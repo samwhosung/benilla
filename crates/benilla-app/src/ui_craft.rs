@@ -264,7 +264,6 @@ fn feed_craft(
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
     items: Res<Items>,
-    commands: Res<NetCommands>,
     mut memo: Local<crate::ui_script::VmMemo<CraftMemo>>,
 ) {
     vm.feed(|script, (pet_reads, open, mut waits), fires| {
@@ -272,9 +271,8 @@ fn feed_craft(
             return;
         };
         let memo = memo.get(script);
-        // The show stands for the stock frame's getter calls, whose lookups pass the callback
-        // `0x4f7710` (`0x4f75f2`, `0x4f7a0a`); the rebuilds between read.
-        let ask = Ask::at(memo.state.is_none() || open.is_changed(), &commands);
+        // The list only reads the item cache: the build asks nothing (`0x4f60c0`), and a reagent
+        // or a totem is asked by its getter's call, inside it (`0x4f75f2`, `0x4f7a0a`).
         let fresh = (|| -> Option<CraftState> {
             let line = open.line?;
             let craft_type = open.craft_type;
@@ -361,7 +359,7 @@ fn feed_craft(
                         let have = count_of(&store.0, &objects, entry, InventoryScope::DEFAULT);
                         // A reagent's icon is the shared item chain (`0x5d88b0`) through its
                         // display.
-                        let (name, icon) = match items.template(entry, 0, ask) {
+                        let (name, icon) = match items.template(entry, 0, Ask::Read) {
                             Some(t) => (
                                 Some(t.name.clone()),
                                 item_icon(icons.as_deref(), t.display_info_id),
@@ -394,7 +392,7 @@ fn feed_craft(
                     let mut tools_pending = Vec::new();
                     for &t in d.totems.iter().filter(|&&t| t != 0) {
                         let have = count_of(&store.0, &objects, t, InventoryScope::DEFAULT) > 0;
-                        match items.template(t, 0, ask) {
+                        match items.template(t, 0, Ask::Read) {
                             Some(info) => tools.push((info.name.clone(), have)),
                             None => tools_pending.push(t),
                         }
@@ -474,9 +472,10 @@ fn feed_craft(
         // Every push is silent: the rebuilds signal, and the getters read the state at their call.
         if fresh != memo.state {
             script.set_craft(fresh.clone());
-            // Pre-ask the reagent templates `GetCraftReagentItemLink` reads.
+            // The reagent templates `GetCraftReagentItemLink` reads, off the cache: the link
+            // passes no callback (`0x4f780a`).
             if let Some(f) = &fresh {
-                script.ask_item_templates(
+                script.read_item_templates(
                     f.recipes
                         .iter()
                         .flat_map(|r| r.reagents.iter().map(|re| re.item)),

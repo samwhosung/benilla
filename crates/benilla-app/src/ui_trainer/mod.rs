@@ -594,9 +594,8 @@ pub(crate) fn feed_trainer(
             0
         };
         let forced = passes > 0;
-        // The stock window calls `GetTrainerServiceIcon` and `GetTrainerServiceDescription`, which
-        // look the product up with a callback (`0x4d9096`, `0x4d9d07`), at `TRAINER_SHOW` and
-        // `TRAINER_UPDATE`: a list, a re-derive, or a window this VM has not shown.
+        // The stock window reads `UnitName("npc")` at `TRAINER_SHOW` and `TRAINER_UPDATE`: a list,
+        // a re-derive, or a window this VM has not shown.
         let ask = Ask::at(last.is_none() || listed || forced, &commands);
         if forced {
             let player = reeval::PlayerView {
@@ -774,7 +773,9 @@ pub(crate) fn feed_trainer(
                 },
                 icons.as_deref(),
                 &items,
-                ask,
+                // A product is asked by the icon and description getters' calls alone, inside
+                // them (`0x4d9096`, `0x4d9d07`): the list and its passes look no item up.
+                Ask::Read,
                 &ServiceText {
                     player: &ctx,
                     pet: &pet_ctx,

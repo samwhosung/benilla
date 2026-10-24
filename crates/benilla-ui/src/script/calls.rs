@@ -325,7 +325,7 @@ pub enum RecordAsk {
 
 /// The owner id a profession or trainer getter's item lookup passes: `0xb0000000` over the row's
 /// spell id (`cdq; or edx,0xb0000000`, `0x4f75cf`, `0x4d9078`-`0x4d9087`, `0x4fdb8a`-`0x4fdb99`).
-pub(crate) fn spell_owner(spell_id: u32) -> u64 {
+pub fn spell_owner(spell_id: u32) -> u64 {
     0xb000_0000_0000_0000 | u64::from(spell_id)
 }
 

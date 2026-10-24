@@ -295,12 +295,13 @@ fn recipe_icon(
     icons: Option<&ItemDisplays>,
     items: &Items,
     ask: Ask<'_>,
+    owner: u64,
 ) -> Option<String> {
     let item = d.effect_item_type[0];
     if item == 0 {
         return None;
     }
-    let display = items.template(item, 0, ask)?.display_info_id;
+    let display = items.template(item, owner, ask)?.display_info_id;
     item_icon(icons, display)
 }
 
@@ -331,7 +332,8 @@ fn resolve_recipe(
     let mut num_available = u32::MAX;
     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
         let have = count_of(&store.0, objects, entry, InventoryScope::DEFAULT);
-        let (name, icon) = match items.template(entry, 0, ask) {
+        // A reagent is asked by its getter's call alone (`0x4ff6e2`).
+        let (name, icon) = match items.template(entry, 0, Ask::Read) {
             Some(t) => (Some(t.name.clone()), item_icon(icons, t.display_info_id)),
             None => (None, None),
         };
@@ -360,7 +362,10 @@ fn resolve_recipe(
     } else {
         (0, 1, 1)
     };
-    let icon = recipe_icon(d, icons, items, ask);
+    // The build's lookup of the product, with the callback `0x4fc8e0` and the recipe's
+    // `0xb0000000` id as the owner (`0x4fcd21`-`0x4fcd4d`).
+    let owner = benilla_ui::script::spell_owner(spell_id);
+    let icon = recipe_icon(d, icons, items, ask, owner);
     // The icon getter's item while its record is in flight (`0x4fdb90`).
     let icon_pending = Some(d.effect_item_type[0])
         .filter(|&item| item != 0 && items.template(item, 0, Ask::Read).is_none());
@@ -370,7 +375,7 @@ fn resolve_recipe(
     // breaks ties on (`record+0x14`).
     let (group, product_inv_type, product_item_level) = (product_item != 0)
         .then(|| {
-            items.template(product_item, 0, ask).map(|t| {
+            items.template(product_item, owner, ask).map(|t| {
                 let name = subclasses
                     .and_then(|sc| sc.0.name(t.class, t.subclass))
                     .unwrap_or_default()
@@ -393,7 +398,8 @@ fn resolve_recipe(
     let mut tools_pending = Vec::new();
     for &t in d.totems.iter().filter(|&&t| t != 0) {
         let have = count_of(&store.0, objects, t, InventoryScope::DEFAULT) > 0;
-        match items.template(t, 0, ask) {
+        // A totem is asked by its getter's call alone (`0x4ffade`).
+        match items.template(t, 0, Ask::Read) {
             Some(info) => tools.push((info.name.clone(), have)),
             None => tools_pending.push(t),
         }
@@ -714,10 +720,10 @@ fn feed_trade_skill(
         // Every push is silent: the rebuilds signal, and the getters read the state at their call.
         if fresh != memo.state {
             script.set_trade_skill(fresh.clone());
-            // The link verbs never query, as the client has every template cached by the time the
-            // list shows, so the feed asks for the missing ones here.
+            // The templates the link verbs read, off the cache: they pass no callback (`0x4ff4b9`,
+            // `0x4ff8da`).
             if let Some(f) = &fresh {
-                script.ask_item_templates(f.recipes.iter().flat_map(|r| {
+                script.read_item_templates(f.recipes.iter().flat_map(|r| {
                     std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
                 }));
             }
@@ -965,7 +971,7 @@ mod tests {
         let icons = landed_item(&mut deps);
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands)),
+            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands), 0),
             Some("ITEM".into()),
         );
     }
@@ -977,7 +983,7 @@ mod tests {
         let icons = landed_item(&mut deps);
         let d = recipe(SPELL_EFFECT_ENCHANT_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands)),
+            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands), 0),
             Some("ITEM".into()),
         );
     }
@@ -991,7 +997,13 @@ mod tests {
         // EffectItemType[0] == 0: 0x55ba30 short-circuits on a zero id before hashing.
         let none = recipe(SPELL_EFFECT_ENCHANT_ITEM, 0);
         assert_eq!(
-            recipe_icon(&none, Some(&icons), &deps.items, Ask::New(&deps.commands)),
+            recipe_icon(
+                &none,
+                Some(&icons),
+                &deps.items,
+                Ask::New(&deps.commands),
+                0
+            ),
             None,
         );
 
@@ -1002,7 +1014,8 @@ mod tests {
                 &missing,
                 Some(&icons),
                 &deps.items,
-                Ask::New(&deps.commands)
+                Ask::New(&deps.commands),
+                0
             ),
             None,
         );
@@ -1011,7 +1024,8 @@ mod tests {
                 &missing,
                 Some(&icons),
                 &deps.items,
-                Ask::New(&deps.commands)
+                Ask::New(&deps.commands),
+                0
             ),
             None,
         );
@@ -1020,7 +1034,7 @@ mod tests {
         // Template landed, `ItemDisplayInfo` missing: still nil.
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, None, &deps.items, Ask::New(&deps.commands)),
+            recipe_icon(&d, None, &deps.items, Ask::New(&deps.commands), 0),
             None
         );
     }

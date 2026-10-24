@@ -392,6 +392,18 @@ impl super::UiScript {
         }
     }
 
+    /// Reads the templates of `ids` the store lacks off the app's cache, asking nothing: the
+    /// trade-skill and craft link verbs pass no callback (`0x4ff8da`, `0x4f780a`), so a template
+    /// the cache holds is the store's, and one it lacks waits for a getter's own ask.
+    pub fn read_item_templates(&mut self, ids: impl IntoIterator<Item = u32>) {
+        let mut model = self.model_mut();
+        for id in ids {
+            if id != 0 && !model.item_templates.contains_key(&id) {
+                model.item_stat_reads.insert(id);
+            }
+        }
+    }
+
     /// Drains the ids asked for that the store did not hold.
     pub fn take_item_stat_asks(&mut self) -> Vec<u32> {
         self.model_mut().item_stat_asks.drain().collect()

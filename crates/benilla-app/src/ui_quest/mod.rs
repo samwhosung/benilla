@@ -551,17 +551,19 @@ pub(crate) fn feed_quest(
             .collect();
         show_messages(script, &mut sink, "ui_quest", lines);
         let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
-        // A panel's publish, or a window this VM has not shown, is the stock frame's getter calls.
+        // A panel's publish, or a window this VM has not shown, is the stock frame's name read.
         let published = giver.panels != giver.panels_asked;
         let ask = Ask::at(last.is_none() || published, &commands);
         giver.panels_asked = giver.panels;
         // The getter's callbacks, kept inside its calls ([`QuestGiver::ask_item_record`]).
         let item_updates = giver.item_answers(&items);
+        // A reward is asked by `GetQuestItemInfo`'s call alone, inside it (`0x5017de`): the panel
+        // setters look no item up.
         let fresh = snapshot(
             &giver,
             &items,
             icons.as_deref(),
-            ask,
+            Ask::Read,
             &crate::npc_text::MacroContext {
                 subject: player.as_ref(),
                 states: &states,
