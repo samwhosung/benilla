@@ -2461,6 +2461,8 @@ pub(crate) struct PendingTransfer(pub(crate) Option<PendingTransferInfo>);
 pub(crate) struct PendingTransferInfo {
     pub(crate) map_id: u32,
     pub(crate) transport_entry: Option<u32>,
+    /// The map left, sent with the transport entry.
+    pub(crate) from_map: Option<u32>,
 }
 
 /// `SMSG_PLAY_SOUND`, `PLAY_MUSIC` or `PLAY_OBJECT_SOUND`: a SoundEntries id. An unstreamed

@@ -447,7 +447,8 @@ fn transfer_pending_both_shapes_and_abort_parse_and_decode() {
         decode(plain).as_slice(),
         [SessionEvent::TransferPending {
             map_id: 1,
-            transport_entry: None
+            transport_entry: None,
+            from_map: None,
         }]
     ));
     // Riding: 176310 is the Menethil boat, arriving in EK (0) from Kalimdor (1).
@@ -466,7 +467,8 @@ fn transfer_pending_both_shapes_and_abort_parse_and_decode() {
         decode(riding).as_slice(),
         [SessionEvent::TransferPending {
             map_id: 0,
-            transport_entry: Some(176310)
+            transport_entry: Some(176310),
+            from_map: Some(1),
         }]
     ));
     let abort = messages::parse_server(messages::opcode::SMSG_TRANSFER_ABORTED, &[2]).unwrap();

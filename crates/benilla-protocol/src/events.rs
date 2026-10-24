@@ -348,9 +348,12 @@ pub enum SessionEvent {
         needs_ack: bool,
     },
     /// `SMSG_TRANSFER_PENDING`: a worldport follows, boat-local when `transport_entry` is set.
+    /// `from_map` is the map left, sent with the entry; the screen draws that leg's route
+    /// (`0x401900`, `0x4072c0`).
     TransferPending {
         map_id: u32,
         transport_entry: Option<u32>,
+        from_map: Option<u32>,
     },
     /// `SMSG_TRANSFER_ABORTED`: the announced transfer is off (map full, no instance).
     TransferAborted { reason: u8 },

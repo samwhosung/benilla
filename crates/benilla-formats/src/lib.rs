@@ -167,6 +167,12 @@ mod light;
 pub use light::{Atmosphere, LightCatalog, Submersion, ZERO_KEY_COLOR, ZERO_KEY_SCALAR};
 mod loading_screen;
 pub use loading_screen::{load_loading_screens, LoadingScreenCatalog};
+// The route a transport transfer's loading screen draws.
+mod loading_route;
+pub use loading_route::{
+    load_loading_screen_taxi_splines, LoadingScreenTaxiSpline, LoadingScreenTaxiSplines, Route,
+    RouteQuad, RouteVertex, TaxiLegTable,
+};
 mod liquid;
 pub use liquid::{LiquidKind, LiquidMesh};
 mod maps;

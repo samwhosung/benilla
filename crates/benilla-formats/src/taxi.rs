@@ -35,19 +35,34 @@ pub struct TaxiPathNode {
 /// `TaxiPathNode.dbc` rows grouped by `PathID`, each path's `Vec` sorted by `NodeIndex`.
 pub struct TaxiPathNodes {
     paths: HashMap<u32, Vec<TaxiPathNode>>,
+    /// The paths in the order their first rows appear in the file.
+    order: Vec<u32>,
 }
 
 impl TaxiPathNodes {
     /// These waypoints grouped by `PathID`, each path in `NodeIndex` order.
     pub fn from_rows(rows: impl IntoIterator<Item = TaxiPathNode>) -> Self {
         let mut paths: HashMap<u32, Vec<TaxiPathNode>> = HashMap::new();
+        let mut order = Vec::new();
         for node in rows {
-            paths.entry(node.path_id).or_default().push(node);
+            paths
+                .entry(node.path_id)
+                .or_insert_with(|| {
+                    order.push(node.path_id);
+                    Vec::new()
+                })
+                .push(node);
         }
         for nodes in paths.values_mut() {
             nodes.sort_by_key(|n| n.node_index);
         }
-        Self { paths }
+        Self { paths, order }
+    }
+
+    /// Every node in file order, as the reference's store walks them: the shipped file keeps each
+    /// path's rows together and in `NodeIndex` order.
+    pub fn in_file_order(&self) -> impl Iterator<Item = &TaxiPathNode> {
+        self.order.iter().flat_map(|id| self.paths[id].iter())
     }
 
     /// A path's nodes in `NodeIndex` order.

@@ -7,7 +7,7 @@
 //! ms. A leg is a Catmull-Rom curve over its nodes ([`curve`]), timed span by span between its
 //! stops ([`timing`]), and the legs are laid end to end into the period.
 
-mod curve;
+pub(crate) mod curve;
 mod timing;
 
 pub use timing::ShipAnim;

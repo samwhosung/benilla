@@ -1,5 +1,5 @@
-//! A ship leg's curve: the reference's Catmull-Rom curve object, mode 1 (cubic), measured by arc
-//! length. `n` control points make `n − 3` segments, segment `i` running from point `i + 1` to
+//! The reference's Catmull-Rom curve object in mode 1 (cubic), measured by arc length: a ship
+//! leg's curve and the transfer screen's route. `n` control points make `n − 3` segments, segment `i` running from point `i + 1` to
 //! point `i + 2`. The x87 runs at 53 bits: each operation is an `f64`, each store an `f32`.
 
 /// The Catmull-Rom basis at `0xb05e10` (`0x453fa0`): the row `i` weights point `i` of a segment,
@@ -63,17 +63,17 @@ fn sum(lengths: &[f32]) -> f64 {
 /// One leg's curve: its control points as the path gives them, each segment's length and the
 /// whole length (`0x4532e0`).
 #[derive(Debug, Clone)]
-pub(super) struct Curve {
+pub(crate) struct Curve {
     points: Vec<[f32; 3]>,
     lengths: Vec<f32>,
     /// `+8`, the float of the 53-bit sum of the segment lengths (`0x4543d0`, `0x453920`).
-    pub(super) length: f32,
+    pub(crate) length: f32,
 }
 
 impl Curve {
     /// `SetSplinePath` (`0x453360`) over `points`, which must number more than 3: the client writes
     /// no length for fewer (`0x4532e3`).
-    pub(super) fn new(points: Vec<[f32; 3]>) -> Self {
+    pub(crate) fn new(points: Vec<[f32; 3]>) -> Self {
         debug_assert!(points.len() > 3);
         let mut curve = Self {
             lengths: Vec::with_capacity(points.len() - 3),
@@ -141,6 +141,21 @@ impl Curve {
         }
         let frac = ((s - f64::from(running)) / f64::from(self.lengths[i])) as f32;
         (i, frac)
+    }
+
+    /// `0x453390(t, out, 1)`: the first control point for `t ≤ 0`, the last for `t ≥ 1`, else the
+    /// point at the arc-length parameter `t` (slot 2, `0x453840` then `0x453580`).
+    pub(crate) fn point(&self, t: f32) -> [f32; 3] {
+        // 0x453393: `t < 0` and `t = 0` take the first point; NaN goes on to the slot.
+        if t <= 0.0 {
+            return self.points[0];
+        }
+        // 0x4533c6: `t ≥ 1` takes the last.
+        if t >= 1.0 {
+            return self.points[self.points.len() - 1];
+        }
+        let (i, u) = self.locate(t);
+        blend(&BASIS, &self.segment(i), u)
     }
 
     /// The position and tangent of `0x454580`'s frame at the arc-length parameter `t`, for a

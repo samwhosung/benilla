@@ -351,7 +351,8 @@ fn on_transfer(In(ev): In<SessionEvent>, mut e: Edges) {
         SessionEvent::TransferPending {
             map_id,
             transport_entry,
-        } => transfer_pending(map_id, transport_entry, &mut e.transfer),
+            from_map,
+        } => transfer_pending(map_id, transport_entry, from_map, &mut e.transfer),
         SessionEvent::TransferAborted { reason } => transfer_aborted(reason, &mut e.transfer),
         _ => {}
     }
@@ -801,7 +802,12 @@ fn knock_back(
 
 /// `SMSG_TRANSFER_PENDING`: latched for the worldport; its transport block makes `NEW_WORLD`'s
 /// coordinates boat-local.
-fn transfer_pending(map_id: u32, transport_entry: Option<u32>, pending: &mut PendingTransfer) {
+fn transfer_pending(
+    map_id: u32,
+    transport_entry: Option<u32>,
+    from_map: Option<u32>,
+    pending: &mut PendingTransfer,
+) {
     match transport_entry {
         Some(entry) => info!("net: transfer pending → map {map_id} riding transport {entry}"),
         None => info!("net: transfer pending → map {map_id}"),
@@ -809,6 +815,7 @@ fn transfer_pending(map_id: u32, transport_entry: Option<u32>, pending: &mut Pen
     pending.0 = Some(crate::net::PendingTransferInfo {
         map_id,
         transport_entry,
+        from_map,
     });
 }
 
