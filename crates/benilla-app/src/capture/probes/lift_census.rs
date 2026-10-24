@@ -134,7 +134,7 @@ fn fire_lift_census(
                 net.display_id.unwrap_or(0),
                 transport.map_or(0, Transport::period_ms),
                 cycle.map_or_else(|| "-".into(), |c| c.to_string()),
-                sample.map_or(0, |s| u8::from(s.moving)),
+                sample.map_or(0, |s| u8::from(s.moving())),
                 vis.map_or_else(|| "absent".into(), |v| format!("{v:?}")),
                 inherited.map_or(0, |i| u8::from(i.get())),
                 u8::from(attached),

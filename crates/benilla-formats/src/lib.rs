@@ -352,9 +352,8 @@ pub use zone_map::{load_zone_map, ZONE_MAP_EDGE};
 // Taxi and transport paths, and the transport timetable.
 mod taxi;
 pub use taxi::{load_taxi_path_nodes, TaxiPathNode, TaxiPathNodes};
-mod transport_period;
 mod transports;
-pub use transports::{TransportSample, TransportTimetable};
+pub use transports::{ShipAnim, TransportSample, TransportTimetable};
 // Type-11 elevator and lift keyframe paths.
 mod elevators;
 pub use elevators::{

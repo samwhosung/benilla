@@ -136,8 +136,9 @@ pub(crate) struct MeetingStoneTemplate {
 #[derive(Clone, Copy)]
 pub(crate) struct MoTransport {
     pub(crate) taxi_path_id: u32,
-    pub(crate) move_speed: f32,
-    pub(crate) accel_rate: f32,
+    /// `data[1]` and `data[2]` as the dwords the client makes floats (`0x5f4cc0`).
+    pub(crate) move_speed: u32,
+    pub(crate) accel_rate: u32,
 }
 
 /// Entry to template, asked once while in flight.
@@ -216,8 +217,8 @@ impl GameObjectTemplates {
         // vmangos `GameObjectInfo::moTransport`.
         let mo_transport = (type_id == 15).then(|| MoTransport {
             taxi_path_id: data[0].max(0) as u32,
-            move_speed: data[1].max(0) as f32,
-            accel_rate: data[2].max(0) as f32,
+            move_speed: data[1] as u32,
+            accel_rate: data[2] as u32,
         });
         self.templates.insert(
             entry,
@@ -386,8 +387,8 @@ mod tests {
             .mo_transport
             .expect("type 15 captures");
         assert_eq!(mo.taxi_path_id, 292);
-        assert_eq!(mo.move_speed, 30.0);
-        assert_eq!(mo.accel_rate, 1.0);
+        assert_eq!(mo.move_speed, 30);
+        assert_eq!(mo.accel_rate, 1);
         // A chest doesn't.
         t.insert(2, 3, "Chest".into(), &data);
         assert!(t.templates.get(2).unwrap().mo_transport.is_none());

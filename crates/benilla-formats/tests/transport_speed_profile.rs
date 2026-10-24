@@ -1,6 +1,6 @@
 //! Samples the Ratchet-Booty Bay boat's timetable at 60 Hz over its whole cycle and measures the
 //! finite-difference speed against its 30 yd/s cruise. A spike at a segment boundary is a position
-//! discontinuity; a smooth swing through a bend is the spline parameter standing in for arc length.
+//! discontinuity; a smooth swing through a bend is the curve's speed within a segment.
 //! `--nocapture` prints the profile.
 
 use benilla_formats::{load_taxi_path_nodes, open_chain, TransportTimetable};
@@ -16,8 +16,8 @@ fn ratchet_booty_bay_speed_profile() {
     let mut chain = open_chain(&data).expect("open chain");
     let nodes = load_taxi_path_nodes(&mut chain).expect("taxi nodes");
     let path = nodes.path(241).expect("path 241 (Ratchet–Booty Bay)");
-    let tt = TransportTimetable::build(path, 30.0, 1.0).expect("timetable");
-    // The build pins its period to the reference's own bookkeeping, bit-exact.
+    let tt = TransportTimetable::build(path, 30, 1).expect("timetable");
+    // The reference's period, which vmangos's `transports` row is a sniff of.
     assert_eq!(tt.period_ms, 350_818, "path 241's self-pinned period");
 
     let step_ms = 16u32; // ~60 Hz
@@ -32,7 +32,7 @@ fn ratchet_booty_bay_speed_profile() {
     let mut t = step_ms;
     while t < tt.period_ms {
         let cur = tt.sample(t);
-        if cur.moving && prev.moving && cur.map == prev.map {
+        if cur.moving() && prev.moving() && cur.map == prev.map {
             let v = dist(cur.pos, prev.pos) / dt;
             moving_samples += 1;
             speed_sum += f64::from(v);
@@ -89,8 +89,8 @@ fn ratchet_booty_bay_speed_profile() {
     }
 
     // A discontinuity crosses in one 16 ms step at hundreds of yd/s. Smooth motion peaks near
-    // 51 yd/s through one sharp bend: the table between stops is vmangos-mode, the spline parameter
-    // standing in for arc length, and the reference's per-leg evaluation is not ported.
+    // 52 yd/s through one sharp bend: `0x453840` makes the parameter linear in arc length only
+    // segment by segment, so the speed swings with the curve's own within a segment.
     assert!(
         max_speed < 100.0,
         "position discontinuity: {max_speed:.1} yd/s at cycle {max_speed_at} ms"

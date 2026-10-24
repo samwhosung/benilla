@@ -1,7 +1,7 @@
 //! `TaxiPathNode.dbc`, the ordered waypoints of every flight path and every `MO_TRANSPORT` (boat,
 //! zeppelin), keyed by `TaxiPath.dbc` id; the layout is vmangos's `TaxiPathNodeEntry`
 //! (`DBCStructure.h:696-707`). A path can cross maps (302, Orgrimmar to Undercity, spans 1 and 0),
-//! and the transport timetable (`crate::transports`) turns a map change into a teleport keyframe.
+//! and a transport's path (`crate::transports`) opens a leg at each map change.
 
 use std::collections::HashMap;
 
@@ -26,8 +26,7 @@ pub struct TaxiPathNode {
     pub map_id: u32,
     /// World position `(x, y, z)` on `map_id`.
     pub pos: [f32; 3],
-    /// Raw `actionFlag`: `& 2` marks a station stop (the reference tests the bit at `0x5f4e37`,
-    /// vmangos `== 2`, the same on the shipped data) and `& 1` a teleport (`TransportMgr.cpp:134`).
+    /// Raw `actionFlag`: `& 2` marks a stop (`0x5f4e37`) and `& 1` ends its leg (`0x5f4de9`).
     pub flags: u32,
     /// Stop delay in whole seconds, set on stops only.
     pub delay: u32,

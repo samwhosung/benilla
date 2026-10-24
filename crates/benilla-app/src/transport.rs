@@ -2,9 +2,10 @@
 //! only an anchor: the movement block's `UPDATE_FLAG_TRANSPORT` u32, its path-progress ms at
 //! create, re-sent on every re-create.
 //!
-//! - Type 15 (`MO_TRANSPORT`, boats and zeppelins): a timetable from `TaxiPathNode.dbc` and the
-//!   template's `(taxiPathId, moveSpeed, accelRate)` ([`benilla_formats::TransportTimetable`]),
-//!   sampled at `(anchor + elapsed) % period`.
+//! - Type 15 (`MO_TRANSPORT`, boats and zeppelins): the reference's ship path from
+//!   `TaxiPathNode.dbc` and the template's `(taxiPathId, moveSpeed, accelRate)`
+//!   ([`benilla_formats::TransportTimetable`], `0x5f4cc0`), placed at `(anchor + elapsed) % period`
+//!   (`0x5f50a0`).
 //! - Type 11 (`TRANSPORT`, elevators and trams): the `TransportAnimation.dbc` keyframe path keyed
 //!   by template entry, at `spawn + R(spawn_quat)·lerp(keyframes, (anchor + elapsed) % period)`
 //!   ([`benilla_formats::elevator_sample`], the reference's `0x5f6280`; vmangos does the same in
@@ -21,7 +22,7 @@ use avian3d::collider_tree::update_moved_collider_aabbs as republish_moved_colli
 use avian3d::prelude::{Collider, Position, RigidBody, Rotation};
 use benilla_formats::{
     elevator_period_ms, elevator_sample, load_elevator_paths, load_taxi_path_nodes,
-    ElevatorKeyframe, ElevatorPaths, TaxiPathNodes, TransportSample, TransportTimetable,
+    ElevatorKeyframe, ElevatorPaths, ShipAnim, TaxiPathNodes, TransportSample, TransportTimetable,
 };
 use bevy::prelude::*;
 
@@ -193,7 +194,12 @@ impl Transport {
                     map: here,
                     pos,
                     heading: l.yaw,
-                    moving,
+                    // A lift has no speed curve: under way reads as cruising.
+                    anim: if moving {
+                        ShipAnim::Cruise
+                    } else {
+                        ShipAnim::Stand
+                    },
                 }
             }
         }
@@ -329,7 +335,6 @@ fn arm_transports(
             .entry(mo.taxi_path_id)
             .or_insert_with(|| {
                 let t = nodes.path(mo.taxi_path_id).and_then(|path| {
-                    // The build pins its period to the reference's own bookkeeping (`0x5f4cc0`).
                     let t = TransportTimetable::build(path, mo.move_speed, mo.accel_rate)?;
                     info!(
                         "transport: path {} timetable built — period {} ms",
@@ -384,12 +389,12 @@ fn tick_transports(
     {
         let cycle = transport.cycle_ms(anchor);
         let sample = transport.sample(cycle, current_map.0);
-        if sample.moving != transport.was_moving {
-            transport.was_moving = sample.moving;
+        if sample.moving() != transport.was_moving {
+            transport.was_moving = sample.moving();
             debug!(
                 "transport {:#x}: {} at cycle {cycle} ms (period {}, map {})",
                 guid.0,
-                if sample.moving { "departed" } else { "docked" },
+                if sample.moving() { "departed" } else { "docked" },
                 transport.period_ms(),
                 sample.map,
             );
@@ -704,7 +709,7 @@ mod tests {
     fn ferry_241(chain: &mut benilla_formats::Chain) -> Transport {
         let cat = benilla_formats::load_taxi_path_nodes(chain).expect("TaxiPathNode.dbc");
         let nodes = cat.path(241).expect("taxi path 241 (Ratchet–Booty Bay)");
-        let tt = TransportTimetable::build(nodes, 30.0, 1.0).expect("path 241 builds");
+        let tt = TransportTimetable::build(nodes, 30, 1).expect("path 241 builds");
         Transport {
             drive: Drive::Taxi(Arc::new(tt)),
             was_moving: false,

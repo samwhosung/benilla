@@ -148,7 +148,7 @@ fn crossing_probe(
                     continue;
                 }
                 let sample = transport.sample_at(anchor, map);
-                if sample.map != map || sample.moving {
+                if sample.map != map || sample.moving() {
                     continue;
                 }
                 // Only a nearby ferry: after a cross-continent `.go` the departed surroundings'
@@ -214,7 +214,7 @@ fn crossing_probe(
                 transports.iter().find(|(g, ..)| g.0 == boat)
             {
                 let sample = transport.sample_at(anchor, map);
-                if sample.map == to_map && !sample.moving {
+                if sample.map == to_map && !sample.moving() {
                     info!(
                         "PROBE crossing: SUCCESS — docked on map {to_map} still aboard {boat:#x}"
                     );
