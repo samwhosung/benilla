@@ -272,6 +272,46 @@ mod tests {
         );
     }
 
+    /// `0x5f55c8`: a transport with no world entity yet, its record not in, answers inside, so a
+    /// ride seated from our create holds on whatever the feet land on until the transport arms.
+    #[test]
+    fn a_transport_with_no_world_entity_holds_its_rider() {
+        let mut world = World::new();
+        let deck = world
+            .spawn((
+                Transform::default(),
+                crate::net::Guid(0xF120_0000_0000_0001),
+            ))
+            .id();
+        let ground = world.spawn_empty().id();
+        let mut player = Player {
+            ride: Some(PlayerRide {
+                entity: deck,
+                guid: 0xF120_0000_0000_0001,
+                local_pos: Vec3::ZERO,
+                boat_yaw: 0.0,
+                placed: false,
+            }),
+            ..Default::default()
+        };
+        let held = world
+            .run_system_once(
+                move |transports: TransportQuery, child_of: Query<&ChildOf>| {
+                    update_attachment(
+                        &mut player,
+                        &transports,
+                        &child_of,
+                        Some(ground),
+                        true,
+                        false,
+                    );
+                    player.ride.is_some()
+                },
+            )
+            .expect("runs");
+        assert!(held);
+    }
+
     /// Undercity's lift car 20652 descends 96.5 yd in 3.33 s (`TransportAnimation.dbc`).
     const LIFT_DROP_SPEED: f32 = 28.95;
 
