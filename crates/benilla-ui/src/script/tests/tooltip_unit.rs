@@ -815,7 +815,7 @@ fn minimap_blip_tooltip_shows_follows_and_hides() {
     s.run(r#"CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate")"#)
         .unwrap();
     assert!(
-        !s.minimap_tooltip("Stormwind", false),
+        !s.minimap_tooltip("Stormwind"),
         "no Minimap yet: the show refuses"
     );
     s.run(
@@ -828,7 +828,7 @@ fn minimap_blip_tooltip_shows_follows_and_hides() {
     )
     .unwrap();
     s.mouse_move(795.0, 500.0);
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     s.run(
         r#"
         assert(GameTooltipTextLeft1:GetText() == "Stormwind")
@@ -898,7 +898,7 @@ fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
         .unwrap()
     };
     s.mouse_move(400.0, 300.0);
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     let (x, y) = at(&mut s);
     assert!(
         (x - 400.0).abs() < 1e-3 && (y - 300.0).abs() < 1e-3,
@@ -1000,7 +1000,7 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
         "#,
     )
     .unwrap();
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     s.run(
         r#"
         assert(GameTooltip:IsShown())

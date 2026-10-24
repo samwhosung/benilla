@@ -3,7 +3,7 @@
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
-use super::{drive_blip_tooltip, MinimapBlipHover};
+use super::{drive_blip_tooltip, BlipBlock, BlipName, MinimapBlipHover};
 use crate::names::NameCache;
 use crate::net::NetCommands;
 
@@ -42,6 +42,20 @@ fn blip(app: &mut App, hover: MinimapBlipHover) {
     app.update();
 }
 
+/// A landmark icon under the cursor.
+fn landmark(name: &str) -> MinimapBlipHover {
+    let mut hover = MinimapBlipHover::default();
+    hover.push(BlipBlock::Icon, BlipName::Known(name.into()), false);
+    hover
+}
+
+/// A tracked unit's dot under the cursor.
+fn unit(guid: u64) -> MinimapBlipHover {
+    let mut hover = MinimapBlipHover::default();
+    hover.push(BlipBlock::Dot(1), BlipName::Unit(guid), false);
+    hover
+}
+
 fn shown(app: &mut App) -> bool {
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
@@ -54,13 +68,13 @@ fn shown(app: &mut App) -> bool {
 #[test]
 fn a_blip_hover_loss_hides_whoever_holds_the_tooltip() {
     let mut app = minimap_app();
-    blip(&mut app, MinimapBlipHover::Landmark("Stormwind".into()));
+    blip(&mut app, landmark("Stormwind"));
     assert!(shown(&mut app), "the blip tooltip is up");
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
         .run(r#"GameTooltip:SetOwner(UIParent, "ANCHOR_NONE"); GameTooltip:SetText("Addon")"#)
         .unwrap();
-    blip(&mut app, MinimapBlipHover::None);
+    blip(&mut app, MinimapBlipHover::default());
     assert!(!shown(&mut app), "the addon's tooltip is hidden");
     assert!(app
         .world_mut()
@@ -77,7 +91,7 @@ fn a_hovered_unnamed_blip_only_reads() {
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     for _ in 0..600 {
-        blip(&mut app, MinimapBlipHover::Npc(0x9, false));
+        blip(&mut app, unit(0x9));
     }
     assert!(!shown(&mut app), "no name, no tooltip");
     assert!(crate::query_cache::queries(&rx).is_empty());
@@ -102,9 +116,9 @@ fn a_hovered_live_unit_is_asked_by_each_probe_once_per_answer() {
         .resource_mut::<crate::net::GuidIndex>()
         .0
         .insert(UNIT, e);
-    blip(&mut app, MinimapBlipHover::Npc(UNIT, false));
+    blip(&mut app, unit(UNIT));
     assert_eq!(crate::query_cache::queries(&rx).len(), 1, "the probe asks");
-    blip(&mut app, MinimapBlipHover::Npc(UNIT, false));
+    blip(&mut app, unit(UNIT));
     assert!(
         crate::query_cache::queries(&rx).is_empty(),
         "once while the answer is pending"
@@ -112,7 +126,7 @@ fn a_hovered_live_unit_is_asked_by_each_probe_once_per_answer() {
     app.world_mut()
         .resource_mut::<NameCache>()
         .insert_player(UNIT, String::new(), None);
-    blip(&mut app, MinimapBlipHover::Npc(UNIT, false));
+    blip(&mut app, unit(UNIT));
     assert_eq!(
         crate::query_cache::queries(&rx).len(),
         1,
@@ -176,4 +190,36 @@ fn stacked_landmarks_each_get_a_line_in_list_order() {
         .eval::<String>("return GameTooltipTextLeft1:GetText()")
         .unwrap();
     assert_eq!(text, "Guards' directions\nCorpse");
+}
+
+/// The build's order (`0x4eb58c`-`0x4eb840`): the rim arrows, the party and pet arrow frames, the
+/// icons, then the dot categories 0 to 4, whatever order the emitters found them in. A grey dot
+/// is wrapped in `|cffb0b0b0`…`|r` (`0x4eb7cf`); a dot whose name the cache lacks has no line
+/// (`0x4eb785`).
+#[test]
+fn the_lines_join_in_the_probes_order_greyed_and_named() {
+    const MEMBER: u64 = 0x7;
+    const UNNAMED: u64 = 0x8;
+    let mut app = minimap_app();
+    app.world_mut()
+        .resource_mut::<NameCache>()
+        .insert_player(MEMBER, "Aldwyn".into(), None);
+    let mut hover = MinimapBlipHover::default();
+    let known = |n: &str| BlipName::Known(n.into());
+    hover.push(BlipBlock::Icon, known("Goldshire"), false);
+    hover.push(BlipBlock::RimArrow, known("Stormwind"), false);
+    hover.push(BlipBlock::Dot(0), known("Copper Vein"), true);
+    hover.push(BlipBlock::Dot(1), BlipName::Unit(UNNAMED), false);
+    hover.push(BlipBlock::Dot(3), known("Marshal"), false);
+    hover.push(BlipBlock::GroupArrow, BlipName::Unit(MEMBER), false);
+    blip(&mut app, hover);
+    let text = app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .eval::<String>("return GameTooltipTextLeft1:GetText()")
+        .unwrap();
+    assert_eq!(
+        text,
+        "Stormwind\nAldwyn\nGoldshire\n|cffb0b0b0Copper Vein|r\nMarshal"
+    );
 }

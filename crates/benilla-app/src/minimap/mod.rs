@@ -382,7 +382,7 @@ fn emit_minimap(
         pois,
     ) = blip_inputs;
     // Hover resets every frame; the blip pass re-establishes it while the map draws.
-    *blip_hover = blips::MinimapBlipHover::None;
+    *blip_hover = blips::MinimapBlipHover::default();
     let (Some(slot), Some(assets), Some(map), Some(catalog)) =
         (widget.0.as_ref(), assets, map, catalog)
     else {
@@ -661,7 +661,7 @@ fn emit_minimap(
             cursor,
         }
     });
-    let mut hover = blips::MinimapBlipHover::None;
+    let mut hover = blips::MinimapBlipHover::default();
     if let Some(ctx) = &blip_ctx {
         // The guard-directions marker and the corpse ride this pass as landmarks, as the reference
         // appends its static blip slots after the DBC scan, so they draw even without

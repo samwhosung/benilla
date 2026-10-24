@@ -39,7 +39,7 @@ fn minimap_and_bag() -> UiScript {
 fn leaving_the_minimap_hides_the_tooltip_before_the_next_enter() {
     let mut s = minimap_and_bag();
     s.mouse_move(670.0, 470.0);
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     s.mouse_move(120.0, 120.0);
     assert!(
         s.eval::<bool>("return entered_visible == nil").unwrap(),
@@ -107,14 +107,14 @@ fn the_minimap_probe_drops_its_blip_only_when_the_walk_probes_it() {
     .unwrap();
     s.resolve();
     s.mouse_move(670.0, 470.0);
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     s.mouse_move(720.0, 520.0);
     assert_eq!(s.minimap_blip().as_deref(), Some("Stormwind"), "not probed");
     assert!(!s
         .eval::<bool>("return GameTooltip:IsVisible() == 1")
         .unwrap());
     s.mouse_move(670.0, 470.0);
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     s.mouse_move(300.0, 300.0);
     assert_eq!(s.minimap_blip(), None, "probed and missed");
     assert!(!s
@@ -159,7 +159,7 @@ fn a_captured_minimap_is_probed_though_the_sweep_never_reaches_it() {
     s.run(r#"Bag:SetFrameStrata("DIALOG")"#).unwrap();
     s.resolve();
     s.mouse_move(670.0, 470.0);
-    assert!(s.minimap_tooltip("Stormwind", false));
+    assert!(s.minimap_tooltip("Stormwind"));
     s.mouse_button(670.0, 470.0, "LeftButton", true);
     s.mouse_move(120.0, 120.0);
     assert_eq!(s.minimap_blip(), None, "the capture's probe missed");

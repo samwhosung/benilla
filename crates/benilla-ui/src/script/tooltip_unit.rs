@@ -576,13 +576,13 @@ impl super::UiScript {
         true
     }
 
-    /// Show the minimap blip tooltip (an `AreaPOI` or quest-dot name), from `Minimap`'s own hover
-    /// probe `0x4eb0c0`: owned by `Minimap` itself (`0x4eb19c` keeps `this + 0x24`, pushed at
-    /// `0x4eb57d`) in mode 6, `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on
-    /// the cursor; one gold line, faint gold for a cross-interior dot; then the show
-    /// (`0x4eb85f`/`0x4eb869`). The blip is held until the probe finds none
+    /// Show the minimap blip tooltip, from `Minimap`'s own hover probe `0x4eb0c0`: owned by
+    /// `Minimap` itself (`0x4eb19c` keeps `this + 0x24`, pushed at `0x4eb57d`) in mode 6,
+    /// `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on the cursor; `text`, the
+    /// names of everything under the cursor joined by `\n`, as one gold line (`0x530380`); then the
+    /// show (`0x4eb85f`/`0x4eb869`). The text is held until the probe finds nothing
     /// ([`Self::minimap_blip_lost`]) or misses the Minimap.
-    pub fn minimap_tooltip(&mut self, text: &str, grey: bool) -> bool {
+    pub fn minimap_tooltip(&mut self, text: &str) -> bool {
         let (h, id, root) = {
             let mut model = self.model_mut();
             let Some(h) = model.arena.lookup("GameTooltip") else {
@@ -601,14 +601,7 @@ impl super::UiScript {
             }
         };
         set_owner_core(&self.lua, h, Some(root), TooltipAnchor::Cursor, 0.0, 0.0);
-        // A cross-interior entry's `|cffb0b0b0` wrap modulates the gold: faint gold, not grey.
-        let dim = 0xb0 as f32 / 255.0;
-        let color = if grey {
-            [GOLD[0] * dim, GOLD[1] * dim, GOLD[2] * dim, 1.0]
-        } else {
-            GOLD
-        };
-        if let Err(e) = append_line(&self.lua, &wrapper, (text.to_string(), color), None, false) {
+        if let Err(e) = append_line(&self.lua, &wrapper, (text.to_string(), GOLD), None, false) {
             self.push_error(e);
             return false;
         }

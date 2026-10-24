@@ -16,7 +16,9 @@ use crate::names::NameCache;
 use crate::net::{GuidIndex, NetEntity, ObjectStore};
 use crate::ui_pass::{UiQuad, UiQuads, UvRect};
 
-use super::{group_records, BlipCtx, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX};
+use super::{
+    group_records, BlipBlock, BlipCtx, BlipName, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX,
+};
 
 /// The quest dot's quad, 8 px (`0xbc82a8`, frozen by the ctor); the per-cell scale table
 /// `{1,1,1,1,1.3}` scales only the party cell 4.
@@ -109,7 +111,7 @@ pub(in crate::minimap) fn emit_quest_dots(
         });
         if let Some(c) = ctx.cursor {
             if rect.contains(c) {
-                *hover = MinimapBlipHover::Npc(npc, grey);
+                hover.push(BlipBlock::Dot(3), BlipName::Unit(npc), grey);
             }
         }
     }
@@ -179,7 +181,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
     hover: &mut MinimapBlipHover,
 ) {
     // The unit pass runs even with an empty creature mask: the always-show clauses need none.
-    let mut dot = |guid: u64, tf: &GlobalTransform, cell: [f32; 4], name: DotName| {
+    let mut dot = |guid: u64, tf: &GlobalTransform, cell: [f32; 4], category: u8, name: DotName| {
         let w = bevy_to_wow(tf.translation());
         let d3 =
             ((w[0] - ctx.wx).powi(2) + (w[1] - ctx.wy).powi(2) + (w[2] - ctx.wz).powi(2)).sqrt();
@@ -202,10 +204,11 @@ pub(in crate::minimap) fn emit_tracking_dots(
         });
         if let Some(c) = ctx.cursor {
             if rect.contains(c) {
-                *hover = match name {
-                    DotName::Guid => MinimapBlipHover::Npc(guid, grey),
-                    DotName::Known(n) => MinimapBlipHover::TrackedGo(n, grey),
+                let name = match name {
+                    DotName::Guid => BlipName::Unit(guid),
+                    DotName::Known(n) => BlipName::Known(n),
                 };
+                hover.push(BlipBlock::Dot(category), name, grey);
             }
         }
     };
@@ -221,7 +224,13 @@ pub(in crate::minimap) fn emit_tracking_dots(
                     continue; // template not answered yet
                 };
                 if tracked_resource(tracking.resources, t.lock_id, locks) {
-                    dot(guid.0, tf, TRACKED_GO_CELL, DotName::Known(t.name.clone()));
+                    dot(
+                        guid.0,
+                        tf,
+                        TRACKED_GO_CELL,
+                        0,
+                        DotName::Known(t.name.clone()),
+                    );
                 }
             }
         }
@@ -247,7 +256,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
             .unwrap_or((0, false));
         let creature_type = store.map(|s| types.of(s));
         if tracked_creature(tracking, creature_type, dyn_flags, creeping) {
-            dot(guid.0, tf, TRACKED_UNIT_CELL, DotName::Guid);
+            dot(guid.0, tf, TRACKED_UNIT_CELL, 1, DotName::Guid);
         }
     }
 }
@@ -282,9 +291,12 @@ pub(in crate::minimap) fn emit_party_dots(
         .flatten()
     {
         let d = ((x - ctx.wx).powi(2) + (y - ctx.wy).powi(2)).sqrt();
-        let rect = if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
+        let (rect, block) = if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
             // Out of range: the arrow child draws it; only its frame is hit-tested here.
-            super::rim_arrow_rect(ctx, [x, y, 0.0])
+            (
+                super::rim_arrow_rect(ctx, [x, y, 0.0]),
+                BlipBlock::GroupArrow,
+            )
         } else {
             let rect = Rect::from_center_size(
                 ctx.center + ctx.offset([x, y, 0.0]),
@@ -298,10 +310,10 @@ pub(in crate::minimap) fn emit_party_dots(
                 color: [1.0, 1.0, 1.0, ctx.alpha],
                 ..default()
             });
-            rect
+            (rect, BlipBlock::Dot(4))
         };
         if ctx.cursor.is_some_and(|c| rect.contains(c)) {
-            *hover = MinimapBlipHover::Npc(guid, false);
+            hover.push(block, BlipName::Unit(guid), false);
         }
     }
 }
@@ -440,7 +452,7 @@ mod tests {
                             pet,
                             &Handle::default(),
                             &mut quads,
-                            &mut MinimapBlipHover::None,
+                            &mut MinimapBlipHover::default(),
                         );
                         quads
                             .overlays
@@ -529,7 +541,7 @@ mod tests {
                           group: Res<crate::ui_party::GroupState>| {
                         let ctx = ctx(cursor);
                         let mut quads = UiQuads::default();
-                        let mut hover = MinimapBlipHover::None;
+                        let mut hover = MinimapBlipHover::default();
                         emit_party_dots(
                             &ctx,
                             &group,
@@ -540,20 +552,25 @@ mod tests {
                             &mut quads,
                             &mut hover,
                         );
-                        match hover {
-                            MinimapBlipHover::Npc(guid, grey) => Some((guid, grey)),
-                            _ => None,
-                        }
+                        hover.lines().first().map(|l| (l.name.clone(), l.block))
                     },
                 )
                 .unwrap()
         };
         // The member's dot, north (up): offset (0, -50 · px_per_yd).
         let dot = Vec2::new(0.0, -50.0 * BLIP_BASIS_PX * 0.5 / 133.0);
-        assert_eq!(hover(&mut world, dot), Some((MEMBER, false)), "the dot");
+        assert_eq!(
+            hover(&mut world, dot),
+            Some((BlipName::Unit(MEMBER), BlipBlock::Dot(4))),
+            "the dot"
+        );
         // The pet's arrow on the 0.8 rim toward the west (left).
         let arrow = Vec2::new(-BLIP_BASIS_PX * 0.5 * super::super::BLIP_EDGE_RATIO, 0.0);
-        assert_eq!(hover(&mut world, arrow), Some((PET, false)), "the arrow");
+        assert_eq!(
+            hover(&mut world, arrow),
+            Some((BlipName::Unit(PET), BlipBlock::GroupArrow)),
+            "the arrow"
+        );
         assert_eq!(
             hover(&mut world, Vec2::new(0.0, 30.0)),
             None,
