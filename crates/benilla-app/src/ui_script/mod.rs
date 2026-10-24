@@ -849,6 +849,8 @@ mod cinematic_tests;
 mod glue_input_tests;
 #[cfg(test)]
 mod key_walk_tests;
+#[cfg(test)]
+mod tick_order_tests;
 
 #[cfg(test)]
 mod cast_tests;
