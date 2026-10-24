@@ -1746,11 +1746,11 @@ fn the_group_header_keys_resolve_in_the_real_global_strings() {
     }
 }
 
-/// The stock window calls `GetTrainerServiceIcon` at `TRAINER_SHOW` and `TRAINER_UPDATE`, which
-/// looks the product up with a callback (`0x4d9096`); the frames between ask only what the cache
-/// holds nothing for. A refused product is asked by no frame, and again by the trainer's next list.
+/// The list asks no product: the reference's list and its passes look no item up, and a product
+/// is asked by the icon and description getters' calls alone (`0x4d9096`, `0x4d9d07`), inside
+/// them. No list, no pass and no frame asks.
 #[test]
-fn a_refused_product_is_asked_at_the_next_list_never_by_a_frame() {
+fn the_list_asks_no_product() {
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
     app.add_message::<crate::net::FieldChanged>()
@@ -1788,18 +1788,13 @@ fn a_refused_product_is_asked_at_the_next_list_never_by_a_frame() {
             .count()
     };
     list(&mut app);
-    app.update();
-    assert_eq!(product_asks(&rx), 1);
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(777, None);
-    for _ in 0..600 {
+    for _ in 0..3 {
         app.update();
     }
-    assert_eq!(product_asks(&rx), 0, "no frame asks the refusal");
+    assert_eq!(product_asks(&rx), 0, "the list and its frames");
     list(&mut app);
     app.update();
-    assert_eq!(product_asks(&rx), 1, "the next list does, once");
+    assert_eq!(product_asks(&rx), 0, "the next list");
 }
 
 /// [`resolve_service`] with the pet's book beside the player's, as `GetTrainerServiceAbilityReq`

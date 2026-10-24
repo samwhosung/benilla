@@ -1471,6 +1471,94 @@ mod tests {
         assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE"]);
     }
 
+    /// The window's show asks what the list build looks up, each recipe's product with the
+    /// callback `0x4fc8e0` and the recipe's `0xb0000000` id as the owner (`0x4fcd21`-`0x4fcd4d`),
+    /// and nothing else: a reagent or a totem is asked by its getter's call alone (`0x4ff6e2`,
+    /// `0x4ffade`), and the reagents the link getters read, which pass no callback (`0x4ff8da`),
+    /// are read off the cache, never asked.
+    #[test]
+    fn the_show_asks_the_products_alone() {
+        const LINEN: u32 = 2589;
+        const BOLT: u32 = 2996;
+        const NEEDLE: u32 = 5956;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.extend([2963]);
+        actions.profession_order.extend([2963]);
+        let mut effects = [0; 3];
+        effects[0] = SPELL_EFFECT_CREATE_ITEM;
+        let mut effect_item_type = [0; 3];
+        effect_item_type[0] = BOLT;
+        let bolt = SpellDisplay {
+            name: "Bolt of Linen Cloth".into(),
+            attributes: SPELL_ATTR_IS_TRADESKILL,
+            reagents: [
+                (LINEN, 2),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+            ],
+            totems: [NEEDLE, 0],
+            effects,
+            effect_item_type,
+            ..Default::default()
+        };
+        let sla = benilla_formats::SlaInfo {
+            skill_id: 197,
+            req_skill_value: 1,
+            forward_spell_id: 0,
+            trivial_low: 1,
+            trivial_high: 2,
+        };
+        app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
+            .init_resource::<crate::ui_craft::CraftOpen>()
+            .insert_resource(actions)
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .insert_resource(crate::net::NetCommands(tx))
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(2963, bolt)].into_iter().collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities([(2963, sla)]),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_trade_skill.in_set(crate::ui_script::UiFeed))
+            .insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        app.update();
+        app.update();
+        let asked: Vec<_> = crate::query_cache::queries(&rx)
+            .into_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::ItemQuery { .. }))
+            .collect();
+        assert!(
+            matches!(
+                asked[..],
+                [crate::net::ClientCommand::ItemQuery {
+                    entry: BOLT,
+                    guid: 0xb000_0000_0000_0b93
+                }]
+            ),
+            "{asked:?}"
+        );
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        assert!(script.take_item_stat_asks().is_empty(), "no pre-ask");
+    }
+
     /// A learn or an unlearn of a profession spell rebuilds the open list once per packet
     /// (`0x5e9d79`, `0x5ea165`), whether or not the list moved, a supersede once for each half
     /// (`0x5e6392`, `0x5e63a4`); another spell rebuilds nothing. A record a getter's call waited

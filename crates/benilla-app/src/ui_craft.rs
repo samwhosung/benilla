@@ -1332,6 +1332,58 @@ mod tests {
     /// resent unchanged included; a learn or an unlearn of a craft spell rebuilds it once per packet
     /// (`0x5e9e12`, `0x5ea240`), whether or not the list moved; a record a getter's call waited on
     /// rebuilds it once per call (`0x4f7710`).
+    /// The window's show looks no item up: the reference's list build asks nothing (`0x4f60c0`),
+    /// and a reagent or a totem is asked by its getter's call alone (`0x4f75f2`, `0x4f7a0a`).
+    /// The reagents the link getters read, which pass no callback (`0x4f780a`), are read off the
+    /// cache, never asked.
+    #[test]
+    fn the_show_asks_no_reagent_or_totem() {
+        const DUST: u32 = 10_940;
+        const ROD: u32 = 6218;
+        let displays = vec![(
+            7418,
+            SpellDisplay {
+                name: "Enchant Bracer - Minor Health".into(),
+                cast_ui: 3,
+                reagents: [
+                    (DUST, 1),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                ],
+                totems: [ROD, 0],
+                ..Default::default()
+            },
+        )];
+        let catalog =
+            benilla_formats::SkillLineCatalog::from_abilities([(7418, ability(ENCHANTING, 1, 70))]);
+        let mut app = craft_feed(displays, &[7418], catalog, 3, &[]);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return GetNumCrafts()")
+                .unwrap(),
+            1,
+            "the window is up"
+        );
+        let rx = app
+            .world()
+            .non_send_resource::<crossbeam_channel::Receiver<crate::net::ClientCommand>>();
+        let asked: Vec<_> = crate::query_cache::queries(rx)
+            .into_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::ItemQuery { .. }))
+            .collect();
+        assert!(asked.is_empty(), "{asked:?}");
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        assert!(script.take_item_stat_asks().is_empty(), "no pre-ask");
+    }
+
     #[test]
     fn each_packet_and_each_waited_record_signals_one_update() {
         const DUST: u32 = 10_940;
