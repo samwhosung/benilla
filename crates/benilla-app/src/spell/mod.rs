@@ -90,6 +90,7 @@ impl Plugin for SpellPlugin {
             .init_resource::<targeting::PicksSelf>()
             .init_resource::<targeting::CorpsePick>()
             .init_resource::<targeting::UnitPick>()
+            .init_resource::<targeting::GoPick>()
             .init_resource::<group_relation::GroupRoster>()
             .add_observer(cast_target::on_cvar)
             .add_systems(
@@ -113,6 +114,7 @@ impl Plugin for SpellPlugin {
                         targeting::publish_picks_self,
                         targeting::publish_corpse_pick,
                         targeting::publish_unit_pick,
+                        targeting::publish_go_pick,
                     )
                         .in_set(UiFeed)
                         .after(LocalCancel),

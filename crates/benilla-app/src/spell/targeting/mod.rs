@@ -44,7 +44,9 @@ pub(crate) use corpse::fixture as corpse_fixture;
 pub(crate) use corpse::{corpse_pick_admits, publish_corpse_pick, CorpsePick};
 pub(crate) use cursor::{drive_targeting_cursor, ground_cast_radius};
 pub(crate) use item::EnchantConfirmItem;
-pub(crate) use pick::{publish_unit_pick, PickChecks, UnitPick};
+pub(crate) use pick::{
+    publish_go_pick, publish_unit_pick, spell_opens_go, GoPick, GoPickChecks, PickChecks, UnitPick,
+};
 pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
 
 use bevy::prelude::*;

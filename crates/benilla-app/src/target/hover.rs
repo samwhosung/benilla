@@ -1442,6 +1442,139 @@ mod tests {
         assert_eq!(world.resource::<PressPick>().hovered.target, Some(rear));
     }
 
+    /// A GameObject of `entry` at depth `z` on the cursor's ray, of type 3 (CHEST) with these
+    /// `GAMEOBJECT_FLAGS` (field 9), with one drawn pick box.
+    fn chest_at(world: &mut World, guid: u64, entry: u32, z: f32, flags: u32) -> Entity {
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        let at = GlobalTransform::from_translation(Vec3::new(0.0, 0.0, z));
+        let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x21),
+            (FIELD_OBJECT_ENTRY, entry),
+            (9, flags),
+            (21, 3),
+        ]));
+        let go = world.spawn((Guid(guid), at, store)).id();
+        let mut part = world.spawn((
+            ChildOf(go),
+            benilla_world::interact::GoPickPart,
+            benilla_world::interact::PickBox,
+            Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0)),
+            at,
+            ViewVisibility::HIDDEN,
+        ));
+        use bevy::camera::visibility::SetViewVisibility;
+        part.get_mut::<ViewVisibility>()
+            .expect("just spawned")
+            .set_visible();
+        go
+    }
+
+    /// Opening's lock type is 1; an herb's lock is type 2, which it does not open.
+    const OPENING: u32 = 3365;
+
+    /// The GameObject pick's world: two chests on the ray, entry 7 locked by lock 55 (type 1, which
+    /// [`OPENING`] opens) and entry 8 by lock 56 (type 2), the spells and the templates.
+    fn go_pick_world() -> World {
+        use benilla_formats::{LockCatalog, LockSlot, OpenLock, SpellDisplay, LOCK_KEY_SKILL};
+        let mut world = unit_pick_world();
+        world.init_resource::<HoveredObject>();
+        world.init_resource::<crate::items::Items>();
+        world.init_resource::<crate::net::GuidIndex>();
+        world.init_resource::<crate::spell::targeting::GoPick>();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog =
+            benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+                OPENING,
+                SpellDisplay {
+                    targets: 0x4000,
+                    open_lock: Some(OpenLock {
+                        effect: 0,
+                        lock_type: 1,
+                    }),
+                    ..SpellDisplay::default()
+                },
+            )]));
+        world.insert_resource(spells);
+        let lock = |index| {
+            let mut slots = [LockSlot::default(); benilla_formats::MAX_LOCK_SLOTS];
+            slots[0] = LockSlot {
+                key_type: LOCK_KEY_SKILL,
+                index,
+                skill: 0,
+                action: 5,
+            };
+            slots
+        };
+        world.insert_resource(crate::go_templates::Locks(LockCatalog::from_rows([
+            (55, lock(1)),
+            (56, lock(2)),
+        ])));
+        let mut templates = crate::go_templates::GameObjectTemplates::default();
+        for (entry, lock_id) in [(7, 55), (8, 56)] {
+            let mut data = [0; 24];
+            data[0] = lock_id;
+            templates.insert(entry, 3, "Chest".into(), &data);
+        }
+        world.insert_resource(templates);
+        world
+    }
+
+    /// The GameObject pick over `word`, as a frame runs it: the word published, then the pick.
+    fn go_pick_under(world: &mut World, word: Option<u16>) -> Option<Entity> {
+        let mut targeting = world.resource_mut::<crate::spell::SpellTargeting>();
+        match word {
+            Some(word) => targeting.enter(OPENING, crate::spell::CastCommit::Spell, word),
+            None => targeting.clear(),
+        }
+        world
+            .run_system_cached(crate::spell::targeting::publish_go_pick)
+            .expect("the word publishes");
+        world
+            .run_system_cached(update_hovered_object)
+            .expect("the pick runs");
+        world.resource::<HoveredObject>().target
+    }
+
+    /// `0x481050` sets the GameObject flag `0x4` while targeting only for a word in `0x4800`
+    /// (`0x481101`-`0x48110a`), and `0x480780`'s GameObject arm then admits only an object the
+    /// spell's lock test passes (`0x4807fa`-`0x48080c`, `0x6e62e0`, `0x5f8260`). Outside targeting
+    /// the nearer object wins, whatever it is. The herb chest is 5 yards nearer the camera.
+    #[test]
+    fn while_targeting_the_go_pick_takes_only_what_the_word_can_open() {
+        let mut world = go_pick_world();
+        let herb = chest_at(&mut world, 0xF110_0000_0800_0002, 8, 5.0, 0);
+        let chest = chest_at(&mut world, 0xF110_0000_0700_0001, 7, 0.0, 0);
+        assert_eq!(
+            go_pick_under(&mut world, None),
+            Some(herb),
+            "outside targeting"
+        );
+        assert_eq!(
+            go_pick_under(&mut world, Some(0x4800)),
+            Some(chest),
+            "Opening passes over the lock it cannot open"
+        );
+        for word in [0x0100, 0x0040, 0x0010] {
+            assert_eq!(
+                go_pick_under(&mut world, Some(word)),
+                None,
+                "a word without 0x4800 picks no GameObject ({word:#06x})"
+            );
+        }
+        assert_eq!(go_pick_under(&mut world, None), Some(herb), "and back");
+    }
+
+    /// While targeting, the grader publishes the pick without the mouseover slot `+0x54`
+    /// (`0x4828f4` → `0x4829d4`), so a chest the word admits is the hover even where its
+    /// `NO_INTERACT` flag keeps it out outside targeting.
+    #[test]
+    fn while_targeting_the_go_pick_skips_the_mouseover_slot() {
+        let mut world = go_pick_world();
+        let chest = chest_at(&mut world, 0xF110_0000_0700_0001, 7, 0.0, 0x10);
+        assert_eq!(go_pick_under(&mut world, None), None, "not eligible");
+        assert_eq!(go_pick_under(&mut world, Some(0x4800)), Some(chest));
+    }
+
     /// Naxxramas's "Unholy Axe" is an `InvisibleStalker` body with no vertices holding a real axe,
     /// which is its whole pick surface.
     #[test]
