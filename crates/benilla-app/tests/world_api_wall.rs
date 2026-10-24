@@ -227,7 +227,10 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
     ("liquid::WaterChunkInfo", "CLOSE/absorb"),
     ("map_proj::WorldProj", "CLOSE/move-game"),
     ("map_proj::ZoneRect", "CLOSE/move-game"),
+    ("map_proj::continent_sheet_rect", "CLOSE/move-game"),
     ("map_proj::world_uv", "CLOSE/move-game"),
+    ("map_proj::zone_uv", "CLOSE/move-game"),
+    ("map_proj::zone_world", "CLOSE/move-game"),
     ("mesh_tag::describe", "CLOSE/absorb"),
     ("mesh_tag::with_alpha", "CLOSE/invert"),
     ("model_fade::DespawnFade", "CLOSE/move-game"),
@@ -294,7 +297,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 ];
 
 /// The gate on the leak count. Lower it when a leak closes.
-const LEAK_CEILING: usize = 108;
+const LEAK_CEILING: usize = 111;
 
 /// How far under [`LEAK_CEILING`] the count may sit before the test asks for the ceiling to be
 /// lowered: one closure does not fail the gate, a whole stage of work cannot go unrecorded.
@@ -584,6 +587,9 @@ fn paths_in(text: &str, split: bool, want_engine: bool) -> Vec<(String, usize)> 
     // (`mod tests;`, `use …;`) at its semicolon.
     let mut test_at: Option<i32> = None;
     let mut test_open = false;
+    // With the crate, a module the file imports (`use benilla_world::map_proj::{self}`,
+    // `use benilla_world::particles::buffer`, `view as camera_view`): its local name to its path.
+    let mut modules: BTreeMap<String, String> = BTreeMap::new();
     for (n, line) in logical_lines(text).iter().map(|(n, l)| (*n, l.as_str())) {
         let t = line.trim_start();
         if t.starts_with("#[cfg(test)]") {
@@ -651,6 +657,23 @@ fn paths_in(text: &str, split: bool, want_engine: bool) -> Vec<(String, usize)> 
                     }
                 }
                 rest = &rest[i + prefix.len()..];
+            }
+            if split && want_engine {
+                let is_use = t.starts_with("use ") || t.starts_with("pub");
+                if let Some(tree) = line
+                    .find(prefix)
+                    .filter(|_| is_use)
+                    .map(|i| &line[i + prefix.len()..])
+                {
+                    modules.extend(imported_names(tree, ""));
+                }
+                for (name, module) in &modules {
+                    found.extend(
+                        paths_through(line, name)
+                            .into_iter()
+                            .map(|tail| (canon(&format!("{module}::{tail}")), n + 1)),
+                    );
+                }
             }
         }
         depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
@@ -771,6 +794,66 @@ fn expand(s: &str) -> Vec<String> {
             }
             None => out.extend(expand(part)),
         }
+    }
+    out
+}
+
+/// The local names a `use` tree under `head` binds to a lowercase path, a module or a function:
+/// `self` in a group binds the group's last segment, `x as y` binds `y`.
+fn imported_names(tree: &str, head: &str) -> Vec<(String, String)> {
+    let join = |seg: &str| {
+        if head.is_empty() {
+            seg.to_string()
+        } else {
+            format!("{head}::{seg}")
+        }
+    };
+    let tree = tree.trim().trim_end_matches(';').trim();
+    if let Some(group) = tree.strip_prefix('{') {
+        let inner = &group[..group.rfind('}').unwrap_or(group.len())];
+        let mut depth = 0usize;
+        return split_top(inner, &mut depth)
+            .into_iter()
+            .flat_map(|part| {
+                let part = part.trim();
+                if part == "self" {
+                    let last = head.rsplit("::").next().unwrap_or(head);
+                    return vec![(last.to_string(), head.to_string())];
+                }
+                imported_names(part, head)
+            })
+            .collect();
+    }
+    let Some((seg, after)) = ident(tree) else {
+        return vec![];
+    };
+    if let Some(rest) = after.strip_prefix("::") {
+        return imported_names(rest, &join(&seg));
+    }
+    let local = after
+        .trim()
+        .strip_prefix("as ")
+        .and_then(|a| ident(a.trim()))
+        .map_or(seg.clone(), |(alias, _)| alias);
+    if seg.starts_with(char::is_uppercase) || local == "_" {
+        return vec![];
+    }
+    vec![(local, join(&seg))]
+}
+
+/// Every path tail named through `name::` on `line`, where `name` starts the path: not after
+/// `::` or inside a longer identifier.
+fn paths_through(line: &str, name: &str) -> Vec<String> {
+    let needle = format!("{name}::");
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = line[from..].find(&needle).map(|i| i + from) {
+        let before = line[..i].chars().next_back();
+        let starts = before.is_none_or(|c| !is_ident(c) && c != ':');
+        if starts {
+            out.extend(expand(&line[i + needle.len()..]));
+        }
+        from = i + needle.len();
     }
     out
 }
