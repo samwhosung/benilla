@@ -154,22 +154,28 @@ impl Until {
     }
 }
 
+/// What an exclusive firing reads beside the call host and its own lane, by type, resources and
+/// components alike: Bevy reports such a system's access as empty, so the guard on the lanes'
+/// frame-final reads takes this list instead.
+pub(crate) type LaneReads = fn(&World) -> Vec<std::any::TypeId>;
+
 /// One lane: its name, its head, its firing (a one-shot taking [`Until`], the `NetHandlers`
-/// shape), and what it does once ahead of each drain.
+/// shape), what it does once ahead of each drain, and an exclusive firing's declared reads.
 struct Lane {
     name: &'static str,
     peek: fn(&World) -> Option<Stamp>,
     fire: SystemId<In<Until>>,
     begin: Option<fn(&World)>,
+    reads: Option<LaneReads>,
 }
 
 /// Every lane, in registration order.
 #[derive(Resource, Default)]
 pub(crate) struct Lanes(
     Vec<Lane>,
-    /// Each lane's firing's declared access, once [`measure`] ran.
+    /// Each lane's firing's declared access and whether it is exclusive, once [`measure`] ran.
     #[cfg(test)]
-    Option<Vec<bevy::ecs::query::FilteredAccessSet>>,
+    Option<Vec<(bevy::ecs::query::FilteredAccessSet, bool)>>,
 );
 
 impl Lanes {
@@ -182,10 +188,28 @@ impl Lanes {
     /// Each lane's firing's declared access, in registration order, for the tests that ask what
     /// the drain touches. Panics before [`measure`].
     #[cfg(test)]
-    pub(crate) fn accesses(&self) -> &[bevy::ecs::query::FilteredAccessSet] {
+    pub(crate) fn accesses(&self) -> Vec<&bevy::ecs::query::FilteredAccessSet> {
         self.1
             .as_deref()
             .expect("the lanes' accesses are read after `lanes::measure`")
+            .iter()
+            .map(|(a, _)| a)
+            .collect()
+    }
+
+    /// Each lane's firing, in registration order: whether it is exclusive, and the reads it
+    /// declares. Panics before [`measure`].
+    #[cfg(test)]
+    pub(crate) fn exclusive_reads(&self) -> Vec<(bool, Option<LaneReads>)> {
+        let measured = self
+            .1
+            .as_deref()
+            .expect("the lanes' firings are read after `lanes::measure`");
+        measured
+            .iter()
+            .zip(&self.0)
+            .map(|((_, exclusive), lane)| (*exclusive, lane.reads))
+            .collect()
     }
 }
 
@@ -205,7 +229,8 @@ pub(crate) fn measure(world: &mut World) {
                 .unregister_system(lane.fire)
                 .expect("a registered lane firing")
                 .system();
-            accesses.push(system.initialize(world));
+            let exclusive = system.is_exclusive();
+            accesses.push((system.initialize(world), exclusive));
             lane.fire = world.register_boxed_system(system);
         }
         lanes.1 = Some(accesses);
@@ -232,6 +257,16 @@ pub(crate) trait LaneApp {
         peek: fn(&World) -> Option<Stamp>,
         fire: impl IntoSystem<In<Until>, (), M> + 'static,
         begin: Option<fn(&World)>,
+    ) -> &mut Self;
+
+    /// Register a lane whose firing holds the world, with what it reads beside the call host and
+    /// its own lane ([`LaneReads`]).
+    fn add_exclusive_lane(
+        &mut self,
+        name: &'static str,
+        peek: fn(&World) -> Option<Stamp>,
+        fire: fn(In<Until>, &mut World),
+        reads: LaneReads,
     ) -> &mut Self;
 
     /// Run `end` once after each drain, whether it fired every item or stopped.
@@ -276,7 +311,28 @@ impl LaneApp for App {
             peek,
             fire,
             begin,
+            reads: None,
         });
+        self
+    }
+
+    fn add_exclusive_lane(
+        &mut self,
+        name: &'static str,
+        peek: fn(&World) -> Option<Stamp>,
+        fire: fn(In<Until>, &mut World),
+        reads: LaneReads,
+    ) -> &mut Self {
+        self.add_lane(name, peek, fire, None);
+        if let Some(lane) = self
+            .world_mut()
+            .resource_mut::<Lanes>()
+            .0
+            .iter_mut()
+            .find(|l| l.name == name)
+        {
+            lane.reads = Some(reads);
+        }
         self
     }
 

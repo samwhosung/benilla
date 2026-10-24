@@ -64,7 +64,7 @@ pub(super) fn register(app: &mut App) {
     use crate::lanes::LaneApp;
     app.init_resource::<Deaths>()
         .net_handler(SessionEventKind::ObjectUpdateEnd, on_unit_died)
-        .add_lane("deaths", peek_deaths, fire_deaths, None);
+        .add_exclusive_lane("deaths", peek_deaths, fire_deaths, |_| Vec::new());
 }
 
 /// The packet's deaths, in its edges' order, each run in place.
@@ -98,7 +98,8 @@ fn peek_deaths(world: &World) -> Option<Stamp> {
 }
 
 /// Each leg's signals `until` admits, run as the firing of their stamp with the host lent; the
-/// lane stops after one whose firing stamped anything, so what it pushed fires next.
+/// lane stops after one whose firing stamped anything, so what it pushed fires next. It reads
+/// nothing beside the host and its own lane.
 fn fire_deaths(In(until): In<Until>, world: &mut World) {
     loop {
         let Some((at, session, key)) = world
