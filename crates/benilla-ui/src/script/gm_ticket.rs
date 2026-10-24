@@ -25,7 +25,8 @@ pub enum GmTicketIntent {
 pub struct GmTicketWrite {
     /// The selected `GMTicketCategory.dbc` id (`HelpFrameOpenTicket.ticketType`).
     pub category: u32,
-    /// The text as typed; the EditBox caps it at 500, under the reference's 1999.
+    /// The text as typed, never empty (the verb refuses one); the EditBox caps it at 500, under
+    /// the reference's 1999.
     pub text: String,
     /// `NewGMTicket` or `UpdateGMTicket`, two opcodes: the window picks by its own `hasTicket`
     /// flag, and the app must not re-derive it.
@@ -86,11 +87,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // Submit and Save Changes: one signature, `(type, text)` in the reference's usage string.
+    // Submit and Save Changes: one signature, `(type, text)` in the reference's usage string. An
+    // empty text sends nothing and shows `ERR_TICKET_NO_TEXT` (`push 0x157; call 0x496720`): the
+    // senders test the copied text's first byte, a new ticket at `0x5ef802`-`0x5ef80a` and an
+    // update at `0x5efadf`-`0x5efae9`. Stock `HelpFrame.lua:478-486` leaves the check to them.
     for (name, is_new) in [("NewGMTicket", true), ("UpdateGMTicket", false)] {
         g.set(
             name,
             lua.create_function(move |lua, (category, text): (u32, String)| {
+                if text.is_empty() {
+                    return super::calls::display_error(lua, "ERR_TICKET_NO_TEXT");
+                }
                 lua.app_data_mut::<Model>()
                     .expect("model app_data")
                     .gm_ticket_intents
