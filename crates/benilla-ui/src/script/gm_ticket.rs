@@ -95,6 +95,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, (category, text): (u32, String)| {
+                // With no active player the binding calls nothing (`0x48ca29`-`0x48ca30`,
+                // `0x48cab9`-`0x48cac0`).
+                if !super::battlefield_queue::player_exists(
+                    &lua.app_data_ref::<Model>().expect("model app_data"),
+                ) {
+                    return Ok(());
+                }
                 if text.is_empty() {
                     return super::calls::display_error(lua, "ERR_TICKET_NO_TEXT");
                 }
