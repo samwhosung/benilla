@@ -300,3 +300,81 @@ fn first_cycle_on_map_lands_on_that_map() {
         "no golden path crosses continents — this test proves nothing"
     );
 }
+
+/// The angle from `b` to `a`, wrapped to `(-π, π]`.
+fn angle_between(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(std::f32::consts::TAU);
+    if d > std::f32::consts::PI {
+        d - std::f32::consts::TAU
+    } else {
+        d
+    }
+}
+
+/// `0x5f50a0` faces the ship against its curve's tangent (`0x5f5251`-`0x5f52ae`), so over a whole
+/// period, on every path the install holds, the facing turned half a circle is the direction of
+/// travel: the chord of the positions 50 ms either side. A ship on a vmangos timetable turns
+/// about mid-route (path 241, Booty Bay to Ratchet).
+#[test]
+fn a_ship_faces_its_direction_of_travel_on_every_path() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_taxi_path_nodes(&mut chain).expect("load TaxiPathNode");
+    let tuple = |id: u32| {
+        GOLDENS
+            .iter()
+            .find(|g| g.path_id == id)
+            .map_or((30.0, 1.0), |g| (g.move_speed, g.accel_rate))
+    };
+    const HALF_WINDOW_MS: u32 = 50;
+    const STEP_MS: u32 = 250;
+    let mut paths = 0usize;
+    let mut checked = 0usize;
+    let mut worst: Vec<(u32, u32, f32)> = Vec::new();
+    let mut ids: Vec<u32> = cat.paths().map(|(id, _)| id).collect();
+    ids.sort_unstable();
+    for id in ids {
+        let nodes = cat.path(id).unwrap();
+        let (speed, accel) = tuple(id);
+        let Some(tt) = TransportTimetable::build(nodes, speed, accel) else {
+            panic!("path {id} builds");
+        };
+        paths += 1;
+        let mut path_worst = (0u32, 0.0f32);
+        let mut t = HALF_WINDOW_MS;
+        while t + HALF_WINDOW_MS < tt.period_ms {
+            let (before, here, after) = (
+                tt.sample(t - HALF_WINDOW_MS),
+                tt.sample(t),
+                tt.sample(t + HALF_WINDOW_MS),
+            );
+            let chord = [after.pos[0] - before.pos[0], after.pos[1] - before.pos[1]];
+            let moved = chord[0].hypot(chord[1]);
+            // Under way at a third of cruise or more, on one map, with no teleport in the window.
+            let window_s = 2.0 * HALF_WINDOW_MS as f32 * 0.001;
+            if before.map == after.map
+                && moved >= speed * window_s / 3.0
+                && moved <= speed * window_s * 1.5
+            {
+                let travel = chord[1].atan2(chord[0]);
+                let off = angle_between(here.heading + std::f32::consts::PI, travel).abs();
+                checked += 1;
+                if off > path_worst.1 {
+                    path_worst = (t, off);
+                }
+            }
+            t += STEP_MS;
+        }
+        if path_worst.1 > 0.01 {
+            worst.push((id, path_worst.0, path_worst.1));
+        }
+    }
+    assert!(paths > 200, "the install holds {paths} paths");
+    assert!(checked > 10_000, "only {checked} samples under way");
+    assert!(
+        worst.is_empty(),
+        "{} paths face off their travel by more than 0.01 rad, (path, cycle ms, rad): {:?}",
+        worst.len(),
+        &worst[..worst.len().min(20)]
+    );
+}
