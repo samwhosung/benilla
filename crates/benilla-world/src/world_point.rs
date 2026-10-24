@@ -31,6 +31,27 @@ pub enum Subject {
     Unit(Entity),
 }
 
+/// The terrain heightfield alone, asked about a column: the narrow read for a caller that holds
+/// the whole of [`WorldPoint`] nowhere, such as the call host's minimap ground cast. Read-only.
+#[derive(SystemParam)]
+pub struct TerrainHeights<'w> {
+    /// Absent in an app with no world, where every column misses.
+    streamer: Option<Res<'w, crate::terrain_stream::TerrainStreamer>>,
+    adt_tiles: Option<Res<'w, Assets<benilla_assets::AdtTile>>>,
+}
+
+impl TerrainHeights<'_> {
+    /// The MCNK heightfield's height (WoW `z`) under a point (Bevy space): the terrain-only trace
+    /// down its column. `None` off the streamed set or over a hole.
+    pub fn under(&self, pos: Vec3) -> Option<f32> {
+        crate::terrain_stream::terrain_height_under(
+            self.streamer.as_deref()?,
+            self.adt_tiles.as_deref()?,
+            pos,
+        )
+    }
+}
+
 /// The world, asked about a point; read-only, so it never conflicts with a caller's parameters.
 #[derive(SystemParam)]
 pub struct WorldPoint<'w, 's> {

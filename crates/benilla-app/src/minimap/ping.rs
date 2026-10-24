@@ -102,9 +102,8 @@ pub(crate) struct MinimapSteps<'w> {
     ping: Option<ResMut<'w, MinimapPing>>,
     group: Option<Res<'w, crate::ui_party::GroupState>>,
     commands: Res<'w, NetCommands>,
-    /// The streamed terrain the ground cast's trace reads; absent without a world.
-    streamer: Option<Res<'w, benilla_world::terrain_stream::TerrainStreamer>>,
-    adt_tiles: Option<Res<'w, Assets<benilla_assets::AdtTile>>>,
+    /// The streamed terrain the ground cast's trace reads.
+    terrain: benilla_world::world_point::TerrainHeights<'w>,
 }
 
 impl MinimapSteps<'_> {
@@ -113,12 +112,7 @@ impl MinimapSteps<'_> {
     /// the heightfield's height there, raised by `[0x807b10]` (`0x4eeee9`). `None` is a miss: no
     /// tile streamed there, or a hole.
     pub(crate) fn ground_under(&self, x: f32, y: f32) -> Option<[f32; 3]> {
-        let (streamer, adt_tiles) = (self.streamer.as_deref()?, self.adt_tiles.as_deref()?);
-        let z = benilla_world::terrain_stream::terrain_height_under(
-            streamer,
-            adt_tiles,
-            wow_to_bevy([x, y, 0.0]),
-        )?;
+        let z = self.terrain.under(wow_to_bevy([x, y, 0.0]))?;
         Some(ground_cast_point(x, y, z))
     }
 
