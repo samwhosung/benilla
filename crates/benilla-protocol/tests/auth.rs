@@ -281,6 +281,7 @@ fn press(grid: &[u8; 10], pin: u32) -> Vec<u8> {
 fn a_pin_account_logs_in_with_the_pin_pressed_on_its_grid() {
     let (addr, proofs) = pin_realmd();
     let mut shown = None;
+    let mut stages = Vec::new();
     let logon = benilla_protocol::logon_with_pin(
         &addr,
         "probe",
@@ -290,9 +291,18 @@ fn a_pin_account_logs_in_with_the_pin_pressed_on_its_grid() {
             shown = Some(*grid);
             Ok(press(grid, PIN))
         },
+        &mut |s| stages.push(s),
     )
     .expect("the PIN verifies");
     assert_eq!(shown, Some([6, 3, 2, 1, 9, 8, 7, 0, 4, 5]));
+    // The reply's state is the keypad's 7 (`pin`'s call), so no 9 comes before the proof.
+    assert_eq!(
+        stages,
+        [
+            benilla_protocol::LoginStage::Authenticating,
+            benilla_protocol::LoginStage::ProofSent
+        ]
+    );
     assert_eq!(proofs.recv().unwrap().len(), 111);
     assert_eq!(logon.pin(), Some(&[2u8, 5, 9, 0][..]));
 }
@@ -307,6 +317,7 @@ fn a_wrong_pin_is_refused_by_the_proof() {
         "secret",
         auth::LOCALE_TAG_EN_US,
         &mut |grid| Ok(press(grid, 1234)),
+        &mut |_| {},
     )
     .err()
     .expect("refused");
@@ -327,6 +338,7 @@ fn a_prompt_that_gives_no_pin_ends_the_logon() {
         "secret",
         auth::LOCALE_TAG_EN_US,
         &mut |_| anyhow::bail!("cancelled"),
+        &mut |_| {},
     )
     .err()
     .expect("no PIN, no logon");
