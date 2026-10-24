@@ -853,6 +853,11 @@ fn worldport(
         if ours && transports.get(*e).is_ok_and(|t| t.touches_map(map_id)) {
             // info, not debug: rare, and the crossing depends on it firing for the ridden boat.
             info!("worldport: sparing transport {guid:#x} (its path touches map {map_id})");
+            // It stands for the new object the post-port create builds, so its clock goes until
+            // that create sets one (`0x5f7080`); the deck holds its pose meanwhile.
+            commands
+                .entity(*e)
+                .remove::<crate::transport::TransportAnchor>();
             return true;
         }
         commands.entity(*e).try_despawn();

@@ -96,7 +96,7 @@ pub(crate) struct TransportLegLeft {
 
 /// The create-block anchor: the server's path-progress ms and the local instant it arrived,
 /// inserted on every create that carries `UPDATE_FLAG_TRANSPORT`.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct TransportAnchor {
     pub(crate) progress_ms: u32,
     pub(crate) at: Instant,
@@ -434,13 +434,12 @@ fn arm_transports(
 fn tick_transports(
     current_map: Option<Res<CurrentMap>>,
     player: Option<Res<crate::player::Player>>,
-    mut worldports: MessageReader<crate::net::WorldportMessage>,
     mut legs_left: MessageWriter<TransportLegLeft>,
     mut transports: Query<(
         Entity,
         &Guid,
         &mut Transport,
-        &TransportAnchor,
+        Ref<TransportAnchor>,
         &mut Transform,
         &mut Visibility,
         Option<&mut Position>,
@@ -451,9 +450,6 @@ fn tick_transports(
     let Some(current_map) = current_map else {
         return;
     };
-    // The reference destroys every object at `SMSG_NEW_WORLD` (`0x401bc0`): a transport spared
-    // across it ticks on as a new one would, with no leg and no animation yet.
-    let ported = worldports.read().count() > 0;
     let riding = player.as_ref().and_then(|p| p.ride_entity());
     for (
         entity,
@@ -467,11 +463,14 @@ fn tick_transports(
         (loaded, store),
     ) in &mut transports
     {
-        if ported {
+        // A fresh clock is a new object's: the ship kept across a worldport, re-anchored by its
+        // post-port create, ticks on as the one the reference builds then, with no leg and no
+        // animation yet (`0x401bc0`).
+        if anchor.is_added() {
             transport.leg = None;
             transport.anim = None;
         }
-        let cycle = transport.cycle_ms(anchor);
+        let cycle = transport.cycle_ms(&anchor);
         let sample = transport.sample(cycle, current_map.0);
         if sample.moving() != transport.was_moving {
             transport.was_moving = sample.moving();

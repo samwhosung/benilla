@@ -81,6 +81,8 @@ pub(crate) struct Scene<'w, 's> {
     modes: Query<'w, 's, &'static mut UnitMoveModes>,
     xp_awarded: Query<'w, 's, (), With<crate::ui_chat::combat::watch::XpAwarded>>,
     riders: Query<'w, 's, &'static mut crate::transport::TransportRider>,
+    /// A transport's clock, which only a new object's create sets (`0x5f7080`).
+    anchors: Query<'w, 's, &'static crate::transport::TransportAnchor>,
     speeds: Query<'w, 's, &'static mut UnitSpeeds>,
     field_changes: MessageWriter<'w, FieldChanged>,
     /// The aura watcher's calls ([`super::AuraFieldsChanged`]), one per block.
@@ -496,10 +498,11 @@ pub(super) enum Landing {
     /// A held object, refreshed in place; the caller writes its store.
     Live(Entity),
     /// A new entity with `store`: an object allocated now, or a released one brought back, which
-    /// keeps `kept_pose` when its type takes no position from the block.
+    /// keeps `kept_pose` when its type takes no position from the block, and its clock.
     New {
         store: ObjectFields,
         kept_pose: Option<Transform>,
+        kept_anchor: Option<crate::transport::TransportAnchor>,
     },
 }
 
@@ -603,8 +606,12 @@ fn object_create(
             if let Some(s) = speeds {
                 commands.entity(e).insert(UnitSpeeds(s));
             }
-            if let Some(anchor) = transport_anchor {
-                commands.entity(e).insert(anchor);
+            // `0x466350` constructs nothing, so a held transport keeps its clock; one with none is
+            // the ship kept across a worldport, standing for the new object built there.
+            if !sc.anchors.contains(e) {
+                if let Some(anchor) = transport_anchor {
+                    commands.entity(e).insert(anchor);
+                }
             }
             if let Some(seed) = elevator_seed {
                 commands.entity(e).insert(seed);
@@ -636,7 +643,11 @@ fn object_create(
             }
             e
         }
-        Landing::New { store, kept_pose } => {
+        Landing::New {
+            store,
+            kept_pose,
+            kept_anchor,
+        } => {
             // A transport spawns hidden: its create pose is the spawn point, not where it is in
             // its cycle; its first tick unhides it, posed unless its leg is on another map.
             let visibility = if transport_anchor.is_some() {
@@ -658,7 +669,8 @@ fn object_create(
             if let Some(s) = speeds {
                 entity.insert(UnitSpeeds(s));
             }
-            if let Some(anchor) = transport_anchor {
+            // Reactivation constructs nothing either (`0x464530`): a brought-back clock stands.
+            if let Some(anchor) = kept_anchor.or(transport_anchor) {
                 entity.insert(anchor);
             }
             if let Some(seed) = elevator_seed {
