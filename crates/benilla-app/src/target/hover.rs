@@ -1584,6 +1584,79 @@ mod tests {
         assert_eq!(go_pick_under(&mut world, None), Some(herb), "and back");
     }
 
+    /// `0x5f8260`'s `OPEN_LOCK_ITEM` (59) arm (`0x5f831c`-`0x5f837e`): the cast item named by the
+    /// record's guid (`0xceac48`, looked up as an item, `0x5f833a`) opens a lock whose KEY slot
+    /// (type 1) indexes its entry, so a key's cursor admits that lock to the pick and no other.
+    #[test]
+    fn while_targeting_a_key_picks_the_lock_it_fits() {
+        use benilla_formats::{LockCatalog, LockSlot, SpellDisplay, LOCK_KEY_ITEM};
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        const KEY_SPELL: u32 = 3366;
+        const KEY: u64 = 0x4000_0000_0000_0042;
+        let pick_with_key = |key_entry: u32| {
+            let mut world = go_pick_world();
+            world.resource_mut::<crate::ui_action::Spells>().catalog =
+                benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+                    KEY_SPELL,
+                    SpellDisplay {
+                        effects: [59, 0, 0],
+                        ..SpellDisplay::default()
+                    },
+                )]));
+            let mut slots = [LockSlot::default(); benilla_formats::MAX_LOCK_SLOTS];
+            slots[0] = LockSlot {
+                key_type: LOCK_KEY_ITEM,
+                index: 5000,
+                skill: 0,
+                action: 5,
+            };
+            world.insert_resource(crate::go_templates::Locks(LockCatalog::from_rows([(
+                57, slots,
+            )])));
+            let mut data = [0; 24];
+            data[0] = 57;
+            world
+                .resource_mut::<crate::go_templates::GameObjectTemplates>()
+                .insert(9, 3, "Locked Chest".into(), &data);
+            let chest = chest_at(&mut world, 0xF110_0000_0900_0003, 9, 0.0, 0);
+            let key = world
+                .spawn((
+                    Guid(KEY),
+                    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                        (2, 0x3),
+                        (FIELD_OBJECT_ENTRY, key_entry),
+                    ])),
+                ))
+                .id();
+            world
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(KEY, key);
+            world.resource_mut::<crate::spell::SpellTargeting>().enter(
+                KEY_SPELL,
+                crate::spell::CastCommit::Item {
+                    bag_index: 0,
+                    slot: 0,
+                    entry: key_entry,
+                    guid: Some(KEY),
+                    spell_index: 0,
+                    on_object: None,
+                },
+                0x4800,
+            );
+            world
+                .run_system_cached(crate::spell::targeting::publish_go_pick)
+                .expect("the word publishes");
+            world
+                .run_system_cached(update_hovered_object)
+                .expect("the pick runs");
+            (world.resource::<HoveredObject>().target, chest)
+        };
+        let (picked, chest) = pick_with_key(5000);
+        assert_eq!(picked, Some(chest), "the key fits");
+        assert_eq!(pick_with_key(5001).0, None, "another key does not");
+    }
+
     /// While targeting, the grader publishes the pick without the mouseover slot `+0x54`
     /// (`0x4828f4` → `0x4829d4`), so a chest the word admits is the hover even where its
     /// `NO_INTERACT` flag keeps it out outside targeting.
