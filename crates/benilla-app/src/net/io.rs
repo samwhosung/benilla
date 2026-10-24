@@ -1022,6 +1022,14 @@ fn stream(
                         return Ok(StreamEnd::Back(reason));
                     }
                 }
+                // The answer's bytes after its record has landed: what the on-disk cache keeps.
+                if crate::wdb::is_saved_answer(opcode)
+                    && events_tx
+                        .send(SessionEvent::SavedAnswer { opcode, body })
+                        .is_err()
+                {
+                    return Ok(StreamEnd::Exit);
+                }
             }
             Poll::Skipped {
                 opcode,

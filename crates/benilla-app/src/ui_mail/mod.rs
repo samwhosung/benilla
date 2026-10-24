@@ -102,7 +102,7 @@ pub(crate) struct MailResult {
 /// The mailbox session: the open mailbox's guid, the inbox rows as the wire sent them, the
 /// letter-body cache and the result queues. A close forgets the guid and the queues and keeps the
 /// rows, as the reference's close does (`0x4acd71`); the world-enter init (`0x4acb10`) and a
-/// disconnect clear everything.
+/// disconnect clear everything but the bodies.
 #[derive(Resource, Default)]
 pub(crate) struct MailOpen {
     pub(crate) mailbox: Option<u64>,
@@ -174,7 +174,9 @@ impl MailOpen {
         self.show_requested = false;
     }
 
-    /// The world-enter init (`0x4acb10`) and a disconnect: no mailbox and no rows.
+    /// The world-enter init (`0x4acb10`) and a disconnect: no mailbox and no rows. The bodies
+    /// stay: the item-text store is saved (`0x554eb0`), and neither the init nor the world entry
+    /// (`0x555811`) clears it.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
         self.results.clear();
@@ -1185,7 +1187,7 @@ mod tests {
     }
 
     /// A close forgets the mailbox and keeps the rows (`0x4acd71`); the world-enter init and a
-    /// disconnect clear them (`0x4acb10`).
+    /// disconnect clear them (`0x4acb10`), and keep the saved item-text store.
     #[test]
     fn a_close_keeps_the_rows_and_the_session_end_clears_them() {
         let mut m = MailOpen::default();
@@ -1198,7 +1200,7 @@ mod tests {
         assert!(!m.bodies.is_empty());
         m.clear_session();
         assert!(m.mails.is_empty());
-        assert!(m.bodies.is_empty());
+        assert!(!m.bodies.is_empty());
     }
 
     /// No GlobalStrings in a unit test: every key misses.

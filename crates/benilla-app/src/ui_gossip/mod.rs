@@ -3,8 +3,6 @@
 //! slots ([`GossipVerbs`]), and so does `CloseGossip`'s close core.
 //! As in the reference's `0x4e2010`, a menu opens only once its greeting is drawn.
 
-use std::collections::HashMap;
-
 use benilla_protocol::messages::{select_greeting, GossipOption, NpcTextBlock};
 use bevy::prelude::*;
 
@@ -12,7 +10,7 @@ use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow};
 
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
-use crate::query_cache::Ask;
+use crate::query_cache::{Ask, QueryCache};
 use crate::ui_quest::row_is_active;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
@@ -30,7 +28,8 @@ pub(crate) struct GossipState {
     /// because `GetGossipAvailableQuests` and `GetGossipActiveQuests` return `(title, level)`
     /// pairs, walked in twos by stock `GossipFrame.lua` (lines 66 and 90).
     pub(crate) quests: Vec<(u32, u32, u32, String)>,
-    records: HashMap<u32, Vec<NpcTextBlock>>,
+    /// The NPC-text store (`0xc0e264`), which [`crate::wdb`] saves; the menu sends its own query.
+    records: QueryCache<u32, Vec<NpcTextBlock>>,
     /// The drawn record had no line for the NPC's gender: the close core is owed.
     missing_text: bool,
     /// The reference's text-pending latch `[0xbbb670]`: set on the text's cache miss
@@ -42,7 +41,16 @@ pub(crate) struct GossipState {
 
 impl GossipState {
     pub(crate) fn cached_record(&self, text_id: u32) -> Option<&[NpcTextBlock]> {
-        self.records.get(&text_id).map(Vec::as_slice)
+        self.records.get(text_id).map(Vec::as_slice)
+    }
+
+    /// The NPC-text store, the one [`crate::wdb`] saves.
+    pub(crate) fn record_store(&self) -> &QueryCache<u32, Vec<NpcTextBlock>> {
+        &self.records
+    }
+
+    pub(crate) fn record_store_mut(&mut self) -> &mut QueryCache<u32, Vec<NpcTextBlock>> {
+        &mut self.records
     }
 
     pub(crate) fn remember_record(&mut self, text_id: u32, blocks: Vec<NpcTextBlock>) {

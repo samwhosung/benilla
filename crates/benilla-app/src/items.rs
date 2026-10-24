@@ -665,6 +665,24 @@ impl Items {
         }
     }
 
+    /// The template store, the one [`crate::wdb`] saves.
+    pub(crate) fn template_store(&self) -> &QueryCache<u32, ItemInfo> {
+        &self.templates
+    }
+
+    pub(crate) fn template_store_mut(&mut self) -> &mut QueryCache<u32, ItemInfo> {
+        &mut self.templates
+    }
+
+    /// Drops every template, which the interface's copy drops too: another realm's file replaces
+    /// them.
+    pub(crate) fn forget_templates(&mut self) {
+        self.dropped
+            .extend(self.templates.iter().map(|(&entry, _)| entry));
+        self.fresh.clear();
+        self.templates.clear();
+    }
+
     /// Bumped by every landed answer, for consumers besides the drain; the stand-in for the
     /// reference's `DBCACHECALLBACK` redisplay (`0x6e29b0`).
     pub(crate) fn template_epoch(&self) -> u64 {

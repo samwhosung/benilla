@@ -269,6 +269,7 @@ impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
         self.answered.iter()
     }
 
+    #[cfg(test)]
     /// How many records it holds.
     pub(crate) fn len(&self) -> usize {
         self.answered.len()

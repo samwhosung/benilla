@@ -220,6 +220,15 @@ impl crate::query_cache::AskOnce for GuildState {
 }
 
 impl GuildState {
+    /// The world entry's clear ([`crate::wdb`]): the guild store is built with persistence off
+    /// (`0x554d20`), so `0x555740` clears it (`0x5557c0`), the callbacks of its pending records
+    /// with it.
+    pub(crate) fn clear_world_session(&mut self) {
+        self.identities.clear();
+        self.waiters.clear();
+        self.identity_generation = self.identity_generation.wrapping_add(1);
+    }
+
     /// `IsInGuild`: our own `PLAYER_GUILDID` is set, known before any guild packet.
     pub(crate) fn in_guild(&self) -> bool {
         self.guild_id != 0
@@ -747,9 +756,8 @@ pub(crate) mod net {
         }
     }
 
-    /// Reset at session end: the next login may be another character. Deviation: the identity
-    /// cache goes too, where the reference keeps it in `guildcache.wdb`, because a renamed guild
-    /// would otherwise show its old name.
+    /// Reset at session end: the next login may be another character. The identity store goes
+    /// too, which the next world entry would clear anyway (`0x5557c0`).
     fn on_session_end(
         In(_): In<SessionEvent>,
         mut guild: ResMut<GuildState>,

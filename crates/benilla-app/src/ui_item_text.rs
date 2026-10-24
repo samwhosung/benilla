@@ -56,8 +56,17 @@ impl PageTexts {
         self.pages.insert(page_id, PageText { text, next });
     }
 
+    /// The page store, the one [`crate::wdb`] saves.
+    pub(crate) fn page_store(&self) -> &QueryCache<u32, PageText> {
+        &self.pages
+    }
+
+    pub(crate) fn page_store_mut(&mut self) -> &mut QueryCache<u32, PageText> {
+        &mut self.pages
+    }
+
     /// The cached page, read as `ask` says; `guid` is the reading object, which vmangos discards.
-    fn page(&self, page_id: u32, guid: u64, ask: Ask<'_>) -> Option<&PageText> {
+    pub(crate) fn page(&self, page_id: u32, guid: u64, ask: Ask<'_>) -> Option<&PageText> {
         self.pages.read(page_id, ask, |commands| {
             debug!("page text: asking page {page_id} (object {guid:#x})");
             let _ = commands

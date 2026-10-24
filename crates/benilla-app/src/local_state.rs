@@ -354,16 +354,15 @@ pub(crate) fn move_character_state(realm: &str, old: &str, new: &str) {
     }
 }
 
-/// `benilla-config/cache/<realm>.tsv`: the player, creature and pet names the server has answered,
-/// one file for the reference's `WDB/namecache.wdb`, `creaturecache.wdb` and `petnamecache.wdb`.
-///
-/// Realm-scoped, where the reference's is not: guids, creature entries and pet numbers are
-/// realm-local, so one shared file would serve a realm another realm's names.
-pub(crate) fn name_cache_path(realm: &str) -> Option<PathBuf> {
+/// `benilla-config/cache/<realm>/<store>.bin`: one saved template store ([`crate::wdb`]), the
+/// reference's `WDB/<store>.wdb`. Realm-scoped, where the reference's is not: a template key is
+/// the server's, so another realm may hold another template under it.
+pub(crate) fn template_cache_path(realm: &str, store: &str) -> Option<PathBuf> {
     Some(
         home()?
             .join("cache")
-            .join(format!("{}.tsv", file_token(realm))),
+            .join(file_token(realm))
+            .join(format!("{store}.bin")),
     )
 }
 

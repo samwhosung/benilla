@@ -243,6 +243,25 @@ impl PetitionRecords {
     }
 
     /// One step per landed or patched record.
+    /// The world entry's clear ([`crate::wdb`]): the petition store is built with persistence off
+    /// (`0x554e60`), so `0x555740` clears it (`0x55580c`).
+    pub(crate) fn clear_world_session(&mut self) {
+        self.records.clear();
+        self.records_epoch = self.records_epoch.wrapping_add(1);
+    }
+
+    /// Files a record as its answer does, for a test elsewhere.
+    #[cfg(test)]
+    pub(crate) fn answer_for_test(&mut self, response: PetitionQueryResponse) {
+        self.apply_record(response);
+    }
+
+    /// Whether the store holds a record for `petition_id`, for a test elsewhere.
+    #[cfg(test)]
+    pub(crate) fn holds_for_test(&self, petition_id: u32) -> bool {
+        self.records.get(petition_id).is_some()
+    }
+
     pub(crate) fn records_epoch(&self) -> u64 {
         self.records_epoch
     }

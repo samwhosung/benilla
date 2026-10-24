@@ -348,7 +348,7 @@ pub enum ServerPacket {
         info: Option<CreatureQueryInfo>,
     },
     /// `SMSG_PET_NAME_QUERY_RESPONSE`: keyed by pet number, as the client's pet-name cache is; the
-    /// `nameTimestamp` tail, which only ages that on-disk cache, is read and dropped.
+    /// `nameTimestamp` tail is read and dropped.
     PetNameQueryResponse {
         pet_number: u32,
         name: String,

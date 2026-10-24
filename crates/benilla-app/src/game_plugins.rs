@@ -24,7 +24,6 @@ use crate::entities::EntitiesPlugin;
 use crate::fishing_line::FishingLinePlugin;
 use crate::footprints::FootprintsPlugin;
 use crate::loading_screen::LoadingScreenPlugin;
-use crate::name_persist::NamePersistPlugin;
 use crate::net::NetPlugin;
 use crate::player::PlayerPlugin;
 use crate::portrait::PortraitPlugin;
@@ -232,7 +231,7 @@ impl PluginGroup for GamePlugins {
             .add(UiTradePlugin)
             .add(UiItemTextPlugin)
             .add(UiSavedPlugin)
-            .add(NamePersistPlugin)
+            .add(crate::wdb::WdbPlugin)
             .add(UiStablePlugin)
             .add(TabardUiPlugin)
             .add(UiTrainerPlugin)
@@ -976,9 +975,8 @@ pub(crate) mod schedule_tests {
     ///   against the 80 world systems no declared order places against it, which bevy lists with
     ///   no component. What they meet of the drain's (its lanes' firings, the VM with the call host,
     ///   and the unit edits it applies in place: every component a change writes, the cast events,
-    ///   the precast tail's loot release) is the name cache alone, a pure cache, which the
-    ///   persisted-name load writes; `lanes::guard_tests` checks that it stays so, and that no
-    ///   exclusive system is among them. Commands a firing defers, which the drain applies after
+    ///   the precast tail's loot release) is the name cache alone, a pure cache;
+    ///   `lanes::guard_tests` checks that it stays so, and that no exclusive system is among them. Commands a firing defers, which the drain applies after
     ///   it, are outside that model;
     /// - the minimap's draw (`minimap::emit_minimap`), which reads `QuestGiver`'s dialog statuses,
     ///   against `ui_panes::feed_character_panes`, which lends the call host, whose quest verbs

@@ -1287,8 +1287,8 @@ fn parse_server_body(
                 }
             }
         }
-        // `u32 petNumber, cstring name, u32 nameTimestamp` (`Pet.cpp:79-84`); the timestamp only
-        // ages the reference's on-disk pet-name cache.
+        // `u32 petNumber, cstring name, u32 nameTimestamp` (`Pet.cpp:79-84`); the timestamp is
+        // read and dropped.
         opcode::SMSG_PET_NAME_QUERY_RESPONSE => {
             let pet_number = read_u32_le(&mut r)?;
             let name = read_cstring(&mut r)?;

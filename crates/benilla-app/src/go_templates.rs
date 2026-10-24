@@ -183,6 +183,15 @@ impl GameObjectTemplates {
             .send(ClientCommand::GameObjectQuery { entry, guid });
     }
 
+    /// The template store, the one [`crate::wdb`] saves.
+    pub(crate) fn template_store(&self) -> &QueryCache<u32, GoTemplate> {
+        &self.templates
+    }
+
+    pub(crate) fn template_store_mut(&mut self) -> &mut QueryCache<u32, GoTemplate> {
+        &mut self.templates
+    }
+
     /// A refused entry (`SMSG_GAMEOBJECT_QUERY_RESPONSE` with the top bit set, `0x5588e0`): no
     /// template, and the next lookup asks again ([`QueryCache::refuse`]).
     pub(crate) fn refuse(&mut self, entry: u32) {

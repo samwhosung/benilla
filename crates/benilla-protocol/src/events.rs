@@ -237,6 +237,10 @@ pub enum SessionEvent {
     /// The world session ended, and with [`SessionEnd::Lost`] the link with it; `reason` is
     /// human-readable.
     Disconnected { reason: String, end: SessionEnd },
+    /// The body of an answer whose record the 1.12 client saves to disk, as it came off the wire,
+    /// its key the first dword (`0x556e5b`): emitted by the IO thread after the answer's decoded
+    /// events, never wire-decoded, for the app's on-disk template caches.
+    SavedAnswer { opcode: u16, body: Vec<u8> },
     /// A placed object entered view, its spawn identity decoded per object type.
     ObjectCreate {
         guid: u64,
