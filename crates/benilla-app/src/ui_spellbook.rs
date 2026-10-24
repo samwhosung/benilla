@@ -596,6 +596,14 @@ mod tests {
             None,
             "an id with no Spell.dbc record flashes nothing"
         );
+
+        // The add's live tail signals the tab, then triggers The Spellbook (`0x4b2b92`,
+        // `0x4b2ba1`); a spell the add returns early for does neither.
+        let mut script = UiScript::new().unwrap();
+        fire_tab_flashes(&mut script, &[668], &tab_lines, &spells, None, 1, 1);
+        assert!(script.take_tutorial_triggers().is_empty(), "DO_NOT_DISPLAY");
+        fire_tab_flashes(&mut script, &[133], &tab_lines, &spells, None, 1, 1);
+        assert_eq!(script.take_tutorial_triggers(), [0x27]);
     }
 
     /// Shown spells sort name then rank, and General takes the fixed name and icon.

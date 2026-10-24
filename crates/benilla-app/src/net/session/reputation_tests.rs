@@ -582,3 +582,63 @@ fn the_at_war_message_copies_bit_1_alone() {
         "the message tests no peace-forced bit"
     );
 }
+
+/// `SMSG_SET_FACTION_STANDING` triggers Reputation (`0x4d5973`-`0x4d597a`) with the active
+/// player held at level 10 or more (`0x4d596d cmp [ecx+0x70],0xa`), after its entries and
+/// before its `UPDATE_FACTION`; below 10 nothing.
+#[test]
+fn a_standing_change_at_level_ten_triggers_the_reputation_tutorial() {
+    for (level, fired) in [(9, vec![]), (10, vec![0x10])] {
+        let mut app = App::new();
+        app.init_resource::<crate::net::GuidIndex>()
+            .insert_resource(SelfGuid(Some(ME)))
+            .init_resource::<crate::net::NetStatus>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<crate::items::Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<Reputations>()
+            .init_resource::<crate::net::ServerTime>()
+            .init_resource::<crate::net::ServerWallClock>()
+            .init_resource::<crate::net::HomeBind>()
+            .init_resource::<crate::net::Proficiencies>()
+            .init_resource::<crate::net::DroppedOpcodes>()
+            .init_resource::<crate::ui_quest::QuestGiver>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::tutorial::Tutorials>()
+            .insert_resource(crate::net::NetCommands(crossbeam_channel::unbounded().0));
+        app.world()
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        // `UNIT_FIELD_LEVEL`.
+        let me = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                ObjectStore(ObjectFields::from_pairs(&[
+                    (36, HUMAN_WARRIOR),
+                    (34, level),
+                ])),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ME, me);
+        app.world_mut()
+            .run_system_cached_with(
+                on_reputation_delta,
+                SessionEvent::ReputationDelta {
+                    standings: vec![(0, 100)],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<crate::tutorial::Tutorials>()
+                .take_fired(),
+            fired,
+            "level {level}"
+        );
+    }
+}

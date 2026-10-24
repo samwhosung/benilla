@@ -680,3 +680,31 @@ fn a_target_name_that_finds_nobody_shows_the_references_line() {
     assert!(f.errors().is_empty(), "{:?}", f.errors());
     assert_eq!(f.selected(), Some(MOB));
 }
+
+/// Talking to an NPC in reach whose dialog status is 1, unavailable, triggers Unavailable Quest
+/// Givers (`0x5f0268`-`0x5f0278`) ahead of its service ladder; another status triggers nothing.
+/// The click's select lit the NPC, which the selection's tutorial ladder then judges
+/// (`0x493789`).
+#[test]
+fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
+    for (status, fired) in [(5, vec![]), (1, vec![0x2b])] {
+        let mut f = fix(false);
+        f.app.world_mut().init_resource::<crate::player::Player>();
+        f.app
+            .world()
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        let npc = f.unit_with(NPC, 3.0, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
+        f.app
+            .world_mut()
+            .resource_mut::<crate::ui_quest::QuestGiver>()
+            .set_status(NPC, status);
+        f.press_on(npc, NPC, false);
+        f.right_click();
+        assert!(greeted(&f.sent(), NPC), "status {status}: in reach");
+        let tutorials = f.app.world().resource::<crate::tutorial::Tutorials>();
+        assert_eq!(tutorials.take_fired(), fired, "status {status}");
+        assert_eq!(tutorials.take_selects(), [(npc, NPC)], "the select it made");
+    }
+}

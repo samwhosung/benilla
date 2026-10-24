@@ -2649,4 +2649,38 @@ mod tests {
             assert_eq!(view.field_duration, 3_600_000, "bag {bag}");
         }
     }
+
+    /// The alert recompute triggers Broken Items for a slot broken at durability 0 (`0x4c7fee`-
+    /// `0x4c8002`) and Damaged Items for 1 to 5 points left (`0x4c801b`-`0x4c802e`); a force-red
+    /// slot (`0x10`, `0x4c7fb0`) is broken with no tutorial, and the ammo arm has none.
+    #[test]
+    fn the_alert_recompute_triggers_broken_and_damaged_items() {
+        let mut s = UiScript::new().unwrap();
+        let worn = |durability: (u32, u32), flags: u32| {
+            Some(InvSlotView {
+                item_id: 2361,
+                durability: Some(durability),
+                flags,
+                ..Default::default()
+            })
+        };
+        let mut slots: crate::script::InventorySlots = Default::default();
+        slots[1] = worn((10, 50), 0x10);
+        slots[0] = Some(InvSlotView {
+            item_id: 2512,
+            count: 3,
+            ..Default::default()
+        });
+        s.set_inventory_slots(slots.clone());
+        assert!(
+            s.take_tutorial_triggers().is_empty(),
+            "force-red and low ammo"
+        );
+        slots[3] = worn((4, 50), 0);
+        s.set_inventory_slots(slots.clone());
+        assert_eq!(s.take_tutorial_triggers(), [0x23], "damaged");
+        slots[3] = worn((0, 50), 0);
+        s.set_inventory_slots(slots);
+        assert_eq!(s.take_tutorial_triggers(), [0x24], "broken");
+    }
 }

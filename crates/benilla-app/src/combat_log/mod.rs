@@ -984,6 +984,42 @@ mod tests {
         );
     }
 
+    /// The swing's log step triggers Spells and Abilities for a swing of the active player's
+    /// whose victim state is 1, a hit (`0x629b1a`-`0x629b37`), on the state the record read
+    /// left; a dodge, or a hit on us, triggers nothing.
+    #[test]
+    fn our_own_landed_swing_triggers_spells_and_abilities() {
+        let swing = |attacker: u64, victim: u64, victim_state: u32| {
+            SessionEvent::AttackerState(benilla_protocol::messages::AttackerState {
+                attacker,
+                victim,
+                hit_info: 0x2,
+                damage: 30,
+                victim_state,
+                absorb: 0,
+                resist: 0,
+                blocked: 0,
+                melee_spell_id: 0,
+                school: 0,
+            })
+        };
+        let mut app = swing_world(&[ME, MOB]);
+        app.init_resource::<crate::tutorial::Tutorials>();
+        app.world()
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        let fired = |app: &mut App, ev: SessionEvent| {
+            crate::net::handlers::dispatch(app.world_mut(), vec![ev]);
+            app.world()
+                .resource::<crate::tutorial::Tutorials>()
+                .take_fired()
+        };
+        assert!(fired(&mut app, swing(ME, MOB, 2)).is_empty(), "a dodge");
+        assert!(fired(&mut app, swing(MOB, ME, 1)).is_empty(), "a hit on us");
+        assert_eq!(fired(&mut app, swing(ME, MOB, 1)), [0x06], "our hit");
+    }
+
     /// `HandleUnitCombatMessage` signals `PLAYER_ENTER_COMBAT` inside our `SMSG_ATTACKSTART`
     /// (`0x6256ff`) and `PLAYER_LEAVE_COMBAT` inside our `SMSG_ATTACKSTOP`, after its swing flush
     /// (`0x625763` → `0x624e40`, then `0x625778`), each gated on the attacker being the active

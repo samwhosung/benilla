@@ -210,10 +210,10 @@ pub(crate) fn cancel_auto_repeat_local(
 /// signal and `SPELLCAST_STOP`; in the save under a cast, by the packet alone, which is why Auto
 /// Shot (`0x6e5976`) darkens a Raptor Strike ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo
 /// (`0x624e40`), as in the reference. The send marks `me`'s stop in flight in `word`
-/// (`0x6243b2`).
+/// (`0x6243b2`). Ahead of the send, `low`'s Food and Drink tutorials (`0x5ecb17`, `0x5ecb54`).
 pub(crate) fn stop_attack_local(
     me: Option<Entity>,
-    _low: crate::tutorial::LowVitals,
+    low: crate::tutorial::LowVitals,
     edits: &UnitEdits,
     word: &mut AttackStopInFlight,
     core: &mut crate::spell::CastCore,
@@ -223,6 +223,9 @@ pub(crate) fn stop_attack_local(
     // target as the queue leaves it answers both.
     if !me.is_some_and(|me| edits.attacking(me)) {
         return;
+    }
+    for id in low.tutorials() {
+        core.trigger_tutorial(id);
     }
     let _ = core.net.0.send(crate::net::ClientCommand::AttackStop);
     if let Some(me) = me {

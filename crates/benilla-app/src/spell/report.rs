@@ -29,6 +29,8 @@ pub(crate) const REASON_TARGETS_DEAD: u8 = 0x65;
 
 /// The failure the reporter fires no event for: `SPELL_FAILED_SPELL_IN_PROGRESS` (`0x6e2234`).
 const REASON_IN_PROGRESS: u8 = 0x61;
+/// `SPELL_FAILED_NEED_AMMO`.
+const REASON_NEED_AMMO: u8 = 0x2f;
 
 /// The edge a failure signals: `SPELLCAST_INTERRUPTED` (340) for `SPELL_FAILED_INTERRUPTED` and
 /// `_INTERRUPTED_COMBAT`, `SPELLCAST_FAILED` (339) for every other (`0x6e2238`, `0x6e4a24`).
@@ -261,6 +263,11 @@ impl CastCore<'_> {
     /// "Another action is in progress" (`0x6e2234`); anything else fires the failure's edge.
     pub(crate) fn report(&mut self, fail: CastFail, from_server: bool, reaches_tail: bool) {
         let (spell_id, reason) = (fail.spell_id, fail.reason);
+        // The player cleanup's switch, ahead of the line: `NEED_AMMO` triggers Ammunition
+        // (`0x6e1cc3`-`0x6e1cca`).
+        if reason == REASON_NEED_AMMO {
+            self.trigger_tutorial(crate::tutorial::id::AMMUNITION);
+        }
         self.reports.refused(fail);
         if !reaches_tail {
             return;
