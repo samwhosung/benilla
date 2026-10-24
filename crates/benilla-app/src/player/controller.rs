@@ -104,6 +104,7 @@ pub(super) fn control(
             Query<&crate::transport::TransportRider, With<Embodied>>,
             Res<crate::net::GuidIndex>,
             Query<&Transform, (Without<Embodied>, Without<FlyCam>, Without<Camera>)>,
+            Query<&crate::net::ObjectStore>,
         ),
     ),
 ) {
@@ -918,10 +919,15 @@ fn self_seat(
         Query<&crate::transport::TransportRider, With<Embodied>>,
         Res<crate::net::GuidIndex>,
         Query<&Transform, (Without<Embodied>, Without<FlyCam>, Without<Camera>)>,
+        Query<&crate::net::ObjectStore>,
     ),
 ) -> Option<wire_in::SelfSeat> {
     let rider = q.0.single().ok()?;
     let entity = *q.1 .0.get(&rider.transport_guid)?;
+    // 0x630a80: a game object whose flags have the transport bit (0x8).
+    if q.3.get(entity).ok()?.0.gameobject_flags() & 0x8 == 0 {
+        return None;
+    }
     Some(wire_in::SelfSeat {
         entity,
         guid: rider.transport_guid,
