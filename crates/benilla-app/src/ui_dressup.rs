@@ -158,17 +158,31 @@ impl DressUpRoom {
     }
 
     /// An id the server never answers stays pending, and its slot shows the player's own gear. A
-    /// try-on's first resolve is its lookup; the later ones read.
+    /// try-on's first resolve is its lookup; the later ones read. Returns how many resolved items
+    /// are not equippable, each an `ERR_NOT_EQUIPPABLE` to show ([`not_equippable`]).
     fn resolve_pending(&mut self, items: &Items, commands: &NetCommands) -> u32 {
         let mut pending = std::mem::take(&mut self.pending);
         let asked = std::mem::take(&mut self.pending_asked);
         let mut i = 0;
+        let mut refused = 0;
         pending.retain(|item| {
             let ask = Ask::at(i >= asked, commands);
             i += 1;
             let Some(t) = items.template(*item, 0, ask) else {
                 return true; // in flight
             };
+            // A record with no display does nothing (`0x50458b`-`0x504590`).
+            if t.display_info_id == 0 {
+                return false;
+            }
+            if not_equippable(t.inventory_type) {
+                refused += 1;
+                return false;
+            }
+            // Neck, finger, trinket and relic preview nothing (the map's 1 at `0x504b37`).
+            if matches!(t.inventory_type, 2 | 11 | 12 | 28) {
+                return false;
+            }
             let item = CharEnumItem {
                 display_id: t.display_info_id,
                 inventory_type: t.inventory_type as u8,
@@ -177,15 +191,21 @@ impl DressUpRoom {
                 // The held arms pick their lane as the look is composed.
                 Some(slot) if HELD_SLOTS.contains(&slot) => self.held.push(item),
                 Some(slot) => self.worn[slot] = Some(item),
-                // A non-worn item maps to no slot and previews nothing.
                 None => {}
             }
             false
         });
         self.pending = pending;
         self.pending_asked = self.pending.len();
-        0
+        refused
     }
+}
+
+/// `TryOn`'s dispatch, `dec eax; cmp eax,0x1b; ja` then the byte map at `0x504b7c`
+/// (`0x5045a4`-`0x5045b8`): non-equip (0, an unsigned -1 there), bag (18), ammo (24), quiver (27)
+/// and anything above 28 show `ERR_NOT_EQUIPPABLE` (`0x504b2d`, `push 0x13; call 0x496720`).
+fn not_equippable(inventory_type: u32) -> bool {
+    matches!(inventory_type, 0 | 18 | 24 | 27) || inventory_type > 28
 }
 
 pub(crate) struct DressUpUiPlugin;
@@ -211,6 +231,7 @@ fn feed_dressup(
         Res<crate::ui_action::PlayerActions>,
         Option<Res<crate::ui_action::Spells>>,
     ),
+    mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
@@ -229,7 +250,13 @@ fn feed_dressup(
         {
             room.apply(DressUpIntent::Close);
         }
-        let _ = room.resolve_pending(&items, &commands);
+        // The refusal shows as its record lands: at once when cached, else from the cache's
+        // callback (`0x504ba0`).
+        let refused = room.resolve_pending(&items, &commands);
+        let lines = (0..refused)
+            .filter_map(|_| crate::ui_action::keyed_line(script, "ERR_NOT_EQUIPPABLE"))
+            .collect::<Vec<_>>();
+        crate::ui_action::show_messages(script, &mut sink, "ui_dressup", lines);
 
         // The crest comes off the guild cache this system holds, not the outfit `player_look`
         // builds.
