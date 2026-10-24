@@ -9,8 +9,8 @@ use bevy::prelude::*;
 /// in the scene list `[0xca7d70]` (`0x698a07`) and clears it only for a node that passes the
 /// frustum test `0x682ef0` and the horizon test `0x686000` (`0x6833dd`-`0x6833ec`, and
 /// `0x68359b`-`0x6835aa` in WMO groups). Here that is any of the unit's meshes passing last
-/// frame's visibility check; benilla has no horizon cull yet, so it is the frustum verdict alone,
-/// and a unit with no model yet has no node.
+/// frame's visibility check, the frustum and the indoor portal walk; benilla has no horizon cull
+/// yet, and a unit with no model yet has no node.
 #[derive(SystemParam)]
 pub(crate) struct SceneDrawn<'w, 's> {
     children: Query<'w, 's, &'static Children>,
