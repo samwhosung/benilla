@@ -71,12 +71,14 @@ fn on_list(In(ev): In<SessionEvent>, mut commands: Commands) {
         );
         commands.queue(move |world: &mut World| {
             // `ReadTrainerList`'s test (`0x5dcc85`-`0x5dcca9`): the trainer asked (`0xc4d788`),
-            // else the open gossip window's NPC (`0xbc3f58`); any other list opens nothing
-            // (`0x5dcd44`).
+            // else the open gossip window's NPC (`0xbc3f58`, 0 with none open); any other list
+            // opens nothing (`0x5dcd44`).
             let asked = world.resource::<TrainerOpen>().asked == trainer;
             let gossip = world
                 .get_resource::<crate::ui_gossip::GossipState>()
-                .is_some_and(|g| g.npc == Some(trainer));
+                .and_then(|g| g.npc)
+                .unwrap_or(0)
+                == trainer;
             if !asked && !gossip {
                 debug!("net: trainer {trainer:#x}'s list was not asked for — dropped");
                 return;
