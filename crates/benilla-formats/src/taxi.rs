@@ -145,6 +145,42 @@ mod tests {
         }
     }
 
+    /// `0x5f4cc0` takes a path's nodes as the run of rows from the first with its id to the first
+    /// of another, in store order: no sort by `NodeIndex`, and a later run of the same id is not
+    /// read.
+    #[test]
+    fn a_path_is_its_first_run_of_rows_in_store_order() {
+        let row = |id: u32, path_id: u32, node_index: u32| TaxiPathNode {
+            id,
+            path_id,
+            node_index,
+            map_id: 0,
+            pos: [id as f32, 0.0, 0.0],
+            flags: 0,
+            delay: 0,
+        };
+        let nodes = TaxiPathNodes::from_rows([
+            row(1, 7, 2),
+            row(2, 7, 0),
+            row(3, 7, 1),
+            row(4, 8, 0),
+            row(5, 7, 3),
+        ]);
+        let ids = |p: u32| {
+            nodes
+                .path(p)
+                .map(|n| n.iter().map(|n| n.id).collect::<Vec<_>>())
+        };
+        assert_eq!(ids(7), Some(vec![1, 2, 3]));
+        assert_eq!(ids(8), Some(vec![4]));
+        assert_eq!(ids(9), None);
+        assert_eq!(
+            nodes.in_file_order().map(|n| n.id).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5],
+            "the store walks every row"
+        );
+    }
+
     /// The 5875 layout on path 302 (Orgrimmar to Undercity, two 60 s stops) and path 285.
     #[test]
     fn real_taxi_path_node_layout_sanity() {
