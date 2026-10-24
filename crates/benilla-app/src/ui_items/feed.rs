@@ -358,7 +358,7 @@ fn taught_spell(
     })
 }
 
-/// Answers the engine's set-id asks from `ItemSet.dbc`: member names from the template cache, each
+/// Answers the engine's set-id asks from `ItemSet.dbc`: member names from the item-name store, each
 /// miss queried as the reference queries set members, and bonus text from the `$`-engine. A set
 /// stays pending, re-pushing, until every member resolves.
 pub(super) fn feed_item_sets(
@@ -455,7 +455,7 @@ pub(super) fn feed_item_sets(
             } else {
                 Ask::Read
             };
-            let members = set_members(&row.items, &items, &item_names, ask);
+            let members = set_members(&row.items, &item_names, ask);
             let view = benilla_ui::script::ItemSetView {
                 name: row.name.clone(),
                 bonuses: row
@@ -502,15 +502,15 @@ pub(super) fn feed_item_sets(
     })
 }
 
-/// An item set's member names, each read as `ask` says.
+/// An item set's member names, each read as `ask` says from the item-name store, as the tooltip's
+/// set block reads them (`0x52df5a` on `0xc0e2dc`), not from the template store.
 pub(super) fn set_members(
     ids: &[u32],
-    items: &Items,
-    _names: &crate::item_names::ItemNames,
+    names: &crate::item_names::ItemNames,
     ask: Ask<'_>,
 ) -> Vec<(u32, Option<String>)> {
     ids.iter()
-        .map(|&id| (id, items.template(id, 0, ask).map(|t| t.name.clone())))
+        .map(|&id| (id, names.name(id, ask).map(str::to_string)))
         .collect()
 }
 
@@ -1749,9 +1749,8 @@ mod tests {
 
         let (tx, rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
-        let items = crate::items::Items::default();
         let mut names = ItemNames::default();
-        let members = super::set_members(&[16_866, 16_867], &items, &names, Ask::Event(&commands));
+        let members = super::set_members(&[16_866, 16_867], &names, Ask::Event(&commands));
         assert_eq!(members, [(16_866, None), (16_867, None)]);
         let asked = crate::query_cache::queries(&rx);
         assert!(
@@ -1771,7 +1770,7 @@ mod tests {
             "{asked:?}"
         );
         names.file(16_866, Some("Helm of Wrath".into()));
-        let members = super::set_members(&[16_866], &items, &names, Ask::Read);
+        let members = super::set_members(&[16_866], &names, Ask::Read);
         assert_eq!(members, [(16_866, Some("Helm of Wrath".into()))]);
     }
 
