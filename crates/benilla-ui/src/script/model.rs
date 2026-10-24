@@ -672,9 +672,6 @@ pub(crate) struct Model {
     pub(crate) battlefield_positions: Vec<super::battlefield_positions::BattlefieldPositionView>,
     pub(crate) battlefield_flag: Option<super::battlefield_positions::BattlefieldFlagView>,
     pub(crate) battlefield_icon_scale: f32,
-    /// The 0-based rows `GetBattlefieldPosition` read with no name: each call's name lookup passes
-    /// the callback `0x4ac190` (`0x4ac118`), which the app makes.
-    pub(crate) battlefield_position_lookups: Vec<usize>,
     /// The meeting stone's queued area (`[0xb72038]`) and status text (`[0xb7203c]`), as pushed.
     pub(crate) meeting_stone_area: u32,
     pub(crate) meeting_stone_status_text: Option<String>,
@@ -1549,7 +1546,6 @@ impl Model {
             battlefield_slots: Default::default(),
             battlefield_instance_expiration_ms: 0,
             battlefield_positions: Vec::new(),
-            battlefield_position_lookups: Vec::new(),
             battlefield_flag: None,
             battlefield_icon_scale: 1.0,
             meeting_stone_area: 0,

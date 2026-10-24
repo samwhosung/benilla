@@ -121,7 +121,7 @@ fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
 
 /// `GetBattlefieldPosition` on a teammate the name cache lacks looks the name up with the
 /// callback `0x4ac190` and no dedupe (`0x4ac104`-`0x4ac118`): the query goes out inside the call,
-/// once while it is in flight.
+/// once while it is in flight, and again after a refusal.
 #[test]
 fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
     let (mut app, rx) = client();
@@ -139,4 +139,9 @@ fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
         "GetBattlefieldPosition(1) RandomRoll(1, 2) GetBattlefieldPosition(1)",
     );
     assert_eq!(sent(&rx), ["name 0x31", "roll 1"]);
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(0x31, String::new(), None);
+    eval::<()>(&mut app, "GetBattlefieldPosition(1)");
+    assert_eq!(sent(&rx), ["name 0x31"], "the call after the refusal asks again");
 }

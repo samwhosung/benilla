@@ -283,7 +283,9 @@ pub enum ScriptCall {
 /// sends the query on a miss, once while it is in flight, and keeps the callback for the answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordAsk {
-    /// `UnitName` on a unit with no object: the player-name cache by guid (`0x5171eb`).
+    /// The player-name cache by guid, with a callback the name's landing runs: `UnitName` on a
+    /// unit with no object (`0x5171eb`), and `GetBattlefieldPosition` on a nameless teammate
+    /// (`0x4ac118`, `0x4ac190`, whose `WORLD_MAP_NAME_UPDATE` the app's feed signals).
     PlayerName(u64),
     /// A trade getter's filled slot whose template the mirror lacks: the item cache, with the
     /// callback `0x4c0340` that signals `TRADE_UPDATE` (`0x4c017f`, `0x4c0582`).

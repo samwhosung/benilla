@@ -113,7 +113,6 @@ fn feed_battlefield_positions(
     guids: Res<GuidIndex>,
     unit_pos: Query<&GlobalTransform, With<NetEntity>>,
     names: Res<NameCache>,
-    commands: Res<NetCommands>,
     // The last empty push: with no list the engine is told on change, with one every frame.
     mut last_empty: Local<crate::ui_script::VmMemo<Option<(bool, u32)>>>,
 ) {
@@ -132,11 +131,10 @@ fn feed_battlefield_positions(
             pending_names,
             ..
         } = &mut *state;
-        // The getter's calls are its name lookups with the callback `0x4ac190` (`0x4ac118`): the
-        // map's `OnUpdate` makes them every frame it shows (`WorldMapFrame.lua:408`,
-        // `Blizzard_BattlefieldMinimap.lua:290`), so a row read nameless is asked, a refused name
-        // again once per answer. The push itself only reads.
-        let looked_up = script.take_battlefield_position_lookups();
+        // The push only reads: the getter's calls are its name lookups with the callback
+        // `0x4ac190`, which ask a nameless row inside the call (`0x4ac118`,
+        // [`benilla_ui::script::RecordAsk::PlayerName`]); the map's `OnUpdate` makes them every
+        // frame it shows (`WorldMapFrame.lua:408`, `Blizzard_BattlefieldMinimap.lua:290`).
         // The getters read the count and the carrier with no slot test (`0x4abf09`, `0x4ac1c6`),
         // under the active slot's map, 0 with none.
         let map = active.unwrap_or(0);
@@ -163,13 +161,8 @@ fn feed_battlefield_positions(
             if me.0 == Some(p.guid) || group.members.iter().any(|m| m.guid == p.guid) {
                 continue;
             }
-            let ask = if looked_up.contains(&players.len()) {
-                Ask::Event(&commands)
-            } else {
-                Ask::Read
-            };
             let (x, y) = live_or_packet(p, &guids, &unit_pos);
-            let name = names.resolve_player(p.guid, ask).map(str::to_string);
+            let name = names.resolve_player(p.guid, Ask::Read).map(str::to_string);
             match name {
                 None => {
                     if !pending_names.contains(&p.guid) {
@@ -260,11 +253,11 @@ mod tests {
     use super::*;
     use benilla_ui::script::UiScript;
 
-    /// The getter's calls are the name lookups (`0x4ac118`, callback `0x4ac190`), which the map's
-    /// `OnUpdate` makes every frame: the packet and the frames without a call ask nothing, a call
-    /// on a nameless row asks once while pending, and the call after a refusal asks again.
+    /// The push only reads a teammate's name: the packet and the frames ask nothing, the getter's
+    /// own lookup asking a nameless row inside its call (`0x4ac118`,
+    /// [`benilla_ui::script::RecordAsk::PlayerName`]).
     #[test]
-    fn a_position_name_is_asked_by_each_getter_call_once_per_answer() {
+    fn the_push_reads_a_position_name_and_asks_nothing() {
         use benilla_protocol::messages::BattlefieldStatus;
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
@@ -301,40 +294,13 @@ mod tests {
                 });
             app.update();
         };
-        let call = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .run("GetBattlefieldPosition(1)")
-                .unwrap();
-            app.update();
-        };
         packet(&mut app);
-        assert!(
-            crate::query_cache::queries(&rx).is_empty(),
-            "the packet only reads"
-        );
-        call(&mut app);
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1, "a call asks");
-        call(&mut app);
-        assert!(
-            crate::query_cache::queries(&rx).is_empty(),
-            "once while the answer is pending"
-        );
-        app.world_mut()
-            .resource_mut::<NameCache>()
-            .insert_player(0x9, String::new(), None);
-        for _ in 0..600 {
+        for _ in 0..3 {
             app.update();
         }
         assert!(
             crate::query_cache::queries(&rx).is_empty(),
-            "no frame without a call asks"
-        );
-        call(&mut app);
-        assert_eq!(
-            crate::query_cache::queries(&rx).len(),
-            1,
-            "the call after the refusal asks again"
+            "the packet and the frames only read"
         );
     }
 
