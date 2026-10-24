@@ -58,6 +58,7 @@ pub(crate) struct RecordAsks<'w> {
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     summon: Option<Res<'w, crate::ui_summon::SummonState>>,
     battlefield: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
+    ammo_hits: Option<ResMut<'w, crate::ui_char::AmmoRecordHits>>,
     cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
     trainer: Option<ResMut<'w, crate::ui_trainer::TrainerOpen>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
@@ -94,8 +95,10 @@ impl RecordAsks<'_> {
                 }
             }
             RecordAsk::AmmoItem { entry, owner } => {
-                if let Some(items) = self.items.as_deref() {
-                    crate::ui_char::ask_ammo_record(items, &self.net, entry, owner);
+                if let (Some(items), Some(hits)) =
+                    (self.items.as_deref(), self.ammo_hits.as_deref_mut())
+                {
+                    crate::ui_char::ask_ammo_record(items, &self.net, hits, entry, owner);
                 }
             }
             RecordAsk::CooldownItem { entry, owner } => {

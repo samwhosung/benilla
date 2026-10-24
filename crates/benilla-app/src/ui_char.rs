@@ -57,6 +57,7 @@ pub(crate) struct UiCharPlugin;
 impl Plugin for UiCharPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CharFeedState>()
+            .init_resource::<AmmoRecordHits>()
             .add_systems(
                 Startup,
                 load_skill_tiers.after(benilla_assets::AssetSet::Open),
@@ -673,20 +674,39 @@ fn bank_bag_slots(
     bags
 }
 
+/// The ammo getters' calls that found the record the cache holds and the VM's doll lacked: the
+/// reference's call would have read it, so the feed's next push fires `UNIT_INVENTORY_CHANGED`
+/// after it, once per call, for the frame to read it there.
+#[derive(Resource, Default)]
+pub(crate) struct AmmoRecordHits(u32);
+
 /// The ammo slot getters' lookup with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`), inside
 /// their calls ([`benilla_ui::script::RecordAsk::AmmoItem`]): a miss asks, a refused entry again,
 /// and waits for the answer, whose ready record signals `UNIT_INVENTORY_CHANGED` (`0x4c8509`) at
-/// its packet. A hit registers nothing.
-pub(crate) fn ask_ammo_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
+/// its packet. A hit registers no callback; it is the doll's push's to show ([`AmmoRecordHits`]).
+pub(crate) fn ask_ammo_record(
+    items: &Items,
+    commands: &NetCommands,
+    hits: &mut AmmoRecordHits,
+    entry: u32,
+    owner: u64,
+) {
     if items.template(entry, owner, Ask::Event(commands)).is_none() {
         items.wait_for_ammo_record(entry);
+    } else {
+        hits.0 += 1;
     }
 }
 
 pub(crate) fn feed_char(
     // `ChrClasses.dbc` field 16, the relic flag `find_equip_slot` reads; absent, no class has one.
     classes: Option<Res<crate::chr_classes::ChrClassTable>>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The VM beside the hits its getters' calls leave.
+    mut vm: crate::script_calls::disjoint::Pair<
+        crate::script_calls::HostedVm<'static, 'static>,
+        ResMut<'static, AmmoRecordHits>,
+    >,
+    mut field_notices: ResMut<crate::field_watch::NoticeLane>,
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
@@ -697,7 +717,7 @@ pub(crate) fn feed_char(
     // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.p0().run(|script| {
         let Some(script) = script else {
             return;
         };
@@ -809,7 +829,12 @@ pub(crate) fn feed_char(
             memo.last_inv = Some(inv);
             memo.last_bank_bags = Some(bank_bags);
         }
-    })
+    });
+    // Fired with the field events, after this push ([`AmmoRecordHits`]).
+    let hits = std::mem::take(&mut vm.p1().0);
+    field_notices.write_batch((0..hits).map(|_| crate::field_watch::FieldNotice::Player {
+        id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+    }));
 }
 
 /// The 0-based weapon slots `GetWeaponEnchantInfo` (`0x4c9790`) reads (`0x4c97c3`, `0x4c988b`);
@@ -961,6 +986,7 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<CharFeedState>()
+            .init_resource::<AmmoRecordHits>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::names::NameCache>()
@@ -1216,15 +1242,18 @@ mod tests {
             .world_mut()
             .non_send_resource_mut::<UiScript>()
             .take_ammo_record_asks();
-        let world = app.world();
-        for entry in entries {
-            ask_ammo_record(
-                world.resource::<Items>(),
-                world.resource::<NetCommands>(),
-                entry,
-                0,
-            );
-        }
+        app.world_mut()
+            .resource_scope(|world, mut hits: Mut<AmmoRecordHits>| {
+                for entry in entries {
+                    ask_ammo_record(
+                        world.resource::<Items>(),
+                        world.resource::<NetCommands>(),
+                        &mut hits,
+                        entry,
+                        0,
+                    );
+                }
+            });
     }
 
     /// The ammo view only reads the record: what asks it are the texture and quality getters'

@@ -1940,6 +1940,9 @@ pub(crate) mod schedule_tests {
          "`reset_on_world_enter` runs before it at each world-enter cascade, clears the session and re-sends `BattlefieldStatusRequest`"),
         ("ui_binder.rs", "feed_binder", Because::PlayerRoundTrip,
          "`SMSG_BINDER_CONFIRM` only answers the innkeeper's gossip line"),
+        ("ui_char.rs", "feed_char", Because::FilledByVm,
+         "its take is the ammo getters' hits, which only a getter's call leaves, and a frameless VM \
+          calls none; the doll's own pushes ride `VmMemo`s"),
         ("ui_chat/feed.rs", "played_time_bridge", Because::FilledByVm,
          "the answer it takes follows `RequestTimePlayed()`, Lua's own ask, which a frameless VM \
           never makes"),

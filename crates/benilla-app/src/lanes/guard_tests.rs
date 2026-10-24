@@ -500,8 +500,9 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::motion::modes::UnitMoveModes", "net::motion::remote::RemoteMotion",
         "net::reputations::Reputations", "spell::mods::SpellModifiers",
         "ui_action::PlayerActions"]),
+    // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore"]),
+        "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
     ("::ui_char::feed_skills", &["net::ObjectStore"]),
     ("::ui_reputation::feed_reputation", &["net::ObjectStore", "net::reputations::Reputations"]),
     ("::ui_inspect::feed_inspect", &["items::Items", "names::NameCache", "net::GuidIndex",
