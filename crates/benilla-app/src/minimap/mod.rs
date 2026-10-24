@@ -29,7 +29,7 @@ use benilla_assets::minimap_grid::group_axis_grid;
 use benilla_assets::WmoModel;
 use benilla_formats::{tile_to_world, world_to_tile, MinimapTranslate};
 
-use interior::{interior_group_selection, wmo_minimap_stem};
+use interior::{interior_drawable, wmo_minimap_stem, InteriorWindow};
 
 use benilla_ui::widget::{MinimapArt, MinimapArtSlot, MINIMAP_DEFAULT_ZOOM};
 
@@ -238,6 +238,9 @@ struct MinimapTileCache {
     tiles: HashMap<(u32, u32), Option<Handle<Image>>>,
     interior_stem: Option<String>,
     interior: HashMap<(usize, u32, u32), Option<Handle<Image>>>,
+    /// The interior window and its flood as the last rebuild stored them; outdoors, none, as the
+    /// indoor edge sets the dirty bit (`0x6d95ab`).
+    interior_window: Option<InteriorWindow>,
 }
 
 /// Load the translate catalog and the minimap art once the patch chain is open.
@@ -316,18 +319,18 @@ fn setup_minimap(
 /// the flood seed once the gate says indoors.
 fn minimap_interior<'a>(
     player: &Player,
-    instances: &Query<&WmoPortalInstance>,
+    instances: &Query<(Entity, &WmoPortalInstance)>,
     wmos: &'a Assets<WmoModel>,
     world: &benilla_world::world_point::WorldPoint,
     asset_server: &AssetServer,
-) -> Option<(Affine3A, &'a WmoModel, String, usize)> {
+) -> Option<(Entity, Affine3A, &'a WmoModel, String, usize)> {
     if !player.active || player.detached || world.area_interior().is_none() {
         return None;
     }
     let eye = player.pos + Vec3::Y * INTERIOR_PROBE_HEIGHT;
     // The down-ray races the terrain, as the zone tracker does: grass above a mine is not in it.
     let terrain = world.terrain_height_under(eye);
-    instances.iter().find_map(|inst| {
+    instances.iter().find_map(|(entity, inst)| {
         let model = wmos.get(&inst.handle)?;
         if model.wmo_id == 0 {
             return None;
@@ -339,7 +342,7 @@ fn minimap_interior<'a>(
         let stem = asset_server
             .get_path(inst.handle.id())
             .and_then(|p| wmo_minimap_stem(&p.path().to_string_lossy()))?;
-        Some((inst.world_from_local, model, stem, in_group))
+        Some((entity, inst.world_from_local, model, stem, in_group))
     })
 }
 
@@ -353,7 +356,7 @@ fn emit_minimap(
     catalog: Option<Res<MapCatalogRes>>,
     player: Res<Player>,
     lighting: Option<Res<benilla_world::lighting::WowLighting>>,
-    instances: Query<&WmoPortalInstance>,
+    instances: Query<(Entity, &WmoPortalInstance)>,
     wmos: Res<Assets<WmoModel>>,
     world: benilla_world::world_point::WorldPoint,
     asset_server: Res<AssetServer>,
@@ -417,11 +420,15 @@ fn emit_minimap(
 
     // For the dots' indoor test; the branch below consumes `interior`.
     let player_indoors = interior.is_some();
+    if !player_indoors {
+        cache.interior_window = None;
+    }
     let view_radius = view_radius_yd(zoom, inside_zoom, player_indoors);
     if assets.tex(MinimapArtSlot::Mask).is_none() {
         // An empty mask name leaves no texture, and the render returns at once (`0x4ec959`,
         // `0x4ec968`): no tiles, and with no scale no landmarks, rim arrows or dots either.
-    } else if let Some((world_from_local, model, stem, in_group)) = interior {
+    } else if let Some((instance, world_from_local, model, stem, in_group)) = interior {
+        let cache = &mut *cache;
         // Interior: the WMO's own per-group tiles, drawn white. They are baked in the model frame
         // (north = model +X), so each sits at its model-space centre through the placement and the
         // whole set turns by one placement yaw (`0x6da180`).
@@ -452,10 +459,18 @@ fn emit_minimap(
         let rt_half = composite::RT_SIZE as f32 * 0.5;
         composite.active = true;
 
-        // The portal flood-fill from the player's group (`0x6a5020`). Its query box uses the draw
-        // radius (`0x6d96b6`), so zooming in also tightens the box's Z extent.
-        let drawable =
-            interior_group_selection(model, &world_from_local, player.pos, radius, in_group);
+        // The portal flood-fill from the player's group (`0x6a5020`) in the stored window. Its
+        // query box uses the draw radius (`0x6d96b6`), so zooming in also tightens the box's Z
+        // extent.
+        let drawable = interior_drawable(
+            &mut cache.interior_window,
+            model,
+            &world_from_local,
+            instance,
+            player.pos,
+            radius,
+            in_group,
+        );
         // Draw order (`0x4ebeb0`, keyed at `0x6d9e30`): ascending by `Zmidpoint − playerZ`, the
         // player's own group keyed `FLT_MAX`, so it draws last and no storey covers the room.
         let player_z = bevy_to_wow(world_from_local.inverse().transform_point3(player.pos))[2];
@@ -714,7 +729,7 @@ fn feed_minimap_inside(
     mut hosted_vm: crate::script_calls::HostedVm,
     world: benilla_world::world_point::WorldPoint,
     player: Res<Player>,
-    instances: Query<&WmoPortalInstance>,
+    instances: Query<(Entity, &WmoPortalInstance)>,
     wmos: Res<Assets<WmoModel>>,
     asset_server: Res<AssetServer>,
     mut inside_res: ResMut<MinimapInside>,

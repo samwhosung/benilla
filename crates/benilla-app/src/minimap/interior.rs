@@ -1,5 +1,6 @@
 //! The WMO-interior minimap's group selection (the portal flood-fill) and tile-name stem.
 
+use bevy::ecs::entity::Entity;
 use bevy::math::{Affine3A, Vec3};
 
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
@@ -36,18 +37,78 @@ fn interior_window(p: [f32; 3], c: f32) -> ([f32; 3], [f32; 3]) {
     ([x, y, z], [x + c, y + c, c * 0.5 + z])
 }
 
+/// The interior window as its last rebuild stored it (`0xcea9c4`-`0xcea9d8`), what the rebuild
+/// keyed on, and the groups its flood chose, which draw until the next rebuild.
+pub(super) struct InteriorWindow {
+    /// The WMO instance the player is in (the pair `0xceaa68`/`0xceaa64`).
+    instance: Entity,
+    /// The player's group (`0x86f6a0`).
+    group: usize,
+    /// The zoom radius `c`; a zoom change sets the dirty bit (`SetZoomIndex`, `0x6da915`).
+    radius: f32,
+    min: [f32; 3],
+    max: [f32; 3],
+    drawable: Vec<bool>,
+}
+
+impl InteriorWindow {
+    /// Whether `UpdateMinimap` keeps the window (`0x6d95f0`): no change of instance (`0x6d94ef`)
+    /// or group (`0x6d9523`), no dirty bit, and x and y strictly inside the window's x/y bounds
+    /// (`0x6d952c`-`0x6d9579`). Nothing compares z, so a climb inside one cell and one group keeps
+    /// the window's z range, and the flood's box floor, as stored.
+    fn holds(&self, instance: Entity, group: usize, radius: f32, p: [f32; 3]) -> bool {
+        self.instance == instance
+            && self.group == group
+            && self.radius == radius
+            && p[0] > self.min[0]
+            && p[0] < self.max[0]
+            && p[1] > self.min[1]
+            && p[1] < self.max[1]
+    }
+}
+
+/// The groups the interior minimap draws, per absolute group index: the stored window's flood,
+/// rebuilt from the player's position (`0x6d95f8`-`0x6d96ab`) only when [`InteriorWindow::holds`]
+/// fails.
+pub(super) fn interior_drawable<'a>(
+    stored: &'a mut Option<InteriorWindow>,
+    model: &WmoModel,
+    world_from_local: &Affine3A,
+    instance: Entity,
+    player_pos: Vec3,
+    radius: f32,
+    seed: usize,
+) -> &'a [bool] {
+    let p = bevy_to_wow(player_pos);
+    if !stored
+        .as_ref()
+        .is_some_and(|w| w.holds(instance, seed, radius, p))
+    {
+        let (min, max) = interior_window(p, radius);
+        *stored = Some(InteriorWindow {
+            instance,
+            group: seed,
+            radius,
+            min,
+            max,
+            drawable: interior_group_selection(model, world_from_local, (min, max), radius, seed),
+        });
+    }
+    stored.as_ref().map_or(&[], |w| &w.drawable)
+}
+
 /// Which groups' tiles draw, per absolute group index: the reference's portal flood-fill from the
-/// player's group (`0x6a5020`) inside the query box.
+/// player's group (`0x6a5020`) inside the query box of the stored `window`.
 ///
 /// The box is [`interior_window`] grown by `c` on every side (`0x6d96b6`-`0x6d96f3`), moved into
 /// the model frame as the AABB of its image (`0x6dc540`), its top z then replaced by the seed
 /// group's ceiling (`0x6a524b`, the group's `+0x28`). A group whose bbox misses the box in XY
 /// neither emits nor floods onward (`0x6a51f4`); there is no per-group Z test. A portal is crossed
 /// unless its polygon lies wholly outside one of the box's six planes, the only Z gate.
-pub(super) fn interior_group_selection(
+fn interior_group_selection(
     model: &WmoModel,
     world_from_local: &Affine3A,
-    player_pos: Vec3,
+    window: ([f32; 3], [f32; 3]),
     radius: f32,
     seed: usize,
 ) -> Vec<bool> {
@@ -57,8 +118,7 @@ pub(super) fn interior_group_selection(
         return drawable;
     }
     let c = radius;
-    let (wmin, wmax) = interior_window(bevy_to_wow(player_pos), c);
-    let (wmin, wmax) = (wmin.map(|v| v - c), wmax.map(|v| v + c));
+    let (wmin, wmax) = (window.0.map(|v| v - c), window.1.map(|v| v + c));
 
     // A world point (WoW axes) to the model frame, where the reference floods.
     let local_from_world = world_from_local.inverse();
