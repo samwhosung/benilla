@@ -713,13 +713,7 @@ mod tests {
             .init_resource::<crate::world_state::WorldStates>()
             .add_systems(
                 Update,
-                (
-                    apply_reads,
-                    begin_item_text,
-                    feed_item_text,
-                    drain_item_text,
-                )
-                    .chain(),
+                (apply_reads, begin_item_text, feed_item_text).chain(),
             );
         net::register(&mut app);
         app.insert_non_send_resource(UiScript::new().unwrap());
