@@ -162,3 +162,45 @@ fn mis_split_real_deltas_reach_on_update_and_gettime_as_even_steps_and_a_stall_w
         "and GetTime by the same step"
     );
 }
+
+/// The loading screen's layer covers the unit square with flag bit 0 clear, so the frame pass takes
+/// it out of what the interface's layer can see (`0x442431`-`0x442437`) and skips the empty layer
+/// (`0x4424b9`/`0x4424ca`): no `OnUpdate` under it. The elapsed time is cleared after each pass
+/// (`0x4426c3`), so the first walk after the reveal gets one frame's, and `GetTime` keeps the wall.
+#[test]
+fn no_on_update_runs_under_the_loading_screen_and_the_first_after_it_gets_one_frame() {
+    let t0 = Instant::now();
+    let mut app = app(t0);
+    let secs = Duration::from_secs_f64;
+    let mut t = t0;
+    frame(&mut app, t);
+    for _ in 0..30 {
+        t += secs(P);
+        frame(&mut app, t);
+    }
+    let walks = eval(&app, "return table.getn(STEPS)");
+    let (_, before) = last(&app);
+    app.insert_resource(crate::loading_screen::LoadingScreen::test_covering());
+    for _ in 0..20 {
+        t += secs(P);
+        frame(&mut app, t);
+    }
+    assert_eq!(
+        eval(&app, "return table.getn(STEPS)"),
+        walks,
+        "an OnUpdate ran under the loading screen"
+    );
+    app.insert_resource(crate::loading_screen::LoadingScreen::default());
+    t += secs(P);
+    frame(&mut app, t);
+    let (elapsed, now) = last(&app);
+    assert!(
+        (elapsed - P).abs() < 1.0e-3,
+        "the first OnUpdate after the reveal got {elapsed} s, not one frame's"
+    );
+    assert!(
+        (now - before - 21.0 * P).abs() < 1.0e-3,
+        "GetTime moved {} s across the cover, not the wall's",
+        now - before
+    );
+}
