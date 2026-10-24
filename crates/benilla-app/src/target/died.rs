@@ -64,7 +64,7 @@ pub(super) fn register(app: &mut App) {
     use crate::lanes::LaneApp;
     app.init_resource::<Deaths>()
         .net_handler(SessionEventKind::ObjectUpdateEnd, on_unit_died)
-        .add_exclusive_lane("deaths", peek_deaths, fire_deaths, |_| Vec::new());
+        .add_exclusive_lane("deaths", peek_deaths, fire_deaths, |_| Default::default());
 }
 
 /// The packet's deaths, in its edges' order, each run in place.

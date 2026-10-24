@@ -1659,8 +1659,8 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The reader's open reads the object, its records and the text caches as the frame left them,
     // past the answers still on its lane; its register closes whichever latched window holds the
     // latch, reading that window's state as the frame left it.
-    ("item text", &["go_templates::GameObjectTemplates", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "ui_auction::AuctionOpen", "ui_bank::BankOpen",
+    ("item text", &["go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
+        "net::GuidIndex", "net::ObjectStore", "ui_auction::AuctionOpen", "ui_bank::BankOpen",
         "ui_gossip::GossipState", "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts",
         "ui_mail::MailOpen", "ui_merchant::MerchantOpen", "ui_petition::GuildRegistrarState",
         "ui_quest::QuestGiver", "ui_session::latch::InteractLatch", "ui_stable::StableOpen",
@@ -1730,40 +1730,22 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
         .zip(lanes.accesses())
         .zip(lanes.exclusive_reads());
     for ((lane, access), (exclusive, declared)) in firings {
-        // An exclusive firing shows Bevy no access: its declared reads stand in, by type.
-        if exclusive {
-            let Some(declared) = declared else {
+        // An exclusive firing shows Bevy no access: the access its declared reads measure stands
+        // in ([`super::measure`]).
+        match (exclusive, declared) {
+            (true, false) => {
                 undeclared.push(format!("{lane:?} is exclusive and declares no reads"));
                 continue;
-            };
-            let mut inputs = BTreeSet::new();
-            for t in declared(world) {
-                let ids = [
-                    world.components().get_id(t),
-                    world.components().get_resource_id(t),
-                ];
-                for id in ids.into_iter().flatten() {
-                    let n = name(world, id);
-                    let written = components.contains(&id) || resources.contains(&id);
-                    if written && Some(id) != vm && !n.contains("Messages<") {
-                        inputs.insert(short_name(&n));
-                    }
-                }
             }
-            inputs.retain(|n| {
-                !QUEUES_NOT_VIEWS.contains(&n.as_str())
-                    && !lane_queues.iter().any(|(l, q)| *l == lane && q == n)
-            });
-            found.push((lane, inputs));
-            continue;
-        }
-        if declared.is_some() {
-            undeclared.push(format!(
+            (false, true) => undeclared.push(format!(
                 "{lane:?} declares reads, but its firing is not exclusive"
-            ));
+            )),
+            _ => {}
         }
         let mut own: Vec<&FilteredAccess> = access.filtered_accesses().iter().collect();
-        for h in &host {
+        // A firing that lends the host shows the host's access beside its own; an exclusive
+        // firing's declared reads are its own alone.
+        for h in host.iter().filter(|_| !exclusive) {
             if let Some(i) = own.iter().position(|o| *o == h) {
                 own.remove(i);
             }

@@ -248,25 +248,17 @@ fn sweep_item_text(world: &mut World) {
     close_core(world);
 }
 
-/// What the item-text lane's firing reads beside the call host and its own lane, for the guard on
-/// the lanes' frame-final reads: the reader and its latch, the object and its records, the two
-/// text caches, the asks' channel, and each latched window a register closes.
-fn item_text_reads(world: &World) -> Vec<std::any::TypeId> {
-    use std::any::TypeId;
-    let mut reads = vec![
-        TypeId::of::<ItemTextOpen>(),
-        TypeId::of::<crate::ui_session::InteractLatch>(),
-        TypeId::of::<crate::net::GuidIndex>(),
-        TypeId::of::<crate::net::ObjectStore>(),
-        TypeId::of::<Items>(),
-        TypeId::of::<GameObjectTemplates>(),
-        TypeId::of::<PageMaterials>(),
-        TypeId::of::<PageTexts>(),
-        TypeId::of::<MailOpen>(),
-        TypeId::of::<NetCommands>(),
-    ];
-    reads.extend(crate::ui_session::latched_window_types(world));
-    reads
+/// What the item-text lane's firing touches beside the call host and its own lane, for the guard
+/// on the lanes' frame-final reads: the begin's access as Bevy measures it, and the latch and its
+/// windows, which the open's release and the begin's register read.
+fn item_text_reads(world: &mut World) -> bevy::ecs::query::FilteredAccessSet {
+    let mut access = crate::lanes::system_access(world, begin_item_text);
+    for t in crate::ui_session::latch_reads(world) {
+        if let Some(id) = world.components().get_resource_id(t) {
+            access.add_unfiltered_resource_read(id);
+        }
+    }
+    access
 }
 
 /// The item-text lane's head.

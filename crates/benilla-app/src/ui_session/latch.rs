@@ -253,10 +253,12 @@ impl LatchApp for App {
     }
 }
 
-/// Each latched window's own resource, in the latch's order: what a register's or a release's
-/// close of the holder reads.
-pub(crate) fn latched_window_types(world: &World) -> Vec<std::any::TypeId> {
-    entries(world).iter().map(|e| e.resource).collect()
+/// What a register or a release reads: the latch, and each latched window's own resource, which
+/// its close of the holder reads.
+pub(crate) fn latch_reads(world: &World) -> Vec<std::any::TypeId> {
+    let mut reads = vec![std::any::TypeId::of::<InteractLatch>()];
+    reads.extend(entries(world).iter().map(|e| e.resource));
+    reads
 }
 
 fn entries(world: &World) -> Vec<Entry> {
