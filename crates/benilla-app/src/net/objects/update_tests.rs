@@ -1180,3 +1180,78 @@ fn a_transport_create_anchors_its_clock_at_the_packets_arrival() {
     assert_eq!(anchor.progress_ms, 1234);
     assert_eq!(anchor.at, arrived);
 }
+
+/// A type-15 ship's create block with this clock.
+fn ship_create(guid: u64, progress_ms: u32, arrived: std::time::Instant) -> SessionEvent {
+    let SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id,
+        position,
+        orientation,
+        scale,
+        speeds,
+        mover,
+        transport,
+        spline,
+        fields,
+        ..
+    } = created(guid, EntityKind::GameObject, [0.0; 3], &[(21, 15)])
+    else {
+        unreachable!()
+    };
+    SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id,
+        position,
+        orientation,
+        scale,
+        speeds,
+        mover,
+        transport_progress: Some(benilla_protocol::TransportClock {
+            progress_ms,
+            arrived: Some(arrived),
+        }),
+        transport,
+        spline,
+        fields,
+    }
+}
+
+fn anchor_of(world: &World, guid: u64) -> Option<(u32, std::time::Instant)> {
+    let e = *world.resource::<GuidIndex>().0.get(&guid)?;
+    world
+        .get::<crate::transport::TransportAnchor>(e)
+        .map(|a| (a.progress_ms, a.at))
+}
+
+/// Only the constructor sets a transport's clock (`0x5f7080`): a create for a held object updates
+/// it (`0x466350`), and one bringing a released object back reactivates it (`0x464530`), neither
+/// of which constructs, so both keep the anchor; so does a values block bringing it back.
+#[test]
+fn a_known_transport_keeps_its_anchor_through_a_re_create() {
+    const BOAT: u64 = 0xF120_0000_0000_0011;
+    let mut app = client();
+    let world = app.world_mut();
+    let first = std::time::Instant::now() - std::time::Duration::from_secs(9);
+    let later = std::time::Instant::now();
+    send(world, [ship_create(BOAT, 1234, first)]);
+    world.flush();
+    assert_eq!(anchor_of(world, BOAT), Some((1234, first)));
+    send(world, [ship_create(BOAT, 99_999, later)]);
+    world.flush();
+    assert_eq!(anchor_of(world, BOAT), Some((1234, first)), "held");
+    send(world, [out_of_range(&[BOAT])]);
+    send(world, [ship_create(BOAT, 99_999, later)]);
+    world.flush();
+    assert_eq!(anchor_of(world, BOAT), Some((1234, first)), "brought back");
+    send(world, [out_of_range(&[BOAT])]);
+    send(world, [values(BOAT, &[(21, 15)])]);
+    world.flush();
+    assert_eq!(
+        anchor_of(world, BOAT),
+        Some((1234, first)),
+        "brought back by values"
+    );
+}

@@ -1260,6 +1260,67 @@ mod worldport_tests {
         (alive(world, RIDDEN, ridden), alive(world, IN_VIEW, in_view))
     }
 
+    /// The ship kept across a worldport stands for the new object the reference builds from the
+    /// post-port create (`0x401bc0`), so that create sets its clock (`0x5f7080`) as a new one's.
+    #[test]
+    fn the_ship_kept_across_a_worldport_takes_its_next_create_as_new() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        let old = std::time::Instant::now() - std::time::Duration::from_secs(30);
+        let ridden = world
+            .spawn((
+                crate::net::Guid(RIDDEN),
+                crate::transport::Transport::sailing_for_test((1, 0)),
+                crate::transport::TransportAnchor {
+                    progress_ms: 5,
+                    at: old,
+                },
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(RIDDEN, ridden);
+        world.insert_resource(crate::player::Player::riding_for_test(ridden, RIDDEN));
+        world.resource_mut::<PendingTransfer>().0 = Some(crate::net::PendingTransferInfo {
+            map_id: 0,
+            transport_entry: Some(20808),
+            from_map: Some(1),
+        });
+        dispatch(
+            world,
+            vec![SessionEvent::Worldport {
+                map_id: 0,
+                position: [0.0; 3],
+                orientation: 0.0,
+                needs_ack: true,
+            }],
+        );
+        world.flush();
+        let fresh = std::time::Instant::now();
+        let create = SessionEvent::ObjectCreate {
+            guid: RIDDEN,
+            kind: benilla_protocol::EntityKind::GameObject,
+            display_id: None,
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: Some(benilla_protocol::TransportClock {
+                progress_ms: 777,
+                arrived: Some(fresh),
+            }),
+            transport: None,
+            spline: None,
+            fields: benilla_protocol::ObjectFields::from_pairs(&[(21, 15)])
+                .into_created(benilla_protocol::messages::ObjectType::GameObject),
+        };
+        dispatch(world, crate::net::wire(vec![create]));
+        world.flush();
+        let anchor = world
+            .get::<crate::transport::TransportAnchor>(ridden)
+            .expect("anchored");
+        assert_eq!((anchor.progress_ms, anchor.at), (777, fresh));
+    }
+
     /// `0x401bc0` destroys every object at `SMSG_NEW_WORLD`; only the ship a transport transfer
     /// carries us on is kept, until its create arrives. A ship merely in view goes with its
     /// colliders, as does the ridden one on a transfer that does not ride it (a hearth).

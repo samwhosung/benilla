@@ -976,11 +976,11 @@ mod tests {
         assert_eq!(leg_changes(true, false), [], "no animation played yet");
     }
 
-    /// A ship spared across a worldport ticks on as the new object the reference builds after
-    /// `SMSG_NEW_WORLD` (`0x401bc0`): when our clock crosses onto the new map's leg after the
-    /// server's, that change raises nothing.
+    /// The ship kept across a worldport waits, unanchored, for its create, and ticks from it as the
+    /// new object the reference builds then (`0x401bc0`), with no leg and no animation: the leg it
+    /// starts on raises nothing.
     #[test]
-    fn a_ship_spared_across_a_worldport_starts_its_legs_afresh() {
+    fn a_ship_anchored_afresh_starts_its_legs_afresh() {
         let mut app = deck_app(1);
         let timetable = two_legs((1, 0));
         let leg1 = (0..timetable.period_ms)
@@ -1004,20 +1004,15 @@ mod tests {
         ride(&mut app, deck);
         app.update();
         app.update();
-        // The server's crossing: we land on map 0 with our clock still on map 1's leg.
-        app.world_mut().write_message(crate::net::WorldportMessage {
-            map_id: 0,
-            position: [0.0; 3],
-            orientation: 0.0,
-            needs_ack: true,
-            transport_entry: Some(176495),
-        });
+        // The worldport keeps the deck and drops its clock; we land on map 0.
+        app.world_mut().entity_mut(deck).remove::<TransportAnchor>();
         app.insert_resource(CurrentMap(0));
         app.update();
-        app.world_mut()
-            .get_mut::<TransportAnchor>(deck)
-            .unwrap()
-            .progress_ms = leg1 + 1000;
+        // Its create, on map 0's leg.
+        app.world_mut().entity_mut(deck).insert(TransportAnchor {
+            progress_ms: leg1 + 1000,
+            at: Instant::now(),
+        });
         app.update();
         let left: Vec<_> = app
             .world_mut()
