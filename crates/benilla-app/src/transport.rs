@@ -124,6 +124,22 @@ pub(crate) struct Transport {
     drive: Drive,
     /// Last frame's `moving`, for the dock and depart log lines.
     was_moving: bool,
+    /// The ship's leg as its tick last stored it (`+0x58`).
+    leg: Option<usize>,
+    /// The animation it last played (`+0x54`, −1 until the first): a leg change raises the route
+    /// screen only after one (`0x5f50b9`, `0x5f547a`).
+    anim: Option<ShipAnim>,
+}
+
+impl Transport {
+    fn new(drive: Drive) -> Self {
+        Self {
+            drive,
+            was_moving: false,
+            leg: None,
+            anim: None,
+        }
+    }
 }
 
 /// A transport's answer to "is this point aboard" (handler slot 21, `0x5f55c0` and `0x5f6540`,
@@ -355,16 +371,13 @@ fn arm_transports(
                 seed.entry, guid.0
             );
             commands.entity(entity).remove::<ElevatorSeed>().insert((
-                Transport {
-                    drive: Drive::Lift(Lift {
-                        frames,
-                        period_ms,
-                        base_pos: seed.base_pos,
-                        quat,
-                        yaw: seed.yaw,
-                    }),
-                    was_moving: false,
-                },
+                Transport::new(Drive::Lift(Lift {
+                    frames,
+                    period_ms,
+                    base_pos: seed.base_pos,
+                    quat,
+                    yaw: seed.yaw,
+                })),
                 // Kinematic for the same reason as the boats below.
                 RigidBody::Kinematic,
             ));
@@ -405,25 +418,26 @@ fn arm_transports(
         if let Some(timetable) = timetable {
             // Kinematic, not the GO default of Static: it moves every frame, and avian's static
             // tree is tuned for immobile geometry.
-            commands.entity(entity).insert((
-                Transport {
-                    drive: Drive::Taxi(timetable),
-                    was_moving: false,
-                },
-                RigidBody::Kinematic,
-            ));
+            commands
+                .entity(entity)
+                .insert((Transport::new(Drive::Taxi(timetable)), RigidBody::Kinematic));
         }
     }
 }
 
 /// The per-frame tick, the reference's `(progress + anchor) % period` leg walk (`0x5f50a0`):
 /// sample and write translation and rotation (model scale is baked in by the renderer). A leg on
-/// another map ends the tick (`0x5f5274`), so a boat on the other continent's leg keeps its last
-/// pose in view; a lift never trips it.
+/// another map stores the leg and ends the tick (`0x5f5274`-`0x5f5279`), so a boat on the other
+/// continent's leg keeps its last pose in view; a lift never trips it. A ship we ride changing
+/// legs on our map, after its first animation, raises the route screen ([`TransportLegLeft`]).
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn tick_transports(
     current_map: Option<Res<CurrentMap>>,
+    player: Option<Res<crate::player::Player>>,
+    mut worldports: MessageReader<crate::net::WorldportMessage>,
+    mut legs_left: MessageWriter<TransportLegLeft>,
     mut transports: Query<(
+        Entity,
         &Guid,
         &mut Transport,
         &TransportAnchor,
@@ -431,14 +445,32 @@ fn tick_transports(
         &mut Visibility,
         Option<&mut Position>,
         Option<&mut Rotation>,
+        (Has<TransportVolume>, Option<&ObjectStore>),
     )>,
 ) {
     let Some(current_map) = current_map else {
         return;
     };
-    for (guid, mut transport, anchor, mut transform, mut visibility, position, rotation) in
-        &mut transports
+    // The reference destroys every object at `SMSG_NEW_WORLD` (`0x401bc0`): a transport spared
+    // across it ticks on as a new one would, with no leg and no animation yet.
+    let ported = worldports.read().count() > 0;
+    let riding = player.as_ref().and_then(|p| p.ride_entity());
+    for (
+        entity,
+        guid,
+        mut transport,
+        anchor,
+        mut transform,
+        mut visibility,
+        position,
+        rotation,
+        (loaded, store),
+    ) in &mut transports
     {
+        if ported {
+            transport.leg = None;
+            transport.anim = None;
+        }
         let cycle = transport.cycle_ms(anchor);
         let sample = transport.sample(cycle, current_map.0);
         if sample.moving() != transport.was_moving {
@@ -458,10 +490,34 @@ fn tick_transports(
         // Anchored creates spawn hidden until their first tick, which shows them on any leg.
         visibility.set_if_neq(Visibility::Inherited);
         if sample.map != current_map.0 {
+            transport.leg = Some(sample.leg);
             continue;
         }
         // Write on change only: a docked deck samples the same pose every frame.
         write_deck_pose(&sample, &mut transform, position, rotation);
+        if !matches!(transport.drive, Drive::Taxi(_)) {
+            continue;
+        }
+        // 0x5f50b9: whether no animation had played as the tick began.
+        let first = transport.anim.is_none();
+        // 0x5f52bd-0x5f5301: a loaded model plays the phase's animation when it changes.
+        if loaded {
+            transport.anim = Some(sample.anim);
+        }
+        // 0x5f5461-0x5f54c2: a new leg is stored, and with the camera's unit aboard and an
+        // animation played, the tick calls `0x407de0(entry, old leg)`.
+        let left = transport
+            .leg
+            .replace(sample.leg)
+            .filter(|&l| l != sample.leg);
+        if let Some(leg) = left.filter(|_| riding == Some(entity) && !first) {
+            let entry = store.and_then(|s| s.0.object_entry()).unwrap_or(0);
+            info!(
+                "transport {:#x}: left leg {leg} for {} on map {}",
+                guid.0, sample.leg, sample.map
+            );
+            legs_left.write(TransportLegLeft { entry, leg });
+        }
     }
 }
 
@@ -696,25 +752,22 @@ fn stamp_ride_frames(
 impl Transport {
     /// A lift parked at the origin, for other modules' tests.
     pub(crate) fn parked_for_test() -> Self {
-        Self {
-            drive: Drive::Lift(Lift {
-                frames: Arc::new(vec![
-                    ElevatorKeyframe {
-                        time_ms: 0,
-                        pos: [0.0; 3],
-                    },
-                    ElevatorKeyframe {
-                        time_ms: 1000,
-                        pos: [0.0; 3],
-                    },
-                ]),
-                period_ms: 1000,
-                base_pos: [0.0; 3],
-                quat: [0.0, 0.0, 0.0, 1.0],
-                yaw: 0.0,
-            }),
-            was_moving: false,
-        }
+        Self::new(Drive::Lift(Lift {
+            frames: Arc::new(vec![
+                ElevatorKeyframe {
+                    time_ms: 0,
+                    pos: [0.0; 3],
+                },
+                ElevatorKeyframe {
+                    time_ms: 1000,
+                    pos: [0.0; 3],
+                },
+            ]),
+            period_ms: 1000,
+            base_pos: [0.0; 3],
+            quat: [0.0, 0.0, 0.0, 1.0],
+            yaw: 0.0,
+        }))
     }
 }
 
@@ -759,10 +812,7 @@ mod tests {
     }
 
     fn taxi(t: TransportTimetable) -> Transport {
-        Transport {
-            drive: Drive::Taxi(Arc::new(t)),
-            was_moving: false,
-        }
+        Transport::new(Drive::Taxi(Arc::new(t)))
     }
 
     /// The deck systems alone, on `map`, with us riding `deck` when it is given.
@@ -906,6 +956,57 @@ mod tests {
         assert_eq!(leg_changes(true, false), [], "no animation played yet");
     }
 
+    /// A ship spared across a worldport ticks on as the new object the reference builds after
+    /// `SMSG_NEW_WORLD` (`0x401bc0`): when our clock crosses onto the new map's leg after the
+    /// server's, that change raises nothing.
+    #[test]
+    fn a_ship_spared_across_a_worldport_starts_its_legs_afresh() {
+        let mut app = deck_app(1);
+        let timetable = two_legs((1, 0));
+        let leg1 = (0..timetable.period_ms)
+            .step_by(100)
+            .find(|&t| timetable.sample(t).leg == 1)
+            .expect("a second leg");
+        let deck = app
+            .world_mut()
+            .spawn((
+                Guid(0xF120_0000_0000_0001),
+                taxi(timetable),
+                TransportAnchor {
+                    progress_ms: 1000,
+                    at: Instant::now(),
+                },
+                Transform::default(),
+                Visibility::Hidden,
+                TransportVolume::Box([-1.0; 3], [1.0; 3]),
+            ))
+            .id();
+        ride(&mut app, deck);
+        app.update();
+        app.update();
+        // The server's crossing: we land on map 0 with our clock still on map 1's leg.
+        app.world_mut().write_message(crate::net::WorldportMessage {
+            map_id: 0,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: true,
+            transport_entry: Some(176495),
+        });
+        app.insert_resource(CurrentMap(0));
+        app.update();
+        app.world_mut()
+            .get_mut::<TransportAnchor>(deck)
+            .unwrap()
+            .progress_ms = leg1 + 1000;
+        app.update();
+        let left: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<TransportLegLeft>>()
+            .drain()
+            .collect();
+        assert_eq!(left, []);
+    }
+
     /// A two-frame pause path at `base_pos`.
     fn parked_lift() -> Lift {
         Lift {
@@ -944,14 +1045,13 @@ mod tests {
         }
         let mut app = App::new();
         app.insert_resource(CurrentMap(0))
+            .add_message::<crate::net::WorldportMessage>()
+            .add_message::<TransportLegLeft>()
             .init_resource::<Dirty>()
             .add_systems(Update, (tick_transports, spy).chain());
         app.world_mut().spawn((
             Guid(0xF110_0000_0000_0001),
-            Transport {
-                drive: Drive::Lift(parked_lift()),
-                was_moving: false,
-            },
+            Transport::new(Drive::Lift(parked_lift())),
             TransportAnchor {
                 progress_ms: 0,
                 at: Instant::now(),
@@ -978,15 +1078,14 @@ mod tests {
         let mut app = App::new();
         // Alterac Valley, a map with no type-11 GameObject: the value must not matter.
         app.insert_resource(CurrentMap(30))
+            .add_message::<crate::net::WorldportMessage>()
+            .add_message::<TransportLegLeft>()
             .add_systems(Update, tick_transports);
         let lift = app
             .world_mut()
             .spawn((
                 Guid(0xF110_0000_0000_0002),
-                Transport {
-                    drive: Drive::Lift(parked_lift()),
-                    was_moving: false,
-                },
+                Transport::new(Drive::Lift(parked_lift())),
                 TransportAnchor {
                     progress_ms: 0,
                     at: Instant::now(),

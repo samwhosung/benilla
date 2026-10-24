@@ -550,6 +550,7 @@ fn drive_loading_screen(
         MessageReader<crate::net::CharacterLoginFailedMessage>,
         Option<Res<crate::net::PendingTransfer>>,
         Option<Res<crate::glue_session::roster::Roster>>,
+        MessageReader<crate::transport::TransportLegLeft>,
     ),
 ) {
     let (
@@ -562,6 +563,7 @@ fn drive_loading_screen(
         mut refusals,
         transfer,
         roster,
+        mut legs_left,
     ) = edges;
     let now = time.elapsed_secs();
     // The physics hold releases on the same residency signal, so the body's world is live first.
@@ -590,7 +592,12 @@ fn drive_loading_screen(
                     .zip(info.from_map)
                     .filter(|&(entry, from)| entry != 0 && from != u32::MAX);
                 let route = route_arm.and_then(|(entry, from)| {
-                    route_source.build(entry, from, assets.as_deref_mut(), &mut images)
+                    route_source.build(
+                        entry,
+                        route::RouteLeg::Leaving(from),
+                        assets.as_deref_mut(),
+                        &mut images,
+                    )
                 });
                 let map = route.is_none().then_some(info.map_id);
                 screen.raise("transfer pending", true, map, now);
@@ -602,6 +609,21 @@ fn drive_loading_screen(
             // this frame): stop waiting, and the resident old world clears the screen.
             None => screen.awaiting_snap = false,
         }
+    }
+    // `0x407de0`, from the ship tick: the route of the leg we left, which stores −1 for the map on
+    // success (`0x407e59`) and leaves the last raise's map otherwise. The reference loads around
+    // the camera and dismisses inside that tick (`0x615020`, `0x407e80`); here the readiness poll
+    // below dismisses it.
+    for left in legs_left.read() {
+        let route = route_source.build(
+            left.entry,
+            route::RouteLeg::Index(left.leg),
+            assets.as_deref_mut(),
+            &mut images,
+        );
+        let map = if route.is_some() { None } else { screen.map };
+        screen.raise("transport leg", false, map, now);
+        screen.set_route(route);
     }
     // A snap never re-raises a live screen ([`LoadingScreen::far_snap`]).
     for w in worldports.read() {

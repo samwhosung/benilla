@@ -52,10 +52,14 @@ pub(super) fn setup_transfer_routes(mut commands: Commands, assets: Option<Res<W
 }
 
 impl TransferRoutes {
-    /// `0x4072c0`'s route for a transport on taxi path `path` leaving `from_map`: the leg whose
-    /// first stop is on that map (`0x4073f0` with −1 when none, which fails), then its vertices.
-    fn route(&self, path: u32, from_map: u32) -> Option<Route> {
-        let leg = self.legs.leg_from(path, from_map)?;
+    /// The route for a transport on taxi path `path`: for `0x4072c0` the leg whose first stop is
+    /// on the map left (`0x4073f0` with −1 when none, which fails), for `0x407de0` the leg it is
+    /// given; then its vertices.
+    fn route(&self, path: u32, leg: RouteLeg) -> Option<Route> {
+        let leg = match leg {
+            RouteLeg::Leaving(map) => self.legs.leg_from(path, map)?,
+            RouteLeg::Index(leg) => leg,
+        };
         self.legs.route(path, leg, &self.splines, |map, x, y| {
             // 0x4a72b0: the horizontal result and one minus the vertical, through the map's
             // `WorldMapContinent` row; no row fails.
@@ -69,6 +73,13 @@ impl TransferRoutes {
             Some([u, 1.0 - v])
         })
     }
+}
+
+/// Which leg a route shows: the one leaving a map (`0x4072c0`) or one by its index (`0x407de0`).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RouteLeg {
+    Leaving(u32),
+    Index(usize),
 }
 
 /// A built route and its textures, `0x8828e0` and the handles `0x4074b0` loads.
@@ -88,13 +99,13 @@ pub(super) struct RouteSource<'w, 's> {
 }
 
 impl RouteSource<'_, '_> {
-    /// `0x4072c0(entry, from_map)`: a route when the player rides a game object whose entry is
-    /// `entry` and its taxi path has a leg from `from_map`, and `0x4074b0` then loads every
-    /// texture; else `None`, the plain screen.
+    /// `0x4072c0(entry, from_map)` and `0x407de0(entry, leg)`: a route when the player rides a
+    /// game object whose entry is `entry` and its taxi path has that leg, and `0x4074b0` then
+    /// loads every texture; else `None`, the plain screen.
     pub(super) fn build(
         &self,
         entry: u32,
-        from_map: u32,
+        leg: RouteLeg,
         assets: Option<&mut WorldAssets>,
         images: &mut Assets<Image>,
     ) -> Option<ActiveRoute> {
@@ -114,14 +125,14 @@ impl RouteSource<'_, '_> {
             .of(&store.0)?
             .mo_transport?
             .taxi_path_id;
-        let route = self.routes.as_ref()?.route(path, from_map)?;
+        let route = self.routes.as_ref()?.route(path, leg)?;
         let assets = assets?;
         let mut load = |path: &str| assets.sprite_texture_opened(path, LooseOpen::Archives, images);
         let elements = load(DYNAMIC_ELEMENTS)?;
         let tiles = (1..=12)
             .map(|i| load(&format!("Interface\\WorldMap\\World\\World{i}.blp")))
             .collect::<Option<Vec<_>>>()?;
-        info!("loading screen: route for path {path} leaving map {from_map}");
+        info!("loading screen: route for path {path}, {leg:?}");
         Some(ActiveRoute {
             route,
             elements,
@@ -314,7 +325,7 @@ mod tests {
             continents: load_world_map_continent_catalog(&mut chain).expect("continents"),
         };
         let route = routes
-            .route(241, 1)
+            .route(241, RouteLeg::Leaving(1))
             .expect("path 241 has a route leaving Kalimdor");
         let (ratchet, booty_bay) = (centre(&route.markers[0]), centre(&route.markers[1]));
         eprintln!(
@@ -329,10 +340,21 @@ mod tests {
         for v in route.ribbon.iter().chain(&route.markers).flatten() {
             assert!((0.0..=1.0).contains(&v.pos[0]) && (0.0..=1.0).contains(&v.pos[1]));
         }
-        assert!(routes.route(241, 0).is_some(), "and leaving Azeroth");
         assert!(
-            routes.route(241, 30).is_none(),
+            routes.route(241, RouteLeg::Leaving(0)).is_some(),
+            "and leaving Azeroth"
+        );
+        assert!(
+            routes.route(241, RouteLeg::Leaving(30)).is_none(),
             "a map it never leaves has none"
+        );
+        // `0x407de0` names the leg itself: leg 0 is the one leaving Kalimdor.
+        let by_index = routes.route(241, RouteLeg::Index(0)).expect("leg 0");
+        assert_eq!(by_index.markers, route.markers);
+        // Path 301 changes legs on Eastern Kingdoms, the one change that reaches `0x407de0`.
+        assert_eq!(
+            [0, 1, 2].map(|l| routes.route(301, RouteLeg::Index(l)).is_some()),
+            [true, true, false]
         );
     }
 
