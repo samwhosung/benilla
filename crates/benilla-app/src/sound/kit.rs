@@ -245,6 +245,12 @@ fn no_duplicates_blocks(dedupe_exempt: bool, flags: u32, live_same_kit: usize) -
     !dedupe_exempt && flags & sound_kit_flags::NO_DUPLICATES != 0 && live_same_kit > 0
 }
 
+/// How many live channels the duplicate walk (`0x7a66e7`-`0x7a670b`) matches for a play of `file`
+/// from `kit`, each live channel given as its kit and file.
+fn live_duplicates<'a>(live: impl Iterator<Item = (u32, &'a str)>, kit: u32, _file: &str) -> usize {
+    live.filter(|(k, _)| *k == kit).count()
+}
+
 /// The [`SAME_KIT_MAX`] cap, part of the one-shot lane ([`PlayExtras::dedupe_exempt`]).
 fn same_kit_cap_blocks(dedupe_exempt: bool, live_same_kit: usize) -> bool {
     !dedupe_exempt && live_same_kit >= SAME_KIT_MAX
@@ -1346,6 +1352,30 @@ mod tests {
         assert!(
             same_kit_cap_blocks(false, SAME_KIT_MAX),
             "the exemption is scoped to the caller that asks for it, not global"
+        );
+    }
+
+    /// The duplicate walk compares the open file's `SStrHash` (`0x7a66cf`, which folds ASCII case
+    /// and `/` to `\`) with each live sound's `+0x80` (`0x7a66f0`): another file of the same
+    /// kit is no duplicate, and the same file is one whatever kit or `PlaySoundFile` opened it.
+    #[test]
+    fn the_duplicate_walk_matches_the_file_not_the_kit() {
+        let live = [
+            (7, "Sound\\Spells\\A.wav"),
+            (7, "Sound\\Spells\\B.wav"),
+            (0, "Sound\\Spells\\C.wav"),
+        ];
+        let dupes = |kit, file| live_duplicates(live.iter().copied(), kit, file);
+        assert_eq!(
+            dupes(7, "Sound\\Spells\\D.wav"),
+            0,
+            "another file of the kit"
+        );
+        assert_eq!(dupes(7, "sound/spells/a.WAV"), 1, "the same file, folded");
+        assert_eq!(
+            dupes(9, "Sound\\Spells\\C.wav"),
+            1,
+            "the same file from elsewhere"
         );
     }
 
