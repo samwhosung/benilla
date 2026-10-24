@@ -199,8 +199,9 @@ fn the_profession_closes_zero_the_open_marker_inside_their_calls() {
     assert_eq!(sent(&rx), ["roll"]);
 }
 
-/// `CloseMail()` zeroes the mailbox inside its call (`0x4aded0` → `0x4acd8f`): a mail verb later
-/// in the same chunk finds none and sends nothing.
+/// `CloseMail()` runs the close core's tail inside its call: after a letter was read the
+/// next-mail-time query goes out (`0x4acda8`, `0x4acdb1`) ahead of the chunk's next verb, and the
+/// mailbox is zeroed (`0x4aded0` → `0x4acd8f`), so a mail verb later in the chunk sends nothing.
 #[test]
 fn close_mail_closes_before_the_next_verb() {
     let (mut app, rx) = client();
@@ -211,12 +212,20 @@ fn close_mail_closes_before_the_next_verb() {
             inbox: Vec::new(),
             open: true,
         }));
-    eval::<()>(&mut app, "CloseMail() CheckInbox()");
-    let wire: Vec<_> = rx
+    app.world_mut()
+        .resource_mut::<crate::ui_mail::MailPending>()
+        .arm_refresh();
+    eval::<()>(&mut app, "CloseMail() RandomRoll(1, 2) CheckInbox()");
+    let wire: Vec<&str> = rx
         .try_iter()
-        .filter(|c| matches!(c, ClientCommand::GetMailList { .. }))
+        .filter_map(|c| match c {
+            ClientCommand::QueryNextMailTime => Some("next mail time"),
+            ClientCommand::RandomRoll { .. } => Some("roll"),
+            ClientCommand::GetMailList { .. } => Some("mail list"),
+            _ => None,
+        })
         .collect();
-    assert!(wire.is_empty(), "{wire:?}");
+    assert_eq!(wire, ["next mail time", "roll"]);
 }
 
 /// Every merchant close runs the core `0x4fadf0`, whose tail clears a vendor row held on the
