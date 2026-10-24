@@ -280,3 +280,50 @@ fn get_quest_item_info_asks_a_missed_record_inside_its_call() {
     );
     assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 2590"]);
 }
+
+/// The craft getters look a record in flight up with the callback `0x4f7710` and no dedupe:
+/// `GetCraftReagentInfo` its reagent (`0x4f75dd`), `GetCraftSpellFocus` each totem (`0x4f79f2`).
+/// The item query goes out inside the call, once while it is in flight.
+#[test]
+fn the_craft_getters_ask_a_missed_record_inside_their_calls() {
+    use benilla_ui::script::{CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
+    let (mut app, rx) = client();
+    vm(&mut app).set_craft(Some(CraftState {
+        name: "Enchanting".into(),
+        display_line: None,
+        rank: 1,
+        max_rank: 75,
+        craft_type: 3,
+        recipes: vec![CraftRecipe {
+            spell_id: 7418,
+            name: "Enchant Bracer - Minor Health".into(),
+            sub_name: String::new(),
+            difficulty: CraftDifficulty::Optimal,
+            num_available: 0,
+            icon: None,
+            description: None,
+            needs_item_target: true,
+            reagents: vec![CraftReagent {
+                item: 10940,
+                name: None,
+                icon: None,
+                need: 1,
+                have: 0,
+            }],
+            tools: Vec::new(),
+            tooltip: CraftTooltip::Spell(7418),
+            spell_level: 1,
+            group: 0,
+            skill_line: None,
+            training_point_cost: 0,
+            required_level: 0,
+            tools_pending: vec![6218],
+        }],
+    }));
+    eval::<()>(
+        &mut app,
+        "for i = 1, GetNumCrafts() do GetCraftReagentInfo(i, 1) end RandomRoll(1, 2) \
+         for i = 1, GetNumCrafts() do GetCraftSpellFocus(i) GetCraftReagentInfo(i, 1) end",
+    );
+    assert_eq!(sent(&rx), ["item 10940", "roll 1", "item 6218"]);
+}
