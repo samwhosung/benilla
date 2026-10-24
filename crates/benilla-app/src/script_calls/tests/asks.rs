@@ -17,6 +17,7 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
                 ClientCommand::RandomRoll { min, .. } => format!("roll {min}"),
                 ClientCommand::NameQuery { guid } => format!("name {guid:#x}"),
                 ClientCommand::ItemQuery { entry, .. } => format!("item {entry}"),
+                ClientCommand::GuildQuery { guild_id } => format!("guild {guild_id}"),
                 _ => return None,
             })
         })
@@ -71,4 +72,28 @@ fn a_trade_getter_asks_a_missed_template_inside_its_call() {
         "GetTradeTargetItemInfo(1) RandomRoll(1, 2) GetTradePlayerItemInfo(2)",
     );
     assert_eq!(sent(&rx), ["item 4306", "roll 1", "item 2592"]);
+}
+
+/// `GetGuildInfo` on a player whose guild the cache lacks makes the lookup with its callback
+/// inside its call (`0x4c93d2`): `CMSG_GUILD_QUERY` goes out ahead of the chunk's next verb, once
+/// while it is in flight.
+#[test]
+fn get_guild_info_asks_a_missed_guild_inside_its_call() {
+    let (mut app, rx) = client();
+    vm(&mut app).set_unit(
+        "target",
+        Some(UnitState {
+            exists: true,
+            has_object: true,
+            is_player: true,
+            guid: 0x77,
+            guild_id: 9,
+            ..Default::default()
+        }),
+    );
+    eval::<()>(
+        &mut app,
+        r#"GetGuildInfo("target") RandomRoll(1, 2) GetGuildInfo("target")"#,
+    );
+    assert_eq!(sent(&rx), ["guild 9", "roll 1"]);
 }
