@@ -702,9 +702,15 @@ mod tests {
     /// `0x7fffffff`): a name that differs only in case keeps both texts.
     #[test]
     fn the_whole_wmo_name_compares_without_case() {
-        assert!(!whole_wmo_name_takes_the_zone("The Great Forge", "the great forge"));
+        assert!(!whole_wmo_name_takes_the_zone(
+            "The Great Forge",
+            "the great forge"
+        ));
         assert!(!whole_wmo_name_takes_the_zone("Ironforge", "Ironforge"));
-        assert!(whole_wmo_name_takes_the_zone("Ironforge", "The Great Forge"));
+        assert!(whole_wmo_name_takes_the_zone(
+            "Ironforge",
+            "The Great Forge"
+        ));
         assert!(whole_wmo_name_takes_the_zone("Ironforge", ""));
     }
 }
