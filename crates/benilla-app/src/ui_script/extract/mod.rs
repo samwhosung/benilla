@@ -1338,8 +1338,8 @@ fn convert_entry(
             rotation,
             desaturated,
         } => {
-            // A live unit portrait (`SetPortraitTexture(region, unit)`): the model bake, or the
-            // reference's 2D TemporaryPortrait while the model streams; no entry yet draws nothing.
+            // A live unit portrait (`SetPortraitTexture(region, unit)`): the model bake, a 2D
+            // stand-in for a unit the client does not hold, or no image, which draws nothing.
             if let Some(token) = &portrait_unit {
                 use crate::portrait::PortraitSource;
                 // The aspect, published before the readiness check as in the model-pane arm; a
@@ -1358,7 +1358,7 @@ fn convert_entry(
                         assets.as_mut().and_then(|a| a.sprite_texture(p, images)),
                         false,
                     ),
-                    None => (None, false),
+                    Some(PortraitSource::Empty) | None => (None, false),
                 };
                 let Some(handle) = handle else {
                     return;
