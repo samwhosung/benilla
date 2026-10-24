@@ -293,6 +293,10 @@ pub enum RecordAsk {
     /// `GetGuildInfo` on a player whose guild the mirror lacks: the guild cache, with a waiter
     /// of the call's own for the unit (`0x4c93b6`-`0x4c93d2`).
     Guild { guild_id: u32, guid: u64 },
+    /// The ammo slot's texture or quality getter on ammunition whose record the mirror lacks: the
+    /// item cache, with the callback `0x4c84f0` that signals `UNIT_INVENTORY_CHANGED` for a ready
+    /// record (`0x4c83bc`, `0x4c89cf`).
+    AmmoItem(u32),
     /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
     /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
     Summoner,

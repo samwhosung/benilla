@@ -354,10 +354,13 @@ impl super::UiScript {
         self.model_mut().player_combat_stats = stats;
     }
 
-    /// Drain the ammunition entries the ammo slot's texture and quality getters looked up and
-    /// missed, one per call, each to be registered with the callback `0x4c84f0`.
+    /// The ammunition entries the ammo slot's texture and quality getters looked up and missed
+    /// that a harness's VM kept ([`Self::keep_calls`]), one per call.
     pub fn take_ammo_record_asks(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().ammo_record_asks)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::AmmoItem(entry)) => Some(*entry),
+            _ => None,
+        })
     }
 
     /// Push the doll snapshot, recompute the 12 alert statuses and fire `UPDATE_INVENTORY_ALERTS`.
@@ -539,17 +542,26 @@ fn own_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSlotV
 }
 
 /// The ammo slot's record lookup with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`): a view of
-/// the active player's ammunition whose record the cache lacks registers one per call.
-fn ask_ammo_record(lua: &Lua, token: &Option<String>, slot: i64, view: Option<&InvSlotView>) {
+/// the active player's ammunition whose record the cache lacks asks inside the call and registers
+/// one callback per call.
+fn ask_ammo_record(
+    lua: &Lua,
+    token: &Option<String>,
+    slot: i64,
+    view: Option<&InvSlotView>,
+) -> mlua::Result<()> {
     let Some(v) = view.filter(|v| slot == 0 && v.item_id != 0 && v.name.is_none()) else {
-        return;
+        return Ok(());
     };
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     // The ammo leg reads the active player's field alone (`0x4c8382`).
-    let own = token.as_deref().and_then(|t| model.inventory_reader(t)) == Some(InvReader::Own);
-    if own {
-        model.ammo_record_asks.push(v.item_id);
+    let own = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        token.as_deref().and_then(|t| model.inventory_reader(t)) == Some(InvReader::Own)
+    };
+    if !own {
+        return Ok(());
     }
+    super::calls::ask(lua, super::RecordAsk::AmmoItem(v.item_id))
 }
 
 /// The bank's live-API ids, `BankButtonIDToInvSlotID`'s two bands: 24 vault slots, 6 bag slots.
@@ -1116,7 +1128,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?;
             let view = player_inv_slot(lua, &token, slot);
             // Only while the player carries some (`0x4c83a0`, `CountInventoryItemsByEntry`).
-            ask_ammo_record(lua, &token, slot, view.as_ref().filter(|v| v.count > 0));
+            ask_ammo_record(lua, &token, slot, view.as_ref().filter(|v| v.count > 0))?;
             match view.and_then(|v| v.icon) {
                 Some(icon) => Ok(Value::String(lua.create_string(&icon)?)),
                 None => Ok(Value::Nil),
@@ -1208,7 +1220,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?;
             // The item table's slot (`0x4c89d6` → `0x6228a0`), empty for another player.
             let view = own_inv_slot(lua, &token, slot);
-            ask_ammo_record(lua, &token, slot, view.as_ref());
+            ask_ammo_record(lua, &token, slot, view.as_ref())?;
             Ok(
                 match view
                     .filter(|v| v.item_id != 0)
@@ -2371,6 +2383,7 @@ mod tests {
     #[test]
     fn the_ammo_slot_getters_register_a_record_callback_on_a_miss() {
         let mut s = seated();
+        s.keep_calls();
         let mut slots: crate::script::InventorySlots = Default::default();
         let arrows = |count: u32, name: Option<&str>| InvSlotView {
             item_id: 2512,
@@ -2392,7 +2405,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.take_ammo_record_asks(), [2512, 2512, 2512]);
-        assert!(s.take_ammo_record_asks().is_empty(), "drained");
+        assert!(s.take_ammo_record_asks().is_empty(), "taken");
         slots[0] = Some(arrows(0, None));
         s.set_inventory_slots(slots.clone());
         s.run(r#"GetInventoryItemTexture("player", 0); GetInventoryItemQuality("player", 0)"#)

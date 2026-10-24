@@ -1083,10 +1083,6 @@ pub(crate) struct Model {
 
     /// The paper doll's combat stats, `None` until the first push.
     pub(crate) player_combat_stats: Option<char_stats::UnitCombatStats>,
-    /// The ammunition entry each `GetInventoryItemTexture` or `GetInventoryItemQuality` call on
-    /// the ammo slot looked up and missed, one callback `0x4c84f0` per call (`0x4c83bc`,
-    /// `0x4c89cf`), for the host to register with the item cache.
-    pub(crate) ammo_record_asks: Vec<u32>,
     pub(crate) inventory_slots: char_stats::InventorySlots,
     /// The six bank-bag slots, ids 64..=69, fed from the player descriptor's guids.
     pub(crate) bank_bag_slots: char_stats::BankBagSlots,
@@ -1735,7 +1731,6 @@ impl Model {
             .into_iter()
             .collect(),
             player_combat_stats: None,
-            ammo_record_asks: Vec::new(),
             inventory_slots: Default::default(),
             bank_bag_slots: Default::default(),
             inventory_alerts: [0; 12],

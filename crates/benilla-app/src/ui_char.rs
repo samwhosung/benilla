@@ -673,6 +673,16 @@ fn bank_bag_slots(
     bags
 }
 
+/// The ammo slot getters' lookup with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`), inside
+/// their calls ([`benilla_ui::script::RecordAsk::AmmoItem`]): a miss asks, a refused entry again,
+/// and waits for the answer, whose ready record signals `UNIT_INVENTORY_CHANGED` (`0x4c8509`) at
+/// its packet. A hit registers nothing.
+pub(crate) fn ask_ammo_record(items: &Items, commands: &NetCommands, entry: u32) {
+    if items.template(entry, 0, Ask::Event(commands)).is_none() {
+        items.wait_for_ammo_record(entry);
+    }
+}
+
 pub(crate) fn feed_char(
     // `ChrClasses.dbc` field 16, the relic flag `find_equip_slot` reads; absent, no class has one.
     classes: Option<Res<crate::chr_classes::ChrClassTable>>,
@@ -682,30 +692,15 @@ pub(crate) fn feed_char(
     icons: Option<Res<ItemDisplays>>,
     enchants: Option<Res<crate::items::Enchants>>,
     props: Option<Res<crate::items::RandomProperties>>,
-    commands: Res<NetCommands>,
     mut feed: ResMut<CharFeedState>,
     names: Res<crate::names::NameCache>,
     // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
-    // The ammo getters' record callback, fired with the field events after this push.
-    mut field_notices: ResMut<crate::field_watch::NoticeLane>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
         };
-        // The ammo slot getters' lookups with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`),
-        // registered after the script's tick: a miss asks and waits for the answer; a record that
-        // landed since the call runs the callback now, `UNIT_INVENTORY_CHANGED` (`0x4c8509`).
-        for entry in script.take_ammo_record_asks() {
-            if items.template(entry, 0, Ask::Event(&commands)).is_some() {
-                field_notices.write(crate::field_watch::FieldNotice::Player {
-                    id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
-                });
-            } else {
-                items.wait_for_ammo_record(entry);
-            }
-        }
         // Per VM: after a `/reload` both snapshots re-push.
         let (memo, vm_reset) = feed.vm.get_reset(script);
 
@@ -1214,6 +1209,23 @@ mod tests {
         assert_eq!(name(0xC2).as_deref(), Some("Red Ribboned Gift"));
     }
 
+    /// The ammo asks a harness's VM kept, asked as the host asks them inside the call
+    /// ([`benilla_ui::script::RecordAsk::AmmoItem`]).
+    fn ask_kept_ammo(app: &mut App) {
+        let entries = app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .take_ammo_record_asks();
+        let world = app.world();
+        for entry in entries {
+            ask_ammo_record(
+                world.resource::<Items>(),
+                world.resource::<NetCommands>(),
+                entry,
+            );
+        }
+    }
+
     /// The ammo view only reads the record: what asks it are the texture and quality getters'
     /// lookups with the callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), so a frame no getter read
     /// the slot in sends nothing.
@@ -1237,65 +1249,50 @@ mod tests {
         app.world_mut().run_system_once(feed_char).unwrap();
         app.world_mut().run_system_once(feed_char).unwrap();
         assert_eq!(asked(&rx), 0, "the view reads");
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.keep_calls();
+        script
             .run(r#"GetInventoryItemQuality("player", 0)"#)
             .unwrap();
-        app.world_mut().run_system_once(feed_char).unwrap();
+        ask_kept_ammo(&mut app);
         assert_eq!(asked(&rx), 1, "the getter asks");
     }
 
     /// The ammo slot getters' record lookups with the callback `0x4c84f0` (`0x4c83bc`,
-    /// `0x4c89cf`): a call that missed waits for the answer; one whose record landed since runs
-    /// its callback at once, `UNIT_INVENTORY_CHANGED` with `"player"` (`0x4c8509`).
+    /// `0x4c89cf`): a call that misses the cache waits for the answer, one callback per call; a
+    /// call that finds the record registers none.
     #[test]
-    fn an_ammo_getters_miss_waits_and_a_record_landed_since_signals_at_once() {
-        use crate::field_watch::{id, FieldNotice};
+    fn an_ammo_getters_miss_waits_and_a_hit_registers_nothing() {
         const ARROW: u32 = 2512;
         /// `PLAYER_AMMO_ID`.
         const AMMO_ID: u16 = 1223;
         let mut app = world_with_bank_bag(None);
         set_self(&mut app, &[(AMMO_ID, ARROW)]);
         app.world_mut().run_system_once(feed_char).unwrap();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .keep_calls();
         let ask = |app: &mut App| {
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
                 .run(r#"GetInventoryItemQuality("player", 0)"#)
                 .unwrap();
+            ask_kept_ammo(app);
         };
-        let signals = |app: &mut App| -> Vec<FieldNotice> {
-            app.world_mut()
-                .resource_mut::<crate::field_watch::NoticeLane>()
-                .drain()
-                .collect()
-        };
-        ask(&mut app);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(signals(&mut app).is_empty());
-        assert_eq!(
+        let waiters = |app: &mut App| {
             app.world_mut()
                 .resource_mut::<Items>()
-                .take_ammo_waiters(ARROW),
-            1,
-            "the miss waits for its answer"
-        );
+                .take_ammo_waiters(ARROW)
+        };
         ask(&mut app);
+        ask(&mut app);
+        assert_eq!(waiters(&mut app), 2, "each miss waits for its answer");
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(ARROW, Some(crate::items::test_template("Rough Arrow")));
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert_eq!(
-            signals(&mut app),
-            [FieldNotice::Player {
-                id: id::UNIT_INVENTORY_CHANGED
-            }]
-        );
-        assert_eq!(
-            app.world_mut()
-                .resource_mut::<Items>()
-                .take_ammo_waiters(ARROW),
-            0
-        );
+        // The view still lacks the name, so the getter looks up, and the cache answers.
+        ask(&mut app);
+        assert_eq!(waiters(&mut app), 0, "a hit registers no callback");
     }
 
     /// The lock is the VM's, keyed by the guid this feed pushes: a lock moves no snapshot, and

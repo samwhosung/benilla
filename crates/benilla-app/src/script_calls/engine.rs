@@ -80,6 +80,11 @@ impl RecordAsks<'_> {
                     guild.wait_for_info(guild_id, guid, &self.net);
                 }
             }
+            RecordAsk::AmmoItem(entry) => {
+                if let Some(items) = self.items.as_deref() {
+                    crate::ui_char::ask_ammo_record(items, &self.net, entry);
+                }
+            }
             // A zero guid is no key and asks nothing (`0x55f080`).
             RecordAsk::Summoner => {
                 let summoner = self.summon.as_deref().and_then(|s| s.pending());
