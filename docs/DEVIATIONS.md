@@ -304,9 +304,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_aura
 
-- On a catalog miss the reference keeps the record's stale value (`0x4e4533`, `0x4e4550` skip the write); this answers from the joined expiry, because a stale value is no mechanism to reproduce. ([`src/ui_aura.rs:477`](../crates/benilla-app/src/ui_aura.rs#L477))
-- On other units' rows an id the catalog lacks stays visible, because every wire id is a real spell and failing closed would blank every aura on a catalog failure; the reference skips one there (`[0xc0d78c]`), though its player cache inserts one, as here. ([`src/ui_aura.rs:505`](../crates/benilla-app/src/ui_aura.rs#L505))
-- The reference never clears its expiry array (`0xbc5f68`); this does, because vmangos sends no durations at login to overwrite a kept stamp (`SMSG_UPDATE_AURA_DURATION` is an empty placeholder in `Player::SendInitialPacketsBeforeAddToMap`, `Player.cpp:19248`). ([`src/ui_aura.rs:914`](../crates/benilla-app/src/ui_aura.rs#L914))
+- On a catalog miss the reference keeps the record's stale value (`0x4e4533`, `0x4e4550` skip the write); this answers from the joined expiry, because a stale value is no mechanism to reproduce. ([`src/ui_aura.rs:472`](../crates/benilla-app/src/ui_aura.rs#L472))
+- On other units' rows an id the catalog lacks stays visible, because every wire id is a real spell and failing closed would blank every aura on a catalog failure; the reference skips one there (`[0xc0d78c]`), though its player cache inserts one, as here. ([`src/ui_aura.rs:500`](../crates/benilla-app/src/ui_aura.rs#L500))
+- The reference never clears its expiry array (`0xbc5f68`); this does, because vmangos sends no durations at login to overwrite a kept stamp (`SMSG_UPDATE_AURA_DURATION` is an empty placeholder in `Player::SendInitialPacketsBeforeAddToMap`, `Player.cpp:19248`). ([`src/ui_aura.rs:897`](../crates/benilla-app/src/ui_aura.rs#L897))
 
 #### ui_binder
 
@@ -327,7 +327,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_dressup
 
-- The base is the player's melee pair, held drawn, because the booth shares the select screen's assembly; the reference clones the live model with its attachments, drawn or sheathed (`0x5059a0`, `0x70ea00`). ([`src/ui_dressup.rs:29`](../crates/benilla-app/src/ui_dressup.rs#L29))
+- The base is the player's melee pair, held drawn, because the booth shares the select screen's assembly; the reference clones the live model with its attachments, drawn or sheathed (`0x5059a0`, `0x70ea00`). ([`src/ui_dressup.rs:42`](../crates/benilla-app/src/ui_dressup.rs#L42))
 
 #### ui_duel
 
@@ -374,10 +374,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_loot
 
-- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:271`](../crates/benilla-app/src/ui_loot/mod.rs#L271))
-- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:685`](../crates/benilla-app/src/ui_loot/mod.rs#L685))
-- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:713`](../crates/benilla-app/src/ui_loot/mod.rs#L713))
-- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:910`](../crates/benilla-app/src/ui_loot/mod.rs#L910))
+- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:267`](../crates/benilla-app/src/ui_loot/mod.rs#L267))
+- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:681`](../crates/benilla-app/src/ui_loot/mod.rs#L681))
+- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:709`](../crates/benilla-app/src/ui_loot/mod.rs#L709))
+- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:889`](../crates/benilla-app/src/ui_loot/mod.rs#L889))
 
 #### ui_loot_roll
 
@@ -760,8 +760,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:534`](../crates/benilla-ui/src/script/macros.rs#L534))
 - Each line is trimmed, because the reference sends an indented `" /say hi"` as plain chat, never as the command meant. ([`src/script/macros/bind.rs:30`](../crates/benilla-ui/src/script/macros/bind.rs#L30))
 - The `/cast` argument is trimmed, because the reference binds `/cast  Fireball` (two spaces) to a name that never resolves. ([`src/script/macros/bind.rs:50`](../crates/benilla-ui/src/script/macros/bind.rs#L50))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:886`](../crates/benilla-ui/src/script/mod.rs#L886))
-- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:937`](../crates/benilla-ui/src/script/mod.rs#L937))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:888`](../crates/benilla-ui/src/script/mod.rs#L888))
+- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:939`](../crates/benilla-ui/src/script/mod.rs#L939))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:339`](../crates/benilla-ui/src/script/modelframe.rs#L339))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:432`](../crates/benilla-ui/src/script/nameplate.rs#L432))
