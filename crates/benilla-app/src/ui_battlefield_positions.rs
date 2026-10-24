@@ -101,7 +101,7 @@ fn flag_token(faction: Option<&str>) -> Option<&'static str> {
     }
 }
 
-fn feed_battlefield_positions(
+pub(crate) fn feed_battlefield_positions(
     // The positions, which the request's call clears and stamps: an engine turn, its events
     // signalled after.
     mut vm: crate::script_calls::VmWith<ResMut<'static, BattlefieldPositions>>,
