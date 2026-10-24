@@ -317,3 +317,51 @@ fn the_both_button_press_hands_the_pitch_off() {
     assert_eq!(player.pitch_keys, None);
     assert_ne!(player.mover_pitch, 0.5, "the aim took it");
 }
+
+/// A create on a transport seats us only on a game object whose flags carry the transport bit 0x8
+/// (`0x618b30` → `0x630a80`); on any other the login pose stands.
+#[test]
+fn a_login_seats_us_only_on_a_game_object_flagged_as_a_transport() {
+    use crate::transport::TransportRider;
+    const BOAT: u64 = 0xF120_0000_0000_0010;
+    let seat = |flags: u32| {
+        let mut world = World::new();
+        let boat = world
+            .spawn((
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                // `GAMEOBJECT_FLAGS`, field 9.
+                crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(9, flags)])),
+            ))
+            .id();
+        world.spawn((
+            crate::net::Embodied,
+            TransportRider {
+                transport_guid: BOAT,
+                local_pos: [4.0, 5.0, 6.0],
+                local_orientation: 0.5,
+            },
+        ));
+        world.insert_resource(GuidIndex([(BOAT, boat)].into_iter().collect()));
+        world
+            .run_system_once(
+                |riders: Query<&TransportRider, With<crate::net::Embodied>>,
+                 index: Res<GuidIndex>,
+                 decks: Query<
+                    &Transform,
+                    (
+                        Without<crate::net::Embodied>,
+                        Without<FlyCam>,
+                        Without<Camera>,
+                    ),
+                >,
+                 stores: Query<&crate::net::ObjectStore>| {
+                    super::self_seat(&(riders, index, decks, stores))
+                        .map(|s| (s.entity, s.guid, s.local_pos, s.local_orientation))
+                },
+            )
+            .unwrap()
+            .map(|(_, guid, pos, o)| (guid, pos, o))
+    };
+    assert_eq!(seat(0x8 | 0x20), Some((BOAT, [4.0, 5.0, 6.0], 0.5)));
+    assert_eq!(seat(0x20), None, "no transport bit");
+}
