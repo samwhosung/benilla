@@ -127,12 +127,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_guild::GuildState",
-        "the guild state, which `feed_guild` fires from; the guild verbs, acting in their calls, \
-         read it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_guild::GuildLocal",
         "the held guild invitation, which `feed_guild` fires from; the guild verbs, acting in \
          their calls, hold it in the host",
@@ -164,6 +158,13 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_logout::LogoutState",
         "the logout state, which `feed_logout` fires from; the session verbs, acting in their \
          calls, hold it in the host",
+    ),
+    (
+        Row::Queue,
+        "::ui_guild::GuildState",
+        "the guild state, which `feed_guild` fires from; the guild verbs, acting in their calls, \
+         read it in the host, and `GetGuildInfo` leaves its waiters there through `&self`, which \
+         the query response's handler spends onto the notice lane",
     ),
     (
         Row::Queue,
@@ -661,6 +662,9 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
     "::tutorial::Tutorials",
     "::ui_session::latch::LatchCloses",
     "::ui_logout::SessionPosts",
+    // The guild cache's waiters, which `GetGuildInfo` leaves inside its call through `&self`
+    // (`0x4c93d2`).
+    "::ui_guild::GuildState",
 ];
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
@@ -734,7 +738,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::CombatLogRanges",
     "::LogPeriodicSpells",
     "::GuildMemberNotify",
-    "::ui_guild::GuildState",
     "::PetitionRecords",
     "::ui_petition::PetitionState",
     "::ItemSubClasses",
