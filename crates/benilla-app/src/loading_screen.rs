@@ -1309,4 +1309,22 @@ mod tests {
             "a raise hides the layers below again"
         );
     }
+
+    /// `0x5deb93`-`0x5debbd`: an arrival on foot ends the screen at once (`0x407e80`), so the
+    /// interface runs from that frame on, while here the cover waits for the world to be ready.
+    #[test]
+    fn an_arrival_on_foot_lets_the_interface_run() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let mut screen = LoadingScreen::default();
+        screen.raise("world entry", true, Some(0), 0.0);
+        world.insert_resource(screen);
+        world.insert_resource(crate::net::GuidIndex::default());
+        world.init_resource::<crate::cinematic::Cinematic>();
+        world.spawn(crate::net::SelfPlayer);
+        world
+            .run_system_once(see_through_on_transport_arrival)
+            .unwrap();
+        assert!(!world.resource::<LoadingScreen>().hides_interface());
+    }
 }
