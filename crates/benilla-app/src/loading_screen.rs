@@ -28,6 +28,9 @@ use benilla_world::terrain_stream::WorldLoadProgress;
 /// The cover's input half: while it is up the client takes no input (a source cut in `PreUpdate`).
 mod input;
 pub(crate) use input::CoverInput;
+/// The frames the window presents, counted in the render world.
+mod hold;
+pub(crate) use hold::Presents;
 /// A transport transfer's route screen.
 mod route;
 
@@ -389,6 +392,7 @@ impl Plugin for LoadingScreenPlugin {
             );
         // The cover's input rule, registered here so the two cannot be registered apart.
         input::build(app);
+        hold::build(app);
     }
 }
 
