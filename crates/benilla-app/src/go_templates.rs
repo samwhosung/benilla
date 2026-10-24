@@ -83,6 +83,14 @@ pub(crate) enum GoColumn {
     NotInCombat,
 }
 
+/// Whether the object's own type has an `id` column at all (`0x621b00` gives no −1).
+pub(crate) fn has_column(go: &ObjectFields, id: GoColumn) -> bool {
+    u32::try_from(go.gameobject_type_id())
+        .ok()
+        .and_then(|t| data_column(t, id))
+        .is_some()
+}
+
 /// `0x621b00(type, id)` for the ids of [`GoColumn`]: the index of `id` in the type's id array
 /// (`[0x80d7a4 + 20·type]`, counted by `[0x80d7a0 + 20·type]`), or `None` where the type has no
 /// such column.
@@ -321,6 +329,14 @@ mod tests {
         );
         assert_eq!(col(3, GoColumn::NoDamageImmune), 111);
         assert_eq!(col(3, GoColumn::AutoClose), 103);
+    }
+
+    /// TEXT (9) and GOOBER (10) carry a pageID column; a door has none.
+    #[test]
+    fn the_page_column_is_texts_and_goobers() {
+        assert!(has_column(&go(9), GoColumn::PageId));
+        assert!(has_column(&go(10), GoColumn::PageId));
+        assert!(!has_column(&go(0), GoColumn::PageId));
     }
 
     #[test]
