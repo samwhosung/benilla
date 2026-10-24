@@ -443,7 +443,10 @@ impl Plugin for UiDuelPlugin {
                 (
                     // The tick names its line and `feed_duel` resolves it, so the tick runs first or
                     // each "Duel starting: N" lands a frame late.
-                    tick_countdown.before(feed_duel),
+                    // Before the pass: the duel answers' calls read the session.
+                    tick_countdown
+                        .before(feed_duel)
+                        .before(crate::vm_pass::VmPass::Start),
                     feed_duel.in_set(UiFeed),
                 ),
             );

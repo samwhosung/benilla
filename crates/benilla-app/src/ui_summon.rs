@@ -257,7 +257,10 @@ impl Plugin for UiSummonPlugin {
             Update,
             (
                 // Before the feed, so the frame a session ends feeds nothing from it.
-                end_session_summon.before(feed_summon),
+                // Before the pass: `ConfirmSummon`'s call reads the latch.
+                end_session_summon
+                    .before(feed_summon)
+                    .before(crate::vm_pass::VmPass::Start),
                 feed_summon.in_set(UiFeed),
             ),
         );

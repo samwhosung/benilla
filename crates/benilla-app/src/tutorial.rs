@@ -597,7 +597,11 @@ impl Plugin for TutorialPlugin {
                 (
                     on_world_enter.before(run_world_enter_cascade),
                     run_world_enter_cascade.before(feed_tutorials),
-                    watch_windows.before(feed_tutorials),
+                    // Before the pass, whose trainer and merchant calls write the windows it
+                    // watches.
+                    watch_windows
+                        .before(feed_tutorials)
+                        .before(crate::vm_pass::VmPass::Start),
                     watch_self
                         .after(on_world_enter)
                         .after(crate::player::ControlRestore)

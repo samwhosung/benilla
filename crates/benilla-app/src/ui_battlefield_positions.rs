@@ -226,7 +226,10 @@ impl Plugin for BattlefieldPositionsPlugin {
         app.init_resource::<BattlefieldPositions>().add_systems(
             Update,
             (
-                reset_on_world_enter.before(feed_battlefield_positions),
+                // Before the pass: the positions request's call reads and stamps the state.
+                reset_on_world_enter
+                    .before(feed_battlefield_positions)
+                    .before(crate::vm_pass::VmPass::Start),
                 feed_battlefield_positions.in_set(UiFeed),
             ),
         );

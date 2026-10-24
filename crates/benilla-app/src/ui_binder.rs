@@ -230,7 +230,10 @@ impl Plugin for UiBinderPlugin {
             Update,
             (
                 // Range-close before the feed, so walking away hides the dialog the same frame.
-                close_npc_session_out_of_range::<BinderState>.before(feed_binder),
+                // Before the pass: `ConfirmBinder`'s call reads the question.
+                close_npc_session_out_of_range::<BinderState>
+                    .before(feed_binder)
+                    .before(crate::vm_pass::VmPass::Start),
                 feed_binder.in_set(UiFeed),
             ),
         );
