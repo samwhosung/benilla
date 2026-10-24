@@ -288,6 +288,9 @@ pub enum RecordAsk {
     /// A trade getter's filled slot whose template the mirror lacks: the item cache, with the
     /// callback `0x4c0340` that signals `TRADE_UPDATE` (`0x4c017f`, `0x4c0582`).
     TradeItem(u32),
+    /// `GetGuildInfo` on a player whose guild the mirror lacks: the guild cache, with a waiter
+    /// of the call's own for the unit (`0x4c93b6`-`0x4c93d2`).
+    Guild { guild_id: u32, guid: u64 },
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,

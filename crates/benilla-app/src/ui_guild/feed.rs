@@ -169,20 +169,17 @@ pub(super) fn feed_guild(
     }
 }
 
-/// Ask the guilds `GetGuildInfo` missed, each with its waiter (`0x4c93d2`): the getter's lookup,
-/// which the getter cannot send from inside the VM.
-pub(super) fn ask_missed_guilds(
-    mut vm: VmWith<ResMut<'static, GuildState>>,
+/// The guilds `GetGuildInfo` missed that a harness's VM kept, each asked with its waiter as the
+/// host asks it inside the call (`0x4c93d2`).
+#[cfg(test)]
+pub(super) fn ask_kept_guilds(
+    mut script: NonSendMut<UiScript>,
+    guild: Res<GuildState>,
     commands: Res<NetCommands>,
 ) {
-    vm.turn(|script, mut guild| {
-        let Some(script) = script else {
-            return;
-        };
-        for (guild_id, guid) in script.take_guild_info_asks() {
-            guild.wait_for_info(guild_id, guid, &commands);
-        }
-    });
+    for (guild_id, guid) in script.take_guild_info_asks() {
+        guild.wait_for_info(guild_id, guid, &commands);
+    }
 }
 
 /// `SMSG_GUILD_INFO`'s chat lines, `GUILD_NAME_TEMPLATE` then `GUILD_INFO_TEMPLATE` (`0x5e6fb0`,

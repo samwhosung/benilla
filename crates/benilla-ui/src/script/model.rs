@@ -486,8 +486,6 @@ pub(crate) struct Model {
     /// The roster module's own cells and the rank editor's unsaved edits, apart from `guild` so a
     /// push keeps them.
     pub(crate) guild_cells: guild::GuildCells,
-    /// The guilds `GetGuildInfo` missed, `(guild_id, guid)`, for the app to ask with a waiter.
-    pub(crate) guild_info_asks: Vec<(u32, u64)>,
     /// The charter price and open petition, names resolved from caches as the reference does.
     pub(crate) petition: petition::PetitionState,
     /// Per chat window from `ChatFrame1`, the tint, alpha and font size its tab menu can change.
@@ -1477,7 +1475,6 @@ impl Model {
             lfg_slots: [0; 3],
             lfg_comment: String::new(),
             guild: guild::GuildState::default(),
-            guild_info_asks: Vec::new(),
             guild_cells: guild::GuildCells::default(),
             petition: petition::PetitionState::default(),
             // Per window, as the stock dock differs: 1 and 2 are the dock, the rest undocked.

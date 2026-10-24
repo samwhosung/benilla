@@ -257,10 +257,16 @@ impl super::UiScript {
         self.model_mut().guild_cells = cells;
     }
 
-    /// The guilds `GetGuildInfo` found no record for since the last take, each `(guild_id, guid)`:
-    /// the lookup with its callback (`0x4c93d2`), which asks and leaves a waiter for the unit.
+    /// The guilds `GetGuildInfo` found no record for that a harness's VM kept
+    /// ([`Self::keep_calls`]), each `(guild_id, guid)`: the lookup with its callback (`0x4c93d2`),
+    /// which asks and leaves a waiter for the unit.
     pub fn take_guild_info_asks(&mut self) -> Vec<(u32, u64)> {
-        std::mem::take(&mut self.model_mut().guild_info_asks)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::Guild { guild_id, guid }) => {
+                Some((*guild_id, *guid))
+            }
+            _ => None,
+        })
     }
 
     /// The guild calls a harness VM kept ([`Self::keep_calls`]), in call order.
@@ -341,20 +347,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // token, a non-player, a guildless player and an unarrived guild record all answer
     // `nil, nil, 0`, the third the number 0 (`mov eax,3` on both legs). Stock
     // `PaperDollFrame_SetGuild` calls it for `"player"` unguarded (`PaperDollFrame.lua:117`). A
-    // player's guild the cache lacks is asked with a waiter of the call's own
-    // ([`UiScript::take_guild_info_asks`]); the zero key never is (`0x560e3d`).
+    // player's guild the cache lacks is asked with a waiter of the call's own, inside the call
+    // ([`super::RecordAsk::Guild`]); the zero key never is (`0x560e3d`).
     g.set(
         "GetGuildInfo",
         lua.create_function(|lua, unit: Option<String>| {
             crate::script::unit::check_unit_token(&unit)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(state) = unit.as_deref().and_then(|u| model.unit(u)) else {
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             let Some(guild) = state.guild.as_ref() else {
-                let miss = (state.has_object && state.is_player && state.guild_id != 0)
-                    .then_some((state.guild_id, state.guid));
-                model.guild_info_asks.extend(miss);
+                let miss = (state.has_object && state.is_player && state.guild_id != 0).then_some(
+                    super::RecordAsk::Guild {
+                        guild_id: state.guild_id,
+                        guid: state.guid,
+                    },
+                );
+                drop(model);
+                if let Some(miss) = miss {
+                    super::calls::ask(lua, miss)?;
+                }
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             Ok((

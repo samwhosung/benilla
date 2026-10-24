@@ -55,6 +55,7 @@ pub(crate) struct RecordAsks<'w> {
     /// Each absent in a harness without it, which asks nothing.
     names: Option<Res<'w, crate::names::NameCache>>,
     items: Option<Res<'w, crate::items::Items>>,
+    guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
@@ -71,6 +72,11 @@ impl RecordAsks<'_> {
             RecordAsk::TradeItem(entry) => {
                 if let Some(items) = self.items.as_deref() {
                     crate::ui_trade::ask_trade_record(items, &self.net, entry);
+                }
+            }
+            RecordAsk::Guild { guild_id, guid } => {
+                if let Some(guild) = self.guild.as_deref() {
+                    guild.wait_for_info(guild_id, guid, &self.net);
                 }
             }
         }

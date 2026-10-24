@@ -131,6 +131,7 @@ pub(crate) fn idle_action(idle: Duration, gates: IdleGates) -> IdleAction {
 }
 
 /// The handler, in-world only: `0x482ea0` is `WorldFrame::Render`.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(crate) fn idle_handler(
     time: Res<Time<Real>>,
     last: Res<LastInput>,

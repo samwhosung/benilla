@@ -4,6 +4,7 @@
 //! `SMSG_GUILD_QUERY_RESPONSE`, cached by guild id and filled lazily, as in the reference.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use benilla_formats::GuildEmblem;
 use benilla_protocol::messages::{
@@ -112,8 +113,9 @@ pub(crate) struct GuildState {
     identities: QueryCache<u32, Identity>,
     /// Bumped when an identity lands or is evicted, never by an ask; the unit feeds watch it.
     identity_generation: u64,
-    /// The callbacks waiting on each guild's record, in the order they were left.
-    waiters: HashMap<u32, Vec<Waiter>>,
+    /// The callbacks waiting on each guild's record, in the order they were left; locked so a
+    /// getter's lookup leaves one through `&self`, inside its call ([`Self::wait_for_info`]).
+    waiters: Mutex<HashMap<u32, Vec<Waiter>>>,
     /// `0x5e2890`'s table of each guild's last `PLAYER_GUILD_TIMESTAMP` (`0xc4d668`, guild and
     /// stamp), freed when the world goes (`0x5e2e60`).
     stamps: Vec<(u32, u32)>,
@@ -345,23 +347,29 @@ impl GuildState {
     /// `0x561d20`: the record goes, and a pending one's callbacks run with status 0, which
     /// signals nothing.
     fn drop_record(&mut self, guild_id: u32) {
-        self.waiters.remove(&guild_id);
+        self.waiters().remove(&guild_id);
         if self.identities.evict(guild_id) {
             self.identity_generation = self.identity_generation.wrapping_add(1);
             self.dirty = true;
         }
     }
 
+    fn waiters(&self) -> std::sync::MutexGuard<'_, HashMap<u32, Vec<Waiter>>> {
+        self.waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// `GetGuildInfo` missed `guild_id` for the unit `guid`: the lookup with its callback
     /// (`0x4c93d2`), asking a key not in flight, a refused one again, and leaving a waiter, with
     /// no dedupe (`push 0`, `0x4c93b6`). A record already held takes no waiter.
-    pub(crate) fn wait_for_info(&mut self, guild_id: u32, guid: u64, commands: &NetCommands) {
+    pub(crate) fn wait_for_info(&self, guild_id: u32, guid: u64, commands: &NetCommands) {
         if guild_id != 0
             && self
                 .resolve_identity(guild_id, Ask::Event(commands))
                 .is_none()
         {
-            self.waiters
+            self.waiters()
                 .entry(guild_id)
                 .or_default()
                 .push(Waiter::Info(guid));
@@ -381,7 +389,7 @@ impl GuildState {
         // The zero key asks nothing and keeps no callback (`0x560e3d`).
         if guild_id != 0 {
             self.resolve_identity(guild_id, Ask::Event(commands));
-            self.waiters
+            self.waiters()
                 .entry(guild_id)
                 .or_default()
                 .push(Waiter::Members);
@@ -394,7 +402,10 @@ impl GuildState {
     fn apply_query_response(&mut self, response: GuildQueryResponse) -> Vec<Waiter> {
         let ours = response.guild_id == self.guild_id;
         let found = !response.name.is_empty();
-        let waiters = self.waiters.remove(&response.guild_id).unwrap_or_default();
+        let waiters = self
+            .waiters()
+            .remove(&response.guild_id)
+            .unwrap_or_default();
         // A refusal redisplays only an identity it took away: every guild callback ignores
         // status 0 (`0x4d1486`, `0x4c9476`, `0x5dd866`, `0x5e29c6`, the crest's `0x5e0650` at
         // `0x5e0679`, the glue's `0x472420` at `0x472435`), and the corpse's `0x5d6f90` only
@@ -565,8 +576,8 @@ pub(crate) fn unit_guild(
 }
 
 /// [`unit_guild`] from the cache alone, asking nothing: the guild leg of a held unit's snapshot,
-/// whose `GetGuildInfo` asks a miss itself, with a waiter of its own (`0x4c93d2`,
-/// [`benilla_ui::script::UiScript::take_guild_info_asks`]).
+/// whose `GetGuildInfo` asks a miss itself, with a waiter of its own, inside its call
+/// (`0x4c93d2`, [`benilla_ui::script::RecordAsk::Guild`]).
 pub(crate) fn cached_unit_guild(fields: &ObjectFields, guild: &GuildState) -> Option<UnitGuild> {
     guild_of(fields, guild, Ask::Read)
 }
@@ -880,13 +891,10 @@ impl Plugin for UiGuildPlugin {
             .init_resource::<GuildMemberNotify>()
             .add_systems(
                 Update,
-                (
-                    // Its push is what `PLAYER_GUILD_UPDATE`'s handlers read.
-                    feed::feed_guild
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                    feed::ask_missed_guilds.in_set(crate::ui_script::UiDrain),
-                )
+                // Its push is what `PLAYER_GUILD_UPDATE`'s handlers read.
+                feed::feed_guild
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
                     // Never against the glue VM: the feed's edge memo survives the entry load, so
                     // an edge spent on a VM with no frames, such as the login MOTD, is lost.
                     .run_if(crate::ui_script::ingame_ui_up),
@@ -1472,7 +1480,7 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::field_watch::NoticeLane>()
             .insert_resource(commands)
-            .add_systems(Update, feed::ask_missed_guilds);
+            .add_systems(Update, feed::ask_kept_guilds);
         net::register(&mut app);
         let target = |guild_id: u32| UnitState {
             exists: true,
@@ -1483,6 +1491,7 @@ mod tests {
             ..Default::default()
         };
         let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script.set_unit("target", Some(target(5)));
         app.insert_non_send_resource(script);
         let call = |app: &mut App| {
