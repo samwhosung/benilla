@@ -8,8 +8,9 @@
 //! At the settle release one `REVEAL_SUM` line closes the window from the snap to residency:
 //! `frames`, the frames it took; `presented`, how many the window presented (counted at the
 //! release frame, so the release frame's own present is not in it); and `drawn` and `wmo`, the
-//! submeshes and retained-pass WMO groups that came on screen in presented frames, the sum of
-//! each frame's growth over the last presented one.
+//! submeshes and retained-pass WMOs that came on screen after the first frame shown, the sum of
+//! each shown frame's growth over the last one shown (a frame
+//! [`crate::loading_screen::PresentHold`] holds is not shown).
 //!
 //! Runs in `Last`: visibility, the exterior-scene gate and the retained pass settle in
 //! `PostUpdate`, so an `Update` line would report them a frame late.
@@ -74,6 +75,7 @@ fn drive_reveal_audit(
     cam: Query<&GlobalTransform, With<benilla_world::view::WorldCamera>>,
     time: ProbeClock,
     presents: Option<Res<crate::loading_screen::Presents>>,
+    hold: Option<Res<crate::loading_screen::PresentHold>>,
     mut teleports: MessageReader<crate::net::TeleportMessage>,
     mut worldports: MessageReader<crate::net::WorldportMessage>,
 ) {
@@ -111,12 +113,18 @@ fn drive_reveal_audit(
     let since = audit.since;
     if let Some(w) = audit.window.as_mut() {
         w.frames += 1;
-        let shown = (seen.drawn, wmo_drawn);
-        if let Some((d, g)) = w.last_drawn {
-            w.drawn_grew += shown.0.saturating_sub(d);
-            w.wmo_grew += shown.1.saturating_sub(g);
+        // A held frame never reaches the window, so what it drew is not on screen.
+        if !hold
+            .as_deref()
+            .is_some_and(crate::loading_screen::PresentHold::held)
+        {
+            let shown = (seen.drawn, wmo_drawn);
+            if let Some((d, g)) = w.last_drawn {
+                w.drawn_grew += shown.0.saturating_sub(d);
+                w.wmo_grew += shown.1.saturating_sub(g);
+            }
+            w.last_drawn = Some(shown);
         }
-        w.last_drawn = Some(shown);
         // A snap the stream already holds releases on its own frame: `frames=1`.
         if !settling {
             info!(

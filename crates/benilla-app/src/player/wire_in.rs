@@ -437,7 +437,8 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     // (`Player.cpp:1866-1893`), and the reference's apply (`0x6186b0`) re-parents to the packet's
     // transport guid, zero here. A kept ride would carry us back onto the deck.
     player.ride = None;
-    player.pos = wow_to_bevy(t.position);
+    let to = wow_to_bevy(t.position);
+    player.pos = to;
     player.face_yaw = t.orientation;
     *cam_yaw = t.orientation;
     player.move_flags = 0;
@@ -896,6 +897,42 @@ mod teleport_tests {
         assert_eq!(player.pos, wow_to_bevy(t.position));
         assert_eq!((player.face_yaw, cam_yaw), (1.25, 1.25));
         assert!(player.settling && player.ride_abort && player.world_stale);
+    }
+
+    /// `0x617e90` reloads the world only for `d² > 900` of the unit the camera follows
+    /// (`0x630bd0`): a short hop, or a snap under a free-fly eye, holds no frame.
+    #[test]
+    fn only_a_snap_past_30_yards_of_the_followed_body_reloads_the_world() {
+        let snapped = |from: [f32; 3], to: [f32; 3], detached: bool| {
+            let mut player = Player {
+                active: true,
+                detached,
+                pos: wow_to_bevy(from),
+                ..Default::default()
+            };
+            let t = TeleportMessage {
+                guid: 0x45,
+                counter: 1,
+                position: to,
+                orientation: 0.0,
+            };
+            snap_near_teleport(&mut player, &mut 0.0, &t, 10.0);
+            player
+        };
+        let from = [16_222.0, 16_252.0, 12.5];
+        let south_seas = [-11_880.0, -4_700.0, 2.0];
+        let holds = |to, detached| snapped(from, to, detached).holds_the_frame();
+        assert!(holds(south_seas, false), "GM Island to the South Seas");
+        assert!(holds([16_222.0, 16_282.5, 12.5], false), "30.5 yards");
+        assert!(!holds([16_222.0, 16_281.5, 12.5], false), "29.5 yards");
+        assert!(!holds(south_seas, true), "the eye does not follow");
+
+        let mut player = snapped(from, south_seas, false);
+        player.end_settle(true, 11.0);
+        assert!(
+            !player.holds_the_frame(),
+            "the settle release ends the hold"
+        );
     }
 }
 
