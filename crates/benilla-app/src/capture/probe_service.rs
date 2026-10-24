@@ -281,13 +281,16 @@ fn open_window(
     None
 }
 
+/// The NPC windows' cells the probe reads, lent with the VM since the host holds them.
+type ServiceWindows = (
+    ResMut<'static, MerchantOpen>,
+    ResMut<'static, GossipState>,
+    ResMut<'static, QuestGiver>,
+    ResMut<'static, TrainerOpen>,
+);
+
 fn service_probe(
-    mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, MerchantOpen>,
-        ResMut<'static, GossipState>,
-        ResMut<'static, QuestGiver>,
-        ResMut<'static, TrainerOpen>,
-    )>,
+    mut vm: crate::script_calls::VmWith<ServiceWindows>,
     time: ProbeClock,
     mut probe: ResMut<ServiceProbe>,
     // `[0xb4e2d0]`'s mirror, what the re-click gate reads: armed by a window and only by one.
