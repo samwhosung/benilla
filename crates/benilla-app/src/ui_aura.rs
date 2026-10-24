@@ -30,13 +30,12 @@ pub(crate) struct AuraDurations {
 }
 
 struct DurationStamp {
-    /// Seconds: the full duration on an apply or refresh, only the remainder on a relog
-    /// (`Map::ExistingPlayerLogin`) or a cast pushback (`Unit::DelaySpellAuraHolder`).
+    /// Seconds: the full duration on an apply or refresh, only the remainder at a login (the
+    /// character's load, `Player::_LoadAuras`), a relog (`Map::ExistingPlayerLogin`) or a cast
+    /// pushback (`Unit::DelaySpellAuraHolder`).
     total: f64,
     /// The real-clock instant it runs out: a server-sent span counts down in real seconds.
     expires_at: f64,
-    /// The real-clock arrival, the freshness gate against a recycled slot.
-    received_at: f64,
 }
 
 impl AuraDurations {
@@ -63,7 +62,6 @@ impl AuraDurations {
             DurationStamp {
                 total,
                 expires_at: now + total,
-                received_at: now,
             },
         );
     }
@@ -74,8 +72,6 @@ impl AuraDurations {
 struct CachedAura {
     slot: u8,
     spell_id: u32,
-    /// When the aura entered the cache, for the duration freshness gate.
-    appeared_at: f64,
     /// The `AURAFLAGS` nibble and the `AURALEVELS` byte as the record was made (`+0xa`, `+0x8`).
     flags: u8,
     level: u8,
@@ -143,7 +139,6 @@ fn reconcile(cache: &mut Vec<CachedAura>, live: &[UnitAuraSlot], now: f64) {
             cache.push(CachedAura {
                 slot: a.slot,
                 spell_id: a.spell_id,
-                appeared_at: now,
                 flags: a.flags,
                 level: a.level,
                 stacks: a.stacks,
@@ -569,7 +564,9 @@ fn feed_auras(
         };
         let Ok((me_entity, store, self_guid)) = self_q.single() else {
             // No avatar does not end the aura state: a worldport re-streams the avatar mid-session,
-            // and vmangos re-sends durations only on apply, refresh and `Map::ExistingPlayerLogin`.
+            // and vmangos sends a duration where one is set (an apply, a refresh, a pushback), at
+            // the character's load (`Player::_LoadAuras`) and at a relog
+            // (`Map::ExistingPlayerLogin`), none of which a worldport runs.
             // The reference's `0xbc5f68` is zeroed once, by the startup init (`0x4e40c0` from
             // `0x48f5a9`), and touched otherwise only by its setter `0x4e43a6` and reader
             // `0x4e4467`.
@@ -758,12 +755,8 @@ fn player_list(
         .iter()
         .map(|c| {
             let display = catalog.and_then(|cat| cat.get(c.spell_id));
-            let (duration, expiration_time) = join_duration(
-                durations.by_slot.get(&c.slot),
-                c.appeared_at,
-                stamp_now,
-                script_now,
-            );
+            let (duration, expiration_time) =
+                join_duration(durations.by_slot.get(&c.slot), stamp_now, script_now);
             AuraState {
                 spell_id: c.spell_id,
                 name: display.map(|d| d.name.clone()),
@@ -889,23 +882,13 @@ pub(crate) fn run_feed_auras_once(world: &mut World) {
         .expect("the aura feed runs as a one-shot system");
 }
 
-/// How long before its aura a duration packet may arrive and still join it. The measured lead is
-/// one frame, about 50 ms, on a fresh apply; a recycled slot's stale stamp is seconds older.
-const DURATION_SLACK: f64 = 1.0;
-
 /// Joins a slot's stamp to the aura in that slot as `(duration, expirationTime)` on the script
-/// clock, `(0, 0)` for none; only this rejects a stamp. A stamp older than the aura by more than
-/// [`DURATION_SLACK`] is dropped as an earlier occupant's, where the reference's reader
-/// (`0x4e4450`) has no freshness test. `stamp_now` is the stamps' clock at the instant
-/// `script_now` stands at, so the expiry holds still frame to frame.
-fn join_duration(
-    stamp: Option<&DurationStamp>,
-    appeared_at: f64,
-    stamp_now: f64,
-    script_now: f64,
-) -> (f64, f64) {
+/// clock, `(0, 0)` for none. The reference's reader (`0x4e4450`) returns `expiry - now` for the
+/// slot with no freshness test, so a stamp from before its aura joins it: a login's durations go
+/// out while the server loads the character, seconds ahead of the auras. `stamp_now` is the
+/// stamps' clock at the instant `script_now` stands at, so the expiry holds still frame to frame.
+fn join_duration(stamp: Option<&DurationStamp>, stamp_now: f64, script_now: f64) -> (f64, f64) {
     stamp
-        .filter(|d| d.received_at >= appeared_at - DURATION_SLACK)
         .map(|d| (d.total, script_now + (d.expires_at - stamp_now)))
         .unwrap_or((0.0, 0.0))
 }
@@ -983,7 +966,6 @@ mod tests {
             .push(CachedAura {
                 slot: 32, // the first harmful slot, a debuff
                 spell_id: 11976,
-                appeared_at: 10.0,
                 flags: 0x8,
                 level: 60,
                 stacks: 1,
@@ -1047,7 +1029,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<PlayerAuraCache>().auras.len(),
             1,
-            "the display cache survives the gap — its `appeared_at` is the freshness gate's anchor"
+            "the display cache survives the gap"
         );
         assert!(
             app.world()
@@ -1192,34 +1174,17 @@ mod tests {
         // The level and the flags stay as the record was made (`0x4e433b`-`0x4e434a`).
         assert_eq!(cache[1].level, 60);
         assert_eq!(cache[1].flags, AURA_FLAG_CANCELABLE | 0x8);
-        assert_eq!(cache[0].appeared_at, 1.0, "appeared_at is not disturbed");
     }
 
     #[test]
-    fn a_duration_is_joined_only_when_it_is_no_older_than_the_aura() {
-        // Received at t=100 for an aura that appeared at t=200: a previous occupant's.
-        let stale = DurationStamp {
-            total: 30.0,
-            expires_at: 130.0,
-            received_at: 100.0,
-        };
-        assert_eq!(
-            join_duration(Some(&stale), 200.0, 200.0, 5000.0),
-            (0.0, 0.0),
-            "a stamp seconds older than the aura is rejected — no timer, not a wrong one"
-        );
-        // Received just before the aura: joined, and rebased onto the script clock.
-        let fresh = DurationStamp {
+    fn a_duration_is_rebased_onto_the_script_clock() {
+        let stamp = DurationStamp {
             total: 30.0,
             expires_at: 230.0,
-            received_at: 199.9,
         };
-        assert_eq!(
-            join_duration(Some(&fresh), 200.0, 200.0, 5000.0),
-            (30.0, 5030.0)
-        );
+        assert_eq!(join_duration(Some(&stamp), 200.0, 5000.0), (30.0, 5030.0));
         // No stamp: a permanent aura, which gets no packet.
-        assert_eq!(join_duration(None, 200.0, 200.0, 5000.0), (0.0, 0.0));
+        assert_eq!(join_duration(None, 200.0, 5000.0), (0.0, 0.0));
     }
 
     /// The span is a signed dword that the reference adds to its clock (`0x4e4390`) and reads back
@@ -1229,18 +1194,18 @@ mod tests {
     fn a_negative_span_leaves_the_slot_reading_zero_and_drops_its_last_timer() {
         let mut durations = AuraDurations::default();
         durations.set(0, 300_000, 15.0);
-        let live = join_duration(durations.by_slot.get(&0), 15.0, 15.0, 900.0);
+        let live = join_duration(durations.by_slot.get(&0), 15.0, 900.0);
         assert_eq!(live.0, 300.0, "control: a positive span joins");
 
         durations.set(0, -1, 16.0);
         assert_eq!(
-            join_duration(durations.by_slot.get(&0), 15.0, 16.0, 901.0),
+            join_duration(durations.by_slot.get(&0), 16.0, 901.0),
             (0.0, 0.0),
             "-1 is not 4,294,967 seconds, and not the earlier 300"
         );
         // The one negative the client's wrapped sign test reads as time left (`0x4e4472`).
         durations.set(1, i32::MIN, 16.0);
-        let (total, _) = join_duration(durations.by_slot.get(&1), 15.0, 16.0, 901.0);
+        let (total, _) = join_duration(durations.by_slot.get(&1), 16.0, 901.0);
         assert_eq!(total, 2_147_483.648, "i32::MIN reads as 2^31 ms");
         durations.set(2, 0, 16.0);
         assert!(durations.by_slot.contains_key(&2), "0 ms is a stamp, now");
@@ -1267,30 +1232,6 @@ mod tests {
         );
     }
 
-    /// The duration packet arrives about a frame before the delta that fills its slot.
-    #[test]
-    fn a_stamp_that_arrives_one_frame_before_its_aura_still_joins_it() {
-        let mut durations = AuraDurations::default();
-        // t = 15.10: the packet lands while slot 0 is still empty.
-        durations.set(0, 300_000, 15.10);
-        let mut cache = Vec::new();
-        assert!(cache.is_empty());
-        // t = 15.15: the next frame's descriptor delta fills slot 0.
-        reconcile(&mut cache, &[slot(0, 1126)], 15.15);
-
-        let (total, expiry) = join_duration(
-            durations.by_slot.get(&0),
-            cache[0].appeared_at,
-            15.15,
-            900.0,
-        );
-        assert_eq!(total, 300.0, "the stamp survived the gap");
-        // Script clock 900 plus the 300 s that began 50 ms ago, at the packet, not the delta.
-        assert!(
-            (expiry - 1199.95).abs() < 1e-9,
-            "expiry rebased onto the script clock, got {expiry}"
-        );
-    }
     // == `UnitBuff`'s unit-level gate (`0x519500`) ==
     // A stealthed Ridge Stalker carries 5916 in a positive slot and 22766 in a negative one; the
     // reference draws only 22766, as `UnitBuff` lists no hostile creature's buffs.
