@@ -57,6 +57,7 @@ pub(crate) struct RecordAsks<'w> {
     items: Option<Res<'w, crate::items::Items>>,
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     summon: Option<Res<'w, crate::ui_summon::SummonState>>,
+    battlefield: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
     cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
     trainer: Option<ResMut<'w, crate::ui_trainer::TrainerOpen>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
@@ -73,6 +74,13 @@ impl RecordAsks<'_> {
             RecordAsk::PlayerName(guid) => {
                 if let Some(names) = self.names.as_deref() {
                     let _ = names.resolve_player(guid, Ask::Event(&self.net));
+                }
+            }
+            RecordAsk::BattlefieldName(guid) => {
+                if let (Some(names), Some(state)) =
+                    (self.names.as_deref(), self.battlefield.as_deref_mut())
+                {
+                    state.wait_for_name(names, &self.net, guid);
                 }
             }
             RecordAsk::TradeItem { entry, owner } => {

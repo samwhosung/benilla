@@ -17,7 +17,7 @@ use benilla_protocol::messages::{BattlefieldPosition, BattlefieldPositions as Po
 use benilla_ui::script::{BattlefieldFlagView, BattlefieldPositionView};
 
 use crate::names::NameCache;
-use crate::net::{EnteredWorldMessage, GuidIndex, NetEntity, SelfGuid};
+use crate::net::{EnteredWorldMessage, GuidIndex, NetCommands, NetEntity, SelfGuid};
 use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
@@ -33,8 +33,9 @@ pub(crate) const REQUEST_THROTTLE: Duration = Duration::from_millis(5000);
 pub(crate) struct BattlefieldPositions {
     packet: Option<PositionsPacket>,
     last_request: Option<Instant>,
-    /// Guids whose name the cache has not answered yet.
-    pending_names: Vec<u64>,
+    /// The callbacks `0x4ac190` the getter's calls left, one per call that missed, each the
+    /// guid whose name it waits on; the name cache keeps them, so no list clear drops them.
+    name_callbacks: Vec<u64>,
 }
 
 impl BattlefieldPositions {
@@ -43,19 +44,36 @@ impl BattlefieldPositions {
         self.packet = Some(packet);
     }
 
+    /// `GetBattlefieldPosition`'s lookup of a nameless teammate, inside its call
+    /// ([`benilla_ui::script::RecordAsk::BattlefieldName`]): the cache asks a miss, a refused name
+    /// again, and the call leaves its callback, with no dedupe (`0x4ac104`-`0x4ac118`).
+    pub(crate) fn wait_for_name(&mut self, names: &NameCache, commands: &NetCommands, guid: u64) {
+        if names.resolve_player(guid, Ask::Event(commands)).is_none() {
+            self.name_callbacks.push(guid);
+        }
+    }
+
+    /// The callbacks whose name the cache answered, a record or a refusal, spent: each signals
+    /// `WORLD_MAP_NAME_UPDATE` with no status test (`0x4ac190`-`0x4ac195`).
+    fn answered_callbacks(&mut self, names: &NameCache) -> usize {
+        let before = self.name_callbacks.len();
+        self.name_callbacks.retain(|&guid| {
+            names.resolve_player(guid, Ask::Read).is_none() && !names.player_answered_unknown(guid)
+        });
+        before - self.name_callbacks.len()
+    }
+
     /// The positions request's clear with no active slot (`0x4aa5df`): the teammate count
     /// `[0xb6ebdc]` alone, the carrier kept.
     pub(crate) fn clear_teammates(&mut self) {
         if let Some(packet) = self.packet.as_mut() {
             packet.players.clear();
         }
-        self.pending_names.clear();
     }
 
     /// Everything the last packet left, at a world entry.
     fn clear(&mut self) {
         self.packet = None;
-        self.pending_names.clear();
     }
 
     /// The carrier the last packet left, if any.
@@ -126,15 +144,18 @@ pub(crate) fn feed_battlefield_positions(
             .as_deref()
             .and_then(|m| m.0.battleground(active.unwrap_or(0)))
             .map_or(1.0, |b| b.minimap_icon_scale);
-        let BattlefieldPositions {
-            packet,
-            pending_names,
-            ..
-        } = &mut *state;
         // The push only reads: the getter's calls are its name lookups with the callback
         // `0x4ac190`, which ask a nameless row inside the call (`0x4ac118`,
-        // [`benilla_ui::script::RecordAsk::PlayerName`]); the map's `OnUpdate` makes them every
-        // frame it shows (`WorldMapFrame.lua:408`, `Blizzard_BattlefieldMinimap.lua:290`).
+        // [`BattlefieldPositions::wait_for_name`]); the map's `OnUpdate` makes them every frame it
+        // shows (`WorldMapFrame.lua:408`, `Blizzard_BattlefieldMinimap.lua:290`). Each callback
+        // whose name answered signals once, after the push.
+        let answered = state.answered_callbacks(&names);
+        let signal = |script: &mut benilla_ui::script::UiScript| {
+            for _ in 0..answered {
+                script.fire_event("WORLD_MAP_NAME_UPDATE", Vec::new());
+            }
+        };
+        let packet = &state.packet;
         // The getters read the count and the carrier with no slot test (`0x4abf09`, `0x4ac1c6`),
         // under the active slot's map, 0 with none.
         let map = active.unwrap_or(0);
@@ -145,6 +166,7 @@ pub(crate) fn feed_battlefield_positions(
                 *last = key;
                 script.set_battlefield_positions(Vec::new(), None, icon_scale);
             }
+            signal(script);
             return;
         };
         *last_empty.get(script) = Some((true, icon_scale.to_bits()));
@@ -155,7 +177,6 @@ pub(crate) fn feed_battlefield_positions(
                 .and_then(|d| project_on_displayed(d, selection, map, x, y))
                 .unwrap_or((0.0, 0.0))
         };
-        let mut name_landed = false;
         let mut players = Vec::with_capacity(packet.players.len());
         for p in &packet.players {
             if me.0 == Some(p.guid) || group.members.iter().any(|m| m.guid == p.guid) {
@@ -163,19 +184,6 @@ pub(crate) fn feed_battlefield_positions(
             }
             let (x, y) = live_or_packet(p, &guids, &unit_pos);
             let name = names.resolve_player(p.guid, Ask::Read).map(str::to_string);
-            match name {
-                None => {
-                    if !pending_names.contains(&p.guid) {
-                        pending_names.push(p.guid);
-                    }
-                }
-                Some(_) => {
-                    if let Some(i) = pending_names.iter().position(|g| *g == p.guid) {
-                        pending_names.swap_remove(i);
-                        name_landed = true;
-                    }
-                }
-            }
             players.push(BattlefieldPositionView {
                 uv: project(x, y),
                 name,
@@ -194,9 +202,7 @@ pub(crate) fn feed_battlefield_positions(
             }
         });
         script.set_battlefield_positions(players, flag, icon_scale);
-        if name_landed {
-            script.fire_event("WORLD_MAP_NAME_UPDATE", Vec::new());
-        }
+        signal(script);
     })
 }
 
@@ -251,7 +257,6 @@ impl Plugin for BattlefieldPositionsPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::NetCommands;
     use benilla_ui::script::UiScript;
 
     /// The push only reads a teammate's name: the packet and the frames ask nothing, the getter's

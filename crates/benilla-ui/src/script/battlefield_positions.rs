@@ -86,7 +86,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     // A nameless row is the lookup's ask with the callback `0x4ac190`, inside the
                     // call (`0x4ac118`); a zero guid is no key (`0x55f080`).
                     if r.name.is_none() && r.guid != 0 {
-                        super::calls::ask(lua, super::RecordAsk::PlayerName(r.guid))?;
+                        super::calls::ask(lua, super::RecordAsk::BattlefieldName(r.guid))?;
                     }
                     three(lua, r.uv, r.name.as_deref())
                 }
