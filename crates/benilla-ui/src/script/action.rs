@@ -36,7 +36,6 @@ pub fn macro_slot_word(id: u32) -> (u8, u32) {
     ((word >> 24) as u8, word & 0x00ff_ffff)
 }
 
-/// What one action slot shows; the app resolves the icon before pushing.
 /// An action bar verb the host applies inside its call ([`super::ScriptCall::ActionBar`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionBarCall {
@@ -49,6 +48,7 @@ pub enum ActionBarCall {
     Set { id: u32, packed: u32 },
 }
 
+/// What one action slot shows; the app resolves the icon before pushing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionSlot {
     /// The icon texture path (`Interface\Icons\…`); `None` shows the slot's fallback.

@@ -243,3 +243,40 @@ impl<A: SystemParam, B: SystemParam> Pair<'_, '_, A, B> {
         unsafe { B::get_param(&mut self.states.1, &self.meta, self.world, self.change_tick) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bevy::prelude::*;
+
+    use super::Pair;
+
+    #[derive(Resource, Default)]
+    struct Cell(u32);
+
+    /// The members of a pair may conflict with one another, as the pair lends one at a time.
+    #[test]
+    fn a_pairs_members_may_conflict_with_each_other() {
+        let mut app = App::new();
+        app.init_resource::<Cell>().add_systems(
+            Update,
+            |mut pair: Pair<ResMut<'static, Cell>, Res<'static, Cell>>| {
+                pair.p0().0 += 1;
+                assert_eq!(pair.p1().0, 1);
+            },
+        );
+        app.update();
+    }
+
+    /// A member that conflicts with a parameter outside its set is refused as the system's state
+    /// is built, as `ParamSet` refuses it.
+    #[test]
+    #[should_panic(expected = "conflicts with a parameter outside its set")]
+    fn a_member_conflicting_with_a_parameter_outside_the_set_panics() {
+        let mut app = App::new();
+        app.init_resource::<Cell>().add_systems(
+            Update,
+            |_outside: ResMut<Cell>, _pair: Pair<Res<'static, Cell>, Res<'static, Cell>>| {},
+        );
+        app.update();
+    }
+}
