@@ -17,7 +17,7 @@ use benilla_protocol::messages::{BattlefieldPosition, BattlefieldPositions as Po
 use benilla_ui::script::{BattlefieldFlagView, BattlefieldPositionView};
 
 use crate::names::NameCache;
-use crate::net::{EnteredWorldMessage, GuidIndex, NetCommands, NetEntity, SelfGuid};
+use crate::net::{EnteredWorldMessage, GuidIndex, NetEntity, SelfGuid};
 use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
@@ -251,6 +251,7 @@ impl Plugin for BattlefieldPositionsPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::NetCommands;
     use benilla_ui::script::UiScript;
 
     /// The push only reads a teammate's name: the packet and the frames ask nothing, the getter's
