@@ -327,7 +327,7 @@ fn gameobject_create_surfaces_transport_progress_and_position_fallback() {
                 "a GameObject's HAS_POSITION block carries no speeds"
             );
             assert_eq!(
-                *transport_progress,
+                transport_progress.map(|c| c.progress_ms),
                 Some(123_456),
                 "UPDATE_FLAG_TRANSPORT's u32 tail is the pathProgress ms anchor"
             );

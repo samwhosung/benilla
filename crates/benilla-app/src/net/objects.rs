@@ -486,7 +486,7 @@ pub(super) struct CreateBlock {
     pub(super) scale: f32,
     pub(super) speeds: Option<MoveSpeeds>,
     pub(super) mover: Option<benilla_protocol::MoverState>,
-    pub(super) transport_progress: Option<u32>,
+    pub(super) transport_progress: Option<benilla_protocol::TransportClock>,
     pub(super) transport: Option<benilla_protocol::TransportPose>,
     pub(super) spline: Option<benilla_protocol::CreateSpline>,
 }
@@ -537,8 +537,8 @@ fn object_create(
     let transport_anchor = matches!(go_type, Some(11 | 15))
         .then_some(transport_progress)
         .flatten()
-        .map(|progress_ms| crate::transport::TransportAnchor {
-            progress_ms,
+        .map(|clock| crate::transport::TransportAnchor {
+            progress_ms: clock.progress_ms,
             at: std::time::Instant::now(),
         });
     // The placement, and on a type-11 lift the basis its keyframe offsets rotate through.

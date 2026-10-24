@@ -1125,3 +1125,58 @@ fn a_groupmates_pet_leaving_its_field_tears_down_that_pets_selection() {
     send(world, [values(ME, &guid(0, 6))]);
     assert!(torn(world).is_empty(), "an old pet still held");
 }
+
+/// A transport's clock is anchored at the instant its packet arrived, the time the queue node
+/// stamps (`0x538851`) and the constructor subtracts (`0x5f7080`), not when the drain applies it.
+#[test]
+fn a_transport_create_anchors_its_clock_at_the_packets_arrival() {
+    const BOAT: u64 = 0xF120_0000_0000_0010;
+    let mut app = client();
+    let world = app.world_mut();
+    let arrived = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    // `GAMEOBJECT_TYPE_ID`, field 21: a type-15 ship.
+    let SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id,
+        position,
+        orientation,
+        scale,
+        speeds,
+        mover,
+        transport,
+        spline,
+        fields,
+        ..
+    } = created(BOAT, EntityKind::GameObject, [0.0; 3], &[(21, 15)])
+    else {
+        unreachable!()
+    };
+    send(
+        world,
+        [SessionEvent::ObjectCreate {
+            guid,
+            kind,
+            display_id,
+            position,
+            orientation,
+            scale,
+            speeds,
+            mover,
+            transport_progress: Some(benilla_protocol::TransportClock {
+                progress_ms: 1234,
+                arrived: Some(arrived),
+            }),
+            transport,
+            spline,
+            fields,
+        }],
+    );
+    world.flush();
+    let e = world.resource::<GuidIndex>().0[&BOAT];
+    let anchor = world
+        .get::<crate::transport::TransportAnchor>(e)
+        .expect("anchored");
+    assert_eq!(anchor.progress_ms, 1234);
+    assert_eq!(anchor.at, arrived);
+}

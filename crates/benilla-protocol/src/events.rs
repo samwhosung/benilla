@@ -121,6 +121,16 @@ impl LoginRefusal {
     }
 }
 
+/// A transport create's clock: `UPDATE_FLAG_TRANSPORT`'s u32, the path progress in ms, and when
+/// its packet arrived, the time the reference's create runs with (the queue node's stamp
+/// `0x538851`, which `0x5f7080` subtracts).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportClock {
+    pub progress_ms: u32,
+    /// Stamped by [`crate::WorldReader::poll`] as it reads the packet; `None` from a bare decode.
+    pub arrived: Option<std::time::Instant>,
+}
+
 /// The block an [`SessionEvent::ObjectNotify`] stands for in the notify pass.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NotifyBlock {
@@ -242,9 +252,10 @@ pub enum SessionEvent {
         /// Flags and swim pitch the unit streams in with, applied by the reference before its model
         /// exists: the flags via the relay's `0x75a07dff` merge, the pitch via `0x7c6420`.
         mover: Option<MoverState>,
-        /// `UPDATE_FLAG_TRANSPORT`'s path progress in ms, only on a type-11/15 transport create;
-        /// progress is this plus elapsed ms; position is `timetable(progress % period)`.
-        transport_progress: Option<u32>,
+        /// `UPDATE_FLAG_TRANSPORT`'s path progress and its packet's arrival, only on a type-11/15
+        /// transport create; progress is this plus the ms since; position is
+        /// `timetable(progress % period)`.
+        transport_progress: Option<TransportClock>,
         /// Its rider pose, local to the transport, when created with `MOVEFLAG_ON_TRANSPORT`.
         transport: Option<TransportPose>,
         /// The path it was already walking (`MOVEFLAG_SPLINE_ENABLED`), with the ms already ridden.

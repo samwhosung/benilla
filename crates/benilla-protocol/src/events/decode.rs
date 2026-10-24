@@ -3,7 +3,7 @@
 use crate::messages::{CastOutcome, Object, ObjectFields, ObjectType, ServerPacket};
 use crate::wire::Vector3d;
 
-use super::{EntityKind, MoveSpeeds, NotifyBlock, SessionEvent};
+use super::{EntityKind, MoveSpeeds, NotifyBlock, SessionEvent, TransportClock};
 
 fn v3(v: Vector3d) -> [f32; 3] {
     [v.x, v.y, v.z]
@@ -1231,7 +1231,12 @@ fn create_event(
         scale: object_scale(object_type, &mask),
         speeds: movement.speeds.map(MoveSpeeds::from_wire),
         mover: movement.mover,
-        transport_progress: movement.transport_progress,
+        transport_progress: movement
+            .transport_progress
+            .map(|progress_ms| TransportClock {
+                progress_ms,
+                arrived: None,
+            }),
         transport: movement.transport,
         spline: movement.spline,
         fields: mask,
