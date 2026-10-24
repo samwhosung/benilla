@@ -82,7 +82,22 @@ fn plates_app() -> App {
         .id();
     world.resource_mut::<GuidIndex>().0.insert(ME, me);
     world.resource_mut::<SelfGuid>().0 = Some(ME);
+    part(&mut app, me, true);
     app
+}
+
+/// A mesh part under `unit`, drawn in the last render or not: the scene node's cull word
+/// `[+0x94]` the gate reads through `0x6704c0`.
+fn part(app: &mut App, unit: Entity, drawn: bool) -> Entity {
+    use bevy::camera::visibility::SetViewVisibility;
+    let world = app.world_mut();
+    let part = world
+        .spawn((Mesh3d::default(), ViewVisibility::HIDDEN, ChildOf(unit)))
+        .id();
+    if drawn {
+        world.get_mut::<ViewVisibility>(part).unwrap().set_visible();
+    }
+    part
 }
 
 /// A living creature `guid` at `at`, with `fields` over its health.
@@ -104,6 +119,7 @@ fn unit(app: &mut App, guid: u64, at: Vec3, fields: &[(u16, u32)]) -> Entity {
         ))
         .id();
     world.resource_mut::<GuidIndex>().0.insert(guid, e);
+    part(app, e, true);
     e
 }
 
@@ -250,9 +266,90 @@ fn an_unnamed_units_plate_reads_unknownobject() {
         .resource_mut::<GuidIndex>()
         .0
         .insert(0x40, player);
+    part(&mut app, player, true);
     assert_eq!(
         plate_names(&mut app),
         vec!["Unknown", "Unknown", "Wolf"],
         "the unknown creature and the unknown player"
+    );
+}
+
+/// The gate needs the unit's scene node, and its cull word clear (`0x60f63b`-`0x60f650`): the
+/// scene sets the word on every node each frame (`0x698a07`) and clears it only for a node it
+/// draws (`0x6833dd`-`0x6833ec`). A unit outside last frame's render, or with no model yet, has
+/// no plate though it is in range and projects into view.
+#[test]
+fn a_unit_the_scene_did_not_draw_last_frame_has_no_plate() {
+    let mut app = plates_app();
+    let drawn = unit(&mut app, mob(0x31), Vec3::X * 3.0, &[]);
+    let culled = unit(&mut app, mob(0x32), Vec3::X * 5.0, &[]);
+    let culled_part = app.world().entity(culled).get::<Children>().unwrap()[0];
+    app.world_mut()
+        .entity_mut(culled_part)
+        .insert(ViewVisibility::HIDDEN);
+    let modelless = unit(&mut app, mob(0x33), Vec3::X * 7.0, &[]);
+    let modelless_part = app.world().entity(modelless).get::<Children>().unwrap()[0];
+    app.world_mut().entity_mut(modelless_part).despawn();
+    assert_eq!(
+        plated(&mut app),
+        HashSet::from([drawn]),
+        "only the unit the last render drew"
+    );
+    // A second part drawn is enough: the node is the whole model.
+    part(&mut app, culled, true);
+    assert_eq!(plated(&mut app), HashSet::from([drawn, culled]));
+}
+
+/// Under far sight the camera follows the far-sight object whatever its type (`0x5ee483`,
+/// `0x5ee4ae`), and the gate resolves the camera's GUID as a unit only (`0x60f677`): a unit
+/// there is the centre of the 20 yards and has no plate, and our body is a candidate; a dynamic
+/// object resolves to nothing and every plate fails (`0x60f77c`).
+#[test]
+fn far_sight_judges_plates_around_the_cameras_object() {
+    use crate::player::RemoteView;
+    let mut app = plates_app();
+    let me = app.world().resource::<GuidIndex>().0[&ME];
+    let near_me = unit(&mut app, mob(0x31), Vec3::new(-8.0, 0.0, 0.0), &[]);
+    let eye = unit(&mut app, mob(0x32), Vec3::new(14.0, 0.0, 0.0), &[]);
+    let near_eye = unit(&mut app, mob(0x33), Vec3::new(24.0, 0.0, 0.0), &[]);
+    let view = |app: &mut App, entity: Option<Entity>| {
+        app.world_mut()
+            .resource_mut::<crate::player::ViewSubject>()
+            .remote = entity.map(|entity| RemoteView {
+            entity,
+            feet: Vec3::ZERO,
+            pivot_height: 0.0,
+        });
+    };
+    view(&mut app, Some(eye));
+    assert_eq!(
+        plated(&mut app),
+        HashSet::from([me, near_eye]),
+        "around the viewed unit: our body and the unit within 20 yards of it, never itself"
+    );
+
+    let far_sight = app
+        .world_mut()
+        .spawn((
+            Guid(0xF110_0000_0000_0001),
+            NetEntity {
+                kind: EntityKind::DynamicObject,
+                display_id: None,
+                scale: 1.0,
+            },
+            Transform::from_xyz(14.0, 0.0, 0.0),
+        ))
+        .id();
+    view(&mut app, Some(far_sight));
+    assert!(
+        plated(&mut app).is_empty(),
+        "a dynamic object is no unit: no plates at all"
+    );
+
+    view(&mut app, None);
+    assert_eq!(
+        plated(&mut app),
+        HashSet::from([near_me, eye]),
+        "home: around our body again"
     );
 }
