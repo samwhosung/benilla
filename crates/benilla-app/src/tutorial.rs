@@ -779,7 +779,10 @@ impl Plugin for TutorialPlugin {
                 (
                     on_world_enter.before(run_world_enter_cascade),
                     run_world_enter_cascade.before(feed_tutorials),
-                    judge_selections.before(feed_tutorials),
+                    // After the self tag, whose object the ladder reads the player off.
+                    judge_selections
+                        .after(benilla_world::schedule::WorldStage::Net)
+                        .before(feed_tutorials),
                     // Before the pass, whose trainer and merchant calls write the windows it
                     // watches.
                     watch_windows
