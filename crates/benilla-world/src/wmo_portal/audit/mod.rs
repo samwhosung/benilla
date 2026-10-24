@@ -273,6 +273,7 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
         doodad_base: Vec::new(),
         doodad_owner: Vec::new(),
         doodad_groups: Vec::new(),
+        convex_volume: Vec::new(),
     };
     Subject {
         model,

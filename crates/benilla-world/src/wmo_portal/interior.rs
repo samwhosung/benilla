@@ -755,6 +755,7 @@ mod tests {
             doodad_base: Default::default(),
             doodad_owner: Default::default(),
             doodad_groups: Default::default(),
+            convex_volume: Vec::new(),
         }
     }
 

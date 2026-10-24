@@ -15,7 +15,7 @@ pub(super) fn carry(player: &mut Player, cam: &mut FlyCam, transports: &Transpor
     // nor `seat_camera`'s look-session gate.
     if let Some(ride) = player.ride.as_ref() {
         match transports.get(ride.entity) {
-            Ok((boat, _, _)) => {
+            Ok((boat, ..)) => {
                 let world = boat.translation + boat.rotation * ride.local_pos;
                 let yaw_now = boat.rotation.to_euler(EulerRot::YXZ).0;
                 let mut dyaw = yaw_now - ride.boat_yaw;
@@ -46,8 +46,25 @@ impl Player {
     }
 }
 
+/// Whether the rider's feet lie inside the transport it rides (`0x630ba0`): the point in the
+/// transport's frame, as the reference keeps the mover (`0x6173d5` passes `[mover+0x10]`), against
+/// its [`crate::transport::TransportVolume`]. A transport whose model has not loaded holds no one.
+fn aboard(player: &Player, transports: &TransportQuery) -> bool {
+    let Some((boat, _, _, Some(volume))) = player
+        .ride
+        .as_ref()
+        .and_then(|r| transports.get(r.entity).ok())
+    else {
+        return false;
+    };
+    let local = boat.compute_affine().inverse().transform_point3(player.pos);
+    volume.contains(benilla_assets::coords::bevy_to_wow(local))
+}
+
 /// Attaches or detaches against this frame's walkable support, then re-snapshots the deck-local
-/// pose. `ground` is the mover's resolved support ([`super::mover::Outcome::ground`]).
+/// pose. `ground` is the mover's resolved support ([`super::mover::Outcome::ground`]). A support
+/// that is no transport detaches only once the feet leave the ridden transport's volume
+/// (`0x6173b0`).
 pub(super) fn update_attachment(
     player: &mut Player,
     transports: &TransportQuery,
@@ -61,7 +78,7 @@ pub(super) fn update_attachment(
     // deck is deck-frame ballistics.
     let owning_transport = |mut e: Entity| {
         for _ in 0..4 {
-            if let Ok((t, g, _)) = transports.get(e) {
+            if let Ok((t, g, ..)) = transports.get(e) {
                 return Some((e, t, g));
             }
             e = child_of.get(e).ok()?.parent();
@@ -85,6 +102,9 @@ pub(super) fn update_attachment(
                     boat_yaw: 0.0,
                 });
             }
+            // 0x6173b0 with no transport for the support: the ride holds while `0x630ba0` finds
+            // the feet, in the transport's frame, inside it.
+            None if aboard(player, transports) => {}
             None => {
                 if player.ride.take().is_some() {
                     info!("transport: deboard (support is world geometry)");
@@ -100,7 +120,7 @@ pub(super) fn update_attachment(
             .ride
             .as_ref()
             .and_then(|r| transports.get(r.entity).ok())
-            .map(|(t, _, aabb)| {
+            .map(|(t, _, aabb, _)| {
                 (
                     t.translation,
                     t.rotation.to_euler(EulerRot::YXZ).0,
@@ -163,7 +183,7 @@ pub(super) fn update_attachment(
         }
     }
     if let Some(ride) = player.ride.as_mut() {
-        if let Ok((boat, _, _)) = transports.get(ride.entity) {
+        if let Ok((boat, ..)) = transports.get(ride.entity) {
             ride.local_pos = boat.compute_affine().inverse().transform_point3(feet);
             ride.boat_yaw = boat.rotation.to_euler(EulerRot::YXZ).0;
         }
@@ -175,6 +195,76 @@ mod tests {
     use super::super::mover::fall_step;
     use super::super::{GRAVITY, JUMP_SPEED, TERMINAL_VELOCITY};
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// A rider on a deck at the origin facing +x, its volume a box 10 yd long, 4 wide and 6
+    /// high, standing at `feet` (WoW axes, the deck's frame) on world geometry: whether the ride
+    /// holds.
+    fn holds_on_world_ground(
+        feet: [f32; 3],
+        volume: Option<crate::transport::TransportVolume>,
+    ) -> bool {
+        let mut world = World::new();
+        let mut deck = world.spawn((
+            Transform::default(),
+            crate::net::Guid(0xF120_0000_0000_0001),
+            crate::transport::Transport::parked_for_test(),
+        ));
+        if let Some(v) = volume {
+            deck.insert(v);
+        }
+        let deck = deck.id();
+        let ground = world.spawn_empty().id();
+        let mut player = Player {
+            pos: benilla_assets::coords::wow_to_bevy(feet),
+            ride: Some(PlayerRide {
+                entity: deck,
+                guid: 0xF120_0000_0000_0001,
+                local_pos: Vec3::ZERO,
+                boat_yaw: 0.0,
+            }),
+            ..Default::default()
+        };
+        world
+            .run_system_once(
+                move |transports: TransportQuery, child_of: Query<&ChildOf>| {
+                    update_attachment(
+                        &mut player,
+                        &transports,
+                        &child_of,
+                        Some(ground),
+                        true,
+                        false,
+                    );
+                    player.ride.is_some()
+                },
+            )
+            .expect("runs")
+    }
+
+    /// `0x6173b0`: landing on anything that is no transport keeps the ride while `0x630ba0` finds
+    /// the feet inside the transport, and ends it once they leave.
+    #[test]
+    fn a_landing_inside_the_transport_keeps_the_ride() {
+        let hull = || {
+            Some(crate::transport::TransportVolume::Box(
+                [-5.0, -2.0, 0.0],
+                [5.0, 2.0, 6.0],
+            ))
+        };
+        assert!(
+            holds_on_world_ground([3.0, 1.0, 0.5], hull()),
+            "inside the hull"
+        );
+        assert!(
+            !holds_on_world_ground([3.0, 4.0, 0.5], hull()),
+            "over the side"
+        );
+        assert!(
+            !holds_on_world_ground([0.0, 0.0, 0.5], None),
+            "a hull whose model has not loaded holds no one"
+        );
+    }
 
     /// Undercity's lift car 20652 descends 96.5 yd in 3.33 s (`TransportAnimation.dbc`).
     const LIFT_DROP_SPEED: f32 = 28.95;

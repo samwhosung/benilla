@@ -59,6 +59,7 @@ pub struct WmoRoot {
     portals: WmoPortals,
     fogs: Vec<WmoFog>,
     skybox: Option<String>,
+    convex_volume: Vec<[f32; 4]>,
 }
 
 impl WmoRoot {
@@ -129,6 +130,24 @@ impl WmoRoot {
     pub fn skybox(&self) -> Option<&str> {
         self.skybox.as_deref()
     }
+
+    /// The MCVP convex volume planes `[nx, ny, nz, d]` (`+0x15c`, counted at `+0x194`), which the
+    /// transports' hulls carry; [`point_in_convex_volume`] tests a point against them.
+    pub fn convex_volume(&self) -> &[[f32; 4]] {
+        &self.convex_volume
+    }
+}
+
+/// `0x6a4990`: a point is inside a map object's convex volume when every plane gives
+/// `((ny·py + nz·pz) + nx·px) + d ≤ 0` at 53 bits, a NaN counting as inside (`test ah,0x41` at
+/// `0x6a49d7` finds C0 or C3); with no planes every point is inside.
+pub fn point_in_convex_volume(planes: &[[f32; 4]], p: [f32; 3]) -> bool {
+    let [px, py, pz] = p.map(f64::from);
+    planes.iter().all(|&[nx, ny, nz, d]| {
+        let [nx, ny, nz, d] = [nx, ny, nz, d].map(f64::from);
+        let dist = ((ny * py + nz * pz) + nx * px) + d;
+        dist <= 0.0 || dist.is_nan()
+    })
 }
 
 /// Parse a WMO root file.
@@ -143,6 +162,7 @@ pub fn parse_wmo_root(bytes: &[u8]) -> Result<WmoRoot> {
     let portals = parse_wmo_portals(bytes);
     let fogs = parse_wmo_fogs(bytes);
     let skybox = parse_skybox(bytes);
+    let convex_volume = parse_convex_volume(bytes);
     Ok(WmoRoot {
         parsed,
         doodads,
@@ -151,7 +171,24 @@ pub fn parse_wmo_root(bytes: &[u8]) -> Result<WmoRoot> {
         portals,
         fogs,
         skybox,
+        convex_volume,
     })
+}
+
+/// MCVP, the root's last chunk (`0x6c3a20` takes it when it lies inside the file with its tag):
+/// 16-byte planes `[nx, ny, nz, d]`.
+fn parse_convex_volume(bytes: &[u8]) -> Vec<[f32; 4]> {
+    let Some(mcvp) = find_wmo_chunk(bytes, b"PVCM") else {
+        return Vec::new();
+    };
+    mcvp.as_chunks::<16>()
+        .0
+        .iter()
+        .map(|r| {
+            let f = |i: usize| f32::from_le_bytes([r[i], r[i + 1], r[i + 2], r[i + 3]]);
+            [f(0), f(4), f(8), f(12)]
+        })
+        .collect()
 }
 
 /// MOSB: one NUL-terminated `.mdx` path, or four zero bytes for none; returned as `.m2`.
@@ -413,6 +450,64 @@ mod tests {
             (p.refs[1].portal, p.refs[1].group, p.refs[1].side),
             (0, 7, -1)
         );
+    }
+
+    /// `0x6a4990` over MCVP: inside only behind every plane, NaN inside, no planes everywhere.
+    #[test]
+    fn a_point_is_inside_the_convex_volume_behind_every_plane() {
+        // The unit cube: six planes facing out.
+        let mut mcvp = Vec::new();
+        for n in [
+            [1.0f32, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ] {
+            mcvp.extend(f3(n));
+            mcvp.extend_from_slice(&(-1.0f32).to_le_bytes());
+        }
+        let planes = parse_convex_volume(&chunk(b"PVCM", &mcvp));
+        assert_eq!(planes.len(), 6);
+        assert!(point_in_convex_volume(&planes, [0.5, -0.5, 0.9]));
+        assert!(
+            point_in_convex_volume(&planes, [1.0, 1.0, 1.0]),
+            "faces count"
+        );
+        assert!(!point_in_convex_volume(&planes, [0.0, 0.0, 1.01]));
+        assert!(point_in_convex_volume(&planes, [f32::NAN, 0.0, 0.0]));
+        assert!(point_in_convex_volume(&[], [1e9, 0.0, 0.0]));
+        assert!(parse_convex_volume(&[]).is_empty());
+    }
+
+    /// The transports' hulls carry their volume: the ship's MCVP has 30 planes, the zeppelin's 32.
+    #[test]
+    fn the_transport_hulls_carry_a_convex_volume() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        // A point above the ship's deck, and in the zeppelin's gondola, which hangs below its origin.
+        for (path, planes, aboard) in [
+            (
+                r"World\wmo\transports\transport_ship\transportship.wmo",
+                30,
+                [0.0, 0.0, 5.0],
+            ),
+            (
+                r"World\wmo\transports\transport_zeppelin\transport_zeppelin.wmo",
+                32,
+                [0.0, 0.0, -10.0],
+            ),
+        ] {
+            let bytes = chain.read_file(path).expect("the hull's root");
+            let root = parse_wmo_root(&bytes).expect("parses");
+            assert_eq!(root.convex_volume().len(), planes, "{path}");
+            assert!(point_in_convex_volume(root.convex_volume(), aboard));
+            assert!(!point_in_convex_volume(
+                root.convex_volume(),
+                [0.0, 0.0, 500.0]
+            ));
+        }
     }
 
     #[test]

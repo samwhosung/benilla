@@ -239,7 +239,8 @@ pub(super) type BodyQuery<'w, 's> = Query<
     (With<Embodied>, Without<FlyCam>),
 >;
 
-/// The armed transports, for the deck carry ([`ride`]). `ColliderAabb` is for the ride trace:
+/// The armed transports, for the deck carry ([`ride`]) and its hold aboard (`TransportVolume`,
+/// `0x6173b0`). `ColliderAabb` is for the ride trace:
 /// avian refreshes it in `FixedPostUpdate`, before `tick_transports` moves the deck in `Update`, so
 /// the broad-phase box lags its deck by a frame.
 pub(super) type TransportQuery<'w, 's> = Query<
@@ -249,6 +250,7 @@ pub(super) type TransportQuery<'w, 's> = Query<
         &'static Transform,
         &'static crate::net::Guid,
         Option<&'static avian3d::prelude::ColliderAabb>,
+        Option<&'static crate::transport::TransportVolume>,
     ),
     (
         With<crate::transport::Transport>,

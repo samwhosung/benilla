@@ -12,10 +12,9 @@ use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 
 use crate::creature_anim::{move_flags, wrap_pi};
 use crate::net::{
-    ClientCommand, ClientControlMessage, Embodied, Guid, KnockBackMessage, MoveModeMessage,
-    NetCommands, SelfMoveMessage, SpeedChangeMessage, TeleportMessage, WorldportMessage,
+    ClientCommand, ClientControlMessage, KnockBackMessage, MoveModeMessage, NetCommands,
+    SelfMoveMessage, SpeedChangeMessage, TeleportMessage, WorldportMessage,
 };
-use crate::transport::Transport;
 use benilla_world::world_map::CurrentMap;
 
 use super::camera::FlyCam;
@@ -133,10 +132,7 @@ pub(super) fn apply_server_moves(
     self_moves: &mut MessageReader<SelfMoveMessage>,
     control_msgs: &mut MessageReader<ClientControlMessage>,
     self_guid: Option<u64>,
-    transports: &Query<
-        (&Transform, &Guid, Option<&avian3d::prelude::ColliderAabb>),
-        (With<Transport>, Without<Embodied>, Without<FlyCam>),
-    >,
+    transports: &super::TransportQuery,
     self_pose: Option<(Vec3, f32)>,
 ) -> ServerMoves {
     // A grant must be claimed: vmangos drops every `MSG_MOVE_*` for an unconfirmed mover
@@ -192,7 +188,7 @@ pub(super) fn apply_server_moves(
             // packet, which the server reads as a deboard mid-ocean.
             let ride = player.ride.as_mut().expect("riding checked above");
             ride.local_pos = wow_to_bevy(w.position);
-            if let Ok((boat, _, _)) = transports.get(ride.entity) {
+            if let Ok((boat, ..)) = transports.get(ride.entity) {
                 let boat_yaw = boat.rotation.to_euler(EulerRot::YXZ).0;
                 ride.boat_yaw = boat_yaw;
                 player.pos = boat.translation + boat.rotation * ride.local_pos;
@@ -449,10 +445,7 @@ fn apply_self_move(
     player: &mut Player,
     cam: &mut FlyCam,
     time: &Time,
-    transports: &Query<
-        (&Transform, &Guid, Option<&avian3d::prelude::ColliderAabb>),
-        (With<Transport>, Without<Embodied>, Without<FlyCam>),
-    >,
+    transports: &super::TransportQuery,
 ) {
     let was_falling = player.move_flags & move_flags::FALLING != 0;
     player.move_flags = merge_server_flags(player.move_flags, m.flags);
@@ -482,7 +475,7 @@ fn apply_self_move(
     // pose: at a cross-map seam our boat is still frozen on the source continent while `position`
     // is on the destination, so the subtraction would fling us thousands of yards.
     if let Some(ride) = player.ride.as_mut() {
-        if let Ok((boat, _, _)) = transports.get(ride.entity) {
+        if let Ok((boat, ..)) = transports.get(ride.entity) {
             match m.transport.filter(|t| t.guid == ride.guid) {
                 Some(t) => {
                     ride.local_pos = wow_to_bevy([t.pos.x, t.pos.y, t.pos.z]);

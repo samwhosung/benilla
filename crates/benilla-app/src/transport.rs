@@ -53,6 +53,7 @@ impl Plugin for TransportPlugin {
                 // tick resource, so a second run is idempotent; it sweeps every collider.
                 (
                     arm_transports,
+                    attach_transport_volumes,
                     reseek_ridden_transport_at_worldport,
                     tick_transports,
                     watch_ridden_transport_map,
@@ -106,6 +107,61 @@ pub(crate) struct Transport {
     drive: Drive,
     /// Last frame's `moving`, for the dock and depart log lines.
     was_moving: bool,
+}
+
+/// A transport's answer to "is this point aboard" (handler slot 21, `0x5f55c0` and `0x5f6540`,
+/// through `0x670a70`), for a point in its own frame, WoW axes: a map object (tag 0x8) by its
+/// MCVP planes (`0x6a4990`), a doodad (tag 0x40) by its file's box at `+0xb4`, faces included and
+/// a NaN inside. `0x6173b0` holds a rider aboard while it says yes.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(crate) enum TransportVolume {
+    Planes(Arc<[[f32; 4]]>),
+    Box([f32; 3], [f32; 3]),
+}
+
+impl TransportVolume {
+    pub(crate) fn contains(&self, p: [f32; 3]) -> bool {
+        match self {
+            Self::Planes(planes) => benilla_formats::point_in_convex_volume(planes, p),
+            // 0x670ae2-0x670cc8: the six planes on the box's faces, `d = −n·corner`, each distance
+            // `((nx·px + nz·pz) + ny·py) + d` failing only above 0.
+            Self::Box(min, max) => {
+                let [px, py, pz] = p.map(f64::from);
+                (0..6).all(|i| {
+                    let mut n = [0.0f64; 3];
+                    n[i / 2] = if i % 2 == 0 { 1.0 } else { -1.0 };
+                    let corner = if i % 2 == 0 { max } else { min };
+                    let d = -(n[0] * f64::from(corner[0])
+                        + n[1] * f64::from(corner[1])
+                        + n[2] * f64::from(corner[2]));
+                    let dist = ((n[0] * px + n[2] * pz) + n[1] * py) + f64::from(d as f32);
+                    dist <= 0.0 || dist.is_nan()
+                })
+            }
+        }
+    }
+}
+
+/// Give each armed transport its [`TransportVolume`] once its model has loaded.
+#[allow(clippy::type_complexity)] // one Bevy system's full input set
+fn attach_transport_volumes(
+    mut commands: Commands,
+    gameobjects: Option<Res<crate::entities::GameObjects>>,
+    wmos: Res<Assets<benilla_assets::WmoModel>>,
+    m2s: Res<Assets<benilla_assets::M2Model>>,
+    pending: Query<(Entity, &crate::net::NetEntity), (With<Transport>, Without<TransportVolume>)>,
+) {
+    let Some(gameobjects) = gameobjects else {
+        return;
+    };
+    for (entity, net) in &pending {
+        if let Some(volume) = net
+            .display_id
+            .and_then(|d| gameobjects.transport_volume(d, &wmos, &m2s))
+        {
+            commands.entity(entity).insert(volume);
+        }
+    }
 }
 
 /// The two cycle evaluators; consumers key on [`Transport`], never on the drive.
@@ -704,9 +760,50 @@ fn stamp_ride_frames(
 }
 
 #[cfg(test)]
+impl Transport {
+    /// A lift parked at the origin, for other modules' tests.
+    pub(crate) fn parked_for_test() -> Self {
+        Self {
+            drive: Drive::Lift(Lift {
+                frames: Arc::new(vec![
+                    ElevatorKeyframe {
+                        time_ms: 0,
+                        pos: [0.0; 3],
+                    },
+                    ElevatorKeyframe {
+                        time_ms: 1000,
+                        pos: [0.0; 3],
+                    },
+                ]),
+                period_ms: 1000,
+                base_pos: [0.0; 3],
+                quat: [0.0, 0.0, 0.0, 1.0],
+                yaw: 0.0,
+            }),
+            was_moving: false,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use benilla_formats::ElevatorKeyframe;
+
+    /// `0x670a70`'s doodad box: faces included, a NaN inside; a map object by its planes.
+    #[test]
+    fn a_transport_volume_holds_points_inside_it() {
+        let lift = TransportVolume::Box([-1.0, -2.0, 0.0], [1.0, 2.0, 3.0]);
+        assert!(lift.contains([0.0, 0.0, 1.5]));
+        assert!(lift.contains([1.0, -2.0, 3.0]), "faces count");
+        assert!(!lift.contains([0.0, 0.0, 3.01]));
+        assert!(!lift.contains([-1.5, 0.0, 1.0]));
+        // 0·NaN is NaN on every plane.
+        assert!(lift.contains([f32::NAN, 100.0, 100.0]));
+        let ship = TransportVolume::Planes(vec![[0.0, 0.0, 1.0, -10.0]].into());
+        assert!(ship.contains([500.0, 0.0, 10.0]));
+        assert!(!ship.contains([0.0, 0.0, 10.5]));
+    }
 
     /// The Ratchet–Booty Bay ferry's real timetable (taxi path 241): the builder can truncate a
     /// short synthetic cycle so the far continent's legs are never reached.

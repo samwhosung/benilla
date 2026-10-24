@@ -420,9 +420,33 @@ pub(crate) struct DisplayRig<'a> {
 
 /// The `GameObjectDisplayInfo` catalog and per-display [`DisplayModel`] cache.
 #[derive(Resource)]
-struct GameObjects {
+pub(crate) struct GameObjects {
     catalog: GameObjectCatalog,
     models: HashMap<u32, DisplayModel>,
+}
+
+impl GameObjects {
+    /// The point test of a transport with this display once its model has loaded, the world
+    /// entity's answer (`0x670a70`): a map object's convex volume, a doodad's file box; `None`
+    /// while the model is unloaded, which holds no rider.
+    pub(crate) fn transport_volume(
+        &self,
+        display_id: u32,
+        wmos: &Assets<WmoModel>,
+        m2s: &Assets<M2Model>,
+    ) -> Option<crate::transport::TransportVolume> {
+        use crate::transport::TransportVolume;
+        match &self.models.get(&display_id)?.handle {
+            ModelHandle::Wmo(h) => Some(TransportVolume::Planes(
+                wmos.get(h)?.convex_volume.clone().into(),
+            )),
+            ModelHandle::M2(h) => {
+                let b = m2s.get(h)?.bounds.as_ref()?;
+                Some(TransportVolume::Box(b.bbox_min, b.bbox_max))
+            }
+            ModelHandle::None => None,
+        }
+    }
 }
 
 /// The customization → visible-geoset tables; without them players render every geoset.
