@@ -2191,3 +2191,54 @@ fn the_state_pass_runs_once_per_trigger_and_per_callback() {
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
     assert!(tick(&mut app).is_empty(), "the callbacks are spent");
 }
+
+/// A pet-learn row's pet is the unit `UNIT_FIELD_SUMMON` names (`0x4d7f2d`, mask 8 at
+/// `0x4d7f49`), its level its own (`0x4d7f99`); its book is the pet bar's only when the bar names
+/// that unit (`0x60c77a`-`0x60c790`). No such unit is no pet (`0x4d7f5a` → `0x4d803c`).
+#[test]
+fn a_pet_rows_pet_is_the_summon_not_the_bar() {
+    use benilla_protocol::messages::{PetActionEntry, PetSpells};
+    use benilla_protocol::ObjectFields;
+    const SUMMON: u64 = 0xF140_0000_0000_0001;
+    const POSSESSED: u64 = 0xF130_0000_0000_0002;
+    let unit = |level: u32| ObjectStore(ObjectFields::from_pairs(&[(2, 0x9), (34, level)]));
+    let (summon, possessed) = (unit(10), unit(30));
+    let store_of = |guid: u64| match guid {
+        SUMMON => Some(&summon),
+        POSSESSED => Some(&possessed),
+        _ => None,
+    };
+    let bar = |guid: u64| PetSpells {
+        pet_guid: guid,
+        spells: vec![PetActionEntry {
+            packed: (1 << 24) | 100,
+        }],
+        ..Default::default()
+    };
+    let view = |level: u32, known: &[u32]| reeval::PetView {
+        level,
+        known: known.iter().copied().collect(),
+    };
+    assert_eq!(
+        pet_view(Some(SUMMON), store_of, &bar(POSSESSED)),
+        Some(view(10, &[])),
+        "the summon, whose book the bar does not hold"
+    );
+    assert_eq!(
+        pet_view(Some(SUMMON), store_of, &bar(SUMMON)),
+        Some(view(10, &[100]))
+    );
+    assert_eq!(
+        pet_view(Some(SUMMON), store_of, &bar(0)),
+        Some(view(10, &[]))
+    );
+    assert_eq!(
+        pet_view(None, store_of, &bar(POSSESSED)),
+        None,
+        "a possessed unit's bar is no pet"
+    );
+    assert_eq!(
+        pet_view(Some(0xF140_0000_0000_0099), store_of, &bar(0)),
+        None
+    );
+}

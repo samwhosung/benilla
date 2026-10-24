@@ -451,6 +451,28 @@ pub(crate) struct ReEvalInputs<'w, 's> {
     edges: MessageReader<'w, 's, FieldChanged>,
 }
 
+/// The pet a pet-learn row re-evaluates against (`0x4d7f2d`-`0x4d7fa5`), given the player's
+/// `UNIT_FIELD_SUMMON` and the stores by guid.
+fn pet_view<'a>(
+    summon: Option<u64>,
+    store_of: impl Fn(u64) -> Option<&'a ObjectStore>,
+    bar: &benilla_protocol::messages::PetSpells,
+) -> Option<reeval::PetView> {
+    let _ = summon;
+    (bar.pet_guid != 0)
+        .then(|| store_of(bar.pet_guid))
+        .flatten()
+        .map(|store| reeval::PetView {
+            level: store.0.unit_level().unwrap_or(0),
+            known: bar
+                .spells
+                .iter()
+                .filter(|e| e.is_spell())
+                .map(|e| e.action())
+                .collect(),
+        })
+}
+
 /// The resources a service description's `$`-tokens read beside the caster's descriptor: the
 /// spell-modifier tables and the bind point `$z` names, the same two reads the item and spell
 /// tooltip feeds make.
@@ -578,21 +600,17 @@ pub(crate) fn feed_trainer(
                             .collect()
                     })
                     .unwrap_or_default(),
-                pet: (re_eval.pet_bar.spells.pet_guid != 0)
-                    .then(|| re_eval.index.0.get(&re_eval.pet_bar.spells.pet_guid))
-                    .flatten()
-                    .and_then(|&e| re_eval.stores.get(e).ok())
-                    .map(|store| reeval::PetView {
-                        level: store.0.unit_level().unwrap_or(0),
-                        known: re_eval
-                            .pet_bar
-                            .spells
-                            .spells
-                            .iter()
-                            .filter(|e| e.is_spell())
-                            .map(|e| e.action())
-                            .collect(),
-                    }),
+                pet: pet_view(
+                    self_player.and_then(|(_, store)| store.0.unit_summon()),
+                    |guid| {
+                        re_eval
+                            .index
+                            .0
+                            .get(&guid)
+                            .and_then(|&e| re_eval.stores.get(e).ok())
+                    },
+                    &re_eval.pet_bar.spells,
+                ),
             };
             let TrainerOpen {
                 services,
