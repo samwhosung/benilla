@@ -127,13 +127,13 @@ pub(crate) struct DressUpRoom {
 impl DressUpRoom {
     fn apply(&mut self, intent: DressUpIntent) {
         match intent {
+            // The rebuild (`0x504cd0` → `0x505b50` → `0x5059a0`) cancels no cache callback: a
+            // try-on still waiting lands on the rebuilt model.
             DressUpIntent::Dress => {
                 self.open = true;
                 self.bare = false;
                 self.worn = Default::default();
                 self.held.clear();
-                self.pending.clear();
-                self.pending_asked = 0;
             }
             DressUpIntent::Undress => {
                 self.open = true;
