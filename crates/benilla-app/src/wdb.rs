@@ -336,6 +336,8 @@ pub(crate) struct WdbFile<T> {
     bodies: HashMap<u32, Vec<u8>>,
     /// The store's generation at the last write.
     saved: u64,
+    /// Bytes have landed since the last write, which the generation does not count.
+    dirty: bool,
     since_save: f32,
     _store: PhantomData<T>,
 }
@@ -347,6 +349,7 @@ impl<T> Default for WdbFile<T> {
             path: None,
             bodies: HashMap::new(),
             saved: 0,
+            dirty: false,
             since_save: 0.0,
             _store: PhantomData,
         }
@@ -369,6 +372,7 @@ impl<T> WdbFile<T> {
         } else {
             self.bodies.insert(key, body);
         }
+        self.dirty = true;
     }
 }
 
@@ -385,6 +389,7 @@ fn load<T: SavedCache>(roster: Res<Roster>, mut file: ResMut<WdbFile<T>>, mut ca
         write_now(&mut file, &cache);
         cache.forget();
         file.bodies.clear();
+        file.dirty = false;
     }
     file.realm = Some(realm.clone());
     file.path = crate::local_state::template_cache_path(&realm, T::FILE);
@@ -439,7 +444,7 @@ fn save_on_exit<T: SavedCache>(mut file: ResMut<WdbFile<T>>, cache: Res<T>) {
 
 fn write_now<T: SavedCache>(file: &mut WdbFile<T>, cache: &T) {
     let generation = cache.store().generation();
-    if generation == file.saved {
+    if generation == file.saved && !file.dirty {
         return;
     }
     let (Some(path), Some(realm)) = (file.path.as_ref(), file.realm.as_ref()) else {
@@ -454,6 +459,7 @@ fn write_now<T: SavedCache>(file: &mut WdbFile<T>, cache: &T) {
     match crate::local_state::write_atomic_bytes(path, &bytes) {
         Ok(()) => {
             file.saved = generation;
+            file.dirty = false;
             debug!("wdb: wrote {}", path.display());
         }
         Err(e) => warn!("wdb: cannot write {}: {e}", path.display()),

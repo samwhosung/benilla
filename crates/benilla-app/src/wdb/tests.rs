@@ -230,15 +230,15 @@ impl<T: SavedCache> Session<T> {
         }
     }
 
-    /// An answer off the wire: its decoded events filed as the live handler files them, then its
-    /// bytes, as the IO thread hands them on after.
+    /// An answer off the wire: its bytes, then its decoded events filed as the live handler files
+    /// them, the order the IO thread hands them on in.
     fn answer(&mut self, body: Vec<u8>) {
         let world = self.app.world_mut();
         let packet = benilla_protocol::messages::parse_server(T::ANSWER, &body).expect("parses");
+        world.resource_mut::<WdbFile<T>>().keep(body);
         for ev in benilla_protocol::decode(packet) {
             world.resource_mut::<T>().install(ev);
         }
-        world.resource_mut::<WdbFile<T>>().keep(body);
     }
 
     /// A debounced write between frames.
