@@ -1134,6 +1134,7 @@ mod tests {
     mod census;
     mod closes;
     mod dialogs;
+    mod engine;
     mod refusals;
     mod selection;
     mod sends;
