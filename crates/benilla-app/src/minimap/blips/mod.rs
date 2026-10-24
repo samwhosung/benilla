@@ -289,7 +289,8 @@ pub(super) fn emit_landmarks(
     }
 }
 
-/// A rim arrow's square on the 0.8 rim toward its target, for the hover test.
+/// A rim arrow's square on the 0.8 rim toward its target, for the hover test: the probe tests the
+/// landmark and the group arrow frames alike (`0x4eb3b0`, `0x4eb433`).
 fn rim_arrow_rect(ctx: &BlipCtx, target: [f32; 3]) -> Rect {
     let dir = ctx.offset(target).normalize_or_zero();
     let pos = ctx.center + dir * (ctx.side * 0.5 * BLIP_EDGE_RATIO);
@@ -352,32 +353,30 @@ pub(crate) fn party_member_pos<F: bevy::ecs::query::QueryFilter>(
         .map(|(x, y)| (f32::from(x), f32::from(y)))
 }
 
-/// The five group records' positions of the party placement `0x6dad10`: slots 0 to 3 the party
-/// members, slot 4 the pet, our charm else our summon (`0x6dad60`–`0x6dad9c`), each fetched as a
-/// unit (`0x6dadc8`); a member that is not streamed falls back to its party-stats position, the
-/// pet to nothing (`0x6dae25`).
-pub(super) fn group_positions<F: bevy::ecs::query::QueryFilter>(
+/// The five group records of the party placement `0x6dad10`, each its guid (record `+0`) and
+/// position: slots 0 to 3 the party members, slot 4 the pet, our charm else our summon
+/// (`0x6dad60`–`0x6dad9c`), each fetched as a unit (`0x6dadc8`); a member that is not streamed
+/// falls back to its party-stats position, the pet to nothing (`0x6dae25`).
+pub(super) fn group_records<F: bevy::ecs::query::QueryFilter>(
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
     unit_pos: &Query<&GlobalTransform, F>,
     pet: Option<u64>,
-) -> [Option<(f32, f32)>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
+) -> [Option<(u64, (f32, f32))>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
     let mut records = [None; benilla_ui::widget::MINIMAP_GROUP_ARROWS];
     for (i, m) in group.party_slots().enumerate().take(4) {
-        records[i] = party_member_pos(m, group, guids, unit_pos);
+        records[i] = party_member_pos(m, group, guids, unit_pos).map(|p| (m.guid, p));
     }
-    records[4] = pet
-        .and_then(|g| guids.0.get(&g))
-        .and_then(|e| unit_pos.get(*e).ok())
-        .map(|tf| {
-            let w = bevy_to_wow(tf.translation());
-            (w[0], w[1])
-        });
+    records[4] = pet.and_then(|g| {
+        let tf = unit_pos.get(*guids.0.get(&g)?).ok()?;
+        let w = bevy_to_wow(tf.translation());
+        Some((g, (w[0], w[1])))
+    });
     records
 }
 
 /// The party and pet arrow frames' bearings, the out-of-range half of the placement: beyond 0.8
-/// of the radius a [`group_positions`] record has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`).
+/// of the radius a [`group_records`] record has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`).
 pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     wx: f32,
     wy: f32,
@@ -387,11 +386,13 @@ pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     unit_pos: &Query<&GlobalTransform, F>,
     pet: Option<u64>,
 ) -> [Option<f32>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
-    group_positions(group, guids, unit_pos, pet).map(|pos| {
-        pos.filter(|&(x, y)| {
-            ((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO
-        })
-        .map(|(x, y)| bearing(wx, wy, x, y))
+    group_records(group, guids, unit_pos, pet).map(|record| {
+        record
+            .map(|(_, pos)| pos)
+            .filter(|&(x, y)| {
+                ((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO
+            })
+            .map(|(x, y)| bearing(wx, wy, x, y))
     })
 }
 

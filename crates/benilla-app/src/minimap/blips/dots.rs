@@ -16,7 +16,7 @@ use crate::names::NameCache;
 use crate::net::{GuidIndex, NetEntity, ObjectStore};
 use crate::ui_pass::{UiQuad, UiQuads, UvRect};
 
-use super::{group_positions, BlipCtx, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX};
+use super::{group_records, BlipCtx, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX};
 
 /// The quest dot's quad, 8 px (`0xbc82a8`, frozen by the ctor); the per-cell scale table
 /// `{1,1,1,1,1.3}` scales only the party cell 4.
@@ -260,9 +260,13 @@ enum DotName {
 }
 
 /// The party and pet dots, the in-range half of the party placement `0x6dad10`: blue cell 4 at
-/// 1.3× for each of the five [`group_positions`] records within 0.8 of the radius
+/// 1.3× for each of the five [`group_records`] records within 0.8 of the radius
 /// (`0x4ed6b0`-`0x4ed7a7`), drawn last in the map's own layer (`0x4ed7b7`), under every arrow
-/// child.
+/// child. The probe names each record under the cursor by its guid, never grey (the dot's
+/// `+0x10` is 0, `0x4ed740`): its dot in category 4 (`0x4eb2fa`-`0x4eb33c`), else its arrow frame
+/// (`0x4eb42d`-`0x4eb4a9`), whose name is the member's cache entry or the pet's unit name
+/// (`0x6daeee`-`0x6daf26`).
+#[allow(clippy::too_many_arguments)] // the shared blip inputs plus the hover out
 pub(in crate::minimap) fn emit_party_dots(
     ctx: &BlipCtx,
     group: &crate::ui_party::GroupState,
@@ -271,26 +275,34 @@ pub(in crate::minimap) fn emit_party_dots(
     pet: Option<u64>,
     icons: &Handle<Image>,
     quads: &mut UiQuads,
+    hover: &mut MinimapBlipHover,
 ) {
-    for (x, y) in group_positions(group, guids, unit_pos, pet)
+    for (guid, (x, y)) in group_records(group, guids, unit_pos, pet)
         .into_iter()
         .flatten()
     {
         let d = ((x - ctx.wx).powi(2) + (y - ctx.wy).powi(2)).sqrt();
-        if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
-            continue; // out of range: the arrow pass drew it
-        }
-        quads.overlays.push(UiQuad {
-            rect: Rect::from_center_size(
+        let rect = if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
+            // Out of range: the arrow child draws it; only its frame is hit-tested here.
+            super::rim_arrow_rect(ctx, [x, y, 0.0])
+        } else {
+            let rect = Rect::from_center_size(
                 ctx.center + ctx.offset([x, y, 0.0]),
                 Vec2::splat(ctx.side * (PARTY_DOT_PX / BLIP_BASIS_PX)),
-            ),
-            z_key: ctx.z,
-            texture: Some(icons.clone()),
-            uv: UvRect::from_tex_coords(PARTY_DOT_CELL),
-            color: [1.0, 1.0, 1.0, ctx.alpha],
-            ..default()
-        });
+            );
+            quads.overlays.push(UiQuad {
+                rect,
+                z_key: ctx.z,
+                texture: Some(icons.clone()),
+                uv: UvRect::from_tex_coords(PARTY_DOT_CELL),
+                color: [1.0, 1.0, 1.0, ctx.alpha],
+                ..default()
+            });
+            rect
+        };
+        if ctx.cursor.is_some_and(|c| rect.contains(c)) {
+            *hover = MinimapBlipHover::Npc(guid, false);
+        }
     }
 }
 
@@ -428,6 +440,7 @@ mod tests {
                             pet,
                             &Handle::default(),
                             &mut quads,
+                            &mut MinimapBlipHover::None,
                         );
                         quads
                             .overlays
