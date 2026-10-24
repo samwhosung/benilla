@@ -801,6 +801,7 @@ fn rebuild_ui_mesh(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut mesh_cost: ResMut<UiMeshCost>,
     cost_wanted: Res<crate::ui_script::UiCostWanted>,
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     // Forget the materials of removed images first, before any early return, since a missed read
     // leaks: a cached material holds a strong image handle and, prepared, its GPU texture.
@@ -902,10 +903,12 @@ fn rebuild_ui_mesh(
         return;
     }
 
-    // Screen px (y-down, top-left origin) to the camera's world space (y-up, centred): the default
-    // `OrthographicProjection`, one unit per logical px.
+    // Interface px (y-down, top-left origin) to the camera's world space (y-up, centred): the
+    // default `OrthographicProjection`, one unit per logical px, after the stretch across the
+    // window a 4:3 interface takes with `widescreen` 0 ([`crate::ui_script::UiScreen`]).
+    let stretch = crate::ui_script::UiScreen::of_window(window, widescreen.as_deref()).stretch;
     let (half_w, half_h) = (window.width() * 0.5, window.height() * 0.5);
-    let to_world = move |p: Vec2| Vec2::new(p.x - half_w, half_h - p.y);
+    let to_world = move |p: Vec2| Vec2::new(p.x * stretch - half_w, half_h - p.y);
 
     // Stable, so equal keys keep producer order, the base lane before the append lane.
     let mut sorted: Vec<&UiQuad> = q.quads.iter().chain(q.overlays.iter()).collect();
@@ -1012,11 +1015,12 @@ fn rebuild_ui_mesh(
         let z = -450.0 + (i as f32 / run_count) * 900.0;
         let scale = window.scale_factor();
         let (mask_rect, mask) = match &run.mask {
+            // The mask is tested in the target's device px, where the stretch has landed.
             Some(m) => (
                 Vec4::new(
-                    m.rect.min.x * scale,
+                    m.rect.min.x * scale * stretch,
                     m.rect.min.y * scale,
-                    m.rect.max.x * scale,
+                    m.rect.max.x * scale * stretch,
                     m.rect.max.y * scale,
                 ),
                 Some(m.texture.clone()),

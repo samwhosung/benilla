@@ -257,8 +257,11 @@ fn drive_mouseover_tooltip(
     mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     hovered: Res<Hovered>,
     hovered_go: Res<HoveredObject>,
-    // Seats the cursor-anchored GameObject plate.
-    window: Query<&Window, With<PrimaryWindow>>,
+    // Seats the cursor-anchored GameObject plate, on the interface's screen.
+    (window, widescreen): (
+        Query<&Window, With<PrimaryWindow>>,
+        Option<Res<crate::video::Widescreen>>,
+    ),
     stores: Query<&ObjectStore>,
     // The stored GAMEOBJECT_STATE the lock lines' Action gate reads.
     anims: Query<&crate::go_anim::GoAnim>,
@@ -456,7 +459,9 @@ fn drive_mouseover_tooltip(
                         w.cursor_position()
                             .or_else(crate::target::hover_probe_point)
                             .map(|c| {
-                                let at = crate::ui_script::window_to_ui(w.height(), c);
+                                let screen =
+                                    crate::ui_script::UiScreen::of_window(w, widescreen.as_deref());
+                                let at = crate::ui_script::window_to_ui(screen, c);
                                 (at.x, at.y)
                             })
                     })

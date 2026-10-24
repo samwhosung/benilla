@@ -370,7 +370,7 @@ fn emit_minimap(
         quest,
         guids,
         unit_pos,
-        window,
+        (window, widescreen),
         mut blip_hover,
         group,
         tracked,
@@ -643,7 +643,11 @@ fn emit_minimap(
                 tracking.stealthed,
             );
         }
-        let cursor = window.iter().next().and_then(|w| w.cursor_position());
+        // The cursor on the interface's screen, where the slot's rect is.
+        let cursor = window.iter().next().and_then(|w| {
+            let screen = crate::ui_script::UiScreen::of_window(w, widescreen.as_deref());
+            w.cursor_position().map(|c| screen.point(c))
+        });
         // The pan origin snapped to a half-logical-pixel grid: every blip offset and rim bearing
         // derives from `wx`/`wy`, so the layer steps together instead of rewriting the batch mesh
         // every frame while walking. Blip world positions stay exact.

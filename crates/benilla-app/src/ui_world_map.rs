@@ -726,6 +726,7 @@ fn dev_map_jump(
     mut hosted_vm: crate::script_calls::HostedVm,
     data: Option<Res<WorldMapUiData>>,
     net: Res<crate::net::NetCommands>,
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     hosted_vm.run(|script| {
         // A dev affordance compiled into every build, so gated at run time.
@@ -743,7 +744,8 @@ fn dev_map_jump(
             return;
         };
         // Window px (y-down) to the VM's y-up root units, as the pointer feed converts them.
-        let at = crate::ui_script::window_to_ui(window.height(), cursor);
+        let screen = crate::ui_script::UiScreen::of_window(window, widescreen.as_deref());
+        let at = crate::ui_script::window_to_ui(screen, cursor);
         let Some((u, v)) = script.world_map_uv_at(at.x, at.y) else {
             return;
         };

@@ -161,6 +161,8 @@ pub(crate) fn float_combat_text(
     font: Option<Res<DamageTextFont>>,
     // The globals a word is read from; with no VM a word has no string.
     script: Option<NonSend<benilla_ui::script::UiScript>>,
+    // `widescreen`, which shapes the interface's screen the text is drawn on.
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     let now = time.elapsed_secs_f64();
     // Headless there is no camera: spawns and expiry run, nothing draws.
@@ -236,9 +238,14 @@ pub(crate) fn float_combat_text(
     let (Some((cam, cam_tf)), Some(atlas)) = (cam, atlas.as_mut()) else {
         return; // headless or pre-world: age, draw nothing
     };
-    let Some(viewport) = viewport else {
+    let Some(cam_viewport) = viewport else {
         return;
     };
+    // The text is drawn on the interface's screen, 4:3 and stretched across the window with
+    // `widescreen` 0 ([`crate::ui_script::UiScreen`]), whose size the gx sizes take.
+    let ui =
+        crate::ui_script::UiScreen::of(cam_viewport, widescreen.as_deref().is_none_or(|w| w.0));
+    let viewport = ui.size;
     // The per-frame reset (`0x509500`), then seats per unit in creation order (the anchor id
     // here), slots descending (`0x6c6e00`): the newest number seats first, the older is pushed.
     bucket.clear();
@@ -254,7 +261,9 @@ pub(crate) fn float_combat_text(
         let life = elapsed_ms / cat.dur_ms;
         // The rise enters world z before projection (`6c7d29`, projected at `6c7d96`).
         let world = t.pos + Vec3::Y * (cat.rise * life);
-        let Some(screen) = crate::ui_pass::project_overlay(cam, &cam_tf, world, viewport) else {
+        let Some(screen) =
+            crate::ui_pass::project_overlay(cam, &cam_tf, world, cam_viewport).map(|p| ui.point(p))
+        else {
             culled.push(i); // behind the camera or off the viewport
             continue;
         };
