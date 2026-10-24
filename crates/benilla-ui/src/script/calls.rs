@@ -901,6 +901,15 @@ impl UiScript {
         })
     }
 
+    /// The record lookups a harness's VM kept, each with its owner id, in call order
+    /// ([`RecordAsk`]).
+    pub fn take_record_asks(&mut self) -> Vec<RecordAsk> {
+        self.take_calls_where(|call| match call {
+            ScriptCall::RecordAsk(ask) => Some(*ask),
+            _ => None,
+        })
+    }
+
     /// Take the kept calls `pick` answers for, in call order, leaving the rest kept.
     pub(crate) fn take_calls_where<T>(
         &mut self,

@@ -216,6 +216,32 @@ fn the_ammo_getters_ask_a_missed_record_inside_their_calls() {
     );
 }
 
+/// The ammo getter's query, as the wire carries it: `CMSG_ITEM_QUERY_SINGLE`'s entry, then the
+/// owner id the lookup passed, the active player's guid (`0x4c83ad`-`0x4c83c4`).
+#[test]
+fn the_ammo_getters_query_body_is_byte_exact() {
+    let (mut app, rx) = client();
+    let mut slots: benilla_ui::script::InventorySlots = Default::default();
+    slots[0] = Some(benilla_ui::script::InvSlotView {
+        item_id: 2512,
+        count: 200,
+        ..Default::default()
+    });
+    vm(&mut app).set_inventory_slots(slots);
+    seat_player(&mut app);
+    eval::<()>(&mut app, r#"GetInventoryItemTexture("player", 0)"#);
+    let bodies: Vec<Vec<u8>> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::ItemQuery { entry, guid } => {
+                Some(benilla_protocol::messages::item_query(entry, guid))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bodies, [[0xd0, 0x09, 0, 0, 0x2a, 0, 0, 0, 0, 0, 0, 0]]);
+}
+
 /// The item cooldown query `0x6e2ed0` asks a record the cache lacks with the callback `0x6e2f70`,
 /// deduped (`0x6e2ef4`-`0x6e2f0d`): `GetContainerItemCooldown` (`0x4f99b0`) and the bag and
 /// inventory tooltips (`0x53483a`, `0x533188` → `0x5331ec`) each send the item query inside the

@@ -2069,6 +2069,49 @@ fn lua_numbers(app: &mut App, chunk: &str) -> Vec<i64> {
     s.eval::<Vec<i64>>(chunk).unwrap()
 }
 
+/// The icon and description getters' product lookups pass the taught spell's id under
+/// `0xb0000000` as the owner: the icon takes the record of the learn slot's trigger and reads its
+/// id (`0x4d9050`-`0x4d9074`), the description the taught record's (`0x4d9c98`, `0x4d9cdf`), never
+/// the wire spell's.
+#[test]
+fn the_product_lookups_pass_the_taught_spell_as_their_owner() {
+    use benilla_ui::script::{spell_owner, ItemCallback, RecordAsk};
+    let wire_spell = SpellDisplay {
+        name: "Copper Shortsword".into(),
+        effects: [SPELL_EFFECT_LEARN_SPELL, 0, 0],
+        effect_trigger_spell: [200, 0, 0],
+        ..Default::default()
+    };
+    let taught = SpellDisplay {
+        name: "Copper Shortsword".into(),
+        attributes: SPELL_ATTR_IS_TRADESKILL,
+        effects: [SPELL_EFFECT_CREATE_ITEM, 0, 0],
+        effect_item_type: [777, 0, 0],
+        ..Default::default()
+    };
+    let mut app = feed_app(
+        SpellCatalog::from_displays(HashMap::from([(100, wire_spell), (200, taught)])),
+        benilla_formats::SkillLineCatalog::from_spell_lines([]),
+    );
+    app.world_mut().resource_mut::<TrainerOpen>().open(
+        0x10,
+        TRAINER_TYPE_TRADESKILL,
+        vec![wire(100, trainer_spell_state::GREEN, 1, 1, 0)],
+        String::new(),
+    );
+    tick(&mut app);
+    let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+    // Row 1 is the group's header.
+    s.run("GetTrainerServiceIcon(2) GetTrainerServiceDescription(2)")
+        .unwrap();
+    let ask = RecordAsk::Item {
+        entry: 777,
+        owner: spell_owner(200),
+        callback: ItemCallback::Trainer,
+    };
+    assert_eq!(s.take_record_asks(), [ask, ask]);
+}
+
 /// `TRAINER_SHOW` fires from the list builder alone (`0x4d7b73`), so the open trainer's second
 /// list fires it again; `TRAINER_UPDATE` from the state pass (`0x4d83f9`) and the mask commits
 /// (`0x4d8ca0`-`0x4d8ce0`) alone. The trainer's name landing fires neither.

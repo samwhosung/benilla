@@ -1296,6 +1296,50 @@ mod tests {
         assert_eq!(waiters(&mut app), 0, "a hit registers no callback");
     }
 
+    /// A getter call that finds the record the host holds and the doll's view lacks, which landed
+    /// after the doll's last push, reaches the frame: the next push fires `UNIT_INVENTORY_CHANGED`
+    /// after it, as the callback `0x4c84f0` would at the landing (`0x4c8509`), so the frame reads
+    /// the record the reference's call would have returned.
+    #[test]
+    fn a_held_record_the_doll_lacks_reaches_the_frame() {
+        use crate::field_watch::{id, FieldNotice, NoticeLane};
+        const ARROW: u32 = 2512;
+        /// `PLAYER_AMMO_ID`.
+        const AMMO_ID: u16 = 1223;
+        let mut app = world_with_bank_bag(None);
+        set_self(&mut app, &[(AMMO_ID, ARROW)]);
+        app.world_mut().run_system_once(feed_char).unwrap();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .keep_calls();
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(ARROW, Some(crate::items::test_template("Rough Arrow")));
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(r#"GetInventoryItemTexture("player", 0)"#)
+            .unwrap();
+        ask_kept_ammo(&mut app);
+        app.world_mut().run_system_once(feed_char).unwrap();
+        let fired: Vec<_> = app
+            .world_mut()
+            .resource_mut::<NoticeLane>()
+            .drain()
+            .collect();
+        assert_eq!(
+            fired,
+            [FieldNotice::Player {
+                id: id::UNIT_INVENTORY_CHANGED
+            }]
+        );
+        let named = app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<bool>(r#"return GetInventoryItemQuality("player", 0) ~= nil"#)
+            .unwrap();
+        assert!(named, "the push carries the record");
+    }
+
     /// The lock is the VM's, keyed by the guid this feed pushes: a lock moves no snapshot, and
     /// `IsInventoryItemLocked` reads it on the bank bag's own guid, at a banker
     /// (`GetItemInSlot`'s bank gate, `0x6228a0`).
