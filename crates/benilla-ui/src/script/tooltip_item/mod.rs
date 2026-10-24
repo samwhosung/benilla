@@ -497,7 +497,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         .filter(|s| s.record_pending())
                         .map(|s| s.item_id);
                     if let Some(entry) = pending {
-                        super::calls::ask(lua, super::RecordAsk::CooldownItem(entry))?;
+                        super::container::ask_cooldown_record(lua, entry)?;
                     }
                 }
                 let (item_id, name, quality, inst, count, repair_cost, currently_equipped) = {
@@ -629,7 +629,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 .filter(|s| s.record_pending())
                 .map(|s| s.item_id);
             if let Some(entry) = pending {
-                super::calls::ask(lua, super::RecordAsk::CooldownItem(entry))?;
+                super::container::ask_cooldown_record(lua, entry)?;
             }
             let (item_id, count, link, quality, inst, repair_cost) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");

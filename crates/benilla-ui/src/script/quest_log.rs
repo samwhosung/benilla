@@ -623,6 +623,8 @@ fn ask_lookups(lua: &Lua) -> mlua::Result<()> {
             lua,
             super::RecordAsk::Item {
                 entry,
+                // A zero owner id (`0x4e05c7`-`0x4e05ce`, `0x4e0b9c`-`0x4e0baa`).
+                owner: 0,
                 callback: super::ItemCallback::QuestLog,
             },
         )?;

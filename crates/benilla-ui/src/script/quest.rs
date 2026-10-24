@@ -402,6 +402,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     lua,
                     super::RecordAsk::Item {
                         entry: it.item_id,
+                        // The panel's source (`[0xbe0810]`), which the host holds.
+                        owner: 0,
                         callback: super::ItemCallback::Quest,
                     },
                 )?;

@@ -176,8 +176,9 @@ pub(crate) fn ask_item_record(
     commands: &NetCommands,
     open: &mut TrainerOpen,
     entry: u32,
+    owner: u64,
 ) {
-    let _ = items.template(entry, 0, Ask::Event(commands));
+    let _ = items.template(entry, owner, Ask::Event(commands));
     open.item_waits.push(entry);
 }
 

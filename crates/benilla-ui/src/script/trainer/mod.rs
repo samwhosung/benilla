@@ -605,11 +605,12 @@ fn rows(model: &Model) -> (&[Row], usize) {
 
 /// A getter's product lookup that missed: the item cache asked inside the call, with the
 /// window's callback (`0x4d9140`, `0x4d9db0`, dedupe flag 0 at `0x4d9076` and `0x4d9ce7`).
-fn ask_item(lua: &Lua, entry: u32) -> mlua::Result<()> {
+fn ask_item(lua: &Lua, entry: u32, spell_id: u32) -> mlua::Result<()> {
     super::calls::ask(
         lua,
         super::RecordAsk::Item {
             entry,
+            owner: super::calls::spell_owner(spell_id),
             callback: super::ItemCallback::Trainer,
         },
     )
@@ -788,13 +789,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (texture, wait) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 service(&model, index)
-                    .map(|s| (s.texture.clone(), s.icon_wait))
+                    .map(|s| (s.texture.clone(), s.icon_wait.map(|e| (e, s.spell_id))))
                     .unwrap_or_default()
             };
             // The miss asks and keeps its callback inside the call (`0x4d907e`), and pushes nil
             // (`0x4d90a4`).
-            if let Some(entry) = wait {
-                ask_item(lua, entry)?;
+            if let Some((entry, spell_id)) = wait {
+                ask_item(lua, entry, spell_id)?;
             }
             opt_str(lua, texture.as_ref())
         })?,
@@ -810,12 +811,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (description, wait) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 service(&model, index)
-                    .map(|s| (s.description.clone(), s.description_wait))
+                    .map(|s| {
+                        let wait = s.description_wait.map(|e| (e, s.spell_id));
+                        (s.description.clone(), wait)
+                    })
                     .unwrap_or_default()
             };
             // The miss asks and keeps its callback inside the call (`0x4d9cef`).
-            if let Some(entry) = wait {
-                ask_item(lua, entry)?;
+            if let Some((entry, spell_id)) = wait {
+                ask_item(lua, entry, spell_id)?;
             }
             opt_str(lua, description.as_ref())
         })?,

@@ -358,7 +358,7 @@ impl super::UiScript {
     /// that a harness's VM kept ([`Self::keep_calls`]), one per call.
     pub fn take_ammo_record_asks(&mut self) -> Vec<u32> {
         self.take_calls_where(|call| match call {
-            super::ScriptCall::RecordAsk(super::RecordAsk::AmmoItem(entry)) => Some(*entry),
+            super::ScriptCall::RecordAsk(super::RecordAsk::AmmoItem { entry, .. }) => Some(*entry),
             _ => None,
         })
     }
@@ -553,15 +553,23 @@ fn ask_ammo_record(
     let Some(v) = view.filter(|v| slot == 0 && v.item_id != 0 && v.name.is_none()) else {
         return Ok(());
     };
-    // The ammo leg reads the active player's field alone (`0x4c8382`).
-    let own = {
+    // The ammo leg reads the active player's field alone (`0x4c8382`), and passes the unit's
+    // guid, the active player's, as the owner id (`0x4c83ad`-`0x4c83c4`).
+    let owner = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        token.as_deref().and_then(|t| model.inventory_reader(t)) == Some(InvReader::Own)
+        let own = token.as_deref().and_then(|t| model.inventory_reader(t)) == Some(InvReader::Own);
+        own.then_some(model.unit_guids.player)
     };
-    if !own {
+    let Some(owner) = owner else {
         return Ok(());
-    }
-    super::calls::ask(lua, super::RecordAsk::AmmoItem(v.item_id))
+    };
+    super::calls::ask(
+        lua,
+        super::RecordAsk::AmmoItem {
+            entry: v.item_id,
+            owner,
+        },
+    )
 }
 
 /// The bank's live-API ids, `BankButtonIDToInvSlotID`'s two bands: 24 vault slots, 6 bag slots.

@@ -1888,6 +1888,7 @@ fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
                     world.resource::<Items>(),
                     world.resource::<crate::net::NetCommands>(),
                     entry,
+                    0,
                 );
             }
         });

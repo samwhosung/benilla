@@ -395,7 +395,9 @@ impl super::UiScript {
     /// ([`Self::keep_calls`]), each asked with the callback `0x6e2f70`.
     pub fn take_cooldown_record_asks(&mut self) -> Vec<u32> {
         self.take_calls_where(|call| match call {
-            super::ScriptCall::RecordAsk(super::RecordAsk::CooldownItem(entry)) => Some(*entry),
+            super::ScriptCall::RecordAsk(super::RecordAsk::CooldownItem { entry, .. }) => {
+                Some(*entry)
+            }
             _ => None,
         })
     }
@@ -859,6 +861,17 @@ fn container_key(
 
 /// Register the container verbs as bare globals, as `reference/lua_globals.tsv` lists them;
 /// `C_Container` is a later client's namespace, and an addon that finds it assumes that client.
+
+/// The item cooldown query's lookup of a record the mirror lacks, inside the call: the callback
+/// `0x6e2f70`, deduped, with the active player as the owner id (`0x6e2eef`-`0x6e2f0d`).
+pub(super) fn ask_cooldown_record(lua: &Lua, entry: u32) -> mlua::Result<()> {
+    let owner = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .unit_guids
+        .player;
+    super::calls::ask(lua, super::RecordAsk::CooldownItem { entry, owner })
+}
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ContainerIDToInventoryID(containerID) (`0x4f94e0`): `id - 1`, then +20 below 4 else +60, so
     // the keyring -2 → 17, the backpack 0 → 19, bags 1-4 → 20-23 and bank bags 5-10 → 64-69, with
@@ -1010,7 +1023,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The query asks a missing record with the callback `0x6e2f70` inside the call
             // (`0x6e2efb`).
             if let Some(entry) = pending {
-                super::calls::ask(lua, super::RecordAsk::CooldownItem(entry))?;
+                ask_cooldown_record(lua, entry)?;
             }
             Ok(triple)
         })?,

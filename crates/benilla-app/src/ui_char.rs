@@ -677,8 +677,8 @@ fn bank_bag_slots(
 /// their calls ([`benilla_ui::script::RecordAsk::AmmoItem`]): a miss asks, a refused entry again,
 /// and waits for the answer, whose ready record signals `UNIT_INVENTORY_CHANGED` (`0x4c8509`) at
 /// its packet. A hit registers nothing.
-pub(crate) fn ask_ammo_record(items: &Items, commands: &NetCommands, entry: u32) {
-    if items.template(entry, 0, Ask::Event(commands)).is_none() {
+pub(crate) fn ask_ammo_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
+    if items.template(entry, owner, Ask::Event(commands)).is_none() {
         items.wait_for_ammo_record(entry);
     }
 }
@@ -1222,6 +1222,7 @@ mod tests {
                 world.resource::<Items>(),
                 world.resource::<NetCommands>(),
                 entry,
+                0,
             );
         }
     }

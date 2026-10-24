@@ -2056,6 +2056,7 @@ fn run_getters(app: &mut App, chunk: &str) {
                 world.resource::<NetCommands>(),
                 &mut open,
                 entry,
+                0,
             );
         }
     });

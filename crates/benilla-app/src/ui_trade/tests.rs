@@ -457,7 +457,7 @@ fn ask_kept_records(
     commands: Res<NetCommands>,
 ) {
     for entry in script.take_trade_record_asks() {
-        ask_trade_record(&items, &commands, entry);
+        ask_trade_record(&items, &commands, entry, 0);
     }
 }
 

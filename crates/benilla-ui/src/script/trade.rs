@@ -503,7 +503,7 @@ impl super::UiScript {
     /// ([`Self::keep_calls`]), one per call that found a filled slot with no template.
     pub fn take_trade_record_asks(&mut self) -> Vec<u32> {
         self.take_calls_where(|call| match call {
-            super::ScriptCall::RecordAsk(super::RecordAsk::TradeItem(entry)) => Some(*entry),
+            super::ScriptCall::RecordAsk(super::RecordAsk::TradeItem { entry, .. }) => Some(*entry),
             _ => None,
         })
     }
@@ -525,12 +525,28 @@ impl Model {
 
 /// A getter's item-cache lookup when the slot is filled and its template has not answered: the
 /// lookup with the callback `0x4c0340` (`0x4c017f`, `0x4c0582`), one per call, which the host
-/// makes inside the call and whose callback signals `TRADE_UPDATE` when the record lands.
-fn ask_record(lua: &Lua, slot: Option<&TradeSlotItem>) -> mlua::Result<()> {
-    match slot.filter(|s| s.name.is_none()) {
-        Some(slot) => super::calls::ask(lua, super::RecordAsk::TradeItem(slot.item_id)),
-        None => Ok(()),
-    }
+/// makes inside the call and whose callback signals `TRADE_UPDATE` when the record lands. The
+/// owner id is the partner for theirs, who rides the `npc` unit (`[0xb71728]`, `0x4c016c`), and
+/// the active player for ours (`0x4c0573`).
+fn ask_record(lua: &Lua, slot: Option<&TradeSlotItem>, partners: bool) -> mlua::Result<()> {
+    let Some(slot) = slot.filter(|s| s.name.is_none()) else {
+        return Ok(());
+    };
+    let owner = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        if partners {
+            model.unit("npc").map_or(0, |u| u.guid)
+        } else {
+            model.unit_guids.player
+        }
+    };
+    super::calls::ask(
+        lua,
+        super::RecordAsk::TradeItem {
+            entry: slot.item_id,
+            owner,
+        },
+    )
 }
 
 /// The slot at a 1-based index on the side `pick` selects.
@@ -862,7 +878,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 slot_at(&model, id, |t| &t.player)
             };
-            ask_record(lua, slot.as_ref())?;
+            ask_record(lua, slot.as_ref(), false)?;
             let Some(s) = slot else {
                 return Ok(super::binding_abi::tuple(&[
                     None,
@@ -958,7 +974,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .is_none_or(|s| super::item_stats::item_usable_by_id(&model, s.item_id));
                 (slot, usable)
             };
-            ask_record(lua, slot.as_ref())?;
+            ask_record(lua, slot.as_ref(), true)?;
             // A template the cache lacks takes the miss too (`0x4c019b`, `0x4c02f6`).
             let Some(s) = slot.filter(|s| s.name.is_some()) else {
                 return Ok(super::binding_abi::tuple(&[

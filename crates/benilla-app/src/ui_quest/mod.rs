@@ -211,9 +211,11 @@ impl QuestGiver {
 
     /// `GetQuestItemInfo`'s lookup of a template in flight, inside its call
     /// ([`benilla_ui::script::ItemCallback::Quest`]): the item cache asks a miss, a refused entry
-    /// again, and the window keeps one callback `0x5018c0` per call (`0x5017ce`).
+    /// again, with the panel's source as the owner id (`[0xbe0810]` at `0x5017d3`, which the panel
+    /// setter writes, `0x500d86`), and the window keeps one callback `0x5018c0` per call
+    /// (`0x5017ce`).
     pub(crate) fn ask_item_record(&mut self, items: &Items, commands: &NetCommands, entry: u32) {
-        let _ = items.template(entry, 0, Ask::Event(commands));
+        let _ = items.template(entry, self.npc.unwrap_or(0), Ask::Event(commands));
         self.item_waits.push(entry);
     }
 

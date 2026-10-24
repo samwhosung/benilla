@@ -797,8 +797,9 @@ pub(crate) fn ask_item_record(
     commands: &NetCommands,
     waits: &mut TradeSkillItemWaits,
     entry: u32,
+    owner: u64,
 ) {
-    let _ = items.template(entry, 0, Ask::Event(commands));
+    let _ = items.template(entry, owner, Ask::Event(commands));
     waits.0.push(entry);
 }
 
@@ -1599,6 +1600,7 @@ mod tests {
                         world.resource::<NetCommands>(),
                         &mut waits,
                         entry,
+                        0,
                     );
                 }
             });

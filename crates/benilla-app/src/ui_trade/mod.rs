@@ -1333,9 +1333,10 @@ fn feed_trade(
 /// (`0x55bbb3`), and each runs when the record lands, for a ready record only; a refusal frees
 /// them silent. The landed records signal on the item lane, at the answer's packet
 /// ([`crate::item_watch::ItemNotice::TradeRecord`]).
-pub(crate) fn ask_trade_record(items: &Items, commands: &NetCommands, entry: u32) {
-    // The getter's lookup with the callback: a miss asks, a refused entry again.
-    if items.template(entry, 0, Ask::Event(commands)).is_none() {
+pub(crate) fn ask_trade_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
+    // The getter's lookup with the callback: a miss asks, a refused entry again, the slot's side
+    // as the owner id.
+    if items.template(entry, owner, Ask::Event(commands)).is_none() {
         items.wait_for_trade_record(entry);
     }
 }

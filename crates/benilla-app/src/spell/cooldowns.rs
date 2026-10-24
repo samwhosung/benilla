@@ -483,8 +483,9 @@ impl Cooldowns {
         items: &crate::items::Items,
         commands: &crate::net::NetCommands,
         item_entry: u32,
+        owner: u64,
     ) {
-        let _ = items.template(item_entry, 0, crate::query_cache::Ask::Event(commands));
+        let _ = items.template(item_entry, owner, crate::query_cache::Ask::Event(commands));
         self.await_item_record(item_entry);
     }
 

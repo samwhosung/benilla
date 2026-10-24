@@ -453,12 +453,13 @@ pub(crate) fn recipe(model: &Model, index: usize) -> Option<&CraftRecipe> {
 }
 
 /// A getter's item lookup that missed: the item cache asked inside the call, with the callback
-/// `0x4f7710` (`0x4f75dd`, `0x4f79f2`), one per call.
-fn ask_item(lua: &Lua, entry: u32) -> mlua::Result<()> {
+/// `0x4f7710` (`0x4f75dd`, `0x4f79f2`), one per call, and the row's spell as the owner id.
+fn ask_item(lua: &Lua, entry: u32, spell_id: u32) -> mlua::Result<()> {
     super::calls::ask(
         lua,
         super::RecordAsk::Item {
             entry,
+            owner: super::calls::spell_owner(spell_id),
             callback: super::ItemCallback::Craft,
         },
     )
@@ -712,16 +713,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?;
             let reagent = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                recipe(&model, index)
-                    .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
-                    .cloned()
+                recipe(&model, index).and_then(|r| {
+                    let n = reagent_index.checked_sub(1)?;
+                    Some((r.reagents.get(n)?.clone(), r.spell_id))
+                })
             };
-            let Some(reagent) = reagent else {
+            let Some((reagent, spell_id)) = reagent else {
                 return Ok(binding_abi::tuple(&[None; 4]));
             };
             if reagent.name.is_none() {
                 // The miss asks with the callback `0x4f7710` inside the call (`0x4f75dd`).
-                ask_item(lua, reagent.item)?;
+                ask_item(lua, reagent.item, spell_id)?;
             }
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, reagent.name.as_ref())?,
@@ -743,12 +745,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(r) = recipe(&model, index) else {
                 return Ok(MultiValue::new());
             };
-            let (tools, pending) = (r.tools.clone(), r.tools_pending.clone());
+            let (tools, pending, spell_id) = (r.tools.clone(), r.tools_pending.clone(), r.spell_id);
             drop(model);
             // Each totem in flight is asked with the callback `0x4f7710` inside the call
             // (`0x4f79f2`).
             for entry in pending {
-                ask_item(lua, entry)?;
+                ask_item(lua, entry, spell_id)?;
             }
             let mut out = Vec::new();
             for (name, have) in &tools {
