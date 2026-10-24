@@ -46,7 +46,7 @@
 //! Not built: `$BWR` launches from its event marker, where the reference first tries the ranged
 //! weapon's HandArrow/Bullet attachment (`0x23`/`0x24`); homing aims at the attachment point, not
 //! the ray-sphere intercept `0x61d230`, the same body point in practice; and `0x61dd50`'s
-//! per-outcome disposition (jump table `0x61d76c`, cases `0x61d784`), which keeps a BLOCK 5000 ms
+//! per-outcome disposition, which keeps a BLOCK 5000 ms
 //! (`0x61e7c0`), rebuilds a RESIST or IMMUNE model (`0x707350` on `0x861790`) and curves a
 //! DEFLECT away (`0x4531e0`, `0x7be490`), where every miss but a REFLECT ends on arrival here.
 
