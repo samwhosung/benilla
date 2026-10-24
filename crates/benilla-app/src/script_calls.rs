@@ -134,8 +134,9 @@ disjoint::disjoint_set! {
         /// The console's commands, against what they read and write, and the getters' lookups.
         console: crate::console::ConsoleSteps<'static, 'static>,
         asks: engine::RecordAsks<'static>,
-        /// The unit objects the getters read as they run.
+        /// The unit objects and the items the getters read as they run.
         units: UnitLive<'static, 'static>,
+        items_live: crate::ui_items::live::ItemLive<'static, 'static>,
     }
 }
 
@@ -550,6 +551,14 @@ impl ScriptCallHost<'_, '_> {
 }
 
 impl CallHost for ScriptCallHost<'_, '_> {
+    fn read_item(
+        &mut self,
+        key: benilla_ui::script::ItemKey,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::ItemRead),
+    ) -> bool {
+        self.appliers.items_live().read(key, read)
+    }
+
     fn read_unit_object(
         &mut self,
         guid: u64,
@@ -790,6 +799,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Nameplates(write) => appliers.plates().apply(write),
             ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
             ScriptCall::Console(line) => appliers.console().run(&engine::VmCvars(script), &line),
+            ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::AuctionName { guid, list }) => {
+                appliers.auction().wait_for_name(script, guid, list);
+            }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(script, ask),
         }
         self.settle_selection(script, &mut at, owed);

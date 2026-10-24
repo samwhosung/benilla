@@ -7,6 +7,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag, number_arg};
 use super::cursor::{self, CursorItem, CursorPayload};
+use super::item_read::read_item;
 use super::protected::{self, Tag};
 use super::{ItemCall, Model};
 
@@ -115,6 +116,11 @@ pub struct ContainerSlot {
 }
 
 impl ContainerSlot {
+    /// The item object the getters read as they run, while the slot names one.
+    pub(crate) fn item_key(&self) -> Option<super::ItemKey> {
+        (self.guid != 0).then_some(super::ItemKey::Object(self.guid))
+    }
+
     /// An item object whose record the cache does not hold yet, which the feed pushes with its
     /// entry and no quality: a cooldown query on it asks the record with the callback `0x6e2f70`
     /// (`0x6e2efb`), whose arrival runs it.
@@ -1033,13 +1039,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetContainerItemLink",
         lua.create_function(|lua, (bag, slot): (Value, Value)| {
             let key = container_key(lua, bag, slot, "Usage: GetContainerItemLink(index, slot)")?;
-            let link = {
+            let slot = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                key.and_then(|(bag, slot)| {
-                    let s = model.bag_slot(bag, slot)?;
-                    s.link.clone().or_else(|| s.uncached_link.clone())
-                })
+                key.and_then(|(bag, slot)| model.bag_slot(bag, slot).cloned())
             };
+            // The object and its record as the call runs (`0x4f997f` → `0x52ae00`).
+            let link = slot.and_then(|s| {
+                read_item(lua, s.item_key(), &s, |_, item| {
+                    item.link().or_else(|| item.uncached_link())
+                })
+            });
             // Nothing at all when the resolver fails or finds no item object (`0x4f996b`,
             // `0x4f997b`, both to `0x4f99a5`); any object links (`0x4f997f` → `0x52ae00`), with
             // no record white and nameless.
@@ -1076,26 +1085,33 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(s) = info else {
                 return Ok(mlua::MultiValue::new());
             };
+            // The object and its record as the call runs (`0x4f96dc`, `0x4f978b`).
+            let (texture, count, quality, readable) =
+                read_item(lua, s.item_key(), &s, |s, item| {
+                    (
+                        item.texture(),
+                        item.stack_count().unwrap_or(s.count),
+                        super::item_stats::gated_quality(item.quality(), item.inventory_type()),
+                        item.readable(),
+                    )
+                });
             Ok(mlua::MultiValue::from_vec(vec![
                 // A string on every path: the question mark while the template is unknown
                 // (`0x5d8af0`).
                 Value::String(
                     lua.create_string(
-                        s.texture
+                        texture
                             .as_deref()
                             .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
                     )?,
                 ),
-                Value::Integer(i64::from(s.count)),
+                Value::Integer(i64::from(count)),
                 // The item's lock bit (`0x4f9752`, [`cursor::item_locked`]).
                 flag(locked),
                 // A number on every path: -1 unless the template is cached and equippable
                 // (`0x4f9794`).
-                Value::Integer(super::item_stats::gated_quality(
-                    s.quality,
-                    s.inventory_type,
-                )),
-                flag(s.readable),
+                Value::Integer(quality),
+                flag(readable),
             ]))
         })?,
     )?;

@@ -9,6 +9,7 @@
 //! nothing here signals: a change of the gear, as of the level, is the unit-field bridge's
 //! ([`crate::field_watch`]), fired per token on a values block.
 
+use benilla_ui::script::ItemRead;
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
@@ -122,32 +123,25 @@ fn inspect_slot_view(
     // `+0x424`, names the suffix only: its stat lines would sit in enchant slots 2-6, which 1.12
     // servers leave empty.
     let roll = store.0.player_visible_item_properties(slot0);
-    // By entry alone (guid 0), as the reference's item cache asks: there is no item object.
-    let t = items.template(entry, 0, Ask::Read);
-    let (name, quality, display) = match t {
-        Some(t) => (
-            Some(rolls.name(&t.name, roll)),
-            t.quality,
-            t.display_info_id,
-        ),
-        None => (None, 0, 0),
-    };
     // The link names the permanent enchant, the block's `+0xc`, and the suffix at `+0x28`
     // (`0x4c8d5c`-`0x4c8d74` → `0x52adb0`).
-    let perm = store.0.player_visible_item_enchant(slot0, 0).unwrap_or(0);
-    let link = name
-        .as_ref()
-        .map(|n| crate::ui_items::item_link_full(entry, perm, roll, 0, n, quality));
+    let roll = benilla_ui::script::ItemRoll {
+        enchant: store.0.player_visible_item_enchant(slot0, 0).unwrap_or(0),
+        property: roll,
+        suffix_factor: 0,
+    };
+    // By entry alone (guid 0), as the reference's item cache asks: there is no item object. What
+    // the getters read of it as they run, read here the same way.
+    let live = crate::ui_items::live::LiveItem::record(entry, roll, items, icons, rolls);
     Some(InvSlotView {
         item_id: entry,
-        icon: icons
-            .and_then(|i| i.catalog.get(display))
-            .and_then(|d| d.icon.clone()),
+        icon: live.texture(),
         count: 1,
-        quality: quality as i32,
-        inventory_type: t.map(|t| t.inventory_type),
-        name,
-        link,
+        quality: live.quality().map_or(0, |q| q as i32),
+        inventory_type: live.cached().then(|| live.inventory_type()),
+        name: live.name(),
+        link: live.link(),
+        roll,
         creator,
         creator_guid,
         // `0x5da2c0` reads an item object's `ITEM_FIELD_FLAGS`, which inspected gear lacks, so the

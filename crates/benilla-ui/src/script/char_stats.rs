@@ -16,6 +16,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
+use super::item_read::{read_item, read_live};
 use super::{binding_abi, Model};
 
 /// The `SkillLine.dbc` id behind weapon subclass `0..=20` (vmangos `Item.cpp:700-707`), `None`
@@ -234,6 +235,9 @@ pub struct InvSlotView {
     /// The item object's guid, 0 while unresolved: `IsInventoryItemLocked` reads the client's lock
     /// on it.
     pub guid: u64,
+    /// For a slot with no item object (the ammo slot, an inspected player's visible item), the
+    /// roll its record shows with: the name's suffix and the link's numbers.
+    pub roll: super::ItemRoll,
     /// The 1-based live-API slots this item could be equipped into; empty if none.
     pub equip_slots: Vec<u8>,
     /// The resolved name of [`Self::creator_guid`], the tooltip's "<Made by %s>" line.
@@ -313,11 +317,11 @@ const ALERT_SLOTS: [usize; 12] = [1, 3, 5, 6, 7, 8, 9, 10, 16, 17, 18, 0];
 
 /// Broken for the doll's red tint, from `0x4c7ee0`'s bits: never when wrapped (`0x08`), else when
 /// force-red (`0x10`) or at durability 0 of a nonzero max.
-fn slot_is_broken(v: &InvSlotView) -> bool {
+fn slot_is_broken(v: &InvSlotView, durability: Option<(u32, u32)>) -> bool {
     if v.item_id == 0 || v.flags & 0x08 != 0 {
         return false;
     }
-    v.flags & 0x10 != 0 || matches!(v.durability, Some((0, max)) if max > 0)
+    v.flags & 0x10 != 0 || matches!(durability, Some((0, max)) if max > 0)
 }
 
 /// One region's `GetInventoryAlertStatus` (`0x4c7ee0`): 4 when force-red or broken, 3 with 1..=5
@@ -742,6 +746,19 @@ fn link_item_name(link: &str) -> Option<String> {
 }
 
 impl InvSlotView {
+    /// The item the getters read as they run: the slot's object, else, for the ammo slot and an
+    /// inspected player's visible item, its record with the slot's roll.
+    pub(crate) fn item_key(&self) -> Option<super::ItemKey> {
+        if self.guid != 0 {
+            Some(super::ItemKey::Object(self.guid))
+        } else {
+            (self.item_id != 0).then_some(super::ItemKey::Record {
+                entry: self.item_id,
+                roll: self.roll,
+            })
+        }
+    }
+
     /// An item object whose record the cache does not hold yet, which the app pushes with its
     /// entry and no name: `SetInventoryItem`'s cooldown query on it asks the record with the
     /// callback `0x6e2f70` (`0x533188` → `0x5331ec`, `0x6e2efb`).
@@ -1135,9 +1152,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Invalid inventory slot in GetInventoryItemTexture",
             )?;
             let view = player_inv_slot(lua, &token, slot);
+            // The slot's item and its record as the call runs.
+            let read = view.as_ref().map(|v| {
+                read_item(lua, v.item_key(), v, |_, item| {
+                    (item.cached(), item.texture())
+                })
+            });
             // Only while the player carries some (`0x4c83a0`, `CountInventoryItemsByEntry`).
-            ask_ammo_record(lua, &token, slot, view.as_ref().filter(|v| v.count > 0))?;
-            match view.and_then(|v| v.icon) {
+            if read.as_ref().is_some_and(|(cached, _)| !cached) {
+                ask_ammo_record(lua, &token, slot, view.as_ref().filter(|v| v.count > 0))?;
+            }
+            match read.and_then(|(_, icon)| icon) {
                 Some(icon) => Ok(Value::String(lua.create_string(&icon)?)),
                 None => Ok(Value::Nil),
             }
@@ -1169,8 +1194,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let token = Some(token);
             super::unit::check_unit_token(&token)?;
-            let link = player_inv_slot(lua, &token, i64::from(slot0) + 1)
-                .and_then(|v| v.link.or(v.uncached_link));
+            let link = player_inv_slot(lua, &token, i64::from(slot0) + 1).and_then(|v| {
+                read_item(lua, v.item_key(), &v, |_, item| {
+                    item.link().or_else(|| item.uncached_link())
+                })
+            });
             Ok(match link {
                 Some(link) => MultiValue::from_vec(vec![Value::String(lua.create_string(&link)?)]),
                 None => MultiValue::new(),
@@ -1205,6 +1233,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(1i64);
             };
             Ok(match v.contents_count {
+                // A held object's stack as the call runs; the ammo slot's carried total is its
+                // view's.
+                None if v.guid != 0 => {
+                    let count = read_item(lua, v.item_key(), &v, |v, item| {
+                        item.stack_count().unwrap_or(v.count).max(1)
+                    });
+                    i64::from(count)
+                }
                 None => i64::from(v.count),
                 Some(_) if slot0 > 0x16 => 0,
                 Some(n) => i64::from(n),
@@ -1227,18 +1263,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Invalid inventory slot in GetInventoryItemQuality",
             )?;
             // The item table's slot (`0x4c89d6` → `0x6228a0`), empty for another player.
-            let view = own_inv_slot(lua, &token, slot);
-            ask_ammo_record(lua, &token, slot, view.as_ref())?;
-            Ok(
-                match view
-                    .filter(|v| v.item_id != 0)
-                    .map(|v| (v.inventory_type, v.quality))
-                {
-                    Some((Some(0), _)) => Value::Integer(-1),
-                    Some((Some(_), quality)) => Value::Integer(i64::from(quality)),
-                    _ => Value::Nil,
-                },
-            )
+            let view = own_inv_slot(lua, &token, slot).filter(|v| v.item_id != 0);
+            // The slot's record as the call runs.
+            let read = view.as_ref().map(|v| {
+                read_item(lua, v.item_key(), v, |_, item| {
+                    item.quality().map(|q| (item.inventory_type(), q))
+                })
+            });
+            if read.as_ref().is_some_and(Option::is_none) {
+                ask_ammo_record(lua, &token, slot, view.as_ref())?;
+            }
+            Ok(match read.flatten() {
+                Some((0, _)) => Value::Integer(-1),
+                Some((_, quality)) => Value::Integer(i64::from(quality)),
+                None => Value::Nil,
+            })
         })?,
     )?;
 
@@ -1255,10 +1294,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: GetInventoryItemBroken(unit, slot)",
                 "Invalid inventory slot in GetInventoryItemBroken",
             )?;
-            match own_inv_slot(lua, &token, slot) {
-                Some(v) if slot_is_broken(&v) => Ok(Value::Integer(1)),
-                _ => Ok(Value::Nil),
-            }
+            // The object's durability as the call runs.
+            let broken = own_inv_slot(lua, &token, slot).is_some_and(|v| {
+                read_item(lua, v.item_key(), &v, |v, item| {
+                    slot_is_broken(v, item.durability())
+                })
+            });
+            Ok(if broken {
+                Value::Integer(1)
+            } else {
+                Value::Nil
+            })
         })?,
     )?;
 
@@ -1332,12 +1378,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "OffhandHasWeapon",
         lua.create_function(|lua, (): ()| {
-            let model = lua.app_data_mut::<Model>().expect("model app_data");
-            let is_weapon = model.inventory_slots[17]
-                .as_ref()
-                .filter(|v| v.item_id != 0)
-                .and_then(|v| model.item_templates.get(&v.item_id))
-                .is_some_and(|t| t.class == 2);
+            let (held, snapshot_class) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let held = model.inventory_slots[17].clone().filter(|v| v.item_id != 0);
+                let class = held
+                    .as_ref()
+                    .and_then(|v| model.item_templates.get(&v.item_id))
+                    .map(|t| t.class);
+                (held, class)
+            };
+            // The off hand's record as the call runs; off the snapshot, the VM's record copy.
+            let is_weapon = held.is_some_and(|v| {
+                let live = read_live(lua, v.item_key(), |item| item.class());
+                live.unwrap_or(snapshot_class) == Some(2)
+            });
             Ok(is_weapon.then_some(1i64))
         })?,
     )?;

@@ -9,15 +9,15 @@ use bevy::prelude::*;
 
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_ui::script::{
-    weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, SkillEntry, SkillsState,
-    UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
+    weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, ItemRead, SkillEntry,
+    SkillsState, UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
 };
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::ui_items::{find_equip_slot, item_link};
+use crate::ui_items::find_equip_slot;
 use crate::ui_script::{gate, UiFeed};
 
 /// Equipment slots, 0-based (`EQUIPMENT_SLOT_*`): main hand, off hand, ranged.
@@ -404,7 +404,9 @@ fn slot_view(
     let duration_ms = countdowns.and_then(|c| c.lifetime_remaining_display_ms());
     let obj = objects.object(guid)?;
     let entry = obj.object_entry()?;
-    let count = obj.item_stack_count().unwrap_or(1).max(1);
+    // What the getters read of it as they run, read here the same way.
+    let live = crate::ui_items::live::LiveItem::object(obj, guid, items, icons, rolls);
+    let count = live.stack_count().unwrap_or(1).max(1);
     // `OBJECT_FIELD_TYPE & TYPEMASK_CONTAINER`, read off the object as `GetInventoryItemCount`'s
     // first fork reads it (`0x4c87a6`).
     let is_container = obj.is_container();
@@ -412,10 +414,7 @@ fn slot_view(
         let slots = obj.container_num_slots().unwrap_or(0).min(36) as u8;
         (0..slots).filter_map(|s| obj.container_slot(s)).collect()
     };
-    let durability = obj
-        .item_durability()
-        .zip(obj.item_max_durability())
-        .filter(|&(_, max)| max > 0);
+    let durability = live.durability();
     // `ITEM_FIELD_FLAGS`, for its wrapped (0x08) and force-red (0x10) bits.
     let flags = obj.item_flags().unwrap_or(0);
     // Soulbound or carrying a binding enchant (`0x5da2c0`), read off the raw descriptor, never off
@@ -447,25 +446,14 @@ fn slot_view(
     );
     // Only read, as the inventory getters read it (`0x4c8a0a`, `0x4c8d34`): the item's create asked.
     let t = items.template(entry, guid, Ask::Read);
-    // `GetInventoryItemLink` links the player's own item object (`0x4c8ce2` → `0x52ae00`), its
-    // record cached or not.
-    let object_link = crate::ui_items::object_link(obj, t, rolls);
-    let (name, quality, display, link, equip_slots, kind, bar_placeable, consumable) = match t {
-        Some(t) => {
-            // The item object's name (`0x5d8bc0`): the roll's suffix, unless it is wrapped.
-            let name = crate::ui_items::object_name(obj, t, rolls);
-            (
-                Some(name.clone()),
-                t.quality as i32,
-                t.display_info_id,
-                Some(object_link.clone()),
-                find_equip_slot(t.inventory_type, has_relic_slot),
-                (t.class, t.subclass),
-                t.placeable_on_action_bar(),
-                t.is_consumable(),
-            )
-        }
-        None => (None, 0, 0, None, Vec::new(), (0, 0), false, false),
+    let (equip_slots, kind, bar_placeable, consumable) = match t {
+        Some(t) => (
+            find_equip_slot(t.inventory_type, has_relic_slot),
+            (t.class, t.subclass),
+            t.placeable_on_action_bar(),
+            t.is_consumable(),
+        ),
+        None => (Vec::new(), (0, 0), false, false),
     };
     // A container counts its contents' stacks when its subclass's `DisplayFlags` has 0x4, else 0
     // (`GetInventoryItemCount` `0x4c8680`: `0x4c881a`, summed by `0x622130`); the bit is on Soul
@@ -482,11 +470,9 @@ fn slot_view(
             0
         }
     });
-    let icon = icons
-        .and_then(|i| i.catalog.get(display))
-        .and_then(|d| d.icon.clone());
     Some(InvSlotView {
-        inventory_type: t.map(|t| t.inventory_type),
+        roll: Default::default(),
+        inventory_type: live.cached().then(|| live.inventory_type()),
         bonding: t.map_or(0, |t| t.bonding),
         // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
         occupied_seats: is_container
@@ -498,13 +484,16 @@ fn slot_view(
             crate::ui_items::dispatch_fork(t, flags, obj.item_text_id().unwrap_or(0))
         }),
         item_id: entry,
-        icon,
+        icon: live.texture(),
         count,
         contents_count,
-        quality,
-        name,
-        uncached_link: t.is_none().then_some(object_link),
-        link,
+        quality: live.quality().map_or(0, |q| q as i32),
+        // The item object's name (`0x5d8bc0`): the roll's suffix, unless it is wrapped.
+        name: live.name(),
+        // `GetInventoryItemLink` links the player's own item object (`0x4c8ce2` → `0x52ae00`),
+        // its record cached or not.
+        uncached_link: live.uncached_link(),
+        link: live.link(),
         durability,
         flags,
         already_bound,
@@ -572,23 +561,16 @@ fn inventory_slots(
     if ammo_id != 0 {
         // Only read: what asks the record are the texture and quality getters' lookups with the
         // callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), drained in `feed_char`.
-        let t = items.template(ammo_id, 0, Ask::Read);
-        let inventory_type = t.map(|t| t.inventory_type);
-        let (name, quality, display, link) = match t {
-            Some(t) => (
-                Some(t.name.clone()),
-                t.quality as i32,
-                t.display_info_id,
-                Some(item_link(ammo_id, &t.name, t.quality)),
-            ),
-            None => (None, 0, 0, None),
-        };
-        let icon = icons
-            .and_then(|i| i.catalog.get(display))
-            .and_then(|d| d.icon.clone());
+        let live = crate::ui_items::live::LiveItem::record(
+            ammo_id,
+            Default::default(),
+            items,
+            icons,
+            rolls,
+        );
         inv[0] = Some(InvSlotView {
             uncached_link: None,
-            inventory_type,
+            inventory_type: live.cached().then(|| live.inventory_type()),
             durability: None,
             flags: 0,
             // Ammo has no item object, only its template, so there is no bind to read.
@@ -598,13 +580,14 @@ fn inventory_slots(
             use_spell: 0,
             use_fork: Default::default(),
             item_id: ammo_id,
-            icon,
+            icon: live.texture(),
             count: ammo_count(store, objects, ammo_id),
             // `GetInventoryItemCount`'s `PLAYER_AMMO_ID` leg, before the container fork.
             contents_count: None,
-            quality,
-            name,
-            link,
+            quality: live.quality().map_or(0, |q| q as i32),
+            name: live.name(),
+            link: live.link(),
+            roll: Default::default(),
             // No click or drag path reaches the ammo slot: nothing locks it, it fits nowhere.
             guid: 0,
             equip_slots: Vec::new(),

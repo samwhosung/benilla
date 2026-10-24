@@ -688,6 +688,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::SpellVisuals",
     "::Creatures",
     "::ItemDisplays",
+    // `ItemClass.dbc`, whose names the host's `GetItemInfo` reads.
+    "::ItemClasses",
     "::GameObjectTemplates",
     "::Enchants",
     "::Items",

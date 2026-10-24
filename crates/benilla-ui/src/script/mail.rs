@@ -6,7 +6,8 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag};
 use super::cursor;
-use super::Model;
+use super::item_read::read_live;
+use super::{ItemKey, Model};
 
 /// The GM stationery, `Stationery.dbc` row 61 (`0x4af2cb cmp [rec+0x11c],0x3d`).
 const STATIONERY_GM: u32 = 61;
@@ -637,16 +638,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Nil,
                 ]));
             };
-            let name = match &r.item_name {
+            // The attachment's record off the item cache as the call runs.
+            let key = ItemKey::Record {
+                entry: r.item_id,
+                roll: super::ItemRoll {
+                    property: r.item_random_property_id,
+                    ..Default::default()
+                },
+            };
+            let (name, texture, quality) = read_live(lua, Some(key), |item| {
+                (item.name(), item.texture(), item.quality())
+            })
+            .unwrap_or_else(|| (r.item_name.clone(), r.item_texture.clone(), r.item_quality));
+            let name = match &name {
                 Some(n) => Value::String(lua.create_string(n)?),
                 None => Value::Nil,
             };
-            let texture = match &r.item_texture {
+            let texture = match &texture {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
             // A number on every path, as in `GetSendMailItem`.
-            let quality = Value::Integer(i64::from(r.item_quality.unwrap_or(0)));
+            let quality = Value::Integer(i64::from(quality.unwrap_or(0)));
             Ok(MultiValue::from_vec(vec![
                 name,
                 texture,
@@ -927,19 +940,36 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // A whole-stack pickup records no count, so the size comes from the source slot.
             // The template's lookup (`0x4ae604`) misses with nothing to read (`0x4ae60e`).
-            let item = {
+            let held = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.mail_send_item.clone().and_then(|it| {
-                    let template = model.item_templates.get(&it.item_id)?;
-                    let quality = match template.inventory_type {
-                        0 => -1,
-                        _ => i64::from(template.quality),
-                    };
+                model.mail_send_item.clone().map(|it| {
                     let count = cursor::held_count(&model, &it);
-                    Some((it, count, quality))
+                    // Off the snapshot: the VM's record copy, and the link's name.
+                    let snapshot = model.item_templates.get(&it.item_id).map(|t| {
+                        let name = cursor::item_link_name(it.link.as_deref());
+                        let name = (!name.is_empty()).then_some(name);
+                        (name, it.texture.clone(), t.inventory_type, t.quality)
+                    });
+                    (it.guid, count, snapshot)
                 })
             };
-            let Some((it, count, quality)) = item else {
+            // The attached object and its record as the call runs.
+            let item = held.and_then(|(guid, count, snapshot)| {
+                let read = read_live(lua, Some(ItemKey::Object(guid)), |item| {
+                    let name = item.name();
+                    let quality = item.quality();
+                    quality.map(|q| (name, item.texture(), item.inventory_type(), q))
+                })
+                .unwrap_or(snapshot);
+                read.map(|(name, texture, inventory_type, quality)| {
+                    let quality = match inventory_type {
+                        0 => -1,
+                        _ => i64::from(quality),
+                    };
+                    (name, texture, count, quality)
+                })
+            });
+            let Some((name, texture, count, quality)) = item else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
                     Value::Nil,
@@ -947,13 +977,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Integer(0),
                 ]));
             };
-            let name = cursor::item_link_name(it.link.as_deref());
-            let name = if name.is_empty() {
-                Value::Nil
-            } else {
-                Value::String(lua.create_string(&name)?)
+            let name = match name {
+                Some(n) => Value::String(lua.create_string(&n)?),
+                None => Value::Nil,
             };
-            let texture = match &it.texture {
+            let texture = match &texture {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };

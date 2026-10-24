@@ -1526,6 +1526,7 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
     // inventory slot 20.
     let mut inv: benilla_ui::script::InventorySlots = Default::default();
     inv[20] = Some(benilla_ui::script::InvSlotView {
+        roll: Default::default(),
         uncached_link: None,
         duration_ms: None,
         field_duration: 0,

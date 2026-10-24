@@ -29,6 +29,19 @@ pub trait CallHost {
     /// lines) is returned as the tail.
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail>;
 
+    /// Hand `read` the item `key` names, as a getter reads it now: its record off the item cache
+    /// and, for an object, its descriptor, each field derived as it is asked for. Whether there was
+    /// one to hand: `false` for an object the engine does not hold, and from a host that reads
+    /// none. `read` runs no Lua.
+    fn read_item(
+        &mut self,
+        key: super::ItemKey,
+        read: &mut dyn FnMut(&dyn super::ItemRead),
+    ) -> bool {
+        let _ = (key, read);
+        false
+    }
+
     /// Hand `read` the unit object the engine holds under `guid`, as a getter reads it now: its
     /// descriptor's own fields, each derived as it is asked for, as of the place the getter runs
     /// (`UnitHealth` reads the object, `0x5174d0`). Whether there was one to hand: `false` when it

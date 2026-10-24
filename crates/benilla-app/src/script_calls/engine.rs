@@ -159,6 +159,10 @@ impl RecordAsks<'_> {
                     let _ = names.resolve_player(guid, Ask::Event(&self.net));
                 }
             }
+            // The house verbs keep its wait ([`crate::ui_auction::AuctionVerbs::wait_for_name`]).
+            RecordAsk::AuctionName { guid, list } => {
+                debug!("record ask: auction name {guid:#x} for list {list} has no house here");
+            }
         }
     }
 }

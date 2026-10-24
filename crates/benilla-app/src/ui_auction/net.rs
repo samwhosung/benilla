@@ -158,6 +158,9 @@ pub(crate) enum HouseStep {
 pub(crate) struct HouseLane {
     steps: std::collections::VecDeque<(crate::lanes::Stamp, HouseStep)>,
     waits: Vec<(u64, usize)>,
+    /// The VM session the waits' getters ran in ([`UiScript::session`]): a new VM's first wait
+    /// drops an old one's, whose callbacks went with its state.
+    waits_session: u64,
 }
 
 impl HouseLane {
@@ -182,10 +185,25 @@ impl HouseLane {
             .flatten()
     }
 
-    /// Keep a name's wait for `list`, once per name and list (`0x55f080`'s dedupe flag 1).
-    pub(super) fn wait_for_name(&mut self, guid: u64, list: usize) {
+    /// Keep a name's wait for `list`, made by a getter in VM session `session`, once per name and
+    /// list (`0x55f080`'s dedupe flag 1).
+    pub(super) fn wait_for_name(&mut self, guid: u64, list: usize, session: u64) {
+        self.keep_session(session);
         if !self.waits.contains(&(guid, list)) {
             self.waits.push((guid, list));
+        }
+    }
+
+    /// Whether the waits were made in a VM session other than `session`.
+    pub(super) fn stale(&self, session: u64) -> bool {
+        self.waits_session != session
+    }
+
+    /// Drop the waits made in any VM session but `session`.
+    pub(super) fn keep_session(&mut self, session: u64) {
+        if self.waits_session != session {
+            self.waits_session = session;
+            self.waits.clear();
         }
     }
 
@@ -206,7 +224,7 @@ impl HouseLane {
     }
 
     /// Whether `named` now answers some wait's name.
-    pub(super) fn any_named(&self, named: impl Fn(u64) -> bool) -> bool {
+    pub(crate) fn any_named(&self, named: impl Fn(u64) -> bool) -> bool {
         self.waits.iter().any(|&(g, _)| named(g))
     }
 
@@ -226,10 +244,6 @@ impl HouseLane {
     /// Everything waiting, dropped: the session's end, or a new VM's for the waits.
     pub(super) fn clear(&mut self) {
         self.steps.clear();
-        self.waits.clear();
-    }
-
-    pub(super) fn clear_waits(&mut self) {
         self.waits.clear();
     }
 

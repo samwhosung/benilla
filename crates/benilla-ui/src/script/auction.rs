@@ -466,11 +466,15 @@ impl super::UiScript {
         })
     }
 
-    /// The guids `GetAuctionItemInfo` read and missed in the name cache since the last take, each
-    /// with the list whose callback it registers, in read order, for the app to ask
-    /// (`0x4cf167`, `0x4cf1c8`).
+    /// The names `GetAuctionItemInfo` missed, each with the list whose callback it registers, as a
+    /// harness's VM kept them ([`Self::keep_calls`]), in read order (`0x4cf167`, `0x4cf1c8`).
     pub fn take_auction_name_asks(&mut self) -> Vec<(u64, usize)> {
-        std::mem::take(&mut self.model_mut().auction_name_asks)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::AuctionName { guid, list }) => {
+                Some((*guid, *list))
+            }
+            _ => None,
+        })
     }
 
     /// `0x4cdfe0` as a result or notice runs it (`0x4cc658`, `0x4cd173`, `0x4cd468`,
@@ -851,18 +855,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 super::item_stats::item_usable_by_id(&model, r.item_id)
             };
-            // A name the cache misses is asked with the list's callback, the bidder's on an owned
-            // row first (`0x4cf167`), then the seller's (`0x4cf1c8`); nothing else asks a name.
+            // A name the cache misses is asked inside the call with the list's callback, the
+            // bidder's on an owned row first (`0x4cf167`), then the seller's (`0x4cf1c8`); nothing
+            // else asks a name.
             if let Some(list) = list_index(&kind) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let bidder_missed = r.named_bidder != 0 && r.high_bidder == AuctionHighBidder::Nil;
                 let seller_missed = r.owner_guid != 0 && r.owner.is_none();
                 for (missed, guid) in [
                     (bidder_missed, r.named_bidder),
                     (seller_missed, r.owner_guid),
                 ] {
-                    if missed && !model.auction_name_asks.contains(&(guid, list)) {
-                        model.auction_name_asks.push((guid, list));
+                    if missed {
+                        super::calls::ask(lua, super::RecordAsk::AuctionName { guid, list })?;
                     }
                 }
             }
@@ -2693,16 +2697,15 @@ mod tests {
         rows[2].owner_guid = 0x56;
         rows[2].quality = None;
         s.set_auction(state);
+        s.keep_calls();
         s.run(
             r#"for i = 1, 3 do GetAuctionItemInfo("owner", i) end GetAuctionItemInfo("owner", 1)"#,
         )
         .unwrap();
-        assert_eq!(s.take_auction_name_asks(), [(0x99, OWNER), (0x77, OWNER)]);
-        s.run(r#"GetAuctionItemInfo("owner", 1)"#).unwrap();
+        // Every read asks; the host keeps each name and list once.
         assert_eq!(
             s.take_auction_name_asks(),
-            [(0x99, OWNER), (0x77, OWNER)],
-            "every read asks"
+            [(0x99, OWNER), (0x77, OWNER), (0x99, OWNER), (0x77, OWNER)]
         );
         assert!(s.take_auction_name_asks().is_empty());
     }

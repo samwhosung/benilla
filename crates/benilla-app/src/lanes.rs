@@ -428,6 +428,8 @@ mod group_view_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
+mod item_live_tests;
+#[cfg(test)]
 mod item_tests;
 #[cfg(test)]
 mod packet_signal_tests;

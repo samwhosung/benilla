@@ -647,25 +647,43 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 v
             };
-            let Some(v) = view else {
+            // The record as the cache holds it now, the snapshot's copy only with no host lent.
+            // The base name: the suffix is the VM's own `ITEM_SUFFIX_TEMPLATE` fill, below.
+            let key = (item_id != 0).then_some(super::ItemKey::Record {
+                entry: item_id,
+                roll: super::ItemRoll::default(),
+            });
+            let read = |r: &dyn super::ItemRead| {
+                Some((
+                    r.name()?,
+                    r.quality()?,
+                    r.info()?,
+                    r.inventory_type(),
+                    r.texture(),
+                ))
+            };
+            let live = super::item_read::read_live(lua, key, read);
+            let Some((base, quality, info, inventory_type, icon)) =
+                live.unwrap_or_else(|| view.as_ref().and_then(|v| read(v)))
+            else {
                 return Ok(MultiValue::new());
             };
-            let name = suffixed_name(lua, &v.name, random_property);
+            let name = suffixed_name(lua, &base, random_property);
             let str_or_empty = |s: &Option<String>| s.clone().unwrap_or_default();
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&name)?),
                 Value::String(lua.create_string(format!(
                     "item:{item_id}:{enchant}:{random_property}:{suffix}"
                 ))?),
-                Value::Integer(i64::from(v.quality)),
-                Value::Integer(i64::from(v.required_level)),
-                Value::String(lua.create_string(str_or_empty(&v.item_type))?),
-                Value::String(lua.create_string(str_or_empty(&v.item_sub_type))?),
-                Value::Integer(i64::from(v.stackable)),
-                Value::String(lua.create_string(equip_loc_token(v.inventory_type))?),
+                Value::Integer(i64::from(quality)),
+                Value::Integer(i64::from(info.required_level)),
+                Value::String(lua.create_string(str_or_empty(&info.item_type))?),
+                Value::String(lua.create_string(str_or_empty(&info.item_sub_type))?),
+                Value::Integer(i64::from(info.stackable)),
+                Value::String(lua.create_string(equip_loc_token(inventory_type))?),
                 // Deviation: nil for a display row with no icon, where the reference answers the
                 // unloadable `Interface\Icons\`, because `SetTexture` shows no icon for either.
-                match &v.icon {
+                match &icon {
                     Some(icon) => Value::String(lua.create_string(icon)?),
                     None => Value::Nil,
                 },

@@ -23,6 +23,7 @@ mod calls;
 mod drain;
 mod equip_error;
 pub(crate) mod feed;
+pub(crate) mod live;
 mod lock_openers;
 pub(crate) mod locks;
 mod net;
@@ -804,19 +805,6 @@ pub(super) fn item_link_full(
     )
 }
 
-/// `CGItem_C::GetFullName` (`0x5d8bc0`): the item's name with its random property's suffix
-/// (`0x5d8b00`), or with none when `ITEM_FIELD_FLAGS` has the wrapped bit `0x8`.
-pub(crate) fn object_name(
-    fields: &ObjectFields,
-    template: &benilla_protocol::messages::ItemInfo,
-    rolls: crate::items::RollCatalogs,
-) -> String {
-    rolls.name(
-        &template.name,
-        object_link_numbers(fields, Some(template)).1,
-    )
-}
-
 /// The three numbers `0x52ae00` passes `0x52adb0` for an item object: the permanent enchant
 /// (`[block+0x40]`, `0x52aeb2`), 0 for a charter, whose template flag `0x2000` marks slot 0 as its
 /// petition id (`0x52aeaa`); the random property id (`+0x98`); and the property seed (`+0x94`). A
@@ -843,37 +831,6 @@ pub(crate) fn object_link_numbers(
         fields.item_random_properties_id(),
         fields.item_property_seed(),
     )
-}
-
-/// `0x52ae00`, the link of an item object: its record's quality and [`object_name`], with
-/// [`object_link_numbers`]. Every link the client makes of an item it holds comes from here: the
-/// bag slot's (`GetContainerItemLink`, `0x4f997f`), the player's own equipped slot's
-/// (`GetInventoryItemLink`, `0x4c8ce2`) and our own trade slot's (`GetTradePlayerItemLink`,
-/// `0x4c06bc`). With no record the link is white (`0x52aec5`) and nameless (`0x5d8b40`), and the
-/// record's flags read 0 (`0x5da2a0`), so the enchant goes in.
-pub(crate) fn object_link(
-    fields: &ObjectFields,
-    template: Option<&benilla_protocol::messages::ItemInfo>,
-    rolls: crate::items::RollCatalogs,
-) -> String {
-    let entry = fields.object_entry().unwrap_or(0);
-    match template {
-        Some(t) => {
-            let (enchant, roll, seed) = object_link_numbers(fields, Some(t));
-            item_link_full(
-                entry,
-                enchant,
-                roll,
-                seed,
-                &object_name(fields, t, rolls),
-                t.quality,
-            )
-        }
-        None => {
-            let (enchant, roll, seed) = object_link_numbers(fields, None);
-            item_link_full(entry, enchant, roll, seed, "", 1)
-        }
-    }
 }
 
 /// [`item_link_full`] with zero enchant, random-property and suffix ids, for a caller with no roll

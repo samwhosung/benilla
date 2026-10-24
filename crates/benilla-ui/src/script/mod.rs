@@ -119,6 +119,7 @@ mod input_verbs;
 mod inspect;
 mod inventory_verbs;
 mod item_calls;
+mod item_read;
 mod item_stats;
 mod item_text;
 pub mod keybind;
@@ -299,6 +300,7 @@ pub use guild::{
 pub use host::{CallHost, CallTail, Deferring};
 pub use input_verbs::{BindingInput, FiredInput, HeldInput, LookCall, PostureCall, ViewAxis};
 pub use item_calls::ItemCall;
+pub use item_read::{ItemInfoFields, ItemKey, ItemRead, ItemRoll};
 pub use lfg::LfgDungeon;
 pub use lottery::UnservedSend;
 pub use modelframe::{CharacterPaneFrame, ModelPaneFrame, ModelWanted};

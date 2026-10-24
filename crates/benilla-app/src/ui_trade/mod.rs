@@ -8,7 +8,9 @@
 use benilla_protocol::messages::{TradeItem, TradeStatusExtended, TRADE_SLOT_COUNT};
 use bevy::prelude::*;
 
-use benilla_ui::script::{ScriptValue, TradeSideState, TradeSlotItem, TradeState, UiScript};
+use benilla_ui::script::{
+    ItemRead, ScriptValue, TradeSideState, TradeSlotItem, TradeState, UiScript,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -747,31 +749,24 @@ fn resolve_slot(
     names: &NameCache,
     rolls: crate::items::RollCatalogs,
 ) -> TradeSlotItem {
-    let template = items.template(item.entry, 0, Ask::Read);
-    let name = template.map(|t| rolls.name(&t.name, item.random_prop_id));
-    let quality = template.map(|t| t.quality);
-    let inventory_type = template.map_or(0, |t| t.inventory_type);
-    // The icon comes from the template's display, not the wire's (`0x5d88b0([rec+0x18])`,
-    // `0x4c01f0`; `0x5d8af0` on our side, `0x4c0529`); a cached template whose display has no
-    // icon falls to the question mark, and an unanswered one leaves it to the getter.
-    let texture = template.map(|t| {
-        icons
-            .and_then(|i| i.catalog.get(t.display_info_id))
-            .and_then(|d| d.icon.clone())
+    // What the getters read of it as they run, read here the same way.
+    let roll = benilla_ui::script::ItemRoll {
+        enchant: item.perm_enchant,
+        property: item.random_prop_id,
+        suffix_factor: item.suffix_factor,
+    };
+    let live = crate::ui_items::live::LiveItem::record(item.entry, roll, items, icons, rolls);
+    let name = live.name();
+    let quality = live.quality();
+    let inventory_type = live.inventory_type();
+    // A cached template whose display has no icon falls to the question mark, and an unanswered
+    // one leaves it to the getter.
+    let texture = live.cached().then(|| {
+        live.texture()
             .unwrap_or_else(|| crate::ui_action::MISSING_ITEM_ICON.to_string())
     });
     // Nil until the template answers: the link embeds the name and the quality colour.
-    let link = match (name.as_deref(), quality) {
-        (Some(n), Some(q)) => Some(crate::ui_items::item_link_full(
-            item.entry,
-            item.perm_enchant,
-            item.random_prop_id,
-            item.suffix_factor,
-            n,
-            q,
-        )),
-        _ => None,
-    };
+    let link = live.link();
     // Only a wrapped gift names its giver (`0x52e288`, `0x52e29d`). Only read: the slot tooltip's
     // build asks it (`crate::ui_items::feed::ask_item_build_lookups`).
     let gift_creator = (item.wrapped && item.gift_creator != 0)
@@ -803,6 +798,7 @@ fn resolve_slot(
         charges: item.charges,
         durability: (item.durability, item.max_durability),
         link,
+        roll,
     }
 }
 

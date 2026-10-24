@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use benilla_protocol::ItemInfo;
-use benilla_ui::script::{ContainerSlot, ContainerState, UiScript};
+use benilla_ui::script::{ContainerSlot, ContainerState, ItemRead, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -198,12 +198,17 @@ fn template_view(
             .filter_map(|s| spell_name(s.spell_id).map(|n| (n, s.charges)))
             .collect(),
         hide_subclass: sub_classes.is_some_and(|c| c.hides_name(t.class, t.subclass)),
-        // `GetItemInfo`'s type pair: the subclass is `name()`, verbose name first (`0x48e311`),
-        // so a one-handed sword is "One-Handed Swords" to an addon and "Sword" on the tooltip.
-        item_type: classes.and_then(|c| c.name(t.class)).map(str::to_string),
-        item_sub_type: sub_classes
-            .and_then(|c| c.name(t.class, t.subclass))
-            .map(str::to_string),
+        // `GetItemInfo`'s type pair, as it reads them as it runs.
+        item_type: super::live::ClassNames {
+            classes,
+            sub_classes,
+        }
+        .item_type(t),
+        item_sub_type: super::live::ClassNames {
+            classes,
+            sub_classes,
+        }
+        .item_sub_type(t),
         // The tooltip's spelling: the display name alone.
         sub_class_display: sub_classes
             .and_then(|c| c.display_name(t.class, t.subclass))
@@ -910,18 +915,14 @@ fn resolve_slot(
     // NULL), so `GetContainerItemInfo` pushes nothing (`0x4f96dc`, `0x4f96e0`, `0x4f9810`) and
     // the slot reads empty.
     let fields = objects.object(guid)?;
+    // What the getters read of it as they run, read here the same way.
+    let live = super::live::LiveItem::object(fields, guid, items, icons, rolls);
     let (entry, count, durability, readable, creator, flags, already_bound, enchant_lines) = (
         fields.object_entry().unwrap_or(0),
-        fields.item_stack_count().unwrap_or(1),
-        // Max 0 is indestructible: no line.
-        fields
-            .item_durability()
-            .zip(fields.item_max_durability())
-            .filter(|&(_, max)| max > 0),
-        // `GetContainerItemInfo`'s readable flag (`0x4f97ba`): the cached template's PageText
-        // (`0x5d9e10`), 0 while uncached, else the instance's letter text (`0x4f97c1`).
-        crate::items::record_page_text(items, fields.object_entry().unwrap_or(0), guid) != 0
-            || fields.item_text_id().is_some_and(|id| id != 0),
+        live.stack_count().unwrap_or(1),
+        live.durability(),
+        // `GetContainerItemInfo`'s readable flag (`0x4f97ba`).
+        live.readable(),
         // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
         // name query answers. The tooltip build asks it ([`ask_item_build_lookups`]).
         fields
@@ -974,7 +975,7 @@ fn resolve_slot(
         return Some(ContainerSlot {
             durability: None,
             guid,
-            uncached_link: Some(crate::ui_items::object_link(fields, None, rolls)),
+            uncached_link: live.uncached_link(),
             item_id: entry,
             count,
             readable,
@@ -994,7 +995,7 @@ fn resolve_slot(
     Some(ContainerSlot {
         uncached_link: None,
         use_fork: super::drain::use_fork(&t, flags, fields.item_text_id().unwrap_or(0)),
-        item_class: Some(t.class),
+        item_class: live.class(),
         bonding: t.bonding,
         use_spell: t.use_spell.map_or(0, |u| u.spell_id),
         // A charter's guild name and master, keyed by the petition id the server puts in
@@ -1011,17 +1012,15 @@ fn resolve_slot(
                 })
             })
             .flatten(),
-        texture: icons
-            .and_then(|i| i.catalog.get(t.display_info_id))
-            .and_then(|d| d.icon.clone()),
+        texture: live.texture(),
         count,
         durability,
-        quality: Some(t.quality),
-        inventory_type: t.inventory_type,
+        quality: live.quality(),
+        inventory_type: live.inventory_type(),
         item_id: entry,
         // `GetContainerItemLink` links the object (`0x4f997f` → `0x52ae00`); the tooltip reads its
         // name back off it.
-        link: Some(crate::ui_items::object_link(fields, Some(&t), rolls)),
+        link: live.link(),
         guid,
         readable,
         creator,

@@ -11,6 +11,7 @@
 //! re-asks the server.
 
 use benilla_protocol::messages::{mail_error, mail_message_type, MailListEntry};
+use benilla_ui::script::ItemRead;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -387,20 +388,22 @@ fn resolve_row(
     let (item_id, item_roll, item_count, item_name, item_texture, item_quality) = match &entry.item
     {
         Some(att) => {
-            let template = items.template(att.entry, 0, ask);
-            let name = template.map(|t| rolls.name(&t.name, att.random_prop_id));
-            let quality = template.map(|t| t.quality);
-            let display_id = template.map(|t| t.display_info_id).unwrap_or(0);
-            let texture = icons
-                .and_then(|i| i.catalog.get(display_id))
-                .and_then(|d| d.icon.clone());
+            // The row's lookup, whose miss asks; then what `GetInboxItem` reads of the record as
+            // it runs, read the same way.
+            let _ = items.template(att.entry, 0, ask);
+            let roll = benilla_ui::script::ItemRoll {
+                property: att.random_prop_id,
+                ..Default::default()
+            };
+            let live =
+                crate::ui_items::live::LiveItem::record(att.entry, roll, items, icons, rolls);
             (
                 att.entry,
                 att.random_prop_id,
                 u32::from(att.count),
-                name,
-                texture,
-                quality,
+                live.name(),
+                live.texture(),
+                live.quality(),
             )
         }
         None => (0, 0, 0, None, None, None),

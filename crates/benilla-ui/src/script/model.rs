@@ -909,9 +909,6 @@ pub(crate) struct Model {
     pub(crate) auction_item_classes: Vec<auction::AuctionCategory>,
     pub(crate) auction_selected: [u32; 3],
     pub(crate) auction_can_query: bool,
-    /// The guids `GetAuctionItemInfo` missed in the name cache, each with the list whose callback
-    /// it registers, for the app to ask (`0x4cf167`, `0x4cf1c8`).
-    pub(crate) auction_name_asks: Vec<(u64, usize)>,
     /// The sell slot's item, resolved to its guid when `StartAuction` fires.
     pub(crate) auction_sell_item: Option<cursor::CursorItem>,
 
@@ -1624,7 +1621,6 @@ impl Model {
             auction_item_classes: Vec::new(),
             auction_selected: [0; 3],
             auction_can_query: true,
-            auction_name_asks: Vec::new(),
             auction_sell_item: None,
             trade: None,
             trade_partner: 0,

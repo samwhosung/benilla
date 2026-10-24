@@ -54,6 +54,7 @@ fn item(item_id: u32, name: &str, count: u32, quality: u32) -> TradeSlotItem {
         charges: 0,
         durability: (0, 0),
         link: Some(format!("|cffffffff|Hitem:{item_id}:0:0:0|h[{name}]|h|r")),
+        roll: Default::default(),
     }
 }
 

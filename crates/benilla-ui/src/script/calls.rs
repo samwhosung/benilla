@@ -321,6 +321,10 @@ pub enum RecordAsk {
     /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
     /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
     Summoner,
+    /// `GetAuctionItemInfo` on a row whose bidder (`0x4cf167`) or seller (`0x4cf1c8`) the name
+    /// cache misses: the player-name cache by guid, with the list's callback (`0x4cf290`,
+    /// `0x4cf2b0`, `0x4cf2d0`), kept once per name and list (`0x55f080`'s dedupe flag 1).
+    AuctionName { guid: u64, list: usize },
 }
 
 /// The owner id a profession or trainer getter's item lookup passes: `0xb0000000` over a spell id

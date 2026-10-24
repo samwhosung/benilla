@@ -53,6 +53,7 @@ fn combat_stats() -> UnitCombatStats {
 fn inventory_with_head_item() -> InventorySlots {
     let mut slots: InventorySlots = Default::default();
     slots[1] = Some(InvSlotView {
+        roll: Default::default(),
         uncached_link: None,
         duration_ms: None,
         field_duration: 0,
