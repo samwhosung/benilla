@@ -52,11 +52,7 @@ impl Plugin for TransportPlugin {
                 // deck's previous-frame box, above its rider after one long frame. It writes no
                 // tick resource, so a second run is idempotent; it sweeps every collider.
                 (
-                    arm_transports,
-                    attach_transport_volumes,
-                    reseek_ridden_transport_at_worldport,
-                    tick_transports,
-                    watch_ridden_transport_map,
+                    deck_ticks(),
                     republish_moved_collider_aabbs::<Collider>,
                     compose_riders,
                     ground_deck_riders,
@@ -75,6 +71,18 @@ impl Plugin for TransportPlugin {
                 stamp_ride_frames.after(crate::player::PlayerControlSet),
             );
     }
+}
+
+/// The systems that arm the transports and pose their decks for this frame, in order.
+fn deck_ticks() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    (
+        arm_transports,
+        attach_transport_volumes,
+        reseek_ridden_transport_at_worldport,
+        tick_transports,
+        watch_ridden_transport_map,
+    )
+        .chain()
 }
 
 /// The create-block anchor: the server's path-progress ms and the local instant it arrived,
@@ -805,6 +813,116 @@ mod tests {
         let ship = TransportVolume::Planes(vec![[0.0, 0.0, 1.0, -10.0]].into());
         assert!(ship.contains([500.0, 0.0, 10.0]));
         assert!(!ship.contains([0.0, 0.0, 10.5]));
+    }
+
+    /// A ship path with no data: two legs of five nodes 100 yd apart along +x, the first on
+    /// `maps.0` from x = 0, the second on `maps.1` from x = 1000, split after a flag 1 node when
+    /// the maps are one.
+    fn two_legs(maps: (u32, u32)) -> TransportTimetable {
+        let node = |id: u32, map_id: u32, x: f32, flags: u32| benilla_formats::TaxiPathNode {
+            id,
+            path_id: 1,
+            node_index: id,
+            map_id,
+            pos: [x, 0.0, 0.0],
+            flags,
+            delay: 0,
+        };
+        let nodes: Vec<_> = (0..5)
+            .map(|i| node(i, maps.0, i as f32 * 100.0, u32::from(i == 4)))
+            .chain((0..5).map(|i| node(5 + i, maps.1, 1000.0 + i as f32 * 100.0, 0)))
+            .collect();
+        TransportTimetable::build(&nodes, 30, 1).expect("two legs build")
+    }
+
+    fn taxi(t: TransportTimetable) -> Transport {
+        Transport {
+            drive: Drive::Taxi(Arc::new(t)),
+            was_moving: false,
+        }
+    }
+
+    /// The deck systems alone, on `map`, with us riding `deck` when it is given.
+    fn deck_app(map: u32) -> App {
+        let mut app = App::new();
+        app.insert_resource(CurrentMap(map))
+            .init_resource::<Timetables>()
+            .init_resource::<GameObjectTemplates>()
+            .init_resource::<Assets<benilla_assets::WmoModel>>()
+            .init_resource::<Assets<benilla_assets::M2Model>>()
+            .init_resource::<crate::player::Player>()
+            .add_message::<crate::net::WorldportMessage>()
+            .add_systems(Update, deck_ticks());
+        app
+    }
+
+    fn ride(app: &mut App, deck: Entity) {
+        app.insert_resource(crate::player::Player::riding_for_test(
+            deck,
+            0xF120_0000_0000_0001,
+        ));
+    }
+
+    /// The reference keeps no transport across `SMSG_NEW_WORLD` and has nothing that moves a
+    /// clock: only the constructor writes the anchor (`0x5f7080`). A transfer we ride leaves the
+    /// clock where it was, whatever map the worldport names.
+    #[test]
+    fn a_worldport_leaves_the_ridden_transports_clock_alone() {
+        let mut app = deck_app(1);
+        let at = Instant::now();
+        let deck = app
+            .world_mut()
+            .spawn((
+                Guid(0xF120_0000_0000_0001),
+                taxi(two_legs((1, 0))),
+                TransportAnchor {
+                    progress_ms: 1000,
+                    at,
+                },
+                Transform::default(),
+                Visibility::Hidden,
+            ))
+            .id();
+        ride(&mut app, deck);
+        app.update();
+        app.world_mut().write_message(crate::net::WorldportMessage {
+            map_id: 0,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: true,
+            transport_entry: Some(176495),
+        });
+        app.update();
+        let anchor = app.world().get::<TransportAnchor>(deck).unwrap();
+        assert_eq!((anchor.progress_ms, anchor.at), (1000, at));
+    }
+
+    /// `0x5f5274`: a leg on another map ends the tick, so the ship keeps its last pose and stays
+    /// in view; nothing hides it.
+    #[test]
+    fn a_ship_on_another_maps_leg_stays_where_it_was() {
+        let mut app = deck_app(0);
+        let pose = Transform::from_xyz(1.0, 2.0, 3.0);
+        let deck = app
+            .world_mut()
+            .spawn((
+                Guid(0xF120_0000_0000_0001),
+                taxi(two_legs((1, 0))),
+                TransportAnchor {
+                    progress_ms: 1000,
+                    at: Instant::now(),
+                },
+                pose,
+                Visibility::Hidden,
+            ))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<Transform>(deck), Some(&pose), "not moved");
+        assert_eq!(
+            app.world().get::<Visibility>(deck),
+            Some(&Visibility::Inherited),
+            "in view"
+        );
     }
 
     /// The Ratchet–Booty Bay ferry's real timetable (taxi path 241): the builder can truncate a

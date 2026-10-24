@@ -535,6 +535,21 @@ pub(super) struct PendingKnockback {
 
 impl Player {
     /// A player whose last streamed movement word is `flags`, for the gates that read it.
+    /// Riding `entity`, placed on its deck at its origin, for other modules' tests.
+    #[cfg(test)]
+    pub(crate) fn riding_for_test(entity: Entity, guid: u64) -> Self {
+        Self {
+            ride: Some(PlayerRide {
+                entity,
+                guid,
+                local_pos: Vec3::ZERO,
+                boat_yaw: 0.0,
+                placed: true,
+            }),
+            ..Self::default()
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_move_flags(flags: u32) -> Self {
         Self {
