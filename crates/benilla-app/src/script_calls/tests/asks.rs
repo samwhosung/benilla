@@ -18,6 +18,7 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
                 ClientCommand::NameQuery { guid } => format!("name {guid:#x}"),
                 ClientCommand::ItemQuery { entry, .. } => format!("item {entry}"),
                 ClientCommand::GuildQuery { guild_id } => format!("guild {guild_id}"),
+                ClientCommand::CreatureQuery { entry, .. } => format!("creature {entry}"),
                 _ => return None,
             })
         })
@@ -393,4 +394,54 @@ fn the_trade_skill_getters_ask_a_missed_record_inside_their_calls() {
          for i = 1, n do GetTradeSkillTools(i) GetTradeSkillReagentInfo(i, 1) end",
     );
     assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 5956"]);
+}
+
+/// The quest log's lookups with a callback and no dedupe: the leaderboard's creature name
+/// (`0x4e044c`, callback `0x4e07d0`) and item (`0x4e05d1`, callback `0x4e0830`), and the reward
+/// getter's item (`0x4e0b9e`). Each query goes out inside the call, once while it is in flight.
+#[test]
+fn the_quest_log_getters_ask_a_missed_record_inside_their_calls() {
+    use benilla_ui::script::{QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS};
+    let (mut app, rx) = client();
+    let mut record = QuestRecordView {
+        title: "Pelts".into(),
+        level: 1,
+        zone_or_sort: 12,
+        header: "Elwynn Forest".into(),
+        rewards: vec![(2589, 1)],
+        ..Default::default()
+    };
+    record.objectives[0] = QuestObjectiveView {
+        creature_or_go: 40,
+        required_count: 3,
+        ..Default::default()
+    };
+    record.objectives[1] = QuestObjectiveView {
+        item_id: 900,
+        item_count: 5,
+        ..Default::default()
+    };
+    let mut slots = [QuestSlotView::default(); QUEST_LOG_SLOTS];
+    slots[0] = QuestSlotView {
+        quest_id: 50,
+        counters: [1, 0, 0, 0],
+        state: 0,
+        timer: 0,
+    };
+    {
+        let mut s = vm(&mut app);
+        s.seed_quest_record(50, record);
+        s.set_quest_log_player(true);
+        s.quest_log_changed(slots);
+    }
+    eval::<()>(
+        &mut app,
+        "GetQuestLogLeaderBoard(1, 2) RandomRoll(1, 2) GetQuestLogLeaderBoard(2, 2) \
+         RandomRoll(3, 4) SelectQuestLogEntry(2) GetQuestLogRewardInfo(1) \
+         GetQuestLogLeaderBoard(1, 2) GetQuestLogLeaderBoard(2, 2)",
+    );
+    assert_eq!(
+        sent(&rx),
+        ["creature 40", "roll 1", "item 900", "roll 3", "item 2589"]
+    );
 }
