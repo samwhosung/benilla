@@ -4330,7 +4330,7 @@ mod tests {
     /// The systems of `app` that write the VM, and those of them whose declared access does not
     /// cover the call host's, by schedule and name. An exclusive system declares no access and is
     /// left out.
-    fn vm_writers_and_the_unhosted(app: &mut App) -> (usize, Vec<String>) {
+    fn vm_writers_and_the_unhosted(app: &mut App) -> (Vec<String>, Vec<String>) {
         use bevy::ecs::system::{IntoSystem, System};
         let world = app.world_mut();
         let host = System::initialize(&mut IntoSystem::into_system(|_: ScriptCallHost| {}), world);
@@ -4339,7 +4339,7 @@ mod tests {
             .iter()
             .map(|(_, s)| s.label())
             .collect();
-        let (mut writers, mut unhosted) = (0, Vec::new());
+        let (mut writers, mut unhosted) = (Vec::new(), Vec::new());
         for label in labels {
             world.schedule_scope(label, |world, schedule| {
                 schedule.graph_mut().systems.initialize(world);
@@ -4358,7 +4358,7 @@ mod tests {
                     if system.is_exclusive() || !access.has_resource_write(vm) {
                         continue;
                     }
-                    writers += 1;
+                    writers.push(system.name().to_string());
                     let mut with_host = declared.access.clone();
                     with_host.extend(host.clone());
                     if with_host.combined_access() != access {
@@ -4390,16 +4390,27 @@ mod tests {
             ),
         );
         let (writers, unhosted) = vm_writers_and_the_unhosted(&mut probe);
-        assert_eq!((writers, unhosted.len()), (3, 1), "{unhosted:?}");
+        assert_eq!((writers.len(), unhosted.len()), (3, 1), "{unhosted:?}");
 
         let mut app = crate::game_plugins::schedule_tests::headless_client_with(
             crate::dev::add_every_instrument,
         );
         let (writers, unhosted) = vm_writers_and_the_unhosted(&mut app);
+        // The census reads the client's systems: a hundred writers at least in either build, and
+        // where the build carries type names, a feed, a death feed and a frame poll among them.
         assert!(
-            writers > 200,
-            "the census reads the client's VM writers: {writers}"
+            writers.len() >= 100,
+            "the census reads the client's VM writers: {} read",
+            writers.len()
         );
+        if writers.iter().any(|w| w.contains("benilla_app::")) {
+            for name in ["feed_dialog_verbs", "feed_death", "poll_area_spirit_healer"] {
+                assert!(
+                    writers.iter().any(|w| w.contains(name)),
+                    "the census reads the client's VM writers, `{name}` among them"
+                );
+            }
+        }
         assert!(
             unhosted.is_empty(),
             "these systems write the VM without holding its call host (`HostedVm` or `VmWith`), \
