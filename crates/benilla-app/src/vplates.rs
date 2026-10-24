@@ -4,10 +4,11 @@
 //!
 //! - Toggles: the `[0xc4da34]` bitmask, bit 0 enemy and bit 3 friendly, both off at boot.
 //! - Gate (`0x60f600`): never the camera's unit (`camera+0x88`, `0x60f68c`) or a `NOT_SELECTABLE`
-//!   one; enemy or friendly by `CanAttack` from the active player (`0x606980`), and a player
-//!   subject must also pass `CanCooperate` (equal faction-group masks); no friendly totem
-//!   (`0x60f757`); 20 yd from the camera's unit (`0x60f7b8`); no occlusion; a unit not projected
-//!   into view loses its plate.
+//!   one; only a unit the last render drew (`0x6704c0` at `0x60f649`, [`SceneDrawn`]); enemy or
+//!   friendly by `CanAttack` from the active player (`0x606980`), and a player subject must also
+//!   pass `CanCooperate` (equal faction-group masks); no friendly totem (`0x60f757`); 20 yd from
+//!   the camera's unit (`0x60f7b8`), and none at all when the camera's object is no unit
+//!   (`0x60f77c`); a unit not projected into view loses its plate.
 //! - Anchor: the overhead head point (`0x608640`) plus 2/3 yd (`[0x80abfc]`), projected every
 //!   frame (`0x483ee0`), the plate's top centre on it (`0x509ec0`), sized in gx units of the
 //!   screen diagonal (`0x41ad10`), outside uiScale. Deviation: the basis is damped past
@@ -30,7 +31,7 @@ use benilla_ui::script::{
     unit_is_grey, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
 };
 
-use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
+use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback, SceneDrawn};
 use crate::names::NameCache;
 use crate::net::{Embodied, Guid, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
@@ -325,9 +326,12 @@ struct PlateWorld<'w, 's> {
         ),
     >,
     self_q: Query<'w, 's, Option<&'static ObjectStore>, With<SelfPlayer>>,
-    // The camera's unit (`0x4818f0`, its `+0x88` resolved at `0x60f67c`): the plates' centre and
-    // the one unit that never gets one. Our own body unless we are attached to another unit.
+    // The body we control: the camera's unit (`0x4818f0`, its `+0x88`) unless far sight moved the
+    // camera onto another object ([`crate::player::ViewSubject`]).
     centre: Query<'w, 's, (Entity, &'static Transform), With<Embodied>>,
+    view: Res<'w, crate::player::ViewSubject>,
+    // Whether the last render drew each unit (`0x6704c0`).
+    drawn: SceneDrawn<'w, 's>,
     relations: crate::target::RelationWorld<'w, 's>,
     selection: Res<'w, Selection>,
     // With `selection`, the highlight's pair: the watcher's globals `[0xb4e2c8]`/`[0xb4e2d8]`.
@@ -374,12 +378,26 @@ fn drive_vplates(
         if !mode.enemies && !mode.friends {
             return PlateStep::Retire;
         }
-        // No camera unit (`0x60f685`) fails every unit at `0x60f77c`.
-        let (Ok((cam, cam_pose)), Ok(self_store), Ok((centre, centre_tf))) = (
-            world.camera.single(),
-            world.self_q.single(),
-            world.centre.single(),
-        ) else {
+        // The camera's object (`[cam+0x88]`), resolved with the unit mask alone (`0x60f677`): the
+        // far-sight object while the camera follows one (`0x5ee483`, `0x5ee4ae`, whatever its
+        // type), else our body. No camera unit (`0x60f685`), or an object that is no unit, a Far
+        // Sight dynamic object, fails every unit at `0x60f77c`.
+        let centre = match world.view.remote {
+            Some(remote) => world
+                .units
+                .get(remote.entity)
+                .ok()
+                .filter(|(_, net, ..)| matches!(net.kind, EntityKind::Unit | EntityKind::Player))
+                .map(|(e, _, _, tf, _)| (e, tf.translation)),
+            None => world
+                .centre
+                .single()
+                .ok()
+                .map(|(e, tf)| (e, tf.translation)),
+        };
+        let (Ok((cam, cam_pose)), Ok(self_store), Some((centre, centre_pos))) =
+            (world.camera.single(), world.self_q.single(), centre)
+        else {
             return PlateStep::Retire;
         };
         let Some(script) = script else {
@@ -453,8 +471,13 @@ fn drive_vplates(
             if store.is_some_and(|s| s.0.unit_is_ghost_visual()) {
                 continue;
             }
+            // The unit's scene node, drawn in the last render (`0x60f63b`-`0x60f650`): culled by
+            // the frustum, or with no model yet, it has no plate.
+            if !world.drawn.unit(entity) {
+                continue;
+            }
             // Measured from the camera's unit (`0x60f780`-`0x60f7b8`).
-            if (tf.translation - centre_tf.translation).length_squared() > MAX_DIST_SQ {
+            if (tf.translation - centre_pos).length_squared() > MAX_DIST_SQ {
                 continue;
             }
             // A CREATEDBY owner, no SUMMONEDBY owner and flags bit 9 (`0x200`): no plate in either

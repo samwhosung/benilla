@@ -59,6 +59,10 @@ use live_display::{refresh_live_display, tick_scale_ease};
 /// Terrain conform: a model flagged `GlobalModelFlags & 3 ∈ {1,3}` tilts to the ground.
 mod conform;
 
+/// Whether the last render drew a unit, the scene-node test the bubble and plate gates read.
+mod scene_drawn;
+pub(crate) use scene_drawn::SceneDrawn;
+
 /// The per-unit collision height, the `h` the swim, wade, splash and foam depths are fractions of.
 mod collision_height;
 use collision_height::stamp_collision_heights;
