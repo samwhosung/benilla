@@ -16,9 +16,11 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
             Some(match c {
                 ClientCommand::RandomRoll { min, .. } => format!("roll {min}"),
                 ClientCommand::NameQuery { guid } => format!("name {guid:#x}"),
-                ClientCommand::ItemQuery { entry, .. } => format!("item {entry}"),
+                ClientCommand::ItemQuery { entry, guid } => format!("item {entry} {guid:#x}"),
                 ClientCommand::GuildQuery { guild_id } => format!("guild {guild_id}"),
-                ClientCommand::CreatureQuery { entry, .. } => format!("creature {entry}"),
+                ClientCommand::CreatureQuery { entry, guid } => {
+                    format!("creature {entry} {guid:#x}")
+                }
                 _ => return None,
             })
         })
@@ -27,6 +29,23 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
 
 fn vm(app: &mut App) -> Mut<'_, UiScript> {
     app.world_mut().non_send_resource_mut::<UiScript>()
+}
+
+/// The active player's guid, which the ammo and cooldown lookups pass as their owner id.
+const ME: u64 = 0x2a;
+
+/// The VM's active player, as the unit feeds seat it.
+fn seat_player(app: &mut App) {
+    vm(app).set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: ME,
+        ..Default::default()
+    });
+}
+
+/// The owner id the profession and trainer lookups pass: `0xb0000000` over the row's spell id
+/// (`cdq; or edx,0xb0000000`, `0x4f75cf`-`0x4f75d2`, `0x4d9078`-`0x4d9087`, `0x4fdb8a`-`0x4fdb99`).
+fn spell_owner(spell_id: u32) -> u64 {
+    0xb000_0000_0000_0000 | u64::from(spell_id)
 }
 
 /// `UnitName` on a unit with no object reads the player-name cache by guid with a callback
@@ -68,11 +87,23 @@ fn a_trade_getter_asks_a_missed_template_inside_its_call() {
         ..Default::default()
     });
     vm(&mut app).set_trade(Some(TradeState { player, target }));
+    seat_player(&mut app);
+    // The partner rides the `npc` unit, the reference's `[0xb71728]`.
+    vm(&mut app).set_unit(
+        "npc",
+        Some(UnitState {
+            exists: true,
+            guid: 0x88,
+            ..Default::default()
+        }),
+    );
     eval::<()>(
         &mut app,
         "GetTradeTargetItemInfo(1) RandomRoll(1, 2) GetTradePlayerItemInfo(2)",
     );
-    assert_eq!(sent(&rx), ["item 4306", "roll 1", "item 2592"]);
+    // The partner's slot passes the partner (`0x4c016c`-`0x4c017c`), ours the active player
+    // (`0x4c0573`).
+    assert_eq!(sent(&rx), ["item 4306 0x88", "roll 1", "item 2592 0x2a"]);
 }
 
 /// `GetGuildInfo` on a player whose guild the cache lacks makes the lookup with its callback
@@ -168,12 +199,14 @@ fn the_ammo_getters_ask_a_missed_record_inside_their_calls() {
         ..Default::default()
     });
     vm(&mut app).set_inventory_slots(slots);
+    seat_player(&mut app);
     eval::<()>(
         &mut app,
         r#"GetInventoryItemTexture("player", 0) RandomRoll(1, 2)
            GetInventoryItemQuality("player", 0)"#,
     );
-    assert_eq!(sent(&rx), ["item 2512", "roll 1"]);
+    // The owner id is the unit's guid, the active player's (`0x4c83ad`-`0x4c83c4`).
+    assert_eq!(sent(&rx), ["item 2512 0x2a", "roll 1"]);
     assert_eq!(
         app.world_mut()
             .resource_mut::<crate::items::Items>()
@@ -210,6 +243,7 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
         ..Default::default()
     });
     vm(&mut app).set_inventory_slots(worn);
+    seat_player(&mut app);
     eval::<()>(
         &mut app,
         r#"local tip = CreateFrame("GameTooltip", "AskTip")
@@ -222,11 +256,11 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
     assert_eq!(
         sent(&rx),
         [
-            "item 6948",
+            "item 6948 0x2a",
             "roll 1",
-            "item 5976",
+            "item 5976 0x2a",
             "roll 3",
-            "item 2589",
+            "item 2589 0x2a",
             "roll 5"
         ]
     );
@@ -264,7 +298,15 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
          for i = 1, GetNumTrainerServices() do GetTrainerServiceDescription(i) end \
          for i = 1, GetNumTrainerServices() do GetTrainerServiceIcon(i) end",
     );
-    assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 2590"]);
+    let owner = spell_owner(2018);
+    assert_eq!(
+        sent(&rx),
+        [
+            format!("item 2589 {owner:#x}"),
+            "roll 1".into(),
+            format!("item 2590 {owner:#x}")
+        ]
+    );
     assert_eq!(
         app.world()
             .resource::<crate::ui_trainer::TrainerOpen>()
@@ -291,12 +333,23 @@ fn get_quest_item_info_asks_a_missed_record_inside_its_call() {
         choices: vec![pending(2590)],
         ..Default::default()
     }));
+    // The panel's source, `[0xbe0810]`, which the panel setter writes (`0x500d86`).
+    app.world_mut()
+        .resource_mut::<crate::ui_quest::QuestGiver>()
+        .npc = Some(NPC);
     eval::<()>(
         &mut app,
         r#"GetQuestItemInfo("reward", 1) RandomRoll(1, 2) GetQuestItemInfo("choice", 1)
            GetQuestItemInfo("reward", 1)"#,
     );
-    assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 2590"]);
+    assert_eq!(
+        sent(&rx),
+        [
+            format!("item 2589 {NPC:#x}"),
+            "roll 1".into(),
+            format!("item 2590 {NPC:#x}")
+        ]
+    );
 }
 
 /// The craft getters look a record in flight up with the callback `0x4f7710` and no dedupe:
@@ -345,7 +398,15 @@ fn the_craft_getters_ask_a_missed_record_inside_their_calls() {
         "for i = 1, GetNumCrafts() do GetCraftReagentInfo(i, 1) end RandomRoll(1, 2) \
          for i = 1, GetNumCrafts() do GetCraftSpellFocus(i) GetCraftReagentInfo(i, 1) end",
     );
-    assert_eq!(sent(&rx), ["item 10940", "roll 1", "item 6218"]);
+    let owner = spell_owner(7418);
+    assert_eq!(
+        sent(&rx),
+        [
+            format!("item 10940 {owner:#x}"),
+            "roll 1".into(),
+            format!("item 6218 {owner:#x}")
+        ]
+    );
 }
 
 /// The trade-skill getters look a record in flight up with the callback `0x4fdc30` and no dedupe:
@@ -393,7 +454,15 @@ fn the_trade_skill_getters_ask_a_missed_record_inside_their_calls() {
          for i = 1, n do GetTradeSkillReagentInfo(i, 1) end RandomRoll(1, 2) \
          for i = 1, n do GetTradeSkillTools(i) GetTradeSkillReagentInfo(i, 1) end",
     );
-    assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 5956"]);
+    let owner = spell_owner(2963);
+    assert_eq!(
+        sent(&rx),
+        [
+            format!("item 2589 {owner:#x}"),
+            "roll 1".into(),
+            format!("item 5956 {owner:#x}")
+        ]
+    );
 }
 
 /// The quest log's lookups with a callback and no dedupe: the leaderboard's creature name
@@ -442,6 +511,14 @@ fn the_quest_log_getters_ask_a_missed_record_inside_their_calls() {
     );
     assert_eq!(
         sent(&rx),
-        ["creature 40", "roll 1", "item 900", "roll 3", "item 2589"]
+        // Each lookup passes a zero owner id (`0x4e0448`-`0x4e045e`, `0x4e05c7`-`0x4e05ce`,
+        // `0x4e0b9c`-`0x4e0baa`).
+        [
+            "creature 40 0x0",
+            "roll 1",
+            "item 900 0x0",
+            "roll 3",
+            "item 2589 0x0"
+        ]
     );
 }

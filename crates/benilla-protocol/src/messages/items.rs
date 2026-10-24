@@ -455,7 +455,8 @@ pub(super) fn read_item_name_query_response(r: &mut &[u8]) -> io::Result<(u32, O
     Ok((entry, Some(read_cstring(r)?)))
 }
 
-/// Body of `CMSG_ITEM_QUERY_SINGLE`: entry, then a full item guid (0 with no instance in hand).
+/// Body of `CMSG_ITEM_QUERY_SINGLE`: entry, then the lookup's owner id (`PutGuid`, `0x558648`
+/// to `0x558698`): an instance's or a unit's guid, a spell's `0xb0000000` id, or 0 for none.
 pub fn item_query(entry: u32, guid: u64) -> Vec<u8> {
     let mut body = Vec::with_capacity(12);
     body.extend_from_slice(&entry.to_le_bytes());
@@ -682,6 +683,25 @@ mod tests {
     // The query-response parse goldens are in `tests/items.rs`; do not duplicate them here.
 
     // Item-move body goldens follow vmangos `Server/Packets/Item.cpp`; every field is a `u8`.
+
+    /// The item query's body: the entry, then the owner id, both little-endian. A profession or
+    /// trainer getter's owner is `0xb0000000` over the row's spell id (`0x4d9078`-`0x4d9093`),
+    /// the ammo and cooldown lookups' the active player (`0x4c83ad`-`0x4c83c4`, `0x6e2eef`).
+    #[test]
+    fn item_query_bodies_are_byte_exact() {
+        assert_eq!(
+            item_query(2589, 0xb000_0000_0000_07e2),
+            [0x1d, 0x0a, 0, 0, 0xe2, 0x07, 0, 0, 0, 0, 0, 0xb0]
+        );
+        assert_eq!(
+            item_query(2512, 0x0000_0000_0000_002a),
+            [0xd0, 0x09, 0, 0, 0x2a, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            item_query(900, 0),
+            [0x84, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
 
     #[test]
     fn open_container_decodes() {
