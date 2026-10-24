@@ -195,7 +195,7 @@ fn feed_zone_events(
                 }
             });
             if let Some(a) = a_name.filter(|n| !n.is_empty()) {
-                if a != subzone_text {
+                if whole_wmo_name_takes_the_zone(&a, &subzone_text) {
                     zone_text = a;
                     subzone_text = String::new();
                 }
@@ -299,6 +299,12 @@ fn latch_realm_pvp(
 /// world entry's value, which the process starts at 0 (`.data`).
 fn latched_realm_pvp(previous: bool, row_pvp: Option<bool>) -> bool {
     row_pvp.unwrap_or(previous)
+}
+
+/// Indoors the whole-WMO row's name replaces the zone text, and clears the subzone, only when it
+/// differs from the subzone text (`0x67e6e4`).
+fn whole_wmo_name_takes_the_zone(name: &str, subzone: &str) -> bool {
+    name != subzone
 }
 
 /// The shared area catalog and the zone-event feed.
@@ -690,5 +696,15 @@ mod tests {
         );
         assert!(ticks(&mut app, GOLDSHIRE, 9).is_empty());
         assert_eq!(ticks(&mut app, GOLDSHIRE, 1), ["ZONE_CHANGED"]);
+    }
+
+    /// `0x67e6e4` compares the whole-WMO name with the subzone by `SStrCmpI` (`0x64a4c0`, limit
+    /// `0x7fffffff`): a name that differs only in case keeps both texts.
+    #[test]
+    fn the_whole_wmo_name_compares_without_case() {
+        assert!(!whole_wmo_name_takes_the_zone("The Great Forge", "the great forge"));
+        assert!(!whole_wmo_name_takes_the_zone("Ironforge", "Ironforge"));
+        assert!(whole_wmo_name_takes_the_zone("Ironforge", "The Great Forge"));
+        assert!(whole_wmo_name_takes_the_zone("Ironforge", ""));
     }
 }
