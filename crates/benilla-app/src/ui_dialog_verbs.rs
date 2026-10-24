@@ -754,14 +754,19 @@ pub(crate) fn feed_dialog_verbs(
 pub(crate) struct PetUnlearnSteps<'w, 's> {
     /// Absent in a harness without the pet trainer's latch.
     pet: Option<Res<'w, PetUnlearnState>>,
-    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    me: Query<'w, 's, (&'static ObjectStore, &'static Transform), With<SelfPlayer>>,
+    index: Res<'w, crate::net::GuidIndex>,
+    units: Query<'w, 's, &'static Transform>,
     net: Res<'w, NetCommands>,
     sink: crate::ui_action::MessageSink<'w>,
 }
 
 impl PetUnlearnSteps<'_, '_> {
-    /// With the trainer latched: a cost above the player's money shows `ERR_NOT_ENOUGH_MONEY` and
-    /// sends nothing; otherwise `CMSG_PET_UNLEARN` to the trainer (`0x2F0`).
+    /// `PetUnlearnDialog(0, 0)` (`0x5dfba0`) on the remembered trainer (`[0xc4d7b0]`): the trainer
+    /// looked up (`0x5dfbd5`) and tested within the interaction range at the call (`0x5dfc1c`,
+    /// `d² <= [0xc4c28c]`), else nothing, the trainer still remembered; then a cost above the
+    /// player's money shows `ERR_NOT_ENOUGH_MONEY` (`0x5dfca3`) and sends nothing, and otherwise
+    /// `CMSG_PET_UNLEARN` goes to the trainer (`0x2F0`).
     pub(crate) fn confirm(&mut self, script: &mut UiScript) {
         let Some((npc, cost)) = self
             .pet
@@ -770,11 +775,19 @@ impl PetUnlearnSteps<'_, '_> {
         else {
             return;
         };
-        let money = self
-            .me
-            .single()
-            .ok()
-            .and_then(|store| store.0.player_money())
+        let Some(trainer) = self.index.0.get(&npc).and_then(|&e| self.units.get(e).ok()) else {
+            return;
+        };
+        let me = self.me.single().ok();
+        let in_range = me.is_some_and(|(_, at)| {
+            at.translation.distance_squared(trainer.translation) <= crate::target::SERVICE_RANGE_SQ
+        });
+        if !in_range {
+            debug!("pet unlearn: trainer {npc:#x} out of range at the confirm — nothing sent");
+            return;
+        }
+        let money = me
+            .and_then(|(store, _)| store.0.player_money())
             .unwrap_or(0);
         if cost > money {
             let input = script.input_events();
@@ -907,22 +920,23 @@ impl SpiritScan<'_, '_> {
     }
 }
 
-/// What one healer change owes, as `0x4921c0` does it: a pending wave's cancel, `0x6e7040(0xA18)`,
-/// signals `AREA_SPIRIT_HEALER_OUT_OF_RANGE` with no argument into `script`, if given, then sends
-/// `CMSG_CANCEL_AURA`; a new healer is queried.
-pub(crate) fn apply_healer_change(
+/// What one healer change owes outside a script call, as `0x4921c0` does it: a pending wave's
+/// cancel, the whole aura cancel `0x6e7040(0xA18)` (`0x492201`), whose
+/// `AREA_SPIRIT_HEALER_OUT_OF_RANGE` fires into `script`, if given; then the new healer's query.
+fn apply_healer_change(
     outcome: &SetHealerOutcome,
     script: Option<&mut UiScript>,
     net: &NetCommands,
+    aura: &crate::ui_aura::AuraSteps,
 ) {
     if outcome.cancel_aura {
-        if let Some(script) = script {
-            script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
-        }
-        let _ = net.0.send(ClientCommand::CancelAura {
-            spell_id: AREA_SPIRIT_HEALER_AURA,
-        });
+        aura.cancel(script, AREA_SPIRIT_HEALER_AURA);
     }
+    send_healer_query(outcome, net);
+}
+
+/// A healer change's query of the new healer (`0x492219`-`0x49225b`).
+pub(crate) fn send_healer_query(outcome: &SetHealerOutcome, net: &NetCommands) {
     if let Some(healer) = outcome.query {
         let _ = net.0.send(ClientCommand::AreaSpiritHealerQuery { healer });
     }
@@ -931,6 +945,7 @@ pub(crate) fn apply_healer_change(
 /// The scan's every-frame run (`0x4818ca` → `0x4923b0`).
 fn poll_area_spirit_healer(
     commands: Res<NetCommands>,
+    aura: crate::ui_aura::AuraSteps,
     // The relation inputs, which a call the event's handlers make can write, and the healer the
     // accept's call reads: read and written first.
     mut vm: crate::script_calls::VmWith<(
@@ -944,7 +959,7 @@ fn poll_area_spirit_healer(
     };
     vm.run(|mut script| {
         for outcome in &outcomes {
-            apply_healer_change(outcome, script.as_deref_mut(), &commands);
+            apply_healer_change(outcome, script.as_deref_mut(), &commands, &aura);
         }
     })
 }
@@ -954,11 +969,12 @@ fn poll_area_spirit_healer(
 fn apply_healer_changes(
     In(changes): In<Vec<SetHealerOutcome>>,
     commands: Res<NetCommands>,
+    aura: crate::ui_aura::AuraSteps,
     mut vm: crate::script_calls::HostedVm,
 ) {
     vm.run(|mut script| {
         for change in &changes {
-            apply_healer_change(change, script.as_deref_mut(), &commands);
+            apply_healer_change(change, script.as_deref_mut(), &commands, &aura);
         }
     });
 }
@@ -2041,5 +2057,33 @@ mod tests {
         assert_eq!(q.run_time_ms(now), 0);
         assert_eq!(q.instance_expiration_ms(now), 0);
         assert!(!q.take_score_dirty());
+    }
+}
+#[cfg(test)]
+mod scratch_scan {
+    #[test]
+    fn scratch_farsight_scan() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let catalog = benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let mut hits: Vec<_> = catalog
+            .iter()
+            .filter(|(_, d)| d.attributes_ex & 0x2000 != 0)
+            .map(|(id, d)| (id, d.attributes_ex & 0x4 != 0, d.name.clone(), d.effects))
+            .collect();
+        hits.sort();
+        for h in &hits {
+            eprintln!("FS {h:?}");
+        }
+        // Stuck: the spells whose effect is 0x54.
+        let mut stuck: Vec<_> = catalog
+            .iter()
+            .filter(|(_, d)| d.effects.contains(&0x54))
+            .map(|(id, d)| (id, d.name.clone(), d.effects))
+            .collect();
+        stuck.sort();
+        for h in &stuck {
+            eprintln!("ST {h:?}");
+        }
     }
 }

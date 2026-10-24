@@ -121,7 +121,7 @@ disjoint::disjoint_set! {
         action_bar: crate::ui_action::ActionBarSteps<'static>,
         worn: crate::ui_unit::WornDisplaySteps<'static>,
         gm_ticket: crate::ui_gm_ticket::GmTicketSteps<'static>,
-        inspect: crate::ui_inspect::InspectSteps<'static>,
+        inspect: crate::ui_inspect::InspectSteps<'static, 'static>,
         item_text: crate::ui_item_text::ItemTextSteps<'static>,
         aura: crate::ui_aura::AuraSteps<'static, 'static>,
         minimap: crate::minimap::MinimapSteps<'static>,
@@ -247,13 +247,15 @@ impl ScriptCallHost<'_, '_> {
     ) {
         let changes = self.appliers.death().rescan_spirit();
         for change in &changes {
+            // `0x4921fc` → `0x6e7040(0xa18)`, the whole cancel, then the new healer's query.
             if change.cancel_aura {
-                script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
-                self.at_point(script, mark);
+                self.cancel_aura(
+                    script,
+                    mark,
+                    crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA,
+                );
             }
-            // The signal ran above; the change's sends.
-            let steps = self.appliers.death();
-            crate::ui_dialog_verbs::apply_healer_change(change, None, steps.net());
+            crate::ui_dialog_verbs::send_healer_query(change, self.appliers.death().net());
         }
         self.appliers
             .death()
@@ -261,8 +263,9 @@ impl ScriptCallHost<'_, '_> {
     }
 
     /// The aura cancel `0x6e7040(spell)`: the active player's precast of the spell and its kits
-    /// ended (`0x6e7075`, `0x6e707e`), then for spell 2584 `AREA_SPIRIT_HEALER_OUT_OF_RANGE`
-    /// (`0x6e70c3`), whose listeners run where it fires, then `CMSG_CANCEL_AURA` (`0x6e70eb`).
+    /// ended (`0x6e7075`, `0x6e707e`), the far-sight gate (`0x6e709e`-`0x6e70b4`), then for spell
+    /// 2584 `AREA_SPIRIT_HEALER_OUT_OF_RANGE` (`0x6e70c3`), whose listeners run where it fires,
+    /// then `CMSG_CANCEL_AURA` (`0x6e70eb`).
     fn cancel_aura(
         &mut self,
         script: &mut UiScript,
@@ -270,6 +273,9 @@ impl ScriptCallHost<'_, '_> {
         spell_id: u32,
     ) {
         self.appliers.aura().end_on_player(spell_id);
+        if !self.appliers.aura().passes_far_sight(spell_id) {
+            return;
+        }
         if spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA {
             script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
             self.at_point(script, mark);
@@ -709,11 +715,15 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::GmTicket(GmTicketCall::Ticket(intent)) => {
                 appliers.gm_ticket().ticket(intent);
             }
+            // With none learned the dword is 0, and benilla casts nothing: the attempt on spell 0
+            // (`0x6e4b60`) is not traced.
             ScriptCall::GmTicket(GmTicketCall::Stuck) => {
-                crate::ui_gm_ticket::cast_stuck(&mut appliers.cast());
+                if let Some(spell) = appliers.gm_ticket().stuck_spell() {
+                    crate::ui_gm_ticket::cast_stuck(&mut appliers.cast(), spell);
+                }
             }
             ScriptCall::Unserved(send) => appliers.gm_ticket().unserved(send),
-            ScriptCall::Inspect(call) => appliers.inspect().apply(call),
+            ScriptCall::Inspect(call) => appliers.inspect().apply(script, call),
             ScriptCall::ItemText(ItemTextCall::Turn(delta)) => {
                 appliers.item_text().turn(script, delta);
             }

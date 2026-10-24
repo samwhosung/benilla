@@ -209,7 +209,11 @@ fn stuck_casts_inside_its_call() {
     const STUCK: u32 = 7355;
     let (mut app, rx) = client();
     seat(&mut app, &[]);
-    spells(&mut app, &[(STUCK, "Stuck")]);
+    spell_rows(&mut app, &[(STUCK, 0, 84)]);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .spells
+        .insert(STUCK);
     eval::<()>(&mut app, "Stuck() RandomRoll(1, 2)");
     assert_eq!(sent(&rx), ["cast 7355", "roll 1"]);
 }
@@ -241,11 +245,12 @@ fn notify_inspect_and_the_honor_ask_send_inside_their_calls() {
 }
 
 /// `ConfirmPetUnlearn()` (`0x48dca0` → `0x5dfba0`) sends `CMSG_PET_UNLEARN` to the remembered
-/// trainer inside its call, past its money gate.
+/// trainer inside its call, in range and past its money gate.
 #[test]
 fn confirm_pet_unlearn_sends_inside_its_call() {
     let (mut app, rx) = client();
     seat(&mut app, &[(COINAGE, 10_000)]);
+    unit_at(&mut app, NPC, 3.0);
     app.world_mut()
         .resource_mut::<crate::ui_dialog_verbs::PetUnlearnState>()
         .ask(NPC, 100);
@@ -322,7 +327,9 @@ fn the_aura_cancels_send_inside_their_calls() {
 
 /// For the active player `0x6e7040` first ends the precast of the cancelled spell
 /// (`0x60d040(player, spell, 1, 1)` at `0x6e7075`) and reaps its kits (`0x614150` at `0x6e707e`),
-/// ahead of the send, so a channel the player cancels through its aura ends in the call.
+/// ahead of the send. In benilla the two are unit edits, queued in the call and applied after the
+/// pass with the frame's others (the test applies them by hand): the components they write are
+/// read by the systems that lend the call host, so the host cannot write them in the call.
 #[test]
 fn an_aura_cancel_ends_the_players_precast_of_that_spell() {
     const ARCANE_MISSILES: u32 = 5143;

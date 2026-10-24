@@ -1014,19 +1014,16 @@ fn get_inspect_honor_data_answers_twelve_zeros_when_no_reply_is_held() {
 }
 
 /// `0x4c80a0` refuses a query while one is in flight and once data is held; `TogglePVP` has no
-/// latch.
+/// latch. The in-flight latch is the host's, set after its send (`0x4c811b`).
 #[test]
 fn the_intent_queues_drain_and_the_honor_query_refuses_to_double_up() {
     let mut s = seated();
     assert_eq!(s.take_inspect_honor_requests(), 0);
 
-    // Two calls, one query: the second sees `pending`.
-    s.eval::<()>("RequestInspectHonorData() RequestInspectHonorData()")
-        .unwrap();
+    // The query, then the host's latch after its send: the next call sees `pending`.
+    s.eval::<()>("RequestInspectHonorData()").unwrap();
     assert_eq!(s.take_inspect_honor_requests(), 1);
-    assert_eq!(s.take_inspect_honor_requests(), 0);
-
-    // Still latched after the drain: sent, not yet answered.
+    s.latch_inspect_honor_ask();
     s.eval::<()>("RequestInspectHonorData()").unwrap();
     assert_eq!(s.take_inspect_honor_requests(), 0, "still in flight");
 

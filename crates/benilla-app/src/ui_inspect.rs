@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{InspectCall, InvSlotView, InventorySlots};
+use benilla_ui::script::{InspectCall, InvSlotView, InventorySlots, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -214,25 +214,24 @@ impl VisibleItemTables<'_> {
 
 /// The inspect verbs inside their calls ([`benilla_ui::script::InspectCall`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct InspectSteps<'w> {
+pub(crate) struct InspectSteps<'w, 's> {
     /// Absent in a harness without the inspect window.
     target: Option<ResMut<'w, InspectTarget>>,
     selection: Res<'w, crate::target::Selection>,
-    group: Res<'w, crate::ui_party::GroupState>,
+    tokens: crate::ui_unit::UnitTokens<'w, 's>,
     net: Res<'w, NetCommands>,
 }
 
-impl InspectSteps<'_> {
+impl InspectSteps<'_, '_> {
     /// `call` inside its verb.
-    pub(crate) fn apply(&mut self, call: InspectCall) {
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: InspectCall) {
         match call {
-            // `0x5decc0`: `CMSG_INSPECT` for the unit's guid, then the token latched as the
-            // inspect target (`0x5ded10`, `0x5ded1c`).
+            // `0x48a36a`: the token through the unit resolver `0x515970`, any unit; then
+            // `0x5decc0`, for a nonzero guid (`0x5deccf`), `CMSG_INSPECT` and the token latched as
+            // the inspect target (`0x5ded10`, `0x5ded1c`).
             InspectCall::Notify(token) => {
-                let Some(guid) =
-                    crate::ui_unit::player_token_guid(&token, &self.selection, &self.group)
-                else {
-                    debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
+                let Some(guid) = self.tokens.guid(&token, &self.selection) else {
+                    debug!("inspect: {token:?} names nobody — nothing sent");
                     return;
                 };
                 debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
@@ -248,7 +247,9 @@ impl InspectSteps<'_> {
                 }
             }
             // `RequestInspectHonorData()` asks about the inspected token's guid now
-            // (`0x4c8112`), so a re-target before the Honor tab opens asks about the new player.
+            // (`0x4c8112`), so a re-target before the Honor tab opens asks about the new player,
+            // and latches its query in flight after the send (`0x4c811b`). With no target it
+            // returns before both (`0x4c80c2`), and the pane asks again from its next `OnShow`.
             InspectCall::Honor => match self.inspected() {
                 Some(guid) => {
                     debug!("honor: inspect-honor request -> {guid:#x}");
@@ -256,8 +257,8 @@ impl InspectSteps<'_> {
                         .net
                         .0
                         .send(ClientCommand::InspectHonorStats { target: guid });
+                    script.latch_inspect_honor_ask();
                 }
-                // Nothing to ask about; the pane asks again from its next `OnShow`.
                 None => debug!("honor: inspect-honor request with no resolvable target — not sent"),
             },
         }
@@ -266,7 +267,7 @@ impl InspectSteps<'_> {
     /// The guid the inspect target's token names now.
     fn inspected(&self) -> Option<u64> {
         let token = self.target.as_deref()?.token.as_deref()?;
-        crate::ui_unit::player_token_guid(token, &self.selection, &self.group)
+        self.tokens.guid(token, &self.selection)
     }
 }
 
@@ -424,7 +425,7 @@ mod tests {
         for token in notified {
             steps
                 .get_mut(app.world_mut())
-                .apply(InspectCall::Notify(token));
+                .apply(&mut UiScript::new().unwrap(), InspectCall::Notify(token));
         }
         assert!(
             rx.try_iter()

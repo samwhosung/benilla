@@ -913,23 +913,34 @@ fn end_session_aura_state(
     })
 }
 
-/// The aura cancel `0x6e7040` inside its verb's call (`CancelPlayerBuff`, `CancelTrackingBuff`,
-/// `CancelAreaSpiritHeal`): the active player's halves, then the packet, which names the spell, not
-/// the slot. The host signals the area spirit healer aura's event between them ([`benilla_ui::script::AuraCall`]).
+/// The aura cancel `0x6e7040` (`CancelPlayerBuff`, `CancelTrackingBuff`, `CancelAreaSpiritHeal`
+/// inside their calls, and the healer scan's wave cancel): the active player's halves, the
+/// far-sight gate, then the packet, which names the spell, not the slot. The host signals the area
+/// spirit healer aura's event between the gate and the packet
+/// ([`benilla_ui::script::AuraCall`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuraSteps<'w, 's> {
-    me: Query<'w, 's, Entity, With<SelfPlayer>>,
+    me: Query<'w, 's, (Entity, &'static ObjectStore), With<SelfPlayer>>,
     /// Absent in a harness without the unit changes' queue.
     edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
+    /// The record the gate reads; absent without client data, which gates nothing.
+    spells: Option<Res<'w, Spells>>,
+    index: Option<Res<'w, GuidIndex>>,
     net: Res<'w, NetCommands>,
 }
+
+/// `AttributesEx` 0x2000, the far-sight spells, which the cancel hands to `UpdateFarSight`.
+const ATTR_EX_FAR_SIGHT: u32 = 0x2000;
+/// `AttributesEx` 0x4, the channelled spells, which the cancel's far-sight gate passes.
+const ATTR_EX_CHANNELED: u32 = 0x4;
 
 impl AuraSteps<'_, '_> {
     /// For an active player: the precast of `spell_id` ended with its tail
     /// (`0x60d040(player, spell, 1, 1)` at `0x6e7075`), then the spell's kits stopped
-    /// (`0x614150(player, spell, 0)` at `0x6e707e`).
+    /// (`0x614150(player, spell, 0)` at `0x6e707e`). Both are unit edits, applied at the pass's
+    /// end with the rest of the frame's: the components they write are read beside the call host.
     pub(crate) fn end_on_player(&self, spell_id: u32) {
-        let (Ok(entity), Some(edits)) = (self.me.single(), self.edits.as_deref()) else {
+        let (Ok((entity, _)), Some(edits)) = (self.me.single(), self.edits.as_deref()) else {
             return;
         };
         edits.push(crate::creature_anim::UnitEdit::EndPrecast {
@@ -940,9 +951,51 @@ impl AuraSteps<'_, '_> {
         edits.push(crate::creature_anim::UnitEdit::StopSpellKits { entity, spell_id });
     }
 
+    /// The far-sight gate (`0x6e7083`-`0x6e70b4`): a spell with `AttributesEx` 0x2000 and without
+    /// 0x4 stops the cancel with no player, or when `UpdateFarSight` (`0x5ee290`, at `0x6e70ad`)
+    /// answers nonzero, which it does unless `PLAYER_FARSIGHT` names an object the client does not
+    /// hold (`0x5ee32b` → `0x5ee360`). Whether the cancel goes on to its event and packet. Not
+    /// built: `UpdateFarSight`'s own work, which ends or re-engages the view
+    /// (`CMSG_FAR_SIGHT`, the mover); benilla's view follows the field
+    /// ([`crate::player::ViewSubject`]).
+    pub(crate) fn passes_far_sight(&self, spell_id: u32) -> bool {
+        let ex = self
+            .spells
+            .as_deref()
+            .and_then(|s| s.catalog.get(spell_id))
+            .map_or(0, |d| d.attributes_ex);
+        if ex & ATTR_EX_FAR_SIGHT == 0 || ex & ATTR_EX_CHANNELED != 0 {
+            return true;
+        }
+        let Ok((_, store)) = self.me.single() else {
+            return false;
+        };
+        store.0.player_farsight().is_some_and(|guid| {
+            !self
+                .index
+                .as_deref()
+                .is_some_and(|index| index.0.contains_key(&guid))
+        })
+    }
+
     /// `CMSG_CANCEL_AURA` (`0x6e70eb`), the spell's id.
     pub(crate) fn send(&self, spell_id: u32) {
         let _ = self.net.0.send(ClientCommand::CancelAura { spell_id });
+    }
+
+    /// `0x6e7040(spell)` outside a script call, the healer scan's (`0x492201`): its event fired
+    /// into `script`, if given.
+    pub(crate) fn cancel(&self, script: Option<&mut UiScript>, spell_id: u32) {
+        self.end_on_player(spell_id);
+        if !self.passes_far_sight(spell_id) {
+            return;
+        }
+        if spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA {
+            if let Some(script) = script {
+                script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
+            }
+        }
+        self.send(spell_id);
     }
 }
 

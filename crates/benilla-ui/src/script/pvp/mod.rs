@@ -123,10 +123,16 @@ impl super::UiScript {
     }
 
     /// The `RequestInspectHonorData` calls a harness's VM kept ([`Self::keep_calls`]), each a
-    /// `MSG_INSPECT_HONOR_STATS` send for the app's inspect target. At most 1: the `pending` latch
-    /// (`0x4c80b6`) refuses another until [`Self::set_inspect_honor`] resolves the first.
+    /// `MSG_INSPECT_HONOR_STATS` send for the app's inspect target. The `pending` latch
+    /// (`0x4c80b6`) is the host's to set, after its send ([`Self::latch_inspect_honor_ask`]).
     pub fn take_inspect_honor_requests(&mut self) -> u32 {
         self.take_calls_like(&super::ScriptCall::Inspect(super::InspectCall::Honor)) as u32
+    }
+
+    /// The inspect honor query is in flight (`[0xb71fcc] = 1`, `0x4c811b`): set by the host after
+    /// its send, cleared by [`Self::set_inspect_honor`].
+    pub fn latch_inspect_honor_ask(&mut self) {
+        self.model_mut().inspect_honor_pending = true;
     }
 
     /// A rank's localized title for the app's `SMSG_PVP_CREDIT` chat line, `None` if missing or
@@ -552,17 +558,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // `0x4c80a0` bails silently if data is held (`0x4c80a6`), if a query is in flight (`pending`,
     // `0x4c80b6`, `[0xb71fcc]`) or if the target guid is 0 (`0x4c80c2`). The first two are here;
-    // the guid is the app's, which drops a request with no target. Our `pending` latches on
-    // queue, not send, so a dropped request holds it until the next `set_inspect_honor`, which
-    // `ClearInspectPlayer` calls as `0x4c6f70` clears the engine's.
+    // the guid is the host's, which sends and then latches `pending` (`0x4c811b`), so a request
+    // with no target leaves it clear.
     g.set(
         "RequestInspectHonorData",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             if model.inspect_honor.is_some() || model.inspect_honor_pending {
                 return Ok(());
             }
-            model.inspect_honor_pending = true;
             drop(model);
             super::calls::submit(lua, super::ScriptCall::Inspect(super::InspectCall::Honor))
         })?,

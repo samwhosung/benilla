@@ -20,9 +20,10 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::player::Player;
 use crate::ui_script::{UiFeed, VmMemo};
 
-/// Spell 7355 "Stuck", what `Stuck()` casts: the only spell with `SPELL_EFFECT_STUCK` (84), which
-/// moves the player to their last safe position (vmangos `SpellEffects.cpp:4697`).
-const SPELL_STUCK: u32 = 7355;
+/// `SPELL_EFFECT_STUCK`, the effect whose learned spell `Stuck()` casts (`0x4b2614`): 7355 "Stuck"
+/// in the shipped `Spell.dbc`, which moves the player to their last safe position (vmangos
+/// `SpellEffects.cpp:4697`).
+const SPELL_EFFECT_STUCK: u32 = 84;
 
 /// What the last `SMSG_GMTICKET_GETTICKET` said, and how many have arrived: the feed fires on the
 /// count, so the window's poll is answered even when nothing changed.
@@ -166,9 +167,25 @@ pub(crate) struct GmTicketSteps<'w> {
     commands: Res<'w, NetCommands>,
     player: Option<Res<'w, Player>>,
     map: Option<Res<'w, benilla_world::world_map::CurrentMap>>,
+    /// The book and the records `Stuck()`'s spell is found in; absent without client data.
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
+    actions: Option<Res<'w, crate::ui_action::PlayerActions>>,
 }
 
 impl GmTicketSteps<'_> {
+    /// `[0xb70098]`, the spell `Stuck()` casts: `AddSpellToBook` stores each learned spell whose
+    /// `Effect[0]` (record `+0xf4`) is [`SPELL_EFFECT_STUCK`] (`0x4b2614`-`0x4b261d`), and the
+    /// book's reset zeroes it (`0x4b23a0`). `None` is 0, no such spell learned.
+    pub(crate) fn stuck_spell(&self) -> Option<u32> {
+        let (spells, actions) = (self.spells.as_deref()?, self.actions.as_deref()?);
+        actions.spells.iter().copied().find(|&id| {
+            spells
+                .catalog
+                .get(id)
+                .is_some_and(|s| s.effects[0] == SPELL_EFFECT_STUCK)
+        })
+    }
+
     /// A ticket verb's packet, sent in its call, so call order is wire order:
     /// `DeleteGMTicket(); GetGMTicket()` never becomes get-then-delete.
     pub(crate) fn ticket(&self, intent: GmTicketIntent) {
@@ -225,12 +242,13 @@ impl GmTicketSteps<'_> {
     }
 }
 
-/// `Stuck()` past its gate (`0x489370`): `CastSpellAsActivePlayer` (`0x6e5a90`) on its spell, with
-/// no item and no target (`0x489376`, `0x489378`), into the cast attempt.
-pub(crate) fn cast_stuck(cast: &mut crate::spell::ScriptCast) {
+/// `Stuck()` past its gate (`0x489370`): `CastSpellAsActivePlayer` (`0x6e5a90`) on `spell`, its
+/// [`GmTicketSteps::stuck_spell`], with no item and no target (`0x489376`, `0x489378`), into the
+/// cast attempt.
+pub(crate) fn cast_stuck(cast: &mut crate::spell::ScriptCast, spell: u32) {
     let ctx = cast.targeting.context();
     cast.ladder
-        .send(SPELL_STUCK, &ctx, crate::spell::CastCommit::Spell);
+        .send(spell, &ctx, crate::spell::CastCommit::Spell);
 }
 
 /// The category a `NewGMTicket`/`UpdateGMTicket` call may put on the wire, 0 to 10. vmangos files
