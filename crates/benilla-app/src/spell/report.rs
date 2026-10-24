@@ -62,9 +62,19 @@ pub(crate) struct CastCore<'a> {
     pub(crate) ground: &'a mut SpellTargeting,
     pub(crate) reports: &'a mut CastReports,
     pub(crate) net: &'a NetCommands,
+    /// The tutorial bank the reporter and StopAttack trigger into (`0x4b5390`); absent in a
+    /// harness without it.
+    pub(crate) tutorials: Option<&'a crate::tutorial::Tutorials>,
 }
 
 impl CastCore<'_> {
+    /// `TriggerTutorial(id, 0)` (`0x4b5390`) from the reporter's or StopAttack's site.
+    pub(crate) fn trigger_tutorial(&self, id: u32) {
+        if let Some(tutorials) = self.tutorials {
+            tutorials.trigger_now(id);
+        }
+    }
+
     /// What the in-flight slot `0xceca88` holds.
     pub(crate) fn slot(&self) -> Option<Inflight> {
         inflight(self.pending, self.queued_melee, self.ground)
@@ -274,6 +284,7 @@ pub(crate) struct CastSlots<'w> {
     queued_melee: ResMut<'w, QueuedMeleeSpell>,
     ground: ResMut<'w, SpellTargeting>,
     reports: ResMut<'w, CastReports>,
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
 }
 
 impl CastSlots<'_> {
@@ -285,6 +296,7 @@ impl CastSlots<'_> {
             ground: &mut self.ground,
             reports: &mut self.reports,
             net,
+            tutorials: self.tutorials.as_deref(),
         }
     }
 
@@ -340,6 +352,7 @@ mod tests {
         queued_melee: QueuedMeleeSpell,
         ground: SpellTargeting,
         reports: CastReports,
+        tutorials: crate::tutorial::Tutorials,
     }
 
     impl Slots {
@@ -350,6 +363,7 @@ mod tests {
                 ground: &mut self.ground,
                 reports: &mut self.reports,
                 net,
+                tutorials: Some(&self.tutorials),
             }
         }
 
@@ -543,5 +557,20 @@ mod tests {
         assert_eq!(s.stream(), ["REFUSED 0x59", "FAILED"]);
         assert!(s.ground.active());
         assert!(cancels(&rx).is_empty());
+    }
+
+    /// The reporter's player cleanup: reason 0x2f `NEED_AMMO` triggers Ammunition (`0x2c`,
+    /// `0x6e1cc3`-`0x6e1cca`), whatever the slot holds; every other reason triggers nothing.
+    #[test]
+    fn a_need_ammo_refusal_triggers_the_ammunition_tutorial() {
+        let (net, _rx) = wire();
+        let mut s = Slots::default();
+        s.tutorials.lock().apply_flags(&[0u8; 32]);
+        s.core(&net)
+            .report(CastFail::local(AUTO_SHOT, 0x59), false, true);
+        assert!(s.tutorials.take_fired().is_empty(), "another reason");
+        s.core(&net)
+            .report(CastFail::local(AUTO_SHOT, 0x2f), true, false);
+        assert_eq!(s.tutorials.take_fired(), [0x2d], "published as 0x2c + 1");
     }
 }

@@ -213,6 +213,7 @@ pub(crate) fn cancel_auto_repeat_local(
 /// (`0x6243b2`).
 pub(crate) fn stop_attack_local(
     me: Option<Entity>,
+    _low: crate::tutorial::LowVitals,
     edits: &UnitEdits,
     word: &mut AttackStopInFlight,
     core: &mut crate::spell::CastCore,
@@ -244,6 +245,8 @@ pub(crate) struct StartGate {
     pub(crate) seated: bool,
     /// `SetStandState`'s descriptor legs refuse a change ([`crate::player::stand_up_refused`]).
     pub(crate) stand_refused: bool,
+    /// What the refusal arm's StopAttack reads (`0x5ecc48`).
+    pub(crate) low: crate::tutorial::LowVitals,
 }
 
 impl StartGate {
@@ -256,6 +259,7 @@ impl StartGate {
             control_lost,
             seated: own.is_some_and(|me| me.0.unit_stand_state() != 0),
             stand_refused: own.is_some_and(|me| crate::player::stand_up_refused(&me.0)),
+            low: crate::tutorial::LowVitals::of(own),
         }
     }
 
@@ -335,7 +339,7 @@ pub(crate) fn start_attack_head(
     match verdict {
         StartTarget::Unheld => return false,
         StartTarget::Refused => {
-            stop_attack_local(Some(entity), edits, stop_word, core);
+            stop_attack_local(Some(entity), gate.low, edits, stop_word, core);
             return false;
         }
         StartTarget::Attackable => {}
@@ -532,6 +536,7 @@ impl AttackSeam<'_, '_> {
         let me = self.me.single().ok();
         stop_attack_local(
             me,
+            self.start_gate().low,
             &self.edits,
             &mut self.stop_word,
             &mut self.slots.core(&self.net),
@@ -1405,6 +1410,57 @@ mod attack_stand_tests {
         ));
     }
 
+    /// StopAttack's own tutorial site (`0x5ecaf7`-`0x5ecb54`): stopping a swing below half
+    /// health triggers Food (`0x0a`) and, for a mana user below half mana, Drink (`0x0b`); a stop
+    /// with no swing returns first (`0x5ecaf5`) and triggers neither.
+    #[test]
+    fn a_stop_below_half_health_and_mana_triggers_food_and_drink() {
+        let mut a = Attack::new();
+        a.world.init_resource::<crate::tutorial::Tutorials>();
+        a.world
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        // Health 40/100 (22, 28) and mana 10/100 (23, 29), power type 0.
+        a.world
+            .get_mut::<crate::net::ObjectStore>(a.me)
+            .unwrap()
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 40),
+                (28, 100),
+                (23, 10),
+                (29, 100),
+            ]));
+        let stop = |a: &mut Attack| {
+            let me = a.me;
+            a.world
+                .run_system_once(
+                    move |stores: Query<&crate::net::ObjectStore>,
+                          edits: Res<UnitEdits>,
+                          mut slots: crate::spell::CastSlots,
+                          mut word: ResMut<AttackStopInFlight>,
+                          net: Res<crate::net::NetCommands>| {
+                        stop_attack_local(
+                            Some(me),
+                            crate::tutorial::LowVitals::of(stores.get(me).ok()),
+                            &edits,
+                            &mut word,
+                            &mut slots.core(&net),
+                        );
+                    },
+                )
+                .unwrap();
+            a.world
+                .resource::<crate::tutorial::Tutorials>()
+                .take_fired()
+        };
+        assert!(stop(&mut a).is_empty(), "no swing: nothing");
+        a.world.entity_mut(a.me).insert(Engaged(TARGET));
+        assert_eq!(stop(&mut a), [0x0b, 0x0c], "Food then Drink, each id + 1");
+        assert!(matches!(a.sent()[..], [ClientCommand::AttackStop]));
+    }
+
     /// The stand comes before the already-attacking skip, which jumps past it to `0x5ecd78` and
     /// sends no `CMSG_ATTACKSWING`.
     #[test]
@@ -1451,7 +1507,13 @@ mod attack_stand_tests {
                         );
                     }
                     assert_eq!(edits.attack_target(me), Some(TARGET));
-                    stop_attack_local(Some(me), &edits, &mut stop_word, &mut slots.core(&net));
+                    stop_attack_local(
+                        Some(me),
+                        crate::tutorial::LowVitals::default(),
+                        &edits,
+                        &mut stop_word,
+                        &mut slots.core(&net),
+                    );
                 },
             )
             .unwrap();

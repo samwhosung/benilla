@@ -140,6 +140,7 @@ impl GoRig {
                                 ground: &mut Default::default(),
                                 reports: &mut Default::default(),
                                 net: &net_commands,
+                                tutorials: None,
                             },
                         ),
                         1,

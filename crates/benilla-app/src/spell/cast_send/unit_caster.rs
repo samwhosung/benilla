@@ -105,6 +105,7 @@ impl CastLadder<'_, '_> {
             ground: &mut self.ground,
             reports: &mut self.reports,
             net: &self.commands,
+            tutorials: self.tutorials.as_deref(),
         };
         // A cursor's commit is past TryCast, whose attack tail it never reaches.
         let unit = UnitCaster {

@@ -41,6 +41,8 @@ pub(crate) mod id {
     pub(crate) const TARGETING: u32 = 0x03;
     pub(crate) const LOOTING: u32 = 0x06;
     pub(crate) const BACKPACK: u32 = 0x07;
+    pub(crate) const FOOD: u32 = 0x0a;
+    pub(crate) const DRINK: u32 = 0x0b;
     pub(crate) const TRAINERS: u32 = 0x0d;
     pub(crate) const GROUPING: u32 = 0x11;
     pub(crate) const VENDORS: u32 = 0x13;
@@ -80,6 +82,43 @@ pub(crate) const LEVEL_TRIGGERS: [(i32, u32); 8] = [
     (8, 0x20),  // Jumping
     (10, 0x0c), // Learning Talents
 ];
+
+/// What StopAttack (`0x5ecac0`) reads of the active player for its two tutorials, the stop's
+/// own site (`0x5ecaf7`-`0x5ecb54`): Food (`0x0a`) below half health, Drink (`0x0b`) for a mana
+/// user (`UNIT_FIELD_BYTES_0` byte 3 zero, `0x5ecb22`) below half mana, or with no maximum at all
+/// (`0x5ecb2c`-`0x5ecb37`). Each ratio is signed (`fild`) and strictly below `0.5` (`0x7ffa24`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LowVitals {
+    food: bool,
+    drink: bool,
+}
+
+impl LowVitals {
+    /// The two tests off the active player's descriptor; nothing without one.
+    pub(crate) fn of(own: Option<&ObjectStore>) -> Self {
+        let Some(f) = own.map(|s| &s.0) else {
+            return Self::default();
+        };
+        // A 0 maximum divides to an infinity or NaN, neither below half (`0x5ecb0e`).
+        let below_half = |cur: Option<u32>, max: Option<u32>| {
+            let (cur, max) = (cur.unwrap_or(0) as i32, max.unwrap_or(0) as i32);
+            f64::from(cur) / f64::from(max) < 0.5
+        };
+        let max_mana = f.unit_max_power(0).unwrap_or(0);
+        Self {
+            food: below_half(f.unit_health(), f.unit_max_health()),
+            drink: f.unit_power_type() == 0
+                && (max_mana == 0 || below_half(f.unit_power(0), Some(max_mana))),
+        }
+    }
+
+    /// The tutorials owed, in the stop's order.
+    pub(crate) fn tutorials(self) -> impl Iterator<Item = u32> {
+        [(self.food, id::FOOD), (self.drink, id::DRINK)]
+            .into_iter()
+            .filter_map(|(owed, id)| owed.then_some(id))
+    }
+}
 
 /// The Targeting popup's delay at its one site (`0x514a8d mov edx,0x2710`).
 pub(crate) const TARGETING_DELAY_MS: u32 = 10_000;
@@ -149,6 +188,18 @@ impl Tutorials {
         let mut state = self.lock();
         state.acknowledge(id);
         state.flush(commands);
+    }
+
+    /// `TriggerTutorial(id, 0)` (`0x4b5390`) from an engine site that holds the bank: the
+    /// fire-once test now, the event at the next feed.
+    pub(crate) fn trigger_now(&self, id: u32) {
+        self.lock().trigger(id, 0, Instant::now());
+    }
+
+    /// The published ids owed the VM, taken.
+    #[cfg(test)]
+    pub(crate) fn take_fired(&self) -> Vec<u32> {
+        std::mem::take(&mut self.lock().fired)
     }
 
     /// The acknowledged bank, as `TutorialsEnabled` (`0x4b5960`) reads it, for a VM told inside the
@@ -654,6 +705,38 @@ mod tests {
         t
     }
 
+    /// StopAttack's tests (`0x5ecaf7`-`0x5ecb54`): each ratio strictly below half; Drink only
+    /// for a mana user, and for one with no maximum mana at all (`0x5ecb37`); a 0 maximum
+    /// health is no Food.
+    #[test]
+    fn the_stops_food_and_drink_tests_read_the_bytes_thresholds() {
+        use benilla_protocol::ObjectFields;
+        // Health 22, max 28; power1 23, max 29; `UNIT_FIELD_BYTES_0` 36, byte 3 the power type.
+        let low = |health: u32, max_health: u32, power_type: u32, mana: u32, max_mana: u32| {
+            let store = ObjectStore(ObjectFields::from_pairs(&[
+                (22, health),
+                (28, max_health),
+                (23, mana),
+                (29, max_mana),
+                (36, power_type << 24),
+            ]));
+            LowVitals::of(Some(&store)).tutorials().collect::<Vec<_>>()
+        };
+        assert_eq!(low(49, 100, 0, 49, 100), [id::FOOD, id::DRINK]);
+        assert!(
+            low(50, 100, 0, 50, 100).is_empty(),
+            "half is not below half"
+        );
+        assert_eq!(low(100, 100, 1, 0, 100), [] as [u32; 0], "rage: no Drink");
+        assert_eq!(
+            low(100, 100, 0, 0, 0),
+            [id::DRINK],
+            "no maximum mana: Drink"
+        );
+        assert!(low(0, 0, 1, 0, 0).is_empty(), "0/0 is NaN: no Food");
+        assert!(LowVitals::of(None).tutorials().next().is_none());
+    }
+
     /// No bank: silent. A clear bit: set in A only, the event owed, nothing sent. Twice: once.
     #[test]
     fn the_trigger_fires_once_per_bank_a_and_never_sends() {
@@ -975,7 +1058,8 @@ mod tests {
                 .init_resource::<crate::ui_merchant::MerchantOpen>()
                 .init_resource::<crate::ui_taxi::TaxiState>()
                 .init_resource::<Player>()
-                .add_message::<EnteredWorldMessage>();
+                .add_message::<EnteredWorldMessage>()
+                .add_message::<crate::net::WorldEnterCascadeMessage>();
             let (tx, _rx) = crossbeam_channel::unbounded();
             app.insert_resource(crate::net::NetCommands(tx));
             app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
@@ -998,6 +1082,9 @@ mod tests {
                     flags,
                 )])),
             ));
+            // The create's cascade (`0x5deb60`), as `enter_world_on_self_create` writes it.
+            app.world_mut()
+                .write_message(crate::net::WorldEnterCascadeMessage);
             app.update();
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.resolve();
@@ -1007,5 +1094,59 @@ mod tests {
                 "flags {flags:#x}"
             );
         }
+    }
+
+    /// The cascade `0x4908c0` fires Welcome (`0x490a48`) and Questgivers (`0x490a51`) on every
+    /// pass: a cross-map worldport's create (`0x5deb60`) and a `/reload` (`0x490168`) as well as
+    /// the login, with the banks zeroed only at the login's bring-up (`0x4b5330`). So after
+    /// Reset Tutorials, the next cascade with no world entry pops both again.
+    #[test]
+    fn every_world_enter_cascade_fires_welcome_and_questgivers() {
+        let mut app = App::new();
+        app.add_plugins(TutorialPlugin)
+            .init_resource::<crate::items::Items>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_trainer::TrainerOpen>()
+            .init_resource::<crate::ui_merchant::MerchantOpen>()
+            .init_resource::<crate::ui_taxi::TaxiState>()
+            .init_resource::<Player>()
+            .add_message::<EnteredWorldMessage>()
+            .add_message::<crate::net::WorldEnterCascadeMessage>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        let script = UiScript::new().expect("a VM");
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') \
+                 f:RegisterEvent('TUTORIAL_TRIGGER') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, arg1) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[])),
+        ));
+        // Mid-session: the login's flags long applied and both tutorials since reset.
+        app.world()
+            .resource::<Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        app.update();
+        let seen = |app: &mut App| {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            s.eval::<Vec<i64>>("return SEEN").unwrap()
+        };
+        assert!(seen(&mut app).is_empty(), "no cascade, nothing");
+        app.world_mut()
+            .write_message(crate::net::WorldEnterCascadeMessage);
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            [0x2a, 0x01],
+            "a `/reload` or a port's cascade"
+        );
     }
 }
