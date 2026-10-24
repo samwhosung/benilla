@@ -214,10 +214,14 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // The race/sex refusal voice lines (`0x457877`), `SoundOptionsFrame.lua:3`; the master enable
     // greys it.
     same("EnableErrorSpeech", "1"),
-    // Not a 1.12 CVar or checkbox; the later-era name. The reference mutes on losing focus, music
-    // included (`WM_ACTIVATE` to `0x7a4860`'s `FSOUND_SetMute(-3, active ? 0 : 1)`), so "0" is its
-    // behaviour. The knob is `SoundConfig::background_sound`.
-    same("Sound_EnableSoundWhenGameIsInBG", "0"),
+    // The knob is `SoundConfig::background_sound`.
+    ours(
+        "Sound_EnableSoundWhenGameIsInBG",
+        "0",
+        "1.12 registers no such CVar and has no box for it: it mutes on losing focus, music \
+         included (`WM_ACTIVATE` to `0x7a4860`'s `FSOUND_SetMute(-3, !active)`), so OFF is the \
+         reference's own behaviour; the name is the later era's",
+    ),
     // Registered "1" (`0x4573be`); `SoundConfig::reverb` carries the evidence for shipping "0".
     deviates(
         "SoundReverb",
