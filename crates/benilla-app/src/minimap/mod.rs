@@ -695,7 +695,8 @@ fn emit_minimap(
                 &mut hover,
             );
             // The in-range party dots (blue cell 4, 1.3×), last.
-            blips::emit_party_dots(ctx, &group, &guids, &unit_pos, icons, &mut quads);
+            let pet = me.and_then(|(s, _)| s.0.unit_pet_guid());
+            blips::emit_party_dots(ctx, &group, &guids, &unit_pos, pet, icons, &mut quads);
         }
     }
     *blip_hover = hover;
