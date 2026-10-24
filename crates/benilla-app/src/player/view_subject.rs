@@ -103,7 +103,7 @@ mod tests {
                 .collect()
         };
 
-        // A subject standing 100 yards away, at scale 1.
+        // A unit standing 100 yards away, at scale 1.
         let subject = app
             .world_mut()
             .spawn((
@@ -111,6 +111,11 @@ mod tests {
                 CameraPivot {
                     height_local: 2.0,
                     swim_drop_local: 0.0,
+                },
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
                 },
             ))
             .id();
@@ -146,16 +151,10 @@ mod tests {
             app.world().resource::<ViewSubject>().remote.is_none(),
             "far sight naming an unstreamed object → the body, never the world origin"
         );
-        assert_eq!(
-            votes(&rx),
-            [true],
-            "the vote is keyed off the FIELD, not off resolving the object — voting 'released' \
-             here would tear down the server's stream around the object we are waiting for"
-        );
-        app.update();
         assert!(
             votes(&rx).is_empty(),
-            "and it fires on the edge, not per frame"
+            "a field naming no held object takes the end (`0x5de15d`), which sends nothing while \
+             far sight is off"
         );
 
         // Streamed: the subject's feet, and its pivot as the sweep origin's height.
@@ -176,6 +175,13 @@ mod tests {
             "the boom sweeps from the SUBJECT's head, not ours — otherwise it is cast across the \
              world and stops at the first wall in between"
         );
+        assert_eq!(
+            votes(&rx),
+            [true],
+            "the unit's arrival starts far sight (`0x5fbb1a`), which tells the server once"
+        );
+        app.update();
+        assert!(votes(&rx).is_empty(), "once, not per frame");
 
         // Cleared to zero: home.
         set(&mut app, 0);
@@ -185,5 +191,103 @@ mod tests {
             "a zeroed field is the ONLY teardown signal there is — no CLEAR_FAR_SIGHT_IMMEDIATE"
         );
         assert_eq!(votes(&rx), [false], "and the release votes 0, once");
+    }
+
+    /// Cancelling the buff of a far-sight spell (`AttributesEx` 0x2000 without 0x4: Sentry Totem,
+    /// 6495) runs `UpdateFarSight` (`0x6e70ad` → `0x5ee290`). With the camera on the field's object
+    /// it ends far sight: `CMSG_FAR_SIGHT` 0 (`0x5ee500`) and the camera back on the player
+    /// (`0x5ee54c`); with the camera elsewhere it starts it again, 1 (`0x5ee3d8`) and the camera on
+    /// the object (`0x5ee483`). Either way it answers 1, so the cancel sends no `CMSG_CANCEL_AURA`
+    /// (`0x6e70b4`).
+    #[test]
+    fn a_far_sight_buff_cancel_toggles_the_view_and_tells_the_server() {
+        const SENTRY_TOTEM: u32 = 6495;
+        const TOTEM: u64 = 0xF130_0000_0000_0042;
+        const FARSIGHT: u16 = 712;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        app.insert_resource(NetCommands(tx));
+        app.world_mut().insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                [(
+                    SENTRY_TOTEM,
+                    benilla_formats::SpellDisplay {
+                        id: SENTRY_TOTEM,
+                        attributes_ex: 0x2000,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+        let totem = app
+            .world_mut()
+            .spawn(Transform::from_xyz(50.0, 0.0, 0.0))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(TOTEM, totem);
+        app.world_mut().spawn((
+            SelfPlayer,
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (FARSIGHT, TOTEM as u32),
+                (FARSIGHT + 1, (TOTEM >> 32) as u32),
+            ])),
+        ));
+        let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<String> {
+            rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::FarSight { engage } => {
+                        Some(format!("far sight {}", engage as u8))
+                    }
+                    ClientCommand::CancelAura { spell_id } => Some(format!("cancel {spell_id}")),
+                    _ => None,
+                })
+                .collect()
+        };
+        let publish = |app: &mut App| {
+            app.world_mut()
+                .run_system_cached(publish_view_subject)
+                .unwrap();
+            app.world()
+                .resource::<ViewSubject>()
+                .remote
+                .map(|r| r.entity)
+        };
+        let cancel = |app: &mut App| {
+            app.world_mut()
+                .run_system_cached(|aura: crate::ui_aura::AuraSteps| {
+                    aura.cancel(None, SENTRY_TOTEM)
+                })
+                .unwrap();
+        };
+
+        assert_eq!(
+            publish(&mut app),
+            Some(totem),
+            "the field engages the totem"
+        );
+        assert_eq!(sent(&rx), ["far sight 1"]);
+
+        cancel(&mut app);
+        assert_eq!(
+            sent(&rx),
+            ["far sight 0"],
+            "the view ends, and no aura cancel"
+        );
+        assert_eq!(publish(&mut app), None, "the camera is back on the player");
+        assert_eq!(sent(&rx), Vec::<String>::new());
+
+        cancel(&mut app);
+        assert_eq!(
+            sent(&rx),
+            ["far sight 1"],
+            "and a second cancel looks again"
+        );
+        assert_eq!(publish(&mut app), Some(totem));
     }
 }
