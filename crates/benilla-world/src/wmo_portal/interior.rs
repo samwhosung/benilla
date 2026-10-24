@@ -938,6 +938,155 @@ mod tests {
         assert_eq!(footprint_sample_above(&model, [-1.0, -1.0, 1.0]), None);
     }
 
+    /// A one-group building of `wmo_id` whose only collision face is a floor at WoW `z`, under the
+    /// origin column, its group flagged `flags` with `WMOGroupID` `area`.
+    fn floor_model(wmo_id: u32, z: f32, flags: u32, area: u32) -> WmoModel {
+        let tri = [[-10.0, -10.0, z], [10.0, -10.0, z], [0.0, 10.0, z]];
+        let bounds = ([-10.0, -10.0, z], [10.0, 10.0, z]);
+        WmoModel {
+            wmo_id,
+            group_nav: vec![benilla_assets::WmoGroupNav {
+                flags,
+                bbox_min: [-10.0, -10.0, z - 1.0],
+                bbox_max: [10.0, 10.0, z + 10.0],
+                ref_start: 0,
+                ref_count: 0,
+                area_table_id: area,
+                fog_indices: [0; 4],
+                group_liquid: 0xf,
+            }],
+            group_collision_tris: vec![vec![tri]],
+            group_camera_only_tris: vec![Vec::new()],
+            group_collision_bounds: vec![Some(bounds)],
+            group_collision_grids: vec![None],
+            collision_bounds: Some(bounds),
+            ..bare_model()
+        }
+    }
+
+    /// The trackers' world: the player at the WoW origin and the placements in iteration order,
+    /// each at identity.
+    fn trackers_world(models: Vec<WmoModel>) -> (World, Vec<Entity>) {
+        let mut world = World::new();
+        world.init_resource::<Assets<AdtTile>>();
+        world.init_resource::<TerrainStreamer>();
+        world.init_resource::<CurrentAreaInterior>();
+        world.init_resource::<CurrentWmoInterior>();
+        world.init_resource::<PlayerWmoRoom>();
+        world.insert_resource(crate::view::Viewer {
+            at: Some(wow_to_bevy([0.0, 0.0, 0.0])),
+            ..Default::default()
+        });
+        let mut assets = Assets::<WmoModel>::default();
+        let handles: Vec<Handle<WmoModel>> = models.into_iter().map(|m| assets.add(m)).collect();
+        world.insert_resource(assets);
+        let placed = handles
+            .into_iter()
+            .map(|handle| {
+                world
+                    .spawn(WmoPortalInstance {
+                        handle,
+                        world_from_local: Affine3A::IDENTITY,
+                        name_set: 0,
+                        visible: vec![true],
+                        interior_fog: vec![false],
+                        liquid_visited: vec![false],
+                        flooded: vec![None],
+                    })
+                    .id()
+            })
+            .collect();
+        (world, placed)
+    }
+
+    /// The zone-text claim and the room after one frame of the trackers.
+    fn track(world: &mut World) -> (Option<WmoInteriorKeys>, Option<WmoInteriorKeys>) {
+        use bevy::ecs::system::RunSystemOnce;
+        world.run_system_once(track_area_interior).unwrap();
+        world.run_system_once(track_current_interior).unwrap();
+        (
+            world.resource::<CurrentAreaInterior>().0,
+            world.resource::<CurrentWmoInterior>().0,
+        )
+    }
+
+    fn keys(wmo_id: u32, area: u32) -> Option<WmoInteriorKeys> {
+        Some(WmoInteriorKeys {
+            wmo_id,
+            name_set: 0,
+            group_area_id: area,
+        })
+    }
+
+    /// `0x6a8840` keeps one fraction across every map object and group and replaces it only with
+    /// a strictly smaller one (`0x6a89a3`/`0x6a89aa`), and the camera's probe `0x6be250` shares one
+    /// across instances: the nearest floor under the player names the building, whichever comes
+    /// first in iteration. The far floor's building is placed first.
+    #[test]
+    fn the_nearest_building_under_the_player_claims_it() {
+        let (mut world, _) = trackers_world(vec![
+            floor_model(11, -5.0, 0, 101),
+            floor_model(22, -1.0, 0, 202),
+        ]);
+        assert_eq!(track(&mut world), (keys(22, 202), keys(22, 202)));
+    }
+
+    /// The nearest hit decides even when it is exterior: an `0x8` deck over an interior floor is
+    /// outdoors (`0x6a87f0`; `0x6be250` clears the instance for an exterior best).
+    #[test]
+    fn a_nearer_exterior_floor_leaves_the_player_outdoors() {
+        let (mut world, _) = trackers_world(vec![
+            floor_model(11, -5.0, 0, 101),
+            floor_model(22, -1.0, EXTERIOR, 202),
+        ]);
+        assert_eq!(track(&mut world), (None, None));
+    }
+
+    /// The trace tests every map object, whatever its `MOHD.wmoID`: a nearer building with id 0
+    /// claims the zone text's indoors bit over one behind it.
+    #[test]
+    fn a_nearer_building_without_a_wmo_id_still_claims_the_player() {
+        let (mut world, _) = trackers_world(vec![
+            floor_model(11, -5.0, 0, 101),
+            floor_model(0, -1.0, 0, 202),
+        ]);
+        assert_eq!(track(&mut world).0, keys(0, 202));
+    }
+
+    /// A unit's room is the same nearest claim (`0x6a8a20` from its position).
+    #[test]
+    fn a_units_room_is_the_nearest_buildings() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut world, placed) = trackers_world(vec![
+            floor_model(11, -5.0, 0, 101),
+            floor_model(22, -1.0, 0, 202),
+        ]);
+        let room = world
+            .run_system_once(
+                |wmos: Res<Assets<WmoModel>>,
+                 instances: Query<(Entity, &WmoPortalInstance)>,
+                 streamer: Res<TerrainStreamer>,
+                 adt_tiles: Res<Assets<AdtTile>>| {
+                    room_at(
+                        &wmos,
+                        &instances,
+                        &streamer,
+                        &adt_tiles,
+                        wow_to_bevy([0.0, 0.0, 0.0]),
+                        ROOM_UNDER_FLOOR_TOLERANCE,
+                    )
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            room,
+            Some(WmoRoom {
+                instance: placed[1],
+                group: 0
+            })
+        );
+    }
+
     /// The derived bounds cover only vertices a face references: an orphan must not inflate them.
     #[test]
     fn footprint_bounds_ignore_unreferenced_vertices() {
