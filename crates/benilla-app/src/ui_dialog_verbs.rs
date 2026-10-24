@@ -108,7 +108,7 @@ const SPIRIT_GUIDE_ACQUIRE_YD: f32 = 20.0;
 const SPIRIT_GUIDE_RETAIN_YD: f32 = SPIRIT_GUIDE_ACQUIRE_YD * 1.1;
 
 /// What [`AreaSpiritHealer::set_healer`] owes the frame; the reference does both in `0x4921c0`.
-#[derive(Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub(crate) struct SetHealerOutcome {
     /// A wave was pending and the healer changed (`0x4921fc`): `AREA_SPIRIT_HEALER_OUT_OF_RANGE`
     /// fires and `CMSG_CANCEL_AURA` goes out for 2584; this, not Lua, closes the dialog.
@@ -940,26 +940,18 @@ fn poll_area_spirit_healer(
     })
 }
 
-/// `SMSG_AREA_SPIRIT_HEALER_TIME`'s handler `0x492290`: the scan first (`0x492296`), then the
-/// arm for the healer it left cached (`0x4922a0`).
-fn rescan_and_time(
-    In((healer, ms)): In<(u64, u32)>,
+/// The healer changes the time packet's scan made, signalled and sent in order with the VM in
+/// hand (`0x4921c0` inside `0x492296`).
+fn apply_healer_changes(
+    In(changes): In<Vec<SetHealerOutcome>>,
     commands: Res<NetCommands>,
-    mut vm: crate::script_calls::VmWith<(
-        SpiritScan<'static, 'static>,
-        ResMut<'static, AreaSpiritHealer>,
-    )>,
+    mut vm: crate::script_calls::HostedVm,
 ) {
-    let outcomes = {
-        let (scan, mut spirit) = vm.own();
-        scan.run(&mut spirit)
-    };
     vm.run(|mut script| {
-        for outcome in &outcomes {
-            apply_healer_change(outcome, script.as_deref_mut(), &commands);
+        for change in &changes {
+            apply_healer_change(change, script.as_deref_mut(), &commands);
         }
     });
-    vm.own().1.on_time(healer, ms, Instant::now());
 }
 
 /// The dialog verbs' packet handlers: each parks a question or a countdown for the feed.
@@ -967,7 +959,7 @@ mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
-    use super::{BattlefieldQueue, InstanceBoot, MeetingStone, PetUnlearnState};
+    use super::{AreaSpiritHealer, BattlefieldQueue, InstanceBoot, MeetingStone, PetUnlearnState};
     use crate::net::NetHandlerApp;
 
     pub(super) fn register(app: &mut App) {
@@ -1010,11 +1002,23 @@ mod net {
         }
     }
 
-    fn on_area_spirit_healer_time(In(ev): In<SessionEvent>, mut world_commands: Commands) {
+    /// `0x492290`: the scan first (`0x492296`), then the arm for the healer it left cached
+    /// (`0x4922a0`); the scan's changes signal and send as the handler returns, in their order.
+    fn on_area_spirit_healer_time(
+        In(ev): In<SessionEvent>,
+        scan: super::SpiritScan,
+        mut spirit: ResMut<AreaSpiritHealer>,
+        mut world_commands: Commands,
+    ) {
         if let SessionEvent::AreaSpiritHealerTime { healer, ms } = ev {
+            let changes = scan.run(&mut spirit);
+            spirit.on_time(healer, ms, std::time::Instant::now());
+            if changes.is_empty() {
+                return;
+            }
             world_commands.queue(move |world: &mut World| {
-                if let Err(e) = world.run_system_cached_with(super::rescan_and_time, (healer, ms)) {
-                    debug!("net: the spirit healer's time did not run: {e}");
+                if let Err(e) = world.run_system_cached_with(super::apply_healer_changes, changes) {
+                    debug!("net: the spirit healer's changes did not run: {e}");
                 }
             });
         }

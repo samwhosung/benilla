@@ -281,6 +281,11 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
+        "::ui_dialog_verbs::AreaSpiritHealer",
+        "the area spirit healer, whose `in_range` the time packet's handler fills and `feed_dialog_verbs` fires `AREA_SPIRIT_HEALER_IN_RANGE` from in system order; `AcceptAreaSpiritHeal`'s scan, acting in its call, holds it in the host",
+    ),
+    (
+        Row::HostHeld,
         "::ui_dialog_verbs::BattlefieldQueue",
         "the battleground queue slots, which `feed_dialog_verbs` and `feed_battlefield_score` fire from; the port, leave and positions verbs, acting in their calls, read them in the host",
     ),
