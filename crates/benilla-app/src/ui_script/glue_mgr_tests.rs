@@ -252,8 +252,8 @@ fn pin_entered_sends_the_keys_on() {
             m.park_out.as_slice(),
             [ParkRequest::Realm(RealmRequest::Pin { positions, .. })] if positions == &[2, 9, 4, 7]
         ),
-        "{:?}",
-        m.park_out
+        "{} park asks",
+        m.park_out.len()
     );
     m.outbox.clear();
     m.tick();
@@ -2328,6 +2328,62 @@ fn the_stock_login_reaches_the_login_engine_and_shows_its_status() {
     assert!(!unknown.is_empty());
     assert_eq!(dialog(&app), Some(("OKAY".into(), unknown)));
     assert_eq!(mgr(&app).state, ScreenState::Idle);
+}
+
+/// A PIN challenge over the stock screens: the dialog goes down for the stock keypad
+/// (`AccountLogin.xml`'s `VirtualKeypadFrame`), whose keys show the grid in order; the keys
+/// pressed and its Okay reach the logon as positions, under the `CANCEL` dialog, then
+/// `LOGIN_STATE_CHECKINGVERSIONS`.
+#[test]
+fn the_stock_keypad_shows_the_grid_and_sends_the_keys_pressed() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, rx, _) = stock_app();
+    let (park_tx, park_rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::RealmChoice(crate::net::ParkSender::Park(
+        park_tx,
+        std::marker::PhantomData,
+    )));
+    vm(&app).run("AcceptEULA() AcceptTOS()").unwrap();
+    app.update();
+    type_and_login(&mut app);
+    assert!(rx.try_recv().is_ok());
+    for stage in [LoginStage::Connecting, LoginStage::Pin { grid: GRID }] {
+        app.world_mut().write_message(LoginStageMessage { stage });
+        app.update();
+    }
+    assert_eq!(dialog(&app), None, "the keypad replaces the dialog");
+    let shown: Vec<String> = vm(&app)
+        .eval(
+            "local t = {} for i = 1, 10 do \
+               t[i] = getglobal('VirtualKeypadButton'..i):GetText() or '' end return t",
+        )
+        .unwrap();
+    assert_eq!(shown, GRID.map(|d| d.to_string()));
+    assert!(vm(&app)
+        .eval::<bool>("return VirtualKeypadFrame:IsShown() == 1")
+        .unwrap());
+
+    // 2590 on this grid: the keys with ids 2, 9, 4 and 7, buttons 3, 10, 5 and 8.
+    vm(&app)
+        .run(
+            "VirtualKeypadButton3:Click() VirtualKeypadButton10:Click() \
+             VirtualKeypadButton5:Click() VirtualKeypadButton8:Click() \
+             VirtualKeypadOkayButton:Click()",
+        )
+        .unwrap();
+    app.update();
+    assert!(
+        matches!(
+            park_rx.try_recv(),
+            Ok(ParkRequest::Realm(RealmRequest::Pin { positions, .. })) if positions == [2, 9, 4, 7]
+        ),
+        "the keys reach the logon"
+    );
+    assert!(!vm(&app)
+        .eval::<bool>("return VirtualKeypadFrame:IsShown() == 1")
+        .unwrap());
+    let checking = vm(&app).global_text("LOGIN_STATE_CHECKINGVERSIONS");
+    assert_eq!(dialog(&app), Some(("CANCEL".into(), checking)));
 }
 
 /// The account guard's refusal of the run's own credentials, which no network message carries,

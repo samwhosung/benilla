@@ -311,7 +311,10 @@ fn a_wrong_pin_is_refused_by_the_proof() {
     .err()
     .expect("refused");
     let r = e.downcast_ref::<benilla_protocol::AuthReject>().unwrap();
-    assert_eq!((r.code, r.reply), (0x04, benilla_protocol::LogonReply::Proof));
+    assert_eq!(
+        (r.code, r.reply),
+        (0x04, benilla_protocol::LogonReply::Proof)
+    );
 }
 
 /// A prompt that gives no PIN ends the logon there, with nothing sent.
