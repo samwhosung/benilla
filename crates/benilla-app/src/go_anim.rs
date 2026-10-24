@@ -63,6 +63,10 @@ pub(crate) struct GoAnim {
     /// The requested id currently armed (`[block0+0xf8]`, written by op4 `0x71252f`, read by
     /// `0x712090(model, -1)`), which the already-playing skip compares.
     armed_id: Option<u16>,
+    /// The substate slot 34 was last asked for (`[handler+0x10]`, stored at `0x5f3c19` ahead of
+    /// the arm), as its `AnimationData.dbc` id: the motion or rest pose the state resolved to,
+    /// before the missing-sequence remap and the already-playing skip.
+    substate: Option<u16>,
 }
 
 /// The dispatch `0x5f3cb0` ran on this entity; its first act (`0x5f3cc8 call 0x5f40c0`) releases
@@ -232,13 +236,12 @@ pub(crate) fn go_state(anim: Option<&GoAnim>, store: &ObjectStore) -> u32 {
 }
 
 /// The handler's substate `[handler+0x10]` as its `AnimationData.dbc` id (`0x8607e4`: substate 1
-/// Closed 147, 3 Opened 149): the armed transient, else the rest pose of the state shown, else of
-/// the stored state. A static object's handler rests on its state's pose.
+/// Closed 147, 3 Opened 149): the one last asked for, else the rest pose of the stored state. A
+/// static object's handler rests on its state's pose.
 pub(crate) fn substate_anim(anim: Option<&GoAnim>, store: &ObjectStore) -> Option<u16> {
     match anim {
         Some(a) => a
-            .transient
-            .map(|t| t.id)
+            .substate
             .or_else(|| a.shown.or(a.state).and_then(rest_anim)),
         None => rest_anim(go_state(None, store)),
     }
@@ -558,6 +561,7 @@ fn drive_go_anim(
                     go.transient = None;
                     break 'state;
                 };
+                go.substate = Some(play.anim_id());
                 // Remap an unowned id, so a lidless model holds a real pose, not bind.
                 let (want, frozen) = remap_missing(anims, play.anim_id());
                 // The already-playing skip (`0x5f39fa: cmp esi,eax; je 0x5f3b32`) holds only on
@@ -617,6 +621,8 @@ fn drive_go_anim(
         if go.one_shot.is_some() {
             let id = go.one_shot.take().expect("checked is_some");
             if anims.owns(id) {
+                // Owned (`0x5f4245`), slot 15 asks slot 34 for the substate (`0x5f4253`).
+                go.substate = Some(id);
                 // Slot 15 arms through the same `0x5f3930`, so it rolls a variation too.
                 let roll = rng.draw();
                 if let Some(clip) = anims.pick_variation(id, roll) {
