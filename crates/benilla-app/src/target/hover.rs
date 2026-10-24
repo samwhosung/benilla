@@ -1390,6 +1390,24 @@ mod tests {
         }
     }
 
+    /// While a word stands the grader forks to the targeting arm (`0x4828f4`) and publishes the
+    /// pick (`0x4829d4`-`0x4829e0`) without the `IsSelectable` call (`0x482982`), so a
+    /// `UNIT_FLAG_NOT_SELECTABLE` unit the word admits is the hover; outside targeting it is
+    /// refused. A plain unit word (`0x0002`) asks the filter for no relation (`0x481050`).
+    #[test]
+    fn while_targeting_the_hover_skips_the_selectable_grade() {
+        const NOT_SELECTABLE: u32 = 0x0200_0000;
+        let mut world = unit_pick_world();
+        let farmer = unit_at(&mut world, 10, 0.0, unit_store(2, NOT_SELECTABLE, 100));
+        let outside = pick_under(&mut world, None);
+        assert_eq!(outside.target, None, "outside targeting the grader refuses it");
+        assert!(outside.refused);
+        let aimed = pick_under(&mut world, Some(0x0002));
+        assert_eq!(aimed.target, Some(farmer), "a word takes it ungraded");
+        assert_eq!(aimed.guid, Some(10));
+        assert!(!aimed.refused);
+    }
+
     /// The press latches the hover's pick, so the click reaches what the cursor showed: the unit
     /// behind, not the one in front the word refuses.
     #[test]
