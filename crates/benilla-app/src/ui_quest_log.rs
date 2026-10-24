@@ -123,9 +123,15 @@ impl QuestLog {
         self.folds = Default::default();
     }
 
-    /// Disconnect: drops everything, the templates and the folds included.
+    /// Disconnect: drops everything but the templates, the folds included. The quest store is
+    /// saved (`0x554d70`), so the world entry keeps it (`0x5557c5`).
     pub(crate) fn clear_session(&mut self) {
-        *self = Self::default();
+        let templates = std::mem::take(&mut self.templates);
+        *self = Self {
+            templates,
+            ..Self::default()
+        };
+        self.templates.clear_pending();
     }
 }
 

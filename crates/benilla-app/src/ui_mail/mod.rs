@@ -182,7 +182,7 @@ impl MailOpen {
         self.results.clear();
         self.mails.clear();
         self.auction_subjects.clear();
-        self.bodies.clear();
+        self.bodies.clear_pending();
         self.request_resolved = false;
         self.list_results = 0;
     }

@@ -250,9 +250,7 @@ const SAVED_ANSWERS: [u16; 7] = [
 
 /// Whether `opcode` answers a saved store's query.
 pub(crate) fn is_saved_answer(opcode: u16) -> bool {
-    let _ = SAVED_ANSWERS;
-    let _ = opcode;
-    false
+    SAVED_ANSWERS.contains(&opcode)
 }
 
 pub(crate) struct WdbPlugin;
@@ -291,7 +289,10 @@ fn clear_session_stores(
     mut guilds: ResMut<GuildState>,
     mut petitions: ResMut<PetitionRecords>,
 ) {
-    let _ = (ev, &mut guilds, &mut petitions);
+    if let SessionEvent::Connected { .. } = ev {
+        guilds.clear_world_session();
+        petitions.clear_world_session();
+    }
 }
 
 /// Every saved store's file, for the answer bytes' handler.
@@ -374,7 +375,51 @@ impl<T> WdbFile<T> {
 /// Loads the realm's file the first frame its identity is known, and on a realm change, after
 /// saving the realm left.
 fn load<T: SavedCache>(roster: Res<Roster>, mut file: ResMut<WdbFile<T>>, mut cache: ResMut<T>) {
-    let _ = (roster, &mut file, &mut cache);
+    let Some((realm, _)) = crate::ui_macro::identity(&roster) else {
+        return;
+    };
+    if file.realm.as_deref() == Some(realm.as_str()) {
+        return;
+    }
+    if file.realm.is_some() {
+        write_now(&mut file, &cache);
+        cache.forget();
+        file.bodies.clear();
+    }
+    file.realm = Some(realm.clone());
+    file.path = crate::local_state::template_cache_path(&realm, T::FILE);
+    file.saved = cache.store().generation();
+    let Some(path) = file.path.clone() else {
+        return; // a hermetic capture, or no state folder: session-only
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return; // no file yet
+    };
+    let Some(entries) = decode(&bytes, T::TAG, &realm) else {
+        // The first save overwrites it.
+        debug!(
+            "wdb: discarding {} — not this build, locale or realm",
+            path.display()
+        );
+        return;
+    };
+    let n = entries.len();
+    for (key, body) in entries {
+        // An answer that landed before the load is newer than the file's.
+        if cache.store().get(key).is_some() {
+            continue;
+        }
+        if let Ok(packet) = benilla_protocol::messages::parse_server(T::ANSWER, &body) {
+            for ev in benilla_protocol::decode(packet) {
+                cache.install(ev);
+            }
+        }
+        if cache.store().get(key).is_some() {
+            file.bodies.insert(key, body);
+        }
+    }
+    file.saved = cache.store().generation();
+    debug!("wdb: loaded {n} {} records for {realm}", T::FILE);
 }
 
 /// Writes the store when its records have changed and the debounce has elapsed.
@@ -393,7 +438,26 @@ fn save_on_exit<T: SavedCache>(mut file: ResMut<WdbFile<T>>, cache: Res<T>) {
 }
 
 fn write_now<T: SavedCache>(file: &mut WdbFile<T>, cache: &T) {
-    let _ = (file, cache);
+    let generation = cache.store().generation();
+    if generation == file.saved {
+        return;
+    }
+    let (Some(path), Some(realm)) = (file.path.as_ref(), file.realm.as_ref()) else {
+        return;
+    };
+    let mut keys: Vec<u32> = cache.store().iter().map(|(&k, _)| k).collect();
+    keys.sort_unstable();
+    let entries = keys
+        .into_iter()
+        .filter_map(|k| file.bodies.get(&k).map(|b| (k, b.as_slice())));
+    let bytes = encode(T::TAG, realm, entries);
+    match crate::local_state::write_atomic_bytes(path, &bytes) {
+        Ok(()) => {
+            file.saved = generation;
+            debug!("wdb: wrote {}", path.display());
+        }
+        Err(e) => warn!("wdb: cannot write {}: {e}", path.display()),
+    }
 }
 
 /// The header's locale, the client's locale tag as each `.wdb` header carries it (`[0xc2a2a4]`,
@@ -405,8 +469,18 @@ fn locale_tag() -> u32 {
 
 /// A store's file: the header, each `{key, size, body}` entry, then two zero dwords.
 fn encode<'a>(tag: u32, realm: &str, entries: impl Iterator<Item = (u32, &'a [u8])>) -> Vec<u8> {
-    let _ = (tag, realm, entries.count(), BUILD, FORMAT, locale_tag());
-    Vec::new()
+    let mut out = Vec::new();
+    for word in [tag, BUILD, locale_tag(), FORMAT, realm.len() as u32] {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    out.extend_from_slice(realm.as_bytes());
+    for (key, body) in entries {
+        out.extend_from_slice(&key.to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(body);
+    }
+    out.extend_from_slice(&[0; 8]);
+    out
 }
 
 /// The next little-endian dword of `r`, consumed.
@@ -418,8 +492,31 @@ fn take_u32(r: &mut &[u8]) -> Option<u32> {
 
 /// [`encode`]'s entries, `None` when any header field differs or the file is cut short.
 fn decode(bytes: &[u8], tag: u32, realm: &str) -> Option<Vec<(u32, Vec<u8>)>> {
-    let _ = (bytes, tag, realm, take_u32);
-    None
+    let mut r = bytes;
+    let header = [
+        take_u32(&mut r)?,
+        take_u32(&mut r)?,
+        take_u32(&mut r)?,
+        take_u32(&mut r)?,
+    ];
+    if header != [tag, BUILD, locale_tag(), FORMAT] {
+        return None;
+    }
+    let len = take_u32(&mut r)? as usize;
+    if r.get(..len)? != realm.as_bytes() {
+        return None;
+    }
+    r = &r[len..];
+    let mut entries = Vec::new();
+    loop {
+        let key = take_u32(&mut r)?;
+        let size = take_u32(&mut r)? as usize;
+        if key == 0 {
+            return Some(entries);
+        }
+        entries.push((key, r.get(..size)?.to_vec()));
+        r = &r[size..];
+    }
 }
 
 #[cfg(test)]
