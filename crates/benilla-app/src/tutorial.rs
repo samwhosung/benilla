@@ -14,7 +14,8 @@
 //!
 //! The reference has fifty-one trigger sites and seven acknowledge sites (the callers of
 //! `0x4b5390` and `0x4b54c0`); the ones this app can produce reach here through
-//! [`TutorialEvent`], the polled edges below, or a field watcher's
+//! [`TutorialEvent`], [`Tutorials::trigger_now`] from a site that holds the bank, the VM's queue
+//! for a site beside a script, the polled edges below, or a field watcher's
 //! [`crate::field_watch::FieldNotice::Tutorial`], fired in the watcher's place
 //! ([`TutorialState::fire_now`]).
 
@@ -457,8 +458,9 @@ fn feed_tutorials(
                 TutorialEvent::Acknowledge { id } => tutorials.acknowledge(id),
             }
         }
-        // The engine's sites: Quest Completion, a turn-in test that passed (`0x4df792`), and Elite
-        // Quests, an elite quest's accept (`0x5dde7d`).
+        // The sites beside a script, queued on the VM: Quest Completion (`0x4df792`), Elite
+        // Quests (`0x5dde7d`), Replying to Tells (`0x49b107`), The Spellbook (`0x4b2ba1`) and the
+        // inventory alerts (`0x4c8002`, `0x4c802e`).
         if let Some(script) = script.as_mut() {
             for id in script.take_tutorial_triggers() {
                 tutorials.trigger(id, 0, now);
