@@ -69,6 +69,8 @@ pub(crate) use light::{material_variant, VariantLane};
 use light::{studio_light, BoothLight};
 mod panes;
 pub(crate) use panes::{PaneDisplays, PaneRequest, PaneRequests};
+#[cfg(test)]
+mod loading_tests;
 pub(crate) mod test_bake;
 #[cfg(test)]
 mod unheld_tests;
