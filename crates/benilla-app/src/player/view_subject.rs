@@ -1,17 +1,21 @@
 //! What the camera orbits: our body, or a far-sight subject elsewhere. Far sight moves only the
 //! eye, so the subject is published for the camera, not made a control branch like free-fly.
 //!
-//! The server's only signal is `PLAYER_FARSIGHT` (player field 712) on our own object: non-zero
-//! looks through that guid, zero comes home. vmangos defers the set by 400 ms
+//! The server's signal is `PLAYER_FARSIGHT` (player field 712) on our own object, and the client
+//! answers it with `UpdateFarSight` (`0x5ee290`, [`FarSight`]), which moves the camera and tells
+//! the server with `CMSG_FAR_SIGHT`. vmangos defers the set by 400 ms
 //! (`Player::ScheduleCameraUpdate`, `Player.cpp:19136`), so the subject has streamed first, and
 //! sends the clear at once to every client in range (`DirectSendPublicValueUpdate`), so only our
 //! [`SelfPlayer`] store is read; it never sends `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE`. Mind Control
 //! sets the same field (`SpellAuras.cpp:2975`).
 
+use std::sync::{Mutex, PoisonError};
+
+use benilla_protocol::EntityKind;
 use bevy::prelude::*;
 
 use super::{head_height, CameraPivot};
-use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{ClientCommand, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 
 /// Where the camera rig sits this frame when it is not our body; `None` is the body. It carries a
 /// resolved pose because the controller, holding our own `Transform`, cannot query another's.
@@ -40,26 +44,147 @@ impl RemoteView {
     }
 }
 
-/// Resolves our `PLAYER_FARSIGHT` into a pose, before the controller runs; a subject not yet
-/// streamed leaves the camera on the body.
+/// The far-sight machine `UpdateFarSight` (`0x5ee290`) runs for the active player, written
+/// through `&self` as a shared sink of the VM pass ([`crate::vm_pass::shared_sinks`]): the buff
+/// cancel runs it inside its call (`0x6e70ad`), and [`publish_view_subject`] for the field's
+/// change, an object's arrival and the camera's lost object.
+///
+/// Not built: the mover switch (`SetActiveMover` `0x6006e0` at `0x5ee35b`, `0x5ee477`,
+/// `0x5ee573`), which possession already moves by the control update; the attack stop at a
+/// start (`0x5ecac0` at `0x5ee445`); the targeting stop at an end (`0x6e4920` at `0x5ee545`).
+#[derive(Resource, Default)]
+pub(crate) struct FarSight(Mutex<FarSightState>);
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct FarSightState {
+    /// `+0x1c70` bit 0: `CMSG_FAR_SIGHT` 1 sent and 0 not yet.
+    on: bool,
+    /// The far-sight object the camera follows (`[cam+0x88]`); `None` is the active player.
+    camera: Option<u64>,
+}
+
+impl FarSight {
+    fn state(&self) -> std::sync::MutexGuard<'_, FarSightState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The far-sight object the camera follows, `None` for our own player.
+    pub(crate) fn camera(&self) -> Option<u64> {
+        self.state().camera
+    }
+
+    /// `UpdateFarSight` (`0x5ee290`) for the active player, whose `PLAYER_FARSIGHT` is `field`,
+    /// with `held` the client's object lookup (`0x5ee2ef`). A field naming no held object puts
+    /// the camera back on the player (`0x5ee334`) and answers 0 (`0x5ee360`). A held object the
+    /// camera is not on starts far sight: `CMSG_FAR_SIGHT` 1 unless it is on already (`0x5ee39c`,
+    /// `0x5ee3d8`), and the camera on the object (`0x5ee483`). Anything else, no field or the
+    /// camera already on its object (`0x5ee396`), ends it: 0 when it was on (`0x5ee4c4`,
+    /// `0x5ee500`), and the camera on the player (`0x5ee54c`). Both answer 1.
+    pub(crate) fn update(
+        &self,
+        field: Option<u64>,
+        held: impl Fn(u64) -> bool,
+        net: &NetCommands,
+    ) -> bool {
+        let mut st = self.state();
+        let object = field.filter(|&guid| held(guid));
+        if field.is_some() && object.is_none() {
+            st.camera = None;
+            return false;
+        }
+        match object {
+            Some(guid) if st.camera != Some(guid) => {
+                if !st.on {
+                    let _ = net.0.send(ClientCommand::FarSight { engage: true });
+                    st.on = true;
+                }
+                st.camera = Some(guid);
+            }
+            _ => {
+                if st.on {
+                    st.on = false;
+                    let _ = net.0.send(ClientCommand::FarSight { engage: false });
+                }
+                st.camera = None;
+            }
+        }
+        true
+    }
+
+    /// `StartFarSight` (`0x5ee270`): the update while far sight is off.
+    fn start(&self, field: Option<u64>, held: impl Fn(u64) -> bool, net: &NetCommands) {
+        if !self.state().on {
+            self.update(field, held, net);
+        }
+    }
+
+    /// `EndFarSight` (`0x5ee590`): the update while far sight is on.
+    fn end(&self, field: Option<u64>, held: impl Fn(u64) -> bool, net: &NetCommands) {
+        if self.state().on {
+            self.update(field, held, net);
+        }
+    }
+
+    /// Whether far sight is on (`+0x1c70` bit 0).
+    fn on(&self) -> bool {
+        self.state().on
+    }
+}
+
+/// Runs the far-sight callers outside a script call, then resolves the camera's object into a
+/// pose, before the controller runs; an object not held leaves the camera on the body.
+/// - `PLAYER_FARSIGHT`'s change (`0x5de0d0`): the start when the new field's object is held
+///   (`0x5de144`), else the end (`0x5de15d`);
+/// - the field's object arriving, a unit's (`0x5fbb1a`) or a dynamic object's (`0x5d552d`): the
+///   start;
+/// - the camera's object gone while far sight is on, the world frame's render (`0x483031`,
+///   `0x483054`-`0x483061`): the update.
+#[allow(clippy::too_many_arguments)] // a Bevy system's full input set
 pub(super) fn publish_view_subject(
     mut subject: ResMut<ViewSubject>,
+    far_sight: Res<FarSight>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     index: Res<GuidIndex>,
     // The pivot height takes the raw `OBJECT_FIELD_SCALE_X`, not the eased render scale.
-    poses: Query<(
-        &Transform,
-        Option<&CameraPivot>,
-        Option<&crate::net::NetEntity>,
-    )>,
+    poses: Query<(&Transform, Option<&CameraPivot>, Option<&NetEntity>)>,
     net: Res<NetCommands>,
-    mut engaged: Local<Option<u64>>,
+    mut seen_field: Local<Option<u64>>,
+    mut seen_object: Local<Option<Entity>>,
 ) {
-    let anchor = self_store
+    let field = self_store
         .iter()
         .next()
         .and_then(|store| store.0.player_farsight());
-    subject.remote = anchor
+    let held = |guid: u64| index.0.contains_key(&guid);
+    let object = field.and_then(|guid| index.0.get(&guid).copied());
+    if *seen_field != field {
+        *seen_field = field;
+        if object.is_some() {
+            far_sight.start(field, held, &net);
+        } else {
+            far_sight.end(field, held, &net);
+        }
+    } else if object.is_some() && object != *seen_object {
+        let arrives = object
+            .and_then(|e| poses.get(e).ok())
+            .and_then(|(_, _, net)| net)
+            .is_some_and(|n| {
+                matches!(
+                    n.kind,
+                    EntityKind::Unit | EntityKind::Player | EntityKind::DynamicObject
+                )
+            });
+        if arrives {
+            far_sight.start(field, held, &net);
+        }
+    }
+    *seen_object = object;
+    if far_sight.camera().is_some_and(|guid| !held(guid)) && far_sight.on() {
+        far_sight.update(field, held, &net);
+    }
+
+    subject.remote = far_sight
+        .camera()
         .and_then(|guid| index.0.get(&guid).copied())
         .and_then(|entity| Some((entity, poses.get(entity).ok()?)))
         .map(|(entity, (t, pivot, net))| RemoteView {
@@ -67,18 +192,6 @@ pub(super) fn publish_view_subject(
             feet: t.translation,
             pivot_height: head_height(pivot, net.map_or(1.0, |n| n.scale)),
         });
-
-    // `CMSG_FAR_SIGHT` on the field's edge: 1 as the view attaches and 0 as it releases, the
-    // reference's two sites (`0x5ee290`). It follows the field, not the resolve: a release sent
-    // while the subject streams in would tear down the server's stream around it.
-    if *engaged != anchor {
-        if anchor.is_some() {
-            let _ = net.0.send(ClientCommand::FarSight { engage: true });
-        } else {
-            let _ = net.0.send(ClientCommand::FarSight { engage: false });
-        }
-        *engaged = anchor;
-    }
 }
 
 #[cfg(test)]
@@ -90,6 +203,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<ViewSubject>()
+            .init_resource::<FarSight>()
             .init_resource::<GuidIndex>()
             .insert_resource(NetCommands(tx))
             .add_systems(Update, publish_view_subject);

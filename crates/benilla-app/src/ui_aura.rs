@@ -927,6 +927,8 @@ pub(crate) struct AuraSteps<'w, 's> {
     spells: Option<Res<'w, Spells>>,
     index: Option<Res<'w, GuidIndex>>,
     net: Res<'w, NetCommands>,
+    /// The machine `UpdateFarSight` runs; absent in a harness without the player's plugin.
+    far_sight: Option<Res<'w, crate::player::FarSight>>,
 }
 
 /// `AttributesEx` 0x2000, the far-sight spells, which the cancel hands to `UpdateFarSight`.
@@ -952,12 +954,11 @@ impl AuraSteps<'_, '_> {
     }
 
     /// The far-sight gate (`0x6e7083`-`0x6e70b4`): a spell with `AttributesEx` 0x2000 and without
-    /// 0x4 stops the cancel with no player, or when `UpdateFarSight` (`0x5ee290`, at `0x6e70ad`)
-    /// answers nonzero, which it does unless `PLAYER_FARSIGHT` names an object the client does not
-    /// hold (`0x5ee32b` → `0x5ee360`). Whether the cancel goes on to its event and packet. Not
-    /// built: `UpdateFarSight`'s own work, which ends or re-engages the view
-    /// (`CMSG_FAR_SIGHT`, the mover); benilla's view follows the field
-    /// ([`crate::player::ViewSubject`]).
+    /// 0x4 stops the cancel with no player, or else runs `UpdateFarSight` (`0x5ee290`, at
+    /// `0x6e70ad`, [`crate::player::FarSight::update`]), which toggles the view and tells the
+    /// server, and stops the cancel when it answers nonzero: unless `PLAYER_FARSIGHT` names an
+    /// object the client does not hold (`0x5ee32b` → `0x5ee360`). Whether the cancel goes on to
+    /// its event and packet.
     pub(crate) fn passes_far_sight(&self, spell_id: u32) -> bool {
         let ex = self
             .spells
@@ -970,12 +971,17 @@ impl AuraSteps<'_, '_> {
         let Ok((_, store)) = self.me.single() else {
             return false;
         };
-        store.0.player_farsight().is_some_and(|guid| {
-            !self
-                .index
+        let field = store.0.player_farsight();
+        let held = |guid: u64| {
+            self.index
                 .as_deref()
                 .is_some_and(|index| index.0.contains_key(&guid))
-        })
+        };
+        match self.far_sight.as_deref() {
+            Some(far_sight) => !far_sight.update(field, held, &self.net),
+            // No machine: its answer alone.
+            None => field.is_some_and(|guid| !held(guid)),
+        }
     }
 
     /// `CMSG_CANCEL_AURA` (`0x6e70eb`), the spell's id.

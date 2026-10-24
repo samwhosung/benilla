@@ -116,7 +116,7 @@ pub(crate) use state::{
 pub(crate) use swim::{may_swim, swim_enter_depth};
 /// The camera's followed unit when not our body; [`crate::camera_shake`] takes its body frame and
 /// two suspend gates from it, as the reference does from `[cam+0x88]`.
-pub(crate) use view_subject::ViewSubject;
+pub(crate) use view_subject::{FarSight, ViewSubject};
 
 /// `UNIT_FLAG_STUNNED`, the `UNIT_FIELD_FLAGS` bit that stops turning. The reference reads it off
 /// the descriptor (`[[unit+0x110]+0xa0]`, predicate `0x5145b0`, an inverted `not/shr/and` test) at
@@ -318,6 +318,7 @@ impl Plugin for PlayerPlugin {
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a
         // separate system, as `control` holds our `Transform` mutably and cannot read another's.
         app.init_resource::<view_subject::ViewSubject>()
+            .init_resource::<view_subject::FarSight>()
             .init_resource::<scoped_view::ScopedView>()
             .add_systems(
                 Update,

@@ -159,6 +159,7 @@ pub(crate) fn shared_sinks(world: &World) -> Vec<ComponentId> {
         std::any::TypeId::of::<crate::ui_action::UiErrorKeys>(),
         std::any::TypeId::of::<crate::sound::MessageSounds>(),
         std::any::TypeId::of::<crate::creature_anim::UnitEdits>(),
+        std::any::TypeId::of::<crate::player::FarSight>(),
     ]
     .into_iter()
     .filter_map(|t| world.components().get_resource_id(t))
@@ -877,7 +878,7 @@ mod tests {
     fn every_user_of_a_shared_sink_runs_in_one_order() {
         let mut app = headless_client_with(crate::dev::add_every_instrument);
         let sinks = super::shared_sinks(app.world());
-        assert_eq!(sinks.len(), 4, "the sinks are registered");
+        assert_eq!(sinks.len(), 5, "the sinks are registered");
         let users: Vec<SystemKey> = app.world_mut().schedule_scope(Update, |world, schedule| {
             schedule.graph_mut().systems.initialize(world);
             let graph = schedule.graph();
