@@ -66,7 +66,7 @@ pub(crate) fn drop_bar(
     script.set_pet_state(bar.spells.state);
     // What the stats feed's push of no pet records.
     if let Some(stats_feed) = stats_feed {
-        *stats_feed.0.get(script) = Some((false, benilla_ui::script::PetStats::default()));
+        stats_feed.0.get(script).pushed = Some((false, benilla_ui::script::PetStats::default()));
     }
     // What the feed's own push of a cleared bar records: no slots, not usable, nothing to lift.
     let Some(feed) = feed else {

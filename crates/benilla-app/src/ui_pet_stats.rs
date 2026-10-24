@@ -50,7 +50,26 @@ pub(crate) struct PetSnapshot;
 /// ([`crate::ui_pet::drop_bar`]) records what it pushed and the feed neither pushes nor signals it
 /// again.
 #[derive(Resource, Default)]
-pub(crate) struct PetStatsFeed(pub(crate) crate::ui_script::VmMemo<Option<(bool, PetStats)>>);
+pub(crate) struct PetStatsFeed(pub(crate) crate::ui_script::VmMemo<StatsMemory>);
+
+/// The bucket and its two tooltip figures, the `UNIT_HAPPINESS` key.
+type Happiness = (Option<u32>, u32, u32);
+
+/// What [`feed_pet_stats`] last pushed to a VM, and the happiness of the last pet it saw, by guid.
+#[derive(Default)]
+pub(crate) struct StatsMemory {
+    pub(crate) pushed: Option<(bool, PetStats)>,
+    /// The streamed pet's guid and its [`Happiness`] when last pushed; a push with no pet keeps it.
+    happiness: Option<(u64, Happiness)>,
+}
+
+fn happiness(s: &PetStats) -> Happiness {
+    (
+        s.happiness,
+        s.damage_percentage.to_bits(),
+        s.loyalty_rate.to_bits(),
+    )
+}
 
 pub(crate) struct UiPetStatsPlugin;
 
@@ -176,27 +195,27 @@ pub(crate) fn feed_pet_stats(
         let Some(script) = script else {
             return;
         };
-        let last = last.0.get(script);
+        let memory = last.0.get(script);
         let store = pet.store(bar.spells.pet_guid);
         let family = family_for(store, &names, family_tables.as_deref());
         let fresh = stats_for(store, self_store.iter().next(), tables.as_deref(), family);
+        // `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`), is the pet's
+        // happiness field's watch: it fires for a change on the pet the feed last saw, never for a
+        // VM's first push, a pet's arrival or the bar's return. Deviation: fired when the bucket
+        // or its two tooltip figures change, not on every change of the happiness field as in the
+        // reference, because no stock consumer reads the raw value.
+        let now = store.map(|_| (bar.spells.pet_guid, happiness(&fresh.1)));
+        let happiness_moved = matches!(
+            (memory.happiness, now),
+            (Some((was_pet, was)), Some((pet, is))) if was_pet == pet && was != is
+        );
+        if now.is_some() {
+            memory.happiness = now;
+        }
+        let last = &mut memory.pushed;
         if last.as_ref() == Some(&fresh) {
             return;
         }
-        // `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`). Deviation: fired when
-        // the bucket or its two tooltip figures change, not on every change of the happiness field
-        // as in the reference, because no stock consumer reads the raw value.
-        let happiness_moved = last.as_ref().map(|(_, s)| {
-            (
-                s.happiness,
-                s.damage_percentage.to_bits(),
-                s.loyalty_rate.to_bits(),
-            )
-        }) != Some((
-            fresh.1.happiness,
-            fresh.1.damage_percentage.to_bits(),
-            fresh.1.loyalty_rate.to_bits(),
-        ));
         if happiness_moved {
             debug!(
                 "ui_pet_stats: happiness {:?} ({}% damage), loyalty {:?}",
