@@ -123,17 +123,18 @@ pub(crate) struct AreaSpiritHealer {
     /// Written only by [`Self::set_healer`], the reference's `0x4921c0`.
     healer: Option<u64>,
     deadline: Option<Instant>,
-    in_range: bool,
 }
 
 impl AreaSpiritHealer {
     /// `SMSG_AREA_SPIRIT_HEALER_TIME`: arms the clock only for the cached healer (`0x4922a0`) and
-    /// a positive time, and owes `AREA_SPIRIT_HEALER_IN_RANGE`.
-    pub(crate) fn on_time(&mut self, healer: u64, ms: u32, now: Instant) {
-        if self.healer == Some(healer) && ms > 0 {
-            self.deadline = Some(now + std::time::Duration::from_millis(u64::from(ms)));
-            self.in_range = true;
+    /// a positive time (`0x4922b2`); whether it did, for the `AREA_SPIRIT_HEALER_IN_RANGE` that
+    /// follows the store (`0x4922cc`-`0x4922d1`).
+    pub(crate) fn on_time(&mut self, healer: u64, ms: u32, now: Instant) -> bool {
+        if self.healer != Some(healer) || ms == 0 {
+            return false;
         }
+        self.deadline = Some(now + std::time::Duration::from_millis(u64::from(ms)));
+        true
     }
 
     /// `0x4921c0`: an unchanged guid returns before anything else (`0x4921cf`/`0x4921dd`), so the
@@ -147,10 +148,6 @@ impl AreaSpiritHealer {
         }
         self.healer = new;
         let cancel_aura = self.deadline.take().is_some();
-        if cancel_aura {
-            // The cancel closes the dialog, so an `_IN_RANGE` still owed is stale.
-            self.in_range = false;
-        }
         SetHealerOutcome {
             cancel_aura,
             query: new,
@@ -687,18 +684,10 @@ pub(crate) fn feed_dialog_verbs(
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     let now = Instant::now();
-    let (
-        spirit_secs,
-        spirit_in_range,
-        queue_tutorials,
-        queue_changed,
-        unlearn_pending,
-        unlearn_ask,
-    ) = {
-        let (mut spirit, mut queue, mut pet) = vm.own();
+    let (spirit_secs, queue_tutorials, queue_changed, unlearn_pending, unlearn_ask) = {
+        let (spirit, mut queue, mut pet) = vm.own();
         (
             spirit.secs(now),
-            std::mem::take(&mut spirit.in_range),
             std::mem::take(&mut queue.tutorials),
             std::mem::take(&mut queue.changed),
             pet.pending().is_some(),
@@ -733,10 +722,9 @@ pub(crate) fn feed_dialog_verbs(
             crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
         }
 
+        // The time packet's `AREA_SPIRIT_HEALER_IN_RANGE` is its handler's, on the notice lane
+        // after this push, so `GetAreaSpiritHealerTime` reads the deadline it stored.
         script.set_area_spirit_healer_secs(spirit_secs);
-        if spirit_in_range {
-            script.fire_event("AREA_SPIRIT_HEALER_IN_RANGE", vec![]);
-        }
 
         for id in queue_tutorials {
             if let Some(t) = tutorials.as_mut() {
@@ -1028,16 +1016,22 @@ mod net {
     }
 
     /// `0x492290`: the scan first (`0x492296`), then the arm for the healer it left cached
-    /// (`0x4922a0`); the scan's changes signal and send as the handler returns, in their order.
+    /// (`0x4922a0`) and its `AREA_SPIRIT_HEALER_IN_RANGE` (`0x4922d1`) at the packet's place; the
+    /// scan's changes signal and send as the handler returns, in their order.
     fn on_area_spirit_healer_time(
         In(ev): In<SessionEvent>,
         scan: super::SpiritScan,
         mut spirit: ResMut<AreaSpiritHealer>,
+        mut lane: ResMut<crate::field_watch::NoticeLane>,
         mut world_commands: Commands,
     ) {
         if let SessionEvent::AreaSpiritHealerTime { healer, ms } = ev {
             let changes = scan.run(&mut spirit);
-            spirit.on_time(healer, ms, std::time::Instant::now());
+            if spirit.on_time(healer, ms, std::time::Instant::now()) {
+                lane.write(crate::field_watch::FieldNotice::Global {
+                    id: crate::field_watch::id::AREA_SPIRIT_HEALER_IN_RANGE,
+                });
+            }
             if changes.is_empty() {
                 return;
             }
@@ -1790,15 +1784,14 @@ mod tests {
     fn the_spirit_healer_clock_only_arms_for_the_cached_healer() {
         let mut spirit = AreaSpiritHealer::default();
         let now = Instant::now();
-        spirit.on_time(0x77, 30_000, now);
-        assert!(!spirit.in_range, "no healer cached: the packet is ignored");
+        assert!(
+            !spirit.on_time(0x77, 30_000, now),
+            "no healer cached: the packet is ignored"
+        );
         spirit.healer = Some(0x77);
-        spirit.on_time(0x78, 30_000, now);
-        assert!(!spirit.in_range, "another guid: ignored");
-        spirit.on_time(0x77, 0, now);
-        assert!(!spirit.in_range, "a zero time: ignored");
-        spirit.on_time(0x77, 30_000, now);
-        assert!(spirit.in_range);
+        assert!(!spirit.on_time(0x78, 30_000, now), "another guid: ignored");
+        assert!(!spirit.on_time(0x77, 0, now), "a zero time: ignored");
+        assert!(spirit.on_time(0x77, 30_000, now));
         assert_eq!(spirit.secs(now), 30);
     }
 

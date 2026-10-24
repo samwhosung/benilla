@@ -303,11 +303,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_dialog_verbs::AreaSpiritHealer",
-        "the area spirit healer, whose `in_range` the time packet's handler fills and `feed_dialog_verbs` fires `AREA_SPIRIT_HEALER_IN_RANGE` from in system order; `AcceptAreaSpiritHeal`'s scan, acting in its call, holds it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_dialog_verbs::BattlefieldQueue",
         "the battleground queue slots, which `feed_dialog_verbs` and `feed_battlefield_score` fire from; the port, leave and positions verbs, acting in their calls, read them in the host",
     ),
@@ -401,6 +396,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::target::Selection",
     "::ui_action::PlayerActions",
     "::ui_auction::AuctionOpen",
+    // Read, and quiet: `feed_dialog_verbs` pushes the deadline the time packet stores and fires
+    // nothing off it, as the packet's `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
+    "::ui_dialog_verbs::AreaSpiritHealer",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
     "::ui_merchant::MerchantOpen",
