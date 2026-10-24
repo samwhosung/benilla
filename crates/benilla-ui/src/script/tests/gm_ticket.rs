@@ -123,19 +123,23 @@ fn new_and_update_are_distinguishable_and_keep_their_order() {
     );
 }
 
-/// The reference's usage string is `Usage: UpdateGMTicket(type, text)`. The binding queues any
-/// text; the reference refuses an empty one before the send (`ERR_TICKET_NO_TEXT`, `0x5ef808`,
-/// `0x5efae7`).
+/// An empty text is refused inside the call and sends nothing: a new ticket tests the copied
+/// text's first byte (`0x5ef802`-`0x5ef80a`), an update likewise (`0x5efae7`), and each raises
+/// `ERR_TICKET_NO_TEXT` through `DisplayError` (`push 0x157`, `0x5ef80c`/`0x5efaeb`).
 #[test]
-fn an_empty_ticket_body_is_queued_not_swallowed() {
+fn an_empty_ticket_body_shows_no_text_and_sends_nothing() {
+    use crate::script::ui_errors::shown::seen_in_call;
     let mut s = script();
-    s.run("NewGMTicket(1, \"\")").unwrap();
-    assert_eq!(
-        s.take_gm_ticket_intents(),
-        vec![GmTicketIntent::Write(GmTicketWrite {
-            category: 1,
-            text: String::new(),
-            is_new: true,
-        })]
-    );
+    for verb in ["NewGMTicket", "UpdateGMTicket"] {
+        let (seen, _) = seen_in_call(&mut s, &format!("{verb}(1, \"\")"));
+        assert_eq!(seen, "ERR_TICKET_NO_TEXT", "{verb}");
+        assert!(
+            s.take_gm_ticket_intents().is_empty(),
+            "{verb} sends nothing"
+        );
+    }
+    // A one-character text goes out, with no line.
+    let (seen, _) = seen_in_call(&mut s, "NewGMTicket(1, \"x\")");
+    assert_eq!(seen, "");
+    assert_eq!(s.take_gm_ticket_intents().len(), 1);
 }

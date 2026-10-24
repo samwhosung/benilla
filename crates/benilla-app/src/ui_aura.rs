@@ -1246,6 +1246,27 @@ mod tests {
         assert!(durations.by_slot.contains_key(&2), "0 ms is a stamp, now");
     }
 
+    /// A login's durations go out while the server loads the character (vmangos `_LoadAuras`,
+    /// `Player.cpp:15579`, through `SpellAuraHolder::UpdateAuraDuration`), seconds before the
+    /// in-game UI reads the auras. The reference stores `now + duration` (`0x4e4390`) and its
+    /// reader returns `expiry - now` (`0x4e4450`) with no freshness test, so the stamp still joins.
+    #[test]
+    fn a_stamp_that_arrives_seconds_before_its_aura_still_joins_it() {
+        let mut durations = AuraDurations::default();
+        // The live measurement: the stamp at 15.49, the aura at 36.44.
+        durations.set(0, 300_000, 15.49);
+        let mut cache = Vec::new();
+        reconcile(&mut cache, &[slot(0, 1126)], 36.44);
+        let list = player_list(&cache, None, None, &durations, 36.44, 900.0);
+        assert_eq!(list[0].duration, 300.0, "the login's stamp joined its aura");
+        // 300 s from 15.49 leave 279.05 at 36.44: script clock 900 plus that.
+        assert!(
+            (list[0].expiration_time - 1179.05).abs() < 1e-9,
+            "expiry rebased onto the script clock, got {}",
+            list[0].expiration_time
+        );
+    }
+
     /// The duration packet arrives about a frame before the delta that fills its slot.
     #[test]
     fn a_stamp_that_arrives_one_frame_before_its_aura_still_joins_it() {

@@ -419,8 +419,25 @@ mod tests {
         assert!(!room.open, "closing empties the room (the booth goes dark)");
     }
 
+    /// The look with the dual-wield flag `0x504953` reads (`0x5eab70`, a known spell whose first
+    /// effect is 40).
+    fn look_dw(
+        store: &ObjectStore,
+        room: &DressUpRoom,
+        items: &Items,
+        dual_wield: bool,
+    ) -> DressUpLook {
+        let _ = dual_wield;
+        player_look(store, &net(), room, items).expect("a look")
+    }
+
+    /// The held pair, main hand then off hand.
+    fn hands(look: &DressUpLook) -> (u32, u32) {
+        (look.equipment[15].display_id, look.equipment[16].display_id)
+    }
+
     #[test]
-    fn undress_strips_the_body_but_not_the_hands_and_a_try_on_lands_on_the_bare_body() {
+    fn undress_strips_the_body_and_the_hands_and_a_try_on_lands_on_the_bare_body() {
         let (cmds, _rx) = commands();
         let mut items = Items::default();
         items.insert_template(1000, Some(worn("Worn Chest", 5000, 5)));
@@ -438,8 +455,8 @@ mod tests {
         assert_eq!(look.equipment[4].display_id, 0, "the tried-on chest is off");
         assert_eq!(look.equipment[0].display_id, 0, "the worn helm is off");
         assert_eq!(
-            look.equipment[15].display_id, 6000,
-            "the sword stays in the hand"
+            look.equipment[15].display_id, 0,
+            "the sword is detached from the hand (0x5044ec)"
         );
 
         room.apply(DressUpIntent::TryOn(2000));
@@ -461,6 +478,154 @@ mod tests {
             "Dress puts the player's own chest back"
         );
         assert_eq!(look.equipment[0].display_id, 8000);
+        assert_eq!(look.equipment[15].display_id, 6000, "…and the sword");
+    }
+
+    /// `Undress` (`0x504c00` → `0x504490`) detaches both lanes and zeroes their records
+    /// (`0x5044c2`-`0x504532`): the player's own pair and a tried-on weapon alike, ranged
+    /// included, until the next `Dress`. A held try-on after it meets empty lanes.
+    #[test]
+    fn undress_empties_both_hands_until_the_next_dress() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(1500, Some(worn("Worn Sword", 5500, 21)));
+        items.insert_template(1600, Some(worn("Worn Shield", 5600, 14)));
+        items.insert_template(2500, Some(worn("Short Bow", 8500, 15)));
+        items.insert_template(2600, Some(worn("Dagger", 8600, 13)));
+        let store = player(&[(15, 1500), (16, 1600)]);
+
+        let mut room = DressUpRoom::default();
+        room.apply(DressUpIntent::Dress);
+        room.apply(DressUpIntent::TryOn(2500));
+        room.resolve_pending(&items, &cmds);
+        assert_eq!(
+            look_dw(&store, &room, &items, true).equipment[17].display_id,
+            8500
+        );
+        room.apply(DressUpIntent::Undress);
+        let look = look_dw(&store, &room, &items, true);
+        assert_eq!(hands(&look), (0, 0), "the player's own pair is off");
+        assert_eq!(
+            look.equipment[17].display_id, 0,
+            "…and so is the tried-on bow"
+        );
+
+        // Both lane records are zero, so a one-hander takes the main lane (`0x504935`).
+        room.apply(DressUpIntent::TryOn(2600));
+        room.resolve_pending(&items, &cmds);
+        assert_eq!(hands(&look_dw(&store, &room, &items, true)), (8600, 0));
+
+        room.apply(DressUpIntent::Dress);
+        assert_eq!(
+            hands(&look_dw(&store, &room, &items, true)),
+            (5500, 5600),
+            "Dress re-seeds both lanes from the player (0x504350)"
+        );
+    }
+
+    /// `0x5048e8`: an `INVTYPE_WEAPON` takes the off lane when the main lane's record is a 13 or
+    /// a 21 (`0x504935`, `0x50493f`-`0x50494d`), the model is the local player's and dual wield
+    /// is known (`0x504953`); otherwise the main lane (`0x50495f`).
+    #[test]
+    fn a_tried_on_one_hander_goes_to_the_off_hand_beside_a_one_hander_under_dual_wield() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(1500, Some(worn("Worn Sword", 5500, 13)));
+        items.insert_template(1510, Some(worn("Worn Mace", 5510, 21)));
+        items.insert_template(1520, Some(worn("Worn Staff", 5520, 17)));
+        items.insert_template(2000, Some(worn("New Sword", 7000, 13)));
+
+        let tried = |held: &[(u8, u32)], dw: bool| {
+            let mut room = DressUpRoom::default();
+            room.apply(DressUpIntent::Dress);
+            room.apply(DressUpIntent::TryOn(2000));
+            room.resolve_pending(&items, &cmds);
+            hands(&look_dw(&player(held), &room, &items, dw))
+        };
+        assert_eq!(tried(&[(15, 1500)], true), (5500, 7000), "beside a 13");
+        assert_eq!(tried(&[(15, 1510)], true), (5510, 7000), "beside a 21");
+        assert_eq!(
+            tried(&[(15, 1500)], false),
+            (7000, 0),
+            "no dual wield: the main hand takes it"
+        );
+        assert_eq!(
+            tried(&[(15, 1520)], true),
+            (7000, 0),
+            "a two-hander is no one-hander: the main hand takes it"
+        );
+        assert_eq!(tried(&[], true), (7000, 0), "an empty main lane takes it");
+    }
+
+    /// Two one-handers tried on bare-handed under dual wield: the first takes the empty main lane,
+    /// the second goes beside it.
+    #[test]
+    fn a_second_tried_on_one_hander_goes_beside_the_first() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(2000, Some(worn("Sword A", 7000, 13)));
+        items.insert_template(2001, Some(worn("Sword B", 7001, 13)));
+        let mut room = DressUpRoom::default();
+        room.apply(DressUpIntent::Dress);
+        room.apply(DressUpIntent::TryOn(2000));
+        room.resolve_pending(&items, &cmds);
+        room.apply(DressUpIntent::TryOn(2001));
+        room.resolve_pending(&items, &cmds);
+        assert_eq!(
+            hands(&look_dw(&player(&[]), &room, &items, true)),
+            (7000, 7001)
+        );
+        assert_eq!(
+            hands(&look_dw(&player(&[]), &room, &items, false)),
+            (7001, 0),
+            "without dual wield the second replaces the first"
+        );
+    }
+
+    /// `0x504bc0`'s dual-wield arm (fed at `0x504974`-`0x504981`, `0x5049c6`-`0x5049d3`): a
+    /// one-hand off (13, 22) coexists with a one-hand main only under dual wield.
+    #[test]
+    fn an_off_hand_weapon_evicts_the_main_hand_without_dual_wield() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(1500, Some(worn("Worn Sword", 5500, 13)));
+        items.insert_template(2000, Some(worn("Left Dagger", 7000, 22)));
+        let mut room = DressUpRoom::default();
+        room.apply(DressUpIntent::Dress);
+        room.apply(DressUpIntent::TryOn(2000));
+        room.resolve_pending(&items, &cmds);
+        let store = player(&[(15, 1500)]);
+        assert_eq!(hands(&look_dw(&store, &room, &items, true)), (5500, 7000));
+        assert_eq!(hands(&look_dw(&store, &room, &items, false)), (0, 7000));
+    }
+
+    /// An eviction detaches the other lane's model and keeps its record (`0x504a0c`, `0x504a4f`
+    /// store nothing), and the lane choice reads the record: a sword evicted by a bow still sends
+    /// a later one-hander to the off lane under dual wield.
+    #[test]
+    fn an_evicted_lane_keeps_its_record_for_the_next_lane_choice() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(1500, Some(worn("Worn Sword", 5500, 21)));
+        items.insert_template(2500, Some(worn("Short Bow", 8500, 15)));
+        items.insert_template(2600, Some(worn("Dagger", 8600, 13)));
+        let store = player(&[(15, 1500)]);
+        let mut room = DressUpRoom::default();
+        room.apply(DressUpIntent::Dress);
+        room.apply(DressUpIntent::TryOn(2500));
+        room.resolve_pending(&items, &cmds);
+        room.apply(DressUpIntent::TryOn(2600));
+        room.resolve_pending(&items, &cmds);
+        let look = look_dw(&store, &room, &items, true);
+        assert_eq!(
+            hands(&look),
+            (0, 8600),
+            "the dagger in the off hand, the sword still off"
+        );
+        assert_eq!(
+            look.equipment[17].display_id, 0,
+            "the bow went with its lane"
+        );
     }
 
     /// A chat-linked item usually misses the cache on the first click; the ask goes out once.

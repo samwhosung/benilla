@@ -13,6 +13,7 @@ use bevy::window::PrimaryWindow;
 use benilla_ui::script::{TooltipTint, UnitState};
 use benilla_ui::strings::Arg;
 
+use crate::go_templates::MeetingStoneTemplate;
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
@@ -121,6 +122,17 @@ struct GoLock<'a> {
     /// The resolver's verdict and the opener it last matched (`0x5f83d0`).
     outcome: Option<crate::target::lock::LockOutcome>,
     matched: Option<crate::target::lock::LockMatch>,
+}
+
+/// The type handler's lines, slot 33 of its table (`[vtbl+0x84]`, called at `0x52aad4`) after
+/// the name and before the lock lines; the base slot adds none (`0x5f9f10`).
+fn go_handler_lines(
+    stone: Option<MeetingStoneTemplate>,
+    area_name: &dyn Fn(u32) -> Option<String>,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, TooltipTint)> {
+    let _ = (stone, area_name, get);
+    Vec::new()
 }
 
 /// The builder's lock lines (`0x52aa20`): "Locked" iff `GO_FLAG_LOCKED` (`0x52aae5`), then one line

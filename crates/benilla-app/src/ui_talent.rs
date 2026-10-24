@@ -366,6 +366,86 @@ mod tests {
         assert_eq!(rank_of(&t, &BTreeSet::new()), 0);
     }
 
+    /// `0x52b390` writes an unmet prerequisite's line (`0x52b3f0`-`0x52b4e5`) before the tier
+    /// line (`0x52b561`), and returns 0 when any requirement is unmet, which hides
+    /// `TOOLTIP_TALENT_LEARN` (`0x52b31b`, `0x52f735`). It runs only for an unlearned talent
+    /// (`0x52e887`, `0x52b246`), whose flag otherwise stays 1 (`0x52e75b`).
+    #[test]
+    fn a_locked_talent_lists_its_prerequisite_before_its_tier_and_offers_no_learn() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let talents = benilla_formats::load_talent_catalog(&mut chain).expect("talent catalog");
+        let spells = benilla_formats::load_spell_catalog(&mut chain).expect("spell catalog");
+        let get = |key: &str| match key {
+            "TOOLTIP_TALENT_PREREQ" | "TOOLTIP_TALENT_PREREQ_P1" => Some("PREREQ %d %s".into()),
+            "TOOLTIP_TALENT_TIER_POINTS" => Some("TIER %d %s".into()),
+            "ITEM_REQ_SKILL" => Some("SPELL %s".into()),
+            _ => None,
+        };
+        // Human (1) mage (8), one unspent point, nothing learned.
+        let (race, class) = (1, 8);
+        let state = build_pages(
+            &talents,
+            &BTreeSet::new(),
+            &spells,
+            race,
+            class,
+            (1, 0),
+            &get,
+        );
+        let mut checked = 0;
+        for (tab, views) in talents
+            .tabs_for_class(race, class)
+            .iter()
+            .zip(&state.talents)
+        {
+            for (t, v) in talents.talents_in_tab(tab.id).iter().zip(views) {
+                if t.prereq_talent != 0 && t.row > 0 {
+                    assert!(v.req_lines.len() >= 2, "{}: {:?}", v.name, v.req_lines);
+                    assert!(v.req_lines[0].starts_with("PREREQ "), "{:?}", v.req_lines);
+                    assert!(v.req_lines[1].starts_with("TIER "), "{:?}", v.req_lines);
+                    assert!(!v.learnable, "{}: a locked talent offers no learn", v.name);
+                    checked += 1;
+                } else if t.row == 0 && t.prereq_talent == 0 && t.required_spell == 0 {
+                    assert!(v.req_lines.is_empty());
+                    assert!(
+                        v.learnable,
+                        "{}: a free first-tier talent is learnable",
+                        v.name
+                    );
+                }
+            }
+        }
+        assert!(checked > 0, "the mage trees have prerequisite arrows");
+
+        // A learned talent builds no requirement lines, whatever the tree says: the builder
+        // skips `0x52b390` for a known rank.
+        let (tab, t) = talents
+            .tabs_for_class(race, class)
+            .into_iter()
+            .find_map(|tab| {
+                talents
+                    .talents_in_tab(tab.id)
+                    .iter()
+                    .find(|t| t.prereq_talent != 0 && t.row > 0 && t.max_rank() > 1)
+                    .map(|t| (tab.id, t.clone()))
+            })
+            .expect("a multi-rank talent behind an arrow");
+        let known: BTreeSet<u32> = [t.ranks[0]].into_iter().collect();
+        let state = build_pages(&talents, &known, &spells, race, class, (1, 0), &get);
+        let page = talents
+            .tabs_for_class(race, class)
+            .iter()
+            .position(|x| x.id == tab)
+            .expect("its page");
+        let v = state.talents[page]
+            .iter()
+            .find(|v| v.talent_id == t.id)
+            .expect("its view");
+        assert!(v.req_lines.is_empty(), "{:?}", v.req_lines);
+        assert!(v.learnable, "rank 1 of {}, a point to spend", t.max_rank());
+    }
+
     /// A tab's icon (`TalentTab.dbc` `SpellIconID` through `SpellIcon.dbc`, `0x4f30d0`-`0x4f30f1`)
     /// is the second value `GetTalentTabInfo` answers, from the catalog to the Lua call.
     #[test]

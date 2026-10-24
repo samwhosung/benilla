@@ -1,9 +1,10 @@
-//! The GameObject builder's lock lines (`0x52aa20`, `0x52aae2`-`0x52ace7`).
+//! The GameObject builder's handler lines (`0x52aad4`) and lock lines (`0x52aae2`-`0x52ace7`).
 
 use benilla_formats::{LockSlot, GO_STATE_READY, LOCK_KEY_ITEM, LOCK_KEY_SKILL, MAX_LOCK_SLOTS};
 use benilla_ui::script::TooltipTint;
 
-use super::{go_lock_lines, GoLock};
+use super::{go_handler_lines, go_lock_lines, GoLock};
+use crate::go_templates::MeetingStoneTemplate;
 use crate::target::lock::{LockMatch, LockOutcome};
 
 /// Marked stand-ins: every lock key reads "Requires %s" in enUS.
@@ -146,5 +147,40 @@ fn a_flag_locked_objects_lines_follow_the_opener() {
                 TooltipTint::White
             ),
         ]
+    );
+}
+
+/// A meeting stone's slot 33 (`0x5f6b10`): its area's `AreaTable` name (`+0x2c + 4·locale`,
+/// `0x5f6b5c`, added at `0x5f6b68`), then `MEETINGSTONE_LEVEL` (`0x86095c`) of its minimum and
+/// maximum levels (`0x5f6b8a`-`0x5f6bb2`, added at `0x5f6bdf`), both through `0x530380` in gold.
+/// An area with no row adds no name line (`0x5f6b3f`-`0x5f6b54`); any other type adds nothing.
+#[test]
+fn a_meeting_stones_tooltip_adds_its_area_and_level_range() {
+    let stone = MeetingStoneTemplate {
+        min_level: 15,
+        max_level: 25,
+        area: 1581,
+    };
+    let area = |id: u32| (id == 1581).then(|| "The Deadmines".to_string());
+    let get = |key: &str| (key == "MEETINGSTONE_LEVEL").then(|| "Level %d-%d".to_string());
+    assert_eq!(
+        go_handler_lines(Some(stone), &area, &get),
+        [
+            ("The Deadmines".to_string(), TooltipTint::Gold),
+            ("Level 15-25".to_string(), TooltipTint::Gold),
+        ]
+    );
+    let nowhere = MeetingStoneTemplate {
+        area: 9999,
+        ..stone
+    };
+    assert_eq!(
+        go_handler_lines(Some(nowhere), &area, &get),
+        [("Level 15-25".to_string(), TooltipTint::Gold)],
+        "no area row, no name line"
+    );
+    assert!(
+        go_handler_lines(None, &area, &get).is_empty(),
+        "not a stone"
     );
 }

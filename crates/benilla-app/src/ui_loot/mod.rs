@@ -2972,6 +2972,55 @@ mod tests {
         assert_eq!(format_money(10_000), "1 Gold");
     }
 
+    /// The coin row's name is `GetLootRowName`'s (`0x4c2550`): gold, silver and copper in that
+    /// order, each non-zero one as `"%d %s%s"` (`0x847ffc`) with the word read from the
+    /// `GOLD`/`SILVER`/`COPPER` global at the call (`0x6c6230`, `0x703bf0`) and `"\n"`
+    /// (`0x835144`) after gold and silver, `""` (`0x882748`) after copper.
+    #[test]
+    fn the_coin_rows_name_puts_each_denomination_on_its_own_line_in_the_globals_words() {
+        let items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let (grp, nm) = nobody();
+        let mut script = UiScript::new().expect("VM");
+        script
+            .run(r#"GOLD = "Gold" SILVER = "Silver" COPPER = "Copper""#)
+            .expect("the words");
+        let name_of = |script: &mut UiScript, copper: u32| {
+            let mut loot = LootState::default();
+            loot.open(0x42, loot_type::CORPSE, copper, vec![]);
+            let snap = snapshot(
+                &loot.window,
+                &items,
+                None,
+                Ask::Event(&commands),
+                RollCatalogs::NONE,
+                Candidates {
+                    group: &grp,
+                    names: &nm,
+                },
+            );
+            script.set_loot(snap);
+            script
+                .eval::<String>("local _, name = GetLootSlotInfo(1) return name")
+                .expect("the coin row")
+        };
+        let s = &mut script;
+        assert_eq!(name_of(s, 12_345), "1 Gold\n23 Silver\n45 Copper");
+        assert_eq!(name_of(s, 10_000), "1 Gold\n", "gold's newline stays");
+        assert_eq!(name_of(s, 10_025), "1 Gold\n25 Copper");
+        assert_eq!(name_of(s, 2_300), "23 Silver\n");
+        assert_eq!(name_of(s, 4), "4 Copper");
+
+        s.run(r#"GOLD = "Or" SILVER = "Argent" COPPER = "Cuivre""#)
+            .expect("an addon's words");
+        assert_eq!(
+            name_of(s, 12_345),
+            "1 Or\n23 Argent\n45 Cuivre",
+            "the words are the globals' at the call"
+        );
+    }
+
     /// The reference's six-step ladder (`0x6c6307`-`0x6c6386`), both sides of every boundary.
     #[test]
     fn coin_icon_walks_the_references_six_step_ladder() {
