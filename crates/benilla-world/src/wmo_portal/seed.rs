@@ -41,7 +41,8 @@ pub struct DownRaySeeds {
     pub(crate) across: Option<usize>,
 }
 
-/// [`down_ray_pick`] over the asset's stored pieces; `terrain_z` is in this model's local space.
+/// The eye's current group, by the module doc's mechanism, over the asset's stored pieces;
+/// `terrain_z` is in this model's local space.
 pub fn down_ray_seeds(model: &WmoModel, eye: [f32; 3], terrain_z: Option<f32>) -> DownRaySeeds {
     down_ray_seeds_scored(model, eye, terrain_z).0
 }
@@ -68,9 +69,8 @@ pub(crate) fn down_ray_seeds_scored(
     )
 }
 
-/// The eye's current group, by the module doc's mechanism. `terrain_z` is the terrain height under
-/// the eye in WMO model space, or `None` where there is none to hit: off the streamed tiles, or a
-/// hole cut through the ground into this interior.
+/// [`down_ray_pick_scored`]'s verdict over the pieces a test builds.
+#[cfg(test)]
 pub(crate) fn down_ray_pick(
     tris: &[Vec<[[f32; 3]; 3]>],
     grids: &[Option<ColumnGrid>],
@@ -96,7 +96,10 @@ pub(crate) fn down_ray_pick(
     .0
 }
 
-/// [`down_ray_pick`] with the winning hit's depth, as [`down_ray_seeds_scored`] gives it.
+/// The eye's current group, by the module doc's mechanism, and the winning hit's depth, as
+/// [`down_ray_seeds_scored`] gives it. `terrain_z` is the terrain height under the eye in WMO model
+/// space, or `None` where there is none to hit: off the streamed tiles, or a hole cut through the
+/// ground into this interior.
 fn down_ray_pick_scored(
     tris: &[Vec<[[f32; 3]; 3]>],
     grids: &[Option<ColumnGrid>],
@@ -269,6 +272,7 @@ const ZONE_RAY_LEN: f32 = 1000.0;
 ///
 /// The portal leg belongs to the camera's render seed alone: a doorway plane under the eye must
 /// not claim the interior. `None` is outdoors; [`down_ray_claim`] keeps an outdoor-class winner.
+#[cfg(test)]
 pub(crate) fn area_down_ray(
     tris: &[Vec<[[f32; 3]; 3]>],
     bounds: &[Option<([f32; 3], [f32; 3])>],
@@ -294,7 +298,7 @@ pub(crate) struct DownRayClaim {
     pub(crate) outdoor: bool,
 }
 
-/// [`area_down_ray`] without the outdoor collapse: the light chain tells an outdoor-class face (a
+/// `area_down_ray` without the outdoor collapse: the light chain tells an outdoor-class face (a
 /// deck) from open terrain.
 pub(crate) fn down_ray_claim(
     tris: &[Vec<[[f32; 3]; 3]>],
