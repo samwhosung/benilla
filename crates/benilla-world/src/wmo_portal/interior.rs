@@ -33,12 +33,13 @@ pub(super) fn load_wmo_areas(
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 use benilla_assets::{AdtTile, WmoModel};
 
-use super::seed::{area_down_ray, down_ray_claim, down_ray_seeds, up_ray_claim, DownRayClaim};
+use super::seed::{down_ray_claim, down_ray_seeds_scored, up_ray_claim, DownRayClaim};
 use super::{WmoPortalInstance, WmoRoom, WorldCamera, EXTERIOR, EXTERIOR_LIT};
 use crate::terrain_stream::{terrain_height_under, PropLobeLight, TerrainStreamer};
 
 /// The WMO interior the player is in: the `WMOAreaTable` keys of the group owning the nearest
-/// surface under the probe ([`down_ray_seeds`]), or `None` in the open world.
+/// surface under the probe across every placement ([`super::down_ray_seeds`]), or `None` in the
+/// open world.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentWmoInterior(pub Option<WmoInteriorKeys>);
 
@@ -138,8 +139,9 @@ impl EntityOutdoors<'_, '_> {
     }
 }
 
-/// Track [`CurrentAreaInterior`]: per placed building, the faces-only down-ray from the player's
-/// position, first claim wins; the camera stands in before login.
+/// Track [`CurrentAreaInterior`]: the faces-only down-ray from the player's position, its one
+/// nearest hit across every placed building ([`nearest_claim`], `0x6a8840`), indoors when that hit's
+/// group is not exterior; the camera stands in before login.
 pub(super) fn track_area_interior(
     wmos: Res<Assets<WmoModel>>,
     viewer: Res<crate::view::Viewer>,
@@ -157,40 +159,27 @@ pub(super) fn track_area_interior(
     } else {
         return;
     };
-    let terrain = terrain_height_under(&streamer, &adt_tiles, eye_world);
-    let mut found = None;
-    for inst in &instances {
-        let Some(model) = wmos.get(&inst.handle) else {
-            continue;
-        };
-        if model.wmo_id == 0 {
-            continue;
-        }
-        let local_from_world = inst.world_from_local.inverse();
-        let eye_local = bevy_to_wow(local_from_world.transform_point3(eye_world));
-        if !column_in_collision_bounds(model.collision_bounds, eye_local, false) {
-            continue; // no face of this building can own the probe column
-        }
-        let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye_world, z));
-        // The zone-text law is `0x8` alone: a `0x40`-only street group is indoors for naming
-        // (`[node+0x90]` bit 0 is set before the `0x40` test).
-        if let Some(gi) = area_down_ray(
-            &model.group_collision_tris,
-            &model.group_collision_bounds,
-            &model.group_collision_grids,
-            &model.group_nav,
-            eye_local,
-            terrain_local,
-            EXTERIOR,
-        ) {
-            found = Some(WmoInteriorKeys {
-                wmo_id: model.wmo_id,
-                name_set: u32::from(inst.name_set),
-                group_area_id: model.group_nav.get(gi).map_or(0, |g| g.area_table_id),
-            });
-            break;
-        }
-    }
+    let placements: Vec<((), &WmoPortalInstance)> = instances.iter().map(|i| ((), i)).collect();
+    // The zone-text law is `0x8` alone: a `0x40`-only street group is indoors for naming
+    // (`[node+0x90]` bit 0 is set before the `0x40` test).
+    let found = nearest_claim(
+        &wmos,
+        &placements,
+        &streamer,
+        &adt_tiles,
+        eye_world,
+        LightAttach::DownRay,
+        EXTERIOR,
+    )
+    .filter(|(claim, ..)| !claim.outdoor)
+    .map(|(claim, model, inst, ..)| WmoInteriorKeys {
+        wmo_id: model.wmo_id,
+        name_set: u32::from(inst.name_set),
+        group_area_id: model
+            .group_nav
+            .get(claim.group)
+            .map_or(0, |g| g.area_table_id),
+    });
     if current.0 != found {
         current.0 = found;
     }
@@ -219,32 +208,40 @@ pub(super) fn track_current_interior(
     // The terrain leg, sampled once for the column (`GetAreaID` races the same two probes,
     // `0x670345`): a tunnel under a hill must not claim the player on the grass above it.
     let terrain = terrain_height_under(&streamer, &adt_tiles, eye_world);
-    let mut found = None;
-    let mut found_room = None;
+    // One fraction across every placement (`0x6be250`): the nearest hit wins, and an exterior
+    // nearest leaves the player outside.
+    let mut best: Option<(f32, Option<(WmoInteriorKeys, WmoRoom)>)> = None;
     for (entity, inst) in &instances {
         let Some(model) = wmos.get(&inst.handle) else {
             continue;
         };
-        if model.wmo_id == 0 {
-            continue;
-        }
         let local_from_world = inst.world_from_local.inverse();
         let eye_local = bevy_to_wow(local_from_world.transform_point3(eye_world));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye_world, z));
-        if let Some(gi) = down_ray_seeds(model, eye_local, terrain_local).in_group {
-            found = Some(WmoInteriorKeys {
+        let (seeds, depth) = down_ray_seeds_scored(model, eye_local, terrain_local);
+        let Some(depth) = depth else {
+            continue;
+        };
+        if best.as_ref().is_some_and(|(d, _)| *d <= depth) {
+            continue;
+        }
+        let claim = seeds.in_group.map(|gi| {
+            let keys = WmoInteriorKeys {
                 wmo_id: model.wmo_id,
                 name_set: u32::from(inst.name_set),
                 group_area_id: model.group_nav.get(gi).map_or(0, |g| g.area_table_id),
-            });
+            };
             // The same claim as a placement identity, the liquid query's scope key.
-            found_room = Some(WmoRoom {
+            let room = WmoRoom {
                 instance: entity,
                 group: gi as u16,
-            });
-            break;
-        }
+            };
+            (keys, room)
+        });
+        best = Some((depth, claim));
     }
+    let claim = best.and_then(|(_, claim)| claim);
+    let (found, found_room) = (claim.map(|c| c.0), claim.map(|c| c.1));
     if current.0 != found {
         current.0 = found;
     }
@@ -334,7 +331,8 @@ fn room_at(
         .or_else(|| room_cast(wmos, instances, streamer, adt_tiles, feet_world, reach))
 }
 
-/// One faces-only room cast from `feet_world + rise`.
+/// One faces-only room cast from `feet_world + rise`: the nearest hit across every placement
+/// ([`nearest_claim`]), a room when its group is not exterior.
 fn room_cast(
     wmos: &Assets<WmoModel>,
     instances: &Query<(Entity, &WmoPortalInstance)>,
@@ -344,36 +342,21 @@ fn room_cast(
     rise: f32,
 ) -> Option<WmoRoom> {
     let probe_world = feet_world + Vec3::Y * (POSITION_PROBE_LIFT + rise);
-    let terrain = terrain_height_under(streamer, adt_tiles, probe_world);
-    for (entity, inst) in instances {
-        let Some(model) = wmos.get(&inst.handle) else {
-            continue;
-        };
-        if model.wmo_id == 0 {
-            continue; // as the player's own claim skips it
-        }
-        let local_from_world = inst.world_from_local.inverse();
-        let probe_local = bevy_to_wow(local_from_world.transform_point3(probe_world));
-        if !column_in_collision_bounds(model.collision_bounds, probe_local, false) {
-            continue; // no face of this building can own the probe column
-        }
-        let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, probe_world, z));
-        if let Some(gi) = area_down_ray(
-            &model.group_collision_tris,
-            &model.group_collision_bounds,
-            &model.group_collision_grids,
-            &model.group_nav,
-            probe_local,
-            terrain_local,
-            EXTERIOR,
-        ) {
-            return Some(WmoRoom {
-                instance: entity,
-                group: gi as u16,
-            });
-        }
-    }
-    None
+    let placements: Vec<(Entity, &WmoPortalInstance)> = instances.iter().collect();
+    nearest_claim(
+        wmos,
+        &placements,
+        streamer,
+        adt_tiles,
+        probe_world,
+        LightAttach::DownRay,
+        EXTERIOR,
+    )
+    .filter(|(claim, ..)| !claim.outdoor)
+    .map(|(claim, _, _, _, instance)| WmoRoom {
+        instance,
+        group: claim.group as u16,
+    })
 }
 
 /// Whether a world position is indoors for the unit light law: the nearest surface under it is a

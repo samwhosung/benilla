@@ -43,7 +43,19 @@ pub struct DownRaySeeds {
 
 /// [`down_ray_pick`] over the asset's stored pieces; `terrain_z` is in this model's local space.
 pub fn down_ray_seeds(model: &WmoModel, eye: [f32; 3], terrain_z: Option<f32>) -> DownRaySeeds {
-    down_ray_pick(
+    down_ray_seeds_scored(model, eye, terrain_z).0
+}
+
+/// [`down_ray_seeds`] with the winning hit's depth below the eye, which the placements race on:
+/// `0x6be250` shares one fraction across every instance, and an exterior best clears the claim. An
+/// exterior winner is outside but keeps its depth; a miss, a hit past the floor drop and a hit
+/// the terrain beats have none.
+pub(crate) fn down_ray_seeds_scored(
+    model: &WmoModel,
+    eye: [f32; 3],
+    terrain_z: Option<f32>,
+) -> (DownRaySeeds, Option<f32>) {
+    down_ray_pick_scored(
         &model.group_collision_tris,
         &model.group_collision_grids,
         &model.group_camera_only_tris,
@@ -70,6 +82,32 @@ pub(crate) fn down_ray_pick(
     eye: [f32; 3],
     terrain_z: Option<f32>,
 ) -> DownRaySeeds {
+    down_ray_pick_scored(
+        tris,
+        grids,
+        camera_only_tris,
+        nav,
+        portal_vertices,
+        portal_infos,
+        portal_refs,
+        eye,
+        terrain_z,
+    )
+    .0
+}
+
+/// [`down_ray_pick`] with the winning hit's depth, as [`down_ray_seeds_scored`] gives it.
+fn down_ray_pick_scored(
+    tris: &[Vec<[[f32; 3]; 3]>],
+    grids: &[Option<ColumnGrid>],
+    camera_only_tris: &[Vec<[[f32; 3]; 3]>],
+    nav: &[WmoGroupNav],
+    portal_vertices: &[[f32; 3]],
+    portal_infos: &[WmoPortalInfo],
+    portal_refs: &[WmoPortalRef],
+    eye: [f32; 3],
+    terrain_z: Option<f32>,
+) -> (DownRaySeeds, Option<f32>) {
     // Broad phase: the column inside the group's XY bounds, its bottom at or below the eye.
     let in_column = |g: &WmoGroupNav| {
         eye[0] >= g.bbox_min[0]
@@ -167,7 +205,7 @@ pub(crate) fn down_ray_pick(
         // Leg C, the camera-void fallback (the module doc's deviation): only when both legs missed
         // and no terrain lies at or below the eye. Leg A's rules; one root, no `across`.
         if terrain_z.is_some_and(|tz| tz <= eye[2]) {
-            return DownRaySeeds::default();
+            return (DownRaySeeds::default(), None);
         }
         let mut fb_z = f32::NEG_INFINITY;
         let mut fb: Option<usize> = None;
@@ -184,27 +222,37 @@ pub(crate) fn down_ray_pick(
                 }
             }
         }
-        let named = fb.filter(|&g| {
-            eye[2] - fb_z <= MAX_FLOOR_DROP && nav.get(g).is_some_and(|n| n.flags & EXTERIOR == 0)
-        });
-        return DownRaySeeds {
+        let Some(fb) = fb.filter(|_| eye[2] - fb_z <= MAX_FLOOR_DROP) else {
+            return (DownRaySeeds::default(), None);
+        };
+        let named = nav
+            .get(fb)
+            .is_some_and(|n| n.flags & EXTERIOR == 0)
+            .then_some(fb);
+        let seeds = DownRaySeeds {
             in_group: named,
             across: None,
         };
+        return (seeds, Some(eye[2] - fb_z));
     };
-    if eye[2] - best_z > MAX_FLOOR_DROP || nav.get(in_group).is_none_or(|g| g.flags & EXTERIOR != 0)
-    {
-        return DownRaySeeds::default();
+    if eye[2] - best_z > MAX_FLOOR_DROP {
+        return (DownRaySeeds::default(), None);
     }
     // The terrain race: terrain above the eye is off the segment; terrain strictly nearer than the
     // WMO hit is open ground, outside; a tie keeps the WMO (the client's strict `<`).
     if terrain_z.is_some_and(|tz| tz <= eye[2] && tz > best_z) {
-        return DownRaySeeds::default();
+        return (DownRaySeeds::default(), None);
     }
-    DownRaySeeds {
+    let depth = Some(eye[2] - best_z);
+    // An exterior winner is outside, its depth kept for the race across placements.
+    if nav.get(in_group).is_none_or(|g| g.flags & EXTERIOR != 0) {
+        return (DownRaySeeds::default(), depth);
+    }
+    let seeds = DownRaySeeds {
         in_group: Some(in_group),
         across,
-    }
+    };
+    (seeds, depth)
 }
 
 /// The zone-text ray length, the client's `[0x8022cc]` = 1000.0; the render probe's is 1760.
