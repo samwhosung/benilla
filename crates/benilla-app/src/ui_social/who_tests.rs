@@ -28,7 +28,7 @@ struct Who {
 /// The whole client, headless, with the stock class and race names, one zone, and a VM that
 /// defines the enUS tags and `UNKNOWN`.
 fn client() -> Who {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     crate::ui_unit::TestNames::english().insert(&mut app);

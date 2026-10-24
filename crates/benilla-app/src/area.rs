@@ -481,7 +481,7 @@ mod tests {
         /// `UNIT_FIELD_FACTIONTEMPLATE`.
         const TEMPLATE: u16 = 35;
 
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         benilla_world::world_point::init_world_point_resources(world);
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -538,7 +538,7 @@ mod tests {
         /// `UNIT_FIELD_FACTIONTEMPLATE`.
         const TEMPLATE: u16 = 35;
 
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         benilla_world::world_point::init_world_point_resources(world);
         let (tx, _rx) = crossbeam_channel::unbounded();

@@ -32,7 +32,7 @@ struct Social {
 /// `FRIENDLIST_UPDATE` in `UPDATES` and defines the strings `GetFriendInfo` reads. The first feed,
 /// which stands for every list's packet, has run.
 fn client() -> Social {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     crate::ui_unit::TestNames::english().insert(&mut app);

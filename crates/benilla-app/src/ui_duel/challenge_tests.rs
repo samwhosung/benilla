@@ -19,7 +19,7 @@ const DUEL: u32 = 7266;
 /// The whole client with us, a player party member and a creature 5 yards off, the duel spell
 /// known, and a VM whose resolver names the member as `party1`.
 fn client() -> (App, Receiver<ClientCommand>) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

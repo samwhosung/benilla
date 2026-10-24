@@ -418,7 +418,7 @@ fn a_monster_line_with_no_macro_fires_at_its_packet() {
 /// player line's sender.
 #[test]
 fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let world = app.world_mut();
     let log = || crate::ui_chat::ChatLog::default();
     for (line, answer) in [

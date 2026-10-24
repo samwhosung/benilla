@@ -581,7 +581,7 @@ mod tests {
     /// inside its call as the handler's turn ends; our player is in the world.
     fn hosted(idle_ms: u64) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_resource(NetCommands(tx))
             .insert_resource(crate::net::SelfGuid(Some(0x4000_0000_0000_0009)));
         app.world_mut()

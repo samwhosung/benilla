@@ -619,7 +619,7 @@ mod tests {
     fn a_mask_with_fewer_than_two_known_nodes_opens_no_map() {
         use benilla_protocol::SessionEvent;
         const MASTER: u64 = 0xF130_0000_0000_0099;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let script = UiScript::new().unwrap();
         script
             .run(

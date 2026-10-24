@@ -153,7 +153,7 @@ pub(super) fn rig(
     slots: &[u32],
     pet: Option<ObjectStore>,
 ) -> Rig {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, commands) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

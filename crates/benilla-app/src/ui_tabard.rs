@@ -498,7 +498,7 @@ mod tests {
         use crate::script_calls::with_hosted_vm;
         use benilla_ui::script::{TabardHost, UnitState};
         const VENDOR: u64 = 0xF130_0000_0000_0042;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();

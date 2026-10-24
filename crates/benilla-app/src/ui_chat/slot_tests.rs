@@ -389,7 +389,7 @@ struct Client {
 
 impl Client {
     fn new(held: &[&str], mut script: UiScript) -> Self {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, sent) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let mut channels = ChannelState {

@@ -1177,7 +1177,7 @@ mod tests {
             ])
             .into_created(ObjectType::Item),
         };
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let me = world
             .spawn((
@@ -1260,7 +1260,7 @@ mod tests {
     #[test]
     fn an_item_answer_runs_each_waiting_trade_getters_callback_once() {
         use crate::item_watch::ItemNotice;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         {
             let items = world.resource::<Items>();
@@ -1340,7 +1340,7 @@ mod tests {
             let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * n;
             [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)]
         };
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let pairs: Vec<(u16, u32)> = seat(0, HELM).into_iter().chain(seat(23, POTIONS)).collect();
         let me = world
@@ -1417,7 +1417,7 @@ mod tests {
     #[test]
     fn an_item_answer_runs_each_waiting_ammo_getters_callback_once() {
         use crate::field_watch::FieldNotice;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         {
             let items = world.resource::<Items>();
@@ -1486,7 +1486,7 @@ mod tests {
             guid,
             fields: ObjectFields::from_pairs(pairs),
         };
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         world.resource_mut::<SelfGuid>().0 = Some(ME);
         let drain = |world: &mut World| -> Vec<FieldNotice> {
@@ -1559,7 +1559,7 @@ mod tests {
             spline: None,
             fields: ObjectFields::from_pairs(pairs).into_created(ObjectType::Player),
         };
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         world.resource_mut::<SelfGuid>().0 = Some(ME);
         let record = PartyMemberStatsInfo {
@@ -1614,7 +1614,7 @@ mod tests {
     /// as a player), the potion's template cached; the items it lists created, our own.
     fn watch_world(items: &[(u64, u32, bool)]) -> App {
         use benilla_protocol::messages::ObjectType;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let me = world
             .spawn((
@@ -1769,7 +1769,7 @@ mod tests {
     #[test]
     fn a_refused_game_object_entry_is_no_template() {
         const ENTRY: u32 = 1731;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let fields = crate::go_templates::test_fields(ENTRY);
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -1821,7 +1821,7 @@ mod tests {
     #[test]
     fn a_refused_creature_is_asked_again_when_a_new_unit_of_it_is_created() {
         const ENTRY: u32 = 1234;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         let create = |guid: u64| SessionEvent::ObjectCreate {
@@ -1865,7 +1865,7 @@ mod tests {
     fn an_entry_change_asks_the_creature_cache_for_the_new_entry() {
         const OLD: u32 = 299;
         const NEW: u32 = 2_671;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         let mob = (u64::from(OLD) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
@@ -1952,7 +1952,7 @@ mod tests {
         const GO_ENTRY: u32 = 1000;
         const GO: u64 = 0xF110_0000_0000_0009;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
 
@@ -1978,7 +1978,7 @@ mod tests {
         const GO_ENTRY: u32 = 1000;
         const GO: u64 = 0xF110_0000_0000_0009;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
 
@@ -2051,7 +2051,7 @@ mod tests {
         const ENTRY: u32 = 1234;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
         const PLAYER: u64 = 0x0000_0000_0000_0042;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         app.world_mut().insert_resource(display_tables());
@@ -2099,7 +2099,7 @@ mod tests {
         use benilla_protocol::field::{FIELD_UNIT_DISPLAYID, FIELD_UNIT_HEALTH};
         const ENTRY: u32 = 1234;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         app.world_mut().insert_resource(display_tables());
@@ -2243,7 +2243,7 @@ mod tests {
         const ME: u64 = 0x0000_0000_0000_0007;
         const SWORD: u64 = 0x4000_0000_0000_0042;
         const STONE: u64 = 0x4000_0000_0000_0043;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let create = |guid| SessionEvent::ItemCreate {
             guid,
@@ -2351,7 +2351,7 @@ mod tests {
         const THEIRS: u64 = 0x4000_0000_0000_0043;
         const MACE: u64 = 0x4000_0000_0000_0044;
         const ENTRY: u32 = 117;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let me = world
             .spawn((

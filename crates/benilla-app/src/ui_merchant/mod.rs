@@ -1184,7 +1184,7 @@ mod tests {
         use benilla_protocol::field::FIELD_UNIT_NPC_FLAGS;
         const VENDOR: u64 = 0xF130_0000_0000_0042;
 
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let mut open = MerchantOpen::default();
         open.open(VENDOR, Vec::new());
         app.insert_resource(open);

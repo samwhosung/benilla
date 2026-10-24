@@ -112,7 +112,7 @@ pub(super) fn health(n: u32) -> [(u16, u32); 1] {
 /// with [`BOAR`] (50 health) beside it; a VM whose spy records `UNIT_HEALTH`, `UNIT_MANA` and
 /// `UNIT_COMBAT`, each with its token and what `Look(event, token)` reads as it fires.
 pub(super) fn client() -> App {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
     let world = app.world_mut();

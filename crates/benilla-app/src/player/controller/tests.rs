@@ -38,7 +38,7 @@ struct Client {
 impl Client {
     /// `set` applies to [`Player`] before the first placement.
     fn new(body: Body, set: impl FnOnce(&mut Player)) -> Self {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         // The startup's player, rig and camera, with no client data, the empty world's liquids and
         // rooms, and a session to send on.

@@ -17,7 +17,7 @@ const COINAGE: u16 = 1176;
 /// The whole client, headless, the player holding `money` copper and a trainer's respec question
 /// latched at 1000, its VM seated with one tab: talent 100 at rank 2 of 5, talent 101 at 5 of 5.
 fn client(money: u32) -> (App, Receiver<ClientCommand>) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

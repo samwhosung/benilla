@@ -66,7 +66,7 @@ fn state() -> ReputationState {
 /// The whole client, headless, its VM seated with [`state`], the player's descriptor holding
 /// `unit_flags` and watching nothing, and Stormwind's slot 19 holding `stormwind` flags.
 fn client(unit_flags: u32, stormwind: u8, list: ReputationState) -> (App, Receiver<ClientCommand>) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

@@ -272,6 +272,37 @@ pub(crate) mod schedule_tests {
     /// [`headless_client`] with `more` added before it finishes, as the binary adds its
     /// instruments and probes.
     pub(crate) fn headless_client_with(more: impl FnOnce(&mut App)) -> App {
+        let mut app = finished_client(more);
+        app.cleanup();
+        app
+    }
+
+    /// The whole client's world, for a fixture that drives it by hand (a one-shot system, a call
+    /// with the host lent, a schedule of its own) and never runs the app: every plugin built and
+    /// finished, every resource in place, every schedule but `Main` and `Update`, and the pass
+    /// never ordered, whose system census is most of what [`headless_client`] costs. With no
+    /// `Main`, `app.update()` panics, and with no `Update` and no [`crate::vm_pass::PassOrder`] so
+    /// does a run or a read of the pass, so a test that comes to need them moves to
+    /// [`headless_client`]. Every other schedule is the client's own, its unit-edit flushes
+    /// included.
+    pub(crate) fn headless_client_unrun() -> App {
+        let mut app = finished_client(|_| {});
+        let unrun = |app: &mut App| {
+            let mut schedules = app.world_mut().resource_mut::<Schedules>();
+            schedules.remove(Main);
+            schedules.remove(Update);
+        };
+        unrun(&mut app);
+        app.cleanup();
+        // A plugin's cleanup may add to `Update` again.
+        unrun(&mut app);
+        app.world_mut()
+            .remove_resource::<crate::vm_pass::PassOrder>();
+        app
+    }
+
+    /// Every plugin of the client built and finished, `more` among them; none cleaned up.
+    fn finished_client(more: impl FnOnce(&mut App)) -> App {
         let mut app = App::new();
         // The tonemapping tables are the render world's alone, and there is none: in place
         // already, they are not decoded (`TonemappingPlugin` builds them only when absent).
@@ -305,7 +336,6 @@ pub(crate) mod schedule_tests {
         });
         more(&mut app);
         app.finish();
-        app.cleanup();
         app
     }
 

@@ -31,7 +31,7 @@ struct Feed {
 /// Us, alive or not, a hunter who knows Feed Pet, with Tough Jerky in the backpack and our pet
 /// streamed: created by us by a spell, and `pet_number` its `UNIT_FIELD_PETNUMBER`.
 fn client(alive: bool, pet_number: u32) -> Feed {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

@@ -51,7 +51,7 @@ impl Client {
 
     /// [`Self::new`], with `NPC` streamed with `npc_flags`, or not at all for `None`.
     pub(crate) fn streaming(npc_flags: Option<u32>) -> Self {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();

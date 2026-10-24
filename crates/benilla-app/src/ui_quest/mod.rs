@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn the_givers_name_landing_fires_no_quest_event() {
         const GIVER: u64 = 0x10;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let script = UiScript::new().unwrap();
         script
             .run(
@@ -1078,7 +1078,7 @@ mod tests {
     /// The feed over a headless client's world, registered once so its memo lasts from run to
     /// run, and a VM that records the panel events in `SEEN`.
     fn quest_app() -> (App, bevy::ecs::system::SystemId) {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let script = UiScript::new().unwrap();
         script
             .run(

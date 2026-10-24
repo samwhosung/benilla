@@ -3502,7 +3502,7 @@ fn the_away_lines_fire_inside_the_call() {
 fn the_call_host_applies_the_chat_calls_inside_the_verb() {
     use crate::net::{ChatKind, ClientCommand, NetCommands};
 
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     app.world_mut().insert_non_send_resource(in_world_vm());

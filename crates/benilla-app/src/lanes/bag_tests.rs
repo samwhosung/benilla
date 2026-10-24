@@ -97,7 +97,7 @@ fn combo(n: u32) -> SessionEvent {
 /// The client in the world as [`ME`] with the potions in the backpack, the linen in the bank and
 /// the bag equipped, and a VM whose spy records the bag, lock, bank and money events with `arg1`.
 fn client() -> App {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let world = app.world_mut();
     let pairs: Vec<(u16, u32)> = seat(23, POTIONS)
         .into_iter()

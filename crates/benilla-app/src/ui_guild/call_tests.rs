@@ -22,7 +22,7 @@ struct Guild {
 
 /// The whole client, headless, with a VM that counts `GUILD_ROSTER_UPDATE`.
 fn client() -> Guild {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let script = UiScript::new().expect("a VM");

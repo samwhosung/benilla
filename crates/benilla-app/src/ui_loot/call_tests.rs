@@ -46,7 +46,7 @@ pub(super) struct Loot {
 /// templates and a VM that notes the loot events in `SEEN`, defines the loot error keys as
 /// themselves and the money line's strings as the stock ones.
 pub(super) fn client() -> Loot {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

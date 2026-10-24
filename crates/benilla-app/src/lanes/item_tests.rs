@@ -64,7 +64,7 @@ fn item(guid: u64, entry: u32) -> SessionEvent {
 /// (slots 3 and 5), and a VM whose spy records the item watchers' events and the combo count's,
 /// with `arg1`.
 fn client() -> App {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let world = app.world_mut();
     let seat = |n: u16, guid: u64| {
         let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * n;

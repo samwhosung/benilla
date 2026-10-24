@@ -72,7 +72,7 @@ fn claimed() -> SessionEvent {
 
 /// One frame of the real drain over `events`; what the unit ended up as.
 fn drained(events: Vec<SessionEvent>) -> (Vec<(u16, u32)>, MoveSpeeds, UnitMoveModes) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetEvents(rx));
     for ev in crate::net::wire(events) {
@@ -171,7 +171,7 @@ fn force_run(speed: f32) -> SessionEvent {
 
 /// One frame of the real drain; the unit's live speed set, if any.
 fn speeds_after(events: Vec<SessionEvent>) -> Option<MoveSpeeds> {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetEvents(rx));
     for ev in crate::net::wire(events) {

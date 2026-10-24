@@ -18,7 +18,7 @@ const MASTER: u64 = 0xF130_0000_0000_0099;
 /// Hill (4), Ironforge (6) and Thelsamar (8), the master latched, and every map event and shown
 /// line recorded in `HEARD`.
 fn client(data: &std::path::Path) -> (App, Receiver<ClientCommand>) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let mut chain = benilla_formats::open_chain(data).expect("open chain");

@@ -25,7 +25,7 @@ const BUYBACK_PRICE_1: u16 = 1226;
 /// Refreshing Spring Water (159) in row 1, our cloth in the backpack and one sold item in the
 /// buyback list.
 fn client() -> (App, Receiver<ClientCommand>) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

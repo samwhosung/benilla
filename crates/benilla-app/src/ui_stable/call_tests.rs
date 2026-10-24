@@ -23,7 +23,7 @@ struct Stable {
 /// The whole client, headless, with us streamed (`summon` our summoned pet's guid, or none), a
 /// stable open on its master with one slot bought and pet 3 in it, and 1g in the purse.
 fn client(summon: u64) -> Stable {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

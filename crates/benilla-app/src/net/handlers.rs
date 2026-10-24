@@ -236,7 +236,7 @@ mod tests {
     /// A kind with no handler is a decoded packet dropped in silence, as the reference does.
     #[test]
     fn every_session_event_kind_has_one_owner() {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let table = app.world_mut().resource::<NetHandlers>().census();
         let unowned: Vec<String> = SessionEventKind::all()
             .filter(|k| !table.contains_key(k))
@@ -255,7 +255,7 @@ mod tests {
     /// never in a smoke run; this fetches them all once, with an event each handler ignores.
     #[test]
     fn every_registered_handler_can_run_on_the_built_client() {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let handlers = world
             .remove_resource::<NetHandlers>()
@@ -355,7 +355,7 @@ mod tests {
                 }
             }
         }
-        let registered: usize = crate::game_plugins::schedule_tests::headless_client()
+        let registered: usize = crate::game_plugins::schedule_tests::headless_client_unrun()
             .world()
             .resource::<NetHandlers>()
             .census()

@@ -6,7 +6,7 @@ const ME: u64 = 0x0000_0000_0000_0007;
 const MOB: u64 = 0xF130_0000_1234_0001;
 
 fn client() -> App {
-    crate::game_plugins::schedule_tests::headless_client()
+    crate::game_plugins::schedule_tests::headless_client_unrun()
 }
 
 /// An indexed entity for `guid`, as a create leaves it.

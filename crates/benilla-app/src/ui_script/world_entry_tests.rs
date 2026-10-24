@@ -1969,7 +1969,7 @@ JoinProbe.lua
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_addon("joinprobe", "JoinProbe", TOC, LUA);
     // The whole client, whose call host the load lends.
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let world = app.world_mut();
     boot(world);
     let (tx, wire) = crossbeam_channel::unbounded();
@@ -2294,7 +2294,7 @@ fn a_call_a_file_makes_at_the_load_applies_inside_its_verb() {
         "## Interface: 11200\nLoadCall.lua\n",
         "TargetUnit(\"player\") LoadCallSeen = UnitExists(\"target\")",
     );
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));

@@ -27,7 +27,7 @@ struct Charter {
 
 /// The whole client, headless, with a VM that records the charter's events and lines.
 fn client() -> Charter {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     app.world_mut()

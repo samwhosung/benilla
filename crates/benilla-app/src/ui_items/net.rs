@@ -148,7 +148,7 @@ mod tests {
         const A: u64 = 0x4000_0000_0000_00a1;
         const B: u64 = 0x4000_0000_0000_00b2;
         const REASON: u8 = 0x16;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let mut script = benilla_ui::script::UiScript::new().unwrap();
         let key = super::super::equip_error::equip_error_key(REASON);
         script
@@ -205,7 +205,7 @@ mod tests {
     /// [`keyring_client`] before the key's record is known.
     fn keyring_client_without_the_record() -> App {
         const ME: u64 = 0x7;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         let me = world
             .spawn((

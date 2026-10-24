@@ -1241,7 +1241,7 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         // The whole schedule, with no world loaded: a system missing what world entry inserts
         // (the camera rig, the map) skips rather than panics.
         app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
@@ -1289,7 +1289,7 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
             bevy::ecs::error::ignore,
         ));
@@ -1938,7 +1938,7 @@ mod tests {
         World,
         crossbeam_channel::Receiver<crate::net::ClientCommand>,
     ) {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         front_world_in(std::mem::take(app.world_mut()), seated, charmed)
     }
 
@@ -2153,7 +2153,7 @@ mod tests {
     #[test]
     fn a_shutdown_one_shot_applies_its_unit_edits_as_it_returns() {
         const ME: u64 = 0x10;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(crate::net::NetCommands(tx));
         let world = app.world_mut();
