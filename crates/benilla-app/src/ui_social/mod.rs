@@ -850,7 +850,7 @@ impl Plugin for UiSocialPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         // Category 0 (`0x5adcfd`).
-        app.console_command(
+        app.console_command_in_call(
             "whois",
             crate::console::DEBUG,
             Some(whois::HELP),

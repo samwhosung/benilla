@@ -97,9 +97,7 @@ pub(super) struct ChatProbes<'w, 's> {
 /// What the drain hands to another subsystem's setter, bundled for the same ceiling. Chat never
 /// writes [`Selection`]: [`crate::target`]'s resolver commits through the click's path.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct ChatOut<'w, 's> {
-    /// A `/console` line runs against the world at the next sync point.
-    console: Commands<'w, 's>,
+pub(super) struct ChatOut<'w> {
     target: MessageWriter<'w, crate::target::TargetByNameRequest>,
     assist: MessageWriter<'w, crate::target::AssistRequest>,
     follow: MessageWriter<'w, crate::player::FollowRequest>,
@@ -110,21 +108,6 @@ pub(super) struct ChatOut<'w, 's> {
     ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
 }
 
-/// The `ConsoleExec` lines the VM queued, as [`ParsedChat::Console`] values, so one executor
-/// serves them and a probe's `/console`. They wait for the drain, where every other chat verb
-/// applies inside its call: a console command runs against the whole world
-/// ([`crate::console::run`]), which no call host holds.
-fn engine_verbs(script: &mut benilla_ui::script::UiScript) -> Vec<(String, ParsedChat)> {
-    script
-        .take_console_lines()
-        .into_iter()
-        // `ConsoleExec` already ran the commands that write a CVar; what reaches here is a
-        // console command (`detailDoodadAlpha`, registered by `0x63f9e0`, never persists), a bare
-        // CVar name to print, or an unknown word.
-        .map(|line| (line.clone(), ParsedChat::Console { line }))
-        .collect()
-}
-
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn drain_chat_input(
     mut vm: crate::script_calls::VmWith<(
@@ -133,7 +116,7 @@ pub(super) fn drain_chat_input(
         ResMut<'static, crate::names::NameCache>,
         MessageWriter<'static, crate::creature_anim::CastEvent>,
         ResMut<'static, crate::creature_anim::PlaySeq>,
-        ChatOut<'static, 'static>,
+        ChatOut<'static>,
         // The dev probes read the relation inputs a call can write.
         ChatProbes<'static, 'static>,
     )>,
@@ -164,7 +147,7 @@ pub(super) fn drain_chat_input(
         } = &probes;
         let script = script?;
         let lines = lines.get_or_insert_with(|| {
-            let mut queue = engine_verbs(script);
+            let mut queue = Vec::new();
             // The dev instruments, from their host `SlashCmdList` rows once the stock
             // `ChatEdit_ParseText` has found no built-in (dev builds), and probe lines.
             for raw in script.take_chat_input() {
@@ -738,13 +721,6 @@ pub(super) fn drain_chat_input(
                 // `crate::ui_logout` narrates the answer with the CAMP or QUIT countdown.
                 ParsedChat::Logout => session(script, SessionRequest::Logout),
                 ParsedChat::Quit => session(script, SessionRequest::Quit),
-                // Deferred to the world, since a command is `fn(&mut World, &str)`; its lines go to
-                // the log, never to chat ([`crate::console::run`]).
-                ParsedChat::Console { line } => {
-                    chat_out
-                        .console
-                        .queue(move |world: &mut World| crate::console::run(world, &line));
-                }
                 // The reference's handler body, run in the VM.
                 ParsedChat::Lua { body } => return Some(LineWork::Lua(LineLua::Body(body))),
                 ParsedChat::Unknown => {

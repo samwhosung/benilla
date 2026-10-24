@@ -239,6 +239,26 @@ impl super::UiScript {
             .collect()
     }
 
+    /// Every row of the mirror as `(name, value, default, reset)`, in its list order (each row's
+    /// insertion), for the console's prints inside a `ConsoleExec` call: the mirror holds what
+    /// the chunk's own writes left, as the reference's one record does.
+    pub fn cvar_rows(&self) -> Vec<(String, String, String, Option<String>)> {
+        let model = self.model_mut();
+        let mut slots: Vec<&CvarSlot> = model.cvars.values().collect();
+        slots.sort_by_key(|s| s.seq);
+        slots
+            .into_iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.value.clone(),
+                    s.default.clone(),
+                    s.reset.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// Drain the lines CVar change callbacks printed since the last call, for the console.
     pub fn take_cvar_console_lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().cvar_console)
@@ -1213,6 +1233,7 @@ mod tests {
     #[test]
     fn console_exec_writes_a_valued_cvar_and_hands_a_bare_name_to_the_host() {
         let mut s = script_with_volume();
+        s.keep_calls();
         s.run(r#"ConsoleExec("MusicVolume 0.2")"#).unwrap();
         assert_eq!(
             s.eval::<String>(r#"return GetCVar("MusicVolume")"#)

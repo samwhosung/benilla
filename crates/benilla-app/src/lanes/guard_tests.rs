@@ -482,6 +482,8 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_instance::feed_instance", &["ui_instance::InstanceState"]),
     ("::ui_billing::poll_play_time", &["net::SessionBilling"]),
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
+    // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
+    ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
     ("::ui_social::feed::feed_social", &["names::NameCache", "ui_social::SocialState"]),
     ("::ui_guild::feed::feed_guild", &["net::ObjectStore", "ui_guild::GuildLocal",
         "ui_guild::GuildState"]),
@@ -669,6 +671,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_chat::edit::ChannelState",
+    // The console's registry, which a `ConsoleExec` a listener makes reads.
+    "::console::ConsoleCommands",
     // The creature families the cast send's pet learn rung reads (`0x60c7c0`).
     "::ui_pet_stats::PetFamilyTables",
     "::AreaTableRes",

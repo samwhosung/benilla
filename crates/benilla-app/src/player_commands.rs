@@ -3,18 +3,16 @@
 //! with no build or account test on the way, and `/console` reaches its commands through
 //! `0x63ce00`, which has no category gate. `ClientDestroyGame` unregisters all six (slot 1,
 //! `0x401f86` to `0x405390`) and `whois` too (`0x5ae316`), so the reference holds them from world
-//! entry only. Registered for the process here they answer the same: the one route into `execute`
-//! at the glue is `drain_glue_console`, and stock GlueXML never calls `ConsoleExec`. Each but
+//! entry only. Registered for the process here they answer the same: the one route to them at the
+//! glue is the glue VM's `ConsoleExec`, which stock GlueXML never calls. Each but
 //! `showplayer` is a send to the server; whether the account may use it is the server's to say.
 
 use benilla_assets::coords::bevy_to_wow;
-use benilla_assets::MapCatalogRes;
 use benilla_ui::script::{s_str_to_float, s_str_tokenize};
 use bevy::prelude::*;
 
-use crate::console::{ConsoleCommandApp, DEBUG, GAME, GRAPHICS};
-use crate::net::{ClientCommand, NetCommands};
-use crate::player::Player;
+use crate::console::{ConsoleCommandApp, ConsoleSteps, DEBUG, GAME, GRAPHICS};
+use crate::net::ClientCommand;
 
 pub(crate) struct PlayerCommandsPlugin;
 
@@ -23,12 +21,12 @@ impl Plugin for PlayerCommandsPlugin {
         // Registered in the reference's order, none with a help string (`0x4049e0`-`0x404a48`):
         // category 0 for the three that move the player, 1 for `showplayer`, 4 for the two
         // toggles.
-        app.console_command("port", DEBUG, None, port)
-            .console_command("worldport", DEBUG, None, worldport)
-            .console_command("setrawpos", DEBUG, None, setrawpos)
+        app.console_command_in_call("port", DEBUG, None, port)
+            .console_command_in_call("worldport", DEBUG, None, worldport)
+            .console_command_in_call("setrawpos", DEBUG, None, setrawpos)
             .console_command("showplayer", GRAPHICS, None, show_player)
-            .console_command("togglehelm", GAME, None, toggle_helm)
-            .console_command("togglecloak", GAME, None, toggle_cloak);
+            .console_command_in_call("togglehelm", GAME, None, toggle_helm)
+            .console_command_in_call("togglecloak", GAME, None, toggle_cloak);
     }
 }
 
@@ -68,12 +66,9 @@ const TOKEN_BYTES: usize = 0x40;
 /// `ds:0x7ffaac`, pi / 180 as a float: what a facing argument in degrees is multiplied by.
 const DEGREES_TO_RADIANS: f64 = 0.017_453_292_f32 as f64;
 
-/// Queues `command` for the write thread, which drops it with no session as `NetClient::Send`
-/// (`0x5379a0`) sends nothing unconnected. Nothing is printed.
-fn send(world: &World, command: ClientCommand) -> Vec<String> {
-    if let Some(net) = world.get_resource::<NetCommands>() {
-        let _ = net.0.send(command);
-    }
+/// Queues `command` for the write thread ([`ConsoleSteps::send`]). Nothing is printed.
+fn send(steps: &ConsoleSteps, command: ClientCommand) -> Vec<String> {
+    steps.send(command);
     Vec::new()
 }
 
@@ -105,8 +100,8 @@ fn in_range(x: f32, y: f32) -> bool {
 /// Where the active player stands, in the wire's terms: the position in world yards and the
 /// facing in radians in `[0, 2pi)`. `None` when no player is active, where the handlers do
 /// nothing (`ClntObjMgrObjectPtr` is null, `0x404aab`, `0x404dea`, `0x405046`).
-fn player_pose(world: &World) -> Option<([f32; 3], f32)> {
-    let player = world.get_resource::<Player>().filter(|p| p.active)?;
+fn player_pose(steps: &ConsoleSteps) -> Option<([f32; 3], f32)> {
+    let player = steps.player.as_deref().filter(|p| p.active)?;
     Some((
         bevy_to_wow(player.pos),
         player.facing().rem_euclid(std::f32::consts::TAU),
@@ -150,13 +145,13 @@ fn starts_a_number(args: &str) -> bool {
 /// `PortCommand` (`0x404a60`) with a player: a number-first line is `x y [z] [facing]`, checked by
 /// `0x404d10`, and sent as `MSG_MOVE_TELEPORT_CHEAT` (`0x404cdc`); any other text is a player
 /// name, sent whole as `CMSG_TELEPORT_TO_UNIT` (`0x404b31`), an empty line too.
-fn port(world: &mut World, args: &str) -> Vec<String> {
-    let Some((_, facing)) = player_pose(world) else {
+fn port(steps: &mut ConsoleSteps, args: &str) -> Vec<String> {
+    let Some((_, facing)) = player_pose(steps) else {
         return Vec::new();
     };
     if !starts_a_number(args) {
         return send(
-            world,
+            steps,
             ClientCommand::TeleportToUnit {
                 text: args.to_string(),
             },
@@ -165,14 +160,14 @@ fn port(world: &mut World, args: &str) -> Vec<String> {
     match read_position(args, facing) {
         None => Vec::new(),
         Some(Err(line)) => vec![line.to_string()],
-        Some(Ok((pos, facing))) => send(world, ClientCommand::TeleportCheat { pos, facing }),
+        Some(Ok((pos, facing))) => send(steps, ClientCommand::TeleportCheat { pos, facing }),
     }
 }
 
 /// `SetRawPosCommand` (`0x405000`) with a player: `port`'s numbers, sent as
 /// `CMSG_MOVE_SET_RAW_POSITION` (`0x4051e4`); other text sends nothing.
-fn setrawpos(world: &mut World, args: &str) -> Vec<String> {
-    let Some((_, facing)) = player_pose(world) else {
+fn setrawpos(steps: &mut ConsoleSteps, args: &str) -> Vec<String> {
+    let Some((_, facing)) = player_pose(steps) else {
         return Vec::new();
     };
     if !starts_a_number(args) {
@@ -181,7 +176,7 @@ fn setrawpos(world: &mut World, args: &str) -> Vec<String> {
     match read_position(args, facing) {
         None => Vec::new(),
         Some(Err(line)) => vec![line.to_string()],
-        Some(Ok((pos, facing))) => send(world, ClientCommand::SetRawPosition { pos, facing }),
+        Some(Ok((pos, facing))) => send(steps, ClientCommand::SetRawPosition { pos, facing }),
     }
 }
 
@@ -198,8 +193,8 @@ fn s_str_to_unsigned(text: &str) -> u32 {
 /// to where the player stands. No map prints the usage (`0x82efb0`); a map with no `Map.dbc` row
 /// prints `Bad world number` (`0x82ef98`). Sent as `CMSG_WORLD_TELEPORT` (`0x404fc8`) with the
 /// millisecond clock (`0x42c010`). No range test is made on the position.
-fn worldport(world: &mut World, args: &str) -> Vec<String> {
-    let Some((mut pos, mut facing)) = player_pose(world) else {
+fn worldport(steps: &mut ConsoleSteps, args: &str) -> Vec<String> {
+    let Some((mut pos, mut facing)) = player_pose(steps) else {
         return Vec::new();
     };
     let mut rest = args.as_bytes();
@@ -220,17 +215,19 @@ fn worldport(world: &mut World, args: &str) -> Vec<String> {
     }
     // `0 <= map <= [0xc0daac]` and a row in the table at `[0xc0daa8]` (`0x404eef`-`0x404f04`).
     let known = i32::try_from(map).is_ok()
-        && world
-            .get_resource::<MapCatalogRes>()
+        && steps
+            .maps
+            .as_deref()
             .is_some_and(|maps| maps.0.directory(map).is_some());
     if !known {
         return vec![format!("Bad world number: {}\n", map as i32)];
     }
-    let time_ms = world
-        .get_resource::<Time<Real>>()
+    let time_ms = steps
+        .real_time
+        .as_deref()
         .map_or(0, crate::ui_billing::now_ms);
     send(
-        world,
+        steps,
         ClientCommand::WorldTeleport {
             time_ms,
             map,
@@ -243,13 +240,13 @@ fn worldport(world: &mut World, args: &str) -> Vec<String> {
 /// `ToggleHelmCommand` (`0x405250`): `CMSG_TOGGLE_HELM` with no body, whatever the arguments and
 /// whether or not a player exists. The client's own flag is not consulted, unlike the interface's
 /// Show Helm box (`objectlayer/inventory`, Helm and cloak).
-fn toggle_helm(world: &mut World, _args: &str) -> Vec<String> {
-    send(world, ClientCommand::ToggleHelm)
+fn toggle_helm(steps: &mut ConsoleSteps, _args: &str) -> Vec<String> {
+    send(steps, ClientCommand::ToggleHelm)
 }
 
 /// `ToggleCloakCommand` (`0x4052f0`): `CMSG_TOGGLE_CLOAK`, as [`toggle_helm`].
-fn toggle_cloak(world: &mut World, _args: &str) -> Vec<String> {
-    send(world, ClientCommand::ToggleCloak)
+fn toggle_cloak(steps: &mut ConsoleSteps, _args: &str) -> Vec<String> {
+    send(steps, ClientCommand::ToggleCloak)
 }
 
 #[cfg(test)]
@@ -257,7 +254,10 @@ mod tests {
     use super::*;
     use crate::console::{execute, ConsolePlugin};
     use crate::cvars::Cvars;
+    use crate::net::NetCommands;
+    use crate::player::Player;
     use benilla_assets::coords::wow_to_bevy;
+    use benilla_assets::MapCatalogRes;
     use crossbeam_channel::Receiver;
 
     fn commands_app() -> (App, Receiver<ClientCommand>) {

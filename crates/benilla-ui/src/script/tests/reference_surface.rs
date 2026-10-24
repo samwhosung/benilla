@@ -1647,12 +1647,13 @@ fn the_pfui_hdgraphic_extended_arm_runs() {
 fn the_nameplate_verbs_write_two_runtime_bits_and_no_cvar() {
     use crate::script::{PLATE_BIT_ENEMY as ENEMY, PLATE_BIT_FRIEND as FRIEND};
     let mut s = script();
+    s.keep_calls();
 
     s.run("ShowNameplates()").unwrap();
     assert_eq!(s.take_nameplate_bit_writes().apply(0), ENEMY);
     assert!(
         s.take_nameplate_bit_writes().is_empty(),
-        "a drain empties the queue"
+        "a take empties what was kept"
     );
 
     s.run("HideNameplates()").unwrap();

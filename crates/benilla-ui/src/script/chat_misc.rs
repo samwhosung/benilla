@@ -42,10 +42,14 @@ impl super::UiScript {
         })
     }
 
-    /// `ConsoleExec` lines its own CVar commands did not run ([`super::console_exec`]): the app's
-    /// console commands (`reloadui`, …), a bare CVar name, an unknown word.
+    /// `ConsoleExec` lines its own CVar commands did not run ([`super::console_exec`]), which a
+    /// harness's VM kept ([`Self::keep_calls`]): the app's console commands (`reloadui`, …), a
+    /// bare CVar name, an unknown word.
     pub fn take_console_lines(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().console_lines)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Console(line) => Some(line.clone()),
+            _ => None,
+        })
     }
 
     /// `(chat, combat)`, as `LoggingChat` and `LoggingCombat` last set them.

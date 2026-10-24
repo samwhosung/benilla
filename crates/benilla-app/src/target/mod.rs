@@ -81,6 +81,8 @@ pub(crate) use by_name::{
 // The one SetSelection path, for the loot response's select (`0x48f3a0`), and what a selecting
 // call owes after its signals.
 pub(crate) use by_name::{SelectCommit, SelectDebt};
+// The follow's start gate, for `/follow` and for `FollowUnit` and `FollowByName` in their calls.
+pub(crate) use by_name::{FollowStart, FollowSteps};
 // The selector's colour and the faction catalog it and the model read.
 #[cfg(test)]
 pub(crate) use ring::{ring_variant, PlayerPath, SelectorInput};
@@ -398,8 +400,7 @@ impl Plugin for TargetPlugin {
                     (
                         by_name::target_by_name_requests,
                         by_name::assist_requests,
-                        // After the follow drain, so a `FollowUnit` starts the frame it is made.
-                        by_name::follow_requests.after(crate::ui_follow::drain_follow),
+                        by_name::follow_requests,
                     )
                         .chain(),
                     scan::auto_acquire,

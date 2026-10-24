@@ -352,19 +352,6 @@ pub(crate) fn run_pending_glue_rebuild(world: &mut World) {
     super::lifecycle::install_glue_side_vm(world, &screen);
 }
 
-/// `ConsoleExec` lines the glue VM left for the console (`0x515f10` → `ConsoleCommandExecute`),
-/// run as the in-game drain runs its own, their output to the log: the glue has no chat to print
-/// to.
-pub(crate) fn drain_glue_console(world: &mut World) {
-    let lines = match world.get_non_send_resource_mut::<UiScript>() {
-        Some(mut s) if s.vm_kind() == benilla_ui::script::VmKind::Glue => s.take_console_lines(),
-        _ => return,
-    };
-    for line in lines {
-        crate::console::run(world, &line);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -643,7 +630,7 @@ mod tests {
     fn glue_world() -> World {
         use crate::console::ConsoleCommandApp;
         let mut app = App::new();
-        app.console_command(
+        app.console_command_in_call(
             "reloadUI",
             crate::console::GRAPHICS,
             None,
@@ -680,11 +667,18 @@ mod tests {
         let set_state = |world: &World, state: ScreenState| {
             world.non_send_resource::<SharedGlueMgr>().get_mut().state = state;
         };
-        world
-            .non_send_resource::<UiScript>()
-            .run("SetGlueScreen('credits') ConsoleExec('reloadUI')")
-            .unwrap();
-        drain_glue_console(&mut world);
+        // The console line as the host runs it inside the call.
+        let lines = {
+            let mut s = world.non_send_resource_mut::<UiScript>();
+            s.keep_calls();
+            s.run("SetGlueScreen('credits') ConsoleExec('reloadUI')")
+                .unwrap();
+            s.take_console_lines()
+        };
+        assert_eq!(lines, ["reloadUI"]);
+        for line in lines {
+            crate::console::execute(&mut world, &line);
+        }
         let old = session(&world);
 
         set_state(&world, ScreenState::Logon);

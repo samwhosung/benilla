@@ -146,7 +146,9 @@ mod messageframe;
 mod minimap;
 mod movieframe;
 pub mod nameplate;
-pub use nameplate::{PlateBitWrites, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND};
+pub use nameplate::{
+    PlateBitWrite, PlateBitWrites, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
+};
 mod model;
 mod modelframe;
 mod mouseover;

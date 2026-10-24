@@ -507,8 +507,10 @@ fn log_in(
     if let Some(saved) = saved {
         std::fs::write(home.join("saved-variables.lua"), saved).unwrap();
     }
+    let mut s = s;
+    s.keep_calls();
     let mut app = App::new();
-    app.add_systems(Update, crate::vplates::apply_plate_verbs)
+    app.add_systems(Update, crate::vplates::apply_kept_plate_calls)
         .insert_resource(before)
         .insert_non_send_resource(s);
     crate::ui_saved::load_saved_variables(

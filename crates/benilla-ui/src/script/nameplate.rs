@@ -138,9 +138,6 @@ pub(crate) struct NamePlates {
     /// true, where freelook (`0x60f830`) clears the bit.
     hit_test_vetoed: bool,
     geometry: Option<PlateGeometry>,
-    /// The verbs' writes to the two script bits, drained by
-    /// [`UiScript::take_nameplate_bit_writes`].
-    bit_writes: PlateBitWrites,
     /// The fills of the lit plates, which draw boosted ([`lit_fill_boost`]).
     lit_fills: std::collections::HashSet<RegionHandle>,
 }
@@ -188,9 +185,28 @@ pub const PLATE_BIT_ENEMY: u8 = 0x1;
 /// by `HideFriendNameplates` (setter `0x605510`).
 pub const PLATE_BIT_FRIEND: u8 = 0x8;
 
-/// The plate verbs' writes since the last drain. Each setter `or`s or `and`s its bit into the live
-/// dword in call order, so per bit the last write wins; bits `0x2` and `0x4` are the frame loop's
-/// own latches and no verb reaches them.
+/// One plate verb's write of its bit of `[0xc4da34]`, which the host applies inside the call
+/// ([`super::ScriptCall::Nameplates`]): the setter `or`s or `and`s the bit into the live dword.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlateBitWrite {
+    pub bit: u8,
+    pub on: bool,
+}
+
+impl PlateBitWrite {
+    /// `bits` with this write applied.
+    pub fn apply(self, bits: u8) -> u8 {
+        if self.on {
+            bits | self.bit
+        } else {
+            bits & !self.bit
+        }
+    }
+}
+
+/// The plate writes a harness's VM kept ([`UiScript::take_nameplate_bit_writes`]), folded in call
+/// order, so per bit the last write wins; bits `0x2` and `0x4` are the frame loop's own latches
+/// and no verb reaches them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlateBitWrites {
     set: u8,
@@ -213,7 +229,7 @@ impl PlateBitWrites {
         (bits | self.set) & !self.clear
     }
 
-    /// No verb ran since the last drain.
+    /// No verb ran since the last take.
     pub fn is_empty(self) -> bool {
         self.set | self.clear == 0
     }
@@ -237,8 +253,10 @@ pub(super) fn install_verbs(lua: &Lua) -> mlua::Result<()> {
             name,
             // The empty `MultiValue` returns zero values, which is not nil.
             lua.create_function(move |lua, _: mlua::MultiValue| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.nameplates.bit_writes.write(bit, on);
+                super::calls::submit(
+                    lua,
+                    super::ScriptCall::Nameplates(PlateBitWrite { bit, on }),
+                )?;
                 Ok(mlua::MultiValue::new())
             })?,
         )?;
@@ -247,11 +265,16 @@ pub(super) fn install_verbs(lua: &Lua) -> mlua::Result<()> {
 }
 
 impl UiScript {
-    /// Drain the plate verbs' writes for the engine's `[0xc4da34]`, which the app owns.
+    /// The plate writes a harness's VM kept ([`Self::keep_calls`]), folded in call order.
     pub fn take_nameplate_bit_writes(&mut self) -> PlateBitWrites {
-        let lua = self.lua();
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        std::mem::take(&mut model.nameplates.bit_writes)
+        let mut writes = PlateBitWrites::default();
+        for write in self.take_calls_where(|c| match c {
+            super::ScriptCall::Nameplates(write) => Some(*write),
+            _ => None,
+        }) {
+            writes.write(write.bit, write.on);
+        }
+        writes
     }
 
     /// Drive the pool from the app's per-frame states, one per shown plate; a unit with no state

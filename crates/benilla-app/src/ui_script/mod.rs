@@ -298,17 +298,14 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<UiSca
 /// `/reload` queue, which the world alone honours. It prints nothing in any state: the handler
 /// sets the flag `[0xb41d8c]` and calls `CGGameUI::Reload` (`0x491380`), neither of which writes
 /// a line, so a run with no interface to reload is silent too.
-fn console_reload_ui(world: &mut World, _args: &str) -> Vec<String> {
-    if let Some(mut rebuild) = world.get_resource_mut::<glue::GlueRebuild>() {
+fn console_reload_ui(steps: &mut crate::console::ConsoleSteps, _args: &str) -> Vec<String> {
+    if let Some(rebuild) = steps.glue_rebuild.as_deref_mut() {
         rebuild.request();
     }
-    crate::script_calls::with_hosted_vm(world, |script| {
-        if let Some(Err(e)) =
-            script.map(|s| s.session_call(benilla_ui::script::SessionRequest::ReloadUi))
-        {
-            debug!("console: reloadUI with no interface to reload: {e}");
-        }
-    });
+    // `CGGameUI::Reload`'s flag `0xb4b3f4`, which the session's `ReloadUI()` sets too.
+    if let Some(reload) = steps.reload.as_deref_mut() {
+        reload.0 = true;
+    }
     Vec::new()
 }
 
@@ -317,7 +314,7 @@ impl Plugin for UiScriptPlugin {
         use crate::console::ConsoleCommandApp;
         app.add_observer(on_cvar);
         // Category 1 with no help (`0x402ba6`-`0x402bb4`).
-        app.console_command(
+        app.console_command_in_call(
             "reloadUI",
             crate::console::GRAPHICS,
             None,
@@ -392,14 +389,10 @@ impl Plugin for UiScriptPlugin {
                 PreUpdate,
                 (
                     run_pending_reload,
-                    // The glue's `ConsoleExec` lines the last frame left and its top's size
-                    // callback, then the rebuild either asked for. The callback reads the
-                    // `gxResolution` the screen shows this frame.
-                    (
-                        glue::drain_glue_console,
-                        glue::watch_glue_aspect.after(crate::video::show_screen_size),
-                    )
-                        .chain()
+                    // The glue top's size callback, then the rebuild it or a `reloadUI` asked
+                    // for. The callback reads the `gxResolution` the screen shows this frame.
+                    glue::watch_glue_aspect
+                        .after(crate::video::show_screen_size)
                         .run_if(glue::glue_ui_up),
                     glue::run_pending_glue_rebuild,
                     lifecycle::run_pending_entry_load,

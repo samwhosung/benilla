@@ -141,82 +141,85 @@ pub(crate) fn idle_handler(
         ResMut<'static, AfkMirror>,
         // The pending byte, which the host's logout writes inside its call.
         Res<'static, crate::ui_logout::LogoutState>,
+        // The auto-moves, which the host's follow arms inside its call.
+        Res<'static, crate::player::FollowState>,
+        Res<'static, crate::player::Approach>,
     )>,
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     chat: Res<ChatLog>,
     commands: Res<crate::net::NetCommands>,
-    follow: Res<crate::player::FollowState>,
-    approach: Res<crate::player::Approach>,
 ) {
-    vm.turn(|script, (mut stand, mut mirror, logout)| {
-        let idle = time.elapsed().saturating_sub(last.0);
-        if idle < AUTO_AFK_AFTER {
-            return;
-        }
-        let Some(script) = script else {
-            return;
-        };
-        let gates = self_q.iter().next().map(|store| {
-            let flags = store.0.unit_flags();
-            IdleGates {
-                stand_state: store.0.unit_stand_state(),
-                in_combat: flags & crate::player::UNIT_FLAG_IN_COMBAT != 0,
-                mounted: store.0.unit_mount_display_id() != 0,
-                on_taxi: flags & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0,
-                afk: mirror.is_afk(),
-                auto_moving: follow.guid.is_some() || approach.active(),
+    vm.turn(
+        |script, (mut stand, mut mirror, logout, follow, approach)| {
+            let idle = time.elapsed().saturating_sub(last.0);
+            if idle < AUTO_AFK_AFTER {
+                return;
             }
-        });
-        let action = match gates {
-            Some(g) => idle_action(idle, g),
-            // No body yet: the reference resolves the local player inside the block (`0x468550`,
-            // `0x468460`), so the sit and the AFK have nothing to read; the camp leg never reads
-            // it.
-            None => IdleAction {
-                camp: idle >= AUTO_LOGOUT_AFTER,
-                ..IdleAction::default()
-            },
-        };
-
-        if action.sit {
-            // Through the one setter, like the reference: `player::posture` refuses a swimmer and
-            // drops a request equal to its pending state, so one `CMSG_STANDSTATECHANGE` goes out.
-            stand.write(crate::player::StandStateRequest {
-                state: 1,
-                sent: false,
+            let Some(script) = script else {
+                return;
+            };
+            let gates = self_q.iter().next().map(|store| {
+                let flags = store.0.unit_flags();
+                IdleGates {
+                    stand_state: store.0.unit_stand_state(),
+                    in_combat: flags & crate::player::UNIT_FLAG_IN_COMBAT != 0,
+                    mounted: store.0.unit_mount_display_id() != 0,
+                    on_taxi: flags & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0,
+                    afk: mirror.is_afk(),
+                    auto_moving: follow.guid.is_some() || approach.active(),
+                }
             });
-        }
+            let action = match gates {
+                Some(g) => idle_action(idle, g),
+                // No body yet: the reference resolves the local player inside the block (`0x468550`,
+                // `0x468460`), so the sit and the AFK have nothing to read; the camp leg never reads
+                // it.
+                None => IdleAction {
+                    camp: idle >= AUTO_LOGOUT_AFTER,
+                    ..IdleAction::default()
+                },
+            };
 
-        let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);
-        if action.afk {
-            // `SetAFK(NULL)` is `/afk` with an empty message and a clear mirror, so it shares that
-            // path: the `DEFAULT_AFK_MESSAGE` echo and body, and the optimistic mirror.
-            let out = afk_line("", *mirror, &strings);
-            if let Some(line) = out.line {
-                push_system(&chat, line);
+            if action.sit {
+                // Through the one setter, like the reference: `player::posture` refuses a swimmer and
+                // drops a request equal to its pending state, so one `CMSG_STANDSTATECHANGE` goes out.
+                stand.write(crate::player::StandStateRequest {
+                    state: 1,
+                    sent: false,
+                });
             }
-            if let Some(v) = out.mirror {
-                mirror.0 = v;
+
+            let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);
+            if action.afk {
+                // `SetAFK(NULL)` is `/afk` with an empty message and a clear mirror, so it shares that
+                // path: the `DEFAULT_AFK_MESSAGE` echo and body, and the optimistic mirror.
+                let out = afk_line("", *mirror, &strings);
+                if let Some(line) = out.line {
+                    push_system(&chat, line);
+                }
+                if let Some(v) = out.mirror {
+                    mirror.0 = v;
+                }
+                let _ = commands.0.send(crate::net::ClientCommand::Chat {
+                    kind: crate::net::ChatKind::Afk,
+                    target: None,
+                    text: out.body,
+                    language: None,
+                });
             }
-            let _ = commands.0.send(crate::net::ClientCommand::Chat {
-                kind: crate::net::ChatKind::Afk,
-                target: None,
-                text: out.body,
-                language: None,
-            });
-        }
-        // `0x482eee call 0x5ab0d0; 0x482ef5 jne`: while a logout is pending the whole leg is
-        // skipped, the line with the request, so it runs once per logout and again after a cancel.
-        if action.camp && !logout.pending() {
-            if let Some(line) = strings("IDLE_MESSAGE") {
-                push_system(&chat, line);
+            // `0x482eee call 0x5ab0d0; 0x482ef5 jne`: while a logout is pending the whole leg is
+            // skipped, the line with the request, so it runs once per logout and again after a cancel.
+            if action.camp && !logout.pending() {
+                if let Some(line) = strings("IDLE_MESSAGE") {
+                    push_system(&chat, line);
+                }
+                // `0x5ab000` with the game menu's arguments, applied as the turn ends.
+                if let Err(e) = script.session_call(benilla_ui::script::SessionRequest::Logout) {
+                    warn!("idle: the camp's logout was refused: {e}");
+                }
             }
-            // `0x5ab000` with the game menu's arguments, applied as the turn ends.
-            if let Err(e) = script.session_call(benilla_ui::script::SessionRequest::Logout) {
-                warn!("idle: the camp's logout was refused: {e}");
-            }
-        }
-    })
+        },
+    )
 }
 
 #[cfg(test)]

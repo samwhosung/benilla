@@ -26,6 +26,7 @@ use benilla_ui::script::{
 };
 
 pub(crate) mod disjoint;
+mod engine;
 mod windows;
 
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
@@ -126,6 +127,12 @@ disjoint::disjoint_set! {
         aura: crate::ui_aura::AuraSteps<'static, 'static>,
         minimap: crate::minimap::MinimapSteps<'static>,
         pet_unlearn: crate::ui_dialog_verbs::PetUnlearnSteps<'static, 'static>,
+        /// The engine's plate bits, and the follow's start and what the VM was told of it.
+        plates: crate::vplates::PlateSteps<'static>,
+        follow: crate::target::FollowSteps<'static, 'static>,
+        follow_feed: Option<ResMut<'static, crate::ui_follow::FollowFeed>>,
+        /// The console's commands, against what they read and write.
+        console: crate::console::ConsoleSteps<'static, 'static>,
     }
 }
 
@@ -619,6 +626,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::Uninvite(name) => appliers.chat().uninvite(name),
             ScriptCall::RequestTimePlayed => appliers.chat().request_time_played(),
+            ScriptCall::OpeningCinematic => appliers.chat().opening_cinematic(),
             ScriptCall::AddonMessage(send) => appliers.chat().addon_message(send),
             ScriptCall::PickItem(pick) => popup = appliers.cursor().pick_item(pick),
             ScriptCall::EnchantConfirm(answer) => popup = appliers.cursor().confirm_enchant(answer),
@@ -739,6 +747,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::Posture(PostureCall::SitOrStand) => self.sit_or_stand(),
             ScriptCall::ConfirmPetUnlearn => appliers.pet_unlearn().confirm(script),
+            ScriptCall::Nameplates(write) => appliers.plates().apply(write),
+            ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
+            ScriptCall::Console(line) => appliers.console().run(script, &line),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

@@ -65,15 +65,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     }
 
     // `OpeningCinematic()` (`0x48c8c0`): sends an empty `CMSG_OPENING_CINEMATIC` (`0xf9`,
-    // `0x48c8c9` into `0x5ab630`) and returns nothing; the server may answer with
+    // `0x48c8c9` into `0x5ab630`) inside the call and returns nothing; the server may answer with
     // `SMSG_TRIGGER_CINEMATIC`. Arguments are ignored.
     g.set(
         "OpeningCinematic",
         lua.create_function(|lua, _: MultiValue| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .opening_cinematic_asks += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::OpeningCinematic)
         })?,
     )?;
 
@@ -244,9 +241,9 @@ impl super::UiScript {
         .len() as u32
     }
 
-    /// Drain the `OpeningCinematic()` calls, each an empty `CMSG_OPENING_CINEMATIC`.
+    /// The `OpeningCinematic()` calls a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_opening_cinematic_asks(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().opening_cinematic_asks)
+        self.take_calls_like(&super::ScriptCall::OpeningCinematic) as u32
     }
 
     /// Push the bind location's name, resolved from `SMSG_BINDPOINTUPDATE`'s AreaTable id through
@@ -558,17 +555,18 @@ mod tests {
         assert_eq!(s.arity("GetDebugStats()").unwrap(), 0);
     }
 
-    /// Each `OpeningCinematic()` queues one send and returns nothing.
+    /// Each `OpeningCinematic()` hands the host one send and returns nothing.
     #[test]
-    fn opening_cinematic_queues_one_send_per_call() {
+    fn opening_cinematic_hands_one_send_per_call() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.arity("OpeningCinematic()").unwrap(), 0);
         s.run("OpeningCinematic(1)").unwrap();
         assert_eq!(s.take_opening_cinematic_asks(), 2);
         assert_eq!(
             s.take_opening_cinematic_asks(),
             0,
-            "the drain empties the queue"
+            "the take empties what was kept"
         );
     }
 

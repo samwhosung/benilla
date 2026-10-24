@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
 use super::systems::{client, eval, listen};
-use crate::net::{ClientCommand, Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
+use crate::net::{ClientCommand, Guid, GuidIndex, SelfGuid, SelfPlayer};
 
 /// Our own guid in these chunks.
 const ME: u64 = 0x10;
@@ -72,7 +72,9 @@ fn follow_world(app: &mut App) {
     use crate::target::relations::fixture::{factions, player, store_of, HUMAN};
     let alive = |guid| {
         let mut store = store_of(&player(guid, HUMAN));
-        store.0.merge(ObjectFields::from_pairs(&[(22, 100), (28, 100)]));
+        store
+            .0
+            .merge(ObjectFields::from_pairs(&[(22, 100), (28, 100)]));
         store
     };
     let world = app.world_mut();
@@ -133,8 +135,7 @@ fn follow_unit_begins_inside_its_call() {
     );
     let seq: String = eval(&mut app, r#"FollowByName("Them", 1) return SEQ"#);
     assert_eq!(
-        seq,
-        "AUTOFOLLOW_BEGIN AUTOFOLLOW_END AUTOFOLLOW_BEGIN ",
+        seq, "AUTOFOLLOW_BEGIN AUTOFOLLOW_END AUTOFOLLOW_BEGIN ",
         "the arm ends the follow it replaces first"
     );
 }
@@ -145,9 +146,8 @@ fn follow_unit_begins_inside_its_call() {
 fn a_refused_follow_shows_its_line_inside_its_call() {
     let (mut app, rx) = client();
     follow_world(&mut app);
-    app.world_mut()
-        .resource_mut::<crate::target::Selection>()
-        .guid = None;
+    *app.world_mut().resource_mut::<crate::target::Selection>() = Default::default();
+    eval::<()>(&mut app, r#"ERR_GENERIC_NO_TARGET = "You have no target.""#);
     listen(&mut app, &["UI_ERROR_MESSAGE"], "RandomRoll(9, 10)");
     eval::<()>(&mut app, r#"FollowUnit("target") RandomRoll(1, 2)"#);
     assert_eq!(sent(&rx), ["roll 9", "roll 1"]);
@@ -169,10 +169,11 @@ fn console_exec_runs_its_command_inside_its_call() {
     assert_eq!(sent(&rx), ["togglehelm", "roll 1", "whois Bob"]);
 }
 
-/// A console command that writes engine state has written it as the call returns: `showCull`
-/// (`0x673250`) flips its world flag.
+/// A console command that writes engine state no script reads runs against the world at the
+/// call's next sync point, here the end of the host's lend: `showCull` (`0x673250`) flips its
+/// world flag.
 #[test]
-fn a_console_command_writes_the_engine_inside_its_call() {
+fn a_console_command_on_the_world_runs_at_the_calls_sync_point() {
     use benilla_world::world_flags::WorldFlags;
     let (mut app, _rx) = client();
     let culled = |app: &App| app.world().resource::<WorldFlags>().has(WorldFlags::CULL);

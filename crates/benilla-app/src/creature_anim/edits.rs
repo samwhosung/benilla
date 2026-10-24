@@ -9,6 +9,8 @@
 //! one-shots as they return ([`crate::script_calls::with_hosted_vm`],
 //! [`crate::script_calls::run_cached`]). The pass's end set, and a flush in each other schedule
 //! that can queue one, hand it to the sync point ahead of the readers ([`flush_unit_edits`]).
+//! The same queue carries the console commands a call runs against the world, which no host
+//! lends ([`UnitEdits::push_world`]).
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -184,7 +186,12 @@ pub(crate) struct UnitEdits {
     precasts: Mutex<EntityHashMap<Precast>>,
     /// Every unit's [`Engaged`] target as applied, kept by the component's hooks.
     attacks: Mutex<EntityHashMap<u64>>,
+    /// What a call runs against the world, after the unit edits, in the order queued.
+    world_runs: Mutex<Vec<WorldRun>>,
 }
+
+/// A call's run against the world ([`UnitEdits::push_world`]).
+pub(crate) type WorldRun = Box<dyn FnOnce(&mut World) + Send>;
 
 impl UnitEdits {
     fn queue(&self) -> MutexGuard<'_, Vec<UnitEdit>> {
@@ -194,6 +201,18 @@ impl UnitEdits {
     /// Queue `edit` behind the ones already queued.
     pub(crate) fn push(&self, edit: UnitEdit) {
         self.queue().push(edit);
+    }
+
+    /// Queue `run` against the world, after the unit edits: a console command that writes engine
+    /// state no host lends ([`crate::console::ConsoleHandler`]).
+    pub(crate) fn push_world(&self, run: WorldRun) {
+        self.runs().push(run);
+    }
+
+    fn runs(&self) -> MutexGuard<'_, Vec<WorldRun>> {
+        self.world_runs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The precast `entity` holds once the queue applies: the applied one with the queued changes
@@ -279,19 +298,31 @@ pub(super) fn engaged_replaced(world: DeferredWorld, ctx: HookContext) {
 
 /// Applies the queue in order, from an exclusive system. A despawned unit's changes are dropped.
 pub(crate) fn apply_unit_edits(world: &mut World) {
-    let Some(edits) = world.get_resource::<UnitEdits>() else {
+    let Some(queued) = world.get_resource::<UnitEdits>() else {
         return;
     };
-    let edits = std::mem::take(&mut *edits.queue());
+    let edits = std::mem::take(&mut *queued.queue());
+    let runs = std::mem::take(&mut *queued.runs());
     apply(world, edits);
+    run_all(world, runs);
 }
 
 /// The pass's end: the queue as one command, so it applies at the sync point ahead of the systems
 /// ordered after the pass, the readers of what it changes.
-pub(crate) fn flush_unit_edits(edits: Res<UnitEdits>, mut commands: Commands) {
-    let edits = std::mem::take(&mut *edits.queue());
-    if !edits.is_empty() {
-        commands.queue(move |world: &mut World| apply(world, edits));
+pub(crate) fn flush_unit_edits(queued: Res<UnitEdits>, mut commands: Commands) {
+    let edits = std::mem::take(&mut *queued.queue());
+    let runs = std::mem::take(&mut *queued.runs());
+    if !edits.is_empty() || !runs.is_empty() {
+        commands.queue(move |world: &mut World| {
+            apply(world, edits);
+            run_all(world, runs);
+        });
+    }
+}
+
+fn run_all(world: &mut World, runs: Vec<WorldRun>) {
+    for run in runs {
+        run(world);
     }
 }
 

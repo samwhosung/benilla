@@ -1,4 +1,5 @@
-//! `FollowUnit` and `FollowByName`; each call queues a [`FollowRequest`] the app drains.
+//! `FollowUnit` and `FollowByName`; each hands its [`FollowRequest`] to the host, which runs the
+//! start gate and arms the follow inside the call ([`super::ScriptCall::Follow`]).
 //! `FollowUnit("target")` is a bare `/follow` and the `FOLLOWTARGET` binding. `FollowByName`
 //! (`0x489ec0`) calls the by-name resolver `0x493aa0` for players (`0x10`) who `CanAssist` and are
 //! alive, with its second argument as the exact-only flag: `UnitPopup.lua:623` passes 1, so the
@@ -7,9 +8,7 @@
 
 use mlua::Lua;
 
-use super::Model;
-
-/// A follow intent queued by the globals.
+/// A follow verb, which the host applies inside its call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FollowRequest {
     /// `FollowUnit(unit)`: whoever the token names, of any type; the reference applies no
@@ -21,9 +20,12 @@ pub enum FollowRequest {
 }
 
 impl super::UiScript {
-    /// Drain the follow intents queued since the last call.
+    /// The follow verbs a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_follow_requests(&mut self) -> Vec<FollowRequest> {
-        std::mem::take(&mut self.model_mut().follow_requests)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Follow(request) => Some(request.clone()),
+            _ => None,
+        })
     }
 }
 
@@ -34,9 +36,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "FollowUnit",
         lua.create_function(|lua, unit: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.follow_requests.push(FollowRequest::ByUnit(unit));
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Follow(FollowRequest::ByUnit(unit)))
         })?,
     )?;
 
@@ -45,11 +45,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (name, exact): (String, Option<mlua::Value>)| {
             // `GetBoolOrDefault` (`0x6f1c10`, `0x489f14`) with default false.
             let exact = super::binding_abi::bool_or_default(exact.as_ref(), false);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .follow_requests
-                .push(FollowRequest::ByName { name, exact });
-            Ok(())
+            super::calls::submit(
+                lua,
+                super::ScriptCall::Follow(FollowRequest::ByName { name, exact }),
+            )
         })?,
     )?;
 

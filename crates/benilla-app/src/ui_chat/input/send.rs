@@ -95,6 +95,12 @@ impl ChatSender<'_, '_> {
         let _ = self.commands.0.send(ClientCommand::PlayedTime);
     }
 
+    /// `OpeningCinematic`'s empty `CMSG_OPENING_CINEMATIC` (`0x48c8f6`); the server answers, if
+    /// at all, with the `SMSG_TRIGGER_CINEMATIC` [`crate::cinematic`] plays.
+    pub(crate) fn opening_cinematic(&self) {
+        let _ = self.commands.0.send(ClientCommand::OpeningCinematic);
+    }
+
     /// `UninviteByName`'s `CMSG_GROUP_UNINVITE` (`0x48a669`).
     pub(crate) fn uninvite(&self, name: String) {
         let _ = self.commands.0.send(ClientCommand::GroupUninvite { name });

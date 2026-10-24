@@ -990,24 +990,6 @@ mod tests {
         }
     }
 
-    /// A follow the Lua asks (`FollowUnit`, `FollowByName`) starts the frame it is made: the
-    /// request's reader runs after the drain that writes it.
-    #[test]
-    fn a_follow_the_lua_asks_starts_the_frame_it_is_made() {
-        let mut app = headless_client();
-        if pass_order(&app).is_none() {
-            return;
-        }
-        let update = census(&mut app, Update, SyncPoints::Declared);
-        let next = successors(&update);
-        let drain = one(&update, "ui_follow::drain_follow");
-        let reader = one(&update, "by_name::follow_requests");
-        assert!(
-            after(&next, drain).contains(&reader),
-            "`follow_requests` reads the `FollowRequest` before `drain_follow` writes it"
-        );
-    }
-
     /// A `SetCVar` the input pass makes moves the camera the frame it is made: the registry's
     /// sync triggers the observers (the camera's look, zoom and follow knobs) and a sync point
     /// runs them ahead of the controller, as the reference's `CVar::Set` (`0x63df50`) calls the

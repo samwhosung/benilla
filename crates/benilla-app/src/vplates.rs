@@ -41,7 +41,7 @@ use benilla_world::view::WorldCamera;
 pub(crate) mod border;
 
 /// The two script bits of `[0xc4da34]`, bit `0x1` enemy plates and bit `0x8` friendly: engine
-/// state, written only by the four plate verbs ([`apply_plate_verbs`]) and cleared at every world
+/// state, written only by the four plate verbs inside their calls ([`PlateSteps`]) and cleared at every world
 /// entry ([`clear_at_world_entry`]). Nothing persists it: FrameXML replays its own
 /// `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` saved variables through the verbs
 /// (`UIOptionsFrame.lua:768-780`, `UIParent.lua:234`, `:367`).
@@ -218,20 +218,21 @@ pub(crate) fn text_px(h: f32, basis: f32) -> f32 {
     (h * basis).round().min(32.0)
 }
 
-/// Every frame: fold the plate verbs' writes into the bits, in the order the VM made them.
-pub(crate) fn apply_plate_verbs(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut mode: ResMut<VPlateMode>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
+/// The plate verbs inside their calls ([`benilla_ui::script::ScriptCall::Nameplates`]): each
+/// setter (`0x6054f0`, `0x605510`) writes its bit of the live dword before the verb returns.
+#[derive(SystemParam)]
+pub(crate) struct PlateSteps<'w> {
+    /// Absent in a harness without the plates.
+    mode: Option<ResMut<'w, VPlateMode>>,
+}
+
+impl PlateSteps<'_> {
+    /// `write` inside its verb.
+    pub(crate) fn apply(&mut self, write: benilla_ui::script::PlateBitWrite) {
+        let Some(mode) = self.mode.as_deref_mut() else {
             return;
         };
-        let writes = script.take_nameplate_bit_writes();
-        if writes.is_empty() {
-            return;
-        }
-        let now = VPlateMode::from_bits(writes.apply(mode.bits()));
+        let now = VPlateMode::from_bits(write.apply(mode.bits()));
         if *mode != now {
             info!(
                 "nameplates: enemy {}, friendly {}",
@@ -240,7 +241,21 @@ pub(crate) fn apply_plate_verbs(
             );
             *mode = now;
         }
-    })
+    }
+}
+
+/// The plate writes a harness's VM kept, applied as the host applies them, for a test that runs
+/// the verbs on a VM with no host.
+#[cfg(test)]
+pub(crate) fn apply_kept_plate_calls(
+    mut script: NonSendMut<benilla_ui::script::UiScript>,
+    mut steps: PlateSteps,
+) {
+    for call in script.take_script_calls() {
+        if let benilla_ui::script::ScriptCall::Nameplates(write) = call {
+            steps.apply(write);
+        }
+    }
 }
 
 /// The world-entry clear of both script bits (`0x60394b`, `0x603952`, in `0x6033c0`), which the
@@ -248,9 +263,6 @@ pub(crate) fn apply_plate_verbs(
 /// whose `UI_Init` fires `VARIABLES_LOADED` at `0x4900b2`): the load's replay is cleared, and
 /// the one at `PLAYER_ENTERING_WORLD` decides. A `ReloadUI()` never reaches it.
 pub(crate) fn clear_at_world_entry(world: &mut World) {
-    if let Some(mut script) = world.get_non_send_resource_mut::<benilla_ui::script::UiScript>() {
-        let _ = script.take_nameplate_bit_writes();
-    }
     if let Some(mut mode) = world.get_resource_mut::<VPlateMode>() {
         *mode = VPlateMode::default();
     }
@@ -324,6 +336,8 @@ struct PlateWorld<'w, 's> {
     window: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
     // The pending ground-target cast, for the plate's hit-test veto (`0x7cba30`).
     targeting: Res<'w, crate::spell::SpellTargeting>,
+    /// The script bits, which a plate's `OnShow` may move inside its call.
+    mode: Res<'w, VPlateMode>,
 }
 
 /// Every frame: gate the units, seat each plate and hand the result to the widget layer as
@@ -331,7 +345,6 @@ struct PlateWorld<'w, 's> {
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_vplates(
     mut vm: crate::script_calls::VmWith<PlateWorld<'static, 'static>>,
-    mode: Res<VPlateMode>,
     mut plates: ResMut<VPlates>,
     mut plate_clicks: ResMut<PlateClicks>,
     rig: Res<crate::player::CameraControl>,
@@ -357,6 +370,7 @@ fn drive_vplates(
         bucket.clear();
         // Every early return retires the plates first, or the widgets stay on screen; the reference
         // hides each live plate and returns it to the pool (`0x608a10`).
+        let mode = *world.mode;
         if !mode.enemies && !mode.friends {
             return PlateStep::Retire;
         }
@@ -704,16 +718,10 @@ impl Plugin for VPlatesPlugin {
             .init_resource::<PlateClicks>()
             .add_systems(
                 Update,
-                (
-                    // A drain of the verbs the tick ran (a binding body, `UpdateNameplates`).
-                    apply_plate_verbs.in_set(crate::ui_script::UiDrain),
-                    // After the targeting chain, itself after `WorldStage::Input`, so this projects
-                    // through this frame's camera; `ui_script::extract::paint_script` runs after
-                    // it, so the plates paint the same frame.
-                    drive_vplates.after(TargetUpdate),
-                )
-                    .chain()
-                    .in_set(VPlateSet),
+                // After the targeting chain, itself after `WorldStage::Input`, so this projects
+                // through this frame's camera; `ui_script::extract::paint_script` runs after it,
+                // so the plates paint the same frame.
+                drive_vplates.after(TargetUpdate).in_set(VPlateSet),
             );
     }
 }
@@ -780,12 +788,15 @@ mod tests {
         assert_eq!(text_px(NAME_H, 10_000.0), 32.0, "atlas-cell cap, raw law");
     }
 
-    /// An app with the drain and a bare VM: the four verbs are all it needs.
+    /// An app with a bare VM whose plate calls apply as the host applies them: the four verbs
+    /// are all it needs.
     fn verb_app() -> App {
         let mut app = App::new();
-        app.add_systems(Update, apply_plate_verbs)
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        script.keep_calls();
+        app.add_systems(Update, apply_kept_plate_calls)
             .init_resource::<VPlateMode>()
-            .insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+            .insert_non_send_resource(script);
         app
     }
 
@@ -835,13 +846,9 @@ mod tests {
         let mut app = verb_app();
         run(&mut app, "ShowNameplates() ShowFriendNameplates()");
         assert_eq!(mode(&app), (true, true));
-        // The load's replay, not yet drained when the entry clears.
-        app.world()
-            .non_send_resource::<benilla_ui::script::UiScript>()
-            .run("ShowNameplates()")
-            .unwrap();
+        // The load's replay, applied in its call before the entry clears.
+        run(&mut app, "ShowNameplates()");
         clear_at_world_entry(app.world_mut());
-        app.update();
         assert_eq!(mode(&app), (false, false), "both clear after the entry");
         run(&mut app, "ShowFriendNameplates()");
         assert_eq!(

@@ -531,21 +531,40 @@ pub(super) fn assist_requests(
     }
 }
 
-/// Drain `/follow [name]` into [`crate::player`]; follow sends nothing on the wire. The followee's
-/// name is latched here for `AUTOFOLLOW_BEGIN` ([`crate::ui_follow`]).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn follow_requests(
-    mut requests: MessageReader<crate::player::FollowRequest>,
-    scan_params: ByNameScan,
-    selection: Res<Selection>,
-    tokens: crate::ui_unit::UnitTokens,
-    mover: Query<(&Guid, &ObjectStore), With<crate::net::ActiveMover>>,
-    errors: Res<crate::ui_action::UiErrorKeys>,
-    mut follow: ResMut<crate::player::FollowState>,
-    mut approach: ResMut<crate::player::Approach>,
-) {
-    use crate::player::FollowRequest;
-    for request in requests.read() {
+/// What a follow request comes to at the start gate (`0x60fed0`).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FollowStart {
+    /// The gate's line, by its GlobalStrings key, shown where the request was made.
+    Refused(&'static str),
+    /// The gate's silent return (`0x60ff8a`): the mover itself.
+    Silent,
+    /// Armed (`0x611130`): the followee's name, `AUTOFOLLOW_BEGIN`'s argument (`0x610061`).
+    Started { name: String },
+}
+
+/// The follow's start, from the chat layer's `/follow` and from `FollowUnit` and `FollowByName`
+/// inside their calls ([`crate::script_calls::ScriptCallHost`]); follow sends nothing on the wire.
+#[derive(SystemParam)]
+pub(crate) struct FollowSteps<'w, 's> {
+    scan_params: ByNameScan<'w, 's>,
+    selection: Res<'w, Selection>,
+    tokens: crate::ui_unit::UnitTokens<'w, 's>,
+    mover: Query<'w, 's, (&'static Guid, &'static ObjectStore), With<crate::net::ActiveMover>>,
+    /// Absent in a harness without the mover, which drops the request.
+    follow: Option<ResMut<'w, crate::player::FollowState>>,
+    approach: Option<ResMut<'w, crate::player::Approach>>,
+}
+
+impl FollowSteps<'_, '_> {
+    /// Whom the follow follows, 0 for none.
+    pub(crate) fn followee(&self) -> u64 {
+        self.follow.as_deref().and_then(|f| f.guid).unwrap_or(0)
+    }
+
+    /// `request` through the start gate, and the follow armed when it passes.
+    pub(crate) fn start(&mut self, request: &crate::player::FollowRequest) -> FollowStart {
+        use crate::player::FollowRequest;
+        let scan_params = &self.scan_params;
         // The followee each entry point finds, and the line it shows when that is no unit.
         let (guid, missing) = match request {
             // `FollowByName` (`0x489ec0`): a nonempty name through the mode-2 scan (`0x489f23`),
@@ -564,26 +583,36 @@ pub(super) fn follow_requests(
                 ),
                 "ERR_UNIT_NOT_FOUND",
             ),
-            FollowRequest::Name { .. } => (selection.guid, "ERR_GENERIC_NO_TARGET"),
+            FollowRequest::Name { .. } => (self.selection.guid, "ERR_GENERIC_NO_TARGET"),
             // `FollowUnit` (`0x489e00`): the unit the token names (`0x515940`), any token.
             FollowRequest::Unit(token) => (
-                tokens.resolve(token, &selection).map(|(_, guid)| guid),
+                self.tokens
+                    .resolve(token, &self.selection)
+                    .map(|(_, guid)| guid),
                 "ERR_GENERIC_NO_TARGET",
             ),
         };
         // Both look the followee up with the unit typemask (`0x489e5c`, `0x489f46`).
+        let tokens = &self.tokens;
         let followee = guid.and_then(|guid| {
             let store = tokens.stores.get(tokens.held(guid)?.0).ok();
             Some((guid, store.filter(|s| s.is_unit())?))
         });
-        let mover = mover.iter().next().map(|(guid, store)| (guid.0, store));
+        let mover = self
+            .mover
+            .iter()
+            .next()
+            .map(|(guid, store)| (guid.0, store));
         match scan_params.follow_refusal(mover, followee, missing) {
             // A refusal leaves a follow in progress alone: the gate returns before `0x611130`.
             Some(FollowRefusal::Line(key)) => {
                 info!("follow: refused — {key}");
-                errors.push(crate::ui_action::UiError::key(key));
+                FollowStart::Refused(key)
             }
-            Some(FollowRefusal::Silent) => info!("follow: the mover itself — nothing"),
+            Some(FollowRefusal::Silent) => {
+                info!("follow: the mover itself — nothing");
+                FollowStart::Silent
+            }
             None => {
                 let guid = followee.map_or(0, |(guid, _)| guid);
                 let name = scan_params
@@ -593,9 +622,28 @@ pub(super) fn follow_requests(
                     .to_string();
                 info!("follow: now following \"{name}\" guid {guid:#x}");
                 // The arm `0x611130` cancels what runs first: one auto-move cell.
-                approach.stop();
-                follow.start(guid, name);
+                if let Some(approach) = self.approach.as_deref_mut() {
+                    approach.stop();
+                }
+                if let Some(follow) = self.follow.as_deref_mut() {
+                    follow.start(guid, name.clone());
+                }
+                FollowStart::Started { name }
             }
+        }
+    }
+}
+
+/// Drain the chat layer's `/follow [name]` into [`crate::player`]: a refusal's line through the
+/// action feed, the signals from [`crate::ui_follow`]'s transitions.
+pub(super) fn follow_requests(
+    mut requests: MessageReader<crate::player::FollowRequest>,
+    mut steps: FollowSteps,
+    errors: Res<crate::ui_action::UiErrorKeys>,
+) {
+    for request in requests.read() {
+        if let FollowStart::Refused(key) = steps.start(request) {
+            errors.push(crate::ui_action::UiError::key(key));
         }
     }
 }

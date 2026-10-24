@@ -124,6 +124,8 @@ pub enum ScriptCall {
     RandomRoll { min: u32, max: u32 },
     /// `RequestTimePlayed()` (`0x48a900`): the empty `CMSG_PLAYED_TIME`, sent at `0x48a936`.
     RequestTimePlayed,
+    /// `OpeningCinematic()` (`0x48c8c0`): the empty `CMSG_OPENING_CINEMATIC`, sent at `0x48c8f6`.
+    OpeningCinematic,
     /// `DoEmote(token, target)` (`0x49fd30`) past its empty-token check: the host finds the
     /// `EmotesText` row by name (`0x49fd72`-`0x49fda6`), resolves the target (`0x49fdb1`-`0x49fdee`)
     /// and runs `0x5ef560` (`0x49fe16`), its gates, posture, play and `CMSG_TEXT_EMOTE`.
@@ -260,6 +262,15 @@ pub enum ScriptCall {
     Minimap(super::MinimapCall),
     /// A posture verb ([`super::PostureCall`]): the stand-state setter inside the call.
     Posture(super::PostureCall),
+    /// A `ConsoleExec` line that is no CVar write: `ConsoleCommandExecute` (`0x63ce00`) inside the
+    /// call (`0x515f43`), a registered command, a CVar's print or `Unknown command`.
+    Console(String),
+    /// `FollowUnit` or `FollowByName` ([`super::FollowRequest`]): the start gate, its refusal's
+    /// line or the follow armed and `AUTOFOLLOW_BEGIN` signalled, inside the call (`0x60fed0`).
+    Follow(super::FollowRequest),
+    /// A plate verb (`ShowNameplates` `0x489450` and its three siblings): its bit of
+    /// `[0xc4da34]` written inside the call ([`super::PlateBitWrite`]).
+    Nameplates(super::PlateBitWrite),
     /// `ConfirmPetUnlearn()` (`0x48dca0` → `0x5dfba0(0, 0)`): `CMSG_PET_UNLEARN` to the
     /// remembered trainer, or the money refusal's line, inside the call.
     ConfirmPetUnlearn,

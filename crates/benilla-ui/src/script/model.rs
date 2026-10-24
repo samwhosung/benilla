@@ -5,9 +5,9 @@ use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 
 use super::{
     auction, backdrop, bank, camera_view, char_stats, chat_window, colorselect, container, craft,
-    cursor, death, follow, gossip, guild, item_calls, item_text, loot, loot_roll, macros, mail,
-    merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation, simplehtml,
-    skills, slider, social, spellbook, stable, taxi, trade, tradeskill, trainer, weapon_enchant,
+    cursor, death, gossip, guild, item_calls, item_text, loot, loot_roll, macros, mail, merchant,
+    parse_unit_token, party, petition, pvp, quest, quest_log, reputation, simplehtml, skills,
+    slider, social, spellbook, stable, taxi, trade, tradeskill, trainer, weapon_enchant,
     ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest, PlayerReqState, RegionData,
     ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
 };
@@ -512,8 +512,6 @@ pub(crate) struct Model {
     pub(crate) guild_recruitment_plan: super::channel::RecruitmentPlan,
     /// Lua changed the recruitment mode: the chat cache's dirty signal.
     pub(crate) guild_recruitment_changed: bool,
-    /// `ConsoleExec` lines that were not CVar writes.
-    pub(crate) console_lines: Vec<String>,
     /// `LoggingChat` and `LoggingCombat`'s flags, and their change cue.
     pub(crate) logging_chat: bool,
     pub(crate) logging_combat: bool,
@@ -522,8 +520,6 @@ pub(crate) struct Model {
     pub(crate) user_placed_changed: bool,
     /// The default chat language; `None` is no player, so `GetDefaultLanguage()` returns nothing.
     pub(crate) default_language: Option<String>,
-    /// `FollowUnit` and `FollowByName` calls; Lua sees following only as `AUTOFOLLOW_*` events.
-    pub(crate) follow_requests: Vec<follow::FollowRequest>,
     /// `SetView`, `SaveView`, `ResetView`, `NextView`, `PrevView` and `FlipCameraYaw` calls; the
     /// views reach Lua only as CVars, `cameraView` and `camera{Distance,Pitch,Yaw}{,A..D}`.
     pub(crate) camera_view_requests: Vec<camera_view::CameraViewRequest>,
@@ -1200,8 +1196,6 @@ pub(crate) struct Model {
     /// The minimap's process-wide statics (zoom cells, indoor byte, mask), shared by every
     /// Minimap frame of this VM.
     pub(crate) minimap: crate::widget::MinimapStatics,
-    /// `OpeningCinematic()` calls, one empty `CMSG_OPENING_CINEMATIC` each.
-    pub(crate) opening_cinematic_asks: u32,
     /// `Screenshot()` calls, one capture each.
     pub(crate) screenshot_asks: u32,
     /// `GetRealmName()`: `""` until pushed, never nil, since addons index tables with it at load.
@@ -1504,13 +1498,11 @@ impl Model {
             guild_recruitment_cascade: false,
             guild_recruitment_plan: Default::default(),
             guild_recruitment_changed: false,
-            console_lines: Vec::new(),
             logging_chat: false,
             logging_combat: false,
             logging_changed: false,
             user_placed_changed: false,
             default_language: None,
-            follow_requests: Vec::new(),
             camera_view_requests: Vec::new(),
             glue: Default::default(),
             player_login_armed: false,
@@ -1728,7 +1720,6 @@ impl Model {
             item_locks: std::collections::HashSet::new(),
             cursor_pos: (0.0, 0.0),
             minimap: crate::widget::MinimapStatics::default(),
-            opening_cinematic_asks: 0,
             screenshot_asks: 0,
             realm_name: String::new(),
             player_record: super::PlayerRecord::default(),
