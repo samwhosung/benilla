@@ -327,7 +327,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_dressup
 
-- The base is the player's melee pair, held drawn, because the booth shares the select screen's assembly; the reference clones the live model with its attachments, drawn or sheathed (`0x5059a0`, `0x70ea00`). ([`src/ui_dressup.rs:42`](../crates/benilla-app/src/ui_dressup.rs#L42))
+- The base is the player's melee pair, held drawn, because the booth shares the select screen's assembly; the reference clones the live model with its attachments, drawn or sheathed (`0x5059a0`, `0x70ea00`). ([`src/ui_dressup.rs:43`](../crates/benilla-app/src/ui_dressup.rs#L43))
 
 #### ui_duel
 
