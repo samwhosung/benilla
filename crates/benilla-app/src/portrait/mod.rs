@@ -321,18 +321,20 @@ impl DisplayBakes {
     }
 }
 
-/// Leaving the world, by logout or a lost link, empties both bake caches: `CGGameUI::ShutdownGame`
-/// calls `ClearPortraitCaches` (`0x491187` → `0x524b70`).
+/// Leaving the world, by logout or a lost link, empties both bake caches and the pending list:
+/// `CGGameUI::ShutdownGame` calls `ClearPortraitCaches` (`0x491187` → `0x524b70`).
 fn clear_portrait_caches(
     mut logged_out: MessageReader<crate::net::LoggedOutMessage>,
     mut disconnected: MessageReader<crate::net::DisconnectedMessage>,
     mut bakes: ResMut<PortraitBakes>,
     mut displays: ResMut<DisplayBakes>,
+    mut marks: ResMut<PortraitMarks>,
 ) {
     let left = logged_out.read().count() + disconnected.read().count();
     if left > 0 {
         bakes.clear();
         displays.clear();
+        marks.clear();
     }
 }
 
@@ -740,6 +742,8 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut rate: ResMut<PaneRa
 impl Plugin for PortraitPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PortraitImages>()
+            .init_resource::<PortraitMarks>()
+            .init_resource::<crate::field_watch::NoticeLane>()
             .init_resource::<PortraitBakes>()
             .init_resource::<DisplayBakes>()
             .init_resource::<PaneRate>()
@@ -772,6 +776,9 @@ impl Plugin for PortraitPlugin {
                     test_bake::sync_test_portraits,
                     // Before the bakes: a frame that leaves the world files nothing it then keeps.
                     clear_portrait_caches,
+                    // The portrait list's marks and its drain (`0x524cd0`), the world render's.
+                    drain::mark_portraits,
+                    drain::drain_portraits,
                     sync_portraits,
                     // The scene before the character standing in it: they commit as one pair
                     // (`glue_booth::PendingSwap`), and the booth reads the stage off the scene.
@@ -987,8 +994,8 @@ fn test_mode(cached: &mut Option<bool>) -> bool {
     *cached.get_or_insert_with(|| std::env::var("WOW_PORTRAIT_TEST").is_ok_and(|s| !s.is_empty()))
 }
 
-/// benilla's `UNIT_MODEL_CHANGED` for the producers that are not a change of dress; a character
-/// pane re-takes its copy when it moves ([`SnapKey`]).
+/// A model event that is not a change of dress, for a character pane to re-take its copy on
+/// ([`SnapKey`]).
 ///
 /// - The manual sheath ceremony: `ToggleSheath` passes `bInstant = 0`, and the clip's
 ///   `$SHL`/`$SHR` event marks the unit (`0x611b60` → `0x5ffb10`, mark at `0x5ffbbe`). A snap
@@ -1029,8 +1036,8 @@ fn sheath_lane(attach: Option<u16>) -> bool {
 /// What a character pane re-takes its copy on beyond the engine's own build requests. A
 /// `<PlayerModel>` duplicates the unit's `CM2Model` once (`0x5059a0` → `0x707400`, which releases
 /// the source); the engine asks again on `SetUnit`, `RefreshUnit` and each show (`0x505d00`). The
-/// stock windows also `SetUnit` again on `UNIT_MODEL_CHANGED`, which benilla does not fire, so
-/// the booth stands in for it here:
+/// stock windows also `SetUnit` again on `UNIT_MODEL_CHANGED` (`drain`), which reaches a script a
+/// frame after the mark, so the booth re-takes on the same marks itself:
 ///
 /// 1. A change of dress ([`Self::dress`], [`Self::stable`]): `UNIT_MODEL_CHANGED`, fired only at
 ///    `0x524df1`, marked by equipping (`0x5e2810` → `0x5dee30`), a displayId change, a helm or
@@ -2020,7 +2027,7 @@ mod tests {
     }
 
     /// The display-id cache keeps the first face filed under a display (`0x525719`, a bake files
-    /// only on a miss) and empties on leaving the world (`0x524b70`).
+    /// only on a miss) and empties on leaving the world, the pending list with it (`0x524b70`).
     #[test]
     fn the_display_cache_keeps_its_first_face_until_the_world_is_left() {
         use bevy::ecs::system::RunSystemOnce;
@@ -2030,6 +2037,8 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<PortraitBakes>();
         world.init_resource::<DisplayBakes>();
+        world.init_resource::<PortraitMarks>();
+        world.resource_mut::<PortraitMarks>().mark(0x51);
         world.init_resource::<Messages<crate::net::LoggedOutMessage>>();
         world.init_resource::<Messages<crate::net::DisconnectedMessage>>();
         {
@@ -2053,6 +2062,10 @@ mod tests {
             "a logout clears"
         );
         assert_eq!(world.resource::<PortraitBakes>().get(0x51), None);
+        assert!(
+            world.resource::<PortraitMarks>().pending().is_empty(),
+            "and the pending list"
+        );
         world.resource_mut::<DisplayBakes>().fill(903, first);
         world.write_message(crate::net::DisconnectedMessage::new(
             String::new(),

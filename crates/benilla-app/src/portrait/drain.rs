@@ -20,7 +20,15 @@ pub(crate) struct PortraitMarks(Vec<u64>);
 impl PortraitMarks {
     /// `0x524e10(&guid)`.
     pub(crate) fn mark(&mut self, guid: u64) {
-        let _ = guid;
+        if !self.0.contains(&guid) {
+            self.0.insert(0, guid);
+        }
+    }
+
+    /// The GUIDs waiting, head first.
+    #[cfg(test)]
+    pub(super) fn pending(&self) -> &[u64] {
+        &self.0
     }
 
     /// Leaving the world frees every node (`0x524b70`, `0x524c60`-`0x524c89`).
@@ -29,12 +37,99 @@ impl PortraitMarks {
     }
 }
 
-/// The marks benilla can see this frame, in the order their producers run in the reference's
-/// model update: the body, then its dress, then the sheath clip's key.
-pub(super) fn mark_portraits() {}
+/// Mark each unit a producer of `0x524e10` reached since the last frame:
+/// - a body built, at a create or a display change (a shapeshift, a polymorph): `0x607da0` marks
+///   once the model loads, for the latch the constructor (`0x5faf14`) or `0x60abe0` (`0x60ad2e`)
+///   set (`0x607e0f`), and its component build marks too (`0x5fb5d0`). A mount builds no body:
+///   its field's handler `0x5ffa50` reaches no mark;
+/// - a player's worn look ([`Equipment`]): a visible item (`0x5df119`), the helm and cloak flags
+///   (`0x5eea22`), the guild tabard and the designer's preview (`0x5e08c9`, `0x5e081e`);
+/// - a player's weapons and their enchants ([`DressKey`], `0x5df119`, `0x5eeda9`), but not a
+///   weapon's model finishing its load, nor the body's display, which the build marks;
+/// - the sheath clip's `$SHL`/`$SHR` key (`0x5ffbbe`).
+#[allow(clippy::type_complexity)]
+pub(super) fn mark_portraits(
+    mut marks: ResMut<PortraitMarks>,
+    built: Query<(&Guid, &NetEntity), Added<VisualAttached>>,
+    worn: Query<&Guid, Changed<Equipment>>,
+    armed: Query<(Entity, &Guid, &NetEntity, &DressKey), Changed<DressKey>>,
+    mut dropped: RemovedComponents<DressKey>,
+    guids: Query<&Guid>,
+    mut swaps: MessageReader<crate::creature_anim::SheathSwapMessage>,
+    mut weapons: Local<HashMap<Entity, DressKey>>,
+) {
+    use benilla_protocol::EntityKind;
+    for (guid, net) in &built {
+        if matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
+            marks.mark(guid.0);
+        }
+    }
+    for guid in &worn {
+        marks.mark(guid.0);
+    }
+    for gone in dropped.read() {
+        weapons.remove(&gone);
+    }
+    for (entity, guid, net, dress) in &armed {
+        if net.kind != EntityKind::Player {
+            continue;
+        }
+        let held = DressKey {
+            display_id: None,
+            held_ready: true,
+            ..*dress
+        };
+        if weapons.insert(entity, held) != Some(held) {
+            marks.mark(guid.0);
+        }
+    }
+    for swap in swaps.read() {
+        if let Ok(guid) = guids.get(swap.entity) {
+            marks.mark(guid.0);
+        }
+    }
+}
 
-/// `0x524cd0`, the drain.
-pub(super) fn drain_portraits() {}
+/// `0x524cd0`, after the frame's script work, as the world frame's render calls it: from the head,
+/// each GUID whose unit is held but not ready stays (`0x524d42`-`0x524d8e`), and every other
+/// leaves the list and signals `UNIT_PORTRAIT_UPDATE` (0xb8), then `UNIT_MODEL_CHANGED` (0xb9),
+/// through the token fan-out. Ready is a body built ([`VisualAttached`]), benilla's one latch for
+/// the reference's latches, compositor and model tests. A GUID no unit answers to fires at once
+/// (`0x524d40 je 0x524d90`). The pair rides the notice lane, so it fires at the next frame's drain.
+pub(super) fn drain_portraits(
+    mut marks: ResMut<PortraitMarks>,
+    index: Res<GuidIndex>,
+    units: Query<(&NetEntity, Has<VisualAttached>)>,
+    mut lane: ResMut<NoticeLane>,
+) {
+    use benilla_protocol::EntityKind;
+    if marks.0.is_empty() {
+        return;
+    }
+    marks.0.retain(|&guid| {
+        // The lookup with type mask 8 (`0x524d37`): a unit, or nothing.
+        let loading = index
+            .0
+            .get(&guid)
+            .and_then(|e| units.get(*e).ok())
+            .is_some_and(|(net, built)| {
+                matches!(net.kind, EntityKind::Unit | EntityKind::Player) && !built
+            });
+        if !loading {
+            lane.write_batch([
+                FieldNotice::Signal {
+                    guid,
+                    id: id::UNIT_PORTRAIT_UPDATE,
+                },
+                FieldNotice::Signal {
+                    guid,
+                    id: id::UNIT_MODEL_CHANGED,
+                },
+            ]);
+        }
+        loading
+    });
+}
 
 #[cfg(test)]
 mod tests {
@@ -147,7 +242,7 @@ mod tests {
         let mut want = Vec::from(pair(MOB));
         want.extend(pair(A));
         assert_eq!(notices(&mut app), want, "B is held and still loading");
-        assert_eq!(app.world().resource::<PortraitMarks>().0, [B]);
+        assert_eq!(app.world().resource::<PortraitMarks>().pending(), [B]);
     }
 
     /// Equipping marks the wearer every time (`0x5e2810` → `0x5dee30` → `0x5df119`), and so do a

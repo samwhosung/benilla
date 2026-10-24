@@ -579,6 +579,8 @@ fn unit_event(id: u16) -> Option<&'static str> {
         159..=161 => "UNIT_ATTACK_POWER",
         162..=164 => "UNIT_RANGED_ATTACK_POWER",
         183 => "UNIT_NAME_UPDATE",
+        184 => "UNIT_PORTRAIT_UPDATE",
+        185 => "UNIT_MODEL_CHANGED",
         186 => "UNIT_INVENTORY_CHANGED",
         187 => "UNIT_CLASSIFICATION_CHANGED",
         345 => "PLAYER_GUILD_UPDATE",
