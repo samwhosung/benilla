@@ -325,19 +325,23 @@ type Decks = (
     Without<Camera>,
 );
 
-/// A create on a transport seats us only on a game object whose flags carry the transport bit 0x8
-/// (`0x618b30` → `0x630a80`); on any other the login pose stands.
+/// A create on a transport seats us only on a game object, the type mask 0x20 the lookup asks
+/// (`0x468460`), whose flags carry the transport bit 0x8 (`0x618b30` → `0x630a80`); on any other
+/// the login pose stands.
 #[test]
 fn a_login_seats_us_only_on_a_game_object_flagged_as_a_transport() {
     use crate::transport::TransportRider;
     const BOAT: u64 = 0xF120_0000_0000_0010;
-    let seat = |flags: u32| {
+    let seat = |mask: u32, flags: u32| {
         let mut world = World::new();
         let boat = world
             .spawn((
                 Transform::from_xyz(1.0, 2.0, 3.0),
-                // `GAMEOBJECT_FLAGS`, field 9.
-                crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(9, flags)])),
+                // `OBJECT_FIELD_TYPE`, field 2, and `GAMEOBJECT_FLAGS`, field 9.
+                crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, mask),
+                    (9, flags),
+                ])),
             ))
             .id();
         world.spawn((
@@ -362,6 +366,7 @@ fn a_login_seats_us_only_on_a_game_object_flagged_as_a_transport() {
             .unwrap()
             .map(|(_, guid, pos, o)| (guid, pos, o))
     };
-    assert_eq!(seat(0x8 | 0x20), Some((BOAT, [4.0, 5.0, 6.0], 0.5)));
-    assert_eq!(seat(0x20), None, "no transport bit");
+    assert_eq!(seat(0x21, 0x8 | 0x20), Some((BOAT, [4.0, 5.0, 6.0], 0.5)));
+    assert_eq!(seat(0x21, 0x20), None, "no transport bit");
+    assert_eq!(seat(0x09, 0x8), None, "no game object");
 }
