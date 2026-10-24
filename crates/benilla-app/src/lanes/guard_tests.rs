@@ -10,7 +10,16 @@ use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
 
 use crate::game_plugins::schedule_tests::SyncPoints;
-use crate::game_plugins::schedule_tests::{census, headless_client, type_names_available};
+use crate::game_plugins::schedule_tests::{census, type_names_available};
+
+/// The whole client headless ([`crate::game_plugins::schedule_tests::headless_client`]), with
+/// every handler's and every lane firing's declared access read.
+fn headless_client() -> App {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    crate::net::handlers::measure(app.world_mut());
+    super::measure(app.world_mut());
+    app
+}
 
 /// What a row names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -819,7 +828,7 @@ fn handler_queues(
 ) -> Vec<ComponentId> {
     let handlers = world.resource::<crate::net::handlers::NetHandlers>();
     let mut out = BTreeSet::new();
-    for (_, access) in &handlers.accesses {
+    for (_, access) in handlers.accesses() {
         let access = access.combined_access();
         out.extend(access.resource_writes().filter(|id| !caches.contains(id)));
         out.extend(
@@ -847,7 +856,7 @@ fn filled_apart_from_the_host(app: &mut App) -> std::collections::HashSet<Compon
     let host_writes: Vec<ComponentId> = host.resource_writes().collect();
     let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
     handlers
-        .accesses
+        .accesses()
         .iter()
         .map(|(_, a)| a.combined_access())
         .filter(|a| !host_writes.iter().all(|&id| a.has_resource_write(id)))
@@ -896,7 +905,7 @@ fn every_resource_a_handler_reads_is_a_known_queue_or_read_only() {
         .map(|t| world.components().get_resource_id(t))
         .collect();
     let mut reads = BTreeSet::new();
-    for (_, access) in &handlers.accesses {
+    for (_, access) in handlers.accesses() {
         let access = access.combined_access();
         for id in access.resource_reads() {
             if !access.has_resource_write(id) && Some(id) != vm && !lanes.contains(&Some(id)) {
@@ -1339,7 +1348,7 @@ fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
     use bevy::ecs::query::{Access, AccessConflicts};
     let mut app = headless_client();
     let mut drain = Access::new();
-    for a in &app.world().resource::<super::Lanes>().1 {
+    for a in app.world().resource::<super::Lanes>().accesses() {
         drain.extend(a.combined_access());
     }
     {
@@ -1486,7 +1495,7 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
         let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
         let mut components = BTreeSet::new();
         let mut resources = BTreeSet::new();
-        for (_, access) in &handlers.accesses {
+        for (_, access) in handlers.accesses() {
             let access = access.combined_access();
             if let Ok(kinds) = access.try_iter_component_access() {
                 components.extend(kinds.filter_map(|k| match k {
@@ -1647,7 +1656,7 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
         let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
         let mut components = BTreeSet::new();
         let mut resources = BTreeSet::new();
-        for (_, access) in &handlers.accesses {
+        for (_, access) in handlers.accesses() {
             let access = access.combined_access();
             if let Ok(kinds) = access.try_iter_component_access() {
                 components.extend(kinds.filter_map(|k| match k {
@@ -1687,7 +1696,7 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
         .collect();
     let lanes = world.resource::<super::Lanes>();
     let mut found: Vec<(&str, BTreeSet<String>)> = Vec::new();
-    for (lane, access) in lanes.names().into_iter().zip(&lanes.1) {
+    for (lane, access) in lanes.names().into_iter().zip(lanes.accesses()) {
         let mut own: Vec<&FilteredAccess> = access.filtered_accesses().iter().collect();
         for h in &host {
             if let Some(i) = own.iter().position(|o| *o == h) {
