@@ -475,6 +475,19 @@ impl Cooldowns {
         self.awaited_records.insert(item_entry);
     }
 
+    /// The cooldown query's lookup of a record its getter's mirror lacks, inside the call
+    /// ([`benilla_ui::script::RecordAsk::CooldownItem`]): the item cache asks a miss, a refused
+    /// entry again, and the callback `0x6e2f70` awaits it, deduped (`0x6e2ef4`-`0x6e2f0d`).
+    pub(crate) fn ask_item_record(
+        &mut self,
+        items: &crate::items::Items,
+        commands: &crate::net::NetCommands,
+        item_entry: u32,
+    ) {
+        let _ = items.template(item_entry, 0, crate::query_cache::Ask::Event(commands));
+        self.await_item_record(item_entry);
+    }
+
     /// Whether a cooldown query's callback awaits the record of `item_entry`.
     #[cfg(test)]
     pub(crate) fn awaits_item_record(&self, item_entry: u32) -> bool {

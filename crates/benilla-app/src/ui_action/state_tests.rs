@@ -1874,10 +1874,23 @@ fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
         .resource_mut::<Cooldowns>()
         .apply_wire_item_cooldown(HEARTHSTONE, 8690, Instant::now());
     frame(&mut app);
-    app.world()
-        .non_send_resource::<UiScript>()
-        .run("GetContainerItemCooldown(0, 1)")
-        .unwrap();
+    let entries = {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        s.keep_calls();
+        s.run("GetContainerItemCooldown(0, 1)").unwrap();
+        s.take_cooldown_record_asks()
+    };
+    // The lookup the host makes inside the call ([`Cooldowns::ask_item_record`]).
+    app.world_mut()
+        .resource_scope(|world, mut cooldowns: Mut<Cooldowns>| {
+            for entry in entries {
+                cooldowns.ask_item_record(
+                    world.resource::<Items>(),
+                    world.resource::<crate::net::NetCommands>(),
+                    entry,
+                );
+            }
+        });
     assert!(frame(&mut app).is_empty(), "asked, and waiting");
     app.world_mut()
         .resource_mut::<Items>()

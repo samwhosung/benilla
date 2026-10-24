@@ -94,8 +94,7 @@ impl RecordAsks<'_> {
                 if let (Some(items), Some(cooldowns)) =
                     (self.items.as_deref(), self.cooldowns.as_deref_mut())
                 {
-                    let _ = items.template(entry, 0, Ask::Event(&self.net));
-                    cooldowns.await_item_record(entry);
+                    cooldowns.ask_item_record(items, &self.net, entry);
                 }
             }
             RecordAsk::Item { entry, callback } => {
