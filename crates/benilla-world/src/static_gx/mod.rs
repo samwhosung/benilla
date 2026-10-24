@@ -135,8 +135,11 @@ struct GxItem {
     transform: Transform,
     /// The placement identity the pick names, shared by the placement's batches.
     object: Arc<crate::interact::WorldObject>,
-    /// The batch's model-local bound for the pick's broad phase; `None` is always narrow-tested.
-    local_aabb: Option<Aabb>,
+    /// [`crate::interact::occludes_pick`], held inline for the per-frame occluder cast.
+    occludes: bool,
+    /// The batch's world box `(min, max)` for the pick's broad phase, from its model-local bound
+    /// and placement, taken once at the divert; `None` is always narrow-tested.
+    world_bounds: Option<(Vec3, Vec3)>,
     /// The owner tile, read only by [`StaticGx::release_owner`]; regions follow their instance.
     owner: (i32, i32),
     texture: Option<AssetId<bevy::image::Image>>,
@@ -238,6 +241,35 @@ struct GxCell {
     settled: Option<bool>,
     /// A prop region's distinct referrer sets, indexed by [`GxItemProp::set`].
     sets: Vec<Arc<[u16]>>,
+    /// The union of the items' [`GxItem::world_bounds`], the pick's per-cell broad phase.
+    pick_bounds: Option<(Vec3, Vec3)>,
+    /// An item without a bound: the cell is always walked.
+    pick_unbounded: bool,
+}
+
+impl GxCell {
+    /// Take `bounds` into [`Self::pick_bounds`].
+    fn grow_pick_bounds(&mut self, bounds: Option<(Vec3, Vec3)>) {
+        match bounds {
+            Some((mn, mx)) => {
+                self.pick_bounds = Some(match self.pick_bounds {
+                    Some((a, b)) => (a.min(mn), b.max(mx)),
+                    None => (mn, mx),
+                });
+            }
+            None => self.pick_unbounded = true,
+        }
+    }
+
+    /// Rebuild the pick's cell bound from the items, after a removal.
+    fn rebuild_pick_bounds(&mut self) {
+        self.pick_bounds = None;
+        self.pick_unbounded = false;
+        let bounds: Vec<_> = self.items.iter().map(|i| i.world_bounds).collect();
+        for b in bounds {
+            self.grow_pick_bounds(b);
+        }
+    }
 }
 
 /// The main-world collector and its published draw set.
@@ -526,11 +558,16 @@ impl StaticGx {
                 entry.settled = None;
             }
         }
+        let world_bounds = b
+            .aabb
+            .map(|a| crate::interact::world_aabb(&a, &GlobalTransform::from(b.transform)));
+        entry.grow_pick_bounds(world_bounds);
         entry.items.push(GxItem {
             geometry: b.geometry.clone(),
             transform: b.transform,
             object: b.object.clone(),
-            local_aabb: b.aabb,
+            occludes: crate::interact::occludes_pick(b.object, b.geometry),
+            world_bounds,
             owner: b.owner,
             texture: b.texture.as_ref().map(Handle::id),
             _texture_handle: b.texture,
@@ -575,6 +612,7 @@ impl StaticGx {
             let before = cell.items.len();
             cell.items.retain(|i| i.owner != owner);
             if cell.items.len() != before {
+                cell.rebuild_pick_bounds();
                 if !cell.dirty {
                     cell.dirty_since = frame;
                 }

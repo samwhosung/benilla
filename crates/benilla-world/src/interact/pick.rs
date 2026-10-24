@@ -54,19 +54,11 @@ pub struct ObjectHit {
 /// the ray itself, since only it knows what it drew, and reports only content it selected.
 pub trait PickSource {
     /// Append the nearest hit per member along `ray`; `all_hits` asks for the whole ray.
-    fn cast_objects(&self, ray: Ray3d, all_hits: bool, out: &mut Vec<(Arc<WorldObject>, RayHit)>) {
-        self.cast_admitted(ray, all_hits, &|_, _| true, out);
-    }
+    fn cast_objects(&self, ray: Ray3d, all_hits: bool, out: &mut Vec<(Arc<WorldObject>, RayHit)>);
 
-    /// [`Self::cast_objects`] over only the drawn batches `admit` passes, by the placement's
-    /// identity and the batch's geometry.
-    fn cast_admitted(
-        &self,
-        ray: Ray3d,
-        all_hits: bool,
-        admit: &dyn Fn(&WorldObject, &RenderSubmesh) -> bool,
-        out: &mut Vec<(Arc<WorldObject>, RayHit)>,
-    );
+    /// The distance to the nearest drawn batch along `ray` that occludes the mouse pick
+    /// ([`occludes_pick`]); run every frame, so a lane keeps what it needs inline.
+    fn nearest_occluder(&self, ray: Ray3d) -> Option<f32>;
 }
 
 /// Whether a drawn batch is the static-doodad geometry the reference's world trace tests

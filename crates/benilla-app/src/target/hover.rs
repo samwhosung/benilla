@@ -1018,6 +1018,10 @@ mod tests {
                     blend,
                 },
             ));
+            // What the spawn marks a static doodad's batch of blend 0 with.
+            if blend == ModelBlend::Opaque {
+                e.insert(benilla_world::interact::PickOccluderPart);
+            }
             if drawn {
                 e.get_mut::<ViewVisibility>().unwrap().set_visible();
             }

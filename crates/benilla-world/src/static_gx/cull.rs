@@ -122,6 +122,9 @@ fn spawn_exile(commands: &mut Commands, f: &GxFader, alpha: f32, admitted: bool)
         if let Some(aabb) = b.aabb {
             e.insert((aabb, bevy::camera::visibility::NoAutoAabb));
         }
+        if let Some(m) = crate::interact::PickOccluderPart::of(b.blend_mode) {
+            e.insert(m);
+        }
         ents.push(e.id());
     }
     if fade_trace() {

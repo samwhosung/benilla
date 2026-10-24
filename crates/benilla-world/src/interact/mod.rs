@@ -19,7 +19,20 @@ pub use pick::{
     PickSource,
 };
 
+pub(crate) use pick::{ray_aabb, world_aabb};
 pub use pick::{ray_member, ray_mesh_bounds, ray_posed_mesh, RayHit};
+
+/// Marks a static doodad's drawn batch that occludes the mouse pick ([`occludes_pick`]): an
+/// entity part of blend 0, so [`DoodadOccluders`] walks these alone, never every model part.
+#[derive(Component, Clone, Copy)]
+pub struct PickOccluderPart;
+
+impl PickOccluderPart {
+    /// The marker for a static doodad's batch of `blend`, `None` for any other.
+    pub(crate) fn of(blend: benilla_formats::ModelBlend) -> Option<Self> {
+        (blend == benilla_formats::ModelBlend::Opaque).then_some(Self)
+    }
+}
 
 /// The identity of a pickable world thing, attached to its renderable mesh entities at spawn.
 #[derive(Component, Clone, Debug)]
@@ -132,9 +145,8 @@ pub struct DoodadOccluders<'w, 's> {
             &'static GlobalTransform,
             &'static ViewVisibility,
             Option<&'static bevy::camera::primitives::Aabb>,
-            &'static crate::model_render::ModelPart,
         ),
-        (Without<GoPickPart>, Without<CreaturePickPart>),
+        With<PickOccluderPart>,
     >,
     #[allow(clippy::type_complexity)] // one query of the blob's pick inputs
     blobs: Query<
@@ -159,11 +171,8 @@ impl DoodadOccluders<'_, '_> {
             None => true,
             Some(t) => best.is_some_and(|b| t > b),
         };
-        for (mesh, gt, vis, aabb, part) in &self.parts {
-            if !vis.get()
-                || part.kind != crate::model_render::ModelKind::Doodad
-                || part.blend != benilla_formats::ModelBlend::Opaque
-            {
+        for (mesh, gt, vis, aabb) in &self.parts {
+            if !vis.get() {
                 continue;
             }
             if aabb.is_some_and(|b| beyond(best, pick::ray_mesh_bounds(origin, dir, b, gt))) {
@@ -188,12 +197,8 @@ impl DoodadOccluders<'_, '_> {
                 }
             }
         }
-        if let Some(gx) = self.gx.as_deref() {
-            let mut out = Vec::new();
-            gx.cast_admitted(ray, false, &occludes_pick, &mut out);
-            for (_, hit) in out {
-                best = Some(best.map_or(hit.distance, |b| b.min(hit.distance)));
-            }
+        if let Some(d) = self.gx.as_deref().and_then(|gx| gx.nearest_occluder(ray)) {
+            best = Some(best.map_or(d, |b| b.min(d)));
         }
         best
     }
