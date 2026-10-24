@@ -1381,6 +1381,34 @@ mod tests {
         assert!(!will_hold(&app, go), "no clip played: the unhold follows");
     }
 
+    /// Slot 34 stores the substate it is asked for (`0x5f3c19`) ahead of the arm and its
+    /// missing-sequence remap (`0x5f3c21` → `0x5f3930`), so a door whose model lacks Open (148)
+    /// and plays Opened in its place (`0x5f3b40`) is still in substate 2, Open, while it swings;
+    /// once the play ends it rests at 3, Opened.
+    #[test]
+    fn the_substate_is_the_one_asked_for_not_the_clip_the_remap_plays() {
+        let (mut app, go) = model_app(&[(0x93, 0.167, 0), (0x95, 0.100, 0)]);
+        app.update();
+        let store = ObjectStore::default();
+        let substate = |app: &App| substate_anim(app.world().get::<GoAnim>(go), &store);
+        assert_eq!(substate(&app), Some(ANIM_CLOSED), "at rest, closed");
+        app.world_mut()
+            .get_mut::<GoAnim>(go)
+            .unwrap()
+            .set_wire_state(GO_STATE_ACTIVE);
+        app.update();
+        assert_eq!(
+            armed(&app, go).map(|a| a.0),
+            Some(0x95),
+            "the remap plays Opened"
+        );
+        assert_eq!(
+            substate(&app),
+            Some(0x94),
+            "the substate is Open, mid-swing"
+        );
+    }
+
     fn will_hold(app: &App, go: Entity) -> bool {
         let world = app.world();
         world
