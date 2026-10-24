@@ -1010,6 +1010,7 @@ mod tests {
             .add_message::<crate::net::LoggedOutMessage>()
             .add_message::<crate::net::DisconnectedMessage>()
             .add_message::<crate::net::CharacterLoginFailedMessage>()
+            .add_message::<crate::transport::TransportLegLeft>()
             .init_resource::<LoadingScreen>()
             .init_resource::<crate::pipe_warm::WarmPass>()
             .init_resource::<Assets<Image>>()
@@ -1110,6 +1111,28 @@ mod tests {
         });
         app.update();
         assert!(covering(&app));
+    }
+
+    /// `0x407de0`, from the ship tick's leg change: it raises the screen, and with no route to
+    /// draw it keeps the map the last raise stored, as it stores none but −1 (`0x407e59`).
+    #[test]
+    fn a_ridden_ships_leg_change_raises_the_screen() {
+        let mut app = in_world(GM_ISLAND);
+        {
+            let mut screen = app.world_mut().resource_mut::<LoadingScreen>();
+            screen.raise("earlier", false, Some(0), 0.0);
+            screen.dismiss();
+        }
+        app.world_mut()
+            .write_message(crate::transport::TransportLegLeft {
+                entry: 176495,
+                leg: 0,
+            });
+        app.update();
+        assert!(covering(&app));
+        let screen = app.world().resource::<LoadingScreen>();
+        assert!(screen.route.is_none(), "no route tables here");
+        assert_eq!(screen.map, Some(0));
     }
 
     /// `0x401900` raises on both arms: a transport crossing covers at `SMSG_TRANSFER_PENDING`,

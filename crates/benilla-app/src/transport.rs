@@ -38,6 +38,7 @@ pub(crate) struct TransportPlugin;
 impl Plugin for TransportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Timetables>()
+            .add_message::<TransportLegLeft>()
             // After `AssetSet::Open`, whose Commands insert `WorldAssets`; unordered, this finds
             // none and silently does nothing.
             .add_systems(
@@ -82,6 +83,15 @@ fn deck_ticks() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::Sched
         watch_ridden_transport_map,
     )
         .chain()
+}
+
+/// A ship we ride left leg `leg` for another on the map we are on: the tick's
+/// `0x407de0(entry, leg)` (`0x5f54c2`), which raises the loading screen with that leg's route.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TransportLegLeft {
+    /// The ship's `OBJECT_FIELD_ENTRY` (`0x5f54bd`).
+    pub(crate) entry: u32,
+    pub(crate) leg: usize,
 }
 
 /// The create-block anchor: the server's path-progress ms and the local instant it arrived,
@@ -231,6 +241,7 @@ impl Transport {
             Drive::Lift(l) => {
                 let (pos, moving) = elevator_sample(&l.frames, l.base_pos, l.quat, cycle_ms);
                 TransportSample {
+                    leg: 0,
                     map: here,
                     pos,
                     heading: l.yaw,
@@ -764,6 +775,7 @@ mod tests {
             .init_resource::<Assets<benilla_assets::M2Model>>()
             .init_resource::<crate::player::Player>()
             .add_message::<crate::net::WorldportMessage>()
+            .add_message::<TransportLegLeft>()
             .add_systems(Update, deck_ticks());
         app
     }
@@ -835,6 +847,63 @@ mod tests {
             Some(&Visibility::Inherited),
             "in view"
         );
+    }
+
+    /// A ship of entry 176495 on two legs of one map, `riding` or not, its model loaded or not,
+    /// ticked twice on leg 0 and then on leg 1: the leg-change calls it made.
+    fn leg_changes(riding: bool, ready: bool) -> Vec<TransportLegLeft> {
+        let mut app = deck_app(0);
+        let timetable = two_legs((0, 0));
+        let leg1 = (0..timetable.period_ms)
+            .step_by(100)
+            .find(|&t| timetable.sample(t).leg == 1)
+            .expect("a second leg");
+        let mut deck = app.world_mut().spawn((
+            Guid(0xF120_0000_0000_0001),
+            taxi(timetable),
+            TransportAnchor {
+                progress_ms: 1000,
+                at: Instant::now(),
+            },
+            Transform::default(),
+            Visibility::Hidden,
+            // `OBJECT_FIELD_ENTRY`, field 3.
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(3, 176495)])),
+        ));
+        if ready {
+            deck.insert(TransportVolume::Box([-1.0; 3], [1.0; 3]));
+        }
+        let deck = deck.id();
+        if riding {
+            ride(&mut app, deck);
+        }
+        app.update();
+        app.update();
+        app.world_mut()
+            .get_mut::<TransportAnchor>(deck)
+            .unwrap()
+            .progress_ms = leg1 + 1000;
+        app.update();
+        app.world_mut()
+            .resource_mut::<Messages<TransportLegLeft>>()
+            .drain()
+            .collect()
+    }
+
+    /// `0x5f5461`-`0x5f54c2`: a leg change on the map we are on, with the camera's unit among
+    /// the passengers and an animation already played (`+0x54` not −1), calls `0x407de0` with
+    /// the ship's entry and the leg it left; anything else only stores the new leg.
+    #[test]
+    fn a_ridden_ship_changing_legs_on_our_map_raises_the_route() {
+        assert_eq!(
+            leg_changes(true, true),
+            [TransportLegLeft {
+                entry: 176495,
+                leg: 0
+            }]
+        );
+        assert_eq!(leg_changes(false, true), [], "not riding");
+        assert_eq!(leg_changes(true, false), [], "no animation played yet");
     }
 
     /// A two-frame pause path at `base_pos`.

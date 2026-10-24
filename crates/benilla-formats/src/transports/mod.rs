@@ -23,6 +23,8 @@ const MAX_NODES: usize = 1024;
 /// A transport's pose at one instant of its period, in WoW coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransportSample {
+    /// The leg the instant falls in, by its place in the path (the tick's `+0x58`).
+    pub leg: usize,
     /// The map of the leg the instant falls in, which changes as a transport crosses continents.
     pub map: u32,
     pub pos: [f32; 3],
@@ -142,10 +144,11 @@ impl TransportTimetable {
     /// (`0x5f8d60`).
     pub fn sample(&self, cycle_ms: u32) -> TransportSample {
         let t = cycle_ms % self.period_ms;
-        let leg = self
+        let (index, leg) = self
             .legs
             .iter()
-            .find(|l| t < l.end)
+            .enumerate()
+            .find(|(_, l)| t < l.end)
             .expect("the last leg ends at the period");
         let last = leg.stops.len() - 1;
         let mut span_start = leg.start;
@@ -188,6 +191,7 @@ impl TransportTimetable {
         let (pos, tangent) = leg.curve.frame(fraction, [1.0, 0.0, 0.0]);
         let h = normalize2([-tangent[0], -tangent[1]]);
         TransportSample {
+            leg: index,
             map: leg.map,
             pos,
             heading: f64::from(h[1]).atan2(f64::from(h[0])) as f32,
