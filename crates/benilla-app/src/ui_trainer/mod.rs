@@ -52,11 +52,14 @@ pub(crate) fn open_pet_trainer(open: Option<&TrainerOpen>) -> Option<u64> {
         .filter(|_| open.trainer_type == TRAINER_TYPE_PET)
 }
 
-/// `TalkToTrainer` (`0x5df680`) on `trainer`: the window closed through the close core
-/// (`0x5df6bb` → `0x4d7440` with a zero guid), then `CMSG_TRAINER_LIST` for it (`0x5df6fc`). The
-/// asked guid it remembers (`0xc4d788`), which the list's open tests (`0x5dcc85`), has no cell
-/// here: every list opens.
+/// `TalkToTrainer` (`0x5df680`) on `trainer`: the asked guid stored (`0x5df69f`, `0x5df6a8`), the
+/// window closed through the close core (`0x5df6bb` → `0x4d7440` with a zero guid), then
+/// `CMSG_TRAINER_LIST` for it (`0x5df6fc`). Its callers are `SetPetGuid`'s refresh (`0x4bc8b2`),
+/// `OpenTrainer` (`0x4d8d3c`) and the NPC click (`0x5f0385`).
 pub(crate) fn talk_to_trainer(world: &mut World, trainer: u64) {
+    if let Some(mut open) = world.get_resource_mut::<TrainerOpen>() {
+        open.asked = trainer;
+    }
     close_core(world);
     if let Some(net) = world.get_resource::<NetCommands>() {
         let _ = net.0.send(ClientCommand::TrainerList { trainer });
@@ -87,6 +90,9 @@ pub(crate) struct TrainerOpen {
     /// cache's callbacks `0x4d9140` and `0x4d9db0`, which outlive the window and run `0x4d7d40`
     /// when their record lands (`0x4d914a`, `0x4d9dba`), on whatever trainer is open then.
     pub(crate) item_waits: Vec<u32>,
+    /// The trainer `TalkToTrainer` last asked for its list (`0xc4d788`), which a list's open tests
+    /// (`0x5dcc85`): written by every ask, never cleared, 0 before the first.
+    pub(crate) asked: u64,
 }
 
 impl TrainerOpen {
@@ -892,10 +898,13 @@ impl TrainerSteps<'_, '_> {
     }
 
     /// The rest of `TalkToTrainer` on the player's own guid (`0x5df680`) after its close
-    /// (`0x5df6bb`): `CMSG_TRAINER_LIST` (`0x5df6fc`), which the server answers with nothing for
-    /// a player.
+    /// (`0x5df6bb`): the asked guid (`0x5df69f`), then `CMSG_TRAINER_LIST` (`0x5df6fc`), which the
+    /// server answers with nothing for a player.
     pub(crate) fn ask_own_list(&mut self, trainer: u64) {
         debug!("ui_trainer: OpenTrainer asks for the player's own list");
+        if let Some(open) = self.open.as_deref_mut() {
+            open.asked = trainer;
+        }
         let _ = self.net.0.send(ClientCommand::TrainerList { trainer });
     }
 

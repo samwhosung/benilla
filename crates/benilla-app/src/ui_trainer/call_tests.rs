@@ -95,4 +95,9 @@ fn the_trainer_verbs_send_inside_their_calls() {
             "RandomRoll { min: 3, max: 4 }".to_string(),
         ]
     );
+    assert_eq!(
+        app.world().resource::<TrainerOpen>().asked,
+        ME,
+        "`TalkToTrainer` stores the guid it asks (`0x5df69f`)"
+    );
 }

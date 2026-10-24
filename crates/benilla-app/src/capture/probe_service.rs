@@ -470,6 +470,15 @@ fn service_probe(
                         let _ = net.0.send(cmd);
                         named
                     }
+                    // `TalkToTrainer`'s asked guid (`0x5df69f`), which the list's open tests, and
+                    // its send; no trainer is open here for its close.
+                    ServiceAction::TalkToTrainer => {
+                        trainer.asked = guid;
+                        let cmd = ClientCommand::TrainerList { trainer: guid };
+                        let named = format!("{cmd:?}");
+                        let _ = net.0.send(cmd);
+                        named
+                    }
                     // No leg here takes a dialog arm; if one ever does, say so rather than hang.
                     other => {
                         let why: &str = match other {
@@ -479,9 +488,9 @@ fn service_probe(
                                 "adopts the area spirit healer; the packet leaves from the cache"
                             }
                             ServiceAction::Silent(w) => w,
-                            ServiceAction::Send(_) | ServiceAction::SellFromCursor(_) => {
-                                unreachable!()
-                            }
+                            ServiceAction::Send(_)
+                            | ServiceAction::SellFromCursor(_)
+                            | ServiceAction::TalkToTrainer => unreachable!(),
                         };
                         warn!(
                             "PROBE_SERVICE: SKIP ({}) — arm {arm:?} opens no window from a packet \

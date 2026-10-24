@@ -336,7 +336,8 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Feedback<'w, 's> {
     errors: Res<'w, crate::ui_action::UiErrorKeys>,
-    // The mailbox's open, which registers on the interaction latch with the world in hand.
+    // The mailbox's open, which registers on the interaction latch with the world in hand, and
+    // `TalkToTrainer`, whose close core runs with it.
     windows: Commands<'w, 's>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
     // The cast queue: this system cannot also hold `CastLadder` (a second `Items` and
@@ -1069,6 +1070,13 @@ impl Dispatch<'_, '_> {
                 if let Some(script) = script.as_deref_mut() {
                     script.take_cursor_item_for_sale();
                 }
+            }
+            ServiceAction::TalkToTrainer => {
+                debug!("right-click interact: {guid:#x} (trainer)");
+                // With the world in hand: the close core runs inside it.
+                self.feedback.windows.queue(move |world: &mut World| {
+                    crate::ui_trainer::talk_to_trainer(world, guid)
+                });
             }
             ServiceAction::AskBinder => {
                 debug!("right-click interact: {guid:#x} (innkeeper — CONFIRM_BINDER, no packet)");
@@ -1933,6 +1941,9 @@ pub(crate) enum ServiceAction {
     AskSpiritHealer,
     /// Adopt this guide as the area's spirit healer; `0x5df950` → `0x4921c0` sends the query.
     AcquireSpiritGuide,
+    /// `TalkToTrainer` (`0x5f0385` → `0x5df680`): the asked guid, the open trainer closed, then
+    /// `CMSG_TRAINER_LIST`.
+    TalkToTrainer,
     /// Nothing goes out; the payload says why, for the debug line.
     Silent(&'static str),
 }
@@ -1963,7 +1974,7 @@ pub(crate) fn service_action(
             None => ServiceAction::Send(ClientCommand::ListInventory { guid }),
         },
         ServiceArm::FlightMaster => ServiceAction::Send(ClientCommand::TaxiQueryNodes { guid }),
-        ServiceArm::Trainer => ServiceAction::Send(ClientCommand::TrainerList { trainer: guid }),
+        ServiceArm::Trainer => ServiceAction::TalkToTrainer,
         ServiceArm::SpiritHealer if ghost => ServiceAction::AskSpiritHealer,
         ServiceArm::SpiritHealer => ServiceAction::Silent("spirit healer, and we are alive"),
         // The query goes through the proximity poll's routine after a `(0,0)` cache bust, so a
@@ -2404,6 +2415,7 @@ mod tests {
             ServiceAction::AskBinder => "ask-binder".to_string(),
             ServiceAction::AskSpiritHealer => "ask-spirit-healer".to_string(),
             ServiceAction::AcquireSpiritGuide => "acquire-spirit-guide".to_string(),
+            ServiceAction::TalkToTrainer => "talk-to-trainer".to_string(),
             ServiceAction::Silent(_) => "silent".to_string(),
         };
         assert!(matches!(
@@ -2412,7 +2424,7 @@ mod tests {
         ));
         assert!(matches!(
             service_action(ServiceArm::Trainer, 0x42, false, None),
-            ServiceAction::Send(ClientCommand::TrainerList { trainer: 0x42 })
+            ServiceAction::TalkToTrainer
         ));
         assert!(matches!(
             service_action(ServiceArm::Petitioner, 0x42, false, None),
@@ -2498,6 +2510,7 @@ mod tests {
                     ServiceAction::AskBinder => "ask-binder".into(),
                     ServiceAction::AskSpiritHealer => "ask-xp-loss".into(),
                     ServiceAction::AcquireSpiritGuide => "acquire-spirit-guide".into(),
+                    ServiceAction::TalkToTrainer => "talk-to-trainer".into(),
                     ServiceAction::Silent(w) => format!("silent {w}"),
                 };
                 let empty = describe(service_action(arm, VENDOR, ghost, None));

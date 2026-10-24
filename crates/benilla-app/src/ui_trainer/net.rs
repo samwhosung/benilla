@@ -70,6 +70,17 @@ fn on_list(In(ev): In<SessionEvent>, mut commands: Commands) {
             services.len()
         );
         commands.queue(move |world: &mut World| {
+            // `ReadTrainerList`'s test (`0x5dcc85`-`0x5dcca9`): the trainer asked (`0xc4d788`),
+            // else the open gossip window's NPC (`0xbc3f58`); any other list opens nothing
+            // (`0x5dcd44`).
+            let asked = world.resource::<TrainerOpen>().asked == trainer;
+            let gossip = world
+                .get_resource::<crate::ui_gossip::GossipState>()
+                .is_some_and(|g| g.npc == Some(trainer));
+            if !asked && !gossip {
+                debug!("net: trainer {trainer:#x}'s list was not asked for — dropped");
+                return;
+            }
             super::open_trainer(world, trainer, trainer_type, services, greeting);
         });
     }
@@ -92,7 +103,6 @@ fn on_session_end(In(_): In<SessionEvent>, mut trainer_open: ResMut<TrainerOpen>
     trainer_open.clear_session();
 }
 
-/// `SMSG_TRAINER_LIST`: open the window on the trainer's services.
 /// `SMSG_TRAINER_BUY_SUCCEEDED`, logged only: the reference registers no handler for it
 /// (`0x5ab650`/`0x537a60`), the bought row repaints on `SMSG_LEARNED_SPELL`'s re-evaluation, and
 /// vmangos sends no fresh list (`NPCHandler.cpp:262-343`).
