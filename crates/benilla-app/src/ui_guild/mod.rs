@@ -227,7 +227,7 @@ impl GuildState {
     /// with it.
     pub(crate) fn clear_world_session(&mut self) {
         self.identities.clear();
-        self.waiters.clear();
+        self.waiters().clear();
         self.identity_generation = self.identity_generation.wrapping_add(1);
     }
 
