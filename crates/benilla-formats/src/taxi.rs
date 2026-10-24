@@ -20,7 +20,8 @@ pub struct TaxiPathNode {
     pub id: u32,
     /// The `TaxiPath.dbc` id this node belongs to.
     pub path_id: u32,
-    /// 0-based position in the path, the order the catalog stores each path in.
+    /// 0-based position in the path; the shipped store keeps each path's rows in this order, and
+    /// the reference never reads it.
     pub node_index: u32,
     /// The map this node's `pos` is expressed in (`Map.dbc` id).
     pub map_id: u32,
@@ -32,56 +33,59 @@ pub struct TaxiPathNode {
     pub delay: u32,
 }
 
-/// `TaxiPathNode.dbc` rows grouped by `PathID`, each path's `Vec` sorted by `NodeIndex`.
+/// `TaxiPathNode.dbc`'s rows in store order, and each path's nodes: the run of rows from the first
+/// with its id to the first of another (`0x5f4cc0`, `0x4db580`).
 pub struct TaxiPathNodes {
-    paths: HashMap<u32, Vec<TaxiPathNode>>,
-    /// The paths in the order their first rows appear in the file.
+    rows: Vec<TaxiPathNode>,
+    /// Each path's first run, as a range of `rows`, and the paths in the order the runs start.
+    runs: HashMap<u32, std::ops::Range<usize>>,
     order: Vec<u32>,
 }
 
 impl TaxiPathNodes {
-    /// These waypoints grouped by `PathID`, each path in `NodeIndex` order.
+    /// These rows in this order, the store's.
     pub fn from_rows(rows: impl IntoIterator<Item = TaxiPathNode>) -> Self {
-        let mut paths: HashMap<u32, Vec<TaxiPathNode>> = HashMap::new();
+        let rows: Vec<TaxiPathNode> = rows.into_iter().collect();
+        let mut runs: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
         let mut order = Vec::new();
-        for node in rows {
-            paths
-                .entry(node.path_id)
-                .or_insert_with(|| {
-                    order.push(node.path_id);
-                    Vec::new()
-                })
-                .push(node);
+        let mut start = 0;
+        for i in 1..=rows.len() {
+            if i == rows.len() || rows[i].path_id != rows[start].path_id {
+                let id = rows[start].path_id;
+                if let std::collections::hash_map::Entry::Vacant(e) = runs.entry(id) {
+                    e.insert(start..i);
+                    order.push(id);
+                }
+                start = i;
+            }
         }
-        for nodes in paths.values_mut() {
-            nodes.sort_by_key(|n| n.node_index);
-        }
-        Self { paths, order }
+        Self { rows, runs, order }
     }
 
-    /// Every node in file order, as the reference's store walks them: the shipped file keeps each
-    /// path's rows together and in `NodeIndex` order.
+    /// Every row in store order, as the reference's store walks them (`0x408000`).
     pub fn in_file_order(&self) -> impl Iterator<Item = &TaxiPathNode> {
-        self.order.iter().flat_map(|id| self.paths[id].iter())
+        self.rows.iter()
     }
 
-    /// A path's nodes in `NodeIndex` order.
+    /// A path's nodes, its first run of rows.
     pub fn path(&self, path_id: u32) -> Option<&[TaxiPathNode]> {
-        self.paths.get(&path_id).map(Vec::as_slice)
+        self.runs.get(&path_id).map(|r| &self.rows[r.clone()])
     }
 
-    /// Every path, in no particular order.
+    /// Every path's nodes, in the order their runs start.
     pub fn paths(&self) -> impl Iterator<Item = (u32, &[TaxiPathNode])> {
-        self.paths.iter().map(|(&id, nodes)| (id, nodes.as_slice()))
+        self.order
+            .iter()
+            .map(|&id| (id, &self.rows[self.runs[&id].clone()]))
     }
 
     /// The number of paths, not nodes.
     pub fn len(&self) -> usize {
-        self.paths.len()
+        self.runs.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.paths.is_empty()
+        self.runs.is_empty()
     }
 }
 
@@ -126,7 +130,7 @@ mod tests {
 
     /// The reference reads a path's points as one run of consecutive rows in file order
     /// (`0x4db580` starts a run, `0x4db58c` grows it); the shipped file keeps each path's rows
-    /// together and in `NodeIndex` order, the order [`TaxiPathNodes::path`] gives.
+    /// together and in `NodeIndex` order, so no path loses a row to a second run.
     #[test]
     fn shipped_paths_are_single_runs_in_node_index_order() {
         let data = crate::wow_data_or_skip!();

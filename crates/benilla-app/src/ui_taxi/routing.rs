@@ -117,8 +117,7 @@ impl TaxiCatalogs {
 /// A path's length (`0x4dbc68`-`0x4dbccd`): the straight 3-D distance between consecutive points,
 /// added to an f32 sum. The x87 runs at 53 bits, so f64 is its arithmetic: x's difference is
 /// stored as an f32 (`0x4dbc97`), y's and z's are not, and the squares add z, x, then y. The
-/// reference walks the points in file order; the shipped file keeps each path's points
-/// consecutive and in `NodeIndex` order, the order [`TaxiPathNodes`] gives.
+/// reference walks the path's run of points in file order, the order [`TaxiPathNodes`] gives.
 fn path_length(points: &[TaxiPathNode]) -> f32 {
     let mut sum = 0.0f32;
     for pair in points.windows(2) {
