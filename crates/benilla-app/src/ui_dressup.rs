@@ -159,7 +159,7 @@ impl DressUpRoom {
 
     /// An id the server never answers stays pending, and its slot shows the player's own gear. A
     /// try-on's first resolve is its lookup; the later ones read.
-    fn resolve_pending(&mut self, items: &Items, commands: &NetCommands) {
+    fn resolve_pending(&mut self, items: &Items, commands: &NetCommands) -> u32 {
         let mut pending = std::mem::take(&mut self.pending);
         let asked = std::mem::take(&mut self.pending_asked);
         let mut i = 0;
@@ -184,6 +184,7 @@ impl DressUpRoom {
         });
         self.pending = pending;
         self.pending_asked = self.pending.len();
+        0
     }
 }
 
@@ -228,7 +229,7 @@ fn feed_dressup(
         {
             room.apply(DressUpIntent::Close);
         }
-        room.resolve_pending(&items, &commands);
+        let _ = room.resolve_pending(&items, &commands);
 
         // The crest comes off the guild cache this system holds, not the outfit `player_look`
         // builds.
@@ -701,6 +702,54 @@ mod tests {
         room.resolve_pending(&items, &cmds);
         assert!(room.pending.is_empty(), "resolved, just not worn anywhere");
         assert!(room.worn.iter().all(Option::is_none));
+    }
+
+    /// A record with display id 0 does nothing (`0x50458b`-`0x504590`): no slot, no lane, no
+    /// eviction.
+    #[test]
+    fn a_try_on_with_no_display_does_nothing() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(1500, Some(worn("Worn Sword", 5500, 21)));
+        items.insert_template(1600, Some(worn("Worn Shield", 5600, 14)));
+        items.insert_template(2000, Some(worn("Invisible Axe", 0, 17)));
+        items.insert_template(2100, Some(worn("Invisible Chest", 0, 5)));
+        let store = player(&[(15, 1500), (16, 1600)]);
+        let mut room = DressUpRoom::default();
+        room.apply(DressUpIntent::Dress);
+        room.apply(DressUpIntent::TryOn(2000));
+        room.apply(DressUpIntent::TryOn(2100));
+        assert_eq!(room.resolve_pending(&items, &cmds), 0, "and no error");
+        assert!(room.pending.is_empty(), "resolved");
+        let look = look_dw(&store, &room, &items, true);
+        assert_eq!(hands(&look), (5500, 5600), "the two-hander evicted nothing");
+        assert!(room.worn.iter().all(Option::is_none));
+    }
+
+    /// `0x5045a4`-`0x5045b8`: `dec eax; cmp eax,0x1b; ja` and the byte map at `0x504b7c` send
+    /// types 0 (an unsigned -1), 18, 24, 27 and above 28 to `push 0x13; call 0x496720`
+    /// (`0x504b2d`), `ERR_NOT_EQUIPPABLE`; 2, 11, 12 and 28 to the silent return (`0x504b37`).
+    #[test]
+    fn an_unequippable_try_on_raises_not_equippable() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        for t in [0u32, 2, 11, 12, 18, 24, 27, 28, 29] {
+            items.insert_template(3000 + t, Some(worn("Thing", 9000 + t, t)));
+        }
+        let refused = |t: u32| {
+            let mut room = DressUpRoom::default();
+            room.apply(DressUpIntent::Dress);
+            room.apply(DressUpIntent::TryOn(3000 + t));
+            let n = room.resolve_pending(&items, &cmds);
+            assert!(room.worn.iter().all(Option::is_none) && room.held.is_empty());
+            n
+        };
+        for t in [0, 18, 24, 27, 29] {
+            assert_eq!(refused(t), 1, "type {t} is not equippable");
+        }
+        for t in [2, 11, 12, 28] {
+            assert_eq!(refused(t), 0, "type {t} previews nothing, silently");
+        }
     }
 
     /// A bow takes the off lane and clears the main; a crossbow takes the main and clears the off.

@@ -222,9 +222,9 @@ pub(crate) fn build_pages(
             let mut req_lines = Vec::new();
             let mut all_met = true;
             let mut prereqs = Vec::new();
-            if t.prereq_talent != 0 {
-                if let Some(p) = catalog.talent(t.tab, t.prereq_talent) {
-                    let need = t.prereq_rank + 1;
+            if t.prereq_talents[0] != 0 {
+                if let Some(p) = catalog.talent(t.tab, t.prereq_talents[0]) {
+                    let need = t.prereq_ranks[0] + 1;
                     let learnable = rank_of(p, known) >= need;
                     prereqs.push(TalentPrereqView {
                         tier: p.row + 1,
@@ -348,8 +348,8 @@ mod tests {
             row,
             col,
             ranks: r,
-            prereq_talent: 0,
-            prereq_rank: 0,
+            prereq_talents: [0; 3],
+            prereq_ranks: [0; 3],
             required_spell: 0,
             exceptional: false,
         }
@@ -374,6 +374,146 @@ mod tests {
         let spent: BTreeSet<u32> = [14522, 14788, 14789].into_iter().collect();
         assert_eq!(rank_of(&t, &spent), 3);
         assert_eq!(rank_of(&t, &BTreeSet::new()), 0);
+    }
+
+    /// A mage Fire tab of three talents: Alpha and Beta on tier 1, Gamma on tier 2 behind both.
+    fn two_arrow_tree() -> (TalentCatalog, benilla_formats::SpellCatalog) {
+        let tab = benilla_formats::TalentTabInfo {
+            id: 41,
+            name: "Fire".into(),
+            race_mask: 511,
+            class_mask: 1 << 7,
+            background: "MageFire".into(),
+            icon: None,
+        };
+        let mut gamma = talent(12, 41, 1, 0, &[1003, 1004]);
+        gamma.prereq_talents = [10, 11, 0];
+        let talents = vec![
+            talent(10, 41, 0, 0, &[1001]),
+            talent(11, 41, 0, 1, &[1002]),
+            gamma,
+        ];
+        let spells = [
+            (1001, "Alpha"),
+            (1002, "Beta"),
+            (1003, "Gamma"),
+            (1004, "Gamma"),
+        ]
+        .into_iter()
+        .map(|(id, name)| {
+            let d = benilla_formats::SpellDisplay {
+                name: name.into(),
+                ..Default::default()
+            };
+            (id, d)
+        })
+        .collect();
+        (
+            TalentCatalog::from_rows(vec![tab], talents),
+            benilla_formats::SpellCatalog::from_displays(spells),
+        )
+    }
+
+    /// `0x52b390` walks all three prerequisite slots (`+0x34`/`+0x40`, `0x52b3e4`), a line for
+    /// each unmet one; `GetTalentPrereqs` (`0x4f34d0`, `0x4f3589`) lists each populated slot.
+    #[test]
+    fn every_prerequisite_slot_is_read() {
+        let (catalog, spells) = two_arrow_tree();
+        let get = |key: &str| match key {
+            "TOOLTIP_TALENT_PREREQ" => Some("PREREQ %d %s".into()),
+            "TOOLTIP_TALENT_TIER_POINTS" => Some("TIER %d %s".into()),
+            _ => None,
+        };
+        // Alpha learned, Beta not: one point in the tab.
+        let known: BTreeSet<u32> = [1001].into_iter().collect();
+        let state = build_pages(&catalog, &known, &spells, 1, 8, (1, 0), &get);
+        let gamma = &state.talents[0][2];
+        assert_eq!(gamma.prereqs.len(), 2, "both arrows");
+        assert_eq!(
+            gamma
+                .prereqs
+                .iter()
+                .map(|p| p.learnable)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        assert_eq!(
+            talent_tooltip_reqs(&state, 2),
+            ["PREREQ 1 Beta", "TIER 5 Fire"],
+            "the unmet second slot, then the tier"
+        );
+        assert!(!gamma.learnable);
+    }
+
+    /// The requirement lines' templates are `_G` reads at the tooltip's build (`0x703bf0` at
+    /// `0x52b4a5`, `0x52b566`, `0x52b60b`), so an addon's rewording shows at the next hover.
+    #[test]
+    fn the_requirement_words_are_read_at_the_tooltip_call() {
+        let (catalog, spells) = two_arrow_tree();
+        let get = |key: &str| match key {
+            "TOOLTIP_TALENT_PREREQ" => Some("OLD %d %s".into()),
+            "TOOLTIP_TALENT_TIER_POINTS" => Some("OLD %d %s".into()),
+            _ => None,
+        };
+        let state = build_pages(&catalog, &BTreeSet::new(), &spells, 1, 8, (1, 0), &get);
+        let mut script = UiScript::new().expect("VM");
+        crate::ui_script::test_ui::load_tooltip_template(&script);
+        script.set_talents(state);
+        script.set_spell_tooltip(1003, gamma_view());
+        let lines: Vec<String> = script
+            .eval(
+                r#"
+                TOOLTIP_TALENT_PREREQ = "NEW %d %s"
+                TOOLTIP_TALENT_PREREQ_P1 = "NEW %d %s"
+                TOOLTIP_TALENT_TIER_POINTS = "NEWTIER %d %s"
+                local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+                tt:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+                tt:SetTalent(1, 3)
+                local t = {}
+                for i = 1, tt:NumLines() do t[i] = getglobal("TTTextLeft" .. i):GetText() or "" end
+                return t
+                "#,
+            )
+            .expect("the tooltip");
+        assert!(lines.iter().any(|l| l == "NEW 1 Alpha"), "{lines:?}");
+        assert!(lines.iter().any(|l| l == "NEWTIER 5 Fire"), "{lines:?}");
+    }
+
+    /// Gamma's rank-1 spell view, which `SetTalent` waits on before its requirement lines.
+    fn gamma_view() -> benilla_ui::script::SpellTooltipView {
+        benilla_ui::script::SpellTooltipView {
+            name: "Gamma".into(),
+            description: "Burns.".into(),
+            ..Default::default()
+        }
+    }
+
+    /// The requirement lines a talent's tooltip shows, as `SetTalent` writes them.
+    fn talent_tooltip_reqs(state: &TalentUiState, index: usize) -> Vec<String> {
+        let mut script = UiScript::new().expect("VM");
+        crate::ui_script::test_ui::load_tooltip_template(&script);
+        script
+            .run(r#"TOOLTIP_TALENT_PREREQ = "PREREQ %d %s" TOOLTIP_TALENT_TIER_POINTS = "TIER %d %s""#)
+            .expect("the words");
+        script.set_talents(state.clone());
+        script.set_spell_tooltip(1003, gamma_view());
+        let lines: Vec<String> = script
+            .eval(&format!(
+                r#"
+                local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+                tt:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+                tt:SetTalent(1, {})
+                local t = {{}}
+                for i = 1, tt:NumLines() do t[i] = getglobal("TTTextLeft" .. i):GetText() or "" end
+                return t
+                "#,
+                index + 1
+            ))
+            .expect("the tooltip");
+        lines
+            .into_iter()
+            .filter(|l| l.starts_with("PREREQ ") || l.starts_with("TIER "))
+            .collect()
     }
 
     /// `0x52b390` writes an unmet prerequisite's line (`0x52b3f0`-`0x52b4e5`) before the tier
@@ -410,13 +550,13 @@ mod tests {
             .zip(&state.talents)
         {
             for (t, v) in talents.talents_in_tab(tab.id).iter().zip(views) {
-                if t.prereq_talent != 0 && t.row > 0 {
+                if t.prereq_talents[0] != 0 && t.row > 0 {
                     assert!(v.req_lines.len() >= 2, "{}: {:?}", v.name, v.req_lines);
                     assert!(v.req_lines[0].starts_with("PREREQ "), "{:?}", v.req_lines);
                     assert!(v.req_lines[1].starts_with("TIER "), "{:?}", v.req_lines);
                     assert!(!v.learnable, "{}: a locked talent offers no learn", v.name);
                     checked += 1;
-                } else if t.row == 0 && t.prereq_talent == 0 && t.required_spell == 0 {
+                } else if t.row == 0 && t.prereq_talents[0] == 0 && t.required_spell == 0 {
                     assert!(v.req_lines.is_empty());
                     assert!(
                         v.learnable,
@@ -437,7 +577,7 @@ mod tests {
                 talents
                     .talents_in_tab(tab.id)
                     .iter()
-                    .find(|t| t.prereq_talent != 0 && t.row > 0 && t.max_rank() > 1)
+                    .find(|t| t.prereq_talents[0] != 0 && t.row > 0 && t.max_rank() > 1)
                     .map(|t| (tab.id, t.clone()))
             })
             .expect("a multi-rank talent behind an arrow");

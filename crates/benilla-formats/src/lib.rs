@@ -246,7 +246,9 @@ mod spell_mechanic;
 pub use spell_focus::{load_spell_focus_catalog, SpellFocusCatalog};
 pub use spell_mechanic::{load_spell_mechanic_catalog, SpellMechanicCatalog};
 mod talents;
-pub use talents::{load_talent_catalog, Talent, TalentCatalog, TalentTabInfo, MAX_TALENT_RANK};
+pub use talents::{
+    load_talent_catalog, Talent, TalentCatalog, TalentTabInfo, MAX_TALENT_RANK, TALENT_PREREQS,
+};
 mod spell_visual;
 pub use spell_visual::{
     char_proc_small_int, char_proc_type, load_spell_visual_catalog, ChainEffect, ChainProc,

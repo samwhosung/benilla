@@ -3,6 +3,20 @@
 use super::common::script;
 use crate::script::{GmTicketIntent, GmTicketWrite, UiScript};
 
+/// A VM with the active player in the world, which the ticket writes need (`0x48ca29`,
+/// `0x48cab9`).
+fn in_world() -> UiScript {
+    let mut s = script();
+    s.set_unit(
+        "player",
+        Some(crate::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
+    s
+}
+
 /// The catalog as the app pushes it: `GMTicketCategory.dbc`'s own ids and order.
 fn with_categories() -> UiScript {
     let mut s = script();
@@ -78,7 +92,7 @@ fn the_payload_free_verbs_queue_rather_than_latch() {
 /// Call order is wire order: reversed, the get would answer with the ticket just deleted.
 #[test]
 fn the_queue_preserves_call_order_across_different_verbs() {
-    let mut s = script();
+    let mut s = in_world();
     s.run("DeleteGMTicket() GetGMTicket()").unwrap();
     assert_eq!(
         s.take_gm_ticket_intents(),
@@ -103,7 +117,7 @@ fn the_queue_preserves_call_order_across_different_verbs() {
 /// Same signature, different opcodes; the stock window picks one from its own `hasTicket` flag.
 #[test]
 fn new_and_update_are_distinguishable_and_keep_their_order() {
-    let mut s = script();
+    let mut s = in_world();
     s.run("NewGMTicket(4, \"My sword vanished.\") UpdateGMTicket(4, \"Still gone.\")")
         .unwrap();
     assert_eq!(
@@ -129,7 +143,7 @@ fn new_and_update_are_distinguishable_and_keep_their_order() {
 #[test]
 fn an_empty_ticket_body_shows_no_text_and_sends_nothing() {
     use crate::script::ui_errors::shown::seen_in_call;
-    let mut s = script();
+    let mut s = in_world();
     for verb in ["NewGMTicket", "UpdateGMTicket"] {
         let (seen, _) = seen_in_call(&mut s, &format!("{verb}(1, \"\")"));
         assert_eq!(seen, "ERR_TICKET_NO_TEXT", "{verb}");
@@ -142,4 +156,25 @@ fn an_empty_ticket_body_shows_no_text_and_sends_nothing() {
     let (seen, _) = seen_in_call(&mut s, "NewGMTicket(1, \"x\")");
     assert_eq!(seen, "");
     assert_eq!(s.take_gm_ticket_intents().len(), 1);
+}
+
+/// With no active player the writes do nothing at all, an empty text included: the bindings find
+/// the player before they call the sender (`0x48ca29`-`0x48ca30`, `0x48cab9`-`0x48cac0`), and the
+/// sender looks again (`0x5ef79f`-`0x5ef7a6`).
+#[test]
+fn a_ticket_write_with_no_player_does_nothing() {
+    use crate::script::ui_errors::shown::seen_in_call;
+    let mut s = script();
+    for chunk in [
+        "NewGMTicket(1, \"stuck\")",
+        "UpdateGMTicket(1, \"stuck\")",
+        "NewGMTicket(1, \"\")",
+    ] {
+        let (seen, _) = seen_in_call(&mut s, chunk);
+        assert_eq!(seen, "", "{chunk} shows nothing");
+        assert!(
+            s.take_gm_ticket_intents().is_empty(),
+            "{chunk} sends nothing"
+        );
+    }
 }
