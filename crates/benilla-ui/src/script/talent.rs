@@ -67,10 +67,12 @@ pub struct TalentView {
     pub display_spell: u32,
     /// The next rank's spell id when `0 < rank < max_rank`, else 0.
     pub next_spell: u32,
-    /// Red requirement lines (`TOOLTIP_TALENT_TIER_POINTS`, `TOOLTIP_TALENT_PREREQ`), shown while
-    /// the talent is locked.
+    /// Red requirement lines of an unlearned talent, in `0x52b390`'s order: its prerequisites
+    /// (`TOOLTIP_TALENT_PREREQ`), its tier (`TOOLTIP_TALENT_TIER_POINTS`), its required spell
+    /// (`ITEM_REQ_SKILL`).
     pub req_lines: Vec<String>,
-    /// A higher rank is learnable now: the green `TOOLTIP_TALENT_LEARN` line and border.
+    /// A higher rank is learnable now, every requirement met, a point to spend and a rank below
+    /// the maximum: the green `TOOLTIP_TALENT_LEARN` line (`0x52b31b`, `0x52f735`).
     pub learnable: bool,
 }
 

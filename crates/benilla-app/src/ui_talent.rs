@@ -4,7 +4,7 @@
 //! `Player::LearnTalent`); an unlearned one wears rank 1's name and icon.
 //!
 //! The red requirement lines are the three keys `0x52b390` emits, in its order:
-//! `TOOLTIP_TALENT_TIER_POINTS` (`0x854a40`), `TOOLTIP_TALENT_PREREQ[_P1]` (`0x854a5c`) and
+//! `TOOLTIP_TALENT_PREREQ[_P1]` (`0x854a5c`), `TOOLTIP_TALENT_TIER_POINTS` (`0x854a40`) and
 //! `ITEM_REQ_SKILL` (`0x84e338`), resolved off the install's `GlobalStrings.lua`; a key it lacks
 //! renders no line.
 
@@ -214,22 +214,13 @@ pub(crate) fn build_pages(
             let d = spells.get(display_spell);
             // `meetsPrereq` is the `requiredSpell` check alone (`GetTalentInfo` `0x4f3200`).
             let meets_prereq = t.required_spell == 0 || known.contains(&t.required_spell);
-            // The tier gate reads the tab's own spent sum; prereqs read the prereq's rank.
-            let tier_unlocked = t.row * 5 <= spent;
+            // `0x52b390`'s lines, in its order, for an unlearned talent alone (`0x52e887`,
+            // `0x52b246`): each prerequisite below its rank (`0x52b3f0`-`0x52b4e5`), the tab
+            // points its tier needs (`0x52b4ee`-`0x52b591`), then an unknown required spell
+            // (`0x52b5af`-`0x52b636`). Each line clears the all-met flag it returns; a learned
+            // talent keeps the builder's 1 (`0x52e75b`).
             let mut req_lines = Vec::new();
-            if !tier_unlocked {
-                req_lines.extend(
-                    get("TOOLTIP_TALENT_TIER_POINTS")
-                        .map(|f| fill(&f, &[Arg::D(i64::from(t.row * 5)), Arg::S(&tab.name)])),
-                );
-            }
-            // The item tooltip's `ITEM_REQ_SKILL`, not the `LOCKED_WITH_*` or `SPELL_FAILED_*`
-            // keys that read the same in enUS.
-            if !meets_prereq {
-                if let Some(req) = spells.get(t.required_spell) {
-                    req_lines.extend(get("ITEM_REQ_SKILL").map(|f| fill(&f, &[Arg::S(&req.name)])));
-                }
-            }
+            let mut all_met = true;
             let mut prereqs = Vec::new();
             if t.prereq_talent != 0 {
                 if let Some(p) = catalog.talent(t.tab, t.prereq_talent) {
@@ -240,7 +231,8 @@ pub(crate) fn build_pages(
                         column: p.col + 1,
                         learnable,
                     });
-                    if !learnable {
+                    if !learnable && rank == 0 {
+                        all_met = false;
                         let p_name = spells
                             .get(p.ranks[0])
                             .map(|d| d.name.clone())
@@ -252,9 +244,27 @@ pub(crate) fn build_pages(
                     }
                 }
             }
-            // The green hint is points left and not maxed alone (`SetTalent` `0x535170`); the
-            // frame's gold, green and gray come from the stock Lua.
-            let learnable = rank < max_rank && points.0 > 0;
+            // The tier gate reads the tab's own spent sum.
+            if rank == 0 && t.row * 5 > spent {
+                all_met = false;
+                req_lines.extend(
+                    get("TOOLTIP_TALENT_TIER_POINTS")
+                        .map(|f| fill(&f, &[Arg::D(i64::from(t.row * 5)), Arg::S(&tab.name)])),
+                );
+            }
+            // The item tooltip's `ITEM_REQ_SKILL`, not the `LOCKED_WITH_*` or `SPELL_FAILED_*`
+            // keys that read the same in enUS. A spell with no record adds no line and leaves the
+            // flag (`0x52b5f1`).
+            if rank == 0 && !meets_prereq {
+                if let Some(req) = spells.get(t.required_spell) {
+                    all_met = false;
+                    req_lines.extend(get("ITEM_REQ_SKILL").map(|f| fill(&f, &[Arg::S(&req.name)])));
+                }
+            }
+            // The green hint needs the flag, points left and a rank below the maximum (`0x52b31b`
+            // in `0x52b0a0`, `0x52f735` in `0x52e610`); the frame's gold, green and gray come from
+            // the stock Lua.
+            let learnable = all_met && rank < max_rank && points.0 > 0;
             views.push(TalentView {
                 talent_id: t.id,
                 name: d.map(|d| d.name.clone()).unwrap_or_default(),
