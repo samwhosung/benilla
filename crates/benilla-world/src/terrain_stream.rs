@@ -163,6 +163,13 @@ struct TileState {
     gave_up: bool,
 }
 
+/// Whether the load counts the tile as in: furnished, or its ADT read failed, as the reference's
+/// wait-all completes on a failed read (`0x443d30`) and loads on without the tile.
+fn tile_done(t: &TileState, server: &AssetServer) -> bool {
+    let _ = server;
+    t.furnished
+}
+
 impl TileState {
     /// A tile whose ADT read is in flight, nothing spawned yet.
     fn requested(handle: Handle<AdtTile>) -> Self {

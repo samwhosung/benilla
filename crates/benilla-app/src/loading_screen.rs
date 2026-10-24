@@ -412,6 +412,13 @@ fn release_interface_on_arrival(
     }
 }
 
+/// The cover's per-frame drive alone, in `Update` after `after`, for the tests of the paths that
+/// feed it.
+#[cfg(test)]
+pub(crate) fn add_drive<M>(app: &mut App, after: impl bevy::ecs::schedule::IntoSystemSet<M>) {
+    app.add_systems(Update, drive_loading_screen.after(after));
+}
+
 /// Startup: load the LoadingScreens catalog and the bar textures, and spawn the hidden UI tree.
 fn setup_loading_screen(
     mut commands: Commands,
@@ -1138,56 +1145,6 @@ mod tests {
                 "nor does the destination streaming in under the held body"
             );
         }
-    }
-
-    /// The same port holds the frame instead (`0x630bd0` → `0x694920`): no frame is presented from
-    /// the snap until the destination is resident, and no screen comes up at either end.
-    #[test]
-    fn a_same_map_teleport_presents_no_frame_until_the_destination_is_resident() {
-        let held = |app: &App| app.world().resource::<hold::PresentHold>().held();
-        let mut app = in_world(GM_ISLAND);
-        app.init_resource::<hold::PresentHold>()
-            .add_systems(PostUpdate, hold::decide_present_hold);
-        app.update();
-        assert!(
-            !held(&app),
-            "standing on resident ground, every frame presents"
-        );
-
-        // The snap as `snap_near_teleport` leaves it: the body held, the world to reload.
-        land_unloaded(&mut app, SOUTH_SEAS);
-        app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .world_reload = true;
-        app.world_mut().write_message(crate::net::TeleportMessage {
-            guid: 1,
-            counter: 0,
-            position: SOUTH_SEAS,
-            orientation: 0.0,
-        });
-        for frame in 0..30 {
-            app.update();
-            assert!(held(&app), "frame {frame} after the snap is presented");
-            assert!(!covering(&app), "and the hold is no loading screen");
-        }
-
-        // Residency: the settle release, which the stream's presentable world drives.
-        app.insert_resource(WorldLoadProgress {
-            ready: 9,
-            total: 9,
-            focus_resident: true,
-            scene_ready: true,
-            ..Default::default()
-        });
-        app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .end_settle(true, 1.0);
-        app.update();
-        assert!(
-            !held(&app),
-            "the frame after residency presents the destination"
-        );
-        assert!(!covering(&app));
     }
 
     /// A live body outrunning the stream (GM speed ×100) stands on unloaded ground with no hold:

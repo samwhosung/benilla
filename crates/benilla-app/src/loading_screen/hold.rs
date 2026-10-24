@@ -57,7 +57,7 @@ impl PresentHold {
 }
 
 /// `PostUpdate`: hold the frame while a reloading snap's settle hold is up.
-pub(super) fn decide_present_hold(
+pub(crate) fn decide_present_hold(
     player: Option<Res<crate::player::Player>>,
     mut hold: ResMut<PresentHold>,
     mut frames: Local<u32>,
@@ -333,6 +333,42 @@ mod tests {
 
     fn take_seen(app: &mut App) -> Vec<ButtonState> {
         std::mem::take(&mut app.world_mut().resource_mut::<Seen>().0)
+    }
+
+    /// A key pressed under the hold and then an alt-tab: the focus loss arrives after the press,
+    /// in order, so the key ends released, as the window's own order releases it.
+    #[test]
+    fn a_press_then_a_focus_loss_under_the_hold_ends_released() {
+        use bevy::input::keyboard::KeyboardFocusLost;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .add_message::<CursorMoved>()
+            .init_resource::<PresentHold>()
+            .init_resource::<HeldInput>()
+            .init_resource::<HeldPointer>()
+            .add_systems(
+                PreUpdate,
+                defer_input_through_the_hold.before(bevy::input::InputSystems),
+            );
+        let pressed = |app: &App| {
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        };
+
+        app.world_mut().resource_mut::<PresentHold>().held = true;
+        app.world_mut().write_message(key(ButtonState::Pressed));
+        app.update();
+        app.world_mut().write_message(KeyboardFocusLost);
+        app.update();
+        app.world_mut().resource_mut::<PresentHold>().held = false;
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            !pressed(&app),
+            "the press is released by the focus loss after it"
+        );
     }
 
     /// The reference pumps no window message while its reload blocks (`0x42c9f0` runs only from

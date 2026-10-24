@@ -275,6 +275,31 @@ mod tests {
         );
     }
 
+    /// The load's wait completes on a failed read (`0x443d30`): the tile counts as in, so a hold
+    /// on the destination ends; one still being read does not.
+    #[test]
+    fn a_failed_read_counts_as_done_for_the_load() {
+        use super::super::{tile_done, TileState};
+        let mut app = test_app();
+        app.init_resource::<TerrainStreamer>();
+        let server = app.world().resource::<AssetServer>().clone();
+        let handle = server.load::<benilla_assets::AdtTile>("no_such_dir/no_such_tile.adt");
+        for _ in 0..400 {
+            if matches!(
+                server.load_state(&handle),
+                bevy::asset::LoadState::Failed(_)
+            ) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.update();
+        }
+        let failed = TileState::requested(handle);
+        assert!(tile_done(&failed, &server), "a failed read is done");
+        let reading = TileState::requested(server.load::<benilla_assets::AdtTile>("x/y.adt"));
+        assert!(!tile_done(&reading, &server), "a read in flight is not");
+    }
+
     #[test]
     fn a_one_object_map_gates_nothing() {
         let r = TerrainResidency::one_object();

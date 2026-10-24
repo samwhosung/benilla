@@ -72,6 +72,8 @@ mod view_subject;
 /// A far-sight pose, for a test that seats the camera on another object.
 #[cfg(test)]
 pub(crate) use view_subject::RemoteView;
+#[cfg(test)]
+mod teleport_hold_tests;
 mod walk;
 mod wire_in;
 pub(crate) use wire_in::regain_control_on_arrival;
