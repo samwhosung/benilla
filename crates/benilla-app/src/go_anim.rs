@@ -231,6 +231,23 @@ pub(crate) fn go_state(anim: Option<&GoAnim>, store: &ObjectStore) -> u32 {
         .unwrap_or(GO_STATE_ACTIVE)
 }
 
+/// The handler's substate `[handler+0x10]` as its `AnimationData.dbc` id (`0x8607e4`: substate 1
+/// Closed 147, 3 Opened 149): the armed transient, else the rest pose of the state shown, else of
+/// the stored state. A static object's handler rests on its state's pose.
+pub(crate) fn substate_anim(anim: Option<&GoAnim>, store: &ObjectStore) -> Option<u16> {
+    match anim {
+        Some(a) => a
+            .transient
+            .map(|t| t.id)
+            .or_else(|| a.shown.or(a.state).and_then(rest_anim)),
+        None => rest_anim(go_state(None, store)),
+    }
+}
+
+/// `AnimationData.dbc` 147 Closed and 149 Opened, the rest poses of substates 1 and 3.
+pub(crate) const ANIM_CLOSED: u16 = 0x93;
+pub(crate) const ANIM_OPENED: u16 = 0x95;
+
 /// The inspector's readout: the armed id (the newest arm, the smallest seek), whether it is a
 /// transient, and its repeat mode; `None` for a static mesh or before any arm.
 pub(crate) fn armed_anim(
@@ -332,9 +349,9 @@ fn remap_missing(anims: &ModelAnimations, id: u16) -> (u16, bool) {
 /// The held rest pose for a wire `GAMEOBJECT_STATE` (`0x5f3c30`).
 fn rest_anim(state: u32) -> Option<u16> {
     match state {
-        0 => Some(0x95), // ACTIVE  → Opened (held open)
-        1 => Some(0x93), // READY   → Closed (held closed)
-        2 => Some(0x97), // ALT     → Destroyed
+        0 => Some(ANIM_OPENED), // ACTIVE  → Opened (held open)
+        1 => Some(ANIM_CLOSED), // READY   → Closed (held closed)
+        2 => Some(0x97),        // ALT     → Destroyed
         _ => None,
     }
 }

@@ -459,6 +459,11 @@ pub(crate) struct AttackSeam<'w, 's> {
 }
 
 impl AttackSeam<'_, '_> {
+    /// `[0xb4b3e4]` clear: our player has lost control ([`crate::player::OwnControlLost`]).
+    pub(crate) fn own_control_lost(&self) -> bool {
+        self.own_control.as_deref().is_some_and(|c| c.0)
+    }
+
     /// `SelectTarget`'s first return (`0x493589`-`0x49359c`): the active player is charmed
     /// (`UNIT_FIELD_CHARMEDBY`), and whatever the guid, a select and a deselect alike return before
     /// they touch anything.

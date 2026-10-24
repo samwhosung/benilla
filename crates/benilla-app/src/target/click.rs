@@ -742,14 +742,10 @@ impl Dispatch<'_, '_> {
             .me()
             .and_then(|(e, ..)| self.stores.get(e).ok())
             .map(|(s, _)| s);
-        let go = self
-            .stores
-            .get(entity)
-            .ok()
-            .map(|(s, anim)| (s, crate::go_anim::go_state(anim, s)));
-        let lock_id = go
-            .and_then(|(s, _)| self.go_inputs.templates.of(&s.0))
-            .map_or(0, |t| t.lock_id);
+        let go_entry = self.stores.get(entity).ok();
+        let go = go_entry.map(|(s, anim)| (s, crate::go_anim::go_state(anim, s)));
+        let tmpl = go.and_then(|(s, _)| self.go_inputs.templates.of(&s.0));
+        let lock_id = tmpl.map_or(0, |t| t.lock_id);
         let has_lock_row = lock_id != 0
             && self
                 .go_inputs
@@ -759,9 +755,20 @@ impl Dispatch<'_, '_> {
         let go_type = go.map_or(-1, |(s, _)| s.0.gameobject_type_id());
         // The player arms refuse ahead of the range arm, so a dead player is never walked there,
         // and before the opener: no packet, no cast, no mail window.
-        if let Some(refusal) =
-            self_store.and_then(|me| cursor_mode::go_player_refusal(me, has_lock_row, go_type))
-        {
+        let control_lost = self.seam.own_control_lost();
+        let forms = self.go_inputs.spells.as_deref().map(|s| &s.forms);
+        let refusal = self_store.zip(go_entry).and_then(|(me, (store, anim))| {
+            cursor_mode::go_player_refusal(&cursor_mode::GoUse {
+                me,
+                control_lost,
+                forms,
+                go: store,
+                anim,
+                template: tmpl,
+                has_lock_row,
+            })
+        });
+        if let Some(refusal) = refusal {
             debug!("right-click gameobject {guid:#x}: refused, {refusal:?} (type {go_type})");
             if let Some(key) = refusal.error_key() {
                 self.feedback

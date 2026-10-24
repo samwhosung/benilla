@@ -42,6 +42,54 @@ pub(crate) struct GoTemplate {
     /// The `PageTextMaterial.dbc` id `GetQuestBackgroundMaterial` answers for a quest from this
     /// object (`0x5f5950`): QUESTGIVER (2) and TEXT (9) read `data[2]`, GOOBER (10) `data[9]`.
     pub(crate) quest_material: Option<u32>,
+    /// `GAMEOBJECT_TYPE_ID` as the template gives it, which names its data columns.
+    type_id: u32,
+    /// The 24 data dwords (`[rec+0x1c]`), read by semantic through [`GoTemplate::column`].
+    data: [i32; 24],
+}
+
+impl GoTemplate {
+    /// `0x5f8150(0x621b00(type, id))`: the data column the type names `id` by, 0 for a type
+    /// without one (`0x5f8150` refuses the −1 as past 23).
+    pub(crate) fn column(&self, id: GoColumn) -> i32 {
+        data_column(self.type_id, id).map_or(0, |c| self.data[c])
+    }
+}
+
+/// The data-column semantic ids benilla reads, by their names in the record table at `0x80c9fc`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GoColumn {
+    /// `startOpen` (1).
+    StartOpen,
+    /// `autoClose` (3).
+    AutoClose,
+    /// `noDamageImmune` (0x39).
+    NoDamageImmune,
+    /// `notInCombat` (0x3e).
+    NotInCombat,
+}
+
+/// `0x621b00(type, id)` for the ids of [`GoColumn`]: the index of `id` in the type's id array
+/// (`[0x80d7a4 + 20·type]`, counted by `[0x80d7a0 + 20·type]`), or `None` where the type has no
+/// such column.
+fn data_column(type_id: u32, id: GoColumn) -> Option<usize> {
+    use GoColumn::*;
+    match (type_id, id) {
+        (0 | 1, StartOpen) => Some(0),
+        (0 | 1, AutoClose) => Some(2),
+        (0, NoDamageImmune) => Some(3),
+        (1, NoDamageImmune) => Some(4),
+        (2, NoDamageImmune) => Some(5),
+        (3, NotInCombat) => Some(12),
+        (6, AutoClose) => Some(6),
+        (10, AutoClose) => Some(3),
+        (10, NoDamageImmune) => Some(11),
+        (12, AutoClose) => Some(5),
+        (24, NoDamageImmune) => Some(5),
+        (26, NoDamageImmune) => Some(3),
+        (30, StartOpen) => Some(0),
+        _ => None,
+    }
 }
 
 /// A MEETINGSTONE template's slots, read through `0x621b00` keys `0x33` to `0x35` (vmangos
@@ -174,6 +222,8 @@ impl GameObjectTemplates {
                 mo_transport,
                 text_page,
                 quest_material,
+                type_id,
+                data: *data,
             },
         );
     }
@@ -236,6 +286,30 @@ pub(crate) fn test_fields(entry: u32) -> ObjectFields {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x621b00`'s arrays name the door's columns `startOpen`, `open`, `autoClose`,
+    /// `noDamageImmune` (0 to 3), the chest's `notInCombat` 12 and the goober's `noDamageImmune`
+    /// 11; a type without the id reads 0.
+    #[test]
+    fn columns_are_read_by_the_types_semantic_ids() {
+        let mut t = GameObjectTemplates::default();
+        let data: [i32; 24] = std::array::from_fn(|i| 100 + i as i32);
+        t.insert(1, 0, "Door".into(), &data);
+        t.insert(2, 3, "Chest".into(), &data);
+        t.insert(3, 10, "Goober".into(), &data);
+        let col = |entry, id| t.templates.get(entry).unwrap().column(id);
+        assert_eq!(col(1, GoColumn::StartOpen), 100);
+        assert_eq!(col(1, GoColumn::AutoClose), 102);
+        assert_eq!(col(1, GoColumn::NoDamageImmune), 103);
+        assert_eq!(col(2, GoColumn::NotInCombat), 112);
+        assert_eq!(
+            col(2, GoColumn::NoDamageImmune),
+            0,
+            "a chest has no such column"
+        );
+        assert_eq!(col(3, GoColumn::NoDamageImmune), 111);
+        assert_eq!(col(3, GoColumn::AutoClose), 103);
+    }
 
     #[test]
     fn lock_slot_by_type_matches_getlockid() {
