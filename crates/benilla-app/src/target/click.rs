@@ -3356,6 +3356,222 @@ mod tests {
         }
     }
 
+    /// The rest of `usable 0x5f3130`'s player arms and the door's own slot (`0x5f4360`), each
+    /// graying the cursor and raising its error on the use with nothing sent:
+    /// - locked out, `[0xb4b3e4]` clear: 0x7f (`0x5f316e`-`0x5f3183`);
+    /// - shapeshifted at an object with no lock row, a form without flag `0x8` (`0x5f31e1`,
+    ///   `0x5f3210`): 0x1a0;
+    /// - in combat (`UNIT_FLAG` `0x80000`) at an object whose notInCombat column is set
+    ///   (`0x5f5970`, a chest's `data[12]`): 0x1a1 (`0x5f325d`);
+    /// - `UNIT_FLAG` `0x80000000` at a chest, or at an object whose noDamageImmune column is set
+    ///   (`0x5f59a0`, a goober's `data[11]`): 0x169 (`0x5f3297`);
+    /// - a door with autoClose (`data[2]`) at the rest state opposite its start (`0x5f42f0`:
+    ///   `startOpen ? substate != 1 : substate != 3`): 0xe3.
+    #[test]
+    fn the_player_and_door_arms_refuse_an_object_in_reach() {
+        use benilla_protocol::field::{FIELD_OBJECT_ENTRY, FIELD_UNIT_FLAGS};
+        const F_BYTES_1: u16 = 138;
+        const F_GO_FLAGS_STATE: u16 = 14;
+        const IN_COMBAT: u32 = 0x8_0000;
+        const IMMUNE: u32 = 0x8000_0000;
+        /// One case: our fields, whether we lost control, the form row's flags, the object's
+        /// type, its template data and wire state, and the expected error, `None` for a use.
+        struct Case {
+            label: &'static str,
+            own: Vec<(u16, u32)>,
+            locked_out: bool,
+            form_flags: u32,
+            go_type: u32,
+            data: Vec<(usize, i32)>,
+            state: u32,
+            error: Option<&'static str>,
+        }
+        let live = |extra: &[(u16, u32)]| {
+            let mut own = vec![(F_HEALTH, 100), (F_MAXHEALTH, 100)];
+            own.extend_from_slice(extra);
+            own
+        };
+        let case = |label, own, go_type, data: &[(usize, i32)], state, error| Case {
+            label,
+            own,
+            locked_out: false,
+            form_flags: 0,
+            go_type,
+            data: data.to_vec(),
+            state,
+            error,
+        };
+        let cases = [
+            Case {
+                locked_out: true,
+                ..case(
+                    "locked out",
+                    live(&[]),
+                    3,
+                    &[],
+                    1,
+                    Some("ERR_CLIENT_LOCKED_OUT"),
+                )
+            },
+            case(
+                "in cat form",
+                live(&[(F_BYTES_1, 1 << 16)]),
+                3,
+                &[],
+                1,
+                Some("ERR_NOT_WHILE_SHAPESHIFTED"),
+            ),
+            Case {
+                form_flags: 0x8,
+                ..case(
+                    "in a form that may interact",
+                    live(&[(F_BYTES_1, 1 << 16)]),
+                    3,
+                    &[],
+                    1,
+                    None,
+                )
+            },
+            Case {
+                form_flags: 0x1,
+                ..case(
+                    "in a stance",
+                    live(&[(F_BYTES_1, 1 << 16)]),
+                    3,
+                    &[],
+                    1,
+                    None,
+                )
+            },
+            case(
+                "in combat at a notInCombat chest",
+                live(&[(FIELD_UNIT_FLAGS, IN_COMBAT)]),
+                3,
+                &[(12, 1)],
+                1,
+                Some("ERR_NOT_IN_COMBAT"),
+            ),
+            case(
+                "in combat at an ordinary chest",
+                live(&[(FIELD_UNIT_FLAGS, IN_COMBAT)]),
+                3,
+                &[],
+                1,
+                None,
+            ),
+            case(
+                "immune at a chest",
+                live(&[(FIELD_UNIT_FLAGS, IMMUNE)]),
+                3,
+                &[],
+                1,
+                Some("ERR_USE_CANT_IMMUNE"),
+            ),
+            case(
+                "immune at a noDamageImmune goober",
+                live(&[(FIELD_UNIT_FLAGS, IMMUNE)]),
+                10,
+                &[(11, 1)],
+                1,
+                Some("ERR_USE_CANT_IMMUNE"),
+            ),
+            case(
+                "immune at an ordinary goober",
+                live(&[(FIELD_UNIT_FLAGS, IMMUNE)]),
+                10,
+                &[],
+                1,
+                None,
+            ),
+            case(
+                "an auto-closing door left open",
+                live(&[]),
+                0,
+                &[(2, 1)],
+                0,
+                Some("ERR_USE_OBJECT_MOVING"),
+            ),
+            case(
+                "an auto-closing door at rest",
+                live(&[]),
+                0,
+                &[(2, 1)],
+                1,
+                None,
+            ),
+            case(
+                "an auto-closing door that starts open, left closed",
+                live(&[]),
+                0,
+                &[(0, 1), (2, 1)],
+                1,
+                Some("ERR_USE_OBJECT_MOVING"),
+            ),
+            case(
+                "a door that never closes itself",
+                live(&[]),
+                0,
+                &[],
+                0,
+                None,
+            ),
+        ];
+        for c in cases {
+            let (mut world, _vendor, rx) = walking_world(Vec3::ZERO, false);
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .unwrap();
+            world.entity_mut(me).insert(store(&c.own));
+            world.resource_mut::<crate::player::OwnControlLost>().0 = c.locked_out;
+            let mut spells = crate::ui_action::Spells::empty_for_tests();
+            spells.forms.insert(
+                1,
+                benilla_formats::ShapeshiftForm {
+                    flags: c.form_flags,
+                    ..Default::default()
+                },
+            );
+            world.insert_resource(spells);
+            let mut data = [0; 24];
+            for &(i, v) in &c.data {
+                data[i] = v;
+            }
+            world
+                .resource_mut::<crate::go_templates::GameObjectTemplates>()
+                .insert(77, c.go_type, "Object".into(), &data);
+            let object = spawn_object(&mut world, c.go_type, Vec3::new(2.0, 0.0, 0.0));
+            world.entity_mut(object).insert(store(&[
+                (GO_TYPE_FIELD, c.go_type),
+                (FIELD_OBJECT_ENTRY, 77),
+                (F_GO_FLAGS_STATE, c.state),
+            ]));
+            let hovered = HoveredObject {
+                target: Some(object),
+                guid: Some(CHEST),
+                distance: 2.0,
+            };
+            let cursor = world
+                .run_system_once(move |inputs: cursor_mode::CursorInputs| {
+                    cursor_mode::classify(&inputs, &Hovered::default(), &hovered).0
+                })
+                .unwrap();
+            assert_eq!(cursor.unable, c.error.is_some(), "{}: {cursor:?}", c.label);
+            interact_with(&mut world, object);
+            let sent_use = rx
+                .try_iter()
+                .any(|c| matches!(c, ClientCommand::GameObjUse { .. }));
+            assert_eq!(sent_use, c.error.is_none(), "{}", c.label);
+            let keys: Vec<&str> = world
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .snapshot()
+                .iter()
+                .map(|e| e.key)
+                .collect();
+            assert_eq!(keys, c.error.into_iter().collect::<Vec<_>>(), "{}", c.label);
+        }
+    }
+
     const WOLF: u64 = 0xF130_0000_0000_0299;
 
     /// Our body hostile to nobody in particular and a wolf three yards off, the attack cursor on
