@@ -627,3 +627,67 @@ fn the_load_removes_the_earlier_creature_file() {
     let _session = Session::<NameCache>::start("Hydraxian Waterlords");
     assert!(!old.exists());
 }
+
+/// Whether a fresh process on realm `R` holds `key` in the store `T` loads.
+fn held_next_session<T: SavedCache>(key: u32) -> bool {
+    Session::<T>::start("R").store().store().get(key).is_some()
+}
+
+/// Every saved answer from its packet through the IO thread's emission ([`crate::net::io::inbound`])
+/// and the live client's handler table to the store's file, and back in the next process.
+#[test]
+fn each_answer_reaches_its_own_stores_file_through_the_live_handlers() {
+    let _home = Home::new("live");
+    let answers = [
+        (NameCache::ANSWER, creature_answer(CREATURE)),
+        (GameObjectTemplates::ANSWER, game_object_answer()),
+        (ItemNames::ANSWER, item_name_answer()),
+        (Items::ANSWER, item_answer()),
+        (GossipState::ANSWER, npc_text_answer()),
+        (QuestLog::ANSWER, quest_answer("The Kobold Menace")),
+        (PageTexts::ANSWER, page_answer()),
+        (MailOpen::ANSWER, item_text_answer()),
+    ];
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    app.insert_resource(roster("R"));
+    fn load_all(world: &mut World) {
+        world.run_system_once(load::<NameCache>).unwrap();
+        world.run_system_once(load::<GameObjectTemplates>).unwrap();
+        world.run_system_once(load::<ItemNames>).unwrap();
+        world.run_system_once(load::<Items>).unwrap();
+        world.run_system_once(load::<GossipState>).unwrap();
+        world.run_system_once(load::<QuestLog>).unwrap();
+        world.run_system_once(load::<PageTexts>).unwrap();
+        world.run_system_once(load::<MailOpen>).unwrap();
+    }
+    load_all(app.world_mut());
+    for (opcode, body) in answers {
+        let packet = benilla_protocol::messages::parse_server(opcode, &body).expect("parses");
+        let events = crate::net::io::inbound(opcode, benilla_protocol::decode(packet), body);
+        crate::net::handlers::dispatch(app.world_mut(), events);
+    }
+    let world = app.world_mut();
+    world.run_system_once(save_on_exit::<NameCache>).unwrap();
+    world
+        .run_system_once(save_on_exit::<GameObjectTemplates>)
+        .unwrap();
+    world.run_system_once(save_on_exit::<ItemNames>).unwrap();
+    world.run_system_once(save_on_exit::<Items>).unwrap();
+    world.run_system_once(save_on_exit::<GossipState>).unwrap();
+    world.run_system_once(save_on_exit::<QuestLog>).unwrap();
+    world.run_system_once(save_on_exit::<PageTexts>).unwrap();
+    world.run_system_once(save_on_exit::<MailOpen>).unwrap();
+    drop(app);
+
+    assert!(held_next_session::<NameCache>(CREATURE), "creature");
+    assert!(
+        held_next_session::<GameObjectTemplates>(GAME_OBJECT),
+        "game object"
+    );
+    assert!(held_next_session::<ItemNames>(ITEM), "item name");
+    assert!(held_next_session::<Items>(ITEM), "item");
+    assert!(held_next_session::<GossipState>(NPC_TEXT), "npc text");
+    assert!(held_next_session::<QuestLog>(QUEST), "quest");
+    assert!(held_next_session::<PageTexts>(PAGE), "page text");
+    assert!(held_next_session::<MailOpen>(ITEM_TEXT), "item text");
+}
