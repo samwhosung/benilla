@@ -1290,28 +1290,6 @@ mod tests {
         assert!(!will_hold(&app, go), "the window ended: the hold drops");
     }
 
-    /// Despawn is substate 12 (`0x80b0e0[6]`), past slot 14's `cmp 0xb; ja` (`0x5f4126`,
-    /// `0x5f4134`): its end only unpins (`0x5f41ae`), so nothing re-arms and the model keeps the
-    /// clip's end, also for an object the server announces and never destroys.
-    #[test]
-    fn a_finished_despawn_arms_nothing() {
-        let (mut app, go) = crate_app(&[(157, 2.667, 0)]);
-        app.update();
-        app.world_mut().get_mut::<GoAnim>(go).unwrap().despawn();
-        app.update();
-        assert_eq!(armed(&app, go), Some((157, RepeatAnimation::Never)));
-
-        advance(&mut app, 2700);
-        app.update();
-        app.update();
-        assert_eq!(
-            armed(&app, go),
-            Some((157, RepeatAnimation::Never)),
-            "the Despawn clip's end stays on the model"
-        );
-        assert!(!app.world().get::<GoAnim>(go).unwrap().holds());
-    }
-
     /// A model without 157 plays nothing, so nothing holds the object (`0x5f424a`), from the
     /// packet on: a looted chest such as the static `DeadmineCargoBoxes.m2` goes as its release
     /// comes.
@@ -1453,7 +1431,8 @@ mod tests {
 
     /// `SendObjectDeSpawnAnim` is on `WorldObject`, and two vmangos boss scripts send it for
     /// living objects (Sapphiron for himself): with no release pending the window ends and the
-    /// object stays.
+    /// object stays. Despawn is substate 12 (`0x80b0e0[6]`), past slot 14's `cmp 0xb; ja`
+    /// (`0x5f4126`, `0x5f4134`): its end only unpins (`0x5f41ae`), so nothing re-arms.
     #[test]
     fn an_announcement_without_a_release_despawns_nothing() {
         let (mut app, go) = crate_app(&[(157, 2.667, 0)]);
@@ -1468,9 +1447,10 @@ mod tests {
         assert!(app.world().get_entity(go).is_ok(), "no release, no despawn");
         assert_eq!(
             armed(&app, go),
-            Some((0x93, RepeatAnimation::Never)),
-            "and the window hands back to the state pose, like any other one-shot"
+            Some((157, RepeatAnimation::Never)),
+            "and the model keeps the Despawn clip's end"
         );
+        assert!(!app.world().get::<GoAnim>(go).unwrap().holds());
     }
 
     /// A Custom that ends while its object's release is pending dispatches nothing and arms
