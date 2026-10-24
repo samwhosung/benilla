@@ -472,3 +472,210 @@ fn sit_or_stand_sends_inside_its_call() {
     eval::<()>(&mut app, "SitOrStand() RandomRoll(1, 2)");
     assert_eq!(sent(&rx), ["stand 1", "roll 1"]);
 }
+
+/// `PLAYER_FARSIGHT`'s low word.
+const FARSIGHT: u16 = 712;
+
+/// A unit `guid` standing `yards` along +X, in the guid index.
+fn unit_at(app: &mut App, guid: u64, yards: f32) {
+    let world = app.world_mut();
+    let e = world
+        .spawn((
+            Guid(guid),
+            Transform::from_xyz(yards, 0.0, 0.0),
+            ObjectStore(ObjectFields::from_pairs(&[(2, 0x9), (22, 100), (28, 100)])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(guid, e);
+}
+
+/// The spell catalog holding `rows` as `(id, AttributesEx, Effect[0])`.
+fn spell_rows(app: &mut App, rows: &[(u32, u32, u32)]) {
+    app.world_mut().insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(
+            rows.iter()
+                .map(|&(id, attributes_ex, effect)| {
+                    (
+                        id,
+                        benilla_formats::SpellDisplay {
+                            id,
+                            attributes_ex,
+                            effects: [effect, 0, 0],
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+}
+
+/// A far-sight aura (`AttributesEx` 0x2000 without 0x4) the player cancels: `0x6e7040` calls
+/// `UpdateFarSight` (`0x6e709e`-`0x6e70ad`), and when it answers nonzero the cancel sends nothing
+/// (`0x6e70b4` → `0x6e7122`). It answers 0 only for a `PLAYER_FARSIGHT` set on an object the
+/// client does not hold (`0x5ee32b` → `0x5ee360`); then the cancel goes out.
+#[test]
+fn a_far_sight_aura_cancel_sends_only_when_far_sight_answers_zero() {
+    const SENTRY_TOTEM: u32 = 6495;
+    for farsight in [0u32, 0x77] {
+        let (mut app, rx) = client();
+        seat(&mut app, &[(FARSIGHT, farsight)]);
+        spell_rows(&mut app, &[(SENTRY_TOTEM, 0x2000, 90)]);
+        vm(&mut app).set_player_auras(vec![benilla_ui::script::AuraState {
+            spell_id: SENTRY_TOTEM,
+            helpful: true,
+            cancelable: true,
+            count: 1,
+            ..Default::default()
+        }]);
+        eval::<()>(&mut app, "CancelPlayerBuff(0) RandomRoll(1, 2)");
+        let expected: &[&str] = if farsight == 0 {
+            &["roll 1"]
+        } else {
+            &["cancel aura 6495", "roll 1"]
+        };
+        assert_eq!(sent(&rx), expected, "far sight {farsight:#x}");
+    }
+}
+
+/// The healer scan's cancel of a wave (`0x4921c0` → `0x6e7040(0xa18)` at `0x492201`) is the whole
+/// aura cancel: the player's precast of 2584 ends too (`0x6e7075`).
+#[test]
+fn the_healer_scans_cancel_ends_the_players_precast_of_the_wave() {
+    const HEALER: u64 = 0xF130_0000_0000_0A5A;
+    const WAVE: u32 = 2584;
+    let (mut app, rx) = client();
+    let me = seat(&mut app, &[(22, 1), (190, 0x10)]);
+    app.world_mut()
+        .entity_mut(me)
+        .insert(crate::creature_anim::Precast {
+            spell_id: WAVE,
+            busy: false,
+        });
+    unit_at(&mut app, HEALER, 30.0);
+    let e = app.world().resource::<GuidIndex>().0[&HEALER];
+    app.world_mut().entity_mut(e).insert(crate::net::NetEntity {
+        kind: benilla_protocol::EntityKind::Unit,
+        display_id: None,
+        scale: 1.0,
+    });
+    {
+        let mut spirit = app
+            .world_mut()
+            .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>();
+        let _ = spirit.set_healer(Some(HEALER));
+        spirit.on_time(HEALER, 30_000, std::time::Instant::now());
+    }
+    eval::<()>(&mut app, "AcceptAreaSpiritHeal()");
+    crate::creature_anim::apply_unit_edits(app.world_mut());
+    assert_eq!(sent(&rx), ["cancel aura 2584"]);
+    assert!(
+        app.world()
+            .get::<crate::creature_anim::Precast>(me)
+            .is_none(),
+        "the scan's cancel ended the precast"
+    );
+}
+
+/// `NotifyInspect(unit)` resolves any unit token (`0x515970` at `0x48a36a`) and sends for any
+/// nonzero guid (`0x5deccf`): a creature target and the player alike.
+#[test]
+fn notify_inspect_sends_for_any_unit_the_token_names() {
+    let (mut app, rx) = client();
+    seat(&mut app, &[]);
+    unit_at(&mut app, NPC, 3.0);
+    let world = app.world_mut();
+    let npc = world.resource::<GuidIndex>().0[&NPC];
+    let mut selection = world.resource_mut::<crate::target::Selection>();
+    selection.guid = Some(NPC);
+    selection.target = Some(npc);
+    eval::<()>(
+        &mut app,
+        r#"NotifyInspect("target") RandomRoll(1, 2) NotifyInspect("player")"#,
+    );
+    assert_eq!(
+        sent(&rx),
+        ["inspect 0xf130000000000042", "roll 1", "inspect 0x10"]
+    );
+}
+
+/// `ConfirmPetUnlearn()` tests the trainer's range at the call (`0x5dfbd5`, `0x5dfc1c` against
+/// `[0xc4c28c]`): out of it nothing happens and the trainer stays remembered, so the confirm made
+/// back in range sends.
+#[test]
+fn confirm_pet_unlearn_tests_the_trainers_range_at_the_call() {
+    let (mut app, rx) = client();
+    let me = seat(&mut app, &[(COINAGE, 10_000)]);
+    unit_at(&mut app, NPC, 10.0);
+    app.world_mut()
+        .resource_mut::<crate::ui_dialog_verbs::PetUnlearnState>()
+        .ask(NPC, 100);
+    eval::<()>(&mut app, "ConfirmPetUnlearn() RandomRoll(1, 2)");
+    assert_eq!(sent(&rx), ["roll 1"], "out of range");
+    app.world_mut()
+        .get_mut::<Transform>(me)
+        .unwrap()
+        .translation
+        .x = 6.0;
+    eval::<()>(&mut app, "ConfirmPetUnlearn()");
+    assert_eq!(
+        sent(&rx),
+        ["pet unlearn 0xf130000000000042"],
+        "back in range"
+    );
+}
+
+/// `RequestInspectHonorData()` (`0x4c80a0`) sets its pending flag after the send (`0x4c811b`), and
+/// with no inspect target returns before it (`0x4c80c2`): a request made before the target is set
+/// leaves the next one free to send, and that one holds off a third.
+#[test]
+fn the_inspect_honor_ask_latches_only_once_it_sends() {
+    let (mut app, rx) = client();
+    seat(&mut app, &[]);
+    unit_at(&mut app, OTHER, 3.0);
+    let world = app.world_mut();
+    let other = world.resource::<GuidIndex>().0[&OTHER];
+    world
+        .entity_mut(other)
+        .insert(ObjectStore(ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (22, 100),
+            (28, 100),
+        ])));
+    let mut selection = world.resource_mut::<crate::target::Selection>();
+    selection.guid = Some(OTHER);
+    selection.target = Some(other);
+    eval::<()>(
+        &mut app,
+        r#"RequestInspectHonorData() NotifyInspect("target") RequestInspectHonorData()
+           RequestInspectHonorData()"#,
+    );
+    assert_eq!(sent(&rx), ["inspect 0x77", "honor 0x77"]);
+}
+
+/// `Stuck()` casts the spell in `[0xb70098]` (`0x489370`), which `AddSpellToBook` stores for a
+/// learned spell whose `Effect[0]` is 84 (`0x4b2614`-`0x4b261d`): that spell, whatever its id, and
+/// none when no learned spell has the effect.
+#[test]
+fn stuck_casts_the_learned_spell_with_the_stuck_effect() {
+    const UNSTUCK: u32 = 9999;
+    for learned in [false, true] {
+        let (mut app, rx) = client();
+        seat(&mut app, &[]);
+        spell_rows(&mut app, &[(UNSTUCK, 0, 84)]);
+        if learned {
+            app.world_mut()
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .spells
+                .insert(UNSTUCK);
+        }
+        eval::<()>(&mut app, "Stuck() RandomRoll(1, 2)");
+        let expected: &[&str] = if learned {
+            &["cast 9999", "roll 1"]
+        } else {
+            &["roll 1"]
+        };
+        assert_eq!(sent(&rx), expected, "learned {learned}");
+    }
+}
