@@ -81,9 +81,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the wire's error texts",
     ),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::minimap::ping::MinimapPing",
-        "the minimap pings",
+        "the members' minimap pings, which `drive_minimap_ping` fires; our own `PingLocation`, \
+         acting in its call, holds the ping in the host",
     ),
     (
         Row::Queue,
@@ -98,6 +99,11 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (Row::Queue, "::ui_bank::BankErrors", "the bank errors"),
     (
         Row::Queue,
+        "::ui_action::drain::ActionSlotWrites",
+        "the action slot writes a handler's Lua makes, sent in the call and stored after the pass",
+    ),
+    (
+        Row::Queue,
         "::ui_dialog_verbs::InstanceBoot",
         "the instance boot",
     ),
@@ -107,9 +113,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the meeting stone",
     ),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_dialog_verbs::PetUnlearnState",
-        "the pet unlearn confirm",
+        "the pet unlearn confirm, which `feed_dialog_verbs` fires; `ConfirmPetUnlearn`, acting in \
+         its call, reads it in the host",
     ),
     (
         Row::HostHeld,
@@ -496,9 +503,9 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_char::feed_skills", &["net::ObjectStore"]),
     ("::ui_reputation::feed_reputation", &["net::ObjectStore", "net::reputations::Reputations"]),
     ("::ui_inspect::feed_inspect", &["items::Items", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid", "target::Selection", "ui_party::GroupState"]),
+        "net::ObjectStore", "net::SelfGuid"]),
     ("::ui_honor::feed_honor", &["net::ObjectStore", "target::Selection", "ui_honor::InspectHonor",
-        "ui_party::GroupState"]),
+        "ui_inspect::InspectTarget", "ui_party::GroupState"]),
     ("::ui_action::recount::recount_item_actions", &["items::Countdowns", "items::Items",
         "net::GuidIndex", "net::ObjectStore"]),
     ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",
@@ -644,6 +651,8 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
 /// other sinks (the message sounds and the unit edits, which raise no event) are not queues here.
 const FILLED_THROUGH_A_READ: &[&str] = &[
     "::ui_action::errors::UiErrorKeys",
+    // The slot writes the call host's action bar verbs queue for the store.
+    "::ui_action::drain::ActionSlotWrites",
     "::tutorial::Tutorials",
     "::ui_session::latch::LatchCloses",
     "::ui_logout::SessionPosts",
@@ -687,6 +696,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::OwnControlLost",
     "::Player",
     "::player::state::StandPending",
+    // The page cache the host's page turns read.
+    "::ui_item_text::PageTexts",
+    // The pet trainer's latch, which the host's `ConfirmPetUnlearn` reads.
+    "::ui_dialog_verbs::PetUnlearnState",
     "::BarUnitOutdoors",
     "::PlayerOutdoors",
     "::EmoteSounds",

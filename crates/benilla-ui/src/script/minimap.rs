@@ -99,6 +99,14 @@ pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
     }
 }
 
+/// A minimap verb the host applies inside its call ([`super::ScriptCall::Minimap`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MinimapCall {
+    /// `Minimap:PingLocation` at the world point `(x, y)` it computed (`0x4eee48`): the process's
+    /// ping there and, in a party or raid, `MSG_MINIMAP_PING` (`0x4eef72`).
+    Ping { x: f32, y: f32 },
+}
+
 /// What the `CMinimap` ctor takes from the screen-scale cells: `base = G48 · 5/3` (`0x4edc42`,
 /// `0x4edc47`), about 1 at 4:3; the eight arrow frames' width and height, the disc ([`disc`],
 /// through slots 5 and 6 at `0x4ede9e`, `0x4edeaf`); the player arrow's offset of
@@ -431,7 +439,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // `0x4eee31`), the second by its width (slot 0x1c, `0x4eee21`): fractions of its own size,
         // whatever its scale. Each times the zoom diameter (`0x4eecf8`) offsets the player's point,
         // world X by the second and world Y by the first (`0x4eee48`), with no disc test. The
-        // party send (`0x4eef72`) goes to the host; the ping then applies at once (`0x4eefb5`).
+        // party's packet (`0x4eef72`) goes out through the host inside the call; the ping then
+        // applies at once (`0x4eefb5`).
         lua.create_function(|lua, args: mlua::MultiValue| {
             let player = lua
                 .app_data_ref::<Model>()
@@ -458,18 +467,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 first = -stored(x as f32) / f64::from(ht);
                 second = stored(y as f32) / f64::from(w);
             }
-            super::tick::verb(lua, |model| {
+            let world = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let d = 2.0 * f64::from(model.minimap.radius_yd());
                 // Each fraction times the diameter is stored as a float (`0x4eee2e`, `0x4eee3d`).
                 let (second, first) = (
                     f64::from((second * d) as f32),
                     f64::from((first * d) as f32),
                 );
-                let world = (
+                (
                     (f64::from(player.0) + second) as f32,
                     (f64::from(player.1) + first) as f32,
-                );
-                model.minimap_pings_sent.push(world);
+                )
+            };
+            // The host's half: the group's packet (`0x4eef72`).
+            super::calls::submit(
+                lua,
+                super::ScriptCall::Minimap(MinimapCall::Ping {
+                    x: world.0,
+                    y: world.1,
+                }),
+            )?;
+            super::tick::verb(lua, |model| {
                 if let Some((a, b)) = model.minimap.apply_ping(world) {
                     model.raise("MINIMAP_PING", super::ping_args("player", a, b));
                 }

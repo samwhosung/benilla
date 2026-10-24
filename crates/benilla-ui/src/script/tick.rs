@@ -72,6 +72,17 @@ impl Model {
         }
     }
 
+    /// Inside a [`verb`] segment, hand `call` to the host in its place among the segment's
+    /// signals, as engine code a verb shares makes it there: `0x4e58e0`'s send ahead of the
+    /// `ACTIONBAR_SLOT_CHANGED` it signals (`0x4e5998`). Engine code reaches this only inside a
+    /// verb.
+    pub(crate) fn call_in_verb(&mut self, call: super::ScriptCall) {
+        match &mut self.verb_events {
+            Some(segment) => segment.push(Raised::Call(Box::new(call))),
+            None => debug_assert!(false, "a call outside a verb segment: {call:?}"),
+        }
+    }
+
     /// End the view [`Model::view_cursor`] opened.
     pub(crate) fn end_cursor_view(&mut self) {
         if let Some(segment) = &mut self.verb_events {
@@ -93,6 +104,9 @@ pub(crate) enum Raised {
     EndCursorView,
     /// A cursor write, its own records inside it ([`super::cursor::write`]).
     CursorWrite(Box<super::cursor::CursorWrite>),
+    /// A call the engine code made in its place among the segment's signals
+    /// ([`Model::call_in_verb`]), handed to the host there.
+    Call(Box<super::ScriptCall>),
 }
 
 /// Undo `raised`'s writes, last first: each lock bit as it was, and each cursor write
@@ -104,7 +118,8 @@ pub(crate) fn rewind(model: &mut Model, raised: &[Raised]) {
                 set_lock_bit(model, *guid, *was);
             }
             Raised::CursorWrite(write) => write.rewind(model),
-            Raised::Event(..) | Raised::CursorView(_) | Raised::EndCursorView => {}
+            Raised::Event(..) | Raised::CursorView(_) | Raised::EndCursorView | Raised::Call(_) => {
+            }
         }
     }
 }
@@ -118,7 +133,8 @@ fn roll_back_locks(model: &mut Model, raised: &[Raised]) {
                 set_lock_bit(model, *guid, *was);
             }
             Raised::CursorWrite(write) => roll_back_locks(model, &write.raised),
-            Raised::Event(..) | Raised::CursorView(_) | Raised::EndCursorView => {}
+            Raised::Event(..) | Raised::CursorView(_) | Raised::EndCursorView | Raised::Call(_) => {
+            }
         }
     }
 }
@@ -160,7 +176,7 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         if raised.iter().any(|r| {
             matches!(
                 r,
-                Raised::Event(..) | Raised::Lock { .. } | Raised::CursorWrite(_)
+                Raised::Event(..) | Raised::Lock { .. } | Raised::CursorWrite(_) | Raised::Call(_)
             )
         }) {
             super::calls::hold(lua, super::calls::Held::Segment(raised));
@@ -216,6 +232,13 @@ pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>, how: Fan) {
                 );
             }
             Raised::Event(event, args) => fire_event_into(lua, &event, args),
+            Raised::Call(call) => {
+                if let Err(e) = super::calls::submit(lua, *call) {
+                    lua.app_data_mut::<Model>()
+                        .expect("model app_data set")
+                        .record_lua_error(&e);
+                }
+            }
             Raised::CursorView(payload) => {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
                 hidden.push(std::mem::replace(&mut model.cursor, payload));

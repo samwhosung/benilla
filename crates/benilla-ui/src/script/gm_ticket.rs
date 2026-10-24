@@ -1,13 +1,22 @@
-//! The seven GM ticket globals `HelpFrame.lua` calls. The five ticket verbs share one ordered
-//! queue, because call order is the reference's wire order, and two calls are two sends: the
-//! ticket toast re-polls `GetGMTicket()` every 10 minutes. `GetGMTicket()` is a send, answered by
-//! the `UPDATE_TICKET` event, so nothing here holds a ticket.
+//! The seven GM ticket globals `HelpFrame.lua` calls. The five ticket verbs send inside their
+//! calls, through the host ([`GmTicketCall`]), so call order is the wire order, and two calls are
+//! two sends: the ticket toast re-polls `GetGMTicket()` every 10 minutes. `GetGMTicket()` is a
+//! send, answered by the `UPDATE_TICKET` event, so nothing here holds a ticket.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// One ticket verb the window called, drained in call order.
+/// A GM verb the host applies inside its call ([`super::ScriptCall::GmTicket`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GmTicketCall {
+    /// A ticket verb's packet.
+    Ticket(GmTicketIntent),
+    /// `Stuck()` (`0x489370`) past the gate: `CastSpellAsActivePlayer` (`0x6e5a90`) on its spell.
+    Stuck,
+}
+
+/// One ticket verb the window called, sent in call order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GmTicketIntent {
     /// `GetGMTicket()`: `CMSG_GMTICKET_GETTICKET`.
@@ -40,15 +49,24 @@ impl super::UiScript {
         self.model_mut().gm_ticket_categories = categories;
     }
 
-    /// Drain the ticket verbs in call order, one packet each.
+    /// The ticket verbs a harness's VM kept ([`Self::keep_calls`]), in call order, one packet
+    /// each.
     pub fn take_gm_ticket_intents(&mut self) -> Vec<GmTicketIntent> {
-        std::mem::take(&mut self.model_mut().gm_ticket_intents)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::GmTicket(GmTicketCall::Ticket(intent)) => Some(intent.clone()),
+            _ => None,
+        })
     }
 
-    /// Drain the `Stuck()` calls, each one cast of spell 7355.
+    /// The `Stuck()` calls a harness's VM kept, each one cast of spell 7355.
     pub fn take_stuck_casts(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().stuck_casts)
+        self.take_calls_like(&super::ScriptCall::GmTicket(GmTicketCall::Stuck)) as u32
     }
+}
+
+/// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
+fn submit(lua: &Lua, call: GmTicketCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::GmTicket(call))
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -87,11 +105,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 {
                     return Ok(());
                 }
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .gm_ticket_intents
-                    .push(intent.clone());
-                Ok(())
+                submit(lua, GmTicketCall::Ticket(intent.clone()))
             })?,
         )?;
     }
@@ -114,15 +128,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if text.is_empty() {
                     return super::calls::display_error(lua, "ERR_TICKET_NO_TEXT");
                 }
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .gm_ticket_intents
-                    .push(GmTicketIntent::Write(GmTicketWrite {
+                submit(
+                    lua,
+                    GmTicketCall::Ticket(GmTicketIntent::Write(GmTicketWrite {
                         category,
                         text,
                         is_new,
-                    }));
-                Ok(())
+                    })),
+                )
             })?,
         )?;
     }
@@ -134,9 +147,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // `0x48937c` → `TryCastSpell`, behind the gate's tag 2 (`0x6e4bc1`).
             if super::protected::gate(lua, super::protected::Tag::CAST) {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .stuck_casts += 1;
+                submit(lua, GmTicketCall::Stuck)?;
             }
             Ok(())
         })?,

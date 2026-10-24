@@ -15,9 +15,9 @@ pub enum MeetingStoneCall {
 }
 
 impl super::UiScript {
-    /// `ConfirmPetUnlearn()` calls since the last drain.
+    /// The `ConfirmPetUnlearn()` calls a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_pet_unlearn_confirms(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().pet_unlearn_confirms)
+        self.take_calls_like(&super::ScriptCall::ConfirmPetUnlearn) as u32
     }
 
     /// What `CheckPetUntrainerDist()` answers: a pending question whose trainer is in reach.
@@ -59,6 +59,9 @@ impl super::UiScript {
     }
 }
 
+/// The area spirit healer's aura, `0x4923a0`'s spell (`0xa18`).
+const AREA_SPIRIT_HEALER_AURA: u32 = 2584;
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -82,22 +85,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )
         })?,
     )?;
-    // `0x48df30` runs the generic cancel-aura (`0x4923a0` → `0x6e7040`): the event in place
-    // (`0x6e70c3`), then the host's `0x136` with `u32 2584`, no guid. Its refusal gate
-    // (`AttributesEx` bit 13 set, bit 2 clear, then `0x5ee290`) never trips for 2584 in the
-    // shipped `Spell.dbc` (the app's `spell_2584_never_trips_the_cancel_gate`), so the send is
-    // unconditional.
+    // `0x48df30` runs the generic cancel-aura (`0x4923a0` → `0x6e7040`) on spell 2584, which the
+    // host runs whole inside the call: its event in place (`0x6e70c3`), then `0x136` with
+    // `u32 2584`, no guid. Its refusal gate (`AttributesEx` bit 13 set, bit 2 clear, then
+    // `0x5ee290`) never trips for 2584 in the shipped `Spell.dbc` (the app's
+    // `spell_2584_never_trips_the_cancel_gate`).
     g.set(
         "CancelAreaSpiritHeal",
-        lua.create_function(|lua, ()| {
-            super::tick::verb(lua, |model| {
-                model.raise("AREA_SPIRIT_HEALER_OUT_OF_RANGE", Vec::new());
-            });
-            super::calls::submit(
-                lua,
-                super::ScriptCall::Death(super::DeathAction::CancelAreaSpiritHeal),
-            )
-        })?,
+        lua.create_function(|lua, ()| super::aura::cancel_aura(lua, AREA_SPIRIT_HEALER_AURA))?,
     )?;
     // Whole seconds: `max(0, [0xb4e338] - now) / 1000`.
     g.set(
@@ -182,13 +177,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(flag(model.pet_untrainer_pending))
         })?,
     )?;
-    // `0x48dca0`: the app holds the latch and the money gate, and sends `0x2F0`.
+    // `0x48dca0` → `PetUnlearnDialog(0, 0)` (`0x5dfba0`): the host holds the latch and the money
+    // gate, and sends `0x2F0` inside the call.
     g.set(
         "ConfirmPetUnlearn",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.pet_unlearn_confirms += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::ConfirmPetUnlearn)
         })?,
     )?;
 
@@ -202,6 +196,7 @@ mod tests {
     #[test]
     fn the_clocks_read_what_the_app_feeds() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(
             s.eval::<i64>("return GetInstanceBootTimeRemaining()")
                 .unwrap(),
@@ -241,25 +236,11 @@ mod tests {
     }
 
     #[test]
-    fn cancel_area_spirit_heal_cancels_the_aura_and_fires_out_of_range() {
+    fn cancel_area_spirit_heal_cancels_the_areas_aura() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.run(
-            r#"F = CreateFrame("Frame") F:RegisterEvent("AREA_SPIRIT_HEALER_OUT_OF_RANGE")
-               F:SetScript("OnEvent", function() GOT = event end) CancelAreaSpiritHeal()"#,
-        )
-        .unwrap();
-        s.tick(0.0);
-        assert_eq!(
-            s.eval::<String>("return GOT").unwrap(),
-            "AREA_SPIRIT_HEALER_OUT_OF_RANGE"
-        );
-        assert_eq!(
-            s.take_calls_like(&crate::script::ScriptCall::Death(
-                crate::script::DeathAction::CancelAreaSpiritHeal
-            )),
-            1
-        );
+        s.run("CancelAreaSpiritHeal()").unwrap();
+        assert_eq!(s.take_cancel_aura_requests(), [2584]);
     }
 
     #[test]
@@ -289,6 +270,7 @@ mod tests {
     #[test]
     fn the_meeting_stone_pair_answers_one_or_nil_and_string_or_nil() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.arity("IsInMeetingStoneQueue()").unwrap(), 1);
         assert!(s
             .eval::<bool>("return IsInMeetingStoneQueue() == nil")

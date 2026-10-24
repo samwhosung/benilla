@@ -198,6 +198,21 @@ impl ScriptCallHost<'_, '_> {
         self.appliers.trade().send_cancel();
     }
 
+    /// The reader's close core `0x4e32e0(0, 0)`, `CloseItemText()` itself (`0x4e3b70`): with an
+    /// object read, the release on the cell (`0x4e3357`), the cell cleared (`0x4e3364`) and
+    /// `ITEM_TEXT_CLOSED` (`0x4e33a2`).
+    pub(super) fn close_item_text(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        let Some(object) = self.appliers.item_text().object() else {
+            return;
+        };
+        self.release_into(script, mark, object, Self::close_item_text);
+        self.appliers.item_text().clear();
+        self.appliers.latch().note_closed(NpcWindow::ItemText);
+        script.set_item_text(None);
+        script.fire_event("ITEM_TEXT_CLOSED", vec![]);
+        self.signalled(script, mark);
+    }
+
     /// The taxi map's close core `0x4dc0f0`: with a map open, the release (`0x4dc105`), the cell
     /// cleared (`0x4dc113`) and each slot's route freed (`0x4dc130`-`0x4dc145`), then
     /// `TAXIMAP_CLOSED` (`0x4dc15f`).

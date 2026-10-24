@@ -17,7 +17,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{HonorState, InspectHonorData, ScriptValue, UiScript};
 
-use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{ObjectStore, SelfPlayer};
 use crate::ui_script::{UiFeed, VmMemo};
 
 /// The inspect-honor reply held: one slot, like the reference's `HasInspectHonorData` latch.
@@ -156,21 +156,29 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
     })
 }
 
-/// Push the self snapshot and the inspect reply, and drain the pane's request.
+/// Push the self snapshot and the inspect reply.
 pub(crate) fn feed_honor(
-    // The selection, read before the VM runs with the host lent, which a call may move.
+    // The selection and the inspect target, read before the VM runs with the host lent, which a
+    // call may move.
     mut hosted: crate::script_calls::disjoint::Pair<
-        Res<'static, crate::target::Selection>,
+        (
+            Res<'static, crate::target::Selection>,
+            Res<'static, crate::ui_inspect::InspectTarget>,
+        ),
         crate::script_calls::HostedVm<'static, 'static>,
     >,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    inspect_target: Res<crate::ui_inspect::InspectTarget>,
     group: Res<crate::ui_party::GroupState>,
     mut inspect_honor: ResMut<InspectHonor>,
     mut state: ResMut<HonorFeedState>,
-    commands: Res<NetCommands>,
 ) {
-    let selection = *hosted.p0();
+    let inspected = {
+        let (selection, inspect_target) = hosted.p0();
+        inspect_target
+            .token
+            .as_deref()
+            .and_then(|t| crate::ui_unit::player_token_guid(t, &selection, &group))
+    };
     hosted.p1().run(|script| {
         let Some(script) = script else {
             return;
@@ -193,10 +201,6 @@ pub(crate) fn feed_honor(
         // token's guid moves, because our window re-resolves its token each frame and both tabs
         // read it, so the reference's rule would let the two tabs show different players.
         // `ClearInspectPlayer` drops the token, which clears the slot here too.
-        let inspected = inspect_target
-            .token
-            .as_deref()
-            .and_then(|t| crate::ui_unit::player_token_guid(t, &selection, &group));
         if inspect_honor
             .0
             .as_ref()
@@ -230,29 +234,13 @@ pub(crate) fn feed_honor(
             // Fired on a clear too, so the pane stops showing the previous player's numbers.
             script.fire_event("INSPECT_HONOR_UPDATE", Vec::<ScriptValue>::new());
         }
-
-        // --- the pane's request ------------------------------------------------------------------
-        // `RequestInspectHonorData()` takes no argument: it asks about the inspected token's guid
-        // now, so a re-target before the Honor tab opens asks about the new player.
-        let requests = script.take_inspect_honor_requests();
-        if requests > 0 {
-            match inspected {
-                Some(guid) => {
-                    debug!("honor: inspect-honor request -> {guid:#x}");
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::InspectHonorStats { target: guid });
-                }
-                // Nothing to ask about; the pane asks again from its next `OnShow`.
-                None => debug!("honor: inspect-honor request with no resolvable target — not sent"),
-            }
-        }
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::NetCommands;
 
     /// The block is pushed on first sight and on change, and the push fires nothing: the PvP
     /// events are the field watches' (`0x5ddc35`, `0x5ddc5c`, `0x5ddc83`), which a create and a

@@ -16,7 +16,7 @@ mod composite;
 mod interior;
 /// The minimap ping, engine-owned and pinned to a world point.
 mod ping;
-pub(crate) use ping::MinimapPing;
+pub(crate) use ping::{MinimapPing, MinimapSteps};
 
 use std::collections::HashMap;
 
@@ -991,13 +991,6 @@ impl Plugin for MinimapPlugin {
                         .after(ping::drive_minimap_ping)
                         .in_set(crate::ui_script::UiFeed)
                         .run_if(not(crate::ui_script::ingame_ui_up)),
-                    // A drain of what the Lua asked, after the tick whose `PingLocation` calls it
-                    // sends, and the chat and group drains, so a ping from a slash handler goes
-                    // against this frame's roster.
-                    ping::send_own_pings
-                        .in_set(crate::ui_script::UiDrain)
-                        .after(crate::ui_chat::ChatDrain)
-                        .after(crate::ui_party::drain_party),
                     // Before the script tick, so GameTimeFrame reads this frame's minute.
                     feed_game_time.in_set(crate::ui_script::UiFeed),
                     // In the feed, off the hover the last walk left; after the world drive only so

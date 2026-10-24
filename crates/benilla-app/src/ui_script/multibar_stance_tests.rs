@@ -911,6 +911,7 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
 fn a_bar_toggle_sends_the_byte_its_globals_pack_to() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s, &[]);
     let _ = s.take_action_bar_toggle_sends();

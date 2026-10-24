@@ -98,6 +98,7 @@ fn drawn(s: &mut UiScript, needle: &str) -> bool {
 /// Everything the window needs to open on `"target"`, in range.
 fn armed() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `PLAYER_LEVEL`, the template the stock level line formats through.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");

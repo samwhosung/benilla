@@ -186,14 +186,6 @@ impl Plugin for UiUnitPlugin {
                 .before(UnitSnapshots)
                 .before(crate::ui_aura::AuraEvents),
         )
-        .add_systems(
-            Update,
-            drain_worn_display_toggles.in_set(crate::ui_script::UiDrain),
-        )
-        .add_systems(
-            Update,
-            drain_action_bar_toggles.in_set(crate::ui_script::UiDrain),
-        )
         .add_systems(Update, feed_default_language.in_set(UnitFeed))
         .add_systems(Update, feed_known_languages.in_set(UnitFeed))
         // `load_exhaustion_rows` pushes into the VM, so it runs per VM; the rest are one-shots.
@@ -1177,41 +1169,22 @@ impl PvpSteps<'_> {
     }
 }
 
-/// Drain the `ShowHelm`/`ShowCloak` flips into `CMSG_TOGGLE_HELM`/`CMSG_TOGGLE_CLOAK`; the VM,
-/// which alone knows what the Options row did, has already decided each is needed.
-fn drain_worn_display_toggles(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for which in script.take_worn_display_toggles() {
-            let _ = commands.0.send(match which {
-                WornDisplay::Helm => crate::net::ClientCommand::ToggleHelm,
-                WornDisplay::Cloak => crate::net::ClientCommand::ToggleCloak,
-            });
-        }
-    })
+/// `ShowHelm` and `ShowCloak` past the VM's belief, inside their calls
+/// ([`benilla_ui::script::ScriptCall::WornDisplay`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct WornDisplaySteps<'w> {
+    net: Res<'w, NetCommands>,
 }
 
-/// Drain `SetActionBarToggles` into `CMSG_SET_ACTIONBAR_TOGGLES` (sent at `0x4e771d`), one packet
-/// per call: the reference binding neither checks for a change nor coalesces.
-fn drain_action_bar_toggles(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for toggles in script.take_action_bar_toggle_sends() {
-            let _ = commands
-                .0
-                .send(crate::net::ClientCommand::SetActionBarToggles { toggles });
-        }
-    })
+impl WornDisplaySteps<'_> {
+    /// The flip's bodiless packet (`0x5ee6e3`, `push 0x2b9`, and its cloak twin): the VM, which
+    /// alone knows what the Options row did, has already decided it is needed.
+    pub(crate) fn flip(&self, which: WornDisplay) {
+        let _ = self.net.0.send(match which {
+            WornDisplay::Helm => crate::net::ClientCommand::ToggleHelm,
+            WornDisplay::Cloak => crate::net::ClientCommand::ToggleCloak,
+        });
+    }
 }
 
 /// Inside a rest area (vmangos `Player.h:320`), the bit `IsResting` (`0x516ea0`) tests.

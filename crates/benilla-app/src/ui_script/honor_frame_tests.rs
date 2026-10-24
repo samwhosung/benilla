@@ -345,6 +345,7 @@ fn inspect_reply() -> InspectHonorData {
 /// The inspect window on its Honor tab, over a rank-12 Alliance target, [`inspect_reply`] held.
 fn shown_inspect_honor_page() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",

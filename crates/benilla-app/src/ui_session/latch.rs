@@ -16,9 +16,9 @@
 //! caused it; a window's feed fires its opens and updates and starts over from closed after each
 //! core run ([`LatchCloses`]). A handler that calls its window's close verb, as stock
 //! `HideUIPanel` → `OnHide` does, re-enters that core in the reference before the fire returns;
-//! a close verb whose core runs inside its call does so through the host ([`LatchSteps`]), and
-//! [`fire`] runs a latch-driven one before going on, as a core that fires before it clears its
-//! cell (trainer, bank, auction) is re-entered with the cell still set.
+//! every close verb runs its core inside its call, through the host ([`LatchSteps`]), so a core
+//! that fires before it clears its cell (trainer, bank, auction) is re-entered with the cell still
+//! set.
 //!
 //! The NPC's voice rides the same two calls ([`LatchVocal`]): `0x4930d0` greets a different
 //! non-player unit it latches, and `0x4931c0` says goodbye to the unit it releases, unless its
@@ -97,18 +97,11 @@ pub(crate) enum LatchVocal {
     Goodbye(u64),
 }
 
-/// How deep [`fire`]'s answers to close verbs may nest. The reference recurses without bound, so
-/// a handler that calls its own close verb on every fire overflows its stack; three levels cover
-/// every stock route.
-const MAX_REENTRY: u32 = 8;
-
 /// The interaction latch, `[0xb4e2d0]`: the guid the open NPC window registered, until a close
 /// core releases it. A UI shutdown leaves it to the leave-world sweep; a disconnect clears it.
 #[derive(Resource, Default)]
 pub(crate) struct InteractLatch {
     guid: Option<u64>,
-    /// [`fire`]'s nesting, against a handler that re-closes forever.
-    depth: u32,
     /// The guids [`LatchSteps::release`] released inside a call, for the world's check after it
     /// ([`check_call_releases`]).
     #[cfg(debug_assertions)]
@@ -209,19 +202,14 @@ impl LatchSteps<'_> {
     }
 }
 
-/// A window on the latch: its cell, its close core as `0x493310` calls it, and its Lua close
-/// verb.
+/// A window on the latch: its cell, and its close core as `0x493310` calls it. Its Lua close verb
+/// runs the core inside its call ([`LatchSteps`]).
 pub(crate) trait LatchedWindow: Resource + Sized {
     const WINDOW: NpcWindow;
     /// The guid in the window's cell; `None` when it is closed.
     fn cell(&self) -> Option<u64>;
     /// The close core as `0x493310` enters it.
     fn dispatched(world: &mut World);
-    /// Take the window's Lua close verb, if a handler called it and the verb left the core for
-    /// the latch; a close verb whose core runs inside its call ([`LatchSteps`]) leaves none.
-    fn take_close_verb(_script: &mut UiScript) -> bool {
-        false
-    }
 }
 
 /// One registered window, type-erased for the dispatcher.
@@ -230,7 +218,6 @@ struct Entry {
     window: NpcWindow,
     cell: fn(&World) -> Option<u64>,
     dispatched: fn(&mut World),
-    take_close_verb: fn(&mut UiScript) -> bool,
 }
 
 /// The windows on the latch, in `0x493310`'s order.
@@ -256,7 +243,6 @@ impl LatchApp for App {
                 window: T::WINDOW,
                 cell: |world| world.get_resource::<T>().and_then(T::cell),
                 dispatched: T::dispatched,
-                take_close_verb: T::take_close_verb,
             });
             windows.0.sort_by_key(|e| e.window);
         }
@@ -404,30 +390,10 @@ pub(crate) fn with_script(world: &mut World, f: impl FnOnce(&mut UiScript)) {
     });
 }
 
-/// A core's event: `f` fires it into the VM with the host lent, so a handler's script calls apply
-/// inside their verbs; then every close verb its handlers called runs, in `0x493310`'s order, as
-/// the reference's verb would have inside the fire. With no VM there is no handler to call one.
+/// A core's event: `f` fires it into the VM with the host lent, so a handler's script calls,
+/// close verbs among them, apply inside their verbs. With no VM there is no handler.
 pub(crate) fn fire(world: &mut World, f: impl FnOnce(&mut UiScript)) {
-    let fired = crate::script_calls::with_hosted_vm(world, |script| script.map(f).is_some());
-    if !fired {
-        return;
-    }
-    let depth = {
-        let mut latch = world.get_resource_or_init::<InteractLatch>();
-        latch.depth += 1;
-        latch.depth
-    };
-    if depth <= MAX_REENTRY {
-        for e in entries(world) {
-            let called = world
-                .get_non_send_resource_mut::<UiScript>()
-                .is_some_and(|mut s| (e.take_close_verb)(&mut s));
-            if called {
-                (e.dispatched)(world);
-            }
-        }
-    }
-    world.resource_mut::<InteractLatch>().depth -= 1;
+    with_script(world, f);
 }
 
 /// Queue `f` to run on the world at the next command flush: how a system reaches a core.

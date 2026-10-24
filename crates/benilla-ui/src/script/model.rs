@@ -416,9 +416,6 @@ pub(crate) struct Model {
     pub(crate) unit_auras: HashMap<u64, super::UnitAuraList>,
     /// The unit-token resolver's inputs (`0x515970`), which the aura bindings resolve through.
     pub(crate) unit_guids: super::UnitGuids,
-    /// Spell ids the cancel verbs queued (`CancelPlayerBuff`, `CancelTrackingBuff`, …), one
-    /// `CMSG_CANCEL_AURA` each.
-    pub(crate) cancel_aura_requests: Vec<u32>,
     /// The player's active tracking aura, behind `GetTrackingTexture`.
     pub(crate) tracking: Option<super::aura::TrackingState>,
     /// What waits for the host, in the order made: the calls that touch the selection, the cast
@@ -539,8 +536,6 @@ pub(crate) struct Model {
     pub(crate) honor: Option<pvp::HonorState>,
     /// The last `MSG_INSPECT_HONOR_STATS` reply; its presence is `HasInspectHonorData`'s answer.
     pub(crate) inspect_honor: Option<pvp::InspectHonorData>,
-    /// `RequestInspectHonorData` calls; the pending gate keeps this at 0 or 1.
-    pub(crate) inspect_honor_requests: u32,
     /// An inspect-honor query is out (`0xb71fcc`); `RequestInspectHonorData` (`0x4c80a0`) refuses
     /// while set. Cleared by a reply (`0x4c6f4c`) or by the app clearing the slot (`0x4c6f9d`).
     pub(crate) inspect_honor_pending: bool,
@@ -549,14 +544,10 @@ pub(crate) struct Model {
     pub(crate) helm_shown: bool,
     /// `ShowingCloak()`, the same for `HIDE_CLOAK`.
     pub(crate) cloak_shown: bool,
-    /// Flips from `ShowHelm`/`ShowCloak`, one `CMSG_TOGGLE_HELM`/`CMSG_TOGGLE_CLOAK` each.
-    pub(crate) worn_display_toggles: Vec<super::worn_display::WornDisplay>,
 
     /// `PLAYER_FIELD_BYTES` byte 2 (descriptor `+0x102a`), which extra action bars are on. Only
     /// the server moves it, as in the reference: `SetActionBarToggles` leaves it a round trip late.
     pub(crate) action_bar_toggles: Option<u8>,
-    /// One `CMSG_SET_ACTIONBAR_TOGGLES` payload per `SetActionBarToggles` call, ungated.
-    pub(crate) action_bar_toggle_sends: Vec<u8>,
 
     /// `PlaySound` and `PlaySoundFile` calls queued.
     pub(crate) sound_queue: Vec<SoundRequest>,
@@ -621,9 +612,6 @@ pub(crate) struct Model {
     /// Per action, its usable, range, current and cooldown state; an absent one reads cold.
     pub(crate) action_states: HashMap<u32, super::action::StoredActionState>,
     pub(crate) bonus_bar_offset: u8,
-    /// `(action id, packed)` per slot `PickupAction`/`PlaceAction` changed, 0 clearing it: one
-    /// `CMSG_SET_ACTION_BUTTON` each, so a drag swap is two sends.
-    pub(crate) action_sets: Vec<(u32, u32)>,
     /// GlobalStrings keys of refusals this crate raises, fired by the app as `UI_ERROR_MESSAGE`
     /// (the reference's `DisplayError` `0x496720`), each a literal from `0xb4b498` (stride `0x14`).
     pub(crate) ui_errors: Vec<(&'static str, super::InputEvents)>,
@@ -668,8 +656,6 @@ pub(crate) struct Model {
     /// `CheckTalentMasterDist()`: the respec question is live and in range; false hides its dialog.
     pub(crate) talent_master_pending: bool,
     // ── The dialog engine's verbs (`0x48dca0` is the first below) ──
-    /// `ConfirmPetUnlearn()` calls; the app holds the trainer and the money gate.
-    pub(crate) pet_unlearn_confirms: u32,
     /// `CheckPetUntrainerDist()`: the pet trainer's question is pending and in reach.
     pub(crate) pet_untrainer_pending: bool,
     /// `GetInstanceBootTimeRemaining()` in whole seconds, from the `SMSG_RAID_GROUP_ONLY` deadline.
@@ -882,8 +868,6 @@ pub(crate) struct Model {
     pub(crate) craft: Option<craft::CraftState>,
     /// The window is open (`[0xbdcfb8]`), which a close alone zeroes (`0x4f5fe0`).
     pub(crate) craft_open: bool,
-    /// `DoCraft` spell ids; no count, as the 1.12 CraftFrame has no Create All.
-    pub(crate) craft_dos: Vec<u32>,
     /// The selected spell id (`0xbdcfbc`), 0 for none, which a header or an index past the rows
     /// stores (`0x4f6050`); the index answers by finding its row (`0x4f6080`).
     pub(crate) craft_selection: u32,
@@ -906,10 +890,8 @@ pub(crate) struct Model {
     /// The open group-loot rolls.
     pub(crate) loot_rolls: loot_roll::LootRollsState,
 
-    /// The item-text reader: the pushed page, then the close and page-turn calls.
+    /// The item-text reader: the pushed page.
     pub(crate) item_text: Option<item_text::ItemTextState>,
-    pub(crate) item_text_close: bool,
-    pub(crate) item_text_page_turns: Vec<i32>,
     /// The inbox, rows 1-based.
     pub(crate) mail: Option<mail::MailState>,
     /// `CheckInbox`'s throttle `[0xb6efc4]`, on the `GetTime` clock: the list query 60 s ago
@@ -1131,10 +1113,6 @@ pub(crate) struct Model {
     /// slots 1..=19 as the doll numbers them: the slot getters' other-unit leg (`0x4c8420` →
     /// `0x5f0d60`).
     pub(crate) visible_equipment: HashMap<u64, char_stats::InventorySlots>,
-    /// `NotifyInspect` unit tokens, sent as `CMSG_INSPECT`.
-    pub(crate) inspect_notifies: Vec<String>,
-    /// `ClearInspectPlayer` ran; the app drops its inspect target.
-    pub(crate) inspect_clear: bool,
     /// `DressUpModel` `SetUnit`, `Dress`, `Undress` and `TryOn` calls, applied in call order.
     pub(crate) dressup_intents: Vec<super::dressup::DressUpIntent>,
     /// Tabard designs per `TabardModel`, the app's preview five, the host facts and queued calls.
@@ -1168,8 +1146,6 @@ pub(crate) struct Model {
     pub(crate) skills_pending: HashMap<u32, u32>,
     /// `SkillTiers.dbc`: tier id to its sixteen step costs.
     pub(crate) skill_tiers: HashMap<u32, [u32; 16]>,
-    /// Sends the lottery and GM survey verbs queued, for the app to put on the wire.
-    pub(crate) unserved_sends: Vec<super::lottery::UnservedSend>,
     /// The GM survey's tables and answer buffer.
     pub(crate) gm_survey: super::gm_survey::SurveyState,
 
@@ -1223,9 +1199,6 @@ pub(crate) struct Model {
     /// The minimap's process-wide statics (zoom cells, indoor byte, mask), shared by every
     /// Minimap frame of this VM.
     pub(crate) minimap: crate::widget::MinimapStatics,
-    /// The world points our own `Minimap:PingLocation` calls pinged, for the host's wire send
-    /// (`0x1d5`, `0x4eef72`) and its process-wide copy of the ping.
-    pub(crate) minimap_pings_sent: Vec<(f32, f32)>,
     /// `OpeningCinematic()` calls, one empty `CMSG_OPENING_CINEMATIC` each.
     pub(crate) opening_cinematic_asks: u32,
     /// `Screenshot()` calls, one capture each.
@@ -1240,10 +1213,6 @@ pub(crate) struct Model {
     pub(crate) bind_location: String,
     /// `GMTicketCategory.dbc` `(id, name)` rows in file order; the ids are wire values.
     pub(crate) gm_ticket_categories: Vec<(u32, String)>,
-    /// GM ticket calls in call order, so a delete then a get reach the wire in that order.
-    pub(crate) gm_ticket_intents: Vec<super::gm_ticket::GmTicketIntent>,
-    /// `Stuck()` calls, each a cast of spell 7355, the Help window's Auto-Unstuck.
-    pub(crate) stuck_casts: u32,
     /// `CheckBinderDist()`: the innkeeper's question is live and in range; false hides its dialog.
     pub(crate) binder_pending: bool,
     /// The summon getters' answers, defaulting to the reference's `""`, `""`, 0 with none pending.
@@ -1490,7 +1459,6 @@ impl Model {
             player_auras: Vec::new(),
             unit_auras: HashMap::new(),
             unit_guids: Default::default(),
-            cancel_aura_requests: Vec::new(),
             tracking: None,
             script_calls: Vec::new(),
             parked: HashMap::new(),
@@ -1547,13 +1515,10 @@ impl Model {
             player_login_armed: false,
             honor: None,
             inspect_honor: None,
-            inspect_honor_requests: 0,
             inspect_honor_pending: false,
             helm_shown: true,
             cloak_shown: true,
-            worn_display_toggles: Vec::new(),
             action_bar_toggles: None,
-            action_bar_toggle_sends: Vec::new(),
             sound_queue: Vec::new(),
             music_queue: Vec::new(),
             sound_suppression: 0,
@@ -1577,7 +1542,6 @@ impl Model {
             actions: HashMap::new(),
             action_states: HashMap::new(),
             bonus_bar_offset: 0,
-            action_sets: Vec::new(),
             ui_errors: Vec::new(),
             spellbook: spellbook::SpellBookState::default(),
             pet_book: spellbook::PetBookState::default(),
@@ -1595,7 +1559,6 @@ impl Model {
             spell_targetable_units: HashSet::new(),
             talents: super::talent::TalentUiState::default(),
             talent_master_pending: false,
-            pet_unlearn_confirms: 0,
             pet_untrainer_pending: false,
             instance_boot_secs: 0,
             area_spirit_secs: 0,
@@ -1679,7 +1642,6 @@ impl Model {
             trade_skill_repeat_count: 0,
             craft: None,
             craft_open: false,
-            craft_dos: Vec::new(),
             craft_selection: 0,
             craft_rows: Vec::new(),
             craft_visible: 0,
@@ -1689,8 +1651,6 @@ impl Model {
             loot_type: 0,
             loot_rolls: loot_roll::LootRollsState::default(),
             item_text: None,
-            item_text_close: false,
-            item_text_page_turns: Vec::new(),
             mail: None,
             mail_list_stamp: None,
             mail_busy: false,
@@ -1767,15 +1727,12 @@ impl Model {
             item_locks: std::collections::HashSet::new(),
             cursor_pos: (0.0, 0.0),
             minimap: crate::widget::MinimapStatics::default(),
-            minimap_pings_sent: Vec::new(),
             opening_cinematic_asks: 0,
             screenshot_asks: 0,
             realm_name: String::new(),
             player_record: super::PlayerRecord::default(),
             bind_location: String::new(),
             gm_ticket_categories: Vec::new(),
-            gm_ticket_intents: Vec::new(),
-            stuck_casts: 0,
             binder_pending: false,
             summon_confirm: super::summon::SummonConfirmUiState::default(),
             summon_summoner_lookups: 0,
@@ -1811,8 +1768,6 @@ impl Model {
             inventory_alerts: [0; 12],
             weapon_enchants: [None; 2],
             visible_equipment: HashMap::new(),
-            inspect_notifies: Vec::new(),
-            inspect_clear: false,
             dressup_intents: Vec::new(),
             tabard_designs: HashMap::new(),
             tabard_preview: None,
@@ -1830,7 +1785,6 @@ impl Model {
             skills_built: false,
             skills_pending: HashMap::new(),
             skill_tiers: HashMap::new(),
-            unserved_sends: Vec::new(),
             gm_survey: Default::default(),
             reputation: reputation::ReputationState::default(),
             reputation_rows: Vec::new(),

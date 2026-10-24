@@ -7,17 +7,17 @@
 //! The reference's getters push a number and then return 0 (`xor eax,eax`), so Lua receives no
 //! value from them (`tables/bindings.tsv` flags them `stack-leak`); that is kept.
 //!
-//! The three senders (`GetLastLotteryNumbers`, `BuyRandomPicks`, `SubmitNumbers`) queue the send
-//! the reference makes ([`UnservedSend`]) for the app to put on the wire: opcodes `0x334` and
-//! `0x336`. Their bodies are the instructions' own (`0x4c4220`, `0x4c4290`, `0x4c4400`).
+//! The three senders (`GetLastLotteryNumbers`, `BuyRandomPicks`, `SubmitNumbers`) hand the send
+//! the reference makes ([`UnservedSend`]) to the host, which puts it on the wire inside the call:
+//! opcodes `0x334` and `0x336`. Their bodies are the instructions' own (`0x4c4220`, `0x4c4290`, `0x4c4400`).
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 
 use super::binding_abi::{coerced_number, ftol, number_arg};
 use super::item_stats::MISSING_ITEM_ICON;
-use super::Model;
 
-/// A send made by a verb of a system no 1.12 server runs, drained by the app in call order.
+/// A send made by a verb of a system no 1.12 server runs, sent inside its call
+/// ([`super::ScriptCall::Unserved`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UnservedSend {
     /// `CMSG_LOTTERY_QUERY_OBSOLETE`: `GetLastLotteryNumbers`.
@@ -37,18 +37,18 @@ pub enum UnservedSend {
 }
 
 impl super::UiScript {
-    /// Drain the sends queued since the last call.
+    /// The sends a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_unserved_sends(&mut self) -> Vec<UnservedSend> {
-        std::mem::take(&mut self.model_mut().unserved_sends)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::Unserved(send) => Some(send.clone()),
+            _ => None,
+        })
     }
 }
 
-/// Queue a send from a binding.
-pub(super) fn queue(lua: &Lua, send: UnservedSend) {
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
-        .unserved_sends
-        .push(send);
+/// A binding's send, handed to the host, which makes it before this returns.
+pub(super) fn queue(lua: &Lua, send: UnservedSend) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Unserved(send))
 }
 
 /// `GetPrizeItemInfo`'s error (`0x848318`), raised for a prize the window holds no record of.
@@ -79,10 +79,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetLastLotteryNumbers (`0x4c4220`): sends opcode `0x334` with no body.
     g.set(
         "GetLastLotteryNumbers",
-        lua.create_function(|lua, ()| {
-            queue(lua, UnservedSend::LotteryQuery);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| queue(lua, UnservedSend::LotteryQuery))?,
     )?;
 
     // SubmitNumbers(a, b, c, d) (`0x4c4290`): no argument gate, each read by `lua_tonumber` and
@@ -100,7 +97,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         first: 0,
                         second: mask,
                     },
-                );
+                )?;
                 return Ok(MultiValue::new());
             }
             let top = match args.last() {
@@ -127,8 +124,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         first: n as u32,
                         second: 0,
                     },
-                );
-                Ok(())
+                )
             } else {
                 Err(mlua::Error::runtime("Invalid number of randompicks"))
             }
@@ -253,7 +249,8 @@ mod tests {
     /// stack it pushed nothing to: the last argument it was given.
     #[test]
     fn submit_numbers_hands_back_the_last_argument_when_the_picks_are_bad() {
-        let s = UiScript::new().unwrap();
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.arity("SubmitNumbers(1, 2, 3, 4)").unwrap(), 0);
         assert_eq!(s.arity("SubmitNumbers('1', '2', 3.9, 31)").unwrap(), 0);
         // A repeat: the fourth argument comes back, as itself.
@@ -291,7 +288,8 @@ mod tests {
 
     #[test]
     fn buy_random_picks_takes_one_to_ten_and_reads_no_type() {
-        let s = UiScript::new().unwrap();
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         for ok in ["1", "10", "'5'", "9.9"] {
             assert_eq!(
                 s.arity(&format!("BuyRandomPicks({ok})")).unwrap(),
@@ -313,7 +311,8 @@ mod tests {
     /// reference's pushing getters return no value at all.
     #[test]
     fn the_empty_lottery_answers_its_first_slot_and_errors_elsewhere() {
-        let s = UiScript::new().unwrap();
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let (name, icon, count, quality, usable): (String, String, i64, i64, i64) =
             s.eval("return GetLotteryPrizeInfo(1)").unwrap();
         assert_eq!(
@@ -395,6 +394,7 @@ mod tests {
     #[test]
     fn the_senders_queue_one_send_each_and_the_refused_none() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("GetLastLotteryNumbers()").unwrap();
         assert_eq!(s.take_unserved_sends(), [UnservedSend::LotteryQuery]);
         s.run("BuyRandomPicks(7)").unwrap();

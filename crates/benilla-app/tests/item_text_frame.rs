@@ -164,6 +164,7 @@ fn the_scrollbar_track_sits_right_of_the_page() {
 fn a_book_page_shows_the_paging_chrome() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_item_text(Some(ItemTextState {
         item: "Lament of the Highborne".into(),
@@ -196,12 +197,13 @@ fn a_book_page_shows_the_paging_chrome() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The X hides the panel and its OnHide queues `CloseItemText`; the app then clears the session
-/// and fires `ITEM_TEXT_CLOSED`, which hides again harmlessly.
+/// The X hides the panel and its OnHide calls `CloseItemText`, whose core clears the session and
+/// fires `ITEM_TEXT_CLOSED`, which hides again harmlessly.
 #[test]
 fn closing_queues_the_close_intent() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_item_text(Some(letter()));
     s.fire_event("ITEM_TEXT_BEGIN", vec![]);
@@ -210,7 +212,7 @@ fn closing_queues_the_close_intent() {
 
     s.run("ItemTextCloseButton:Click()").unwrap();
     assert!(!s.eval::<bool>("return ItemTextFrame:IsShown()").unwrap());
-    assert!(s.take_item_text_close(), "OnHide queued the close intent");
+    assert!(s.take_item_text_close(), "OnHide called the close");
 
     s.set_item_text(None);
     s.fire_event("ITEM_TEXT_CLOSED", vec![]);

@@ -212,8 +212,8 @@ pub(crate) mod xml_layout;
 mod zone_text;
 
 pub use action::{
-    macro_slot_id, macro_slot_word, ActionSlot, ActionState, ActionUse, CastView, OpenProfessions,
-    Profession,
+    macro_slot_id, macro_slot_word, ActionBarCall, ActionSlot, ActionState, ActionUse, CastView,
+    OpenProfessions, Profession,
 };
 pub use addon::{addon_load_context, AddOnInfo, AddonLoad, AddonReply, AddonSecurity};
 pub use addon_enable::{AddonStateFiles, EnableHash, EnableStore};
@@ -224,7 +224,7 @@ pub use auction::{
     AuctionStartRequest, AuctionState, AuctionSubCategory, BidVerdict, BIDDER, LIST, OWNER,
     SORT_KEYS,
 };
-pub use aura::{AuraState, TrackingState, UnitAuraList};
+pub use aura::{AuraCall, AuraState, TrackingState, UnitAuraList};
 pub use backdrop::{Backdrop, Insets};
 pub use bank::{BankCall, BankState};
 pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
@@ -288,14 +288,14 @@ pub use dressup::DressUpIntent;
 pub use duel::DuelRequest;
 pub use follow::FollowRequest;
 pub use gm_survey::{GmSurveyTables, SurveyAnswerSend};
-pub use gm_ticket::{GmTicketIntent, GmTicketWrite};
+pub use gm_ticket::{GmTicketCall, GmTicketIntent, GmTicketWrite};
 pub use gossip::{GossipCall, GossipMenu, GossipOptionView, GossipQuestRow};
 pub use guild::{
     GuildCall, GuildCells, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline,
     UnitGuild, MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
 pub use host::{CallHost, CallTail, Deferring};
-pub use input_verbs::{BindingInput, FiredInput, HeldInput, LookCall, ViewAxis};
+pub use input_verbs::{BindingInput, FiredInput, HeldInput, LookCall, PostureCall, ViewAxis};
 pub use item_calls::ItemCall;
 pub use lfg::LfgDungeon;
 pub use lottery::UnservedSend;
@@ -314,13 +314,13 @@ pub use worldmap_arrow::ARROW_MODEL;
 
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
 pub(crate) use font_block::{face_loads, own_font_lua, SAME_FONT_HEIGHT};
-pub use inspect::UnitReach;
+pub use inspect::{InspectCall, UnitReach};
 pub use instance::InstanceCall;
 pub use item_stats::{
     item_usable, ItemRecipe, ItemSetView, ItemSpellLine, ItemTemplateView, PlayerReqState,
     TaughtSpell,
 };
-pub use item_text::ItemTextState;
+pub use item_text::{ItemTextCall, ItemTextState};
 pub use layout_cache::{AnchorLayout, FrameLayout, LayoutPoint};
 pub use lock_check::{check_lock, LockCheck, LockOpener, LockOpeners, LockSlotView};
 pub use loot::{LootCall, LootRow, LootState, LOOT_PORTRAIT_UNIT};
@@ -337,8 +337,9 @@ pub use measure::TextMeasure;
 pub use merchant::{ItemStatsHead, MerchantCall, MerchantItem, MerchantState, RepairCosts};
 pub(crate) use minimap::apply_model_attrs as apply_minimap_model_attrs;
 pub use minimap::{
-    MinimapRimArrow, CORPSE_ARROW as MINIMAP_CORPSE_ARROW, GROUP_ARROW as MINIMAP_GROUP_ARROW,
-    GUIDE_ARROW as MINIMAP_GUIDE_ARROW, LANDMARK_ARROW as MINIMAP_LANDMARK_ARROW,
+    MinimapCall, MinimapRimArrow, CORPSE_ARROW as MINIMAP_CORPSE_ARROW,
+    GROUP_ARROW as MINIMAP_GROUP_ARROW, GUIDE_ARROW as MINIMAP_GUIDE_ARROW,
+    LANDMARK_ARROW as MINIMAP_LANDMARK_ARROW,
 };
 pub(crate) use model::Model;
 pub use model::{
@@ -1086,9 +1087,13 @@ impl UiScript {
         }
     }
 
-    /// Drain the world points our own `Minimap:PingLocation` pinged since the last call.
+    /// The world points our own `Minimap:PingLocation` calls pinged, which a harness's VM kept
+    /// ([`Self::keep_calls`]).
     pub fn take_minimap_pings_sent(&mut self) -> Vec<(f32, f32)> {
-        std::mem::take(&mut self.model_mut().minimap_pings_sent)
+        self.take_calls_where(|c| match c {
+            ScriptCall::Minimap(MinimapCall::Ping { x, y }) => Some((*x, *y)),
+            _ => None,
+        })
     }
 
     /// What this VM's texture setter for `slot` last stored, with the call's stamp; `None` while

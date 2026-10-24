@@ -252,11 +252,29 @@ impl super::UiScript {
             .unwrap_or_default()
     }
 
-    /// Drain the queued cancels, one `CMSG_CANCEL_AURA` per spell id: the server cancels by spell,
-    /// never by slot.
+    /// The cancels a harness's VM kept ([`Self::keep_calls`]), one `CMSG_CANCEL_AURA` per spell
+    /// id: the server cancels by spell, never by slot.
     pub fn take_cancel_aura_requests(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().cancel_aura_requests)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::Aura(AuraCall::Cancel(spell_id)) => Some(*spell_id),
+            _ => None,
+        })
     }
+}
+
+/// An aura verb the host applies inside its call ([`super::ScriptCall::Aura`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuraCall {
+    /// `0x6e7040(spell)`, the cancel `CancelPlayerBuff`, `CancelTrackingBuff` and
+    /// `CancelAreaSpiritHeal` run: for the active player its precast of the spell ended and the
+    /// spell's kits reaped (`0x6e7075`, `0x6e707e`), then `AREA_SPIRIT_HEALER_OUT_OF_RANGE` for
+    /// spell 2584 (`0x6e70c3`) and `CMSG_CANCEL_AURA` (`0x6e70eb`).
+    Cancel(u32),
+}
+
+/// Hand the cancel of `spell_id` to the host, which runs it before this returns.
+pub(crate) fn cancel_aura(lua: &Lua, spell_id: u32) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Aura(AuraCall::Cancel(spell_id)))
 }
 
 /// Register the aura and tracking globals, the `GetPlayerBuff` family from [`player_buff`].
@@ -308,17 +326,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CancelTrackingBuff() (`0x4e4a80`), the tracking frame's right-click: queues the tracking
-    // spell's id behind its `AFLAG_CANCELABLE`; with no tracking it is a no-op.
+    // CancelTrackingBuff() (`0x4e4a80`), the tracking frame's right-click: cancels the tracking
+    // spell behind its `AFLAG_CANCELABLE`, inside the call; with no tracking it is a no-op.
     g.set(
         "CancelTrackingBuff",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(t) = model.tracking.as_ref().filter(|t| t.cancelable) {
-                let id = t.spell_id;
-                model.cancel_aura_requests.push(id);
+            let tracked = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .tracking
+                    .as_ref()
+                    .filter(|t| t.cancelable)
+                    .map(|t| t.spell_id)
+            };
+            match tracked {
+                Some(id) => cancel_aura(lua, id),
+                None => Ok(()),
             }
-            Ok(())
         })?,
     )?;
 
@@ -335,6 +359,7 @@ mod tests {
     /// A VM whose resolver names us as `player` and `TARGET` as `target`.
     fn script() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_unit_guids(&UnitGuids {
             player: ME,
             target: TARGET,
@@ -520,6 +545,7 @@ mod tests {
     /// its own: `base + 1` and `base + 2`.
     fn group_script() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         crate::script::tests::common::load_tooltip_template(&s);
         s.set_unit_guids(&UnitGuids {
             player: ME,

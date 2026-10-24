@@ -205,6 +205,7 @@ fn the_layout_cache_rounds_the_getter_steps() {
 #[test]
 fn ping_location_divides_the_stored_offsets() {
     let mut s = vm();
+    s.keep_calls();
     s.run(r#"m = CreateFrame("Minimap", "Pinged") m:SetWidth(140) m:SetHeight(100)"#)
         .unwrap();
     s.set_minimap_player(Some((100.0, 200.0)));

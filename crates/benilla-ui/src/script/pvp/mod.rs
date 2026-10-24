@@ -122,11 +122,11 @@ impl super::UiScript {
         model.inspect_honor_pending = false;
     }
 
-    /// Drain the queued `RequestInspectHonorData` calls, each a `MSG_INSPECT_HONOR_STATS` send for
-    /// the app's inspect target. At most 1: the `pending` latch (`0x4c80b6`) refuses another until
-    /// [`Self::set_inspect_honor`] resolves the first.
+    /// The `RequestInspectHonorData` calls a harness's VM kept ([`Self::keep_calls`]), each a
+    /// `MSG_INSPECT_HONOR_STATS` send for the app's inspect target. At most 1: the `pending` latch
+    /// (`0x4c80b6`) refuses another until [`Self::set_inspect_honor`] resolves the first.
     pub fn take_inspect_honor_requests(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().inspect_honor_requests)
+        self.take_calls_like(&super::ScriptCall::Inspect(super::InspectCall::Honor)) as u32
     }
 
     /// A rank's localized title for the app's `SMSG_PVP_CREDIT` chat line, `None` if missing or
@@ -548,7 +548,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // RequestInspectHonorData(): `InspectHonorFrame_OnShow` calls it while
     // `HasInspectHonorData()` is false; the app sends `MSG_INSPECT_HONOR_STATS` for its inspect
-    // target. Zero return values (`0x4c9610`).
+    // target, inside the call. Zero return values (`0x4c9610`).
     //
     // `0x4c80a0` bails silently if data is held (`0x4c80a6`), if a query is in flight (`pending`,
     // `0x4c80b6`, `[0xb71fcc]`) or if the target guid is 0 (`0x4c80c2`). The first two are here;
@@ -562,9 +562,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if model.inspect_honor.is_some() || model.inspect_honor_pending {
                 return Ok(());
             }
-            model.inspect_honor_requests += 1;
             model.inspect_honor_pending = true;
-            Ok(())
+            drop(model);
+            super::calls::submit(lua, super::ScriptCall::Inspect(super::InspectCall::Honor))
         })?,
     )?;
 

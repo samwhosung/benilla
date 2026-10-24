@@ -797,6 +797,7 @@ mod tests {
 
     fn seeded() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_macro_icons(vec![
             "Interface\\Icons\\Ability_Ambush".into(),
             "Interface\\Icons\\Ability_BackStab".into(),
@@ -1172,6 +1173,7 @@ mod tests {
         icons: &'static [&'static str],
     ) -> (UiScript, std::rc::Rc<std::cell::Cell<u32>>) {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let runs = std::rc::Rc::new(std::cell::Cell::new(0));
         let counter = runs.clone();
         s.set_macro_icon_source(Box::new(move || {

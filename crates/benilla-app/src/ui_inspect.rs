@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{InvSlotView, InventorySlots};
+use benilla_ui::script::{InspectCall, InvSlotView, InventorySlots};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -212,46 +212,77 @@ impl VisibleItemTables<'_> {
     }
 }
 
+/// The inspect verbs inside their calls ([`benilla_ui::script::InspectCall`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct InspectSteps<'w> {
+    /// Absent in a harness without the inspect window.
+    target: Option<ResMut<'w, InspectTarget>>,
+    selection: Res<'w, crate::target::Selection>,
+    group: Res<'w, crate::ui_party::GroupState>,
+    net: Res<'w, NetCommands>,
+}
+
+impl InspectSteps<'_> {
+    /// `call` inside its verb.
+    pub(crate) fn apply(&mut self, call: InspectCall) {
+        match call {
+            // `0x5decc0`: `CMSG_INSPECT` for the unit's guid, then the token latched as the
+            // inspect target (`0x5ded10`, `0x5ded1c`).
+            InspectCall::Notify(token) => {
+                let Some(guid) =
+                    crate::ui_unit::player_token_guid(&token, &self.selection, &self.group)
+                else {
+                    debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
+                    return;
+                };
+                debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
+                let _ = self.net.0.send(ClientCommand::Inspect { target: guid });
+                if let Some(target) = self.target.as_deref_mut() {
+                    target.token = Some(token);
+                }
+            }
+            // `ClearInspectPlayer()`, from `InspectFrame_OnHide`.
+            InspectCall::Clear => {
+                if let Some(target) = self.target.as_deref_mut() {
+                    target.token = None;
+                }
+            }
+            // `RequestInspectHonorData()` asks about the inspected token's guid now
+            // (`0x4c8112`), so a re-target before the Honor tab opens asks about the new player.
+            InspectCall::Honor => match self.inspected() {
+                Some(guid) => {
+                    debug!("honor: inspect-honor request -> {guid:#x}");
+                    let _ = self
+                        .net
+                        .0
+                        .send(ClientCommand::InspectHonorStats { target: guid });
+                }
+                // Nothing to ask about; the pane asks again from its next `OnShow`.
+                None => debug!("honor: inspect-honor request with no resolvable target — not sent"),
+            },
+        }
+    }
+
+    /// The guid the inspect target's token names now.
+    fn inspected(&self) -> Option<u64> {
+        let token = self.target.as_deref()?.token.as_deref()?;
+        crate::ui_unit::player_token_guid(token, &self.selection, &self.group)
+    }
+}
+
 pub(crate) fn feed_inspect(
-    // What the host also reaches, read before the VM runs with the host lent.
-    mut hosted: crate::script_calls::disjoint::Pair<
-        Res<'static, crate::target::Selection>,
-        crate::script_calls::HostedVm<'static, 'static>,
-    >,
-    mut target: ResMut<InspectTarget>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut feed: ResMut<InspectFeedState>,
     tables: VisibleItemTables,
-    commands: Res<NetCommands>,
     index: Res<GuidIndex>,
     stores: Query<Ref<ObjectStore>>,
-    group: Res<crate::ui_party::GroupState>,
     me: Res<crate::net::SelfGuid>,
 ) {
-    let p = hosted.p0();
-    let selection = *p;
-    hosted.p1().run(|script| {
+    hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
         };
         let memo = feed.vm.get(script);
-
-        // `NotifyInspect(unit)`: send `CMSG_INSPECT` for the unit's guid and latch its token.
-        for token in script.take_inspect_notifies() {
-            match crate::ui_unit::player_token_guid(&token, &selection, &group) {
-                Some(guid) => {
-                    debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
-                    let _ = commands.0.send(ClientCommand::Inspect { target: guid });
-                    target.token = Some(token);
-                }
-                None => {
-                    debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
-                }
-            }
-        }
-        // `ClearInspectPlayer()`, from `InspectFrame_OnHide`.
-        if script.take_inspect_clear() {
-            target.token = None;
-        }
 
         let tables_moved = tables.moved(&mut memo.templates, &mut memo.names);
         // Every player a token can name, but the active one, whose own items the getters read.
@@ -337,6 +368,7 @@ mod tests {
                 .insert(guid, e);
         }
         let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script.set_unit_guids(&benilla_ui::script::UnitGuids {
             target: guids[0],
             party: [guids[1], 0, 0, 0],
@@ -382,10 +414,23 @@ mod tests {
                 .filter(|c| matches!(c, ClientCommand::ItemQuery { entry: 955, .. }))
                 .count()
         };
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run(r#"NotifyInspect("target")"#)
-            .unwrap();
+        let notified = {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.run(r#"NotifyInspect("target")"#).unwrap();
+            script.take_inspect_notifies()
+        };
+        // The call as the host applies it.
+        let mut steps = bevy::ecs::system::SystemState::<InspectSteps>::new(app.world_mut());
+        for token in notified {
+            steps
+                .get_mut(app.world_mut())
+                .apply(InspectCall::Notify(token));
+        }
+        assert!(
+            rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::Inspect { target: MATE })),
+            "the inspect went out"
+        );
         for _ in 0..10 {
             app.update();
         }

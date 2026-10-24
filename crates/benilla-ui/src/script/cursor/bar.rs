@@ -102,7 +102,7 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
         // the slot's action at call time (`0x4e74e0`), nil for an empty slot, so the handler
         // below must not read the lifted item's green border off the emptied slot.
         model.action_states.remove(&id);
-        model.action_sets.push((id, 0));
+        model.call_in_verb(set_slot(id, 0));
         raise_slot_changed(model, id);
     });
     Ok(true)
@@ -122,13 +122,19 @@ pub(crate) fn clear_macro_slots(model: &mut Model, macro_id: u32) {
     for id in held {
         model.actions.remove(&id);
         model.action_states.remove(&id);
-        model.action_sets.push((id, 0));
+        model.call_in_verb(set_slot(id, 0));
         raise_slot_changed(model, id);
     }
 }
 
+/// The slot write's send (`0x4e58e0`): the store's slot `id` set to `packed`, 0 clearing it, and
+/// `CMSG_SET_ACTION_BUTTON`, inside the call and ahead of the slot's signal.
+fn set_slot(id: u32, packed: u32) -> crate::script::ScriptCall {
+    crate::script::ScriptCall::ActionBar(crate::script::ActionBarCall::Set { id, packed })
+}
+
 /// The slot write's tail (`0x4e58e0`): `ACTIONBAR_SLOT_CHANGED` with the 1-based slot, signalled
-/// in place (`0x4e5998`) after the `CMSG_SET_ACTION_BUTTON` it queues.
+/// in place (`0x4e5998`) after the `CMSG_SET_ACTION_BUTTON` it sends.
 fn raise_slot_changed(model: &mut Model, id: u32) {
     model.raise(
         "ACTIONBAR_SLOT_CHANGED",
@@ -185,7 +191,7 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
                 model.action_states.remove(&id);
             }
         }
-        model.action_sets.push((id, pack(kind, action)));
+        model.call_in_verb(set_slot(id, pack(kind, action)));
         // Every arm writes through `0x4e684f` into `0x4e58e0`.
         raise_slot_changed(model, id);
     });
@@ -357,6 +363,7 @@ mod tests {
     #[test]
     fn pickup_action_empties_the_slot_and_queues_a_clear() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
 
         assert!(pickup_action(&s.lua, 1).unwrap());
@@ -379,6 +386,7 @@ mod tests {
     #[test]
     fn the_cursor_events_fire_before_the_slot_write() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
         s.set_action(2, Some(action_slot("Interface\\Icons\\Spell_B", 0x00, 222)));
         crate::script::tick::heard::listen(
@@ -419,6 +427,7 @@ mod tests {
     #[test]
     fn an_equipped_items_green_border_moves_with_it() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let worn = || {
             Some(ActionState {
                 equipped: true,
@@ -474,6 +483,7 @@ mod tests {
     #[test]
     fn pickup_action_on_an_empty_slot_is_a_no_op() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(!pickup_action(&s.lua, 5).unwrap());
         assert!(s.cursor_payload().is_none());
         assert!(s.take_action_sets().is_empty());
@@ -482,6 +492,7 @@ mod tests {
     #[test]
     fn place_action_onto_empty_writes_the_slot_and_clears_cursor() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Action(CursorAction {
             src_slot: 3,
             kind: 0x00,
@@ -506,6 +517,7 @@ mod tests {
     #[test]
     fn place_action_onto_occupied_hops_the_displaced_action() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
         s.set_action(2, Some(action_slot("Interface\\Icons\\Spell_B", 0x00, 222)));
 
@@ -531,6 +543,7 @@ mod tests {
     #[test]
     fn place_action_item_payload_packs_the_item_kind_and_leaves_the_bag_untouched() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
             item_class: None,
             guid: 0x114,
@@ -559,6 +572,7 @@ mod tests {
     #[test]
     fn place_action_spell_payload_packs_the_spell_kind() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
             spell_id: 133,
@@ -572,6 +586,7 @@ mod tests {
     #[test]
     fn place_action_with_an_empty_cursor_is_a_no_op() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
         assert!(!place_action(&s.lua, 1).unwrap());
         assert!(s.eval::<bool>("return HasAction(1)").unwrap(), "untouched");
@@ -581,6 +596,7 @@ mod tests {
     #[test]
     fn pickup_action_with_a_payload_held_falls_through_to_place() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Action(CursorAction {
             src_slot: 1,
             kind: 0x00,
@@ -601,6 +617,7 @@ mod tests {
     /// hop's inner clear hides it before the displaced action's setter shows it again.
     fn showgrid_hidegrid_fire_on_gain_and_loss_and_twice_on_a_hop() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
         s.set_action(2, Some(action_slot("Interface\\Icons\\Spell_B", 0x00, 222)));
         s.run(
@@ -636,6 +653,7 @@ mod tests {
     #[test]
     fn a_non_usable_non_equippable_item_is_refused_and_stays_held() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
             item_class: None,
             guid: 0x115,
@@ -668,6 +686,7 @@ mod tests {
     #[test]
     fn a_passive_spell_is_refused_with_the_refs_error_and_stays_held() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             spell_id: 674, // Dual Wield, a passive
             texture: Some("Interface\\Icons\\Ability_DualWield".into()),
@@ -692,6 +711,7 @@ mod tests {
     #[test]
     fn an_active_spell_places_without_an_error() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             spell_id: 133, // Fireball
             texture: Some("Interface\\Icons\\Spell_Fire_FlameBolt".into()),
@@ -706,6 +726,7 @@ mod tests {
     #[test]
     fn a_bag_is_placeable() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
             item_class: None,
             guid: 0x116,
@@ -734,6 +755,7 @@ mod tests {
     fn a_bar_pickup_and_a_hop_signal_as_their_setters() {
         let s = {
             let mut s = UiScript::new().unwrap();
+            s.keep_calls();
             s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
             s.set_action(2, Some(action_slot("Interface\\Icons\\INV_A", 0x80, 4540)));
             s
@@ -774,6 +796,7 @@ mod tests {
     #[test]
     fn bar_spells_and_macros_lift_with_their_setters() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
         s.run(r#"CreateMacro("Ambush", 1, "/cast Ambush")"#)
             .unwrap();
@@ -810,6 +833,7 @@ mod tests {
     #[test]
     fn pickup_action_lifts_over_a_payload_it_cannot_place() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_money(1_000);
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
         s.run("PickupPlayerMoney(10)").unwrap();
@@ -828,6 +852,7 @@ mod tests {
     #[test]
     fn placing_the_slots_own_action_clears_and_writes_nothing() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
         s.set_action(2, Some(action_slot("Interface\\Icons\\INV_A", 0x80, 4540)));
         s.run(r#"CreateMacro("Ambush", 1, "/cast Ambush")"#)
@@ -880,6 +905,7 @@ mod tests {
     #[test]
     fn a_place_over_a_dangling_macro_clears_the_cursor() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_action(
             3,
             Some(action_slot("Interface\\Icons\\Ability_Ambush", 0x40, 9)),
@@ -902,6 +928,7 @@ mod tests {
     #[test]
     fn a_spell_dropped_on_a_macro_or_item_casting_it_clears_the_cursor() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(r#"CreateMacro("Fire", 1, "/cast Fireball")"#)
             .unwrap();
         s.set_macro_bindings(std::collections::HashMap::from([(
@@ -944,6 +971,7 @@ mod tests {
     #[test]
     fn a_dropped_spell_writes_its_bar_face() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_spellbook(crate::script::SpellBookState {
             tabs: Vec::new(),
             slots: vec![crate::script::SpellSlotView {
@@ -976,6 +1004,7 @@ mod tests {
     #[test]
     fn a_worn_thrown_weapon_places_with_its_count_gate() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let mut inv: crate::script::InventorySlots = Default::default();
         inv[18] = Some(crate::script::InvSlotView {
             item_id: 3137,
@@ -1005,6 +1034,7 @@ mod tests {
     fn a_passive_spells_refusal_shows_inside_its_call() {
         use crate::script::ui_errors::shown::seen_in_call;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             spell_id: 674,
             texture: None,

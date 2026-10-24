@@ -680,20 +680,29 @@ pub(crate) fn feed_dialog_verbs(
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, AreaSpiritHealer>,
         ResMut<'static, BattlefieldQueue>,
+        ResMut<'static, PetUnlearnState>,
     )>,
-    mut pet: ResMut<PetUnlearnState>,
     mut boot: ResMut<InstanceBoot>,
     mut sink: crate::ui_action::MessageSink,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     let now = Instant::now();
-    let (spirit_secs, spirit_in_range, queue_tutorials, queue_changed) = {
-        let (mut spirit, mut queue) = vm.own();
+    let (
+        spirit_secs,
+        spirit_in_range,
+        queue_tutorials,
+        queue_changed,
+        unlearn_pending,
+        unlearn_ask,
+    ) = {
+        let (mut spirit, mut queue, mut pet) = vm.own();
         (
             spirit.secs(now),
             std::mem::take(&mut spirit.in_range),
             std::mem::take(&mut queue.tutorials),
             std::mem::take(&mut queue.changed),
+            pet.pending().is_some(),
+            std::mem::take(&mut pet.ask).then_some(pet.cost),
         )
     };
     vm.run(|script| {
@@ -701,12 +710,11 @@ pub(crate) fn feed_dialog_verbs(
             return;
         };
 
-        script.set_pet_untrainer_pending(pet.pending().is_some());
-        if pet.ask {
-            pet.ask = false;
+        script.set_pet_untrainer_pending(unlearn_pending);
+        if let Some(cost) = unlearn_ask {
             script.fire_event(
                 "CONFIRM_PET_UNLEARN",
-                vec![ScriptValue::Int(i64::from(pet.cost))],
+                vec![ScriptValue::Int(i64::from(cost))],
             );
         }
 
@@ -741,46 +749,47 @@ pub(crate) fn feed_dialog_verbs(
     })
 }
 
-/// The pet trainer's confirm, a drain over its latch.
-fn drain_latch_verbs(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    pet: Res<PetUnlearnState>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    commands: Res<NetCommands>,
-    mut sink: crate::ui_action::MessageSink,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
+/// `ConfirmPetUnlearn()` inside its call (`0x48dca0` → `0x5dfba0`).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PetUnlearnSteps<'w, 's> {
+    /// Absent in a harness without the pet trainer's latch.
+    pet: Option<Res<'w, PetUnlearnState>>,
+    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    net: Res<'w, NetCommands>,
+    sink: crate::ui_action::MessageSink<'w>,
+}
+
+impl PetUnlearnSteps<'_, '_> {
+    /// With the trainer latched: a cost above the player's money shows `ERR_NOT_ENOUGH_MONEY` and
+    /// sends nothing; otherwise `CMSG_PET_UNLEARN` to the trainer (`0x2F0`).
+    pub(crate) fn confirm(&mut self, script: &mut UiScript) {
+        let Some((npc, cost)) = self
+            .pet
+            .as_deref()
+            .and_then(|p| p.pending().map(|npc| (npc, p.cost)))
+        else {
             return;
         };
-
-        // ConfirmPetUnlearn: `cost > coinage` shows ERR_NOT_ENOUGH_MONEY and sends nothing.
-        let confirms = script.take_pet_unlearn_confirms();
-        if confirms > 0 {
-            if let Some(npc) = pet.pending() {
-                let money = self_q
-                    .single()
-                    .ok()
-                    .and_then(|store| store.0.player_money())
-                    .unwrap_or(0);
-                if pet.cost > money {
-                    if let Some(line) = crate::ui_action::keyed_line(script, "ERR_NOT_ENOUGH_MONEY")
-                    {
-                        crate::ui_action::show_messages(
-                            script,
-                            &mut sink,
-                            "ui_dialog_verbs",
-                            [line],
-                        );
-                    }
-                } else {
-                    for _ in 0..confirms {
-                        let _ = commands.0.send(ClientCommand::PetUnlearn { trainer: npc });
-                    }
-                }
+        let money = self
+            .me
+            .single()
+            .ok()
+            .and_then(|store| store.0.player_money())
+            .unwrap_or(0);
+        if cost > money {
+            let input = script.input_events();
+            if let Some(line) = crate::ui_action::keyed_line(script, "ERR_NOT_ENOUGH_MONEY") {
+                crate::ui_action::show_now(
+                    script,
+                    &mut self.sink,
+                    "ui_dialog_verbs",
+                    line.under(input),
+                );
             }
+            return;
         }
-    })
+        let _ = self.net.0.send(ClientCommand::PetUnlearn { trainer: npc });
+    }
 }
 
 /// `CancelMeetingStoneRequest()` inside its call ([`benilla_ui::script::MeetingStoneCall`]).
@@ -1055,7 +1064,10 @@ impl Plugin for UiDialogVerbsPlugin {
             .add_systems(
                 Update,
                 (
-                    close_npc_session_out_of_range::<PetUnlearnState>.before(feed_dialog_verbs),
+                    // Before the pass: `ConfirmPetUnlearn`'s call reads the latch.
+                    close_npc_session_out_of_range::<PetUnlearnState>
+                        .before(feed_dialog_verbs)
+                        .before(crate::vm_pass::VmPass::Start),
                     // Gated on the in-game interface: vmangos can send `SMSG_RAID_GROUP_ONLY` in
                     // the login burst (`Player.cpp:18686`), and an `INSTANCE_BOOT_START` fired at
                     // the glue VM would be lost; the queue waits instead.
@@ -1076,7 +1088,6 @@ impl Plugin for UiDialogVerbsPlugin {
                         .after(crate::ui_battlefield::reset_on_world_enter)
                         .before(feed_meeting_stone),
                     feed_meeting_stone.in_set(UiFeed),
-                    drain_latch_verbs.in_set(crate::ui_script::UiDrain),
                     // After the target chain, which writes `MeetingStoneUse`, so the join leaves
                     // on the click's own frame.
                     drain_meeting_stone_joins

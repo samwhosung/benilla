@@ -11,16 +11,14 @@ use benilla_formats::{
 };
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_protocol::{SessionEvent, SessionEventKind};
-use benilla_ui::script::{
-    CraftCall, CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip,
-};
+use benilla_ui::script::{CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::spell::known::{PetReads, PetView};
-use crate::spell::{cast_target, CastCommit, CastLadder};
+use crate::spell::CastCommit;
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
 use crate::ui_spellbook::SkillLines;
@@ -46,13 +44,8 @@ pub(crate) struct UiCraftPlugin;
 impl Plugin for UiCraftPlugin {
     fn build(&self, app: &mut App) {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
-        app.init_resource::<CraftOpen>().add_systems(
-            Update,
-            (
-                feed_craft.in_set(UnitFeed),
-                drain_craft.in_set(crate::ui_script::UiDrain),
-            ),
-        );
+        app.init_resource::<CraftOpen>()
+            .add_systems(Update, feed_craft.in_set(UnitFeed));
     }
 }
 
@@ -500,32 +493,15 @@ struct CraftMemo {
     item_waits: Vec<u32>,
 }
 
-/// Drains `DoCraft` down the cast ladder: an enchant's `Targets = 0x10` arms the cursor's item
-/// half, a rod craft commits at once. `CloseCraft` closes the window inside its call
-/// ([`CraftSteps`]), sends no packet and leaves an armed pick to the ordinary cancels (Escape,
-/// right-click, a new cast).
-fn drain_craft(
-    mut vm: crate::script_calls::VmWith<(
-        cast_target::CastTargeting<'static, 'static>,
-        CastLadder<'static, 'static>,
-        Res<'static, CraftOpen>,
-    )>,
-    skill_lines: Option<Res<SkillLines>>,
-) {
-    vm.turn(|script, (targeting, mut ladder, open)| {
-        let Some(script) = script else {
-            return;
-        };
-        let _ = skill_lines; // the feed resolves lines; the drain just casts what it is handed
-        for spell_id in script.take_craft_dos() {
-            if open.line.is_none() {
-                debug!("ui_craft: DoCraft({spell_id}) with no open window — ignored");
-                continue;
-            }
-            debug!("ui_craft: DoCraft({spell_id})");
-            ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
-        }
-    })
+/// `DoCraft(index)` past its row (`0x4f7d10`): the row's cast through `CastSpellAsActivePlayer`
+/// (`0x4f7d64` → `0x6e5a90`) inside the call, with no item and no target. The cast ladder takes
+/// it from there: an enchant's `Targets = 0x10` arms the cursor's item half, a rod craft commits
+/// at once. The row test is the VM's, against the list it holds; the reference tests no open
+/// marker.
+pub(crate) fn do_craft(cast: &mut crate::spell::ScriptCast, spell_id: u32) {
+    debug!("ui_craft: DoCraft({spell_id})");
+    let ctx = cast.targeting.context();
+    cast.ladder.send(spell_id, &ctx, CastCommit::Spell);
 }
 
 /// The craft window's close inside its call ([`crate::script_calls::ScriptCallHost`]).
@@ -537,8 +513,7 @@ pub(crate) struct CraftSteps<'w> {
 
 impl CraftSteps<'_> {
     /// `CloseCraft()` (`0x4f6c00` → `0x4f5fe0`): the open marker `[0xbdcfb8]` zeroed, no packet.
-    pub(crate) fn apply(&mut self, call: CraftCall) {
-        let CraftCall::Close = call;
+    pub(crate) fn close(&mut self) {
         if let Some(open) = self.open.as_deref_mut() {
             debug!("ui_craft: client-side close (no packet)");
             open.line = None;

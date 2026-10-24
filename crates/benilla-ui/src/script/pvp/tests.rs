@@ -68,6 +68,7 @@ fn player() -> UnitState {
 
 fn seated() -> UiScript {
     let mut s = UiScript::new().expect("VM");
+    s.keep_calls();
     s.set_honor(Some(honor_state()));
     s.set_unit("player", Some(player()));
     s

@@ -77,6 +77,14 @@ pub enum LookCall {
     MouseRelease { sticky: bool },
 }
 
+/// A posture verb the host applies inside its call ([`ScriptCall::Posture`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostureCall {
+    /// `SitOrStand()` (`0x48b920`): `SetStandState(1)` on the active player when its stand state
+    /// byte is 0, else `SetStandState(0)` (`0x5ed430`).
+    SitOrStand,
+}
+
 /// A one-shot command, fired as its key fires it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FiredInput {
@@ -86,8 +94,6 @@ pub enum FiredInput {
     ToggleRun,
     /// `ToggleAutoRun()` (`0x513de0`), which toggles `0x1000`.
     ToggleAutoRun,
-    /// `SitOrStand()` (`0x48b920`): sit when standing, else stand (`0x5ed430(1)` or `(0)`).
-    SitOrStand,
     /// `ToggleSheath()` (`0x48a070` → `0x5eb480`).
     ToggleSheath,
     /// `CameraZoomIn([yards])` (`0x50b400` → `0x50fc60`), 1.0 when absent.
@@ -414,19 +420,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // `ToggleSheath()` and `SitOrStand()` resolve the active player and act on it, ungated.
-    let posture: [(&str, FiredInput); 2] = [
-        ("ToggleSheath", FiredInput::ToggleSheath),
-        ("SitOrStand", FiredInput::SitOrStand),
-    ];
-    for (name, input) in posture {
-        g.set(
-            name,
-            lua.create_function(move |lua, _: MultiValue| {
-                push(lua, BindingInput::Fire(input));
-                Ok(())
-            })?,
-        )?;
-    }
+    g.set(
+        "ToggleSheath",
+        lua.create_function(move |lua, _: MultiValue| {
+            push(lua, BindingInput::Fire(FiredInput::ToggleSheath));
+            Ok(())
+        })?,
+    )?;
+    // `SitOrStand()` (`0x48b920`): the host runs `SetStandState` inside the call, a sit when the
+    // stand state byte is 0, else a stand (`0x48b951`, `0x48b95b` → `0x5ed430`).
+    g.set(
+        "SitOrStand",
+        lua.create_function(|lua, _: MultiValue| {
+            push_call(lua, ScriptCall::Posture(PostureCall::SitOrStand))
+        })?,
+    )?;
     Ok(())
 }
 
@@ -524,11 +532,15 @@ mod tests {
         assert!(s.run_binding("error('boom')").is_err());
         s.run("TurnLeftStart()").unwrap();
         assert!(s.take_binding_input().is_empty());
+        s.keep_calls();
         s.run("SitOrStand() ToggleSheath() CameraZoomIn()").unwrap();
+        assert_eq!(
+            s.take_calls_like(&ScriptCall::Posture(PostureCall::SitOrStand)),
+            1
+        );
         assert_eq!(
             s.take_binding_input(),
             vec![
-                BindingInput::Fire(FiredInput::SitOrStand),
                 BindingInput::Fire(FiredInput::ToggleSheath),
                 BindingInput::Fire(FiredInput::CameraZoomIn(1.0)),
             ]

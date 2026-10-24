@@ -238,6 +238,31 @@ pub enum ScriptCall {
     Instance(super::InstanceCall),
     /// The PvP flag's toggle ([`super::PvpCall`]): its packet inside the call.
     Pvp(super::PvpCall),
+    /// `ShowHelm` or `ShowCloak` past the belief's test ([`super::WornDisplay`]): the flip's packet
+    /// inside the call (`0x5ee6e3`).
+    WornDisplay(super::WornDisplay),
+    /// An action bar verb's packet ([`super::ActionBarCall`]): the toggles' send, or a slot write
+    /// stored and sent ahead of its signal (`0x4e58e0`).
+    ActionBar(super::ActionBarCall),
+    /// A GM ticket verb's packet, or `Stuck`'s cast ([`super::GmTicketCall`]), inside the call.
+    GmTicket(super::GmTicketCall),
+    /// A send of a system no 1.12 server runs ([`super::UnservedSend`]), inside its verb.
+    Unserved(super::UnservedSend),
+    /// An inspect verb ([`super::InspectCall`]): its packet and the target it sets inside the
+    /// call.
+    Inspect(super::InspectCall),
+    /// An item text verb ([`super::ItemTextCall`]): the page move and its ask, or the close core,
+    /// inside the call.
+    ItemText(super::ItemTextCall),
+    /// An aura cancel ([`super::AuraCall`]): `0x6e7040` whole inside the call.
+    Aura(super::AuraCall),
+    /// A minimap verb ([`super::MinimapCall`]): the ping inside the call.
+    Minimap(super::MinimapCall),
+    /// A posture verb ([`super::PostureCall`]): the stand-state setter inside the call.
+    Posture(super::PostureCall),
+    /// `ConfirmPetUnlearn()` (`0x48dca0` → `0x5dfba0(0, 0)`): `CMSG_PET_UNLEARN` to the
+    /// remembered trainer, or the money refusal's line, inside the call.
+    ConfirmPetUnlearn,
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

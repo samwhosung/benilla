@@ -1,4 +1,5 @@
-//! The inspect bindings: `NotifyInspect` and `ClearInspectPlayer` queue intents, the app pushes
+//! The inspect bindings: `NotifyInspect` and `ClearInspectPlayer` act inside their calls through
+//! the host ([`InspectCall`]), the app pushes
 //! each held player's visible items by guid ([`UiScript::set_visible_equipment`]) for the
 //! `GetInventoryItem*` verbs, and `CanInspect` and `CheckInteractDistance` read a per-guid
 //! distance map ([`UiScript::set_unit_reach`]) through the token resolver ([`super::UnitGuids`]).
@@ -95,16 +96,32 @@ impl super::UiScript {
         };
     }
 
-    /// Drain the tokens `NotifyInspect` queued; the app sends `CMSG_INSPECT` for each, which also
-    /// sets the server-side selection (`MiscHandler.cpp:945`).
+    /// The tokens `NotifyInspect` named, which a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_inspect_notifies(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().inspect_notifies)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::Inspect(InspectCall::Notify(token)) => Some(token.clone()),
+            _ => None,
+        })
     }
 
-    /// Whether `ClearInspectPlayer` was called since the last drain; the app drops its target.
+    /// Whether a harness's VM kept a `ClearInspectPlayer` ([`Self::keep_calls`]).
     pub fn take_inspect_clear(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().inspect_clear)
+        self.take_calls_like(&super::ScriptCall::Inspect(InspectCall::Clear)) > 0
     }
+}
+
+/// An inspect verb the host applies inside its call ([`super::ScriptCall::Inspect`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InspectCall {
+    /// `NotifyInspect(unit)` (`0x48a310` → `0x5decc0`): `CMSG_INSPECT` for the unit's guid, which
+    /// also sets the server-side selection (`MiscHandler.cpp:945`), then the inspect target set to
+    /// it (`0x5ded10`, `0x5ded1c`).
+    Notify(String),
+    /// `ClearInspectPlayer()` (`0x4c9780` → `0x4c6f70(0)`): the inspect target dropped.
+    Clear,
+    /// `RequestInspectHonorData()` past its two flags (`0x4c80a6`, `0x4c80b6`): with a target,
+    /// `MSG_INSPECT_HONOR_STATS` for it (`0x4c8112`).
+    Honor,
 }
 
 /// The reach of the unit `token` names, through the resolver (`0x515970`, which both verbs call via
@@ -187,11 +204,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "NotifyInspect",
         lua.create_function(|lua, unit: String| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .inspect_notifies
-                .push(unit);
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Inspect(InspectCall::Notify(unit)))
         })?,
     )?;
 
@@ -199,10 +212,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ClearInspectPlayer",
         lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .inspect_clear = true;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Inspect(InspectCall::Clear))
         })?,
     )?;
 
@@ -233,6 +243,7 @@ mod tests {
     /// targets us; party1's pet targets nobody. `OUT` is a roster member with no object.
     fn seeded() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_unit_guids(&UnitGuids {
             player: ME,
             pet: P1_PET,
@@ -400,6 +411,7 @@ mod tests {
     fn can_inspects_refusal_shows_inside_its_call() {
         use crate::script::ui_errors::shown::seen_in_call;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let (seen, _) = seen_in_call(&mut s, r#"CanInspect("target")"#);
         assert_eq!(seen, "ERR_UNIT_NOT_FOUND");
         assert!(s.take_ui_errors().is_empty(), "nothing waits for the feed");

@@ -142,7 +142,7 @@ fn set_action_bar_toggles_sends_inside_its_call() {
 
 /// `PickupAction` and `PlaceAction` write the slot through `0x4e58e0`, which sends
 /// `CMSG_SET_ACTION_BUTTON` and then signals `ACTIONBAR_SLOT_CHANGED` (`0x4e5998`): the handler,
-/// which rolls, runs after the packet, and the store holds the write by the chunk's next line.
+/// which rolls, runs after the packet. The store takes the writes after the pass.
 #[test]
 fn pickup_and_place_action_send_ahead_of_their_slot_signal() {
     const FIREBALL: u32 = 133;
@@ -168,6 +168,9 @@ fn pickup_and_place_action_send_ahead_of_their_slot_signal() {
             "roll 9"
         ]
     );
+    app.world_mut()
+        .run_system_cached(crate::ui_action::store_action_writes)
+        .unwrap();
     let actions = app.world().resource::<crate::ui_action::PlayerActions>();
     assert!(!actions.buttons.contains_key(&2));
     assert_eq!(actions.buttons.get(&4).map(|b| b.action), Some(FIREBALL));
@@ -371,29 +374,6 @@ fn ping_location_sends_inside_its_call() {
     let n: i64 = eval(&mut app, "m:PingLocation() RandomRoll(1, 2) return N");
     assert_eq!(n, 1, "the ping signalled in the call");
     assert_eq!(sent(&rx), ["ping 100 200", "roll 1"]);
-}
-
-/// With a ground spell armed (`0x6e48a0` and `0x6e6320` at `0x4eee67`, `0x4eee74`) the click casts
-/// at the ground under it instead of pinging; a trace that hits nothing does nothing at all
-/// (`0x4eeedd`): no ping, no packet, and the cursor stays.
-#[test]
-fn ping_location_with_a_ground_spell_armed_and_no_ground_does_nothing() {
-    const BLIZZARD: u32 = 10;
-    let (mut app, rx) = client();
-    minimap(&mut app);
-    app.world_mut()
-        .resource_mut::<crate::spell::targeting::SpellTargeting>()
-        .enter(BLIZZARD, crate::spell::CastCommit::Spell, 0x40);
-    let n: i64 = eval(&mut app, "m:PingLocation() RandomRoll(1, 2) return N");
-    assert_eq!(n, 0, "no ping");
-    assert_eq!(sent(&rx), ["roll 1"]);
-    assert_eq!(
-        app.world()
-            .resource::<crate::spell::targeting::SpellTargeting>()
-            .spell(),
-        Some(BLIZZARD),
-        "the cursor stays"
-    );
 }
 
 /// A book of two pages read, the first shown: page 10, whose next is 11, not yet cached.

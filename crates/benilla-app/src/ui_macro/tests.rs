@@ -567,6 +567,7 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
     app.insert_resource(actions)
+        .init_resource::<crate::ui_action::ActionSlotWrites>()
         .insert_resource(crate::net::NetCommands(tx))
         .insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
             vec![crate::glue_session::roster::test_character(7, "Probeone")],
@@ -576,7 +577,7 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
         .insert_non_send_resource(UiScript::new().unwrap())
         .add_systems(
             Update,
-            (super::load_macros, crate::ui_action::drain_action_sets).chain(),
+            (super::load_macros, crate::ui_action::store_action_writes).chain(),
         );
     let sent = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
         rx.try_iter()

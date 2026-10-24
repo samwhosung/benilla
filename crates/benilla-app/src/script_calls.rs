@@ -19,10 +19,10 @@ use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    AuctionCall, BankCall, BinderCall, CallHost, CallTail, DeathAction, DuelRequest, GossipCall,
-    InstanceCall, LootRollCall, MailCall, MeetingStoneCall, MerchantCall, PetitionCall, PvpCall,
-    ScriptCall, StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall,
-    TrainerCall, UiScript,
+    AuctionCall, AuraCall, BankCall, BinderCall, CallHost, CallTail, CraftCall, DeathAction,
+    DuelRequest, GmTicketCall, GossipCall, InstanceCall, ItemTextCall, LootRollCall, MailCall,
+    MeetingStoneCall, MerchantCall, MinimapCall, PetitionCall, PostureCall, PvpCall, ScriptCall,
+    StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall, TrainerCall, UiScript,
 };
 
 pub(crate) mod disjoint;
@@ -113,8 +113,19 @@ disjoint::disjoint_set! {
         pet_press: crate::ui_pet::PetPress<'static, 'static>,
         pet: crate::ui_pet::PetSteps<'static, 'static>,
         stable: crate::ui_stable::StableSteps<'static, 'static>,
-        /// The player's attack.
+        /// The player's attack, and its stand-state setter.
         attack: crate::ui_action::AttackPress<'static, 'static>,
+        stand: crate::player::StandSetter<'static, 'static>,
+        /// The sends of the action bar, the worn display, the Help window, the unserved systems,
+        /// the inspect window, the reader, the aura cancel, the minimap and the pet trainer.
+        action_bar: crate::ui_action::ActionBarSteps<'static>,
+        worn: crate::ui_unit::WornDisplaySteps<'static>,
+        gm_ticket: crate::ui_gm_ticket::GmTicketSteps<'static>,
+        inspect: crate::ui_inspect::InspectSteps<'static>,
+        item_text: crate::ui_item_text::ItemTextSteps<'static>,
+        aura: crate::ui_aura::AuraSteps<'static, 'static>,
+        minimap: crate::minimap::MinimapSteps<'static>,
+        pet_unlearn: crate::ui_dialog_verbs::PetUnlearnSteps<'static, 'static>,
     }
 }
 
@@ -247,6 +258,40 @@ impl ScriptCallHost<'_, '_> {
         self.appliers
             .death()
             .apply(script, DeathAction::AcceptAreaSpiritHeal);
+    }
+
+    /// The aura cancel `0x6e7040(spell)`: the active player's precast of the spell and its kits
+    /// ended (`0x6e7075`, `0x6e707e`), then for spell 2584 `AREA_SPIRIT_HEALER_OUT_OF_RANGE`
+    /// (`0x6e70c3`), whose listeners run where it fires, then `CMSG_CANCEL_AURA` (`0x6e70eb`).
+    fn cancel_aura(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+        spell_id: u32,
+    ) {
+        self.appliers.aura().end_on_player(spell_id);
+        if spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA {
+            script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
+            self.at_point(script, mark);
+        }
+        self.appliers.aura().send(spell_id);
+    }
+
+    /// `SitOrStand()` (`0x48b920`): `SetStandState` (`0x5ed430`) on the active player, whose
+    /// change to a state but 0 runs its local apply's leave, the loot close (`0x48f200` at
+    /// `0x5f07d5`) then the attack stop (`0x5ecac0` at `0x5f07e7`), before its tail.
+    fn sit_or_stand(&mut self) {
+        let Some(state) = self.appliers.stand().sit_or_stand() else {
+            return;
+        };
+        let Some(leave) = self.appliers.stand().set(state) else {
+            return;
+        };
+        if leave {
+            self.appliers.loot().close_for_stand();
+            self.appliers.attack().stop_for_stand();
+        }
+        self.appliers.stand().finish();
     }
 
     /// The reports the call made since `mark` signalled now, ahead of whatever it signals next:
@@ -633,7 +678,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 crate::ui_tradeskill::do_trade_skill(&mut appliers.cast(), spell_id, count);
             }
             ScriptCall::TradeSkill(TradeSkillCall::Close) => appliers.trade_skill().close(),
-            ScriptCall::Craft(call) => appliers.craft().apply(call),
+            ScriptCall::Craft(CraftCall::Do { spell_id }) => {
+                crate::ui_craft::do_craft(&mut appliers.cast(), spell_id);
+            }
+            ScriptCall::Craft(CraftCall::Close) => appliers.craft().close(),
             ScriptCall::Battlefield(call) => appliers.battlefield().apply(script, call),
             ScriptCall::Death(DeathAction::AcceptAreaSpiritHeal) => {
                 self.accept_area_spirit_heal(script, &mut at.mark);
@@ -656,6 +704,26 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::Instance(InstanceCall::Reset) => appliers.instance().reset(),
             ScriptCall::Pvp(PvpCall::Toggle) => appliers.pvp().toggle(),
+            ScriptCall::WornDisplay(which) => appliers.worn().flip(which),
+            ScriptCall::ActionBar(call) => appliers.action_bar().apply(call),
+            ScriptCall::GmTicket(GmTicketCall::Ticket(intent)) => {
+                appliers.gm_ticket().ticket(intent);
+            }
+            ScriptCall::GmTicket(GmTicketCall::Stuck) => {
+                crate::ui_gm_ticket::cast_stuck(&mut appliers.cast());
+            }
+            ScriptCall::Unserved(send) => appliers.gm_ticket().unserved(send),
+            ScriptCall::Inspect(call) => appliers.inspect().apply(call),
+            ScriptCall::ItemText(ItemTextCall::Turn(delta)) => {
+                appliers.item_text().turn(script, delta);
+            }
+            ScriptCall::ItemText(ItemTextCall::Close) => self.close_item_text(script, &mut at.mark),
+            ScriptCall::Aura(AuraCall::Cancel(spell_id)) => {
+                self.cancel_aura(script, &mut at.mark, spell_id);
+            }
+            ScriptCall::Minimap(MinimapCall::Ping { x, y }) => appliers.minimap().ping(x, y),
+            ScriptCall::Posture(PostureCall::SitOrStand) => self.sit_or_stand(),
+            ScriptCall::ConfirmPetUnlearn => appliers.pet_unlearn().confirm(script),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

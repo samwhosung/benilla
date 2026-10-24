@@ -35,6 +35,10 @@ pub(crate) enum UnitEdit {
     /// gates it ([`crate::spell::CastCore::cancel_reaping`]), and the failed cast event the
     /// server's echo would bring, stamped as it applies.
     AbortCasting { entity: Entity, spell_id: u32 },
+    /// `0x614150(spell, 0)` with no cast edge of its own, as the aura cancel stops the cancelled
+    /// spell's kits (`0x6e707e`): its [`Casting`] while that is still this spell's, and a
+    /// [`CastEventKind::Reap`].
+    StopSpellKits { entity: Entity, spell_id: u32 },
     /// The sticky auto-repeat arm (`0x6e593b`, `|= 0x200`).
     ArmAutoRepeat(Entity),
     /// The local auto-repeat stop's unit leg (`0x6ea080`): the arm (`0x6ea113`), the precast of
@@ -68,7 +72,7 @@ impl UnitEdit {
     #[cfg(test)]
     pub(crate) fn writes(&self) -> Vec<std::any::TypeId> {
         match self {
-            Self::ReapCasting { .. } | Self::AbortCasting { .. } => {
+            Self::ReapCasting { .. } | Self::AbortCasting { .. } | Self::StopSpellKits { .. } => {
                 vec![std::any::TypeId::of::<Casting>()]
             }
             Self::ArmAutoRepeat(_) => vec![std::any::TypeId::of::<AutoRepeatArmed>()],
@@ -101,6 +105,10 @@ impl UnitEdit {
                 entity,
                 spell_id: 0,
             },
+            Self::StopSpellKits {
+                entity,
+                spell_id: 0,
+            },
             Self::ArmAutoRepeat(entity),
             Self::ClearAutoRepeat {
                 entity,
@@ -128,6 +136,7 @@ impl UnitEdit {
             match edit {
                 Self::ReapCasting { .. }
                 | Self::AbortCasting { .. }
+                | Self::StopSpellKits { .. }
                 | Self::ArmAutoRepeat(_)
                 | Self::ClearAutoRepeat { .. }
                 | Self::StartPrecast { .. }
@@ -158,6 +167,7 @@ impl UnitEdit {
             Self::EndPrecastBusy(entity) => Some((entity, Change::Busy)),
             Self::ReapCasting { .. }
             | Self::AbortCasting { .. }
+            | Self::StopSpellKits { .. }
             | Self::ArmAutoRepeat(_)
             | Self::StartAttack { .. }
             | Self::EndAttack(_) => None,
@@ -304,6 +314,10 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
             UnitEdit::AbortCasting { entity, spell_id } => {
                 reap(world, entity, spell_id);
                 cast_event(world, entity, spell_id, CastEventKind::Fail);
+            }
+            UnitEdit::StopSpellKits { entity, spell_id } => {
+                reap(world, entity, spell_id);
+                cast_event(world, entity, spell_id, CastEventKind::Reap);
             }
             UnitEdit::ArmAutoRepeat(entity) => {
                 if let Ok(mut unit) = world.get_entity_mut(entity) {

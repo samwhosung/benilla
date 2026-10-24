@@ -52,9 +52,6 @@ pub enum DeathAction {
     /// `AcceptAreaSpiritHeal()` (`0x48df20` → `0x492310`): `CMSG_AREA_SPIRIT_HEALER_QUEUE` with
     /// the cached healer, silent with none.
     AcceptAreaSpiritHeal,
-    /// `CancelAreaSpiritHeal()` (`0x48df30` → `0x4923a0` → `0x6e7040(2584)`) past its event:
-    /// `CMSG_CANCEL_AURA` for spell 2584.
-    CancelAreaSpiritHeal,
     /// `UseSoulstone()` (`0x48ad70`): `CMSG_SELF_RES` when `PLAYER_SELF_RES_SPELL` is non-zero,
     /// else a use of the carried item, decided inside the call.
     UseSoulstone {

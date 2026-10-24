@@ -174,10 +174,6 @@ impl LatchedWindow for ItemTextOpen {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_item_text_close()
-    }
 }
 
 /// The close, `0x4e32e0` with a zero guid: with an object read, the latch release on the cell
@@ -370,14 +366,11 @@ impl Plugin for UiItemTextPlugin {
             .add_sweep_leg(SweepLeg::ItemText, close_core)
             .add_systems(
                 Update,
-                (
-                    // The reads and the begin ahead of the feed, so a read that resolves paints
-                    // this frame; the drain after the input pass so a close clears this frame.
-                    (apply_reads, begin_item_text, feed_item_text)
-                        .chain()
-                        .in_set(UiFeed),
-                    drain_item_text.in_set(crate::ui_script::UiDrain),
-                ),
+                // The reads and the begin ahead of the feed, so a read that resolves paints this
+                // frame.
+                (apply_reads, begin_item_text, feed_item_text)
+                    .chain()
+                    .in_set(UiFeed),
             );
     }
 }
@@ -559,35 +552,52 @@ fn feed_item_text(
 #[derive(Resource)]
 pub(crate) struct PageMaterials(pub(crate) benilla_formats::PageTextMaterialCatalog);
 
-/// Drain the reader's intents: `CloseItemText()` runs the core; a page turn re-runs the feed from
-/// `ITEM_TEXT_READY`, as the reference does not re-fire BEGIN.
-fn drain_item_text(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, ItemTextOpen>>,
-    pages: Res<PageTexts>,
-    mut world_commands: Commands,
-) {
-    vm.turn(|script, mut open| {
-        let Some(script) = script else {
+/// The reader's verbs inside their calls ([`benilla_ui::script::ItemTextCall`]): the page turns
+/// here, the close core in the host ([`crate::script_calls::ScriptCallHost`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ItemTextSteps<'w> {
+    /// Absent in a harness without the reader.
+    open: Option<ResMut<'w, ItemTextOpen>>,
+    pages: Option<Res<'w, PageTexts>>,
+    commands: Res<'w, NetCommands>,
+}
+
+impl ItemTextSteps<'_> {
+    /// `ItemTextPrevPage()` (`0x4e3870`) or `ItemTextNextPage()` (`0x4e38b0`) as `delta`: the page
+    /// moved, then the show (`0x4e35b0`) looks its record up with a callback (`0x4e363c`), which
+    /// asks for a page not cached. The repaint and `ITEM_TEXT_READY` follow on the feed, which
+    /// does not fire BEGIN again.
+    pub(crate) fn turn(&mut self, script: &mut UiScript, delta: i32) {
+        let (Some(open), Some(pages)) = (self.open.as_deref_mut(), self.pages.as_deref()) else {
             return;
         };
-        for delta in script.take_item_text_page_turns() {
-            let Some(sess) = open.pending.as_mut() else {
-                continue;
-            };
-            let ReadSource::Pages { visited } = &mut sess.source else {
-                continue; // a letter has no pages; its buttons never show
-            };
-            if turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
-                // Repaint on the next feed without re-firing BEGIN; the show asks for the new page.
-                let told = sess.told.get(script);
-                told.ready = false;
-                told.asked = false;
-            }
+        let Some(sess) = open.pending.as_mut() else {
+            return;
+        };
+        let ReadSource::Pages { visited } = &mut sess.source else {
+            return; // a letter has no pages; its buttons never show
+        };
+        if !turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
+            return;
         }
-        if script.take_item_text_close() {
-            crate::ui_session::queue(&mut world_commands, close_core);
+        let page_id = *visited.last().expect("a turn lands on a page");
+        let _ = pages.page(page_id, sess.object_guid, Ask::Event(&self.commands));
+        let told = sess.told.get(script);
+        told.ready = false;
+        told.asked = true;
+    }
+
+    /// The reader's cell `[0xbc3fa0]`.
+    pub(crate) fn object(&self) -> Option<u64> {
+        self.open.as_deref().and_then(ItemTextOpen::object)
+    }
+
+    /// The close core's cell clear (`0x4e3364`).
+    pub(crate) fn clear(&mut self) {
+        if let Some(open) = self.open.as_deref_mut() {
+            open.pending = None;
         }
-    })
+    }
 }
 
 /// Walk the trail one step: Next pushes the page's `nextPageId` from `next_of`, the cache, and
@@ -637,13 +647,7 @@ mod tests {
             .init_resource::<crate::world_state::WorldStates>()
             .add_systems(
                 Update,
-                (
-                    apply_reads,
-                    begin_item_text,
-                    feed_item_text,
-                    drain_item_text,
-                )
-                    .chain(),
+                (apply_reads, begin_item_text, feed_item_text).chain(),
             );
         app.insert_non_send_resource(UiScript::new().unwrap());
         app.world_mut()

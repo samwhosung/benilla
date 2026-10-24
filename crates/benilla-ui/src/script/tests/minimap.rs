@@ -337,6 +337,7 @@ fn frame_alpha_reads_the_shown_frames_alpha() {
 #[test]
 fn ping_location_pings_the_world_point_its_fractions_name_inside_the_call() {
     let mut s = script();
+    s.keep_calls();
     s.run(
         r#"m = CreateFrame("Minimap", "TestMinimap")
            m:SetWidth(140) m:SetHeight(100)

@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     /// The ungated one-shots fire as the keys do: `CameraZoomIn(yards)` carries its amount to the
-    /// zoom (1.0 when absent, `0x50b42d`), `SitOrStand` and `ToggleSheath` fire.
+    /// zoom (1.0 when absent, `0x50b42d`), and `ToggleSheath` fires, one frame only.
     #[test]
     fn the_one_shot_functions_fire_their_inputs() {
         let mut app = harness();
@@ -1669,11 +1669,10 @@ mod tests {
             0.0,
             "one frame only"
         );
-        run(&mut app, "SitOrStand()");
-        assert!(state(&app).fired(Input::SitOrStand));
         run(&mut app, "ToggleSheath()");
         assert!(state(&app).fired(Input::ToggleSheath));
-        assert!(!state(&app).fired(Input::SitOrStand));
+        run(&mut app, "CameraZoomOut()");
+        assert!(!state(&app).fired(Input::ToggleSheath));
     }
 
     /// Two keys on one command share its one bit: W and UP both run MOVEFORWARD's body, so the
@@ -1942,10 +1941,10 @@ mod tests {
             state(&app).pressed(Input::MoveForward),
             "the capture edge is not a release — holding W keeps you running while you type"
         );
-        press_key(&mut app, KeyCode::KeyX);
+        press_key(&mut app, KeyCode::KeyZ);
         app.update();
         assert!(
-            !state(&app).fired(Input::SitOrStand),
+            !state(&app).fired(Input::ToggleSheath),
             "typed keys are not bindings"
         );
         // Letting go still stops you, box focused or not.
@@ -1956,12 +1955,12 @@ mod tests {
             "the release is delivered regardless of focus"
         );
         // Focus drops; keys work again.
-        release_key(&mut app, KeyCode::KeyX);
+        release_key(&mut app, KeyCode::KeyZ);
         app.world_mut().resource_mut::<UiKeyboardCapture>().typing = false;
         app.update();
-        press_key(&mut app, KeyCode::KeyX);
+        press_key(&mut app, KeyCode::KeyZ);
         app.update();
-        assert!(state(&app).fired(Input::SitOrStand));
+        assert!(state(&app).fired(Input::ToggleSheath));
     }
 
     /// A shown keyboard frame eating the key that closes it costs that key its binding and
@@ -1985,22 +1984,22 @@ mod tests {
         // The eaten key loses its binding...
         release_key(&mut app, KeyCode::KeyM);
         app.update();
-        frame_ate(&mut app, &[KeyCode::KeyX]);
-        press_key(&mut app, KeyCode::KeyX);
+        frame_ate(&mut app, &[KeyCode::KeyZ]);
+        press_key(&mut app, KeyCode::KeyZ);
         app.update();
         assert!(
-            !state(&app).fired(Input::SitOrStand),
+            !state(&app).fired(Input::ToggleSheath),
             "the frame ate this key: its binding must not also fire"
         );
 
         // ...and only that key.
-        release_key(&mut app, KeyCode::KeyX);
+        release_key(&mut app, KeyCode::KeyZ);
         app.update();
         frame_ate(&mut app, &[KeyCode::KeyM]);
-        press_key(&mut app, KeyCode::KeyX);
+        press_key(&mut app, KeyCode::KeyZ);
         app.update();
         assert!(
-            state(&app).fired(Input::SitOrStand),
+            state(&app).fired(Input::ToggleSheath),
             "consumption is per key, not per frame"
         );
         assert!(

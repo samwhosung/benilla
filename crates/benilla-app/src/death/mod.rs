@@ -646,13 +646,6 @@ impl DeathSteps<'_, '_> {
                     send(&self.net, ClientCommand::AreaSpiritHealerQueue { healer });
                 }
             }
-            // `0x6e7040(0xA18)` past its event: the packet with no guid.
-            DeathAction::CancelAreaSpiritHeal => send(
-                &self.net,
-                ClientCommand::CancelAura {
-                    spell_id: crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA,
-                },
-            ),
             DeathAction::UseSoulstone { .. } => {
                 if let Some(store) = store {
                     self.use_soulstone(script, &store);

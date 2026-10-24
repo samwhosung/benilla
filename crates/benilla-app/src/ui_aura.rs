@@ -99,7 +99,7 @@ impl Plugin for UiAuraPlugin {
             .init_resource::<PlayerAuraCache>()
             .init_resource::<AuraFeedMemory>()
             .init_resource::<benilla_world::frame_pace::FrameStep>()
-            // Feed before the VM dispatch, drain after it.
+            // Fed before the VM dispatch.
             // After this frame's world publish, so the gain names the unit in the same frame.
             .add_systems(
                 Update,
@@ -108,7 +108,6 @@ impl Plugin for UiAuraPlugin {
                     .in_set(AuraEvents)
                     .after(crate::ui_tooltip::MouseoverPublish),
             )
-            .add_systems(Update, drain_aura_cancels.in_set(crate::ui_script::UiDrain))
             // Torn down only at the session's end, not with the avatar, which a worldport drops.
             // After the shutdown's `PLAYER_LOGOUT` and before the glue VM goes in.
             .add_systems(
@@ -914,17 +913,37 @@ fn end_session_aura_state(
     })
 }
 
-/// A `CMSG_CANCEL_AURA` per queued `CancelPlayerBuff` or `CancelTrackingBuff`, naming the spell,
-/// not the slot (`0x6e7040`).
-fn drain_aura_cancels(mut hosted_vm: crate::script_calls::HostedVm, net: Res<NetCommands>) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
+/// The aura cancel `0x6e7040` inside its verb's call (`CancelPlayerBuff`, `CancelTrackingBuff`,
+/// `CancelAreaSpiritHeal`): the active player's halves, then the packet, which names the spell, not
+/// the slot. The host signals the area spirit healer aura's event between them ([`benilla_ui::script::AuraCall`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct AuraSteps<'w, 's> {
+    me: Query<'w, 's, Entity, With<SelfPlayer>>,
+    /// Absent in a harness without the unit changes' queue.
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
+    net: Res<'w, NetCommands>,
+}
+
+impl AuraSteps<'_, '_> {
+    /// For an active player: the precast of `spell_id` ended with its tail
+    /// (`0x60d040(player, spell, 1, 1)` at `0x6e7075`), then the spell's kits stopped
+    /// (`0x614150(player, spell, 0)` at `0x6e707e`).
+    pub(crate) fn end_on_player(&self, spell_id: u32) {
+        let (Ok(entity), Some(edits)) = (self.me.single(), self.edits.as_deref()) else {
             return;
         };
-        for spell_id in script.take_cancel_aura_requests() {
-            let _ = net.0.send(ClientCommand::CancelAura { spell_id });
-        }
-    })
+        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+            entity,
+            spell_id: Some(spell_id),
+            tail: true,
+        });
+        edits.push(crate::creature_anim::UnitEdit::StopSpellKits { entity, spell_id });
+    }
+
+    /// `CMSG_CANCEL_AURA` (`0x6e70eb`), the spell's id.
+    pub(crate) fn send(&self, spell_id: u32) {
+        let _ = self.net.0.send(ClientCommand::CancelAura { spell_id });
+    }
 }
 
 #[cfg(test)]

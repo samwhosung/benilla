@@ -90,10 +90,6 @@ pub(super) fn update(
         }
     }
     let stand_state = pending.stand_state(stand_byte);
-    let mut request_stand = None;
-    if binds.fired(crate::bindings::Input::SitOrStand) {
-        request_stand = Some(u8::from(stand_state == 0));
-    }
     // Movement stands us up, volunteered, as the server never does: translation, a keyboard turn
     // and jump reach the stand wrapper `0x60be30(0)` from any nonzero state; a left-drag orbit
     // does not, nor a right-drag turn (`0x514f50` skips its stand arm while the button is held),
@@ -106,13 +102,9 @@ pub(super) fn update(
     if embodied
         && (moving || turned || knocked_out_of_it || binds.fired(crate::bindings::Input::Jump))
         && stand_state != 0
-        && request_stand.is_none()
     {
-        request_stand = Some(0);
-    }
-    if let Some(s) = request_stand {
         set_stand_state(
-            s,
+            0,
             stand_state,
             gates,
             flags,
@@ -188,6 +180,14 @@ pub(crate) struct StandSetter<'w, 's> {
 }
 
 impl StandSetter<'_, '_> {
+    /// What `SitOrStand()` (`0x48b920`) asks of the active player: a sit (1) when its descriptor's
+    /// stand state byte (`[[player+0x110]+0x210]`, `0x48b947`) is 0, else a stand (0); `None` with
+    /// no active player (`0x48b93f`). The byte, not the local prediction.
+    pub(crate) fn sit_or_stand(&self) -> Option<u8> {
+        let (_, store) = self.me.single().ok()?;
+        Some(u8::from(store.0.unit_stand_state() == 0))
+    }
+
     /// `SetSheatheState(0, 1, 1)` (`0x611cf0`): stowed now, its `CMSG_SETSHEATHED` sent
     /// (`0x611dbc`) when the state changed.
     pub(crate) fn stow(&mut self) {

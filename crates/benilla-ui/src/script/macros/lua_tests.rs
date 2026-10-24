@@ -7,6 +7,7 @@ use crate::script::UiScript;
 /// A VM whose icon chooser lists two icons, so `CreateMacro`'s icon number resolves.
 fn script() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_macro_icons(vec![
         "Interface\\Icons\\Ability_Ambush".into(),
         "Interface\\Icons\\Ability_BackStab".into(),

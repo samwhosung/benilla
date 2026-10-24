@@ -465,41 +465,100 @@ pub(crate) fn use_action(
     UseOutcome::Done
 }
 
-/// Applies the queued `PickupAction`/`PlaceAction` writes (packed 0 clears) to the store, which
-/// the VM already mirrors, marks it dirty for the feed and sends each as `CMSG_SET_ACTION_BUTTON`.
-pub(crate) fn drain_action_sets(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, PlayerActions>>,
-    commands: Res<NetCommands>,
-) {
-    vm.turn(|script, mut actions| {
-        let Some(script) = script else {
+/// The slot writes `0x4e58e0` made inside calls and engine writes, in order, for
+/// [`store_action_writes`] to store: pushed through `&self`, so the call host and a system that
+/// lends it can both hold it.
+#[derive(Resource, Default)]
+pub(crate) struct ActionSlotWrites(std::sync::Mutex<Vec<(u8, u32)>>);
+
+impl ActionSlotWrites {
+    fn push(&self, slot: u8, packed: u32) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((slot, packed));
+    }
+
+    fn take(&self) -> Vec<(u8, u32)> {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
+
+/// The action bar's sends inside their calls ([`benilla_ui::script::ActionBarCall`]): the
+/// toggles' packet, and each slot write sent and queued for the store.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ActionBarSteps<'w> {
+    /// Absent in a harness without the action store, which sends without storing.
+    writes: Option<Res<'w, ActionSlotWrites>>,
+    net: Res<'w, NetCommands>,
+}
+
+impl ActionBarSteps<'_> {
+    /// `call` inside its verb.
+    pub(crate) fn apply(&self, call: benilla_ui::script::ActionBarCall) {
+        use benilla_ui::script::ActionBarCall;
+        match call {
+            // `0x4e771d`: one packet per call, with no change test.
+            ActionBarCall::Toggles(toggles) => {
+                let _ = self
+                    .net
+                    .0
+                    .send(ClientCommand::SetActionBarToggles { toggles });
+            }
+            ActionBarCall::Set { id, packed } => self.set(id, packed),
+        }
+    }
+
+    /// The slot write `0x4e58e0` for the 1-based `lua_id` (`packed == 0` clears), which the VM
+    /// already mirrors: `CMSG_SET_ACTION_BUTTON` sent, ahead of the `ACTIONBAR_SLOT_CHANGED` the
+    /// VM signals after it, and the store's write queued.
+    pub(crate) fn set(&self, lua_id: u32, packed: u32) {
+        let Ok(slot) = u8::try_from(lua_id.saturating_sub(1)) else {
+            debug!("ui_action: set_action_button lua id {lua_id} out of range — ignored");
             return;
         };
-        for (lua_id, packed) in script.take_action_sets() {
-            let Ok(slot) = u8::try_from(lua_id.saturating_sub(1)) else {
-                debug!("ui_action: set_action_button lua id {lua_id} out of range — ignored");
-                continue;
-            };
-            if packed == 0 {
-                actions.buttons.remove(&slot);
-            } else {
-                actions.buttons.insert(
-                    slot,
-                    ActionButton {
-                        slot,
-                        action: packed & 0x00FF_FFFF,
-                        kind: (packed >> 24) as u8,
-                    },
-                );
-            }
-            actions.dirty = true;
-            debug!(
+        debug!(
             "ui_action: set_action_button lua {lua_id} (wire slot {slot}) packed {packed:#010x}"
         );
-            let _ = commands.0.send(ClientCommand::SetActionButton {
-                button: slot,
-                packed,
-            });
+        let _ = self.net.0.send(ClientCommand::SetActionButton {
+            button: slot,
+            packed,
+        });
+        if let Some(writes) = self.writes.as_deref() {
+            writes.push(slot, packed);
         }
-    })
+    }
+}
+
+/// Store the slot writes the calls made, in order, marking the bar dirty for the feed. The store
+/// is written here, after the VM pass, and not inside the call: the store is every action feed's
+/// input beside the call host, which reads it.
+pub(crate) fn store_action_writes(
+    writes: Res<ActionSlotWrites>,
+    mut actions: ResMut<PlayerActions>,
+) {
+    let writes = writes.take();
+    if writes.is_empty() {
+        return;
+    }
+    for (slot, packed) in writes {
+        if packed == 0 {
+            actions.buttons.remove(&slot);
+        } else {
+            actions.buttons.insert(
+                slot,
+                ActionButton {
+                    slot,
+                    action: packed & 0x00FF_FFFF,
+                    kind: (packed >> 24) as u8,
+                },
+            );
+        }
+    }
+    actions.dirty = true;
 }

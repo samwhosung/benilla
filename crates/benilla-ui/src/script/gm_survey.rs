@@ -156,8 +156,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 s.clear();
                 send
             };
-            queue(lua, send);
-            Ok(())
+            queue(lua, send)
         })?,
     )?;
 
@@ -214,7 +213,8 @@ mod tests {
 
     #[test]
     fn a_survey_comment_wants_a_string_or_a_number() {
-        let s = UiScript::new().unwrap();
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         for call in [
             "GMSurveyCommentSubmit()",
             "GMSurveyCommentSubmit(nil)",
@@ -252,6 +252,7 @@ mod tests {
     #[test]
     fn the_survey_question_is_the_text_of_the_slots_question() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_gm_survey_tables(shipped());
         for (i, want) in [
             (1, "Did the GM help?"),
@@ -298,6 +299,7 @@ mod tests {
             comment: comment.into(),
         };
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_gm_survey_tables(shipped());
         s.run("GMSurveyAnswerSubmit(1, 5, 'great') GMSurveyAnswerSubmit(3, 2, '') GMSurveyAnswerSubmit(7, 4, 'no slot')")
             .unwrap();
@@ -350,6 +352,7 @@ mod tests {
         assert_eq!(comment, "");
         // Without the tables the survey is id 0 with no questions.
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("GMSurveySubmit()").unwrap();
         assert_eq!(
             s.take_unserved_sends(),

@@ -164,7 +164,14 @@ fn a_landed_item_template_also_lands_the_consumable_gate() {
 #[test]
 fn a_bar_drag_fires_its_slots_in_place_and_the_feed_adds_nothing() {
     let (mut app, _rx) = app_with_food_on_the_bar();
-    app.add_systems(Update, super::drain::drain_action_sets.after(feed_actions));
+    app.init_resource::<super::drain::ActionSlotWrites>()
+        .add_systems(
+            Update,
+            super::drain::store_action_writes.after(feed_actions),
+        );
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .keep_calls();
     let mut info = test_template("Tough Jerky");
     info.display_info_id = JERKY_DISPLAY;
     info.spells = vec![ItemSpellEntry {
@@ -211,6 +218,12 @@ fn a_bar_drag_fires_its_slots_in_place_and_the_feed_adds_nothing() {
         ],
         "both slots signal before the verbs return, the placed one with its gate"
     );
+    // The slot writes as the host applies them inside the calls.
+    let sets = script(&mut app).take_action_sets();
+    let mut bar = bevy::ecs::system::SystemState::<super::ActionBarSteps>::new(app.world_mut());
+    for (id, packed) in sets {
+        bar.get(app.world()).set(id, packed);
+    }
 
     app.update();
     app.update();

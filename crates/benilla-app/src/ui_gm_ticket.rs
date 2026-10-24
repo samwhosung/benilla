@@ -32,7 +32,7 @@ pub(crate) struct GmTicketState {
     ticket: Option<Box<benilla_protocol::messages::GmTicket>>,
     /// One per `SMSG_GMTICKET_GETTICKET`, wrapping.
     answers: u32,
-    /// Re-asks the engine owes ([`Self::note_write_landed`]), sent by [`drain_gm_ticket`].
+    /// Re-asks the engine owes ([`Self::note_write_landed`]), sent by [`send_gm_reasks`].
     engine_reasks: u32,
     /// The last queue status, with its own answer count. Signed as in the reference, which copies
     /// the wire dword verbatim (`0x418e95`), pushes it unmodified (`0x5e467b`) and loads it signed
@@ -151,85 +151,86 @@ fn update_ticket_args(ticket: Option<&benilla_protocol::messages::GmTicket>) -> 
     ]
 }
 
-/// Turn the window's clicks into packets.
-fn drain_gm_ticket(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut reask: ResMut<GmTicketState>,
-    commands: Res<NetCommands>,
-    player: Option<Res<Player>>,
-    map: Option<Res<benilla_world::world_map::CurrentMap>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
+/// The engine's re-asks ([`GmTicketState::note_write_landed`]): they answer a push that arrived
+/// before this frame's input.
+fn send_gm_reasks(mut reask: ResMut<GmTicketState>, commands: Res<NetCommands>) {
+    for _ in 0..reask.take_reasks() {
+        let _ = commands.0.send(ClientCommand::GmTicketGet);
+    }
+}
 
-        // The engine's re-asks first: they answer a push that arrived before this frame's input.
-        for _ in 0..reask.take_reasks() {
-            let _ = commands.0.send(ClientCommand::GmTicketGet);
-        }
+/// The Help window's ticket verbs and the unserved systems' sends inside their calls
+/// ([`benilla_ui::script::GmTicketCall`], [`benilla_ui::script::ScriptCall::Unserved`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct GmTicketSteps<'w> {
+    commands: Res<'w, NetCommands>,
+    player: Option<Res<'w, Player>>,
+    map: Option<Res<'w, benilla_world::world_map::CurrentMap>>,
+}
 
-        for _ in 0..script.take_stuck_casts() {
-            let _ = commands.0.send(ClientCommand::CastSpell {
-                spell_id: SPELL_STUCK,
-                target: None,
-            });
-        }
-
-        // The lottery and survey verbs' sends (the lottery has no module of its own, its window
-        // being unbuilt), in call order.
-        for send in script.take_unserved_sends() {
-            let _ = commands.0.send(match send {
-                UnservedSend::SkillBuyStep { skill_id } => ClientCommand::SkillBuyStep { skill_id },
-                UnservedSend::LotteryQuery => ClientCommand::LotteryQuery,
-                UnservedSend::BuyLotteryTicket { first, second } => {
-                    ClientCommand::BuyLotteryTicket { first, second }
-                }
-                UnservedSend::GmSurveySubmit {
-                    survey,
-                    answers,
-                    comment,
-                } => ClientCommand::GmSurveySubmit {
-                    survey,
-                    answers: answers
-                        .into_iter()
-                        .map(|a| (a.question, a.rating, a.comment))
-                        .collect(),
-                    comment,
-                },
-            });
-        }
-
-        let intents = script.take_gm_ticket_intents();
-        if intents.is_empty() {
-            return;
-        }
-        // Where the player stands at send time, in WoW coordinates: where `.ticket go` takes the
-        // GM.
-        let pos = player.map(|p| bevy_to_wow(p.pos)).unwrap_or([0.0; 3]);
-        let map = map.map(|m| m.0).unwrap_or(0);
-        // In call order: `DeleteGMTicket(); GetGMTicket()` must not become get-then-delete.
-        for intent in intents {
-            let _ = commands.0.send(match intent {
-                GmTicketIntent::Ask => ClientCommand::GmTicketGet,
-                GmTicketIntent::AskStatus => ClientCommand::GmTicketSystemStatus,
-                GmTicketIntent::Delete => ClientCommand::GmTicketDelete,
-                GmTicketIntent::Write(write) => {
-                    let category = write.category;
-                    match client_command_for(write, map, pos) {
-                        Some(cmd) => cmd,
-                        None => {
-                            warn!(
-                                "gm ticket: refusing to file under category {category} — not a \
+impl GmTicketSteps<'_> {
+    /// A ticket verb's packet, sent in its call, so call order is wire order:
+    /// `DeleteGMTicket(); GetGMTicket()` never becomes get-then-delete.
+    pub(crate) fn ticket(&self, intent: GmTicketIntent) {
+        let _ = self.commands.0.send(match intent {
+            GmTicketIntent::Ask => ClientCommand::GmTicketGet,
+            GmTicketIntent::AskStatus => ClientCommand::GmTicketSystemStatus,
+            GmTicketIntent::Delete => ClientCommand::GmTicketDelete,
+            GmTicketIntent::Write(write) => {
+                // Where the player stands at send time, in WoW coordinates: where `.ticket go`
+                // takes the GM.
+                let pos = self
+                    .player
+                    .as_deref()
+                    .map(|p| bevy_to_wow(p.pos))
+                    .unwrap_or([0.0; 3]);
+                let map = self.map.as_deref().map(|m| m.0).unwrap_or(0);
+                let category = write.category;
+                match client_command_for(write, map, pos) {
+                    Some(cmd) => cmd,
+                    None => {
+                        warn!(
+                            "gm ticket: refusing to file under category {category} — not a \
                              GMTicketCategory.dbc id (1..={GM_TICKET_CATEGORY_MAX})"
-                            );
-                            continue;
-                        }
+                        );
+                        return;
                     }
                 }
-            });
-        }
-    })
+            }
+        });
+    }
+
+    /// A lottery or survey verb's send (the lottery has no module of its own, its window being
+    /// unbuilt), or `BuySkillTier`'s.
+    pub(crate) fn unserved(&self, send: UnservedSend) {
+        let _ = self.commands.0.send(match send {
+            UnservedSend::SkillBuyStep { skill_id } => ClientCommand::SkillBuyStep { skill_id },
+            UnservedSend::LotteryQuery => ClientCommand::LotteryQuery,
+            UnservedSend::BuyLotteryTicket { first, second } => {
+                ClientCommand::BuyLotteryTicket { first, second }
+            }
+            UnservedSend::GmSurveySubmit {
+                survey,
+                answers,
+                comment,
+            } => ClientCommand::GmSurveySubmit {
+                survey,
+                answers: answers
+                    .into_iter()
+                    .map(|a| (a.question, a.rating, a.comment))
+                    .collect(),
+                comment,
+            },
+        });
+    }
+}
+
+/// `Stuck()` past its gate (`0x489370`): `CastSpellAsActivePlayer` (`0x6e5a90`) on its spell, with
+/// no item and no target (`0x489376`, `0x489378`), into the cast attempt.
+pub(crate) fn cast_stuck(cast: &mut crate::spell::ScriptCast) {
+    let ctx = cast.targeting.context();
+    cast.ladder
+        .send(SPELL_STUCK, &ctx, crate::spell::CastCommit::Spell);
 }
 
 /// The category a `NewGMTicket`/`UpdateGMTicket` call may put on the wire, 0 to 10. vmangos files
@@ -431,7 +432,7 @@ impl Plugin for UiGmTicketPlugin {
                 Update,
                 (
                     feed_gm_ticket.in_set(UiFeed),
-                    drain_gm_ticket.in_set(crate::ui_script::UiDrain),
+                    send_gm_reasks.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -446,14 +447,14 @@ mod tests {
     #[test]
     fn the_lottery_and_survey_verbs_send_once_each() {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<GmTicketState>()
-            .add_systems(Update, drain_gm_ticket);
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(NetCommands(tx));
         app.insert_non_send_resource(UiScript::new().unwrap());
+        // Each chunk with the host lent, which sends inside the verb.
         let run = |app: &mut App, lua: &str| {
-            app.world().non_send_resource::<UiScript>().run(lua).ok();
-            app.update();
+            crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+                let _ = s.expect("a VM").run(lua);
+            });
             rx.try_iter().collect::<Vec<_>>()
         };
         let one = |sent: Vec<ClientCommand>| {

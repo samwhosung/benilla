@@ -37,6 +37,18 @@ pub fn macro_slot_word(id: u32) -> (u8, u32) {
 }
 
 /// What one action slot shows; the app resolves the icon before pushing.
+/// An action bar verb the host applies inside its call ([`super::ScriptCall::ActionBar`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionBarCall {
+    /// `SetActionBarToggles` (`0x4e76e0`): `CMSG_SET_ACTIONBAR_TOGGLES` with its byte
+    /// (`0x4e771d`).
+    Toggles(u8),
+    /// A slot write through `0x4e58e0` (`PickupAction`, `PlaceAction`, `DeleteMacro`'s clears):
+    /// the store's slot `id` (1-based) set to `packed`, 0 clearing it, and `CMSG_SET_ACTION_BUTTON`
+    /// sent, ahead of the `ACTIONBAR_SLOT_CHANGED` the VM signals after it (`0x4e5998`).
+    Set { id: u32, packed: u32 },
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionSlot {
     /// The icon texture path (`Interface\Icons\…`); `None` shows the slot's fallback.
@@ -279,16 +291,13 @@ impl super::UiScript {
         })
     }
 
-    /// Drain the `(lua action id, packed)` pairs `PickupAction`/`PlaceAction` queued; the app
-    /// sends each as `CMSG_SET_ACTION_BUTTON` (`packed == 0` clears) and updates its own store.
+    /// The `(lua action id, packed)` slot writes a harness's VM kept ([`Self::keep_calls`]), in
+    /// call order: each a `CMSG_SET_ACTION_BUTTON` (`packed == 0` clears) and a store write.
     pub fn take_action_sets(&mut self) -> Vec<(u32, u32)> {
-        std::mem::take(&mut self.model_mut().action_sets)
-    }
-
-    /// Queue `(lua action id, packed)` writes behind the ones a placement queued, for the app's
-    /// drain to store and send the same way: a write the host makes to the bar, not a script's.
-    pub fn queue_action_sets(&mut self, writes: impl IntoIterator<Item = (u32, u32)>) {
-        self.model_mut().action_sets.extend(writes);
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::ActionBar(ActionBarCall::Set { id, packed }) => Some((*id, *packed)),
+            _ => None,
+        })
     }
 
     /// Drain the GlobalStrings keys of engine-side refusals; the app fires `UI_ERROR_MESSAGE` for
@@ -666,6 +675,7 @@ mod tests {
     fn get_action_text_reads_a_character_macros_slot() {
         use crate::script::{MacroState, MacroView};
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_macros(MacroState::from_scopes(
             Vec::new(),
             vec![MacroView {
@@ -693,6 +703,7 @@ mod tests {
     fn action_autocast_reads_a_pet_book_macro_only() {
         use crate::script::{MacroBinding, MacroState, MacroView, PetBookState, SpellSlotView};
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_book(PetBookState {
             token: Some("PET".into()),
             slots: vec![SpellSlotView {
@@ -849,6 +860,7 @@ mod tests {
     #[test]
     fn get_action_count_reads_the_pushed_count() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.eval::<i64>("return GetActionCount(5)").unwrap(), 0);
         s.set_action(
             5,
@@ -902,6 +914,8 @@ mod tests {
         use crate::script::{MacroState, MacroView};
 
         let mut s = UiScript::new().unwrap();
+
+        s.keep_calls();
         s.set_macros(MacroState::from_scopes(
             vec![
                 MacroView {
@@ -974,6 +988,7 @@ mod tests {
     #[test]
     fn use_action_applies_in_the_call_with_a_host_lent() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let calls = crate::script::host::test_support::applied_in_call(&mut s, "UseAction(1)");
         assert!(
             matches!(

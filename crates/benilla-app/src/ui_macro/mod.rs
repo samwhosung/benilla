@@ -119,6 +119,7 @@ fn load_macros(
     mut hosted_vm: crate::script_calls::HostedVm,
     roster: Res<crate::glue_session::roster::Roster>,
     actions: Res<crate::ui_action::PlayerActions>,
+    bar: crate::ui_action::ActionBarSteps,
     mut files: ResMut<MacroFiles>,
 ) {
     hosted_vm.run(|script| {
@@ -155,7 +156,7 @@ fn load_macros(
             state.count(true)
         );
         if !moves.is_empty() {
-            migrate_character_bar(script, &actions, &state, &files, &moves);
+            migrate_character_bar(&bar, &actions, &state, &files, &moves);
         }
         script.set_macros(state);
         // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
@@ -173,11 +174,11 @@ fn load_macros(
 /// The file goes first, rewritten in this build's numbering, so the next load finds no old ids and
 /// the buttons move once: afterwards a word in 19 to 36 can be an account macro's. If the write
 /// fails nothing moves and the next load tries again. Each button then goes out as a placement's
-/// does, through the VM's queue to `drain_action_sets`, which stores it and sends
-/// `CMSG_SET_ACTION_BUTTON`. A button whose old place holds no macro is cleared the same way: its
+/// does ([`crate::ui_action::ActionBarSteps::set`]): `CMSG_SET_ACTION_BUTTON` sent and the store's
+/// write queued. A button whose old place holds no macro is cleared the same way: its
 /// word would read as an account macro of that id, and misbind once one takes it.
 fn migrate_character_bar(
-    script: &mut UiScript,
+    bar: &crate::ui_action::ActionBarSteps,
     actions: &crate::ui_action::PlayerActions,
     state: &MacroState,
     files: &MacroFiles,
@@ -207,7 +208,9 @@ fn migrate_character_bar(
         "ui_macro: {} character macro button(s) moved to macro ids or cleared",
         writes.len()
     );
-    script.queue_action_sets(writes);
+    for (id, packed) in writes {
+        bar.set(id, packed);
+    }
 }
 
 /// Persist on the engine's dirty edge. The verbs signal `UPDATE_MACROS` themselves, inside their
