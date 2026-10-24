@@ -70,14 +70,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // Sends: `GetGMTicket` is answered by `UPDATE_TICKET`, `GetGMStatus` by `UPDATE_GM_STATUS`.
-    for (name, intent) in [
-        ("GetGMTicket", GmTicketIntent::Ask),
-        ("GetGMStatus", GmTicketIntent::AskStatus),
-        ("DeleteGMTicket", GmTicketIntent::Delete),
+    // With no active player `GetGMTicket` and `DeleteGMTicket` call nothing (`0x48c9bd`,
+    // `0x48cb8d`); `GetGMStatus` sends regardless (`0x48cfc0`).
+    for (name, intent, needs_player) in [
+        ("GetGMTicket", GmTicketIntent::Ask, true),
+        ("GetGMStatus", GmTicketIntent::AskStatus, false),
+        ("DeleteGMTicket", GmTicketIntent::Delete, true),
     ] {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
+                if needs_player
+                    && !super::battlefield_queue::player_exists(
+                        &lua.app_data_ref::<Model>().expect("model app_data"),
+                    )
+                {
+                    return Ok(());
+                }
                 lua.app_data_mut::<Model>()
                     .expect("model app_data")
                     .gm_ticket_intents

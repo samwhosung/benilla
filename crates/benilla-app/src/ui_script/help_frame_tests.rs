@@ -57,6 +57,14 @@ fn setup() -> UiScript {
         (9, "Account/Billing".into()),
         (10, "Character".into()),
     ]);
+    // In the world: `GetGMTicket` sends only with an active player (`0x48c9bd`).
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
     s
 }
 
