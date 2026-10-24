@@ -394,7 +394,11 @@ fn tick_transports(
             debug!(
                 "transport {:#x}: {} at cycle {cycle} ms (period {}, map {})",
                 guid.0,
-                if sample.moving() { "departed" } else { "docked" },
+                if sample.moving() {
+                    "departed"
+                } else {
+                    "docked"
+                },
                 transport.period_ms(),
                 sample.map,
             );
