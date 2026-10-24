@@ -1252,6 +1252,74 @@ mod tests {
         assert!(s.take_glue_calls().is_empty());
     }
 
+    /// `PLAYER_ENTER_PIN` (event 25) carries the grid's ten digits as numbers, the first key's
+    /// first (`0x46bac3`-`0x46bb15`, `%d` ten times at `0x8372a8`).
+    #[test]
+    fn enter_pin_fires_the_grid_as_ten_numbers() {
+        let grid = [6, 3, 2, 1, 9, 8, 7, 0, 4, 5];
+        let (s, _host) = seated(vec![("StatusDialogClick", vec![GlueSignal::EnterPin(grid)])]);
+        s.run(
+            "GOT = {} F = CreateFrame('Frame') F:RegisterEvent('PLAYER_ENTER_PIN') \
+             F:SetScript('OnEvent', function() for i = 1, 10 do \
+               local v = getglobal('arg'..i) if type(v) == 'number' then GOT[i] = v end \
+             end end)",
+        )
+        .unwrap();
+        let got: Vec<i64> = s.eval("StatusDialogClick() return GOT").unwrap();
+        assert_eq!(got, grid.map(i64::from));
+    }
+
+    /// The keys `PINEntered` handed the host, or the error it raised.
+    fn pin_entered(args: &str) -> Result<Vec<u8>, String> {
+        let mut s = UiScript::new_glue().unwrap();
+        s.run(&format!("PINEntered({args})"))
+            .map_err(|e| e.to_string())?;
+        match s.take_glue_calls().as_slice() {
+            [GlueCall::PinEntered(pin)] => Ok(pin.positions.clone()),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// `PINEntered` (`0x46d1c0`) reads arguments 1 to 10 up to the first nil (`lua_type` ≤ 0,
+    /// `0x46d1eb`), numbers or numeric strings, each the low byte of its `__ftol` (`0x46d20f`), and
+    /// hands 4 to 10 of them to `0x46b0c0`. The stock keypad passes its keys' ids as strings.
+    #[test]
+    fn pin_entered_hands_on_the_keys_pressed() {
+        assert_eq!(pin_entered("'2', '9', '4', '7'"), Ok(vec![2, 9, 4, 7]));
+        assert_eq!(pin_entered("1, 2, 3, 4, nil, 6"), Ok(vec![1, 2, 3, 4]));
+        assert_eq!(pin_entered("258, -1, 3.9, '7'"), Ok(vec![2, 255, 3, 7]));
+        assert_eq!(
+            pin_entered("0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10"),
+            Ok((0..10).collect()),
+            "the eleventh is never read"
+        );
+        assert!(
+            format!("{:?}", GlueCall::PinEntered(GluePin { positions: vec![1, 2, 3, 4] }))
+                .contains("4 keys"),
+            "the keys are never printed"
+        );
+    }
+
+    /// A count outside 4 to 10 raises `0x837cf4` with the count; an argument that is not a number
+    /// raises `0x837d34` with its position. Either hands nothing on.
+    #[test]
+    fn pin_entered_raises_its_usage() {
+        let err = pin_entered("1, 2, 3").unwrap_err();
+        assert!(
+            err.contains("Usage: PINEntered(4-10 key positions) - bad number of args 3"),
+            "{err}"
+        );
+        let err = pin_entered("").unwrap_err();
+        assert!(err.contains("bad number of args 0"), "{err}");
+        let err = pin_entered("1, 'x', 3, 4").unwrap_err();
+        assert!(
+            err.contains("Usage: PINEntered(4-10 key positions) - non-numeric arg #2"),
+            "{err}"
+        );
+        let err = pin_entered("1, 2, 3, false").unwrap_err();
+        assert!(err.contains("non-numeric arg #4"), "{err}");
+    }
+
     /// An agreement's flags come off its record's integer (`0x46a41a` reads `+0x28`), Storm's
     /// `SStrToInt`: no whitespace skip, no `+`, a 32-bit wrap.
     #[test]

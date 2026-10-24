@@ -145,7 +145,6 @@ const NOT_YET: &[(&str, &[&str])] = &[
             "GetBillingPlan",
             "GetBillingTimeRemaining",
             "GetBillingTimeRested",
-            "PINEntered",
             "PatchDownloadApply",
             "PatchDownloadCancel",
             "PatchDownloadProgress",
