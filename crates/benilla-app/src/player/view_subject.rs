@@ -199,18 +199,29 @@ pub(super) fn publish_view_subject(
 /// leads to `0x5e43f8`, which looks up the active player (`0x5e440e`) and runs `EndFarSight` on it
 /// (`0x5ee590` at `0x5e441d`), reading no body. The field still names the object, so the view
 /// stays home until it changes.
-pub(super) fn on_clear_far_sight(
-    In(_): In<benilla_protocol::SessionEvent>,
+fn on_clear_far_sight(
+    In(ev): In<benilla_protocol::SessionEvent>,
     far_sight: Res<FarSight>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     index: Res<GuidIndex>,
     net: Res<NetCommands>,
 ) {
-    let Some(store) = self_store.iter().next() else {
+    let (benilla_protocol::SessionEvent::FarSightCleared, Some(store)) =
+        (ev, self_store.iter().next())
+    else {
         return;
     };
     let held = |guid: u64| index.0.contains_key(&guid);
     far_sight.end(store.0.player_farsight(), held, &net);
+}
+
+/// The far-sight packet's handler.
+pub(super) fn register(app: &mut App) {
+    use crate::net::NetHandlerApp;
+    app.net_handler(
+        benilla_protocol::SessionEventKind::FarSightCleared,
+        on_clear_far_sight,
+    );
 }
 
 #[cfg(test)]

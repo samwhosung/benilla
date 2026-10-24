@@ -320,11 +320,7 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<camera_dynamics::CameraOptions>();
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a
         // separate system, as `control` holds our `Transform` mutably and cannot read another's.
-        crate::net::NetHandlerApp::net_handler(
-            app,
-            benilla_protocol::SessionEventKind::FarSightCleared,
-            view_subject::on_clear_far_sight,
-        );
+        view_subject::register(app);
         app.init_resource::<view_subject::ViewSubject>()
             .init_resource::<view_subject::FarSight>()
             .init_resource::<scoped_view::ScopedView>()

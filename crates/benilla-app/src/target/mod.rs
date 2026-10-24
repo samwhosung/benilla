@@ -342,7 +342,12 @@ impl Plugin for TargetPlugin {
                 Update,
                 (
                     // The latch first, before any pick refresh clears what the press was over.
-                    (latch_press_pick, hover::update_pick_occlusion).chain(),
+                    // The trace reads the static world after this frame's stream reshapes it.
+                    (
+                        latch_press_pick,
+                        hover::update_pick_occlusion.after(WorldStage::Stream),
+                    )
+                        .chain(),
                     hover::update_hover,
                     hover::update_hovered_object,
                     cursor_mode::classify_cursor,
