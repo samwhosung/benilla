@@ -43,7 +43,7 @@ pub(crate) struct SummonState {
 
 impl SummonState {
     /// The latch, `0x4963a0`.
-    fn latch(&mut self, summoner: u64, zone: u32, delay_ms: u32, now: f64) {
+    pub(crate) fn latch(&mut self, summoner: u64, zone: u32, delay_ms: u32, now: f64) {
         self.summoner = summoner;
         self.zone = zone;
         self.expires_at = Some(now + f64::from(delay_ms) / 1000.0);

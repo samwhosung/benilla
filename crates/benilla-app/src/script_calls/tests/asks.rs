@@ -97,3 +97,19 @@ fn get_guild_info_asks_a_missed_guild_inside_its_call() {
     );
     assert_eq!(sent(&rx), ["guild 9", "roll 1"]);
 }
+
+/// `GetSummonConfirmSummoner` reads the name cache by the latched summoner (`0xb4e358`) with the
+/// callback `0x48b710` and no dedupe (`0x48b6bf`-`0x48b6e1`): a miss sends `CMSG_NAME_QUERY`
+/// inside the call, once while it is in flight.
+#[test]
+fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
+    let (mut app, rx) = client();
+    app.world_mut()
+        .resource_mut::<crate::ui_summon::SummonState>()
+        .latch(0x2a, 1519, 120_000, 0.0);
+    eval::<()>(
+        &mut app,
+        "GetSummonConfirmSummoner() RandomRoll(1, 2) GetSummonConfirmSummoner()",
+    );
+    assert_eq!(sent(&rx), ["name 0x2a", "roll 1"]);
+}
