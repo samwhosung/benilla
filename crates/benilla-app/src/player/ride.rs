@@ -52,17 +52,20 @@ impl Player {
 
 /// Whether the rider's feet lie inside the transport it rides (`0x630ba0`): the point in the
 /// transport's frame, as the reference keeps the mover (`0x6173d5` passes `[mover+0x10]`), against
-/// its [`crate::transport::TransportVolume`]. A transport whose model has not loaded holds no one.
+/// its [`crate::transport::TransportVolume`]. A transport not yet armed has no world entity, which
+/// answers inside (`0x5f55c8`); one whose model has not loaded holds no one (`0x670a70`).
 fn aboard(player: &Player, transports: &TransportQuery) -> bool {
-    let Some((boat, _, _, Some(volume))) = player
-        .ride
-        .as_ref()
-        .and_then(|r| transports.get(r.entity).ok())
-    else {
+    let Some(ride) = player.ride.as_ref() else {
         return false;
     };
-    let local = boat.compute_affine().inverse().transform_point3(player.pos);
-    volume.contains(benilla_assets::coords::bevy_to_wow(local))
+    match transports.get(ride.entity) {
+        Err(_) => true,
+        Ok((boat, _, _, Some(volume))) => {
+            let local = boat.compute_affine().inverse().transform_point3(player.pos);
+            volume.contains(benilla_assets::coords::bevy_to_wow(local))
+        }
+        Ok(_) => false,
+    }
 }
 
 /// Attaches or detaches against this frame's walkable support, then re-snapshots the deck-local
