@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use benilla_formats::SpellCatalog;
 use benilla_protocol::messages::ActionButton;
 
-use crate::ui_script::UiInput;
+use crate::ui_script::UiTick;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
@@ -467,7 +467,7 @@ impl Plugin for UiActionPlugin {
                         .before(crate::ui_cast::feed_cast_reports),
                     // The target chain queues the right-click casts earlier in the frame.
                     drain::drain_click_casts
-                        .after(UiInput)
+                        .after(UiTick)
                         .after(crate::target::TargetUpdate),
                     // The latches must be current before the target chain's cursor reads them.
                     track_learned_abilities

@@ -164,7 +164,7 @@ pub(crate) struct WorldStateUiPlugin;
 impl Plugin for WorldStateUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_world_state_ui.after(AssetSet::Open))
-            .add_systems(Update, feed_world_state_ui.after(crate::ui_script::UiInput));
+            .add_systems(Update, feed_world_state_ui.after(crate::ui_script::UiTick));
     }
 }
 

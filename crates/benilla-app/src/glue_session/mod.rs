@@ -45,7 +45,7 @@ impl Plugin for GlueSessionPlugin {
                     realm_smoke::debug_realm_smoke.run_if(realm_smoke::enabled),
                 )
                     .chain()
-                    .after(crate::ui_script::UiInput)
+                    .after(crate::ui_script::UiTick)
                     .after(crate::ui_script::glue_mgr::drive_glue_mgr)
                     .after(edges::SessionEdges)
                     .after(login::LoginPolicy),

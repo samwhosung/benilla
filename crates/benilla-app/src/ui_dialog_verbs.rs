@@ -19,7 +19,7 @@ use crate::net::{
 };
 use crate::query_cache::Ask;
 use crate::ui_party::GroupState;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiTick};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The pet trainer's pending question: the latch (`0xc4d7b0/b4`) and the cost (`0xc4d7b8`).
@@ -1090,7 +1090,7 @@ impl Plugin for UiDialogVerbsPlugin {
                     // After the target chain, which writes `MeetingStoneUse`, so the join leaves
                     // on the click's own frame.
                     drain_meeting_stone_joins
-                        .after(UiInput)
+                        .after(UiTick)
                         .after(crate::target::TargetUpdate),
                 ),
             )

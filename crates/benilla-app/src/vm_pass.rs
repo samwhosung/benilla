@@ -15,10 +15,12 @@
 //! in, which only a changed registration moves. The reference's tick runs its due timers, then the
 //! queued window input (`0x423920`, called at `0x420d23`), each record whole through its
 //! category's handlers (`0x4239a0`, `0x4245b0`), then category 6 (`0x420d55`), where the packet
-//! dispatch `0x403620` is registered, then the frame time, category 5 (`0x420f70`); which category
-//! the frame's `OnUpdate` walk runs in is not read. benilla runs the net feeds, then the tick, then
-//! the UI's input records, and its bindings and world clicks after the input stage: the window
-//! input ahead of the net drain is an order it does not keep yet.
+//! dispatch `0x403620` is registered, then the frame time, category 5 (`0x420d63`), and last the
+//! frame pass, category 0x11 (`0x420d6a`, `0x442350`), whose interface layer runs the `OnUpdate`
+//! walk (`0x764330` → `0x765650` → `0x76b2c0`) before the draw. benilla runs the UI's input
+//! records and the bindings, then the feeds, then the tick, then the paint, all after the net
+//! drain, which applies the frame's packets to the world before its input; its world clicks and
+//! the controller's frame-time step follow the tick.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -231,6 +233,7 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
         let in_phase = members(&[
             &crate::ui_script::UiFeed,
             &crate::ui_script::UiInput,
+            &crate::ui_script::UiTick,
             &crate::ui_script::UiDrain,
             &crate::ui_script::UiPaint,
             &VmPass::Member,
@@ -670,23 +673,23 @@ mod tests {
         next
     }
 
-    /// The pass runs its phases in their declared order: the net feeds (the unit feed), then the
-    /// frame's tick and the input pass, then the drains of what their Lua asked, then the paint.
+    /// The pass runs its phases in the reference's tick order: the input pass, then the net feeds
+    /// (the unit feed), then the tick, then the drains of what their Lua asked, then the paint.
     #[test]
-    fn the_pass_runs_the_feeds_then_the_tick_then_the_drains() {
+    fn the_pass_runs_the_input_then_the_feeds_then_the_tick_then_the_drains() {
         let app = headless_client();
         let Some(order) = pass_order(&app) else {
             return;
         };
         let at = |name: &str| at(&order, name);
-        let (feed, tick, input) = (
+        let (input, feed, tick) = (
+            at("::feed_ui_input"),
             at("::ui_unit::feed_units"),
             at("::tick_script"),
-            at("::feed_ui_input"),
         );
         let (drain, paint) = (at("::drain_chat_input"), at("::paint_script"));
         assert!(
-            feed < tick && tick < drain && input < drain && drain < paint,
+            input < feed && feed < tick && tick < drain && drain < paint,
             "{order:?}"
         );
     }

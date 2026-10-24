@@ -339,7 +339,7 @@ impl Plugin for CursorPlugin {
                     // After the tick: a FrameXML `SetCursor` made this frame is read here; and
                     // after the target chain, whose clicks, calls and selects end or raise the
                     // targeting cursor.
-                    .after(crate::ui_script::UiInput)
+                    .after(crate::ui_script::UiTick)
                     .after(crate::target::TargetUpdate),
             );
         #[cfg(not(target_os = "macos"))]
@@ -357,7 +357,7 @@ impl Plugin for CursorPlugin {
                     // After the tick: a FrameXML `SetCursor` made this frame is read here; and
                     // after the target chain, whose clicks, calls and selects end or raise the
                     // targeting cursor.
-                    .after(crate::ui_script::UiInput)
+                    .after(crate::ui_script::UiTick)
                     .after(crate::target::TargetUpdate),
             );
     }

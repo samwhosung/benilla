@@ -1768,11 +1768,12 @@ pub(crate) mod schedule_tests {
         );
     }
 
-    /// The VM ticks once a frame (`extract::tick_script`, in `UiInput`): a push the tick must
-    /// see rides `UiFeed`, chained after the net drain and before the tick; a drain of what it
-    /// produced is `.after(UiInput)`. Read off the built graph. Fails a holder with no path to or
-    /// from the tick, one before the tick outside `UiFeed` and not argued in
-    /// [`OUTSIDE_THE_FEED_PHASE`], a `UiFeed` member the graph does not place between the drain
+    /// The VM ticks once a frame (`extract::tick_script`, in `UiTick`): the window input rides
+    /// `UiInput` and a push the tick must see rides `UiFeed`, both chained after the net drain
+    /// and before the tick, the input first; a drain of what the tick produced is
+    /// `.after(UiTick)`. Read off the built graph. Fails a holder with no path to or from the
+    /// tick, one before the tick outside both phases and not argued in
+    /// [`OUTSIDE_THE_FEED_PHASE`], a member of either the graph does not place between the drain
     /// and the tick, and a stale row.
     #[test]
     fn every_vm_holder_in_update_declares_its_side_of_the_tick() {
@@ -1816,7 +1817,7 @@ pub(crate) mod schedule_tests {
         let after_drain = reach(drain, &succ);
         let mut holders: Vec<SystemKey> = c.holds_vm.iter().copied().collect();
         holders.sort_by(|a, b| c.name(*a).cmp(c.name(*b)));
-        let (mut feed, mut post, mut argued) = (0, 0, 0);
+        let (mut input, mut feed, mut post, mut argued) = (0, 0, 0, 0);
         let mut offenders = Vec::new();
         let mut stale = Vec::new();
         for k in &holders {
@@ -1824,11 +1825,20 @@ pub(crate) mod schedule_tests {
                 continue;
             }
             let s = &c.systems[k];
+            let in_input = s.sets.iter().any(|set| set == "UiInput");
             let in_feed = s.sets.iter().any(|set| set == "UiFeed");
             let row = OUTSIDE_THE_FEED_PHASE
                 .iter()
                 .find(|(suffix, _)| s.name.ends_with(suffix));
-            if in_feed {
+            if in_input {
+                input += 1;
+                if !(after_drain.contains(k) && before_tick.contains(k)) {
+                    offenders.push(format!(
+                        "{}: in `UiInput`, but the graph does not place it after the net drain and before the tick",
+                        s.name
+                    ));
+                }
+            } else if in_feed {
                 feed += 1;
                 if !(after_drain.contains(k) && before_tick.contains(k)) {
                     offenders.push(format!(
@@ -1844,7 +1854,7 @@ pub(crate) mod schedule_tests {
                     continue;
                 }
                 offenders.push(format!(
-                    "{}: ordered before the tick but not in `UiFeed` — it may run before this frame's packets land; `.in_set(UiFeed)`",
+                    "{}: ordered before the tick but in neither `UiInput` nor `UiFeed` — it may run before this frame's packets land; `.in_set(UiFeed)`",
                     s.name
                 ));
             } else {
@@ -1859,7 +1869,9 @@ pub(crate) mod schedule_tests {
                 stale.push(format!(
                     "{}: argued in OUTSIDE_THE_FEED_PHASE but the graph places it {} — drop the row",
                     s.name,
-                    if in_feed {
+                    if in_input {
+                        "in the input pass"
+                    } else if in_feed {
                         "in the feed phase"
                     } else {
                         "after the tick"
@@ -1875,13 +1887,13 @@ pub(crate) mod schedule_tests {
             }
         }
         eprintln!(
-            "VM holders in Update: {} — the tick, {feed} in the feed phase, {post} after the tick, {argued} argued outside the phase",
+            "VM holders in Update: {} — the tick, {input} in the input pass, {feed} in the feed phase, {post} after the tick, {argued} argued outside the phase",
             holders.len()
         );
         assert!(
             offenders.is_empty(),
             "these systems hold the VM in `Update` without declaring their side of the tick \
-             (`UiFeed` before it, or `.in_set(crate::ui_script::UiDrain)`):\n  {}",
+             (`UiInput` or `UiFeed` before it, or `.in_set(crate::ui_script::UiDrain)`):\n  {}",
             offenders.join("\n  ")
         );
         assert!(stale.is_empty(), "stale rows:\n  {}", stale.join("\n  "));

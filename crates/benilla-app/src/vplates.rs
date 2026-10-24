@@ -78,7 +78,8 @@ pub(crate) struct VPlates(pub(crate) EntityHashSet);
 #[derive(Resource, Default)]
 pub(crate) struct PlateHover(pub(crate) Option<Entity>);
 
-/// Read [`PlateHover`] off the walk that just ran, at the end of the UI input pass.
+/// Read [`PlateHover`] after the tick: off the input pass's hover walk and the leaves and re-pick
+/// of the pump (`0x765650` → `0x7660d0`).
 pub(crate) fn seed_plate_hover(
     script: Option<NonSend<benilla_ui::script::UiScript>>,
     guids: Option<Res<crate::net::GuidIndex>>,

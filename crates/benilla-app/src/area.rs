@@ -325,7 +325,7 @@ impl Plugin for AreaPlugin {
                 // spurious splash. After the unit feed too, by the sets: the commit's handlers read
                 // our template as the frame's packets left it.
                 feed_zone_events
-                    .after(crate::ui_script::UiInput)
+                    .after(crate::ui_script::UiTick)
                     .after(benilla_world::terrain_stream::AreaAuthoritySet),
             );
     }

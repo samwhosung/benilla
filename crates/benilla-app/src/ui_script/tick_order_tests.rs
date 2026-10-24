@@ -46,7 +46,10 @@ fn in_frame_order(app: &mut App) -> Vec<Step> {
             runs_before(app, extract::tick_script, input::feed_ui_input),
         ),
     ] {
-        assert!(ab != ba, "{a:?} and {b:?} run in an order the executor picks");
+        assert!(
+            ab != ba,
+            "{a:?} and {b:?} run in an order the executor picks"
+        );
         table.push(if ab { (a, b) } else { (b, a) });
     }
     let mut steps = vec![Input, Packets, Update];
