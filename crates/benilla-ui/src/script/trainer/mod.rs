@@ -116,6 +116,14 @@ impl Default for TrainerTooltip {
     }
 }
 
+/// A product record a getter's lookup misses: the item, and the taught spell whose id, under
+/// `0xb0000000`, the lookup passes as its owner (`[taught]` at `0x4d9074` and `0x4d9cdf`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductWait {
+    pub item: u32,
+    pub taught: u32,
+}
+
 /// One service, resolved by the app from the wire `TrainerSpell`; its place in
 /// [`TrainerState::services`] is wire order, not display order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -130,12 +138,12 @@ pub struct TrainerService {
     pub texture: Option<String>,
     /// The item whose record the icon's product lookup (`0x4d9096`) misses: each
     /// `GetTrainerServiceIcon` call on the row keeps the callback `0x4d9140` on it.
-    pub icon_wait: Option<u32>,
+    pub icon_wait: Option<ProductWait>,
     /// The expanded text; `None` answers nil (`0x4d9d90`).
     pub description: Option<String>,
     /// The item whose record the description's product lookup (`0x4d9d07`) misses: each
     /// `GetTrainerServiceDescription` call on the row keeps the callback `0x4d9db0` on it.
-    pub description_wait: Option<u32>,
+    pub description_wait: Option<ProductWait>,
     /// In copper, already reputation-discounted by the server.
     pub cost: u32,
     /// A primary profession's first rank: the stock window's `cpCost2 > 0`, which asks to confirm.
@@ -605,12 +613,12 @@ fn rows(model: &Model) -> (&[Row], usize) {
 
 /// A getter's product lookup that missed: the item cache asked inside the call, with the
 /// window's callback (`0x4d9140`, `0x4d9db0`, dedupe flag 0 at `0x4d9076` and `0x4d9ce7`).
-fn ask_item(lua: &Lua, entry: u32, spell_id: u32) -> mlua::Result<()> {
+fn ask_item(lua: &Lua, wait: ProductWait) -> mlua::Result<()> {
     super::calls::ask(
         lua,
         super::RecordAsk::Item {
-            entry,
-            owner: super::calls::spell_owner(spell_id),
+            entry: wait.item,
+            owner: super::calls::spell_owner(wait.taught),
             callback: super::ItemCallback::Trainer,
         },
     )
@@ -789,13 +797,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (texture, wait) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 service(&model, index)
-                    .map(|s| (s.texture.clone(), s.icon_wait.map(|e| (e, s.spell_id))))
+                    .map(|s| (s.texture.clone(), s.icon_wait))
                     .unwrap_or_default()
             };
             // The miss asks and keeps its callback inside the call (`0x4d907e`), and pushes nil
             // (`0x4d90a4`).
-            if let Some((entry, spell_id)) = wait {
-                ask_item(lua, entry, spell_id)?;
+            if let Some(wait) = wait {
+                ask_item(lua, wait)?;
             }
             opt_str(lua, texture.as_ref())
         })?,
@@ -811,15 +819,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (description, wait) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 service(&model, index)
-                    .map(|s| {
-                        let wait = s.description_wait.map(|e| (e, s.spell_id));
-                        (s.description.clone(), wait)
-                    })
+                    .map(|s| (s.description.clone(), s.description_wait))
                     .unwrap_or_default()
             };
             // The miss asks and keeps its callback inside the call (`0x4d9cef`).
-            if let Some((entry, spell_id)) = wait {
-                ask_item(lua, entry, spell_id)?;
+            if let Some(wait) = wait {
+                ask_item(lua, wait)?;
             }
             opt_str(lua, description.as_ref())
         })?,

@@ -42,8 +42,9 @@ fn seat_player(app: &mut App) {
     });
 }
 
-/// The owner id the profession and trainer lookups pass: `0xb0000000` over the row's spell id
-/// (`cdq; or edx,0xb0000000`, `0x4f75cf`-`0x4f75d2`, `0x4d9078`-`0x4d9087`, `0x4fdb8a`-`0x4fdb99`).
+/// The owner id the profession and trainer lookups pass: `0xb0000000` over a spell id (`cdq; or
+/// edx,0xb0000000`), the row's at a profession (`0x4f75cf`-`0x4f75d2`, `0x4fdb8a`-`0x4fdb99`), the
+/// taught spell's at a trainer (`0x4d9074`-`0x4d9087`).
 fn spell_owner(spell_id: u32) -> u64 {
     0xb000_0000_0000_0000 | u64::from(spell_id)
 }
@@ -302,7 +303,7 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
 /// callback on the window.
 #[test]
 fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
-    use benilla_ui::script::{TrainerService, TrainerServiceCategory, TrainerState};
+    use benilla_ui::script::{ProductWait, TrainerService, TrainerServiceCategory, TrainerState};
     let (mut app, rx) = client();
     vm(&mut app).set_trainer(Some(TrainerState {
         guid: NPC,
@@ -312,8 +313,15 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
             category: TrainerServiceCategory::Available,
             group_key: 164,
             group_name: "Blacksmithing".into(),
-            icon_wait: Some(2589),
-            description_wait: Some(2590),
+            // The taught recipe's id builds the owner, never the wire spell's (`0x4d9074`).
+            icon_wait: Some(ProductWait {
+                item: 2589,
+                taught: 2660,
+            }),
+            description_wait: Some(ProductWait {
+                item: 2590,
+                taught: 2660,
+            }),
             ..Default::default()
         }],
         ..Default::default()
@@ -324,7 +332,7 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
          for i = 1, GetNumTrainerServices() do GetTrainerServiceDescription(i) end \
          for i = 1, GetNumTrainerServices() do GetTrainerServiceIcon(i) end",
     );
-    let owner = spell_owner(2018);
+    let owner = spell_owner(2660);
     assert_eq!(
         sent(&rx),
         [

@@ -9,7 +9,9 @@ use benilla_formats::{
     SPELL_EFFECT_SKILL_STEP,
 };
 use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
-use benilla_ui::script::{TrainerServiceCategory, TrainerTooltip, TRAINER_GROUP_KNOWN};
+use benilla_ui::script::{
+    ProductWait, TrainerServiceCategory, TrainerTooltip, TRAINER_GROUP_KNOWN,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -42,7 +44,8 @@ pub(super) fn service_icon(
     )
 }
 
-/// [`service_icon`], with `wait` set to the product whose record the lookup (`0x4d9096`) missed:
+/// [`service_icon`], with `wait` set to the product whose record the lookup (`0x4d9096`) missed,
+/// beside the taught spell its owner is built from:
 /// the callback `0x4d9140` each getter call keeps on it (`0x4d907e`) runs `0x4d7d40` when it lands.
 pub(super) fn service_icon_waiting(
     wire_spell: u32,
@@ -51,7 +54,7 @@ pub(super) fn service_icon_waiting(
     icons: Option<&ItemDisplays>,
     items: &Items,
     ask: Ask<'_>,
-    wait: &mut Option<u32>,
+    wait: &mut Option<ProductWait>,
 ) -> Option<String> {
     let wire = spells.get(wire_spell)?;
     if trainer_type == TRAINER_TYPE_TRADESKILL {
@@ -63,13 +66,15 @@ pub(super) fn service_icon_waiting(
             .map(|i| wire.effect_trigger_spell[i])
             .filter(|&t| t != 0);
         // The taught spell's product item, slot 0 only.
-        if let Some(product) = taught
-            .and_then(|t| spells.get(t))
-            .map(|d| d.effect_item_type[0])
-            .filter(|&e| e != 0)
+        if let Some((taught, product)) = taught
+            .and_then(|t| spells.get(t).map(|d| (t, d.effect_item_type[0])))
+            .filter(|&(_, e)| e != 0)
         {
             let Some(template) = items.template(product, 0, ask) else {
-                *wait = Some(product);
+                *wait = Some(ProductWait {
+                    item: product,
+                    taught,
+                });
                 return None;
             };
             return item_icon(icons, template.display_info_id);
@@ -150,7 +155,7 @@ pub(super) fn service_description(
 }
 
 /// [`service_description`], with `wait` set to the recipe's product whose record the lookup
-/// (`0x4d9d07`) missed: the callback `0x4d9db0` each getter call keeps on it (`0x4d9cef`) runs
+/// (`0x4d9d07`) missed, beside the taught spell its owner is built from: the callback `0x4d9db0` each getter call keeps on it (`0x4d9cef`) runs
 /// `0x4d7d40` when it lands. A product id of 0 is never looked up, so it keeps none.
 pub(super) fn service_description_waiting(
     wire: &TrainerSpell,
@@ -159,7 +164,7 @@ pub(super) fn service_description_waiting(
     items: &Items,
     ask: Ask<'_>,
     text: &ServiceText,
-    wait: &mut Option<u32>,
+    wait: &mut Option<ProductWait>,
 ) -> Option<String> {
     let d = spells.get(wire.spell)?;
     let learn = (0..3).find(|&i| {
@@ -182,7 +187,8 @@ pub(super) fn service_description_waiting(
         }
     }
     if let Some(slot) = learn {
-        if let Some(taught) = spells.get(d.effect_trigger_spell[slot]) {
+        let taught_id = d.effect_trigger_spell[slot];
+        if let Some(taught) = spells.get(taught_id) {
             if let Some(t) = taught.description.as_deref().filter(|t| !t.is_empty()) {
                 return Some(substitute(t, taught, caster(slot)));
             }
@@ -196,7 +202,12 @@ pub(super) fn service_description_waiting(
                         return Some(item.description.clone());
                     }
                     Some(_) => {}
-                    None if product != 0 => *wait = Some(product),
+                    None if product != 0 => {
+                        *wait = Some(ProductWait {
+                            item: product,
+                            taught: taught_id,
+                        })
+                    }
                     None => {}
                 }
             }

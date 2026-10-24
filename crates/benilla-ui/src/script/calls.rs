@@ -323,8 +323,9 @@ pub enum RecordAsk {
     Summoner,
 }
 
-/// The owner id a profession or trainer getter's item lookup passes: `0xb0000000` over the row's
-/// spell id (`cdq; or edx,0xb0000000`, `0x4f75cf`, `0x4d9078`-`0x4d9087`, `0x4fdb8a`-`0x4fdb99`).
+/// The owner id a profession or trainer getter's item lookup passes: `0xb0000000` over a spell id
+/// (`cdq; or edx,0xb0000000`), the row's at a profession (`0x4f75cf`, `0x4fdb8a`-`0x4fdb99`), the
+/// taught spell's at a trainer (`0x4d9074`-`0x4d9087`).
 pub fn spell_owner(spell_id: u32) -> u64 {
     0xb000_0000_0000_0000 | u64::from(spell_id)
 }
