@@ -2059,31 +2059,3 @@ mod tests {
         assert!(!q.take_score_dirty());
     }
 }
-#[cfg(test)]
-mod scratch_scan {
-    #[test]
-    fn scratch_farsight_scan() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let catalog = benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc");
-        let mut hits: Vec<_> = catalog
-            .iter()
-            .filter(|(_, d)| d.attributes_ex & 0x2000 != 0)
-            .map(|(id, d)| (id, d.attributes_ex & 0x4 != 0, d.name.clone(), d.effects))
-            .collect();
-        hits.sort();
-        for h in &hits {
-            eprintln!("FS {h:?}");
-        }
-        // Stuck: the spells whose effect is 0x54.
-        let mut stuck: Vec<_> = catalog
-            .iter()
-            .filter(|(_, d)| d.effects.contains(&0x54))
-            .map(|(id, d)| (id, d.name.clone(), d.effects))
-            .collect();
-        stuck.sort();
-        for h in &stuck {
-            eprintln!("ST {h:?}");
-        }
-    }
-}
