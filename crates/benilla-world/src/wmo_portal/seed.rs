@@ -668,6 +668,33 @@ mod tests {
         );
     }
 
+    /// The portal leg's accept (`0x6be421`-`0x6be434`) is `portal − best < 1e-4` (`0x80c4f4`) in
+    /// fractions of the 1760 yd ray (`0x80fec8`): a floor-hole portal up to 0.176 yd below the
+    /// nearest face still wins, strictly, and one further below does not.
+    #[test]
+    fn the_portal_tie_is_a_fraction_of_the_ray() {
+        let refs = [
+            WmoPortalRef {
+                portal: 0,
+                group: 1,
+                side: -1,
+            },
+            WmoPortalRef {
+                portal: 0,
+                group: 0,
+                side: 1,
+            },
+        ];
+        let (pverts, pinfo) = horizontal_portal(10.0, 5.0);
+        let with_slab_at = |z: f32| {
+            let (groups, mut tris) = stairwell();
+            tris[0].extend(quad(z, 5.0));
+            no_terrain(&tris, &groups, &pverts, &[pinfo], &refs, [0.0, 0.0, 12.0]).in_group
+        };
+        assert_eq!(with_slab_at(10.15), Some(1), "0.15 yd is inside the tie");
+        assert_eq!(with_slab_at(10.2), Some(0), "0.2 yd is past it");
+    }
+
     #[test]
     fn vertical_doorway_snaps_only_within_the_window() {
         // A vertical doorway in the x=0 plane between room A (x<0) and room B (x>0), with room A's

@@ -1014,6 +1014,65 @@ mod tests {
         assert_eq!(track(&mut world), (keys(22, 202), keys(22, 202)));
     }
 
+    /// `0x6be250` races each instance's portal leg against the best fraction across every
+    /// instance so far (`0x6be421`-`0x6be434`, `[ebp+0x8]` the shared fraction): a later building's
+    /// floor-hole portal 0.1 yd below an earlier building's floor still takes the probe.
+    #[test]
+    fn a_later_buildings_portal_wins_the_tie_across_buildings() {
+        let floor = floor_model(11, -1.0, 0, 101);
+        // Group 0 a stairwell far below, group 1 the room whose floor hole is at z = -1.1.
+        let nav = |ref_start, area, z0: f32, z1: f32| benilla_assets::WmoGroupNav {
+            flags: 0,
+            bbox_min: [-10.0, -10.0, z0],
+            bbox_max: [10.0, 10.0, z1],
+            ref_start,
+            ref_count: 1,
+            area_table_id: area,
+            fog_indices: [0; 4],
+            group_liquid: 0xf,
+        };
+        let deep = [
+            [-10.0, -10.0, -30.0],
+            [10.0, -10.0, -30.0],
+            [0.0, 10.0, -30.0],
+        ];
+        let hole = WmoModel {
+            wmo_id: 22,
+            group_nav: vec![nav(0, 201, -31.0, 0.0), nav(1, 202, -1.2, 10.0)],
+            group_collision_tris: vec![vec![deep], Vec::new()],
+            group_camera_only_tris: vec![Vec::new(), Vec::new()],
+            group_collision_bounds: vec![Some(([-10.0, -10.0, -30.0], [10.0, 10.0, -30.0])), None],
+            group_collision_grids: vec![None, None],
+            collision_bounds: Some(([-10.0, -10.0, -30.0], [10.0, 10.0, -30.0])),
+            portal_vertices: vec![
+                [-5.0, -5.0, -1.1],
+                [5.0, -5.0, -1.1],
+                [5.0, 5.0, -1.1],
+                [-5.0, 5.0, -1.1],
+            ],
+            portal_infos: vec![benilla_assets::WmoPortalInfo {
+                start_vertex: 0,
+                count: 4,
+                plane: [0.0, 0.0, 1.0, 1.1],
+            }],
+            portal_refs: vec![
+                benilla_assets::WmoPortalRef {
+                    portal: 0,
+                    group: 1,
+                    side: -1,
+                },
+                benilla_assets::WmoPortalRef {
+                    portal: 0,
+                    group: 0,
+                    side: 1,
+                },
+            ],
+            ..bare_model()
+        };
+        let (mut world, _) = trackers_world(vec![floor, hole]);
+        assert_eq!(track(&mut world).1, keys(22, 202));
+    }
+
     /// The nearest hit decides even when it is exterior: an `0x8` deck over an interior floor is
     /// outdoors (`0x6a87f0`; `0x6be250` clears the instance for an exterior best).
     #[test]
