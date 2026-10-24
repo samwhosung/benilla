@@ -1961,11 +1961,6 @@ mod tests {
             ),
             ("SYSMSG", "UIErrorsFrame.lua"),
             (
-                "UNIT_MODEL_CHANGED",
-                "four files — the paperdoll model refresh",
-            ),
-            ("UNIT_PORTRAIT_UPDATE", "three files — the portrait refresh"),
-            (
                 "ZONE_UNDER_ATTACK",
                 "ChatFrame.lua — registered, but the name is no row of the client's event table \
                  (`reference/events.tsv`), so `RegisterEvent` drops it (`0x702140`) and nothing \
