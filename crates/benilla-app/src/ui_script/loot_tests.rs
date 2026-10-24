@@ -72,11 +72,12 @@ fn coin_and_two_items() -> LootState {
         rows: vec![
             Some(LootRow {
                 item_id: 0,
-                name: Some("1g 23s 45c".into()),
+                name: None,
                 texture: Some("Interface\\Icons\\INV_Misc_Coin_01".into()),
                 quantity: 1,
                 quality: Some(1),
                 is_coin: true,
+                money: 12_345,
                 link: None,
                 random_property_id: 0,
             }),
@@ -87,6 +88,7 @@ fn coin_and_two_items() -> LootState {
                 quantity: 3,
                 quality: Some(2), // uncommon → green text
                 is_coin: false,
+                money: 0,
                 link: None,
                 random_property_id: 0,
             }),
@@ -97,6 +99,7 @@ fn coin_and_two_items() -> LootState {
                 quantity: 1,
                 quality: Some(1), // common → white text
                 is_coin: false,
+                money: 0,
                 link: None,
                 random_property_id: 0,
             }),
@@ -190,7 +193,10 @@ fn shipped_loot_frame_drives_end_to_end() {
             .iter()
             .any(|q| matches!(&q.content, QuadContent::Text { text: Some(x), .. } if x == t))
     };
-    assert!(has_text("1g 23s 45c"), "coin row shows the money amount");
+    assert!(
+        has_text("1 Gold\n23 Silver\n45 Copper"),
+        "coin row shows the money amount, a denomination a line (0x4c2550)"
+    );
     assert!(has_text("Wool Cloth"), "item row shows the name");
     let green = text_color(&quads, "Wool Cloth").expect("Wool Cloth colour");
     assert!(
@@ -397,6 +403,7 @@ fn shipped_loot_frame_pages_five_items() {
                 quantity: 1,
                 quality: Some(1),
                 is_coin: false,
+                money: 0,
                 link: None,
                 random_property_id: 0,
             })
@@ -617,11 +624,12 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
         rows: vec![
             Some(LootRow {
                 item_id: 0,
-                name: Some("1g 23s 45c".into()),
+                name: None,
                 texture: Some("Interface\\Icons\\INV_Misc_Coin_01".into()),
                 quantity: 1,
                 quality: Some(1),
                 is_coin: true,
+                money: 12_345,
                 link: None, // synthesized row, no item behind it
                 random_property_id: 0,
             }),
@@ -632,6 +640,7 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
                 quantity: 3,
                 quality: Some(1),
                 is_coin: false,
+                money: 0,
                 link: Some(WOOL_LINK.into()),
                 random_property_id: 0,
             }),
@@ -741,6 +750,7 @@ fn shipped_loot_frame_hands_a_master_row_to_a_candidate() {
             quantity: 1,
             quality: Some(quality),
             is_coin: false,
+            money: 0,
             link: None,
             random_property_id: 0,
         })
@@ -894,6 +904,7 @@ fn the_master_loot_menu_groups_raid_candidates_by_subgroup() {
             quantity: 1,
             quality: Some(2),
             is_coin: false,
+            money: 0,
             link: None,
             random_property_id: 0,
         })],
@@ -1078,6 +1089,7 @@ fn loot_row_awaiting_its_template_opens_clean() {
             quantity: 1,
             quality: None,
             is_coin: false,
+            money: 0,
             link: None,
             random_property_id: 0,
         })],
@@ -1139,6 +1151,7 @@ fn loot_row_awaiting_its_template_opens_clean() {
             quantity: 1,
             quality: Some(1),
             is_coin: false,
+            money: 0,
             link: None,
             random_property_id: 0,
         })],

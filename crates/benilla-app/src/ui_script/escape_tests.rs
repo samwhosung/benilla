@@ -90,6 +90,7 @@ fn escape_closes_bag_and_panel_releases_loot_and_keeps_the_held_item() {
             quantity: 1,
             quality: Some(1),
             is_coin: false,
+            money: 0,
             link: None,
             random_property_id: 0,
         })],

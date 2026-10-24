@@ -43,10 +43,6 @@ const BIND_CONFIRM_MIN_QUALITY: u32 = 2;
 /// The coin row's quality, 0, so its text is grey: `0x4c23a0`'s coin guard returns 0 at
 /// `0x4c23de`, and `LootFrame_Update` has no coin case (`LootFrame.lua:81-85`).
 const COIN_QUALITY: u32 = 0;
-/// 1.12's `GOLD`, `SILVER` and `COPPER` (`GlobalStrings.lua:2025`, `:3465`, `:865`).
-const GOLD_WORD: &str = "Gold";
-const SILVER_WORD: &str = "Silver";
-const COPPER_WORD: &str = "Copper";
 /// Frames a push waits for its item template before it is dropped, about 2 s at 60 fps.
 const RECEIVE_MAX_TRIES: u16 = 120;
 /// The slots `OnItemPush` treats as the keyring (`0x491bc3`/`0x491bc8`, 0x51..=0x70): the
@@ -838,24 +834,6 @@ fn drop_loot_steps(mut loot: ResMut<LootState>) {
     loot.steps.retain(|(_, s)| matches!(s, Step::Push(_)));
 }
 
-/// The coin row's name: each nonzero denomination as "<n> <Word>", joined by spaces. The
-/// reference's composer `0x6c6260` emits the same "%d %s" parts but separates them with a newline
-/// (`0x835144`).
-fn format_money(copper: u32) -> String {
-    let (g, s, c) = (copper / 10000, (copper % 10000) / 100, copper % 100);
-    let mut parts: Vec<String> = Vec::new();
-    if g > 0 {
-        parts.push(format!("{g} {GOLD_WORD}"));
-    }
-    if s > 0 {
-        parts.push(format!("{s} {SILVER_WORD}"));
-    }
-    if c > 0 || parts.is_empty() {
-        parts.push(format!("{c} {COPPER_WORD}"));
-    }
-    parts.join(" ")
-}
-
 /// The coin row's icon: the reference's six-step ladder (`0x4c2460` → `0x6c62d0`), shared with
 /// `GetCoinIcon` and the money cursor.
 fn coin_icon(copper: u32) -> &'static str {
@@ -899,6 +877,7 @@ fn resolve_item(
         quantity: item.count,
         quality,
         is_coin: false,
+        money: 0,
         item_id: item.item_id,
         link,
         // The raw id, as the client's loot record keeps it; the tooltip resolves it (`0x52b7bf`).
@@ -932,7 +911,9 @@ fn snapshot(
     let mut rows = Vec::with_capacity(window.items.len() + 1);
     if window.coin_slot {
         rows.push(window.has_coin().then(|| LootRow {
-            name: Some(format_money(window.gold)),
+            // Spelled out at `GetLootSlotInfo`'s call, from the money cell (`0x4c2550`).
+            name: None,
+            money: window.gold,
             texture: Some(coin_icon(window.gold).into()),
             // 0: `0x4c22e0`'s coin guard returns before the record read (`0x4c22fd`).
             quantity: 0,
@@ -2962,16 +2943,6 @@ mod tests {
         assert!(!(20..=23).contains(&push_container(63, 0)));
     }
 
-    #[test]
-    fn money_formats_with_real_words_dropping_zero_denominations() {
-        assert_eq!(format_money(0), "0 Copper");
-        assert_eq!(format_money(4), "4 Copper");
-        assert_eq!(format_money(25), "25 Copper");
-        assert_eq!(format_money(10025), "1 Gold 25 Copper");
-        assert_eq!(format_money(12_345), "1 Gold 23 Silver 45 Copper");
-        assert_eq!(format_money(10_000), "1 Gold");
-    }
-
     /// The coin row's name is `GetLootRowName`'s (`0x4c2550`): gold, silver and copper in that
     /// order, each non-zero one as `"%d %s%s"` (`0x847ffc`) with the word read from the
     /// `GOLD`/`SILVER`/`COPPER` global at the call (`0x6c6230`, `0x703bf0`) and `"\n"`
@@ -3040,13 +3011,13 @@ mod tests {
     }
 
     #[test]
-    fn coin_row_uses_real_words_and_the_ladders_icon() {
+    fn coin_row_carries_its_copper_and_the_ladders_icon() {
         let items = Items::default();
         let (tx, _rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
         let (grp, nm) = nobody();
         let mut loot = LootState::default();
-        // A pure-copper drop: name reads "4 Copper", icon is the copper coin pile (_05).
+        // A pure-copper drop: its copper for the name, and the copper coin pile (_05).
         loot.open(0x42, loot_type::CORPSE, 4, vec![]);
         let snap = snapshot(
             &loot.window,
@@ -3063,7 +3034,7 @@ mod tests {
         assert_eq!(snap.rows.len(), 1, "coin row only");
         let coin = snap.rows[0].as_ref().expect("coin row present");
         assert!(coin.is_coin);
-        assert_eq!(coin.name.as_deref(), Some("4 Copper"));
+        assert_eq!(coin.money, 4, "the name is spelled out at the call");
         assert_eq!(coin.texture.as_deref(), Some(coin_icon(4)));
     }
 
@@ -3102,7 +3073,7 @@ mod tests {
         assert_eq!(snap.rows.len(), 2, "coin + one item");
         let coin = snap.rows[0].as_ref().expect("coin row present");
         assert!(coin.is_coin);
-        assert_eq!(coin.name.as_deref(), Some("1 Gold 23 Silver 45 Copper"));
+        assert_eq!(coin.money, 12_345);
         assert_eq!(coin.texture.as_deref(), Some(coin_icon(12_345)));
         // The item's name is nil while its template is in flight; its quantity is present.
         let row = snap.rows[1].as_ref().expect("item row present");

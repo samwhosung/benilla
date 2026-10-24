@@ -262,6 +262,7 @@ fn the_open_menu_takes_the_screen_and_refuses_every_other_panel() {
             quantity: 1,
             quality: Some(1),
             is_coin: false,
+            money: 0,
             link: None,
             random_property_id: 0,
         })],
