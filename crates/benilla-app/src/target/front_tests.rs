@@ -28,7 +28,7 @@ pub(super) struct Fix {
 /// The whole client, headless, with us, `OLD` selected and `MOB` beside; `charmed` has someone
 /// charm us (`UNIT_FIELD_CHARMEDBY`, a guid of two fields).
 pub(super) fn fix(charmed: bool) -> Fix {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();

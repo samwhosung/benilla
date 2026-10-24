@@ -47,7 +47,7 @@ fn fields(pairs: &[(u16, u32)]) -> ObjectStore {
 /// looted skinnable one, a chest and a lootable corpse, all in reach, Skinning known, with a VM
 /// noting `LOOT_OPENED` and `LOOT_CLOSED` in `SEEN`.
 fn client() -> Client {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     // What the dispatchers and the cursor read that a headless build leaves to its plugins.

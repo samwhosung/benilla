@@ -2825,7 +2825,7 @@ mod tests {
             (true, true, Some(0x61)),
         ] {
             let label = format!("in flight {in_flight}, mounted {mounted}");
-            let mut app = crate::game_plugins::schedule_tests::headless_client();
+            let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
             let (tx, rx) = crossbeam_channel::unbounded();
             // In world: the body we drive.
             app.insert_resource(NetCommands(tx))

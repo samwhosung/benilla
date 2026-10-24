@@ -15,7 +15,7 @@ pub(super) const NPC: u64 = 0xF130_0000_0000_0042;
 
 /// The whole client, headless, with a VM and the write channel captured.
 pub(super) fn client() -> (App, Receiver<ClientCommand>) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     app.insert_non_send_resource(UiScript::new().expect("a VM"));

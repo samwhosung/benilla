@@ -133,7 +133,7 @@ mod tests {
 
         const ME: u64 = 0x10;
         const MOB: u64 = 0xF130_0000_0000_0042;
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         world.resource_mut::<SelfGuid>().0 = Some(ME);
         let unit = |kind, extra: &[(u16, u32)]| {

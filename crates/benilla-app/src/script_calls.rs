@@ -1156,7 +1156,7 @@ mod tests {
     /// The whole client, headless, with us, `OLD` (selected when `selected`) and `NEW` as
     /// `party1`, and a VM whose book holds Heal.
     fn frame(selected: bool) -> Frame {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();
