@@ -141,60 +141,6 @@ fn touches_map_matches_the_paths_map_set() {
     );
 }
 
-/// From any instant, the answer samples on the asked-for map, on every cross-continent path:
-/// path 241 reaches map 1 only across the cycle wrap.
-#[test]
-fn first_cycle_on_map_lands_on_that_map() {
-    let data = crate::wow_data_or_skip!();
-    let mut chain = crate::open_chain(&data).expect("open chain");
-    let cat = load_taxi_path_nodes(&mut chain).expect("load TaxiPathNode");
-
-    let mut crossed = 0usize;
-    for g in GOLDENS {
-        let nodes = cat
-            .path(g.path_id)
-            .unwrap_or_else(|| panic!("path {} exists in TaxiPathNode.dbc", g.path_id));
-        let tt = TransportTimetable::build(nodes, g.move_speed, g.accel_rate)
-            .unwrap_or_else(|| panic!("path {} builds", g.path_id));
-        let maps: std::collections::HashSet<u32> = nodes.iter().map(|n| n.map_id).collect();
-        if maps.len() < 2 {
-            continue;
-        }
-        crossed += 1;
-        // 64 instants across the cycle, both sides of the wrap included.
-        for k in 0..64u32 {
-            let from = (u64::from(tt.period_ms) * u64::from(k) / 64) as u32;
-            for &m in &maps {
-                let at = tt.first_cycle_on_map(from, m).unwrap_or_else(|| {
-                    panic!(
-                        "path {} touches map {m} but found no cycle on it",
-                        g.path_id
-                    )
-                });
-                assert!(
-                    at < tt.period_ms,
-                    "path {} map {m}: {at} ms is outside the {} ms cycle",
-                    g.path_id,
-                    tt.period_ms
-                );
-                assert_eq!(
-                    tt.sample(at).map,
-                    m,
-                    "path {} from {from} ms: first_cycle_on_map({m}) = {at} ms samples map {}",
-                    g.path_id,
-                    tt.sample(at).map
-                );
-            }
-        }
-        // A map the path never visits.
-        assert_eq!(tt.first_cycle_on_map(0, 9999), None);
-    }
-    assert!(
-        crossed > 0,
-        "no golden path crosses continents — this test proves nothing"
-    );
-}
-
 /// The angle from `b` to `a`, wrapped to `(-π, π]`.
 fn angle_between(a: f32, b: f32) -> f32 {
     let d = (a - b).rem_euclid(std::f32::consts::TAU);

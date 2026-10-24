@@ -78,7 +78,6 @@ fn deck_ticks() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::Sched
     (
         arm_transports,
         attach_transport_volumes,
-        reseek_ridden_transport_at_worldport,
         tick_transports,
         watch_ridden_transport_map,
     )
@@ -212,29 +211,6 @@ impl Transport {
     pub(crate) fn cycle_ms(&self, anchor: &TransportAnchor) -> u32 {
         let progress = u64::from(anchor.progress_ms) + anchor.at.elapsed().as_millis() as u64;
         (progress % u64::from(self.period_ms().max(1))) as u32
-    }
-
-    /// Re-anchor the clock to the head of `map_id`'s leg unless the cycle is already on that map;
-    /// returns the sample and the cycle instant it moved to, if it moved (the only sound test, as
-    /// `progress_ms` is uptime-scale until a seek). `None` when no leg is on that map.
-    pub(crate) fn reseek_to_map(
-        &self,
-        anchor: &mut TransportAnchor,
-        map_id: u32,
-    ) -> Option<(TransportSample, Option<u32>)> {
-        let Drive::Taxi(t) = &self.drive else {
-            return None;
-        };
-        let cycle = self.cycle_ms(anchor);
-        // Already there: seeking would rewind to the leg's head and jerk the deck backwards.
-        let here = t.sample(cycle);
-        if here.map == map_id {
-            return Some((here, None));
-        }
-        let target = t.first_cycle_on_map(cycle, map_id)?;
-        anchor.progress_ms = target;
-        anchor.at = Instant::now();
-        Some((t.sample(target), Some(target)))
     }
 
     /// Whether any leg of the cycle lies on `map_id`, the cross-map worldport's spare predicate. A
@@ -506,72 +482,6 @@ fn write_deck_pose(
     }
 }
 
-/// Put the ridden transport on the destination map in the worldport frame, so `wire_in` composes
-/// the rider's pose through the destination continent's coordinates rather than off its grid.
-///
-/// The reference keeps nothing across `SMSG_NEW_WORLD`: `0x401bc0` destroys every object
-/// (`0x467700` → `0x467800`), builds a manager on the destination map (`0x464ff0`) and rebuilds
-/// rider and transport from the post-ack creates. We spare the ridden transport instead; the
-/// server's create for it (`Map.cpp:1698-1702`, which is why `SendInitTransports` skips it at
-/// `Map.cpp:1726`) re-anchors it a round trip later, and this fills that window.
-///
-/// It writes the pose itself because `CurrentMap` still names the source map this frame, so
-/// [`tick_transports`] would hide the deck. Order: before it, and before `WorldStage::Input`.
-#[allow(clippy::type_complexity)] // one Bevy system's full input set
-fn reseek_ridden_transport_at_worldport(
-    mut worldports: MessageReader<crate::net::WorldportMessage>,
-    player: Res<crate::player::Player>,
-    mut transports: Query<(
-        &Guid,
-        &Transport,
-        &mut TransportAnchor,
-        &mut Transform,
-        &mut Visibility,
-        Option<&mut Position>,
-        Option<&mut Rotation>,
-    )>,
-) {
-    for w in worldports.read() {
-        // Only a transport transfer while still riding, `wire_in`'s riding predicate.
-        if w.transport_entry.is_none() {
-            continue;
-        }
-        let Some(deck) = player.ride_entity() else {
-            continue;
-        };
-        let Ok((guid, transport, mut anchor, mut transform, mut visibility, position, rotation)) =
-            transports.get_mut(deck)
-        else {
-            continue;
-        };
-        let before = transport.cycle_ms(&anchor);
-        let Some((sample, moved_to)) = transport.reseek_to_map(&mut anchor, w.map_id) else {
-            warn!(
-                "transport {:#x}: rode a transfer to map {} its own path never visits — cannot \
-                 re-anchor; the rider's pose will be composed through a stale one",
-                guid.0, w.map_id
-            );
-            continue;
-        };
-        // When the clock moved, log how far behind the server's our path clock was, measured
-        // forward around the cycle: a crossing is often the cycle wrap (path 241's Kalimdor legs
-        // come first), where a plain `after - before` goes negative.
-        if let Some(after) = moved_to {
-            let period = transport.period_ms().max(1);
-            let behind =
-                (u64::from(after) + u64::from(period) - u64::from(before)) % u64::from(period);
-            info!(
-                "transport {:#x}: re-anchored across the seam to map {} — our path clock was \
-                 {behind} ms behind the server's (cycle {before} → {after} ms of {period} ms). \
-                 Deck now at [{:.1}, {:.1}, {:.1}].",
-                guid.0, w.map_id, sample.pos[0], sample.pos[1], sample.pos[2],
-            );
-        }
-        visibility.set_if_neq(Visibility::Inherited);
-        write_deck_pose(&sample, &mut transform, position, rotation);
-    }
-}
-
 /// Frames the ridden transport's map may disagree with [`CurrentMap`] before it is logged; one
 /// frame of it is normal at every crossing.
 const DISAGREEMENT_GRACE_FRAMES: u32 = 3;
@@ -579,8 +489,9 @@ const DISAGREEMENT_GRACE_FRAMES: u32 = 3;
 /// Tripwire: the transport we ride samples another map. Its frozen off-map pose is what
 /// [`crate::player::wire_in`] composes our body through at a worldport, which lands it off the
 /// destination's grid; it arises when our path clock and the server's disagree about the
-/// crossing. One frame is normal: `CurrentMap` is written by a command insert, a frame after
-/// [`reseek_ridden_transport_at_worldport`], so only a persisting state logs, once per entry.
+/// crossing, until our clock crosses too or the post-port create re-anchors it. One frame is
+/// normal: `CurrentMap` is written by a command insert, a frame after the worldport, so only a
+/// persisting state logs, once per entry.
 fn watch_ridden_transport_map(
     current_map: Option<Res<CurrentMap>>,
     player: Res<crate::player::Player>,
@@ -923,98 +834,6 @@ mod tests {
             Some(&Visibility::Inherited),
             "in view"
         );
-    }
-
-    /// The Ratchet–Booty Bay ferry's real timetable (taxi path 241): the builder can truncate a
-    /// short synthetic cycle so the far continent's legs are never reached.
-    fn ferry_241(chain: &mut benilla_formats::Chain) -> Transport {
-        let cat = benilla_formats::load_taxi_path_nodes(chain).expect("TaxiPathNode.dbc");
-        let nodes = cat.path(241).expect("taxi path 241 (Ratchet–Booty Bay)");
-        let tt = TransportTimetable::build(nodes, 30, 1).expect("path 241 builds");
-        Transport {
-            drive: Drive::Taxi(Arc::new(tt)),
-            was_moving: false,
-        }
-    }
-
-    /// Path 241's Kalimdor legs are the first frames of the cycle, so crossing to Kalimdor is the
-    /// cycle wrap, not an interior map change.
-    #[test]
-    fn the_seam_reanchor_lands_on_the_new_map_and_leaves_an_agreeing_clock_alone() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let transport = ferry_241(&mut chain);
-        let period = transport.period_ms();
-
-        // Where each continent's legs fall in the built timetable.
-        let on = |map: u32| {
-            (0..period)
-                .step_by(500)
-                .find(|&ms| transport.sample(ms, 0).map == map)
-                .unwrap_or_else(|| panic!("path 241 has an instant on map {map}"))
-        };
-        let (on_azeroth, on_kalimdor) = (on(0), on(1));
-
-        // On Azeroth's leg, told Kalimdor: the stored anchor moves onto Kalimdor.
-        let mut anchor = TransportAnchor {
-            progress_ms: on_azeroth,
-            at: Instant::now(),
-        };
-        let (sample, moved_to) = transport
-            .reseek_to_map(&mut anchor, 1)
-            .expect("path 241 visits Kalimdor");
-        assert_eq!(sample.map, 1, "the re-anchored sample must be on Kalimdor");
-        assert!(
-            moved_to.is_some(),
-            "a clock on Azeroth's leg told it is on Kalimdor must report that it moved"
-        );
-        assert_eq!(
-            transport.sample(anchor.progress_ms, 0).map,
-            1,
-            "the stored anchor must itself sit on Kalimdor, not just the returned sample"
-        );
-
-        // Already on Kalimdor: the clock is left alone.
-        let mut anchor = TransportAnchor {
-            progress_ms: on_kalimdor,
-            at: Instant::now(),
-        };
-        let (sample, moved_to) = transport
-            .reseek_to_map(&mut anchor, 1)
-            .expect("path 241 visits Kalimdor");
-        assert_eq!(sample.map, 1);
-        assert_eq!(
-            anchor.progress_ms, on_kalimdor,
-            "an agreeing clock must not be touched"
-        );
-        assert_eq!(
-            moved_to, None,
-            "a no-op seek must report that it did not move the clock"
-        );
-
-        // A map the path never visits has no answer.
-        let mut anchor = TransportAnchor {
-            progress_ms: on_azeroth,
-            at: Instant::now(),
-        };
-        assert!(transport.reseek_to_map(&mut anchor, 4242).is_none());
-        assert_eq!(
-            anchor.progress_ms, on_azeroth,
-            "a failed seek must not move the clock"
-        );
-    }
-
-    #[test]
-    fn a_lift_has_no_seam_to_reanchor() {
-        let lift = Transport {
-            drive: Drive::Lift(parked_lift()),
-            was_moving: false,
-        };
-        let mut anchor = TransportAnchor {
-            progress_ms: 0,
-            at: Instant::now(),
-        };
-        assert!(lift.reseek_to_map(&mut anchor, 1).is_none());
     }
 
     /// A two-frame pause path at `base_pos`.

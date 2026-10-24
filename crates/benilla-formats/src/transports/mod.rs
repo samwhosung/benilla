@@ -195,22 +195,6 @@ impl TransportTimetable {
         }
     }
 
-    /// The start of the first leg on `map_id`, scanning from the leg `from_cycle_ms` is in and
-    /// wrapping. A worldport places a rider with it until the server re-anchors the transport's
-    /// clock, a round trip after the ack (`Map::SendInitSelf`).
-    pub fn first_cycle_on_map(&self, from_cycle_ms: u32, map_id: u32) -> Option<u32> {
-        let n = self.legs.len();
-        let here = self
-            .legs
-            .iter()
-            .position(|l| from_cycle_ms < l.end)
-            .unwrap_or(n - 1);
-        (0..n)
-            .map(|k| &self.legs[(here + k) % n])
-            .find(|l| l.map == map_id && l.start < l.end)
-            .map(|l| l.start)
-    }
-
     /// Whether any leg is on `map_id`; a worldport keeps such a transport across the switch.
     pub fn touches_map(&self, map_id: u32) -> bool {
         self.legs.iter().any(|l| l.map == map_id)
