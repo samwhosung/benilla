@@ -652,6 +652,76 @@ mod tests {
         assert_eq!(names_asked(&rx), 1, "the next read asks it, once");
     }
 
+    /// `SMSG_GAMEOBJECT_PAGETEXT` (`0x5f88c0`) resolves the GameObject and opens the reader on it
+    /// (`0x4e32e0(guid, 0)`), whose page is the object's pageID column (`0x5f5900`, a GOOBER's
+    /// `data[7]`) and its material the pageMaterial column (`0x5f5950`, `data[9]`): "The Lay of
+    /// Ameth'Aran", entry 17188, page 358.
+    #[test]
+    fn a_goobers_page_text_opens_the_reader_on_its_page() {
+        const TABLET: u64 = 0xF110_0043_2400_0001;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<ItemTextOpen>()
+            .init_resource::<PageTexts>()
+            .init_resource::<MailOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<GameObjectTemplates>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .add_systems(
+                Update,
+                (
+                    apply_reads,
+                    begin_item_text,
+                    feed_item_text,
+                    drain_item_text,
+                )
+                    .chain(),
+            );
+        net::register(&mut app);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let mut data = [0i32; 24];
+        data[7] = 358;
+        data[9] = 2;
+        app.world_mut()
+            .resource_mut::<GameObjectTemplates>()
+            .insert(17188, 10, "The Lay of Ameth'Aran".into(), &data);
+        let tablet = app
+            .world_mut()
+            .spawn((
+                crate::net::Guid(TABLET),
+                crate::net::ObjectStore(crate::go_templates::test_fields(17188)),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(TABLET, tablet);
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![benilla_protocol::SessionEvent::GameObjectPageText { guid: TABLET }],
+        );
+        app.update();
+        app.update();
+        let open = app.world().resource::<ItemTextOpen>();
+        let sess = open
+            .pending
+            .as_ref()
+            .expect("the reader opens on the tablet");
+        assert_eq!(sess.object_guid, TABLET);
+        assert!(sess.registered, "its page is data[7]");
+        let asked: Vec<u32> = crate::query_cache::queries(&rx)
+            .iter()
+            .filter_map(|c| match c {
+                ClientCommand::PageTextQuery { page_id, .. } => Some(*page_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, [358]);
+    }
+
     #[test]
     fn page_turns_walk_the_chain_both_ways() {
         let chain = |id: u32| match id {
