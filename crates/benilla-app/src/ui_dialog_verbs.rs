@@ -108,7 +108,7 @@ const SPIRIT_GUIDE_ACQUIRE_YD: f32 = 20.0;
 const SPIRIT_GUIDE_RETAIN_YD: f32 = SPIRIT_GUIDE_ACQUIRE_YD * 1.1;
 
 /// What [`AreaSpiritHealer::set_healer`] owes the frame; the reference does both in `0x4921c0`.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub(crate) struct SetHealerOutcome {
     /// A wave was pending and the healer changed (`0x4921fc`): `AREA_SPIRIT_HEALER_OUT_OF_RANGE`
     /// fires and `CMSG_CANCEL_AURA` goes out for 2584; this, not Lua, closes the dialog.
@@ -1000,23 +1000,33 @@ mod net {
         }
     }
 
-    /// `0x492290`: the scan first (`0x492296`), each change it makes signalling and sending inside
-    /// it (`0x4921c0`), then the arm for the healer it left cached (`0x4922a0`) and its
-    /// `AREA_SPIRIT_HEALER_IN_RANGE` (`0x4922d1`), all on the notice lane at the packet's place.
+    /// `0x492290`: the scan first (`0x492296`), each change it makes acting inside it
+    /// (`0x4921c0`: a pending wave's whole aura cancel, a new healer's query), then the arm for the
+    /// healer it left cached (`0x4922a0`) and its `AREA_SPIRIT_HEALER_IN_RANGE` (`0x4922d1`). The
+    /// sends go out here, so a frame with no VM to fire the lane still cancels and queries; the
+    /// signals, the cancel's `AREA_SPIRIT_HEALER_OUT_OF_RANGE` and the arm's, go on the notice
+    /// lane at the packet's place.
     fn on_area_spirit_healer_time(
         In(ev): In<SessionEvent>,
         scan: super::SpiritScan,
         mut spirit: ResMut<AreaSpiritHealer>,
         mut lane: ResMut<crate::field_watch::NoticeLane>,
+        aura: crate::ui_aura::AuraSteps,
+        net: Res<crate::net::NetCommands>,
     ) {
-        use crate::field_watch::FieldNotice;
+        use crate::field_watch::{id, FieldNotice};
         if let SessionEvent::AreaSpiritHealerTime { healer, ms } = ev {
             for change in scan.run(&mut spirit) {
-                lane.write(FieldNotice::SpiritHealerChange(change));
+                if change.cancel_aura && aura.cancel_at_packet(super::AREA_SPIRIT_HEALER_AURA) {
+                    lane.write(FieldNotice::Global {
+                        id: id::AREA_SPIRIT_HEALER_OUT_OF_RANGE,
+                    });
+                }
+                super::send_healer_query(&change, &net);
             }
             if spirit.on_time(healer, ms, std::time::Instant::now()) {
                 lane.write(FieldNotice::Global {
-                    id: crate::field_watch::id::AREA_SPIRIT_HEALER_IN_RANGE,
+                    id: id::AREA_SPIRIT_HEALER_IN_RANGE,
                 });
             }
         }

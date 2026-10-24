@@ -997,6 +997,19 @@ impl AuraSteps<'_, '_> {
         }
         self.send(spell_id);
     }
+
+    /// `0x6e7040(spell)` from a packet handler, the time packet's scan (`0x492296` → `0x492201`),
+    /// whose signals go on the notice lane at the packet's place: the halves, the gate and the
+    /// packet here, the event left to the lane. Whether the area spirit healer aura's event is
+    /// owed.
+    pub(crate) fn cancel_at_packet(&self, spell_id: u32) -> bool {
+        self.end_on_player(spell_id);
+        if !self.passes_far_sight(spell_id) {
+            return false;
+        }
+        self.send(spell_id);
+        spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA
+    }
 }
 
 #[cfg(test)]
