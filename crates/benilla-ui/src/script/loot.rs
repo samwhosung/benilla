@@ -65,7 +65,8 @@ pub struct LootRow {
     pub name: Option<String>,
     /// Icon path; `None` without a display icon, answered as [`MISSING_ICON`].
     pub texture: Option<String>,
-    /// Stack size looted; 1 for the coin row.
+    /// Stack size looted; 0 for the coin row, whose guard returns before the record read
+    /// (`0x4c22fd`).
     pub quantity: u32,
     /// Quality 0..6; `None` while the template is in flight, answered as [`CACHE_MISS_QUALITY`].
     pub quality: Option<u32>,
