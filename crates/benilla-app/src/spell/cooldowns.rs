@@ -475,6 +475,12 @@ impl Cooldowns {
         self.awaited_records.insert(item_entry);
     }
 
+    /// Whether a cooldown query's callback awaits the record of `item_entry`.
+    #[cfg(test)]
+    pub(crate) fn awaits_item_record(&self, item_entry: u32) -> bool {
+        self.awaited_records.contains(&item_entry)
+    }
+
     /// The callback `0x6e2f70` of each awaited record the item cache now answers, spent either
     /// way: a record re-queries `0x6e2ed0` (`0x6e2f80`), which reads the first on-use spell with
     /// the item (`0x6e2f20`-`0x6e2f58`), and flushes the pair and the bags while a leg ends after

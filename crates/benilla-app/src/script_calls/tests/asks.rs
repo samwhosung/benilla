@@ -173,3 +173,49 @@ fn the_ammo_getters_ask_a_missed_record_inside_their_calls() {
         "a callback per call"
     );
 }
+
+/// The item cooldown query `0x6e2ed0` asks a record the cache lacks with the callback `0x6e2f70`,
+/// deduped (`0x6e2ef4`-`0x6e2f0d`): `GetContainerItemCooldown` (`0x4f99b0`) and the bag and
+/// inventory tooltips (`0x53483a`, `0x533188` → `0x5331ec`) each send the item query inside the
+/// call, and the cooldowns await the record.
+#[test]
+fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
+    use benilla_ui::script::{ContainerSlot, ContainerState, InvSlotView, InventorySlots};
+    let (mut app, rx) = client();
+    let pending = |item_id: u32| ContainerSlot {
+        item_id,
+        count: 1,
+        ..Default::default()
+    };
+    vm(&mut app).set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: std::collections::HashMap::from([(1, pending(6948)), (2, pending(5976))]),
+        }),
+    );
+    let mut worn: InventorySlots = Default::default();
+    worn[14] = Some(InvSlotView {
+        item_id: 2589,
+        ..Default::default()
+    });
+    vm(&mut app).set_inventory_slots(worn);
+    eval::<()>(
+        &mut app,
+        r#"local tip = CreateFrame("GameTooltip", "AskTip")
+           tip:SetOwner(CreateFrame("Frame", "AskTipOwner"), "ANCHOR_NONE")
+           GetContainerItemCooldown(0, 1) RandomRoll(1, 2)
+           tip:SetBagItem(0, 2) RandomRoll(3, 4)
+           tip:SetInventoryItem("player", 14) RandomRoll(5, 6)
+           GetContainerItemCooldown(0, 1)"#,
+    );
+    assert_eq!(
+        sent(&rx),
+        ["item 6948", "roll 1", "item 5976", "roll 3", "item 2589", "roll 5"]
+    );
+    let cooldowns = app.world().resource::<crate::spell::Cooldowns>();
+    for entry in [6948, 5976, 2589] {
+        assert!(cooldowns.awaits_item_record(entry), "{entry} awaited");
+    }
+}
