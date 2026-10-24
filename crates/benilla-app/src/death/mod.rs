@@ -392,10 +392,11 @@ fn signal_death(
     mut vm: crate::script_calls::VmWith<DeathView<'static, 'static>>,
     mut feed: ResMut<DeathFeedState>,
 ) {
-    vm.turn(|script, view| {
-        let Some(script) = script else {
+    let dead = {
+        let (Some(script), set) = vm.parts() else {
             return;
         };
+        let view = set.p0();
         let Some((guid, store, self_t)) = view.body() else {
             return;
         };
@@ -403,7 +404,14 @@ fn signal_death(
         script.set_death(snapshot);
         let memo = feed.vm.get(script);
         memo.last = Some((guid, store.0.unit_is_dead(), store.0.player_is_ghost()));
-        if store.0.unit_health().unwrap_or(0) as i32 <= 0 {
+        store.0.unit_health().unwrap_or(0) as i32 <= 0
+    };
+    // `0x495850`: the signal's listeners run before the cursor clears (`0x49587d`, `0x495889`).
+    vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if dead {
             script.fire_event("PLAYER_DEAD", vec![]);
             script.clear_cursor_payload();
         } else {
@@ -862,6 +870,53 @@ mod tests {
             1,
             "the next offer asks again"
         );
+    }
+
+    /// `0x495850` signals `PLAYER_DEAD` (`0x49587d`) before it clears the cursor (`0x495889`): a
+    /// listener still finds the coins it held.
+    #[test]
+    fn player_dead_listeners_see_the_cursor_before_it_clears() {
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        const ME: u64 = 0x7;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .insert_resource(crate::net::NetStatus {
+                connected: true,
+                last_reason: None,
+            })
+            .init_resource::<SelfGuid>()
+            .init_resource::<DeathNet>()
+            .init_resource::<DeathFeedState>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::items::Items>()
+            .init_resource::<Time<Real>>();
+        let mut script = UiScript::new().unwrap();
+        script.keep_calls();
+        script.set_money(1_000);
+        script
+            .run(
+                "HELD = nil local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_DEAD') \
+                 f:SetScript('OnEvent', function() HELD = GetCursorMoney() end) \
+                 PickupPlayerMoney(10)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let dead = ObjectFields::from_pairs(&[(22, 0), (28, 100)]).into_created(ObjectType::Player);
+        let me = app
+            .world_mut()
+            .spawn((ObjectStore(dead), Transform::default(), SelfPlayer))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ME, me);
+        app.world_mut().resource_mut::<SelfGuid>().0 = Some(ME);
+        signal_death_state(app.world_mut());
+        let script = app.world().non_send_resource::<UiScript>();
+        assert_eq!(script.eval::<i64>("return HELD").unwrap(), 10);
+        assert!(script.cursor_payload().is_none(), "then the clear");
     }
 
     /// PLAYER_UNGHOST hides the popup with `StaticPopup_Hide`, which runs no `OnCancel`, so no
