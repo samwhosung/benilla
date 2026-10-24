@@ -1215,10 +1215,7 @@ mod worldport_tests {
     /// Two ships whose paths touch maps 1 and 0, one of them ridden, and a worldport to map 0,
     /// announced with a transport or not: which ships outlive it.
     fn kept_across(riding_transfer: bool) -> (bool, bool) {
-        let mut app = App::new();
-        app.add_plugins(crate::net::NetPlugin { connect: false })
-            .init_resource::<crate::spell::Cooldowns>()
-            .init_resource::<crate::ui_chat::ChatLog>();
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
         let world = app.world_mut();
         let ship = |world: &mut World, guid: u64| {
             let e = world
