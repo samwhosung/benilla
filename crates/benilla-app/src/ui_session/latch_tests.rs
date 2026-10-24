@@ -159,7 +159,11 @@ fn read_book(world: &mut World, npc: u64) {
         .0
         .contains_key(&npc)
     {
-        crate::items::test_spawn_object(world, npc, crate::go_templates::test_fields(BOOK_ENTRY));
+        crate::items::test_spawn_object(
+            world,
+            npc,
+            crate::go_templates::test_typed_fields(BOOK_ENTRY, 9),
+        );
     }
     crate::ui_item_text::read_now(world, npc);
 }
@@ -182,7 +186,7 @@ pub(crate) fn open(app: &mut App, window: W, npc: u64) {
                 crate::items::test_spawn_object(
                     world,
                     npc,
-                    crate::go_templates::test_fields(BOOK_ENTRY),
+                    crate::go_templates::test_typed_fields(BOOK_ENTRY, 9),
                 );
             }
             crate::ui_item_text::read_now(world, npc)
