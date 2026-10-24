@@ -67,13 +67,44 @@ pub struct TalentView {
     pub display_spell: u32,
     /// The next rank's spell id when `0 < rank < max_rank`, else 0.
     pub next_spell: u32,
-    /// Red requirement lines of an unlearned talent, in `0x52b390`'s order: its prerequisites
-    /// (`TOOLTIP_TALENT_PREREQ`), its tier (`TOOLTIP_TALENT_TIER_POINTS`), its required spell
-    /// (`ITEM_REQ_SKILL`).
-    pub req_lines: Vec<String>,
+    /// The red requirement lines of an unlearned talent, in `0x52b390`'s order; their words are
+    /// read as the tooltip builds ([`TalentReq`]).
+    pub reqs: Vec<TalentReq>,
     /// A higher rank is learnable now, every requirement met, a point to spend and a rank below
     /// the maximum: the green `TOOLTIP_TALENT_LEARN` line (`0x52b31b`, `0x52f735`).
     pub learnable: bool,
+}
+
+/// One red requirement line, its template a `_G` read at the tooltip's build (`0x703bf0`): an
+/// addon's rewording shows at the next hover, and a key it lacks renders no line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TalentReq {
+    /// `TOOLTIP_TALENT_PREREQ`, its `_P1` twin by the rank (`0x52b4a5`, the ordinal in `edx`), of
+    /// the 1-based rank needed and the prerequisite's name.
+    Prereq { rank: u32, name: String },
+    /// `TOOLTIP_TALENT_TIER_POINTS` (`0x52b566`) of the points the tier needs and the tab's name.
+    Tier { points: u32, tab: String },
+    /// `ITEM_REQ_SKILL` (`0x52b60b`) of the required spell's name.
+    Spell { name: String },
+}
+
+impl TalentReq {
+    /// The line as `0x52b390` writes it now, `None` for a missing or empty template.
+    fn line(&self, lua: &Lua) -> Option<String> {
+        use crate::strings::{fill, global, plural, Arg};
+        let get = |key: &str| global(lua, key);
+        Some(match self {
+            Self::Prereq { rank, name } => fill(
+                &plural("TOOLTIP_TALENT_PREREQ", Some(*rank), &get)?,
+                &[Arg::D(i64::from(*rank)), Arg::S(name)],
+            ),
+            Self::Tier { points, tab } => fill(
+                &get("TOOLTIP_TALENT_TIER_POINTS")?,
+                &[Arg::D(i64::from(*points)), Arg::S(tab)],
+            ),
+            Self::Spell { name } => fill(&get("ITEM_REQ_SKILL")?, &[Arg::S(name)]),
+        })
+    }
 }
 
 /// The pushed snapshot: the player's own pages and unspent points.
@@ -312,7 +343,7 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // (`0x85555c`, `0x535394`).
             let tab = binding_abi::index_arg(lua, tab, "Usage: SetTalent(tabIndex, talentIndex)")?;
             let i = binding_abi::index_arg(lua, i, "Usage: SetTalent(tabIndex, talentIndex)")?;
-            let (display, ranks, mut lines) = {
+            let (display, ranks, reqs, mut lines) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let Some(t) = talent_at(&model, tab, i) else {
                     return Ok(());
@@ -329,10 +360,11 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 (
                     t.display_spell,
                     (t.rank, t.max_rank),
+                    t.reqs.clone(),
                     TalentLines {
                         exceptional: t.exceptional,
                         rank_line: None,
-                        reqs: t.req_lines.clone(),
+                        reqs: Vec::new(),
                         next_spell: t.next_spell,
                         next_desc,
                         learn: t.learnable,
@@ -351,6 +383,8 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     ],
                 )
             });
+            // Then the requirement lines' templates, read the same way (`0x52b390`).
+            lines.reqs = reqs.iter().filter_map(|r| r.line(lua)).collect();
             super::tooltip_spell::set_spell_with_talent(lua, &this, display, lines)
         })?,
     )?;

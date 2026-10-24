@@ -61,7 +61,7 @@ fn fixture(points_spent: u32) -> TalentUiState {
         prereqs: Vec::new(),
         display_spell: 201,
         next_spell: 0,
-        req_lines: Vec::new(),
+        reqs: Vec::new(),
         learnable: false,
     };
     let deep_wounds = TalentView {
@@ -81,7 +81,7 @@ fn fixture(points_spent: u32) -> TalentUiState {
         }],
         display_spell: 301,
         next_spell: 0,
-        req_lines: Vec::new(),
+        reqs: Vec::new(),
         learnable: true,
     };
     TalentUiState {

@@ -370,7 +370,9 @@ pub use spellbook::{
 };
 pub use stable::{StableCall, StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
 pub use summon::SummonConfirmUiState;
-pub use talent::{TalentCall, TalentPrereqView, TalentTabView, TalentUiState, TalentView};
+pub use talent::{
+    TalentCall, TalentPrereqView, TalentReq, TalentTabView, TalentUiState, TalentView,
+};
 pub use taxi::{TaxiCall, TaxiNodeType, TaxiUiNode, TaxiUiState};
 pub use tooltip_aura::{AuraKey, AuraTooltipView};
 pub use tooltip_spell::{ReputationRequirement, SpellTooltipView};

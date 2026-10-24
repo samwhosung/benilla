@@ -35,7 +35,7 @@ fn one_tab_state() -> TalentUiState {
                     prereqs: Vec::new(),
                     display_spell: 11070,
                     next_spell: 11071,
-                    req_lines: Vec::new(),
+                    reqs: Vec::new(),
                     learnable: true,
                 },
                 TalentView {
@@ -55,7 +55,10 @@ fn one_tab_state() -> TalentUiState {
                     }],
                     display_spell: 11119,
                     next_spell: 0,
-                    req_lines: vec!["Requires 5 points in Improved Fireball".into()],
+                    reqs: vec![TalentReq::Prereq {
+                        rank: 5,
+                        name: "Improved Fireball".into(),
+                    }],
                     learnable: false,
                 },
             ],
@@ -166,6 +169,8 @@ fn seed_talent_strings(s: &mut UiScript) {
         TOOLTIP_TALENT_RANK      = "[RANK %d/%d]"
         TOOLTIP_TALENT_NEXT_RANK = "[NEXT_RANK]"
         TOOLTIP_TALENT_LEARN     = "[LEARN]"
+        TOOLTIP_TALENT_PREREQ_P1 = "Requires %d points in %s"
+        TOOLTIP_TALENT_TIER_POINTS = "Requires %d points in %s Talents"
     "#,
     )
     .unwrap();
@@ -254,7 +259,10 @@ fn set_talent_on_an_exceptional_talent_keeps_the_spell_body() {
     let holy_shield = &mut state.talents[0][1];
     holy_shield.name = "Holy Shield".into();
     holy_shield.exceptional = true;
-    holy_shield.req_lines = vec!["Requires 30 points in Protection Talents".into()];
+    holy_shield.reqs = vec![TalentReq::Tier {
+        points: 30,
+        tab: "Protection".into(),
+    }];
     s.set_talents(state);
     s.set_spell_tooltip(
         11119,
