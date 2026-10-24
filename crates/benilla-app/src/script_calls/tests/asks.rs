@@ -346,3 +346,51 @@ fn the_craft_getters_ask_a_missed_record_inside_their_calls() {
     );
     assert_eq!(sent(&rx), ["item 10940", "roll 1", "item 6218"]);
 }
+
+/// The trade-skill getters look a record in flight up with the callback `0x4fdc30` and no dedupe:
+/// `GetTradeSkillReagentInfo` its reagent (`0x4ff6cd`), `GetTradeSkillTools` each totem
+/// (`0x4ffac6`). The item query goes out inside the call, once while it is in flight.
+#[test]
+fn the_trade_skill_getters_ask_a_missed_record_inside_their_calls() {
+    use benilla_ui::script::{
+        TradeSkillDifficulty, TradeSkillReagent, TradeSkillRecipe, TradeSkillState,
+    };
+    let (mut app, rx) = client();
+    vm(&mut app).set_trade_skill(Some(TradeSkillState {
+        line: 197,
+        line_name: "Tailoring".into(),
+        rank: 1,
+        max_rank: 75,
+        recipes: vec![TradeSkillRecipe {
+            group: None,
+            spell_id: 2963,
+            name: "Bolt of Linen Cloth".into(),
+            difficulty: TradeSkillDifficulty::Trivial,
+            num_available: 0,
+            icon: None,
+            min_made: 1,
+            max_made: 1,
+            cooldown: None,
+            product_item: 2996,
+            product_inv_type: 0,
+            product_item_level: 0,
+            reagents: vec![TradeSkillReagent {
+                item: 2589,
+                name: None,
+                icon: None,
+                need: 2,
+                have: 0,
+            }],
+            tools: Vec::new(),
+            icon_pending: None,
+            tools_pending: vec![5956],
+        }],
+    }));
+    eval::<()>(
+        &mut app,
+        "local n = GetNumTradeSkills() \
+         for i = 1, n do GetTradeSkillReagentInfo(i, 1) end RandomRoll(1, 2) \
+         for i = 1, n do GetTradeSkillTools(i) GetTradeSkillReagentInfo(i, 1) end",
+    );
+    assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 5956"]);
+}
