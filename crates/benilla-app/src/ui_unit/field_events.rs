@@ -1789,10 +1789,14 @@ mod tests {
 
     /// The cascade's `SetPetGuid(0, 0)` stores the zero guid (`0x4bc822`, `0x4bc827`) before its
     /// `UNIT_PET` (`0x4bc84f`), and `HasPetUI` resolves the pet from that guid (`0x4be67e`-
-    /// `0x4be690`): a `/reload` with a pet out hears `UNIT_PET` with `HasPetUI()` nil, and the stats
-    /// feed after it has nothing new to push or signal.
+    /// `0x4be690`): a `/reload` with a pet out hears `UNIT_PET` with `HasPetUI()` nil. The pet's
+    /// happiness field moves at neither the VM's first push nor the bar's return, so neither signals
+    /// `UNIT_HAPPINESS`. The stats feed runs ahead of the unit feed, as the schedule orders them.
     #[test]
     fn the_world_entry_pet_reset_signals_unit_pet_with_no_pet_ui() {
+        /// `UNIT_FIELD_BYTES_0` (class in byte 1) and `UNIT_FIELD_PETNUMBER`.
+        const BYTES_0: u16 = 36;
+        const PETNUMBER: u16 = 139;
         let spy = r#"SEEN = {}
             local f = CreateFrame("Frame")
             f:RegisterEvent("UNIT_PET")
@@ -1801,34 +1805,47 @@ mod tests {
                 local ui, hunter = HasPetUI()
                 table.insert(SEEN, event .. " " .. tostring(ui) .. " " .. tostring(hunter))
             end)"#;
-        let (mut app, _) = feed_world(&[], spy);
+        let (mut app, me) = feed_world(&[(BYTES_0, 3 << 8)], spy);
         app.init_resource::<crate::ui_pet::PetBar>()
             .init_resource::<crate::ui_pet::PetAttackLatch>()
             .init_resource::<crate::ui_pet_stats::PetStatsFeed>()
             .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<crate::net::SelfGuid>();
+            .insert_resource(crate::net::SelfGuid(Some(ME)));
+        let pet = app
+            .world_mut()
+            .spawn((
+                crate::net::Guid(PET),
+                crate::net::ObjectStore(
+                    benilla_protocol::ObjectFields::from_pairs(&[(PETNUMBER, 7)])
+                        .into_created(benilla_protocol::messages::ObjectType::Unit),
+                ),
+            ))
+            .id();
+        {
+            let mut index = app.world_mut().resource_mut::<crate::net::GuidIndex>();
+            index.0.insert(ME, me);
+            index.0.insert(PET, pet);
+        }
         app.world_mut()
             .resource_mut::<crate::ui_pet::PetBar>()
             .spells
             .pet_guid = PET;
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .set_pet_stats(
-                true,
-                benilla_ui::script::PetStats {
-                    hunter_pet: true,
-                    ..Default::default()
-                },
-            );
         app.add_systems(
             Update,
             (
-                super::super::feed_units,
                 crate::ui_pet_stats::feed_pet_stats,
+                super::super::feed_units,
             )
                 .chain(),
         );
         app.update();
-        assert_eq!(seen(&mut app), ["UNIT_PET nil nil"]);
+        assert_eq!(seen(&mut app), ["UNIT_PET nil nil"], "the reload's entry");
+        // `SMSG_PET_SPELLS` brings the same pet back.
+        app.world_mut()
+            .resource_mut::<crate::ui_pet::PetBar>()
+            .spells
+            .pet_guid = PET;
+        app.update();
+        assert!(seen(&mut app).is_empty(), "the pet's return");
     }
 }

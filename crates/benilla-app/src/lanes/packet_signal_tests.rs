@@ -123,35 +123,69 @@ fn the_spirit_healer_time_signals_in_range_at_its_packet() {
         .world_mut()
         .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>()
         .set_healer(Some(HEALER));
-    spy(&mut app, &["AREA_SPIRIT_HEALER_IN_RANGE"]);
+    spy(
+        &mut app,
+        &[
+            "AREA_SPIRIT_HEALER_IN_RANGE",
+            "AREA_SPIRIT_HEALER_OUT_OF_RANGE",
+        ],
+    );
     let time = |ms| SessionEvent::AreaSpiritHealerTime { healer: HEALER, ms };
     let seen = frame(&mut app, vec![time(0), fall(5), time(30_000), fall(5)]);
     assert_eq!(seen, [FELL, "AREA_SPIRIT_HEALER_IN_RANGE", FELL]);
+    // The time is signed (`0x4922b0 test esi,esi; jle`): a negative one arms nothing.
+    assert!(frame(&mut app, vec![time(0x8000_0000)]).is_empty());
+
+    // The healer gone, the rescan drops it with the wave pending (`0x4921fc`):
+    // `AREA_SPIRIT_HEALER_OUT_OF_RANGE` inside the handler, at the packet's place.
+    let world = app.world_mut();
+    let healer = world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .remove(&HEALER)
+        .expect("the healer's entity");
+    world.despawn(healer);
+    let seen = frame(&mut app, vec![fall(5), time(30_000), fall(5)]);
+    assert_eq!(seen, [FELL, "AREA_SPIRIT_HEALER_OUT_OF_RANGE", FELL]);
 }
 
-/// `SMSG_GAMEOBJECT_PAGETEXT` (`0x5f88c0`) opens the reader on the object (`0x5f8915` →
-/// `0x4e32e0`), whose begin latches it (`0x4e349a`) and signals `ITEM_TEXT_BEGIN` (`0x4e34a4`)
-/// inside the handler, ahead of the packets after it: "The Lay of Ameth'Aran", entry 17188.
-#[test]
-fn a_game_objects_page_text_begins_at_its_packet() {
-    const TABLET: u64 = 0xF110_0043_2400_0001;
-    let mut app = client();
+/// "The Lay of Ameth'Aran", entry 17188, a GOOBER whose page is 358, streamed as [`TABLET`]; with
+/// `cached`, its first page already in the page cache (`0xc0e174`).
+fn tablet(app: &mut App, cached: bool) {
     let mut data = [0i32; 24];
     data[7] = 358;
-    app.world_mut()
+    let world = app.world_mut();
+    world
         .resource_mut::<crate::go_templates::GameObjectTemplates>()
         .insert(17188, 10, "The Lay of Ameth'Aran".into(), &data);
-    let tablet = app
-        .world_mut()
+    if cached {
+        world
+            .resource_mut::<crate::ui_item_text::PageTexts>()
+            .insert(358, "Page one.".into(), 0);
+    }
+    let tablet = world
         .spawn((
             crate::net::Guid(TABLET),
             crate::net::ObjectStore(crate::go_templates::test_typed_fields(17188, 10)),
         ))
         .id();
-    app.world_mut()
+    world
         .resource_mut::<crate::net::GuidIndex>()
         .0
         .insert(TABLET, tablet);
+}
+
+/// A readable tablet.
+const TABLET: u64 = 0xF110_0043_2400_0001;
+
+/// `SMSG_GAMEOBJECT_PAGETEXT` (`0x5f88c0`) opens the reader on the object (`0x5f8915` →
+/// `0x4e32e0`); with its first page cached (`0x4e3465`, `0x4e3489`) the begin latches it
+/// (`0x4e349a`) and signals `ITEM_TEXT_BEGIN` (`0x4e34a4`) inside the handler, ahead of the packets
+/// after it.
+#[test]
+fn a_game_objects_page_text_begins_at_its_packet() {
+    let mut app = client();
+    tablet(&mut app, true);
     spy(&mut app, &["ITEM_TEXT_BEGIN"]);
     let seen = frame(
         &mut app,
@@ -168,6 +202,64 @@ fn a_game_objects_page_text_begins_at_its_packet() {
             .object(),
         Some(TABLET)
     );
+}
+
+/// With the first page not cached the open asks for it and returns (`0x4e348b` → `0x4e35a0`); the
+/// page's answer runs the callback `0x4e3280`, which opens again (`0x4e32a5`), so
+/// `ITEM_TEXT_BEGIN` fires at the answer's place.
+#[test]
+fn an_uncached_page_begins_at_its_answer() {
+    let mut app = client();
+    tablet(&mut app, false);
+    spy(&mut app, &["ITEM_TEXT_BEGIN"]);
+    let page = SessionEvent::PageText {
+        page_id: 358,
+        text: "Page one.".into(),
+        next_page_id: 0,
+    };
+    let seen = frame(
+        &mut app,
+        vec![
+            SessionEvent::GameObjectPageText { guid: TABLET },
+            fall(5),
+            page,
+            fall(5),
+        ],
+    );
+    assert_eq!(seen, [FELL, "ITEM_TEXT_BEGIN", FELL]);
+}
+
+/// The session's end drops the reads the item-text lane holds, as the other lanes' ends drop
+/// theirs; so does a worldport's leave-world sweep in the same frame, which closes the reader
+/// (`0x490abc` → `0x4e3240`) ahead of the lanes' drain.
+#[test]
+fn the_session_end_and_a_worldport_drop_the_item_text_lane() {
+    let reader = |app: &App| {
+        app.world()
+            .resource::<crate::ui_item_text::ItemTextOpen>()
+            .object()
+    };
+    let page_text = || vec![SessionEvent::GameObjectPageText { guid: TABLET }];
+    let mut app = client();
+    tablet(&mut app, true);
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, page_text());
+    world.init_resource::<crate::player::CameraControl>();
+    world.run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+    crate::lanes::fire_in_order(world);
+    assert_eq!(reader(&app), None, "the session's end");
+
+    let mut app = client();
+    tablet(&mut app, true);
+    spy(&mut app, &["ITEM_TEXT_BEGIN"]);
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, page_text());
+    world
+        .resource_mut::<crate::ui_script::LeavingWorldArmed>()
+        .arm();
+    crate::ui_script::run_leave_world_sweep(world);
+    assert!(frame(&mut app, vec![]).is_empty(), "the worldport's sweep");
+    assert_eq!(reader(&app), None);
 }
 
 /// `ReadTrainerList` (`0x5dca60`) opens the trainer (`0x5dccb5`) only when the list's guid is the
@@ -201,4 +293,10 @@ fn a_trainer_list_opens_only_the_trainer_asked_or_the_gossip_npc() {
         .npc = Some(OTHER);
     frame(&mut app, vec![list(OTHER)]);
     assert_eq!(open(&app), Some(OTHER), "the gossip window's NPC");
+    // With no gossip open its cell is 0 (`0xbc3f58`), which a zero guid matches (`0x5dcc97`).
+    app.world_mut()
+        .resource_mut::<crate::ui_gossip::GossipState>()
+        .npc = None;
+    frame(&mut app, vec![list(0)]);
+    assert_eq!(open(&app), Some(0), "a zero guid against no gossip");
 }
