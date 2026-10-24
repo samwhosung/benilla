@@ -396,7 +396,7 @@ pub(crate) fn object_material(
     let name = |id: u32| materials.and_then(|m| m.0.name(id)).map(str::to_string);
     if benilla_protocol::guid::is_gameobject(guid) {
         let fields = objects.object(guid)?;
-        return name(go_templates.of(fields)?.page_material());
+        return name(go_templates.of(fields)?.page_material(fields));
     }
     let entry = objects.object(guid)?.object_entry()?;
     let t = items.template(entry, guid, Ask::Read)?;
@@ -415,11 +415,14 @@ fn readable(
     ask: Ask<'_>,
 ) -> Option<Readable> {
     let name = |id: u32| materials.and_then(|m| m.0.name(id)).map(str::to_string);
-    if let Some(go) = go_templates.of_guid(objects, guid) {
+    if let Some((fields, go)) = objects
+        .object(guid)
+        .and_then(|f| Some((f, go_templates.of_guid(objects, guid)?)))
+    {
         return Some(Readable {
             title: go.name.clone(),
-            material: name(go.page_material()),
-            page_head: go.page_id(),
+            material: name(go.page_material(fields)),
+            page_head: go.page_id(fields),
         });
     }
     let entry = objects.object(guid)?.object_entry()?;
@@ -716,7 +719,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::net::Guid(TABLET),
-                crate::net::ObjectStore(crate::go_templates::test_fields(17188)),
+                crate::net::ObjectStore(crate::go_templates::test_typed_fields(17188, 10)),
             ))
             .id();
         app.world_mut()
@@ -807,10 +810,10 @@ mod quest_material_tests {
         let items = Items::default();
         let mut objs = crate::ui_items::TestObjects::new();
         // Each source object is streamed; its descriptor, not its guid, names the template.
-        for entry in [100, 102, 777] {
+        for (entry, type_id) in [(100, 2), (102, 10), (777, 3)] {
             objs.spawn_object(
                 go_guid(entry),
-                crate::go_templates::test_fields(entry as u32),
+                crate::go_templates::test_typed_fields(entry as u32, type_id),
             );
         }
         let objects = objs.get();

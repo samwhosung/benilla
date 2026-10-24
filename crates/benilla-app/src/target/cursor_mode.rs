@@ -292,7 +292,7 @@ pub(super) struct GoUse<'a> {
 /// [`PlayerRefusal`] for our player at an object, in the reference's order.
 pub(super) fn go_player_refusal(u: &GoUse) -> Option<PlayerRefusal> {
     use crate::go_templates::GoColumn;
-    let column = |id| u.template.map_or(0, |t| t.column(id));
+    let column = |id| u.template.map_or(0, |t| t.column(&u.go.0, id));
     let go_type = u.go.0.gameobject_type_id();
     // The door's slot 6 runs ahead of `0x5f3130` (`0x5f4366`): with autoClose, a door that
     // starts open refuses at substate 1, one that starts closed at substate 3.

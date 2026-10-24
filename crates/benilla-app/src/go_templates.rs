@@ -37,30 +37,32 @@ pub(crate) struct GoTemplate {
     pub(crate) meeting_stone: Option<MeetingStoneTemplate>,
     /// MO_TRANSPORT (type 15) only: the transport timetable's inputs.
     pub(crate) mo_transport: Option<MoTransport>,
-    /// `GAMEOBJECT_TYPE_ID` as the template gives it, which names its data columns.
-    type_id: u32,
     /// The 24 data dwords (`[rec+0x1c]`), read by semantic through [`GoTemplate::column`].
     data: [i32; 24],
 }
 
 impl GoTemplate {
-    /// `0x5f8150(0x621b00(type, id))`: the data column the type names `id` by, 0 for a type
-    /// without one (`0x5f8150` refuses the −1 as past 23).
-    pub(crate) fn column(&self, id: GoColumn) -> i32 {
-        data_column(self.type_id, id).map_or(0, |c| self.data[c])
+    /// `0x5f8150(0x621b00(type, id))` for the object `go` of this template: the data column its
+    /// own `GAMEOBJECT_TYPE_ID` names `id` by (`[go+0x110]+0x3c`, as `0x5f5900`, `0x5f5970` and
+    /// `0x5f59a0` read it), 0 for a type without one (`0x5f8150` refuses the −1 as past 23).
+    pub(crate) fn column(&self, go: &ObjectFields, id: GoColumn) -> i32 {
+        u32::try_from(go.gameobject_type_id())
+            .ok()
+            .and_then(|t| data_column(t, id))
+            .map_or(0, |c| self.data[c])
     }
 
     /// The first `PageText` id the reader opens on, the pageID column (`GetPageTextId 0x5f5900`):
     /// TEXT's `data[0]`, GOOBER's `data[7]`; 0 is nothing to read.
-    pub(crate) fn page_id(&self) -> u32 {
-        self.column(GoColumn::PageId).max(0) as u32
+    pub(crate) fn page_id(&self, go: &ObjectFields) -> u32 {
+        self.column(go, GoColumn::PageId).max(0) as u32
     }
 
     /// The `PageTextMaterial.dbc` id, the pageMaterial column (`0x5f5950`), which the reader and
     /// `GetQuestBackgroundMaterial` paint on: QUESTGIVER's and TEXT's `data[2]`, GOOBER's
     /// `data[9]`; 0 for a type without one.
-    pub(crate) fn page_material(&self) -> u32 {
-        self.column(GoColumn::PageMaterial).max(0) as u32
+    pub(crate) fn page_material(&self, go: &ObjectFields) -> u32 {
+        self.column(go, GoColumn::PageMaterial).max(0) as u32
     }
 }
 
@@ -218,7 +220,6 @@ impl GameObjectTemplates {
                 floating_tooltip,
                 meeting_stone,
                 mo_transport,
-                type_id,
                 data: *data,
             },
         );
@@ -279,9 +280,21 @@ pub(crate) fn test_fields(entry: u32) -> ObjectFields {
     ObjectFields::from_pairs(&[(2, 0x21), (FIELD_OBJECT_ENTRY, entry)])
 }
 
+/// [`test_fields`] with `GAMEOBJECT_TYPE_ID` (field 21), which names the object's data columns.
+#[cfg(test)]
+pub(crate) fn test_typed_fields(entry: u32, type_id: u32) -> ObjectFields {
+    use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+    ObjectFields::from_pairs(&[(2, 0x21), (FIELD_OBJECT_ENTRY, entry), (21, type_id)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A GameObject's descriptor of `GAMEOBJECT_TYPE_ID` (field 21) `type_id`.
+    fn go(type_id: u32) -> ObjectFields {
+        ObjectFields::from_pairs(&[(2, 0x21), (21, type_id)])
+    }
 
     /// `0x621b00`'s arrays name the door's columns `startOpen`, `open`, `autoClose`,
     /// `noDamageImmune` (0 to 3), the chest's `notInCombat` 12 and the goober's `noDamageImmune`
@@ -293,7 +306,10 @@ mod tests {
         t.insert(1, 0, "Door".into(), &data);
         t.insert(2, 3, "Chest".into(), &data);
         t.insert(3, 10, "Goober".into(), &data);
-        let col = |entry, id| t.templates.get(entry).unwrap().column(id);
+        let col = |entry, id| {
+            let ty = [0, 0, 3, 10][entry as usize];
+            t.templates.get(entry).unwrap().column(&go(ty), id)
+        };
         assert_eq!(col(1, GoColumn::StartOpen), 100);
         assert_eq!(col(1, GoColumn::AutoClose), 102);
         assert_eq!(col(1, GoColumn::NoDamageImmune), 103);
@@ -328,14 +344,14 @@ mod tests {
         t.insert(101, 9, "Book".into(), &data);
         t.insert(102, 10, "Goober".into(), &data);
         t.insert(103, 15, "Boat".into(), &data);
-        assert_eq!(t.templates.get(100).unwrap().page_material(), 2);
-        assert_eq!(t.templates.get(101).unwrap().page_material(), 2);
+        assert_eq!(t.templates.get(100).unwrap().page_material(&go(2)), 2);
+        assert_eq!(t.templates.get(101).unwrap().page_material(&go(9)), 2);
         assert_eq!(
-            t.templates.get(102).unwrap().page_material(),
+            t.templates.get(102).unwrap().page_material(&go(10)),
             3,
             "a GOOBER (type 10) reads data[9]"
         );
-        assert_eq!(t.templates.get(103).unwrap().page_material(), 0);
+        assert_eq!(t.templates.get(103).unwrap().page_material(&go(15)), 0);
     }
 
     #[test]
@@ -370,11 +386,11 @@ mod tests {
         data[2] = 2; // pageMaterial (Stone)
         t.insert(2036, 9, "Book".into(), &data);
         let book = t.templates.get(2036).unwrap();
-        assert_eq!(book.page_id(), 1416);
-        assert_eq!(book.page_material(), 2);
+        assert_eq!(book.page_id(&go(9)), 1416);
+        assert_eq!(book.page_material(&go(9)), 2);
         // A goober's data[0] is a lockId; its page is data[7].
         t.insert(2037, 10, "Lever".into(), &data);
-        assert_eq!(t.templates.get(2037).unwrap().page_id(), 0);
+        assert_eq!(t.templates.get(2037).unwrap().page_id(&go(10)), 0);
     }
 
     #[test]

@@ -395,7 +395,7 @@ pub(super) fn inspect_ui(
             {
                 match go_templates
                     .of(&s.0)
-                    .map(|t| t.page_id())
+                    .map(|t| t.page_id(&s.0))
                 {
                     None => " · page ?".to_string(),
                     Some(0) => " · page —".to_string(),
