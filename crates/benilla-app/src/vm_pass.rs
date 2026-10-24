@@ -182,15 +182,15 @@ pub(crate) fn shared_sinks(world: &World) -> Vec<ComponentId> {
 /// already orders keep that order and its sync point. Panics on a cycle in the declared order,
 /// the pass's ends included.
 pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Vec<String> {
+    let label = label.intern();
+    if !world.resource::<Schedules>().contains(label) {
+        return Vec::new();
+    }
     let host = System::initialize(
         &mut IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {}),
         world,
     );
     let sinks = shared_sinks(world);
-    let label = label.intern();
-    if !world.resource::<Schedules>().contains(label) {
-        return Vec::new();
-    }
     world.schedule_scope(label, |world, schedule| {
         schedule.graph_mut().systems.initialize(world);
         let graph = schedule.graph();
