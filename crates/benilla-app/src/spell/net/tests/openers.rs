@@ -202,3 +202,52 @@ fn a_supersede_unlists_the_old_rank_twice() {
         LockOutcome::OpenBySpell(OPENING_2)
     );
 }
+
+/// `Stuck()`'s spell `[0xb70098]`: each registered spell whose `Effect[0]` is 84 overwrites it
+/// (`0x4b2614`-`0x4b261d`), so the last such learn holds it; an unlearn leaves it, and the book's
+/// reset zeroes it (`0x4b2433`) before the login list registers again in wire order.
+#[test]
+fn stuck_spell_is_the_last_registered_spell_with_the_stuck_effect() {
+    const STUCK: u32 = 7355;
+    const STUCK_2: u32 = 7356;
+    let stuck = || SpellDisplay {
+        effects: [0x54, 0, 0],
+        ..Default::default()
+    };
+    let mut spells = Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [
+            (STUCK, stuck()),
+            (STUCK_2, stuck()),
+            (FIREBALL, SpellDisplay::default()),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut actions = book(&[STUCK_2, STUCK, FIREBALL], &spells);
+    assert_eq!(actions.stuck_spell, Some(STUCK), "the list's last");
+    let errors = UiErrorKeys::default();
+    learned_spell(
+        STUCK_2,
+        &mut actions,
+        Some(&spells),
+        &errors,
+        &mut LearnedInTab::default(),
+    );
+    assert_eq!(actions.stuck_spell, Some(STUCK_2), "a learn overwrites");
+    removed_spell(STUCK_2, &mut actions, Some(&spells), &errors);
+    assert_eq!(actions.stuck_spell, Some(STUCK_2), "an unlearn leaves it");
+    spell_book(
+        vec![FIREBALL],
+        vec![],
+        &mut actions,
+        &mut Cooldowns::default(),
+        (
+            Some(&spells),
+            &crate::items::Items::default(),
+            &crate::spell::SpellModifiers::default(),
+            crate::spell::CategoryPad::for_list(false, None),
+        ),
+    );
+    assert_eq!(actions.stuck_spell, None, "the reset zeroes it");
+}

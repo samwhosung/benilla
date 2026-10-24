@@ -649,8 +649,10 @@ fn spell_book(
     // `ResetSpellBook 0x4b23a0` empties the opener list (`0x4b2464`-`0x4b2470`) before the
     // arrival's replay learns the list in wire order (`0x5dea8b`-`0x5deab9`).
     actions.openers.clear();
+    // It zeroes the effect-spell globals too (`0x4b2433`), `Stuck()`'s among them.
+    actions.stuck_spell = None;
     for &spell_id in &spell_ids {
-        list_opener(spell_id, spells, actions);
+        register_in_book(spell_id, spells, actions);
     }
     actions.spells.clear();
     actions.profession_order.clear();
@@ -695,7 +697,7 @@ fn learned_spell(
         actions.dirty = true;
     }
     list_learn(spell_id, actions);
-    list_opener(spell_id, spells, actions);
+    register_in_book(spell_id, spells, actions);
     announce_learn(spell_id, spells, errors);
     tab_flash.0.push(spell_id);
 }
@@ -721,6 +723,23 @@ fn list_unlearn(spell_id: u32, actions: &mut PlayerActions) {
     }
     if let Some(at) = actions.craft_order.iter().position(|&id| id == spell_id) {
         actions.craft_order.remove(at);
+    }
+}
+
+/// `SPELL_EFFECT_STUCK` in `Effect[0]`, the registrar's test for `Stuck()`'s spell (`0x4b2614`).
+const SPELL_EFFECT_STUCK: u32 = 0x54;
+
+/// The registrar `0x4b25b0`'s effect legs this client keeps: the opener list, and `Stuck()`'s
+/// spell `[0xb70098]`, which each registered spell whose `Effect[0]` is `SPELL_EFFECT_STUCK`
+/// overwrites (`0x4b2614`-`0x4b261d`), so the last such learn holds it. No unlearn clears it; the
+/// book's reset does.
+fn register_in_book(spell_id: u32, spells: Option<&Spells>, actions: &mut PlayerActions) {
+    list_opener(spell_id, spells, actions);
+    if spells
+        .and_then(|s| s.catalog.get(spell_id))
+        .is_some_and(|d| d.effects[0] == SPELL_EFFECT_STUCK)
+    {
+        actions.stuck_spell = Some(spell_id);
     }
 }
 
@@ -836,7 +855,7 @@ fn superceded_spell(
     // unlearn of the old rank (`0x5e6392` → `0x5ea24c`) then runs the removal once more, and its
     // learn of the new one (`0x5e63a4`) skips the registrar (`0x5e9c5a`).
     unlist_opener(old_spell_id, actions);
-    list_opener(new_spell_id, spells, actions);
+    register_in_book(new_spell_id, spells, actions);
     unlist_opener(old_spell_id, actions);
     // A rank-up announces once, like a first learn: the supersede pair `0x4b2f50` calls the
     // unlearn `0x4b2c50`, which prints nothing, then the registrar `0x4b25b0` with `edx = 1`

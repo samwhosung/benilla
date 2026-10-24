@@ -96,6 +96,7 @@ mod tests {
             profession_order: spells.to_vec(),
             craft_order: spells.to_vec(),
             openers: Vec::new(),
+            stuck_spell: None,
             superseded: Vec::new(),
             unlearned: Vec::new(),
             dirty: true,

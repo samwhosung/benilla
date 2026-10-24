@@ -210,10 +210,10 @@ fn stuck_casts_inside_its_call() {
     let (mut app, rx) = client();
     seat(&mut app, &[]);
     spell_rows(&mut app, &[(STUCK, 0, 84)]);
+    // The book registered it ([`crate::ui_action::PlayerActions::stuck_spell`]).
     app.world_mut()
         .resource_mut::<crate::ui_action::PlayerActions>()
-        .spells
-        .insert(STUCK);
+        .stuck_spell = Some(STUCK);
     eval::<()>(&mut app, "Stuck() RandomRoll(1, 2)");
     assert_eq!(sent(&rx), ["cast 7355", "roll 1"]);
 }
@@ -674,8 +674,7 @@ fn stuck_casts_the_learned_spell_with_the_stuck_effect() {
         if learned {
             app.world_mut()
                 .resource_mut::<crate::ui_action::PlayerActions>()
-                .spells
-                .insert(UNSTUCK);
+                .stuck_spell = Some(UNSTUCK);
         }
         eval::<()>(&mut app, "Stuck() RandomRoll(1, 2)");
         let expected: &[&str] = if learned {
