@@ -155,8 +155,9 @@ fn down_ray_pick_scored(
         }
     }
 
-    // Leg B, portal crossings, racing the face hit; a coincident portal wins the tie.
-    let mut across: Option<usize> = None;
+    // Leg B, portal crossings (`0x6a3f80`): the nearest crossing alone, a hit at most the shortest
+    // so far kept (`0x6a4111`, so the later of equals), as (z, chosen group, across).
+    let mut nearest: Option<(f32, usize, Option<usize>)> = None;
     for (gi, g) in nav.iter().enumerate() {
         if !in_column(g) {
             continue;
@@ -181,9 +182,8 @@ fn down_ray_pick_scored(
                 }
                 z
             };
-            // Accepted while `best − z < tie`, strictly, a NaN refused.
-            if (best_z - z).partial_cmp(&NEAREST_TIE_YD) != Some(std::cmp::Ordering::Less) {
-                continue; // the best hit is nearer by the tie or more
+            if nearest.is_some_and(|(pz, ..)| z < pz) {
+                continue; // farther than the shortest so far
             }
             let Some(verts) = portal_poly(portal_vertices, info) else {
                 continue;
@@ -204,9 +204,18 @@ fn down_ray_pick_scored(
                 continue;
             }
             let other = if chosen == gi { r.group as usize } else { gi };
+            let across = (nav.get(other).is_some() && other != chosen).then_some(other);
+            nearest = Some((z, chosen, across));
+        }
+    }
+    // Then raced once against the face best (`0x6be421`-`0x6be434`): taken while `best − z < tie`,
+    // strictly, a NaN refused, so a coincident portal wins.
+    let mut across: Option<usize> = None;
+    if let Some((z, chosen, other)) = nearest {
+        if (best_z - z).partial_cmp(&NEAREST_TIE_YD) == Some(std::cmp::Ordering::Less) {
             best_z = z;
             best = Some(chosen);
-            across = (nav.get(other).is_some() && other != chosen).then_some(other);
+            across = other;
         }
     }
 
