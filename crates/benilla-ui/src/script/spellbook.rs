@@ -116,14 +116,6 @@ pub struct PetBookState {
     pub slots: Vec<SpellSlotView>,
 }
 
-/// Whether two pet books list the same spells, which is all a name lookup reads.
-fn same_spells(a: &PetBookState, b: &PetBookState) -> bool {
-    a.slots.len() == b.slots.len()
-        && a.slots.iter().zip(&b.slots).all(|(x, y)| {
-            (x.spell_id, &x.name, &x.rank, x.passive) == (y.spell_id, &y.name, &y.rank, y.passive)
-        })
-}
-
 /// The player's book: the skill-line tabs and the flat slot list they index into.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellBookState {
@@ -137,26 +129,15 @@ impl super::UiScript {
         self.model_mut().spellbook = state;
     }
 
-    /// Replace the pet's book; the app fires `SPELLS_CHANGED`, which the reference fires for both
-    /// books off one re-sort (`0x4b2fd0`).
+    /// Replace the pet's book; its `SPELLS_CHANGED` is the pet spell message's own sort
+    /// (`0x4bdadb` → `0x4b2fd0`), which the app signals at the packet.
     pub fn set_pet_book(&mut self, state: PetBookState) {
-        let mut model = self.model_mut();
-        if !same_spells(&model.pet_book, &state) {
-            model.pet_book_generation += 1;
-        }
-        model.pet_book = state;
+        self.model_mut().pet_book = state;
     }
 
     /// The pet's book as it stands, for the app's name lookups (a macro's bound spell).
     pub fn pet_spellbook(&self) -> PetBookState {
         self.model_mut().pet_book.clone()
-    }
-
-    /// Bumped each time [`Self::set_pet_book`] changes which spells the pet's book lists, by id,
-    /// name, rank or passivity, not a cooldown or an autocast flag: the pet spell message
-    /// (`0x4bdae0`) that re-derives the macros bound to the pet's book (`0x4f0ce0`).
-    pub fn pet_book_generation(&self) -> u64 {
-        self.model_mut().pet_book_generation
     }
 
     /// Take the `CastSpell(id, "pet")` calls out of the call stream as `(spell id, onSelf)`: each

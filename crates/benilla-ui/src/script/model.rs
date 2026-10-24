@@ -619,8 +619,6 @@ pub(crate) struct Model {
     pub(crate) spellbook: spellbook::SpellBookState,
     /// The pet's spellbook, a second array as in the reference (`0xb700f0`, `0xb6f098`).
     pub(crate) pet_book: spellbook::PetBookState,
-    /// Bumped when `set_pet_book` changes which spells the pet's book lists.
-    pub(crate) pet_book_generation: u64,
     /// The player's macros, owned here as 1.12 macros have no server side; the app persists them.
     pub(crate) macros: macros::MacroState,
     /// A script changed the macros: the save's cue.
@@ -1548,7 +1546,6 @@ impl Model {
             ui_errors: Vec::new(),
             spellbook: spellbook::SpellBookState::default(),
             pet_book: spellbook::PetBookState::default(),
-            pet_book_generation: 0,
             macros: macros::MacroState::default(),
             macros_dirty: false,
             macros_generation: 0,

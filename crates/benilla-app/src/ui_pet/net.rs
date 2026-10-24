@@ -57,6 +57,12 @@ fn on_spells(
         if changed {
             latch.0 = None;
         }
+        // The pet book's sort on every packet, an empty list included (`0x4bdadb` →
+        // `0x4b2fd0(0, 1)`), which signals `SPELLS_CHANGED` (`0x4b302a`) ahead of the macro
+        // derivation (`0x4bdae0`) and the guid's store.
+        lane.write(crate::field_watch::FieldNotice::Global {
+            id: crate::field_watch::id::SPELLS_CHANGED,
+        });
         // `SetPetGuid`'s signals at the packet's place (`0x4bdaf0` → `0x4bc7e0`): the pet frame's
         // `UnitExists("pet")` reads our summon field as this packet left it.
         lane.write(crate::field_watch::FieldNotice::PetGuidSet {
@@ -66,9 +72,18 @@ fn on_spells(
     }
 }
 
-fn on_mode(In(ev): In<SessionEvent>, mut bar: ResMut<PetBar>) {
+fn on_mode(
+    In(ev): In<SessionEvent>,
+    mut bar: ResMut<PetBar>,
+    mut lane: ResMut<crate::field_watch::NoticeLane>,
+) {
     if let SessionEvent::PetMode(mode) = ev {
-        pet_mode(mode, &mut bar);
+        if pet_mode(mode, &mut bar) {
+            // `0x4bdb4f`: `PET_BAR_UPDATE` inside the handler, at the packet's place.
+            lane.write(crate::field_watch::FieldNotice::Global {
+                id: crate::field_watch::id::PET_BAR_UPDATE,
+            });
+        }
     }
 }
 
@@ -133,6 +148,7 @@ fn pet_spells(
         let signals = bar.bar_signals.wrapping_add(1);
         bar.clear();
         bar.bar_signals = signals;
+        bar.book_sorts = bar.book_sorts.wrapping_add(1);
         return new_pet;
     }
     debug!(
@@ -200,17 +216,24 @@ fn pet_spells(
     // `SetPet` (`0x4bc7e0`) ends in `SignalEvent(0x161)` on every packet (`0x4bc90c`), whatever
     // changed: the one repaint a packet that moves only the pet's cooldowns gets.
     bar.bar_signals = bar.bar_signals.wrapping_add(1);
+    // The book's sort (`0x4bdadb`) and the macro derivation after it (`0x4bdae0`), every packet.
+    bar.book_sorts = bar.book_sorts.wrapping_add(1);
     new_pet
 }
 
-/// `SMSG_PET_MODE`: the state word alone, applied only to the bar of the pet it names.
-fn pet_mode(mode: PetMode, bar: &mut PetBar) {
-    if bar.spells.pet_guid == 0 || bar.spells.pet_guid != mode.pet_guid {
-        return;
+/// `SMSG_PET_MODE` (`0x4bdb10`): the state word alone, applied only when the packet's guid is the
+/// bar's cached one (`0x4bdb33`, `0x4bdb3f`), a zero guid against no bar included; whether it was,
+/// for the signal that follows the store (`0x4bdb4f`). The signal is the bar's whole source moving,
+/// as `SetPet`'s is, so the feed repaints without a second event.
+fn pet_mode(mode: PetMode, bar: &mut PetBar) -> bool {
+    if bar.spells.pet_guid != mode.pet_guid {
+        return false;
     }
     debug!("net: pet mode — state {:#010x}", mode.state);
     // The whole dword, as the client stores both packets' state (`0x4bc930`).
     bar.spells.state = mode.state;
+    bar.bar_signals = bar.bar_signals.wrapping_add(1);
+    true
 }
 
 /// `SMSG_PET_ACTION_FEEDBACK`: a refused order's reason byte, onto the red line.

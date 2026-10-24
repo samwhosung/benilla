@@ -52,7 +52,8 @@ impl Plugin for UiMacroPlugin {
                     rebind_macro_spells
                         .in_set(crate::ui_unit::UnitFeed)
                         .in_set(MacroBindings)
-                        .after(crate::ui_spellbook::BookFeed),
+                        .after(crate::ui_spellbook::BookFeed)
+                        .after(crate::ui_pet_book::feed_pet_book),
                     // In-world only: the per-character file needs the character. Ahead of the
                     // rank pass, which rewrites the bar's words too, as the one-time move of a
                     // character's old buttons does.
@@ -232,12 +233,12 @@ fn save_dirty_macros(mut hosted_vm: crate::script_calls::HostedVm, files: Res<Ma
     })
 }
 
-/// What [`rebind_macro_spells`] last saw, per VM: a fresh VM restarts both counters at 0, which a
-/// bare memo would gate off for good.
+/// What [`rebind_macro_spells`] last saw, per VM: a fresh VM restarts the table's counter at 0,
+/// which a bare memo would gate off for good.
 #[derive(Default)]
 struct BindingsSeen {
     macros: Option<u64>,
-    pet_book: Option<u64>,
+    pet_book: Option<u32>,
 }
 
 /// Derive the bound spells the engine's verbs do not (they derive the record a create or an edit
@@ -245,9 +246,10 @@ struct BindingsSeen {
 /// `0x4efe00` do, and nowhere else:
 /// - every record after the macro files load (`0x4f0a55` into `0x4f0ca0`) and after our player's
 ///   arrival learns its initial spells (`0x5deacc`);
-/// - at the pet's spell list (`0x4bdae0` into `0x4f0ce0`), the records that follow the pet's book:
-///   a `/cast` that did not resolve and any record whose selector is the pet's (`0x4f0cfb`-
-///   `0x4f0d11`).
+/// - at each pet spell list (`0x4bdae0` into `0x4f0ce0`), the same list again included, the
+///   records that follow the pet's book: a `/cast` that did not resolve and any record whose
+///   selector is the pet's (`0x4f0cfb`-`0x4f0d11`). The frame's lists derive once, after the
+///   last, off the book the pet book's feed pushed.
 ///
 /// A learned spell derives nothing, so a `/cast` of a spell not yet known stays -1 until its macro
 /// is edited, loaded again or the player arrives again. A superseded rank rewrites the cached
@@ -260,27 +262,28 @@ fn rebind_macro_spells(
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, crate::ui_action::PlayerActions>,
         ResMut<'static, MacroBoundSpells>,
+        Option<Res<'static, crate::ui_pet::PetBar>>,
     )>,
     arrivals: Query<(), Added<crate::net::SelfPlayer>>,
     mut owed: Local<(bool, crate::ui_script::VmMemo<BindingsSeen>)>,
 ) {
     let (arrived, seen) = &mut *owed;
     *arrived |= !arrivals.is_empty();
-    vm.turn(|script, (mut actions, mut bound)| {
+    vm.turn(|script, (mut actions, mut bound, pet_bar)| {
         // With no VM the supersede pairs wait for the first pass that can apply them.
         let Some(script) = script else {
             return;
         };
         let seen = seen.get(script);
         let generation = script.macros_generation();
-        let pet_generation = script.pet_book_generation();
+        let book_sorts = pet_bar.map_or(0, |b| b.book_sorts);
         let table_moved = seen.macros != Some(generation);
-        let pet_moved = seen.pet_book != Some(pet_generation);
+        let pet_moved = seen.pet_book != Some(book_sorts);
         if !table_moved && !pet_moved && !*arrived && actions.superseded.is_empty() {
             return;
         }
         seen.macros = Some(generation);
-        seen.pet_book = Some(pet_generation);
+        seen.pet_book = Some(book_sorts);
         // Both taken, so neither stays owed to the next pass.
         let (arrival, load) = (std::mem::take(arrived), script.take_macro_derives().loaded);
         let every = arrival || load;

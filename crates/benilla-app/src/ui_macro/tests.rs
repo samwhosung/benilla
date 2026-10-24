@@ -331,6 +331,7 @@ fn rebind_app(script: UiScript) -> bevy::prelude::App {
     let mut app = App::new();
     app.init_resource::<crate::ui_action::PlayerActions>()
         .init_resource::<super::MacroBoundSpells>()
+        .init_resource::<crate::ui_pet::PetBar>()
         .insert_non_send_resource(script)
         .add_systems(Update, super::rebind_macro_spells);
     app
@@ -344,12 +345,19 @@ fn book_slot(spell_id: u32, name: &str) -> benilla_ui::script::SpellSlotView {
     }
 }
 
-/// `0x4f0ce0`, from the pet spell message (`0x4bdae0`), derives only the records whose cached
+/// One `SMSG_PET_SPELLS`'s sort of the pet book (`0x4bdadb`), which the derivation follows.
+fn pet_spell_list(app: &mut bevy::prelude::App) {
+    let mut bar = app.world_mut().resource_mut::<crate::ui_pet::PetBar>();
+    bar.book_sorts = bar.book_sorts.wrapping_add(1);
+}
+
+/// `0x4f0ce0`, from each pet spell message (`0x4bdae0`), derives only the records whose cached
 /// spell is below 0 or whose book selector is the pet's (`0x4f0cfb`-`0x4f0d11`), and a miss leaves
 /// the selector (`0x4eff81` stores the spell alone). So a `/cast` that missed binds when the pet's
 /// spell arrives; a `CastSpellByName` that was bound to it and lost it binds again when the pet
-/// returns; and one made while the pet was away keeps its 0 through the pet's list alone. The
-/// engine's copy carries the book, which `GetActionAutocast` reads.
+/// returns; and one made while the pet was away keeps its 0 through the pet's list alone. A book
+/// pushed with no message derives nothing. The engine's copy carries the book, which
+/// `GetActionAutocast` reads.
 #[test]
 fn the_pets_spell_list_rebinds_the_failed_and_the_pet_bound_macros_only() {
     use super::run::{Bound, BoundSpell};
@@ -408,25 +416,20 @@ fn the_pets_spell_list_rebinds_the_failed_and_the_pet_bound_macros_only() {
         "the binding's book reaches GetActionAutocast"
     );
 
-    // A cooldown or autocast change is not a spell message: nothing is derived again.
-    let before = script.pet_book_generation();
-    let mut ticking = seduction.clone();
-    ticking.slots[0].cooldown = Some((1_000, 5_000, true));
+    // The pet's book empties with no spell message: nothing is derived again.
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
-        .set_pet_book(ticking);
+        .set_pet_book(PetBookState::default());
+    app.update();
     assert_eq!(
-        app.world()
-            .non_send_resource::<UiScript>()
-            .pet_book_generation(),
-        before
+        (bound(&app, 1), bound(&app, 2)),
+        (pet_spell, pet_spell),
+        "no spell message, no derivation"
     );
 
     // The pet is dismissed. The `/cast` is a miss (-1) and the quoted call stores 0; both keep the
     // pet's book. A quoted call made now never found the spell.
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .set_pet_book(PetBookState::default());
+    pet_spell_list(&mut app);
     app.world_mut()
         .non_send_resource::<UiScript>()
         .run(r#"CreateMacro("Later", 1, 'CastSpellByName("Seduction")')"#)
@@ -457,6 +460,7 @@ fn the_pets_spell_list_rebinds_the_failed_and_the_pet_bound_macros_only() {
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
         .set_pet_book(seduction);
+    pet_spell_list(&mut app);
     app.update();
     assert_eq!(
         (

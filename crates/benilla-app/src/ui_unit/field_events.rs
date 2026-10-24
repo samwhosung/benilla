@@ -604,6 +604,9 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PET_UI_UPDATE => "PET_UI_UPDATE",
         id::PLAYTIME_CHANGED => "PLAYTIME_CHANGED",
         id::PLAYER_MONEY => "PLAYER_MONEY",
+        id::SPELLS_CHANGED => "SPELLS_CHANGED",
+        id::PET_BAR_UPDATE => "PET_BAR_UPDATE",
+        id::AREA_SPIRIT_HEALER_IN_RANGE => "AREA_SPIRIT_HEALER_IN_RANGE",
         _ => return None,
     })
 }

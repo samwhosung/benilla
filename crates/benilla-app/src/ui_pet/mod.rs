@@ -67,6 +67,10 @@ pub(crate) struct PetBar {
     /// `0x4bc960`), and `OnClick`'s `SetChecked(0)` needs that repaint to relight a press on the
     /// current mode, so the count is in the feed's dedup key. Wrapping: only a change is read.
     pub(crate) bar_signals: u32,
+    /// The pet book's sorts, one per `SMSG_PET_SPELLS` (`0x4bdadb`), each followed by the
+    /// derivation of the macros that follow the pet's book (`0x4bdae0` → `0x4f0ce0`). Wrapping:
+    /// only a change is read, and [`Self::clear`] keeps it.
+    pub(crate) book_sorts: u32,
     /// `[0xb714a8]`: the charm or possess expiry, the packet's duration past its arrival; `None`
     /// when the duration is 0, as for a hunter's or warlock's own pet.
     pub(crate) expires: Option<Instant>,
@@ -96,12 +100,14 @@ impl PetBar {
     }
 
     /// No pet: every field back to its default, the cooldown list emptied with its counters kept
-    /// ([`Cooldowns::clear_silent`]), for the teardown packet and the session end.
+    /// ([`Cooldowns::clear_silent`]) and the book's sorts kept, for the teardown packet and the
+    /// session end.
     pub(crate) fn clear(&mut self) {
         let mut cooldowns = std::mem::take(&mut self.cooldowns);
         cooldowns.clear_silent();
         *self = Self {
             cooldowns,
+            book_sorts: self.book_sorts,
             ..Default::default()
         };
     }

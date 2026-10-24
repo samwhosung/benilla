@@ -541,7 +541,9 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_spellbook::feed_spellbook", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
         "ui_spellbook::LearnedInTab"]),
-    ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions"]),
+    // The pet book's sorts, which each pet spell list counts and the derivation follows
+    // (`0x4bdae0`): the frame's lists derive once, after the last.
+    ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions", "ui_pet::PetBar"]),
     ("::ui_macro::load_macros", &["ui_action::PlayerActions"]),
     ("::ui_talent::feed_talents", &["net::ObjectStore", "ui_action::PlayerActions"]),
     ("::ui_talent_wipe::feed_talent_wipe", &["ui_talent_wipe::TalentWipeState"]),
