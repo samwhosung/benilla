@@ -181,6 +181,8 @@ pub(crate) mod id {
     pub(crate) const UNIT_DISPLAYPOWER: u16 = 30;
     pub(crate) const UNIT_AURA: u16 = 41;
     pub(crate) const UNIT_NAME_UPDATE: u16 = 183;
+    pub(crate) const UNIT_PORTRAIT_UPDATE: u16 = 184;
+    pub(crate) const UNIT_MODEL_CHANGED: u16 = 185;
     pub(crate) const UNIT_INVENTORY_CHANGED: u16 = 186;
     pub(crate) const PLAYER_MONEY: u16 = 200;
     pub(crate) const PLAYERBANKSLOTS_CHANGED: u16 = 347;

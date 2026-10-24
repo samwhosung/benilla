@@ -52,6 +52,8 @@ use booth::{
     clear_booth_rig, spawn_booth_effects, spawn_booth_model, spawn_booth_own_emitters,
     BoothBillboardSpec, BoothEffects, BoothInstance, BoothMotion, BoothPart, BoothRider,
 };
+mod drain;
+pub(crate) use drain::PortraitMarks;
 mod dressup;
 pub(crate) use dressup::{DressUpBake, DressUpLook, DressUpPreview};
 mod glue_booth;

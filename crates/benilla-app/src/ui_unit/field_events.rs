@@ -826,6 +826,39 @@ mod tests {
         );
     }
 
+    /// The portrait drain's pair for one unit (`0x524de4`, `0x524df1`): `UNIT_PORTRAIT_UPDATE` for
+    /// every token naming it, then `UNIT_MODEL_CHANGED` for every token, each with the token as
+    /// `arg1` (`0x515e7a`).
+    #[test]
+    fn the_portrait_pair_fires_each_event_for_every_token_in_turn() {
+        let mut app = world(seated());
+        let (portrait, model) = (
+            crate::field_watch::id::UNIT_PORTRAIT_UPDATE,
+            crate::field_watch::id::UNIT_MODEL_CHANGED,
+        );
+        assert_eq!(
+            fired(
+                &mut app,
+                &[
+                    FieldNotice::Signal {
+                        guid: ME,
+                        id: portrait
+                    },
+                    FieldNotice::Signal {
+                        guid: ME,
+                        id: model
+                    },
+                ]
+            ),
+            [
+                "UNIT_PORTRAIT_UPDATE player",
+                "UNIT_PORTRAIT_UPDATE target",
+                "UNIT_MODEL_CHANGED player",
+                "UNIT_MODEL_CHANGED target",
+            ]
+        );
+    }
+
     /// Each callback's own signals, in the order the notices came.
     #[test]
     fn each_callback_fires_its_own_signals_in_notice_order() {
