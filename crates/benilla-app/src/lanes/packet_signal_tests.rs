@@ -149,6 +149,54 @@ fn the_spirit_healer_time_signals_in_range_at_its_packet() {
     assert_eq!(seen, [FELL, "AREA_SPIRIT_HEALER_OUT_OF_RANGE", FELL]);
 }
 
+/// The rescan's sends are the handler's own (`0x4921c0`): with no VM to fire the notice lane, and
+/// the lane dropped, the dropped healer's `CMSG_CANCEL_AURA` still goes out.
+#[test]
+fn the_spirit_healer_rescan_sends_with_no_vm() {
+    const HEALER: u64 = 0xF130_0000_1868_0001;
+    let mut app = client();
+    frame(
+        &mut app,
+        vec![
+            values(ME, &[(benilla_protocol::field::FIELD_PLAYER_FLAGS, 0x10)]),
+            created(HEALER, EntityKind::Unit, &[]),
+        ],
+    );
+    let _ = app
+        .world_mut()
+        .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>()
+        .set_healer(Some(HEALER));
+    let time = SessionEvent::AreaSpiritHealerTime {
+        healer: HEALER,
+        ms: 30_000,
+    };
+    frame(&mut app, vec![time.clone()]);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let world = app.world_mut();
+    world.insert_resource(crate::net::NetCommands(tx));
+    world.remove_non_send_resource::<UiScript>();
+    let healer = world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .remove(&HEALER)
+        .expect("the healer's entity");
+    world.despawn(healer);
+    crate::net::handlers::dispatch(world, vec![time]);
+    world
+        .resource_mut::<crate::field_watch::NoticeLane>()
+        .clear();
+    let sent: Vec<_> = rx.try_iter().collect();
+    assert!(
+        sent.iter().any(|c| matches!(
+            c,
+            crate::net::ClientCommand::CancelAura {
+                spell_id: crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA
+            }
+        )),
+        "the cancel goes out at the packet: {sent:?}"
+    );
+}
+
 /// "The Lay of Ameth'Aran", entry 17188, a GOOBER whose page is 358, streamed as [`TABLET`]; with
 /// `cached`, its first page already in the page cache (`0xc0e174`).
 fn tablet(app: &mut App, cached: bool) {
