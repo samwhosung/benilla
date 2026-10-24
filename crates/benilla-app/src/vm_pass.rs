@@ -260,8 +260,7 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                 with_host.clone_from(combined);
                 with_host.extend(host.combined_access());
                 let hosted = with_host == *combined;
-                let meets = in_phase[index[&key]] && !declared.is_compatible(&host);
-                if hosted || meets {
+                if hosted || (in_phase[index[&key]] && !declared.is_compatible(&host)) {
                     Joins::Always
                 } else if sinks.iter().any(|id| combined.has_resource_read(*id)) {
                     Joins::Sink
