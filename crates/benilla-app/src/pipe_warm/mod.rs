@@ -103,8 +103,8 @@ fn publish_cover(
     hold: Option<Res<crate::loading_screen::hold::PresentHold>>,
 ) {
     // A frame the teleport hold keeps from the window hides its compiles as the cover does.
-    let _ = hold;
-    let covered = loading.covering() || *state.get() != ClientState::InWorld;
+    let held = hold.is_some_and(|h| h.held());
+    let covered = loading.covering() || held || *state.get() != ClientState::InWorld;
     watch.0.covered.store(covered, Ordering::Relaxed);
 }
 

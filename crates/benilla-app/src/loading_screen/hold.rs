@@ -243,7 +243,13 @@ fn defer_input_through_the_hold(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     let held = hold.held;
-    let _ = (&mut pointer, &mut window);
+    if let (true, Ok(mut window)) = (held, window.single_mut()) {
+        pointer.live = Some(window.physical_cursor_position());
+        // Unchanged, so `changed_windows` does not read it as a warp; handed back in `PostUpdate`.
+        window
+            .bypass_change_detection()
+            .set_physical_cursor_position(pointer.shown.map(|p| p.as_dvec2()));
+    }
     deferred.keyboard.step(held, &mut queues.keyboard);
     deferred.buttons.step(held, &mut queues.buttons);
     deferred.motion.step(held, &mut queues.motion);
