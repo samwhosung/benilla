@@ -592,7 +592,7 @@ fn an_attacks_pick_signals_its_target_change_before_the_swing() {
         spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
         f.app
             .world_mut()
-            .resource_mut::<crate::ui_action::PlayerActions>()
+            .resource_mut::<crate::ui_action::ActionSlots>()
             .buttons
             .insert(
                 0,

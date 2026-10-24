@@ -11,7 +11,7 @@ use crate::net::{ClientCommand, NetCommands};
 
 use crate::spell::{cast_target, CastLadder};
 
-use super::{attack_actor_refusal, PlayerActions, UiErrorKeys, SPELL_ATTACK};
+use super::{attack_actor_refusal, ActionSlots, UiErrorKeys, SPELL_ATTACK};
 use crate::query_cache::Ask;
 
 /// What clicking an item action does, and to which copy.
@@ -235,7 +235,8 @@ pub(crate) fn drain_click_casts(
 /// What a `UseAction` press reads and writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ActionPress<'w, 's> {
-    actions: Res<'w, PlayerActions>,
+    /// The slots as the calls before the press left them.
+    slots: Res<'w, ActionSlots>,
     targeting: cast_target::CastTargeting<'w, 's>,
     // The by-key error line. Not a `CastLadder` field: Bevy panics, at runtime and not in unit
     // tests, on a resource reachable twice from one system.
@@ -266,7 +267,7 @@ pub(crate) fn use_action(
     press: benilla_ui::script::ActionUse,
 ) -> UseOutcome {
     let ActionPress {
-        actions,
+        slots,
         targeting,
         ui_errors,
         ladder,
@@ -279,7 +280,7 @@ pub(crate) fn use_action(
         Ok(s) => s,
         Err(_) => return UseOutcome::Done,
     };
-    match actions.buttons.get(&slot) {
+    match slots.buttons.get(&slot) {
         Some(b) if b.kind == ACTION_KIND_SPELL && b.action == SPELL_ATTACK => {
             // `UseAction` casts Attack through TryCast, so its dead rung comes first: "You are
             // dead", where the binding, which skips TryCast, reads "Can't attack while dead."
@@ -465,42 +466,23 @@ pub(crate) fn use_action(
     UseOutcome::Done
 }
 
-/// The slot writes `0x4e58e0` made inside calls and engine writes, in order, for
-/// [`store_action_writes`] to store: pushed through `&self`, so the call host and a system that
-/// lends it can both hold it.
-#[derive(Resource, Default)]
-pub(crate) struct ActionSlotWrites(std::sync::Mutex<Vec<(u8, u32)>>);
-
-impl ActionSlotWrites {
-    fn push(&self, slot: u8, packed: u32) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((slot, packed));
-    }
-
-    fn take(&self) -> Vec<(u8, u32)> {
-        std::mem::take(
-            &mut *self
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-    }
-}
-
 /// The action bar's sends inside their calls ([`benilla_ui::script::ActionBarCall`]): the
-/// toggles' packet, and each slot write sent and queued for the store.
+/// toggles' packet, and each slot write sent and stored.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ActionBarSteps<'w> {
     /// Absent in a harness without the action store, which sends without storing.
-    writes: Option<Res<'w, ActionSlotWrites>>,
+    slots: Option<ResMut<'w, ActionSlots>>,
     net: Res<'w, NetCommands>,
 }
 
 impl ActionBarSteps<'_> {
+    /// The slots as the writes so far left them; empty in a harness without the store.
+    pub(crate) fn buttons(&self) -> impl Iterator<Item = &ActionButton> {
+        self.slots.iter().flat_map(|s| s.buttons.values())
+    }
+
     /// `call` inside its verb.
-    pub(crate) fn apply(&self, call: benilla_ui::script::ActionBarCall) {
+    pub(crate) fn apply(&mut self, call: benilla_ui::script::ActionBarCall) {
         use benilla_ui::script::ActionBarCall;
         match call {
             // `0x4e771d`: one packet per call, with no change test.
@@ -516,8 +498,8 @@ impl ActionBarSteps<'_> {
 
     /// The slot write `0x4e58e0` for the 1-based `lua_id` (`packed == 0` clears), which the VM
     /// already mirrors: `CMSG_SET_ACTION_BUTTON` sent, ahead of the `ACTIONBAR_SLOT_CHANGED` the
-    /// VM signals after it, and the store's write queued.
-    pub(crate) fn set(&self, lua_id: u32, packed: u32) {
+    /// VM signals after it, and the slot stored (`0x4e590a`), marking the bar for the feed.
+    pub(crate) fn set(&mut self, lua_id: u32, packed: u32) {
         let Ok(slot) = u8::try_from(lua_id.saturating_sub(1)) else {
             debug!("ui_action: set_action_button lua id {lua_id} out of range — ignored");
             return;
@@ -529,28 +511,13 @@ impl ActionBarSteps<'_> {
             button: slot,
             packed,
         });
-        if let Some(writes) = self.writes.as_deref() {
-            writes.push(slot, packed);
-        }
-    }
-}
-
-/// Store the slot writes the calls made, in order, marking the bar dirty for the feed. The store
-/// is written here, after the VM pass, and not inside the call: the store is every action feed's
-/// input beside the call host, which reads it.
-pub(crate) fn store_action_writes(
-    writes: Res<ActionSlotWrites>,
-    mut actions: ResMut<PlayerActions>,
-) {
-    let writes = writes.take();
-    if writes.is_empty() {
-        return;
-    }
-    for (slot, packed) in writes {
+        let Some(slots) = self.slots.as_deref_mut() else {
+            return;
+        };
         if packed == 0 {
-            actions.buttons.remove(&slot);
+            slots.buttons.remove(&slot);
         } else {
-            actions.buttons.insert(
+            slots.buttons.insert(
                 slot,
                 ActionButton {
                     slot,
@@ -559,6 +526,6 @@ pub(crate) fn store_action_writes(
                 },
             );
         }
+        slots.dirty = true;
     }
-    actions.dirty = true;
 }

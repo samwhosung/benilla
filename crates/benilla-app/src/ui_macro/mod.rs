@@ -117,13 +117,12 @@ pub(crate) fn identity(roster: &crate::glue_session::roster::Roster) -> Option<(
 
 /// Seed the engine's macro table from disk, once per character per VM.
 fn load_macros(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The bar's verbs, whose slots the call host's own bar verbs write too: an engine turn.
+    mut vm: crate::script_calls::VmWith<crate::ui_action::ActionBarSteps<'static>>,
     roster: Res<crate::glue_session::roster::Roster>,
-    actions: Res<crate::ui_action::PlayerActions>,
-    bar: crate::ui_action::ActionBarSteps,
     mut files: ResMut<MacroFiles>,
 ) {
-    hosted_vm.run(|script| {
+    vm.feed(|script, mut bar, fires| {
         let Some(script) = script else { return };
         let Some(id) = identity(&roster) else { return };
         if files.identity.get(script).as_ref() == Some(&id) {
@@ -157,11 +156,11 @@ fn load_macros(
             state.count(true)
         );
         if !moves.is_empty() {
-            migrate_character_bar(&bar, &actions, &state, &files, &moves);
+            migrate_character_bar(&mut bar, &state, &files, &moves);
         }
         script.set_macros(state);
         // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
-        script.fire_event("UPDATE_MACROS", vec![]);
+        fires.post("UPDATE_MACROS", vec![]);
     })
 }
 
@@ -175,12 +174,11 @@ fn load_macros(
 /// The file goes first, rewritten in this build's numbering, so the next load finds no old ids and
 /// the buttons move once: afterwards a word in 19 to 36 can be an account macro's. If the write
 /// fails nothing moves and the next load tries again. Each button then goes out as a placement's
-/// does ([`crate::ui_action::ActionBarSteps::set`]): `CMSG_SET_ACTION_BUTTON` sent and the store's
-/// write queued. A button whose old place holds no macro is cleared the same way: its
+/// does ([`crate::ui_action::ActionBarSteps::set`]): `CMSG_SET_ACTION_BUTTON` sent and the slot
+/// stored. A button whose old place holds no macro is cleared the same way: its
 /// word would read as an account macro of that id, and misbind once one takes it.
 fn migrate_character_bar(
-    bar: &crate::ui_action::ActionBarSteps,
-    actions: &crate::ui_action::PlayerActions,
+    bar: &mut crate::ui_action::ActionBarSteps,
     state: &MacroState,
     files: &MacroFiles,
     moves: &[(u32, u32)],
@@ -191,10 +189,10 @@ fn migrate_character_bar(
         warn!("ui_macro: renumbering {}: {e}", path.display());
         return;
     }
-    let mut writes: Vec<(u32, u32)> = actions
-        .buttons
-        .iter()
-        .filter_map(|(&slot, b)| {
+    let mut writes: Vec<(u32, u32)> = bar
+        .buttons()
+        .filter_map(|b| {
+            let slot = b.slot;
             let word = (u32::from(b.kind) << 24) | b.action;
             let old_numbering = b.kind == ACTION_KIND_MACRO
                 && (MAX_MACROS as u32 + 1..=2 * MAX_MACROS as u32).contains(&b.action);
@@ -262,6 +260,7 @@ fn rebind_macro_spells(
     // and usable refresh read, so a turn: no Lua runs here.
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, crate::ui_action::PlayerActions>,
+        Res<'static, crate::ui_action::ActionSlots>,
         ResMut<'static, MacroBoundSpells>,
         Option<Res<'static, crate::ui_pet::PetBar>>,
     )>,
@@ -270,7 +269,7 @@ fn rebind_macro_spells(
 ) {
     let (arrived, seen) = &mut *owed;
     *arrived |= !arrivals.is_empty();
-    vm.turn(|script, (mut actions, mut bound, pet_bar)| {
+    vm.turn(|script, (mut actions, slots, mut bound, pet_bar)| {
         // With no VM the supersede pairs wait for the first pass that can apply them.
         let Some(script) = script else {
             return;
@@ -293,7 +292,7 @@ fn rebind_macro_spells(
         let superseded = std::mem::take(&mut actions.bypass_change_detection().superseded);
         if !superseded.is_empty() {
             // The macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
-            let on_bar: std::collections::HashSet<u32> = actions
+            let on_bar: std::collections::HashSet<u32> = slots
                 .buttons
                 .values()
                 .filter_map(|b| benilla_ui::script::macro_slot_id(b.kind, b.action))

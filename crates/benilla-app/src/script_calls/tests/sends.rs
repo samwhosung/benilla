@@ -142,7 +142,7 @@ fn set_action_bar_toggles_sends_inside_its_call() {
 
 /// `PickupAction` and `PlaceAction` write the slot through `0x4e58e0`, which sends
 /// `CMSG_SET_ACTION_BUTTON` and then signals `ACTIONBAR_SLOT_CHANGED` (`0x4e5998`): the handler,
-/// which rolls, runs after the packet. The store takes the writes after the pass.
+/// which rolls, runs after the packet. The slot is stored in the call (`0x4e590a`).
 #[test]
 fn pickup_and_place_action_send_ahead_of_their_slot_signal() {
     const FIREBALL: u32 = 133;
@@ -168,12 +168,9 @@ fn pickup_and_place_action_send_ahead_of_their_slot_signal() {
             "roll 9"
         ]
     );
-    app.world_mut()
-        .run_system_cached(crate::ui_action::store_action_writes)
-        .unwrap();
-    let actions = app.world().resource::<crate::ui_action::PlayerActions>();
-    assert!(!actions.buttons.contains_key(&2));
-    assert_eq!(actions.buttons.get(&4).map(|b| b.action), Some(FIREBALL));
+    let slots = app.world().resource::<crate::ui_action::ActionSlots>();
+    assert!(!slots.buttons.contains_key(&2));
+    assert_eq!(slots.buttons.get(&4).map(|b| b.action), Some(FIREBALL));
 }
 
 /// `0x4e58e0` writes the slot arrays inside the call (`0x4e590a`), so a later verb of the chunk
@@ -196,7 +193,7 @@ fn a_slot_written_by_lua_is_read_by_the_chunks_next_verb() {
     };
     vm(&mut app).set_action(3, Some(slot));
     app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             2,

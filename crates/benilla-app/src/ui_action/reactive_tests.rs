@@ -42,6 +42,7 @@ fn app() -> App {
     let mut actions = PlayerActions::default();
     actions.spells.extend([REVENGE, REVENGE_2, FIREBALL]);
     app.insert_resource(actions)
+        .init_resource::<crate::ui_action::ActionSlots>()
         .insert_resource(crate::ui_macro::MacroBoundSpells::default())
         .insert_resource(Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
@@ -321,8 +322,10 @@ fn the_reactive_re_check_runs_inside_each_usable_refresh_alone() {
 fn the_bars_usable_event_comes_before_the_reactive_word() {
     let mut app = app();
     {
-        let mut actions = app.world_mut().resource_mut::<PlayerActions>();
-        actions.buttons.insert(
+        let mut slots = app
+            .world_mut()
+            .resource_mut::<crate::ui_action::ActionSlots>();
+        slots.buttons.insert(
             0,
             benilla_protocol::messages::ActionButton {
                 slot: 0,
@@ -330,7 +333,7 @@ fn the_bars_usable_event_comes_before_the_reactive_word() {
                 kind: benilla_protocol::messages::ACTION_KIND_SPELL,
             },
         );
-        actions.dirty = true;
+        slots.dirty = true;
     }
     app.world_mut()
         .non_send_resource_mut::<UiScript>()

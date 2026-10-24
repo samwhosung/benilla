@@ -51,7 +51,7 @@ fn is_current_action_on_the_next_line_reads_the_use_just_made() {
     );
     let world = f.app.world_mut();
     world
-        .resource_mut::<crate::ui_action::PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             0,
@@ -418,7 +418,7 @@ fn only_the_bars_press_toggles_a_running_repeat_off() {
     );
     f.app
         .world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             0,

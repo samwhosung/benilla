@@ -144,9 +144,9 @@ fn active_player<'a>(
         .and_then(|&e| stores.get(e).ok())
 }
 
-fn on_action_buttons(In(ev): In<SessionEvent>, mut l: Lifecycle) {
+fn on_action_buttons(In(ev): In<SessionEvent>, mut slots: ResMut<crate::ui_action::ActionSlots>) {
     if let SessionEvent::ActionButtons { buttons } = ev {
-        action_buttons(buttons, &mut l.actions);
+        action_buttons(buttons, &mut slots);
     }
 }
 
@@ -680,10 +680,10 @@ fn spell_book(
 }
 
 /// `SMSG_ACTION_BUTTONS`, at login and on server-side edits, into the action store.
-fn action_buttons(buttons: Vec<ActionButton>, actions: &mut PlayerActions) {
+fn action_buttons(buttons: Vec<ActionButton>, slots: &mut crate::ui_action::ActionSlots) {
     debug!("net: action bar — {} occupied slots", buttons.len());
-    actions.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
-    actions.dirty = true;
+    slots.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
+    slots.dirty = true;
 }
 
 /// `SMSG_LEARNED_SPELL`: the spell joins the book (the spellbook feed diffs it; learning never
@@ -1746,7 +1746,7 @@ fn spell_chain_targets(
 mod tests {
     use super::*;
     use crate::spell::QueuedMeleeSpell;
-    use benilla_protocol::messages::{ObjectType, ACTION_KIND_SPELL};
+    use benilla_protocol::messages::ObjectType;
 
     mod cooldown_sites;
     mod dispatch;
@@ -2009,14 +2009,6 @@ mod tests {
     fn superceded_spell_swaps_the_book_and_leaves_the_bar_to_the_rank_pass() {
         let mut actions = PlayerActions::default();
         actions.spells.insert(78); // Heroic Strike rank 1, known
-        actions.buttons.insert(
-            0,
-            ActionButton {
-                slot: 0,
-                action: 78,
-                kind: ACTION_KIND_SPELL,
-            },
-        );
 
         superceded_spell(
             78,
@@ -2035,11 +2027,10 @@ mod tests {
             actions.spells.contains(&284),
             "the new rank enters the book"
         );
-        assert_eq!(
-            actions.buttons[&0].action, 78,
-            "the bar follows from the book, not from here"
+        assert!(
+            actions.dirty,
+            "the bar follows from the book, and `dirty` is what makes it follow"
         );
-        assert!(actions.dirty, "…and `dirty` is what makes it follow");
     }
 
     /// The self player's own packets, run through the real handlers in the order a server sends

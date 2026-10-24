@@ -20,10 +20,8 @@ pub(crate) use cast_lines::{CastFailLines, CastFailRedisplays};
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::{attack_nearest_probe, use_action, ActionPress, AttackPress, UseOutcome};
-// The bar's sends inside their calls, and the store of the slot writes they queue.
+// The bar's sends and slot writes inside their calls.
 pub(crate) use drain::ActionBarSteps;
-#[cfg(test)]
-pub(crate) use drain::{store_action_writes, ActionSlotWrites};
 // The right-click casts' drain, which the click's tests run after the click.
 #[cfg(test)]
 pub(crate) use drain::drain_click_casts;
@@ -72,13 +70,22 @@ pub(crate) use weapon_icon::{melee_auto_attack_icon, ranged_weapon_icon, substit
 /// keys on this id; the icon keys on `SPELL_EFFECT_ATTACK`, which only 6603 carries.
 pub(crate) const SPELL_ATTACK: u32 = 6603;
 
-/// The action slots (wire 0..119) and the known spells. The bar is client-authoritative:
-/// [`drain::store_action_writes`] writes it directly, and vmangos stores a slot without a reply
+/// The action slots (wire 0..119), the reference's slot arrays, which `0x4e58e0` writes inside the
+/// call that places or clears one (`0x4e590a`), so the chunk's next verb reads the write. Apart
+/// from [`PlayerActions`] so the call host's bar verbs hold it alone ([`ActionBarSteps`]). The bar
+/// is client-authoritative: vmangos stores a slot without a reply
 /// (`MasterPlayer::addActionButton`).
 #[derive(Resource, Default)]
-pub(crate) struct PlayerActions {
+pub(crate) struct ActionSlots {
     /// Wire slot (0-based) to its packed action; the Lua action id is slot + 1.
     pub buttons: HashMap<u8, ActionButton>,
+    /// Set by every slot change, cleared once the feed re-resolves slot identity.
+    pub dirty: bool,
+}
+
+/// The known spells and the book's lists the registrar keeps.
+#[derive(Resource, Default)]
+pub(crate) struct PlayerActions {
     /// The known spells (`SMSG_INITIAL_SPELLS` and the learns since), the reference's known-spell
     /// bits `0xb710fc` (`0x4b2603`): a set, which keeps no learn order.
     pub spells: BTreeSet<u32>,
@@ -109,7 +116,7 @@ pub(crate) struct PlayerActions {
     /// arrival order, whose bar slots the unlearn clears (`0x5ea253` into `0x4e5e20`), drained by
     /// the bar's clear (`unlearn`).
     pub unlearned: Vec<u32>,
-    /// Set by every book or bar change, cleared once the feed re-resolves slot identity, which a
+    /// Set by every book change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
     /// resolves an item slot's count moves only by the item watchers' recount (`recount`).
     pub dirty: bool,
@@ -395,7 +402,7 @@ impl Plugin for UiActionPlugin {
             .init_resource::<state::ActionStateMemory>()
             .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<PlayerActions>()
-            .init_resource::<drain::ActionSlotWrites>()
+            .init_resource::<ActionSlots>()
             .init_resource::<LearnedAbilities>()
             .init_resource::<CastFailRedisplays>()
             .init_resource::<MountErrors>()
@@ -458,7 +465,6 @@ impl Plugin for UiActionPlugin {
                         .after(state::feed_action_state)
                         .after(crate::ui_unit::UnitSnapshots)
                         .before(crate::ui_cast::feed_cast_reports),
-                    drain::store_action_writes.in_set(crate::ui_script::UiDrain),
                     // The target chain queues the right-click casts earlier in the frame.
                     drain::drain_click_casts
                         .after(UiInput)

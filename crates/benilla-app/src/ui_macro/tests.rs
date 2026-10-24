@@ -330,6 +330,7 @@ fn rebind_app(script: UiScript) -> bevy::prelude::App {
     script.run(r#"SLASH_CAST1 = "/cast""#).unwrap();
     let mut app = App::new();
     app.init_resource::<crate::ui_action::PlayerActions>()
+        .init_resource::<crate::ui_action::ActionSlots>()
         .init_resource::<super::MacroBoundSpells>()
         .init_resource::<crate::ui_pet::PetBar>()
         .insert_non_send_resource(script)
@@ -557,9 +558,9 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
         (5, 0x4000_0001),
         (6, 0x4000_0025),
     ];
-    let mut actions = PlayerActions::default();
+    let mut slots = crate::ui_action::ActionSlots::default();
     for (slot, word) in placed {
-        actions.buttons.insert(
+        slots.buttons.insert(
             slot,
             ActionButton {
                 slot,
@@ -570,8 +571,8 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
     }
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
-    app.insert_resource(actions)
-        .init_resource::<crate::ui_action::ActionSlotWrites>()
+    app.insert_resource(PlayerActions::default())
+        .insert_resource(slots)
         .insert_resource(crate::net::NetCommands(tx))
         .insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
             vec![crate::glue_session::roster::test_character(7, "Probeone")],
@@ -579,10 +580,7 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
         ))
         .init_resource::<super::MacroFiles>()
         .insert_non_send_resource(UiScript::new().unwrap())
-        .add_systems(
-            Update,
-            (super::load_macros, crate::ui_action::store_action_writes).chain(),
-        );
+        .add_systems(Update, super::load_macros);
     let sent = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
         rx.try_iter()
             .map(|c| match c {
@@ -599,7 +597,11 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
         "Alpha, Charlie and Bravo by their ids, the button past the last macro cleared, each once"
     );
     let word = |app: &App, slot: u8| {
-        let b = app.world().resource::<PlayerActions>().buttons.get(&slot)?;
+        let b = app
+            .world()
+            .resource::<crate::ui_action::ActionSlots>()
+            .buttons
+            .get(&slot)?;
         Some((u32::from(b.kind) << 24) | b.action)
     };
     let held: Vec<Option<u32>> = (0..7).map(|slot| word(&app, slot)).collect();
@@ -627,7 +629,7 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
     // The next session: a fresh VM loads the renumbered file. A button at 0x40000013 is now the
     // account macro of that id, and nothing moves it.
     app.world_mut()
-        .resource_mut::<PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             9,
@@ -784,7 +786,7 @@ fn a_superseded_rank_rewrites_the_cached_spell_of_a_macro_on_the_bar() {
     ));
     let mut app = rebind_app(script);
     app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             4,
@@ -829,7 +831,7 @@ fn a_supersede_with_no_vm_yet_is_kept_for_the_first_pass() {
     ));
     let mut app = rebind_app(script);
     app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             4,
@@ -879,7 +881,7 @@ fn an_edit_derives_against_the_book_at_its_call() {
     ));
     let mut app = rebind_app(script);
     app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
+        .resource_mut::<crate::ui_action::ActionSlots>()
         .buttons
         .insert(
             4,

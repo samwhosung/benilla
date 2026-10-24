@@ -11,25 +11,26 @@ use bevy::prelude::*;
 
 use benilla_protocol::messages::ACTION_KIND_SPELL;
 
-use super::PlayerActions;
+use super::{ActionSlots, PlayerActions};
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_spellbook::SkillLines;
 
 /// Re-points each spell slot at the highest known rank of its chain and sends the move, so the
-/// server's stored copy is fixed too. Runs on `dirty`, before the feed consumes it.
+/// server's stored copy is fixed too. Runs on a book or bar `dirty`, before the feed consumes it.
 pub(crate) fn normalize_action_ranks(
-    mut actions: ResMut<PlayerActions>,
+    actions: Res<PlayerActions>,
+    mut slots: ResMut<ActionSlots>,
     skill_lines: Option<Res<SkillLines>>,
     commands: Res<NetCommands>,
 ) {
     let Some(skill_lines) = skill_lines else {
         return;
     };
-    if !actions.dirty {
+    if !actions.dirty && !slots.dirty {
         return;
     }
     // Resolve, then write. An empty book yields no fixes, so a bar arriving first is harmless.
-    let fixes: Vec<(u8, u32)> = actions
+    let fixes: Vec<(u8, u32)> = slots
         .buttons
         .values()
         .filter(|b| b.kind == ACTION_KIND_SPELL)
@@ -41,7 +42,7 @@ pub(crate) fn normalize_action_ranks(
         })
         .collect();
     for (slot, top) in fixes {
-        let Some(button) = actions.buttons.get_mut(&slot) else {
+        let Some(button) = slots.buttons.get_mut(&slot) else {
             continue;
         };
         let was = button.action;
@@ -84,14 +85,13 @@ mod tests {
         data: &std::path::Path,
         buttons: &[ActionButton],
         spells: &[u32],
-    ) -> (PlayerActions, Vec<(u8, u32)>) {
+    ) -> (ActionSlots, Vec<(u8, u32)>) {
         let mut chain = benilla_formats::open_chain(data).expect("open chain");
         let catalog = benilla_formats::load_skill_line_catalog(&mut chain).expect("skill lines");
 
         let (tx, rx): (_, Receiver<ClientCommand>) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(PlayerActions {
-            buttons: buttons.iter().map(|b| (b.slot, *b)).collect(),
             spells: spells.iter().copied().collect(),
             profession_order: spells.to_vec(),
             craft_order: spells.to_vec(),
@@ -99,6 +99,10 @@ mod tests {
             stuck_spell: None,
             superseded: Vec::new(),
             unlearned: Vec::new(),
+            dirty: true,
+        })
+        .insert_resource(ActionSlots {
+            buttons: buttons.iter().map(|b| (b.slot, *b)).collect(),
             dirty: true,
         })
         .insert_resource(SkillLines { catalog })
@@ -113,7 +117,7 @@ mod tests {
                 _ => panic!("the rank pass sends nothing but SetActionButton"),
             })
             .collect();
-        let store = app.world_mut().remove_resource::<PlayerActions>().unwrap();
+        let store = app.world_mut().remove_resource::<ActionSlots>().unwrap();
         (store, sent)
     }
 

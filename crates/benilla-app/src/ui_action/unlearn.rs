@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use benilla_ui::script::macro_slot_id;
 
-use super::PlayerActions;
+use super::{ActionSlots, PlayerActions};
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
@@ -20,6 +20,7 @@ use crate::ui_macro::{BoundSpell, MacroBoundSpells};
 /// cleared slot.
 pub(super) fn clear_unlearned_slots(
     mut actions: ResMut<PlayerActions>,
+    mut slots: ResMut<ActionSlots>,
     bound: Res<MacroBoundSpells>,
     items: Res<Items>,
     commands: Res<NetCommands>,
@@ -29,7 +30,7 @@ pub(super) fn clear_unlearned_slots(
     }
     let unlearned = std::mem::take(&mut actions.unlearned);
     for spell in unlearned {
-        let mut slots: Vec<u8> = actions
+        let mut cleared: Vec<u8> = slots
             .buttons
             .values()
             .filter(|b| {
@@ -50,10 +51,10 @@ pub(super) fn clear_unlearned_slots(
             })
             .map(|b| b.slot)
             .collect();
-        slots.sort_unstable();
-        for slot in slots {
-            actions.buttons.remove(&slot);
-            actions.dirty = true;
+        cleared.sort_unstable();
+        for slot in cleared {
+            slots.buttons.remove(&slot);
+            slots.dirty = true;
             debug!("ui_action: unlearned spell {spell} clears wire slot {slot}");
             let _ = commands.0.send(ClientCommand::SetActionButton {
                 button: slot,
@@ -84,6 +85,7 @@ mod tests {
         const GRENADE: u32 = 4390;
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut actions = PlayerActions::default();
+        let mut slots = crate::ui_action::ActionSlots::default();
         for (slot, kind, action) in [
             (0u8, ACTION_KIND_SPELL, FIREBALL),
             (1, ACTION_KIND_SPELL, FROSTBOLT),
@@ -92,7 +94,7 @@ mod tests {
             (4, ACTION_KIND_ITEM, GRENADE),
             (5, ACTION_KIND_MACRO, 3),
         ] {
-            actions
+            slots
                 .buttons
                 .insert(slot, ActionButton { slot, action, kind });
         }
@@ -122,21 +124,22 @@ mod tests {
         );
         let mut app = App::new();
         app.insert_resource(actions)
+            .insert_resource(slots)
             .insert_resource(bound)
             .insert_resource(items)
             .insert_resource(NetCommands(tx))
             .add_systems(Update, clear_unlearned_slots);
         app.update();
 
-        let actions = app.world().resource::<PlayerActions>();
-        let mut left: Vec<u8> = actions.buttons.keys().copied().collect();
+        let slots = app.world().resource::<ActionSlots>();
+        let mut left: Vec<u8> = slots.buttons.keys().copied().collect();
         left.sort_unstable();
         assert_eq!(left, [1, 3]);
         assert!(
-            actions.dirty,
+            slots.dirty,
             "the identity feed re-resolves the cleared slots"
         );
-        assert!(actions.unlearned.is_empty());
+        assert!(app.world().resource::<PlayerActions>().unlearned.is_empty());
         let sent: Vec<(u8, u32)> = rx
             .try_iter()
             .filter_map(|c| match c {

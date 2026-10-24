@@ -28,7 +28,7 @@ use crate::items::Items;
 use crate::net::{FieldChanged, NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
 
-use super::{PlayerActions, Spells};
+use super::{ActionSlots, PlayerActions, Spells};
 use crate::query_cache::Ask;
 use crate::spell::usable;
 
@@ -326,6 +326,8 @@ pub(crate) struct ActionStates<'w, 's> {
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
     actions: Res<'w, PlayerActions>,
+    /// The slots as the calls so far left them.
+    slots: Res<'w, ActionSlots>,
     spells: Option<Res<'w, Spells>>,
     // Macro bindings, spell mods, the control flag and the skill lines. The range compare reads
     // the caster and the target through the targeting's context.
@@ -558,6 +560,7 @@ impl ActionStates<'_, '_> {
             targeting,
             pet_bar,
             actions,
+            slots,
             spells,
             cast_state,
             self_q,
@@ -608,7 +611,7 @@ impl ActionStates<'_, '_> {
         });
 
         let mut fresh: HashMap<u32, ActionState> = HashMap::new();
-        for (&slot, button) in &actions.buttons {
+        for (&slot, button) in &slots.buttons {
             let action = u32::from(slot) + 1;
             let mut st = ActionState::default();
             let (kind, id) = match resolve_through_macro(button.kind, button.action, bound) {
@@ -797,7 +800,7 @@ impl ActionStates<'_, '_> {
 
         // The usable cache: the slots this frame wrote store their pairs silently, then a refresh
         // compares them all.
-        let words: HashMap<u32, SlotWord> = actions
+        let words: HashMap<u32, SlotWord> = slots
             .buttons
             .iter()
             .map(|(&slot, b)| {
