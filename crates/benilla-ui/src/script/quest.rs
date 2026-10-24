@@ -163,7 +163,6 @@ pub(super) fn submit(lua: &Lua, call: QuestCall) -> mlua::Result<()> {
 }
 
 impl super::UiScript {
-
     /// Push (or clear, with `None`) the open questgiver panel snapshot.
     ///
     /// A greeting also refills the two level pools, which stay when the panel closes or another

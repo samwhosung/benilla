@@ -286,7 +286,6 @@ impl super::UiScript {
         model.trainer_rows_fresh = true;
     }
 
-
     /// The trainer calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_trainer_calls(&mut self) -> Vec<TrainerCall> {
         self.take_calls_where(|call| match call {
