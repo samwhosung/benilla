@@ -176,6 +176,9 @@ pub(crate) struct QuestLogStore {
     /// The item and creature records a verb missed and that have not landed.
     item_waits: HashSet<u32>,
     creature_waits: HashSet<u32>,
+    /// The item and creature lookups the verb being called missed, which it asks inside its call
+    /// once its read of the model ends ([`ask_lookups`]).
+    item_asks: Vec<u32>,
     creature_asks: Vec<u32>,
     /// The creature cache (`0xc0e354`) as far as the leaderboard asked it.
     creature_names: HashMap<u32, String>,
@@ -578,8 +581,10 @@ impl Model {
         match self.item_templates.get(&item_id) {
             Some(t) => Some((t.name.clone(), t.quality, t.icon.clone())),
             None => {
+                // The view the VM holds no copy of, which the app pushes, and the lookup's ask.
                 self.item_stat_asks.insert(item_id);
                 self.quest_store.item_waits.insert(item_id);
+                self.quest_store.item_asks.push(item_id);
                 None
             }
         }
@@ -599,6 +604,33 @@ impl Model {
             }
         }
     }
+}
+
+/// The lookups the verb's read missed, asked inside its call: each item with the callback
+/// `0x4e0830` (`0x4e05d1`, `0x4e0b9e`), each creature with `0x4e07d0` (`0x4e044c`), whose waits
+/// the VM keeps.
+fn ask_lookups(lua: &Lua) -> mlua::Result<()> {
+    let (items, creatures) = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let store = &mut model.quest_store;
+        (
+            std::mem::take(&mut store.item_asks),
+            std::mem::take(&mut store.creature_asks),
+        )
+    };
+    for entry in items {
+        super::calls::ask(
+            lua,
+            super::RecordAsk::Item {
+                entry,
+                callback: super::ItemCallback::QuestLog,
+            },
+        )?;
+    }
+    for entry in creatures {
+        super::calls::ask(lua, super::RecordAsk::QuestCreature(entry))?;
+    }
+    Ok(())
 }
 
 /// One leaderboard line of a record, in `GetQuestLogLeaderBoard`'s order (`0x4e0110`): the event
@@ -1032,9 +1064,24 @@ impl super::UiScript {
         self.model_mut().quest_store.held = counts;
     }
 
-    /// The creature entries the leaderboard missed since the last drain: the app asks each.
+    /// The creature entries the leaderboard missed that a harness's VM kept
+    /// ([`Self::keep_calls`]), each asked once while it waits.
     pub fn take_quest_creature_asks(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().quest_store.creature_asks)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::QuestCreature(entry)) => Some(*entry),
+            _ => None,
+        })
+    }
+
+    /// The creature entries the leaderboard waits on, which the app ends with a refusal
+    /// ([`Self::refuse_quest_creature`]).
+    pub fn quest_creature_waits(&self) -> Vec<u32> {
+        self.model_ref()
+            .quest_store
+            .creature_waits
+            .iter()
+            .copied()
+            .collect()
     }
 
     /// A creature's name landed: held, and each callback the leaderboard left on it is due
@@ -1389,6 +1436,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let index = quest.unwrap_or(model.quest_log_selection) as usize;
                 line_parts(&mut model, index, i)
             };
+            ask_lookups(lua)?;
             let Some(p) = parts else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
@@ -1516,6 +1564,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Some((name, quality, icon, count, usable))
                     })
                 };
+                ask_lookups(lua)?;
                 let Some((name, quality, icon, count, usable)) = item else {
                     return Ok(MultiValue::from_vec(vec![
                         Value::Nil,

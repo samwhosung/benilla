@@ -66,8 +66,8 @@ pub(crate) struct RecordAsks<'w> {
 }
 
 impl RecordAsks<'_> {
-    /// `ask` inside its getter.
-    pub(crate) fn apply(&mut self, ask: RecordAsk) {
+    /// `ask` inside its getter, whose VM a hit the mirror lacked is told.
+    pub(crate) fn apply(&mut self, script: &mut UiScript, ask: RecordAsk) {
         use crate::query_cache::Ask;
         match ask {
             RecordAsk::PlayerName(guid) => {
@@ -123,6 +123,15 @@ impl RecordAsks<'_> {
                             crate::ui_tradeskill::ask_item_record(items, &self.net, waits, entry);
                         }
                     }
+                    // The VM keeps the callback: the cache only asks.
+                    ItemCallback::QuestLog => {
+                        let _ = items.template(entry, 0, Ask::Event(&self.net));
+                    }
+                }
+            }
+            RecordAsk::QuestCreature(entry) => {
+                if let Some(names) = self.names.as_deref() {
+                    crate::ui_quest_log::ask_quest_creature(names, &self.net, script, entry);
                 }
             }
             // A zero guid is no key and asks nothing (`0x55f080`).

@@ -304,6 +304,9 @@ pub enum RecordAsk {
     /// A getter's item-record lookup on a record its mirror lacks: the item cache, with the
     /// getter's callback, kept by its owner ([`ItemCallback`]).
     Item { entry: u32, callback: ItemCallback },
+    /// The quest log's leaderboard on a creature objective whose name the mirror lacks: the
+    /// creature cache, with the callback `0x4e07d0`, whose wait the VM keeps (`0x4e044c`).
+    QuestCreature(u32),
     /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
     /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
     Summoner,
@@ -325,6 +328,9 @@ pub enum ItemCallback {
     /// The trade-skill getters (`0x4fdc30`), whose landing rebuilds the list (`0x4fdc3c`), kept
     /// beside the trade-skill window.
     TradeSkill,
+    /// The quest log's leaderboard and reward getters (`0x4e0830`), whose callback the VM keeps
+    /// and signals `QUEST_LOG_UPDATE` with at its flush (`0x4e083a`): the cache only asks.
+    QuestLog,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,

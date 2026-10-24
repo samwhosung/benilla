@@ -790,7 +790,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Nameplates(write) => appliers.plates().apply(write),
             ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
             ScriptCall::Console(line) => appliers.console().run(&engine::VmCvars(script), &line),
-            ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
+            ScriptCall::RecordAsk(ask) => appliers.asks().apply(script, ask),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

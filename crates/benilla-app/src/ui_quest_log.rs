@@ -53,8 +53,6 @@ pub(crate) struct QuestLog {
     /// `(quest id, item id, count)` pairs of an added item whose quest record was not cached, held
     /// until it lands (`0x5dd180`).
     deferred_item_adds: Vec<(u32, u32, u32)>,
-    /// The creature entries the engine's leaderboard asked for and the cache has not answered.
-    creature_waits: HashSet<u32>,
     /// The `SMSG_SET_FACTION_STANDING` packets that moved a rank since the feed last ran.
     faction_rank_moves: u32,
     /// `SMSG_QUESTGIVER_QUEST_FAILED`'s reason as last read (`0xc4d794`), a global the record
@@ -745,6 +743,21 @@ pub(crate) struct QuestLogReads<'w, 's> {
     changed_items: Query<'w, 's, (), (With<crate::items::ItemObject>, Changed<ObjectStore>)>,
 }
 
+/// The leaderboard's creature lookup with the callback `0x4e07d0`, inside its call
+/// ([`benilla_ui::script::RecordAsk::QuestCreature`]): the cache asks a miss, a refused entry
+/// again, the VM keeping the wait; a name the cache already holds is the VM's at once, whose wait
+/// falls due.
+pub(crate) fn ask_quest_creature(
+    names: &NameCache,
+    commands: &NetCommands,
+    script: &mut UiScript,
+    entry: u32,
+) {
+    if let Some(name) = names.resolve_creature(entry, 0, Ask::Event(commands)) {
+        script.set_quest_creature_name(entry, name.to_string());
+    }
+}
+
 /// The quest log's feed. A new VM or player is seated with every cached record and the slots;
 /// otherwise the frame lands the templates the packets brought, answers the engine's asks, keeps
 /// the held counts current when the bags or the slots moved, fires the callbacks whose records
@@ -880,37 +893,18 @@ pub(crate) fn feed_quest_log(
         }
 
         // Every creature name that lands goes to the engine unprompted, as the reference's
-        // leaderboard reads the one cache; a miss is asked, and its refusal only logs (`0x4e07dc`).
+        // leaderboard reads the one cache; a miss is asked inside the leaderboard's call
+        // ([`benilla_ui::script::RecordAsk::QuestCreature`]), and its refusal only logs
+        // (`0x4e07dc`).
         let (landed, seen) = reads.names.creatures_landed_since(memo.creatures_seen);
         for &entry in landed {
             if let Some(name) = reads.names.resolve_creature(entry, 0, Ask::Read) {
                 script.set_quest_creature_name(entry, name.to_string());
             }
-            quest_log.creature_waits.remove(&entry);
         }
         memo.creatures_seen = seen;
-        for entry in script.take_quest_creature_asks() {
-            match reads
-                .names
-                .resolve_creature(entry, 0, Ask::Event(&reads.commands))
-            {
-                Some(name) => script.set_quest_creature_name(entry, name.to_string()),
-                None => {
-                    quest_log.creature_waits.insert(entry);
-                }
-            }
-        }
-        if !quest_log.creature_waits.is_empty() {
-            let names = &reads.names;
-            let mut refused = Vec::new();
-            quest_log.creature_waits.retain(|&entry| {
-                let gone = names.creature_answered_unknown(entry);
-                if gone {
-                    refused.push(entry);
-                }
-                !gone
-            });
-            for entry in refused {
+        for entry in script.quest_creature_waits() {
+            if reads.names.creature_answered_unknown(entry) {
                 script.refuse_quest_creature(entry);
             }
         }
@@ -1233,6 +1227,22 @@ mod tests {
 
     // ── The feed over one player ────────────────────────────────────────────────────────────────
 
+    /// The leaderboard's and reward getter's lookups the rig's VM kept, with no host to lend,
+    /// made as the host makes them inside the call ([`ask_quest_creature`]).
+    fn ask_kept_lookups(
+        mut script: NonSendMut<UiScript>,
+        names: Res<NameCache>,
+        items: Res<Items>,
+        commands: Res<NetCommands>,
+    ) {
+        for entry in script.take_quest_creature_asks() {
+            ask_quest_creature(&names, &commands, &mut script, entry);
+        }
+        for entry in script.take_item_asks(benilla_ui::script::ItemCallback::QuestLog) {
+            let _ = items.template(entry, 0, Ask::Event(&commands));
+        }
+    }
+
     /// The feed and the quest log's field watcher over one player, the script
     /// logging the quest events as `name:arg1`.
     struct Rig {
@@ -1273,6 +1283,7 @@ mod tests {
             app.add_systems(
                 Update,
                 (
+                    ask_kept_lookups,
                     feed_quest_log,
                     crate::ui_unit::field_events::fire_field_notices,
                     crate::item_lane::fire_item_lane,
@@ -1289,9 +1300,11 @@ mod tests {
             rig
         }
 
-        /// A VM logging the quest events, with the format keys the lines fill.
+        /// A VM logging the quest events, with the format keys the lines fill, keeping its
+        /// getters' lookups for [`ask_kept_lookups`].
         fn vm() -> UiScript {
-            let script = UiScript::new().unwrap();
+            let mut script = UiScript::new().unwrap();
+            script.keep_calls();
             script
                 .run(
                     r#"
