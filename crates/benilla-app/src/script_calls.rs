@@ -1053,6 +1053,7 @@ mod tests {
     mod dialogs;
     mod refusals;
     mod selection;
+    mod sends;
     mod systems;
     mod window_verbs;
 

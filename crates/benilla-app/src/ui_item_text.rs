@@ -151,6 +151,16 @@ impl ItemTextOpen {
     pub(crate) fn open_letter(&mut self, item_guid: u64, text_id: u32) {
         self.open(item_guid, ReadSource::Letter { text_id });
     }
+
+    /// The open page chain shown at `page_id`, its first page, for a test that turns it.
+    #[cfg(test)]
+    pub(crate) fn show_page_for_test(&mut self, page_id: u32) {
+        if let Some(sess) = self.pending.as_mut() {
+            sess.source = ReadSource::Pages {
+                visited: vec![page_id],
+            };
+        }
+    }
 }
 
 /// `CloseItemText` (`0x4e3b70` → `0x4e32e0(0, 0)`) is the core itself.
