@@ -690,6 +690,76 @@ mod tests {
         );
     }
 
+    /// `TryOn` of a cached record sets its slot inside the call (`0x504579` returns the record,
+    /// `0x5045dd`-`0x5045ee` set the component), so an `Undress` after it in the same chunk
+    /// (`0x504c00` → `0x504490`) takes it off again.
+    #[test]
+    fn a_cached_try_on_then_undress_in_one_chunk_leaves_the_body_bare() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(2000, Some(worn("Shiny Chest", 7000, 5)));
+        items.insert_template(2500, Some(worn("Short Bow", 8500, 15)));
+        let store = player(&[]);
+        let mut room = DressUpRoom::default();
+        room.step(
+            [
+                DressUpIntent::Dress,
+                DressUpIntent::TryOn(2000),
+                DressUpIntent::TryOn(2500),
+                DressUpIntent::Undress,
+            ],
+            &items,
+            &cmds,
+        );
+        let look = look_dw(&store, &room, &items, true);
+        assert_eq!(look.equipment[4].display_id, 0, "the chest came off again");
+        assert_eq!(look.equipment[17].display_id, 0, "…and the bow (0x504530)");
+    }
+
+    /// The cache's callback `0x504ba0` lands a record when it arrives, ahead of the script calls
+    /// made after it: an `Undress` made once the record is in clears it.
+    #[test]
+    fn a_record_that_arrived_before_an_undress_is_cleared_by_it() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        let store = player(&[]);
+        let mut room = DressUpRoom::default();
+        room.step([DressUpIntent::Dress, DressUpIntent::TryOn(2000)], &items, &cmds);
+        items.insert_template(2000, Some(worn("Shiny Chest", 7000, 5)));
+        room.step([DressUpIntent::Undress], &items, &cmds);
+        assert_eq!(
+            look_dw(&store, &room, &items, true).equipment[4].display_id,
+            0,
+            "the chest landed, then came off"
+        );
+    }
+
+    /// `Dress` (`0x504cd0` → `0x505b50`) rebuilds the model and cancels no cache callback: a
+    /// try-on still waiting for its record lands on the rebuilt model when it arrives
+    /// (`0x504ba0` → `0x504540`).
+    #[test]
+    fn a_try_on_waiting_for_its_record_survives_dress_and_lands_after_it() {
+        let (cmds, _rx) = commands();
+        let mut items = Items::default();
+        items.insert_template(1000, Some(worn("Worn Chest", 5000, 5)));
+        let store = player(&[(4, 1000)]);
+        let mut room = DressUpRoom::default();
+        room.step([DressUpIntent::Dress, DressUpIntent::TryOn(2000)], &items, &cmds);
+        room.step([DressUpIntent::Dress], &items, &cmds);
+        assert_eq!(
+            look_dw(&store, &room, &items, true).equipment[4].display_id,
+            5000,
+            "the player's own chest until the record comes"
+        );
+        items.insert_template(2000, Some(worn("Shiny Chest", 7000, 5)));
+        room.step([], &items, &cmds);
+        assert_eq!(
+            look_dw(&store, &room, &items, true).equipment[4].display_id,
+            7000,
+            "the record lands on the rebuilt model"
+        );
+    }
+
     /// A chat-linked item usually misses the cache on the first click; the ask goes out once.
     #[test]
     fn an_unknown_item_waits_for_its_template_then_lands() {
