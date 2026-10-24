@@ -807,6 +807,14 @@ fn dead_or_ghost_is_health_zero_or_the_ghost_flag() {
     assert!(!alive.is_dead_or_ghost());
     assert!(corpse.is_dead_or_ghost());
     assert!(!ghost.unit_is_dead(), "a ghost has health");
+    // The health test is signed and alone (`0x605f3b jle`): no maximum, or a health past
+    // `i32::MAX`, reads dead.
+    assert!(unit(&[(FIELD_UNIT_HEALTH, 0)]).unit_is_dead());
+    assert!(unit(&[
+        (FIELD_UNIT_HEALTH, 0x8000_0000),
+        (FIELD_UNIT_MAXHEALTH, 100)
+    ])
+    .unit_is_dead());
     assert!(ghost.is_dead_or_ghost(), "the ghost-flag leg");
     assert!(
         !feigning.is_dead_or_ghost(),
@@ -864,8 +872,8 @@ fn feign_death_reads_dead_without_touching_the_raw_health_field() {
     assert_eq!(feigning.unit_max_power(MANA), Some(900));
     // Out-of-range power slots stay None under the flag, as the ungated reader has them.
     assert_eq!(feigning.unit_shown_power(5), None);
-    // An empty store has no flag and no health.
-    assert!(!ObjectFields::default().unit_reads_dead());
+    // An empty store's health reads 0, dead by `0x605f9b`.
+    assert!(ObjectFields::default().unit_reads_dead());
     assert_eq!(ObjectFields::default().unit_shown_health(), None);
 }
 

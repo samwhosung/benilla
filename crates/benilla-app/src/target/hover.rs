@@ -316,8 +316,8 @@ pub(super) fn update_hover(
                 })
             };
         // The pass-2 ladder (`0x480c90`): alive 3, dead 2, a corpse 2 when
-        // `CORPSE_DYNFLAG_LOOTABLE`, else 0 (`0x480cec`). A corpse has no UNIT block, so
-        // `unit_is_dead()` would answer alive for it.
+        // `CORPSE_DYNFLAG_LOOTABLE`, else 0 (`0x480cec`). A corpse has no UNIT block, so its
+        // health reads 0 and `unit_is_dead()` would answer dead for it.
         let priority = if net.kind == EntityKind::Corpse {
             u8::from(store.is_some_and(|s| s.0.corpse_lootable())) * 2
         } else if store.is_some_and(|s| s.0.unit_is_dead()) {

@@ -136,10 +136,11 @@ impl ObjectFields {
     pub fn unit_max_health(&self) -> Option<u32> {
         self.get_u32(FIELD_UNIT_MAXHEALTH)
     }
-    /// Really dead: health 0 with a known maximum, since a dead unit's create sends no health.
-    /// For how the unit looks, which a feigning hunter shares, use [`Self::unit_reads_dead`].
+    /// Really dead, the health leg of `0x605f30` and `0x605f90`: `UNIT_FIELD_HEALTH` signed at
+    /// or below 0 (`0x605f3b`, `0x605f9b`), an unsent field reading 0. For how the unit looks,
+    /// which a feigning hunter shares, use [`Self::unit_reads_dead`].
     pub fn unit_is_dead(&self) -> bool {
-        self.unit_max_health().unwrap_or(0) > 0 && self.unit_health().unwrap_or(0) == 0
+        self.unit_health().unwrap_or(0) as i32 <= 0
     }
     /// Reads as dead, the reference's `0x605f90`: health 0, `UNIT_DYNFLAG_DEAD` (feign death,
     /// `0x605f9d`) or stand state 7 (`0x605faa`). Feign death sets only the flag
