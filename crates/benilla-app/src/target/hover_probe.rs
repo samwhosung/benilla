@@ -67,10 +67,10 @@ pub(super) fn armed() -> bool {
     aim().is_some()
 }
 
-/// The point to pick from this frame; the caller uses it only where the real cursor is absent.
-pub(super) fn point(window: &Window, frame: u64) -> Option<Vec2> {
+/// The point `aim` picks from on `frame`; the caller uses it only where the real cursor is absent.
+fn point(aim: Option<Aim>, window: &Window, frame: u64) -> Option<Vec2> {
     let (w, h) = (window.width(), window.height());
-    match aim()? {
+    match aim? {
         Aim::Centre => Some(Vec2::new(w / 2.0, h / 2.0)),
         Aim::At(x, y) => Some(Vec2::new(x as f32, y as f32)),
         // 7 × 5 cells over the middle half, off the frame's edges (chrome, sky, the player's own
@@ -87,9 +87,68 @@ pub(super) fn point(window: &Window, frame: u64) -> Option<Vec2> {
     }
 }
 
-/// Whether the aim holds its first pick (`lock`).
-pub(super) fn locks() -> bool {
-    matches!(aim(), Some(Aim::Lock))
+/// The probe's frame: its aim, frame counter and held target, and the point it aims from this
+/// frame, which [`aim_frame`] sets once for every reader of the frame's pick.
+#[derive(Resource)]
+pub(crate) struct ProbeAim {
+    aim: Option<Aim>,
+    frame: u64,
+    /// `lock`'s held target, where the probe rests its aim for the rest of the run.
+    pub(super) lock: LockedAim,
+    now: Option<Vec2>,
+}
+
+impl Default for ProbeAim {
+    fn default() -> Self {
+        Self {
+            aim: aim(),
+            frame: 0,
+            lock: LockedAim::default(),
+            now: None,
+        }
+    }
+}
+
+impl ProbeAim {
+    /// Whether the probe is armed.
+    pub(super) fn armed(&self) -> bool {
+        self.aim.is_some()
+    }
+
+    /// Whether the aim holds its first pick (`lock`).
+    pub(super) fn locks(&self) -> bool {
+        matches!(self.aim, Some(Aim::Lock))
+    }
+
+    /// The frames counted so far, the sweep's cell and the census's cadence.
+    pub(super) fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    /// This frame's aim, for a cursorless window.
+    pub(super) fn now(&self) -> Option<Vec2> {
+        self.now
+    }
+}
+
+/// The frame's aim: `lock`'s held point re-projected, else the grid's or the fixed point. Published
+/// for the UI's readers too; with no world camera or window it keeps the last frame's.
+pub(super) fn aim_frame(
+    camera: Query<(&Camera, &GlobalTransform), With<benilla_world::view::WorldCamera>>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    transforms: Query<&GlobalTransform>,
+    mut probe: ResMut<ProbeAim>,
+) {
+    probe.frame = probe.frame.wrapping_add(1);
+    let (Ok((camera, cam_tf)), Ok(window)) = (camera.single(), window.single()) else {
+        return;
+    };
+    let now = probe
+        .lock
+        .point(camera, cam_tf, |e| transforms.get(e).ok().copied())
+        .or_else(|| point(probe.aim, window, probe.frame));
+    probe.now = now;
+    publish(now);
 }
 
 /// This frame's aim, published once by the pick so the UI mouse feed and the tooltip's

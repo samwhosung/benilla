@@ -315,6 +315,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<Hovered>()
             .init_resource::<HoveredObject>()
             .init_resource::<PickOcclusion>()
+            .init_resource::<hover_probe::ProbeAim>()
             .init_resource::<PressPick>()
             .init_resource::<WorldCursor>()
             .init_resource::<cursor_mode::AttackFork>()
@@ -345,7 +346,7 @@ impl Plugin for TargetPlugin {
                     // The trace reads the static world after this frame's stream reshapes it.
                     (
                         latch_press_pick,
-                        hover::update_pick_occlusion.after(WorldStage::Stream),
+                        hover::aim_and_trace().after(WorldStage::Stream),
                     )
                         .chain(),
                     hover::update_hover,

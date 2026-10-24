@@ -36,15 +36,15 @@ pub(super) fn update_pick_occlusion(
     spatial: avian3d::prelude::SpatialQuery,
     occluders: Query<(), With<PickOccluder>>,
     doodads: DoodadOccluders,
+    probe: Res<super::hover_probe::ProbeAim>,
     mut occlusion: ResMut<PickOcclusion>,
 ) {
     *occlusion = PickOcclusion::default();
     let (Ok((camera, cam_tf)), Ok(window)) = (camera.single(), window.single()) else {
         return;
     };
-    // A cursorless window traces from the hover probe's aim, as the picks do, which publish it
-    // after this runs: a resting aim is last frame's point.
-    let Some(cursor) = window.cursor_position().or_else(super::hover_probe::now) else {
+    // A cursorless window traces from the hover probe's aim, as the picks do.
+    let Some(cursor) = window.cursor_position().or_else(|| probe.now()) else {
         return;
     };
     let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else {
@@ -70,6 +70,12 @@ pub(super) fn update_pick_occlusion(
         occlusion.distance = distance;
         occlusion.point = Some(ray.origin + *ray.direction * distance);
     }
+}
+
+/// The cursor ray's world trace and the hover probe's aim for the frame, in their order.
+pub(super) fn aim_and_trace(
+) -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    (update_pick_occlusion, super::hover_probe::aim_frame).chain()
 }
 
 /// The model instances whose parts are `unit`'s pick geometry: the body, everything it wears, and
@@ -502,12 +508,10 @@ pub(super) struct GoPickSet<'w, 's> {
     last_pick: Local<'s, Option<Entity>>,
     /// Every billboard card, for [`net_entity_of`]'s first hop.
     cards: Query<'w, 's, &'static BillboardCard>,
-    /// The headless probe's frame counter and say-once report ([`super::hover_probe`]), idle in
-    /// a player run.
-    frame: Local<'s, u64>,
+    /// The headless probe's frame ([`super::hover_probe`]) and say-once report, idle in a player
+    /// run.
+    probe: ResMut<'w, super::hover_probe::ProbeAim>,
     report: Local<'s, super::hover_probe::ProbeReport>,
-    /// `WOW_HOVER_PROBE=lock`'s held target, where the probe rests its aim for the rest of the run.
-    lock: Local<'s, super::hover_probe::LockedAim>,
 }
 
 /// The most `ChildOf` hops [`net_entity_of`] climbs: a malformed-data guard, as real joint chains
@@ -577,7 +581,6 @@ pub(super) fn update_hovered_object(
     // The GameObject arm's flag `0x4` and `0x6e62e0` while a word stands (`0x480780`).
     word: crate::spell::targeting::GoPickChecks,
 ) {
-    *cache.frame = cache.frame.wrapping_add(1);
     let added_parts = &cache.added;
     let removed_parts = &mut cache.removed;
     let pickable = &mut *cache.cache;
@@ -612,15 +615,9 @@ pub(super) fn update_hovered_object(
     let (Ok((camera, cam_tf)), Ok(window)) = (camera.single(), window.single()) else {
         return;
     };
-    // The aim: the OS pointer, else the probe's for a cursorless window. Published before the
-    // yield, as the UI mouse feed reads it as its pointer: skipping it would drop `PointerOverUi`
-    // and flicker the UI the probe rests on.
-    let probing = super::hover_probe::armed();
-    let probe_aim = cache
-        .lock
-        .point(camera, cam_tf, |e| parts.get(e).ok().map(|(_, gt, ..)| *gt))
-        .or_else(|| super::hover_probe::point(window, *cache.frame));
-    super::hover_probe::publish(probe_aim);
+    // The aim: the OS pointer, else the probe's for a cursorless window ([`super::hover_probe::aim_frame`]).
+    let probing = cache.probe.armed();
+    let probe_aim = cache.probe.now();
     if yielded {
         return;
     }
@@ -655,7 +652,7 @@ pub(super) fn update_hovered_object(
 
     // The probe's census, once a second: where the pickable GameObjects are on screen, so a
     // headless miss tells a pick fault from a camera looking elsewhere.
-    if probing && (*cache.frame).is_multiple_of(60) {
+    if probing && cache.probe.frame().is_multiple_of(60) {
         let rows: Vec<String> = pickable
             .iter()
             .filter_map(|&e| {
@@ -813,10 +810,13 @@ pub(super) fn update_hovered_object(
             ));
             // `lock` holds only an object past the eligibility gate, the hit kept in the part's
             // frame so the aim survives the camera and the object moving.
-            if super::hover_probe::locks() {
+            if cache.probe.locks() {
                 if let Some((t, part)) = best {
                     if let Ok((_, gt, ..)) = parts.get(part) {
-                        cache.lock.hold(part, gt, ray.origin + *ray.direction * t);
+                        cache
+                            .probe
+                            .lock
+                            .hold(part, gt, ray.origin + *ray.direction * t);
                     }
                 }
             }
@@ -978,6 +978,7 @@ mod tests {
         ));
         app.init_asset::<Mesh>()
             .init_resource::<benilla_world::collision::ColliderEpoch>()
+            .init_resource::<crate::target::hover_probe::ProbeAim>()
             .init_resource::<PickOcclusion>();
         app.finish();
         app.cleanup();
@@ -1610,6 +1611,7 @@ mod tests {
         use benilla_formats::{LockCatalog, LockSlot, SpellDisplay, LOCK_KEY_SKILL};
         let mut world = unit_pick_world();
         world.init_resource::<HoveredObject>();
+        world.init_resource::<crate::target::hover_probe::ProbeAim>();
         world.init_resource::<crate::items::Items>();
         world.init_resource::<crate::net::GuidIndex>();
         world.init_resource::<crate::spell::targeting::GoPick>();
