@@ -89,6 +89,7 @@ pub(super) fn owned_pet() -> ObjectStore {
 /// [`owned_pet`] with more fields set, which win over its own.
 pub(super) fn owned_pet_with(extra: &[(u16, u32)]) -> ObjectStore {
     let mut pairs = vec![
+        (22, 100),
         (SUMMONEDBY, ME as u32),
         (SUMMONEDBY + 1, 0),
         (CREATEDBY, ME as u32),
@@ -363,6 +364,7 @@ fn view_on(rig: &mut Rig, guid: u64) {
 /// A unit the player mind-controls: charmed by us and possessed (`SpellAuras.cpp:2968-2969`).
 fn possessed() -> ObjectStore {
     ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (22, 100),
         (CHARMEDBY, ME as u32),
         (CHARMEDBY + 1, 0),
         (FLAGS, crate::target::UNIT_FLAG_POSSESSED),

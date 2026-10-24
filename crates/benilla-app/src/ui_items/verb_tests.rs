@@ -85,7 +85,8 @@ impl Bags {
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();
-        let mut pairs = Vec::new();
+        // `UNIT_FIELD_HEALTH` (22): alive.
+        let mut pairs = vec![(22, 100)];
         let mut seat = |slot0: u16, guid: u64| {
             pairs.push((F_INV_SLOT_HEAD + 2 * slot0, guid as u32));
             pairs.push((F_INV_SLOT_HEAD + 2 * slot0 + 1, (guid >> 32) as u32));

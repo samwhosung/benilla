@@ -990,9 +990,10 @@ fn request_app(
     app.world_mut()
         .resource_mut::<crate::player::OwnControlLost>()
         .0 = !controlled;
-    // Streamed, since leg 3 drops a request from a guid that resolves to nothing.
+    // Streamed and alive, since leg 3 drops a request from a guid that resolves to nothing.
     for guid in [0x7u64, 0x8] {
-        let e = app.world_mut().spawn(ObjectStore::default()).id();
+        let alive = benilla_protocol::ObjectFields::from_pairs(&[(22, 100)]);
+        let e = app.world_mut().spawn(ObjectStore(alive)).id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
             .0

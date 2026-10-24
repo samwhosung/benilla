@@ -303,14 +303,13 @@ fn the_pinned_clip_outlives_its_aura_until_its_window_ends() {
 /// id over Mount (91), and its mount child plays it too, off the host's still test.
 #[test]
 fn a_still_rider_and_its_mount_both_take_the_pin() {
-    use benilla_protocol::ObjectFields;
     const FIELD_MOUNTDISPLAYID: u16 = 133;
 
     let mut app = app();
     let (rider, nodes) = spawn_orc(&mut app);
     let (mount, mount_nodes) = spawn_orc(&mut app);
     app.world_mut().entity_mut(rider).insert((
-        crate::net::ObjectStore(ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, 2402)])),
+        crate::net::ObjectStore(super::alive(&[(FIELD_MOUNTDISPLAYID, 2402)])),
         crate::entities::mount::MountChild(mount),
         sleeping(),
     ));

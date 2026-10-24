@@ -1265,11 +1265,13 @@ mod attack_stand_tests {
                 ])),
                 ..crate::ui_action::Spells::empty_for_tests()
             });
+            // `UNIT_FIELD_HEALTH`: alive.
+            let alive = benilla_protocol::ObjectFields::from_pairs(&[(
+                benilla_protocol::field::FIELD_UNIT_HEALTH,
+                100,
+            )]);
             let me = world
-                .spawn((
-                    crate::net::SelfPlayer,
-                    crate::net::ObjectStore(Default::default()),
-                ))
+                .spawn((crate::net::SelfPlayer, crate::net::ObjectStore(alive)))
                 .id();
             Self { world, me, sent }
         }

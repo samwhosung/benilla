@@ -32,11 +32,12 @@ struct Trade {
     click: SystemId,
 }
 
-/// Our object with `extra` fields: `OBJECT_FIELD_TYPE` a player, the human template,
+/// Our object with `extra` fields: `OBJECT_FIELD_TYPE` a player, alive, the human template,
 /// player-controlled, and the two pack slots.
 fn me_fields(extra: &[(u16, u32)]) -> ObjectFields {
     let mut pairs = vec![
         (2, 0x19),
+        (22, 100),
         (35, fixture::HUMAN),
         (46, fixture::PC),
         (532, CLOTH as u32),

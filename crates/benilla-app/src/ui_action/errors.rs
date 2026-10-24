@@ -871,13 +871,13 @@ mod attack_actor_tests {
         assert_eq!(refusal(Some(&cc), Some(7)), Some("ERR_ATTACK_STUNNED"));
     }
 
-    /// A descriptor with no health field yet is not a corpse.
+    /// No actor is no refusal; an actor's unsent health reads 0, dead (`0x605f3b`).
     #[test]
     fn an_unresolved_actor_is_never_a_refusal() {
         assert_eq!(refusal(None, Some(7)), None);
         assert_eq!(
             refusal(Some(&ObjectStore(ObjectFields::default())), Some(7)),
-            None
+            Some("ERR_ATTACK_DEAD")
         );
     }
 

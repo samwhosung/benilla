@@ -16,6 +16,14 @@ use crate::names::type_flags::{DO_NOT_PLAY_WOUND_ANIM, MORE_AUDIBLE, NO_FACTION_
 use crate::net::NetCommands;
 use benilla_protocol::ObjectFields;
 
+/// A unit's descriptor with `pairs`, alive: `UNIT_FIELD_HEALTH` (22) 1, as every streamed live
+/// unit carries it; an unsent health reads 0, dead (`0x605f9b`).
+pub(super) fn alive(pairs: &[(u16, u32)]) -> ObjectFields {
+    let mut all = vec![(22, 1)];
+    all.extend_from_slice(pairs);
+    ObjectFields::from_pairs(&all)
+}
+
 /// A held non-weapon keeps Special1H(57): the substitution (`0x5fe3cc`) keys on an empty hand.
 fn holding_a_non_weapon() -> Wielded {
     Wielded {
@@ -1102,8 +1110,6 @@ fn the_swim_relatch_holds_the_kick_but_a_ground_cut_freezes_it() {
 /// A remote unit kneels on `UNIT_FLAG_LOOTING` (field 46); moving outranks it (`0x5fd8b0`).
 #[test]
 fn unit_flag_looting_kneels_stationary_units_only() {
-    use benilla_protocol::messages::ObjectFields;
-
     let mut app = app();
     let model = ModelAnimations {
         graph: Handle::default(),
@@ -1122,7 +1128,7 @@ fn unit_flag_looting_kneels_stationary_units_only() {
             AnimationPlayer::default(),
             AnimationTransitions::new(),
             AnimDriver::default(),
-            crate::net::ObjectStore(ObjectFields::from_pairs(&[(46, 0x400)])),
+            crate::net::ObjectStore(alive(&[(46, 0x400)])),
         ))
         .id();
     let gait = |app: &App| app.world().entity(unit).get::<AnimDriver>().unwrap().gait;
@@ -1141,9 +1147,7 @@ fn unit_flag_looting_kneels_stationary_units_only() {
     app.world_mut().entity_mut(unit).remove::<MovementState>();
     app.world_mut()
         .entity_mut(unit)
-        .insert(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
-            46, 0,
-        )])));
+        .insert(crate::net::ObjectStore(alive(&[(46, 0)])));
     app.update();
     assert_eq!(gait(&app), Some(0), "released — back to Stand");
 }
@@ -1151,8 +1155,6 @@ fn unit_flag_looting_kneels_stationary_units_only() {
 /// The self unit kneels off its loot latch (`[player+0x1d28]`, `0x6126b0`), not the flag.
 #[test]
 fn the_self_kneel_rides_the_loot_latch_not_the_flag() {
-    use benilla_protocol::messages::ObjectFields;
-
     let mut app = app();
     app.init_resource::<crate::ui_loot::LootKneel>();
     let model = ModelAnimations {
@@ -1174,7 +1176,7 @@ fn the_self_kneel_rides_the_loot_latch_not_the_flag() {
             AnimationTransitions::new(),
             AnimDriver::default(),
             crate::net::SelfPlayer,
-            crate::net::ObjectStore(ObjectFields::from_pairs(&[(46, 0x400)])),
+            crate::net::ObjectStore(alive(&[(46, 0x400)])),
             MovementState::default(),
         ))
         .id();
@@ -1208,8 +1210,6 @@ fn the_self_kneel_rides_the_loot_latch_not_the_flag() {
 /// read off the self unit's own descriptor too.
 #[test]
 fn the_creep_vis_flag_prowls_the_body() {
-    use benilla_protocol::messages::ObjectFields;
-
     const CREEP: u32 = 0x0200_0000;
     let mut app = app();
     let model = ModelAnimations {
@@ -1235,7 +1235,7 @@ fn the_creep_vis_flag_prowls_the_body() {
             AnimationTransitions::new(),
             AnimDriver::default(),
             crate::net::SelfPlayer,
-            crate::net::ObjectStore(ObjectFields::from_pairs(&[(138, 0)])),
+            crate::net::ObjectStore(alive(&[(138, 0)])),
             MovementState::default(),
         ))
         .id();
@@ -1243,9 +1243,7 @@ fn the_creep_vis_flag_prowls_the_body() {
     let set_flag = |app: &mut App, v: u32| {
         app.world_mut()
             .entity_mut(unit)
-            .insert(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
-                138, v,
-            )])));
+            .insert(crate::net::ObjectStore(alive(&[(138, v)])));
     };
 
     app.update();
@@ -2324,11 +2322,7 @@ fn a_relic_class_player_refuses_the_ranged_sheath_state() {
     // `OBJECT_FIELD_TYPE` (2) object | unit | player, `UNIT_FIELD_BYTES_0` (36) byte 1 the class,
     // `UNIT_FIELD_BYTES_2` (164) byte 0 the sheath state.
     let player = |class: u32, sheath: u32| {
-        crate::net::ObjectStore(ObjectFields::from_pairs(&[
-            (2, 0x19),
-            (36, class << 8),
-            (164, sheath),
-        ]))
+        crate::net::ObjectStore(alive(&[(2, 0x19), (36, class << 8), (164, sheath)]))
     };
     let spawn = |app: &mut App, store| {
         app.world_mut()
@@ -2381,13 +2375,8 @@ fn a_rebuilt_driver_keeps_the_units_committed_sheath_state() {
     ));
     // `OBJECT_FIELD_TYPE` (2), `UNIT_FIELD_BYTES_0` (36) byte 1 the class, `UNIT_FIELD_BYTES_2`
     // (164) byte 0 the sheath state.
-    let paladin = |sheath: u32| {
-        crate::net::ObjectStore(ObjectFields::from_pairs(&[
-            (2, 0x19),
-            (36, 2 << 8),
-            (164, sheath),
-        ]))
-    };
+    let paladin =
+        |sheath: u32| crate::net::ObjectStore(alive(&[(2, 0x19), (36, 2 << 8), (164, sheath)]));
     let unit = app
         .world_mut()
         .spawn((
@@ -2732,8 +2721,6 @@ fn sheath_of(app: &App, unit: Entity) -> Option<u8> {
 /// bone 0, so it displaces the summon's full-body cast clip at once.
 #[test]
 fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
-    use benilla_protocol::ObjectFields;
-
     /// `UNIT_FIELD_MOUNTDISPLAYID` (index 133).
     const FIELD_MOUNTDISPLAYID: u16 = 133;
     const SPELL_CAST_OMNI: u16 = 54;
@@ -2761,17 +2748,14 @@ fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
             AnimationPlayer::default(),
             AnimationTransitions::new(),
             AnimDriver::default(),
-            crate::net::ObjectStore(ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, 0)])),
+            crate::net::ObjectStore(alive(&[(FIELD_MOUNTDISPLAYID, 0)])),
             MovementState::default(),
         ))
         .id();
     let mount_field = |app: &mut App, v: u32| {
         app.world_mut()
             .entity_mut(unit)
-            .insert(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
-                FIELD_MOUNTDISPLAYID,
-                v,
-            )])));
+            .insert(crate::net::ObjectStore(alive(&[(FIELD_MOUNTDISPLAYID, v)])));
     };
     let playing = |app: &App| drv_of(app, unit).active_anim();
 
@@ -2812,8 +2796,6 @@ fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
 /// (`0x607b35 push 0x1`), the teardown cuts (`0x607d1c push 0x0`), seen in the outgoing weight.
 #[test]
 fn the_dismount_cuts_the_saddle_pose_where_the_mount_up_blends_into_it() {
-    use benilla_protocol::ObjectFields;
-
     const FIELD_MOUNTDISPLAYID: u16 = 133;
     const MOUNT: u16 = 91;
     let stand_node = AnimationNodeIndex::new(1);
@@ -2842,17 +2824,14 @@ fn the_dismount_cuts_the_saddle_pose_where_the_mount_up_blends_into_it() {
             AnimationPlayer::default(),
             AnimationTransitions::new(),
             AnimDriver::default(),
-            crate::net::ObjectStore(ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, 0)])),
+            crate::net::ObjectStore(alive(&[(FIELD_MOUNTDISPLAYID, 0)])),
             MovementState::default(),
         ))
         .id();
     let mount_field = |app: &mut App, v: u32| {
         app.world_mut()
             .entity_mut(unit)
-            .insert(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
-                FIELD_MOUNTDISPLAYID,
-                v,
-            )])));
+            .insert(crate::net::ObjectStore(alive(&[(FIELD_MOUNTDISPLAYID, v)])));
     };
     let weight = |app: &App, node| {
         app.world()
@@ -3367,7 +3346,7 @@ fn spawn_vendor(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
                 display_id: None,
                 scale: 1.0,
             },
-            crate::net::ObjectStore::default(),
+            crate::net::ObjectStore(alive(&[])),
             Transform {
                 translation: benilla_assets::coords::wow_to_bevy([5.0, 0.0, 0.0]),
                 rotation: Quat::from_rotation_y(0.0),
@@ -3736,7 +3715,7 @@ fn a_no_wound_creature_takes_no_flinch() {
         }
     }
     fn streamed(entry: u32) -> crate::net::ObjectStore {
-        crate::net::ObjectStore(ObjectFields::from_pairs(&[(OBJECT_FIELD_ENTRY, entry)]))
+        crate::net::ObjectStore(alive(&[(OBJECT_FIELD_ENTRY, entry)]))
     }
     const OBJECT_FIELD_ENTRY: u16 = 3;
     const SKELETON: u32 = 1783; // a Scarlet Monastery skeleton's template entry
@@ -3859,7 +3838,7 @@ fn the_no_wound_flag_takes_the_parry_but_not_the_dodge() {
                     main: Some((2, 7)),
                     ..Default::default()
                 },
-                crate::net::ObjectStore(ObjectFields::from_pairs(&[(OBJECT_FIELD_ENTRY, entry)])),
+                crate::net::ObjectStore(alive(&[(OBJECT_FIELD_ENTRY, entry)])),
             ))
             .id()
     };
@@ -4273,10 +4252,7 @@ mod routing {
                 AnimationPlayer::default(),
                 AnimationTransitions::new(),
                 AnimDriver::default(),
-                crate::net::ObjectStore(ObjectFields::from_pairs(&[(
-                    FIELD_MOUNTDISPLAYID,
-                    mount_display,
-                )])),
+                crate::net::ObjectStore(alive(&[(FIELD_MOUNTDISPLAYID, mount_display)])),
                 MovementState::default(),
             ))
             .id()
@@ -4617,7 +4593,7 @@ mod emote_state {
                 AnimationPlayer::default(),
                 AnimationTransitions::new(),
                 AnimDriver::default(),
-                ObjectStore(ObjectFields::from_pairs(&[(FIELD_NPC_EMOTESTATE, state)])),
+                ObjectStore(alive(&[(FIELD_NPC_EMOTESTATE, state)])),
             ))
             .id()
     }
