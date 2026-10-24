@@ -72,7 +72,7 @@ fn an_absent_catalog_returns_nothing_rather_than_erroring() {
 /// Two `GetGMTicket()` calls are two packets: `TicketStatus_OnUpdate` re-polls every 10 minutes.
 #[test]
 fn the_payload_free_verbs_queue_rather_than_latch() {
-    let mut s = script();
+    let mut s = in_world();
     s.run("GetGMTicket() GetGMTicket() GetGMStatus() DeleteGMTicket() Stuck() Stuck() Stuck()")
         .unwrap();
     assert_eq!(
@@ -177,4 +177,18 @@ fn a_ticket_write_with_no_player_does_nothing() {
             "{chunk} sends nothing"
         );
     }
+}
+
+/// With no active player `GetGMTicket` and `DeleteGMTicket` send nothing: each finds the player
+/// (`0x468550`, then `0x468460` with mask 0x10) and skips the sender on null (`0x48c9bd`,
+/// `0x48cb8d`). `GetGMStatus` has no such gate (`0x48cfc0` builds message 0x21a straight away).
+#[test]
+fn ticket_get_and_delete_with_no_player_send_nothing() {
+    let mut s = script();
+    s.run("GetGMTicket() DeleteGMTicket() GetGMStatus()").unwrap();
+    assert_eq!(
+        s.take_gm_ticket_intents(),
+        vec![GmTicketIntent::AskStatus],
+        "only the status ask goes out"
+    );
 }
