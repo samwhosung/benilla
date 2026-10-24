@@ -46,6 +46,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             vec![SessionEvent::LogoutResponse { reason, instant }]
         }
         ServerPacket::LogoutCancelAck => vec![SessionEvent::LogoutCancelled],
+        ServerPacket::ClearFarSightImmediate => vec![SessionEvent::FarSightCleared],
         ServerPacket::PlaySound { sound_id } => vec![SessionEvent::PlaySound { sound_id }],
         ServerPacket::PlayMusic { music_id } => vec![SessionEvent::PlayMusic { music_id }],
         ServerPacket::PlayObjectSound { sound_id, guid } => {

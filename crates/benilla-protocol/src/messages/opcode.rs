@@ -468,6 +468,9 @@ pub const CMSG_MOVE_NOT_ACTIVE_MOVER: u16 = 0x02D1; // 721
 /// body (`MiscHandler.cpp:1138-1155`). Sending 0 moves visibility home while the camera stays on
 /// the object, so it must be deliberate; the server expects no reply.
 pub const CMSG_FAR_SIGHT: u16 = 0x027A; // 634
+/// End far sight now: empty body, the view back on the player (`0x5e43f8`). vmangos never sends
+/// it; it clears `PLAYER_FARSIGHT` instead.
+pub const SMSG_CLEAR_FAR_SIGHT_IMMEDIATE: u16 = 0x020D; // 525
 /// Stop auto-repeat: empty body, sent from the local cancel (`0x6ea080`), so on every cancel.
 pub const CMSG_CANCEL_AUTO_REPEAT_SPELL: u16 = 0x026D; // 621
 

@@ -1339,6 +1339,7 @@ fn parse_server_body(
             instant: read_u8(&mut r)? != 0,
         },
         opcode::SMSG_LOGOUT_CANCEL_ACK => ServerPacket::LogoutCancelAck,
+        opcode::SMSG_CLEAR_FAR_SIGHT_IMMEDIATE => ServerPacket::ClearFarSightImmediate,
         opcode::SMSG_PONG => ServerPacket::Pong {
             sequence: read_u32_le(&mut r)?,
         },

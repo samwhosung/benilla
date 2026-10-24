@@ -956,6 +956,8 @@ pub enum ServerPacket {
     },
     /// `SMSG_LOGOUT_CANCEL_ACK` (empty): the logout was cancelled; it takes the countdown down.
     LogoutCancelAck,
+    /// `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE` (empty): end far sight on the active player (`0x5e43f8`).
+    ClearFarSightImmediate,
     /// `SMSG_PONG`: our `CMSG_PING`'s sequence echoed back, timed for the round trip.
     Pong {
         sequence: u32,
@@ -1569,6 +1571,7 @@ impl ServerPacket {
             ServerPacket::LogoutComplete => "SMSG_LOGOUT_COMPLETE".into(),
             ServerPacket::LogoutResponse { .. } => "SMSG_LOGOUT_RESPONSE".into(),
             ServerPacket::LogoutCancelAck => "SMSG_LOGOUT_CANCEL_ACK".into(),
+            ServerPacket::ClearFarSightImmediate => "SMSG_CLEAR_FAR_SIGHT_IMMEDIATE".into(),
             ServerPacket::Pong { .. } => "SMSG_PONG".into(),
             ServerPacket::ForceSpeedChange { kind, .. } => {
                 format!("SMSG_FORCE_{kind:?}_SPEED_CHANGE")

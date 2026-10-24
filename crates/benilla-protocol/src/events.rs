@@ -234,6 +234,9 @@ pub enum SessionEvent {
     LogoutResponse { reason: u32, instant: bool },
     /// The server dropped a pending logout at our `CMSG_LOGOUT_CANCEL` (`SMSG_LOGOUT_CANCEL_ACK`).
     LogoutCancelled,
+    /// `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE`: end far sight now (`0x5e43f8` runs `EndFarSight`
+    /// `0x5ee590` on the active player).
+    FarSightCleared,
     /// The world session ended, and with [`SessionEnd::Lost`] the link with it; `reason` is
     /// human-readable.
     Disconnected { reason: String, end: SessionEnd },

@@ -6,8 +6,9 @@
 //! the server with `CMSG_FAR_SIGHT`. vmangos defers the set by 400 ms
 //! (`Player::ScheduleCameraUpdate`, `Player.cpp:19136`), so the subject has streamed first, and
 //! sends the clear at once to every client in range (`DirectSendPublicValueUpdate`), so only our
-//! [`SelfPlayer`] store is read; it never sends `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE`. Mind Control
-//! sets the same field (`SpellAuras.cpp:2975`).
+//! [`SelfPlayer`] store is read; it never sends `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE`, which another
+//! server may, and which ends far sight at once ([`on_clear_far_sight`]). Mind Control sets the
+//! same field (`SpellAuras.cpp:2975`).
 
 use std::sync::{Mutex, PoisonError};
 
@@ -194,6 +195,24 @@ pub(super) fn publish_view_subject(
         });
 }
 
+/// `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE` (`0x20d`): the handler's jump table (`0x5e417e`, entry 5)
+/// leads to `0x5e43f8`, which looks up the active player (`0x5e440e`) and runs `EndFarSight` on it
+/// (`0x5ee590` at `0x5e441d`), reading no body. The field still names the object, so the view
+/// stays home until it changes.
+pub(super) fn on_clear_far_sight(
+    In(_): In<benilla_protocol::SessionEvent>,
+    far_sight: Res<FarSight>,
+    self_store: Query<&ObjectStore, With<SelfPlayer>>,
+    index: Res<GuidIndex>,
+    net: Res<NetCommands>,
+) {
+    let Some(store) = self_store.iter().next() else {
+        return;
+    };
+    let held = |guid: u64| index.0.contains_key(&guid);
+    far_sight.end(store.0.player_farsight(), held, &net);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,7 +321,7 @@ mod tests {
         app.update();
         assert!(
             app.world().resource::<ViewSubject>().remote.is_none(),
-            "a zeroed field is the ONLY teardown signal there is — no CLEAR_FAR_SIGHT_IMMEDIATE"
+            "a zeroed field is vmangos's teardown signal: it sends no CLEAR_FAR_SIGHT_IMMEDIATE"
         );
         assert_eq!(votes(&rx), [false], "and the release votes 0, once");
     }
@@ -420,7 +439,10 @@ mod tests {
             .world_mut()
             .spawn(Transform::from_xyz(50.0, 0.0, 0.0))
             .id();
-        app.world_mut().resource_mut::<GuidIndex>().0.insert(EYE, eye);
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(EYE, eye);
         app.world_mut().spawn((
             SelfPlayer,
             Transform::default(),
