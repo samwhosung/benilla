@@ -241,8 +241,9 @@ pub(crate) struct EffectRig {
 #[derive(Component)]
 pub(crate) struct PortraitStandIn(pub(crate) u32);
 
-/// What a portrait slot shows: the booth's bake (empty while a held unit's model loads,
-/// `0x525874`), or a 2D stand-in file for a unit with no object (`0x525ba0`, `0x525cb0`).
+/// What a portrait slot shows: the booth's bake or a cached face, a 2D stand-in file for a unit
+/// with no object (`0x525ba0`, `0x525cb0`), or no image while a held unit's model loads
+/// (`0x525874`) and for a unit with no object and no art (`0x51a095`, `0x51a0ce`).
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum PortraitSource {
     /// The slot's off-screen render target (the model bake).
@@ -674,6 +675,11 @@ pub(crate) struct PartyBooths<'w, 's> {
     displays: ResMut<'w, DisplayBakes>,
     images: ResMut<'w, Assets<Image>>,
     targets: Query<'w, 's, (&'static BoothCam, &'static mut RenderTarget)>,
+    /// The portrait list, which a pending unit's bake returns on (`0x524f96`), and the name
+    /// cache's callbacks a portrait registers (`0x51a100`).
+    marks: ResMut<'w, PortraitMarks>,
+    /// A held player's GUID, the key of its cached face (`0x524fe2`).
+    guids: Query<'w, 's, &'static crate::net::Guid>,
 }
 
 /// Tags a booth camera with its slot token (not the M2 rig, `benilla_assets::PortraitCamera`).
@@ -1352,8 +1358,15 @@ fn sync_portraits(
                 &mut party.targets,
             );
             empty_booth(&mut commands, booth);
+            // A player with no name record asks the cache, whose callback marks the portrait
+            // when the record lands (`0x51a08e` → `0x55f080`, `0x51a100`).
+            if let Some(guid) = occupant.filter(|g| {
+                benilla_protocol::guid::is_player(*g) && party.names.player_traits(*g).is_none()
+            }) {
+                party.marks.ask(guid);
+            }
             // No object: the cached bake on a hit, the 2D stand-in on a miss (`0x525ba0`,
-            // `0x525cb0`).
+            // `0x525cb0`), and with neither, no image (`0x51a095`, `0x51a0ce`).
             let src = match unseen {
                 Some(unseen) => {
                     let booths = &booths.0;
@@ -1364,7 +1377,7 @@ fn sync_portraits(
                             .map(|b| b.target.clone())
                     })
                 }
-                None => PortraitSource::Live(booth.target.clone()),
+                None => PortraitSource::Empty,
             };
             if portraits.0.get(token) != Some(&src) {
                 portraits.0.insert(token.to_string(), src);
@@ -1373,11 +1386,12 @@ fn sync_portraits(
         };
         let (parts, riders, billboards, effects) = look.collect(unit);
         if parts.is_empty() {
-            // Not attached yet: `SetPortraitTexture` empties the texture (`0x519fcc`) and the bake
-            // binds nothing while the model is not ready (`0x5250f5`-`0x52515d` → `0x525874`).
-            // The same unit rebuilding its body keeps its last bake: the widget keeps its texture
-            // until the drain's `UNIT_PORTRAIT_UPDATE` binds again, which waits on the body.
-            if booth.baked_unit != Some(unit) {
+            // Not attached yet. The same unit rebuilding its body keeps its last bake: the widget
+            // keeps its texture until the drain's `UNIT_PORTRAIT_UPDATE` binds again, which waits
+            // on the body.
+            let src = if booth.baked_unit == Some(unit) {
+                PortraitSource::Live(booth.target.clone())
+            } else {
                 file_display_bake(
                     booth,
                     token,
@@ -1386,10 +1400,26 @@ fn sync_portraits(
                     &mut party.targets,
                 );
                 empty_booth(&mut commands, booth);
-            }
-            let empty = PortraitSource::Live(booth.target.clone());
-            if portraits.0.get(token) != Some(&empty) {
-                portraits.0.insert(token.to_string(), empty);
+                let net = ent_q.get(unit).ok();
+                let guid = party.guids.get(unit).ok().map(|g| g.0);
+                let booths = &booths.0;
+                loading_source(
+                    net.is_some_and(|n| n.kind == benilla_protocol::EntityKind::Player),
+                    guid,
+                    display_key(net, stores_q.get(unit).ok()),
+                    &party.marks,
+                    &party.bakes,
+                    &party.displays,
+                    |d| {
+                        booths
+                            .values()
+                            .find(|b| b.baked_display == Some(d) && b.settled())
+                            .map(|b| b.target.clone())
+                    },
+                )
+            };
+            if portraits.0.get(token) != Some(&src) {
+                portraits.0.insert(token.to_string(), src);
             }
             continue;
         }
@@ -1512,6 +1542,31 @@ fn sync_portraits(
             portraits.0.insert(token.to_string(), live);
         }
     }
+}
+
+/// What `SetPortraitTexture` binds for a held unit whose model is not ready, in the bake's order
+/// (`0x524f60`): nothing for a unit on the portrait list (`0x524f96`); a clean cached face, a
+/// player's by its GUID (`0x524fe2`-`0x525069`) and any other unit's by its display id
+/// (`0x525077`-`0x5250e4`, or one a booth holds now, as the reference files it as it draws); else
+/// nothing, as the readiness gate binds nothing (`0x5250f5`-`0x52515d` → `0x525874`).
+fn loading_source(
+    player: bool,
+    guid: Option<u64>,
+    display: Option<u32>,
+    marks: &PortraitMarks,
+    bakes: &PortraitBakes,
+    displays: &DisplayBakes,
+    baking: impl Fn(u32) -> Option<Handle<Image>>,
+) -> PortraitSource {
+    if guid.is_some_and(|g| marks.holds(g)) {
+        return PortraitSource::Empty;
+    }
+    let face = if player {
+        guid.and_then(|g| bakes.get(g))
+    } else {
+        display.and_then(|d| displays.get(d).or_else(|| baking(d)))
+    };
+    face.map_or(PortraitSource::Empty, PortraitSource::Live)
 }
 
 /// Empty `booth`'s stage and render it once, so its target holds the backdrop.

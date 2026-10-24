@@ -24,33 +24,119 @@ fn is(store: &ObjectStore, mask: u32) -> bool {
 /// The pending list (`0xc0cdd0`, head `0xc0cdd4`), head first. A mark links a GUID the list does
 /// not hold at the head (`0x524eab`-`0x524ecd`) and leaves one it holds where it is (`0x524e39`);
 /// the drain walks from the head (`0x524cf2`, next at `+0x4`), so the newest mark drains first.
+/// Beside it, the players a portrait asked the name cache for, whose callback `0x51a100` marks
+/// each once its record lands (`0x51a10c`).
 #[derive(Resource, Default, Debug)]
-pub(crate) struct PortraitMarks(Vec<u64>);
+pub(crate) struct PortraitMarks {
+    pending: Vec<u64>,
+    asked: Vec<u64>,
+}
 
 impl PortraitMarks {
     /// `0x524e10(&guid)`.
     pub(crate) fn mark(&mut self, guid: u64) {
-        if !self.0.contains(&guid) {
-            self.0.insert(0, guid);
+        if !self.pending.contains(&guid) {
+            self.pending.insert(0, guid);
         }
     }
 
     /// `SetPortraitTexture` asked the name cache for `guid` with the callback `0x51a100`.
     pub(crate) fn ask(&mut self, guid: u64) {
-        let _ = guid;
+        if !self.asked.contains(&guid) {
+            self.asked.push(guid);
+        }
+    }
+
+    /// Whether `guid` waits on the list, which the bake returns on at once (`0x524f96`).
+    pub(crate) fn holds(&self, guid: u64) -> bool {
+        self.pending.contains(&guid)
     }
 
     /// The GUIDs waiting, head first.
     #[cfg(test)]
     pub(crate) fn pending(&self) -> &[u64] {
-        &self.0
+        &self.pending
     }
 
-    /// Leaving the world frees every node (`0x524b70`, `0x524c60`-`0x524c89`).
+    /// Leaving the world frees every node (`0x524b70`, `0x524c60`-`0x524c89`), and the name
+    /// cache drops its callbacks with its records.
     pub(crate) fn clear(&mut self) {
-        self.0.clear();
+        self.pending.clear();
+        self.asked.clear();
     }
 }
+
+/// What [`mark_portraits`] remembers between frames to tell a producer's run from a rerun.
+#[derive(Default)]
+pub(super) struct Seen {
+    /// The display each unit's body was last built on: benilla's palette heal rebuilds on the
+    /// same one, which is no display change.
+    bodies: HashMap<Entity, Option<u32>>,
+    /// A player's weapons, display and load state aside ([`DressKey`]).
+    weapons: HashMap<Entity, DressKey>,
+    /// Where a player's glowing hand weapons hang ([`crate::entities::HeldItems::glowing_hands`]).
+    hands: HashMap<Entity, [Option<u16>; 2]>,
+    /// Each item's `ITEM_FIELD_DURABILITY` as its watcher last saw it.
+    durability: HashMap<Entity, Option<u32>>,
+}
+
+impl Seen {
+    fn forget(&mut self, entity: Entity) {
+        self.bodies.remove(&entity);
+        self.weapons.remove(&entity);
+        self.hands.remove(&entity);
+        self.durability.remove(&entity);
+    }
+}
+
+/// The inputs [`mark_portraits`] reads off the world.
+#[allow(clippy::type_complexity)]
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct MarkSources<'w, 's> {
+    built: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Guid,
+            &'static ObjectStore,
+            Option<&'static crate::entities::AppliedDisplay>,
+        ),
+        Added<VisualAttached>,
+    >,
+    worn: Query<'w, 's, (&'static Guid, &'static ObjectStore), Changed<Equipment>>,
+    armed: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Guid,
+            &'static ObjectStore,
+            &'static DressKey,
+        ),
+        Changed<DressKey>,
+    >,
+    held: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Guid,
+            &'static ObjectStore,
+            &'static crate::entities::HeldItems,
+            Has<crate::creature_anim::VisualSheath>,
+        ),
+        Changed<crate::entities::HeldItems>,
+    >,
+    items: Query<'w, 's, (Entity, &'static ObjectStore), Changed<ObjectStore>>,
+    stores: Query<'w, 's, &'static ObjectStore>,
+    index: Res<'w, GuidIndex>,
+    names: Res<'w, crate::names::NameCache>,
+    gone: RemovedComponents<'w, 's, Guid>,
+}
+
+/// `TYPEMASK_ITEM`.
+const ITEM: u32 = 0x2;
 
 /// Mark each unit a producer of `0x524e10` reached since the last frame:
 /// - a body built, at a create or a display change (a shapeshift, a polymorph): `0x607da0` marks
@@ -60,33 +146,35 @@ impl PortraitMarks {
 /// - a player's worn look ([`Equipment`]): a visible item (`0x5df119`), the helm and cloak flags
 ///   (`0x5eea22`), the guild tabard and the designer's preview (`0x5e08c9`, `0x5e081e`);
 /// - a player's weapons and their enchants ([`DressKey`], `0x5df119`, `0x5eeda9`), but not a
-///   weapon's model finishing its load, nor the body's display, which the build marks.
+///   weapon's model finishing its load, nor the body's display, which the build marks;
+/// - a glowing hand weapon re-attached by a snap sheath (`0x60b96a` → `0x5eed00`, mark at
+///   `0x5eeda9`); a ceremony's move is its key's mark;
+/// - an item's durability, for its owner when the client holds the owner as a player
+///   (`0x5d97f2`, `0x5d981d`, mark at `0x5d991b`);
+/// - a name record landing that a portrait asked for (`0x51a10c`).
 ///
 /// The sheath clip's `$SHL`/`$SHR` key (`0x5ffbbe`) marks from `bump_model_revision`, the key's
-/// other reader.
-#[allow(clippy::type_complexity)]
+/// other reader; the party record's pet display (`0x5e587f`) from the notice lane.
 pub(super) fn mark_portraits(
     mut marks: ResMut<PortraitMarks>,
-    built: Query<(&Guid, &ObjectStore), Added<VisualAttached>>,
-    worn: Query<(&Guid, &ObjectStore), Changed<Equipment>>,
-    armed: Query<(Entity, &Guid, &ObjectStore, &DressKey), Changed<DressKey>>,
-    mut dropped: RemovedComponents<DressKey>,
-    mut weapons: Local<HashMap<Entity, DressKey>>,
+    mut world: MarkSources,
+    mut seen: Local<Seen>,
 ) {
-    for (guid, store) in &built {
-        if is(store, UNIT) {
+    for gone in world.gone.read() {
+        seen.forget(gone);
+    }
+    for (entity, guid, store, display) in &world.built {
+        let display = display.and_then(|d| d.0);
+        if is(store, UNIT) && seen.bodies.insert(entity, display) != Some(display) {
             marks.mark(guid.0);
         }
     }
-    for (guid, store) in &worn {
+    for (guid, store) in &world.worn {
         if is(store, PLAYER) {
             marks.mark(guid.0);
         }
     }
-    for gone in dropped.read() {
-        weapons.remove(&gone);
-    }
-    for (entity, guid, store, dress) in &armed {
+    for (entity, guid, store, dress) in &world.armed {
         if !is(store, PLAYER) {
             continue;
         }
@@ -95,8 +183,49 @@ pub(super) fn mark_portraits(
             held_ready: true,
             ..*dress
         };
-        if weapons.insert(entity, held) != Some(held) {
+        if seen.weapons.insert(entity, held) != Some(held) {
             marks.mark(guid.0);
+        }
+    }
+    for (entity, guid, store, held, ceremony) in &world.held {
+        let now = held.glowing_hands();
+        let was = seen.hands.insert(entity, now).unwrap_or([None; 2]);
+        let moved = now.iter().zip(was).any(|(n, w)| n.is_some() && *n != w);
+        if is(store, PLAYER) && moved && !ceremony {
+            marks.mark(guid.0);
+        }
+    }
+    for (entity, store) in &world.items {
+        if !is(store, ITEM) {
+            continue;
+        }
+        let now = store.0.item_durability();
+        // A first create runs no watcher (`0x465d80`).
+        let Some(was) = seen.durability.insert(entity, now) else {
+            continue;
+        };
+        let owner = store.0.item_owner().unwrap_or(0);
+        let held = world
+            .index
+            .0
+            .get(&owner)
+            .and_then(|e| world.stores.get(*e).ok())
+            .is_some_and(|s| is(s, PLAYER));
+        if was != now && held {
+            marks.mark(owner);
+        }
+    }
+    if !marks.asked.is_empty() {
+        let names = &world.names;
+        let landed: Vec<u64> = marks
+            .asked
+            .iter()
+            .copied()
+            .filter(|g| names.player_traits(*g).is_some())
+            .collect();
+        marks.asked.retain(|g| !landed.contains(g));
+        for guid in landed {
+            marks.mark(guid);
         }
     }
 }
@@ -113,10 +242,10 @@ pub(super) fn drain_portraits(
     units: Query<(&ObjectStore, Has<VisualAttached>)>,
     mut lane: ResMut<NoticeLane>,
 ) {
-    if marks.0.is_empty() {
+    if marks.pending.is_empty() {
         return;
     }
-    marks.0.retain(|&guid| {
+    marks.pending.retain(|&guid| {
         // The lookup with type mask 8 (`0x524d37`): a unit, or nothing.
         let loading = index
             .0

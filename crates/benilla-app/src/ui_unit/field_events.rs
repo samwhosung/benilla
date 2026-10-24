@@ -43,6 +43,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     // `SetPetGuid`'s unit lookup of the new guid (`0x4bc8e4`).
     index: Option<Res<'w, crate::net::GuidIndex>>,
     stores: Query<'w, 's, &'static crate::net::ObjectStore>,
+    // A callback's mark of the portrait list (`0x524e10`).
+    marks: Option<ResMut<'w, crate::portrait::PortraitMarks>>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -51,6 +53,12 @@ impl NoticeFiring<'_, '_> {
     fn fire(&mut self, script: &mut UiScript, notice: FieldNotice, trainer: Option<u64>) -> bool {
         if let FieldNotice::PetGuidSet { changed, guid } = notice {
             return self.pet_guid_set(script, changed, guid, trainer);
+        }
+        if let FieldNotice::PortraitMark { guid } = notice {
+            if let Some(marks) = self.marks.as_mut() {
+                marks.mark(guid);
+            }
+            return false;
         }
         if notice == FieldNotice::PlayerAuras {
             self.auras.run(script);

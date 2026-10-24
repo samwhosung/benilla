@@ -56,8 +56,8 @@ fn record_changes(old: &PartyMemberStatsInfo, new: &PartyMemberStatsInfo) -> u32
 /// and the power and drops their own bits (`0x5e572f`-`0x5e574a`); then the level, health, maximum,
 /// display power, power and maximum power, `UNIT_FACTION` for the PvP and free-for-all status bits
 /// (`0x5e57c8`), `UNIT_AURA` for either aura block and `UNIT_PET` for a new pet (`0x5e584f`).
-/// With a pet the record names, its own: the name, health, maximum, display power, power, maximum
-/// power and auras (`0x5e586c`-`0x5e5900`). The power events add the new record's power type.
+/// With a pet the record names, its own: the name, a mark of its portrait for the display, then
+/// health, maximum, display power, power, maximum power and auras (`0x5e586c`-`0x5e5900`). The power events add the new record's power type.
 pub(crate) fn record_notices(
     member: u64,
     old: &PartyMemberStatsInfo,
@@ -96,9 +96,15 @@ pub(crate) fn record_notices(
     let pet = new.pet_guid.unwrap_or(0);
     if pet != 0 {
         let power = u16::from(new.pet_power_type.unwrap_or(0));
-        // 0x2000, the display, refreshes the portrait alone (`0x5e587f`).
+        if mask & 0x1000 != 0 {
+            signal(pet, id::UNIT_NAME_UPDATE);
+        }
+        // 0x2000, the display, marks the pet's portrait (`0x5e587f`).
+        if mask & 0x2000 != 0 {
+            out.push(FieldNotice::PortraitMark { guid: pet });
+        }
+        let mut signal = |guid: u64, id: u16| out.push(FieldNotice::Signal { guid, id });
         for (bit, event) in [
-            (0x1000, id::UNIT_NAME_UPDATE),
             (0x4000, id::UNIT_HEALTH),
             (0x8000, id::UNIT_MAXHEALTH),
             (0x10000, id::UNIT_DISPLAYPOWER),
