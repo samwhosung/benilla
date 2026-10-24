@@ -451,26 +451,33 @@ pub(crate) struct ReEvalInputs<'w, 's> {
     edges: MessageReader<'w, 's, FieldChanged>,
 }
 
-/// The pet a pet-learn row re-evaluates against (`0x4d7f2d`-`0x4d7fa5`), given the player's
-/// `UNIT_FIELD_SUMMON` and the stores by guid.
+/// The pet a pet-learn row re-evaluates against: the unit the player's `UNIT_FIELD_SUMMON` names
+/// (`0x4d7f2d`, looked up with mask 8 at `0x4d7f49`), `None` when none is held (`0x4d7f5a`), at its
+/// own level (`0x4d7f99`). `KnowsSpell` (`0x60c740`) reads a unit's book only as the pet bar's
+/// unit (`0x60c77a`-`0x60c790`), so another summon knows nothing.
 fn pet_view<'a>(
     summon: Option<u64>,
     store_of: impl Fn(u64) -> Option<&'a ObjectStore>,
     bar: &benilla_protocol::messages::PetSpells,
 ) -> Option<reeval::PetView> {
-    let _ = summon;
-    (bar.pet_guid != 0)
-        .then(|| store_of(bar.pet_guid))
-        .flatten()
-        .map(|store| reeval::PetView {
-            level: store.0.unit_level().unwrap_or(0),
-            known: bar
-                .spells
-                .iter()
-                .filter(|e| e.is_spell())
-                .map(|e| e.action())
-                .collect(),
-        })
+    /// `TYPEMASK_UNIT`, the lookup's mask.
+    const TYPEMASK_UNIT: u32 = 0x8;
+    let guid = summon?;
+    let store = store_of(guid)
+        .filter(|store| store.0.object_type_mask().unwrap_or(0) & TYPEMASK_UNIT != 0)?;
+    let known = if guid == bar.pet_guid {
+        bar.spells
+            .iter()
+            .filter(|e| e.is_spell())
+            .map(|e| e.action())
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    Some(reeval::PetView {
+        level: store.0.unit_level().unwrap_or(0),
+        known,
+    })
 }
 
 /// The resources a service description's `$`-tokens read beside the caster's descriptor: the

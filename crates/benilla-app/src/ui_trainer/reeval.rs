@@ -27,7 +27,8 @@ pub(super) struct SkillSlot {
     pub value_plus_perm: i32,
 }
 
-/// The player's streamed pet, with its own book: `IsSpellKnown`'s pet path scans the pet's.
+/// The player's streamed summon, with the book `IsSpellKnown`'s pet path scans for it: the pet
+/// bar's when the bar names it, else none.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct PetView {
     pub level: u32,
