@@ -1041,3 +1041,63 @@ fn a_refused_redial_forgets_the_pin_and_dials_no_more() {
     assert_eq!(realmd.dials(), dials, "no dial after the refusal");
     assert_eq!(realmd.refusals(), 1);
 }
+
+/// Every logon stage up to the next event that is none, as the debug names the glue's states come
+/// from.
+fn stages_until_event(events: &crossbeam_channel::Receiver<SessionEvent>) -> Vec<String> {
+    let mut stages = Vec::new();
+    loop {
+        match events.recv_timeout(WAIT).expect("the cycle went quiet") {
+            SessionEvent::LoginStage { stage } => {
+                stages.push(format!("{stage:?}").split(' ').next().unwrap().to_string());
+            }
+            SessionEvent::RealmList { .. } => return stages,
+            other => panic!("expected the stages and the realm list, got {other:?}"),
+        }
+    }
+}
+
+/// A logon reports its states as it goes: `AUTHENTICATING` as the challenge goes out
+/// (`0x5b2196`), `CHECKINGVERSIONS` on the challenge's reply (`0x5b1cd7`), `HANDSHAKING` once the
+/// proof is sent (`0x5b1f93`), in that order, before the realm list.
+#[test]
+fn a_logon_reports_its_states_in_the_references_order() {
+    let (realmd, _) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    assert_eq!(
+        stages_until_event(&cycles.events),
+        [
+            "Connecting",
+            "Authenticating",
+            "CheckingVersions",
+            "ProofSent"
+        ]
+    );
+}
+
+/// With a PIN the reply's state is 7 (`0x5b1cd7`), the keypad waits, and the keys' state 9
+/// (`0x5b31cc`) is the glue's own at `PINEntered`; the proof they make reports `HANDSHAKING`.
+#[test]
+fn a_pin_logon_reports_its_states_in_the_references_order() {
+    let (realmd, _) = fake::servers_with_pin(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let mut before = Vec::new();
+    let (grid, prompt) = loop {
+        match cycles
+            .events
+            .recv_timeout(WAIT)
+            .expect("the cycle went quiet")
+        {
+            SessionEvent::LoginStage {
+                stage: benilla_protocol::LoginStage::Pin { grid, prompt },
+            } => break (grid, prompt),
+            SessionEvent::LoginStage { stage } => before.push(format!("{stage:?}")),
+            other => panic!("expected the PIN prompt, got {other:?}"),
+        }
+    };
+    assert_eq!(before, ["Connecting", "Authenticating"]);
+    cycles.realm.send(keys(&grid, prompt)).unwrap();
+    assert_eq!(stages_until_event(&cycles.events), ["ProofSent"]);
+}
