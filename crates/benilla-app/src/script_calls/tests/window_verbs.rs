@@ -56,6 +56,40 @@ fn purchase_slot_sends_inside_its_call() {
     assert_eq!(sent(&rx), ["buy slot 0xf130000000000042", "roll 1"]);
 }
 
+/// `PurchaseSlot()`'s refusals inside its call (`0x4f86b0`): six slots bought returns silently
+/// (`0x4f8703`); a purse below the next slot's price shows `ERR_BANKSLOT_INSUFFICIENT_FUNDS`
+/// (`0x4f8743`, `0x4f8748`, row 257) before the chunk's next line, and neither sends.
+#[test]
+fn purchase_slot_refuses_inside_its_call() {
+    // `PLAYER_FIELD_COINAGE`, and `PLAYER_BYTES_2` byte 2 the slots bought.
+    const COINAGE: u16 = 1176;
+    const BYTES_2: u16 = 194;
+    for (bought, money, error) in [(6, 1_000_000, false), (0, 9, true)] {
+        let (mut app, rx) = client();
+        seat(&mut app, &[(COINAGE, money), (BYTES_2, bought << 16)]);
+        app.insert_resource(crate::ui_bank::BankPrices(
+            benilla_formats::BankBagSlotPrices::from_rows([(1, 10), (7, 999_999_999)]),
+        ));
+        open(&mut app, W::Bank, NPC);
+        eval::<()>(
+            &mut app,
+            "ERR_BANKSLOT_INSUFFICIENT_FUNDS = 'Not enough money' SEEN = '' \
+             local f = CreateFrame('Frame') f:RegisterEvent('UI_ERROR_MESSAGE') \
+             f:SetScript('OnEvent', function() SEEN = SEEN .. arg1 .. ';' RandomRoll(9, 9) end)",
+        );
+        eval::<()>(&mut app, "PurchaseSlot() RandomRoll(1, 2)");
+        let want: &[&str] = if error {
+            &["roll 9", "roll 1"]
+        } else {
+            &["roll 1"]
+        };
+        assert_eq!(sent(&rx), want, "bought {bought}");
+        let seen: String = eval(&mut app, "return SEEN");
+        let want = if error { "Not enough money;" } else { "" };
+        assert_eq!(seen, want, "bought {bought}");
+    }
+}
+
 /// `SortAuctionItems(type, sort)` promotes the column in the engine's stack inside its call
 /// (`0x4cfc00` → `0x4cd850`), with no auctioneer open: the stack is the one that outlives the
 /// session and the VM.

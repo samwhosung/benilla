@@ -15,6 +15,11 @@ const BANK_BAG_SLOT_PRICES: &str = "DBFilesClient\\BankBagSlotPrices.dbc";
 pub struct BankBagSlotPrices(HashMap<u32, u32>);
 
 impl BankBagSlotPrices {
+    /// A table of `(slot, price)` rows, as the file's would load.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        Self(rows.into_iter().collect())
+    }
+
     /// The price of slot `purchased_count + 1`; a sentinel row still reads as its price.
     pub fn next_slot_price(&self, purchased_count: u8) -> Option<u32> {
         self.0.get(&(u32::from(purchased_count) + 1)).copied()
