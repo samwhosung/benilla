@@ -964,6 +964,65 @@ mod tests {
         assert_eq!(s.refuse_waiting(), 0, "nothing waits");
     }
 
+    /// A host whose every `TargetLastEnemy` leaves `UnitName` on an unheld unit and then
+    /// `TargetLastEnemy` again to run in its tail, so the getter's ask is made at every depth.
+    struct AskingAtDepth {
+        applied: Vec<ScriptCall>,
+        errors: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    impl CallHost for AskingAtDepth {
+        fn apply(&mut self, _: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            let again = call == LAST_ENEMY;
+            self.applied.push(call);
+            if !again {
+                return None;
+            }
+            let errors = self.errors.clone();
+            Some(Box::new(move |script: &mut UiScript| {
+                let chunk = r#"UnitName("target") reached = (reached or 0) + 1 TargetLastEnemy()"#;
+                if let Err(e) = script.run(chunk) {
+                    errors.borrow_mut().push(e.to_string());
+                }
+            }))
+        }
+    }
+
+    /// A getter never raises for its lookup: at the nesting bound its ask is dropped and the
+    /// getter returns, and only the verb after it raises [`TOO_DEEP`]. The reference's getter
+    /// simply asks (`0x5171eb`).
+    #[test]
+    fn a_getters_ask_at_the_nesting_bound_is_dropped_not_raised() {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit(
+            "target",
+            Some(super::super::UnitState {
+                guid: 0x77,
+                ..Default::default()
+            }),
+        );
+        let mut host = AskingAtDepth {
+            applied: Vec::new(),
+            errors: Default::default(),
+        };
+        s.hosted(&mut host, |s| s.run("TargetLastEnemy()").unwrap());
+        let levels = usize::from(MAX_NESTING);
+        assert_eq!(
+            s.eval::<usize>("return reached").unwrap(),
+            levels,
+            "every tail, the one at the bound too, gets past its getter"
+        );
+        let asks = host
+            .applied
+            .iter()
+            .filter(|c| matches!(c, ScriptCall::RecordAsk(_)))
+            .count();
+        assert_eq!(asks, levels - 1, "the ask at the bound is dropped");
+        let errors = host.errors.borrow();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains(TOO_DEEP), "{errors:?}");
+    }
+
     /// With no host lent a call is refused with an error: an entry ran Lua without lending one.
     #[test]
     fn with_no_host_a_call_is_refused() {
