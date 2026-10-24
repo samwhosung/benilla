@@ -327,9 +327,9 @@ const RENAME_NAME_IN_USE: u8 = 0x31;
 /// byte past `0x0f` to `0xff` (`0x5bac36`, `0x5bad8d`). 0x00 and 0x0E take the success arm
 /// (`0x5b2cc9`, `0x5b2cd4` to `0x5b2e16`), authenticated; the unknown account and the wrong
 /// password share one arm (`0x5b2d00`, result 7 with no PIN, [`GlueMgr::count_pin_failure`] with
-/// one); a challenge's 0x0A is the patch state
-/// (`0x5b2d3b`). A proof's 0x0A never gets here: `Grunt::OnLogonProof` returns on it (`0x5bada2`),
-/// so the logon reports nothing and its dialog stands (`None`).
+/// one); a challenge's 0x0A is the patch state (`0x5b2d3b`). A proof's 0x0A never gets here:
+/// `Grunt::OnLogonProof` returns on it (`0x5bada2`), so the logon reports nothing and its dialog
+/// stands (`None`).
 pub(crate) fn realmd_result(byte: u8, reply: benilla_protocol::LogonReply) -> Option<(i32, i32)> {
     if byte == 0x0a && reply == benilla_protocol::LogonReply::Proof {
         return None;
