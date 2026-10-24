@@ -455,7 +455,10 @@ pub(super) fn tick_script(
     ),
     mut ui_cost: ResMut<super::UiFrameCost>,
     mut pass: ResMut<super::UiPassState>,
+    // The loading screen, whose layer hides the interface's from the frame pass.
+    loading: Option<Res<crate::loading_screen::LoadingScreen>>,
 ) {
+    let covered = loading.is_some_and(|l| l.hides_interface());
     hosted_vm.run(|script| {
         pass.live = false;
         let Some(script) = script else {
@@ -541,7 +544,13 @@ pub(super) fn tick_script(
             } else if resized && script.vm_kind() == benilla_ui::script::VmKind::Glue {
                 super::glue::on_glue_screen_resized(script);
             }
-            script.tick(step.delta.as_secs_f32());
+            // Under the loading screen the pass calls no `OnUpdate` and drops the frame's time
+            // (`0x4424b9`, `0x4426c3`), so the first walk after the reveal gets one frame's.
+            if covered {
+                script.tick_covered(step.delta.as_secs_f32());
+            } else {
+                script.tick(step.delta.as_secs_f32());
+            }
         }
         // The VM's clock anchored at the instant the paced clock stands at, which moves by the same
         // steps; every `Instant` to `GetTime` conversion goes through this pair, never

@@ -217,6 +217,9 @@ pub(crate) struct LoadingScreen {
     held: bool,
     /// The transfer's route (`0x8828e0`), which draws in place of the art, the bar and the tip.
     route: Option<route::ActiveRoute>,
+    /// The layer's flag bit 0, which lets the layers below it run (`core/framepass`): cleared by
+    /// every raise (`0x406808`), set only by an arrival aboard a transport (`0x5debb6`).
+    see_through: bool,
     /// Bumped whenever [`Self::route`] changes, for [`route::draw_route`].
     route_built: u32,
 
@@ -229,6 +232,13 @@ impl LoadingScreen {
     /// Whether the opaque cover is up; the world camera renders under it, never behind the glue.
     pub(crate) fn covering(&self) -> bool {
         self.active
+    }
+
+    /// Whether the screen's layer hides the interface's beneath it, so the frame pass calls no
+    /// `OnUpdate` (`0x442431`-`0x442437`, `0x4424b9`): up, and not let through by an arrival aboard
+    /// a transport. The world→glue blackout is no raise of the screen and hides nothing.
+    pub(crate) fn hides_interface(&self) -> bool {
+        self.active && !self.blackout && !self.see_through
     }
 
     /// An active cover, for tests.
@@ -268,6 +278,8 @@ impl LoadingScreen {
         self.displayed = 0.0; // restart the fill for the new load
         self.active_since = now;
         self.last_wait_log = now;
+        // `0x406808`: every raise hides the layers below again.
+        self.see_through = false;
         info!("loading screen: up ({reason}, map {map:?})");
     }
 
@@ -306,6 +318,8 @@ impl LoadingScreen {
         self.art_resolved = false;
         // `0x407f1e`: the route goes with the screen.
         self.set_route(None);
+        // `0x407e8d` closes the layer whose flags these are.
+        self.see_through = false;
     }
 
     /// Take a route, or drop the one held: a build that fails clears it (`0x407405`).
@@ -351,6 +365,12 @@ impl Plugin for LoadingScreenPlugin {
             .add_systems(Update, drive_loading_screen.in_set(WorldStage::Present))
             .add_systems(
                 Update,
+                see_through_on_transport_arrival
+                    .in_set(WorldStage::Present)
+                    .before(drive_loading_screen),
+            )
+            .add_systems(
+                Update,
                 route::draw_route
                     .in_set(WorldStage::Present)
                     .after(drive_loading_screen),
@@ -367,6 +387,29 @@ impl Plugin for LoadingScreenPlugin {
             );
         // The cover's input rule, registered here so the two cannot be registered apart.
         input::build(app);
+    }
+}
+
+/// Our own player's arrival (`0x5dea50`) aboard a transport: a transport GUID (slot 9,
+/// `0x5deb9c`) that resolves to a game object (`0x468460` with mask 0x20, `0x5deba6`) sets the
+/// screen's bit 0 (`0x5debb6`) and leaves it up, so the interface runs under it. Any other arrival
+/// ends the screen there (`0x5debbd`), where here the readiness poll does; a pending cinematic
+/// (`0x5deb80`) skips both in the reference, and here starts off its own latch.
+fn see_through_on_transport_arrival(
+    arrived: Query<&crate::transport::TransportRider, Added<crate::net::SelfPlayer>>,
+    guids: Res<crate::net::GuidIndex>,
+    stores: Query<&crate::net::ObjectStore>,
+    mut screen: ResMut<LoadingScreen>,
+) {
+    let aboard = arrived.iter().any(|rider| {
+        guids
+            .0
+            .get(&rider.transport_guid)
+            .and_then(|&e| stores.get(e).ok())
+            .is_some_and(|s| s.0.object_type_mask().unwrap_or(0) & 0x20 != 0)
+    });
+    if aboard && screen.active {
+        screen.see_through = true;
     }
 }
 
@@ -1211,5 +1254,59 @@ mod tests {
         }
         app.world_mut().resource_mut::<LoadingScreen>().dismiss();
         assert!(app.world().resource::<LoadingScreen>().route.is_none());
+    }
+
+    /// Our arrival with `transport` as its create's transport GUID, the deck streamed as an object
+    /// of type mask `deck_mask`, under a raised screen: whether the screen still hides the UI.
+    fn arrive_aboard(deck_mask: u32, transport: u64) -> bool {
+        use bevy::ecs::system::RunSystemOnce;
+        const DECK: u64 = 0xF120_0000_0000_0042;
+        let mut world = World::new();
+        let mut screen = LoadingScreen::default();
+        screen.raise("transfer pending", true, Some(1), 0.0);
+        assert!(screen.hides_interface(), "a raise hides the layers below");
+        world.insert_resource(screen);
+        let deck = world
+            .spawn(crate::net::ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(&[(2, deck_mask)]),
+            ))
+            .id();
+        world.insert_resource(crate::net::GuidIndex([(DECK, deck)].into_iter().collect()));
+        world.spawn((
+            crate::net::SelfPlayer,
+            crate::transport::TransportRider {
+                transport_guid: transport,
+                local_pos: [0.0; 3],
+                local_orientation: 0.0,
+            },
+        ));
+        world
+            .run_system_once(see_through_on_transport_arrival)
+            .unwrap();
+        world.resource::<LoadingScreen>().hides_interface()
+    }
+
+    /// `0x5deb93`-`0x5debb6`: an arrival whose transport GUID resolves to a game object (mask 0x20)
+    /// sets the layer's bit 0, and the interface runs under the screen; one that resolves to
+    /// nothing, or to no game object, leaves the layers below hidden. The next raise clears it
+    /// (`0x406808`).
+    #[test]
+    fn an_arrival_aboard_a_transport_lets_the_interface_run_under_the_screen() {
+        const DECK: u64 = 0xF120_0000_0000_0042;
+        assert!(
+            !arrive_aboard(0x21, DECK),
+            "aboard a game object: let through"
+        );
+        assert!(arrive_aboard(0x21, DECK + 1), "an unknown transport hides");
+        assert!(arrive_aboard(0x09, DECK), "a unit is no transport here");
+
+        let mut screen = LoadingScreen::default();
+        screen.raise("world entry", true, Some(0), 0.0);
+        screen.see_through = true;
+        screen.raise("worldport", false, Some(1), 0.0);
+        assert!(
+            screen.hides_interface(),
+            "a raise hides the layers below again"
+        );
     }
 }

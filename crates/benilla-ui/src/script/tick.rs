@@ -367,17 +367,7 @@ impl super::UiScript {
     /// range); drains the layout again (`0x765799`); then re-picks the hover against those rects
     /// (`0x7657be`). The draw pass fires `OnUpdateModel`.
     pub fn tick(&mut self, elapsed: f32) {
-        self.model_mut().nameplates.begin_update();
-        self.model_mut().now += f64::from(elapsed);
-        // Events queued since the last tick fire before this tick's OnUpdate.
-        let pending = std::mem::take(&mut self.model_mut().pending_events);
-        for (event, args) in pending {
-            self.fire_event(&event, args);
-        }
-        // The item tooltips the caches answered since the last tick rebuild (`0x52e530`).
-        for e in super::tooltip_item::build::answer_item_caches(&self.lua) {
-            self.push_error(e);
-        }
+        self.advance_clock_and_events(elapsed);
         self.resolve();
         self.update_walk(elapsed);
         self.resolve();
@@ -396,6 +386,30 @@ impl super::UiScript {
         self.paint_model_panes();
         // `WOW_UI_HANDLERS=<secs>`: last, so its report covers everything this tick fired.
         self.report_handler_profile(elapsed);
+    }
+
+    /// A frame whose pass skips the interface's layer, as under the loading screen: its layer
+    /// takes the unit square out of what the layers below see (`0x442431`-`0x442437`), and the
+    /// pass calls no layer left empty (`0x4424b9`/`0x4424ca`). So neither the pump nor the draw
+    /// pass of [`Self::tick`] runs (`0x764330`), and the frame's elapsed time is cleared unread
+    /// (`0x4426c3`): the next walk gets its own frame's. The clock and the queued events still
+    /// advance, being no part of the layer.
+    pub fn tick_covered(&mut self, elapsed: f32) {
+        self.advance_clock_and_events(elapsed);
+    }
+
+    /// The `GetTime()` clock, then the events queued since the last tick and the item tooltips the
+    /// caches answered (`0x52e530`), all ahead of the tick's `OnUpdate`.
+    fn advance_clock_and_events(&mut self, elapsed: f32) {
+        self.model_mut().nameplates.begin_update();
+        self.model_mut().now += f64::from(elapsed);
+        let pending = std::mem::take(&mut self.model_mut().pending_events);
+        for (event, args) in pending {
+            self.fire_event(&event, args);
+        }
+        for e in super::tooltip_item::build::answer_item_caches(&self.lua) {
+            self.push_error(e);
+        }
     }
 }
 
