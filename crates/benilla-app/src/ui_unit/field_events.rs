@@ -43,6 +43,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     // `SetPetGuid`'s unit lookup of the new guid (`0x4bc8e4`).
     index: Option<Res<'w, crate::net::GuidIndex>>,
     stores: Query<'w, 's, &'static crate::net::ObjectStore>,
+    // The rescan's cancel and query sends (`0x4921c0`).
+    net: Option<Res<'w, crate::net::NetCommands>>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -51,6 +53,12 @@ impl NoticeFiring<'_, '_> {
     fn fire(&mut self, script: &mut UiScript, notice: FieldNotice, trainer: Option<u64>) -> bool {
         if let FieldNotice::PetGuidSet { changed, guid } = notice {
             return self.pet_guid_set(script, changed, guid, trainer);
+        }
+        if let FieldNotice::SpiritHealerChange(change) = notice {
+            if let Some(net) = &self.net {
+                crate::ui_dialog_verbs::apply_healer_change(&change, Some(script), net);
+            }
+            return false;
         }
         if notice == FieldNotice::PlayerAuras {
             self.auras.run(script);
@@ -454,7 +462,8 @@ pub(crate) fn fire(
         | FieldNotice::SkillLines
         | FieldNotice::SkillMax
         | FieldNotice::SkillValue { .. }
-        | FieldNotice::PetGuidSet { .. } => {}
+        | FieldNotice::PetGuidSet { .. }
+        | FieldNotice::SpiritHealerChange(_) => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:

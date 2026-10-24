@@ -104,6 +104,10 @@ pub(crate) enum FieldNotice {
     /// shown value (`0x5de417`). Either way, the profession list's rebuild (`0x5de434`). `old` is
     /// the value word's copy, `shown` the value plus the permanent bonus when the value is above 0.
     SkillValue { skill_id: u16, old: u16, shown: u32 },
+    /// A change of the cached area spirit healer that the time packet's rescan made (`0x492296` →
+    /// `0x4921c0`): a pending wave's `AREA_SPIRIT_HEALER_OUT_OF_RANGE` and `CMSG_CANCEL_AURA`, a
+    /// new healer's query.
+    SpiritHealerChange(crate::ui_dialog_verbs::SetHealerOutcome),
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
