@@ -438,6 +438,9 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     // transport guid, zero here. A kept ride would carry us back onto the deck.
     player.ride = None;
     let to = wow_to_bevy(t.position);
+    // `0x617e90`: a snap of more than 30 yards (`0x80c730`, squared against `d²`) of the unit the
+    // world view follows reloads the destination before the frame goes on (`0x630bd0`).
+    player.world_reload = !player.detached && player.pos.distance_squared(to) > 30.0 * 30.0;
     player.pos = to;
     player.face_yaw = t.orientation;
     *cam_yaw = t.orientation;

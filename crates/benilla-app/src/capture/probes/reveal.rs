@@ -3,14 +3,14 @@
 //! (`res`, `focus`, `scene`, `place`, `coll`, `merge`, `gx`) are the terms behind
 //! [`WorldLoadProgress::presentable`], which the cover waits on; draw columns (`drawn`, `hid`,
 //! `sel`, `room`, `win`, `pvslag`) are what the frame put on screen, and `pres` the frames the
-//! window has presented since the snap ([`crate::loading_screen::Presents`]).
+//! window has presented since the snap ([`crate::loading_screen::hold::Presents`]).
 //!
 //! At the settle release one `REVEAL_SUM` line closes the window from the snap to residency:
 //! `frames`, the frames it took; `presented`, how many the window presented (counted at the
 //! release frame, so the release frame's own present is not in it); and `drawn` and `wmo`, the
 //! submeshes and retained-pass WMOs that came on screen after the first frame shown, the sum of
 //! each shown frame's growth over the last one shown (a frame
-//! [`crate::loading_screen::PresentHold`] holds is not shown).
+//! [`crate::loading_screen::hold::PresentHold`] holds is not shown).
 //!
 //! Runs in `Last`: visibility, the exterior-scene gate and the retained pass settle in
 //! `PostUpdate`, so an `Update` line would report them a frame late.
@@ -36,12 +36,12 @@ struct RevealAudit {
 
 /// One snap's tally up to the settle release, for the `REVEAL_SUM` line.
 struct RevealWindow {
-    /// [`crate::loading_screen::Presents`] at the snap.
+    /// [`crate::loading_screen::hold::Presents`] at the snap.
     presents_at_snap: u64,
     frames: u32,
-    /// Submeshes and WMO groups drawn in the last presented frame, the baseline for growth.
+    /// Submeshes and WMOs drawn in the last frame shown, the baseline for growth.
     last_drawn: Option<(usize, usize)>,
-    /// What came on screen in presented frames.
+    /// What came on screen in frames shown.
     drawn_grew: usize,
     wmo_grew: usize,
 }
@@ -74,15 +74,15 @@ fn drive_reveal_audit(
     census: WorldCensus,
     cam: Query<&GlobalTransform, With<benilla_world::view::WorldCamera>>,
     time: ProbeClock,
-    presents: Option<Res<crate::loading_screen::Presents>>,
-    hold: Option<Res<crate::loading_screen::PresentHold>>,
+    presents: Option<Res<crate::loading_screen::hold::Presents>>,
+    hold: Option<Res<crate::loading_screen::hold::PresentHold>>,
     mut teleports: MessageReader<crate::net::TeleportMessage>,
     mut worldports: MessageReader<crate::net::WorldportMessage>,
 ) {
     let now = time.elapsed_secs();
     let presented = presents
         .as_deref()
-        .map_or(0, crate::loading_screen::Presents::count);
+        .map_or(0, crate::loading_screen::hold::Presents::count);
     if teleports.read().next().is_some() || worldports.read().next().is_some() {
         audit.n = Some(0);
         audit.since = now;
@@ -116,7 +116,7 @@ fn drive_reveal_audit(
         // A held frame never reaches the window, so what it drew is not on screen.
         if !hold
             .as_deref()
-            .is_some_and(crate::loading_screen::PresentHold::held)
+            .is_some_and(crate::loading_screen::hold::PresentHold::held)
         {
             let shown = (seen.drawn, wmo_drawn);
             if let Some((d, g)) = w.last_drawn {

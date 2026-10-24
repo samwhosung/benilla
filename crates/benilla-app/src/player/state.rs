@@ -609,7 +609,7 @@ impl Player {
     /// The window keeps its last presented frame: a reloading snap's settle hold is up, as the
     /// reference's reload holds its frame until the destination is in (`0x694920`).
     pub(crate) fn holds_the_frame(&self) -> bool {
-        false
+        self.active && self.settling && self.world_reload
     }
 
     /// The movement flags as last streamed; the water foam tests `& 0xf` (translating) and `& 0x30`

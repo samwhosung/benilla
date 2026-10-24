@@ -29,8 +29,7 @@ use benilla_world::terrain_stream::WorldLoadProgress;
 mod input;
 pub(crate) use input::CoverInput;
 /// A same-map teleport's frozen frame, and the frames the window presents.
-mod hold;
-pub(crate) use hold::{PresentHold, Presents};
+pub(crate) mod hold;
 /// A transport transfer's route screen.
 mod route;
 
@@ -1145,9 +1144,9 @@ mod tests {
     /// the snap until the destination is resident, and no screen comes up at either end.
     #[test]
     fn a_same_map_teleport_presents_no_frame_until_the_destination_is_resident() {
-        let held = |app: &App| app.world().resource::<PresentHold>().held();
+        let held = |app: &App| app.world().resource::<hold::PresentHold>().held();
         let mut app = in_world(GM_ISLAND);
-        app.init_resource::<PresentHold>()
+        app.init_resource::<hold::PresentHold>()
             .add_systems(PostUpdate, hold::decide_present_hold);
         app.update();
         assert!(

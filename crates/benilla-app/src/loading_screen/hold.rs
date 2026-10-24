@@ -12,7 +12,7 @@
 //! order, by the next tick's input step (`0x42c9f0`).
 //!
 //! Here the destination streams in over frames under the settle hold, so the frame is frozen
-//! instead: while [`PresentHold`] is up the render world renders as usual but withholds the
+//! instead: while [`PresentHold`] is up the render world draws no camera and withholds the
 //! present, so the window keeps the last frame it presented, and the raw input messages are kept
 //! back and handed in, in order, on the first frame after. The hold ends with the settle hold, on
 //! the destination's residency (`WorldLoadProgress::presentable`) or its stall budget.
@@ -29,6 +29,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
 use bevy::prelude::*;
+use bevy::render::camera::SortedCameras;
 use bevy::render::extract_resource::{extract_resource, ExtractResource};
 use bevy::render::render_resource::SurfaceTexture;
 use bevy::render::renderer::render_system;
@@ -103,16 +104,19 @@ fn note_acquired(windows: Res<ExtractedWindows>, mut acquired: ResMut<Acquired>)
     );
 }
 
-/// Render world, before `render_system`: on a held frame take each window's texture, so the
-/// present finds nothing to present. The views keep theirs, so the frame still renders into it.
+/// Render world, before `render_system`: a held frame runs no camera's graph, as the reference's
+/// blocked tick runs no frame pass, and presents nothing: each window's texture is taken so the
+/// present finds none, and the window keeps the last frame it presented.
 fn withhold_present(
     hold: Option<Res<PresentHold>>,
+    mut sorted: ResMut<SortedCameras>,
     mut windows: ResMut<ExtractedWindows>,
     mut withheld: ResMut<Withheld>,
 ) {
     if !hold.is_some_and(|h| h.held) {
         return;
     }
+    sorted.0.clear();
     for (&entity, window) in windows.windows.iter_mut() {
         if let Some(texture) = window.swap_chain_texture.take() {
             withheld.0.push((entity, texture));
@@ -120,29 +124,36 @@ fn withhold_present(
     }
 }
 
-/// Render world, after `render_system`: hand the textures back. A window that still holds one
-/// keeps it into the next frame (`prepare_windows` acquires none), which renders over it.
+/// Render world, after `render_system`: a window that held a texture and holds none presented it;
+/// one withheld did not.
+fn count_presents(
+    windows: Res<ExtractedWindows>,
+    acquired: Res<Acquired>,
+    withheld: Res<Withheld>,
+    presents: Res<Presents>,
+) {
+    let presented = acquired
+        .0
+        .iter()
+        .filter(|&&e| !withheld.0.iter().any(|&(w, _)| w == e))
+        .any(|e| {
+            windows
+                .get(e)
+                .is_some_and(|w| w.swap_chain_texture.is_none())
+        });
+    if presented {
+        presents.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Render world, after `render_system`: hand the textures back, so each window keeps its texture
+/// into the next frame (`prepare_windows` acquires none), which draws over it. Never dropped
+/// unpresented: Vulkan's discard is a no-op that leaves the image acquired.
 fn restore_withheld(mut windows: ResMut<ExtractedWindows>, mut withheld: ResMut<Withheld>) {
     for (entity, texture) in withheld.0.drain(..) {
         if let Some(window) = windows.windows.get_mut(&entity) {
             window.swap_chain_texture = Some(texture);
         }
-    }
-}
-
-/// Render world, after `render_system`: a window that held a texture and holds none presented it.
-fn count_presents(
-    windows: Res<ExtractedWindows>,
-    acquired: Res<Acquired>,
-    presents: Res<Presents>,
-) {
-    let presented = acquired.0.iter().any(|e| {
-        windows
-            .get(e)
-            .is_some_and(|w| w.swap_chain_texture.is_none())
-    });
-    if presented {
-        presents.0.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -178,8 +189,12 @@ impl<M: Message + Clone> Deferred<M> {
         self.cursor.clear(queue);
     }
 
-    fn step(&mut self, _held: bool, queue: &mut Messages<M>) {
-        self.release(queue);
+    fn step(&mut self, held: bool, queue: &mut Messages<M>) {
+        if held {
+            self.hold(queue);
+        } else {
+            self.release(queue);
+        }
     }
 }
 
@@ -242,7 +257,7 @@ pub(super) fn build(app: &mut App) {
                 (note_acquired, withhold_present)
                     .chain()
                     .before(render_system),
-                (restore_withheld, count_presents)
+                (count_presents, restore_withheld)
                     .chain()
                     .after(render_system),
             )
