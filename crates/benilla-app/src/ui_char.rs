@@ -1317,7 +1317,7 @@ mod tests {
             .insert_template(ARROW, Some(crate::items::test_template("Rough Arrow")));
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
-            .run(r#"GetInventoryItemTexture("player", 0)"#)
+            .run(r#"GetInventoryItemQuality("player", 0)"#)
             .unwrap();
         ask_kept_ammo(&mut app);
         app.world_mut().run_system_once(feed_char).unwrap();
