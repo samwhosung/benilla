@@ -412,13 +412,16 @@ fn publish(
 /// reconnect exchange and a connect that can never complete is a dead end, not a behaviour; the
 /// new session key serves the next world dial as the reconnect's would. A PIN account's re-dial
 /// presses the PIN the logon proved on its new challenge's grid, as the reconnect asks for none.
+/// A PIN a re-dial's proof has refused (a TOTP code moves on, vmangos `AuthSocket.cpp:720`) is
+/// forgotten and the logon dials no more, so every query fails from then on: each refusal is a
+/// wrong password to the server (`:856`), and the list asks every 5 s.
 fn query(
     logon: &mut benilla_protocol::Logon,
     req: &LoginRequest,
     events_tx: &Sender<SessionEvent>,
 ) -> bool {
     let mut ok = logon.refresh_realms(REALM_REFRESH_TIMEOUT);
-    if !ok {
+    if !ok && logon.can_redial() {
         let pin = logon.pin().map(<[u8]>::to_vec);
         let mut press = |grid: &[u8; 10]| {
             pin.as_deref()
@@ -432,7 +435,12 @@ fn query(
                 *logon = fresh;
                 ok = true;
             }
-            Err(e) => bevy::log::warn!("net: realm list re-dial failed: {e:#}"),
+            Err(e) => {
+                bevy::log::warn!("net: realm list re-dial failed: {e:#}");
+                if logon.pin().is_some() && e.downcast_ref::<AuthReject>().is_some() {
+                    logon.forget_pin();
+                }
+            }
         }
     }
     publish(events_tx, &logon.realms, !ok)
@@ -503,14 +511,31 @@ fn logon_park(
     }
 }
 
+/// PIN prompts made this process, each numbered from 1, so keys are only ever proved on the grid
+/// they were pressed on.
+static PIN_PROMPTS: AtomicU64 = AtomicU64::new(0);
+
+/// The keypad's answer of no keys: no screen stood to show it ([`RealmRequest::Pin`]).
+#[derive(Debug)]
+struct NoPinEntry;
+
+impl std::fmt::Display for NoPinEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the account asks for a PIN and no screen can enter it")
+    }
+}
+
+impl std::error::Error for NoPinEntry {}
+
 /// The logon at the keypad (logon state 7, `0x5b1cd7`): waits for the keys `PINEntered` hands on
-/// under the attempt's `generation` (`0x5ab5a0` → `0x5b3120`). A Cancel (`0x5b3320`, its close
-/// behind a moved generation: one an older attempt left is stale), the app's exit and a new login
-/// each end the wait with an error, the new login handed back to supersede the attempt; anything
-/// else asked meanwhile is dropped, as no screen asks it there.
+/// for this `prompt` (`0x5ab5a0` → `0x5b3120`); keys for another prompt are dropped. No keys
+/// ([`NoPinEntry`]), a Cancel (`0x5b3320`, its close behind a moved generation: one an older
+/// attempt left is stale), the app's exit and a new login each end the wait with an error, the new
+/// login handed back to supersede the attempt; anything else asked meanwhile is dropped, as no
+/// screen asks it there.
 fn keypad(
     parks: &Parks,
-    generation: u64,
+    prompt: u64,
     canceled: &dyn Fn() -> bool,
 ) -> (Result<Vec<u8>>, Option<LoginRequest>) {
     let Parks {
@@ -521,8 +546,9 @@ fn keypad(
         let answer = crossbeam_channel::select! {
             recv(park_rx) -> msg => match msg {
                 Err(_) => Some((Err(anyhow!("the app is gone")), None)),
-                Ok(ParkRequest::Realm(RealmRequest::Pin { positions, generation: g }))
-                    if g == generation => Some((Ok(positions), None)),
+                Ok(ParkRequest::Realm(RealmRequest::Pin { prompt: p, keys })) if p == prompt => {
+                    Some((keys.map(|k| k.positions).ok_or_else(|| NoPinEntry.into()), None))
+                }
                 Ok(ParkRequest::Realm(RealmRequest::Close)) if canceled() => {
                     Some((Err(anyhow!("the PIN entry was cancelled")), None))
                 }
@@ -570,8 +596,12 @@ fn run(
             &req.pass,
             req.locale,
             &mut |grid| {
-                stage(LoginStage::Pin { grid: *grid });
-                let (answer, next) = keypad(parks, generation, &canceled);
+                let prompt = PIN_PROMPTS.fetch_add(1, Ordering::SeqCst) + 1;
+                stage(LoginStage::Pin {
+                    grid: *grid,
+                    prompt,
+                });
+                let (answer, next) = keypad(parks, prompt, &canceled);
                 superseded = next;
                 answer
             },
@@ -588,16 +618,22 @@ fn run(
                 }
                 // A dial that never opened a socket, the one failure the screen can advise on.
                 let dial = e.downcast_ref::<benilla_protocol::DialFailure>().cloned();
-                // A server refusal carries its auth result byte for the `AUTH_*` string; a
-                // transport failure carries none.
-                let refusal = e.downcast_ref::<AuthReject>().map(|r| match r.reply {
-                    benilla_protocol::LogonReply::Challenge => {
-                        benilla_protocol::LoginRefusal::Logon(r.code)
-                    }
-                    benilla_protocol::LogonReply::Proof => {
-                        benilla_protocol::LoginRefusal::LogonProof(r.code)
-                    }
-                });
+                // A server refusal carries its auth result byte for the `AUTH_*` string, and a PIN
+                // no screen could enter is the client's own; a transport failure carries none.
+                let refusal = e
+                    .downcast_ref::<AuthReject>()
+                    .map(|r| match r.reply {
+                        benilla_protocol::LogonReply::Challenge => {
+                            benilla_protocol::LoginRefusal::Logon(r.code)
+                        }
+                        benilla_protocol::LogonReply::Proof => {
+                            benilla_protocol::LoginRefusal::LogonProof(r.code)
+                        }
+                    })
+                    .or_else(|| {
+                        e.downcast_ref::<NoPinEntry>()
+                            .map(|_| benilla_protocol::LoginRefusal::NoPinEntry)
+                    });
                 let _ = events_tx.send(SessionEvent::LoginFailed {
                     refusal: if dial.is_some() { None } else { refusal },
                     reason: format!("{e:#}"),

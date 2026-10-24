@@ -70,8 +70,9 @@ pub enum LoginStage {
     /// SRP6 challenge/proof in flight (`LOGIN_STATE_AUTHENTICATING`).
     Authenticating,
     /// The challenge asked for a PIN (`LOGIN_STATE_PIN`, logon state 7, `0x5b1cd7`): the logon
-    /// waits for the keys pressed on the keypad this grid lays out ([`crate::auth::pin::grid`]).
-    Pin { grid: [u8; 10] },
+    /// waits for the keys pressed on the keypad this grid lays out ([`crate::auth::pin::grid`]),
+    /// taking only keys that answer `prompt`, this prompt's number.
+    Pin { grid: [u8; 10], prompt: u64 },
     /// Realm picked; the world-socket handshake and char enum (`LOGIN_STATE_HANDSHAKING`).
     Handshaking,
     /// The world socket connected, before its authentication (`RESPONSE_CONNECTED`, `0x5aaa90`).
@@ -113,13 +114,20 @@ pub enum LoginRefusal {
     LogonProof(u8),
     /// The world server's `SMSG_AUTH_RESPONSE` code (`crate::WorldAuthReject`).
     World(u8),
+    /// The challenge asked for a PIN and no screen stood to enter it: refused here, before any
+    /// proof, so no server counts it.
+    NoPinEntry,
 }
 
 impl LoginRefusal {
-    /// The raw byte, for logging only: without its server it is ambiguous.
-    pub fn byte(self) -> u8 {
+    /// The raw byte, for logging only: without its server it is ambiguous. The client's own
+    /// refusal has none.
+    pub fn byte(self) -> Option<u8> {
         match self {
-            LoginRefusal::Logon(b) | LoginRefusal::LogonProof(b) | LoginRefusal::World(b) => b,
+            LoginRefusal::Logon(b) | LoginRefusal::LogonProof(b) | LoginRefusal::World(b) => {
+                Some(b)
+            }
+            LoginRefusal::NoPinEntry => None,
         }
     }
 }

@@ -281,12 +281,14 @@ pub(crate) fn drive_policy(
         match msg.refusal {
             Some(refusal) => {
                 // A refusal from either server: shown even on the silent path, never retried.
-                let byte = refusal.byte();
-                warn!("login: refused ({refusal:?}, {byte:#04x}) — {}", msg.reason);
+                let byte = refusal
+                    .byte()
+                    .map_or_else(|| "no byte".to_string(), |b| format!("{b:#04x}"));
+                warn!("login: refused ({refusal:?}, {byte}) — {}", msg.reason);
                 attempt.intent.clear();
                 if may_end_the_run
                     && crate::run_mode::fatal_when_driverless(&format!(
-                        "refused ({refusal:?}, {byte:#04x}) and no resubmit can change it"
+                        "refused ({refusal:?}, {byte}) and no resubmit can change it"
                     ))
                 {
                     exit.write(AppExit::error());

@@ -638,9 +638,10 @@ pub(crate) struct GlueMgr {
     /// A world authentication that came inside the logon's frame, waiting on the logon arm's
     /// steps.
     auth_waits: bool,
-    /// The keypad's grid when this attempt's challenge asked for a PIN: the logon object's
-    /// security byte (`+0x1ac`, zeroed by each connect, `0x5b2fdd`) and its grid (`+0x1ae`).
-    pin: Option<[u8; 10]>,
+    /// The keypad's grid and the IO thread's prompt number when this attempt's challenge asked
+    /// for a PIN: the logon object's security byte (`+0x1ac`, zeroed by each connect, `0x5b2fdd`)
+    /// and its grid (`+0x1ae`).
+    pin: Option<([u8; 10], u64)>,
     /// Refusals 4 and 5 of logons with a PIN (`+0x1ad`), a byte that wraps, zeroed by a success
     /// (`0x5b2e1f`) and kept across logons, as the logon object is (`0x5ab4b0`).
     pin_failures: u8,
@@ -960,8 +961,8 @@ impl GlueMgr {
                 } else if self.cells.state == LOGIN_PIN {
                     // `0x46bac3`: the dialog down, the keypad's event with the grid, state 8.
                     self.outbox.push(Outgoing::Close);
-                    self.outbox
-                        .push(Outgoing::EnterPin(self.pin.unwrap_or_default()));
+                    let grid = self.pin.map(|(grid, _)| grid).unwrap_or_default();
+                    self.outbox.push(Outgoing::EnterPin(grid));
                     self.outbox.push(Outgoing::Begin(Step::PinWait));
                 }
             }
@@ -969,10 +970,12 @@ impl GlueMgr {
             Step::SubmitPin(pin) => {
                 self.cells.state = LOGIN_CHECKINGVERSIONS;
                 self.cells.result = 0;
+                // Prompt 0 is none, for keys with no prompt to answer.
+                let prompt = self.pin.map_or(0, |(_, prompt)| prompt);
                 self.park_out.push(
                     RealmRequest::Pin {
-                        positions: pin.positions,
-                        generation: 0,
+                        prompt,
+                        keys: Some(pin),
                     }
                     .into(),
                 );
@@ -1302,12 +1305,17 @@ impl GlueMgr {
             }
             // The SRP exchange is inside the IO thread's one blocking logon call.
             LoginStage::Authenticating => {}
-            // The challenge's PIN kept (`0x5b1ed0`) and logon state 7 reported (`0x5b1cd7`).
-            LoginStage::Pin { grid } => {
-                self.pin = Some(grid);
+            // The challenge's PIN kept (`0x5b1ed0`) and logon state 7 reported (`0x5b1cd7`). With
+            // no logon on the screen to show the keypad (no glue screen, or one in another state)
+            // the prompt is answered with no keys at once, which fails the logon.
+            LoginStage::Pin { grid, prompt } => {
+                self.pin = Some((grid, prompt));
                 if self.state == ScreenState::Logon {
                     self.cells.state = LOGIN_PIN;
                     self.cells.result = 0;
+                } else {
+                    self.park_out
+                        .push(RealmRequest::Pin { prompt, keys: None }.into());
                 }
             }
             // The world dial begins: a logon with no realm list to publish is done.
@@ -1371,9 +1379,11 @@ impl GlueMgr {
             ScreenState::Connect => {
                 let status = match msg.refusal {
                     Some(LoginRefusal::World(code)) => code,
-                    Some(LoginRefusal::Logon(_) | LoginRefusal::LogonProof(_)) => {
-                        STATUS_RESPONSE_FAILURE
-                    }
+                    Some(
+                        LoginRefusal::Logon(_)
+                        | LoginRefusal::LogonProof(_)
+                        | LoginRefusal::NoPinEntry,
+                    ) => STATUS_RESPONSE_FAILURE,
                     None => STATUS_FAILED_TO_CONNECT,
                 };
                 self.op.complete(false, status);
@@ -2226,9 +2236,7 @@ fn send_asks(mgr: &mut GlueMgr, asks: &mut GlueAsks) {
     if let Some(choice) = asks.realm.as_deref() {
         for mut ask in park_asks {
             match &mut ask {
-                ParkRequest::Realm(
-                    RealmRequest::Enter { generation, .. } | RealmRequest::Pin { generation, .. },
-                ) => *generation = now,
+                ParkRequest::Realm(RealmRequest::Enter { generation, .. }) => *generation = now,
                 ParkRequest::Char(CharRequest::Enter(guid)) => {
                     if let (Some(roster), Some(pick)) =
                         (asks.roster.as_deref_mut(), asks.pick.as_deref())

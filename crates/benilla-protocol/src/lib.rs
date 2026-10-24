@@ -255,6 +255,8 @@ pub struct Logon {
     stream: Option<TcpStream>,
     /// The PIN's digits, when the account asked for one: what the keys pressed showed.
     pin: Option<Vec<u8>>,
+    /// The challenge asked for a PIN.
+    pin_asked: bool,
 }
 
 impl Logon {
@@ -296,6 +298,17 @@ impl Logon {
     /// on its own grid ([`auth::pin::positions`]).
     pub fn pin(&self) -> Option<&[u8]> {
         self.pin.as_deref()
+    }
+
+    /// Forget the PIN, once a server has refused it: a logon of this account asks for it again.
+    pub fn forget_pin(&mut self) {
+        self.pin = None;
+    }
+
+    /// Whether a later logon of this account can go on its own: not once a PIN it asked for is
+    /// forgotten ([`Self::forget_pin`]), as only the player can enter one.
+    pub fn can_redial(&self) -> bool {
+        !self.pin_asked || self.pin.is_some()
     }
 }
 
@@ -348,7 +361,7 @@ pub fn logon_with_pin(
             else {
                 // `SUCCESS_SURVEY` on the challenge authenticates with no SRP exchange; the
                 // reference's success arm copies no key (length 0 at `0x5b2e16`).
-                return finish_logon(stream, [0u8; SESSION_KEY_LENGTH], None);
+                return finish_logon(stream, [0u8; SESSION_KEY_LENGTH], None, false);
             };
             let server_public_key = PublicKey::from_le_bytes(reply.server_public_key)
                 .map_err(|e| anyhow!("invalid server public key: {e}"))?;
@@ -403,7 +416,7 @@ pub fn logon_with_pin(
             // this exchange derived.
             None => challenge.into_unverified_session_key(),
         };
-    finish_logon(stream, session_key, pin_digits)
+    finish_logon(stream, session_key, pin_digits, reply.pin.is_some())
 }
 
 /// An authenticated logon's tail: the realm list over the same socket.
@@ -411,6 +424,7 @@ fn finish_logon(
     mut stream: TcpStream,
     session_key: [u8; SESSION_KEY_LENGTH],
     pin: Option<Vec<u8>>,
+    pin_asked: bool,
 ) -> Result<Logon> {
     auth::write_realm_list_request(&mut stream).context("requesting realm list")?;
     let realms = auth::read_realm_list(&mut stream).context("reading realm list")?;
@@ -420,6 +434,7 @@ fn finish_logon(
         realms,
         stream: Some(stream),
         pin,
+        pin_asked,
     })
 }
 
