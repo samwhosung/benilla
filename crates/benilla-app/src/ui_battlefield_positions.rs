@@ -186,6 +186,7 @@ fn feed_battlefield_positions(
             players.push(BattlefieldPositionView {
                 uv: project(x, y),
                 name,
+                guid: p.guid,
             });
         }
         let flag = packet.carrier.as_ref().map(|c| {

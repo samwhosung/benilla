@@ -505,10 +505,12 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
             BattlefieldPositionView {
                 uv: (0.25, 0.75),
                 name: Some("Alliedguy".into()),
+                ..Default::default()
             },
             BattlefieldPositionView {
                 uv: (0.0, 0.0),
                 name: None,
+                ..Default::default()
             },
         ],
         Some(BattlefieldFlagView {

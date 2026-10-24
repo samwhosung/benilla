@@ -395,10 +395,12 @@ fn battleground_teammates_and_the_flag_draw_from_the_position_family() {
             BattlefieldPositionView {
                 uv: (0.25, 0.75),
                 name: Some("Probe".into()),
+                ..Default::default()
             },
             BattlefieldPositionView {
                 uv: (0.0, 0.0),
                 name: None,
+                ..Default::default()
             },
         ],
         Some(BattlefieldFlagView {

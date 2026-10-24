@@ -241,6 +241,7 @@ fn request_battlefield_positions_without_a_battleground_clears_inside_its_call()
         vec![BattlefieldPositionView {
             uv: (0.5, 0.5),
             name: Some("Bob".into()),
+            ..Default::default()
         }],
         Some(benilla_ui::script::BattlefieldFlagView {
             uv: (0.25, 0.25),

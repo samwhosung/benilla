@@ -8,11 +8,13 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::number_arg;
 use super::Model;
 
-/// One teammate: map-normalized position, `(0, 0)` off the displayed map, and name if known.
+/// One teammate: map-normalized position, `(0, 0)` off the displayed map, name if known, and the
+/// guid the getter's lookup keys a miss by (`0x4ac118`).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BattlefieldPositionView {
     pub uv: (f32, f32),
     pub name: Option<String>,
+    pub guid: u64,
 }
 
 /// The flag carrier: the position and the token the viewer's faction picks, `"HordeFlag"` for an
@@ -150,6 +152,7 @@ mod tests {
             vec![BattlefieldPositionView {
                 uv: (0.25, 0.5),
                 name: None,
+                ..Default::default()
             }],
             Some(BattlefieldFlagView {
                 uv: (0.375, 0.625),
@@ -178,10 +181,12 @@ mod tests {
                 BattlefieldPositionView {
                     uv: (0.25, 0.5),
                     name: Some("Probe-Realm".into()),
+                    ..Default::default()
                 },
                 BattlefieldPositionView {
                     uv: (0.75, 0.125),
                     name: None,
+                    ..Default::default()
                 },
             ],
             Some(BattlefieldFlagView {

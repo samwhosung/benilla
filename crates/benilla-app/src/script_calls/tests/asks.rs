@@ -118,3 +118,25 @@ fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
     eval::<()>(&mut app, "GetSummonConfirmSummoner()");
     assert_eq!(sent(&rx), ["name 0x2a"], "the call after the refusal asks again");
 }
+
+/// `GetBattlefieldPosition` on a teammate the name cache lacks looks the name up with the
+/// callback `0x4ac190` and no dedupe (`0x4ac104`-`0x4ac118`): the query goes out inside the call,
+/// once while it is in flight.
+#[test]
+fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
+    let (mut app, rx) = client();
+    vm(&mut app).set_battlefield_positions(
+        vec![benilla_ui::script::BattlefieldPositionView {
+            uv: (0.5, 0.5),
+            name: None,
+            guid: 0x31,
+        }],
+        None,
+        1.0,
+    );
+    eval::<()>(
+        &mut app,
+        "GetBattlefieldPosition(1) RandomRoll(1, 2) GetBattlefieldPosition(1)",
+    );
+    assert_eq!(sent(&rx), ["name 0x31", "roll 1"]);
+}
