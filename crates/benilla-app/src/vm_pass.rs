@@ -243,6 +243,9 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
             Always,
             Sink,
         }
+        // A host's access holds the call host's: adding the host's changes nothing. The sum is
+        // made in one buffer, reused for every system, so the host's access is never cloned.
+        let mut with_host = bevy::ecs::query::Access::default();
         let joins: Vec<Joins> = graph
             .systems
             .iter()
@@ -254,9 +257,9 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                     return Joins::No;
                 }
                 let combined = declared.combined_access();
-                let mut with_host = declared.clone();
-                with_host.extend(host.clone());
-                let hosted = with_host.combined_access() == combined;
+                with_host.clone_from(combined);
+                with_host.extend(host.combined_access());
+                let hosted = with_host == *combined;
                 let meets = in_phase[index[&key]] && !declared.is_compatible(&host);
                 if hosted || meets {
                     Joins::Always
