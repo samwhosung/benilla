@@ -14,12 +14,10 @@
 //! Here the destination streams in over frames under the settle hold, so the frame is frozen
 //! instead: while [`PresentHold`] is up the render world draws no camera and withholds the
 //! present, so the window keeps the last frame it presented, and the raw input messages are kept
-//! back and handed in, in order, on the first frame after. The hold ends with the settle hold, on
-//! the destination's residency (`WorldLoadProgress::presentable`) or its stall budget.
-//!
-//! Deviation: the window's cursor position, which winit writes directly, stays live through the
-//! hold, so hover can move under the frozen frame where the reference's pick waits for the queued
-//! moves; none of it shows until the frame resumes.
+//! back and handed in, in order, on the first frame after. The pointer the pick and hover read
+//! holds where it was on the last frame shown, so no `OnEnter`, `OnLeave` or tooltip fires under
+//! the frozen frame. The hold ends with the settle hold, on the destination's residency
+//! (`WorldLoadProgress::presentable`) or its stall budget.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -35,7 +33,7 @@ use bevy::render::render_resource::SurfaceTexture;
 use bevy::render::renderer::render_system;
 use bevy::render::view::ExtractedWindows;
 use bevy::render::{ExtractSchedule, Render, RenderApp, RenderSystems};
-use bevy::window::CursorMoved;
+use bevy::window::{CursorMoved, PrimaryWindow};
 
 /// Whether this frame is withheld from the window: decided in `PostUpdate` from the settle hold of
 /// a snap that reloads the world ([`crate::player::Player::holds_the_frame`]), and extracted with
@@ -49,6 +47,12 @@ impl PresentHold {
     /// This frame renders but does not present.
     pub(crate) fn held(&self) -> bool {
         self.held
+    }
+
+    /// A held frame, for tests.
+    #[cfg(test)]
+    pub(crate) fn holding() -> Self {
+        Self { held: true }
     }
 }
 
@@ -198,6 +202,17 @@ impl<M: Message + Clone> Deferred<M> {
     }
 }
 
+/// The pointer a held frame's systems read: winit writes the window's position straight in, and
+/// the pick and hover read it there, so a held frame reads [`Self::shown`] in its place.
+#[derive(Resource, Default)]
+struct HeldPointer {
+    /// Where the pointer was on the last frame shown, in physical pixels.
+    shown: Option<Vec2>,
+    /// winit's position, set aside for the held frame and handed back at its end. Read and written
+    /// at `f32`, the precision `changed_windows` compares at, so the hand-back reads unchanged.
+    live: Option<Option<Vec2>>,
+}
+
 /// The raw queues the input plane is built from, as the cover's input rule takes them.
 #[derive(Resource, Default)]
 struct HeldInput {
@@ -224,8 +239,11 @@ fn defer_input_through_the_hold(
     hold: Res<PresentHold>,
     mut deferred: ResMut<HeldInput>,
     mut queues: RawQueues,
+    mut pointer: ResMut<HeldPointer>,
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     let held = hold.held;
+    let _ = (&mut pointer, &mut window);
     deferred.keyboard.step(held, &mut queues.keyboard);
     deferred.buttons.step(held, &mut queues.buttons);
     deferred.motion.step(held, &mut queues.motion);
@@ -233,12 +251,30 @@ fn defer_input_through_the_hold(
     deferred.moved.step(held, &mut queues.moved);
 }
 
+/// `PostUpdate`, after every reader: a held frame hands winit's position back, so the window
+/// leaves the frame as winit left it; a frame shown notes where the pointer was.
+fn hand_back_the_pointer(
+    mut pointer: ResMut<HeldPointer>,
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    let Ok(mut window) = window.single_mut() else {
+        return;
+    };
+    match pointer.live.take() {
+        Some(live) => window
+            .bypass_change_detection()
+            .set_physical_cursor_position(live.map(|p| p.as_dvec2())),
+        None => pointer.shown = window.physical_cursor_position(),
+    }
+}
+
 pub(super) fn build(app: &mut App) {
     let presents = Presents::default();
     app.insert_resource(presents.clone())
         .init_resource::<PresentHold>()
         .init_resource::<HeldInput>()
-        .add_systems(PostUpdate, decide_present_hold)
+        .init_resource::<HeldPointer>()
+        .add_systems(PostUpdate, (hand_back_the_pointer, decide_present_hold))
         .add_systems(
             PreUpdate,
             defer_input_through_the_hold.before(bevy::input::InputSystems),
@@ -305,6 +341,7 @@ mod tests {
             .add_message::<CursorMoved>()
             .init_resource::<PresentHold>()
             .init_resource::<HeldInput>()
+            .init_resource::<HeldPointer>()
             .init_resource::<Seen>()
             .add_systems(PreUpdate, defer_input_through_the_hold)
             .add_systems(Update, see);
@@ -338,5 +375,65 @@ mod tests {
         );
         app.update();
         assert!(take_seen(&mut app).is_empty(), "and delivers it once");
+    }
+    /// The pick and hover read the window's pointer; while the frame is held they read where it
+    /// was on the last frame shown, as the reference's pick waits for the queued moves, and the
+    /// first frame shown reads where it is now. The window keeps winit's position outside the
+    /// frame's systems, so the pointer is never warped.
+    #[test]
+    fn the_pointer_the_pick_reads_holds_still_through_a_held_frame() {
+        #[derive(Resource, Default)]
+        struct Picked(Vec<Option<Vec2>>);
+        fn pick(window: Single<&Window>, mut picked: ResMut<Picked>) {
+            picked.0.push(window.physical_cursor_position());
+        }
+        let at = |x: f64| Some(Vec2::new(x as f32, 100.0));
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>()
+            .add_message::<MouseButtonInput>()
+            .add_message::<MouseMotion>()
+            .add_message::<MouseWheel>()
+            .add_message::<CursorMoved>()
+            .init_resource::<PresentHold>()
+            .init_resource::<HeldInput>()
+            .init_resource::<HeldPointer>()
+            .init_resource::<Picked>()
+            .add_systems(PreUpdate, defer_input_through_the_hold)
+            .add_systems(Update, pick)
+            .add_systems(PostUpdate, hand_back_the_pointer);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        // What winit does between frames: write the pointer straight into the window.
+        let winit_moves_to = |app: &mut App, x: f64| {
+            app.world_mut()
+                .get_mut::<Window>(window)
+                .unwrap()
+                .set_physical_cursor_position(at(x).map(|p| p.as_dvec2()));
+        };
+
+        winit_moves_to(&mut app, 10.0);
+        app.update();
+        app.world_mut().resource_mut::<PresentHold>().held = true;
+        winit_moves_to(&mut app, 20.0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Window>(window)
+                .unwrap()
+                .physical_cursor_position(),
+            at(20.0),
+            "the window ends the frame on winit's position, so nothing warps"
+        );
+        winit_moves_to(&mut app, 30.0);
+        app.update();
+        app.world_mut().resource_mut::<PresentHold>().held = false;
+        app.update();
+        assert_eq!(
+            app.world().resource::<Picked>().0,
+            [at(10.0), at(10.0), at(10.0), at(30.0)],
+            "no hover change until the frame is shown again"
+        );
     }
 }

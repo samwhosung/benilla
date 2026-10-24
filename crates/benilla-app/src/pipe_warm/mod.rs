@@ -38,7 +38,7 @@ pub(crate) struct PipeShared {
     pub(crate) created: AtomicUsize,
     /// Of those, how many are `Ok` or a non-retryable `Err`; a retryable one reads as pending.
     pub(crate) settled: AtomicUsize,
-    /// An opaque cover hides the frame: the loading screen, or not `InWorld`.
+    /// An opaque cover hides the frame: the loading screen, a held frame, or not `InWorld`.
     pub(crate) covered: AtomicBool,
 }
 
@@ -100,7 +100,10 @@ fn publish_cover(
     watch: Res<PipeWatch>,
     loading: Res<LoadingScreen>,
     state: Res<State<ClientState>>,
+    hold: Option<Res<crate::loading_screen::hold::PresentHold>>,
 ) {
+    // A frame the teleport hold keeps from the window hides its compiles as the cover does.
+    let _ = hold;
     let covered = loading.covering() || *state.get() != ClientState::InWorld;
     watch.0.covered.store(covered, Ordering::Relaxed);
 }
@@ -773,5 +776,38 @@ mod census_tests {
         let without = view_class(Some(&perspective()), Some(&Msaa::Off), false);
         assert_ne!(with, without);
         assert!(!warm_set_without_an_orthographic_arm().contains(&without));
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+    use crate::loading_screen::hold::PresentHold;
+
+    fn covered(hold: PresentHold) -> bool {
+        let watch = PipeWatch(Arc::new(PipeShared {
+            created: AtomicUsize::new(0),
+            settled: AtomicUsize::new(0),
+            covered: AtomicBool::new(false),
+        }));
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .insert_state(ClientState::InWorld)
+            .init_resource::<LoadingScreen>()
+            .insert_resource(hold)
+            .insert_resource(watch.clone())
+            .add_systems(Last, publish_cover);
+        app.update();
+        watch.0.covered.load(Ordering::Relaxed)
+    }
+
+    /// A held frame never reaches the window, so a pipeline compiled under it is hidden.
+    #[test]
+    fn a_held_frame_covers_its_compiles() {
+        assert!(
+            !covered(PresentHold::default()),
+            "a live frame is uncovered"
+        );
+        assert!(covered(PresentHold::holding()), "a held one is covered");
     }
 }
