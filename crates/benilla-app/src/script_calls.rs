@@ -722,6 +722,11 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 self.cancel_aura(script, &mut at.mark, spell_id);
             }
             ScriptCall::Minimap(MinimapCall::Ping { x, y }) => appliers.minimap().ping(x, y),
+            ScriptCall::Minimap(MinimapCall::Ground { x, y }) => {
+                if let Some(at) = appliers.minimap().ground_under(x, y) {
+                    appliers.cursor().bind_location(at);
+                }
+            }
             ScriptCall::Posture(PostureCall::SitOrStand) => self.sit_or_stand(),
             ScriptCall::ConfirmPetUnlearn => appliers.pet_unlearn().confirm(script),
         }

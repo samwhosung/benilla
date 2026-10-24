@@ -105,6 +105,11 @@ pub enum MinimapCall {
     /// `Minimap:PingLocation` at the world point `(x, y)` it computed (`0x4eee48`): the process's
     /// ping there and, in a party or raid, `MSG_MINIMAP_PING` (`0x4eef72`).
     Ping { x: f32, y: f32 },
+    /// The same click with the targeting cursor wanting a location (`0x6e48a0`, `0x6e6320` at
+    /// `0x4eee67`, `0x4eee74`): the terrain trace down the point's column (`0x672170`, flags
+    /// `0x100`), its hit raised 8 (`[0x807b10]`, `0x4eeee9`) and bound as the spell's location
+    /// (`0x6e60f0`); a miss does nothing (`0x4eeedd`). No ping either way.
+    Ground { x: f32, y: f32 },
 }
 
 /// What the `CMinimap` ctor takes from the screen-scale cells: `base = G48 · 5/3` (`0x4edc42`,
@@ -438,9 +443,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // first is negated (`0x4eedeb`) and divided by the frame's given height (slot 0x20,
         // `0x4eee31`), the second by its width (slot 0x1c, `0x4eee21`): fractions of its own size,
         // whatever its scale. Each times the zoom diameter (`0x4eecf8`) offsets the player's point,
-        // world X by the second and world Y by the first (`0x4eee48`), with no disc test. The
-        // party's packet (`0x4eef72`) goes out through the host inside the call; the ping then
-        // applies at once (`0x4eefb5`).
+        // world X by the second and world Y by the first (`0x4eee48`), with no disc test. With the
+        // targeting cursor wanting a location the point goes to the host as a ground cast, and
+        // nothing pings (`0x4eee67`-`0x4eef14`); otherwise the party's packet (`0x4eef72`) goes
+        // out through the host inside the call, and the ping applies at once (`0x4eefb5`).
         lua.create_function(|lua, args: mlua::MultiValue| {
             let player = lua
                 .app_data_ref::<Model>()
@@ -467,19 +473,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 first = -stored(x as f32) / f64::from(ht);
                 second = stored(y as f32) / f64::from(w);
             }
-            let world = {
+            let (world, ground) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let ground = model.spell_targeting && model.location_pick_armed;
                 let d = 2.0 * f64::from(model.minimap.radius_yd());
                 // Each fraction times the diameter is stored as a float (`0x4eee2e`, `0x4eee3d`).
                 let (second, first) = (
                     f64::from((second * d) as f32),
                     f64::from((first * d) as f32),
                 );
-                (
+                let world = (
                     (f64::from(player.0) + second) as f32,
                     (f64::from(player.1) + first) as f32,
-                )
+                );
+                (world, ground)
             };
+            if ground {
+                return super::calls::submit(
+                    lua,
+                    super::ScriptCall::Minimap(MinimapCall::Ground {
+                        x: world.0,
+                        y: world.1,
+                    }),
+                );
+            }
             // The host's half: the group's packet (`0x4eef72`).
             super::calls::submit(
                 lua,

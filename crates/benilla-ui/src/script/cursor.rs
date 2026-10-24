@@ -987,6 +987,13 @@ impl super::UiScript {
         self.model_mut().item_pick_armed = armed;
     }
 
+    /// Arm or disarm the targeting cursor's location half (`SpellTargetWantsLocation`,
+    /// `0x6e6320`, the word's `0x60`): while armed, `Minimap:PingLocation` hands its point to the
+    /// host as a ground cast instead of pinging (`0x4eee74`).
+    pub fn set_location_pick_armed(&mut self, armed: bool) {
+        self.model_mut().location_pick_armed = armed;
+    }
+
     /// Push the guids of the units for which the armed word's unit checks all pass.
     /// `SpellCanTargetUnit` resolves its token to a guid, as `0x515970` does, and asks this set,
     /// so a chain such as `"party1target"` reads the unit it ends on.

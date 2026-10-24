@@ -256,7 +256,7 @@ pub enum ScriptCall {
     ItemText(super::ItemTextCall),
     /// An aura cancel ([`super::AuraCall`]): `0x6e7040` whole inside the call.
     Aura(super::AuraCall),
-    /// A minimap verb ([`super::MinimapCall`]): the ping inside the call.
+    /// A minimap verb ([`super::MinimapCall`]): the ping or the ground cast inside the call.
     Minimap(super::MinimapCall),
     /// A posture verb ([`super::PostureCall`]): the stand-state setter inside the call.
     Posture(super::PostureCall),

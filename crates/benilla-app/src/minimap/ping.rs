@@ -23,7 +23,7 @@
 
 use bevy::prelude::*;
 
-use benilla_assets::coords::bevy_to_wow;
+use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 
 use crate::net::{ClientCommand, Guid, NetCommands, SelfPlayer};
 use crate::player::Player;
@@ -102,9 +102,26 @@ pub(crate) struct MinimapSteps<'w> {
     ping: Option<ResMut<'w, MinimapPing>>,
     group: Option<Res<'w, crate::ui_party::GroupState>>,
     commands: Res<'w, NetCommands>,
+    /// The streamed terrain the ground cast's trace reads; absent without a world.
+    streamer: Option<Res<'w, benilla_world::terrain_stream::TerrainStreamer>>,
+    adt_tiles: Option<Res<'w, Assets<benilla_assets::AdtTile>>>,
 }
 
 impl MinimapSteps<'_> {
+    /// The ground cast's point under the world point `(x, y)`: the terrain-only trace down the
+    /// column from z 100000 to -100000 (`0x672170` with flags `0x100`, `0x4eee91`), whose hit is
+    /// the heightfield's height there, raised by `[0x807b10]` (`0x4eeee9`). `None` is a miss: no
+    /// tile streamed there, or a hole.
+    pub(crate) fn ground_under(&self, x: f32, y: f32) -> Option<[f32; 3]> {
+        let (streamer, adt_tiles) = (self.streamer.as_deref()?, self.adt_tiles.as_deref()?);
+        let z = benilla_world::terrain_stream::terrain_height_under(
+            streamer,
+            adt_tiles,
+            wow_to_bevy([x, y, 0.0]),
+        )?;
+        Some(ground_cast_point(x, y, z))
+    }
+
     /// The ping at the world point `(x, y)`: the process's ping now, and on the wire when grouped
     /// (`0x4eef15`, `0x4eef26`, `0x4eef72`), before the VM applies it (`0x4eefb5`).
     pub(crate) fn ping(&mut self, x: f32, y: f32) {
@@ -115,6 +132,14 @@ impl MinimapSteps<'_> {
             let _ = self.commands.0.send(ClientCommand::MinimapPing { x, y });
         }
     }
+}
+
+/// `[0x807b10]`, the lift `PingLocation` puts on the trace's hit (`0x4eeee9`).
+const GROUND_CAST_LIFT: f32 = 8.0;
+
+/// The bound point of a ground cast whose trace hit the terrain at height `z`.
+fn ground_cast_point(x: f32, y: f32, z: f32) -> [f32; 3] {
+    [x, y, z + GROUND_CAST_LIFT]
 }
 
 /// Register the ping's packet handler.
@@ -273,5 +298,39 @@ mod tests {
                 .unwrap();
             assert!((y - 0.5).abs() < 1e-6, "{y}");
         }
+    }
+
+    /// A trace's hit binds 8 above the ground (`0x4eeee9`) as the waiting spell's DEST (`0x40`,
+    /// `0x6e612c`), and the bind empties the word and sends (`0x6e6177`).
+    #[test]
+    fn a_ground_hit_binds_eight_above_the_terrain_as_the_spells_location() {
+        const BLIZZARD: u32 = 10;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.world_mut()
+            .resource_mut::<crate::spell::targeting::SpellTargeting>()
+            .enter(BLIZZARD, crate::spell::CastCommit::Spell, 0x40);
+        let mut cursor =
+            bevy::ecs::system::SystemState::<crate::spell::ScriptCursor>::new(app.world_mut());
+        cursor
+            .get_mut(app.world_mut())
+            .bind_location(ground_cast_point(100.0, 200.0, 30.5));
+        cursor.apply(app.world_mut());
+        let sent: Vec<_> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CastSpellAtDest { spell_id, dest } => Some((spell_id, dest)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, [(BLIZZARD, [100.0, 200.0, 38.5])]);
+        assert_eq!(
+            app.world()
+                .resource::<crate::spell::targeting::SpellTargeting>()
+                .spell(),
+            None,
+            "the bind ends the mode"
+        );
     }
 }

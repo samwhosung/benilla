@@ -454,6 +454,21 @@ impl SpellTargeting {
             .map(|t| (t.spell_id, t.commit))
     }
 
+    /// `BindLocation 0x6e60f0` at `point` (WoW space): the pending cast, its commit and the bind,
+    /// when the word wants a location; `None` binds nothing. The terrain click's and the minimap
+    /// click's.
+    pub(crate) fn location_commit(
+        &self,
+        point: [f32; 3],
+    ) -> Option<(
+        u32,
+        super::cast_send::CastCommit,
+        super::cast_send::TargetedBind,
+    )> {
+        let (spell_id, commit) = self.pending_for(TargetingWants::Location)?;
+        Some((spell_id, commit, self.location_bind(point)?))
+    }
+
     /// `BindLocation 0x6e60f0`'s fork: SOURCE (`0x20`) is tested before DEST (`0x40`). The
     /// reference takes a second click for a word carrying both; no 1.12 spell does, so only the
     /// precedence is built.
@@ -543,6 +558,8 @@ fn push_targeting_view(
 ) {
     script.set_spell_targeting(targeting.active());
     script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
+    // `SpellTargetWantsLocation` (`0x6e6320`), which `Minimap:PingLocation` asks (`0x4eee74`).
+    script.set_location_pick_armed(targeting.wants(TargetingWants::Location));
     // `SpellCanTargetUnit(unit)`: the VM resolves the token to a guid (`0x6e6d3a`), and
     // `0x6e6460`'s unit leg answers for that guid. The units to ask are the held ones the
     // resolver's inputs list, the `target` chains' included.
@@ -662,6 +679,19 @@ impl ScriptCursor<'_, '_> {
     /// ([`CursorPicks`]), before the next call reads the cursor and the selection.
     pub(crate) fn bind_parked(&mut self) {
         self.picks.bind_all(&mut self.ladder, &self.checks);
+    }
+
+    /// `Minimap:PingLocation`'s ground cast (`0x4eef05`): the ground point `at` (WoW space) bound
+    /// as the waiting spell's location and sent ([`SpellTargeting::location_commit`]).
+    pub(crate) fn bind_location(&mut self, at: [f32; 3]) {
+        let Some((spell_id, commit, bound)) = self.ladder.ground.location_commit(at) else {
+            return;
+        };
+        debug!(
+            "ui_action: minimap ground cast {spell_id} at wow ({:.2}, {:.2}, {:.2}) as {bound:?}",
+            at[0], at[1], at[2]
+        );
+        self.ladder.commit_targeted(spell_id, commit, bound);
     }
 
     /// The ESC chain's `SpellStopTargeting()` (`0x6e6e30`): `StopTargeting 0x6e4900`.

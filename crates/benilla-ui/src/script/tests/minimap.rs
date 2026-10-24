@@ -446,6 +446,43 @@ fn ping_location_pings_the_world_point_its_fractions_name_inside_the_call() {
     );
 }
 
+/// With the targeting cursor up and wanting a location (`0x6e48a0`, `0x6e6320`) the click is the
+/// spell's (`0x4eee67`-`0x4eef14`): the point goes to the host as a ground cast, and neither the
+/// ping nor its packet happens. Up for a word with no location bit, it pings as ever.
+#[test]
+fn ping_location_with_a_location_word_up_casts_and_does_not_ping() {
+    use crate::script::{MinimapCall, ScriptCall};
+    let mut s = script();
+    s.keep_calls();
+    s.run(
+        r#"m = CreateFrame("Minimap", "TestMinimap")
+           m:SetWidth(140) m:SetHeight(140)
+           n = 0
+           local f = CreateFrame("Frame")
+           f:RegisterEvent("MINIMAP_PING")
+           f:SetScript("OnEvent", function() n = n + 1 end)"#,
+    )
+    .unwrap();
+    s.set_minimap_player(Some((100.0, 200.0)));
+    s.set_spell_targeting(true);
+    s.set_location_pick_armed(true);
+    s.run("m:PingLocation()").unwrap();
+    assert_eq!(s.eval::<i64>("return n").unwrap(), 0, "no ping");
+    assert!(s.take_minimap_pings_sent().is_empty());
+    assert_eq!(
+        s.take_script_calls(),
+        [ScriptCall::Minimap(MinimapCall::Ground {
+            x: 100.0,
+            y: 200.0
+        })]
+    );
+
+    s.set_location_pick_armed(false);
+    s.run("m:PingLocation()").unwrap();
+    assert_eq!(s.eval::<i64>("return n").unwrap(), 1, "a unit word pings");
+    assert_eq!(s.take_minimap_pings_sent(), [(100.0, 200.0)]);
+}
+
 /// The two places the ping's numbers round to a float: `MINIMAP_PING`'s first number is rounded
 /// before it is negated (`0x4ee473`) and its second stays a double (`0x4ee476`); `GetPingPosition`
 /// rounds its second (`0x4ef05b`) and not its first.

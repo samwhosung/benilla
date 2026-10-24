@@ -65,10 +65,7 @@ pub(crate) fn commit_ground_cast_on_click(
     let at = bevy_to_wow(point);
     // `BindLocation 0x6e60f0`: SOURCE (`0x20`) first, then DEST (`0x40`), from a word in
     // `TargetingWantsLocation 0x6e6320`.
-    let (Some((spell_id, commit)), Some(bound)) = (
-        ladder.ground.pending_for(TargetingWants::Location),
-        ladder.ground.location_bind(at),
-    ) else {
+    let Some((spell_id, commit, bound)) = ladder.ground.location_commit(at) else {
         debug!("ui_action: a terrain click binds nothing the word wants — the cursor stays");
         return;
     };

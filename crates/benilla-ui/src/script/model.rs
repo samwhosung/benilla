@@ -731,6 +731,9 @@ pub(crate) struct Model {
     pub(crate) item_calls: Vec<item_calls::ItemCall>,
     /// Targeting wants an item (`0x6e6330`): a bag or paper-doll click becomes a pick.
     pub(crate) item_pick_armed: bool,
+    /// Targeting wants a location (`0x6e6320`, the word's `0x60`): a minimap click casts at the
+    /// ground under it instead of pinging.
+    pub(crate) location_pick_armed: bool,
     /// The wrapping paper a right-click armed (`0x5edea0`: lock it, cursor mode 2, no packet). Not
     /// a cursor payload: the reference sets only the cursor mode, so `CursorHasItem()` stays nil.
     pub(crate) pending_wrap: Option<container::PendingWrap>,
@@ -1590,6 +1593,7 @@ impl Model {
             world_pick: cursor::WorldPick::default(),
             item_calls: Vec::new(),
             item_pick_armed: false,
+            location_pick_armed: false,
             pending_wrap: None,
             ui_cursor: None,
             ui_cursor_dirty: false,
