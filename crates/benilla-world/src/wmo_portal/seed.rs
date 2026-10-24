@@ -182,7 +182,7 @@ fn down_ray_pick_scored(
                 z
             };
             // Accepted while `best − z < tie`, strictly, a NaN refused.
-            if !(best_z - z < NEAREST_TIE_YD) {
+            if (best_z - z).partial_cmp(&NEAREST_TIE_YD) != Some(std::cmp::Ordering::Less) {
                 continue; // the best hit is nearer by the tie or more
             }
             let Some(verts) = portal_poly(portal_vertices, info) else {
