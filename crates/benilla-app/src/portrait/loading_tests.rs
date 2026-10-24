@@ -158,3 +158,24 @@ fn a_unit_not_held_keeps_its_stand_in() {
         )))
     );
 }
+
+/// The same unit rebuilding its body (a shapeshift) keeps its last bake: the reference's widget
+/// keeps its texture until the drain's `UNIT_PORTRAIT_UPDATE` binds again, and the drain waits on
+/// the body (`0x524d42`-`0x524d8e`).
+#[test]
+fn a_unit_rebuilding_its_body_keeps_its_last_bake() {
+    let mut app = app();
+    let me = player(&mut app);
+    app.world_mut().entity_mut(me).insert(SelfPlayer);
+    body(&mut app, me);
+    sync(&mut app);
+    assert!(baked(&app, "player"));
+
+    app.world_mut().entity_mut(me).despawn_related::<Children>();
+    sync(&mut app);
+    assert!(baked(&app, "player"), "the old face stays up");
+    assert_eq!(
+        shown(&app, "player"),
+        Some(PortraitSource::Live(booth_target(&app, "player")))
+    );
+}

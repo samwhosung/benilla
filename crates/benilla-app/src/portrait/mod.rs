@@ -6,9 +6,10 @@
 //! `TabardModel`) are live booths of their own, one per visible pane ([`panes`]).
 //!
 //! A booth mirrors the unit's live dressed look ([`PortraitPart`]), so a gear change re-bakes;
-//! until the model loads the slot shows a 2D stand-in, where the reference leaves it blank
-//! (`0x519fcc`) and loads a stand-in only for a unit it holds no object for: a player's
-//! (`0x525ba0`) or a group pet record's (`0x525cb0`).
+//! until the model loads the slot is empty, as the reference's bake binds nothing then
+//! (`0x519fcc`, `0x525874`). A 2D stand-in is only for a unit the client holds no object for: a
+//! player's (`0x525ba0`) or a group pet record's (`0x525cb0`). The portrait list and its events
+//! are [`drain`].
 //! Framing is the model's
 //! authored portrait camera, the one `cameraLookup[0]` selects (`0x713540`), through the
 //! diagonal-FOV projection ([`WowPortraitProjection`]); a camera-less model falls back to
@@ -240,8 +241,8 @@ pub(crate) struct EffectRig {
 #[derive(Component)]
 pub(crate) struct PortraitStandIn(pub(crate) u32);
 
-/// What a portrait slot shows: the booth's bake, or a 2D stand-in file, for a unit with no object
-/// (`0x525ba0`) and while a unit's model streams in (the reference shows blank then, `0x519fcc`).
+/// What a portrait slot shows: the booth's bake (empty while a held unit's model loads,
+/// `0x525874`), or a 2D stand-in file for a unit with no object (`0x525ba0`, `0x525cb0`).
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum PortraitSource {
     /// The slot's off-screen render target (the model bake).
@@ -435,6 +436,8 @@ struct Booth {
     baked_guid: Option<u64>,
     /// The display id a bake of a unit that is no player files its face under in [`DisplayBakes`].
     baked_display: Option<u32>,
+    /// The unit the bake is of, which keeps it while its own body rebuilds.
+    baked_unit: Option<Entity>,
     /// Frames the camera stays active after a content edge; at 0 with nothing pending it sleeps
     /// and the target keeps the last render.
     wake: u32,
@@ -467,6 +470,7 @@ impl Booth {
             baked: None,
             baked_guid: None,
             baked_display: None,
+            baked_unit: None,
             wake: 0,
             live: false,
             pending: Vec::new(),
@@ -1213,7 +1217,7 @@ impl DressedLook<'_, '_> {
 }
 
 /// Each frame, mirror each slot's unit's dressed look into its booth whenever it changes; a unit
-/// whose model has not attached shows a 2D stand-in, where the reference shows blank (`0x519fcc`).
+/// whose model has not attached shows the empty booth (`0x519fcc`, `0x525874`).
 fn sync_portraits(
     mut commands: Commands,
     mut booths: ResMut<Booths>,
@@ -1329,7 +1333,6 @@ fn sync_portraits(
                 let face = take_target(booth, token, &mut party.images, &mut party.targets);
                 party.bakes.store(guid, face);
             }
-            booth.baked_guid = None;
             file_display_bake(
                 booth,
                 token,
@@ -1337,18 +1340,7 @@ fn sync_portraits(
                 &mut party.images,
                 &mut party.targets,
             );
-            // No unit: empty the booth.
-            if booth.baked.is_some() {
-                commands.entity(booth.root).despawn_related::<Children>();
-                booth.baked = None;
-                // Render the emptied stage, so the target holds the backdrop.
-                booth.wake = BOOTH_SETTLE_FRAMES;
-                booth.pending.clear();
-                // The root's rig state needs its own strip.
-                clear_booth_rig(&mut commands, booth.root);
-                booth.rigged = false;
-                booth.parked = false;
-            }
+            empty_booth(&mut commands, booth);
             // No object: the cached bake on a hit, the 2D stand-in on a miss (`0x525ba0`,
             // `0x525cb0`).
             let src = match unseen {
@@ -1370,12 +1362,23 @@ fn sync_portraits(
         };
         let (parts, riders, billboards, effects) = look.collect(unit);
         if parts.is_empty() {
-            // Not attached yet: a 2D stand-in. The reference blanks the widget (`0x519fcc`) and
-            // re-bakes once the model is ready.
-            let file = temporary_portrait(ent_q.get(unit).ok(), stores_q.get(unit).ok());
-            let src = PortraitSource::File(file);
-            if portraits.0.get(token) != Some(&src) {
-                portraits.0.insert(token.to_string(), src);
+            // Not attached yet: `SetPortraitTexture` empties the texture (`0x519fcc`) and the bake
+            // binds nothing while the model is not ready (`0x5250f5`-`0x52515d` → `0x525874`).
+            // The same unit rebuilding its body keeps its last bake: the widget keeps its texture
+            // until the drain's `UNIT_PORTRAIT_UPDATE` binds again, which waits on the body.
+            if booth.baked_unit != Some(unit) {
+                file_display_bake(
+                    booth,
+                    token,
+                    &mut party.displays,
+                    &mut party.images,
+                    &mut party.targets,
+                );
+                empty_booth(&mut commands, booth);
+            }
+            let empty = PortraitSource::Live(booth.target.clone());
+            if portraits.0.get(token) != Some(&empty) {
+                portraits.0.insert(token.to_string(), empty);
             }
             continue;
         }
@@ -1490,12 +1493,29 @@ fn sync_portraits(
             );
             booth.baked = Some(key);
             booth.baked_guid = occupant;
+            booth.baked_unit = Some(unit);
             booth.baked_display = display_key(ent_q.get(unit).ok(), stores_q.get(unit).ok());
         }
         let live = PortraitSource::Live(booth.target.clone());
         if portraits.0.get(token) != Some(&live) {
             portraits.0.insert(token.to_string(), live);
         }
+    }
+}
+
+/// Empty `booth`'s stage and render it once, so its target holds the backdrop.
+fn empty_booth(commands: &mut Commands, booth: &mut Booth) {
+    booth.baked_guid = None;
+    booth.baked_unit = None;
+    if booth.baked.is_some() {
+        commands.entity(booth.root).despawn_related::<Children>();
+        booth.baked = None;
+        booth.wake = BOOTH_SETTLE_FRAMES;
+        booth.pending.clear();
+        // The root's rig state needs its own strip.
+        clear_booth_rig(commands, booth.root);
+        booth.rigged = false;
+        booth.parked = false;
     }
 }
 
@@ -1725,18 +1745,6 @@ fn gate_booth_cameras(
 
 const TEMPORARY_PORTRAIT: &str = "Interface\\CharacterFrame\\TemporaryPortrait";
 
-/// The 2D stand-in for a unit that is not yet renderable: the player file is `0x525ba0`'s.
-fn temporary_portrait(net: Option<&NetEntity>, store: Option<&crate::net::ObjectStore>) -> String {
-    use benilla_protocol::EntityKind;
-    if net.map(|n| n.kind) == Some(EntityKind::Player) {
-        return match store {
-            Some(s) => player_temporary_portrait(s.0.unit_race(), s.0.unit_gender()),
-            None => format!("{TEMPORARY_PORTRAIT}.blp"),
-        };
-    }
-    creature_temporary_portrait()
-}
-
 /// The player stand-in from race and sex bytes, which an out-of-area party member gets from the
 /// name cache. An unknown race gives the plain file, as the reference's `%s-%s` format does.
 fn player_temporary_portrait(race: Option<u8>, sex: Option<u8>) -> String {
@@ -1867,12 +1875,6 @@ fn pet_unseen(roster: &crate::ui_party::GroupState, guid: u64) -> Option<Unseen>
     roster
         .pet_record(guid)
         .map(|r| Unseen::pet(r.pet_model_id.map_or(0, u32::from)))
-}
-
-/// The creature stand-in, benilla's own file: the reference's only creature stand-in is `-Pet`,
-/// for a roster pet with no object (`0x525cb0`), and a live creature not yet loaded shows blank.
-fn creature_temporary_portrait() -> String {
-    format!("{TEMPORARY_PORTRAIT}-Monster.blp")
 }
 
 /// A roster pet with no object and no bake under its display id (`0x525cb0`): the reference's
