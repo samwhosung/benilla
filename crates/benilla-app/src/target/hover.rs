@@ -72,10 +72,11 @@ pub(super) fn update_pick_occlusion(
     }
 }
 
-/// The cursor ray's world trace and the hover probe's aim for the frame, in their order.
+/// The hover probe's aim for the frame, then the cursor ray's world trace from it, so the trace
+/// and the object pick after it read the same point.
 pub(super) fn aim_and_trace(
 ) -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
-    (update_pick_occlusion, super::hover_probe::aim_frame).chain()
+    (super::hover_probe::aim_frame, update_pick_occlusion).chain()
 }
 
 /// The model instances whose parts are `unit`'s pick geometry: the body, everything it wears, and
