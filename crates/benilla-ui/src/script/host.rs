@@ -28,6 +28,14 @@ pub trait CallHost {
     /// Whatever must run Lua with the host back in place (an event this call signals, a macro's
     /// lines) is returned as the tail.
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail>;
+
+    /// The unit object the engine holds under `guid`, as a getter reads it now: its descriptor's
+    /// own fields, as of the place the getter runs (`UnitHealth` reads the object, `0x5174d0`).
+    /// `None` when it holds no unit object there, and from a host that reads none.
+    fn unit_object(&mut self, guid: u64) -> Option<super::UnitObject> {
+        let _ = guid;
+        None
+    }
 }
 
 /// What a call leaves for the VM to run once its host is back in the VM.

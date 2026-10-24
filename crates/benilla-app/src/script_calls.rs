@@ -134,6 +134,26 @@ disjoint::disjoint_set! {
         /// The console's commands, against what they read and write, and the getters' lookups.
         console: crate::console::ConsoleSteps<'static, 'static>,
         asks: engine::RecordAsks<'static>,
+        /// The unit objects the getters read as they run.
+        units: UnitLive<'static, 'static>,
+    }
+}
+
+/// The unit objects the `Unit*` getters read off as they run, as the reference's read the object
+/// they resolve (`UnitHealth`, `0x5174d0`): by guid through the object manager (`0x468460`), each
+/// store as of the drain's place, so a listener reads its own packet's.
+#[derive(SystemParam)]
+pub(crate) struct UnitLive<'w, 's> {
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
+}
+
+impl UnitLive<'_, '_> {
+    /// The object held under `guid`, as of here.
+    fn object(&self, guid: u64) -> Option<benilla_ui::script::UnitObject> {
+        let entity = *self.index.as_deref()?.0.get(&guid)?;
+        let store = self.stores.get(entity).ok()?;
+        Some(crate::ui_unit::unit_object(store))
     }
 }
 
@@ -519,6 +539,10 @@ impl ScriptCallHost<'_, '_> {
 }
 
 impl CallHost for ScriptCallHost<'_, '_> {
+    fn unit_object(&mut self, guid: u64) -> Option<benilla_ui::script::UnitObject> {
+        self.appliers.units().object(guid)
+    }
+
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
         #[cfg(test)]
         self.census_probe();

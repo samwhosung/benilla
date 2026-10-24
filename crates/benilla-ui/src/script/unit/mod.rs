@@ -1,7 +1,8 @@
 //! The `Unit*` bindings. The app pushes each token's [`UnitState`] every frame through
 //! [`UiScript::set_unit`], and the units a `target` chain ends on by guid through
 //! [`UiScript::set_unit_by_guid`]; the globals read that plain data, which keeps this crate free of
-//! the ECS. Every predicate answers the number `1` or nil, never a Lua boolean.
+//! the ECS, and a held unit's own descriptor fields off its object through the lent host
+//! ([`read_unit`]). Every predicate answers the number `1` or nil, never a Lua boolean.
 
 use mlua::Lua;
 
@@ -570,8 +571,8 @@ pub(crate) fn check_unit_token(token: &Option<String>) -> mlua::Result<()> {
     }
 }
 
-/// Map a token's snapshot through `f` under a short model borrow, or answer `default` for an
-/// absent unit, after the token check.
+/// Map the unit `token` names through `f` ([`read_unit`]), or answer `default` for an absent
+/// unit, after the token check.
 fn with_unit<T>(
     lua: &Lua,
     token: &Option<String>,
@@ -579,10 +580,33 @@ fn with_unit<T>(
     f: impl FnOnce(&UnitState) -> T,
 ) -> mlua::Result<T> {
     check_unit_token(token)?;
+    Ok(token
+        .as_deref()
+        .and_then(|t| read_unit(lua, t, f))
+        .unwrap_or(default))
+}
+
+/// The unit `token` names as a getter reads it, mapped through `f`; `None` for no unit. The token
+/// resolves through the snapshots ([`Model::unit`]); a held unit's own descriptor fields
+/// ([`UnitObject`]) are then read off its object through the lent host, as the reference's
+/// getters read the object they resolved (`UnitHealth`, `0x5174d0`). With no host free to ask (a
+/// glue VM, or a call's apply under way) the snapshot answers, as it does for a unit with no
+/// object.
+pub(crate) fn read_unit<T>(lua: &Lua, token: &str, f: impl FnOnce(&UnitState) -> T) -> Option<T> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    Ok(match token.as_ref().and_then(|t| model.unit(t)) {
-        Some(u) => f(u),
-        None => default,
+    let unit = model.unit(token)?;
+    let object = (unit.has_object && unit.guid != 0)
+        .then(|| super::host::with_host(lua, |h| h.unit_object(unit.guid)))
+        .flatten()
+        .flatten();
+    Some(match object {
+        Some(object) if object != unit.object() => {
+            let mut now = unit.clone();
+            drop(model);
+            now.set_object(object);
+            f(&now)
+        }
+        _ => f(unit),
     })
 }
 
@@ -603,6 +627,7 @@ mod bindings;
 pub mod by_name;
 #[cfg(test)]
 mod chain_tests;
+mod object;
 mod relations;
 mod resolve;
 #[cfg(test)]
@@ -610,6 +635,7 @@ mod selection_tests;
 #[cfg(test)]
 mod tests;
 
+pub use object::UnitObject;
 pub use relations::UnitRelations;
 pub use resolve::{parse_unit_token, UnitBase, UnitGuids, UnitTokenParse};
 

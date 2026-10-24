@@ -9,7 +9,8 @@ use bevy::prelude::*;
 use benilla_formats::{ChrClasses, ChrRaces, Reaction};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
-    parse_unit_token, ScriptValue, UiScript, UnitBase, UnitState, UnitTokenParse, WornDisplay,
+    parse_unit_token, ScriptValue, UiScript, UnitBase, UnitObject, UnitState, UnitTokenParse,
+    WornDisplay,
 };
 
 use crate::creature_type::CreatureTypeSources;
@@ -964,6 +965,8 @@ pub(crate) fn player_reaction(rel: &Relations, unit: &RelUnit, me: Option<&RelUn
 /// Build a unit snapshot from a streamed descriptor, its guid, its cached name and its
 /// `UnitReaction` (`1..=7`, or `0` where none is resolved, as for `"player"`); `tables` feeds the
 /// race and class names and the relic column, and `types` the creature type, which every unit carries, players included.
+/// The fields the descriptor alone answers are [`unit_object`]'s, which the getters also read off
+/// the object as they run.
 pub(crate) fn snapshot(
     store: &ObjectStore,
     guid: u64,
@@ -972,13 +975,12 @@ pub(crate) fn snapshot(
     tables: UnitNames<'_>,
     types: CreatureTypeSources<'_>,
 ) -> UnitState {
-    let power_type = store.0.unit_power_type();
     let race = store.0.unit_race().and_then(|r| tables.race(r));
     let class_id = store.0.unit_class();
     let class = class_id.and_then(|c| tables.class(c));
     let classes = tables.classes;
     let creature_type = types.of(store);
-    UnitState {
+    let mut s = UnitState {
         exists: true,
         // A live descriptor is `0x468460` having succeeded, all of `UnitIsVisible` (`0x516030`).
         has_object: true,
@@ -988,6 +990,51 @@ pub(crate) fn snapshot(
         // What the token resolver `0x515970` yields, and `UnitIsUnit` (`0x516070`) compares.
         guid,
         name,
+        reaction,
+        // The one resolver `0x605570` behind `UnitCreatureType` (`0x51a2bc`) and the tooltip's
+        // type slot (`0x52a2e5`): the form's type, else the template's, else the race's.
+        creature_type_name: types.word(creature_type).map(str::to_string),
+        creature_type,
+        race: race.map(|(n, _)| n.to_string()),
+        race_file: race.map(|(_, f)| f.to_string()),
+        class: class.map(|(n, _)| n.to_string()),
+        class_file: class.map(|(_, f)| f.to_string()),
+        // `UnitHasRelicSlot` (`0x519e50`): TYPEMASK_PLAYER first (`0x519e8d`), then the class
+        // byte against `ChrClasses.dbc` field 16; without the player test a class-2 NPC answers 1.
+        has_relic_slot: matches!(store.0.object_type(), Some(ObjectType::Player))
+            && class_id.is_some_and(|c| classes.is_some_and(|t| t.has_relic_slot(u32::from(c)))),
+        // `GetDamageBonusStat` (`0x48b520`): the class byte against `ChrClasses.dbc` field 2,
+        // read for the active player only (TYPEMASK_PLAYER, `0x48b538`).
+        damage_bonus_stat: matches!(store.0.object_type(), Some(ObjectType::Player))
+            .then(|| class_id.and_then(|c| classes.and_then(|t| t.damage_bonus_stat(u32::from(c)))))
+            .flatten(),
+        // `UnitIsPVPFreeForAll` as the unit alone answers it: a player that answers to nobody is
+        // its own controller ([`pvp_free_for_all`]); a held unit's view asks its controller.
+        is_pvp_ffa: matches!(store.0.object_type(), Some(ObjectType::Player))
+            && store.0.unit_charmed_by().is_none()
+            && store.0.unit_created_by().is_none()
+            && store.0.unit_flags() & 0x8 != 0
+            && store.0.player_flags() & PLAYER_FLAGS_FFA_PVP != 0,
+        // The team digit of `PVP_RANK_<rank>_<team>`, from the race ([`UnitNames::pvp_team`]).
+        pvp_team: store.0.unit_race().map_or(-1, |r| tables.pvp_team(r)),
+        tooltip: benilla_ui::script::UnitTooltipFacts {
+            // The builder's raw read (`0x52a89f`), not `UnitHealth`'s feign-death zero. The facts
+            // that read beyond the descriptor are [`tooltip_facts`]'.
+            health: store.0.unit_health().unwrap_or(0),
+            ..Default::default()
+        },
+        // `is_player` and the creature-record fields come from [`enrich_unit`].
+        ..Default::default()
+    };
+    s.set_object(unit_object(store));
+    s
+}
+
+/// What a unit's descriptor alone answers ([`UnitObject`]), read off `store` with no table or
+/// cache: the snapshot's fields of it, and what the getters read off the object as they run.
+pub(crate) fn unit_object(store: &ObjectStore) -> UnitObject {
+    let power_type = store.0.unit_power_type();
+    UnitObject {
         // The UI getters: `UNIT_DYNFLAG_DEAD` (feign death) zeroes `UnitHealth` (`0x5174d0`) and
         // `UnitMana` (`0x517670`) but not the maxima, so its edge fires the reference's pair
         // (`0x6004c5`, `0x6004f0`); the power getters divide rage by 10 and happiness by 1000.
@@ -1010,24 +1057,6 @@ pub(crate) fn snapshot(
         group_leader: store.0.player_is_group_leader(),
         // The raw dword `PLAYER_FLAGS_CHANGED` fires on; 0 on a creature, as in the reference.
         player_flags: store.0.player_flags(),
-        reaction,
-        // The one resolver `0x605570` behind `UnitCreatureType` (`0x51a2bc`) and the tooltip's
-        // type slot (`0x52a2e5`): the form's type, else the template's, else the race's.
-        creature_type_name: types.word(creature_type).map(str::to_string),
-        creature_type,
-        race: race.map(|(n, _)| n.to_string()),
-        race_file: race.map(|(_, f)| f.to_string()),
-        class: class.map(|(n, _)| n.to_string()),
-        class_file: class.map(|(_, f)| f.to_string()),
-        // `UnitHasRelicSlot` (`0x519e50`): TYPEMASK_PLAYER first (`0x519e8d`), then the class
-        // byte against `ChrClasses.dbc` field 16; without the player test a class-2 NPC answers 1.
-        has_relic_slot: matches!(store.0.object_type(), Some(ObjectType::Player))
-            && class_id.is_some_and(|c| classes.is_some_and(|t| t.has_relic_slot(u32::from(c)))),
-        // `GetDamageBonusStat` (`0x48b520`): the class byte against `ChrClasses.dbc` field 2,
-        // read for the active player only (TYPEMASK_PLAYER, `0x48b538`).
-        damage_bonus_stat: matches!(store.0.object_type(), Some(ObjectType::Player))
-            .then(|| class_id.and_then(|c| classes.and_then(|t| t.damage_bonus_stat(u32::from(c)))))
-            .flatten(),
         // Gender byte 0 male, 1 female, on `UnitSex`'s scale: 2 male, 3 female, 0 unknown (nil).
         sex: match store.0.unit_gender() {
             Some(0) => 2,
@@ -1050,17 +1079,8 @@ pub(crate) fn snapshot(
             .unwrap_or(0),
         // `UnitAffectingCombat` (`0x517e10`): bit 19, the one combat bit for every token.
         in_combat: store.0.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0,
-        // `UnitIsPVPFreeForAll` as the unit alone answers it: a player that answers to nobody is
-        // its own controller ([`pvp_free_for_all`]); a held unit's view asks its controller.
-        is_pvp_ffa: matches!(store.0.object_type(), Some(ObjectType::Player))
-            && store.0.unit_charmed_by().is_none()
-            && store.0.unit_created_by().is_none()
-            && store.0.unit_flags() & 0x8 != 0
-            && store.0.player_flags() & PLAYER_FLAGS_FFA_PVP != 0,
         // The honor rank, `PLAYER_BYTES_3` byte 3 (0..=18), public for every player in view.
         pvp_rank: store.0.player_pvp_rank().unwrap_or(0),
-        // The team digit of `PVP_RANK_<rank>_<team>`, from the race ([`UnitNames::pvp_team`]).
-        pvp_team: store.0.unit_race().map_or(-1, |r| tables.pvp_team(r)),
         // `PLAYER_BYTES_3` byte 2, the city-protector title (`PVP_MEDAL<n>`), unset by vmangos.
         pvp_medal: store.0.player_pvp_medal().unwrap_or(0),
         // The quest-log window, off a player alone: `IsUnitOnQuest` looks the guid up with
@@ -1078,14 +1098,6 @@ pub(crate) fn snapshot(
         // object's fields), and the SUMMONEDBY their summon gate compares (`0x519272`).
         combat: crate::ui_char::unit_combat_stats(store),
         summoned_by: store.0.unit_summoned_by().unwrap_or(0),
-        tooltip: benilla_ui::script::UnitTooltipFacts {
-            // The builder's raw read (`0x52a89f`), not `UnitHealth`'s feign-death zero. The facts
-            // that read beyond the descriptor are [`tooltip_facts`]'.
-            health: store.0.unit_health().unwrap_or(0),
-            ..Default::default()
-        },
-        // `is_player` and the creature-record fields come from [`enrich_unit`].
-        ..Default::default()
     }
 }
 
