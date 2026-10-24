@@ -222,24 +222,30 @@ pub(crate) fn build_pages(
             let mut req_lines = Vec::new();
             let mut all_met = true;
             let mut prereqs = Vec::new();
-            if t.prereq_talents[0] != 0 {
-                if let Some(p) = catalog.talent(t.tab, t.prereq_talents[0]) {
-                    let need = t.prereq_ranks[0] + 1;
-                    let learnable = rank_of(p, known) >= need;
-                    prereqs.push(TalentPrereqView {
-                        tier: p.row + 1,
-                        column: p.col + 1,
-                        learnable,
-                    });
-                    if !learnable && rank == 0 {
-                        all_met = false;
-                        let p_name = spells
-                            .get(p.ranks[0])
-                            .map(|d| d.name.clone())
-                            .unwrap_or_default();
+            // The three slots in order, an empty or unknown id skipped (`0x52b3f0`-`0x52b418`).
+            for (&id, &need0) in t.prereq_talents.iter().zip(&t.prereq_ranks) {
+                let Some(p) = (id != 0).then(|| catalog.talent(t.tab, id)).flatten() else {
+                    continue;
+                };
+                let need = need0 + 1;
+                let learnable = rank_of(p, known) >= need;
+                prereqs.push(TalentPrereqView {
+                    tier: p.row + 1,
+                    column: p.col + 1,
+                    learnable,
+                });
+                if !learnable && rank == 0 {
+                    all_met = false;
+                    // The name is the last rank spell the scan from the needed rank read
+                    // (`0x52b430`-`0x52b466`); none, or no record, adds no line (`0x52b484`).
+                    let scanned = p
+                        .ranks
+                        .get(need0 as usize..)
+                        .and_then(|r| r.iter().take_while(|&&s| s != 0).last());
+                    if let Some(name) = scanned.and_then(|&s| spells.get(s)).map(|d| &d.name) {
                         req_lines.extend(
                             benilla_ui::strings::plural("TOOLTIP_TALENT_PREREQ", Some(need), get)
-                                .map(|f| fill(&f, &[Arg::D(i64::from(need)), Arg::S(&p_name)])),
+                                .map(|f| fill(&f, &[Arg::D(i64::from(need)), Arg::S(name)])),
                         );
                     }
                 }
