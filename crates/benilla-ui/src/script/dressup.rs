@@ -19,11 +19,11 @@ pub enum DressUpIntent {
     /// `SetUnit`, `RefreshUnit` and `Dress` (the Reset button): the reference's rebuild from the
     /// unit (`0x505b50`), dropping every substitution.
     Dress,
-    /// `Undress()`: bodyslots `0..0xb` cleared, worn and tried-on alike; the hands keep what they
-    /// hold (`0x504490`).
+    /// `Undress()`: component slots `0..0xb` cleared and both held lanes detached and zeroed, worn
+    /// and tried-on alike (`0x504490`).
     Undress,
-    /// `TryOn(item)`: the item in its `InventoryType`'s slot, with no class, level or proficiency
-    /// check (`DressUpFrame.lua:2-16`).
+    /// `TryOn(item)`: the item in its `InventoryType`'s slot, a held one in the lane `0x5048e8`
+    /// picks, with no class, level or proficiency check (`DressUpFrame.lua:2-16`).
     TryOn(u32),
     /// The window was hidden, so the booth empties. The reference keeps its state while hidden,
     /// but the next `DressUpItem` re-issues `SetUnit("player")`, so that state is never seen.

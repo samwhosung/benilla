@@ -110,6 +110,19 @@ pub(crate) struct PlayerActions {
     pub dirty: bool,
 }
 
+impl PlayerActions {
+    /// Whether a known spell's first effect is `SPELL_EFFECT_DUAL_WIELD` (40): the reference's
+    /// `[0xc4d770]`, which a learn of such a spell sets (`0x5e9fc1`-`0x5e9fcd`), its unlearn clears
+    /// (`0x5ea269`-`0x5ea271`) and `0x5eab70` reads. No catalog, no such spell.
+    pub(crate) fn knows_dual_wield(&self, spells: Option<&Spells>) -> bool {
+        spells.is_some_and(|s| {
+            self.spells
+                .iter()
+                .any(|&id| s.catalog.get(id).is_some_and(|sd| sd.effects[0] == 40))
+        })
+    }
+}
+
 /// The world right-click's casts, queued for the cast ladder later in the frame: the click system
 /// cannot also hold the ladder's resources, and only the ladder sends a cast, so a chest or a body
 /// right-clicked mid-cast meets the attempt's rungs as a button press does (`0x6e4d43`, `0x6e4d97`).

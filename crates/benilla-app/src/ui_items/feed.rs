@@ -831,14 +831,7 @@ pub(super) fn feed_player_req(
                 );
             }
         }
-        // The reference's `0xc4d770`: a known spell whose Effect[0] is 40
-        // (`SPELL_EFFECT_DUAL_WIELD`).
-        let can_dual_wield = spells.as_deref().is_some_and(|s| {
-            actions
-                .spells
-                .iter()
-                .any(|&id| s.catalog.get(id).is_some_and(|sd| sd.effects[0] == 40))
-        });
+        let can_dual_wield = actions.knows_dual_wield(spells.as_deref());
         // The skinnable line's value (`0x529f06`-`0x529f58`): the latched spell's first `SKINNING`
         // effect, its points at the player's skill in the spell's line, kept only above 0.
         let skinning = learned
