@@ -145,3 +145,31 @@ fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
     eval::<()>(&mut app, "GetBattlefieldPosition(1)");
     assert_eq!(sent(&rx), ["name 0x31"], "the call after the refusal asks again");
 }
+
+/// The ammo slot's texture and quality getters look a record the cache lacks up with the
+/// callback `0x4c84f0` and no dedupe (`0x4c83b2`-`0x4c83bc`, `0x4c89c2`-`0x4c89cf`): the item
+/// query goes out inside the call, once while it is in flight, and each call leaves its callback.
+#[test]
+fn the_ammo_getters_ask_a_missed_record_inside_their_calls() {
+    let (mut app, rx) = client();
+    let mut slots: benilla_ui::script::InventorySlots = Default::default();
+    slots[0] = Some(benilla_ui::script::InvSlotView {
+        item_id: 2512,
+        count: 200,
+        ..Default::default()
+    });
+    vm(&mut app).set_inventory_slots(slots);
+    eval::<()>(
+        &mut app,
+        r#"GetInventoryItemTexture("player", 0) RandomRoll(1, 2)
+           GetInventoryItemQuality("player", 0)"#,
+    );
+    assert_eq!(sent(&rx), ["item 2512", "roll 1"]);
+    assert_eq!(
+        app.world_mut()
+            .resource_mut::<crate::items::Items>()
+            .take_ammo_waiters(2512),
+        2,
+        "a callback per call"
+    );
+}
