@@ -61,6 +61,7 @@ pub(crate) struct RecordAsks<'w> {
     trainer: Option<ResMut<'w, crate::ui_trainer::TrainerOpen>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
     craft: Option<ResMut<'w, crate::ui_craft::CraftItemWaits>>,
+    trade_skill: Option<ResMut<'w, crate::ui_tradeskill::TradeSkillItemWaits>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
@@ -115,6 +116,11 @@ impl RecordAsks<'_> {
                     ItemCallback::Craft => {
                         if let Some(waits) = self.craft.as_deref_mut() {
                             crate::ui_craft::ask_item_record(items, &self.net, waits, entry);
+                        }
+                    }
+                    ItemCallback::TradeSkill => {
+                        if let Some(waits) = self.trade_skill.as_deref_mut() {
+                            crate::ui_tradeskill::ask_item_record(items, &self.net, waits, entry);
                         }
                     }
                 }

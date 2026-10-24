@@ -115,6 +115,7 @@ impl Plugin for UiTradeSkillPlugin {
         app.add_sweep_leg(SweepLeg::TradeSkill, cancel_trade_skill_waits);
         app.init_resource::<TradeSkillOpens>()
             .init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<TradeSkillRepeatCarry>()
             .add_systems(Startup, load_spell_focus.after(AssetSet::Open))
             .add_systems(
@@ -613,6 +614,7 @@ fn feed_trade_skill(
     mut vm: crate::script_calls::VmWith<(
         Res<'static, crate::spell::Cooldowns>,
         Res<'static, TradeSkillOpen>,
+        ResMut<'static, TradeSkillItemWaits>,
     )>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
@@ -628,7 +630,7 @@ fn feed_trade_skill(
     mut memo: Local<crate::ui_script::VmMemo<TradeMemo>>,
     mut engine: Local<TradeEngine>,
 ) {
-    vm.feed(|script, (cooldowns, open), fires| {
+    vm.feed(|script, (cooldowns, open, mut waits), fires| {
         let Some(script) = script else {
             return;
         };
@@ -699,13 +701,10 @@ fn feed_trade_skill(
         // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
         // (`0x4fc884`).
         let closed_in_place = !script.trade_skill_open();
-        // The getters' item callbacks, kept by their calls; each record that landed rebuilds
-        // (`0x4fdc30` → `0x4fdc3c`), and a refusal runs it with status 0, which does nothing
-        // (`0x4fdc38`). The item cache holds them, so they outlive a VM.
-        engine
-            .item_waits
-            .extend(script.take_trade_skill_item_waits());
-        let arrivals = landed(&mut engine.item_waits, &items);
+        // The getters' item callbacks, kept inside their calls ([`ask_item_record`]); each record
+        // that landed rebuilds (`0x4fdc30` → `0x4fdc3c`), and a refusal runs it with status 0,
+        // which does nothing (`0x4fdc38`).
+        let arrivals = landed(&mut waits.0, &items);
         // An open is the open line's change, which a `/reload` keeps (`[0xbde040]`): the new VM
         // takes the list with no event, as its world-enter init left it.
         let opened = fresh.as_ref().is_some_and(|f| engine.shown != Some(f.line));
@@ -780,11 +779,27 @@ struct TradeEngine {
     /// The line whose open it signalled; a frame that finds no line open clears it, so the next
     /// session's first open signals again.
     shown: Option<u32>,
-    /// The item records the getters' callbacks wait on in the item cache, one per call
-    /// (`0x4fdc30`), which no cancel removes (`0x4fc890`).
-    item_waits: Vec<u32>,
     /// The product records the builds' callbacks wait on, one per miss (`0x4fc8e0`).
     build_waits: Vec<u32>,
+}
+
+/// The item records the trade-skill getters' lookups missed, one per call, each the callback
+/// `0x4fdc30` the item cache keeps, which outlives a VM and no cancel removes (`0x4fc890`); the
+/// lookups ask inside their calls ([`ask_item_record`]).
+#[derive(Resource, Default)]
+pub(crate) struct TradeSkillItemWaits(pub(crate) Vec<u32>);
+
+/// A trade-skill getter's lookup of a record in flight, inside its call
+/// ([`benilla_ui::script::ItemCallback::TradeSkill`]): the item cache asks a miss, a refused
+/// entry again, and keeps one callback per call (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`).
+pub(crate) fn ask_item_record(
+    items: &Items,
+    commands: &NetCommands,
+    waits: &mut TradeSkillItemWaits,
+    entry: u32,
+) {
+    let _ = items.template(entry, 0, Ask::Event(commands));
+    waits.0.push(entry);
 }
 
 /// Spend the waits whose record answered: the count of those that brought one.
@@ -1187,6 +1202,7 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<PlayerActions>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1253,6 +1269,7 @@ mod tests {
             ..Default::default()
         };
         app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1342,6 +1359,7 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1398,6 +1416,7 @@ mod tests {
             ..Default::default()
         };
         app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1487,6 +1506,7 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<crate::ui_craft::CraftOpen>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
@@ -1563,10 +1583,25 @@ mod tests {
             vec![SessionEvent::SpellRemoved { spell_id: 2964 }],
         );
         assert!(heard(&mut app).is_empty());
-        app.world()
-            .non_send_resource::<UiScript>()
-            .run("GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1)")
-            .unwrap();
+        let entries = {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.keep_calls();
+            s.run("GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1)")
+                .unwrap();
+            s.take_trade_skill_item_waits()
+        };
+        // The host's lookups inside the calls ([`super::ask_item_record`]).
+        app.world_mut()
+            .resource_scope(|world, mut waits: Mut<TradeSkillItemWaits>| {
+                for entry in entries {
+                    super::ask_item_record(
+                        world.resource::<Items>(),
+                        world.resource::<NetCommands>(),
+                        &mut waits,
+                        entry,
+                    );
+                }
+            });
         assert!(heard(&mut app).is_empty());
         app.world_mut()
             .resource_mut::<Items>()
@@ -2006,6 +2041,7 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<TradeSkillOpens>()
             .init_resource::<crate::ui_craft::CraftOpen>()
             .insert_resource(actions)

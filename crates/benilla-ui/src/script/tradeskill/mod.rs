@@ -295,9 +295,10 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().trade_skill_build_waits)
     }
 
-    /// The item records the getters' calls missed since the last take, one per call.
+    /// The item records the getters' calls missed that a harness's VM kept
+    /// ([`Self::keep_calls`]), one per call.
     pub fn take_trade_skill_item_waits(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().trade_skill_item_waits)
+        self.take_item_asks(super::ItemCallback::TradeSkill)
     }
 
     /// The rows the list holds, headers included: the full count (`0xbde04c`) that

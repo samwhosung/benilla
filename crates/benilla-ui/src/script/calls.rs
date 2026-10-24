@@ -322,6 +322,9 @@ pub enum ItemCallback {
     /// `GetCraftReagentInfo` and `GetCraftSpellFocus` (`0x4f7710`), whose landing rebuilds the
     /// craft list (`0x4f771a`), kept beside the craft window.
     Craft,
+    /// The trade-skill getters (`0x4fdc30`), whose landing rebuilds the list (`0x4fdc3c`), kept
+    /// beside the trade-skill window.
+    TradeSkill,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
