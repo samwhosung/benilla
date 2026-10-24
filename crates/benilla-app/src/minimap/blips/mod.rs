@@ -166,11 +166,7 @@ pub(super) type BlipInputs<'w, 's> = (
     Res<'w, crate::ui_quest::QuestGiver>,
     Res<'w, GuidIndex>,
     Query<'w, 's, &'static GlobalTransform, With<NetEntity>>,
-    // The window and `widescreen`, for the cursor on the interface's screen.
-    (
-        Query<'w, 's, &'static Window, With<PrimaryWindow>>,
-        Option<Res<'w, crate::video::Widescreen>>,
-    ),
+    Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     ResMut<'w, MinimapBlipHover>,
     Res<'w, crate::ui_party::GroupState>,
     TrackedCandidates<'w, 's>,

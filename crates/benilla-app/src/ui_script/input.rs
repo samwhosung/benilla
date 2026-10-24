@@ -33,8 +33,6 @@ pub(super) struct PointerFeed<'w> {
     /// A capture owns the pointer ([`super::CapturePointerPinned`]): no OS cursor in the shot.
     capture_pinned: Res<'w, super::CapturePointerPinned>,
     egui_keyboard: Res<'w, super::EguiKeyboard>,
-    /// `widescreen`, which shapes the interface's screen on the window ([`super::UiScreen`]).
-    widescreen: Option<Res<'w, crate::video::Widescreen>>,
 }
 
 impl PointerFeed<'_> {
@@ -123,10 +121,9 @@ pub(super) fn feed_ui_wheel(
     (mut notches, mut world_wheel): (ResMut<WheelNotches>, ResMut<WorldWheel>),
     dispatch: Option<Res<crate::bindings::BindingDispatch>>,
     egui: Option<Res<super::EguiPointerOver>>,
-    (synthetic, capture_pinned, widescreen): (
+    (synthetic, capture_pinned): (
         Res<super::SyntheticPointer>,
         Res<super::CapturePointerPinned>,
-        Option<Res<crate::video::Widescreen>>,
     ),
 ) {
     hosted_vm.run(|script| {
@@ -137,9 +134,7 @@ pub(super) fn feed_ui_wheel(
             w.cursor_position()
                 .or_else(crate::target::hover_probe_point)
                 .filter(|_| !(synthetic.0 || capture_pinned.0))
-                .map(|c| {
-                    super::window_to_ui(super::UiScreen::of_window(w, widescreen.as_deref()), c)
-                })
+                .map(|c| super::window_to_ui(w.height(), c))
         });
         let travel = (
             scroll.unit,
@@ -232,8 +227,7 @@ pub(super) fn feed_ui_input(
             .filter(|_| !synthetic)
         {
             // The window cursor in the root's y-up 768-high units, `GetCursorPosition`'s answer.
-            let screen = super::UiScreen::of_window(window, pointer.widescreen.as_deref());
-            let Vec2 { x, y } = super::window_to_ui(screen, cursor);
+            let Vec2 { x, y } = super::window_to_ui(window.height(), cursor);
             // `WOW_HIT_COST=1` meters this call's per-frame hit-test rebuild, one line a second.
             static HIT_COST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
             let metering =

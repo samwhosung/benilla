@@ -457,8 +457,6 @@ pub(super) fn tick_script(
     mut pass: ResMut<super::UiPassState>,
     // The loading screen, whose layer hides the interface's from the frame pass.
     loading: Option<Res<crate::loading_screen::LoadingScreen>>,
-    // `widescreen`, which picks the aspect the interface's screen is built for.
-    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     let covered = loading.is_some_and(|l| l.hides_interface());
     hosted_vm.run(|script| {
@@ -475,8 +473,7 @@ pub(super) fn tick_script(
             booths.character.reset(0);
             return;
         };
-        // The interface's screen: the window's, or 4:3 and stretched across it ([`super::UiScreen`]).
-        let Vec2 { x: w, y: h } = super::UiScreen::of_window(window, widescreen.as_deref()).size;
+        let (w, h) = (window.width(), window.height());
         // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`;
         // the caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM
         // lives in it: quads scale ×s out, and the mouse and the measures ÷s in.
@@ -661,12 +658,11 @@ pub(super) fn paint_script(
     mut font_atlas: Option<ResMut<UiFontAtlas>>,
     // The booth seam both ways: the bakes regions sample, and the pane aspects published back.
     mut booths: crate::portrait::BoothBridge,
-    // Capture mode (the cursor icon quad), [`super::UiCostWanted`] and `widescreen`, tupled to
-    // stay inside Bevy's 16-parameter system limit.
+    // Capture mode (the cursor icon quad) and [`super::UiCostWanted`], tupled to stay inside
+    // Bevy's 16-parameter system limit.
     run: (
         Option<Res<crate::run_mode::CaptureMode>>,
         Res<super::UiCostWanted>,
-        Option<Res<crate::video::Widescreen>>,
     ),
     // The `<Minimap>` widget slot, parked for `minimap::emit_minimap` to fill later in the frame.
     mut parked_minimap: ResMut<crate::minimap::MinimapWidget>,
@@ -679,7 +675,7 @@ pub(super) fn paint_script(
     pass: Res<super::UiPassState>,
 ) {
     hosted_vm.run(|script| {
-        let (capture, ui_cost_wanted, widescreen) = run;
+        let (capture, ui_cost_wanted) = run;
         // Stand down with the tick half, which already cleared the booth panes.
         if !pass.live {
             return;
@@ -691,8 +687,7 @@ pub(super) fn paint_script(
         let Ok(window) = window.single() else {
             return;
         };
-        let screen = super::UiScreen::of_window(window, widescreen.as_deref());
-        let Vec2 { x: w, y: h } = screen.size;
+        let (w, h) = (window.width(), window.height());
         let (s, dpi) = (pass.seam, pass.dpi);
         let (us_tick, us_resolve) = (pass.us_tick, pass.us_resolve);
         let (solves_before, derives_before) = (Some(pass.solves_before), Some(pass.derives_before));
@@ -1071,9 +1066,7 @@ pub(super) fn paint_script(
                     Some(benilla_ui::script::coin_icon(i64::from(m.copper)).to_string())
                 }
             });
-            if let (Some(texture), Some(pos)) =
-                (texture, window.cursor_position().map(|p| screen.point(p)))
-            {
+            if let (Some(texture), Some(pos)) = (texture, window.cursor_position()) {
                 if let Some(handle) = assets
                     .as_mut()
                     .and_then(|a| a.sprite_texture(&texture, &mut images))
