@@ -120,7 +120,7 @@ pub(crate) fn recheck_corpse(
     guid: u64,
     fields: &ObjectFields,
     self_guid: &SelfGuid,
-    death_net: &mut DeathNet,
+    death_net: &mut impl std::ops::DerefMut<Target = DeathNet>,
 ) {
     // A delta carries only what changed: an absent FLAGS field is not a clear bit.
     let Some(flags) = fields.corpse_flags_present() else {

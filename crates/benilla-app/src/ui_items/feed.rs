@@ -628,11 +628,14 @@ pub(super) fn feed_item_stats(
         }
 
         // A refusal on a held record removed it from the cache (`0x556f35`): the VM's copy goes.
-        for id in items.take_dropped() {
-            pending.remove(&id);
-            script.drop_item_template(id);
+        // Drained only when either holds an entry, so a quiet frame leaves the cache unchanged.
+        if items.any_fresh_or_dropped() {
+            for id in items.take_dropped() {
+                pending.remove(&id);
+                script.drop_item_template(id);
+            }
+            pending.extend(items.take_fresh());
         }
-        pending.extend(items.take_fresh());
         for id in script.take_item_stat_asks() {
             items.template(id, 0, Ask::Event(&commands));
             pending.insert(id);
@@ -1177,8 +1180,17 @@ pub(crate) fn feed_containers(
 ) {
     // The frame's first write of our player or an item, and a swap the last drain left half
     // done (it ended with no VM): the view it put back gives way to the one it owed.
-    let written = view.written.take();
-    let owed = view.swap.take().filter(|s| !s.back).map(|s| s.new);
+    // Taken only when set, so a quiet frame leaves the view unchanged.
+    let written = if view.written.is_some() {
+        view.written.take()
+    } else {
+        None
+    };
+    let owed = if view.swap.is_some() {
+        view.swap.take().filter(|s| !s.back).map(|s| s.new)
+    } else {
+        None
+    };
     // The bags, read off the host's cooldowns among the rest. The push signals nothing: the bag
     // events are the watchers' and the handlers', fired after it on the lanes
     // ([`crate::item_lane`]).

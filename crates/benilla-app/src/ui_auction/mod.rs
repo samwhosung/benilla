@@ -870,7 +870,7 @@ fn feed_auction(
         // A `_S` line whose item was not cached when its handler ran, shown once the record lands,
         // as the reference defers it through `0x4cd190`; the `items.template` call below asks for
         // it.
-        {
+        if !auction.messages.is_empty() {
             let mut deferred = Vec::new();
             let mut lines = Vec::new();
             let asked = std::mem::take(&mut auction.messages_asked);
@@ -903,7 +903,9 @@ fn feed_auction(
         for &(guid, _) in &asks {
             let _ = names.resolve_player(guid, Ask::Event(&commands));
         }
-        if let Some(lane) = steps.as_deref_mut() {
+        // The lane is written only when it has something to do, so a quiet frame leaves it
+        // unchanged.
+        if let Some(lane) = steps.as_mut() {
             if vm_reset {
                 lane.clear_waits();
             }
@@ -911,7 +913,10 @@ fn feed_auction(
                 lane.wait_for_name(guid, list);
             }
             // A name the cache already held when it was asked answers no packet: released here.
-            lane.release_named(|guid| names.resolve_player(guid, Ask::Read).is_some());
+            let named = |guid| names.resolve_player(guid, Ask::Read).is_some();
+            if lane.any_named(named) {
+                lane.release_named(named);
+            }
         }
 
         let self_guid = self_q.iter().next().map(|g| g.0);
@@ -924,8 +929,10 @@ fn feed_auction(
         let shown = last_open.is_none() || auction.show_requested;
         // A landed result's tick, on the clock `GetAuctionItemTimeLeft` reads (`0x4cc865`).
         let tick = script.auction_tick_ms();
-        for slot in &mut auction.lists {
-            slot.arrived_ms.get_or_insert(tick);
+        for i in 0..auction.lists.len() {
+            if auction.lists[i].arrived_ms.is_none() {
+                auction.lists[i].arrived_ms = Some(tick);
+            }
         }
         let lists = [LIST, BIDDER, OWNER].map(|i| {
             let ask = Ask::at(shown || auction.list_result_landed[i], &commands);
@@ -948,8 +955,14 @@ fn feed_auction(
 
         // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
         let opened = last_open.is_none() && auction.auctioneer.is_some();
-        let show_requested = std::mem::take(&mut auction.show_requested);
-        auction.list_result_landed = [false; 3];
+        // Each written only on a change, so a quiet frame leaves the state unchanged.
+        let show_requested = auction.show_requested;
+        if show_requested {
+            auction.show_requested = false;
+        }
+        if auction.list_result_landed != [false; 3] {
+            auction.list_result_landed = [false; 3];
+        }
         // Per list, a page whose items are all answered with no answer left to run its tail, as a
         // page that landed with no VM is: its tail goes onto the house lane here
         // ([`net::record_answered`] runs it at the answer otherwise).
@@ -959,16 +972,16 @@ fn feed_auction(
                 .as_ref()
                 .is_some_and(|items_of| items_of.iter().all(|&e| items.template_answered(e)))
         });
-        for (slot, tail) in auction.lists.iter_mut().zip(tails) {
+        for (i, tail) in tails.into_iter().enumerate() {
             if tail {
-                slot.awaiting = None;
+                auction.lists[i].awaiting = None;
             }
         }
         // A tail run now leaves its list with nothing owed.
         for (list, slot) in fresh.lists.iter_mut().zip(&auction.lists) {
             list.pending = slot.awaiting.is_some();
         }
-        if let Some(lane) = steps.as_deref_mut() {
+        if let Some(lane) = steps.as_mut() {
             for list in [LIST, BIDDER, OWNER] {
                 if tails[list] {
                     lane.push(net::HouseStep::Tail(list));

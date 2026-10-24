@@ -205,6 +205,11 @@ impl HouseLane {
         }
     }
 
+    /// Whether `named` now answers some wait's name.
+    pub(super) fn any_named(&self, named: impl Fn(u64) -> bool) -> bool {
+        self.waits.iter().any(|&(g, _)| named(g))
+    }
+
     /// The waits whose name `named` now answers, released as [`Self::name_landed`] does.
     pub(super) fn release_named(&mut self, named: impl Fn(u64) -> bool) {
         let guids: Vec<u64> = self

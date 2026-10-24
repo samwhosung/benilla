@@ -236,10 +236,15 @@ impl GuildState {
         self.guild_id != 0
     }
 
+    /// Whether the mirror holds `guild_id` and `rank_index` already.
+    fn mirrors(&self, guild_id: u32, rank_index: u32) -> bool {
+        (self.guild_id, self.rank_index) == (guild_id, rank_index)
+    }
+
     /// Mirror our descriptor's guild fields; `true` when either moved. Asks for nothing: the
     /// identity cache is lazy and the roster is the FrameXML's to request.
     fn mirror_self(&mut self, guild_id: u32, rank_index: u32) -> bool {
-        if (self.guild_id, self.rank_index) == (guild_id, rank_index) {
+        if self.mirrors(guild_id, rank_index) {
             return false;
         }
         // A first 0 to N is learning our guild, not changing it: at login the MOTD event arrives

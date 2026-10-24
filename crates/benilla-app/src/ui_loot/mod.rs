@@ -1350,18 +1350,21 @@ fn feed_loot(mut vm: VmWith<(LootSteps<'static, 'static>, ())>, reads: LootReads
         let Some(script) = script else {
             return;
         };
-        let loot = &mut *steps.loot;
-        let (held, mut still): (Vec<_>, Vec<_>) = std::mem::take(&mut loot.waiting)
-            .into_iter()
-            .partition(|r| reads.items.template(r.entry, 0, Ask::Read).is_some());
-        still.retain_mut(|r| {
-            r.tries += 1;
-            r.tries < RECEIVE_MAX_TRIES
-        });
-        loot.waiting = still;
-        for r in held {
-            loot.queue(Step::Push(r));
+        if !steps.loot.waiting.is_empty() {
+            let loot = &mut *steps.loot;
+            let (held, mut still): (Vec<_>, Vec<_>) = std::mem::take(&mut loot.waiting)
+                .into_iter()
+                .partition(|r| reads.items.template(r.entry, 0, Ask::Read).is_some());
+            still.retain_mut(|r| {
+                r.tries += 1;
+                r.tries < RECEIVE_MAX_TRIES
+            });
+            loot.waiting = still;
+            for r in held {
+                loot.queue(Step::Push(r));
+            }
         }
+        let loot = &*steps.loot;
         if loot.window_steps_queued() {
             return;
         }
@@ -1489,7 +1492,8 @@ fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
 fn run_then<X: bevy::ecs::system::SystemParam + 'static>(
     vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
 ) {
-    loop {
+    // Read before it is taken, so a turn with nothing owed leaves the window unchanged.
+    while !vm.own().0.loot.then.is_empty() {
         let Some(then) = vm.own().0.loot.then.pop() else {
             break;
         };

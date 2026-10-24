@@ -1993,8 +1993,6 @@ pub(crate) mod schedule_tests {
          "`MSG_TALENT_WIPE_CONFIRM` answers the trainer's gossip option"),
         ("ui_taxi/mod.rs", "feed_taxi", Because::PlayerRoundTrip,
          "both packets follow talking to a flight master"),
-        ("ui_trade/mod.rs", "feed_trade", Because::Deliberate,
-         "its take is `named_lines_asked`, how many held lines have been asked: taken before the interface is up the lines' names are still asked, to the server and not the VM, and the lines stay held until they show"),
         ("ui_tradeskill.rs", "fire_list_rebuilds", Because::Deliberate,
          "a lane's firing, run only by the drain: `drop_list_rebuilds`, gated on the interface being down, empties the lane the frame its items land, so none fires into a later VM"),
         ("ui_trainer/mod.rs", "feed_trainer", Because::PlayerRoundTrip,

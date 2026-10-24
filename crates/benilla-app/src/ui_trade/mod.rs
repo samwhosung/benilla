@@ -1101,9 +1101,14 @@ fn feed_trade(
     // Our slots an extended status emptied go first, as the handler runs `InvalidateTradeSlot`
     // (`0x4bfbd0`: the unlock and its own `TRADE_PLAYER_ITEM_CHANGED`) as it stores the records
     // (`0x5d4ad3`, `0x5d4b33`), before `0x4bf2b0` (`0x5d4b67`); the diff below then skips them.
+    // Taken only when queued, so a quiet frame leaves the session unchanged.
     let (invalidated, steps) = {
         let mut trade = vm.own();
-        (trade.take_invalidated(), trade.take_accept_steps())
+        if trade.invalidated.is_empty() && trade.accept_steps.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            (trade.take_invalidated(), trade.take_accept_steps())
+        }
     };
     if !invalidated.is_empty() || !steps.is_empty() {
         vm.run(|mut script| {
@@ -1226,7 +1231,12 @@ fn feed_trade(
         }
         // The enchant slot's spell, after the partner's slots (`0x4bf429` on): the spell we cast
         // repaints their slot 7, the one they cast repaints ours.
-        for partner_window in trade.take_enchant_changed() {
+        let enchant_changed = if trade.enchant_changed.is_empty() {
+            Vec::new()
+        } else {
+            trade.take_enchant_changed()
+        };
+        for partner_window in enchant_changed {
             let event = if partner_window {
                 "TRADE_PLAYER_ITEM_CHANGED"
             } else {
@@ -1239,7 +1249,12 @@ fn feed_trade(
         // `PLAYER_TRADE_MONEY` alone (`TradeFrame.xml:565`), so a repaint never overwrites what
         // the player is typing; the partner's is the `TARGET_TRADE` money frame's
         // `TRADE_MONEY_CHANGED` (`MoneyFrame.lua:133`).
-        for partner in trade.take_money_changed() {
+        let money_changed = if trade.money_changed.is_empty() {
+            Vec::new()
+        } else {
+            trade.take_money_changed()
+        };
+        for partner in money_changed {
             if partner {
                 script.fire_event("TRADE_MONEY_CHANGED", vec![]);
             } else {
@@ -1251,8 +1266,13 @@ fn feed_trade(
         // started. The catalog row, read by `ui_action::feed_actions`, decides where each lands.
         // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
         // which goes to the server, not the VM.
-        let asked = std::mem::take(&mut trade.named_lines_asked);
-        for (i, line) in trade.take_named_lines().into_iter().enumerate() {
+        let asked = trade.named_lines_asked;
+        let named_lines = if trade.named_lines.is_empty() {
+            Vec::new()
+        } else {
+            trade.take_named_lines()
+        };
+        for (i, line) in named_lines.into_iter().enumerate() {
             // The status arms print nothing once the player is no longer an object.
             if line.needs_live_object && streamed_player(&index, &stores, line.who).is_none() {
                 continue;
@@ -1266,7 +1286,9 @@ fn feed_trade(
                 None => trade.owe_named_line(line),
             }
         }
-        trade.named_lines_asked = trade.named_lines.len();
+        if trade.named_lines_asked != trade.named_lines.len() {
+            trade.named_lines_asked = trade.named_lines.len();
+        }
         if opened {
             // `SetTradePartner`'s open leg (`0x4bf5f1`): only a trade we started by dropping
             // something on the partner moves what the cursor holds into the offer (`0x5d3f80`).

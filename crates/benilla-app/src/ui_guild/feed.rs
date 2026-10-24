@@ -95,9 +95,12 @@ pub(super) fn feed_guild(
         // Our guild id and rank come from our own descriptor, mirrored only while the avatar is
         // streamed: the frames between logout despawn and teardown must not read as leaving the
         // guild. Their `PLAYER_GUILD_UPDATE` is the descriptor watchers' (`crate::field_watch`),
-        // fired after this push.
+        // fired after this push. Written only on a change, so a quiet frame leaves it unchanged.
         if let Some(store) = self_q.iter().next() {
-            guild.mirror_self(store.0.player_guild_id(), store.0.player_guild_rank());
+            let (id, rank) = (store.0.player_guild_id(), store.0.player_guild_rank());
+            if !guild.mirrors(id, rank) {
+                guild.mirror_self(id, rank);
+            }
         }
 
         // `GUILD_INVITE_REQUEST` shows the popup. There is no hide edge: nothing in the 1.12 client

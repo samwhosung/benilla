@@ -3,12 +3,10 @@
 //! windows, the guild or the auction house moves, so no feed that reads them has anything to
 //! push, and no change tick says otherwise.
 
-use benilla_protocol::field::FIELD_UNIT_HEALTH;
+use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::{EntityKind, SessionEvent};
 use bevy::ecs::change_detection::Tick;
 use bevy::prelude::*;
-
-use benilla_protocol::field::FIELD_UNIT_MAXHEALTH;
-use benilla_protocol::{EntityKind, SessionEvent};
 
 use super::unit_view_tests::{client, created, values, wire_packets};
 

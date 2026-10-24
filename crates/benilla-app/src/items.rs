@@ -694,6 +694,11 @@ impl Items {
         self.templates.iter().map(|(&id, _)| id).collect()
     }
 
+    /// Whether a template landed, or a refusal removed a record, since the last drains.
+    pub(crate) fn any_fresh_or_dropped(&self) -> bool {
+        !self.fresh.is_empty() || !self.dropped.is_empty()
+    }
+
     /// Drain the entries whose template landed since the last drain.
     pub(crate) fn take_fresh(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.fresh)

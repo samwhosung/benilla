@@ -434,7 +434,7 @@ where
         kind: ObjectType,
         fields: &ObjectFields,
         block: &crate::field_watch::Notified,
-        bags: &mut BagCache,
+        bags: &mut impl std::ops::DerefMut<Target = BagCache>,
     ) -> Vec<ItemNotice> {
         self.placed_values(guid, kind, fields, block, bags)
             .into_iter()
@@ -455,7 +455,7 @@ where
         kind: ObjectType,
         fields: &ObjectFields,
         block: &crate::field_watch::Notified,
-        bags: &mut BagCache,
+        bags: &mut impl std::ops::DerefMut<Target = BagCache>,
     ) -> Vec<(Place, Run)> {
         if block.is_quiet() {
             return Vec::new();
@@ -962,7 +962,7 @@ mod tests {
             let mut bags = self.bags;
             let out = self
                 .watch()
-                .placed_values(guid, kind, &fields, &block, &mut bags);
+                .placed_values(guid, kind, &fields, &block, &mut &mut bags);
             self.bags = bags;
             out.into_iter().map(|(_, r)| r).collect()
         }
@@ -980,7 +980,9 @@ mod tests {
             let fields = self.objects[&guid].clone();
             let block = Notified::new(Sent::Fields(&sent), &moved);
             let mut bags = self.bags;
-            let out = self.watch().values(guid, kind, &fields, &block, &mut bags);
+            let out = self
+                .watch()
+                .values(guid, kind, &fields, &block, &mut &mut bags);
             self.bags = bags;
             out
         }
