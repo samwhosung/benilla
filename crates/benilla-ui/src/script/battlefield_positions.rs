@@ -43,12 +43,10 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().battlefield_position_lookups)
     }
 
-    /// The positions request's clear with no active slot (`0x4aa5c0`, `[0xb6ebdc]`): no teammate
-    /// and no carrier until the next packet.
+    /// The positions request's clear with no active slot (`0x4aa5df`): the teammate count
+    /// `[0xb6ebdc]` alone, the carrier kept until the next packet.
     pub fn clear_battlefield_positions(&mut self) {
-        let mut model = self.model_mut();
-        model.battlefield_positions.clear();
-        model.battlefield_flag = None;
+        self.model_mut().battlefield_positions.clear();
     }
 }
 
@@ -143,6 +141,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::*;
     use crate::script::UiScript;
+
+    /// The request's clear with no slot zeroes the count alone (`0x4aa5df`): the carrier stays.
+    #[test]
+    fn the_positions_clear_keeps_the_carrier() {
+        let mut s = UiScript::new().unwrap();
+        s.set_battlefield_positions(
+            vec![BattlefieldPositionView {
+                uv: (0.25, 0.5),
+                name: None,
+            }],
+            Some(BattlefieldFlagView {
+                uv: (0.375, 0.625),
+                token: None,
+            }),
+            1.0,
+        );
+        s.clear_battlefield_positions();
+        let counts: (i64, i64) = s
+            .eval("return GetNumBattlefieldPositions(), GetNumBattlefieldFlagPositions()")
+            .unwrap();
+        assert_eq!(counts, (0, 1));
+    }
 
     #[test]
     fn the_getters_answer_three_values_and_zero_off_the_list() {

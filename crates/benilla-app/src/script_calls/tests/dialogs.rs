@@ -219,25 +219,48 @@ fn join_battlefield_refuses_a_large_group_inside_its_call() {
     assert_eq!(sent(&rx), ["roll 9", "roll 1"]);
 }
 
-/// `RequestBattlefieldPositions()` with no active slot zeroes the teammate count (`0x4abef0` →
-/// `0x4aa5c0`, `[0xb6ebdc]`) inside its call and sends nothing: the next line counts none.
+/// `RequestBattlefieldPositions()` with no active slot zeroes the teammate count alone
+/// (`0x4abef0` → `0x4aa5c0`, `0x4aa5df`) inside its call and sends nothing: the next line counts
+/// no teammate, and the carrier stays, in the engine's copy and the VM's.
 #[test]
 fn request_battlefield_positions_without_a_battleground_clears_inside_its_call() {
+    use benilla_protocol::messages::{BattlefieldPosition, BattlefieldPositions};
     let (mut app, rx) = client();
+    let at = |guid| BattlefieldPosition {
+        guid,
+        x: 1.0,
+        y: 2.0,
+    };
+    app.world_mut()
+        .resource_mut::<crate::ui_battlefield_positions::BattlefieldPositions>()
+        .apply(BattlefieldPositions {
+            players: vec![at(0x9)],
+            carrier: Some(at(0xA)),
+        });
     vm(&mut app).set_battlefield_positions(
         vec![BattlefieldPositionView {
             uv: (0.5, 0.5),
             name: Some("Bob".into()),
         }],
-        None,
+        Some(benilla_ui::script::BattlefieldFlagView {
+            uv: (0.25, 0.25),
+            token: None,
+        }),
         1.0,
     );
-    let n: i64 = eval(
+    let n: (i64, i64) = eval(
         &mut app,
-        "RequestBattlefieldPositions() return GetNumBattlefieldPositions()",
+        "RequestBattlefieldPositions() \
+         return GetNumBattlefieldPositions(), GetNumBattlefieldFlagPositions()",
     );
-    assert_eq!(n, 0);
+    assert_eq!(n, (0, 1));
     assert!(sent(&rx).is_empty());
+    let carrier = app
+        .world()
+        .resource::<crate::ui_battlefield_positions::BattlefieldPositions>()
+        .carrier()
+        .map(|c| c.guid);
+    assert_eq!(carrier, Some(0xA));
 }
 
 /// The death verbs send inside their calls: `RepopMe` (`0x48a970` → `0x5e0ae0`) while dead or a

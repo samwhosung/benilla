@@ -43,10 +43,25 @@ impl BattlefieldPositions {
         self.packet = Some(packet);
     }
 
-    /// The positions request's clear with no active slot (`0x4aa5c0`, `[0xb6ebdc]`).
-    pub(crate) fn clear(&mut self) {
+    /// The positions request's clear with no active slot (`0x4aa5df`): the teammate count
+    /// `[0xb6ebdc]` alone, the carrier kept.
+    pub(crate) fn clear_teammates(&mut self) {
+        if let Some(packet) = self.packet.as_mut() {
+            packet.players.clear();
+        }
+        self.pending_names.clear();
+    }
+
+    /// Everything the last packet left, at a world entry.
+    fn clear(&mut self) {
         self.packet = None;
         self.pending_names.clear();
+    }
+
+    /// The carrier the last packet left, if any.
+    #[cfg(test)]
+    pub(crate) fn carrier(&self) -> Option<&BattlefieldPosition> {
+        self.packet.as_ref()?.carrier.as_ref()
     }
 
     /// The throttle: `true`, and the stamp moves, when a request may go out now.

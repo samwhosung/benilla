@@ -337,7 +337,7 @@ impl BattlefieldSteps<'_> {
                     .and_then(BattlefieldQueue::active_map)
                     .is_none()
                 {
-                    positions.clear();
+                    positions.clear_teammates();
                     script.clear_battlefield_positions();
                 } else if positions.request_due(Instant::now()) {
                     let _ = self.net.0.send(ClientCommand::RequestBattlefieldPositions);
