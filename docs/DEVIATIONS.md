@@ -115,7 +115,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A mounted draw is refused at the setter, because our rider track never replays the reference's per-play force-stow (`0x5fdf80`); the result is the same. ([`src/creature_anim/driver.rs:744`](../crates/benilla-app/src/creature_anim/driver.rs#L744))
 - The reference writes bone 0's rate blindly; we scope it to the swing's own node, because a moving attacker's gait would otherwise slow too. ([`src/creature_anim/driver.rs:1063`](../crates/benilla-app/src/creature_anim/driver.rs#L1063))
 - A time-based rate, because the reference's per-frame step changes with the frame rate. ([`src/creature_anim/select.rs:137`](../crates/benilla-app/src/creature_anim/select.rs#L137))
-- A spell's state kit and body procs are reaped only once no slot holds the spell. ([`src/creature_anim/spell_visual.rs:1181`](../crates/benilla-app/src/creature_anim/spell_visual.rs#L1181))
+- A spell's state kit and body procs are reaped only once no slot holds the spell. ([`src/creature_anim/spell_visual.rs:1275`](../crates/benilla-app/src/creature_anim/spell_visual.rs#L1275))
 
 #### cvars
 
@@ -277,8 +277,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### spell
 
 - An out-of-range byte drops the packet, because the reference's unchecked write overruns the table (`(64, 19)` lands on the class family at `0xcecaac`). ([`src/spell/mods.rs:132`](../crates/benilla-app/src/spell/mods.rs#L132))
-- The fallback is the packet's target guid, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:1244`](../crates/benilla-app/src/spell/net.rs#L1244))
-- A range failure leaves targeting armed and working. The reference's report cancels the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm, which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`), so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a cancel. ([`src/spell/targeting/mod.rs:570`](../crates/benilla-app/src/spell/targeting/mod.rs#L570))
+- The fallback is the packet's target guid, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:1252`](../crates/benilla-app/src/spell/net.rs#L1252))
+- A range failure leaves targeting armed and working. The reference's report cancels the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm, which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`), so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a cancel. ([`src/spell/targeting/mod.rs:589`](../crates/benilla-app/src/spell/targeting/mod.rs#L589))
 
 #### target
 
@@ -474,7 +474,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_tooltip
 
-- A pet view with no pet unit costs 0, an empty cell, where `0x6e3233` returns -1 and the unsigned divide (`0x52e8dd`) prints it as "429496729 Rage", or "4294967 Happiness" (divisors 10 and 1000 at `0x86f978`); benilla shows no such garbage cost. ([`src/ui_tooltip/spell_feed.rs:101`](../crates/benilla-app/src/ui_tooltip/spell_feed.rs#L101))
+- A pet view with no pet unit costs 0, an empty cell, where `0x6e3233` returns -1 and the unsigned divide (`0x52e8dd`) prints it as "429496729 Rage", or "4294967 Happiness" (divisors 10 and 1000 at `0x86f978`); benilla shows no such garbage cost. ([`src/ui_tooltip/spell_feed.rs:114`](../crates/benilla-app/src/ui_tooltip/spell_feed.rs#L114))
 
 #### ui_trade
 
@@ -482,7 +482,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_trainer
 
-- Benilla hides every state from 3 up. The reference shows bytes 32 and up, because x86 `shl` wraps its count (bits 32-34 alias 0-2) and its group counter `[hdr+4+state*4]` (`0x4d7854`) runs past the header. ([`src/ui_trainer/law.rs:280`](../crates/benilla-app/src/ui_trainer/law.rs#L280))
+- Benilla hides every state from 3 up. The reference shows bytes 32 and up, because x86 `shl` wraps its count (bits 32-34 alias 0-2) and its group counter `[hdr+4+state*4]` (`0x4d7854`) runs past the header. ([`src/ui_trainer/law.rs:281`](../crates/benilla-app/src/ui_trainer/law.rs#L281))
 
 #### video
 
@@ -582,7 +582,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### spells
 
-- Every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`, `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l` keys on the number before them, and Blizzard's "$s1 … every $t1 $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. ([`src/spells/tokens.rs:671`](../crates/benilla-formats/src/spells/tokens.rs#L671))
+- Every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`, `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l` keys on the number before them, and Blizzard's "$s1 … every $t1 $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. ([`src/spells/tokens.rs:687`](../crates/benilla-formats/src/spells/tokens.rs#L687))
 
 #### tga
 
@@ -637,9 +637,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:704`](../crates/benilla-protocol/src/events.rs#L704))
-- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1124`](../crates/benilla-protocol/src/events/decode.rs#L1124))
-- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1141`](../crates/benilla-protocol/src/events/decode.rs#L1141))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:708`](../crates/benilla-protocol/src/events.rs#L708))
+- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1126`](../crates/benilla-protocol/src/events/decode.rs#L1126))
+- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1143`](../crates/benilla-protocol/src/events/decode.rs#L1143))
 
 #### examples
 
