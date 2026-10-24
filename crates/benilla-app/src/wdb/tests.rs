@@ -241,6 +241,14 @@ impl<T: SavedCache> Session<T> {
         world.resource_mut::<WdbFile<T>>().keep(body);
     }
 
+    /// A debounced write between frames.
+    fn save(&mut self) {
+        self.app
+            .world_mut()
+            .run_system_once(save_on_exit::<T>)
+            .expect("the write runs");
+    }
+
     /// The process exits.
     fn exit(mut self) {
         self.app
@@ -571,4 +579,27 @@ fn the_saved_answers_are_the_seven_stores_answers() {
     for opcode in [0x51, 0x55, 0x53, 0x1c7, 0x2c5] {
         assert!(!is_saved_answer(opcode), "{opcode:#x}");
     }
+}
+
+/// An answer's record and its bytes drained in two frames, with a write between: the bytes still
+/// reach the file.
+#[test]
+fn bytes_that_land_after_a_write_still_reach_the_file() {
+    let _home = Home::new("split");
+    let mut first = Session::<NameCache>::start("R");
+    let body = creature_answer(CREATURE);
+    let packet = benilla_protocol::messages::parse_server(NameCache::ANSWER, &body).unwrap();
+    for ev in benilla_protocol::decode(packet) {
+        first.store().install(ev);
+    }
+    first.save();
+    first
+        .app
+        .world_mut()
+        .resource_mut::<WdbFile<NameCache>>()
+        .keep(body);
+    first.exit();
+
+    let mut next = Session::<NameCache>::start("R");
+    assert!(next.store().creature_record(CREATURE).is_some());
 }
