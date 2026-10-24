@@ -406,8 +406,9 @@ fn arm_transports(
 }
 
 /// The per-frame tick, the reference's `(progress + anchor) % period` leg walk (`0x5f50a0`):
-/// sample and write translation and rotation (model scale is baked in by the renderer). An
-/// off-map sample, a boat on the other continent's leg, hides the model; a lift never trips it.
+/// sample and write translation and rotation (model scale is baked in by the renderer). A leg on
+/// another map ends the tick (`0x5f5274`), so a boat on the other continent's leg keeps its last
+/// pose in view; a lift never trips it.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn tick_transports(
     current_map: Option<Res<CurrentMap>>,
@@ -443,12 +444,12 @@ fn tick_transports(
                 sample.map,
             );
         }
-        // Write on change only: a docked deck samples the same pose every frame.
+        // Anchored creates spawn hidden until their first tick, which shows them on any leg.
+        visibility.set_if_neq(Visibility::Inherited);
         if sample.map != current_map.0 {
-            visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
-        visibility.set_if_neq(Visibility::Inherited);
+        // Write on change only: a docked deck samples the same pose every frame.
         write_deck_pose(&sample, &mut transform, position, rotation);
     }
 }
@@ -901,7 +902,7 @@ mod tests {
         );
     }
 
-    /// At login lifts arm before `CurrentMap` is written, so the off-map hide must never judge a
+    /// At login lifts arm before `CurrentMap` is written, so the off-map test must never judge a
     /// lift against a map.
     #[test]
     fn a_lift_is_visible_on_whatever_map_the_viewer_is_on() {

@@ -638,7 +638,7 @@ fn object_create(
         }
         Landing::New { store, kept_pose } => {
             // A transport spawns hidden: its create pose is the spawn point, not where it is in
-            // its cycle; the transport tick unhides it at the first sampled pose.
+            // its cycle; its first tick unhides it, posed unless its leg is on another map.
             let visibility = if transport_anchor.is_some() {
                 Visibility::Hidden
             } else {
