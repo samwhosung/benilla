@@ -281,11 +281,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_dialog_verbs::AreaSpiritHealer",
-        "the area spirit healer, which `feed_dialog_verbs` fires from; `AcceptAreaSpiritHeal`, acting in its call, reads it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_dialog_verbs::BattlefieldQueue",
         "the battleground queue slots, which `feed_dialog_verbs` and `feed_battlefield_score` fire from; the port, leave and positions verbs, acting in their calls, read them in the host",
     ),
@@ -715,7 +710,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_battlefield::Battlefield",
     "::MapCatalogRes",
     "::BinderState",
-    "::AreaSpiritHealer",
     "::BattlefieldQueue",
     "::DuelState",
     "::SummonState",

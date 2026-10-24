@@ -264,16 +264,21 @@ fn request_battlefield_positions_without_a_battleground_clears_inside_its_call()
 }
 
 /// The death verbs send inside their calls: `RepopMe` (`0x48a970` → `0x5e0ae0`) while dead or a
-/// ghost (`0x5e0ae6`), `RetrieveCorpse` with the corpse guid (`0x48d260`), and the resurrect
+/// ghost (`0x5e0ae6` → `0x605f30`), `RetrieveCorpse` with the corpse guid (`0x48d260`), and the resurrect
 /// answer (`0x5ded80`), which forgets the offer as it sends (`0x5dedf2`), so a second answer in
 /// the chunk finds none (`0x5ded91`).
 #[test]
 fn the_death_verbs_send_inside_their_calls() {
     const CORPSE: u64 = 0xC0;
     const CASTER: u64 = 0xCA;
-    for dead in [true, false] {
+    // Dead, a released ghost (health 1, `PLAYER_FLAGS` 0x10: `0x605f3d`-`0x605f59`), alive.
+    for (fields, dead) in [
+        (&[(HEALTH, 0)][..], true),
+        (&[(HEALTH, 1), (PLAYER_FLAGS, 0x10)][..], true),
+        (&[(HEALTH, 100)][..], false),
+    ] {
         let (mut app, rx) = client();
-        seat(&mut app, &[(HEALTH, if dead { 0 } else { 100 })]);
+        seat(&mut app, fields);
         {
             let mut death = app.world_mut().resource_mut::<crate::death::DeathNet>();
             death.corpse_guid = Some(CORPSE);
@@ -294,7 +299,7 @@ fn the_death_verbs_send_inside_their_calls() {
         } else {
             &["roll 1", "reclaim 0xc0", "res 0xca true", "roll 2"]
         };
-        assert_eq!(sent(&rx), expected, "dead {dead}");
+        assert_eq!(sent(&rx), expected, "{fields:?}");
     }
 }
 
@@ -343,14 +348,28 @@ fn use_soulstone_sends_inside_its_call() {
     }
 }
 
-/// The area spirit healer's two verbs inside their calls: `AcceptAreaSpiritHeal()` sends
-/// `CMSG_AREA_SPIRIT_HEALER_QUEUE` with the cached healer (`0x492310`, `0x49232b`), and
-/// `CancelAreaSpiritHeal()` runs the aura cancel `0x6e7040(2584)`, its
-/// `AREA_SPIRIT_HEALER_OUT_OF_RANGE` listeners ahead of `CMSG_CANCEL_AURA` (`0x6e70c3`).
+/// A spirit guide `guid` standing `yards` along +X, as the scan's walk sees units.
+fn guide_at(app: &mut App, guid: u64, yards: f32) {
+    unit_at(app, guid, yards);
+    let e = app.world().resource::<GuidIndex>().0[&guid];
+    app.world_mut().entity_mut(e).insert(crate::net::NetEntity {
+        kind: benilla_protocol::EntityKind::Unit,
+        display_id: None,
+        scale: 1.0,
+    });
+}
+
+/// The area spirit healer's two verbs inside their calls, for a ghost: `AcceptAreaSpiritHeal()`
+/// runs the scan (`0x492316` → `0x4923b0`), which keeps a cached healer within 22 yd, then sends
+/// `CMSG_AREA_SPIRIT_HEALER_QUEUE` with it (`0x49232b`); `CancelAreaSpiritHeal()` runs the aura
+/// cancel `0x6e7040(2584)`, its `AREA_SPIRIT_HEALER_OUT_OF_RANGE` listeners ahead of
+/// `CMSG_CANCEL_AURA` (`0x6e70c3`).
 #[test]
 fn the_area_spirit_healer_verbs_send_inside_their_calls() {
     const HEALER: u64 = 0xF130_0000_0000_0A5A;
     let (mut app, rx) = client();
+    seat(&mut app, &[(HEALTH, 1), (PLAYER_FLAGS, 0x10)]);
+    guide_at(&mut app, HEALER, 5.0);
     let _ = app
         .world_mut()
         .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>()
@@ -374,6 +393,74 @@ fn the_area_spirit_healer_verbs_send_inside_their_calls() {
             "roll 2",
         ]
     );
+}
+
+/// `AcceptAreaSpiritHeal()` sends nothing with no healer cached once its scan ran (`0x492326`):
+/// none cached and none in reach, and a cached healer walked past 22 yd mid-wave, which the scan
+/// drops (`0x4921c0(0)`), its wave cancelled with `AREA_SPIRIT_HEALER_OUT_OF_RANGE`'s listeners
+/// ahead of `CMSG_CANCEL_AURA` (`0x4921fc` → `0x6e7040`), all before the chunk's next line.
+#[test]
+fn accept_area_spirit_heal_rescans_before_it_sends() {
+    const HEALER: u64 = 0xF130_0000_0000_0A5A;
+    for cached in [false, true] {
+        let (mut app, rx) = client();
+        seat(&mut app, &[(HEALTH, 1), (PLAYER_FLAGS, 0x10)]);
+        if cached {
+            guide_at(&mut app, HEALER, 30.0);
+            let mut spirit = app
+                .world_mut()
+                .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>();
+            let _ = spirit.set_healer(Some(HEALER));
+            spirit.on_time(HEALER, 30_000, std::time::Instant::now());
+        }
+        listen(
+            &mut app,
+            &["AREA_SPIRIT_HEALER_OUT_OF_RANGE"],
+            "RandomRoll(9, 9)",
+        );
+        eval::<()>(&mut app, "AcceptAreaSpiritHeal() RandomRoll(1, 2)");
+        let expected: &[&str] = if cached {
+            &["roll 9", "cancel aura 2584", "roll 1"]
+        } else {
+            &["roll 1"]
+        };
+        assert_eq!(sent(&rx), expected, "cached {cached}");
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui_dialog_verbs::AreaSpiritHealer>()
+                .healer(),
+            None
+        );
+    }
+}
+
+/// `SMSG_AREA_SPIRIT_HEALER_TIME`'s handler rescans before it arms (`0x492290` → `0x492296`):
+/// the cached healer within 22 yd arms the wave; walked past it, the scan drops the healer and the
+/// time for it arms nothing (`0x4922a0`).
+#[test]
+fn the_spirit_healer_time_rescans_before_it_arms() {
+    const HEALER: u64 = 0xF130_0000_0000_0A5A;
+    for (yards, arms) in [(5.0, true), (30.0, false)] {
+        let (mut app, _rx) = client();
+        seat(&mut app, &[(HEALTH, 1), (PLAYER_FLAGS, 0x10)]);
+        guide_at(&mut app, HEALER, yards);
+        let _ = app
+            .world_mut()
+            .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>()
+            .set_healer(Some(HEALER));
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![benilla_protocol::SessionEvent::AreaSpiritHealerTime {
+                healer: HEALER,
+                ms: 30_000,
+            }],
+        );
+        let spirit = app
+            .world()
+            .resource::<crate::ui_dialog_verbs::AreaSpiritHealer>();
+        assert_eq!(spirit.armed(), arms, "{yards} yd");
+        assert_eq!(spirit.healer(), arms.then_some(HEALER), "{yards} yd");
+    }
 }
 
 /// `AcceptDuel()` and `CancelDuel()` send with the stored flag guid inside their calls, with no

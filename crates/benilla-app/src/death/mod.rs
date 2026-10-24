@@ -574,7 +574,9 @@ pub(crate) fn ghost_probe() -> Option<bool> {
 pub(crate) struct DeathSteps<'w, 's> {
     /// Absent in a world with no death stores, which drops the calls.
     death_net: Option<ResMut<'w, DeathNet>>,
-    spirit: Option<Res<'w, crate::ui_dialog_verbs::AreaSpiritHealer>>,
+    spirit: Option<ResMut<'w, crate::ui_dialog_verbs::AreaSpiritHealer>>,
+    // `AcceptAreaSpiritHeal`'s scan ahead of its send (`0x492316`).
+    spirit_scan: crate::ui_dialog_verbs::SpiritScan<'w, 's>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
     cast: ParamSet<
         'w,
@@ -639,6 +641,8 @@ impl DeathSteps<'_, '_> {
             }
             DeathAction::AcceptXpLoss => self.accept_xp_loss(store.as_ref()),
             // `0x492310`: the cached healer's guid, nothing without one (`0x492326`).
+            // The scan ran first ([`Self::rescan_spirit`]); then 0x2e3 with the healer it left
+            // (`0x49231b`-`0x49235f`), nothing with none.
             DeathAction::AcceptAreaSpiritHeal => {
                 if let Some(healer) = self.spirit.as_deref().and_then(|s| s.healer()) {
                     send(&self.net, ClientCommand::AreaSpiritHealerQueue { healer });
@@ -657,6 +661,20 @@ impl DeathSteps<'_, '_> {
                 }
             }
         }
+    }
+
+    /// `AcceptAreaSpiritHeal`'s scan (`0x492310` → `0x4923b0`): the healer changes it makes, in
+    /// order, for the host to apply with its signal point.
+    pub(crate) fn rescan_spirit(&mut self) -> Vec<crate::ui_dialog_verbs::SetHealerOutcome> {
+        match self.spirit.as_deref_mut() {
+            Some(spirit) => self.spirit_scan.run(spirit),
+            None => Vec::new(),
+        }
+    }
+
+    /// The socket the death verbs send on.
+    pub(crate) fn net(&self) -> &NetCommands {
+        &self.net
     }
 
     /// `0x5df730(0)`: for a ghost (`0x5df74a`) whose remembered healer is a unit in the

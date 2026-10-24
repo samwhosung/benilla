@@ -19,9 +19,10 @@ use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    AuctionCall, BankCall, BinderCall, CallHost, CallTail, DuelRequest, GossipCall, InstanceCall,
-    LootRollCall, MailCall, MeetingStoneCall, MerchantCall, PetitionCall, PvpCall, ScriptCall,
-    StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall, TrainerCall, UiScript,
+    AuctionCall, BankCall, BinderCall, CallHost, CallTail, DeathAction, DuelRequest, GossipCall,
+    InstanceCall, LootRollCall, MailCall, MeetingStoneCall, MerchantCall, PetitionCall, PvpCall,
+    ScriptCall, StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall,
+    TrainerCall, UiScript,
 };
 
 mod windows;
@@ -280,6 +281,33 @@ impl ScriptCallHost<'_, '_> {
         self.signal_reports(script, mark);
         self.commit_views(script);
         script.signal_point(self);
+    }
+
+    /// `AcceptAreaSpiritHeal()` (`0x492310`): the scan first (`0x492316` → `0x4923b0`), each healer
+    /// change it makes applied as `0x4921c0` does, its out-of-range signal's listeners running
+    /// where it fires, then the send with the healer it left.
+    fn accept_area_spirit_heal(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+    ) {
+        let changes = self.appliers.p2().p7().p1().rescan_spirit();
+        for change in &changes {
+            if change.cancel_aura {
+                script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
+                self.at_point(script, mark);
+            }
+            // The signal ran above; the change's sends.
+            let mut world_steps = self.appliers.p2();
+            let mut dialogs = world_steps.p7();
+            let steps = dialogs.p1();
+            crate::ui_dialog_verbs::apply_healer_change(change, None, steps.net());
+        }
+        self.appliers
+            .p2()
+            .p7()
+            .p1()
+            .apply(script, DeathAction::AcceptAreaSpiritHeal);
     }
 
     /// The reports the call made since `mark` signalled now, ahead of whatever it signals next:
@@ -680,6 +708,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::TradeSkill(TradeSkillCall::Close) => appliers.p2().p6().p1().close(),
             ScriptCall::Craft(call) => appliers.p2().p6().p2().apply(call),
             ScriptCall::Battlefield(call) => appliers.p2().p7().p0().apply(script, call),
+            ScriptCall::Death(DeathAction::AcceptAreaSpiritHeal) => {
+                self.accept_area_spirit_heal(script, &mut at.mark);
+            }
             ScriptCall::Death(action) => appliers.p2().p7().p1().apply(script, action),
             ScriptCall::Duel(DuelRequest::StartByGuid(guid)) => {
                 let spell = appliers.p2().p7().p2().duel_spell();

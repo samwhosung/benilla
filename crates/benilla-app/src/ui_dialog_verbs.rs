@@ -168,6 +168,12 @@ impl AreaSpiritHealer {
         }
     }
 
+    /// Whether a wave's deadline is armed (`[0xb4e338]` non-zero).
+    #[cfg(test)]
+    pub(crate) fn armed(&self) -> bool {
+        self.deadline.is_some()
+    }
+
     /// The cached healer: `AcceptAreaSpiritHeal`'s guid and the poll's retain subject.
     pub(crate) fn healer(&self) -> Option<u64> {
         self.healer
@@ -811,117 +817,149 @@ impl MeetingStoneSteps<'_> {
     }
 }
 
-/// The area-spirit-healer poll `0x4923b0`, run every frame from `CGWorldFrame`'s `OnUpdate`
-/// (`0x4818ca`): only a ghost (`[[player+0xe68]+8]` bit 4) holds a healer; a cached one is kept
-/// within 22 yd, else the last unit in the walk that is a `SPIRITGUIDE`, assistable and within
-/// 20 yd is adopted. Last, not nearest: the enumerate callback `0x4924c0` never stops the walk.
-#[allow(clippy::type_complexity)] // a Bevy system's full input set
-fn poll_area_spirit_healer(
-    me: Query<(&ObjectStore, &Transform), With<SelfPlayer>>,
+/// The area-spirit-healer scan `0x4923b0`: only a ghost (`[[player+0xe68]+8]` bit 4) holds a
+/// healer; a cached one is kept within 22 yd, else the last unit in the walk that is a
+/// `SPIRITGUIDE`, assistable and within 20 yd is adopted. Last, not nearest: the enumerate callback
+/// `0x4924c0` never stops the walk. `CGWorldFrame`'s `OnUpdate` runs it every frame (`0x4818ca`),
+/// `AcceptAreaSpiritHeal` before its send (`0x492316`) and the time packet before its arm
+/// (`0x492296`).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SpiritScan<'w, 's> {
+    me: Query<'w, 's, (&'static ObjectStore, &'static Transform), With<SelfPlayer>>,
+    #[allow(clippy::type_complexity)] // the walk's unit view
     units: Query<
+        'w,
+        's,
         (
-            &crate::net::Guid,
-            &crate::net::NetEntity,
-            &ObjectStore,
-            &Transform,
+            &'static crate::net::Guid,
+            &'static crate::net::NetEntity,
+            &'static ObjectStore,
+            &'static Transform,
         ),
         Without<SelfPlayer>,
     >,
+    relations: crate::target::RelationWorld<'w, 's>,
+}
+
+impl SpiritScan<'_, '_> {
+    /// The scan on `spirit`: what each healer change it makes owes, in order.
+    pub(crate) fn run(&self, spirit: &mut AreaSpiritHealer) -> Vec<SetHealerOutcome> {
+        let Ok((self_store, self_tf)) = self.me.single() else {
+            return vec![spirit.set_healer(None)];
+        };
+        if !self_store.0.player_is_ghost() {
+            return vec![spirit.set_healer(None)];
+        }
+        let here = self_tf.translation;
+        let mut out = Vec::new();
+
+        // Retain: a guid that no longer streams drops like one out of range (an `ObjectPtr` miss).
+        if let Some(cached) = spirit.healer() {
+            let still = self.units.iter().find(|(guid, ..)| guid.0 == cached);
+            let keep = still.is_some_and(|(_, _, _, tf)| {
+                tf.translation.distance_squared(here)
+                    <= SPIRIT_GUIDE_RETAIN_YD * SPIRIT_GUIDE_RETAIN_YD
+            });
+            if !keep {
+                out.push(spirit.set_healer(None));
+            }
+        }
+        if spirit.healer().is_some() {
+            return out;
+        }
+
+        // Acquire: `CanAssist 0x6066f0` with the guide as `this` (`0x492506`).
+        let relations = &self.relations;
+        let (rel, Some(me)) = (relations.get(), relations.me()) else {
+            return out;
+        };
+        let mut adopted = None;
+        for (guid, kind, store, tf) in self.units.iter() {
+            if kind.kind != benilla_protocol::EntityKind::Unit {
+                continue;
+            }
+            if store.0.unit_npc_flags() & NPC_FLAG_SPIRITGUIDE == 0 {
+                continue;
+            }
+            if tf.translation.distance_squared(here)
+                > SPIRIT_GUIDE_ACQUIRE_YD * SPIRIT_GUIDE_ACQUIRE_YD
+            {
+                continue;
+            }
+            if !rel.can_assist(&relations.unit_of(guid.0, store), &me) {
+                continue;
+            }
+            adopted = Some(guid.0); // last wins: the callback never stops the walk
+        }
+        if let Some(guid) = adopted {
+            out.push(spirit.set_healer(Some(guid)));
+        }
+        out
+    }
+}
+
+/// What one healer change owes, as `0x4921c0` does it: a pending wave's cancel, `0x6e7040(0xA18)`,
+/// signals `AREA_SPIRIT_HEALER_OUT_OF_RANGE` with no argument into `script`, if given, then sends
+/// `CMSG_CANCEL_AURA`; a new healer is queried.
+pub(crate) fn apply_healer_change(
+    outcome: &SetHealerOutcome,
+    script: Option<&mut UiScript>,
+    net: &NetCommands,
+) {
+    if outcome.cancel_aura {
+        if let Some(script) = script {
+            script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
+        }
+        let _ = net.0.send(ClientCommand::CancelAura {
+            spell_id: AREA_SPIRIT_HEALER_AURA,
+        });
+    }
+    if let Some(healer) = outcome.query {
+        let _ = net.0.send(ClientCommand::AreaSpiritHealerQuery { healer });
+    }
+}
+
+/// The scan's every-frame run (`0x4818ca` → `0x4923b0`).
+fn poll_area_spirit_healer(
     commands: Res<NetCommands>,
     // The relation inputs, which a call the event's handlers make can write, and the healer the
     // accept's call reads: read and written first.
     mut vm: crate::script_calls::VmWith<(
-        crate::target::RelationWorld<'static, 'static>,
+        SpiritScan<'static, 'static>,
         ResMut<'static, AreaSpiritHealer>,
     )>,
 ) {
     let outcomes = {
-        let (relations, mut spirit) = vm.own();
-        poll_outcomes(&mut spirit, &me, &units, &relations)
+        let (scan, mut spirit) = vm.own();
+        scan.run(&mut spirit)
     };
     vm.run(|mut script| {
-        for outcome in outcomes {
-            if outcome.cancel_aura {
-                // `0x6e7040(0xA18)`: the event with no argument, the packet with no guid.
-                if let Some(script) = script.as_deref_mut() {
-                    script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
-                }
-                let _ = commands.0.send(ClientCommand::CancelAura {
-                    spell_id: AREA_SPIRIT_HEALER_AURA,
-                });
-            }
-            if let Some(healer) = outcome.query {
-                let _ = commands
-                    .0
-                    .send(ClientCommand::AreaSpiritHealerQuery { healer });
-            }
+        for outcome in &outcomes {
+            apply_healer_change(outcome, script.as_deref_mut(), &commands);
         }
     })
 }
 
-/// [`poll_area_spirit_healer`]'s walk: what each healer change it makes owes, in order.
-fn poll_outcomes(
-    spirit: &mut AreaSpiritHealer,
-    me: &Query<(&ObjectStore, &Transform), With<SelfPlayer>>,
-    units: &Query<
-        (
-            &crate::net::Guid,
-            &crate::net::NetEntity,
-            &ObjectStore,
-            &Transform,
-        ),
-        Without<SelfPlayer>,
-    >,
-    relations: &crate::target::RelationWorld,
-) -> Vec<SetHealerOutcome> {
-    let Ok((self_store, self_tf)) = me.single() else {
-        return vec![spirit.set_healer(None)];
+/// `SMSG_AREA_SPIRIT_HEALER_TIME`'s handler `0x492290`: the scan first (`0x492296`), then the
+/// arm for the healer it left cached (`0x4922a0`).
+fn rescan_and_time(
+    In((healer, ms)): In<(u64, u32)>,
+    commands: Res<NetCommands>,
+    mut vm: crate::script_calls::VmWith<(
+        SpiritScan<'static, 'static>,
+        ResMut<'static, AreaSpiritHealer>,
+    )>,
+) {
+    let outcomes = {
+        let (scan, mut spirit) = vm.own();
+        scan.run(&mut spirit)
     };
-    if !self_store.0.player_is_ghost() {
-        return vec![spirit.set_healer(None)];
-    }
-    let here = self_tf.translation;
-    let mut out = Vec::new();
-
-    // Retain: a guid that no longer streams drops like one out of range (an `ObjectPtr` miss).
-    if let Some(cached) = spirit.healer() {
-        let still = units.iter().find(|(guid, ..)| guid.0 == cached);
-        let keep = still.is_some_and(|(_, _, _, tf)| {
-            tf.translation.distance_squared(here) <= SPIRIT_GUIDE_RETAIN_YD * SPIRIT_GUIDE_RETAIN_YD
-        });
-        if !keep {
-            out.push(spirit.set_healer(None));
+    vm.run(|mut script| {
+        for outcome in &outcomes {
+            apply_healer_change(outcome, script.as_deref_mut(), &commands);
         }
-    }
-    if spirit.healer().is_some() {
-        return out;
-    }
-
-    // Acquire: `CanAssist 0x6066f0` with the guide as `this` (`0x492506`).
-    let (rel, Some(me)) = (relations.get(), relations.me()) else {
-        return out;
-    };
-    let mut adopted = None;
-    for (guid, kind, store, tf) in units.iter() {
-        if kind.kind != benilla_protocol::EntityKind::Unit {
-            continue;
-        }
-        if store.0.unit_npc_flags() & NPC_FLAG_SPIRITGUIDE == 0 {
-            continue;
-        }
-        if tf.translation.distance_squared(here) > SPIRIT_GUIDE_ACQUIRE_YD * SPIRIT_GUIDE_ACQUIRE_YD
-        {
-            continue;
-        }
-        if !rel.can_assist(&relations.unit_of(guid.0, store), &me) {
-            continue;
-        }
-        adopted = Some(guid.0); // last wins: the callback never stops the walk
-    }
-    if let Some(guid) = adopted {
-        out.push(spirit.set_healer(Some(guid)));
-    }
-    out
+    });
+    vm.own().1.on_time(healer, ms, Instant::now());
 }
 
 /// The dialog verbs' packet handlers: each parks a question or a countdown for the feed.
@@ -929,7 +967,7 @@ mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
-    use super::{AreaSpiritHealer, BattlefieldQueue, InstanceBoot, MeetingStone, PetUnlearnState};
+    use super::{BattlefieldQueue, InstanceBoot, MeetingStone, PetUnlearnState};
     use crate::net::NetHandlerApp;
 
     pub(super) fn register(app: &mut App) {
@@ -972,9 +1010,13 @@ mod net {
         }
     }
 
-    fn on_area_spirit_healer_time(In(ev): In<SessionEvent>, mut spirit: ResMut<AreaSpiritHealer>) {
+    fn on_area_spirit_healer_time(In(ev): In<SessionEvent>, mut world_commands: Commands) {
         if let SessionEvent::AreaSpiritHealerTime { healer, ms } = ev {
-            spirit.on_time(healer, ms, std::time::Instant::now());
+            world_commands.queue(move |world: &mut World| {
+                if let Err(e) = world.run_system_cached_with(super::rescan_and_time, (healer, ms)) {
+                    debug!("net: the spirit healer's time did not run: {e}");
+                }
+            });
         }
     }
 
