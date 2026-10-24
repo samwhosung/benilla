@@ -957,3 +957,23 @@ fn a_redial_presses_the_kept_pin_on_its_new_grid() {
     assert_eq!(realms[0].name, REALM);
     assert_eq!(realmd.logons(), 2);
 }
+
+/// A close with no Cancel behind it, as an older attempt's failure dialog leaves (`CloseLink`),
+/// does not end the wait at the keypad: only a moved generation does.
+#[test]
+fn a_stale_close_leaves_the_keypad_waiting() {
+    let (realmd, _) = fake::servers_with_pin(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let grid = next_pin(&cycles.events);
+    cycles.realm.send(RealmRequest::Close).unwrap();
+    cycles
+        .realm
+        .send(RealmRequest::Pin {
+            positions: fake::press(&grid, fake::PIN),
+            generation: 0,
+        })
+        .unwrap();
+    assert!(!next_list(&cycles.events).1);
+    assert_eq!(realmd.logons(), 1);
+}
