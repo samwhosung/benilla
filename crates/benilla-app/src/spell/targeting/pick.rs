@@ -154,6 +154,12 @@ pub(crate) struct PickChecks<'w, 's> {
 }
 
 impl PickChecks<'_, '_> {
+    /// Whether a word stands as the frame began (`IsTargeting 0x6e48a0`), which forks the hover
+    /// grader (`0x4828f4`).
+    pub(crate) fn targeting(&self) -> bool {
+        self.pick.flags.is_some()
+    }
+
     /// Whether this unit or player is a candidate of the pick: always outside targeting,
     /// otherwise [`PickFlags::admits`]. `store` is its descriptor, if streamed.
     pub(crate) fn admits_unit(&self, entity: Entity, store: Option<&ObjectStore>) -> bool {

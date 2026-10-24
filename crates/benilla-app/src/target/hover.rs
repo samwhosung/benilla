@@ -415,19 +415,24 @@ pub(super) fn update_hover(
         best = None;
     }
     // Switch on type at the end, as the reference does: the one pick lands in the unit slot or the
-    // corpse slot, and a unit the `IsSelectable` grader refuses in neither.
+    // corpse slot, and a unit the `IsSelectable` grader refuses in neither. While a word stands the
+    // grader forks to its targeting arm (`0x4828f4`) and publishes the pick ungraded
+    // (`0x4829d4`-`0x4829e0`), and the click binds it ahead of its own test (`0x4935ca`-`0x4935d5`).
+    let graded = |entity| {
+        target_state.units.targeting() || selectable_pick(entity, &roots, target_state.self_guid.0)
+    };
     if let Some((t, entity)) = best {
         if let Ok((guid, net)) = units.get(entity) {
             if net.kind == EntityKind::Corpse {
                 hovered.corpse = Some(entity);
                 hovered.corpse_guid = Some(guid.0);
-            } else if selectable_pick(entity, &roots, target_state.self_guid.0) {
+            } else if graded(entity) {
                 hovered.target = Some(entity);
                 hovered.guid = Some(guid.0);
             } else {
                 hovered.refused = true;
             }
-        } else if selectable_pick(entity, &roots, target_state.self_guid.0) {
+        } else if graded(entity) {
             hovered.target = Some(entity);
         } else {
             hovered.refused = true;
@@ -438,9 +443,10 @@ pub(super) fn update_hover(
     *last_pick = best.map(|(_, e)| e);
 }
 
-/// The hover grader's `IsSelectable` test: `0x4828d0` calls vtable slot 21 at `0x482982`
-/// (`0x60be60`, the predicate `SetSelection` runs), and a refusal jumps to `0x482090(0,0)` and
-/// `ResetCursor 0x523d30`, past the publisher `0x492890`: no tooltip, cursor, brighten or click.
+/// The hover grader's `IsSelectable` test, run outside targeting only: `0x4828d0` calls vtable
+/// slot 21 at `0x482982` (`0x60be60`, the predicate `SetSelection` runs), and a refusal jumps to
+/// `0x482090(0,0)` and `ResetCursor 0x523d30`, past the publisher `0x492890`: no tooltip, cursor,
+/// brighten or click.
 ///
 /// It grades the winner and filters no candidate: the pick (`0x480a50`, `0x480d90`, `0x713cb0`,
 /// `0x481190`, `0x480df0`) reads no unit field, so a refused unit in front of a chest still takes
@@ -1400,7 +1406,10 @@ mod tests {
         let mut world = unit_pick_world();
         let farmer = unit_at(&mut world, 10, 0.0, unit_store(2, NOT_SELECTABLE, 100));
         let outside = pick_under(&mut world, None);
-        assert_eq!(outside.target, None, "outside targeting the grader refuses it");
+        assert_eq!(
+            outside.target, None,
+            "outside targeting the grader refuses it"
+        );
         assert!(outside.refused);
         let aimed = pick_under(&mut world, Some(0x0002));
         assert_eq!(aimed.target, Some(farmer), "a word takes it ungraded");
