@@ -37,11 +37,6 @@ pub(crate) struct GoTemplate {
     pub(crate) meeting_stone: Option<MeetingStoneTemplate>,
     /// MO_TRANSPORT (type 15) only: the transport timetable's inputs.
     pub(crate) mo_transport: Option<MoTransport>,
-    /// TEXT (type 9) only; a right-click reads it only when `page_id` is nonzero.
-    pub(crate) text_page: Option<TextPage>,
-    /// The `PageTextMaterial.dbc` id `GetQuestBackgroundMaterial` answers for a quest from this
-    /// object (`0x5f5950`): QUESTGIVER (2) and TEXT (9) read `data[2]`, GOOBER (10) `data[9]`.
-    pub(crate) quest_material: Option<u32>,
     /// `GAMEOBJECT_TYPE_ID` as the template gives it, which names its data columns.
     type_id: u32,
     /// The 24 data dwords (`[rec+0x1c]`), read by semantic through [`GoTemplate::column`].
@@ -54,6 +49,19 @@ impl GoTemplate {
     pub(crate) fn column(&self, id: GoColumn) -> i32 {
         data_column(self.type_id, id).map_or(0, |c| self.data[c])
     }
+
+    /// The first `PageText` id the reader opens on, the pageID column (`GetPageTextId 0x5f5900`):
+    /// TEXT's `data[0]`, GOOBER's `data[7]`; 0 is nothing to read.
+    pub(crate) fn page_id(&self) -> u32 {
+        self.column(GoColumn::PageId).max(0) as u32
+    }
+
+    /// The `PageTextMaterial.dbc` id, the pageMaterial column (`0x5f5950`), which the reader and
+    /// `GetQuestBackgroundMaterial` paint on: QUESTGIVER's and TEXT's `data[2]`, GOOBER's
+    /// `data[9]`; 0 for a type without one.
+    pub(crate) fn page_material(&self) -> u32 {
+        self.column(GoColumn::PageMaterial).max(0) as u32
+    }
 }
 
 /// The data-column semantic ids benilla reads, by their names in the record table at `0x80c9fc`.
@@ -63,6 +71,10 @@ pub(crate) enum GoColumn {
     StartOpen,
     /// `autoClose` (3).
     AutoClose,
+    /// `pageID` (0xf).
+    PageId,
+    /// `pageMaterial` (0x11).
+    PageMaterial,
     /// `noDamageImmune` (0x39).
     NoDamageImmune,
     /// `notInCombat` (0x3e).
@@ -79,10 +91,15 @@ fn data_column(type_id: u32, id: GoColumn) -> Option<usize> {
         (0 | 1, AutoClose) => Some(2),
         (0, NoDamageImmune) => Some(3),
         (1, NoDamageImmune) => Some(4),
+        (2, PageMaterial) => Some(2),
         (2, NoDamageImmune) => Some(5),
         (3, NotInCombat) => Some(12),
         (6, AutoClose) => Some(6),
+        (9, PageId) => Some(0),
+        (9, PageMaterial) => Some(2),
         (10, AutoClose) => Some(3),
+        (10, PageId) => Some(7),
+        (10, PageMaterial) => Some(9),
         (10, NoDamageImmune) => Some(11),
         (12, AutoClose) => Some(5),
         (24, NoDamageImmune) => Some(5),
@@ -111,16 +128,6 @@ pub(crate) struct MoTransport {
     pub(crate) taxi_path_id: u32,
     pub(crate) move_speed: f32,
     pub(crate) accel_rate: f32,
-}
-
-/// A TEXT template's readable head (vmangos `GameObjectInfo::text`; the client's `0x621b00` key
-/// `0x11` is the same material slot).
-#[derive(Clone, Copy)]
-pub(crate) struct TextPage {
-    /// `data[0]`, the first `PageText` id; `0` is nothing to read.
-    pub(crate) page_id: u32,
-    /// `data[2]`, a `PageTextMaterial.dbc` id.
-    pub(crate) material: u32,
 }
 
 /// Entry to template, asked once while in flight.
@@ -202,15 +209,6 @@ impl GameObjectTemplates {
             move_speed: data[1].max(0) as f32,
             accel_rate: data[2].max(0) as f32,
         });
-        let text_page = (type_id == 9).then(|| TextPage {
-            page_id: data[0].max(0) as u32,
-            material: data[2].max(0) as u32,
-        });
-        let quest_material = match type_id {
-            2 | 9 => Some(data[2].max(0) as u32),
-            10 => Some(data[9].max(0) as u32),
-            _ => None,
-        };
         self.templates.insert(
             entry,
             GoTemplate {
@@ -220,8 +218,6 @@ impl GameObjectTemplates {
                 floating_tooltip,
                 meeting_stone,
                 mo_transport,
-                text_page,
-                quest_material,
                 type_id,
                 data: *data,
             },
@@ -332,14 +328,14 @@ mod tests {
         t.insert(101, 9, "Book".into(), &data);
         t.insert(102, 10, "Goober".into(), &data);
         t.insert(103, 15, "Boat".into(), &data);
-        assert_eq!(t.templates.get(100).unwrap().quest_material, Some(2));
-        assert_eq!(t.templates.get(101).unwrap().quest_material, Some(2));
+        assert_eq!(t.templates.get(100).unwrap().page_material(), 2);
+        assert_eq!(t.templates.get(101).unwrap().page_material(), 2);
         assert_eq!(
-            t.templates.get(102).unwrap().quest_material,
-            Some(3),
+            t.templates.get(102).unwrap().page_material(),
+            3,
             "a GOOBER (type 10) reads data[9]"
         );
-        assert_eq!(t.templates.get(103).unwrap().quest_material, None);
+        assert_eq!(t.templates.get(103).unwrap().page_material(), 0);
     }
 
     #[test]
@@ -373,17 +369,12 @@ mod tests {
         data[1] = 0; // language
         data[2] = 2; // pageMaterial (Stone)
         t.insert(2036, 9, "Book".into(), &data);
-        let page = t
-            .templates
-            .get(2036)
-            .unwrap()
-            .text_page
-            .expect("type 9 captures");
-        assert_eq!(page.page_id, 1416);
-        assert_eq!(page.material, 2);
-        // A goober's data[0] is a lockId.
+        let book = t.templates.get(2036).unwrap();
+        assert_eq!(book.page_id(), 1416);
+        assert_eq!(book.page_material(), 2);
+        // A goober's data[0] is a lockId; its page is data[7].
         t.insert(2037, 10, "Lever".into(), &data);
-        assert!(t.templates.get(2037).unwrap().text_page.is_none());
+        assert_eq!(t.templates.get(2037).unwrap().page_id(), 0);
     }
 
     #[test]
