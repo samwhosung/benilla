@@ -80,6 +80,11 @@ impl Playing {
 }
 
 impl Cinematic {
+    /// Is a trigger latched for the world to show (`0xc4d75c`)?
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Is a cinematic on screen right now? The engine half of `InCinematic()`.
     pub(crate) fn is_playing(&self) -> bool {
         self.playing.is_some()
@@ -95,6 +100,14 @@ impl Cinematic {
 
 #[cfg(test)]
 impl Cinematic {
+    /// A latched trigger, as one the world was not yet ready to show.
+    pub(crate) fn pending_for_test(id: u32) -> Self {
+        Self {
+            pending: Some(id),
+            ..Self::default()
+        }
+    }
+
     /// A shot-less cinematic for tests that only ask [`Cinematic::is_playing`]; a [`CinematicPath`]
     /// needs a real `Cameras\*.m2`, so anything that reads a shot panics here.
     pub(crate) fn playing_for_test() -> Self {
