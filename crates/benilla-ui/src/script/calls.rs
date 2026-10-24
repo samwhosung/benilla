@@ -316,6 +316,9 @@ pub enum ItemCallback {
     /// `GetTrainerServiceIcon` and `GetTrainerServiceDescription` (`0x4d9140`, `0x4d9db0`), whose
     /// landing runs the window's pass `0x4d7d40` (`0x4d914a`, `0x4d9dba`).
     Trainer,
+    /// `GetQuestItemInfo` (`0x5018c0`), whose landing fires `QUEST_ITEM_UPDATE` for a ready record
+    /// (`0x5018fe`-`0x501903`), kept by the questgiver window.
+    Quest,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,

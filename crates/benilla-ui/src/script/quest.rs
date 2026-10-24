@@ -163,12 +163,6 @@ pub(super) fn submit(lua: &Lua, call: QuestCall) -> mlua::Result<()> {
 }
 
 impl super::UiScript {
-    /// The item records `GetQuestItemInfo`'s calls missed since the last take, one per call: the
-    /// callbacks `0x5018c0` the item cache keeps (dedupe flag 0, `0x5017ca`), each of which fires
-    /// `QUEST_ITEM_UPDATE` when its record lands (`0x5018fe`-`0x501903`).
-    pub fn take_quest_item_waits(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().quest_item_waits)
-    }
 
     /// Push (or clear, with `None`) the open questgiver panel snapshot.
     ///
@@ -399,16 +393,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 list.get(row as usize).cloned()
             };
-            // The lookup (`0x5017de`) of a template in flight keeps the callback `0x5018c0` on it,
-            // one per call; item id 0 is never looked up.
+            // The lookup (`0x5017de`) of a template in flight asks it and keeps the callback
+            // `0x5018c0` on it inside the call, one per call; item id 0 is never looked up.
             if let Some(it) = item
                 .as_ref()
                 .filter(|it| it.name.is_none() && it.item_id != 0)
             {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .quest_item_waits
-                    .push(it.item_id);
+                super::calls::ask(
+                    lua,
+                    super::RecordAsk::Item {
+                        entry: it.item_id,
+                        callback: super::ItemCallback::Quest,
+                    },
+                )?;
             }
             let (name, texture, count, quality, usable) = match item {
                 Some(it) => {

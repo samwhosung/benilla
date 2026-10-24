@@ -209,6 +209,14 @@ impl QuestGiver {
         self.item_waits.clear();
     }
 
+    /// `GetQuestItemInfo`'s lookup of a template in flight, inside its call
+    /// ([`benilla_ui::script::ItemCallback::Quest`]): the item cache asks a miss, a refused entry
+    /// again, and the window keeps one callback `0x5018c0` per call (`0x5017ce`).
+    pub(crate) fn ask_item_record(&mut self, items: &Items, commands: &NetCommands, entry: u32) {
+        let _ = items.template(entry, 0, Ask::Event(commands));
+        self.item_waits.push(entry);
+    }
+
     /// Spend the waits whose item record answered: how many brought a record, each its own
     /// `QUEST_ITEM_UPDATE`; a refusal runs its callback with status 0, which fires nothing
     /// (`0x5018d6`-`0x5018e0`).
@@ -545,8 +553,7 @@ pub(crate) fn feed_quest(
         let published = giver.panels != giver.panels_asked;
         let ask = Ask::at(last.is_none() || published, &commands);
         giver.panels_asked = giver.panels;
-        let waits = script.take_quest_item_waits();
-        giver.item_waits.extend(waits);
+        // The getter's callbacks, kept inside its calls ([`QuestGiver::ask_item_record`]).
         let item_updates = giver.item_answers(&items);
         let fresh = snapshot(
             &giver,
@@ -1151,10 +1158,11 @@ mod tests {
 
         publish(&mut app, offer(102, "Westbrook Garrison", 903));
         assert_eq!(quest_tick(&mut app, feed), ["QUEST_DETAIL"]);
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("GetQuestItemInfo('choice', 1) GetQuestItemInfo('choice', 1)")
-            .unwrap();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM")
+                .run("GetQuestItemInfo('choice', 1) GetQuestItemInfo('choice', 1)")
+        })
+        .unwrap();
         assert!(
             quest_tick(&mut app, feed).is_empty(),
             "the record is still out"
