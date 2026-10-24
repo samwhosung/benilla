@@ -318,6 +318,13 @@ fn the_both_button_press_hands_the_pitch_off() {
     assert_ne!(player.mover_pitch, 0.5, "the aim took it");
 }
 
+/// The filter [`super::self_seat`] reads a deck's pose through.
+type Decks = (
+    Without<crate::net::Embodied>,
+    Without<FlyCam>,
+    Without<Camera>,
+);
+
 /// A create on a transport seats us only on a game object whose flags carry the transport bit 0x8
 /// (`0x618b30` → `0x630a80`); on any other the login pose stands.
 #[test]
@@ -346,14 +353,7 @@ fn a_login_seats_us_only_on_a_game_object_flagged_as_a_transport() {
             .run_system_once(
                 |riders: Query<&TransportRider, With<crate::net::Embodied>>,
                  index: Res<GuidIndex>,
-                 decks: Query<
-                    &Transform,
-                    (
-                        Without<crate::net::Embodied>,
-                        Without<FlyCam>,
-                        Without<Camera>,
-                    ),
-                >,
+                 decks: Query<&Transform, Decks>,
                  stores: Query<&crate::net::ObjectStore>| {
                     super::self_seat(&(riders, index, decks, stores))
                         .map(|s| (s.entity, s.guid, s.local_pos, s.local_orientation))
