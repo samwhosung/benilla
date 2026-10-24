@@ -1,6 +1,6 @@
 //! Doodad-hull welding: world-static hulls batch into a few dozen welded trimeshes instead of
-//! thousands of colliders, with the same triangles, layers and [`PickOccluder`] clamp (the clamp
-//! reads a distance, and hover picks cast against pick meshes, never these hulls).
+//! thousands of colliders, with the same triangles and layers. A hull never occludes the mouse
+//! pick, which tests a doodad's drawn render batches ([`crate::interact::DoodadOccluders`]).
 //!
 //! - WMO props weld per placement (uniqueId) and despawn with it, as the single hulls did.
 //! - ADT doodads weld per the placement's first-registering tile and despawn with that tile. A
@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use super::collider::{build_collider_task, doodad_hulls_bare, PendingCollider};
-use crate::collision::PickOccluder;
 use crate::interact::WorldObject;
 use crate::model_render::ModelKind;
 
@@ -147,14 +146,13 @@ pub(super) fn flush_hull_welds(
 }
 
 /// One closed batch as one off-thread trimesh build with a single hull's components: default
-/// layers, the pick clamp and a static body unless `doodad_hulls_bare`. Not pickable.
+/// layers and a static body unless `doodad_hulls_bare`. Not pickable, and no pick occluder.
 fn spawn_weld(commands: &mut Commands, acc: &mut WeldAcc) -> Entity {
     let verts = std::mem::take(&mut acc.verts);
     let tris = std::mem::take(&mut acc.tris);
     commands
         .spawn((
             PendingCollider::new(build_collider_task(verts, tris), None, !doodad_hulls_bare()),
-            PickOccluder,
             WorldObject {
                 kind: ModelKind::Doodad,
                 label: "hull-weld".into(),

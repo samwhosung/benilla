@@ -54,7 +54,31 @@ pub struct ObjectHit {
 /// the ray itself, since only it knows what it drew, and reports only content it selected.
 pub trait PickSource {
     /// Append the nearest hit per member along `ray`; `all_hits` asks for the whole ray.
-    fn cast_objects(&self, ray: Ray3d, all_hits: bool, out: &mut Vec<(Arc<WorldObject>, RayHit)>);
+    fn cast_objects(&self, ray: Ray3d, all_hits: bool, out: &mut Vec<(Arc<WorldObject>, RayHit)>) {
+        self.cast_admitted(ray, all_hits, &|_, _| true, out);
+    }
+
+    /// [`Self::cast_objects`] over only the drawn batches `admit` passes, by the placement's
+    /// identity and the batch's geometry.
+    fn cast_admitted(
+        &self,
+        ray: Ray3d,
+        all_hits: bool,
+        admit: &dyn Fn(&WorldObject, &RenderSubmesh) -> bool,
+        out: &mut Vec<(Arc<WorldObject>, RayHit)>,
+    );
+}
+
+/// Whether a drawn batch is the static-doodad geometry the reference's world trace tests
+/// (`0x69c0f0`, the mouse pick's mask `0x1000114`): `0x69cdb0` queues a doodad def whose owner pair
+/// `+0x180` is zero, a map doodad rather than a GameObject's, in mode 2 under bits 4 and
+/// `0x1000000`, and mode 2 of `0x7089c0` tests the render submeshes, skipping any blend but 0
+/// (`0x70903b`). The def is queued once flag `0x80` of `+0xc` is set, which placing it sets once its
+/// model is loaded (`0x698da3`, `0x698ec1`, and `0x698a3a` for a map object's doodad set). The
+/// collision triangles, mode 3, need bit 1 or `0x100000`, which the pick's mask lacks.
+pub fn occludes_pick(object: &WorldObject, geometry: &RenderSubmesh) -> bool {
+    object.kind == crate::model_render::ModelKind::Doodad
+        && geometry.blend == benilla_formats::ModelBlend::Opaque
 }
 
 /// One triangle-accurate hit; the normal follows the authored winding, not the ray.
@@ -482,6 +506,15 @@ pub fn ray_member(geometry: &RenderSubmesh, transform: Transform, ray: Ray3d) ->
         *ray.direction,
         false,
     )
+}
+
+/// [`ray_member`] for a part posed by its entity's `GlobalTransform`.
+pub(crate) fn ray_member_at(
+    geometry: &RenderSubmesh,
+    gt: &GlobalTransform,
+    ray: Ray3d,
+) -> Option<RayHit> {
+    ray_submesh(geometry, gt, ray.origin, *ray.direction, false)
 }
 
 /// Ray against an entity's `Aabb` taken to world space corner by corner: the broad phase, and the

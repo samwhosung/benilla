@@ -8,10 +8,22 @@ use std::sync::Arc;
 use bevy::prelude::*;
 
 use super::{FaderState, GxCell, StaticGx};
+use benilla_formats::RenderSubmesh;
+
 use crate::interact::{ray_member, ray_mesh_bounds, PickSource, RayHit, WorldObject};
 
 impl PickSource for StaticGx {
-    fn cast_objects(&self, ray: Ray3d, all_hits: bool, out: &mut Vec<(Arc<WorldObject>, RayHit)>) {
+    fn cast_admitted(
+        &self,
+        ray: Ray3d,
+        all_hits: bool,
+        admit: &dyn Fn(&WorldObject, &RenderSubmesh) -> bool,
+        out: &mut Vec<(Arc<WorldObject>, RayHit)>,
+    ) {
+        let passes = |cell: &GxCell, i: usize| {
+            let item = &cell.items[i];
+            admit(&item.object, &item.geometry)
+        };
         let (origin, dir) = (ray.origin, *ray.direction);
         // Broad phase, nearest box entry first as in the entity cast: the narrow walk stops once a
         // hit beats every remaining box.
@@ -24,13 +36,14 @@ impl PickSource for StaticGx {
                     };
                     gather(cell, origin, dir, &mut candidates, |cell, i| {
                         // A fader draws here only while Steady; exiled, its entities answer.
-                        match cell.items[i].fader {
-                            Some(uid) => matches!(
-                                cell.faders.get(&uid).map(|f| &f.state),
-                                Some(FaderState::Steady)
-                            ),
-                            None => true,
-                        }
+                        passes(cell, i)
+                            && match cell.items[i].fader {
+                                Some(uid) => matches!(
+                                    cell.faders.get(&uid).map(|f| &f.state),
+                                    Some(FaderState::Steady)
+                                ),
+                                None => true,
+                            }
                     });
                 }
                 super::render::GxDoodadVis::Prop(instance, sets) => {
@@ -38,9 +51,10 @@ impl PickSource for StaticGx {
                         continue;
                     };
                     gather(region, origin, dir, &mut candidates, |region, i| {
-                        region.items[i].prop.as_ref().is_some_and(|p| {
-                            sets.drawn.get(usize::from(p.set)).copied().unwrap_or(false)
-                        })
+                        passes(region, i)
+                            && region.items[i].prop.as_ref().is_some_and(|p| {
+                                sets.drawn.get(usize::from(p.set)).copied().unwrap_or(false)
+                            })
                     });
                 }
             }
@@ -50,13 +64,14 @@ impl PickSource for StaticGx {
                 continue;
             };
             gather(region, origin, dir, &mut candidates, |region, i| {
-                region.items[i].wmo.as_ref().is_some_and(|w| {
-                    groups
-                        .drawn
-                        .get(usize::from(w.group))
-                        .copied()
-                        .unwrap_or(false)
-                })
+                passes(region, i)
+                    && region.items[i].wmo.as_ref().is_some_and(|w| {
+                        groups
+                            .drawn
+                            .get(usize::from(w.group))
+                            .copied()
+                            .unwrap_or(false)
+                    })
             });
         }
         candidates.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));

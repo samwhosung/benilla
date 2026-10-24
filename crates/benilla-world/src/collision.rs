@@ -97,10 +97,12 @@ pub struct GroundDecalSurface;
 /// Marks a static collider that occludes the mouse pick: the reference traces the world too and
 /// drops the object hit when the world hit is strictly nearer (`0x480df0` at `0x480eb4`,
 /// `CWorld::Intersect` `0x672170`, mask `0x1000114`), so a unit behind a wall is not hoverable.
-/// Occluders are terrain (DDA `0x69c920`), WMO group faces outside MOPY reject mask `0x84` (here
-/// the walk collider, which rejects only `0x04`: a `0x84` face set is not built) and static
-/// default-set doodad hulls (`0x69cdb0`). Liquid (mask bits 16-19 off) is not, nor are unit and
-/// server-spawned GameObject hulls, transports included: those are the object trace.
+/// Occluder colliders are terrain (DDA `0x69c920`) and WMO group faces outside MOPY reject mask
+/// `0x84` (here the walk collider, which rejects only `0x04`: a `0x84` face set is not built). A
+/// static doodad occludes by its drawn opaque render batches, never its collision hull
+/// (`0x69cdb0` queues it in mode 2, [`crate::interact::DoodadOccluders`]), so no doodad hull
+/// carries this. Liquid (mask bits 16-19 off) is not an occluder, nor are unit and server-spawned
+/// GameObject hulls, transports included: those are the object trace.
 #[derive(Component)]
 pub struct PickOccluder;
 
