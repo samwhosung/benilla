@@ -140,6 +140,45 @@ mod tests {
         );
     }
 
+    /// The world trace's doodad leg admits a drawn doodad batch of blend 0 alone
+    /// ([`crate::interact::occludes_pick`]): an alpha-keyed batch nearer along the ray does not
+    /// occlude.
+    #[test]
+    fn the_occluder_cast_takes_only_opaque_doodad_batches() {
+        let mut gx = StaticGx::default();
+        let (rock, leaves) = (object(5), object(6));
+        let opaque = tri([0.0; 3]);
+        let keyed = Arc::new(benilla_formats::RenderSubmesh {
+            blend: ModelBlend::AlphaTest,
+            ..(*tri([0.0, 0.0, 2.0])).clone()
+        });
+        assert!(gx.divert(batch_of(
+            &rock,
+            &opaque,
+            Vec3::ZERO,
+            None,
+            ModelBlend::Opaque
+        )));
+        assert!(gx.divert(batch_of(
+            &leaves,
+            &keyed,
+            Vec3::ZERO,
+            None,
+            ModelBlend::AlphaTest
+        )));
+        gx.world.visible.push(GxDoodadVis::Cell((0, 0)));
+        let ray = Ray3d::new(Vec3::new(-0.3, 5.0, -0.3), Dir3::NEG_Y);
+        let mut out = Vec::new();
+        gx.cast_admitted(ray, true, &crate::interact::occludes_pick, &mut out);
+        let hits: Vec<(u32, f32)> = out.iter().map(|(o, h)| (o.id, h.distance)).collect();
+        assert_eq!(
+            hits,
+            vec![(5, 5.0)],
+            "the rock, not the leaves 2 yd above it"
+        );
+        assert_eq!(cast(&gx).len(), 2, "the identified pick still names both");
+    }
+
     /// Exiled, the placement draws as entities that carry their own pick, so the lane goes quiet.
     #[test]
     fn an_exiled_fader_stops_answering() {

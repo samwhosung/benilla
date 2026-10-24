@@ -238,7 +238,12 @@ mod tests {
         let owned = streamer.tiles.get(&(3, 4)).unwrap().welds.clone();
         assert_eq!(owned.len(), 1);
         assert!(app.world().get::<PendingCollider>(owned[0]).is_some());
-        assert!(app.world().get::<PickOccluder>(owned[0]).is_some());
+        assert!(
+            app.world()
+                .get::<crate::collision::PickOccluder>(owned[0])
+                .is_none(),
+            "a hull never occludes the mouse pick"
+        );
     }
 
     #[test]
