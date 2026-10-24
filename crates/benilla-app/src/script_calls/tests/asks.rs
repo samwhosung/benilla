@@ -255,3 +255,28 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
         "a callback per call"
     );
 }
+
+/// `GetQuestItemInfo` looks a template in flight up with the callback `0x5018c0` and no dedupe
+/// (`0x5017ca`-`0x5017de`): the item query goes out inside the call, once while it is in flight.
+#[test]
+fn get_quest_item_info_asks_a_missed_record_inside_its_call() {
+    use benilla_ui::script::{QuestItemView, QuestPanel, QuestState};
+    let (mut app, rx) = client();
+    let pending = |item_id: u32| QuestItemView {
+        item_id,
+        count: 1,
+        ..Default::default()
+    };
+    vm(&mut app).set_quest(Some(QuestState {
+        panel: QuestPanel::Reward,
+        rewards: vec![pending(2589)],
+        choices: vec![pending(2590)],
+        ..Default::default()
+    }));
+    eval::<()>(
+        &mut app,
+        r#"GetQuestItemInfo("reward", 1) RandomRoll(1, 2) GetQuestItemInfo("choice", 1)
+           GetQuestItemInfo("reward", 1)"#,
+    );
+    assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 2590"]);
+}
