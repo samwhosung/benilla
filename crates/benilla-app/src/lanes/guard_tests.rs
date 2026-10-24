@@ -99,6 +99,12 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (Row::Queue, "::ui_bank::BankErrors", "the bank errors"),
     (
         Row::Queue,
+        "::player::view_subject::FarSight",
+        "the far-sight machine a handler's Lua runs through the host's buff cancel; every feed \
+         that lends the host reads it, and none fires from it",
+    ),
+    (
+        Row::Queue,
         "::ui_action::drain::ActionSlotWrites",
         "the action slot writes a handler's Lua makes, sent in the call and stored after the pass",
     ),
@@ -647,6 +653,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
     "::ui_action::errors::UiErrorKeys",
     // The slot writes the call host's action bar verbs queue for the store.
     "::ui_action::drain::ActionSlotWrites",
+    // The far-sight machine the call host's buff cancel runs (`0x6e70ad`).
+    "::player::view_subject::FarSight",
     "::tutorial::Tutorials",
     "::ui_session::latch::LatchCloses",
     "::ui_logout::SessionPosts",
