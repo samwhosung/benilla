@@ -781,8 +781,22 @@ mod tests {
         armed: bool,
         covered: bool,
     ) -> WorldCursor {
+        frame_with(standing, world, over_ui, lua, armed, covered, |_| {})
+    }
+
+    /// One frame; `setup` puts the VM in a mode before `lua` runs.
+    fn frame_with(
+        standing: WorldCursor,
+        world: WorldCursor,
+        over_ui: bool,
+        lua: &str,
+        armed: bool,
+        covered: bool,
+        setup: impl FnOnce(&mut benilla_ui::script::UiScript),
+    ) -> WorldCursor {
         let mut app = App::new();
-        let script = benilla_ui::script::UiScript::new().unwrap();
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        setup(&mut script);
         script.run(lua).unwrap();
         app.insert_non_send_resource(script);
         app.insert_resource(if covered {
@@ -929,6 +943,48 @@ mod tests {
             frame_armed(GREY, WorldCursor::default(), true, "ResetCursor()", false),
             WorldCursor::default()
         );
+    }
+
+    /// Every no-cursor exit of the world classifier shows the base mode (`0x523d30`: open ground
+    /// `0x481875`, pick state 2's clears `0x4826cb`, `0x48272d`, `0x4828bd`, `0x4829cf`), so repair
+    /// mode (`0x4fbce3`) and an armed wrap (`0x5edebf`) keep their cursor over the world, while a
+    /// verdict of its own still shows.
+    #[test]
+    fn over_the_world_a_cleared_verdict_shows_the_base_mode() {
+        // Repair mode armed on an earlier frame, its own cursor write already taken.
+        let repair = |s: &mut benilla_ui::script::UiScript| {
+            s.set_merchant(Some(benilla_ui::script::MerchantState {
+                can_repair: true,
+                ..Default::default()
+            }));
+            s.run("ShowRepairCursor()").unwrap();
+            let _ = s.take_cursor_write();
+        };
+        let base = WorldCursor::default();
+        let repair_cursor = WorldCursor {
+            kind: CursorKind::Repair,
+            unable: false,
+        };
+        assert_eq!(
+            frame_with(base, base, false, "", false, false, repair),
+            repair_cursor,
+            "repair mode over open ground"
+        );
+        assert_eq!(
+            frame_with(base, SWORD, false, "", false, false, repair),
+            SWORD,
+            "a unit's own cursor still shows in repair mode"
+        );
+        let wrap = |s: &mut benilla_ui::script::UiScript| s.arm_gift_wrap(0, 1);
+        assert_eq!(
+            frame_with(base, base, false, "", false, false, wrap),
+            WorldCursor {
+                kind: CursorKind::Cast,
+                unable: false,
+            },
+            "an armed wrap over open ground"
+        );
+        assert_eq!(frame(SWORD, base, false, ""), base, "no mode: the pointer");
     }
 
     /// A UI element that writes no cursor does not invent one.
