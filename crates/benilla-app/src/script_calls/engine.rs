@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{FollowRequest, RecordAsk, ScriptValue, UiScript};
+use benilla_ui::script::{FollowRequest, ItemCallback, RecordAsk, ScriptValue, UiScript};
 
 use super::ScriptCallHost;
 use crate::target::FollowStart;
@@ -58,6 +58,7 @@ pub(crate) struct RecordAsks<'w> {
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     summon: Option<Res<'w, crate::ui_summon::SummonState>>,
     cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
+    trainer: Option<ResMut<'w, crate::ui_trainer::TrainerOpen>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
@@ -92,6 +93,18 @@ impl RecordAsks<'_> {
                 {
                     let _ = items.template(entry, 0, Ask::Event(&self.net));
                     cooldowns.await_item_record(entry);
+                }
+            }
+            RecordAsk::Item { entry, callback } => {
+                let Some(items) = self.items.as_deref() else {
+                    return;
+                };
+                match callback {
+                    ItemCallback::Trainer => {
+                        if let Some(trainer) = self.trainer.as_deref_mut() {
+                            crate::ui_trainer::ask_item_record(items, &self.net, trainer, entry);
+                        }
+                    }
                 }
             }
             // A zero guid is no key and asks nothing (`0x55f080`).

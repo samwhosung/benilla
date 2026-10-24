@@ -787,8 +787,6 @@ pub(crate) struct Model {
     pub(crate) trainer_selection: Option<u32>,
     /// The state filter `ds:0xb73a1c`: bit n set shows the services in state n.
     pub(crate) trainer_filter: u32,
-    /// The item records the trainer getters' calls missed, one per call, until the app takes them.
-    pub(crate) trainer_item_waits: Vec<u32>,
     /// The item records the profession getters' calls missed, one per call, each waiting with the
     /// callback `0x4fdc30` (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`).
     pub(crate) trade_skill_item_waits: Vec<u32>,
@@ -1583,7 +1581,6 @@ impl Model {
             trainer: None,
             trainer_selection: None,
             trainer_filter: 7,
-            trainer_item_waits: Vec::new(),
             trade_skill_item_waits: Vec::new(),
             trade_skill_pending: 0,
             trade_skill_build_waits: Vec::new(),

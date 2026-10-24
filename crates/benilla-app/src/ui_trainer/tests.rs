@@ -2017,7 +2017,8 @@ fn feed_app(spells: SpellCatalog, lines: SkillLineCatalog) -> App {
         })
         .insert_resource(SkillLines { catalog: lines })
         .add_systems(Update, feed_trainer);
-    let script = UiScript::new().unwrap();
+    let mut script = UiScript::new().unwrap();
+    script.keep_calls();
     script
         .run(
             "SEEN = {} local f = CreateFrame('Frame') f:RegisterEvent('TRAINER_SHOW') \
@@ -2037,6 +2038,27 @@ fn tick(app: &mut App) -> Vec<String> {
     let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
     s.run("SEEN = {}").unwrap();
     seen
+}
+
+/// Run `chunk`, then make the item lookups its getters kept as the host makes them inside the
+/// call ([`super::ask_item_record`]).
+fn run_getters(app: &mut App, chunk: &str) {
+    let entries = {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        s.run(chunk).unwrap();
+        s.take_item_asks(benilla_ui::script::ItemCallback::Trainer)
+    };
+    let world = app.world_mut();
+    world.resource_scope(|world, mut open: Mut<TrainerOpen>| {
+        for entry in entries {
+            super::ask_item_record(
+                world.resource::<Items>(),
+                world.resource::<NetCommands>(),
+                &mut open,
+                entry,
+            );
+        }
+    });
 }
 
 /// `chunk`'s number.
@@ -2141,10 +2163,7 @@ fn an_item_record_a_getter_missed_runs_the_state_pass() {
     open(&mut app);
     assert_eq!(tick(&mut app), ["TRAINER_SHOW"]);
     assert_eq!(costs(&mut app, 6), listed);
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .run("for i = 1, 6 do GetTrainerServiceIcon(i) end")
-        .unwrap();
+    run_getters(&mut app, "for i = 1, 6 do GetTrainerServiceIcon(i) end");
     assert!(tick(&mut app).is_empty(), "the record is still out");
     land(&mut app);
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE"]);
@@ -2180,10 +2199,7 @@ fn the_state_pass_runs_once_per_trigger_and_per_callback() {
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
     assert!(tick(&mut app).is_empty());
 
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .run("for i = 1, 2 do GetTrainerServiceIcon(i) end GetTrainerServiceIcon(2)")
-        .unwrap();
+    run_getters(&mut app, "for i = 1, 2 do GetTrainerServiceIcon(i) end GetTrainerServiceIcon(2)");
     assert!(tick(&mut app).is_empty(), "the record is still out");
     app.world_mut()
         .resource_mut::<Items>()

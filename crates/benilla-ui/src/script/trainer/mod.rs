@@ -286,12 +286,6 @@ impl super::UiScript {
         model.trainer_rows_fresh = true;
     }
 
-    /// The item records the icon and description getters' calls missed since the last take, one
-    /// per call: the callbacks `0x4d9140` and `0x4d9db0` the item cache keeps (dedupe flag 0,
-    /// `0x4d9076`, `0x4d9ce7`), each of which runs `0x4d7d40` when its record lands.
-    pub fn take_trainer_item_waits(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().trainer_item_waits)
-    }
 
     /// The trainer calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_trainer_calls(&mut self) -> Vec<TrainerCall> {
@@ -610,6 +604,18 @@ fn rows(model: &Model) -> (&[Row], usize) {
     (&model.trainer_rows, model.trainer_visible)
 }
 
+/// A getter's product lookup that missed: the item cache asked inside the call, with the
+/// window's callback (`0x4d9140`, `0x4d9db0`, dedupe flag 0 at `0x4d9076` and `0x4d9ce7`).
+fn ask_item(lua: &Lua, entry: u32) -> mlua::Result<()> {
+    super::calls::ask(
+        lua,
+        super::RecordAsk::Item {
+            entry,
+            callback: super::ItemCallback::Trainer,
+        },
+    )
+}
+
 /// The service at a 1-based row index; `None` for a header. `GameTooltip:SetTrainerService`
 /// resolves its index through this too, never through a raw `services` position.
 pub(super) fn service(model: &Model, index: usize) -> Option<&TrainerService> {
@@ -780,12 +786,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTrainerServiceIcon(index)` (`0x84a8cc`, `0x4d8f81`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceIcon(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let (texture, wait) = service(&model, index)
-                .map(|s| (s.texture.clone(), s.icon_wait))
-                .unwrap_or_default();
-            // The miss keeps its callback (`0x4d907e`) and pushes nil (`0x4d90a4`).
-            model.trainer_item_waits.extend(wait);
+            let (texture, wait) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                service(&model, index)
+                    .map(|s| (s.texture.clone(), s.icon_wait))
+                    .unwrap_or_default()
+            };
+            // The miss asks and keeps its callback inside the call (`0x4d907e`), and pushes nil
+            // (`0x4d90a4`).
+            if let Some(entry) = wait {
+                ask_item(lua, entry)?;
+            }
             opt_str(lua, texture.as_ref())
         })?,
     )?;
@@ -797,12 +808,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `0x4d9b71`).
             let index =
                 binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceDescription(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let (description, wait) = service(&model, index)
-                .map(|s| (s.description.clone(), s.description_wait))
-                .unwrap_or_default();
-            // The miss keeps its callback (`0x4d9cef`).
-            model.trainer_item_waits.extend(wait);
+            let (description, wait) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                service(&model, index)
+                    .map(|s| (s.description.clone(), s.description_wait))
+                    .unwrap_or_default()
+            };
+            // The miss asks and keeps its callback inside the call (`0x4d9cef`).
+            if let Some(entry) = wait {
+                ask_item(lua, entry)?;
+            }
             opt_str(lua, description.as_ref())
         })?,
     )?;

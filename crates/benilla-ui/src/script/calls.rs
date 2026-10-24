@@ -301,9 +301,21 @@ pub enum RecordAsk {
     /// `GetContainerItemCooldown` or the bag and inventory tooltips: the item cache, with the
     /// callback `0x6e2f70`, deduped (`0x6e2ef4`-`0x6e2f0d`).
     CooldownItem(u32),
+    /// A getter's item-record lookup on a record its mirror lacks: the item cache, with the
+    /// getter's callback, kept by its owner ([`ItemCallback`]).
+    Item { entry: u32, callback: ItemCallback },
     /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
     /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
     Summoner,
+}
+
+/// Who keeps the callback of a getter's item-record lookup ([`RecordAsk::Item`]); each is
+/// registered once per call, with no dedupe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemCallback {
+    /// `GetTrainerServiceIcon` and `GetTrainerServiceDescription` (`0x4d9140`, `0x4d9db0`), whose
+    /// landing runs the window's pass `0x4d7d40` (`0x4d914a`, `0x4d9dba`).
+    Trainer,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
@@ -844,6 +856,17 @@ impl UiScript {
     pub fn take_calls_like(&mut self, call: &ScriptCall) -> usize {
         self.take_calls_where(|kept| (kept == call).then_some(()))
             .len()
+    }
+
+    /// The entries of the item-record lookups with `callback` a harness's VM kept, in call order
+    /// ([`RecordAsk::Item`]).
+    pub fn take_item_asks(&mut self, callback: ItemCallback) -> Vec<u32> {
+        self.take_calls_where(|call| match call {
+            ScriptCall::RecordAsk(RecordAsk::Item { entry, callback: c }) if *c == callback => {
+                Some(*entry)
+            }
+            _ => None,
+        })
     }
 
     /// Take the kept calls `pick` answers for, in call order, leaving the rest kept.
