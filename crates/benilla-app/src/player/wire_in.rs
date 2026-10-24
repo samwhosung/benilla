@@ -1039,6 +1039,83 @@ mod arrival_tests {
 }
 
 #[cfg(test)]
+mod self_teleport_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// One bare self-addressed move from GM Island's dock, applied as the controller applies it.
+    fn applied(to: [f32; 3], teleport: bool, detached: bool) -> Player {
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.insert_resource(Player {
+            active: true,
+            detached,
+            pos: wow_to_bevy([16_222.0, 16_252.0, 12.5]),
+            ..Default::default()
+        });
+        let m = SelfMoveMessage {
+            position: to,
+            orientation: 0.0,
+            flags: 0,
+            pitch: 0.0,
+            fall_time: 0,
+            jump: None,
+            transport: None,
+            teleport,
+        };
+        world
+            .run_system_once(
+                move |time: Res<Time>,
+                      mut player: ResMut<Player>,
+                      transports: super::super::TransportQuery| {
+                    let mut cam = FlyCam {
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        speed: 0.0,
+                    };
+                    apply_self_move(&m, &mut player, &mut cam, &time, &transports);
+                },
+            )
+            .expect("runs");
+        world.remove_resource::<Player>().expect("player")
+    }
+
+    /// Our own mover's `MSG_MOVE_TELEPORT` reaches the teleport apply `0x617e90` (`0x6186ee`,
+    /// `0x61870c`), so it reloads under the same gate as the ack's snap: past 30 yards, with the
+    /// camera following. The other relays never reach it.
+    #[test]
+    fn a_self_teleport_past_30_yards_holds_the_body_and_the_frame() {
+        let south_seas = [-11_880.0, -4_700.0, 2.0];
+        let far = applied(south_seas, true, false);
+        assert!(
+            far.holds_the_frame(),
+            "GM Island to the South Seas holds the frame"
+        );
+        assert!(
+            far.settling && far.world_stale,
+            "and the body, until resident"
+        );
+        assert!(
+            !applied([16_222.0, 16_281.5, 12.5], true, false).holds_the_frame(),
+            "29.5 yards"
+        );
+        assert!(
+            applied([16_222.0, 16_282.5, 12.5], true, false).holds_the_frame(),
+            "30.5 yards"
+        );
+        assert!(
+            !applied(south_seas, true, true).holds_the_frame(),
+            "the eye does not follow"
+        );
+        let placed = applied(south_seas, false, false);
+        assert!(
+            !placed.holds_the_frame() && !placed.settling,
+            "a relay that only places the mover reloads nothing"
+        );
+    }
+}
+
+#[cfg(test)]
 mod seat_tests {
     use super::*;
     use crate::player::FlyCam;

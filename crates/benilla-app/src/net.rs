@@ -2409,6 +2409,9 @@ pub(crate) struct SelfMoveMessage {
     /// The server's deck-local pose for us. Never re-derive it from the boat's transform, which
     /// [`crate::transport::tick_transports`] holds at the far pose across a map seam.
     pub(crate) transport: Option<benilla_protocol::TransportPose>,
+    /// `MSG_MOVE_TELEPORT`, whose apply is a teleport's (`0x6016e2` → `0x602f90` → `0x6186b0` →
+    /// `0x617e90`), where the other relays only place the mover.
+    pub(crate) teleport: bool,
 }
 
 /// `SMSG_CLIENT_CONTROL_UPDATE`, verbatim; the controller decides. `mover` is the unit spoken
