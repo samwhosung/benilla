@@ -521,7 +521,10 @@ impl Plugin for TerrainPlugin {
                     // them before or after the release, never beside it.
                     .after(crate::schedule::WorldStage::Net)
                     .in_set(crate::schedule::WorldStage::Stream)
-                    .before(stream_terrain),
+                    .before(stream_terrain)
+                    // The forms and the stream activity it clears, which the ungated form
+                    // furnisher in the same stage writes.
+                    .before(crate::model_forms::furnish_model_forms),
             )
             // Ungated, so the last world's art drains at character select too.
             .add_systems(Update, scope_placement_art)
