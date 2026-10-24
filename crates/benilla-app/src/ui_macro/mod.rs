@@ -256,6 +256,7 @@ struct BindingsSeen {
 /// spell of each macro on the bar that holds the old one (`0x4e5e60`'s macro arm, `0x4e5ec4`),
 /// derived from nothing. Runs after the book's feed, so a derivation reads the book as it stands,
 /// and copies the engine's records out for the action bar.
+#[allow(clippy::type_complexity)] // the bar, the records and the pet book's sorts, as one param
 fn rebind_macro_spells(
     // The bar, whose supersede queue this drains, and the records, which the call host's presses
     // and usable refresh read, so a turn: no Lua runs here.
