@@ -116,6 +116,12 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
+        "::ui_item_text::ItemTextOpen",
+        "the reader's reads, which `SMSG_GAMEOBJECT_PAGETEXT` queues (`0x5f88c0` → `0x4e32e0`) and \
+         `begin_item_text` fires `ITEM_TEXT_BEGIN` from; the reader's verbs hold it in the host",
+    ),
+    (
+        Row::HostHeld,
         "::ui_mail::MailOpen",
         "the mailbox's list and results, the send result's equip refusal line among them, which \
          `feed_mail` fires from; the mail verbs, acting in their calls, hold it in the host",
