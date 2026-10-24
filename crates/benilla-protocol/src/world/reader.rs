@@ -28,13 +28,18 @@ impl WorldReader {
     pub fn poll(&mut self) -> Result<crate::Poll> {
         let (opcode, body) = read_frame(&mut self.stream, Some(&mut self.decrypter), &self.traffic)
             .map_err(|e| anyhow!("world stream closed: {e}"))?;
+        let arrived = std::time::Instant::now();
         match messages::parse_server_with_tail(opcode, &body) {
-            Ok((packet, tail)) => Ok(crate::Poll::Events {
-                opcode,
-                events: crate::decode(packet),
-                tail,
-                body,
-            }),
+            Ok((packet, tail)) => {
+                let mut events = crate::decode(packet);
+                stamp_arrival(&mut events, arrived);
+                Ok(crate::Poll::Events {
+                    opcode,
+                    events,
+                    tail,
+                    body,
+                })
+            }
             Err(e) => Ok(crate::Poll::Skipped {
                 opcode,
                 reason: format!(
@@ -45,6 +50,20 @@ impl WorldReader {
                 ),
                 body,
             }),
+        }
+    }
+}
+
+/// Stamp every transport create of one packet with the instant it was read, as the reference's
+/// network thread stamps a packet's queue node (`0x538851`) and its create runs with that time.
+fn stamp_arrival(events: &mut [crate::SessionEvent], at: std::time::Instant) {
+    for ev in events {
+        if let crate::SessionEvent::ObjectCreate {
+            transport_progress: Some(clock),
+            ..
+        } = ev
+        {
+            clock.arrived = Some(at);
         }
     }
 }
@@ -60,4 +79,55 @@ fn hex_preview(body: &[u8], max: usize) -> String {
         s.push('…');
     }
     s.trim_end().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{EntityKind, ObjectFields, SessionEvent, TransportClock};
+
+    /// Every transport create of a packet takes the packet's read instant; nothing else changes.
+    #[test]
+    fn a_packets_transport_creates_take_its_arrival() {
+        let create = |progress: Option<u32>| SessionEvent::ObjectCreate {
+            guid: 1,
+            kind: EntityKind::GameObject,
+            display_id: None,
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: progress.map(|progress_ms| TransportClock {
+                progress_ms,
+                arrived: None,
+            }),
+            transport: None,
+            spline: None,
+            fields: ObjectFields::default(),
+        };
+        let mut events = vec![create(Some(7)), create(None), SessionEvent::ObjectUpdateEnd];
+        let at = std::time::Instant::now();
+        stamp_arrival(&mut events, at);
+        let clocks: Vec<Option<TransportClock>> = events
+            .iter()
+            .map(|e| match e {
+                SessionEvent::ObjectCreate {
+                    transport_progress, ..
+                } => *transport_progress,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            clocks,
+            [
+                Some(TransportClock {
+                    progress_ms: 7,
+                    arrived: Some(at)
+                }),
+                None,
+                None
+            ]
+        );
+    }
 }

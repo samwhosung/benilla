@@ -529,8 +529,8 @@ fn object_create(
         display_id,
         scale,
     };
-    // A transport's cycle anchor: the create block's `UPDATE_FLAG_TRANSPORT` u32 and when it
-    // landed; a re-create re-anchors. The reference's per-frame tick (`0x630970`) runs types 15
+    // A transport's cycle anchor: the create block's `UPDATE_FLAG_TRANSPORT` u32 and the instant
+    // its packet arrived (`0x5f7080` subtracts the queue node's stamp); a re-create re-anchors. The reference's per-frame tick (`0x630970`) runs types 15
     // (boats, a path-progress clock) and 11 (lifts, `time-since-create % period`,
     // `GameObject.cpp:246`).
     let go_type = (kind == EntityKind::GameObject).then(|| fields.gameobject_type_id());
@@ -539,7 +539,7 @@ fn object_create(
         .flatten()
         .map(|clock| crate::transport::TransportAnchor {
             progress_ms: clock.progress_ms,
-            at: std::time::Instant::now(),
+            at: clock.arrived.unwrap_or_else(std::time::Instant::now),
         });
     // The placement, and on a type-11 lift the basis its keyframe offsets rotate through.
     let go_quat = (kind == EntityKind::GameObject)
