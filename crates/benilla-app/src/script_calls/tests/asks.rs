@@ -6,7 +6,7 @@ use benilla_ui::script::{TradeSideState, TradeSlotItem, TradeState, UiScript, Un
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
-use super::systems::{client, eval};
+use super::systems::{client, eval, NPC};
 use crate::net::ClientCommand;
 
 /// What went out, in order, of the kinds these chunks send.
@@ -218,4 +218,40 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
     for entry in [6948, 5976, 2589] {
         assert!(cooldowns.awaits_item_record(entry), "{entry} awaited");
     }
+}
+
+/// The trainer's icon and description getters look the product's record up with the callbacks
+/// `0x4d9140` and `0x4d9db0` and no dedupe (`0x4d9079`-`0x4d9096`, `0x4d9cea`-`0x4d9d07`): a miss
+/// sends the item query inside the call, once while it is in flight, and each call leaves its
+/// callback on the window.
+#[test]
+fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
+    use benilla_ui::script::{TrainerService, TrainerServiceCategory, TrainerState};
+    let (mut app, rx) = client();
+    vm(&mut app).set_trainer(Some(TrainerState {
+        guid: NPC,
+        services: vec![TrainerService {
+            spell_id: 2018,
+            name: Some("Blacksmithing".into()),
+            category: TrainerServiceCategory::Available,
+            group_key: 164,
+            group_name: "Blacksmithing".into(),
+            icon_wait: Some(2589),
+            description_wait: Some(2590),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    eval::<()>(
+        &mut app,
+        "for i = 1, GetNumTrainerServices() do GetTrainerServiceIcon(i) end RandomRoll(1, 2) \
+         for i = 1, GetNumTrainerServices() do GetTrainerServiceDescription(i) end \
+         for i = 1, GetNumTrainerServices() do GetTrainerServiceIcon(i) end",
+    );
+    assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 2590"]);
+    assert_eq!(
+        app.world().resource::<crate::ui_trainer::TrainerOpen>().item_waits,
+        [2589, 2590, 2589],
+        "a callback per call"
+    );
 }
