@@ -341,6 +341,7 @@ fn get_inventory_item_cooldown_answers_the_item_query_under_the_clients_gates() 
 #[test]
 fn a_bag_slots_cooldown_query_asks_for_its_missing_record() {
     let mut s = script();
+    s.keep_calls();
     let bag = ContainerState {
         name: None,
         num_slots: 16,
@@ -394,6 +395,7 @@ fn a_bag_slots_cooldown_query_asks_for_its_missing_record() {
 #[test]
 fn an_inventory_slots_tooltip_asks_for_its_missing_record() {
     let mut s = script();
+    s.keep_calls();
     // The bank bands read through `GetItemInSlot`, open only at a banker.
     s.set_bank(Some(crate::script::BankState::default()));
     let mut inv: InventorySlots = Default::default();

@@ -448,16 +448,12 @@ impl ActionStates<'_, '_> {
     ) {
         let (memory, new_vm) = self.memory.vm.get_reset(script);
         let cooldowns = &mut *self.cooldowns;
-        let (items, commands, spells) = (&*self.items, &*self.commands, &self.spells);
+        let (items, spells) = (&*self.items, &self.spells);
         let now = Instant::now();
         cooldowns.prune(now);
-        // The callback `0x6e2f70` that the bag getter's and the bag and inventory tooltips'
-        // queries asked, each a lookup with it (`0x6e2f0d`); then every awaited record that
-        // answered, whose flush is this frame's.
-        for entry in script.take_cooldown_record_asks() {
-            let _ = items.template(entry, 0, Ask::Event(commands));
-            cooldowns.await_item_record(entry);
-        }
+        // Every record the callback `0x6e2f70` awaits that answered, whose flush is this frame's:
+        // the bag getter's and the bag and inventory tooltips' queries asked it inside their calls
+        // (`0x6e2f0d`, [`benilla_ui::script::RecordAsk::CooldownItem`]).
         cooldowns.answer_awaited_records(items, spells.as_deref().map(|s| &s.catalog), now);
         let gen_changed = memory.last_generation != Some(cooldowns.generation);
         memory.last_generation = Some(cooldowns.generation);

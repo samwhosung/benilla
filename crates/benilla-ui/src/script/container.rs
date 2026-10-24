@@ -391,10 +391,13 @@ impl super::UiScript {
         })
     }
 
-    /// Drain the item entries whose record a cooldown query found missing since the last call, each
-    /// asked with the callback `0x6e2f70`.
+    /// The item entries whose record a cooldown query found missing that a harness's VM kept
+    /// ([`Self::keep_calls`]), each asked with the callback `0x6e2f70`.
     pub fn take_cooldown_record_asks(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().cooldown_record_asks)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::CooldownItem(entry)) => Some(*entry),
+            _ => None,
+        })
     }
 
     /// Arm a gift wrap with the paper at `(bag, slot)`, as `0x5edea0` does: the paper locks, the
@@ -991,21 +994,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 slot,
                 "Usage: GetContainerItemCooldown(index, slot)",
             )?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let slot = key.and_then(|k| model.bag_slot(k.0, k.1));
-            let held = slot.is_some();
-            // The query asks a missing record with the callback `0x6e2f70` (`0x6e2efb`).
-            if let Some(entry) = slot.filter(|s| s.record_pending()).map(|s| s.item_id) {
-                model.cooldown_record_asks.push(entry);
+            let (pending, triple) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let slot = key.and_then(|k| model.bag_slot(k.0, k.1));
+                let pending = slot.filter(|s| s.record_pending()).map(|s| s.item_id);
+                let triple = match slot {
+                    Some(_) => item_cooldown_triple(
+                        key.and_then(|k| model.container_cooldowns.get(&k).copied()),
+                        now,
+                    ),
+                    None => (0.0, 0.0, 0),
+                };
+                (pending, triple)
+            };
+            // The query asks a missing record with the callback `0x6e2f70` inside the call
+            // (`0x6e2efb`).
+            if let Some(entry) = pending {
+                super::calls::ask(lua, super::RecordAsk::CooldownItem(entry))?;
             }
-            Ok(if held {
-                item_cooldown_triple(
-                    key.and_then(|k| model.container_cooldowns.get(&k).copied()),
-                    now,
-                )
-            } else {
-                (0.0, 0.0, 0)
-            })
+            Ok(triple)
         })?,
     )?;
 

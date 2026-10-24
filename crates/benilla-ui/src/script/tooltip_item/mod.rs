@@ -486,6 +486,20 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 // The token's resolve (`0x533061`), which raises for one it does not know, then
                 // `CanReadUnitInventory` (`0x53306a`), through `Model::inv_slot`.
                 super::unit::check_unit_token(&Some(unit.clone()))?;
+                // The player's item object answers the cooldown query, which asks a missing
+                // record with the callback `0x6e2f70` inside the call (`0x533188` → `0x5331ec`,
+                // `0x6e2efb`); the ammo slot passes an entry and queries nothing (`0x53307d`).
+                if slot0 != -1 && unit.eq_ignore_ascii_case("player") {
+                    let pending = lua
+                        .app_data_ref::<Model>()
+                        .expect("model app_data")
+                        .inv_slot("player", slot)
+                        .filter(|s| s.record_pending())
+                        .map(|s| s.item_id);
+                    if let Some(entry) = pending {
+                        super::calls::ask(lua, super::RecordAsk::CooldownItem(entry))?;
+                    }
+                }
                 let (item_id, name, quality, inst, count, repair_cost, currently_equipped) = {
                     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                     // Only the active player's slots hold item objects; another player's item is
@@ -496,18 +510,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         Ok(t) => std::mem::take(&mut t.equipped_header_armed),
                         Err(_) => false,
                     };
-                    // The player's item object answers the cooldown query, which asks a missing
-                    // record with the callback `0x6e2f70` (`0x533188` → `0x5331ec`, `0x6e2efb`);
-                    // the ammo slot passes an entry and queries nothing (`0x53307d`).
-                    if slot0 != -1 && unit.eq_ignore_ascii_case("player") {
-                        if let Some(entry) = model
-                            .inv_slot("player", slot)
-                            .filter(|s| s.record_pending())
-                            .map(|s| s.item_id)
-                        {
-                            model.cooldown_record_asks.push(entry);
-                        }
-                    }
                     let view = model
                         .inv_slot(&unit, slot)
                         .filter(|s| s.item_id != 0)
@@ -618,18 +620,19 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             };
             let bag = i64::from(crate::script::binding_abi::ftol(bag));
             let slot = crate::script::binding_abi::ftol(slot) as u32;
+            // The cooldown query asks a missing record with the callback `0x6e2f70` inside the
+            // call (`0x53483a`, `0x6e2efb`), off its bag lookup, `0x4f93e0` (`0x534747`).
+            let pending = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .bag_slot(bag, slot)
+                .filter(|s| s.record_pending())
+                .map(|s| s.item_id);
+            if let Some(entry) = pending {
+                super::calls::ask(lua, super::RecordAsk::CooldownItem(entry))?;
+            }
             let (item_id, count, link, quality, inst, repair_cost) = {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                // The cooldown query asks a missing record with the callback `0x6e2f70`
-                // (`0x53483a`, `0x6e2efb`).
-                // Its bag lookup, `0x4f93e0` (`0x534747`).
-                if let Some(entry) = model
-                    .bag_slot(bag, slot)
-                    .filter(|s| s.record_pending())
-                    .map(|s| s.item_id)
-                {
-                    model.cooldown_record_asks.push(entry);
-                }
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let cost = model.repair_costs.bags.get(&(bag, slot)).copied();
                 match model.bag_slot(bag, slot).filter(|s| s.item_id != 0) {
                     // `0x534620` takes the p6=1 leg iff the cooldown query `0x6e2ed0` reports

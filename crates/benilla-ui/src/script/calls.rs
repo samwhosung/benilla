@@ -297,6 +297,10 @@ pub enum RecordAsk {
     /// item cache, with the callback `0x4c84f0` that signals `UNIT_INVENTORY_CHANGED` for a ready
     /// record (`0x4c83bc`, `0x4c89cf`).
     AmmoItem(u32),
+    /// The item cooldown query `0x6e2ed0` on an item whose record the mirror lacks, from
+    /// `GetContainerItemCooldown` or the bag and inventory tooltips: the item cache, with the
+    /// callback `0x6e2f70`, deduped (`0x6e2ef4`-`0x6e2f0d`).
+    CooldownItem(u32),
     /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
     /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
     Summoner,

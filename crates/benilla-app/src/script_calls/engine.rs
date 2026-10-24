@@ -57,12 +57,13 @@ pub(crate) struct RecordAsks<'w> {
     items: Option<Res<'w, crate::items::Items>>,
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     summon: Option<Res<'w, crate::ui_summon::SummonState>>,
+    cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
 impl RecordAsks<'_> {
     /// `ask` inside its getter.
-    pub(crate) fn apply(&self, ask: RecordAsk) {
+    pub(crate) fn apply(&mut self, ask: RecordAsk) {
         use crate::query_cache::Ask;
         match ask {
             RecordAsk::PlayerName(guid) => {
@@ -83,6 +84,14 @@ impl RecordAsks<'_> {
             RecordAsk::AmmoItem(entry) => {
                 if let Some(items) = self.items.as_deref() {
                     crate::ui_char::ask_ammo_record(items, &self.net, entry);
+                }
+            }
+            RecordAsk::CooldownItem(entry) => {
+                if let (Some(items), Some(cooldowns)) =
+                    (self.items.as_deref(), self.cooldowns.as_deref_mut())
+                {
+                    let _ = items.template(entry, 0, Ask::Event(&self.net));
+                    cooldowns.await_item_record(entry);
                 }
             }
             // A zero guid is no key and asks nothing (`0x55f080`).

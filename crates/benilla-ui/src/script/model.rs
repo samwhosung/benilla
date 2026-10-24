@@ -700,10 +700,6 @@ pub(crate) struct Model {
     /// by the item's entry (`0x6e2ed0`), so a worn trinket answers as a bagged one does. Kept off
     /// the doll snapshot, which is pushed on change.
     pub(crate) worn_cooldowns: HashMap<usize, (f64, f64, bool)>,
-    /// The entries whose record `GetContainerItemCooldown`, `SetBagItem` or `SetInventoryItem`
-    /// found missing, which their query asks with the callback `0x6e2f70`
-    /// ([`crate::script::UiScript::take_cooldown_record_asks`]).
-    pub(crate) cooldown_record_asks: Vec<u32>,
     /// `HasKey()`: a keys-family item in equipment, bags, bank or keyring; gates the keyring UI.
     pub(crate) has_key: bool,
     /// What the cursor carries; nothing moves locally, the server's updates settle the bags.
@@ -1555,7 +1551,6 @@ impl Model {
             containers: HashMap::new(),
             container_cooldowns: HashMap::new(),
             worn_cooldowns: HashMap::new(),
-            cooldown_record_asks: Vec::new(),
             has_key: false,
             cursor: None,
             cursor_grid: false,
