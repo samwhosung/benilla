@@ -3579,6 +3579,43 @@ mod tests {
         }
     }
 
+    /// `0x5f59a0` reads the object's own `GAMEOBJECT_TYPE_ID` (`[go+0x110]+0x3c`, `0x5f59a9`) to
+    /// pick the column, not the template's type: a DOOR whose template says GOOBER reads the door's
+    /// noDamageImmune column 3, here 0, not the goober's column 11.
+    #[test]
+    fn the_columns_follow_the_objects_own_type() {
+        use benilla_protocol::field::{FIELD_OBJECT_ENTRY, FIELD_UNIT_FLAGS};
+        let (mut world, _vendor, rx) = walking_world(Vec3::ZERO, false);
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(&world)
+            .unwrap();
+        world.entity_mut(me).insert(store(&[
+            (F_HEALTH, 100),
+            (F_MAXHEALTH, 100),
+            (FIELD_UNIT_FLAGS, 0x8000_0000),
+        ]));
+        let mut data = [0; 24];
+        data[11] = 1;
+        world
+            .resource_mut::<crate::go_templates::GameObjectTemplates>()
+            .insert(77, 10, "Object".into(), &data);
+        let object = spawn_object(&mut world, 0, Vec3::new(2.0, 0.0, 0.0));
+        world.entity_mut(object).insert(store(&[
+            (GO_TYPE_FIELD, 0),
+            (FIELD_OBJECT_ENTRY, 77),
+            (14, 1),
+        ]));
+        interact_with(&mut world, object);
+        assert!(rx
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::GameObjUse { .. })));
+        assert!(world
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .snapshot()
+            .is_empty());
+    }
+
     const WOLF: u64 = 0xF130_0000_0000_0299;
 
     /// Our body hostile to nobody in particular and a wolf three yards off, the attack cursor on
