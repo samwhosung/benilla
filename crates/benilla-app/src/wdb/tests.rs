@@ -603,3 +603,19 @@ fn bytes_that_land_after_a_write_still_reach_the_file() {
     let mut next = Session::<NameCache>::start("R");
     assert!(next.store().creature_record(CREATURE).is_some());
 }
+
+/// The creature names an earlier build kept in `cache/<realm>.tsv` go when the realm's stores
+/// load.
+#[test]
+fn the_load_removes_the_earlier_creature_file() {
+    let home = Home::new("tsv");
+    let old = home.dir.join("cache").join("Hydraxian_Waterlords.tsv");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(
+        &old,
+        "benilla-namecache\t3\t5875\tenGB\tHydraxian Waterlords\n",
+    )
+    .unwrap();
+    let _session = Session::<NameCache>::start("Hydraxian Waterlords");
+    assert!(!old.exists());
+}
