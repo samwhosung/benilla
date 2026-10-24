@@ -386,3 +386,20 @@ fn the_merchant_close_ends_repair_mode_after_its_signal() {
         assert_eq!(after, "nil", "world close {world_close}");
     }
 }
+
+/// A call's core releases the latch without `0x493310`'s walk (`0x4931c0` inside the core), which
+/// strands no window only while one cell at most holds the guid: a debug build checks it once the
+/// call is done, where every cell is readable.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "still hold the released guid")]
+fn a_call_release_that_strands_a_window_fails_the_check() {
+    let (mut app, _rx) = client();
+    open(&mut app, W::Merchant, NPC);
+    // A second cell on the latched guid, which no opener leaves.
+    app.world_mut()
+        .resource_mut::<crate::ui_gossip::GossipState>()
+        .npc = Some(NPC);
+    eval::<()>(&mut app, "CloseMerchant()");
+    app.world_mut().run_schedule(Last);
+}

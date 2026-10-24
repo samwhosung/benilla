@@ -109,6 +109,10 @@ pub(crate) struct InteractLatch {
     guid: Option<u64>,
     /// [`fire`]'s nesting, against a handler that re-closes forever.
     depth: u32,
+    /// The guids [`LatchSteps::release`] released inside a call, for the world's check after it
+    /// ([`check_call_releases`]).
+    #[cfg(debug_assertions)]
+    released: Vec<u64>,
 }
 
 impl InteractLatch {
@@ -178,9 +182,9 @@ impl LatchSteps<'_> {
     /// re-enters while its cell is still set, so its signal fires twice. Whether it re-enters. No
     /// other cell holds a latched guid: every opener registers before it writes its cell
     /// ([`register`] closes the holder first), and the two that write first, the designer's and
-    /// the item text's, are closed by that register, or hold an item's or an object's guid. Every
-    /// walk checks it in a debug build ([`debug_assert_one_holder`]), as this cannot read the
-    /// other windows' cells beside the host.
+    /// the item text's, are closed by that register, or hold an item's or an object's guid. A debug
+    /// build checks it, as for every walk ([`debug_assert_one_holder`]), once the call is done
+    /// ([`check_call_releases`]): this cannot read the other windows' cells beside the host.
     pub(crate) fn release(&mut self, cell: u64) -> bool {
         let Some(latch) = self.latch.as_deref_mut() else {
             return false;
@@ -192,6 +196,8 @@ impl LatchSteps<'_> {
             vocal.write(LatchVocal::Goodbye(cell));
         }
         latch.guid = None;
+        #[cfg(debug_assertions)]
+        latch.released.push(cell);
         true
     }
 
@@ -238,6 +244,9 @@ pub(crate) trait LatchApp {
 
 impl LatchApp for App {
     fn add_latched_window<T: LatchedWindow>(&mut self) -> &mut Self {
+        if !self.world().contains_resource::<LatchedWindows>() {
+            self.add_systems(Last, check_call_releases);
+        }
         let world = self.world_mut();
         world.init_resource::<InteractLatch>();
         world.init_resource::<LatchCloses>();
@@ -357,6 +366,27 @@ fn debug_assert_one_holder(world: &World, guid: u64, left: usize) {
             "windows {holders:?} still hold the released guid {guid:#x}"
         );
     }
+}
+
+/// [`debug_assert_one_holder`] for each guid a call's core released without the walk
+/// ([`LatchSteps::release`]), where every cell is readable: none still holds it, unless the latch
+/// took it again since, as an opener's register does.
+pub(crate) fn check_call_releases(world: &mut World) {
+    #[cfg(debug_assertions)]
+    {
+        let Some(mut latch) = world.get_resource_mut::<InteractLatch>() else {
+            return;
+        };
+        let released = std::mem::take(&mut latch.released);
+        let latched = latch.guid;
+        for guid in released {
+            if latched != Some(guid) {
+                debug_assert_one_holder(world, guid, 0);
+            }
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = world;
 }
 
 /// A core cleared `window`'s cell: its feed starts over from closed.
