@@ -1608,9 +1608,6 @@
                                             <Scripts><OnLoad>BenillaOptionsRow_OnLoad(this, "BlockTrades", "Block Trades",
                                                 "OPTION_TOOLTIP_BLOCK_TRADES")</OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Deviation: ships "1" where 1.12 registers "0": off, a
-                                             friendly cast falls into the targeting cursor, which is
-                                             not modelled. -->
                                         <Frame name="$parentRowAutoSelfCast" inherits="BenillaOptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowBlockTrades" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
