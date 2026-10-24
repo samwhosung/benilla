@@ -628,12 +628,14 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // `LoadAddOn` block the load ran; nothing reaches chat.
     script.finish_ui_load_log();
     super::load_log::write(script.take_load_log_writes());
-    // `DAMAGE_TEXT_FONT` binds at the end of the load, after every addon's `ADDON_LOADED` (where
-    // MikScrollingBattleText and pfUI assign it). The reference reads it eagerly, once per world
-    // entry (`0x6c8470`, called at `0x401620` in `0x401570`, after the UI load at `0x401602`),
-    // and never again: `[0xce8820]` has one writer, and a `/reloadui` does not re-run it, where
-    // this edge re-reads it on every reload.
-    world.insert_resource(crate::combat_text::read_damage_text_font(&script));
+    // `DAMAGE_TEXT_FONT` binds at the end of the world entry's load, after every addon's
+    // `ADDON_LOADED` (where MikScrollingBattleText and pfUI assign it): `0x6c8470` is called only at
+    // `0x401620` in `0x401570`, after the UI load at `0x401602`, and `0x401570` only from Enter
+    // World (`0x46c236`). A `/reload` runs the teardown and the load alone (`0x495664`,
+    // `0x495669`), so the face the login read stays until the next login.
+    if seat == LoadSeat::Roster {
+        world.insert_resource(crate::combat_text::read_damage_text_font(&script));
+    }
     // The load is over: disarm its instruction bound, so no handler is killed for being slow.
     script.clear_instruction_budget();
     world.insert_non_send_resource(script);
