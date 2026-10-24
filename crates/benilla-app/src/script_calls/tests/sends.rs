@@ -176,6 +176,46 @@ fn pickup_and_place_action_send_ahead_of_their_slot_signal() {
     assert_eq!(actions.buttons.get(&4).map(|b| b.action), Some(FIREBALL));
 }
 
+/// `0x4e58e0` writes the slot arrays inside the call (`0x4e590a`), so a later verb of the chunk
+/// reads the slot as the write left it: `UseAction` on a slot just picked up finds it empty, and on
+/// one just placed casts what was placed (`0x4e5ee0`).
+#[test]
+fn a_slot_written_by_lua_is_read_by_the_chunks_next_verb() {
+    const STUCK: u32 = 7355;
+    let (mut app, rx) = client();
+    seat(&mut app, &[]);
+    spell_rows(&mut app, &[(STUCK, 0, 84)]);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .spells
+        .insert(STUCK);
+    let slot = benilla_ui::script::ActionSlot {
+        kind: 0,
+        action: STUCK,
+        ..Default::default()
+    };
+    vm(&mut app).set_action(3, Some(slot));
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .buttons
+        .insert(
+            2,
+            benilla_protocol::messages::ActionButton {
+                slot: 2,
+                action: STUCK,
+                kind: 0,
+            },
+        );
+    eval::<()>(
+        &mut app,
+        "PickupAction(3) UseAction(3) PlaceAction(5) UseAction(5) RandomRoll(1, 2)",
+    );
+    assert_eq!(
+        sent(&rx),
+        ["button 2 0x0", "button 4 0x1cbb", "cast 7355", "roll 1"]
+    );
+}
+
 /// The GM ticket verbs send inside their calls (`0x48c9a0`, `0x48cfc0`, `0x48cb70`, `0x48c9d0`,
 /// `0x48ca60`), and so do the lottery's (`0x4c4220`, `0x4c4400`), each where the chunk calls it.
 #[test]
