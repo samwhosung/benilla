@@ -1339,6 +1339,9 @@ pub(super) fn writer_loop(
                         w.pet_name_query(pet_number, guid)
                     }
                     ClientCommand::ItemQuery { entry, guid } => w.item_query(entry, guid),
+                    ClientCommand::ItemNameQuery { entry, guid } => {
+                        w.item_name_query(entry, guid)
+                    }
                     ClientCommand::UseItem {
                         bag_index,
                         slot,

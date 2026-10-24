@@ -96,6 +96,10 @@ fn item_answer() -> Vec<u8> {
         .0
 }
 
+fn item_name_answer() -> Vec<u8> {
+    Body::default().u32(ITEM).str("Linen Cloth").0
+}
+
 fn npc_text_answer() -> Vec<u8> {
     let mut b = Body::default()
         .u32(NPC_TEXT)
@@ -294,6 +298,11 @@ fn an_answer_from_one_session_is_served_without_a_query_in_the_next() {
             g.resolve_name(GAME_OBJECT, Ask::Event(c)) == Some("Copper Vein")
         });
     assert!(found && asked.is_empty(), "game object: {asked:?}");
+
+    let (found, asked) = asks_in_next_session::<ItemNames>(item_name_answer(), |n, c| {
+        n.name(ITEM, Ask::Event(c)) == Some("Linen Cloth")
+    });
+    assert!(found && asked.is_empty(), "item name: {asked:?}");
 
     let (found, asked) = asks_in_next_session::<Items>(item_answer(), |i, c| {
         i.template(ITEM, 0, Ask::Event(c))
@@ -570,13 +579,12 @@ fn the_session_only_stores_are_empty_after_world_entry() {
 
 /// The IO thread hands on the bytes of exactly the saved stores' answers.
 #[test]
-fn the_saved_answers_are_the_seven_stores_answers() {
-    for opcode in [0x61, 0x5f, 0x58, 0x180, 0x5d, 0x5b, 0x244] {
+fn the_saved_answers_are_the_saved_stores_answers() {
+    for opcode in [0x61, 0x5f, 0x2c5, 0x58, 0x180, 0x5d, 0x5b, 0x244] {
         assert!(is_saved_answer(opcode), "{opcode:#x}");
     }
-    // The names, guild, pet-name and petition answers, and the item-name answer benilla does
-    // not ask for.
-    for opcode in [0x51, 0x55, 0x53, 0x1c7, 0x2c5] {
+    // The names, guild, pet-name and petition answers.
+    for opcode in [0x51, 0x55, 0x53, 0x1c7] {
         assert!(!is_saved_answer(opcode), "{opcode:#x}");
     }
 }

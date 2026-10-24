@@ -131,6 +131,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
                 position: [position.x, position.y, position.z],
             }]
         }
+        ServerPacket::ItemNameQueryResponse { entry, name } => {
+            vec![SessionEvent::ItemName { entry, name }]
+        }
         ServerPacket::ItemQueryResponse { entry, info } => {
             vec![SessionEvent::ItemTemplate { entry, info }]
         }

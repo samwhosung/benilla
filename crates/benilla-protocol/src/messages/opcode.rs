@@ -345,6 +345,11 @@ pub const CMSG_GAMEOBJECT_QUERY: u16 = 0x005E; // 94
 /// Ask for a quest's template; answered by [`SMSG_QUEST_QUERY_RESPONSE`].
 pub const CMSG_QUEST_QUERY: u16 = 0x005C; // 92
 pub const CMSG_ITEM_QUERY_SINGLE: u16 = 0x0056; // 86
+/// Ask for an item's name alone, the item-name store's query (`0x559fe0`); answered by
+/// [`SMSG_ITEM_NAME_QUERY_RESPONSE`].
+pub const CMSG_ITEM_NAME_QUERY: u16 = 0x02C4; // 708
+/// Answers `CMSG_ITEM_NAME_QUERY`; vmangos sends nothing for an unknown item.
+pub const SMSG_ITEM_NAME_QUERY_RESPONSE: u16 = 0x02C5; // 709
 pub const CMSG_USE_ITEM: u16 = 0x00AB; // 171
 /// Open an openable item (a clam, a lockbox, a gift) by bag position; the loot that answers names
 /// the item's own guid (`HandleOpenItemOpcode`).

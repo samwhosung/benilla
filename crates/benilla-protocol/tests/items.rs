@@ -546,3 +546,33 @@ fn item_query_response_miss() {
         _ => panic!("item query miss event"),
     }
 }
+
+/// `CMSG_ITEM_NAME_QUERY` is the entry and the asker's guid; the answer is the entry and the
+/// name, and a top-bit entry refuses.
+#[test]
+fn item_name_query_wire() {
+    assert_eq!(
+        messages::item_name_query(2589, 0),
+        hx("1d0a00000000000000000000")
+    );
+    let hit = messages::parse_server(
+        messages::opcode::SMSG_ITEM_NAME_QUERY_RESPONSE,
+        &hx("1d0a00004c696e656e20436c6f746800"),
+    )
+    .unwrap();
+    match decode(hit).pop().unwrap() {
+        SessionEvent::ItemName { entry, name } => {
+            assert_eq!((entry, name.as_deref()), (2589, Some("Linen Cloth")));
+        }
+        _ => panic!("item name event"),
+    }
+    let miss = messages::parse_server(
+        messages::opcode::SMSG_ITEM_NAME_QUERY_RESPONSE,
+        &hx("1d0a0080"),
+    )
+    .unwrap();
+    match decode(miss).pop().unwrap() {
+        SessionEvent::ItemName { entry, name } => assert_eq!((entry, name), (2589, None)),
+        _ => panic!("item name refusal event"),
+    }
+}

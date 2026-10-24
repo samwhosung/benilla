@@ -14,7 +14,7 @@
 //! |---|---|---|
 //! | creatures `0xc0e354` | `creaturecache.wdb` | saved, [`NameCache`] |
 //! | game objects `0xc0e318` | `gameobjectcache.wdb` | saved, [`GameObjectTemplates`] |
-//! | item names `0xc0e2dc` | `itemnamecache.wdb` | none: benilla sends no item-name query |
+//! | item names `0xc0e2dc` | `itemnamecache.wdb` | saved, [`ItemNames`] |
 //! | items `0xc0e2a0` | `itemcache.wdb` | saved, [`Items`] |
 //! | NPC text `0xc0e264` | `npccache.wdb` | saved, [`GossipState`] |
 //! | quests `0xc0e1b0` | `questcache.wdb` | saved, [`QuestLog`] |
@@ -50,6 +50,7 @@ use bevy::prelude::*;
 
 use crate::glue_session::roster::Roster;
 use crate::go_templates::GameObjectTemplates;
+use crate::item_names::ItemNames;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::NetHandlerApp;
@@ -130,6 +131,28 @@ impl SavedCache for GameObjectTemplates {
         } = answer
         {
             self.insert(entry, type_id, name, &data);
+        }
+    }
+}
+
+impl SavedCache for ItemNames {
+    const FILE: &'static str = "itemnamecache";
+    const TAG: u32 = 0x574e_4442;
+    const ANSWER: u16 = opcode::SMSG_ITEM_NAME_QUERY_RESPONSE;
+    type Record = String;
+    fn store(&self) -> &QueryCache<u32, Self::Record> {
+        ItemNames::store(self)
+    }
+    fn store_mut(&mut self) -> &mut QueryCache<u32, Self::Record> {
+        ItemNames::store_mut(self)
+    }
+    fn install(&mut self, answer: SessionEvent) {
+        if let SessionEvent::ItemName {
+            entry,
+            name: Some(name),
+        } = answer
+        {
+            self.file(entry, Some(name));
         }
     }
 }
@@ -238,9 +261,10 @@ impl SavedCache for MailOpen {
 }
 
 /// The answers whose bodies the IO thread hands on ([`SessionEvent::SavedAnswer`]).
-const SAVED_ANSWERS: [u16; 7] = [
+const SAVED_ANSWERS: [u16; 8] = [
     NameCache::ANSWER,
     GameObjectTemplates::ANSWER,
+    ItemNames::ANSWER,
     Items::ANSWER,
     GossipState::ANSWER,
     QuestLog::ANSWER,
@@ -260,6 +284,7 @@ impl Plugin for WdbPlugin {
         app.init_resource::<Roster>();
         saved::<NameCache>(app);
         saved::<GameObjectTemplates>(app);
+        saved::<ItemNames>(app);
         saved::<Items>(app);
         saved::<GossipState>(app);
         saved::<QuestLog>(app);
@@ -300,6 +325,7 @@ fn clear_session_stores(
 struct Files<'w> {
     creatures: ResMut<'w, WdbFile<NameCache>>,
     game_objects: ResMut<'w, WdbFile<GameObjectTemplates>>,
+    item_names: ResMut<'w, WdbFile<ItemNames>>,
     items: ResMut<'w, WdbFile<Items>>,
     npc_text: ResMut<'w, WdbFile<GossipState>>,
     quests: ResMut<'w, WdbFile<QuestLog>>,
@@ -315,6 +341,7 @@ fn keep_answer(In(ev): In<SessionEvent>, mut files: Files) {
     match opcode {
         NameCache::ANSWER => files.creatures.keep(body),
         GameObjectTemplates::ANSWER => files.game_objects.keep(body),
+        ItemNames::ANSWER => files.item_names.keep(body),
         Items::ANSWER => files.items.keep(body),
         GossipState::ANSWER => files.npc_text.keep(body),
         QuestLog::ANSWER => files.quests.keep(body),

@@ -64,6 +64,7 @@ mod go_templates;
 #[cfg(feature = "dev")]
 mod hover_log;
 mod item_lane;
+mod item_names;
 mod item_watch;
 mod items;
 mod lanes;

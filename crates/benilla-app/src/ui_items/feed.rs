@@ -365,6 +365,7 @@ pub(super) fn feed_item_sets(
     mut hosted_vm: crate::script_calls::HostedVm,
     sets: Option<Res<super::ItemSets>>,
     items: Res<Items>,
+    item_names: Res<crate::item_names::ItemNames>,
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
     spell_mods: Res<crate::spell::SpellModifiers>,
@@ -454,11 +455,7 @@ pub(super) fn feed_item_sets(
             } else {
                 Ask::Read
             };
-            let members: Vec<(u32, Option<String>)> = row
-                .items
-                .iter()
-                .map(|&id| (id, items.template(id, 0, ask).map(|t| t.name.clone())))
-                .collect();
+            let members = set_members(&row.items, &items, &item_names, ask);
             let view = benilla_ui::script::ItemSetView {
                 name: row.name.clone(),
                 bonuses: row
@@ -503,6 +500,18 @@ pub(super) fn feed_item_sets(
             pending.remove(&id);
         }
     })
+}
+
+/// An item set's member names, each read as `ask` says.
+pub(super) fn set_members(
+    ids: &[u32],
+    items: &Items,
+    _names: &crate::item_names::ItemNames,
+    ask: Ask<'_>,
+) -> Vec<(u32, Option<String>)> {
+    ids.iter()
+        .map(|&id| (id, items.template(id, 0, ask).map(|t| t.name.clone())))
+        .collect()
 }
 
 /// Pushes the whole random-suffix table once per VM, when both catalogs are in, and the enchant
@@ -1729,6 +1738,42 @@ fn push_changed(
 #[cfg(test)]
 mod tests {
     use super::{ask_build_lookups, push_containers, resolve_slot, ContainerSlot, FeedMemory};
+
+    /// A set's member names come from the item-name store (`0x52df5a` looks up `0xc0e2dc` with a
+    /// callback and a zero owner), asked with `CMSG_ITEM_NAME_QUERY`, never the template store.
+    #[test]
+    fn a_set_member_is_named_through_the_item_name_store() {
+        use crate::item_names::ItemNames;
+        use crate::net::{ClientCommand, NetCommands};
+        use crate::query_cache::Ask;
+
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let items = crate::items::Items::default();
+        let mut names = ItemNames::default();
+        let members = super::set_members(&[16_866, 16_867], &items, &names, Ask::Event(&commands));
+        assert_eq!(members, [(16_866, None), (16_867, None)]);
+        let asked = crate::query_cache::queries(&rx);
+        assert!(
+            matches!(
+                asked[..],
+                [
+                    ClientCommand::ItemNameQuery {
+                        entry: 16_866,
+                        guid: 0
+                    },
+                    ClientCommand::ItemNameQuery {
+                        entry: 16_867,
+                        guid: 0
+                    }
+                ]
+            ),
+            "{asked:?}"
+        );
+        names.file(16_866, Some("Helm of Wrath".into()));
+        let members = super::set_members(&[16_866], &items, &names, Ask::Read);
+        assert_eq!(members, [(16_866, Some("Helm of Wrath".into()))]);
+    }
 
     /// The view carries what `GetTradeSkillItemStats` reads beyond the tooltip: the item level, and
     /// the five spell slots whose id names a `Spell.dbc` row with their charges, in slot order.

@@ -588,6 +588,8 @@ pub enum SessionEvent {
     PetActionSound { pet_guid: u64, talk: u32 },
     /// A dismissed pet's sound (`SMSG_PET_DISMISS_SOUND`): the `CreatureModelData` column-29 kit.
     PetDismissSound { model_id: u32, position: [f32; 3] },
+    /// `SMSG_ITEM_NAME_QUERY_RESPONSE`, by entry; `None` is unknown.
+    ItemName { entry: u32, name: Option<String> },
     /// `SMSG_ITEM_QUERY_SINGLE_RESPONSE`, by entry; `None` is unknown. Boxed, being wide.
     ItemTemplate {
         entry: u32,

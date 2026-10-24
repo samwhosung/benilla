@@ -16,6 +16,14 @@ impl WorldWriter {
         )
     }
 
+    /// `CMSG_ITEM_NAME_QUERY`: an item's name by entry; `guid` is the asker's, 0 for none.
+    pub fn item_name_query(&mut self, entry: u32, guid: u64) -> Result<()> {
+        self.send(
+            opcode::CMSG_ITEM_NAME_QUERY,
+            &messages::item_name_query(entry, guid),
+        )
+    }
+
     /// `CMSG_USE_ITEM`: use the item at a bag position; a GameObject `target` is how a key opens a
     /// locked door. Refused with `SMSG_CAST_RESULT`.
     pub fn use_item(

@@ -626,6 +626,10 @@ fn parse_server_body(
             let guid = read_u64_le(&mut r)?;
             ServerPacket::Emote { guid, emote_id }
         }
+        opcode::SMSG_ITEM_NAME_QUERY_RESPONSE => {
+            let (entry, name) = items::read_item_name_query_response(&mut r)?;
+            ServerPacket::ItemNameQueryResponse { entry, name }
+        }
         opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE => {
             let (entry, info) = items::read_item_query_response(&mut r)?;
             ServerPacket::ItemQueryResponse {

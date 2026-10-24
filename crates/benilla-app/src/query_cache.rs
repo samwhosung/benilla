@@ -321,6 +321,7 @@ pub(crate) fn queries(
                     | C::CreatureQuery { .. }
                     | C::PetNameQuery { .. }
                     | C::ItemQuery { .. }
+                    | C::ItemNameQuery { .. }
                     | C::NpcTextQuery { .. }
                     | C::GameObjectQuery { .. }
                     | C::PageTextQuery { .. }

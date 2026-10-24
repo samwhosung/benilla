@@ -1032,6 +1032,11 @@ pub(crate) enum ClientCommand {
         pet_number: u32,
         guid: u64,
     },
+    /// `CMSG_ITEM_NAME_QUERY`, sent only by [`crate::item_names::ItemNames`]' lookups.
+    ItemNameQuery {
+        entry: u32,
+        guid: u64,
+    },
     /// `CMSG_ITEM_QUERY_SINGLE` (`guid` 0 for template-only), sent only by
     /// [`crate::items::Items`]' ask-once resolve.
     ItemQuery {
