@@ -311,6 +311,11 @@ impl CastSlots<'_> {
     pub(crate) fn targeting(&self) -> &SpellTargeting {
         &self.ground
     }
+
+    /// The tutorial bank, for the attack seams' other sites (`0x4b5390`).
+    pub(crate) fn tutorials(&self) -> Option<&crate::tutorial::Tutorials> {
+        self.tutorials.as_deref()
+    }
 }
 
 /// `StopTargeting 0x6e4900`'s state for the right-button cancel.

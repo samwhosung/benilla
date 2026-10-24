@@ -466,14 +466,18 @@ pub(crate) enum OwedSend {
 }
 
 impl OwedSend {
-    /// The store and the light (`0x4936e2`, `0x493701`), over whatever a listener selected, and
-    /// the send.
+    /// The store and the light (`0x4936e2`, `0x493701`), over whatever a listener selected, the
+    /// lit unit's tutorial ladder (`0x493789`-`0x49383c`, [`crate::tutorial::select_tutorial`]),
+    /// and the send.
     pub(crate) fn pay(self, selection: &mut Selection, seam: &crate::creature_anim::AttackSeam) {
         let guid = match self {
             OwedSend::Select { entity, guid } => {
                 selection.target = entity;
                 selection.guid = Some(guid);
                 selection.lit = entity;
+                if let (Some(entity), Some(tutorials)) = (entity, seam.slots.tutorials()) {
+                    tutorials.selected(entity, guid);
+                }
                 guid
             }
             // The clear's send reads the selection as it stands (`0x493a49`-`0x493a4f`): a

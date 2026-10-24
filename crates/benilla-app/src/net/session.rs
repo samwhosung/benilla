@@ -502,6 +502,7 @@ fn on_reputation_delta(
     quest_log: Option<ResMut<crate::ui_quest_log::QuestLog>>,
     // Absent in a harness with no interface.
     mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
+    tutorials: Option<Res<crate::tutorial::Tutorials>>,
 ) {
     if let SessionEvent::ReputationDelta { standings } = ev {
         crate::combat_log::chat::faction_standing(
@@ -543,6 +544,18 @@ fn on_reputation_delta(
             }
             if let Some(lane) = lane.as_deref_mut() {
                 refresh_player_reaction(&b, lane);
+            }
+        }
+        // Reputation, with the active player held at level 10 or more (`0x4d5963`-`0x4d597a`).
+        let level = b
+            .self_guid
+            .0
+            .and_then(|g| b.index.0.get(&g))
+            .and_then(|e| b.stores.get(*e).ok())
+            .and_then(|s| s.0.unit_level());
+        if level.is_some_and(|l| l as i32 >= 10) {
+            if let Some(tutorials) = tutorials.as_deref() {
+                tutorials.trigger_now(crate::tutorial::id::REPUTATION);
             }
         }
         // The message's own signal, whatever it held, none included (`0x4d597f`-`0x4d5984`).

@@ -309,6 +309,8 @@ fn fire_tab_flashes(
         };
         debug!("ui_spellbook: spell {spell_id} landed in tab {index} — flash");
         script.fire_event("LEARNED_SPELL_IN_TAB", vec![ScriptValue::Int(index)]);
+        // Then The Spellbook (`0x4b2ba1`).
+        script.queue_tutorial_trigger(crate::tutorial::id::SPELLBOOK);
     }
 }
 

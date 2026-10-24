@@ -687,7 +687,7 @@ fn a_target_name_that_finds_nobody_shows_the_references_line() {
 /// (`0x493789`).
 #[test]
 fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
-    for (status, fired) in [(5, vec![]), (1, vec![0x2b])] {
+    for (status, fired) in [(1, vec![0x2b]), (5, vec![])] {
         let mut f = fix(false);
         f.app.world_mut().init_resource::<crate::player::Player>();
         f.app

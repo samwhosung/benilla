@@ -153,8 +153,18 @@ pub(crate) struct SelectFacts {
 /// `SetSelection`'s ladder, first match: Players for another player while its fire-once bit is
 /// clear (`0x4937af`, else it falls through), Grouping for a cooperative player at the active
 /// player's level 5 or more, Combat Mode for an attackable unit, Travel for a flight master.
-pub(crate) fn select_tutorial(_f: SelectFacts, _players_fired: bool) -> Option<u32> {
-    None
+pub(crate) fn select_tutorial(f: SelectFacts, players_fired: bool) -> Option<u32> {
+    if f.player && !f.me && !players_fired {
+        Some(id::PLAYERS)
+    } else if f.player && f.cooperates && f.my_level >= 5 {
+        Some(id::GROUPING)
+    } else if f.attackable {
+        Some(id::COMBAT_MODE)
+    } else if f.flight_master {
+        Some(id::TRAVEL)
+    } else {
+        None
+    }
 }
 
 /// The Targeting popup's delay at its one site (`0x514a8d mov edx,0x2710`).
@@ -235,12 +245,14 @@ impl Tutorials {
 
     /// `SetSelection` (`0x493540`) lit `entity`, `guid`'s object: its tutorial ladder
     /// (`0x493789`-`0x49383c`) is judged at the next feed ([`select_tutorial`]).
-    pub(crate) fn selected(&self, _entity: Entity, _guid: u64) {}
+    pub(crate) fn selected(&self, entity: Entity, guid: u64) {
+        self.lock().selects.push((entity, guid));
+    }
 
     /// The selections queued for the ladder, taken.
     #[cfg(test)]
     pub(crate) fn take_selects(&self) -> Vec<(Entity, u64)> {
-        Vec::new()
+        std::mem::take(&mut self.lock().selects)
     }
 
     /// The published ids owed the VM, taken.
@@ -270,6 +282,8 @@ pub(crate) struct TutorialState {
     sends: Vec<TutorialSend>,
     /// Item pushes for us since the last feed (`0x491a60`'s sites): `(entry, bag, slot)`.
     pushes: Vec<(u32, u8, u32)>,
+    /// The units `SetSelection` lit since the last feed, for its ladder.
+    selects: Vec<(Entity, u64)>,
 }
 
 impl TutorialState {
@@ -328,6 +342,15 @@ impl TutorialState {
             set_bank_bit(bank, id);
             id + 1
         })
+    }
+
+    /// Bank A's bit for `id`, as `SetSelection` tests Players' directly (`0x4937a9`-`0x4937af`);
+    /// clear with no bank.
+    fn has_fired(&self, id: u32) -> bool {
+        self.fire_once
+            .as_deref()
+            .and_then(|bank| bank_bit(bank, id))
+            .unwrap_or(false)
     }
 
     /// `SetTutorialFlag(id)` (`0x4b54c0`): bank B's bit gates, both banks set, the id's timer
@@ -442,26 +465,37 @@ fn feed_tutorials(
             }
         }
 
-        // The item-received sites: Backpack always; Equippable Items for any non-zero inventory
-        // type (the reference's 23-bit mask `0x809200` is not decoded); Hearthstones by entry;
-        // Ranged Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
+        // The item-received sites in the handler's order (`0x491cec`-`0x491ec9`): Backpack
+        // always; Using Items for an on-use spell; Equippable Items for any non-zero inventory
+        // type (the reference's 23-bit mask `0x809200` is not decoded); Bags for a container;
+        // Keyrings by the slot band; Hearthstones by entry; Ranged Weapons for a ranged type on a
+        // non-hunter.
         let pushes = std::mem::take(&mut tutorials.pushes);
         let class = self_q.single().ok().and_then(|s| s.0.unit_class());
         for (entry, bag, slot) in pushes {
             tutorials.trigger(id::BACKPACK, 0, now);
-            if let Some(info) = items.template(entry, 0, Ask::Read) {
-                if info.inventory_type != 0 {
-                    tutorials.trigger(id::EQUIPPABLE_ITEMS, 0, now);
-                }
-                if info.inventory_type == INVTYPE_RANGED && class != Some(CLASS_HUNTER) {
-                    tutorials.trigger(id::RANGED_WEAPONS, 0, now);
-                }
+            let info = items.template(entry, 0, Ask::Read);
+            // A spell in any of the five blocks with trigger 0, ON_USE (`0x491d00`-`0x491d0a`).
+            if info.is_some_and(|i| i.spells.iter().any(|s| s.trigger == 0)) {
+                tutorials.trigger(id::USING_ITEMS, 0, now);
+            }
+            if info.is_some_and(|i| i.inventory_type != 0) {
+                tutorials.trigger(id::EQUIPPABLE_ITEMS, 0, now);
+            }
+            // Class 1, Container (`0x491d4f cmp [esi],1`).
+            if info.is_some_and(|i| i.class == 1) {
+                tutorials.trigger(id::BAGS, 0, now);
+            }
+            if bag == KEYRING_BAG && KEYRING_SLOTS.contains(&slot) {
+                tutorials.trigger(id::KEYRINGS, 0, now);
             }
             if entry == HEARTHSTONE {
                 tutorials.trigger(id::HEARTHSTONES, 0, now);
             }
-            if bag == KEYRING_BAG && KEYRING_SLOTS.contains(&slot) {
-                tutorials.trigger(id::KEYRINGS, 0, now);
+            if info.is_some_and(|i| i.inventory_type == INVTYPE_RANGED)
+                && class != Some(CLASS_HUNTER)
+            {
+                tutorials.trigger(id::RANGED_WEAPONS, 0, now);
             }
         }
 
@@ -483,6 +517,58 @@ fn feed_tutorials(
         for published in fired {
             fire_published(script, &sounds, published);
         }
+    })
+}
+
+/// Before the feed: the selections' ladder (`0x493789`-`0x49383c`), in their order, each judged
+/// against the bank as the ones before it left it.
+fn judge_selections(
+    tutorials: Res<Tutorials>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    stores: Query<&ObjectStore>,
+    relations: crate::target::RelationWorld,
+) {
+    let mut tutorials = tutorials.lock();
+    let now = Instant::now();
+    for (entity, guid) in std::mem::take(&mut tutorials.selects) {
+        let own = self_q.single().ok();
+        let Some(facts) = select_facts(entity, guid, &stores, own, &relations) else {
+            continue;
+        };
+        let players_fired = tutorials.has_fired(id::PLAYERS);
+        if let Some(id) = select_tutorial(facts, players_fired) {
+            tutorials.trigger(id, 0, now);
+        }
+    }
+}
+
+/// What the ladder reads of the lit unit `guid`, `entity`'s object, against the active player;
+/// `None` without either, or for an object that is no unit (`0x49370f`).
+fn select_facts(
+    entity: Entity,
+    guid: u64,
+    stores: &Query<&ObjectStore>,
+    own: Option<&ObjectStore>,
+    relations: &crate::target::RelationWorld,
+) -> Option<SelectFacts> {
+    const TYPE_UNIT: u32 = 0x8;
+    const TYPE_PLAYER: u32 = 0x10;
+    const NPC_FLIGHT_MASTER: u32 = 0x8;
+    let store = stores.get(entity).ok()?;
+    let mask = store.0.object_type_mask().unwrap_or(0);
+    if mask & TYPE_UNIT == 0 {
+        return None;
+    }
+    let me = relations.me()?;
+    let unit = relations.unit_of(guid, store);
+    let rel = relations.get();
+    Some(SelectFacts {
+        player: mask & TYPE_PLAYER != 0,
+        me: relations.me_guid() == Some(guid),
+        cooperates: rel.can_cooperate(&me, &unit),
+        my_level: own.and_then(|s| s.0.unit_level()).unwrap_or(0) as i32,
+        attackable: rel.can_attack(&me, &unit),
+        flight_master: store.0.unit_npc_flags() & NPC_FLIGHT_MASTER != 0,
     })
 }
 
@@ -684,11 +770,14 @@ impl Plugin for TutorialPlugin {
         app.init_resource::<Tutorials>()
             .init_resource::<WorldEnterCascade>()
             .add_message::<TutorialEvent>()
+            // Written by the player's create and the reload ([`crate::net`]), read here.
+            .add_message::<WorldEnterCascadeMessage>()
             .add_systems(
                 Update,
                 (
                     on_world_enter.before(run_world_enter_cascade),
                     run_world_enter_cascade.before(feed_tutorials),
+                    judge_selections.before(feed_tutorials),
                     // Before the pass, whose trainer and merchant calls write the windows it
                     // watches.
                     watch_windows
@@ -1041,6 +1130,7 @@ mod tests {
     fn the_world_enter_tutorials_are_not_fired_into_a_ui_less_vm() {
         let mut app = App::new();
         app.add_plugins(TutorialPlugin)
+            .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::sound::MessageSounds>()
             // The other watchers' inputs, so the real plugin can run.
@@ -1093,6 +1183,7 @@ mod tests {
         for (flags, published) in [(0x10, vec![0x19, 0x2a, 0x01]), (0, vec![0x2a, 0x01])] {
             let mut app = App::new();
             app.add_plugins(TutorialPlugin)
+                .init_resource::<crate::net::Reputations>()
                 .init_resource::<crate::items::Items>()
                 .init_resource::<crate::sound::MessageSounds>()
                 .init_resource::<crate::ui_trainer::TrainerOpen>()
@@ -1145,6 +1236,7 @@ mod tests {
     fn every_world_enter_cascade_fires_welcome_and_questgivers() {
         let mut app = App::new();
         app.add_plugins(TutorialPlugin)
+            .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_trainer::TrainerOpen>()
@@ -1248,7 +1340,7 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .insert_resource(crate::net::SelfGuid(Some(0x10)))
             .add_message::<TutorialEvent>()
-            .add_systems(Update, feed_tutorials);
+            .add_systems(Update, (judge_selections, feed_tutorials).chain());
         let script = UiScript::new().unwrap();
         script
             .run(

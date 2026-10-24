@@ -388,7 +388,9 @@ impl super::UiScript {
     }
 }
 
-/// The 12 alert statuses off the doll snapshot (`0x4c7ee0`'s recompute), without the event.
+/// The 12 alert statuses off the doll snapshot (`0x4c7ee0`'s recompute), without the event. A
+/// slot it finds broken by durability triggers Broken Items (`0x4c8002`) and one it finds damaged
+/// Damaged Items (`0x4c802e`); the force-red arm (`0x4c7fb0`) and the ammo arm trigger nothing.
 pub(super) fn recompute_inventory_alerts(model: &mut Model) {
     let slots = &model.inventory_slots;
     let alerts: [u8; 12] = std::array::from_fn(|i| {
@@ -398,8 +400,27 @@ pub(super) fn recompute_inventory_alerts(model: &mut Model) {
             alert_status(&slots[ALERT_SLOTS[i]])
         }
     });
+    let forced = |i: usize| {
+        slots[ALERT_SLOTS[i]]
+            .as_ref()
+            .is_some_and(|v| v.flags & 0x10 != 0)
+    };
+    let owed: Vec<u32> = (0..11)
+        .filter_map(|i| match alerts[i] {
+            4 if !forced(i) => Some(TUTORIAL_BROKEN_ITEMS),
+            3 => Some(TUTORIAL_DAMAGED_ITEMS),
+            _ => None,
+        })
+        .collect();
     model.inventory_alerts = alerts;
+    for id in owed {
+        model.tutorial_triggers.push(id);
+    }
 }
+
+/// The two alert tutorials' 0-based numbers.
+const TUTORIAL_DAMAGED_ITEMS: u32 = 0x23;
+const TUTORIAL_BROKEN_ITEMS: u32 = 0x24;
 
 /// The unit a stat getter asks after `GetUnitFromToken` (`0x515940`), the gates' inputs beside
 /// its fields; `None` is no object, whose answer is each function's zeros.

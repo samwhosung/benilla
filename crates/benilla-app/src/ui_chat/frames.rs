@@ -59,6 +59,11 @@ pub(crate) fn route(
     }) {
         windows.logs.record(kind.is_combat_log(), &line);
     }
+    // A received whisper, type 6, triggers Replying to Tells ahead of its event (`0x49b0fb`-
+    // `0x49b107`).
+    if kind == ChatEventKind::Whisper {
+        script.queue_tutorial_trigger(crate::tutorial::id::REPLYING_TO_TELLS);
+    }
     script.fire_event(event_name(kind), event.script_args());
 }
 

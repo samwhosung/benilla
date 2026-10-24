@@ -1025,6 +1025,13 @@ impl Dispatch<'_, '_> {
             debug!("right-click interact: {guid:#x} — its window is already open, nothing sent");
             return;
         }
+        // Dialog status 1, unavailable, triggers Unavailable Quest Givers ahead of the ladder
+        // (`0x5f0268`-`0x5f0278`).
+        if self.service.quest.status(guid) == Some(1) {
+            if let Some(tutorials) = self.seam.slots.tutorials() {
+                tutorials.trigger_now(crate::tutorial::id::UNAVAILABLE_QUEST_GIVERS);
+            }
+        }
         let npc_flags = self
             .stores
             .get(entity)

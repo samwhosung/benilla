@@ -149,9 +149,11 @@ fn on_attacker_state(
     mut pending: ResMut<PendingImpacts>,
     mut sinks: ImpactSinks,
     mut play_seq: ResMut<PlaySeq>,
+    tutorials: Option<Res<crate::tutorial::Tutorials>>,
 ) {
     if let SessionEvent::AttackerState(s) = ev {
         attacker_state(
+            tutorials.as_deref(),
             s,
             &index,
             &self_guid,
@@ -278,6 +280,7 @@ fn ai_reaction(
 /// feedback waits for the clip's attack-hit key (`0x6247d0`); the combat-log line and its
 /// `COMBAT_TEXT_UPDATE` word come off the same packet in [`crate::combat_log`], after this.
 fn attacker_state(
+    tutorials: Option<&crate::tutorial::Tutorials>,
     s: AttackerState,
     index: &GuidIndex,
     self_guid: &SelfGuid,
@@ -304,6 +307,13 @@ fn attacker_state(
         );
     }
     let s = crate::combat_log::read_swing(s, index, &sinks.stores);
+    // The log step `0x629b10`, which every path ends in: our own swing at victim state 1, a
+    // hit, triggers Spells and Abilities (`0x629b1a`-`0x629b37`).
+    if self_guid.0 == Some(s.attacker) && s.victim_state == 1 {
+        if let Some(tutorials) = tutorials {
+            tutorials.trigger_now(crate::tutorial::id::SPELLS_AND_ABILITIES);
+        }
+    }
     let swing = SwingMessage {
         attacker: Entity::PLACEHOLDER, // filled per branch below
         victim,
