@@ -389,6 +389,10 @@ pub enum ServerPacket {
     GameObjectDespawnAnim {
         guid: u64,
     },
+    /// `SMSG_GAMEOBJECT_PAGETEXT`: a bare `u64` guid, the object whose page the reader opens on.
+    GameObjectPageText {
+        guid: u64,
+    },
     /// `SMSG_FISH_NOT_HOOKED`: the channel ended unhooked (empty body; `ERR_FISH_NOT_HOOKED`).
     FishNotHooked,
     /// `SMSG_FISH_ESCAPED`: the skill roll failed on the click (empty body; `ERR_FISH_ESCAPED`).
@@ -1382,6 +1386,7 @@ impl ServerPacket {
             ServerPacket::PageTextQueryResponse { .. } => "SMSG_PAGE_TEXT_QUERY_RESPONSE".into(),
             ServerPacket::GameObjectCustomAnim { .. } => "SMSG_GAMEOBJECT_CUSTOM_ANIM".into(),
             ServerPacket::GameObjectDespawnAnim { .. } => "SMSG_GAMEOBJECT_DESPAWN_ANIM".into(),
+            ServerPacket::GameObjectPageText { .. } => "SMSG_GAMEOBJECT_PAGETEXT".into(),
             ServerPacket::OpenContainer { .. } => "SMSG_OPEN_CONTAINER".into(),
             ServerPacket::Inspect { .. } => "SMSG_INSPECT".into(),
             ServerPacket::StandStateUpdate { .. } => "SMSG_STANDSTATE_UPDATE".into(),

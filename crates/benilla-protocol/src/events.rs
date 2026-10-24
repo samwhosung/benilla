@@ -493,6 +493,9 @@ pub enum SessionEvent {
     /// `SMSG_GAMEOBJECT_DESPAWN_ANIM`: the reference arms substate 12 (AnimationData 157 Despawn)
     /// and keeps the object alive through the same-tick `SMSG_DESTROY_OBJECT` while it plays.
     GameObjectDespawnAnim { guid: u64 },
+    /// `SMSG_GAMEOBJECT_PAGETEXT`: the reference resolves the GameObject and opens the item-text
+    /// reader on it (`0x5f88c0` → `0x4e32e0(guid, 0)`), as a right-click on a TEXT object does.
+    GameObjectPageText { guid: u64 },
     /// `SMSG_OPEN_CONTAINER`: the reference fires `BAG_OPEN` with 0 for our own guid (the
     /// backpack), 1..10 for a bag-cache slot, and nothing for a miss.
     OpenContainer { item: u64 },

@@ -921,6 +921,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::GameObjectDespawnAnim { guid } => {
             vec![SessionEvent::GameObjectDespawnAnim { guid }]
         }
+        ServerPacket::GameObjectPageText { guid } => {
+            vec![SessionEvent::GameObjectPageText { guid }]
+        }
         ServerPacket::OpenContainer { item } => vec![SessionEvent::OpenContainer { item }],
         ServerPacket::StandStateUpdate { state } => {
             vec![SessionEvent::StandStateUpdate { state }]

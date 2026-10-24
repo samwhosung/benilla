@@ -74,6 +74,12 @@ pub(super) fn read_gameobject_despawn_anim(r: &mut &[u8]) -> io::Result<u64> {
     read_u64_le(r)
 }
 
+/// Read `SMSG_GAMEOBJECT_PAGETEXT`, only the guid (`GameObject.cpp:1549-1554`); the 1.12 client
+/// reads it with `0x4190b0` (`0x5f88e0`).
+pub(super) fn read_gameobject_page_text(r: &mut &[u8]) -> io::Result<u64> {
+    read_u64_le(r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +148,18 @@ mod tests {
                 assert_eq!(guid, 0x1234_5678_9abc_def0);
             }
             other => panic!("expected GameObjectDespawnAnim, got {}", other.name()),
+        }
+    }
+
+    /// The body is the eight guid bytes, little-endian.
+    #[test]
+    fn gameobject_page_text_decodes() {
+        let body = hx("f0debc9a78563412");
+        match parse_server(opcode::SMSG_GAMEOBJECT_PAGETEXT, &body).unwrap() {
+            ServerPacket::GameObjectPageText { guid } => {
+                assert_eq!(guid, 0x1234_5678_9abc_def0);
+            }
+            other => panic!("expected GameObjectPageText, got {}", other.name()),
         }
     }
 
