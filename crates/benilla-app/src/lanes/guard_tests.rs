@@ -698,6 +698,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::player::state::StandPending",
     // The page cache the host's page turns read.
     "::ui_item_text::PageTexts",
+    // The streamed terrain the host's minimap ground cast traces.
+    "::terrain_stream::TerrainStreamer",
+    "::Assets<benilla_assets::adt::AdtTile>",
     // The pet trainer's latch, which the host's `ConfirmPetUnlearn` reads.
     "::ui_dialog_verbs::PetUnlearnState",
     "::BarUnitOutdoors",
