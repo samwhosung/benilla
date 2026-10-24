@@ -1,6 +1,7 @@
 //! The HUD minimap renderer, the app half of the `<Minimap>` widget: [`emit_minimap`] fills the
 //! widget's `QuadContent::Minimap` hole with the tiles around the player, masked to
-//! `MinimapMask.blp`, and the player arrow on top; the widget's FrameXML children draw above.
+//! `MinimapMask.blp`, with the landmark icons and dots over them; the player and rim arrows are the
+//! widget's engine `Model` children a level above (`0x4ed335`-`0x4ed344`), so they draw over it.
 //!
 //! - Tiles: one 256² BLP per ADT tile (533.33 yd), `map<X>_<Y>.blp` resolved through
 //!   `md5translate.trs` ([`benilla_formats::MinimapTranslate`]), indexed in ADT order.
@@ -342,7 +343,7 @@ fn minimap_interior<'a>(
     })
 }
 
-/// Fill the widget hole: the tiles masked to the circle, then the blips and the player arrow, at
+/// Fill the widget hole: the tiles masked to the circle, then the landmark icons and the dots, at
 /// the widget's z (a stable sort keeps append order, so all sit below the widget's children).
 fn emit_minimap(
     widget: Res<MinimapWidget>,

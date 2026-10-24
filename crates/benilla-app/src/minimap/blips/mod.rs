@@ -17,7 +17,8 @@
 //! draws the gold cell 3 (status 6 draws nothing; green cell 2 is never used in 1.12), and every
 //! other object falls through to tracking: a GameObject passing `0x5ed2b0` draws gold cell 0, a
 //! unit passing `0x5ed210` red cell 1, against the `PLAYER_TRACK_CREATURES`/`RESOURCES` masks.
-//! Party members are blue cell 4. Dots cull at the view radius in 3-D distance and draw last.
+//! Party members and our pet, our charm else our summon (`0x6dad10` slot 4), are blue cell 4 within
+//! 0.8 of the radius. Object dots cull at the view radius in 3-D distance; all draw last.
 //!
 //! Blip sizes are frozen once by the CGMinimapFrame ctor (`0x4edbc0`) against a 140.8-px basis.
 //!
@@ -351,11 +352,32 @@ pub(crate) fn party_member_pos<F: bevy::ecs::query::QueryFilter>(
         .map(|(x, y)| (f32::from(x), f32::from(y)))
 }
 
-/// The party and pet arrow frames' bearings, the out-of-range half of the party placement
-/// `0x6dad10`: slots 0 to 3 the party members, slot 4 the pet, our charm else our summon
-/// (`0x6dad60`–`0x6dad9c`), each fetched as a unit (`0x6dadc8`); a member that is not streamed
-/// falls back to its party-stats position, the pet to nothing (`0x6dae25`). Beyond 0.8 of the
-/// radius it has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`).
+/// The five group records' positions of the party placement `0x6dad10`: slots 0 to 3 the party
+/// members, slot 4 the pet, our charm else our summon (`0x6dad60`–`0x6dad9c`), each fetched as a
+/// unit (`0x6dadc8`); a member that is not streamed falls back to its party-stats position, the
+/// pet to nothing (`0x6dae25`).
+pub(super) fn group_positions<F: bevy::ecs::query::QueryFilter>(
+    group: &crate::ui_party::GroupState,
+    guids: &GuidIndex,
+    unit_pos: &Query<&GlobalTransform, F>,
+    pet: Option<u64>,
+) -> [Option<(f32, f32)>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
+    let mut records = [None; benilla_ui::widget::MINIMAP_GROUP_ARROWS];
+    for (i, m) in group.party_slots().enumerate().take(4) {
+        records[i] = party_member_pos(m, group, guids, unit_pos);
+    }
+    records[4] = pet
+        .and_then(|g| guids.0.get(&g))
+        .and_then(|e| unit_pos.get(*e).ok())
+        .map(|tf| {
+            let w = bevy_to_wow(tf.translation());
+            (w[0], w[1])
+        });
+    records
+}
+
+/// The party and pet arrow frames' bearings, the out-of-range half of the placement: beyond 0.8
+/// of the radius a [`group_positions`] record has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`).
 pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     wx: f32,
     wy: f32,
@@ -365,23 +387,12 @@ pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     unit_pos: &Query<&GlobalTransform, F>,
     pet: Option<u64>,
 ) -> [Option<f32>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
-    let arrow = |(x, y): (f32, f32)| {
-        (((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO)
-            .then(|| bearing(wx, wy, x, y))
-    };
-    let mut records = [None; benilla_ui::widget::MINIMAP_GROUP_ARROWS];
-    for (i, m) in group.party_slots().enumerate().take(4) {
-        records[i] = party_member_pos(m, group, guids, unit_pos).and_then(arrow);
-    }
-    records[4] = pet
-        .and_then(|g| guids.0.get(&g))
-        .and_then(|e| unit_pos.get(*e).ok())
-        .map(|tf| {
-            let w = bevy_to_wow(tf.translation());
-            (w[0], w[1])
+    group_positions(group, guids, unit_pos, pet).map(|pos| {
+        pos.filter(|&(x, y)| {
+            ((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO
         })
-        .and_then(arrow);
-    records
+        .map(|(x, y)| bearing(wx, wy, x, y))
+    })
 }
 
 /// Show the hovered blip's name; a unit's resolves through the name cache. This is the in-rect

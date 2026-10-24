@@ -16,7 +16,7 @@ use crate::names::NameCache;
 use crate::net::{GuidIndex, NetEntity, ObjectStore};
 use crate::ui_pass::{UiQuad, UiQuads, UvRect};
 
-use super::{party_member_pos, BlipCtx, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX};
+use super::{group_positions, BlipCtx, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX};
 
 /// The quest dot's quad, 8 px (`0xbc82a8`, frozen by the ctor); the per-cell scale table
 /// `{1,1,1,1,1.3}` scales only the party cell 4.
@@ -62,7 +62,7 @@ fn unit_dot_eligible(store: Option<&ObjectStore>, me: Option<u64>) -> bool {
 }
 
 /// Draw a gold dot per quest giver at status 7, culled at the view radius in 3-D distance with
-/// no rim arrow. Runs after the player arrow, so the dots draw on top.
+/// no rim arrow, in the map's own layer, under the arrow children.
 pub(in crate::minimap) fn emit_quest_dots(
     ctx: &BlipCtx,
     statuses: &HashMap<u64, u32>,
@@ -259,21 +259,23 @@ enum DotName {
     Known(String),
 }
 
-/// The party dots, the in-range half of the party placement `0x6dad10`: blue cell 4 at 1.3×,
-/// drawn last with the object dots, above every arrow (`0x4ed7b7`).
+/// The party and pet dots, the in-range half of the party placement `0x6dad10`: blue cell 4 at
+/// 1.3× for each of the five [`group_positions`] records within 0.8 of the radius
+/// (`0x4ed6b0`-`0x4ed7a7`), drawn last in the map's own layer (`0x4ed7b7`), under every arrow
+/// child.
 pub(in crate::minimap) fn emit_party_dots(
     ctx: &BlipCtx,
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
     unit_pos: &Query<&GlobalTransform, With<NetEntity>>,
-    _pet: Option<u64>,
+    pet: Option<u64>,
     icons: &Handle<Image>,
     quads: &mut UiQuads,
 ) {
-    for m in group.party_slots() {
-        let Some((x, y)) = party_member_pos(m, group, guids, unit_pos) else {
-            continue;
-        };
+    for (x, y) in group_positions(group, guids, unit_pos, pet)
+        .into_iter()
+        .flatten()
+    {
         let d = ((x - ctx.wx).powi(2) + (y - ctx.wy).powi(2)).sqrt();
         if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
             continue; // out of range: the arrow pass drew it
