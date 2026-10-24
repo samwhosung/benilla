@@ -903,10 +903,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Value::Nil,
                 })
             };
-            // The object's record off the item cache as the call runs (`0x4c0582`).
-            let (cached, name, texture, quality) = read_item(lua, key, &s, |_, item| {
+            // The object and its record off the item cache as the call runs: the stack off the
+            // object (`0x4c055d`-`0x4c056e`), the record's fields (`0x4c0582`).
+            let (cached, name, texture, quality, count) = read_item(lua, key, &s, |_, item| {
                 let gated = super::item_stats::gated_quality(item.quality(), item.inventory_type());
-                (item.cached(), item.name(), item.texture(), gated)
+                let count = item.stack_count().unwrap_or(s.count);
+                (item.cached(), item.name(), item.texture(), gated, count)
             });
             if !cached {
                 ask_record(lua, s.item_id, false)?;
@@ -921,7 +923,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                             .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
                     )?,
                 ),
-                Value::Integer(i64::from(s.count.max(1))),
+                Value::Integer(i64::from(count.max(1))),
                 Value::Integer(quality),
                 opt_str(&s.enchantment)?,
             ]))

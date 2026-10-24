@@ -36,16 +36,23 @@ pub(crate) struct AuctionVerbs<'w, 's> {
 }
 
 impl AuctionVerbs<'_, '_> {
+    /// The name cache's record for `guid`, read only, for a harness's host.
+    #[cfg(test)]
+    pub(crate) fn player_name(&self, guid: u64) -> Option<String> {
+        let names = self.names.as_deref()?;
+        names.resolve_player(guid, Ask::Read).map(str::to_string)
+    }
+
     /// `GetAuctionItemInfo`'s name lookup inside its call
     /// ([`benilla_ui::script::RecordAsk::AuctionName`]): the cache asks a miss, and the list's
-    /// callback waits on the name, once per name and list, for `script`'s session. A name the cache
-    /// already holds is released by the feed's next look ([`super::net::HouseLane::release_named`]).
-    pub(crate) fn wait_for_name(&mut self, script: &UiScript, guid: u64, list: usize) {
+    /// callback waits on the name, once per name and list (`0x55f080`'s dedupe flag 1). The getter
+    /// makes it only on a miss, having read the cache first ([`Self::player_name`]).
+    pub(crate) fn wait_for_name(&mut self, guid: u64, list: usize) {
         if let Some(names) = self.names.as_deref() {
             let _ = names.resolve_player(guid, Ask::Event(&self.commands));
         }
         if let Some(lane) = self.lane.as_deref_mut() {
-            lane.wait_for_name(guid, list, script.session());
+            lane.wait_for_name(guid, list);
         }
     }
 

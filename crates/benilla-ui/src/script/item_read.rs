@@ -94,6 +94,17 @@ pub(crate) fn read_item<V: ItemRead, T>(
     }
 }
 
+/// `f` over the item `key` names through the lent host, else over the snapshot `snapshot` hands
+/// it, which borrows the snapshot only on that fall and copies only what `f` answers.
+pub(crate) fn read_item_or<T>(
+    lua: &Lua,
+    key: Option<ItemKey>,
+    f: impl Fn(&dyn ItemRead) -> T,
+    snapshot: impl FnOnce(&dyn Fn(&dyn ItemRead) -> T) -> Option<T>,
+) -> Option<T> {
+    read_live(lua, key, &f).or_else(|| snapshot(&f))
+}
+
 /// `f` over the item `key` names through the lent host; `None` where [`read_item`] falls to the
 /// snapshot.
 pub(crate) fn read_live<T>(
@@ -268,5 +279,132 @@ impl ItemRead for super::TradeSlotItem {
     }
     fn readable(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ItemKey, ItemRead};
+    use crate::script::cursor::CursorItem;
+    use crate::script::{
+        CallHost, CallTail, ScriptCall, TradeSideState, TradeSlotItem, TradeState, UiScript,
+    };
+
+    const HELD: u64 = 0x4000_0000_0000_0102;
+
+    /// A host that holds one item object, [`HELD`], whose stack is `stack` now.
+    struct Holding {
+        stack: u32,
+    }
+
+    /// [`Holding`]'s object: a cached record, its stack as the object holds it.
+    struct Stack(u32);
+
+    impl ItemRead for Stack {
+        fn cached(&self) -> bool {
+            true
+        }
+        fn name(&self) -> Option<String> {
+            Some("Linen Cloth".into())
+        }
+        fn texture(&self) -> Option<String> {
+            None
+        }
+        fn quality(&self) -> Option<u32> {
+            Some(1)
+        }
+        fn inventory_type(&self) -> u32 {
+            0
+        }
+        fn class(&self) -> Option<u32> {
+            Some(7)
+        }
+        fn link(&self) -> Option<String> {
+            None
+        }
+        fn uncached_link(&self) -> Option<String> {
+            None
+        }
+        fn stack_count(&self) -> Option<u32> {
+            Some(self.0)
+        }
+        fn durability(&self) -> Option<(u32, u32)> {
+            None
+        }
+        fn readable(&self) -> bool {
+            false
+        }
+    }
+
+    impl CallHost for Holding {
+        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+            None
+        }
+        fn read_item(&mut self, key: ItemKey, read: &mut dyn FnMut(&dyn ItemRead)) -> bool {
+            if key != ItemKey::Object(HELD) {
+                return false;
+            }
+            read(&Stack(self.stack));
+            true
+        }
+    }
+
+    fn held(count: Option<u32>) -> CursorItem {
+        CursorItem {
+            guid: HELD,
+            bag: 0,
+            slot: 1,
+            item_id: 2589,
+            item_class: None,
+            texture: None,
+            link: None,
+            count,
+            quality: Some(1),
+            equip_slots: Vec::new(),
+            bar_placeable: true,
+            consumable: false,
+        }
+    }
+
+    /// Our own trade slot's count is the object's stack as the call runs (`0x4c055d`-`0x4c056e`,
+    /// `[item+0x114]+0x20`), not the push's.
+    #[test]
+    fn our_trade_slots_count_reads_the_objects_stack() {
+        let mut s = UiScript::new().unwrap();
+        let mut player = TradeSideState::default();
+        player.slots[0] = Some(TradeSlotItem {
+            item_id: 2589,
+            count: 2,
+            name: Some("Linen Cloth".into()),
+            ..Default::default()
+        });
+        s.set_trade(Some(TradeState {
+            player,
+            target: TradeSideState::default(),
+        }));
+        s.model_mut().trade_offered[0] = Some(held(None));
+        let chunk = "local _, _, count = GetTradePlayerItemInfo(1) return count";
+        assert_eq!(s.eval::<i64>(chunk).unwrap(), 2, "off the push");
+        let live = s.hosted(&mut Holding { stack: 5 }, |s| s.eval::<i64>(chunk).unwrap());
+        assert_eq!(live, 5);
+    }
+
+    /// The letter's attachment count is the object's stack as the call runs (`0x4ae68e`).
+    #[test]
+    fn the_send_mail_items_count_reads_the_objects_stack() {
+        let mut s = UiScript::new().unwrap();
+        s.set_item_template(
+            2589,
+            crate::script::ItemTemplateView {
+                name: "Linen Cloth".into(),
+                quality: 1,
+                ..Default::default()
+            },
+        );
+        s.model_mut().mail_send_item = Some(held(Some(3)));
+        let chunk = "local _, _, count = GetSendMailItem() return count";
+        assert_eq!(s.eval::<i64>(chunk).unwrap(), 3, "off the cursor");
+        let live = s.hosted(&mut Holding { stack: 7 }, |s| s.eval::<i64>(chunk).unwrap());
+        assert_eq!(live, 7);
     }
 }

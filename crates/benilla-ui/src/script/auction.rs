@@ -855,17 +855,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 super::item_stats::item_usable_by_id(&model, r.item_id)
             };
-            // A name the cache misses is asked inside the call with the list's callback, the
-            // bidder's on an owned row first (`0x4cf167`), then the seller's (`0x4cf1c8`); nothing
-            // else asks a name.
+            // The names off the name cache as the call runs, the bidder's on an owned row first
+            // (`0x4cf167`), then the seller's (`0x4cf1c8`); the push's only with no host lent. A
+            // miss is asked inside the call with the list's callback; nothing else asks a name.
+            let mut r = r;
+            let live = |guid: u64| super::host::read_host(lua, |h| h.player_name(guid));
+            let bidder = (r.named_bidder != 0).then(|| match live(r.named_bidder) {
+                Some(name) => name,
+                None => match &r.high_bidder {
+                    AuctionHighBidder::Name(n) => Some(n.clone()),
+                    _ => None,
+                },
+            });
+            let owner = (r.owner_guid != 0).then(|| live(r.owner_guid).unwrap_or(r.owner.take()));
+            if let Some(name) = &bidder {
+                r.high_bidder = name
+                    .clone()
+                    .map_or(AuctionHighBidder::Nil, AuctionHighBidder::Name);
+            }
+            if let Some(name) = &owner {
+                r.owner.clone_from(name);
+            }
             if let Some(list) = list_index(&kind) {
-                let bidder_missed = r.named_bidder != 0 && r.high_bidder == AuctionHighBidder::Nil;
-                let seller_missed = r.owner_guid != 0 && r.owner.is_none();
-                for (missed, guid) in [
-                    (bidder_missed, r.named_bidder),
-                    (seller_missed, r.owner_guid),
-                ] {
-                    if missed {
+                for (name, guid) in [(&bidder, r.named_bidder), (&owner, r.owner_guid)] {
+                    if matches!(name, Some(None)) {
                         super::calls::ask(lua, super::RecordAsk::AuctionName { guid, list })?;
                     }
                 }

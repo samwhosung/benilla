@@ -559,6 +559,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
         self.appliers.items_live().read(key, read)
     }
 
+    fn player_name(&mut self, guid: u64) -> Option<String> {
+        self.appliers.asks().player_name(guid)
+    }
+
     fn read_unit_object(
         &mut self,
         guid: u64,
@@ -800,7 +804,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
             ScriptCall::Console(line) => appliers.console().run(&engine::VmCvars(script), &line),
             ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::AuctionName { guid, list }) => {
-                appliers.auction().wait_for_name(script, guid, list);
+                appliers.auction().wait_for_name(guid, list);
             }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(script, ask),
         }

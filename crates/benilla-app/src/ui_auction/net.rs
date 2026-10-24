@@ -158,9 +158,6 @@ pub(crate) enum HouseStep {
 pub(crate) struct HouseLane {
     steps: std::collections::VecDeque<(crate::lanes::Stamp, HouseStep)>,
     waits: Vec<(u64, usize)>,
-    /// The VM session the waits' getters ran in ([`UiScript::session`]): a new VM's first wait
-    /// drops an old one's, whose callbacks went with its state.
-    waits_session: u64,
 }
 
 impl HouseLane {
@@ -185,25 +182,13 @@ impl HouseLane {
             .flatten()
     }
 
-    /// Keep a name's wait for `list`, made by a getter in VM session `session`, once per name and
-    /// list (`0x55f080`'s dedupe flag 1).
-    pub(super) fn wait_for_name(&mut self, guid: u64, list: usize, session: u64) {
-        self.keep_session(session);
+    /// Keep a name's wait for `list`, once per name and list (`0x55f080`'s dedupe flag 1). The
+    /// list callbacks (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`) are engine code that only the name
+    /// cache's cancel `0x55f870` removes, and no auction caller makes it, so a wait outlives the VM
+    /// whose getter made it and signals the next one.
+    pub(super) fn wait_for_name(&mut self, guid: u64, list: usize) {
         if !self.waits.contains(&(guid, list)) {
             self.waits.push((guid, list));
-        }
-    }
-
-    /// Whether the waits were made in a VM session other than `session`.
-    pub(super) fn stale(&self, session: u64) -> bool {
-        self.waits_session != session
-    }
-
-    /// Drop the waits made in any VM session but `session`.
-    pub(super) fn keep_session(&mut self, session: u64) {
-        if self.waits_session != session {
-            self.waits_session = session;
-            self.waits.clear();
         }
     }
 

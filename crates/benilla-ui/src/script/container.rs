@@ -7,7 +7,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag, number_arg};
 use super::cursor::{self, CursorItem, CursorPayload};
-use super::item_read::read_item;
+use super::item_read::read_item_or;
 use super::protected::{self, Tag};
 use super::{ItemCall, Model};
 
@@ -333,6 +333,13 @@ impl super::Model {
         }
         self.bag(bag)?.slots.get(&slot)
     }
+}
+
+/// The item the bag slot `(bag, slot)` holds, as its getters read it; `None` for an empty or
+/// unknown slot.
+fn slot_key(lua: &Lua, bag: i64, slot: u32) -> Option<Option<super::ItemKey>> {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    model.bag_slot(bag, slot).map(ContainerSlot::item_key)
 }
 
 impl super::UiScript {
@@ -1038,17 +1045,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetContainerItemLink",
         lua.create_function(|lua, (bag, slot): (Value, Value)| {
-            let key = container_key(lua, bag, slot, "Usage: GetContainerItemLink(index, slot)")?;
-            let slot = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                key.and_then(|(bag, slot)| model.bag_slot(bag, slot).cloned())
+            let Some((bag, slot)) =
+                container_key(lua, bag, slot, "Usage: GetContainerItemLink(index, slot)")?
+            else {
+                return Ok(MultiValue::new());
+            };
+            let Some(key) = slot_key(lua, bag, slot) else {
+                return Ok(MultiValue::new());
             };
             // The object and its record as the call runs (`0x4f997f` → `0x52ae00`).
-            let link = slot.and_then(|s| {
-                read_item(lua, s.item_key(), &s, |_, item| {
-                    item.link().or_else(|| item.uncached_link())
-                })
-            });
+            let link = read_item_or(
+                lua,
+                key,
+                |item| item.link().or_else(|| item.uncached_link()),
+                |f| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    model.bag_slot(bag, slot).map(|s| f(s))
+                },
+            )
+            .flatten();
             // Nothing at all when the resolver fails or finds no item object (`0x4f996b`,
             // `0x4f997b`, both to `0x4f99a5`); any object links (`0x4f997f` → `0x52ae00`), with
             // no record white and nameless.
@@ -1074,27 +1089,33 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // The resolver failed (`0x4f990d`): nothing is pushed (`0x4f9810`).
                 return Ok(mlua::MultiValue::new());
             };
-            let (info, locked) = {
+            let (key, locked) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let info = model.bag_slot(bag, slot).cloned();
-                let locked = info
-                    .as_ref()
-                    .is_some_and(|s| cursor::item_locked(&model, s.guid));
-                (info, locked)
-            };
-            let Some(s) = info else {
-                return Ok(mlua::MultiValue::new());
+                let Some(s) = model.bag_slot(bag, slot) else {
+                    return Ok(mlua::MultiValue::new());
+                };
+                (s.item_key(), cursor::item_locked(&model, s.guid))
             };
             // The object and its record as the call runs (`0x4f96dc`, `0x4f978b`).
-            let (texture, count, quality, readable) =
-                read_item(lua, s.item_key(), &s, |s, item| {
+            let Some((texture, count, quality, readable)) = read_item_or(
+                lua,
+                key,
+                |item| {
                     (
                         item.texture(),
-                        item.stack_count().unwrap_or(s.count),
+                        // A slot's stack is always its object's or its push's.
+                        item.stack_count().unwrap_or(1),
                         super::item_stats::gated_quality(item.quality(), item.inventory_type()),
                         item.readable(),
                     )
-                });
+                },
+                |f| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    model.bag_slot(bag, slot).map(|s| f(s))
+                },
+            ) else {
+                return Ok(mlua::MultiValue::new());
+            };
             Ok(mlua::MultiValue::from_vec(vec![
                 // A string on every path: the question mark while the template is unknown
                 // (`0x5d8af0`).

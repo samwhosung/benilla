@@ -279,11 +279,15 @@ impl benilla_ui::script::CallHost for AuctionHost<'_, '_, '_> {
         match call {
             ScriptCall::Auction(call) => self.0.apply(script, call),
             ScriptCall::RecordAsk(RecordAsk::AuctionName { guid, list }) => {
-                self.0.wait_for_name(script, guid, list);
+                self.0.wait_for_name(guid, list);
             }
             _ => {}
         }
         None
+    }
+
+    fn player_name(&mut self, guid: u64) -> Option<String> {
+        self.0.player_name(guid)
     }
 }
 
@@ -458,6 +462,32 @@ fn a_sellers_name_signals_the_list_without_sorting_it() {
         "the name signals the list that asked, once"
     );
     assert_eq!(h.sellers("list"), "Bob,Al", "and does not sort it");
+}
+
+/// A name wait outlives the VM that made it: the list callbacks are engine code (`0x4cf290`,
+/// `0x4cf2b0`, `0x4cf2d0`) that only `0x55f870` cancels, and no auction caller does, so a `/reload`
+/// keeps them and the name's landing signals the list in the new VM.
+#[test]
+fn a_name_wait_outlives_a_reload_and_signals_the_new_vm() {
+    const AL: u64 = 0x61;
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    let mut al = entry(1, 1);
+    al.owner_guid = AL;
+    h.land(LIST, vec![al]);
+    assert_eq!(h.sellers("list"), "?");
+    h.new_vm();
+    h.app.update();
+    h.script().run("SEEN = {}").unwrap();
+    h.name(AL, "Al");
+    h.app.update();
+    super::net::fire_house_lane(h.app.world_mut());
+    assert_eq!(
+        h.seen(),
+        ["AUCTION_ITEM_LIST_UPDATE=Cloth"],
+        "the new VM hears the list the old one read"
+    );
 }
 
 /// The duration sort compares each row's deadline, the result's tick plus the wire's

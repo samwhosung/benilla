@@ -903,11 +903,7 @@ fn feed_auction(
         // the name lands, whose handler releases them ([`net::HouseLane::name_landed`]). The lane
         // is written only when it has something to do, so a quiet frame leaves it unchanged.
         if let Some(lane) = steps.as_mut() {
-            // A new VM's getters made none of the waits.
-            if lane.stale(script.session()) {
-                lane.keep_session(script.session());
-            }
-            // A name the cache already held when it was asked answers no packet: released here.
+            // A name the cache learned with no name answer of its own releases its waits here.
             let named = |guid| names.resolve_player(guid, Ask::Read).is_some();
             if lane.any_named(named) {
                 lane.release_named(named);

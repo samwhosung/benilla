@@ -639,14 +639,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Ok(item_id) = u32::try_from(id) else {
                 return Ok(MultiValue::new()); // no record holds a negative or past-u32 id
             };
-            let view = {
+            {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let v = model.item_templates.get(&item_id).cloned();
-                if v.is_none() && item_id != 0 {
+                if item_id != 0 && !model.item_templates.contains_key(&item_id) {
                     model.item_stat_reads.insert(item_id);
                 }
-                v
-            };
+            }
             // The record as the cache holds it now, the snapshot's copy only with no host lent.
             // The base name: the suffix is the VM's own `ITEM_SUFFIX_TEMPLATE` fill, below.
             let key = (item_id != 0).then_some(super::ItemKey::Record {
@@ -662,10 +660,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     r.texture(),
                 ))
             };
-            let live = super::item_read::read_live(lua, key, read);
-            let Some((base, quality, info, inventory_type, icon)) =
-                live.unwrap_or_else(|| view.as_ref().and_then(|v| read(v)))
-            else {
+            let answer = super::item_read::read_item_or(lua, key, read, |read| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.item_templates.get(&item_id).map(|v| read(v))
+            });
+            let Some((base, quality, info, inventory_type, icon)) = answer.flatten() else {
                 return Ok(MultiValue::new());
             };
             let name = suffixed_name(lua, &base, random_property);
