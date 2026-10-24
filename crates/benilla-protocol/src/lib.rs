@@ -317,23 +317,38 @@ impl Logon {
 /// `locale` is the client's locale tag the challenge carries ([`auth::write_logon_challenge`]).
 /// An account that asks for a PIN fails it: [`logon_with_pin`] is the logon that can answer.
 pub fn logon(realmlist: &str, username: &str, password: &str, locale: u32) -> Result<Logon> {
-    logon_with_pin(realmlist, username, password, locale, &mut |_| {
-        Err(anyhow!(
-            "the account asks for a PIN, which this logon cannot enter"
-        ))
-    })
+    logon_with_pin(
+        realmlist,
+        username,
+        password,
+        locale,
+        &mut |_| {
+            Err(anyhow!(
+                "the account asks for a PIN, which this logon cannot enter"
+            ))
+        },
+        &mut |_| {},
+    )
 }
 
 /// [`logon`], with `pin` asked for the keys pressed when the challenge asks for a PIN: it gets the
 /// keypad's grid ([`auth::pin::grid`]) and returns the positions pressed on it, as `PINEntered`
 /// hands them on (`0x46d1c0` → `0x5b3120`), or an error that ends the logon there, before the
 /// proof.
+///
+/// `stage` is told each state the logon reaches as it reaches it, as the reference's logon object
+/// reports them to its listener: [`LoginStage::Authenticating`] as the challenge goes out
+/// (`0x5b2196`), [`LoginStage::CheckingVersions`] on a reply that asks for no PIN (`0x5b1cd7`;
+/// one that asks for one is `pin`'s call) and [`LoginStage::ProofSent`] once the proof is out
+/// (`0x5b1f93`). A redial for a fresh server key (below) is no new state, and a reply that
+/// authenticates with no exchange reports none.
 pub fn logon_with_pin(
     realmlist: &str,
     username: &str,
     password: &str,
     locale: u32,
     pin: &mut dyn FnMut(&[u8; 10]) -> Result<Vec<u8>>,
+    stage: &mut dyn FnMut(LoginStage),
 ) -> Result<Logon> {
     let username_n =
         NormalizedString::new(username).map_err(|e| anyhow!("invalid username: {e}"))?;
@@ -347,8 +362,11 @@ pub fn logon_with_pin(
     // one; realmd counts nothing before the proof (`AuthSocket::_HandleLogonChallenge`).
     let (mut stream, reply, server_public_key) = {
         let mut dialed = None;
-        for _ in 0..MAX_CHALLENGE_DIALS {
+        for dial in 0..MAX_CHALLENGE_DIALS {
             let mut stream = connect(target, &address)?;
+            if dial == 0 {
+                stage(LoginStage::Authenticating);
+            }
             auth::write_logon_challenge(
                 &mut stream,
                 &username.to_uppercase(),
@@ -395,7 +413,10 @@ pub fn logon_with_pin(
                 auth::pin::digits(&grid, &positions),
             )
         }
-        None => (None, None),
+        None => {
+            stage(LoginStage::CheckingVersions);
+            (None, None)
+        }
     };
     auth::write_logon_proof(
         &mut stream,
@@ -405,6 +426,7 @@ pub fn logon_with_pin(
         pin_proof.as_ref(),
     )
     .context("sending logon proof")?;
+    stage(LoginStage::ProofSent);
 
     let session_key =
         match auth::read_proof_reply(&mut stream).context("reading logon proof reply")? {

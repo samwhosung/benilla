@@ -67,13 +67,22 @@ impl MoveSpeeds {
 pub enum LoginStage {
     /// Dialing the auth server (`LOGIN_STATE_CONNECTING`).
     Connecting,
-    /// SRP6 challenge/proof in flight (`LOGIN_STATE_AUTHENTICATING`).
+    /// The dial connected and the challenge goes out (`LOGIN_STATE_AUTHENTICATING`, logon state 3,
+    /// `0x5b2196`).
     Authenticating,
+    /// The challenge's reply came and asked for no PIN (`LOGIN_STATE_CHECKINGVERSIONS`, logon
+    /// state 9, `0x5b1cd7`). With a PIN the reply's state is [`Self::Pin`]'s 7, and the 9 comes
+    /// when the keys are in (`0x5b31cc`), which the glue's `PINEntered` reports itself.
+    CheckingVersions,
+    /// The proof went out (`LOGIN_STATE_HANDSHAKING`, logon state 2, `0x5b1f93`): the reference's
+    /// name for the wait on the proof's reply, not the world's handshake ([`Self::Handshaking`]).
+    ProofSent,
     /// The challenge asked for a PIN (`LOGIN_STATE_PIN`, logon state 7, `0x5b1cd7`): the logon
     /// waits for the keys pressed on the keypad this grid lays out ([`crate::auth::pin::grid`]),
     /// taking only keys that answer `prompt`, this prompt's number.
     Pin { grid: [u8; 10], prompt: u64 },
-    /// Realm picked; the world-socket handshake and char enum (`LOGIN_STATE_HANDSHAKING`).
+    /// Realm picked: the world dial begins, which ends the logon on the screen (the glue's
+    /// `LOGIN_STATE_AUTHENTICATED`, logon state 4).
     Handshaking,
     /// The world socket connected, before its authentication (`RESPONSE_CONNECTED`, `0x5aaa90`).
     WorldConnected,

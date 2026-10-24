@@ -428,8 +428,14 @@ fn query(
                 .and_then(|digits| benilla_protocol::auth::pin::positions(grid, digits))
                 .ok_or_else(|| anyhow!("the re-dial has no PIN to press"))
         };
+        // A hidden re-dial for the realm list: no logon on the screen to tell the states to.
         match benilla_protocol::logon_with_pin(
-            &req.host, &req.user, &req.pass, req.locale, &mut press,
+            &req.host,
+            &req.user,
+            &req.pass,
+            req.locale,
+            &mut press,
+            &mut |_| {},
         ) {
             Ok(fresh) => {
                 *logon = fresh;
@@ -605,6 +611,7 @@ fn run(
                 superseded = next;
                 answer
             },
+            &mut |s| stage(s),
         );
         if let Some(next) = superseded {
             req = next;

@@ -5095,3 +5095,90 @@ fn a_stock_create_whose_name_fails_the_check_sends_nothing() {
     assert!(shown(&app, "CharacterCreate"));
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }
+
+/// The `CANCEL` dialogs a logon walks through as `stages` arrive, one frame each.
+fn dialogs_for(m: &mut GlueMgr, stages: impl IntoIterator<Item = LoginStage>) -> Vec<Outgoing> {
+    m.outbox.clear();
+    for stage in stages {
+        m.on_stage(stage, true);
+        m.tick();
+        settle(m);
+    }
+    std::mem::take(&mut m.outbox)
+}
+
+/// Without a PIN a logon shows `CONNECTING`, `AUTHENTICATING` (`0x5b2196`), `CHECKINGVERSIONS`
+/// (`0x5b1cd7`) and `HANDSHAKING` (`0x5b1f93`) in turn, then `AUTHENTICATED`.
+#[test]
+fn a_logon_walks_through_each_state_text() {
+    let mut m = fresh();
+    m.login("a".into(), "b".into());
+    settle(&mut m);
+    let mut shown = dialogs_for(
+        &mut m,
+        [
+            LoginStage::Connecting,
+            LoginStage::Authenticating,
+            LoginStage::CheckingVersions,
+            LoginStage::ProofSent,
+        ],
+    );
+    m.on_logon_done();
+    m.tick();
+    settle(&mut m);
+    shown.append(&mut m.outbox);
+    shown.retain(|o| matches!(o, Outgoing::Open { .. }));
+    assert_eq!(
+        shown,
+        [
+            open("CANCEL", Some("LOGIN_STATE_CONNECTING")),
+            open("CANCEL", Some("LOGIN_STATE_AUTHENTICATING")),
+            open("CANCEL", Some("LOGIN_STATE_CHECKINGVERSIONS")),
+            open("CANCEL", Some("LOGIN_STATE_HANDSHAKING")),
+            open("CANCEL", Some("LOGIN_STATE_AUTHENTICATED")),
+        ]
+    );
+}
+
+/// With a PIN the reply's state is `PIN` (`0x5b1cd7`), the keys' is `CHECKINGVERSIONS`
+/// (`0x5b31cc`), and the proof's `HANDSHAKING` follows.
+#[test]
+fn a_pin_logon_walks_through_each_state_text() {
+    let mut m = fresh();
+    m.login("a".into(), "b".into());
+    settle(&mut m);
+    let mut shown = dialogs_for(
+        &mut m,
+        [
+            LoginStage::Connecting,
+            LoginStage::Authenticating,
+            LoginStage::Pin {
+                grid: GRID,
+                prompt: PROMPT,
+            },
+        ],
+    );
+    m.call(GlueCall::PinEntered(benilla_ui::script::GluePin {
+        positions: vec![2, 9, 4, 7],
+    }));
+    settle(&mut m);
+    m.tick();
+    settle(&mut m);
+    shown.append(&mut m.outbox);
+    shown.extend(dialogs_for(&mut m, [LoginStage::ProofSent]));
+    let texts: Vec<_> = shown
+        .into_iter()
+        .filter(|o| matches!(o, Outgoing::Open { .. }))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            open("CANCEL", Some("LOGIN_STATE_CONNECTING")),
+            open("CANCEL", Some("LOGIN_STATE_AUTHENTICATING")),
+            open("CANCEL", Some("LOGIN_STATE_PIN")),
+            open("CANCEL", None),
+            open("CANCEL", Some("LOGIN_STATE_CHECKINGVERSIONS")),
+            open("CANCEL", Some("LOGIN_STATE_HANDSHAKING")),
+        ]
+    );
+}

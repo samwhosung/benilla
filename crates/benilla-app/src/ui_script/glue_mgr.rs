@@ -148,9 +148,14 @@
 //!    (`0x46c118` → `0x46c177`). The dialog's button in state 5 cancels the operation and goes to
 //!    state 0 (`0x46b776`), sending nothing.
 //!
-//! The login engine reports a logon as one blocking step, so of the logon's states only
-//! `CONNECTING`, `PIN` and `AUTHENTICATED` are seen, and `CHECKINGVERSIONS` once a PIN is in; its
-//! refusals map through the reference's own byte-to-result table ([`realmd_result`]).
+//! The logon's states, in the order the logon object reports them: `CONNECTING` (1) on the dial,
+//! `AUTHENTICATING` (3) as the challenge goes out (`0x5b2196`), then on the challenge's reply
+//! `CHECKINGVERSIONS` (9) for an account with no PIN or `PIN` (7) for one with (`0x5b1cd7`, the
+//! PIN flag at `+0x1ac`), `HANDSHAKING` (2) once the proof is out (`0x5b1f93`)
+//! and `AUTHENTICATED` (4) when the server accepts it. The login engine reports each as it
+//! reaches it ([`LoginStage`]); a PIN's 9 is the keys' own (`0x5b31cc`), reported by
+//! `PINEntered`. Its refusals map through the reference's own byte-to-result table
+//! ([`realmd_result`]).
 //!
 //! The PIN: a challenge that asks for one reports logon state 7, whose arm closes the dialog,
 //! fires `PLAYER_ENTER_PIN` with the keypad's grid and waits in state 8 (`0x46bac3`-`0x46bb1d`);
@@ -264,6 +269,8 @@ const URL_STATUSES: [(u8, &str); 5] = [
 
 /// Login states, the reference's numbers.
 const LOGIN_CONNECTING: i32 = 1;
+const LOGIN_HANDSHAKING: i32 = 2;
+const LOGIN_AUTHENTICATING: i32 = 3;
 const LOGIN_AUTHENTICATED: i32 = 4;
 const LOGIN_FAILED_STATE: i32 = 5;
 const LOGIN_DOWNLOADFILE: i32 = 6;
@@ -1303,8 +1310,12 @@ impl GlueMgr {
                     self.cells.result = 0;
                 }
             }
-            // The SRP exchange is inside the IO thread's one blocking logon call.
-            LoginStage::Authenticating => {}
+            // The states the logon object reports on the way to the PIN or the proof: 3 as the
+            // challenge goes out (`0x5b2196`), 9 on a reply that asks for no PIN (`0x5b1cd7`) and
+            // 2 once the proof is out (`0x5b1f93`). Each shows its text on the frame it lands on.
+            LoginStage::Authenticating => self.on_logon_state(LOGIN_AUTHENTICATING),
+            LoginStage::CheckingVersions => self.on_logon_state(LOGIN_CHECKINGVERSIONS),
+            LoginStage::ProofSent => self.on_logon_state(LOGIN_HANDSHAKING),
             // The challenge's PIN kept (`0x5b1ed0`) and logon state 7 reported (`0x5b1cd7`). With
             // no logon on the screen to show the keypad (no glue screen, or one in another state)
             // the prompt is answered with no keys at once, which fails the logon.
@@ -1339,6 +1350,14 @@ impl GlueMgr {
     /// it is.
     fn on_guard_refused(&mut self, why: &str) {
         self.open("OKAY", Some(Text::Raw(why.to_string())));
+    }
+
+    /// The logon object reports `state` while the logon is on the screen.
+    fn on_logon_state(&mut self, state: i32) {
+        if self.state == ScreenState::Logon {
+            self.cells.state = state;
+            self.cells.result = 0;
+        }
     }
 
     /// The logon authenticated: login state 4, which arms the final latch (`0x46b0f0`).
