@@ -82,3 +82,16 @@ impl RecordAsks<'_> {
         }
     }
 }
+
+/// The calling VM's CVar mirror as a console line reads it inside its `ConsoleExec` call.
+pub(super) struct VmCvars<'a>(pub(super) &'a UiScript);
+
+impl crate::console::ConsoleCvarSource for VmCvars<'_> {
+    fn rows(&self) -> crate::console::ConsoleCvars {
+        crate::console::ConsoleCvars::of_vm(self.0.cvar_rows())
+    }
+
+    fn value(&self, name: &str) -> Option<String> {
+        self.0.cvar(name)
+    }
+}

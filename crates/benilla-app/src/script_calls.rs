@@ -750,10 +750,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::ConfirmPetUnlearn => appliers.pet_unlearn().confirm(script),
             ScriptCall::Nameplates(write) => appliers.plates().apply(write),
             ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
-            ScriptCall::Console(line) => appliers.console().run(
-                crate::console::ConsoleCvars::of_vm(script.cvar_rows()),
-                &line,
-            ),
+            ScriptCall::Console(line) => appliers.console().run(&engine::VmCvars(script), &line),
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
         }
         self.settle_selection(script, &mut at, owed);
