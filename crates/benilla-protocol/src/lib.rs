@@ -305,7 +305,9 @@ impl Logon {
 /// An account that asks for a PIN fails it: [`logon_with_pin`] is the logon that can answer.
 pub fn logon(realmlist: &str, username: &str, password: &str, locale: u32) -> Result<Logon> {
     logon_with_pin(realmlist, username, password, locale, &mut |_| {
-        Err(anyhow!("the account asks for a PIN, which this logon cannot enter"))
+        Err(anyhow!(
+            "the account asks for a PIN, which this logon cannot enter"
+        ))
     })
 }
 

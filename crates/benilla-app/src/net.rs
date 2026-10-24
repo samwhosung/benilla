@@ -589,6 +589,9 @@ pub(crate) enum RealmRequest {
     /// select drops and the thread returns to the logon park, the realmd link as it was (closed
     /// since a world entry). Elsewhere, nothing.
     Leave,
+    /// `PINEntered`'s keys for the logon waiting at the keypad (`0x5ab5a0` → `0x5b3120`), asked
+    /// under `generation`: only the attempt of that generation proves them. Elsewhere, nothing.
+    Pin { positions: Vec<u8>, generation: u64 },
 }
 
 /// The credentials channel to the IO thread's pre-logon park, sent by [`crate::glue_session::login`].

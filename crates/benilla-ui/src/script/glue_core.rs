@@ -731,7 +731,9 @@ fn fire_signal(lua: &Lua, signal: GlueSignal) {
         }
         GlueSignal::EnterPin(grid) => fire(
             "PLAYER_ENTER_PIN",
-            grid.iter().map(|&d| ScriptValue::Int(i64::from(d))).collect(),
+            grid.iter()
+                .map(|&d| ScriptValue::Int(i64::from(d)))
+                .collect(),
         ),
         GlueSignal::Cvar { name, value } => {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -1311,7 +1313,10 @@ mod tests {
     #[test]
     fn enter_pin_fires_the_grid_as_ten_numbers() {
         let grid = [6, 3, 2, 1, 9, 8, 7, 0, 4, 5];
-        let (s, _host) = seated(vec![("StatusDialogClick", vec![GlueSignal::EnterPin(grid)])]);
+        let (s, _host) = seated(vec![(
+            "StatusDialogClick",
+            vec![GlueSignal::EnterPin(grid)],
+        )]);
         s.run(
             "GOT = {} F = CreateFrame('Frame') F:RegisterEvent('PLAYER_ENTER_PIN') \
              F:SetScript('OnEvent', function() for i = 1, 10 do \
@@ -1348,8 +1353,13 @@ mod tests {
             "the eleventh is never read"
         );
         assert!(
-            format!("{:?}", GlueCall::PinEntered(GluePin { positions: vec![1, 2, 3, 4] }))
-                .contains("4 keys"),
+            format!(
+                "{:?}",
+                GlueCall::PinEntered(GluePin {
+                    positions: vec![1, 2, 3, 4]
+                })
+            )
+            .contains("4 keys"),
             "the keys are never printed"
         );
     }

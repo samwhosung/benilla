@@ -410,7 +410,8 @@ fn publish(
 /// nothing, leaving the screen on its connecting dialog for good. Here both queries re-dial on
 /// any failure, with a full logon from the cycle's credentials, because benilla's logon has no
 /// reconnect exchange and a connect that can never complete is a dead end, not a behaviour; the
-/// new session key serves the next world dial as the reconnect's would.
+/// new session key serves the next world dial as the reconnect's would. A PIN account's re-dial
+/// presses the PIN the logon proved on its new challenge's grid, as the reconnect asks for none.
 fn query(
     logon: &mut benilla_protocol::Logon,
     req: &LoginRequest,
@@ -418,7 +419,15 @@ fn query(
 ) -> bool {
     let mut ok = logon.refresh_realms(REALM_REFRESH_TIMEOUT);
     if !ok {
-        match benilla_protocol::logon(&req.host, &req.user, &req.pass, req.locale) {
+        let pin = logon.pin().map(<[u8]>::to_vec);
+        let mut press = |grid: &[u8; 10]| {
+            pin.as_deref()
+                .and_then(|digits| benilla_protocol::auth::pin::positions(grid, digits))
+                .ok_or_else(|| anyhow!("the re-dial has no PIN to press"))
+        };
+        match benilla_protocol::logon_with_pin(
+            &req.host, &req.user, &req.pass, req.locale, &mut press,
+        ) {
             Ok(fresh) => {
                 *logon = fresh;
                 ok = true;
@@ -482,10 +491,44 @@ fn logon_park(
                     Some(LogonAnswer::Enter(realm, generation))
                 }
                 Ok(ParkRequest::Realm(RealmRequest::Close)) => Some(LogonAnswer::Close),
-                // No world session here to leave, and no character screen to ask.
-                Ok(ParkRequest::Realm(RealmRequest::Leave) | ParkRequest::Char(_)) => None,
+                // No world session here to leave, no character screen to ask and no keypad.
+                Ok(ParkRequest::Realm(RealmRequest::Leave | RealmRequest::Pin { .. })
+                    | ParkRequest::Char(_)) => None,
             },
             recv(login_rx) -> msg => Some(msg.map_or(LogonAnswer::Exit, LogonAnswer::Login)),
+        };
+        if let Some(answer) = answer {
+            return answer;
+        }
+    }
+}
+
+/// The logon at the keypad (logon state 7, `0x5b1cd7`): waits for the keys `PINEntered` hands on
+/// under the attempt's `generation` (`0x5ab5a0` → `0x5b3120`). A Cancel (`0x5b3320`, its close
+/// behind a moved generation: one an older attempt left is stale), the app's exit and a new login
+/// each end the wait with an error, the new login handed back to supersede the attempt; anything
+/// else asked meanwhile is dropped, as no screen asks it there.
+fn keypad(
+    parks: &Parks,
+    generation: u64,
+    canceled: &dyn Fn() -> bool,
+) -> (Result<Vec<u8>>, Option<LoginRequest>) {
+    let Parks {
+        login_rx, park_rx, ..
+    } = parks;
+    loop {
+        // No `break` or `continue` inside the `select!` arms (`login_park`).
+        let answer = crossbeam_channel::select! {
+            recv(park_rx) -> msg => match msg {
+                Err(_) => Some((Err(anyhow!("the app is gone")), None)),
+                Ok(ParkRequest::Realm(RealmRequest::Pin { positions, generation: g }))
+                    if g == generation => Some((Ok(positions), None)),
+                Ok(ParkRequest::Realm(RealmRequest::Close)) if canceled() => {
+                    Some((Err(anyhow!("the PIN entry was cancelled")), None))
+                }
+                Ok(_) => None,
+            },
+            recv(login_rx) -> msg => Some((Err(anyhow!("a new login superseded the PIN entry")), msg.ok())),
         };
         if let Some(answer) = answer {
             return answer;
@@ -517,9 +560,27 @@ fn run(
             let _ = events_tx.send(SessionEvent::LoginStage { stage: s });
         };
 
-        // Logon: the dial and the SRP6 exchange against realmd.
+        // Logon: the dial and the SRP6 exchange against realmd, waiting at the keypad when the
+        // challenge asks for a PIN.
         stage(LoginStage::Connecting);
-        let mut logon = match benilla_protocol::logon(&req.host, &req.user, &req.pass, req.locale) {
+        let mut superseded = None;
+        let logon = benilla_protocol::logon_with_pin(
+            &req.host,
+            &req.user,
+            &req.pass,
+            req.locale,
+            &mut |grid| {
+                stage(LoginStage::Pin { grid: *grid });
+                let (answer, next) = keypad(parks, generation, &canceled);
+                superseded = next;
+                answer
+            },
+        );
+        if let Some(next) = superseded {
+            req = next;
+            continue 'logon;
+        }
+        let mut logon = match logon {
             Ok(l) => l,
             Err(e) => {
                 if canceled() {
@@ -766,6 +827,8 @@ fn world(
                         }
                         // `ConnectToRealm` with the world up drops it first (`0x46b22b`).
                         Ok(ParkRequest::Realm(RealmRequest::Leave)) => Parked::Leave,
+                        // No logon waits at a keypad here.
+                        Ok(ParkRequest::Realm(RealmRequest::Pin { .. })) => Parked::StayPut,
                         Ok(ParkRequest::Char(CharRequest::Enter(guid))) => Parked::Play(guid),
                         // Select's Back: drop the parked session, return to the login park.
                         Ok(ParkRequest::Char(CharRequest::Abandon)) => Parked::Repark,

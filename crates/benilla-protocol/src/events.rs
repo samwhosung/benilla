@@ -69,6 +69,9 @@ pub enum LoginStage {
     Connecting,
     /// SRP6 challenge/proof in flight (`LOGIN_STATE_AUTHENTICATING`).
     Authenticating,
+    /// The challenge asked for a PIN (`LOGIN_STATE_PIN`, logon state 7, `0x5b1cd7`): the logon
+    /// waits for the keys pressed on the keypad this grid lays out ([`crate::auth::pin::grid`]).
+    Pin { grid: [u8; 10] },
     /// Realm picked; the world-socket handshake and char enum (`LOGIN_STATE_HANDSHAKING`).
     Handshaking,
     /// The world socket connected, before its authentication (`RESPONSE_CONNECTED`, `0x5aaa90`).
