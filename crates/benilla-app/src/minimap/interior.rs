@@ -317,6 +317,116 @@ mod tests {
         );
     }
 
+    /// A seed group `g0` at the origin, 10 yd square, `[0, seed_top]` high, and a neighbour `g1`
+    /// spanning `x` through a portal: a 1-yd square at (`portal_x`, 0, `portal_z`).
+    fn two_groups(
+        seed_top: f32,
+        g1_x: [f32; 2],
+        portal_x: f32,
+        portal_z: f32,
+    ) -> benilla_assets::WmoModel {
+        use benilla_assets::{WmoGroupNav, WmoModel, WmoPortalInfo, WmoPortalRef};
+        let nav = |bmin: [f32; 3], bmax: [f32; 3], ref_start: u16| WmoGroupNav {
+            flags: 0,
+            bbox_min: bmin,
+            bbox_max: bmax,
+            ref_start,
+            ref_count: 1,
+            area_table_id: 0,
+            fog_indices: [0; 4],
+            group_liquid: benilla_formats::NO_GROUP_LIQUID,
+        };
+        let (x, z) = (portal_x, portal_z);
+        WmoModel {
+            portal_vertices: vec![
+                [x, -0.5, z - 0.5],
+                [x, 0.5, z - 0.5],
+                [x, 0.5, z + 0.5],
+                [x, -0.5, z + 0.5],
+            ],
+            portal_infos: vec![WmoPortalInfo {
+                start_vertex: 0,
+                count: 4,
+                plane: [1.0, 0.0, 0.0, 0.0],
+            }],
+            portal_refs: vec![
+                WmoPortalRef {
+                    portal: 0,
+                    group: 1,
+                    side: 1,
+                },
+                WmoPortalRef {
+                    portal: 0,
+                    group: 0,
+                    side: -1,
+                },
+            ],
+            group_nav: vec![
+                nav([-5.0, -5.0, 0.0], [5.0, 5.0, seed_top], 0),
+                nav([g1_x[0], -5.0, 0.0], [g1_x[1], 5.0, 3.0], 1),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// The query window is the snapped cell `round(p·r − 0.5)·c` (`0x6d95f8`-`0x6d96ab`) grown
+    /// by `c` on every side (`0x6d96b6`-`0x6d96f3`): at the origin with `c` 25, x spans
+    /// `[−25, 50]`, so a group 30 yd west misses it and one 40 yd east is inside.
+    #[test]
+    fn the_query_window_is_the_snapped_cell_grown_by_its_width() {
+        use super::interior_group_selection;
+        use bevy::math::{Affine3A, Vec3};
+        let at = |g1_x: [f32; 2], portal_x: f32| {
+            let model = two_groups(3.0, g1_x, portal_x, 1.0);
+            interior_group_selection(&model, &Affine3A::IDENTITY, Vec3::ZERO, 25.0, 0)[1]
+        };
+        assert!(
+            !at([-45.0, -30.0], -4.0),
+            "west of the window's x minimum −25"
+        );
+        assert!(at([-45.0, -24.0], -4.0), "reaching into it");
+        assert!(
+            at([45.0, 52.0], 4.0),
+            "east, inside the window's x maximum 50"
+        );
+        assert!(!at([51.0, 60.0], 4.0), "past it");
+        // At x = 30 the cell is [25, 50], so the window is [0, 75].
+        let model = two_groups(3.0, [-12.0, -1.0], -4.0, 1.0);
+        let west = interior_group_selection(
+            &model,
+            &Affine3A::IDENTITY,
+            benilla_assets::coords::wow_to_bevy([30.0, 0.0, 0.0]),
+            25.0,
+            0,
+        );
+        assert!(
+            !west[1],
+            "the snap moved the window off it, though it lies within 2c"
+        );
+    }
+
+    /// The flood's box top is the seed group's ceiling (`0x6a524b`, its `+0x28`), not the
+    /// player's height plus `c`: in a hall taller than `c` a portal above `z + c` is crossed, and
+    /// under a low ceiling a portal above it is not.
+    #[test]
+    fn the_flood_box_tops_out_at_the_seed_groups_ceiling() {
+        use super::interior_group_selection;
+        use bevy::math::{Affine3A, Vec3};
+        let crossed = |seed_top: f32, portal_z: f32| {
+            let model = two_groups(seed_top, [-5.0, 5.0], 0.0, portal_z);
+            interior_group_selection(&model, &Affine3A::IDENTITY, Vec3::ZERO, 25.0, 0)[1]
+        };
+        assert!(
+            crossed(40.0, 35.0),
+            "a 40-yd hall: the portal at 35 is under its ceiling"
+        );
+        assert!(
+            !crossed(3.0, 11.0),
+            "a 3-yd room: the portal at 11 is above its ceiling"
+        );
+        assert!(crossed(3.0, 2.0), "and one under it is crossed");
+    }
+
     #[test]
     fn wmo_stem_strips_world_prefix_and_extension() {
         use super::wmo_minimap_stem;
