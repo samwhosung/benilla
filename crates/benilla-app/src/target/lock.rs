@@ -182,26 +182,39 @@ pub(crate) fn resolve_lock(
     }
 }
 
+/// `SPELL_EFFECT_OPEN_LOCK` (`0x5f82c0 cmp [ebx],0x21`).
+const SPELL_EFFECT_OPEN_LOCK: u32 = 0x21;
+/// `SPELL_EFFECT_OPEN_LOCK_ITEM` (`0x5f831c cmp [ebx],0x3b`).
+const SPELL_EFFECT_OPEN_LOCK_ITEM: u32 = 0x3b;
+
 /// `0x5f8260`, the targeting cursor's question for the pending spell (`[0xceac58]`) over a
 /// GameObject, from the object dispatcher `0x4828d0` through `0x6e6460`. Unlike [`resolve_lock`]
-/// it matches the spell's own `OPEN_LOCK` effects against each slot's `Index` and compares no skill
-/// values, so the cursor lights on a chest the skill cannot open and the server refuses the click;
-/// no `Lock.dbc` row (`0x5f8180` null) is false, so the cursor greys over a mailbox.
-///
-/// Not built: the `SPELL_EFFECT_OPEN_LOCK_ITEM` (59) arm, which matches the cast item's entry
-/// against a KEY slot; the catalog lacks its per-effect id.
+/// it compares no skill values, so the cursor lights on a chest the skill cannot open and the
+/// server refuses the click; no `Lock.dbc` row (`0x5f8180` null) is false, so the cursor greys over
+/// a mailbox. For each of the spell's three effects (`0x5f83a2`): an `OPEN_LOCK` one passes a SKILL
+/// slot whose `Index` is its `EffectMiscValue` (`0x5f82e0`-`0x5f82ec`), an `OPEN_LOCK_ITEM` one a
+/// KEY slot whose `Index` is the cast item's entry (`0x5f8360`-`0x5f836c`); `cast_item` is that
+/// entry, `None` when the record's guid (`0xceac48`) names no streamed item (`0x5f8344`). Either
+/// slot's Action must hold (`0x5f81d0`).
 pub(crate) fn spell_opens_lock(
     slots: &[LockSlot],
     spell: &benilla_formats::SpellDisplay,
     go: GoFacts,
+    cast_item: Option<u32>,
 ) -> bool {
-    let Some(lock_type) = spell.open_lock_type() else {
-        return false;
+    let opens = |key_type: u32, index: u32| {
+        slots.iter().any(|slot| {
+            slot.key_type == key_type
+                && slot.index == index
+                && slot.available(go.state, go.flag_locked)
+        })
     };
-    slots.iter().any(|slot| {
-        slot.key_type == LOCK_KEY_SKILL
-            && slot.index == lock_type
-            && slot.available(go.state, go.flag_locked)
+    (0..3).any(|i| {
+        let skill = spell.effects[i] == SPELL_EFFECT_OPEN_LOCK
+            && opens(LOCK_KEY_SKILL, spell.effect_misc_value[i] as u32);
+        let key = spell.effects[i] == SPELL_EFFECT_OPEN_LOCK_ITEM
+            && cast_item.is_some_and(|entry| opens(LOCK_KEY_ITEM, entry));
+        skill || key
     })
 }
 
@@ -251,10 +264,8 @@ mod tests {
         use benilla_formats::SpellDisplay;
         // Pick Lock: LockType 1, Lockpicking.
         let pick_lock = SpellDisplay {
-            open_lock: Some(benilla_formats::OpenLock {
-                effect: 0,
-                lock_type: 1,
-            }),
+            effects: [0x21, 0, 0],
+            effect_misc_value: [1, 0, 0],
             ..SpellDisplay::default()
         };
         let unlocked = GoFacts {
@@ -266,26 +277,27 @@ mod tests {
         // A Lockpicking slot demanding 300 skill, Action 1 (applies while flagged locked).
         let matching = [skill_slot(1, 300, 1), LockSlot::default()];
         assert!(
-            spell_opens_lock(&matching, &pick_lock, unlocked),
+            spell_opens_lock(&matching, &pick_lock, unlocked, None),
             "the right LockType through an applicable slot lights the cursor"
         );
 
         // No skill compare: a slot far beyond Pick Lock still lights, and the server refuses.
         let brutal = [skill_slot(1, 9999, 1), LockSlot::default()];
         assert!(
-            spell_opens_lock(&brutal, &pick_lock, unlocked),
+            spell_opens_lock(&brutal, &pick_lock, unlocked, None),
             "0x5f8260 compares no skill values — an out-of-reach lock still lights"
         );
 
         // Wrong LockType (3, Mining): a lockpick greys over an ore vein.
         let mining = [skill_slot(3, 0, 1), LockSlot::default()];
-        assert!(!spell_opens_lock(&mining, &pick_lock, unlocked));
+        assert!(!spell_opens_lock(&mining, &pick_lock, unlocked, None));
 
         // The shared Action gate: Action 0 applies only while not flagged locked.
         assert!(!spell_opens_lock(
             &[skill_slot(1, 0, 0)],
             &pick_lock,
-            unlocked
+            unlocked,
+            None
         ));
         assert!(spell_opens_lock(
             &[skill_slot(1, 0, 0)],
@@ -293,32 +305,45 @@ mod tests {
             GoFacts {
                 flag_locked: false,
                 ..unlocked
-            }
+            },
+            None
         ));
 
         // No lock row is false, unlike `resolve_lock`: no Pick Lock on a mailbox.
-        assert!(!spell_opens_lock(&[], &pick_lock, unlocked));
+        assert!(!spell_opens_lock(&[], &pick_lock, unlocked, None));
         assert!(!spell_opens_lock(
             &[LockSlot::default()],
             &pick_lock,
-            unlocked
+            unlocked,
+            None
         ));
 
         // A spell with no OPEN_LOCK effect opens nothing, whatever the lock says.
         assert!(!spell_opens_lock(
             &matching,
             &SpellDisplay::default(),
-            unlocked
+            unlocked,
+            None
         ));
 
-        // A KEY slot belongs to the unbuilt effect-59 arm.
+        // A KEY slot belongs to the effect-59 arm: the cast item's entry, never a skill effect.
         let key = [LockSlot {
             key_type: LOCK_KEY_ITEM,
-            index: 1,
+            index: 5000,
             skill: 0,
             action: 1,
         }];
-        assert!(!spell_opens_lock(&key, &pick_lock, unlocked));
+        assert!(!spell_opens_lock(&key, &pick_lock, unlocked, Some(5000)));
+        let key_spell = SpellDisplay {
+            effects: [0, 0x3b, 0],
+            ..SpellDisplay::default()
+        };
+        assert!(spell_opens_lock(&key, &key_spell, unlocked, Some(5000)));
+        assert!(!spell_opens_lock(&key, &key_spell, unlocked, Some(5001)));
+        assert!(
+            !spell_opens_lock(&key, &key_spell, unlocked, None),
+            "no item streamed"
+        );
     }
 
     #[test]

@@ -1495,7 +1495,7 @@ mod tests {
     /// The GameObject pick's world: two chests on the ray, entry 7 locked by lock 55 (type 1, which
     /// [`OPENING`] opens) and entry 8 by lock 56 (type 2), the spells and the templates.
     fn go_pick_world() -> World {
-        use benilla_formats::{LockCatalog, LockSlot, OpenLock, SpellDisplay, LOCK_KEY_SKILL};
+        use benilla_formats::{LockCatalog, LockSlot, SpellDisplay, LOCK_KEY_SKILL};
         let mut world = unit_pick_world();
         world.init_resource::<HoveredObject>();
         world.init_resource::<crate::items::Items>();
@@ -1507,10 +1507,9 @@ mod tests {
                 OPENING,
                 SpellDisplay {
                     targets: 0x4000,
-                    open_lock: Some(OpenLock {
-                        effect: 0,
-                        lock_type: 1,
-                    }),
+                    // Effect 0 is `OPEN_LOCK` (33) on LockType 1, as Opening's row has it.
+                    effects: [0x21, 0, 0],
+                    effect_misc_value: [1, 0, 0],
                     ..SpellDisplay::default()
                 },
             )]));

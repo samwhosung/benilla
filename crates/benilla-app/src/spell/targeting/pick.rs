@@ -141,25 +141,41 @@ pub(crate) fn publish_unit_pick(targeting: Res<SpellTargeting>, mut pick: ResMut
 
 /// The world pick's GameObject admission as the frame began, `0x480780`'s GameObject arm
 /// (`0x4807f4`-`0x48080c`): `None` outside targeting, where the flags carry `0x5c` and so `0x4`,
-/// and every GameObject is a candidate; while targeting, the standing word and its spell, which
-/// [`GoPickChecks::admits`] asks of each.
+/// and every GameObject is a candidate; while targeting, the standing word, its spell and the cast
+/// item's guid, which [`GoPickChecks::admits`] asks of each.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct GoPick(pub(crate) Option<(u16, u32)>);
+pub(crate) struct GoPick(pub(crate) Option<GoPickWord>);
+
+/// What [`GoPick`] holds while a word stands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct GoPickWord {
+    /// The flag word `0xcecac0`.
+    word: u16,
+    /// The pending spell (`[0xceac58]`).
+    spell_id: u32,
+    /// The cast item's guid (`0xceac48`), which the lock test's key arm resolves.
+    item: Option<u64>,
+}
 
 /// Publish [`GoPick`] before the input pass, beside [`UnitPick`].
 pub(crate) fn publish_go_pick(targeting: Res<SpellTargeting>, mut pick: ResMut<GoPick>) {
-    let now = targeting.0.as_ref().map(|t| (t.word, t.spell_id));
+    let now = targeting.0.as_ref().map(|t| GoPickWord {
+        word: t.word,
+        spell_id: t.spell_id,
+        item: t.commit.item_guid(),
+    });
     if pick.0 != now {
         pick.0 = now;
     }
 }
 
 /// `0x5f8260` as `0x6e62e0` asks it (`0x6e62f8`-`0x6e630a`): the template, its `Lock.dbc` row,
-/// and the spell's own `OPEN_LOCK` effect against the row's skill slots
-/// ([`crate::target::lock::spell_opens_lock`]). A template in flight, no row or an unknown spell
-/// is false.
+/// and the spell's effects against the row's slots ([`crate::target::lock::spell_opens_lock`]),
+/// `item` the cast item's guid, looked up as an item (`0x5f833a`, mask 2) for its entry. A
+/// template in flight, no row or an unknown spell is false.
 pub(crate) fn spell_opens_go(
     spell_id: u32,
+    item: Option<u64>,
     store: &ObjectStore,
     anim: Option<&crate::go_anim::GoAnim>,
     lock_inputs: &crate::target::lock::GoLockInputs,
@@ -184,7 +200,11 @@ pub(crate) fn spell_opens_go(
         return false;
     };
     let facts = crate::target::lock::go_facts(Some((store, crate::go_anim::go_state(anim, store))));
-    crate::target::lock::spell_opens_lock(slots, spell, facts)
+    let cast_item = item
+        .and_then(|guid| lock_inputs.objects.object(guid))
+        .filter(|f| f.is_item())
+        .and_then(|f| f.object_entry());
+    crate::target::lock::spell_opens_lock(slots, spell, facts, cast_item)
 }
 
 /// What the GameObject pick asks of each candidate while a word stands ([`GoPick`]).
@@ -212,14 +232,18 @@ impl GoPickChecks<'_, '_> {
     /// targeting, flag `0x4` only for a word in `0x4800` (`0x6e62d0`, `0x481101`-`0x48110a`), then
     /// `0x6e62e0`: the word again and the spell passing the object's lock test.
     pub(crate) fn admits(&self, entity: Entity) -> bool {
-        let Some((word, spell_id)) = self.pick.0 else {
+        let Some(GoPickWord {
+            word,
+            spell_id,
+            item,
+        }) = self.pick.0
+        else {
             return true;
         };
         word & GAMEOBJECT_WORD != 0
-            && self
-                .stores
-                .get(entity)
-                .is_ok_and(|(store, anim)| spell_opens_go(spell_id, store, anim, &self.lock_inputs))
+            && self.stores.get(entity).is_ok_and(|(store, anim)| {
+                spell_opens_go(spell_id, item, store, anim, &self.lock_inputs)
+            })
     }
 }
 

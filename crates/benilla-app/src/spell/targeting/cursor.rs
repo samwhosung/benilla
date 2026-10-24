@@ -174,6 +174,7 @@ pub(crate) fn drive_targeting_cursor(
             &go_tf,
             &lock_inputs,
             spell_id,
+            commit.item_guid(),
             range,
             me,
         )
@@ -215,16 +216,16 @@ fn object_arm(
     go_tf: &Query<&Transform>,
     lock_inputs: &crate::target::lock::GoLockInputs,
     spell_id: u32,
+    item: Option<u64>,
     range: Option<RangeCall>,
     me: Option<Vec3>,
 ) -> bool {
     let Some(entity) = hovered_object.target else {
         return false;
     };
-    let opens = stores
-        .get(entity)
-        .ok()
-        .is_some_and(|(store, anim, _)| super::spell_opens_go(spell_id, store, anim, lock_inputs));
+    let opens = stores.get(entity).ok().is_some_and(|(store, anim, _)| {
+        super::spell_opens_go(spell_id, item, store, anim, lock_inputs)
+    });
     if !opens {
         return false;
     }
@@ -759,7 +760,7 @@ mod tests {
     #[test]
     fn the_object_leg_reads_the_range_talent() {
         use super::super::corpse_fixture as fx;
-        use benilla_formats::{LockCatalog, LockSlot, OpenLock, LOCK_KEY_SKILL};
+        use benilla_formats::{LockCatalog, LockSlot, LOCK_KEY_SKILL};
         use bevy::ecs::system::RunSystemOnce;
         use std::collections::HashMap;
 
@@ -790,10 +791,9 @@ mod tests {
                     targets: 0x4000,
                     spell_family: 3,
                     spell_family_flags: 1 << 7,
-                    open_lock: Some(OpenLock {
-                        effect: 0,
-                        lock_type: 1,
-                    }),
+                    // Effect 0 is `OPEN_LOCK` (33) on LockType 1, as Opening's row has it.
+                    effects: [0x21, 0, 0],
+                    effect_misc_value: [1, 0, 0],
                     ..SpellDisplay::default()
                 },
             )]));
