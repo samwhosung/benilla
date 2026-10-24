@@ -14,6 +14,9 @@
 //! (`0x4e3364`), but it registers only once the text resolves (`0x4e349a`), right before
 //! `ITEM_TEXT_BEGIN`, so the window it opens over closes first; its release (`0x4e3323`,
 //! `0x4e3357`) re-enters the core while latched, firing `ITEM_TEXT_CLOSED` twice.
+//!
+//! A packet's read, `SMSG_GAMEOBJECT_PAGETEXT`'s, runs on the item-text lane ([`ItemTextLane`]),
+//! so its latch and its `ITEM_TEXT_BEGIN` fire at the packet's place among the other lanes.
 
 use bevy::prelude::*;
 
@@ -192,6 +195,72 @@ pub(crate) fn close_core(world: &mut World) {
     });
 }
 
+/// The item-text lane: each `SMSG_GAMEOBJECT_PAGETEXT` read of a GameObject, stamped at its
+/// packet ([`crate::lanes::stamp`]).
+#[derive(Resource, Default)]
+pub(crate) struct ItemTextLane(std::collections::VecDeque<(crate::lanes::Stamp, u64)>);
+
+impl ItemTextLane {
+    /// Queue a read of `guid` behind everything stamped before it.
+    fn push(&mut self, guid: u64) {
+        let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, guid));
+    }
+}
+
+/// The item-text lane's head.
+fn peek_item_text(world: &World) -> Option<crate::lanes::Stamp> {
+    world
+        .get_resource::<ItemTextLane>()?
+        .0
+        .front()
+        .map(|(s, _)| *s)
+}
+
+/// Each read `until` admits, run as the firing of its stamp: `0x4e32e0(guid, 0)` ([`read_core`]),
+/// then its begin with the text at hand (`0x4e33b0`-`0x4e34a4`, [`begin_item_text`]), whose latch
+/// closes the window it opens over and whose `ITEM_TEXT_BEGIN` fires inside it; a template still in
+/// flight leaves the begin to the feed, as the record's callback re-enters the open (`0x4e3280`).
+/// The lane stops after a read whose firing stamped anything, so what it pushed fires next.
+fn fire_item_text(In(until): In<crate::lanes::Until>, world: &mut World) {
+    loop {
+        let Some((at, guid)) = world
+            .resource::<ItemTextLane>()
+            .0
+            .front()
+            .copied()
+            .filter(|(at, _)| until.admits(*at))
+        else {
+            return;
+        };
+        world.resource_mut::<ItemTextLane>().0.pop_front();
+        let ((), moved) = crate::lanes::firing(at, || {
+            read_core(
+                world,
+                guid,
+                ReadSource::Pages {
+                    visited: Vec::new(),
+                },
+            );
+            if let Err(e) = world.run_system_cached(begin_item_text) {
+                debug!("item text: the begin did not run: {e}");
+            }
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// The lane's reads while no in-game interface is up, which no drain fires, handed to the frame's
+/// reads unfired: nobody hears the begin, and the reader still takes the object.
+fn spill_item_text_lane(mut lane: ResMut<ItemTextLane>, mut open: ResMut<ItemTextOpen>) {
+    for (_, guid) in lane.0.drain(..) {
+        open.read_pages(guid);
+    }
+}
+
 /// The queued reads, each `0x4e32e0(guid, 0)`, run with the world in hand ([`read_core`]).
 fn apply_reads(mut open: ResMut<ItemTextOpen>, mut commands: Commands) {
     for (guid, source) in std::mem::take(&mut open.reads) {
@@ -323,11 +392,12 @@ mod net {
 
     /// `SMSG_GAMEOBJECT_PAGETEXT` (`0x5f88c0`): the guid looked up as a GameObject (mask `0x20`,
     /// `0x5f88f9`), then the reader's open on it with flag 0 (`0x5f8915` → `0x4e32e0`), the same
-    /// read a TEXT object's right-click makes; nothing for an object not streamed.
+    /// read a TEXT object's right-click makes, on the item-text lane at the packet's place;
+    /// nothing for an object not streamed.
     fn on_gameobject_page_text(
         In(ev): In<SessionEvent>,
         objects: crate::net::Objects,
-        mut open: ResMut<super::ItemTextOpen>,
+        mut lane: ResMut<super::ItemTextLane>,
     ) {
         let SessionEvent::GameObjectPageText { guid } = ev else {
             return;
@@ -336,7 +406,7 @@ mod net {
             f.object_type() == Some(benilla_protocol::messages::ObjectType::GameObject)
         });
         if is_gameobject {
-            open.read_pages(guid);
+            lane.push(guid);
         }
     }
 
@@ -357,10 +427,13 @@ pub(crate) struct UiItemTextPlugin;
 
 impl Plugin for UiItemTextPlugin {
     fn build(&self, app: &mut App) {
+        use crate::lanes::LaneApp;
         net::register(app);
         crate::query_cache::register::<PageTexts>(app);
         app.init_resource::<ItemTextOpen>()
+            .init_resource::<ItemTextLane>()
             .init_resource::<PageTexts>()
+            .add_lane("item text", peek_item_text, fire_item_text, None)
             .add_latched_window::<ItemTextOpen>()
             // `0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`, the core.
             .add_sweep_leg(SweepLeg::ItemText, close_core)
@@ -368,7 +441,12 @@ impl Plugin for UiItemTextPlugin {
                 Update,
                 // The reads and the begin ahead of the feed, so a read that resolves paints this
                 // frame.
-                (apply_reads, begin_item_text, feed_item_text)
+                (
+                    spill_item_text_lane.run_if(not(crate::ui_script::ingame_ui_up)),
+                    apply_reads,
+                    begin_item_text,
+                    feed_item_text,
+                )
                     .chain()
                     .in_set(UiFeed),
             );
@@ -704,6 +782,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
             .init_resource::<ItemTextOpen>()
+            .init_resource::<ItemTextLane>()
             .init_resource::<PageTexts>()
             .init_resource::<MailOpen>()
             .init_resource::<Items>()
@@ -738,6 +817,9 @@ mod tests {
             app.world_mut(),
             vec![benilla_protocol::SessionEvent::GameObjectPageText { guid: TABLET }],
         );
+        app.world_mut()
+            .run_system_cached_with(fire_item_text, crate::lanes::Until::all())
+            .expect("the item-text lane fires");
         app.update();
         app.update();
         let open = app.world().resource::<ItemTextOpen>();

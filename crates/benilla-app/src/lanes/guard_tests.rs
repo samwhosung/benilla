@@ -132,12 +132,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_item_text::ItemTextOpen",
-        "the reader's reads, which `SMSG_GAMEOBJECT_PAGETEXT` queues (`0x5f88c0` → `0x4e32e0`) and \
-         `begin_item_text` fires `ITEM_TEXT_BEGIN` from; the reader's verbs hold it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_mail::MailOpen",
         "the mailbox's list and results, the send result's equip refusal line among them, which \
          `feed_mail` fires from; the mail verbs, acting in their calls, hold it in the host",
@@ -766,7 +760,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 13] {
+fn lane_types() -> [TypeId; 14] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -786,12 +780,14 @@ fn lane_types() -> [TypeId; 13] {
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         // The deaths lane: the signals each death's legs parked, stamped under its health edge.
         TypeId::of::<crate::target::Deaths>(),
+        // The item-text lane: the page-text packets' reads, stamped at their packets.
+        TypeId::of::<crate::ui_item_text::ItemTextLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 13] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 14] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -815,6 +811,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 13] {
             TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         ),
         ("deaths", TypeId::of::<crate::target::Deaths>()),
+        (
+            "item text",
+            TypeId::of::<crate::ui_item_text::ItemTextLane>(),
+        ),
     ]
 }
 
@@ -973,6 +973,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "deaths",
             "equip errors",
             "field notices",
+            "item text",
             "item watchers",
             "list rebuilds",
             "loot",
