@@ -924,8 +924,10 @@ fn self_seat(
 ) -> Option<wire_in::SelfSeat> {
     let rider = q.0.single().ok()?;
     let entity = *q.1 .0.get(&rider.transport_guid)?;
-    // 0x630a80: a game object whose flags have the transport bit (0x8).
-    if q.3.get(entity).ok()?.0.gameobject_flags() & 0x8 == 0 {
+    // 0x630a80: the lookup `0x468460` with the game object mask 0x20, then the transport bit 0x8
+    // of its flags.
+    let fields = &q.3.get(entity).ok()?.0;
+    if fields.object_type_mask().unwrap_or(0) & 0x20 == 0 || fields.gameobject_flags() & 0x8 == 0 {
         return None;
     }
     Some(wire_in::SelfSeat {
