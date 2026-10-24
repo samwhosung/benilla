@@ -125,14 +125,26 @@ struct GoLock<'a> {
 }
 
 /// The type handler's lines, slot 33 of its table (`[vtbl+0x84]`, called at `0x52aad4`) after
-/// the name and before the lock lines; the base slot adds none (`0x5f9f10`).
+/// the name and before the lock lines; the base slot adds none (`0x5f9f10`). A meeting stone's
+/// (`0x5f6b10`) adds its area's `AreaTable` name when the row exists (`0x5f6b3d`-`0x5f6b68`),
+/// then `MEETINGSTONE_LEVEL` of its minimum and maximum levels (`0x5f6b6d`-`0x5f6bdf`), both in
+/// gold (`0x530380`).
 fn go_handler_lines(
     stone: Option<MeetingStoneTemplate>,
     area_name: &dyn Fn(u32) -> Option<String>,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<(String, TooltipTint)> {
-    let _ = (stone, area_name, get);
-    Vec::new()
+    let Some(stone) = stone else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    lines.extend(area_name(stone.area).map(|name| (name, TooltipTint::Gold)));
+    let levels = [
+        Arg::D(i64::from(stone.min_level)),
+        Arg::D(i64::from(stone.max_level)),
+    ];
+    lines.extend(keyed(get, "MEETINGSTONE_LEVEL", &levels).map(|l| (l, TooltipTint::Gold)));
+    lines
 }
 
 /// The builder's lock lines (`0x52aa20`): "Locked" iff `GO_FLAG_LOCKED` (`0x52aae5`), then one line
@@ -266,6 +278,8 @@ fn drive_mouseover_tooltip(
     guild: Res<crate::ui_guild::GuildState>,
     // A fresh hover's reach and visible items, which its event's handlers read.
     seat: (crate::ui_inspect::VisibleItemTables, Query<&Transform>),
+    // The meeting stone's area name (`0x5f6b49`).
+    areas: Option<Res<crate::area::AreaTableRes>>,
 ) {
     let hover_relations = {
         let relations = vm.own();
@@ -480,7 +494,8 @@ fn drive_mouseover_tooltip(
             let Some(template) = go_inputs.templates.of(fields).cloned() else {
                 return;
             };
-            // The builder's lock lines ([`go_lock_lines`]).
+            // The type handler's lines ([`go_handler_lines`]), then the lock lines
+            // ([`go_lock_lines`]).
             let go_store = stores.get(entity).ok();
             let flags = go_store.map_or(0, |s| s.0.gameobject_flags());
             let flag_locked = flags & GO_FLAG_LOCKED != 0;
@@ -508,7 +523,17 @@ fn drive_mouseover_tooltip(
                     &mut matched,
                 )
             });
-            let lines = go_lock_lines(
+            let mut lines = go_handler_lines(
+                template.meeting_stone,
+                &|id| {
+                    areas
+                        .as_deref()
+                        .and_then(|a| a.0.name(id))
+                        .map(str::to_string)
+                },
+                &|key: &str| benilla_ui::strings::global(script.lua(), key),
+            );
+            lines.extend(go_lock_lines(
                 GoLock {
                     slots,
                     state,
@@ -530,7 +555,7 @@ fn drive_mouseover_tooltip(
                         .map(str::to_string)
                 },
                 &|key: &str| benilla_ui::strings::global(script.lua(), key),
-            );
+            ));
             script.publish_world_mouseover(Some(guid));
             script.world_tooltip_gameobject(&template.name, &lines, cursor_seated);
             return;

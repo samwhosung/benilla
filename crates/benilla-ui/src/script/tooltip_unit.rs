@@ -492,7 +492,7 @@ impl super::UiScript {
     }
 
     /// Show the world-mouseover GameObject tooltip (builder `0x52aa20`): the backdrop tinted, the
-    /// name in gold, then the caller's lock lines. The anchor forks on the object's
+    /// name in gold, then the caller's handler and lock lines. The anchor forks on the object's
     /// `[vtbl+0x5c]`: true (`0x492a01`) owns it by `UIParent` in mode 6, `ANCHOR_CURSOR`
     /// (`0x52ffe0(UIParent, 6, 0, 0)` at `0x492a1e`), which the tooltip's own update then keeps on
     /// the cursor; false (`0x492a42`) fires `OnTooltipSetDefaultAnchor` for the default corner, as
