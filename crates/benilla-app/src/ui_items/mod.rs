@@ -33,7 +33,7 @@ pub(crate) use drain::{dispatch_fork, send_auto_equip};
 pub(crate) use equip_error::{equip_error_key, EquipError, EquipErrors};
 // `UseContainerItem`, `UseInventoryItem` and the item verbs' calls, applied in call order by
 // `crate::script_calls`.
-pub(crate) use calls::BagSteps;
+pub(crate) use calls::ItemSteps;
 pub(crate) use drain::ScriptItemUse;
 use feed::{
     ask_item_build_lookups, feed_containers, feed_item_sets, feed_item_stats, feed_player_req,

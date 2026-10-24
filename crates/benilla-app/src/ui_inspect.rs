@@ -214,7 +214,10 @@ impl VisibleItemTables<'_> {
 
 pub(crate) fn feed_inspect(
     // What the host also reaches, read before the VM runs with the host lent.
-    mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
+    mut hosted: crate::script_calls::disjoint::Pair<
+        Res<'static, crate::target::Selection>,
+        crate::script_calls::HostedVm<'static, 'static>,
+    >,
     mut target: ResMut<InspectTarget>,
     mut feed: ResMut<InspectFeedState>,
     tables: VisibleItemTables,

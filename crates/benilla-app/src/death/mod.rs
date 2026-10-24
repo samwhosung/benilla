@@ -578,13 +578,11 @@ pub(crate) struct DeathSteps<'w, 's> {
     // `AcceptAreaSpiritHeal`'s scan ahead of its send (`0x492316`).
     spirit_scan: crate::ui_dialog_verbs::SpiritScan<'w, 's>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
-    cast: ParamSet<
+    cast: crate::script_calls::disjoint::Pair<
         'w,
         's,
-        (
-            crate::spell::CastLadder<'w, 's>,
-            crate::spell::SelfCancel<'w>,
-        ),
+        crate::spell::CastLadder<'w, 's>,
+        crate::spell::SelfCancel<'w>,
     >,
     gate: crate::ui_bind_confirm::BindGate<'w>,
     ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,

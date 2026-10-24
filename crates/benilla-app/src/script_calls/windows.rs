@@ -11,13 +11,6 @@ use super::ScriptCallHost;
 use crate::ui_cast::ReportMark;
 use crate::ui_session::NpcWindow;
 
-/// The interaction latch's engine half inside the host, for one statement.
-macro_rules! latch {
-    ($host:expr) => {
-        $host.appliers.p2().p5().p2()
-    };
-}
-
 impl ScriptCallHost<'_, '_> {
     /// A core's signal point (`SignalEvent`, `0x703e50`): the listeners of what it fired run
     /// here, before the core goes on.
@@ -34,7 +27,7 @@ impl ScriptCallHost<'_, '_> {
         cell: u64,
         core: fn(&mut Self, &mut UiScript, &mut ReportMark),
     ) {
-        let reenters = latch!(self).release(cell);
+        let reenters = self.appliers.latch().release(cell);
         if reenters {
             core(self, script, mark);
         }
@@ -46,13 +39,13 @@ impl ScriptCallHost<'_, '_> {
     pub(super) fn close_bank(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         script.fire_event("BANKFRAME_CLOSED", vec![]);
         self.signalled(script, mark);
-        let banker = self.appliers.p2().p6().p0().banker();
+        let banker = self.appliers.bank().banker();
         if let Some(banker) = banker {
             self.release_into(script, mark, banker, Self::close_bank);
         }
-        let cleared = self.appliers.p2().p6().p0().clear_banker(script);
+        let cleared = self.appliers.bank().clear_banker(script);
         if cleared {
-            latch!(self).note_closed(NpcWindow::Bank);
+            self.appliers.latch().note_closed(NpcWindow::Bank);
         }
     }
 
@@ -60,18 +53,18 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4d7459`), else `TRAINER_CLOSED` first (`0x4d7468`), the release on the cell as the
     /// listeners left it (`0x4d7474`), then the cell cleared (`0x4d747c`).
     pub(super) fn close_trainer(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        if self.appliers.p5().p5().trainer().is_none() {
+        if self.appliers.trainer().trainer().is_none() {
             return;
         }
         script.fire_event("TRAINER_CLOSED", vec![]);
         self.signalled(script, mark);
-        let trainer = self.appliers.p5().p5().trainer();
+        let trainer = self.appliers.trainer().trainer();
         if let Some(trainer) = trainer {
             self.release_into(script, mark, trainer, Self::close_trainer);
         }
-        let cleared = self.appliers.p5().p5().clear_trainer(script);
+        let cleared = self.appliers.trainer().clear_trainer(script);
         if cleared {
-            latch!(self).note_closed(NpcWindow::Trainer);
+            self.appliers.latch().note_closed(NpcWindow::Trainer);
         }
     }
 
@@ -79,11 +72,11 @@ impl ScriptCallHost<'_, '_> {
     /// own guid (`0x5df680`), which closes the window (`0x5df6bb`) before `CMSG_TRAINER_LIST`
     /// (`0x5df6fc`).
     pub(super) fn open_own_trainer(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        let Some(me) = self.appliers.p5().p5().own_guid() else {
+        let Some(me) = self.appliers.trainer().own_guid() else {
             return;
         };
         self.close_trainer(script, mark);
-        self.appliers.p5().p5().ask_own_list(me);
+        self.appliers.trainer().ask_own_list(me);
     }
 
     /// The auction house's close core `0x4cd5f0`: nothing with no auctioneer (`0x4cd5fb`), else
@@ -92,18 +85,18 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4cd613`-`0x4cd629`), then the sell slot emptied with its unlock (`0x4cd62e` →
     /// `0x4cd640`).
     pub(super) fn close_auction(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        if self.appliers.p4().p3().auctioneer().is_none() {
+        if self.appliers.auction().auctioneer().is_none() {
             return;
         }
         script.fire_event("AUCTION_HOUSE_CLOSED", vec![]);
         self.signalled(script, mark);
-        let auctioneer = self.appliers.p4().p3().auctioneer();
+        let auctioneer = self.appliers.auction().auctioneer();
         if let Some(auctioneer) = auctioneer {
             self.release_into(script, mark, auctioneer, Self::close_auction);
         }
-        if self.appliers.p4().p3().auctioneer().is_some() {
-            self.appliers.p4().p3().clear_auctioneer(script);
-            latch!(self).note_closed(NpcWindow::Auction);
+        if self.appliers.auction().auctioneer().is_some() {
+            self.appliers.auction().clear_auctioneer(script);
+            self.appliers.latch().note_closed(NpcWindow::Auction);
         }
         script.clear_auction_sell_item();
         self.signalled(script, mark);
@@ -113,12 +106,12 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4e1fb8`), else the release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`) and
     /// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay.
     pub(super) fn close_gossip(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        let Some(npc) = self.appliers.p5().p4().npc() else {
+        let Some(npc) = self.appliers.gossip().npc() else {
             return;
         };
         self.release_into(script, mark, npc, Self::close_gossip);
-        self.appliers.p5().p4().clear_npc();
-        latch!(self).note_closed(NpcWindow::Gossip);
+        self.appliers.gossip().clear_npc();
+        self.appliers.latch().note_closed(NpcWindow::Gossip);
         script.fire_event("GOSSIP_CLOSED", vec![]);
         self.signalled(script, mark);
     }
@@ -129,27 +122,27 @@ impl ScriptCallHost<'_, '_> {
     /// next-mail-time query (`0x4acda8`, `0x4acdb1`).
     pub(super) fn close_mail(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         script.reset_compose_tab_silently();
-        let Some(mailbox) = self.appliers.p5().p2().mailbox() else {
+        let Some(mailbox) = self.appliers.mail().mailbox() else {
             return;
         };
         self.release_into(script, mark, mailbox, Self::close_mail);
-        self.appliers.p5().p2().clear_mailbox(script);
-        latch!(self).note_closed(NpcWindow::Mail);
+        self.appliers.mail().clear_mailbox(script);
+        self.appliers.latch().note_closed(NpcWindow::Mail);
         script.fire_event("MAIL_CLOSED", vec![]);
         self.signalled(script, mark);
-        self.appliers.p5().p2().refresh_after_close();
+        self.appliers.mail().refresh_after_close();
     }
 
     /// The vendor's close core `0x4fadf0`: with a vendor open, the release (`0x4fae04`), the cell
     /// cleared (`0x4fae0e`), `MERCHANT_CLOSED` (`0x4fae2c`), then a vendor row held on the cursor
     /// dropped (`0x4fae31`-`0x4fae4a`) and a Repair base mode back to Point (`0x4fae4f`-`0x4fae68`).
     pub(super) fn close_merchant(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        let Some(vendor) = self.appliers.p5().p7().vendor() else {
+        let Some(vendor) = self.appliers.merchant().vendor() else {
             return;
         };
         self.release_into(script, mark, vendor, Self::close_merchant);
-        self.appliers.p5().p7().clear_vendor(script);
-        latch!(self).note_closed(NpcWindow::Merchant);
+        self.appliers.merchant().clear_vendor(script);
+        self.appliers.latch().note_closed(NpcWindow::Merchant);
         script.fire_event("MERCHANT_CLOSED", vec![]);
         self.signalled(script, mark);
         crate::ui_merchant::close_tail(script);
@@ -165,9 +158,9 @@ impl ScriptCallHost<'_, '_> {
         mark: &mut ReportMark,
         giver: u64,
     ) {
-        latch!(self).note_closed(NpcWindow::Quest);
+        self.appliers.latch().note_closed(NpcWindow::Quest);
         script.set_quest(None);
-        let _ = latch!(self).release(giver);
+        let _ = self.appliers.latch().release(giver);
         script.fire_event("QUEST_FINISHED", vec![]);
         self.signalled(script, mark);
     }
@@ -175,12 +168,12 @@ impl ScriptCallHost<'_, '_> {
     /// The stable's close core `0x4cae10`: with a master stored, the release (`0x4cae24`), the
     /// cell cleared (`0x4cae29`), then `PET_STABLE_CLOSED` (`0x4cae3a`).
     pub(super) fn close_stable(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        let Some(master) = self.appliers.p6().p2().master() else {
+        let Some(master) = self.appliers.stable().master() else {
             return;
         };
         self.release_into(script, mark, master, Self::close_stable);
-        self.appliers.p6().p2().clear_master(script);
-        latch!(self).note_closed(NpcWindow::Stable);
+        self.appliers.stable().clear_master(script);
+        self.appliers.latch().note_closed(NpcWindow::Stable);
         script.fire_event("PET_STABLE_CLOSED", vec![]);
         self.signalled(script, mark);
     }
@@ -190,31 +183,31 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`,
     /// open or not (`0x4bf527`).
     pub(super) fn close_trade(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        if self.appliers.p4().p6().run_trade_touches(script) {
+        if self.appliers.trade().run_trade_touches(script) {
             self.signalled(script, mark);
         }
-        let partner = self.appliers.p4().p6().partner_cell();
+        let partner = self.appliers.trade().partner_cell();
         if let Some(partner) = partner {
             script.set_trade_done(false);
             self.release_into(script, mark, partner, Self::close_trade);
-            self.appliers.p4().p6().close_window(script);
-            latch!(self).note_closed(NpcWindow::Trade);
+            self.appliers.trade().close_window(script);
+            self.appliers.latch().note_closed(NpcWindow::Trade);
             script.fire_event("TRADE_CLOSED", vec![]);
             self.signalled(script, mark);
         }
-        self.appliers.p4().p6().send_cancel();
+        self.appliers.trade().send_cancel();
     }
 
     /// The taxi map's close core `0x4dc0f0`: with a map open, the release (`0x4dc105`), the cell
     /// cleared (`0x4dc113`) and each slot's route freed (`0x4dc130`-`0x4dc145`), then
     /// `TAXIMAP_CLOSED` (`0x4dc15f`).
     pub(super) fn close_taxi(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        let Some(flightmaster) = self.appliers.p5().p6().flightmaster() else {
+        let Some(flightmaster) = self.appliers.taxi().flightmaster() else {
             return;
         };
         self.release_into(script, mark, flightmaster, Self::close_taxi);
-        self.appliers.p5().p6().clear_map(script);
-        latch!(self).note_closed(NpcWindow::Taxi);
+        self.appliers.taxi().clear_map(script);
+        self.appliers.latch().note_closed(NpcWindow::Taxi);
         script.fire_event("TAXIMAP_CLOSED", vec![]);
         self.signalled(script, mark);
     }

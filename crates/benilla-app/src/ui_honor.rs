@@ -159,7 +159,10 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
 /// Push the self snapshot and the inspect reply, and drain the pane's request.
 pub(crate) fn feed_honor(
     // The selection, read before the VM runs with the host lent, which a call may move.
-    mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
+    mut hosted: crate::script_calls::disjoint::Pair<
+        Res<'static, crate::target::Selection>,
+        crate::script_calls::HostedVm<'static, 'static>,
+    >,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     inspect_target: Res<crate::ui_inspect::InspectTarget>,
     group: Res<crate::ui_party::GroupState>,

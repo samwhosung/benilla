@@ -301,10 +301,14 @@ fn on_spell_start(
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn on_spell_go(
     In(ev): In<SessionEvent>,
-    mut set: ParamSet<(
-        (Lifecycle, Scene),
-        crate::script_calls::VmWith<crate::target::SelectCommit<'static, 'static>>,
-    )>,
+    mut set: crate::script_calls::disjoint::Pair<
+        (Lifecycle<'static>, Scene<'static, 'static>),
+        crate::script_calls::VmWith<
+            'static,
+            'static,
+            crate::target::SelectCommit<'static, 'static>,
+        >,
+    >,
 ) {
     let mark = crate::lanes::mark();
     if let SessionEvent::SpellGo {

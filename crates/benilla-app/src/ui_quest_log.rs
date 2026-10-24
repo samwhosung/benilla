@@ -741,11 +741,13 @@ pub(crate) fn feed_quest_log(
     // The questgiver window is the host's too: the latch's refresh is bumped after the VM's run.
     // The item watchers' runs still to fire this frame are the host's too: the lanes' drain
     // follows every feed.
-    mut vm: ParamSet<(
-        crate::script_calls::HostedVm,
-        ResMut<crate::ui_quest::QuestGiver>,
-        Res<crate::item_lane::ItemLane>,
-    )>,
+    mut vm: crate::script_calls::disjoint::Pair<
+        crate::script_calls::HostedVm<'static, 'static>,
+        (
+            ResMut<'static, crate::ui_quest::QuestGiver>,
+            Res<'static, crate::item_lane::ItemLane>,
+        ),
+    >,
     reads: QuestLogReads,
     mut quest_log: ResMut<QuestLog>,
     // The toasts are message-catalog rows, whose surface and sound the sink reads.
@@ -756,7 +758,7 @@ pub(crate) fn feed_quest_log(
     field_notices: Res<crate::field_watch::NoticeLane>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemo>>,
 ) {
-    let items_queued = vm.p2().notices().next().is_some();
+    let items_queued = vm.p1().1.notices().next().is_some();
     let refreshes = vm.p0().run(|script| {
         let Some(script) = script else {
             return 0;
@@ -948,7 +950,7 @@ pub(crate) fn feed_quest_log(
         refreshes
     });
     if refreshes > 0 {
-        vm.p1().bump_reask();
+        vm.p1().0.bump_reask();
     }
 }
 

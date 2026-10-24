@@ -25,6 +25,7 @@ use benilla_ui::script::{
     TrainerCall, UiScript,
 };
 
+pub(crate) mod disjoint;
 mod windows;
 
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
@@ -34,151 +35,93 @@ macro_rules! emote_in_order {
     ($appliers:expr, $step:expr) => {{
         if let Some(step) = $step {
             if step.leave {
-                $appliers.p5().p1().close_for_stand();
-                $appliers.p7().stop_for_stand();
+                $appliers.loot().close_for_stand();
+                $appliers.attack().stop_for_stand();
             }
-            $appliers.p4().p2().finish(step);
+            $appliers.emote().finish(step);
         }
     }};
 }
 
+disjoint::disjoint_set! {
+    /// The appliers, one per owner of the state a call touches, each lent alone: they share state
+    /// with one another (the net channel, the cast ladder), never with what holds the host.
+    pub(crate) struct Appliers, AppliersState {
+        /// The selection.
+        select: crate::target::ScriptSelect<'static, 'static>,
+        /// The targeting cursor.
+        cursor: crate::spell::ScriptCursor<'static, 'static>,
+        /// The cast's own state: its cancel, the view the VM reads after each call, and the
+        /// reports the call made.
+        self_cancel: crate::spell::SelfCancel<'static>,
+        cast_state: crate::spell::CastState<'static, 'static>,
+        reports: crate::ui_cast::CallReports<'static, 'static>,
+        /// The character panel's tabs: talents, skills and reputation.
+        talents: crate::ui_talent::TalentSteps<'static, 'static>,
+        skills: crate::ui_char::SkillSteps<'static>,
+        reputation: crate::ui_reputation::ReputationSteps<'static, 'static>,
+        /// The action slots' states, whose usable refresh a selection change runs inside its
+        /// call; absent in a harness without the action feed's inputs.
+        action_states: Option<crate::ui_action::ActionStates<'static, 'static>>,
+        /// The session's: the logout and the reload, the tutorial banks, and the interaction
+        /// latch the NPC windows' close cores release.
+        session: crate::ui_logout::SessionSteps<'static>,
+        tutorial: crate::tutorial::TutorialSteps<'static>,
+        latch: crate::ui_session::LatchSteps<'static>,
+        /// The bank and the profession windows.
+        bank: crate::ui_bank::BankSteps<'static, 'static>,
+        trade_skill: crate::ui_tradeskill::TradeSkillSteps<'static>,
+        craft: crate::ui_craft::CraftSteps<'static>,
+        /// The dialogs and queues: the battlegrounds, death, the duel, the group loot roll, the
+        /// innkeeper, the summon, the meeting stone, the lockouts and the PvP flag.
+        battlefield: crate::ui_battlefield::BattlefieldSteps<'static>,
+        death: crate::death::DeathSteps<'static, 'static>,
+        duel: crate::ui_duel::DuelSteps<'static>,
+        loot_roll: crate::ui_loot_roll::LootRollSteps<'static>,
+        binder: crate::ui_binder::BinderSteps<'static>,
+        summon: crate::ui_summon::SummonSteps<'static>,
+        meeting_stone: crate::ui_dialog_verbs::MeetingStoneSteps<'static>,
+        instance: crate::ui_instance::InstanceSteps<'static>,
+        pvp: crate::ui_unit::PvpSteps<'static>,
+        /// The cast ladder and the targeting it reads.
+        cast: crate::spell::ScriptCast<'static, 'static>,
+        /// The action bar's presses, the chat's sends and emotes, and the social windows'.
+        action: crate::ui_action::ActionPress<'static, 'static>,
+        chat: crate::ui_chat::ChatSender<'static, 'static>,
+        emote: crate::ui_chat::EmoteDoer<'static, 'static>,
+        auction: crate::ui_auction::AuctionVerbs<'static, 'static>,
+        social: crate::ui_social::SocialSteps<'static>,
+        party: crate::ui_party::PartyCalls<'static, 'static>,
+        trade: crate::ui_trade::TradeSteps<'static, 'static>,
+        /// The guild's windows: the roster, the charter and the tabard designer.
+        guild: crate::ui_guild::GuildSteps<'static>,
+        petition: crate::ui_petition::PetitionSteps<'static, 'static>,
+        tabard: crate::ui_tabard::TabardSteps<'static, 'static>,
+        /// The bags', the cursor's and the paper doll's: the item uses and the item verbs' sends.
+        item_use: crate::ui_items::ScriptItemUse<'static, 'static>,
+        items: crate::ui_items::ItemSteps<'static, 'static>,
+        /// The loot window's, the mailbox's, the questgiver's, the gossip menu's and the other
+        /// NPC windows'.
+        loot: crate::ui_loot::LootSteps<'static, 'static>,
+        mail: crate::ui_mail::MailVerbs<'static>,
+        quest: crate::ui_quest::QuestVerbs<'static, 'static>,
+        gossip: crate::ui_gossip::GossipVerbs<'static, 'static>,
+        trainer: crate::ui_trainer::TrainerSteps<'static, 'static>,
+        taxi: crate::ui_taxi::TaxiSteps<'static, 'static>,
+        merchant: crate::ui_merchant::MerchantSteps<'static, 'static>,
+        /// The pet's: the bar's presses, its other verbs and the menu's, and the stable.
+        pet_press: crate::ui_pet::PetPress<'static, 'static>,
+        pet: crate::ui_pet::PetSteps<'static, 'static>,
+        stable: crate::ui_stable::StableSteps<'static, 'static>,
+        /// The player's attack.
+        attack: crate::ui_action::AttackPress<'static, 'static>,
+    }
+}
+
 /// The engine half of every script call: one applier per owner of the state a call touches.
 #[derive(SystemParam)]
-#[allow(clippy::type_complexity)] // the appliers, one per owner of the state a call touches
 pub(crate) struct ScriptCallHost<'w, 's> {
-    appliers: ParamSet<
-        'w,
-        's,
-        (
-            crate::target::ScriptSelect<'w, 's>,
-            crate::spell::ScriptCursor<'w, 's>,
-            // The cast's own state: its cancel, the view the VM reads after each call, and the
-            // reports the call made; the character panel's verbs; and the session's.
-            ParamSet<
-                'w,
-                's,
-                (
-                    crate::spell::SelfCancel<'w>,
-                    crate::spell::CastState<'w, 's>,
-                    crate::ui_cast::CallReports<'w, 's>,
-                    // The character panel's tabs: talents, skills and reputation. A further tab's
-                    // applier joins this set.
-                    ParamSet<
-                        'w,
-                        's,
-                        (
-                            crate::ui_talent::TalentSteps<'w, 's>,
-                            crate::ui_char::SkillSteps<'w>,
-                            crate::ui_reputation::ReputationSteps<'w, 's>,
-                        ),
-                    >,
-                    // The action slots' states, whose usable refresh a selection change runs
-                    // inside its call; absent in a harness without the action feed's inputs.
-                    Option<crate::ui_action::ActionStates<'w, 's>>,
-                    // The session's: the logout and the reload, the tutorial banks, and the
-                    // interaction latch the NPC windows' close cores release. A further
-                    // session-wide applier joins this set.
-                    ParamSet<
-                        'w,
-                        's,
-                        (
-                            crate::ui_logout::SessionSteps<'w>,
-                            crate::tutorial::TutorialSteps<'w>,
-                            crate::ui_session::LatchSteps<'w>,
-                        ),
-                    >,
-                    // The bank and the profession windows. A further window's applier joins this
-                    // set.
-                    ParamSet<
-                        'w,
-                        's,
-                        (
-                            crate::ui_bank::BankSteps<'w, 's>,
-                            crate::ui_tradeskill::TradeSkillSteps<'w>,
-                            crate::ui_craft::CraftSteps<'w>,
-                        ),
-                    >,
-                    // The dialogs and queues: the battlegrounds, death, the duel, the group loot
-                    // roll, the innkeeper, the summon, the meeting stone, the lockouts and the PvP
-                    // flag.
-                    ParamSet<
-                        'w,
-                        's,
-                        (
-                            crate::ui_battlefield::BattlefieldSteps<'w>,
-                            crate::death::DeathSteps<'w, 's>,
-                            crate::ui_duel::DuelSteps<'w>,
-                            crate::ui_loot_roll::LootRollSteps<'w>,
-                            crate::ui_binder::BinderSteps<'w>,
-                            crate::ui_summon::SummonSteps<'w>,
-                            crate::ui_dialog_verbs::MeetingStoneSteps<'w>,
-                            ParamSet<
-                                'w,
-                                's,
-                                (
-                                    crate::ui_instance::InstanceSteps<'w>,
-                                    crate::ui_unit::PvpSteps<'w>,
-                                ),
-                            >,
-                        ),
-                    >,
-                ),
-            >,
-            crate::spell::ScriptCast<'w, 's>,
-            ParamSet<
-                'w,
-                's,
-                (
-                    crate::ui_action::ActionPress<'w, 's>,
-                    crate::ui_chat::ChatSender<'w, 's>,
-                    crate::ui_chat::EmoteDoer<'w, 's>,
-                    crate::ui_auction::AuctionVerbs<'w, 's>,
-                    crate::ui_social::SocialSteps<'w>,
-                    crate::ui_party::PartyCalls<'w, 's>,
-                    crate::ui_trade::TradeSteps<'w, 's>,
-                    // The guild's windows: the roster, the charter and the tabard designer. A
-                    // further guild window's applier joins this set.
-                    ParamSet<
-                        'w,
-                        's,
-                        (
-                            crate::ui_guild::GuildSteps<'w>,
-                            crate::ui_petition::PetitionSteps<'w, 's>,
-                            crate::ui_tabard::TabardSteps<'w, 's>,
-                        ),
-                    >,
-                ),
-            >,
-            // The bags', the loot window's, the mailbox's, the questgiver's, the gossip menu's and
-            // the other NPC windows'.
-            ParamSet<
-                'w,
-                's,
-                (
-                    crate::ui_items::BagSteps<'w, 's>,
-                    crate::ui_loot::LootSteps<'w, 's>,
-                    crate::ui_mail::MailVerbs<'w>,
-                    crate::ui_quest::QuestVerbs<'w, 's>,
-                    crate::ui_gossip::GossipVerbs<'w, 's>,
-                    crate::ui_trainer::TrainerSteps<'w, 's>,
-                    crate::ui_taxi::TaxiSteps<'w, 's>,
-                    crate::ui_merchant::MerchantSteps<'w, 's>,
-                ),
-            >,
-            // The pet's: the bar's presses, its other verbs and the menu's, and the stable. A
-            // further pet window's applier joins this set.
-            ParamSet<
-                'w,
-                's,
-                (
-                    crate::ui_pet::PetPress<'w, 's>,
-                    crate::ui_pet::PetSteps<'w, 's>,
-                    crate::ui_stable::StableSteps<'w, 's>,
-                ),
-            >,
-            crate::ui_action::AttackPress<'w, 's>,
-        ),
-    >,
+    appliers: Appliers<'w, 's>,
     /// The channel the census counts sends on ([`benilla_ui::script::census`]).
     #[cfg(test)]
     census: Option<Res<'w, crate::net::NetCommands>>,
@@ -227,7 +170,7 @@ impl ScriptCallHost<'_, '_> {
             let mut at = Signalled {
                 selected: select.before,
                 latched: select.latched,
-                mark: self.appliers.p2().p2().mark_at(select.mark),
+                mark: self.appliers.reports().mark_at(select.mark),
             };
             self.settle_selection(script, &mut at, select.owed);
             self.commit_views(script);
@@ -248,11 +191,11 @@ impl ScriptCallHost<'_, '_> {
         self.census_probe();
         script.host_out(|script| {
             let mut at = Signalled {
-                selected: self.appliers.p0().selected(),
-                latched: self.appliers.p6().p1().attack_latched(),
-                mark: self.appliers.p2().p2().mark_at(mark),
+                selected: self.appliers.select().selected(),
+                latched: self.appliers.pet().attack_latched(),
+                mark: self.appliers.reports().mark_at(mark),
             };
-            let owed = self.appliers.p0().start_attack(guid);
+            let owed = self.appliers.select().start_attack(guid);
             self.settle_selection(script, &mut at, owed);
             self.commit_views(script);
         });
@@ -266,11 +209,11 @@ impl ScriptCallHost<'_, '_> {
         // The cast state: `SpellStopCasting` (`0x6e6e80`) finds the cast the call sent in flight
         // (`0x6e5026`), and `IsCurrentAction` (`0x4e53a0`) checks its slot, as stock
         // `ActionButtonUp` reads straight after `UseAction` (`ActionButton.lua:54-55`).
-        let view = appliers.p2().p1().view();
+        let view = appliers.cast_state().view();
         script.set_cast_view(view);
         // The targeting word: `SpellIsTargeting` (`0x6e6cd0`) reads it, and `SpellTargetUnit`
         // binds to it.
-        appliers.p1().push_view(script);
+        appliers.cursor().push_view(script);
     }
 
     /// A signal point inside a call (`SignalEvent`, `0x703e50`, runs every listener before the
@@ -291,22 +234,18 @@ impl ScriptCallHost<'_, '_> {
         script: &mut UiScript,
         mark: &mut crate::ui_cast::ReportMark,
     ) {
-        let changes = self.appliers.p2().p7().p1().rescan_spirit();
+        let changes = self.appliers.death().rescan_spirit();
         for change in &changes {
             if change.cancel_aura {
                 script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
                 self.at_point(script, mark);
             }
             // The signal ran above; the change's sends.
-            let mut world_steps = self.appliers.p2();
-            let mut dialogs = world_steps.p7();
-            let steps = dialogs.p1();
+            let steps = self.appliers.death();
             crate::ui_dialog_verbs::apply_healer_change(change, None, steps.net());
         }
         self.appliers
-            .p2()
-            .p7()
-            .p1()
+            .death()
             .apply(script, DeathAction::AcceptAreaSpiritHeal);
     }
 
@@ -316,9 +255,9 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x493a18`) and the change's `PLAYER_TARGET_CHANGED`; TryCast's cancel reports ahead of
     /// its pick (`0x6e4d71`, `0x6e4efb`).
     fn signal_reports(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
-        let ready = self.appliers.p2().p2().ready_since(script, *mark);
+        let ready = self.appliers.reports().ready_since(script, *mark);
         crate::ui_cast::fire(script, ready);
-        *mark = self.appliers.p2().p2().mark();
+        *mark = self.appliers.reports().mark();
     }
 
     /// What `SetSelection` (`0x493540`) signals for a selection this call moved since `at` last
@@ -328,24 +267,24 @@ impl ScriptCallHost<'_, '_> {
     /// listeners and the script's next line. The unit feed takes the change as heard. Whether
     /// it signalled.
     fn signal_selection(&mut self, script: &mut UiScript, at: &mut Signalled) -> bool {
-        let selected = self.appliers.p0().selected();
+        let selected = self.appliers.select().selected();
         if selected == at.selected {
             return false;
         }
         self.signal_reports(script, &mut at.mark);
         let appliers = &mut self.appliers;
-        script.seat_selection(appliers.p0().seated());
-        if at.latched && !appliers.p6().p1().attack_latched() {
+        script.seat_selection(appliers.select().seated());
+        if at.latched && !appliers.pet().attack_latched() {
             script.lower_pet_attack();
             script.fire_event("PET_BAR_UPDATE", vec![]);
         }
-        if let Some(states) = appliers.p2().p4().as_mut() {
+        if let Some(states) = appliers.action_states().as_mut() {
             states.usable_refresh(script).fire(script);
         }
         script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
         script.announce_selection(selected);
         at.selected = selected;
-        at.latched = appliers.p6().p1().attack_latched();
+        at.latched = appliers.pet().attack_latched();
         true
     }
 
@@ -369,12 +308,12 @@ impl ScriptCallHost<'_, '_> {
                 script.lower_pet_attack();
                 script.fire_event("PET_BAR_UPDATE", vec![]);
                 at.latched = false;
-                script.seat_selection(self.appliers.p0().seated());
+                script.seat_selection(self.appliers.select().seated());
                 self.at_point(script, &mut at.mark);
                 // The store over a listener's pick (`0x4936e2`), or for a clear the send of the
                 // listener's pick, and either signals after (`0x49389c`, `0x493a73`), so the
                 // mark stays the selection the call found.
-                self.appliers.p0().pay_send(send);
+                self.appliers.select().pay_send(send);
             }
             let signalled = self.signal_selection(script, at);
             if !signalled && !owed.owes_swings() {
@@ -388,14 +327,14 @@ impl ScriptCallHost<'_, '_> {
             if !owed.owes_swings() {
                 return;
             }
-            owed = self.appliers.p0().pay(owed);
+            owed = self.appliers.select().pay(owed);
         }
     }
 
     /// After a point: what its listeners selected they signalled themselves.
     fn listened(&mut self, at: &mut Signalled) {
-        at.selected = self.appliers.p0().selected();
-        at.latched = self.appliers.p6().p1().attack_latched();
+        at.selected = self.appliers.select().selected();
+        at.latched = self.appliers.pet().attack_latched();
     }
 
     /// The player's Attack (`0x6131a0`): the validator (`0x6131aa` → `0x612df0`), whose pick's
@@ -403,14 +342,14 @@ impl ScriptCallHost<'_, '_> {
     /// the toggle at the target it settled. Its `SelectTarget`s bind a unit to a standing
     /// targeting cursor's cast inside the validator, so that cast is sent ahead of the swing.
     fn attack(&mut self, script: &mut UiScript, at: &mut Signalled, may_pick: bool) {
-        let Some(owed) = self.appliers.p7().pick_attack(may_pick) else {
+        let Some(owed) = self.appliers.attack().pick_attack(may_pick) else {
             return;
         };
         self.settle_selection(script, at, owed.into());
-        let target = self.appliers.p7().settle_attack();
-        self.appliers.p1().bind_parked();
+        let target = self.appliers.attack().settle_attack();
+        self.appliers.cursor().bind_parked();
         if let Some(guid) = target {
-            self.appliers.p7().start_attack(guid);
+            self.appliers.attack().start_attack(guid);
         }
     }
 
@@ -428,11 +367,11 @@ impl ScriptCallHost<'_, '_> {
         use crate::ui_pet::PetStep;
         let step = match step {
             Some(PetStep::Attack(attack)) => {
-                let Some(owed) = self.appliers.p6().p0().pick_attack(&attack) else {
+                let Some(owed) = self.appliers.pet_press().pick_attack(&attack) else {
                     return;
                 };
                 self.settle_selection(script, at, owed.into());
-                let finished = self.appliers.p6().p0().finish_attack(attack);
+                let finished = self.appliers.pet_press().finish_attack(attack);
                 if finished.as_ref().is_some_and(|&(_, latched)| latched) {
                     // The latch (`0x4bd42e`) signals `PET_BAR_UPDATE` (`0x4bd438`), whose
                     // listeners run before the order goes (`0x4bd4a4`).
@@ -446,10 +385,10 @@ impl ScriptCallHost<'_, '_> {
             step => step,
         };
         let appliers = &mut self.appliers;
-        appliers.p1().bind_parked();
+        appliers.cursor().bind_parked();
         match step {
-            Some(PetStep::Order(send)) => appliers.p6().p0().finish_press(send),
-            Some(PetStep::Cast(cast)) => crate::ui_pet::cast_pet_press(&mut appliers.p3(), cast),
+            Some(PetStep::Order(send)) => appliers.pet_press().finish_press(send),
+            Some(PetStep::Cast(cast)) => crate::ui_pet::cast_pet_press(&mut appliers.cast(), cast),
             Some(PetStep::Attack(_)) | None => {}
         }
     }
@@ -462,9 +401,9 @@ impl ScriptCallHost<'_, '_> {
         at: &mut Signalled,
         press: crate::spell::UnitPress,
     ) -> Option<u64> {
-        let owed = self.appliers.p6().p0().pick_for_unit_cast(press)?;
+        let owed = self.appliers.pet_press().pick_for_unit_cast(press)?;
         self.settle_selection(script, at, owed.into());
-        self.appliers.p6().p0().settle_pick()
+        self.appliers.pet_press().settle_pick()
     }
 
     /// The registrar's close core `0x4f5010` inside its call: with a registrar open, the latch
@@ -473,13 +412,11 @@ impl ScriptCallHost<'_, '_> {
     /// per run of the core, as the call's tail.
     fn close_registrar(&mut self) -> Option<CallTail> {
         use crate::ui_session::NpcWindow;
-        let npc = self.appliers.p4().p7().p1().registrar_npc()?;
-        let reenters = self.appliers.p2().p5().p2().release(npc);
-        self.appliers.p4().p7().p1().clear_registrar();
+        let npc = self.appliers.petition().registrar_npc()?;
+        let reenters = self.appliers.latch().release(npc);
+        self.appliers.petition().clear_registrar();
         let runs = 1 + usize::from(reenters);
-        let mut set = self.appliers.p2();
-        let mut session = set.p5();
-        let latch = session.p2();
+        let latch = self.appliers.latch();
         for _ in 0..runs {
             latch.note_closed(NpcWindow::Registrar);
         }
@@ -497,13 +434,11 @@ impl ScriptCallHost<'_, '_> {
     /// fired it at the open.
     fn close_tabard(&mut self) -> Option<CallTail> {
         use crate::ui_session::NpcWindow;
-        let vendor = self.appliers.p4().p7().p2().vendor()?;
-        let reenters = self.appliers.p2().p5().p2().release(vendor);
-        let opened = self.appliers.p4().p7().p2().clear_vendor();
+        let vendor = self.appliers.tabard().vendor()?;
+        let reenters = self.appliers.latch().release(vendor);
+        let opened = self.appliers.tabard().clear_vendor();
         let runs = 1 + usize::from(reenters);
-        let mut set = self.appliers.p2();
-        let mut session = set.p5();
-        let latch = session.p2();
+        let latch = self.appliers.latch();
         for _ in 0..runs {
             latch.note_closed(NpcWindow::Tabard);
         }
@@ -520,7 +455,7 @@ impl ScriptCallHost<'_, '_> {
     /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
     pub(crate) fn emote(&mut self, script: &mut UiScript, text_id: u32, arg: Option<String>) {
         let appliers = &mut self.appliers;
-        emote_in_order!(appliers, appliers.p4().p2().emote(script, text_id, arg));
+        emote_in_order!(appliers, appliers.emote().emote(script, text_id, arg));
     }
 }
 
@@ -531,11 +466,11 @@ impl CallHost for ScriptCallHost<'_, '_> {
         let appliers = &mut self.appliers;
         // The gate's answer for this call, made where the Lua verb ran: its casts start only if
         // tag 2 passed there. The ladder reads it while this call applies.
-        let outer_permit = appliers.p3().ladder.permit(call.may_cast());
+        let outer_permit = appliers.cast().ladder.permit(call.may_cast());
         let mut at = Signalled {
-            selected: appliers.p0().selected(),
-            latched: appliers.p6().p1().attack_latched(),
-            mark: appliers.p2().p2().mark(),
+            selected: appliers.select().selected(),
+            latched: appliers.pet().attack_latched(),
+            mark: appliers.reports().mark(),
         };
         let mut tail: Option<CallTail> = None;
         // The confirm popup an item pick or a Yes raised, signalled with the call's reports.
@@ -543,29 +478,29 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // What a selecting call owes after its signals (`0x493a18`, `0x4938c8`).
         let mut owed = crate::target::SelectDebt::default();
         match call {
-            ScriptCall::Select { request, .. } => owed = appliers.p0().select(request),
+            ScriptCall::Select { request, .. } => owed = appliers.select().select(request),
             ScriptCall::TargetByName { name, exact, .. } => {
-                owed = appliers.p0().target_by_name(&name, exact);
+                owed = appliers.select().target_by_name(&name, exact);
             }
             ScriptCall::TargetNearest { mode, reverse, .. } => {
-                owed = appliers.p0().target_nearest(mode, reverse);
+                owed = appliers.select().target_nearest(mode, reverse);
             }
-            ScriptCall::TargetLastTarget { .. } => owed = appliers.p0().target_last_target(),
-            ScriptCall::ClearTarget => owed = appliers.p0().clear_target(),
+            ScriptCall::TargetLastTarget { .. } => owed = appliers.select().target_last_target(),
+            ScriptCall::ClearTarget => owed = appliers.select().clear_target(),
             ScriptCall::AttackTarget { may_pick, .. } => self.attack(script, &mut at, may_pick),
-            ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
-            ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
-            ScriptCall::SpellStopCasting => appliers.p2().p0().stop_casting(),
+            ScriptCall::SpellTargetUnit(token) => appliers.cursor().spell_target_unit(&token),
+            ScriptCall::SpellStopTargeting => appliers.cursor().stop_targeting(),
+            ScriptCall::SpellStopCasting => appliers.self_cancel().stop_casting(),
             ScriptCall::CastSpell {
                 spell_id, on_self, ..
             } => {
-                crate::ui_spellbook::cast_spell(&mut appliers.p3(), spell_id, on_self);
+                crate::ui_spellbook::cast_spell(&mut appliers.cast(), spell_id, on_self);
             }
             ScriptCall::CastShapeshiftForm { spell_id, .. } => {
-                crate::ui_shapeshift::cast_form(&mut appliers.p3(), spell_id);
+                crate::ui_shapeshift::cast_form(&mut appliers.cast(), spell_id);
             }
             ScriptCall::UseAction(press) => {
-                match crate::ui_action::use_action(&mut appliers.p4().p0(), script, press) {
+                match crate::ui_action::use_action(&mut appliers.action(), script, press) {
                     // The Attack slot is a cast, so the gate's tag 4 (the pick) is asked only
                     // after tag 2 passed, and so passes as well.
                     crate::ui_action::UseOutcome::Attack => self.attack(script, &mut at, true),
@@ -580,172 +515,164 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 }
             }
             ScriptCall::UseContainerItem(call) => {
-                if let Some(open) = appliers.p5().p0().p0().use_container_item(script, call) {
-                    tail = appliers.p5().p1().open_item(script, open);
+                if let Some(open) = appliers.item_use().use_container_item(script, call) {
+                    tail = appliers.loot().open_item(script, open);
                 }
             }
             ScriptCall::UseInventoryItem { slot, on_self, .. } => appliers
-                .p5()
-                .p0()
-                .p0()
+                .item_use()
                 .use_inventory_item(script, slot, on_self),
-            ScriptCall::Item(benilla_ui::script::ItemCall::BindOnUse { may_cast }) => appliers
-                .p5()
-                .p0()
-                .p0()
-                .confirm_bind_on_use(script, may_cast),
-            ScriptCall::Item(call) => appliers.p5().p0().p1().apply(script, call),
+            ScriptCall::Item(benilla_ui::script::ItemCall::BindOnUse { may_cast }) => {
+                appliers.item_use().confirm_bind_on_use(script, may_cast)
+            }
+            ScriptCall::Item(call) => appliers.items().apply(script, call),
             ScriptCall::CastPetSpell { spell_id, on_self } => {
                 let send = crate::ui_pet_book::begin_pet_book_cast(
-                    &mut appliers.p6().p0(),
+                    &mut appliers.pet_press(),
                     spell_id,
                     on_self,
                 );
                 if let Some(send) = send {
                     // `GetTargetingSpellId 0x6e48e0` is this spell: the press lowers the cursor
                     // and sends nothing (`0x4b3474`-`0x4b347d`).
-                    if appliers.p3().ladder.ground.spell() == Some(spell_id) {
-                        appliers.p3().ladder.stop_targeting();
+                    if appliers.cast().ladder.ground.spell() == Some(spell_id) {
+                        appliers.cast().ladder.stop_targeting();
                     } else {
-                        crate::ui_pet_book::finish_pet_book_cast(&mut appliers.p6().p0(), send);
+                        crate::ui_pet_book::finish_pet_book_cast(&mut appliers.pet_press(), send);
                     }
                 }
             }
             ScriptCall::PetAction(slot) => {
-                let step = appliers.p6().p0().begin_slot(slot);
+                let step = appliers.pet_press().begin_slot(slot);
                 self.pet_step(script, &mut at, step);
             }
             ScriptCall::PetOrder(packed) => {
-                let step = appliers.p6().p0().begin_order(packed);
+                let step = appliers.pet_press().begin_order(packed);
                 self.pet_step(script, &mut at, step);
             }
-            ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
-            ScriptCall::DisplayError(key) => appliers.p4().p1().display_error(script, key),
-            ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
+            ScriptCall::SendChat(send) => appliers.chat().send_chat(script, send),
+            ScriptCall::DisplayError(key) => appliers.chat().display_error(script, key),
+            ScriptCall::RandomRoll { min, max } => appliers.chat().random_roll(min, max),
             ScriptCall::Channel(cmd) => {
-                if let Some((packet, refused)) = appliers.p4().p1().channel(script, cmd) {
+                if let Some((packet, refused)) = appliers.chat().channel(script, cmd) {
                     // The join's refusal runs its listeners inside the claim (`0x49b9c5`),
                     // before the body sends (`0x49ee02`).
                     if refused {
                         self.at_point(script, &mut at.mark);
                     }
-                    self.appliers.p4().p1().send_channel(packet);
+                    self.appliers.chat().send_channel(packet);
                 }
             }
             ScriptCall::DoEmote(request) => {
-                emote_in_order!(appliers, appliers.p4().p2().do_emote(script, request));
+                emote_in_order!(appliers, appliers.emote().do_emote(script, request));
             }
-            ScriptCall::Uninvite(name) => appliers.p4().p1().uninvite(name),
-            ScriptCall::RequestTimePlayed => appliers.p4().p1().request_time_played(),
-            ScriptCall::AddonMessage(send) => appliers.p4().p1().addon_message(send),
-            ScriptCall::PickItem(pick) => popup = appliers.p1().pick_item(pick),
-            ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),
-            ScriptCall::Loot(call) => tail = appliers.p5().p1().apply(script, call),
+            ScriptCall::Uninvite(name) => appliers.chat().uninvite(name),
+            ScriptCall::RequestTimePlayed => appliers.chat().request_time_played(),
+            ScriptCall::AddonMessage(send) => appliers.chat().addon_message(send),
+            ScriptCall::PickItem(pick) => popup = appliers.cursor().pick_item(pick),
+            ScriptCall::EnchantConfirm(answer) => popup = appliers.cursor().confirm_enchant(answer),
+            ScriptCall::Loot(call) => tail = appliers.loot().apply(script, call),
             ScriptCall::Auction(AuctionCall::Close) => self.close_auction(script, &mut at.mark),
-            ScriptCall::Auction(call) => appliers.p4().p3().apply(script, call),
-            ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
-            ScriptCall::Party(request) => appliers.p4().p5().apply(script, request),
+            ScriptCall::Auction(call) => appliers.auction().apply(script, call),
+            ScriptCall::Social(call) => appliers.social().apply(script, call),
+            ScriptCall::Party(request) => appliers.party().apply(script, request),
             ScriptCall::Quest(call) => {
-                if let Some(giver) = appliers.p5().p3().apply(script, call) {
+                if let Some(giver) = appliers.quest().apply(script, call) {
                     self.finish_quest_teardown(script, &mut at.mark, giver);
                 }
             }
             ScriptCall::Gossip(GossipCall::Close) => self.close_gossip(script, &mut at.mark),
-            ScriptCall::Gossip(call) => appliers.p5().p4().apply(script, call),
+            ScriptCall::Gossip(call) => appliers.gossip().apply(script, call),
             ScriptCall::Mail(MailCall::Close) => self.close_mail(script, &mut at.mark),
-            ScriptCall::Mail(call) => appliers.p5().p2().apply(script, call),
+            ScriptCall::Mail(call) => appliers.mail().apply(script, call),
             // The partner's slot 7 is the trade's, the bind the targeting cursor's.
             ScriptCall::Trade(
                 call @ (benilla_ui::script::TradeCall::TargetEnchant
                 | benilla_ui::script::TradeCall::ReplaceEnchant),
             ) => {
-                let partner = appliers.p4().p6().partner_enchant_slot();
+                let partner = appliers.trade().partner_enchant_slot();
                 let check = call == benilla_ui::script::TradeCall::TargetEnchant;
-                appliers.p1().trade_enchant(script, partner, check);
+                appliers.cursor().trade_enchant(script, partner, check);
             }
             ScriptCall::Trade(TradeCall::Close) => self.close_trade(script, &mut at.mark),
-            ScriptCall::Trade(call) => tail = appliers.p4().p6().apply(call),
+            ScriptCall::Trade(call) => tail = appliers.trade().apply(call),
             ScriptCall::Trainer(TrainerCall::Buy { trainer, spell_id }) => {
-                appliers.p5().p5().buy(trainer, spell_id);
+                appliers.trainer().buy(trainer, spell_id);
             }
             ScriptCall::Trainer(TrainerCall::OpenOwn) => {
                 self.open_own_trainer(script, &mut at.mark);
             }
             ScriptCall::Trainer(TrainerCall::Close) => self.close_trainer(script, &mut at.mark),
             ScriptCall::Taxi(TaxiCall::Close) => self.close_taxi(script, &mut at.mark),
-            ScriptCall::Taxi(call) => appliers.p5().p6().apply(call),
+            ScriptCall::Taxi(call) => appliers.taxi().apply(call),
             ScriptCall::Merchant(MerchantCall::Close) => {
                 self.close_merchant(script, &mut at.mark);
             }
-            ScriptCall::Merchant(call) => appliers.p5().p7().apply(script, call),
-            ScriptCall::Guild(call) => appliers.p4().p7().p0().apply(script, call),
+            ScriptCall::Merchant(call) => appliers.merchant().apply(script, call),
+            ScriptCall::Guild(call) => appliers.guild().apply(script, call),
             ScriptCall::Petition(PetitionCall::CloseRegistrar) => tail = self.close_registrar(),
             // The designer's opener, then the registrar's close core (`0x4f5355` → `0x4f5010`).
             ScriptCall::Petition(PetitionCall::TabardInfo) => {
-                appliers
-                    .p4()
-                    .p7()
-                    .p1()
-                    .apply(script, PetitionCall::TabardInfo);
+                appliers.petition().apply(script, PetitionCall::TabardInfo);
                 tail = self.close_registrar();
             }
-            ScriptCall::Petition(call) => tail = appliers.p4().p7().p1().apply(script, call),
+            ScriptCall::Petition(call) => tail = appliers.petition().apply(script, call),
             ScriptCall::Tabard(TabardCall::Close) => tail = self.close_tabard(),
-            ScriptCall::Tabard(call) => appliers.p4().p7().p2().apply(script, call),
-            ScriptCall::Talent(call) => appliers.p2().p3().p0().apply(script, call),
-            ScriptCall::Skill(call) => appliers.p2().p3().p1().apply(call),
-            ScriptCall::Reputation(call) => tail = appliers.p2().p3().p2().apply(script, call),
-            ScriptCall::Pet(call) => appliers.p6().p1().apply(script, call),
+            ScriptCall::Tabard(call) => appliers.tabard().apply(script, call),
+            ScriptCall::Talent(call) => appliers.talents().apply(script, call),
+            ScriptCall::Skill(call) => appliers.skills().apply(call),
+            ScriptCall::Reputation(call) => tail = appliers.reputation().apply(script, call),
+            ScriptCall::Pet(call) => appliers.pet().apply(script, call),
             ScriptCall::Stable(StableCall::Close) => self.close_stable(script, &mut at.mark),
-            ScriptCall::Stable(call) => appliers.p6().p2().apply(call),
-            ScriptCall::Session(request) => appliers.p2().p5().p0().apply(request),
-            ScriptCall::Tutorial(call) => appliers.p2().p5().p1().apply(script, call),
+            ScriptCall::Stable(call) => appliers.stable().apply(call),
+            ScriptCall::Session(request) => appliers.session().apply(request),
+            ScriptCall::Tutorial(call) => appliers.tutorial().apply(script, call),
             ScriptCall::Bank(BankCall::Close) => self.close_bank(script, &mut at.mark),
-            ScriptCall::Bank(BankCall::Purchase) => appliers.p2().p6().p0().purchase(script),
+            ScriptCall::Bank(BankCall::Purchase) => appliers.bank().purchase(script),
             ScriptCall::TradeSkill(TradeSkillCall::Do { spell_id, count }) => {
-                crate::ui_tradeskill::do_trade_skill(&mut appliers.p3(), spell_id, count);
+                crate::ui_tradeskill::do_trade_skill(&mut appliers.cast(), spell_id, count);
             }
-            ScriptCall::TradeSkill(TradeSkillCall::Close) => appliers.p2().p6().p1().close(),
-            ScriptCall::Craft(call) => appliers.p2().p6().p2().apply(call),
-            ScriptCall::Battlefield(call) => appliers.p2().p7().p0().apply(script, call),
+            ScriptCall::TradeSkill(TradeSkillCall::Close) => appliers.trade_skill().close(),
+            ScriptCall::Craft(call) => appliers.craft().apply(call),
+            ScriptCall::Battlefield(call) => appliers.battlefield().apply(script, call),
             ScriptCall::Death(DeathAction::AcceptAreaSpiritHeal) => {
                 self.accept_area_spirit_heal(script, &mut at.mark);
             }
-            ScriptCall::Death(action) => appliers.p2().p7().p1().apply(script, action),
+            ScriptCall::Death(action) => appliers.death().apply(script, action),
             ScriptCall::Duel(DuelRequest::StartByGuid(guid)) => {
-                let spell = appliers.p2().p7().p2().duel_spell();
+                let spell = appliers.duel().duel_spell();
                 if let Some(spell) = spell {
-                    crate::ui_duel::cast_duel(&mut appliers.p3(), spell, guid);
+                    crate::ui_duel::cast_duel(&mut appliers.cast(), spell, guid);
                 }
             }
-            ScriptCall::Duel(request) => appliers.p2().p7().p2().answer(&request),
+            ScriptCall::Duel(request) => appliers.duel().answer(&request),
             ScriptCall::LootRoll(LootRollCall::Vote { roll_id, roll_type }) => {
-                appliers.p2().p7().p3().vote(roll_id, roll_type);
+                appliers.loot_roll().vote(roll_id, roll_type);
             }
-            ScriptCall::Binder(BinderCall::Confirm) => appliers.p2().p7().p4().confirm(),
-            ScriptCall::Summon(SummonCall::Confirm) => appliers.p2().p7().p5().confirm(),
+            ScriptCall::Binder(BinderCall::Confirm) => appliers.binder().confirm(),
+            ScriptCall::Summon(SummonCall::Confirm) => appliers.summon().confirm(),
             ScriptCall::MeetingStone(MeetingStoneCall::Cancel) => {
-                appliers.p2().p7().p6().cancel(script);
+                appliers.meeting_stone().cancel(script);
             }
-            ScriptCall::Instance(InstanceCall::Reset) => appliers.p2().p7().p7().p0().reset(),
-            ScriptCall::Pvp(PvpCall::Toggle) => appliers.p2().p7().p7().p1().toggle(),
+            ScriptCall::Instance(InstanceCall::Reset) => appliers.instance().reset(),
+            ScriptCall::Pvp(PvpCall::Toggle) => appliers.pvp().toggle(),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
-        appliers.p1().bind_parked();
+        appliers.cursor().bind_parked();
         // TryCast's attack pick (`0x6e4efb`) can move the selection mid-cast, and its
         // `SetSelection` signals there, before the attempt goes on to its send (`0x6e585a`), so a
         // press held there is picked, its selection signalled in place, and resumed.
-        if let Some(held) = appliers.p3().ladder.take_held() {
+        if let Some(held) = appliers.cast().ladder.take_held() {
             // A held press passed tag 2 to be held, so the pick's tag 4 passes as well.
             match held.unit {
                 None => {
-                    if let Some(owed) = self.appliers.p7().pick_for_cast(held) {
+                    if let Some(owed) = self.appliers.attack().pick_for_cast(held) {
                         self.settle_selection(script, &mut at, owed.into());
-                        if self.appliers.p7().settle_attack().is_some() {
-                            let mut cast = self.appliers.p3();
+                        if self.appliers.attack().settle_attack().is_some() {
+                            let mut cast = self.appliers.cast();
                             let ctx = cast.targeting.context();
                             cast.ladder.resume_after_pick(held, &ctx);
                         }
@@ -755,7 +682,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 // attempt goes on with (`0x6e4ef7`).
                 Some(press) => {
                     if let Some(guid) = self.unit_pick(script, &mut at, press) {
-                        let mut cast = self.appliers.p3();
+                        let mut cast = self.appliers.cast();
                         if let Some(ctx) =
                             cast.targeting.context_for_caster(press.caster, Some(guid))
                         {
@@ -768,20 +695,20 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // A unit caster's send owes its attack tail (`0x6e51de` → `0x6131a0`): its validator with
         // the unit as the actor (`0x6131aa`), whose pick signals in place, then for the bar's unit
         // the bar's Attack (`0x613217`) before the attempt returns.
-        if let Some((caster, guid)) = self.appliers.p3().ladder.take_unit_attack() {
+        if let Some((caster, guid)) = self.appliers.cast().ladder.take_unit_attack() {
             let press = crate::spell::UnitPress {
                 caster,
                 target: Some(guid),
             };
             if let Some(guid) = self.unit_pick(script, &mut at, press) {
-                let step = self.appliers.p6().p0().attack_from_cast(caster, guid);
+                let step = self.appliers.pet_press().attack_from_cast(caster, guid);
                 self.pet_step(script, &mut at, step);
             }
         }
         let appliers = &mut self.appliers;
         // Whatever casts next is the caller's: the engine's own, which asks no gate, or the call
         // whose signal point this call applied at.
-        appliers.p3().ladder.permit(outer_permit);
+        appliers.cast().ladder.permit(outer_permit);
         // A selection the call moved with no signal of its own yet is signalled as the call
         // returns, inside it and under its input events.
         self.signal_selection(script, &mut at);
@@ -789,7 +716,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
         // event, `CURRENT_SPELL_CAST_CHANGED` at each of the attempt's signals, and the item gate's
         // confirm (`0x495d60`), all signalled below as the call returns, under its input events.
-        let ready = self.appliers.p2().p2().ready_since(script, at.mark);
+        let ready = self.appliers.reports().ready_since(script, at.mark);
         self.commit_views(script);
         if ready.is_empty() && popup.is_none() {
             return tail;
@@ -860,7 +787,7 @@ pub(crate) fn hosted<R>(
 #[derive(SystemParam)]
 pub(crate) struct VmWith<'w, 's, P: SystemParam + 'static> {
     script: Option<NonSendMut<'w, UiScript>>,
-    set: ParamSet<'w, 's, (P, Option<ScriptCallHost<'w, 's>>)>,
+    set: disjoint::Pair<'w, 's, P, Option<ScriptCallHost<'w, 's>>>,
 }
 
 impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
@@ -972,7 +899,7 @@ impl<'w, 's, P: SystemParam + 'static> VmWith<'w, 's, P> {
         &mut self,
     ) -> (
         Option<&mut UiScript>,
-        &mut ParamSet<'w, 's, (P, Option<ScriptCallHost<'w, 's>>)>,
+        &mut disjoint::Pair<'w, 's, P, Option<ScriptCallHost<'w, 's>>>,
     ) {
         (self.script.as_deref_mut(), &mut self.set)
     }
@@ -4334,6 +4261,9 @@ mod tests {
         use bevy::ecs::system::{IntoSystem, System};
         let world = app.world_mut();
         let host = System::initialize(&mut IntoSystem::into_system(|_: ScriptCallHost| {}), world);
+        let host = host.combined_access();
+        // Each system's access with the host's summed in, into one buffer reused across them.
+        let mut with_host = bevy::ecs::query::Access::new();
         let labels: Vec<_> = world
             .resource::<bevy::ecs::schedule::Schedules>()
             .iter()
@@ -4359,9 +4289,9 @@ mod tests {
                         continue;
                     }
                     writers.push(system.name().to_string());
-                    let mut with_host = declared.access.clone();
-                    with_host.extend(host.clone());
-                    if with_host.combined_access() != access {
+                    with_host.clone_from(access);
+                    with_host.extend(host);
+                    if with_host != *access {
                         unhosted.push(format!("{label:?}: {}", system.name()));
                     }
                 }

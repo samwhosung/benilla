@@ -1151,13 +1151,11 @@ pub(super) fn deliver(
 
 /// The slots and the call host of the chat lane's firing, borrowed in turn: the host is lent around Lua
 /// alone, and the slots are written between.
-type SlotsAndHost<'w, 's> = ParamSet<
+type SlotsAndHost<'w, 's> = crate::script_calls::disjoint::Pair<
     'w,
     's,
-    (
-        ResMut<'static, ChannelState>,
-        Option<crate::script_calls::ScriptCallHost<'w, 's>>,
-    ),
+    ResMut<'static, ChannelState>,
+    Option<crate::script_calls::ScriptCallHost<'w, 's>>,
 >;
 
 /// [`deliver`] with the host lent around the event alone: a join a handler makes takes its slot

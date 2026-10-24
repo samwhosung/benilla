@@ -295,11 +295,6 @@ fn answer_pending_equip(
     }
 }
 
-/// The bags', the cursor's and the paper doll's appliers, one nested set of the call host: the
-/// item uses and the item verbs' sends.
-pub(crate) type BagSteps<'w, 's> =
-    ParamSet<'w, 's, (super::ScriptItemUse<'w, 's>, ItemSteps<'w, 's>)>;
-
 /// Apply the item calls and the container uses a harness's VM kept
 /// ([`UiScript::keep_calls`]), in call order, as the app's host applies each inside its verb;
 /// an open goes through the loot window's applier.
