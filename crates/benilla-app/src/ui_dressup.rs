@@ -731,7 +731,11 @@ mod tests {
         let mut items = Items::default();
         let store = player(&[]);
         let mut room = DressUpRoom::default();
-        room.step([DressUpIntent::Dress, DressUpIntent::TryOn(2000)], &items, &cmds);
+        room.step(
+            [DressUpIntent::Dress, DressUpIntent::TryOn(2000)],
+            &items,
+            &cmds,
+        );
         items.insert_template(2000, Some(worn("Shiny Chest", 7000, 5)));
         room.step([DressUpIntent::Undress], &items, &cmds);
         assert_eq!(
@@ -751,7 +755,11 @@ mod tests {
         items.insert_template(1000, Some(worn("Worn Chest", 5000, 5)));
         let store = player(&[(4, 1000)]);
         let mut room = DressUpRoom::default();
-        room.step([DressUpIntent::Dress, DressUpIntent::TryOn(2000)], &items, &cmds);
+        room.step(
+            [DressUpIntent::Dress, DressUpIntent::TryOn(2000)],
+            &items,
+            &cmds,
+        );
         room.step([DressUpIntent::Dress], &items, &cmds);
         assert_eq!(
             look_dw(&store, &room, &items, true).equipment[4].display_id,

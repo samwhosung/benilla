@@ -185,7 +185,8 @@ fn a_ticket_write_with_no_player_does_nothing() {
 #[test]
 fn ticket_get_and_delete_with_no_player_send_nothing() {
     let mut s = script();
-    s.run("GetGMTicket() DeleteGMTicket() GetGMStatus()").unwrap();
+    s.run("GetGMTicket() DeleteGMTicket() GetGMStatus()")
+        .unwrap();
     assert_eq!(
         s.take_gm_ticket_intents(),
         vec![GmTicketIntent::AskStatus],
