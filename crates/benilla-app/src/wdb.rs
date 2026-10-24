@@ -21,10 +21,10 @@
 //! | page text `0xc0e174` | `pagetextcache.wdb` | saved, [`PageTexts`] |
 //! | item text `0xc0e0c0` | `itemtextcache.wdb` | saved, [`MailOpen`] |
 //! | `0xc0e084` | `wowcache.wdb` | none: it has no query (opcode 0) |
-//! | player names `0xc0e228` | none | world session, [`NameCache::clear_world_session`] |
-//! | guilds `0xc0e1ec` | none | world session, [`GuildState`] |
-//! | pet names `0xc0e138` | none | world session, [`NameCache::clear_world_session`] |
-//! | petitions `0xc0e0fc` | none | world session, [`PetitionRecords`] |
+//! | player names `0xc0e228` | `namecache.wdb`, unused | world session, [`NameCache`] |
+//! | guilds `0xc0e1ec` | `guildcache.wdb`, unused | world session, [`GuildState`] |
+//! | pet names `0xc0e138` | `petnamecache.wdb`, unused | world session, [`NameCache`] |
+//! | petitions `0xc0e0fc` | `petitioncache.wdb`, unused | world session, [`PetitionRecords`] |
 //!
 //! A file is the reference's layout (`0x5566d0`): a header, then `{key, size, record}` entries
 //! ending in two zero dwords. The header is the store's tag, the build `0x16f3`, the locale tag
