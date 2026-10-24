@@ -306,6 +306,7 @@ fn on_worldport(
     script: Option<NonSend<benilla_ui::script::UiScript>>,
     mut released: ResMut<super::objects::Released>,
     view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
+    player: Option<Res<crate::player::Player>>,
 ) {
     if let SessionEvent::Worldport {
         map_id,
@@ -339,6 +340,7 @@ fn on_worldport(
             &mut b.index,
             &mut e.transfer,
             &b.transports,
+            player.as_ref().and_then(|p| p.ride_entity()),
             &mut e.worldports,
         );
         // Loading a new world frees the released objects with the live ones (`0x467700`).
@@ -826,9 +828,10 @@ fn transfer_aborted(reason: u8, pending: &mut PendingTransfer) {
     pending.0 = None;
 }
 
-/// `SMSG_NEW_WORLD`/`SMSG_LOGIN_VERIFY_WORLD`: drops every tracked object, then hands the app
-/// the destination. A transport whose timetable touches the new map is spared, so a ridden boat
-/// sails through the map change and the server's re-create refreshes it in place.
+/// `SMSG_NEW_WORLD`/`SMSG_LOGIN_VERIFY_WORLD`: drops every tracked object, as `0x401bc0` destroys
+/// them, then hands the app the destination. The one exception is the ship a transport transfer
+/// carries us on, when its timetable touches the new map: it sails through the map change, so our
+/// deck-local pose has a deck, and the server's create refreshes it in place.
 fn worldport(
     map_id: u32,
     position: [f32; 3],
@@ -838,10 +841,16 @@ fn worldport(
     index: &mut GuidIndex,
     pending: &mut PendingTransfer,
     transports: &Query<&crate::transport::Transport>,
+    ridden: Option<Entity>,
     worldports: &mut MessageWriter<WorldportMessage>,
 ) {
+    let carried = pending
+        .0
+        .as_ref()
+        .is_some_and(|p| p.transport_entry.is_some());
     index.0.retain(|guid, e| {
-        if transports.get(*e).is_ok_and(|t| t.touches_map(map_id)) {
+        let ours = carried && ridden == Some(*e);
+        if ours && transports.get(*e).is_ok_and(|t| t.touches_map(map_id)) {
             // info, not debug: rare, and the crossing depends on it firing for the ridden boat.
             info!("worldport: sparing transport {guid:#x} (its path touches map {map_id})");
             return true;
