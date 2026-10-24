@@ -312,46 +312,34 @@ fn angle_between(a: f32, b: f32) -> f32 {
 }
 
 /// `0x5f50a0` faces the ship against its curve's tangent (`0x5f5251`-`0x5f52ae`), so over a whole
-/// period, on every path the install holds, the facing turned half a circle is the direction of
-/// travel: the chord of the positions 50 ms either side. A ship on a vmangos timetable turns
-/// about mid-route (path 241, Booty Bay to Ratchet).
+/// period, on every transport path, the facing turned half a circle is the direction of travel:
+/// the chord of the positions about 1.5 yd either side at cruise. A flight path can part from it,
+/// where a curve's derivative leaves its chord by more than 60° and `0x454580` takes the chord.
 #[test]
-fn a_ship_faces_its_direction_of_travel_on_every_path() {
+fn a_ship_faces_its_direction_of_travel_on_every_transport_path() {
     let data = crate::wow_data_or_skip!();
     let mut chain = crate::open_chain(&data).expect("open chain");
     let cat = load_taxi_path_nodes(&mut chain).expect("load TaxiPathNode");
-    let tuple = |id: u32| {
-        GOLDENS
-            .iter()
-            .find(|g| g.path_id == id)
-            .map_or((30.0, 1.0), |g| (g.move_speed, g.accel_rate))
-    };
-    const HALF_WINDOW_MS: u32 = 50;
     const STEP_MS: u32 = 250;
-    let mut paths = 0usize;
     let mut checked = 0usize;
     let mut worst: Vec<(u32, u32, f32)> = Vec::new();
-    let mut ids: Vec<u32> = cat.paths().map(|(id, _)| id).collect();
-    ids.sort_unstable();
-    for id in ids {
-        let nodes = cat.path(id).unwrap();
-        let (speed, accel) = tuple(id);
-        let Some(tt) = TransportTimetable::build(nodes, speed, accel) else {
-            panic!("path {id} builds");
-        };
-        paths += 1;
+    for g in GOLDENS {
+        let nodes = cat.path(g.path_id).expect("the path exists");
+        let tt = TransportTimetable::build(nodes, g.move_speed, g.accel_rate).expect("it builds");
+        let speed = g.move_speed as f32;
+        let half_window_ms = (1500.0 / speed) as u32;
+        let window_s = 2.0 * half_window_ms as f32 * 0.001;
         let mut path_worst = (0u32, 0.0f32);
-        let mut t = HALF_WINDOW_MS;
-        while t + HALF_WINDOW_MS < tt.period_ms {
+        let mut t = half_window_ms;
+        while t + half_window_ms < tt.period_ms {
             let (before, here, after) = (
-                tt.sample(t - HALF_WINDOW_MS),
+                tt.sample(t - half_window_ms),
                 tt.sample(t),
-                tt.sample(t + HALF_WINDOW_MS),
+                tt.sample(t + half_window_ms),
             );
             let chord = [after.pos[0] - before.pos[0], after.pos[1] - before.pos[1]];
             let moved = chord[0].hypot(chord[1]);
             // Under way at a third of cruise or more, on one map, with no teleport in the window.
-            let window_s = 2.0 * HALF_WINDOW_MS as f32 * 0.001;
             if before.map == after.map
                 && moved >= speed * window_s / 3.0
                 && moved <= speed * window_s * 1.5
@@ -366,15 +354,52 @@ fn a_ship_faces_its_direction_of_travel_on_every_path() {
             t += STEP_MS;
         }
         if path_worst.1 > 0.01 {
-            worst.push((id, path_worst.0, path_worst.1));
+            worst.push((g.path_id, path_worst.0, path_worst.1));
         }
     }
-    assert!(paths > 200, "the install holds {paths} paths");
-    assert!(checked > 10_000, "only {checked} samples under way");
+    assert!(checked > 5_000, "only {checked} samples under way");
     assert!(
         worst.is_empty(),
-        "{} paths face off their travel by more than 0.01 rad, (path, cycle ms, rad): {:?}",
-        worst.len(),
-        &worst[..worst.len().min(20)]
+        "paths facing off their travel by more than 0.01 rad, (path, cycle ms, rad): {worst:?}"
     );
+}
+
+/// Path 241 (Ratchet to Booty Bay) at instants of its period as the reference's build
+/// (`0x5f4cc0`) and tick (`0x5f50a0`) place it, from benilla-re's `ship_path`, which matches the
+/// client bit for bit: its legs open at their second nodes (1 and 24) at 0 and 193437 ms, and it
+/// stands at Ratchet from 66858 ms and at Booty Bay from 233731 ms for 60 s.
+const PATH_241: &[(u32, u32, [f32; 3], f32)] = &[
+    (0, 1, [-1969.408, -4932.962, 0.0], -2.616_787_7),
+    (30_000, 1, [-1382.4594, -4289.3115, 0.0], -2.026_320_7),
+    (66_858, 1, [-1005.6135, -3841.6477, 0.0], 2.623_475_6),
+    (100_000, 1, [-1005.6135, -3841.6477, 0.0], 2.623_475_6),
+    (126_858, 1, [-1005.6135, -3841.6477, 0.0], 2.623_475_6),
+    (140_000, 1, [-940.99854, -3897.3918, 0.0], 2.050_847_3),
+    (180_000, 1, [-1353.893, -4842.0107, 0.0], 0.936_019_8),
+    (193_437, 0, [-14366.629, 1302.033, 0.0], 1.565_639),
+    (210_000, 0, [-14365.361, 822.61865, 0.0], 1.668_638_8),
+    (233_731, 0, [-14277.745, 582.86615, 0.0], 2.819_079_6),
+    (300_000, 0, [-14260.513, 578.3817, 0.0], 2.944_230_6),
+    (340_000, 0, [-14590.503, 854.23706, 0.0], 0.055_232_66),
+];
+
+#[test]
+fn path_241_follows_the_reference_bit_for_bit() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_taxi_path_nodes(&mut chain).expect("load TaxiPathNode");
+    let nodes = cat.path(241).expect("path 241");
+    let tt = TransportTimetable::build(nodes, 30.0, 1.0).expect("it builds");
+    assert_eq!(nodes[1].pos, PATH_241[0].2, "leg 1 opens at node 1");
+    assert_eq!(nodes[24].pos, PATH_241[7].2, "leg 2 opens at node 24");
+    for &(t, map, pos, heading) in PATH_241 {
+        let s = tt.sample(t);
+        assert_eq!(
+            (s.map, s.pos.map(f32::to_bits), s.heading.to_bits()),
+            (map, pos.map(f32::to_bits), heading.to_bits()),
+            "at {t} ms: {:?} facing {}, the reference {pos:?} facing {heading}",
+            s.pos,
+            s.heading
+        );
+    }
 }
