@@ -273,6 +273,13 @@ pub(crate) mod schedule_tests {
     /// instruments and probes.
     pub(crate) fn headless_client_with(more: impl FnOnce(&mut App)) -> App {
         let mut app = App::new();
+        // The tonemapping tables are the render world's alone, and there is none: in place
+        // already, they are not decoded (`TonemappingPlugin` builds them only when absent).
+        app.insert_resource(bevy::core_pipeline::tonemapping::TonemappingLuts {
+            blender_filmic: default(),
+            agx: default(),
+            tony_mc_mapface: default(),
+        });
         app.add_plugins(
             benilla_world::boot::tuned_default_plugins(Window::default())
                 .disable::<bevy::winit::WinitPlugin>()
