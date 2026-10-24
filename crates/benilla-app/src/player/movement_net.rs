@@ -1549,6 +1549,7 @@ mod tests {
                 guid: 0x1F,
                 local_pos: bevy::math::Vec3::ZERO,
                 boat_yaw: 0.0,
+                placed: true,
             }),
             ..Default::default()
         };

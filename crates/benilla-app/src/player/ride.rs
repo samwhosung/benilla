@@ -28,8 +28,12 @@ pub(super) fn carry(player: &mut Player, cam: &mut FlyCam, transports: &Transpor
                 cam.yaw += dyaw;
                 if let Some(r) = player.ride.as_mut() {
                     r.boat_yaw = yaw_now;
+                    r.placed = true;
                 }
             }
+            // Seated from our create on a transport whose path is not built yet: held where the
+            // seat put us until it ticks.
+            Err(_) if !ride.placed => {}
             Err(_) => player.ride = None,
         }
     }
@@ -100,6 +104,7 @@ pub(super) fn update_attachment(
                     guid: guid.0,
                     local_pos: Vec3::ZERO, // filled by the snapshot just below
                     boat_yaw: 0.0,
+                    placed: true,
                 });
             }
             // 0x6173b0 with no transport for the support: the ride holds while `0x630ba0` finds
@@ -222,6 +227,7 @@ mod tests {
                 guid: 0xF120_0000_0000_0001,
                 local_pos: Vec3::ZERO,
                 boat_yaw: 0.0,
+                placed: true,
             }),
             ..Default::default()
         };

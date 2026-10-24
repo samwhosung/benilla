@@ -114,7 +114,20 @@ fn ack_ends_precast(mode: MoveMode) -> bool {
 }
 
 /// Apply this frame's server-authored movement and send each ack ([`ServerMoves`]).
-/// `self_pose` is the streamed self entity's translation and yaw, the take-control target.
+/// Our own create's transport block, with the transport's entity and pose as they stand: the
+/// seat a login aboard a transport takes control in.
+#[derive(Clone, Copy)]
+pub(super) struct SelfSeat {
+    pub(super) entity: Entity,
+    pub(super) guid: u64,
+    /// The position and facing in the transport's frame, WoW axes.
+    pub(super) local_pos: [f32; 3],
+    pub(super) local_orientation: f32,
+    pub(super) deck: Transform,
+}
+
+/// `self_pose` is the streamed self entity's translation and yaw, the take-control target;
+/// `self_seat` its create's transport block.
 // `control`'s own transports query, passed through.
 #[allow(clippy::type_complexity)]
 pub(super) fn apply_server_moves(
@@ -134,6 +147,7 @@ pub(super) fn apply_server_moves(
     self_guid: Option<u64>,
     transports: &super::TransportQuery,
     self_pose: Option<(Vec3, f32)>,
+    self_seat: Option<SelfSeat>,
 ) -> ServerMoves {
     // A grant must be claimed: vmangos drops every `MSG_MOVE_*` for an unconfirmed mover
     // (`MovementHandler.cpp:291-293`, `Player.cpp:20257-20272`).
@@ -341,6 +355,25 @@ pub(super) fn apply_server_moves(
             }
             player.pos = pos;
             player.active = true;
+            let mut yaw = yaw;
+            // 0x618b30: our create on a transport puts the mover in its frame, the deck-local
+            // position and facing of the status's transport block (`0x7c6900`), boarded
+            // (`0x618970`), never the login pose, which vmangos sends deck-local too.
+            if let Some(seat) = self_seat.filter(|_| first) {
+                let local = wow_to_bevy(seat.local_pos);
+                let boat_yaw = seat.deck.rotation.to_euler(EulerRot::YXZ).0;
+                player.pos = seat.deck.translation + seat.deck.rotation * local;
+                player.fall_start_y = player.pos.y;
+                yaw = wrap_pi(seat.local_orientation + boat_yaw);
+                player.ride = Some(super::state::PlayerRide {
+                    entity: seat.entity,
+                    guid: seat.guid,
+                    local_pos: local,
+                    boat_yaw,
+                    placed: false,
+                });
+                info!("took control aboard transport {:#x}", seat.guid);
+            }
             if first {
                 player.settling = true; // settle once the initial ground loads
                 player.settle_since = time.elapsed_secs();
@@ -843,6 +876,7 @@ mod teleport_tests {
                 guid: 0x1F,
                 local_pos: Vec3::new(1.0, 0.0, 2.0),
                 boat_yaw: 0.5,
+                placed: true,
             }),
             ..Default::default()
         };
@@ -961,5 +995,126 @@ mod arrival_tests {
         app.world_mut().write_message(WorldEnterCascadeMessage);
         app.update();
         assert!(!app.world().resource::<Player>().reseat);
+    }
+}
+
+#[cfg(test)]
+mod seat_tests {
+    use super::*;
+    use crate::player::FlyCam;
+    use bevy::ecs::message::Messages;
+    use bevy::ecs::system::RunSystemOnce;
+
+    const DECK: u64 = 0x1FC0_0000_0000_0042;
+
+    /// Take control at login with our create's transport block on a deck at `deck_at`, yawed a
+    /// quarter turn, then run one carry; `armed` puts the deck's path in place.
+    /// What the seat leaves: the ride's guid, deck-local feet and placed flag, the feet and the
+    /// facing.
+    type Seated = (Option<(u64, Vec3, bool)>, Vec3, f32);
+
+    #[allow(clippy::type_complexity)] // the system's message readers
+    fn login_aboard(armed: bool) -> (Seated, Transform) {
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.init_resource::<Player>();
+        world.init_resource::<OwnControlLost>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        world.insert_resource(NetCommands(tx));
+        world.init_resource::<Messages<TeleportMessage>>();
+        world.init_resource::<Messages<WorldportMessage>>();
+        world.init_resource::<Messages<SpeedChangeMessage>>();
+        world.init_resource::<Messages<MoveModeMessage>>();
+        world.init_resource::<Messages<KnockBackMessage>>();
+        world.init_resource::<Messages<SelfMoveMessage>>();
+        world.init_resource::<Messages<ClientControlMessage>>();
+        let deck_at = Transform::from_xyz(100.0, 5.0, -40.0)
+            .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+        let mut deck = world.spawn((deck_at, crate::net::Guid(DECK)));
+        if armed {
+            deck.insert(crate::transport::Transport::parked_for_test());
+        }
+        let deck = deck.id();
+        let seat = SelfSeat {
+            entity: deck,
+            guid: DECK,
+            local_pos: [2.0, 1.0, 3.0],
+            local_orientation: 0.5,
+            deck: deck_at,
+        };
+        let player = world
+            .run_system_once(
+                move |time: Res<Time>,
+                      mut commands: Commands,
+                      mut player: ResMut<Player>,
+                      mut own: ResMut<OwnControlLost>,
+                      net: Res<NetCommands>,
+                      mut readers: (
+                    MessageReader<TeleportMessage>,
+                    MessageReader<WorldportMessage>,
+                    MessageReader<SpeedChangeMessage>,
+                    MessageReader<MoveModeMessage>,
+                    MessageReader<KnockBackMessage>,
+                    MessageReader<SelfMoveMessage>,
+                    MessageReader<ClientControlMessage>,
+                ),
+                      transports: super::super::TransportQuery| {
+                    let mut cam = FlyCam {
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        speed: 0.0,
+                    };
+                    apply_server_moves(
+                        &time,
+                        &mut commands,
+                        &mut player,
+                        &mut own,
+                        &mut cam,
+                        &net,
+                        &mut readers.0,
+                        &mut readers.1,
+                        &mut readers.2,
+                        &mut readers.3,
+                        &mut readers.4,
+                        &mut readers.5,
+                        &mut readers.6,
+                        Some(1),
+                        &transports,
+                        // The create's world position, which the seat replaces.
+                        Some((Vec3::new(-500.0, 0.0, 0.0), 0.0)),
+                        Some(seat),
+                    );
+                    super::super::ride::carry(&mut player, &mut cam, &transports);
+                    let ride = player
+                        .ride
+                        .as_ref()
+                        .map(|r| (r.guid, r.local_pos, r.placed));
+                    (ride, player.pos, player.face_yaw)
+                },
+            )
+            .expect("runs");
+        (player, deck_at)
+    }
+
+    /// `0x618b30`: our create on a transport seats the mover in its frame, from the status's
+    /// transport block, whether or not the transport's path is in place yet.
+    #[test]
+    fn a_login_aboard_a_transport_seats_us_on_its_deck() {
+        for armed in [false, true] {
+            let ((ride, pos, face_yaw), deck) = login_aboard(armed);
+            let (guid, local_pos, placed) = ride.expect("seated on the deck");
+            assert_eq!(guid, DECK);
+            let local = wow_to_bevy([2.0, 1.0, 3.0]);
+            assert_eq!(local_pos, local);
+            assert!(
+                (pos - (deck.translation + deck.rotation * local)).length() < 1e-4,
+                "the feet are the deck's pose composed with the deck-local seat, armed {armed}"
+            );
+            assert!(
+                (face_yaw - wrap_pi(0.5 + std::f32::consts::FRAC_PI_2)).abs() < 1e-5,
+                "the facing is the seat's on top of the deck's"
+            );
+            assert_eq!(placed, armed, "a deck without its path holds the seat");
+        }
     }
 }

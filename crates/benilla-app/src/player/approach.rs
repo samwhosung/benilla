@@ -959,6 +959,7 @@ mod tests {
             guid: 0xB0A7,
             local_pos: Vec3::ZERO,
             boat_yaw: 0.0,
+            placed: true,
         });
         let point = Vec3::new(0.0, 0.0, -10.0);
         assert!(app
@@ -1043,6 +1044,7 @@ mod tests {
             guid: 0xB0A7,
             local_pos: Vec3::ZERO,
             boat_yaw: 0.0,
+            placed: true,
         });
         let point = Vec3::new(0.0, 0.0, -10.0);
         assert!(app

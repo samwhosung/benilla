@@ -513,6 +513,10 @@ pub(super) struct PlayerRide {
     /// The transport's yaw at the snapshot: the carry turns `face_yaw` by its per-frame delta, and
     /// the wire's local orientation is `face_yaw − boat_yaw`.
     pub(super) boat_yaw: f32,
+    /// The transport has been placed since the ride began. A ride seated from our own create
+    /// (`0x618b30`) can name a transport whose path is not built yet; the carry holds it until
+    /// the transport ticks, where it drops a ride whose transport has gone.
+    pub(super) placed: bool,
 }
 
 /// A knockback aimed at our mover (`SMSG_MOVE_KNOCK_BACK`), latched until the mover flies it. The

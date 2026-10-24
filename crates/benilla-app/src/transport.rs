@@ -635,16 +635,18 @@ pub(crate) struct TransportRider {
 /// Compose each observed rider's world pose through its transport's this-frame pose, after
 /// [`tick_transports`], and refresh [`RemoteMotion`]'s WoW pose to match. A rider whose transport
 /// is not streamed keeps its last world pose; the server despawns the pair together.
+#[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn compose_riders(
     guid_index: Res<crate::net::GuidIndex>,
     boats: Query<&Transform, (With<Transport>, Without<TransportRider>)>,
+    // The body we steer is the mover's: its create's tail seated it (`player::wire_in`).
     mut riders: Query<
         (
             &TransportRider,
             &mut Transform,
             Option<&mut crate::net::RemoteMotion>,
         ),
-        Without<Transport>,
+        (Without<Transport>, Without<crate::net::Embodied>),
     >,
 ) {
     for (rider, mut transform, motion) in &mut riders {
@@ -729,7 +731,7 @@ fn stamp_ride_frames(
     player: Res<crate::player::Player>,
     guid_index: Res<crate::net::GuidIndex>,
     body: Query<Entity, With<crate::net::Embodied>>,
-    riders: Query<(Entity, &TransportRider)>,
+    riders: Query<(Entity, &TransportRider), Without<crate::net::Embodied>>,
     stamped: Query<(Entity, &RideFrame)>,
 ) {
     let mut want: HashMap<Entity, Entity> = HashMap::new();

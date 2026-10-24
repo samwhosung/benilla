@@ -99,6 +99,12 @@ pub(super) fn control(
         TransportQuery,
         Query<&ChildOf>,
         Query<Has<crate::net::SelfPlayer>, With<crate::net::ActiveMover>>,
+        // Our create's transport block and the transport it names, placed or not yet.
+        (
+            Query<&crate::transport::TransportRider, With<Embodied>>,
+            Res<crate::net::GuidIndex>,
+            Query<&Transform, (Without<Embodied>, Without<FlyCam>, Without<Camera>)>,
+        ),
     ),
 ) {
     let (world, transports, child_of) = (&world_q.0, &world_q.1, &world_q.2);
@@ -337,6 +343,7 @@ pub(super) fn control(
         body.single()
             .ok()
             .map(|(_, t, ..)| (t.translation, server_ride::yaw_of(t.rotation))),
+        self_seat(&world_q.4),
     );
     let speed_acks = server_moves.speed_acks;
     if let (true, Ok((e, ..))) = (server_moves.precast_ended, body.single()) {
@@ -900,4 +907,26 @@ pub(super) fn control(
         movement_net::park_mover(&net.0 .0, &mut player);
         camera::fly_free(dt, &keys, typing, &mut rig, &mut cam, &mut cam_t);
     }
+}
+
+/// Our create's transport block, the [`crate::transport::TransportRider`] tail on the body we
+/// steer, and the streamed transport it names, as [`wire_in::apply_server_moves`] seats a login
+/// aboard it.
+#[allow(clippy::type_complexity)]
+fn self_seat(
+    q: &(
+        Query<&crate::transport::TransportRider, With<Embodied>>,
+        Res<crate::net::GuidIndex>,
+        Query<&Transform, (Without<Embodied>, Without<FlyCam>, Without<Camera>)>,
+    ),
+) -> Option<wire_in::SelfSeat> {
+    let rider = q.0.single().ok()?;
+    let entity = *q.1 .0.get(&rider.transport_guid)?;
+    Some(wire_in::SelfSeat {
+        entity,
+        guid: rider.transport_guid,
+        local_pos: rider.local_pos,
+        local_orientation: rider.local_orientation,
+        deck: *q.2.get(entity).ok()?,
+    })
 }
