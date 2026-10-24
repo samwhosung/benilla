@@ -1204,9 +1204,6 @@ pub(crate) struct Model {
     pub(crate) binder_pending: bool,
     /// The summon getters' answers, defaulting to the reference's `""`, `""`, 0 with none pending.
     pub(crate) summon_confirm: super::summon::SummonConfirmUiState,
-    /// `GetSummonConfirmSummoner()` calls that answered no name: each call's lookup passes the
-    /// callback `0x48b710` (`0x48b6e1`), which the app makes.
-    pub(crate) summon_summoner_lookups: u32,
     /// `GetFramerate()`, pushed after each world frame; the empty ring's 1000 until then.
     pub(crate) framerate: f64,
     /// `(shift, ctrl, alt)` for `Is*KeyDown`, pushed before the frame's mouse events.
@@ -1716,7 +1713,6 @@ impl Model {
             gm_ticket_categories: Vec::new(),
             binder_pending: false,
             summon_confirm: super::summon::SummonConfirmUiState::default(),
-            summon_summoner_lookups: 0,
             framerate: 1000.0,
             modifiers: (false, false, false),
             money: 0,

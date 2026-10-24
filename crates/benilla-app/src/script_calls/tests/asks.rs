@@ -100,7 +100,7 @@ fn get_guild_info_asks_a_missed_guild_inside_its_call() {
 
 /// `GetSummonConfirmSummoner` reads the name cache by the latched summoner (`0xb4e358`) with the
 /// callback `0x48b710` and no dedupe (`0x48b6bf`-`0x48b6e1`): a miss sends `CMSG_NAME_QUERY`
-/// inside the call, once while it is in flight.
+/// inside the call, once while it is in flight, and again after a refusal.
 #[test]
 fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
     let (mut app, rx) = client();
@@ -112,4 +112,9 @@ fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
         "GetSummonConfirmSummoner() RandomRoll(1, 2) GetSummonConfirmSummoner()",
     );
     assert_eq!(sent(&rx), ["name 0x2a", "roll 1"]);
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(0x2a, String::new(), None);
+    eval::<()>(&mut app, "GetSummonConfirmSummoner()");
+    assert_eq!(sent(&rx), ["name 0x2a"], "the call after the refusal asks again");
 }

@@ -1,7 +1,8 @@
 //! The four summon globals the `CONFIRM_SUMMON` dialog calls (`StaticPopup.lua:1336-1357`); 1.12
 //! has no `CancelSummon`, as declining sends nothing. The reference resolves the summoner
 //! (`0xb4e358`), zone (`0xb4e354`) and deadline (`0xb4e350`) at call time; the app pushes the
-//! answers each frame, so a name still in flight reads `""` and fills in on a later tick.
+//! answers each frame, so a name still in flight reads `""` and fills in on a later tick, and the
+//! summoner getter's miss asks inside its call ([`super::RecordAsk::Summoner`]).
 
 use mlua::Lua;
 
@@ -41,12 +42,6 @@ impl super::UiScript {
     pub fn take_summon_confirms(&mut self) -> u32 {
         self.take_calls_like(&super::ScriptCall::Summon(SummonCall::Confirm)) as u32
     }
-
-    /// `GetSummonConfirmSummoner()` calls since the last drain that answered no name; the app
-    /// looks the summoner up for them, as each call's lookup with a callback does (`0x48b6e1`).
-    pub fn take_summon_summoner_lookups(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().summon_summoner_lookups)
-    }
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -56,12 +51,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSummonConfirmSummoner",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // A miss is the lookup's ask (`0x48b6e1`, callback `0x48b710`), which the app makes.
-            if model.summon_confirm.summoner.is_empty() {
-                model.summon_summoner_lookups += 1;
+            let summoner = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.summon_confirm.summoner.clone()
+            };
+            // A miss is the lookup's ask with the callback `0x48b710` (`0x48b6e1`), inside the
+            // call.
+            if summoner.is_empty() {
+                super::calls::ask(lua, super::RecordAsk::Summoner)?;
             }
-            lua.create_string(&model.summon_confirm.summoner)
+            lua.create_string(&summoner)
         })?,
     )?;
 

@@ -56,6 +56,7 @@ pub(crate) struct RecordAsks<'w> {
     names: Option<Res<'w, crate::names::NameCache>>,
     items: Option<Res<'w, crate::items::Items>>,
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
+    summon: Option<Res<'w, crate::ui_summon::SummonState>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
@@ -77,6 +78,13 @@ impl RecordAsks<'_> {
             RecordAsk::Guild { guild_id, guid } => {
                 if let Some(guild) = self.guild.as_deref() {
                     guild.wait_for_info(guild_id, guid, &self.net);
+                }
+            }
+            // A zero guid is no key and asks nothing (`0x55f080`).
+            RecordAsk::Summoner => {
+                let summoner = self.summon.as_deref().and_then(|s| s.pending());
+                if let (Some(names), Some(guid)) = (self.names.as_deref(), summoner) {
+                    let _ = names.resolve_player(guid, Ask::Event(&self.net));
                 }
             }
         }

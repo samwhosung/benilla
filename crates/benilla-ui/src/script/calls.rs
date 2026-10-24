@@ -291,6 +291,9 @@ pub enum RecordAsk {
     /// `GetGuildInfo` on a player whose guild the mirror lacks: the guild cache, with a waiter
     /// of the call's own for the unit (`0x4c93b6`-`0x4c93d2`).
     Guild { guild_id: u32, guid: u64 },
+    /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
+    /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
+    Summoner,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
