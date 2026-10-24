@@ -953,6 +953,65 @@ mod tests {
         );
     }
 
+    /// Under a `sweep` probe the aim moves every frame, and the occlusion trace casts from the
+    /// point the object pick reads in the same frame, never the last frame's.
+    #[test]
+    fn the_occlusion_trace_casts_from_the_frames_probe_aim() {
+        use bevy::camera::RenderTargetInfo;
+        use bevy::window::WindowResolution;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            avian3d::prelude::PhysicsPlugins::new(bevy::app::PostUpdate),
+        ));
+        app.init_asset::<Mesh>()
+            .init_resource::<benilla_world::collision::ColliderEpoch>()
+            .insert_resource(crate::target::hover_probe::ProbeAim::sweep())
+            .init_resource::<PickOcclusion>()
+            .add_systems(Update, aim_and_trace());
+        app.finish();
+        app.cleanup();
+        let mut camera = Camera::default();
+        camera.computed.clip_from_view = Mat4::perspective_infinite_reverse_rh(1.0, 1.0, 0.1);
+        camera.computed.target_info = Some(RenderTargetInfo {
+            physical_size: UVec2::splat(100),
+            scale_factor: 1.0,
+        });
+        let world = app.world_mut();
+        world.spawn((camera, Transform::from_xyz(0.0, 0.0, 10.0), WorldCamera));
+        // A cursorless window, as an unattended run's is.
+        world.spawn((
+            Window {
+                resolution: WindowResolution::new(100, 100),
+                ..Default::default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        for frame in 0..6 {
+            app.update();
+            let world = app.world_mut();
+            let aim = world
+                .resource::<crate::target::hover_probe::ProbeAim>()
+                .now()
+                .expect("a sweep aims every frame");
+            let (camera, cam_tf) = world
+                .query_filtered::<(&Camera, &GlobalTransform), With<WorldCamera>>()
+                .single(world)
+                .unwrap();
+            let want = camera.viewport_to_world(cam_tf, aim).unwrap().direction;
+            let got = world.resource::<PickOcclusion>().ray;
+            assert!(
+                got.is_some_and(|d| d.dot(*want) > 1.0 - 1e-6),
+                "frame {frame}: the trace cast along {got:?}, the pick's aim {aim} is along {want:?}"
+            );
+        }
+    }
+
     /// The world trace tests a static doodad's drawn opaque render mesh, never its collision
     /// hull (`0x69cdb0` queues it in mode 2 under the mask `0x1000114`; mode 2 of `0x7089c0` tests
     /// the skinned submeshes of blend 0). The plaque on Stormwind's cathedral fountain: along the

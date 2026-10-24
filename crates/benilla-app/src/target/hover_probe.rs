@@ -110,6 +110,15 @@ impl Default for ProbeAim {
 }
 
 impl ProbeAim {
+    /// A `sweep` probe, whatever the environment says.
+    #[cfg(test)]
+    pub(super) fn sweep() -> Self {
+        Self {
+            aim: Some(Aim::Sweep),
+            ..Self::default()
+        }
+    }
+
     /// Whether the probe is armed.
     pub(super) fn armed(&self) -> bool {
         self.aim.is_some()
