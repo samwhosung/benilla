@@ -69,14 +69,9 @@ impl Plugin for UiCraftPlugin {
     }
 }
 
-/// The Craft window dies with the session, and the item callbacks with the asks they wait on.
-fn on_session_end(
-    In(_): In<SessionEvent>,
-    mut open: ResMut<CraftOpen>,
-    mut waits: ResMut<CraftItemWaits>,
-) {
+/// The Craft window dies with the session.
+fn on_session_end(In(_): In<SessionEvent>, mut open: ResMut<CraftOpen>) {
     *open = CraftOpen::default();
-    waits.0.clear();
 }
 
 /// The line's skill total the Craft window bands difficulty on (`0x5ea520` in the build
