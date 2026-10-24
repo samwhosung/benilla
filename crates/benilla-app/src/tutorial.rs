@@ -1458,4 +1458,42 @@ mod tests {
         app.update();
         assert_eq!(seen(&mut app), [0x08, 0x09, 0x0a]);
     }
+
+    /// Equippable Items fires on a set bit among the first 23 of the slot mask `0x809200`
+    /// indexed by the inventory type (`0x491d23`-`0x491d4a`). The mask is 0 for types 0, 24
+    /// (ammo) and 27 (quiver), so those raise no prompt; a bag (type 18, `0x780000`) does.
+    #[test]
+    fn equippable_items_reads_the_slot_mask_so_ammo_and_quivers_raise_none() {
+        let mut app = recording_feeder();
+        {
+            let mut items = app.world_mut().resource_mut::<crate::items::Items>();
+            for (entry, inventory_type) in [(1, 0), (2, 24), (3, 27), (4, 18)] {
+                items.insert_template(
+                    entry,
+                    Some(benilla_protocol::messages::ItemInfo {
+                        inventory_type,
+                        ..crate::items::test_template("Item")
+                    }),
+                );
+            }
+        }
+        {
+            let mut t = app.world().resource::<Tutorials>().lock();
+            t.item_received(1, 0, 23);
+            t.item_received(2, 0, 24);
+            t.item_received(3, 0, 25);
+        }
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            [0x08],
+            "only Backpack: no equippable prompt for types 0, 24 and 27"
+        );
+        app.world()
+            .resource::<Tutorials>()
+            .lock()
+            .item_received(4, 0, 26);
+        app.update();
+        assert_eq!(seen(&mut app), [0x08, 0x18], "a bag is worn in a bag slot");
+    }
 }
