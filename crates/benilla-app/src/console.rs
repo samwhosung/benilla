@@ -74,12 +74,10 @@ struct ConsoleCvar {
 pub(crate) struct ConsoleCvars(Vec<ConsoleCvar>);
 
 impl ConsoleCvars {
-    /// The rows of `script`'s mirror.
-    pub(crate) fn of_vm(script: &benilla_ui::script::UiScript) -> Self {
+    /// The rows of the calling VM's mirror, as `(name, value, default, reset)`.
+    pub(crate) fn of_vm(rows: Vec<(String, String, String, Option<String>)>) -> Self {
         Self::listed(
-            script
-                .cvar_rows()
-                .into_iter()
+            rows.into_iter()
                 .map(|(name, value, default, reset)| ConsoleCvar {
                     name,
                     value,
@@ -113,10 +111,10 @@ impl ConsoleCvars {
 }
 
 impl ConsoleSteps<'_, '_> {
-    /// Run one console line `ConsoleExec` handed on inside its call, against `script`'s CVars,
-    /// its replies to the log.
-    pub(crate) fn run(&mut self, script: &benilla_ui::script::UiScript, line: &str) {
-        *self.cvars = ConsoleCvars::of_vm(script);
+    /// Run one console line `ConsoleExec` handed on inside its call, against the calling VM's
+    /// CVars, its replies to the log.
+    pub(crate) fn run(&mut self, cvars: ConsoleCvars, line: &str) {
+        *self.cvars = cvars;
         for text in self.execute(line) {
             info!("console: {text}");
         }
