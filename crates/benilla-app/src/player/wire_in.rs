@@ -437,11 +437,9 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     // (`Player.cpp:1866-1893`), and the reference's apply (`0x6186b0`) re-parents to the packet's
     // transport guid, zero here. A kept ride would carry us back onto the deck.
     player.ride = None;
-    let to = wow_to_bevy(t.position);
-    // `0x617e90`: a snap of more than 30 yards (`0x80c730`, squared against `d²`) of the unit the
-    // world view follows reloads the destination before the frame goes on (`0x630bd0`).
-    player.world_reload = !player.detached && player.pos.distance_squared(to) > 30.0 * 30.0;
-    player.pos = to;
+    let from = player.pos;
+    player.pos = wow_to_bevy(t.position);
+    mark_world_reload(player, from);
     player.face_yaw = t.orientation;
     *cam_yaw = t.orientation;
     player.move_flags = 0;
@@ -450,13 +448,27 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     player.pitch_keys = None;
     player.mover_pitch = 0.0;
     player.airborne_since = None; // a snap ends any jump arc (no phantom FALL_LAND)
-    player.settling = true; // hold (gravity off) until the destination loads
+    hold_until_resident(player, now);
+    // Voids any self ride: `drive_self_ride` drops it rather than mirror the stale pose over this.
+    player.ride_abort = true;
+}
+
+/// The teleport apply `0x617e90`'s reload, for every teleport that reaches it (the ack's snap and
+/// our own `MSG_MOVE_TELEPORT`): a move of more than 30 yards (`0x80c730`, squared against `d²`)
+/// of the unit the world view follows reloads the destination before the frame goes on
+/// (`0x630bd0`). Returns whether it does.
+fn mark_world_reload(player: &mut Player, from: Vec3) -> bool {
+    player.world_reload = !player.detached && from.distance_squared(player.pos) > 30.0 * 30.0;
+    player.world_reload
+}
+
+/// Hold the body (gravity off) until the destination is resident, which releases it.
+fn hold_until_resident(player: &mut Player, now: f32) {
+    player.settling = true;
     player.settle_since = now;
     player.settle_deadline = now + SETTLE_TIMEOUT;
     // The destination's ground may not have streamed yet.
     player.world_stale = true;
-    // Voids any self ride: `drive_self_ride` drops it rather than mirror the stale pose over this.
-    player.ride_abort = true;
 }
 
 /// The reference's masked merge of a server-authored `MOVEMENTFLAGS` (`0x618c30` at `0x618deb`:
@@ -498,6 +510,7 @@ fn apply_self_move(
     player.modes.merge_from_wire(player.move_flags);
     // Neither mode touches `settling`: the terrain streamer releases it in every mode alike.
 
+    let from = player.pos;
     player.pos = wow_to_bevy(m.position);
     // Aim, body and camera turn by the same delta; the reference writes only the mover's facing,
     // and a hard camera set would yank the view on every `.cheat fly` toggle.
@@ -554,6 +567,11 @@ fn apply_self_move(
     }
     player.wedged = false;
     player.wedge_still = 0;
+    // A teleport's apply, unlike a placing relay's, reloads a far destination (`0x6186b0` →
+    // `0x617e90`), so the body waits for it as the ack's snap does.
+    if m.teleport && mark_world_reload(player, from) {
+        hold_until_resident(player, time.elapsed_secs());
+    }
 }
 
 /// Our own player's create gives control back (`OnActiveArrival 0x5dea50`): with the manager's
