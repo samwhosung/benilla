@@ -703,6 +703,53 @@ mod tests {
         assert_eq!(with_slab_at(10.2), Some(0), "0.2 yd is past it");
     }
 
+    /// `0x6a3f80` finds the nearest portal alone, keeping a hit at most the shortest so far (the
+    /// later of equals, `0x6a4111`), and `0x6be250` races that one portal against the face best
+    /// once: a second portal farther down, though within the tie, never replaces the nearest.
+    #[test]
+    fn the_nearest_portal_is_found_alone_then_raced() {
+        let with_second_at = |z1: f32| {
+            let (mut groups, mut tris) = stairwell();
+            groups[0].ref_count = 2;
+            tris[0].extend(quad(10.15, 5.0));
+            let side_room = nav(0, [-20.0, -20.0, 0.0], [20.0, 20.0, 9.0], 2, 0);
+            let groups = [groups[0], groups[1], side_room];
+            let tris = [tris[0].clone(), Vec::new(), Vec::new()];
+            let (mut verts, near) = horizontal_portal(10.0, 5.0);
+            let (far_verts, mut far) = horizontal_portal(z1, 5.0);
+            far.start_vertex = 4;
+            verts.extend(far_verts);
+            // Both the stairwell's: the eye above each plane picks the ref's other group.
+            let refs = [
+                WmoPortalRef {
+                    portal: 0,
+                    group: 1,
+                    side: -1,
+                },
+                WmoPortalRef {
+                    portal: 1,
+                    group: 2,
+                    side: -1,
+                },
+            ];
+            no_terrain(
+                &tris,
+                &groups,
+                &verts,
+                &[near, far],
+                &refs,
+                [0.0, 0.0, 12.0],
+            )
+            .in_group
+        };
+        assert_eq!(
+            with_second_at(9.9),
+            Some(1),
+            "the nearer portal is the one raced"
+        );
+        assert_eq!(with_second_at(10.0), Some(2), "the later of equals is kept");
+    }
+
     #[test]
     fn vertical_doorway_snaps_only_within_the_window() {
         // A vertical doorway in the x=0 plane between room A (x<0) and room B (x>0), with room A's
