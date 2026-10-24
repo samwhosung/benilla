@@ -694,6 +694,8 @@ impl Plugin for VPlatesPlugin {
 }
 
 #[cfg(test)]
+mod gate_tests;
+#[cfg(test)]
 mod unheld_tests;
 
 #[cfg(test)]
