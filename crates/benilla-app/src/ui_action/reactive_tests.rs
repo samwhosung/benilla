@@ -88,6 +88,7 @@ fn app() -> App {
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
         .init_resource::<super::state::ActionEvents>()
+        .init_resource::<super::state::EnterUsable>()
         .init_resource::<super::state::ActionStateMemory>();
     seat(&mut app);
     app.insert_non_send_resource(listener());

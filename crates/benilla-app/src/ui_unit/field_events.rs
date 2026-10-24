@@ -1754,21 +1754,59 @@ mod tests {
         }
     }
 
+    /// `EnterWorldUI`'s action bar refresh (`0x490979` → `0x4e4f90`): the usable refresh
+    /// `0x4e5c00`, whose `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`) comes after the minimap's set-up
+    /// (`0x49096f`) and before the bonus bar's `UPDATE_BONUS_ACTIONBAR` (`0x4e4f95` → `0x4e4fc0`)
+    /// and the pet reset (`0x4909c9`), inside the cascade. With no pair changed it signals nothing.
+    #[test]
+    fn the_world_entry_signals_the_usable_refresh_inside_the_cascade() {
+        let spy = r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"PLAYER_ENTERING_WORLD", "ACTIONBAR_UPDATE_USABLE",
+                    "UPDATE_BONUS_ACTIONBAR", "PET_BAR_UPDATE"}) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function()
+                table.insert(SEEN, event .. " " .. tostring(arg1) .. " nil")
+            end)"#;
+        for changed in [true, false] {
+            let (mut app, _) = feed_world(&[], spy);
+            app.insert_resource(crate::ui_action::EnterUsable(changed));
+            app.add_systems(Update, super::super::feed_units);
+            app.update();
+            let mut heard = vec!["PLAYER_ENTERING_WORLD nil nil"];
+            if changed {
+                heard.push("ACTIONBAR_UPDATE_USABLE nil nil");
+            }
+            heard.extend(["UPDATE_BONUS_ACTIONBAR nil nil", "PET_BAR_UPDATE nil nil"]);
+            assert_eq!(seen(&mut app), heard, "changed {changed}");
+            assert!(
+                !app.world().resource::<crate::ui_action::EnterUsable>().0,
+                "the cascade takes it"
+            );
+        }
+    }
+
     /// The cascade's `SetPetGuid(0, 0)` stores the zero guid (`0x4bc822`, `0x4bc827`) before its
     /// `UNIT_PET` (`0x4bc84f`), and `HasPetUI` resolves the pet from that guid (`0x4be67e`-
-    /// `0x4be690`): a `/reload` with a pet out hears `UNIT_PET` with `HasPetUI()` nil.
+    /// `0x4be690`): a `/reload` with a pet out hears `UNIT_PET` with `HasPetUI()` nil, and the stats
+    /// feed after it has nothing new to push or signal.
     #[test]
     fn the_world_entry_pet_reset_signals_unit_pet_with_no_pet_ui() {
         let spy = r#"SEEN = {}
             local f = CreateFrame("Frame")
             f:RegisterEvent("UNIT_PET")
+            f:RegisterEvent("UNIT_HAPPINESS")
             f:SetScript("OnEvent", function()
                 local ui, hunter = HasPetUI()
                 table.insert(SEEN, event .. " " .. tostring(ui) .. " " .. tostring(hunter))
             end)"#;
         let (mut app, _) = feed_world(&[], spy);
         app.init_resource::<crate::ui_pet::PetBar>()
-            .init_resource::<crate::ui_pet::PetAttackLatch>();
+            .init_resource::<crate::ui_pet::PetAttackLatch>()
+            .init_resource::<crate::ui_pet_stats::PetStatsFeed>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::net::SelfGuid>();
         app.world_mut()
             .resource_mut::<crate::ui_pet::PetBar>()
             .spells
@@ -1782,7 +1820,14 @@ mod tests {
                     ..Default::default()
                 },
             );
-        app.add_systems(Update, super::super::feed_units);
+        app.add_systems(
+            Update,
+            (
+                super::super::feed_units,
+                crate::ui_pet_stats::feed_pet_stats,
+            )
+                .chain(),
+        );
         app.update();
         assert_eq!(seen(&mut app), ["UNIT_PET nil nil"]);
     }

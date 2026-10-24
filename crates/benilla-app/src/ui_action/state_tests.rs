@@ -33,6 +33,7 @@ fn feed_inputs(app: &mut App) {
 /// The feed's two halves, around the unit snapshots as the plugin orders them.
 fn add_action_feed(app: &mut App) {
     app.init_resource::<ActionEvents>()
+        .init_resource::<EnterUsable>()
         .init_resource::<super::ActionStateMemory>()
         .add_systems(
             Update,
@@ -2022,10 +2023,11 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
 
 /// `0x4e5c00` signals `ACTIONBAR_UPDATE_USABLE` alone for its callers other than `0x4b31c0`: a
 /// reload's world entry against the cache the last VM left (`0x4e4f90`; the cache is zeroed only
-/// by `InitializeGame`, `0x4e4f50`), each `BAG_UPDATE` (`0x4f9374`) and `EditMacro` (`0x4f132e`).
-/// A pair that changed with no refresh signals nothing. Our player's arrival writes every slot
-/// before its enter cascade refreshes (`0x5deafc`, `0x5deb60`), so it signals nothing; a reload
-/// writes none (`0x495664` reaches no `0x5dea50`).
+/// by `InitializeGame`, `0x4e4f50`), whose event the enter cascade signals inside itself
+/// (`0x490979`), each `BAG_UPDATE` (`0x4f9374`) and `EditMacro` (`0x4f132e`). A pair that changed
+/// with no refresh signals nothing. Our player's arrival writes every slot before its enter
+/// cascade refreshes (`0x5deafc`, `0x5deb60`), so it signals nothing; a reload writes none
+/// (`0x495664` reaches no `0x5dea50`).
 #[test]
 fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
     const FROSTBOLT: u32 = 116;
@@ -2052,9 +2054,10 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
     app.world_mut()
         .write_message(crate::net::WorldEnterCascadeMessage);
     record(&mut app, &USABLE);
-    assert_eq!(
-        frame(&mut app),
-        ["ACTIONBAR_UPDATE_USABLE"],
+    take_enter_usable(&mut app);
+    assert!(frame(&mut app).is_empty(), "the cascade signals it");
+    assert!(
+        take_enter_usable(&mut app),
         "a reload's world entry finds the pair the last VM's cache held changed"
     );
 
@@ -2082,11 +2085,18 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
 
     set_mana_quietly(&mut app, 500);
     assert!(frame(&mut app).is_empty());
+    take_enter_usable(&mut app);
     arrive(&mut app, 500);
+    assert!(frame(&mut app).is_empty());
     assert!(
-        frame(&mut app).is_empty(),
+        !take_enter_usable(&mut app),
         "our player's arrival stores every slot ahead of its refresh"
     );
+}
+
+/// Whether the world entry's refresh owes the cascade its `ACTIONBAR_UPDATE_USABLE`, taken.
+fn take_enter_usable(app: &mut App) -> bool {
+    std::mem::take(&mut app.world_mut().resource_mut::<EnterUsable>().0)
 }
 
 /// Our player created anew with `mana`, and the enter cascade its arrival runs.
@@ -2140,10 +2150,11 @@ fn an_arrival_skips_a_spell_the_player_does_not_know() {
     frame(&mut app);
     set_mana_quietly(&mut app, 100);
     assert!(frame(&mut app).is_empty(), "no caller, no event");
+    take_enter_usable(&mut app);
     arrive(&mut app, 100);
-    assert_eq!(
-        frame(&mut app),
-        ["ACTIONBAR_UPDATE_USABLE"],
+    assert!(frame(&mut app).is_empty(), "the cascade signals it");
+    assert!(
+        take_enter_usable(&mut app),
         "the unknown spell's slot kept its pair"
     );
 
@@ -2154,7 +2165,8 @@ fn an_arrival_skips_a_spell_the_player_does_not_know() {
     set_mana_quietly(&mut app, 500);
     assert!(frame(&mut app).is_empty());
     arrive(&mut app, 500);
-    assert!(frame(&mut app).is_empty(), "both known: both stored");
+    assert!(frame(&mut app).is_empty());
+    assert!(!take_enter_usable(&mut app), "both known: both stored");
 }
 
 /// A macro bound to a spell out of the pet's book (`[rec+0x568] != 0`, `0x4e5a50`) is read through

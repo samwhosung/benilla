@@ -46,12 +46,18 @@ pub(crate) struct PetFamilyTables {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct PetSnapshot;
 
+/// [`feed_pet_stats`]' memory per VM, a resource so the world entry's reset
+/// ([`crate::ui_pet::drop_bar`]) records what it pushed and the feed neither pushes nor signals it
+/// again.
+#[derive(Resource, Default)]
+pub(crate) struct PetStatsFeed(pub(crate) crate::ui_script::VmMemo<Option<(bool, PetStats)>>);
+
 pub(crate) struct UiPetStatsPlugin;
 
 impl Plugin for UiPetStatsPlugin {
     fn build(&self, app: &mut App) {
         // In the unit feed, so the pet frame repaints in the pass that pushes its health.
-        app.add_systems(
+        app.init_resource::<PetStatsFeed>().add_systems(
             Update,
             feed_pet_stats
                 .in_set(UnitFeed)
@@ -164,13 +170,13 @@ pub(crate) fn feed_pet_stats(
     tables: Option<Res<PetStatTables>>,
     family_tables: Option<Res<PetFamilyTables>>,
     names: Res<NameCache>,
-    mut last: Local<crate::ui_script::VmMemo<Option<(bool, PetStats)>>>,
+    mut last: ResMut<PetStatsFeed>,
 ) {
     vm.feed(|script, bar, fires| {
         let Some(script) = script else {
             return;
         };
-        let last = last.get(script);
+        let last = last.0.get(script);
         let store = pet.store(bar.spells.pet_guid);
         let family = family_for(store, &names, family_tables.as_deref());
         let fresh = stats_for(store, self_store.iter().next(), tables.as_deref(), family);

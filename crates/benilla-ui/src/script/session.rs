@@ -88,9 +88,10 @@ impl super::UiScript {
     /// (`FrameScriptCollectGarbage(1)`, `0x490946`), then `PLAYER_LOGIN` (270, `0x490959`) only if
     /// a load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
     /// (272, `0x49096a`) every time, then the minimap's zoom reseed
-    /// ([`Self::minimap_enter_world`]), the bonus bar's offset, `bonus_bar_offset`, from the
-    /// player's form and its `UPDATE_BONUS_ACTIONBAR`, the bags' `BAG_UPDATE`s
-    /// ([`Self::bags_enter_world`]), the quest log's rebuild and its `QUEST_LOG_UPDATE`
+    /// ([`Self::minimap_enter_world`]), the action bar's usable refresh and its
+    /// `ACTIONBAR_UPDATE_USABLE` when the caller says a pair changed, the bonus bar's offset,
+    /// `bonus_bar_offset`, from the player's form and its `UPDATE_BONUS_ACTIONBAR`, the bags'
+    /// `BAG_UPDATE`s ([`Self::bags_enter_world`]), the quest log's rebuild and its `QUEST_LOG_UPDATE`
     /// ([`Self::quest_log_enter_world`]), the pet bar's reset ([`Self::drop_pet_bar`],
     /// [`Self::fire_pet_bar_dropped`]), the reputation list's rebuild and its `UPDATE_FACTION`
     /// ([`Self::reputation_enter_world`]) and the skill list's rebuild and its
@@ -102,7 +103,7 @@ impl super::UiScript {
     /// its three parts, [`Self::fire_world_enter_head`], the reset on both sides, then
     /// [`Self::fire_world_enter_tail`].
     pub fn fire_world_enter_with(&mut self, bonus_bar_offset: u8) {
-        self.fire_world_enter_head(bonus_bar_offset);
+        self.fire_world_enter_head(bonus_bar_offset, false);
         let dropped = self.drop_pet_bar();
         self.fire_pet_bar_dropped(dropped);
         self.fire_world_enter_tail();
@@ -110,8 +111,9 @@ impl super::UiScript {
 
     /// The cascade up to the pet bar's reset (`0x4909c9`): the bracket opened, the collection,
     /// `PLAYER_LOGIN` if armed, `PLAYER_ENTERING_WORLD` and the calls after it through the quest
-    /// log's (`0x4909a1`). [`Self::fire_world_enter_tail`] closes it.
-    pub fn fire_world_enter_head(&mut self, bonus_bar_offset: u8) {
+    /// log's (`0x4909a1`). `usable_changed` is whether the action bar's refresh found a slot's pair
+    /// changed, which the caller's slots decide. [`Self::fire_world_enter_tail`] closes it.
+    pub fn fire_world_enter_head(&mut self, bonus_bar_offset: u8, usable_changed: bool) {
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
         // `0x703bc0` with 1: the threshold set to 0 (`0x703bd6`), so the collection runs now.
@@ -121,10 +123,15 @@ impl super::UiScript {
         }
         self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         // The calls after the signal, inside the bracket: the minimap initializer first
-        // (`0x49096f`), then among the rest the action bar's refresh (`0x490979` → `0x4e4f90` →
-        // `0x4e4fc0`), which sets the offset and signals whether or not it moved (`0x4e5018`), the
-        // bag watchers' set-up (`0x49098d`) and the quest log's (`0x4909a1`).
+        // (`0x49096f`), then among the rest the action bar's refresh (`0x490979` → `0x4e4f90`):
+        // the usable refresh `0x4e5c00`, signalling `ACTIONBAR_UPDATE_USABLE` on a changed pair
+        // (`0x4e5c53`), then the bonus bar (`0x4e4f95` → `0x4e4fc0`), which sets the offset and
+        // signals whether or not it moved (`0x4e5018`); then the bag watchers' set-up
+        // (`0x49098d`) and the quest log's (`0x4909a1`).
         self.minimap_enter_world();
+        if usable_changed {
+            self.fire_event("ACTIONBAR_UPDATE_USABLE", Vec::new());
+        }
         self.set_bonus_bar_offset(bonus_bar_offset);
         self.fire_event("UPDATE_BONUS_ACTIONBAR", Vec::new());
         self.bags_enter_world();

@@ -249,13 +249,15 @@ impl super::UiScript {
     }
 
     /// `SetPetGuid(0, 0)`'s VM half (`0x4bc6fd` → `0x4bc7e0`), the world entry's pet reset: no
-    /// bar and no expiry, as a bar with no guid pushes it; the state word stays, which no reader
-    /// asks without a guid. Whether a bar was showing, the guid's change its `UNIT_PET` signals
-    /// on. A caller that holds the guid pushes the same.
+    /// bar and no expiry, as a bar with no guid pushes it, and no pet UI or stats, as `HasPetUI`
+    /// and the stat getters resolve the pet from the cleared guid (`0x4be67e`-`0x4be690`); the
+    /// state word stays, which no reader asks without a guid. Whether a bar was showing, the
+    /// guid's change its `UNIT_PET` signals on. A caller that holds the guid pushes the same.
     pub fn drop_pet_bar(&mut self) -> bool {
         let dropped = self.model_ref().pet_bar.has_bar;
         self.set_pet_expiry(None);
         self.set_pet_actions(false, false, false, Vec::new());
+        self.set_pet_stats(false, PetStats::default());
         dropped
     }
 

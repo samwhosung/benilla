@@ -35,8 +35,10 @@ pub(crate) struct PetBarFeed(crate::ui_script::VmMemo<PetBarMemory>);
 
 /// The world entry's `SetPetGuid(0, 0)` (`0x4bc6f0` → `0x4bc7e0` at `0x4bc6fd`): the guid and the
 /// expiry cleared (`0x4bc822`, `0x4bc83d`), the attack latch lowered (`0x4bc8ce`), one more bar
-/// signal (`0x4bc90c`), and the VM given the bar gone, as [`feed_pet_bar`] would push it. Whether
-/// the guid changed, for `UNIT_PET` (`0x4bc84f`); the caller signals both.
+/// signal (`0x4bc90c`), and the VM given the bar gone, as [`feed_pet_bar`] would push it, and no
+/// pet UI, as `HasPetUI` resolves the pet from the cleared guid (`0x4be67e`-`0x4be690`) and the
+/// stats feed would push it. Whether the guid changed, for `UNIT_PET` (`0x4bc84f`); the caller
+/// signals both.
 ///
 /// The rest stays as the reference leaves it: the slots and the mode word, whose every reader
 /// tests the guid first (`GetPetActionInfo` `0x4bdc9d`, `GetPetActionCooldown` `0x4bdff2`,
@@ -49,6 +51,7 @@ pub(crate) fn drop_bar(
     bar: &mut PetBar,
     latch: &mut super::PetAttackLatch,
     feed: Option<&mut PetBarFeed>,
+    stats_feed: Option<&mut crate::ui_pet_stats::PetStatsFeed>,
 ) -> bool {
     let changed = bar.has_bar();
     let signals = bar.bar_signals.wrapping_add(1);
@@ -61,6 +64,10 @@ pub(crate) fn drop_bar(
     }
     script.drop_pet_bar();
     script.set_pet_state(bar.spells.state);
+    // What the stats feed's push of no pet records.
+    if let Some(stats_feed) = stats_feed {
+        *stats_feed.0.get(script) = Some((false, benilla_ui::script::PetStats::default()));
+    }
     // What the feed's own push of a cleared bar records: no slots, not usable, nothing to lift.
     let Some(feed) = feed else {
         return changed;

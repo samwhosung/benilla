@@ -102,6 +102,7 @@ fn range_answers(
     });
     app.insert_non_send_resource(UiScript::new().unwrap());
     app.init_resource::<ActionEvents>()
+        .init_resource::<EnterUsable>()
         .init_resource::<ActionStateMemory>()
         .add_systems(Update, feed_action_state);
     app.update();

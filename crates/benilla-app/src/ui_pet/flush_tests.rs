@@ -743,7 +743,8 @@ fn the_world_entry_reset_clears_the_guid_and_keeps_the_book() {
                         &mut script,
                         &mut bar,
                         &mut latch,
-                        Some(&mut feed)
+                        Some(&mut feed),
+                        None
                     ));
                 })
             },

@@ -292,6 +292,12 @@ fn range_answers(
     (has_range, in_range)
 }
 
+/// Whether the world entry's usable refresh found a slot's pair changed (`0x4e4f90` →
+/// `0x4e5c00`): its `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`), which the enter cascade signals after
+/// the minimap's set-up and before `UPDATE_BONUS_ACTIONBAR` (`0x490979`), and takes.
+#[derive(Resource, Default)]
+pub(crate) struct EnterUsable(pub(crate) bool);
+
 /// The events one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
 #[derive(Resource, Default)]
 pub(crate) struct ActionEvents {
@@ -436,6 +442,7 @@ impl ActionStates<'_, '_> {
         bag_updates: u64,
         arrived: bool,
         owed: &mut ActionEvents,
+        enter_usable: &mut bool,
     ) {
         let (memory, new_vm) = self.memory.vm.get_reset(script);
         let cooldowns = &mut *self.cooldowns;
@@ -518,7 +525,13 @@ impl ActionStates<'_, '_> {
         };
         let (usable_changed, activated) = self.pass(script, pass);
         owed.cooldowns |= gen_changed;
-        owed.usable_changed |= usable_changed;
+        // A pass that ran the world entry's refresh owes its pair change to the enter cascade,
+        // which signals it inside itself (`0x490979` → `0x4e4f90` → `0x4e5c00`).
+        if entered || new_vm {
+            *enter_usable |= usable_changed;
+        } else {
+            owed.usable_changed |= usable_changed;
+        }
         owed.refresh |= refresh;
         owed.activated.extend(activated);
         owed.bags |= bags;
@@ -865,11 +878,13 @@ pub(super) fn feed_action_state(
         ActionStates<'static, 'static>,
         Option<Res<'static, crate::item_lane::ItemLane>>,
     )>,
-    // The usable refresh's field-watch callers, the enter cascade and the events owed.
-    (mut edges, mut entries, mut owed): (
+    // The usable refresh's field-watch callers, the enter cascade and the events owed, the
+    // cascade's own apart.
+    (mut edges, mut entries, mut owed, mut enter_usable): (
         MessageReader<FieldChanged>,
         MessageReader<crate::net::WorldEnterCascadeMessage>,
         ResMut<ActionEvents>,
+        ResMut<EnterUsable>,
     ),
     // The active player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
     // empties the reactive list (`0x5dea86`); a reload reaches neither.
@@ -894,6 +909,7 @@ pub(super) fn feed_action_state(
             bag_updates,
             arrived,
             &mut owed,
+            &mut enter_usable.0,
         );
     })
 }

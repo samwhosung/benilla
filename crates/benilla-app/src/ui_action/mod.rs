@@ -46,7 +46,7 @@ mod reactive;
 mod reactive_tests;
 pub(crate) mod recount;
 mod state;
-pub(crate) use state::ActionStates;
+pub(crate) use state::{ActionStates, EnterUsable};
 pub(crate) mod toggle;
 mod unlearn;
 mod weapon_icon;
@@ -268,6 +268,7 @@ impl Spells {
 pub(crate) fn run_feed_action_state_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
     world.init_resource::<state::ActionStateMemory>();
+    world.init_resource::<state::EnterUsable>();
     world
         .run_system_once(state::feed_action_state)
         .expect("the action-state feed runs as a one-shot system");
@@ -390,6 +391,7 @@ impl Plugin for UiActionPlugin {
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<state::ActionEvents>()
+            .init_resource::<state::EnterUsable>()
             .init_resource::<state::ActionStateMemory>()
             .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<PlayerActions>()
