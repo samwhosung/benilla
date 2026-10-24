@@ -804,6 +804,7 @@ fn faction_group_pair_and_the_pvp_toggle() {
         .eval::<bool>(r#"local a = UnitFactionGroup("party4") return a == nil"#)
         .unwrap());
 
+    s.keep_calls();
     assert_eq!(s.take_pvp_toggles(), 0, "nothing queued yet");
     s.run("TogglePVP() TogglePVP()").unwrap();
     assert_eq!(
@@ -811,7 +812,7 @@ fn faction_group_pair_and_the_pvp_toggle() {
         2,
         "one send per call, never collapsed"
     );
-    assert_eq!(s.take_pvp_toggles(), 0, "the drain empties the queue");
+    assert_eq!(s.take_pvp_toggles(), 0, "the take empties the kept calls");
 }
 
 /// The word table at `0x850424` by gated rank answers a string for every input: an absent token

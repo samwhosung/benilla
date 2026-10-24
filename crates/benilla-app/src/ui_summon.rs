@@ -27,7 +27,7 @@ use crate::query_cache::Ask;
 use crate::ui_script::UiFeed;
 
 /// The latched question, the reference's four globals: written by [`net::request`], read by
-/// [`feed_summon`] and [`drain_summon`].
+/// [`feed_summon`] and [`SummonSteps`].
 #[derive(Resource, Default)]
 pub(crate) struct SummonState {
     /// `[0xb4e358]`/`[0xb4e35c]`, echoed by Accept; 0 when nothing has asked this session.
@@ -65,15 +65,16 @@ impl SummonState {
 /// Push the three getters' answers every frame, and fire `CONFIRM_SUMMON` (no arguments) for an
 /// owed question.
 fn feed_summon(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut summon: ResMut<SummonState>,
+    // The latch, which the Accept reads inside its call: an engine turn, its events signalled
+    // after.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, SummonState>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     areas: Option<Res<AreaTableRes>>,
     // Real: the deadline was stamped on this clock.
     time: Res<Time<Real>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut summon| {
         let Some(script) = script else {
             return;
         };
@@ -136,34 +137,29 @@ fn area_name(zone: u32, areas: Option<&AreaTableRes>) -> String {
         .to_string()
 }
 
-/// Turn each Accept into `CMSG_SUMMON_RESPONSE`, gated on a latched summoner, never the deadline.
-fn drain_summon(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    summon: Res<SummonState>,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let confirms = script.take_summon_confirms();
-        if confirms == 0 {
-            return;
-        }
-        let Some(summoner) = summon.pending() else {
+/// `ConfirmSummon()` inside its call ([`benilla_ui::script::SummonCall`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SummonSteps<'w> {
+    summon: Option<Res<'w, SummonState>>,
+    net: Res<'w, NetCommands>,
+}
+
+impl SummonSteps<'_> {
+    /// `0x48b770`: `CMSG_SUMMON_RESPONSE` with the latched summoner (`0x48b7d0`), the deadline
+    /// unread; with nothing latched, nothing (the module's deviation).
+    pub(crate) fn confirm(&self) {
+        let Some(summoner) = self.summon.as_deref().and_then(SummonState::pending) else {
             debug!("ui_summon: ConfirmSummon() with nothing latched — nothing to answer with");
             return;
         };
         if benilla_assets::trace::enabled_for("summon") {
             benilla_assets::trace::line(
                 "summon",
-                &format!("SEND CMSG_SUMMON_RESPONSE summoner={summoner:#x} n={confirms}"),
+                &format!("SEND CMSG_SUMMON_RESPONSE summoner={summoner:#x}"),
             );
         }
-        for _ in 0..confirms {
-            let _ = commands.0.send(ClientCommand::SummonResponse { summoner });
-        }
-    })
+        let _ = self.net.0.send(ClientCommand::SummonResponse { summoner });
+    }
 }
 
 /// The latch dies with the session (the module's deviation), on `DisconnectedMessage`, which a
@@ -263,7 +259,6 @@ impl Plugin for UiSummonPlugin {
                 // Before the feed, so the frame a session ends feeds nothing from it.
                 end_session_summon.before(feed_summon),
                 feed_summon.in_set(UiFeed),
-                drain_summon.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

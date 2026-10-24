@@ -511,7 +511,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 may_cast.then_some((spell_id, n))
             });
             match cast {
-                Some((spell_id, count)) => super::submit(lua, TradeSkillCall::Do { spell_id, count }),
+                Some((spell_id, count)) => {
+                    super::submit(lua, TradeSkillCall::Do { spell_id, count })
+                }
                 None => Ok(()),
             }
         })?,

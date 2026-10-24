@@ -37,10 +37,17 @@ impl super::UiScript {
         }
     }
 
-    /// `ResetInstances()` calls since the last drain, each a `CMSG_RESET_INSTANCES`.
+    /// The `ResetInstances()` calls a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_reset_instance_asks(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().reset_instance_asks)
+        self.take_calls_like(&super::ScriptCall::Instance(InstanceCall::Reset)) as u32
     }
+}
+
+/// The lockouts' verb the host applies inside its call ([`super::ScriptCall::Instance`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstanceCall {
+    /// `ResetInstances()` (`0x48a6b0`): `CMSG_RESET_INSTANCES` (`0x48a6e6`).
+    Reset,
 }
 
 /// Register the three lockout globals.
@@ -84,9 +91,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ResetInstances",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.reset_instance_asks += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Instance(InstanceCall::Reset))
         })?,
     )?;
 

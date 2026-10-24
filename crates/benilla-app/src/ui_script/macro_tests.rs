@@ -20,6 +20,7 @@ fn harness() -> UiScript {
 
 fn harness_with(player: &str) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The global strings this window formats.
     s.run(

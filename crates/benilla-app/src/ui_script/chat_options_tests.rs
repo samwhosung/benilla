@@ -21,6 +21,7 @@ fn bake_strings(s: &UiScript) {
 
 fn chat_with_menu() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",

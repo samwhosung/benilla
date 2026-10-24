@@ -529,14 +529,14 @@ struct FeedMemos {
 }
 
 fn feed_world_map(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The death stores, which the death calls write: the corpse is read before the Lua runs.
+    mut vm: crate::script_calls::VmWith<Res<'static, crate::death::DeathNet>>,
     data: Option<Res<WorldMapUiData>>,
     player: Res<Player>,
     map: Option<Res<CurrentMap>>,
     world: benilla_world::world_point::WorldPoint,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
-    death_net: Res<crate::death::DeathNet>,
     poi_marker: Res<crate::poi_marker::PoiMarker>,
     group: Res<crate::ui_party::GroupState>,
     guids: Res<crate::net::GuidIndex>,
@@ -545,7 +545,8 @@ fn feed_world_map(
     world_states: Res<crate::world_state::WorldStates>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
-    hosted_vm.run(|script| {
+    let corpse = vm.own().corpse;
+    vm.run(|script| {
         let (Some(script), Some(data), Some(map), Some(areas)) = (script, data, map, areas) else {
             return;
         };
@@ -603,7 +604,7 @@ fn feed_world_map(
         };
         let uv = project(map.0, wx, wy);
         // The corpse at the query answer's display position, a dungeon corpse at its entrance.
-        let corpse_uv = death_net.corpse.and_then(|cp| {
+        let corpse_uv = corpse.and_then(|cp| {
             project(
                 u32::try_from(cp.display_map).unwrap_or(u32::MAX),
                 cp.position[0],

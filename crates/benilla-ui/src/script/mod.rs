@@ -228,9 +228,12 @@ pub use aura::{AuraState, TrackingState, UnitAuraList};
 pub use backdrop::{Backdrop, Insets};
 pub use bank::{BankCall, BankState};
 pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
-pub use battlefield_queue::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot};
+pub use battlefield_queue::{
+    BattlefieldCall, BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot,
+};
 pub use battlefield_score::{BattlefieldScoreRow, BattlefieldScores, BattlefieldStatColumn};
 pub use bind_confirm::PendingEquipAnswer;
+pub use binder::BinderCall;
 pub use binding_abi::{ftol, s_str_to_float, s_str_to_int};
 pub use calls::{NearestMode, QueuedCall, ScriptCall};
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
@@ -280,6 +283,7 @@ pub use cvars::{
     VIDEO_DEFAULT_CVARS, WORLD_DETAIL_STOPS,
 };
 pub use death::{DeathAction, DeathUiState};
+pub use dialog_verbs::MeetingStoneCall;
 pub use dressup::DressUpIntent;
 pub use duel::DuelRequest;
 pub use follow::FollowRequest;
@@ -311,6 +315,7 @@ pub use worldmap_arrow::ARROW_MODEL;
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
 pub(crate) use font_block::{face_loads, own_font_lua, SAME_FONT_HEIGHT};
 pub use inspect::UnitReach;
+pub use instance::InstanceCall;
 pub use item_stats::{
     item_usable, ItemRecipe, ItemSetView, ItemSpellLine, ItemTemplateView, PlayerReqState,
     TaughtSpell,
@@ -319,7 +324,7 @@ pub use item_text::ItemTextState;
 pub use layout_cache::{AnchorLayout, FrameLayout, LayoutPoint};
 pub use lock_check::{check_lock, LockCheck, LockOpener, LockOpeners, LockSlotView};
 pub use loot::{LootCall, LootRow, LootState, LOOT_PORTRAIT_UNIT};
-pub use loot_roll::{LootRollEntry, LootRollsState};
+pub use loot_roll::{LootRollCall, LootRollEntry, LootRollsState};
 pub use macros::{
     macro_lines, MacroBinding, MacroDerives, MacroState, MacroView, CHARACTER_ID_BASE, MAX_MACROS,
     MAX_MACRO_BODY, MAX_MACRO_NAME,
@@ -344,7 +349,9 @@ pub use party::{
     PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, ReadyCheckState, SavedInstanceInfo,
 };
 pub use pet::{PetActionView, PetCall, PetStats, PET_DISMISS_WORD};
-pub use pvp::{decorated_name, pvp_name_global_keys, HonorState, InspectHonorData, RankTitle};
+pub use pvp::{
+    decorated_name, pvp_name_global_keys, HonorState, InspectHonorData, PvpCall, RankTitle,
+};
 pub use quest::{QuestCall, QuestItemView, QuestPanel, QuestRewardSpell, QuestSelect, QuestState};
 pub use quest_log::{
     QuestLogCarry, QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS,
@@ -369,7 +376,7 @@ pub use spellbook::{
     SpellTabView,
 };
 pub use stable::{StableCall, StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
-pub use summon::SummonConfirmUiState;
+pub use summon::{SummonCall, SummonConfirmUiState};
 pub use talent::{
     TalentCall, TalentPrereqView, TalentReq, TalentTabView, TalentUiState, TalentView,
 };
@@ -378,7 +385,9 @@ pub use tooltip_aura::{AuraKey, AuraTooltipView};
 pub use tooltip_spell::{ReputationRequirement, SpellTooltipView};
 pub use tooltip_text::{KeyedArg, TextPart, TooltipText};
 pub use trade::{TradeCall, TradeOpenItem, TradeSideState, TradeSlotItem, TradeState, TRADE_SLOTS};
-pub use tradeskill::{TradeSkillCall, TradeSkillDifficulty, TradeSkillReagent, TradeSkillRecipe, TradeSkillState};
+pub use tradeskill::{
+    TradeSkillCall, TradeSkillDifficulty, TradeSkillReagent, TradeSkillRecipe, TradeSkillState,
+};
 pub use trainer::{
     TrainerAbilityReq, TrainerCall, TrainerGroup, TrainerService, TrainerServiceCategory,
     TrainerSkillReq, TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,

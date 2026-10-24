@@ -9,6 +9,7 @@ use super::test_ui::load_ui as load_xml;
 /// The files under test on the manifest prefix they sit on, in the production order.
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",

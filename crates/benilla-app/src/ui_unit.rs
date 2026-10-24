@@ -186,7 +186,6 @@ impl Plugin for UiUnitPlugin {
                 .before(UnitSnapshots)
                 .before(crate::ui_aura::AuraEvents),
         )
-        .add_systems(Update, drain_pvp_toggles.in_set(crate::ui_script::UiDrain))
         .add_systems(
             Update,
             drain_worn_display_toggles.in_set(crate::ui_script::UiDrain),
@@ -1164,16 +1163,18 @@ pub(crate) fn enrich_unit(
     }
 }
 
-/// Drain `TogglePVP` into `CMSG_TOGGLE_PVP`; `/pvp` is the reference's only caller.
-fn drain_pvp_toggles(mut hosted_vm: crate::script_calls::HostedVm, commands: Res<NetCommands>) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for _ in 0..script.take_pvp_toggles() {
-            let _ = commands.0.send(crate::net::ClientCommand::TogglePvp);
-        }
-    })
+/// `TogglePVP()` inside its call ([`benilla_ui::script::PvpCall`]); `/pvp` is the reference's only
+/// caller.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PvpSteps<'w> {
+    net: Res<'w, NetCommands>,
+}
+
+impl PvpSteps<'_> {
+    /// `0x48d700`: the empty `CMSG_TOGGLE_PVP` (`0x48d736`).
+    pub(crate) fn toggle(&self) {
+        let _ = self.net.0.send(crate::net::ClientCommand::TogglePvp);
+    }
 }
 
 /// Drain the `ShowHelm`/`ShowCloak` flips into `CMSG_TOGGLE_HELM`/`CMSG_TOGGLE_CLOAK`; the VM,

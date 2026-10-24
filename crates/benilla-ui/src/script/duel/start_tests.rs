@@ -7,6 +7,7 @@ const MEMBER: u64 = 0x51;
 
 fn vm() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_unit_guids(&UnitGuids {
         player: ME,
         party: [MEMBER, 0, 0, 0],

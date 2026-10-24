@@ -7,6 +7,7 @@ use super::test_ui::load_ui as load_xml;
 
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The one-letter duration strings, which `SecondsToTimeAbbrev` formats unguarded.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -869,6 +870,8 @@ fn the_duration_line_reads_the_real_global_strings() {
         .expect("GlobalStrings.lua in the chain");
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     crate::ui_script::test_ui::load_tooltip_template(&s);
     s.set_screen_size(1024.0, 768.0);
     s.run(&String::from_utf8_lossy(&src)).expect("runs clean");

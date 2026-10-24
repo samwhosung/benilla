@@ -8,6 +8,7 @@ use benilla_ui::script::{QuadContent, UiScript};
 /// The page's files in the production order over the stock commands and the install's defaults.
 pub(crate) fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     crate::ui_script::load_stock_bindings(&mut s);
     s.set_screen_size(1024.0, 768.0);
     for file in [
@@ -913,7 +914,8 @@ fn every_command_body_compiles() {
         &crate::ui_script::stock_bindings_file().expect("the install's Bindings.xml"),
     )
     .unwrap();
-    let s = UiScript::new().unwrap();
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     for b in &stock {
         s.run(&format!(
             "local f, err = loadstring({body:?}); \

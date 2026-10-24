@@ -8,6 +8,7 @@ use super::test_ui::load_ui as load_xml;
 /// `CombatText_UpdateDisplayedMessages` registers no events.
 fn load_combat_text() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua"); // ENTERING_COMBAT & co.
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -304,7 +305,8 @@ fn combat_text_master_toggle_unregisters() {
 fn the_damage_text_font_is_read_from_the_lua_global() {
     let data = benilla_formats::wow_data_or_skip!();
     let _ = data;
-    let s = UiScript::new().unwrap();
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
 
     // Unassigned, the reference's failure block (`0x704350`) leaves `0x703bf0`'s pre-seeded `""`,
     // which the font factory rejects.

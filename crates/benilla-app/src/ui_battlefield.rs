@@ -13,7 +13,9 @@ use bevy::prelude::*;
 use benilla_assets::MapCatalogRes;
 use benilla_formats::MapCatalog;
 use benilla_protocol::messages::{BattlefieldList, BattlefieldStatus};
-use benilla_ui::script::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot};
+use benilla_ui::script::{
+    BattlefieldCall, BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot, UiScript,
+};
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, WorldEnterCascadeMessage};
@@ -190,8 +192,8 @@ fn group_fits(catalog: Option<&MapCatalog>, map_id: u32, group: Option<&GroupSta
 /// Runs before the dialog and score feeds fire `UPDATE_BATTLEFIELD_STATUS` and
 /// `UPDATE_BATTLEFIELD_SCORE`, so their handlers read this frame's list and slots.
 fn feed_battlefield(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut state: ResMut<Battlefield>,
+    // The list, which the join reads inside its call: an engine turn, its events signalled after.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, Battlefield>>,
     queue: Res<BattlefieldQueue>,
     maps: Option<Res<MapCatalogRes>>,
     player: Res<Player>,
@@ -199,7 +201,7 @@ fn feed_battlefield(
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut state| {
         let Some(script) = script else {
             return;
         };
@@ -273,52 +275,116 @@ fn feed_battlefield(
     })
 }
 
-/// `JoinBattlefield`'s sends, `CMSG_BATTLEMASTER_JOIN` with a battlemaster and
-/// `CMSG_BATTLEFIELD_JOIN` without (`0x4a9f60`), and `ShowBattlefieldList`'s.
-fn drain_battlefield(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    state: Res<Battlefield>,
-    maps: Option<Res<MapCatalogRes>>,
-    group: Option<Res<GroupState>>,
-    commands: Res<NetCommands>,
-    mut sink: crate::ui_action::MessageSink,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let catalog = maps.as_deref().map(|m| &m.0);
-        let map_id = state.map_id();
-        for (instance_id, as_group) in script.take_battlefield_join_requests() {
-            if as_group && !group_fits(catalog, map_id, group.as_deref()) {
-                if let Some(line) =
-                    crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY")
-                {
-                    crate::ui_action::show_messages(script, &mut sink, "ui_battlefield", [line]);
-                }
-                continue;
+/// The battleground verbs inside their calls ([`BattlefieldCall`]): the list window's, the queue
+/// slots', the scoreboard's and the teammate map's.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct BattlefieldSteps<'w> {
+    /// Absent in a world with no battleground windows, which drops the calls.
+    state: Option<Res<'w, Battlefield>>,
+    queue: Option<Res<'w, BattlefieldQueue>>,
+    board: Option<ResMut<'w, crate::ui_battlefield_score::BattlefieldScoreboard>>,
+    positions: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
+    maps: Option<Res<'w, MapCatalogRes>>,
+    group: Option<Res<'w, GroupState>>,
+    net: Res<'w, NetCommands>,
+    sink: crate::ui_action::MessageSink<'w>,
+}
+
+impl BattlefieldSteps<'_> {
+    /// `call` inside its verb.
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: BattlefieldCall) {
+        match call {
+            BattlefieldCall::Join {
+                instance_id,
+                as_group,
+            } => self.join(script, instance_id, as_group),
+            BattlefieldCall::List { map_id } => {
+                let _ = self.net.0.send(ClientCommand::BattlefieldList { map_id });
             }
-            let battlemaster = state.list.as_ref().map_or(0, |l| l.battlemaster);
-            let command = if battlemaster != 0 {
-                ClientCommand::BattlemasterJoin {
-                    battlemaster,
-                    map_id,
-                    instance_id,
-                    as_group,
+            BattlefieldCall::Port { index, accept } => {
+                if let Some(map_id) = self.queue.as_deref().and_then(|q| q.map_id(index)) {
+                    let _ = self
+                        .net
+                        .0
+                        .send(ClientCommand::BattlefieldPort { map_id, accept });
                 }
-            } else {
-                ClientCommand::BattlefieldJoin {
-                    map_id,
-                    instance_id,
-                    as_group,
+            }
+            BattlefieldCall::ScoreData => {
+                let due = self
+                    .board
+                    .as_deref_mut()
+                    .is_some_and(|b| b.request_due(Instant::now()));
+                if due {
+                    let _ = self.net.0.send(ClientCommand::RequestBattlefieldScoreData);
                 }
-            };
-            let _ = commands.0.send(command);
+            }
+            // A negative slot sends map 0 (`0x4abe72`).
+            BattlefieldCall::Leave => {
+                let map_id = self
+                    .queue
+                    .as_deref()
+                    .and_then(BattlefieldQueue::active_map)
+                    .unwrap_or(0);
+                let _ = self.net.0.send(ClientCommand::LeaveBattlefield { map_id });
+            }
+            BattlefieldCall::Positions => {
+                let Some(positions) = self.positions.as_deref_mut() else {
+                    return;
+                };
+                if self
+                    .queue
+                    .as_deref()
+                    .and_then(BattlefieldQueue::active_map)
+                    .is_none()
+                {
+                    positions.clear();
+                    script.clear_battlefield_positions();
+                } else if positions.request_due(Instant::now()) {
+                    let _ = self.net.0.send(ClientCommand::RequestBattlefieldPositions);
+                }
+            }
         }
-        for map_id in script.take_battlefield_list_requests() {
-            let _ = commands.0.send(ClientCommand::BattlefieldList { map_id });
+    }
+
+    /// `0x4a9f60`: the as-group refusal (`0x4a9fa8`), then `CMSG_BATTLEMASTER_JOIN` with a stored
+    /// battlemaster or `CMSG_BATTLEFIELD_JOIN` without (`0x4a9fea`), for the listed map.
+    fn join(&mut self, script: &mut UiScript, instance_id: u32, as_group: bool) {
+        let state = self.state.as_deref();
+        let map_id = state.map_or(0, Battlefield::map_id);
+        let catalog = self.maps.as_deref().map(|m| &m.0);
+        if as_group && !group_fits(catalog, map_id, self.group.as_deref()) {
+            let input = script.input_events();
+            if let Some(line) =
+                crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY")
+            {
+                crate::ui_action::show_now(
+                    script,
+                    &mut self.sink,
+                    "ui_battlefield",
+                    line.under(input),
+                );
+            }
+            return;
         }
-    })
+        let battlemaster = state
+            .and_then(|s| s.list.as_ref())
+            .map_or(0, |l| l.battlemaster);
+        let command = if battlemaster != 0 {
+            ClientCommand::BattlemasterJoin {
+                battlemaster,
+                map_id,
+                instance_id,
+                as_group,
+            }
+        } else {
+            ClientCommand::BattlefieldJoin {
+                map_id,
+                instance_id,
+                as_group,
+            }
+        };
+        let _ = self.net.0.send(command);
+    }
 }
 
 /// The world-enter cascade's battlefield init (`0x4909fb` → `0x4a9db0`), after the mail query: the
@@ -326,15 +392,14 @@ fn drain_battlefield(
 /// `CMSG_BATTLEFIELD_STATUS` goes out, answered slot by slot.
 pub(crate) fn reset_on_world_enter(
     mut cascades: MessageReader<WorldEnterCascadeMessage>,
-    mut state: ResMut<Battlefield>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, Battlefield>>,
     commands: Res<NetCommands>,
 ) {
-    hosted_vm.run(|script| {
-        if cascades.read().next().is_none() {
-            return;
-        }
-        state.clear_session();
+    if cascades.read().next().is_none() {
+        return;
+    }
+    vm.own().clear_session();
+    vm.run(|script| {
         if let Some(script) = script {
             script.reset_battlefield_selection();
         }
@@ -385,7 +450,6 @@ impl Plugin for BattlefieldPlugin {
                     .before(crate::ui_battlefield_score::feed_battlefield_score)
                     .before(crate::ui_dialog_verbs::feed_dialog_verbs)
                     .in_set(UiFeed),
-                drain_battlefield.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

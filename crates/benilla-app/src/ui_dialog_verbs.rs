@@ -1,6 +1,6 @@
 //! The app half of the verbs behind the stock `StaticPopup.lua` dialogs: the packet feeds that
-//! raise them and the drains behind their buttons, for the pet trainer's unlearn, the instance
-//! boot countdown, the area spirit healer's wave, the battleground queue and the meeting stone.
+//! raise them and what their buttons do, for the pet trainer's unlearn, the instance boot
+//! countdown, the area spirit healer's wave, the battleground queue and the meeting stone.
 //! A meeting stone's click runs the stone's own use slot, which refuses a join client-side or
 //! sends `CMSG_MEETINGSTONE_JOIN`, never the shared `CMSG_GAMEOBJ_USE`.
 
@@ -281,7 +281,7 @@ impl BattlefieldQueue {
     }
 
     /// The map id `AcceptBattlefieldPort` sends for a 1-based slot, if the slot holds a queue.
-    fn map_id(&self, index: u8) -> Option<u32> {
+    pub(crate) fn map_id(&self, index: u8) -> Option<u32> {
         self.slots
             .get(usize::from(index).checked_sub(1)?)
             .and_then(|s| s.as_ref())
@@ -668,20 +668,32 @@ fn area_spirit_healer_leave_world(mut spirit: ResMut<AreaSpiritHealer>) {
     *spirit = AreaSpiritHealer::default();
 }
 
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(crate) fn feed_dialog_verbs(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The healer and the queue, which the death and battleground calls read: taken first.
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, AreaSpiritHealer>,
+        ResMut<'static, BattlefieldQueue>,
+    )>,
     mut pet: ResMut<PetUnlearnState>,
     mut boot: ResMut<InstanceBoot>,
-    mut spirit: ResMut<AreaSpiritHealer>,
-    mut queue: ResMut<BattlefieldQueue>,
     mut sink: crate::ui_action::MessageSink,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
-    hosted_vm.run(|script| {
+    let now = Instant::now();
+    let (spirit_secs, spirit_in_range, queue_tutorials, queue_changed) = {
+        let (mut spirit, mut queue) = vm.own();
+        (
+            spirit.secs(now),
+            std::mem::take(&mut spirit.in_range),
+            std::mem::take(&mut queue.tutorials),
+            std::mem::take(&mut queue.changed),
+        )
+    };
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };
-        let now = Instant::now();
 
         script.set_pet_untrainer_pending(pet.pending().is_some());
         if pet.ask {
@@ -707,28 +719,26 @@ pub(crate) fn feed_dialog_verbs(
             crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
         }
 
-        let secs = spirit.secs(now);
-        script.set_area_spirit_healer(spirit.healer().is_some(), secs);
-        if std::mem::take(&mut spirit.in_range) {
+        script.set_area_spirit_healer_secs(spirit_secs);
+        if spirit_in_range {
             script.fire_event("AREA_SPIRIT_HEALER_IN_RANGE", vec![]);
         }
 
-        for id in std::mem::take(&mut queue.tutorials) {
+        for id in queue_tutorials {
             if let Some(t) = tutorials.as_mut() {
                 t.write(crate::tutorial::TutorialEvent::trigger(id));
             }
         }
-        if std::mem::take(&mut queue.changed) {
+        if queue_changed {
             script.fire_event("UPDATE_BATTLEFIELD_STATUS", vec![]);
         }
     })
 }
 
-/// The pet trainer's confirm and the spirit healer's accept, the two drains over a latch.
+/// The pet trainer's confirm, a drain over its latch.
 fn drain_latch_verbs(
     mut hosted_vm: crate::script_calls::HostedVm,
     pet: Res<PetUnlearnState>,
-    spirit: Res<AreaSpiritHealer>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
@@ -764,69 +774,49 @@ fn drain_latch_verbs(
                 }
             }
         }
-
-        // AcceptAreaSpiritHeal: the cached healer's guid, nothing without one.
-        let accepts = script.take_area_spirit_accepts();
-        if let Some(healer) = spirit.healer() {
-            for _ in 0..accepts {
-                let _ = commands
-                    .0
-                    .send(ClientCommand::AreaSpiritHealerQueue { healer });
-            }
-        }
     })
 }
 
-/// The battleground port and the meeting-stone leave, the two drains over a queue.
-fn drain_queue_verbs(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    queue: Res<BattlefieldQueue>,
-    group: Option<Res<GroupState>>,
-    self_guid: Res<SelfGuid>,
-    commands: Res<NetCommands>,
-    mut sink: crate::ui_action::MessageSink,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
+/// `CancelMeetingStoneRequest()` inside its call ([`benilla_ui::script::MeetingStoneCall`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct MeetingStoneSteps<'w> {
+    group: Option<Res<'w, GroupState>>,
+    self_guid: Res<'w, SelfGuid>,
+    net: Res<'w, NetCommands>,
+    sink: crate::ui_action::MessageSink<'w>,
+}
+
+impl MeetingStoneSteps<'_> {
+    /// `0x4ca120`: in a party whose leader is not the player, `ERR_MEETING_STONE_NOT_LEADER`
+    /// (`0x4ca14e`); otherwise `0x293`, queued or not.
+    pub(crate) fn cancel(&mut self, script: &mut UiScript) {
+        let not_leader = self
+            .group
+            .as_deref()
+            .is_some_and(|g| g.in_group && Some(g.leader) != self.self_guid.0);
+        if not_leader {
+            let input = script.input_events();
+            if let Some(line) = crate::ui_action::keyed_line(script, "ERR_MEETING_STONE_NOT_LEADER")
+            {
+                crate::ui_action::show_now(
+                    script,
+                    &mut self.sink,
+                    "ui_dialog_verbs",
+                    line.under(input),
+                );
+            }
             return;
-        };
-
-        for (index, accept) in script.take_battlefield_port_requests() {
-            if let Some(map_id) = queue.map_id(index) {
-                let _ = commands
-                    .0
-                    .send(ClientCommand::BattlefieldPort { map_id, accept });
-            }
         }
-
-        // CancelMeetingStoneRequest: in a party we do not lead, ERR_MEETING_STONE_NOT_LEADER;
-        // otherwise `0x293`, queued or not.
-        let cancels = script.take_meeting_stone_cancels();
-        if cancels > 0 {
-            let not_leader = group
-                .as_deref()
-                .is_some_and(|g| g.in_group && Some(g.leader) != self_guid.0);
-            if not_leader {
-                if let Some(line) =
-                    crate::ui_action::keyed_line(script, "ERR_MEETING_STONE_NOT_LEADER")
-                {
-                    crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", [line]);
-                }
-            } else {
-                for _ in 0..cancels {
-                    let _ = commands.0.send(ClientCommand::MeetingStoneLeave);
-                }
-            }
-        }
-    })
+        let _ = self.net.0.send(ClientCommand::MeetingStoneLeave);
+    }
 }
 
 /// The area-spirit-healer poll `0x4923b0`, run every frame from `CGWorldFrame`'s `OnUpdate`
 /// (`0x4818ca`): only a ghost (`[[player+0xe68]+8]` bit 4) holds a healer; a cached one is kept
 /// within 22 yd, else the last unit in the walk that is a `SPIRITGUIDE`, assistable and within
 /// 20 yd is adopted. Last, not nearest: the enumerate callback `0x4924c0` never stops the walk.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn poll_area_spirit_healer(
-    mut spirit: ResMut<AreaSpiritHealer>,
     me: Query<(&ObjectStore, &Transform), With<SelfPlayer>>,
     units: Query<
         (
@@ -838,11 +828,15 @@ fn poll_area_spirit_healer(
         Without<SelfPlayer>,
     >,
     commands: Res<NetCommands>,
-    // The relation inputs, which a call the event's handlers make can write: read first.
-    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
+    // The relation inputs, which a call the event's handlers make can write, and the healer the
+    // accept's call reads: read and written first.
+    mut vm: crate::script_calls::VmWith<(
+        crate::target::RelationWorld<'static, 'static>,
+        ResMut<'static, AreaSpiritHealer>,
+    )>,
 ) {
     let outcomes = {
-        let relations = vm.own();
+        let (relations, mut spirit) = vm.own();
         poll_outcomes(&mut spirit, &me, &units, &relations)
     };
     vm.run(|mut script| {
@@ -1036,13 +1030,7 @@ impl Plugin for UiDialogVerbsPlugin {
                         .after(crate::ui_battlefield::reset_on_world_enter)
                         .before(feed_meeting_stone),
                     feed_meeting_stone.in_set(UiFeed),
-                    // Before the target chain, where the poll and the click can change the
-                    // healer: the reference resolves an Accept press in the UI dispatch, before
-                    // its pick and poll run later in the frame.
-                    drain_latch_verbs
-                        .in_set(crate::ui_script::UiDrain)
-                        .before(crate::target::TargetUpdate),
-                    drain_queue_verbs.in_set(crate::ui_script::UiDrain),
+                    drain_latch_verbs.in_set(crate::ui_script::UiDrain),
                     // After the target chain, which writes `MeetingStoneUse`, so the join leaves
                     // on the click's own frame.
                     drain_meeting_stone_joins

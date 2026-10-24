@@ -10,6 +10,7 @@ use super::test_ui::load_ui as load_xml;
 fn the_three_bindings_have_the_reference_shapes() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
 
     assert_eq!(
         s.eval::<(Option<f64>, String)>("return IsInInstance()")
@@ -59,6 +60,7 @@ fn the_three_bindings_have_the_reference_shapes() {
 fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // Verbatim 1.12 values from `GlobalStrings.lua`.
     s.run(

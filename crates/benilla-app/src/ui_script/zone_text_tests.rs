@@ -49,6 +49,7 @@ fn set_area(s: &mut UiScript, zone: &str, sub: &str, pvp: &str, faction: &str) {
 
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The splash formats its territory and autofollow lines straight out of GlobalStrings.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");

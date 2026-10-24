@@ -17,7 +17,7 @@ use benilla_protocol::messages::{BattlefieldPosition, BattlefieldPositions as Po
 use benilla_ui::script::{BattlefieldFlagView, BattlefieldPositionView};
 
 use crate::names::NameCache;
-use crate::net::{ClientCommand, EnteredWorldMessage, GuidIndex, NetCommands, NetEntity, SelfGuid};
+use crate::net::{EnteredWorldMessage, GuidIndex, NetCommands, NetEntity, SelfGuid};
 use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
@@ -43,13 +43,14 @@ impl BattlefieldPositions {
         self.packet = Some(packet);
     }
 
-    fn clear(&mut self) {
+    /// The positions request's clear with no active slot (`0x4aa5c0`, `[0xb6ebdc]`).
+    pub(crate) fn clear(&mut self) {
         self.packet = None;
         self.pending_names.clear();
     }
 
     /// The throttle: `true`, and the stamp moves, when a request may go out now.
-    fn request_due(&mut self, now: Instant) -> bool {
+    pub(crate) fn request_due(&mut self, now: Instant) -> bool {
         let due = self
             .last_request
             .is_none_or(|t| now.saturating_duration_since(t) >= REQUEST_THROTTLE);
@@ -86,8 +87,9 @@ fn flag_token(faction: Option<&str>) -> Option<&'static str> {
 }
 
 fn feed_battlefield_positions(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut state: ResMut<BattlefieldPositions>,
+    // The positions, which the request's call clears and stamps: an engine turn, its events
+    // signalled after.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, BattlefieldPositions>>,
     queue: Res<BattlefieldQueue>,
     data: Option<Res<WorldMapUiData>>,
     maps: Option<Res<MapCatalogRes>>,
@@ -100,7 +102,7 @@ fn feed_battlefield_positions(
     // The last empty push: with no list the engine is told on change, with one every frame.
     mut last_empty: Local<crate::ui_script::VmMemo<Option<(bool, u32)>>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut state| {
         let Some(script) = script else {
             return;
         };
@@ -186,29 +188,6 @@ fn feed_battlefield_positions(
     })
 }
 
-fn drain_battlefield_positions(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut state: ResMut<BattlefieldPositions>,
-    queue: Res<BattlefieldQueue>,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        if script.take_battlefield_position_requests() == 0 {
-            return;
-        }
-        if queue.active_map().is_none() {
-            state.clear();
-            return;
-        }
-        if state.request_due(Instant::now()) {
-            let _ = commands.0.send(ClientCommand::RequestBattlefieldPositions);
-        }
-    })
-}
-
 fn reset_on_world_enter(
     mut entered: MessageReader<EnteredWorldMessage>,
     mut state: ResMut<BattlefieldPositions>,
@@ -249,7 +228,6 @@ impl Plugin for BattlefieldPositionsPlugin {
             (
                 reset_on_world_enter.before(feed_battlefield_positions),
                 feed_battlefield_positions.in_set(UiFeed),
-                drain_battlefield_positions.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

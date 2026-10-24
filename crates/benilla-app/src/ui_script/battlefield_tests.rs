@@ -8,6 +8,7 @@ use super::test_ui::load_ui as load_xml;
 /// The stock pair plus what they call: the panel kit, the confirm dialog, the icon's menu.
 fn session() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The list verbs answer nothing without a local player, so seat one.
     s.set_unit(

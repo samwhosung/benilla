@@ -19,8 +19,9 @@ use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    AuctionCall, BankCall, CallHost, CallTail, GossipCall, MailCall, MerchantCall, PetitionCall,
-    ScriptCall, StableCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall, TrainerCall, UiScript,
+    AuctionCall, BankCall, BinderCall, CallHost, CallTail, DuelRequest, GossipCall, InstanceCall,
+    LootRollCall, MailCall, MeetingStoneCall, MerchantCall, PetitionCall, PvpCall, ScriptCall,
+    StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall, TrainerCall, UiScript,
 };
 
 mod windows;
@@ -94,6 +95,30 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                             crate::ui_bank::BankSteps<'w, 's>,
                             crate::ui_tradeskill::TradeSkillSteps<'w>,
                             crate::ui_craft::CraftSteps<'w>,
+                        ),
+                    >,
+                    // The dialogs and queues: the battlegrounds, death, the duel, the group loot
+                    // roll, the innkeeper, the summon, the meeting stone, the lockouts and the PvP
+                    // flag.
+                    ParamSet<
+                        'w,
+                        's,
+                        (
+                            crate::ui_battlefield::BattlefieldSteps<'w>,
+                            crate::death::DeathSteps<'w, 's>,
+                            crate::ui_duel::DuelSteps<'w>,
+                            crate::ui_loot_roll::LootRollSteps<'w>,
+                            crate::ui_binder::BinderSteps<'w>,
+                            crate::ui_summon::SummonSteps<'w>,
+                            crate::ui_dialog_verbs::MeetingStoneSteps<'w>,
+                            ParamSet<
+                                'w,
+                                's,
+                                (
+                                    crate::ui_instance::InstanceSteps<'w>,
+                                    crate::ui_unit::PvpSteps<'w>,
+                                ),
+                            >,
                         ),
                     >,
                 ),
@@ -654,6 +679,25 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::TradeSkill(TradeSkillCall::Close) => appliers.p2().p6().p1().close(),
             ScriptCall::Craft(call) => appliers.p2().p6().p2().apply(call),
+            ScriptCall::Battlefield(call) => appliers.p2().p7().p0().apply(script, call),
+            ScriptCall::Death(action) => appliers.p2().p7().p1().apply(script, action),
+            ScriptCall::Duel(DuelRequest::StartByGuid(guid)) => {
+                let spell = appliers.p2().p7().p2().duel_spell();
+                if let Some(spell) = spell {
+                    crate::ui_duel::cast_duel(&mut appliers.p3(), spell, guid);
+                }
+            }
+            ScriptCall::Duel(request) => appliers.p2().p7().p2().answer(&request),
+            ScriptCall::LootRoll(LootRollCall::Vote { roll_id, roll_type }) => {
+                appliers.p2().p7().p3().vote(roll_id, roll_type);
+            }
+            ScriptCall::Binder(BinderCall::Confirm) => appliers.p2().p7().p4().confirm(),
+            ScriptCall::Summon(SummonCall::Confirm) => appliers.p2().p7().p5().confirm(),
+            ScriptCall::MeetingStone(MeetingStoneCall::Cancel) => {
+                appliers.p2().p7().p6().cancel(script);
+            }
+            ScriptCall::Instance(InstanceCall::Reset) => appliers.p2().p7().p7().p0().reset(),
+            ScriptCall::Pvp(PvpCall::Toggle) => appliers.p2().p7().p7().p1().toggle(),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

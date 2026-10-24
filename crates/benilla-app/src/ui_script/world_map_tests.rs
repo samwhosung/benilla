@@ -10,6 +10,7 @@ use benilla_ui::script::{
 /// The map plus everything its OnLoad touches, in the shipped list's own order.
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -310,6 +311,7 @@ fn the_player_arrow_is_the_stock_model_pane_seated_and_turned_by_the_update() {
     let _data = benilla_formats::wow_data_or_skip!();
     // The whole manifest: the arrow's quad needs the map visible, through `ShowUIPanel`.
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     s.set_unit(
         "player",
@@ -459,6 +461,7 @@ fn battleground_teammates_and_the_flag_draw_from_the_position_family() {
 fn the_maps_own_furniture_survives_the_hide_that_showing_it_performs() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     // A player exists before the manifest loads: the UI loads on world entry, and the macro
     // window's OnLoad formats `UnitName("player")`.
@@ -524,6 +527,7 @@ fn the_maps_own_furniture_survives_the_hide_that_showing_it_performs() {
 fn hovering_the_player_blip_on_a_scaled_map_names_the_player() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(821.0, 768.0);
     s.set_unit(
         "player",
@@ -573,6 +577,7 @@ fn hovering_the_player_blip_on_a_scaled_map_names_the_player() {
 fn the_player_arrow_draws_over_the_zones_explored_overlays() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     s.set_unit(
         "player",
@@ -630,6 +635,7 @@ fn the_player_arrow_draws_over_the_zones_explored_overlays() {
 fn a_click_over_a_blip_still_answers_the_maps_uv() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     s.set_unit(
         "player",
@@ -812,6 +818,7 @@ fn hovering_a_continent_on_the_world_map_lights_it() {
 fn a_stale_layout_row_cannot_seat_a_stock_frame() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     s.set_unit(
         "player",
@@ -901,6 +908,7 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
 fn the_fullscreen_quads_follow_a_resize() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     // A player exists by the time the manifest loads.
     s.set_unit(
@@ -951,6 +959,7 @@ fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
     let _data = benilla_formats::wow_data_or_skip!();
     // The whole stock UI: the OnShow's `UpdateMicroButtons` and the full-screen panel slot.
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     s.set_unit(
         "player",

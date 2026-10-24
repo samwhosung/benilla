@@ -212,6 +212,8 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.set_action(
@@ -340,6 +342,8 @@ fn a_spell_tooltip_with_a_live_line_arms_the_stock_refresh() {
     use benilla_ui::script::{ActionState, SpellTooltipView};
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.set_action(
@@ -441,6 +445,8 @@ fn a_start_behind_the_clocks_epoch_hides_the_stock_sweep() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.set_action(
@@ -508,6 +514,8 @@ fn the_cooldown_sweep_paints_over_the_buttons_icon_and_ring() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.set_action(
@@ -566,6 +574,8 @@ fn a_cooldown_count_addons_hook_leaves_the_sweep_running() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     // Addons load after FrameXML, so the hook captures the stock global.
@@ -674,6 +684,8 @@ fn a_cooldown_count_draws_over_the_bonus_bars_sweep() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.run(COOLDOWN_COUNT_HOOK)
@@ -797,6 +809,7 @@ fn a_right_click_on_an_action_button_uses_the_action() {
 fn a_rebind_repaints_the_hotkey_in_place() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
@@ -812,6 +825,7 @@ fn a_rebind_repaints_the_hotkey_in_place() {
 fn shift_click_picks_up_not_uses() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
 
@@ -881,6 +895,7 @@ fn shift_click_picks_up_not_uses() {
 fn the_action_bar_lock_stops_the_drag_and_leaves_shift_click_alone() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     assert_eq!(
@@ -952,6 +967,7 @@ fn the_action_bar_lock_stops_the_drag_and_leaves_shift_click_alone() {
 fn drag_drop_onto_another_button_hops_the_displaced_action() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
 
@@ -1013,6 +1029,7 @@ fn drag_drop_onto_another_button_hops_the_displaced_action() {
 fn count_fontstring_follows_is_consumable_action_not_the_bag_count() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
 
@@ -1111,6 +1128,8 @@ fn macro_name_line_follows_get_action_text_through_the_xml() {
     use benilla_ui::script::{MacroState, MacroView};
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.set_macros(MacroState::from_scopes(
@@ -1351,6 +1370,8 @@ fn state_events_leave_empty_wells_untinted() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     // One occupied slot; 2..12 empty.
@@ -1416,6 +1437,8 @@ fn an_occupied_slot_going_empty_leaves_no_white_plate() {
     use benilla_ui::script::ActionState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
     s.set_action(
@@ -1478,6 +1501,7 @@ fn an_occupied_slot_going_empty_leaves_no_white_plate() {
 fn the_bonus_action_bar_exists_hidden_and_takes_layout_calls() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
 
@@ -1531,7 +1555,8 @@ fn the_bonus_action_bar_exists_hidden_and_takes_layout_calls() {
 #[test]
 fn the_reference_action_bar_constants_are_defined() {
     benilla_formats::wow_data_or_skip!();
-    let s = UiScript::new().unwrap();
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_action_bar(&s);
 
     for (name, want) in [
@@ -1573,7 +1598,8 @@ fn the_reference_action_bar_constants_are_defined() {
 #[test]
 fn both_reference_action_button_templates_are_inheritable() {
     benilla_formats::wow_data_or_skip!();
-    let s = UiScript::new().unwrap();
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_action_bar(&s);
 
     // zBar's exact shape: inherit the bar template, supply your own OnLoad.
@@ -1645,6 +1671,7 @@ fn both_reference_action_button_templates_are_inheritable() {
 fn the_main_bar_pages_and_a_bonus_page_still_outranks_it() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -2010,6 +2037,7 @@ fn bonus_bar_slides_up_with_sound_and_down_without() {
 fn bonus_bar_turnaround_continues_from_position() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -2079,6 +2107,7 @@ fn bonus_bar_turnaround_continues_from_position() {
 fn the_page_arrows_do_not_steal_each_other_s_clicks() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");

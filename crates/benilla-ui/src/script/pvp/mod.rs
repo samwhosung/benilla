@@ -84,17 +84,26 @@ pub struct InspectHonorData {
     pub rank_bar: u8,
 }
 
+/// The PvP flag's verb the host applies inside its call ([`super::ScriptCall::Pvp`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PvpCall {
+    /// `TogglePVP()` (`0x48d700`): the empty `CMSG_TOGGLE_PVP` (`0x48d736`), one per call.
+    Toggle,
+}
+
 impl super::UiScript {
-    /// Drain the queued `TogglePVP` calls, one `CMSG_TOGGLE_PVP` each; the packet is empty, so
-    /// two toggles in a frame are two sends.
+    /// The `TogglePVP` calls a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_pvp_toggles(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().pvp_toggles)
+        self.take_calls_like(&super::ScriptCall::Pvp(PvpCall::Toggle)) as u32
     }
 
-    /// Queue a toggle for `/pvp`, which benilla parses in Rust; the reference's `/pvp` is Lua over
-    /// `TogglePVP`.
-    pub fn queue_pvp_toggle(&mut self) {
-        self.model_mut().pvp_toggles += 1;
+    /// `/pvp`, which benilla parses in Rust: the reference's `/pvp` is Lua over `TogglePVP`, so the
+    /// same call.
+    pub fn toggle_pvp(&mut self) {
+        let lua = self.lua().clone();
+        if let Err(e) = super::calls::submit(&lua, super::ScriptCall::Pvp(PvpCall::Toggle)) {
+            self.model_mut().record_lua_error(&e);
+        }
     }
 
     /// Push or clear the local player's honor snapshot, the self getters' only source. It fires
@@ -363,9 +372,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "TogglePVP",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.pvp_toggles += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Pvp(PvpCall::Toggle))
         })?,
     )?;
 

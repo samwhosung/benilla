@@ -33,21 +33,30 @@ pub struct DeathUiState {
     pub self_res_label: Option<String>,
 }
 
-/// One drained death intent.
+/// The death verbs the host applies inside their calls ([`super::ScriptCall::Death`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeathAction {
-    /// `RepopMe()`: `CMSG_REPOP_REQUEST`.
+    /// `RepopMe()` (`0x48a970` → `0x5e0ae0`): `CMSG_REPOP_REQUEST` while dead or a ghost
+    /// (`0x5e0ae6`).
     Repop,
-    /// `RetrieveCorpse()`: `CMSG_RECLAIM_CORPSE`.
+    /// `RetrieveCorpse()` (`0x48d260`): `CMSG_RECLAIM_CORPSE` with the corpse guid, ungated.
     RetrieveCorpse,
-    /// `AcceptResurrect()`: `CMSG_RESURRECT_RESPONSE`, accepting.
+    /// `AcceptResurrect()` (`0x48a9a0` → `0x5ded80(1)`): `CMSG_RESURRECT_RESPONSE`, accepting, while
+    /// an offer is held; the offer is forgotten.
     AcceptResurrect,
-    /// `DeclineResurrect()`: `CMSG_RESURRECT_RESPONSE`, declining.
+    /// `DeclineResurrect()` (`0x48a9d0` → `0x5ded80(0)`), declining.
     DeclineResurrect,
-    /// `AcceptXPLoss()`: `CMSG_SPIRIT_HEALER_ACTIVATE`.
+    /// `AcceptXPLoss()` (`0x48d0c0` → `0x5df730(0)`): `CMSG_SPIRIT_HEALER_ACTIVATE` for a ghost
+    /// whose remembered healer is in range.
     AcceptXpLoss,
-    /// `UseSoulstone()`: `CMSG_SELF_RES` when `PLAYER_SELF_RES_SPELL` is non-zero, else a use of
-    /// the carried item, decided at drain time as the reference decides it at call time.
+    /// `AcceptAreaSpiritHeal()` (`0x48df20` → `0x492310`): `CMSG_AREA_SPIRIT_HEALER_QUEUE` with
+    /// the cached healer, silent with none.
+    AcceptAreaSpiritHeal,
+    /// `CancelAreaSpiritHeal()` (`0x48df30` → `0x4923a0` → `0x6e7040(2584)`) past its event:
+    /// `CMSG_CANCEL_AURA` for spell 2584.
+    CancelAreaSpiritHeal,
+    /// `UseSoulstone()` (`0x48ad70`): `CMSG_SELF_RES` when `PLAYER_SELF_RES_SPELL` is non-zero,
+    /// else a use of the carried item, decided inside the call.
     UseSoulstone {
         /// What the protected-action gate's tag 2 allowed the call: the item leg is `CGItem::Use`
         /// (`0x48ae7d`), whose cast is `TryCastSpell`'s. The cancel before it (`0x48ae6b`) is not
@@ -62,9 +71,12 @@ impl super::UiScript {
         self.model_mut().death = state;
     }
 
-    /// Drain the queued death intents.
+    /// The death calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_death_actions(&mut self) -> Vec<DeathAction> {
-        std::mem::take(&mut self.model_mut().death_actions)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Death(action) => Some(*action),
+            _ => None,
+        })
     }
 }
 
@@ -75,9 +87,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.globals().set(
             name,
             lua.create_function(move |lua, ()| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.death_actions.push(action);
-                Ok(())
+                super::calls::submit(lua, super::ScriptCall::Death(action))
             })?,
         )
     }
@@ -90,11 +100,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "UseSoulstone",
         lua.create_function(|lua, ()| {
             let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .death_actions
-                .push(DeathAction::UseSoulstone { may_cast });
-            Ok(())
+            super::calls::submit(
+                lua,
+                super::ScriptCall::Death(DeathAction::UseSoulstone { may_cast }),
+            )
         })?,
     )?;
 

@@ -25,6 +25,7 @@ const ACE_CHAIN: &[&str] = &[
 /// A VM with our FrameXML and the corpus's Ace2 chain, past `PLAYER_LOGIN`.
 fn ace_vm(root: &Path) -> UiScript {
     let mut script = UiScript::new().expect("VM");
+    script.keep_calls();
     script.set_screen_size(1024.0, 768.0);
     // Ace calls `CreateFrame`, `GetTime` and `ChatTypeInfo`, so the whole interface loads first.
     let failures = crate::ui_script::load_default_ui(&script);

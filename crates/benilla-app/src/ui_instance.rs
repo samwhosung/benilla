@@ -425,16 +425,17 @@ fn feed_instance(
     })
 }
 
-/// Turn the `ResetInstances()` calls the dialog made into `CMSG_RESET_INSTANCES` sends.
-fn drain_instance(mut hosted_vm: crate::script_calls::HostedVm, commands: Res<NetCommands>) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for _ in 0..script.take_reset_instance_asks() {
-            let _ = commands.0.send(ClientCommand::ResetInstances);
-        }
-    })
+/// `ResetInstances()` inside its call ([`benilla_ui::script::InstanceCall`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct InstanceSteps<'w> {
+    net: Res<'w, NetCommands>,
+}
+
+impl InstanceSteps<'_> {
+    /// `0x48a6b0`: `CMSG_RESET_INSTANCES` (`0x48a6e6`), ungated.
+    pub(crate) fn reset(&self) {
+        let _ = self.net.0.send(ClientCommand::ResetInstances);
+    }
 }
 
 /// Drop the witness at logout, as the next login may be another character. The three globals stay,
@@ -461,7 +462,6 @@ impl Plugin for UiInstancePlugin {
                 clear_witness_on_logout.before(track_instance_state),
                 track_instance_state.before(feed_instance),
                 feed_instance.in_set(UiFeed),
-                drain_instance.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

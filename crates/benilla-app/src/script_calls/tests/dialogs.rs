@@ -6,7 +6,7 @@ use benilla_protocol::messages::{BattlefieldList, BattlefieldStatus, LootStartRo
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
     BattlefieldListView, BattlefieldPositionView, BattlefieldQueueSlot, BattlefieldScores,
-    LootRollEntry, LootRollsState, UiScript, UnitState,
+    LootRollEntry, LootRollsState, UiScript, UnitGuids,
 };
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
@@ -382,37 +382,56 @@ fn start_duel_casts_inside_its_call() {
     const FOE: u64 = 0x30;
     let (mut app, rx) = client();
     seat(&mut app, &[(HEALTH, 100)]);
-    unit_at(&mut app, FOE, 3.0);
     let world = app.world_mut();
-    world.insert_resource(crate::ui_action::Spells {
-        catalog: benilla_formats::SpellCatalog::from_displays(
-            [(
-                DUEL,
-                benilla_formats::SpellDisplay {
-                    name: "Duel".into(),
-                    effects: [83, 0, 0],
-                    ..Default::default()
-                },
-            )]
-            .into(),
-        ),
-        ..crate::ui_action::Spells::empty_for_tests()
-    });
+    let foe = world
+        .spawn((
+            Guid(FOE),
+            Transform::from_xyz(5.0, 0.0, 0.0),
+            GlobalTransform::from_translation(Vec3::new(5.0, 0.0, 0.0)),
+            ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (HEALTH, 100),
+                (MAX_HEALTH, 100),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(FOE, foe);
+    let mut spells = crate::ui_action::Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [(
+            DUEL,
+            benilla_formats::SpellDisplay {
+                effects: [83, 0, 0],
+                attributes_ex: 0x0008_0000,
+                targets: 0x2,
+                range_index: 5,
+                ..Default::default()
+            },
+        )]
+        .into(),
+    );
+    spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(
+        [(
+            5,
+            benilla_formats::SpellRange {
+                min: 0.0,
+                max: 10.0,
+                flags: 0,
+            },
+        )]
+        .into(),
+    );
+    world.insert_resource(spells);
     world
         .resource_mut::<crate::ui_action::PlayerActions>()
         .spells
         .insert(DUEL);
-    vm(&mut app).set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            has_object: true,
-            guid: FOE,
-            is_player: true,
-            ..Default::default()
-        }),
-    );
-    eval::<()>(&mut app, "StartDuelUnit('target') RandomRoll(1, 2)");
+    vm(&mut app).set_unit_guids(&UnitGuids {
+        player: ME,
+        party: [FOE, 0, 0, 0],
+        ..Default::default()
+    });
+    eval::<()>(&mut app, "StartDuelUnit('party1') RandomRoll(1, 2)");
     assert_eq!(sent(&rx), ["cast 7266", "roll 1"]);
 }
 

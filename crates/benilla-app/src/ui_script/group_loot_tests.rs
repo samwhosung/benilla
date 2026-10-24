@@ -71,6 +71,7 @@ const BARS: &[&str] = &[
 /// with no loader warning of any kind.
 fn setup_counted(extra: &[&str]) -> (UiScript, usize) {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     let mut built = 0;
     for file in super::test_ui::production_order(&[BARS, GROUP_LOOT, extra]) {
@@ -463,6 +464,7 @@ fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
 fn managed_positions_engage_for_the_bare_frame_name() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `GameTooltip.xml` brings `TOOLTIP_DEFAULT_COLOR`, which the dropdown lists read in their
     // OnLoad (`UIDropDownMenuTemplates.xml:186`).
@@ -633,6 +635,7 @@ fn the_roll_template_carries_the_reference_name_and_the_parts_addons_reach_for()
 fn the_stock_group_loot_frame_survives_an_in_flight_roll() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         super::test_ui::LOOT_UI,

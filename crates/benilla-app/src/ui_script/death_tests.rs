@@ -8,6 +8,7 @@ use super::test_ui::load_ui as load_xml;
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -466,6 +467,7 @@ fn corpse_map_position_binding() {
 #[test]
 fn the_death_timers_answer_whole_seconds() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_death(DeathUiState {
         release_remaining: Some(299.7),
         recovery_delay: 0.4,

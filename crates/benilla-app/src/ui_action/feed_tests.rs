@@ -898,6 +898,7 @@ fn a_refusal_of_the_armed_craft_disarms_the_batch() {
                 tools_pending: Vec::new(),
             }],
         }));
+        script.keep_calls();
         script.run("DoTradeSkill(2, 3)").unwrap();
     }
     let repeat = |app: &App| {

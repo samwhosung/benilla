@@ -322,10 +322,12 @@ mod tests {
         assert!(s.take_gossip_selects().is_empty(), "taken");
 
         s.run("CloseGossip()").unwrap();
-        assert!(s.take_calls_where(|call| match call {
-            super::super::ScriptCall::Gossip(super::GossipCall::Close) => Some(()),
-            _ => None,
-        }) == [()]);
+        assert!(
+            s.take_calls_where(|call| match call {
+                super::super::ScriptCall::Gossip(super::GossipCall::Close) => Some(()),
+                _ => None,
+            }) == [()]
+        );
     }
 
     #[test]

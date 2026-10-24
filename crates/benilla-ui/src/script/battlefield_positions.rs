@@ -43,10 +43,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().battlefield_position_lookups)
     }
 
-    /// `RequestBattlefieldPositions()` calls since the last drain; the app sends at most every
-    /// 5000 ms, and only with an active slot.
-    pub fn take_battlefield_position_requests(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().battlefield_position_requests)
+    /// The positions request's clear with no active slot (`0x4aa5c0`, `[0xb6ebdc]`): no teammate
+    /// and no carrier until the next packet.
+    pub fn clear_battlefield_positions(&mut self) {
+        let mut model = self.model_mut();
+        model.battlefield_positions.clear();
+        model.battlefield_flag = None;
     }
 }
 
@@ -126,12 +128,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // `0x4abef0` is a call to `0x4aa5c0`, applied by the host inside the call.
     g.set(
         "RequestBattlefieldPositions",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.battlefield_position_requests += 1;
-            Ok(())
+            super::battlefield_queue::submit(lua, super::BattlefieldCall::Positions)
         })?,
     )?;
 
@@ -240,9 +241,19 @@ mod tests {
                 .abs()
                 < 1e-6
         );
+        s.keep_calls();
         s.run("RequestBattlefieldPositions() RequestBattlefieldPositions()")
             .unwrap();
-        assert_eq!(s.take_battlefield_position_requests(), 2);
-        assert_eq!(s.take_battlefield_position_requests(), 0);
+        assert_eq!(
+            s.take_battlefield_calls(),
+            vec![crate::script::BattlefieldCall::Positions; 2],
+            "each call is the host's"
+        );
+        s.clear_battlefield_positions();
+        assert_eq!(
+            s.eval::<i64>("return GetNumBattlefieldPositions()")
+                .unwrap(),
+            0
+        );
     }
 }

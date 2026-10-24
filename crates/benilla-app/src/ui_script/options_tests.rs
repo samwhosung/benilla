@@ -17,6 +17,8 @@ fn harness_on(s: UiScript) -> UiScript {
 /// [`harness_on`] with a page's `definers` merged in: the files its rows read, each loaded once
 /// and in the production order.
 fn harness_with(mut s: UiScript, definers: &[&str]) -> UiScript {
+    // No engine: what `UIParent`'s `OnUpdate` calls each tick is kept.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     const WINDOW: &[&str] = &[
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -666,7 +668,8 @@ fn a_slider_rows_readout_sits_on_its_labels_line() {
 
 /// A VM with the real registered CVar set, before any XML loads, as the app boots.
 fn audio_harness() -> UiScript {
-    let s = UiScript::new().unwrap();
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.register_cvars(crate::cvars::registered_pairs());
     s
 }
@@ -2326,7 +2329,8 @@ fn every_row_tooltip_key_resolves_in_the_real_global_strings() {
     let src = chain
         .read_file("Interface\\FrameXML\\GlobalStrings.lua")
         .expect("GlobalStrings.lua in the chain");
-    let strings = UiScript::new().expect("VM");
+    let mut strings = UiScript::new().expect("VM");
+    strings.keep_calls();
     strings
         .run(&String::from_utf8_lossy(&src))
         .expect("GlobalStrings runs clean");
@@ -4115,6 +4119,7 @@ impl benilla_ui::script::TextMeasure for SteppedFont {
 fn the_two_option_tabs_fit_their_labels_at_the_drawn_scale() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_text_measurer(Box::new(SteppedFont(6.0)));
     let mut s = harness_on(s);
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();

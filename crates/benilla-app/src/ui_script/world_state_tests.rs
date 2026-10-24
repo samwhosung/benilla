@@ -7,6 +7,7 @@ use super::test_ui::load_ui as load_xml;
 
 pub(crate) fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in [
         "Interface\\FrameXML\\GlobalStrings.lua",

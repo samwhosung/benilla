@@ -70,12 +70,13 @@ impl NpcSession for BinderState {
 /// Publishes `CheckBinderDist()` every frame and fires `CONFIRM_BINDER` for each packet that
 /// asked, unconditionally, as the reference's handler always reaches its `SignalEvent2`.
 fn feed_binder(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut binder: ResMut<BinderState>,
+    // The question, which the Accept reads inside its call: an engine turn, its events signalled
+    // after.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, BinderState>>,
     world: benilla_world::world_point::WorldPoint,
     areas: Option<Res<AreaTableRes>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut binder| {
         let Some(script) = script else {
             return;
         };
@@ -131,30 +132,24 @@ fn area_name_of(
         .unwrap_or_default()
 }
 
-/// Turns the dialog's Accept into `CMSG_BINDER_ACTIVATE`, only while a question is pending: with
-/// no guid latched, the reference's `ConfirmBinder()` finds no unit and sends nothing (`0x5dfdfe`).
-fn drain_binder(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    binder: Res<BinderState>,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let confirms = script.take_binder_confirms();
-        if confirms == 0 {
-            return;
-        }
-        let Some(npc) = binder.pending() else {
-            return;
-        };
-        for _ in 0..confirms {
-            let _ = commands
+/// `ConfirmBinder()` inside its call ([`benilla_ui::script::BinderCall`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct BinderSteps<'w> {
+    binder: Option<Res<'w, BinderState>>,
+    net: Res<'w, NetCommands>,
+}
+
+impl BinderSteps<'_> {
+    /// `0x5dfdc0(0)`: `CMSG_BINDER_ACTIVATE` while a question is pending; with no guid latched
+    /// the reference finds no unit and sends nothing (`0x5dfdfe`).
+    pub(crate) fn confirm(&self) {
+        if let Some(npc) = self.binder.as_deref().and_then(BinderState::pending) {
+            let _ = self
+                .net
                 .0
                 .send(ClientCommand::BinderActivate { binder: npc });
         }
-    })
+    }
 }
 
 /// `SoundEntries.dbc` 1141, played on `SMSG_PLAYERBOUND` before the area is resolved (`0x5e3d6e`),
@@ -237,7 +232,6 @@ impl Plugin for UiBinderPlugin {
                 // Range-close before the feed, so walking away hides the dialog the same frame.
                 close_npc_session_out_of_range::<BinderState>.before(feed_binder),
                 feed_binder.in_set(UiFeed),
-                drain_binder.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

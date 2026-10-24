@@ -20,6 +20,14 @@ pub struct SummonConfirmUiState {
     pub time_left_ms: u32,
 }
 
+/// The summon's verb the host applies inside its call ([`super::ScriptCall::Summon`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummonCall {
+    /// `ConfirmSummon()` (`0x48b770`): `CMSG_SUMMON_RESPONSE` with the latched summoner
+    /// (`0x48b7d0`).
+    Confirm,
+}
+
 impl super::UiScript {
     /// Push the three resolved reads, each frame.
     pub fn set_summon_confirm(&mut self, state: SummonConfirmUiState) {
@@ -29,9 +37,9 @@ impl super::UiScript {
         }
     }
 
-    /// Drain the `ConfirmSummon()` calls, each a `CMSG_SUMMON_RESPONSE`.
+    /// The `ConfirmSummon()` calls a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_summon_confirms(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().summon_confirms)
+        self.take_calls_like(&super::ScriptCall::Summon(SummonCall::Confirm)) as u32
     }
 
     /// `GetSummonConfirmSummoner()` calls since the last drain that answered no name; the app
@@ -81,9 +89,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ConfirmSummon",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.summon_confirms += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Summon(SummonCall::Confirm))
         })?,
     )?;
 

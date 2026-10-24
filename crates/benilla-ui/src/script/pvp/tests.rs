@@ -1042,6 +1042,7 @@ fn the_intent_queues_drain_and_the_honor_query_refuses_to_double_up() {
     // The binding answers zero Lua values on every one of those paths (`0x4c9610`).
     assert_eq!(s.arity("RequestInspectHonorData()").unwrap(), 0);
 
+    s.keep_calls();
     s.eval::<()>("TogglePVP() TogglePVP()").unwrap();
     assert_eq!(s.take_pvp_toggles(), 2, "no latch here — two packets");
     assert_eq!(s.take_pvp_toggles(), 0);

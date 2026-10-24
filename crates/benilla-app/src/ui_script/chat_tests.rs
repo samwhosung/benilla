@@ -8,6 +8,7 @@ use super::test_ui::load_ui as load_xml;
 /// The chat stack, fonts first so `inherits="ChatFontNormal"` resolves.
 pub(crate) fn chat_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     // No engine behind it: the calls its verbs make are kept for the `take_*` readers.
     s.keep_calls();
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -974,6 +975,7 @@ fn the_combat_log_window_runs_its_own_bottom_button_blink() {
 fn the_chat_menu_builds_its_rows_on_the_references_kit() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in [
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -1083,6 +1085,7 @@ fn a_glass_windows_plate_fades_in_on_every_hover() {
 fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     let failures = super::load_default_ui(&s);
@@ -1238,6 +1241,7 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
 
     // The shipped interface, with the guard the layer installs.
     let mut shipped = UiScript::new().unwrap();
+    shipped.keep_calls();
     shipped.set_screen_size(1600.0, 900.0);
     super::test_ui::load_ui(&shipped, "Interface\\FrameXML\\GlobalStrings.lua");
     let failures = super::load_default_ui(&shipped);
@@ -1349,6 +1353,7 @@ fn the_stock_afk_and_dnd_commands_reach_the_wire() {
 fn the_docked_tabs_follow_the_dock_through_a_session() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     // No engine behind it: `RaidFrame`'s `RequestRaidInfo()` at world entry is kept.
     s.keep_calls();
     s.set_screen_size(768.0 * 16.0 / 9.0, 768.0);

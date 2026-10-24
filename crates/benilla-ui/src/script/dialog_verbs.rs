@@ -6,9 +6,13 @@ use mlua::{Lua, Value};
 use super::binding_abi::{bool_or_default, coerced_number, flag};
 use super::Model;
 
-/// The area spirit healer's aura (`0xA18`), the only cancel-aura spell that also fires
-/// `AREA_SPIRIT_HEALER_OUT_OF_RANGE` (`0x6e70b6`).
-pub const AREA_SPIRIT_HEALER_SPELL: u32 = 2584;
+/// The meeting stone's verb the host applies inside its call ([`super::ScriptCall::MeetingStone`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeetingStoneCall {
+    /// `CancelMeetingStoneRequest()` (`0x4ca5a0` → `0x4ca120`): in a party whose leader is not the
+    /// player `ERR_MEETING_STONE_NOT_LEADER` (`0x4ca14e`), else `CMSG_MEETINGSTONE_LEAVE`.
+    Cancel,
+}
 
 impl super::UiScript {
     /// `ConfirmPetUnlearn()` calls since the last drain.
@@ -26,26 +30,24 @@ impl super::UiScript {
         self.model_mut().instance_boot_secs = secs;
     }
 
-    /// The area spirit healer: whether one is cached, and the seconds to its next wave.
-    pub fn set_area_spirit_healer(&mut self, cached: bool, secs: u32) {
-        let mut model = self.model_mut();
-        model.area_spirit_healer_cached = cached;
-        model.area_spirit_secs = secs;
+    /// The seconds to the area spirit healer's next wave (`[0xb4e338]`).
+    pub fn set_area_spirit_healer_secs(&mut self, secs: u32) {
+        self.model_mut().area_spirit_secs = secs;
     }
 
-    /// `AcceptAreaSpiritHeal()` calls since the last drain, each a `0x2E3` to send.
-    pub fn take_area_spirit_accepts(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().area_spirit_accepts)
-    }
-
-    /// `AcceptBattlefieldPort` calls since the last drain: `(slot 1..=3, accept)`.
+    /// The `AcceptBattlefieldPort` calls a harness's VM kept: `(slot 1..=3, accept)`.
     pub fn take_battlefield_port_requests(&mut self) -> Vec<(u8, bool)> {
-        std::mem::take(&mut self.model_mut().battlefield_port_requests)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Battlefield(super::BattlefieldCall::Port { index, accept }) => {
+                Some((*index, *accept))
+            }
+            _ => None,
+        })
     }
 
-    /// `CancelMeetingStoneRequest()` calls since the last drain.
+    /// The `CancelMeetingStoneRequest()` calls a harness's VM kept.
     pub fn take_meeting_stone_cancels(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().meeting_stone_cancels)
+        self.take_calls_like(&super::ScriptCall::MeetingStone(MeetingStoneCall::Cancel)) as u32
     }
 
     /// The meeting stone's two globals: the queued area id (`0xb72038`, 0 for none) and the
@@ -69,29 +71,32 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `0x48df20`: silent with no healer cached, else `0x2E3` with the cached guid.
+    // `0x48df20` → `0x492310`: the host sends `0x2E3` with the engine's cached guid, silent with
+    // none.
     g.set(
         "AcceptAreaSpiritHeal",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if model.area_spirit_healer_cached {
-                model.area_spirit_accepts += 1;
-            }
-            Ok(())
+            super::calls::submit(
+                lua,
+                super::ScriptCall::Death(super::DeathAction::AcceptAreaSpiritHeal),
+            )
         })?,
     )?;
     // `0x48df30` runs the generic cancel-aura (`0x4923a0` → `0x6e7040`): the event in place
-    // (`0x6e70c3`), then `0x136` with `u32 2584`, no guid. Its refusal gate (`AttributesEx` bit 13
-    // set, bit 2 clear, then `0x5ee290`) never trips for 2584 in the shipped `Spell.dbc` (the
-    // app's `spell_2584_never_trips_the_cancel_gate`), so the send is unconditional.
+    // (`0x6e70c3`), then the host's `0x136` with `u32 2584`, no guid. Its refusal gate
+    // (`AttributesEx` bit 13 set, bit 2 clear, then `0x5ee290`) never trips for 2584 in the
+    // shipped `Spell.dbc` (the app's `spell_2584_never_trips_the_cancel_gate`), so the send is
+    // unconditional.
     g.set(
         "CancelAreaSpiritHeal",
         lua.create_function(|lua, ()| {
             super::tick::verb(lua, |model| {
                 model.raise("AREA_SPIRIT_HEALER_OUT_OF_RANGE", Vec::new());
-                model.cancel_aura_requests.push(AREA_SPIRIT_HEALER_SPELL);
             });
-            Ok(())
+            super::calls::submit(
+                lua,
+                super::ScriptCall::Death(super::DeathAction::CancelAreaSpiritHeal),
+            )
         })?,
     )?;
     // Whole seconds: `max(0, [0xb4e338] - now) / 1000`.
@@ -126,19 +131,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             let accept = bool_or_default(Some(&accept), false);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.battlefield_port_requests.push((slot as u8, accept));
-            Ok(())
+            super::battlefield_queue::submit(
+                lua,
+                super::BattlefieldCall::Port {
+                    index: slot as u8,
+                    accept,
+                },
+            )
         })?,
     )?;
 
-    // `0x4ca5a0`: an empty `0x293` gated on party leadership (the app's); only the reply clears.
+    // `0x4ca5a0` → `0x4ca120`: the host's leadership refusal or empty `0x293`; only the reply
+    // clears.
     g.set(
         "CancelMeetingStoneRequest",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.meeting_stone_cancels += 1;
-            Ok(())
+            super::calls::submit(
+                lua,
+                super::ScriptCall::MeetingStone(MeetingStoneCall::Cancel),
+            )
         })?,
     )?;
 
@@ -201,7 +212,7 @@ mod tests {
             0
         );
         s.set_instance_boot_secs(42);
-        s.set_area_spirit_healer(true, 17);
+        s.set_area_spirit_healer_secs(17);
         assert_eq!(
             s.eval::<i64>("return GetInstanceBootTimeRemaining()")
                 .unwrap(),
@@ -213,24 +224,26 @@ mod tests {
         );
     }
 
+    /// Each `AcceptAreaSpiritHeal()` is the host's: the engine's cache decides the send
+    /// (`0x49231b`).
     #[test]
-    fn accept_area_spirit_heal_is_silent_without_a_cached_healer() {
+    fn accept_area_spirit_heal_hands_each_call_to_the_host() {
         let mut s = UiScript::new().unwrap();
-        s.run("AcceptAreaSpiritHeal()").unwrap();
-        assert_eq!(
-            s.take_area_spirit_accepts(),
-            0,
-            "no healer cached: nothing sent"
-        );
-        s.set_area_spirit_healer(true, 5);
+        s.keep_calls();
         s.run("AcceptAreaSpiritHeal() AcceptAreaSpiritHeal()")
             .unwrap();
-        assert_eq!(s.take_area_spirit_accepts(), 2);
+        assert_eq!(
+            s.take_calls_like(&crate::script::ScriptCall::Death(
+                crate::script::DeathAction::AcceptAreaSpiritHeal
+            )),
+            2
+        );
     }
 
     #[test]
     fn cancel_area_spirit_heal_cancels_the_aura_and_fires_out_of_range() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(
             r#"F = CreateFrame("Frame") F:RegisterEvent("AREA_SPIRIT_HEALER_OUT_OF_RANGE")
                F:SetScript("OnEvent", function() GOT = event end) CancelAreaSpiritHeal()"#,
@@ -242,14 +255,17 @@ mod tests {
             "AREA_SPIRIT_HEALER_OUT_OF_RANGE"
         );
         assert_eq!(
-            s.take_cancel_aura_requests(),
-            vec![super::AREA_SPIRIT_HEALER_SPELL]
+            s.take_calls_like(&crate::script::ScriptCall::Death(
+                crate::script::DeathAction::CancelAreaSpiritHeal
+            )),
+            1
         );
     }
 
     #[test]
     fn accept_battlefield_port_raises_on_a_bad_index_and_coerces_the_answer() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(
             s.run("AcceptBattlefieldPort(nil, 1)").is_err(),
             "a non-number index raises"
@@ -303,6 +319,7 @@ mod tests {
     #[test]
     fn the_pet_pair_counts_and_answers_one_or_nil() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(s
             .eval::<bool>("return CheckPetUntrainerDist() == nil")
             .unwrap());

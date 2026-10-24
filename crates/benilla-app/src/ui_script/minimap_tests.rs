@@ -14,6 +14,7 @@ fn enabled(s: &UiScript, button: &str) -> bool {
 fn minimap_zoom_buttons_resync_when_switching_inside_and_outside() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // Host globals the cluster calls that a bare engine does not install.
     s.run("function GetMinimapZoneText() return '' end")
@@ -78,6 +79,8 @@ fn tracking_frame_follows_get_tracking_texture_across_player_auras_changed() {
     use benilla_ui::script::TrackingState;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();
@@ -116,6 +119,7 @@ fn tracking_frame_follows_get_tracking_texture_across_player_auras_changed() {
 /// The cluster and the stock `GameTime.xml`, the clock at `hour:minute` as the app pushes it.
 fn game_time_session(hour: i32, minute: i32) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();
@@ -222,6 +226,7 @@ fn hovering_the_indicator_shows_and_live_updates_the_game_time_tooltip() {
 fn a_click_on_the_minimap_pings_the_world_point_under_it() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();
@@ -280,6 +285,7 @@ fn a_click_on_the_minimap_pings_the_world_point_under_it() {
 fn get_ping_position_answers_two_numbers_always() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();
@@ -350,6 +356,7 @@ fn get_ping_position_answers_two_numbers_always() {
 fn the_meeting_stone_icon_follows_the_queue_across_meetingstone_changed() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();
@@ -421,6 +428,7 @@ fn a_shown_ping_pane_asks_for_a_tile_and_draws_its_cell() {
 
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();
@@ -621,6 +629,7 @@ fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
     use benilla_ui::widget::{ModelFileFacts, SequenceFacts};
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")
         .unwrap();

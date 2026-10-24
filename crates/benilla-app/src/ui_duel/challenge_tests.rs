@@ -1,7 +1,6 @@
 //! `StartDuelUnit` on the whole client headless: the duel cast at whatever unit the token names,
 //! through the cast path.
 
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -104,16 +103,10 @@ fn select(app: &mut App, guid: u64) {
     script.set_unit_guids(&guids);
 }
 
-/// `lua`, then the duel drain; the duel casts it sent, by target.
+/// `lua` with the host lent; the duel casts it sent inside its calls, by target.
 fn challenge(app: &mut App, rx: &Receiver<ClientCommand>, lua: &str) -> Vec<Option<u64>> {
-    let world = app.world_mut();
-    world
-        .non_send_resource_mut::<UiScript>()
-        .run(lua)
+    crate::script_calls::with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").run(lua))
         .expect("the challenge runs");
-    world
-        .run_system_once(super::drain_duel)
-        .expect("the duel drain runs");
     rx.try_iter()
         .filter_map(|c| match c {
             ClientCommand::CastSpell { spell_id, target } if spell_id == DUEL => Some(target),

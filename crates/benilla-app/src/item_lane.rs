@@ -459,6 +459,8 @@ mod tests {
                 tools_pending: Vec::new(),
             }],
         }));
+        // No engine: the closes' calls are kept, their VM halves run.
+        script.keep_calls();
         script
             .run(
                 "HEARD = {} local f = CreateFrame('Frame') \

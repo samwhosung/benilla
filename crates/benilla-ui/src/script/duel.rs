@@ -1,5 +1,5 @@
 //! The four duel globals, registered together at `0x849fa8`. What the UI reads arrives as event
-//! arguments, so each call only queues a [`DuelRequest`] for the app to send. `AcceptDuel`
+//! arguments, so each call hands the host a [`DuelRequest`] to apply inside it. `AcceptDuel`
 //! (`0x4d4ce0`) and `CancelDuel` (`0x4d4cf0`) call `0x4d4830` and `0x4d48b0`; `StartDuel`
 //! (`0x4d4c40`) and `StartDuelUnit` (`0x4d4c90`) send no duel opcode but cast the duel spell at
 //! the guid they resolve (`0x4d4810`).
@@ -10,13 +10,14 @@ use super::by_name::Filter;
 use super::protected::{self, Tag};
 use super::Model;
 
-/// A duel intent queued by the globals, drained by `UiScript::take_duel_requests`.
+/// The duel verbs the host applies inside their calls ([`super::ScriptCall::Duel`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DuelRequest {
-    /// `AcceptDuel()`, the `DUEL_REQUESTED` popup's Accept: `CMSG_DUEL_ACCEPTED`.
+    /// `AcceptDuel()`, the `DUEL_REQUESTED` popup's Accept: `CMSG_DUEL_ACCEPTED` with the stored
+    /// flag guid, a duel or none (`0x4d4830`).
     Accept,
-    /// `CancelDuel()`: `CMSG_DUEL_CANCELLED`, which the server reads by duel state as a decline,
-    /// a cancel or a forfeit.
+    /// `CancelDuel()`: `CMSG_DUEL_CANCELLED` with the stored flag guid (`0x4d48b0`), which the
+    /// server reads by duel state as a decline, a cancel or a forfeit.
     Cancel,
     /// The duel spell at this guid (`0x4d4810`), never zero: `StartDuel(name)` after the by-name
     /// resolver (`0x4d4c6d`, players only, no filter), or `StartDuelUnit(unit)`, the unit popup's
@@ -25,29 +26,48 @@ pub enum DuelRequest {
 }
 
 impl super::UiScript {
-    /// Drain the duel intents queued since the last call.
+    /// The duel calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_duel_requests(&mut self) -> Vec<DuelRequest> {
-        std::mem::take(&mut self.model_mut().duel_requests)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Duel(request) => Some(request.clone()),
+            _ => None,
+        })
     }
 
-    /// `StartDuel(name)` for the app's Rust slash parser: the binding's own resolve and queue.
+    /// `StartDuel(name)` for the app's Rust slash parser: the binding's own resolve and call.
     pub fn start_duel_by_name(&mut self, name: &str) {
-        start_duel_by_name(&mut self.model_mut(), name);
+        let lua = self.lua().clone();
+        if let Err(e) = start_duel_by_name(&lua, name) {
+            self.model_mut().record_lua_error(&e);
+        }
     }
 
-    /// Queue an intent from the app's Rust slash parser: `/duel` and `/forfeit`, which the
+    /// A duel call from the app's Rust slash parser: `/duel` and `/forfeit`, which the
     /// reference's `SlashCmdList` handlers send through `StartDuel` and `CancelDuel`.
-    pub fn queue_duel_request(&mut self, request: DuelRequest) {
-        self.model_mut().duel_requests.push(request);
+    pub fn duel_call(&mut self, request: DuelRequest) {
+        let lua = self.lua().clone();
+        if let Err(e) = super::calls::submit(&lua, super::ScriptCall::Duel(request)) {
+            self.model_mut().record_lua_error(&e);
+        }
     }
 }
 
 /// `StartDuel` (`0x4d4c40`): `0x493aa0` with typemask 0x10 and mode 0 (`0x4d4c6d`), then the duel
 /// spell at the guid (`0x4d4810`); a zero guid does nothing (`0x4d4c76`).
-fn start_duel_by_name(model: &mut Model, name: &str) {
-    if let Some(guid) = model.closest_player(name, Filter::AcceptAll) {
-        model.duel_requests.push(DuelRequest::StartByGuid(guid));
+fn start_duel_by_name(lua: &Lua, name: &str) -> mlua::Result<()> {
+    let guid = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        model.closest_player(name, Filter::AcceptAll)
+    };
+    match guid {
+        Some(guid) => submit(lua, DuelRequest::StartByGuid(guid)),
+        None => Ok(()),
     }
+}
+
+/// Hand `request` to the host, which applies it before this returns ([`super::calls::submit`]).
+fn submit(lua: &Lua, request: DuelRequest) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Duel(request))
 }
 
 /// Register the duel globals.
@@ -56,21 +76,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "AcceptDuel",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.duel_requests.push(DuelRequest::Accept);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, DuelRequest::Accept))?,
     )?;
 
     // `CancelDuel()`: the popup's Decline, and `/forfeit` (`/concede`, `/yield`) once under way.
     g.set(
         "CancelDuel",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.duel_requests.push(DuelRequest::Cancel);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, DuelRequest::Cancel))?,
     )?;
 
     // StartDuel(name) (`0x4d4c40`): a non-string returns silently (`0x4d4c4f`). The challenge
@@ -86,11 +98,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.closest_player(&name, Filter::AcceptAll)
             };
-            if let Some(guid) = guid.filter(|_| protected::gate(lua, Tag::CAST)) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.duel_requests.push(DuelRequest::StartByGuid(guid));
+            match guid.filter(|_| protected::gate(lua, Tag::CAST)) {
+                Some(guid) => submit(lua, DuelRequest::StartByGuid(guid)),
+                None => Ok(()),
             }
-            Ok(())
         })?,
     )?;
 
@@ -108,10 +119,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 model.unit_guids.guid_of(&token)?.unwrap_or(0)
             };
             if guid != 0 && protected::gate(lua, Tag::CAST) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.duel_requests.push(DuelRequest::StartByGuid(guid));
+                submit(lua, DuelRequest::StartByGuid(guid))
+            } else {
+                Ok(())
             }
-            Ok(())
         })?,
     )?;
 
@@ -128,6 +139,7 @@ mod tests {
 
     fn player_vm(members: &[(&str, u64)]) -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_unit(
             "player",
             Some(UnitState {
@@ -190,6 +202,7 @@ mod tests {
         s.run("StartDuel('Zed')").unwrap();
         assert!(s.take_duel_requests().is_empty());
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_party(PartyState {
             members: vec![PartyMemberInfo {
                 name: "Onerogue".into(),

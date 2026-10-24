@@ -8,6 +8,7 @@ use super::test_ui::load_ui as load_xml;
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -280,21 +281,24 @@ fn the_verb_dialogs_open_from_their_events_and_call_their_verbs() {
     assert!(!s
         .eval::<bool>("return StaticPopup_Visible(\"INSTANCE_BOOT\") ~= nil")
         .unwrap());
-    s.set_area_spirit_healer(true, 20);
+    s.set_area_spirit_healer_secs(20);
     s.fire_event("AREA_SPIRIT_HEALER_IN_RANGE", vec![]);
     s.tick(0.0);
     assert!(s
         .eval::<bool>("return StaticPopup_Visible(\"AREA_SPIRIT_HEAL\") ~= nil")
         .unwrap());
     // The shipped dialog accepts on show and its one button cancels (`StaticPopup.lua:1224`).
+    let accept = benilla_ui::script::ScriptCall::Death(
+        benilla_ui::script::DeathAction::AcceptAreaSpiritHeal,
+    );
     assert!(
-        s.take_area_spirit_accepts() >= 1,
+        s.take_calls_like(&accept) >= 1,
         "showing the dialog IS the accept"
     );
     s.run("StaticPopup_OnClick(StaticPopup_FindVisible(\"AREA_SPIRIT_HEAL\"), 1)")
         .unwrap();
     assert_eq!(
-        s.take_area_spirit_accepts(),
+        s.take_calls_like(&accept),
         0,
         "the button cancels; it does not accept again"
     );

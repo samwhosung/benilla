@@ -582,7 +582,7 @@ pub(super) fn drain_chat_input(
                         script.promote_by_name(&name);
                     }
                 }
-                // The duel verbs join the intent queue `StartDuel` and `CancelDuel` feed: the stock
+                // The duel verbs make the calls `StartDuel` and `CancelDuel` make: the stock
                 // handlers are one-line calls to them.
                 ParsedChat::Duel { name } => {
                     if let Some(name) =
@@ -592,7 +592,7 @@ pub(super) fn drain_chat_input(
                     }
                 }
                 ParsedChat::Forfeit => {
-                    script.queue_duel_request(benilla_ui::script::DuelRequest::Cancel);
+                    script.duel_call(benilla_ui::script::DuelRequest::Cancel);
                 }
                 // `crate::target`'s resolver (the reference's `0x493aa0`) commits through the one
                 // SetSelection path. A bare `/target` takes `GetSlashCmdTarget`'s fallback: a no-op
@@ -621,8 +621,8 @@ pub(super) fn drain_chat_input(
                         None => crate::player::FollowRequest::Unit("target".into()),
                     });
                 }
-                // `SlashCmdList["PVP"]` is `TogglePVP()`, the popup row's intent queue.
-                ParsedChat::Pvp => script.queue_pvp_toggle(),
+                // `SlashCmdList["PVP"]` is `TogglePVP()`, the same call.
+                ParsedChat::Pvp => script.toggle_pvp(),
                 ParsedChat::Help => {
                     // benilla's own summary, for a line that skipped the edit box; a typed `/help`
                     // runs the stock `ChatFrame_DisplayHelpText`.

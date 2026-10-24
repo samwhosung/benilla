@@ -8,6 +8,7 @@ use super::test_ui::load_ui as load_xml;
 /// A 1024-wide screen, so the 1024-wide bar spans x 0..1024 and its offsets are screen coordinates.
 fn harness(extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         &[

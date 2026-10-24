@@ -142,6 +142,7 @@ fn probe_player() -> UnitState {
 
 fn open_window(points_spent: u32) -> UiScript {
     let mut script = UiScript::new().expect("engine");
+    script.keep_calls();
     script.set_screen_size(1024.0, 768.0);
     load_ui(&script);
     script.set_unit("player", Some(probe_player()));
@@ -316,6 +317,7 @@ fn a_wheel_spin_over_the_grid_scrolls_the_tree() {
     // The whole chain: hit test on a talent button, bubble to the ScrollFrame's OnMouseWheel,
     // step the Slider, whose OnValueChanged pans the frame.
     let mut script = UiScript::new().expect("engine");
+    script.keep_calls();
     script.set_screen_size(1024.0, 768.0);
     load_ui(&script);
     script.set_unit("player", Some(probe_player()));

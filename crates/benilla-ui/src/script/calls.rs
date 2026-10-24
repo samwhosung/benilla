@@ -216,6 +216,28 @@ pub enum ScriptCall {
     TradeSkill(super::TradeSkillCall),
     /// The craft window's close ([`super::CraftCall`]): its marker, inside the call.
     Craft(super::CraftCall),
+    /// A battleground verb ([`super::BattlefieldCall`]): its refusal, its packet and its throttle
+    /// inside the call.
+    Battlefield(super::BattlefieldCall),
+    /// A death verb ([`super::DeathAction`]): its gates and its packet, or the soulstone's item
+    /// use, inside the call.
+    Death(super::DeathAction),
+    /// A duel verb ([`super::DuelRequest`]): its packet or the duel spell's cast inside the call.
+    Duel(super::DuelRequest),
+    /// A group loot vote ([`super::LootRollCall`]): its packet and the engine's close inside the
+    /// call, ahead of `CANCEL_LOOT_ROLL`.
+    LootRoll(super::LootRollCall),
+    /// The innkeeper's Accept ([`super::BinderCall`]): its packet inside the call.
+    Binder(super::BinderCall),
+    /// The summon's Accept ([`super::SummonCall`]): its packet inside the call.
+    Summon(super::SummonCall),
+    /// The meeting stone's leave ([`super::MeetingStoneCall`]): its refusal or packet inside the
+    /// call.
+    MeetingStone(super::MeetingStoneCall),
+    /// The lockouts' reset ([`super::InstanceCall`]): its packet inside the call.
+    Instance(super::InstanceCall),
+    /// The PvP flag's toggle ([`super::PvpCall`]): its packet inside the call.
+    Pvp(super::PvpCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that
@@ -245,6 +267,7 @@ impl ScriptCall {
             ScriptCall::PickItem(pick) => pick.may_cast,
             ScriptCall::EnchantConfirm(answer) => answer.may_cast,
             ScriptCall::Item(super::ItemCall::BindOnUse { may_cast }) => *may_cast,
+            ScriptCall::Death(super::DeathAction::UseSoulstone { may_cast }) => *may_cast,
             ScriptCall::CastSpell { may_cast, .. } => *may_cast,
             ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
             ScriptCall::Select { may_cast, .. }
@@ -733,7 +756,8 @@ impl UiScript {
 
     /// Take the kept calls equal to `call`, leaving the rest kept: how many there were.
     pub fn take_calls_like(&mut self, call: &ScriptCall) -> usize {
-        self.take_calls_where(|kept| (kept == call).then_some(())).len()
+        self.take_calls_where(|kept| (kept == call).then_some(()))
+            .len()
     }
 
     /// Take the kept calls `pick` answers for, in call order, leaving the rest kept.

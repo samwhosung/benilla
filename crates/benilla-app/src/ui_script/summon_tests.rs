@@ -18,6 +18,7 @@ use super::test_ui::load_ui as load_xml;
 /// A live offer with the server's full two-minute window left.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -233,6 +234,7 @@ fn the_getters_answer_empties_before_anything_is_pending() {
 #[test]
 fn the_time_left_getter_truncates_to_whole_seconds() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_summon_confirm(SummonConfirmUiState {
         summoner: "Twomage".into(),
         area: "Stormwind City".into(),

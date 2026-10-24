@@ -6,6 +6,7 @@ use super::test_ui::load_ui as load_xml;
 
 fn chat_ui() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",

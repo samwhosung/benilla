@@ -5,11 +5,11 @@ use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 
 use super::{
     auction, backdrop, bank, camera_view, char_stats, chat_window, colorselect, container, craft,
-    cursor, death, duel, follow, gossip, guild, item_calls, item_text, loot, loot_roll, macros,
-    mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation,
-    simplehtml, skills, slider, social, spellbook, stable, taxi, trade, tradeskill, trainer,
-    weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest,
-    PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
+    cursor, death, follow, gossip, guild, item_calls, item_text, loot, loot_roll, macros, mail,
+    merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation, simplehtml,
+    skills, slider, social, spellbook, stable, taxi, trade, tradeskill, trainer, weapon_enchant,
+    ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest, PlayerReqState, RegionData,
+    ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
 };
 
 // ── The Rust-side model ──
@@ -474,8 +474,6 @@ pub(crate) struct Model {
     pub(crate) instance_type: Option<u32>,
     /// `CanShowResetInstances()`, the reference's four-term predicate (`0x495c90`), app-computed.
     pub(crate) can_reset_instances: bool,
-    /// `ResetInstances()` calls queued.
-    pub(crate) reset_instance_asks: u32,
     /// Friends, ignores and the last `/who`, display-resolved as the reference resolves them.
     pub(crate) social: social::SocialState,
     /// `SetWhoToUI`'s flag (`0xc2a12c`), written only by the binding (`0x5ad87c`).
@@ -527,8 +525,6 @@ pub(crate) struct Model {
     pub(crate) user_placed_changed: bool,
     /// The default chat language; `None` is no player, so `GetDefaultLanguage()` returns nothing.
     pub(crate) default_language: Option<String>,
-    /// `AcceptDuel`, `CancelDuel` and `StartDuel*` calls; Lua sees duels only through events.
-    pub(crate) duel_requests: Vec<duel::DuelRequest>,
     /// `FollowUnit` and `FollowByName` calls; Lua sees following only as `AUTOFOLLOW_*` events.
     pub(crate) follow_requests: Vec<follow::FollowRequest>,
     /// `SetView`, `SaveView`, `ResetView`, `NextView`, `PrevView` and `FlipCameraYaw` calls; the
@@ -539,8 +535,6 @@ pub(crate) struct Model {
     /// `PLAYER_LOGIN`'s one-shot, the reference's `[0xb4e260]`: armed by the UI load, spent by
     /// the next world-enter cascade ([`super::UiScript::fire_world_enter`]).
     pub(crate) player_login_armed: bool,
-    /// `TogglePVP` calls, a count because `CMSG_TOGGLE_PVP` has no body.
-    pub(crate) pvp_toggles: u32,
     /// The player's private honor fields; before the first push the six self getters read zeros.
     pub(crate) honor: Option<pvp::HonorState>,
     /// The last `MSG_INSPECT_HONOR_STATS` reply; its presence is `HasInspectHonorData`'s answer.
@@ -680,21 +674,12 @@ pub(crate) struct Model {
     pub(crate) pet_untrainer_pending: bool,
     /// `GetInstanceBootTimeRemaining()` in whole seconds, from the `SMSG_RAID_GROUP_ONLY` deadline.
     pub(crate) instance_boot_secs: u32,
-    /// A cached area spirit healer (`[0xb4e330/334]`) and seconds to its wave (`[0xb4e338]`).
-    pub(crate) area_spirit_healer_cached: bool,
+    /// Whole seconds to the area spirit healer's wave (`[0xb4e338]`).
     pub(crate) area_spirit_secs: u32,
-    /// `AcceptAreaSpiritHeal()` calls, one `CMSG_AREA_SPIRIT_HEALER_QUEUE` each.
-    pub(crate) area_spirit_accepts: u32,
-    /// `AcceptBattlefieldPort(index, accept)` calls: the 1-based slot and the normalised answer.
-    pub(crate) battlefield_port_requests: Vec<(u8, bool)>,
     /// The battleground scoreboard: pushed rows, faction filter, sort order.
     pub(crate) battlefield_board: super::battlefield_score::ScoreBoard,
     /// `GetBattlefieldInstanceRunTime()`, pushed each frame.
     pub(crate) battlefield_run_time_ms: u32,
-    /// `RequestBattlefieldScoreData()` calls.
-    pub(crate) battlefield_score_requests: u32,
-    /// `LeaveBattlefield()` calls that passed the "ended" gate.
-    pub(crate) battlefield_leave_requests: u32,
     /// The battleground instance list and its scalars, as pushed.
     pub(crate) battlefield_list: super::battlefield_queue::BattlefieldListView,
     /// The selected instance id (`[0xb6eba0]`), not an index; written by `SetSelectedBattlefield`.
@@ -705,20 +690,13 @@ pub(crate) struct Model {
     pub(crate) battlefield_slots: [super::battlefield_queue::BattlefieldQueueSlot; 3],
     /// `GetBattlefieldInstanceExpiration()`, pushed each frame.
     pub(crate) battlefield_instance_expiration_ms: u32,
-    /// `JoinBattlefield` calls, `(instance id, as group)`.
-    pub(crate) battlefield_join_requests: Vec<(u32, bool)>,
-    /// `ShowBattlefieldList` calls that passed their gates: the queued slot's map id.
-    pub(crate) battlefield_list_requests: Vec<u32>,
-    /// Teammates' map positions, the flag carrier, the icon scale and position requests.
+    /// Teammates' map positions, the flag carrier and the icon scale.
     pub(crate) battlefield_positions: Vec<super::battlefield_positions::BattlefieldPositionView>,
     pub(crate) battlefield_flag: Option<super::battlefield_positions::BattlefieldFlagView>,
     pub(crate) battlefield_icon_scale: f32,
     /// The 0-based rows `GetBattlefieldPosition` read with no name: each call's name lookup passes
     /// the callback `0x4ac190` (`0x4ac118`), which the app makes.
     pub(crate) battlefield_position_lookups: Vec<usize>,
-    pub(crate) battlefield_position_requests: u32,
-    /// `CancelMeetingStoneRequest()` calls; the app gates on leadership.
-    pub(crate) meeting_stone_cancels: u32,
     /// The meeting stone's queued area (`[0xb72038]`) and status text (`[0xb7203c]`), as pushed.
     pub(crate) meeting_stone_area: u32,
     pub(crate) meeting_stone_status_text: Option<String>,
@@ -925,9 +903,8 @@ pub(crate) struct Model {
     /// The loot type cell (`0xb71bbc`), which outlives the window.
     pub(crate) loot_type: u8,
 
-    /// The open group-loot rolls, and the `RollOnLoot` `(roll_id, roll_type)` votes.
+    /// The open group-loot rolls.
     pub(crate) loot_rolls: loot_roll::LootRollsState,
-    pub(crate) loot_roll_votes: Vec<(u32, u8)>,
 
     /// The item-text reader: the pushed page, then the close and page-turn calls.
     pub(crate) item_text: Option<item_text::ItemTextState>,
@@ -1007,9 +984,8 @@ pub(crate) struct Model {
     /// panel until the next list fills them.
     pub(crate) quest_pool_levels: quest::PoolLevels,
 
-    /// Death countdowns and offers, and the release, reclaim and resurrect calls.
+    /// Death countdowns and offers.
     pub(crate) death: death::DeathUiState,
-    pub(crate) death_actions: Vec<death::DeathAction>,
 
     /// The quest log, selection (1-based) and abandon mark (a quest id, `0xbb7484`).
     pub(crate) quest_log: quest_log::QuestLogState,
@@ -1268,14 +1244,10 @@ pub(crate) struct Model {
     pub(crate) gm_ticket_intents: Vec<super::gm_ticket::GmTicketIntent>,
     /// `Stuck()` calls, each a cast of spell 7355, the Help window's Auto-Unstuck.
     pub(crate) stuck_casts: u32,
-    /// `ConfirmBinder()` calls, one `CMSG_BINDER_ACTIVATE` each; the app holds the innkeeper.
-    pub(crate) binder_confirms: u32,
     /// `CheckBinderDist()`: the innkeeper's question is live and in range; false hides its dialog.
     pub(crate) binder_pending: bool,
     /// The summon getters' answers, defaulting to the reference's `""`, `""`, 0 with none pending.
     pub(crate) summon_confirm: super::summon::SummonConfirmUiState,
-    /// `ConfirmSummon()` calls, one `CMSG_SUMMON_RESPONSE` each; the app holds the summoner.
-    pub(crate) summon_confirms: u32,
     /// `GetSummonConfirmSummoner()` calls that answered no name: each call's lookup passes the
     /// callback `0x48b710` (`0x48b6e1`), which the app makes.
     pub(crate) summon_summoner_lookups: u32,
@@ -1542,7 +1514,6 @@ impl Model {
             player_faction_masks: None,
             instance_type: None,
             can_reset_instances: false,
-            reset_instance_asks: 0,
             social: social::SocialState::default(),
             who_to_ui: false,
             lfg_dungeons: Vec::new(),
@@ -1570,12 +1541,10 @@ impl Model {
             logging_changed: false,
             user_placed_changed: false,
             default_language: None,
-            duel_requests: Vec::new(),
             follow_requests: Vec::new(),
             camera_view_requests: Vec::new(),
             glue: Default::default(),
             player_login_armed: false,
-            pvp_toggles: 0,
             honor: None,
             inspect_honor: None,
             inspect_honor_requests: 0,
@@ -1629,26 +1598,17 @@ impl Model {
             pet_unlearn_confirms: 0,
             pet_untrainer_pending: false,
             instance_boot_secs: 0,
-            area_spirit_healer_cached: false,
             area_spirit_secs: 0,
-            area_spirit_accepts: 0,
-            battlefield_port_requests: Vec::new(),
             battlefield_board: Default::default(),
             battlefield_run_time_ms: 0,
-            battlefield_score_requests: 0,
-            battlefield_leave_requests: 0,
             battlefield_list: Default::default(),
             battlefield_selected: 0,
             battlefield_slots: Default::default(),
             battlefield_instance_expiration_ms: 0,
-            battlefield_join_requests: Vec::new(),
-            battlefield_list_requests: Vec::new(),
             battlefield_positions: Vec::new(),
             battlefield_position_lookups: Vec::new(),
             battlefield_flag: None,
             battlefield_icon_scale: 1.0,
-            battlefield_position_requests: 0,
-            meeting_stone_cancels: 0,
             meeting_stone_area: 0,
             meeting_stone_status_text: None,
             tutorial_bank: None,
@@ -1728,7 +1688,6 @@ impl Model {
             loot: None,
             loot_type: 0,
             loot_rolls: loot_roll::LootRollsState::default(),
-            loot_roll_votes: Vec::new(),
             item_text: None,
             item_text_close: false,
             item_text_page_turns: Vec::new(),
@@ -1762,7 +1721,6 @@ impl Model {
             quest_item_waits: Vec::new(),
             quest_pool_levels: Default::default(),
             death: death::DeathUiState::default(),
-            death_actions: Vec::new(),
             quest_log: quest_log::QuestLogState::default(),
             quest_log_selection: 0,
             quest_log_abandon_mark: 0,
@@ -1818,10 +1776,8 @@ impl Model {
             gm_ticket_categories: Vec::new(),
             gm_ticket_intents: Vec::new(),
             stuck_casts: 0,
-            binder_confirms: 0,
             binder_pending: false,
             summon_confirm: super::summon::SummonConfirmUiState::default(),
-            summon_confirms: 0,
             summon_summoner_lookups: 0,
             framerate: 1000.0,
             modifiers: (false, false, false),
