@@ -35,9 +35,14 @@ impl PortraitMarks {
         }
     }
 
+    /// `SetPortraitTexture` asked the name cache for `guid` with the callback `0x51a100`.
+    pub(crate) fn ask(&mut self, guid: u64) {
+        let _ = guid;
+    }
+
     /// The GUIDs waiting, head first.
     #[cfg(test)]
-    pub(super) fn pending(&self) -> &[u64] {
+    pub(crate) fn pending(&self) -> &[u64] {
         &self.0
     }
 
@@ -149,6 +154,7 @@ mod tests {
         app.init_resource::<PortraitMarks>()
             .init_resource::<NoticeLane>()
             .init_resource::<GuidIndex>()
+            .init_resource::<crate::names::NameCache>()
             .add_message::<crate::creature_anim::SheathSwapMessage>()
             .add_systems(
                 Update,
@@ -210,22 +216,161 @@ mod tests {
     fn a_display_change_fires_both_events_once_the_new_body_is_built() {
         let mut app = app();
         let e = unit(&mut app, A, EntityKind::Player);
-        app.world_mut().entity_mut(e).insert(VisualAttached);
+        built(&mut app, e, 49);
         app.update();
         assert_eq!(notices(&mut app), pair(A), "the first build marks too");
         app.update();
         assert_eq!(notices(&mut app), [], "once");
 
         // The swap tears the body down; the rebuild lands frames later.
-        app.world_mut().entity_mut(e).remove::<VisualAttached>();
+        torn_down(&mut app, e);
         app.update();
         app.update();
         assert_eq!(notices(&mut app), [], "a body still loading fires nothing");
-        app.world_mut().entity_mut(e).insert(VisualAttached);
+        built(&mut app, e, 50);
         app.update();
         assert_eq!(notices(&mut app), pair(A));
         app.update();
         assert_eq!(notices(&mut app), []);
+    }
+
+    fn built(app: &mut App, unit: Entity, display: u32) {
+        app.world_mut().entity_mut(unit).insert((
+            VisualAttached,
+            crate::entities::AppliedDisplay(Some(display)),
+        ));
+    }
+
+    fn torn_down(app: &mut App, unit: Entity) {
+        app.world_mut()
+            .entity_mut(unit)
+            .remove::<(VisualAttached, crate::entities::AppliedDisplay)>();
+    }
+
+    /// benilla's palette heal rebuilds a body on the display it had, which is no display change
+    /// and runs no `0x607da0` latch: no mark.
+    #[test]
+    fn a_body_rebuilt_on_its_own_display_marks_nothing() {
+        let mut app = app();
+        let e = unit(&mut app, A, EntityKind::Player);
+        built(&mut app, e, 49);
+        app.update();
+        notices(&mut app);
+        torn_down(&mut app, e);
+        app.update();
+        built(&mut app, e, 49);
+        app.update();
+        app.update();
+        assert_eq!(notices(&mut app), []);
+    }
+
+    /// Mounting moves neither the body nor its latches: the mount field's handler `0x5ffa50`
+    /// reaches no mark.
+    #[test]
+    fn mounting_marks_nothing() {
+        let mut app = app();
+        let e = unit(&mut app, A, EntityKind::Player);
+        built(&mut app, e, 49);
+        app.update();
+        notices(&mut app);
+        let mounted = ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (benilla_protocol::field::FIELD_UNIT_MOUNTDISPLAYID, 14_338),
+        ]);
+        app.world_mut().entity_mut(e).insert(ObjectStore(mounted));
+        app.update();
+        app.update();
+        assert_eq!(notices(&mut app), []);
+    }
+
+    /// The name callback `0x51a100` marks a player the portrait asked the name cache for once the
+    /// record lands (`0x51a10c`), and the drain fires the pair for a GUID no unit answers to.
+    #[test]
+    fn a_name_record_landing_for_a_portrait_marks_its_player() {
+        let mut app = app();
+        app.world_mut().resource_mut::<PortraitMarks>().ask(B);
+        app.update();
+        assert_eq!(notices(&mut app), [], "no record yet");
+        app.world_mut()
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(B, "Brisca".into(), Some((4, 1, 1)));
+        app.update();
+        assert_eq!(notices(&mut app), pair(B));
+        app.update();
+        assert_eq!(notices(&mut app), [], "the callback runs once");
+    }
+
+    /// The durability watcher `0x5d97c0` marks the item's owner when the item and its owner, a
+    /// player, are both held (`0x5d97f2`, `0x5d981d`, mark at `0x5d991b`), whatever the value; a
+    /// first create runs no watcher.
+    #[test]
+    fn a_durability_change_marks_the_items_owner() {
+        let mut app = app();
+        let e = unit(&mut app, A, EntityKind::Player);
+        built(&mut app, e, 49);
+        let item = |durability: u32, owner: u64| {
+            ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x3),
+                (6, owner as u32),
+                (7, (owner >> 32) as u32),
+                (46, durability),
+                (47, 100),
+            ]))
+        };
+        const SWORD: u64 = 0x4000_0000_0000_0099;
+        let sword = app.world_mut().spawn((Guid(SWORD), item(100, A))).id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(SWORD, sword);
+        app.update();
+        notices(&mut app);
+        app.world_mut().entity_mut(sword).insert(item(99, A));
+        app.update();
+        assert_eq!(notices(&mut app), pair(A), "worn by a hit");
+        app.world_mut().entity_mut(sword).insert(item(100, A));
+        app.update();
+        assert_eq!(notices(&mut app), pair(A), "a repair");
+        app.world_mut().entity_mut(sword).insert(item(80, MOB));
+        app.update();
+        assert_eq!(
+            notices(&mut app),
+            [],
+            "an owner the client does not hold as a player"
+        );
+    }
+
+    /// A snap sheath of a weapon with a glow re-attaches it through `0x60b770` → `0x5eed00`, whose
+    /// `0x5eed50` re-applies the glow and marks (`0x5eeda9`); a weapon with none does not, and a
+    /// ceremony's move is its key's mark (`0x5ffbbe`).
+    #[test]
+    fn a_glowing_weapon_snapped_to_another_point_marks_its_wielder() {
+        use crate::entities::attach_id::{HAND_RIGHT, HIP_MAIN};
+        use crate::entities::HeldItems;
+        let mut app = app();
+        let e = unit(&mut app, A, EntityKind::Player);
+        built(&mut app, e, 49);
+        app.world_mut()
+            .entity_mut(e)
+            .insert(HeldItems::hands_for_tests([Some((HIP_MAIN, 0)), None]));
+        app.update();
+        notices(&mut app);
+        app.world_mut()
+            .entity_mut(e)
+            .insert(HeldItems::hands_for_tests([Some((HAND_RIGHT, 0)), None]));
+        app.update();
+        assert_eq!(notices(&mut app), [], "no glow");
+
+        app.world_mut()
+            .entity_mut(e)
+            .insert(HeldItems::hands_for_tests([Some((HAND_RIGHT, 172)), None]));
+        app.update();
+        notices(&mut app);
+        app.world_mut()
+            .entity_mut(e)
+            .insert(HeldItems::hands_for_tests([Some((HIP_MAIN, 172)), None]));
+        app.update();
+        assert_eq!(notices(&mut app), pair(A), "the glow moved with the snap");
     }
 
     /// The drain walks from the head and a mark links at the head, so the newest unit drains first;

@@ -464,7 +464,8 @@ mod tests {
     }
 
     /// Either aura block raises one `UNIT_AURA`; a new pet guid `UNIT_PET` for the member; the
-    /// pet's own fields their events for the pet, the display none.
+    /// pet's own fields their events for the pet, and the display a mark of its portrait
+    /// (`0x5e587f`) at its place among them.
     #[test]
     fn the_auras_the_pet_and_its_fields_raise_theirs() {
         let old = record(member_status::ONLINE);
@@ -492,10 +493,10 @@ mod tests {
             ..old.clone()
         };
         // Focus, power type 2: `UNIT_FOCUS` 19.
-        assert_eq!(
-            record_notices(MEMBER, &old, &pet_moved),
-            signals(&[(PET, 183), (PET, 16), (PET, 30), (PET, 19), (PET, 41)])
-        );
+        let mut want = signals(&[(PET, 183)]);
+        want.push(FieldNotice::PortraitMark { guid: PET });
+        want.extend(signals(&[(PET, 16), (PET, 30), (PET, 19), (PET, 41)]));
+        assert_eq!(record_notices(MEMBER, &old, &pet_moved), want);
         // With no pet the record names, the pet's bits raise nothing.
         let petless = PartyMemberStatsInfo {
             pet_guid: None,

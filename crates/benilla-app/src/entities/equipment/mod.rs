@@ -109,8 +109,36 @@ const COMPOSITE_SLOTS: [(u8, usize); 8] = [
 
 /// The item models a unit shows this frame, in [`ATTACH_SLOT_NAMES`] order.
 #[derive(Component, Default, Clone, PartialEq, Eq)]
-pub(super) struct HeldItems {
+pub(crate) struct HeldItems {
     slots: [Option<HeldSlot>; ATTACH_SLOTS],
+}
+
+impl HeldItems {
+    /// Where each hand's weapon hangs, main hand then off hand, while it carries a glow: what
+    /// `0x5eed00` re-applies at every attach of the hands (`0x60b770` → `0x5eed50`, which skips a
+    /// weapon whose visual is none, `0x5eed7a`, or whose point the model lacks, `0x5eed8d`).
+    pub(crate) fn glowing_hands(&self) -> [Option<u16>; 2] {
+        [0, 1].map(|hand| {
+            self.slots[hand]
+                .filter(|s| s.visual != NO_GLOW)
+                .map(|s| s.attach)
+        })
+    }
+
+    /// The hands alone, each `(attach, visual)`, for a test outside the resolve.
+    #[cfg(test)]
+    pub(crate) fn hands_for_tests(hands: [Option<(u16, i32)>; 2]) -> Self {
+        let mut slots = [None; ATTACH_SLOTS];
+        for (slot, hand) in slots.iter_mut().zip(hands) {
+            *slot = hand.map(|(attach, visual)| HeldSlot {
+                display: 1234,
+                kind: ItemModelKind::Weapon,
+                attach,
+                visual,
+            });
+        }
+        HeldItems { slots }
+    }
 }
 
 pub(super) const ATTACH_SLOTS: usize = 8;

@@ -23,7 +23,7 @@ const SCALE_EASE_SECS: f32 = 2.0;
 
 /// The display id the visual was built with, cube included: [`refresh_live_display`]'s diff key.
 #[derive(Component)]
-pub(super) struct AppliedDisplay(pub(super) Option<u32>);
+pub(crate) struct AppliedDisplay(pub(crate) Option<u32>);
 
 /// A live display swap tore this entity's visual down. The reference's rebuild ends by replaying
 /// the pending morph's impact kit (`0x60ad67`), which `crate::creature_anim`'s morph-latch watcher

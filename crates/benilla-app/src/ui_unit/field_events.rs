@@ -454,6 +454,7 @@ pub(crate) fn fire(
         | FieldNotice::SkillLines
         | FieldNotice::SkillMax
         | FieldNotice::SkillValue { .. }
+        | FieldNotice::PortraitMark { .. }
         | FieldNotice::PetGuidSet { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
@@ -858,6 +859,23 @@ mod tests {
                 "UNIT_MODEL_CHANGED player",
                 "UNIT_MODEL_CHANGED target",
             ]
+        );
+    }
+
+    /// A mark of the portrait list fires nothing itself: it queues the GUID for the drain.
+    #[test]
+    fn a_portrait_mark_queues_the_guid_and_fires_nothing() {
+        let mut app = world(seated());
+        app.init_resource::<crate::portrait::PortraitMarks>();
+        assert_eq!(
+            fired(&mut app, &[FieldNotice::PortraitMark { guid: PET }]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::portrait::PortraitMarks>()
+                .pending(),
+            [PET]
         );
     }
 

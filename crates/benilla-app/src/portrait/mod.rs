@@ -250,6 +250,9 @@ pub(crate) enum PortraitSource {
     /// A flat portrait BLP (`Interface\CharacterFrame\TemporaryPortrait-…`), resolved by the UI
     /// extract through the standard sprite path.
     File(String),
+    /// No image: the texture `SetPortraitTexture` emptied (`0x519fcc`), which stores a null image
+    /// (`0x770218`-`0x7702cb`) and so draws nothing (`0x7706e3`).
+    Empty,
 }
 
 /// The GUID-keyed bake cache (`0xc0ce7c`): `SetPortraitTexture` on a player the client does not
