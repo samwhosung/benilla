@@ -1203,3 +1203,63 @@ mod forced_reaction_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod worldport_tests {
+    use super::*;
+    use crate::net::handlers::dispatch;
+
+    const RIDDEN: u64 = 0xF120_0000_0000_0001;
+    const IN_VIEW: u64 = 0xF120_0000_0000_0002;
+
+    /// Two ships whose paths touch maps 1 and 0, one of them ridden, and a worldport to map 0,
+    /// announced with a transport or not: which ships outlive it.
+    fn kept_across(riding_transfer: bool) -> (bool, bool) {
+        let mut app = App::new();
+        app.add_plugins(crate::net::NetPlugin { connect: false })
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_chat::ChatLog>();
+        let world = app.world_mut();
+        let ship = |world: &mut World, guid: u64| {
+            let e = world
+                .spawn((
+                    crate::net::Guid(guid),
+                    crate::transport::Transport::sailing_for_test((1, 0)),
+                ))
+                .id();
+            world.resource_mut::<GuidIndex>().0.insert(guid, e);
+            e
+        };
+        let ridden = ship(world, RIDDEN);
+        let in_view = ship(world, IN_VIEW);
+        world.insert_resource(crate::player::Player::riding_for_test(ridden, RIDDEN));
+        world.resource_mut::<PendingTransfer>().0 = Some(crate::net::PendingTransferInfo {
+            map_id: 0,
+            transport_entry: riding_transfer.then_some(20808),
+            from_map: Some(1),
+        });
+        dispatch(
+            world,
+            vec![SessionEvent::Worldport {
+                map_id: 0,
+                position: [0.0; 3],
+                orientation: 0.0,
+                needs_ack: true,
+            }],
+        );
+        world.flush();
+        let alive = |world: &World, guid: u64, e: Entity| {
+            world.resource::<GuidIndex>().0.contains_key(&guid) && world.get_entity(e).is_ok()
+        };
+        (alive(world, RIDDEN, ridden), alive(world, IN_VIEW, in_view))
+    }
+
+    /// `0x401bc0` destroys every object at `SMSG_NEW_WORLD`; only the ship a transport transfer
+    /// carries us on is kept, until its create arrives. A ship merely in view goes with its
+    /// colliders, as does the ridden one on a transfer that does not ride it (a hearth).
+    #[test]
+    fn a_worldport_keeps_only_the_ship_we_ride_through_it() {
+        assert_eq!(kept_across(true), (true, false));
+        assert_eq!(kept_across(false), (false, false));
+    }
+}

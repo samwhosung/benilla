@@ -750,6 +750,26 @@ fn stamp_ride_frames(
 
 #[cfg(test)]
 impl Transport {
+    /// A ship sailing two legs of five nodes, the first on `maps.0`, the second on `maps.1`, for
+    /// other modules' tests.
+    pub(crate) fn sailing_for_test(maps: (u32, u32)) -> Self {
+        let node = |id: u32, map_id: u32, x: f32| benilla_formats::TaxiPathNode {
+            id,
+            path_id: 1,
+            node_index: id,
+            map_id,
+            pos: [x, 0.0, 0.0],
+            flags: u32::from(id == 4),
+            delay: 0,
+        };
+        let nodes: Vec<_> = (0..10)
+            .map(|i| node(i, if i < 5 { maps.0 } else { maps.1 }, i as f32 * 100.0))
+            .collect();
+        Self::new(Drive::Taxi(Arc::new(
+            TransportTimetable::build(&nodes, 30, 1).expect("two legs build"),
+        )))
+    }
+
     /// A lift parked at the origin, for other modules' tests.
     pub(crate) fn parked_for_test() -> Self {
         Self::new(Drive::Lift(Lift {
