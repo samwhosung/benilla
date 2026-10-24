@@ -7,7 +7,12 @@ use bevy::prelude::*;
 use super::{wrap_pi, FlyCam, Player, PlayerRide, TransportQuery};
 
 /// Recomposes the rider from the deck's this-frame pose.
-pub(super) fn carry(player: &mut Player, cam: &mut FlyCam, transports: &TransportQuery) {
+pub(super) fn carry(
+    player: &mut Player,
+    cam: &mut FlyCam,
+    transports: &TransportQuery,
+    _index: &crate::net::GuidIndex,
+) {
     // The transport tick runs on the Net→Input edge, so the deck pose is this frame's; a
     // streamed-out boat detaches into a fall. The yaw delta goes to aim, body and camera alike, on
     // top of this frame's mouse-look, as the reference's camera rides the transport-local rig: a
@@ -54,7 +59,7 @@ impl Player {
 /// transport's frame, as the reference keeps the mover (`0x6173d5` passes `[mover+0x10]`), against
 /// its [`crate::transport::TransportVolume`]. A transport not yet armed has no world entity, which
 /// answers inside (`0x5f55c8`); one whose model has not loaded holds no one (`0x670a70`).
-fn aboard(player: &Player, transports: &TransportQuery) -> bool {
+fn aboard(player: &Player, transports: &TransportQuery, _index: &crate::net::GuidIndex) -> bool {
     let Some(ride) = player.ride.as_ref() else {
         return false;
     };
@@ -75,6 +80,7 @@ fn aboard(player: &Player, transports: &TransportQuery) -> bool {
 pub(super) fn update_attachment(
     player: &mut Player,
     transports: &TransportQuery,
+    index: &crate::net::GuidIndex,
     child_of: &Query<&ChildOf>,
     ground: Option<Entity>,
     grounded: bool,
@@ -112,7 +118,7 @@ pub(super) fn update_attachment(
             }
             // 0x6173b0 with no transport for the support: the ride holds while `0x630ba0` finds
             // the feet, in the transport's frame, inside it.
-            None if aboard(player, transports) => {}
+            None if aboard(player, transports, index) => {}
             None => {
                 if player.ride.take().is_some() {
                     info!("transport: deboard (support is world geometry)");
@@ -234,12 +240,14 @@ mod tests {
             }),
             ..Default::default()
         };
+        let index = crate::net::GuidIndex([(0xF120_0000_0000_0001, deck)].into_iter().collect());
         world
             .run_system_once(
                 move |transports: TransportQuery, child_of: Query<&ChildOf>| {
                     update_attachment(
                         &mut player,
                         &transports,
+                        &index,
                         &child_of,
                         Some(ground),
                         true,
@@ -275,44 +283,59 @@ mod tests {
         );
     }
 
-    /// `0x5f55c8`: a transport with no world entity yet, its record not in, answers inside, so a
-    /// ride seated from our create holds on whatever the feet land on until the transport arms.
-    #[test]
-    fn a_transport_with_no_world_entity_holds_its_rider() {
+    /// A ride seated from our create on a transport that has not armed, its object held or gone:
+    /// whether it outlives a landing on world geometry, and then a carry.
+    fn unarmed_seat(held: bool) -> (bool, bool) {
+        const DECK: u64 = 0xF120_0000_0000_0001;
         let mut world = World::new();
         let deck = world
-            .spawn((
-                Transform::default(),
-                crate::net::Guid(0xF120_0000_0000_0001),
-            ))
+            .spawn((Transform::default(), crate::net::Guid(DECK)))
             .id();
         let ground = world.spawn_empty().id();
-        let mut player = Player {
+        let seated = || Player {
             ride: Some(PlayerRide {
                 entity: deck,
-                guid: 0xF120_0000_0000_0001,
+                guid: DECK,
                 local_pos: Vec3::ZERO,
                 boat_yaw: 0.0,
                 placed: false,
             }),
             ..Default::default()
         };
-        let held = world
+        let index = crate::net::GuidIndex(held.then_some((DECK, deck)).into_iter().collect());
+        let (mut landed, mut carried) = (seated(), seated());
+        world
             .run_system_once(
                 move |transports: TransportQuery, child_of: Query<&ChildOf>| {
                     update_attachment(
-                        &mut player,
+                        &mut landed,
                         &transports,
+                        &index,
                         &child_of,
                         Some(ground),
                         true,
                         false,
                     );
-                    player.ride.is_some()
+                    let mut cam = FlyCam {
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        speed: 0.0,
+                    };
+                    carry(&mut carried, &mut cam, &transports, &index);
+                    (landed.ride.is_some(), carried.ride.is_some())
                 },
             )
-            .expect("runs");
-        assert!(held);
+            .expect("runs")
+    }
+
+    /// `0x5f55c8`: a transport with no world entity yet, its record not in, answers inside, so a
+    /// ride seated from our create holds until it arms. One whose object is gone ends the seat, as
+    /// deactivation takes each passenger off and starts its fall (`0x5f4fb0` → `0x617ac0`,
+    /// `0x617100(0, 0)`).
+    #[test]
+    fn a_seat_holds_for_its_transport_until_the_transport_is_gone() {
+        assert_eq!(unarmed_seat(true), (true, true), "no world entity yet");
+        assert_eq!(unarmed_seat(false), (false, false), "gone");
     }
 
     /// Undercity's lift car 20652 descends 96.5 yd in 3.33 s (`TransportAnimation.dbc`).

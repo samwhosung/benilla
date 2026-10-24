@@ -354,7 +354,7 @@ pub(super) fn control(
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
 
     // On a transport, recompose the rider from the deck's pose this frame, before input integrates.
-    ride::carry(&mut player, &mut cam, transports);
+    ride::carry(&mut player, &mut cam, transports, &world_q.4 .1);
 
     if player.active && !player.detached {
         // The cast bar's self-cancel, at the command press ([`input::cancels_cast`]) and ahead of
@@ -750,6 +750,7 @@ pub(super) fn control(
         ride::update_attachment(
             &mut player,
             transports,
+            &world_q.4 .1,
             child_of,
             ground,
             grounded,

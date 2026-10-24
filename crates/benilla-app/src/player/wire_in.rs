@@ -1035,6 +1035,7 @@ mod seat_tests {
             deck.insert(crate::transport::Transport::parked_for_test());
         }
         let deck = deck.id();
+        world.insert_resource(crate::net::GuidIndex([(DECK, deck)].into_iter().collect()));
         let seat = SelfSeat {
             entity: deck,
             guid: DECK,
@@ -1058,7 +1059,8 @@ mod seat_tests {
                     MessageReader<SelfMoveMessage>,
                     MessageReader<ClientControlMessage>,
                 ),
-                      transports: super::super::TransportQuery| {
+                      transports: super::super::TransportQuery,
+                      index: Res<crate::net::GuidIndex>| {
                     let mut cam = FlyCam {
                         yaw: 0.0,
                         pitch: 0.0,
@@ -1084,7 +1086,7 @@ mod seat_tests {
                         Some((Vec3::new(-500.0, 0.0, 0.0), 0.0)),
                         Some(seat),
                     );
-                    super::super::ride::carry(&mut player, &mut cam, &transports);
+                    super::super::ride::carry(&mut player, &mut cam, &transports, &index);
                     let ride = player
                         .ride
                         .as_ref()
