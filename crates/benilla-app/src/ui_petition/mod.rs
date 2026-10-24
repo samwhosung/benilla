@@ -242,7 +242,6 @@ impl PetitionRecords {
         });
     }
 
-    /// One step per landed or patched record.
     /// The world entry's clear ([`crate::wdb`]): the petition store is built with persistence off
     /// (`0x554e60`), so `0x555740` clears it (`0x55580c`).
     pub(crate) fn clear_world_session(&mut self) {
@@ -262,6 +261,7 @@ impl PetitionRecords {
         self.records.get(petition_id).is_some()
     }
 
+    /// One step per landed or patched record.
     pub(crate) fn records_epoch(&self) -> u64 {
         self.records_epoch
     }
