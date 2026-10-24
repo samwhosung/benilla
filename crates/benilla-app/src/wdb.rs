@@ -393,6 +393,10 @@ fn load<T: SavedCache>(roster: Res<Roster>, mut file: ResMut<WdbFile<T>>, mut ca
     }
     file.realm = Some(realm.clone());
     file.path = crate::local_state::template_cache_path(&realm, T::FILE);
+    // An earlier build's creature names, which the creature store's file replaces.
+    if let Some(retired) = crate::local_state::retired_name_cache_path(&realm) {
+        let _ = std::fs::remove_file(retired);
+    }
     file.saved = cache.store().generation();
     let Some(path) = file.path.clone() else {
         return; // a hermetic capture, or no state folder: session-only

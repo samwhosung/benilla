@@ -366,6 +366,16 @@ pub(crate) fn template_cache_path(realm: &str, store: &str) -> Option<PathBuf> {
     )
 }
 
+/// `benilla-config/cache/<realm>.tsv`: the creature names an earlier build kept, which the
+/// realm's saved stores replace; [`crate::wdb`] removes it.
+pub(crate) fn retired_name_cache_path(realm: &str) -> Option<PathBuf> {
+    Some(
+        home()?
+            .join("cache")
+            .join(format!("{}.tsv", file_token(realm))),
+    )
+}
+
 /// `benilla-config/Logs/`: `WoWChatLog.txt` and `WoWCombatLog.txt`, the reference's names.
 pub(crate) fn logs_dir() -> Option<PathBuf> {
     home().map(|h| h.join("Logs"))
