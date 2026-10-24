@@ -6,9 +6,10 @@
 //! `GLUE_SCREENSHOT_SUCCEEDED` or `GLUE_SCREENSHOT_FAILED` (`0x46c520`), whichever VM is up
 //! ([`UiScript::screenshot_event`]).
 //!
-//! Our UI quads are built at the top of `UiInput` and the binding runs at its bottom, so a capture
-//! on the press frame would still show a second press's fading status; [`ask_for_captures`]
-//! therefore holds each ask exactly one frame.
+//! The binding runs in `UiInput`, where `TakeScreenshot()` hides the status inside its call; the
+//! ask drains in `UiDrain`, after the tick and before the paint builds the frame's quads, so the
+//! press frame's own image no longer shows the status. [`ask_for_captures`] still holds each ask
+//! one frame, which this order no longer needs.
 //!
 //! Deviation: the file is a PNG where the reference writes a TGA (`0x4426f0`, the name
 //! `%s\WoWScrnShot_%s.tga` at `0x834c44`), because a 32-bit Targa of a modern window is about
