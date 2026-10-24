@@ -433,6 +433,13 @@ struct SelfWatch {
 /// The hearthstone's item entry (`0x1b24`).
 const HEARTHSTONE: u32 = 6948;
 const INVTYPE_RANGED: u32 = 15;
+/// The equipment-slot mask per inventory type 0 to 28 (`0x809200`): bit `n` is slot `n`. Types 0
+/// (not equippable), 24 (ammo) and 27 (quiver) fit no slot.
+const INVENTORY_SLOT_MASK: [u32; 29] = [
+    0, 0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 0xc00, 0x3000, 0x18000, 0x10000,
+    0x20000, 0x4000, 0x8000, 0x780000, 0x40000, 0x10, 0x8000, 0x10000, 0x10000, 0, 0x20000,
+    0x20000, 0, 0x20000,
+];
 const CLASS_HUNTER: u8 = 3;
 /// The keyring bag and its slot band (`edi == 0xff`, slot ∈ [0x51, 0x70]).
 const KEYRING_BAG: u8 = 0xff;
@@ -468,10 +475,9 @@ fn feed_tutorials(
         }
 
         // The item-received sites in the handler's order (`0x491cec`-`0x491ec9`): Backpack
-        // always; Using Items for an on-use spell; Equippable Items for any non-zero inventory
-        // type (the reference's 23-bit mask `0x809200` is not decoded); Bags for a container;
-        // Keyrings by the slot band; Hearthstones by entry; Ranged Weapons for a ranged type on a
-        // non-hunter.
+        // always; Using Items for an on-use spell; Equippable Items for an inventory type that
+        // fits a slot ([`INVENTORY_SLOT_MASK`]); Bags for a container; Keyrings by the slot band;
+        // Hearthstones by entry; Ranged Weapons for a ranged type on a non-hunter.
         let pushes = std::mem::take(&mut tutorials.pushes);
         let class = self_q.single().ok().and_then(|s| s.0.unit_class());
         for (entry, bag, slot) in pushes {
@@ -481,7 +487,12 @@ fn feed_tutorials(
             if info.is_some_and(|i| i.spells.iter().any(|s| s.trigger == 0)) {
                 tutorials.trigger(id::USING_ITEMS, 0, now);
             }
-            if info.is_some_and(|i| i.inventory_type != 0) {
+            // A set bit among the first 23 of the type's slot mask (`0x491d23`-`0x491d3f`).
+            if info.is_some_and(|i| {
+                INVENTORY_SLOT_MASK
+                    .get(i.inventory_type as usize)
+                    .is_some_and(|m| m & 0x7f_ffff != 0)
+            }) {
                 tutorials.trigger(id::EQUIPPABLE_ITEMS, 0, now);
             }
             // Class 1, Container (`0x491d4f cmp [esi],1`).
