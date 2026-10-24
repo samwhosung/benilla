@@ -412,9 +412,10 @@ impl super::UiScript {
         true
     }
 
-    /// The item records the getters' calls missed since the last take, one per call.
+    /// The item records the getters' calls missed that a harness's VM kept
+    /// ([`Self::keep_calls`]), one per call.
     pub fn take_craft_item_waits(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().craft_item_waits)
+        self.take_item_asks(super::ItemCallback::Craft)
     }
 
     /// The spell ids of the `DoCraft` calls a harness's VM kept ([`Self::keep_calls`]), one per
@@ -449,6 +450,18 @@ pub(crate) fn recipe(model: &Model, index: usize) -> Option<&CraftRecipe> {
         Row::Recipe(i) => model.craft.as_ref()?.recipes.get(*i),
         Row::Header { .. } => None,
     }
+}
+
+/// A getter's item lookup that missed: the item cache asked inside the call, with the callback
+/// `0x4f7710` (`0x4f75dd`, `0x4f79f2`), one per call.
+fn ask_item(lua: &Lua, entry: u32) -> mlua::Result<()> {
+    super::calls::ask(
+        lua,
+        super::RecordAsk::Item {
+            entry,
+            callback: super::ItemCallback::Craft,
+        },
+    )
 }
 
 /// The row's group name (`+4`): a recipe's line, or its header's.
@@ -697,16 +710,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 reagent_index,
                 "Usage: GetCraftReagentInfo(index, reagentIndex)",
             )?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let Some(reagent) = recipe(&model, index)
-                .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
-                .cloned()
-            else {
+            let reagent = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                recipe(&model, index)
+                    .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
+                    .cloned()
+            };
+            let Some(reagent) = reagent else {
                 return Ok(binding_abi::tuple(&[None; 4]));
             };
             if reagent.name.is_none() {
-                // The miss asks with the callback `0x4f7710` (`0x4f75dd`).
-                model.craft_item_waits.push(reagent.item);
+                // The miss asks with the callback `0x4f7710` inside the call (`0x4f75dd`).
+                ask_item(lua, reagent.item)?;
             }
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, reagent.name.as_ref())?,
@@ -724,14 +739,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetCraftSpellFocus(index)` (`0x84d4dc`, `0x4f78db`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetCraftSpellFocus(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(r) = recipe(&model, index) else {
                 return Ok(MultiValue::new());
             };
             let (tools, pending) = (r.tools.clone(), r.tools_pending.clone());
-            // Each totem in flight is asked with the callback `0x4f7710` (`0x4f79f2`).
-            model.craft_item_waits.extend(pending);
             drop(model);
+            // Each totem in flight is asked with the callback `0x4f7710` inside the call
+            // (`0x4f79f2`).
+            for entry in pending {
+                ask_item(lua, entry)?;
+            }
             let mut out = Vec::new();
             for (name, have) in &tools {
                 out.push(Value::String(lua.create_string(name)?));

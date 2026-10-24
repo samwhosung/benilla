@@ -60,6 +60,7 @@ pub(crate) struct RecordAsks<'w> {
     cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
     trainer: Option<ResMut<'w, crate::ui_trainer::TrainerOpen>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
+    craft: Option<ResMut<'w, crate::ui_craft::CraftItemWaits>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
@@ -109,6 +110,11 @@ impl RecordAsks<'_> {
                     ItemCallback::Quest => {
                         if let Some(quest) = self.quest.as_deref_mut() {
                             quest.ask_item_record(items, &self.net, entry);
+                        }
+                    }
+                    ItemCallback::Craft => {
+                        if let Some(waits) = self.craft.as_deref_mut() {
+                            crate::ui_craft::ask_item_record(items, &self.net, waits, entry);
                         }
                     }
                 }

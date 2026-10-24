@@ -319,6 +319,9 @@ pub enum ItemCallback {
     /// `GetQuestItemInfo` (`0x5018c0`), whose landing fires `QUEST_ITEM_UPDATE` for a ready record
     /// (`0x5018fe`-`0x501903`), kept by the questgiver window.
     Quest,
+    /// `GetCraftReagentInfo` and `GetCraftSpellFocus` (`0x4f7710`), whose landing rebuilds the
+    /// craft list (`0x4f771a`), kept beside the craft window.
+    Craft,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
