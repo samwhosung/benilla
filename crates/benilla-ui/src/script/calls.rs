@@ -262,6 +262,9 @@ pub enum ScriptCall {
     Minimap(super::MinimapCall),
     /// A posture verb ([`super::PostureCall`]): the stand-state setter inside the call.
     Posture(super::PostureCall),
+    /// A getter's lookup with a callback on a record its mirror misses ([`RecordAsk`]): the host
+    /// asks the cache inside the call, which sends the query on the miss (`0x556aa0`).
+    RecordAsk(RecordAsk),
     /// A `ConsoleExec` line that is no CVar write: `ConsoleCommandExecute` (`0x63ce00`) inside the
     /// call (`0x515f43`), a registered command, a CVar's print or `Unknown command`.
     Console(String),
@@ -274,6 +277,29 @@ pub enum ScriptCall {
     /// `ConfirmPetUnlearn()` (`0x48dca0` → `0x5dfba0(0, 0)`): `CMSG_PET_UNLEARN` to the
     /// remembered trainer, or the money refusal's line, inside the call.
     ConfirmPetUnlearn,
+}
+
+/// A getter's lookup with a callback, which the host makes inside the getter's call: the cache
+/// sends the query on a miss, once while it is in flight, and keeps the callback for the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordAsk {
+    /// `UnitName` on a unit with no object: the player-name cache by guid (`0x5171eb`).
+    PlayerName(u64),
+    /// A trade getter's filled slot whose template the mirror lacks: the item cache, with the
+    /// callback `0x4c0340` that signals `TRADE_UPDATE` (`0x4c017f`, `0x4c0582`).
+    TradeItem(u32),
+}
+
+/// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
+/// and no harness keeping calls, nothing asks.
+pub(crate) fn ask(lua: &Lua, ask: RecordAsk) -> mlua::Result<()> {
+    let keeping = lua
+        .app_data_ref::<Model>()
+        .is_some_and(|m| m.kept_calls.is_some());
+    if !super::host::open(lua) && !keeping {
+        return Ok(());
+    }
+    submit(lua, ScriptCall::RecordAsk(ask))
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

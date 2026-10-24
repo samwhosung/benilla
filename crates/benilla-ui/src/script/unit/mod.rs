@@ -328,10 +328,14 @@ pub fn power_token(ty: u8) -> &'static str {
 }
 
 impl super::UiScript {
-    /// Drains the guids `UnitName` read off a unit with no object and found no name for, which the
-    /// reference's lookup asks the server for (`0x5171eb`).
+    /// The guids `UnitName` read off a unit with no object and found no name for, which the
+    /// reference's lookup asks the server for (`0x5171eb`), as a harness's VM kept them
+    /// ([`Self::keep_calls`]), in call order.
     pub fn take_unit_name_asks(&mut self) -> Vec<u64> {
-        self.model_mut().unit_name_asks.drain().collect()
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::PlayerName(guid)) => Some(*guid),
+            _ => None,
+        })
     }
 
     /// [`unknownobject`]'s text, for a reader outside the VM that copies it, as the deactivate

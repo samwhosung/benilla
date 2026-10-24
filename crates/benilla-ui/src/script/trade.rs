@@ -499,11 +499,13 @@ impl super::UiScript {
         });
     }
 
-    /// The entries the trade getters asked the item cache for since the last drain, one per call
-    /// that found a filled slot with no template: the host registers the callback `0x4c0340` on
-    /// each that is still unanswered.
+    /// The entries the trade getters asked the item cache for that a harness's VM kept
+    /// ([`Self::keep_calls`]), one per call that found a filled slot with no template.
     pub fn take_trade_record_asks(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().trade_record_asks)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::TradeItem(entry)) => Some(*entry),
+            _ => None,
+        })
     }
 }
 
@@ -521,12 +523,13 @@ impl Model {
     }
 }
 
-/// What a getter's item-cache lookup leaves behind when the slot is filled and its template has
-/// not answered: a request carrying the callback `0x4c0340` (`0x4c017f`, `0x4c0582`), one per
-/// call. The host registers it and signals `TRADE_UPDATE` when the record lands.
-fn ask_record(model: &mut Model, slot: Option<&TradeSlotItem>) {
-    if let Some(slot) = slot.filter(|s| s.name.is_none()) {
-        model.trade_record_asks.push(slot.item_id);
+/// A getter's item-cache lookup when the slot is filled and its template has not answered: the
+/// lookup with the callback `0x4c0340` (`0x4c017f`, `0x4c0582`), one per call, which the host
+/// makes inside the call and whose callback signals `TRADE_UPDATE` when the record lands.
+fn ask_record(lua: &Lua, slot: Option<&TradeSlotItem>) -> mlua::Result<()> {
+    match slot.filter(|s| s.name.is_none()) {
+        Some(slot) => super::calls::ask(lua, super::RecordAsk::TradeItem(slot.item_id)),
+        None => Ok(()),
     }
 }
 
@@ -856,11 +859,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetTradePlayerItemInfo(index)` (`0x847c44`, `0x4c047e`).
             let id = binding_abi::index_arg(lua, id, "Usage: GetTradePlayerItemInfo(index)")?;
             let slot = {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let slot = slot_at(&model, id, |t| &t.player);
-                ask_record(&mut model, slot.as_ref());
-                slot
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                slot_at(&model, id, |t| &t.player)
             };
+            ask_record(lua, slot.as_ref())?;
             let Some(s) = slot else {
                 return Ok(super::binding_abi::tuple(&[
                     None,
@@ -949,14 +951,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetTradeTargetItemInfo(index)` (`0x847bf4`, `0x4c011e`).
             let id = binding_abi::index_arg(lua, id, "Usage: GetTradeTargetItemInfo(index)")?;
             let (slot, usable) = {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let slot = slot_at(&model, id, |t| &t.target);
-                ask_record(&mut model, slot.as_ref());
                 let usable = slot
                     .as_ref()
                     .is_none_or(|s| super::item_stats::item_usable_by_id(&model, s.item_id));
                 (slot, usable)
             };
+            ask_record(lua, slot.as_ref())?;
             // A template the cache lacks takes the miss too (`0x4c019b`, `0x4c02f6`).
             let Some(s) = slot.filter(|s| s.name.is_some()) else {
                 return Ok(super::binding_abi::tuple(&[
@@ -1568,7 +1570,7 @@ mod tests {
             [4306, 4306, 2592],
             "each unanswered call, in call order; the named slots, the empty one and the links ask nothing"
         );
-        assert!(s.take_trade_record_asks().is_empty(), "drained");
+        assert!(s.take_trade_record_asks().is_empty(), "taken");
     }
 
     #[test]

@@ -151,11 +151,6 @@ pub(super) fn feed_chain_units(
         let Some(script) = script else {
             return;
         };
-        // The names `UnitName` read off a unit with no object and missed, asked as its lookup with
-        // a callback asks (`0x5171eb`), whatever the gate below says.
-        for guid in script.take_unit_name_asks() {
-            let _ = names.resolve_player(guid, Ask::Event(&commands));
-        }
         let (memo, vm_reset) = memo.get_reset(script);
         let ends = script.chain_end_guids();
 
@@ -240,8 +235,8 @@ pub(super) fn feed_chain_units(
 /// player's guid (`QueryHandler.cpp:48-60`), so a creature or a pet reads `UNKNOWNOBJECT`; the
 /// raid mark by guid (`0x4bb4f1`);
 /// nothing else. Off the roster it does not exist (`0x491900`); on it, the VM reads the row's push.
-/// The name is read without asking: the lookup asks when `UnitName` reads it, and the VM hands
-/// the miss back ([`UiScript::take_unit_name_asks`]).
+/// The name is read without asking: the lookup asks when `UnitName` reads it, inside its call
+/// ([`benilla_ui::script::RecordAsk::PlayerName`]).
 pub(crate) fn unheld_state(
     names: &NameCache,
     group: &crate::ui_party::GroupState,
@@ -607,6 +602,18 @@ mod tests {
     }
 
     /// Whether the Lua expression holds.
+    /// The name asks `UnitName` made that the VM kept, asked as the host asks them inside the
+    /// call ([`benilla_ui::script::RecordAsk::PlayerName`]).
+    fn ask_kept_names(
+        mut script: NonSendMut<UiScript>,
+        names: Res<NameCache>,
+        commands: Res<NetCommands>,
+    ) {
+        for guid in script.take_unit_name_asks() {
+            let _ = names.resolve_player(guid, Ask::Event(&commands));
+        }
+    }
+
     fn holds(app: &App, expr: &str) -> bool {
         script(app).eval(&format!("return {expr}")).unwrap()
     }
@@ -746,9 +753,10 @@ mod tests {
             .init_resource::<crate::sound::MessageSounds>();
         benilla_world::world_point::init_world_point_resources(app.world_mut());
         app.init_resource::<crate::ui_party::PartyLane>()
-            .add_systems(Update, crate::ui_party::feed_party);
+            .add_systems(Update, (crate::ui_party::feed_party, ask_kept_names));
         {
             let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.keep_calls();
             script.run(r#"UNKNOWNOBJECT = "Unknown""#).unwrap();
             // Level 60, so the level 0 of a unit with no object would read grey.
             script.set_player_req_state(benilla_ui::script::PlayerReqState {

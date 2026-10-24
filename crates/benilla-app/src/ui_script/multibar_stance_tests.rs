@@ -716,6 +716,7 @@ fn viewable_action_bar_pages_follow_the_bar_toggles() {
 fn the_grid_option_holds_the_extra_bars_empty_wells_open() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s, &[]);
     show_bars(&s, &[1]);
@@ -783,6 +784,7 @@ fn the_grid_option_holds_the_extra_bars_empty_wells_open() {
 fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s, &[]);
     s.set_action(
@@ -1230,6 +1232,7 @@ fn the_stance_shelf_is_as_long_as_the_form_count() {
 fn an_extra_bars_empty_well_keeps_its_bound_hotkey_label() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The real command set, so `MULTIACTIONBAR1BUTTONn` is bindable; it ships unbound.
     crate::ui_script::load_stock_bindings(&mut s);

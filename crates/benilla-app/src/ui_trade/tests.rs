@@ -449,6 +449,18 @@ fn feed_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
     (app, rx)
 }
 
+/// The getters' record asks the VM kept, made as the host makes them inside the call
+/// ([`ask_trade_record`]).
+fn ask_kept_records(
+    mut script: NonSendMut<UiScript>,
+    items: Res<Items>,
+    commands: Res<NetCommands>,
+) {
+    for entry in script.take_trade_record_asks() {
+        ask_trade_record(&items, &commands, entry);
+    }
+}
+
 /// The server's status `status`, through the handler table.
 fn status(app: &mut App, status: TradeStatus) {
     crate::net::handlers::dispatch(
@@ -1260,7 +1272,7 @@ fn both_offers_answer_inside_trade_closed_and_until_the_next_open() {
 fn trade_update_comes_only_from_a_landed_record_a_getter_asked_for() {
     use crate::item_watch::ItemNotice;
     let (mut app, _rx) = feed_app();
-    app.add_systems(Update, drain_trade.after(feed_trade))
+    app.add_systems(Update, ask_kept_records.after(feed_trade))
         .init_resource::<Selection>()
         .init_resource::<GroupState>();
     app.world_mut()
@@ -1383,7 +1395,7 @@ fn trade_update_comes_only_from_a_landed_record_a_getter_asked_for() {
 #[test]
 fn a_refused_slot_record_is_asked_by_the_next_getter_never_by_a_frame() {
     let (mut app, rx) = feed_app();
-    app.add_systems(Update, drain_trade.after(feed_trade))
+    app.add_systems(Update, ask_kept_records.after(feed_trade))
         .init_resource::<Selection>()
         .init_resource::<GroupState>();
     open_with(&mut app, 0x7);

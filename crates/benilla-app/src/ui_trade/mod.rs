@@ -1,9 +1,9 @@
 //! The trade window: [`net`] folds the two status packets into [`TradeSession`], [`feed_trade`]
 //! pushes it into the VM and fires the trade events, the trade verbs act inside their calls
-//! ([`TradeSteps`]), [`drain_trade`] runs `CloseTrade`'s close core,
-//! [`register_record_callbacks`] registers the getters' record asks, whose answers signal
-//! `TRADE_UPDATE` on the item lane ([`crate::item_lane`]), and
-//! [`answer_trade_request`] answers an incoming request.
+//! ([`TradeSteps`]), `CloseTrade`'s close core among them, the getters' record asks register
+//! their callbacks inside their calls ([`ask_trade_record`]), whose answers signal
+//! `TRADE_UPDATE` on the item lane ([`crate::item_lane`]), and [`answer_trade_request`] answers
+//! an incoming request.
 
 use benilla_protocol::messages::{TradeItem, TradeStatusExtended, TRADE_SLOT_COUNT};
 use bevy::prelude::*;
@@ -625,7 +625,6 @@ impl Plugin for UiTradePlugin {
                     answer_trade_request
                         .after(crate::player::ControlRestore)
                         .before(feed_trade),
-                    drain_trade.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -737,7 +736,7 @@ fn answer_trade_request(
 /// A wire [`TradeItem`] as the Lua row: name and quality from the item-template cache once it
 /// answers, the icon from `display_id` via `ItemDisplayInfo.dbc`; [`resolve_side`] names slot 7's
 /// `enchantment`. The template is only read: the getters' lookups ask for it
-/// ([`register_record_callbacks`]). The name joins the random property's suffix (`0x5d8b00`, at
+/// ([`ask_trade_record`]). The name joins the random property's suffix (`0x5d8b00`, at
 /// `0x4c01b8` and `0x4c0405` for the partner's slots) and the link prints the record's permanent
 /// enchant, random property id and suffix factor (`0x4c040a`-`0x4c0431`); our own slots' records
 /// carry what `0x52ae00` reads off the object ([`own_item`]).
@@ -1180,7 +1179,7 @@ fn feed_trade(
         // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based
         // slot (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change
         // signals nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
-        // ([`register_record_callbacks`]). Our invalidated slots signalled ahead of this turn.
+        // ([`ask_trade_record`]). Our invalidated slots signalled ahead of this turn.
         if changed && trade.is_open() && !opened {
             let empty = TradeState::default();
             let old = last.as_ref().unwrap_or(&empty);
@@ -1305,35 +1304,18 @@ fn feed_trade(
     })
 }
 
-/// The callbacks behind `TRADE_UPDATE`, whose one producer is `0x4c0340` (`0x4c034f`), which the
-/// item getters register when they find a filled slot whose template the cache lacks (`0x4c017f`,
-/// `0x4c0582` into `0x55ba30`). A hit never calls it. Each such getter call registers one
-/// callback, with no dedupe (`0x55bbb3`), and each runs when the record lands, for a ready record
-/// only; a refusal frees them silent. The asks the script queued are registered here, after its
-/// tick; the landed records signal on the item lane, at the answer's packet
-/// ([`crate::item_watch::ItemNotice::TradeRecord`]). The waiters are the getters' own asks, which
-/// a frameless VM never makes.
-fn register_record_callbacks(script: &mut UiScript, items: &Items, commands: &NetCommands) {
-    for entry in script.take_trade_record_asks() {
-        // The getter's lookup with the callback: a miss asks, a refused entry again.
-        if items.template(entry, 0, Ask::Event(commands)).is_none() {
-            items.wait_for_trade_record(entry);
-        }
+/// The callback behind `TRADE_UPDATE`, whose one producer is `0x4c0340` (`0x4c034f`), which an
+/// item getter registers when it finds a filled slot whose template the cache lacks (`0x4c017f`,
+/// `0x4c0582` into `0x55ba30`), inside its call ([`benilla_ui::script::RecordAsk::TradeItem`]).
+/// A hit never calls it. Each such getter call registers one callback, with no dedupe
+/// (`0x55bbb3`), and each runs when the record lands, for a ready record only; a refusal frees
+/// them silent. The landed records signal on the item lane, at the answer's packet
+/// ([`crate::item_watch::ItemNotice::TradeRecord`]).
+pub(crate) fn ask_trade_record(items: &Items, commands: &NetCommands, entry: u32) {
+    // The getter's lookup with the callback: a miss asks, a refused entry again.
+    if items.template(entry, 0, Ask::Event(commands)).is_none() {
+        items.wait_for_trade_record(entry);
     }
-}
-
-/// After the tick: the item getters' record callbacks ([`register_record_callbacks`]). Every
-/// trade verb acts inside its call ([`TradeSteps`]), `CloseTrade`'s close core among them.
-fn drain_trade(
-    mut hosted: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-    items: Res<Items>,
-) {
-    hosted.run(|script| {
-        if let Some(script) = script {
-            register_record_callbacks(script, &items, &commands);
-        }
-    })
 }
 
 /// The trade half of `OnMoneyChanged` (`0x5ddf30`), the active player's coinage watcher, run inside

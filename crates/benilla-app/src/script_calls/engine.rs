@@ -1,7 +1,9 @@
 //! The engine verbs inside their calls: the follow's start (`0x60fed0`), whose arm signals where
-//! it runs.
+//! it runs, and the getters' lookups with a callback ([`RecordAsks`]).
 
-use benilla_ui::script::{FollowRequest, ScriptValue, UiScript};
+use bevy::prelude::*;
+
+use benilla_ui::script::{FollowRequest, RecordAsk, ScriptValue, UiScript};
 
 use super::ScriptCallHost;
 use crate::target::FollowStart;
@@ -43,5 +45,34 @@ impl ScriptCallHost<'_, '_> {
         }
         script.fire_event("AUTOFOLLOW_BEGIN", vec![ScriptValue::Str(name)]);
         self.at_point(script, mark);
+    }
+}
+
+/// The getters' lookups with a callback inside their calls ([`RecordAsk`]): each cache sends the
+/// query on a miss, once while it is in flight (`0x556aa0`), and keeps the getter's callback.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct RecordAsks<'w> {
+    /// Each absent in a harness without it, which asks nothing.
+    names: Option<Res<'w, crate::names::NameCache>>,
+    items: Option<Res<'w, crate::items::Items>>,
+    net: Res<'w, crate::net::NetCommands>,
+}
+
+impl RecordAsks<'_> {
+    /// `ask` inside its getter.
+    pub(crate) fn apply(&self, ask: RecordAsk) {
+        use crate::query_cache::Ask;
+        match ask {
+            RecordAsk::PlayerName(guid) => {
+                if let Some(names) = self.names.as_deref() {
+                    let _ = names.resolve_player(guid, Ask::Event(&self.net));
+                }
+            }
+            RecordAsk::TradeItem(entry) => {
+                if let Some(items) = self.items.as_deref() {
+                    crate::ui_trade::ask_trade_record(items, &self.net, entry);
+                }
+            }
+        }
     }
 }

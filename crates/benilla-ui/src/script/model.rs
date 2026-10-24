@@ -939,9 +939,6 @@ pub(crate) struct Model {
     /// The partner cell `[0xb71728]` is set: the window is open. Read by the checks that test the
     /// cell first (`0x4bfd20`) and by `GetPlayerTradeMoney` (`0x4c0706`).
     pub(crate) trade_window: bool,
-    /// The entries the item getters found filled and unnamed (`0x4c017f`, `0x4c0582`), for the
-    /// host to ask the item cache for with the callback that signals `TRADE_UPDATE`.
-    pub(crate) trade_record_asks: Vec<u32>,
     /// The close core's done flag `[0xb71748]`, which `CloseTrade` tests (`0x4bfdc0`).
     pub(crate) trade_done: bool,
     /// The placements whose send the host has yet to answer, by the id their call carries
@@ -985,9 +982,6 @@ pub(crate) struct Model {
     /// creator's and the giver's lookups pass a callback (`0x52e204`, `0x52e29d`) at every build,
     /// and a hovered bag or paper-doll slot's `OnUpdate` builds again each frame.
     pub(crate) item_name_asks: HashSet<u64>,
-    /// Guids `UnitName` read off a unit with no object and missed in the name cache, for the app
-    /// to ask: the no-object leg's lookup passes a callback (`0x5171eb`, `0x517205`).
-    pub(crate) unit_name_asks: HashSet<u64>,
     /// Charter item guids whose build missed the petition record or its owner's name, for the
     /// app to ask: both lookups pass a callback (`0x52b93b`, `0x52b9d2`) at every build.
     pub(crate) petition_asks: HashSet<u64>,
@@ -1665,7 +1659,6 @@ impl Model {
             auction_sell_item: None,
             trade: None,
             trade_window: false,
-            trade_record_asks: Vec::new(),
             trade_done: false,
             trade_placing: std::collections::HashMap::new(),
             trade_place_seq: 0,
@@ -1681,7 +1674,6 @@ impl Model {
             item_sets: HashMap::new(),
             item_set_asks: HashSet::new(),
             item_name_asks: HashSet::new(),
-            unit_name_asks: HashSet::new(),
             petition_asks: HashSet::new(),
             random_properties: HashMap::new(),
             enchant_names: HashMap::new(),

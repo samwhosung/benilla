@@ -131,8 +131,9 @@ disjoint::disjoint_set! {
         plates: crate::vplates::PlateSteps<'static>,
         follow: crate::target::FollowSteps<'static, 'static>,
         follow_feed: Option<ResMut<'static, crate::ui_follow::FollowFeed>>,
-        /// The console's commands, against what they read and write.
+        /// The console's commands, against what they read and write, and the getters' lookups.
         console: crate::console::ConsoleSteps<'static, 'static>,
+        asks: engine::RecordAsks<'static>,
     }
 }
 
@@ -750,6 +751,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Nameplates(write) => appliers.plates().apply(write),
             ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
             ScriptCall::Console(line) => appliers.console().run(script, &line),
+            ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

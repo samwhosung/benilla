@@ -149,10 +149,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some((Some(n), _, _)) => Value::String(lua.create_string(&n)?),
                 Some((None, held, guid)) => {
                     // A unit with no object reads the name cache by guid with a callback
-                    // (`0x5171eb`), which asks on the miss: the host sends it.
+                    // (`0x5171eb`), which asks on the miss inside the call.
                     if !held && guid != 0 {
-                        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                        model.unit_name_asks.insert(guid);
+                        crate::script::calls::ask(lua, crate::script::RecordAsk::PlayerName(guid))?;
                     }
                     Value::String(unknownobject(lua)?)
                 }

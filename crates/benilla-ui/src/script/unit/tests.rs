@@ -2254,6 +2254,7 @@ fn the_unit_verbs_apply_in_the_call_with_a_host_lent() {
 #[test]
 fn unit_name_hands_a_no_object_miss_back_to_ask() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let read = |s: &mut UiScript, unit: UnitState| {
         s.set_unit("target", Some(unit));
         s.eval::<String>(r#"return UnitName("target")"#).unwrap();
