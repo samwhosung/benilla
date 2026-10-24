@@ -599,4 +599,78 @@ mod tests {
             feed_zone_events
         ));
     }
+
+    /// The poll `0x5db900` counts its calls (`0xc4d790`) and reports the area only on the tenth
+    /// (`0x5db906`, `jl 0x5db975`), subtracting ten (`0x5db917`): the first commit lands on the
+    /// tenth tick, and a subzone crossed and recrossed between two polls signals nothing.
+    #[test]
+    fn the_area_commits_on_every_tenth_tick() {
+        use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
+        use benilla_protocol::messages::ObjectType;
+        use benilla_ui::script::UiScript;
+        use benilla_world::terrain_stream::CurrentArea;
+        const ME: u64 = 0x7;
+        const ELWYNN: u32 = 12;
+        const GOLDSHIRE: u32 = 87;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let world = app.world_mut();
+        benilla_world::world_point::init_world_point_resources(world);
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        world.insert_resource(AreaTableRes(AreaTableCatalog::from_rows(vec![
+            (
+                ELWYNN,
+                AreaTableRow {
+                    name: "Elwynn Forest".into(),
+                    ..row(0, 0)
+                },
+            ),
+            (
+                GOLDSHIRE,
+                AreaTableRow {
+                    name: "Goldshire".into(),
+                    zone_id: ELWYNN,
+                    ..row(0, 0)
+                },
+            ),
+        ])));
+        world.insert_resource(CurrentArea(Some(ELWYNN)));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                Seen = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+                f:RegisterEvent("ZONE_CHANGED")
+                f:SetScript("OnEvent", function() table.insert(Seen, event) end)
+                "#,
+            )
+            .unwrap();
+        world.insert_non_send_resource(script);
+        let store = ObjectStore(ObjectFields::from_pairs(&[]).into_created(ObjectType::Player));
+        let me = world.spawn((SelfPlayer, Guid(ME), store)).id();
+        world.resource_mut::<GuidIndex>().0.insert(ME, me);
+        let ticks = |app: &mut App, area: u32, n: usize| {
+            let world = app.world_mut();
+            world.insert_resource(CurrentArea(Some(area)));
+            for _ in 0..n {
+                world.run_system_cached(feed_zone_events).unwrap();
+            }
+            let s = world.non_send_resource::<UiScript>();
+            let seen = s.eval::<Vec<String>>("return Seen").unwrap();
+            s.run("Seen = {}").unwrap();
+            seen
+        };
+        use benilla_protocol::ObjectFields;
+        assert!(ticks(&mut app, ELWYNN, 9).is_empty(), "nine ticks return");
+        assert_eq!(ticks(&mut app, ELWYNN, 1), ["ZONE_CHANGED_NEW_AREA"]);
+        assert!(ticks(&mut app, GOLDSHIRE, 3).is_empty());
+        assert!(
+            ticks(&mut app, ELWYNN, 7).is_empty(),
+            "Goldshire left before the next poll"
+        );
+        assert!(ticks(&mut app, GOLDSHIRE, 9).is_empty());
+        assert_eq!(ticks(&mut app, GOLDSHIRE, 1), ["ZONE_CHANGED"]);
+    }
 }

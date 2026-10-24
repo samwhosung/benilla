@@ -359,6 +359,8 @@ mod guard_tests;
 #[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod packet_signal_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod unit_view_tests;

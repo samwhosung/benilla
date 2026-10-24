@@ -1750,4 +1750,37 @@ mod tests {
             assert_eq!(asked, usize::from(summoned), "summoned {summoned}");
         }
     }
+
+    /// The cascade's `SetPetGuid(0, 0)` stores the zero guid (`0x4bc822`, `0x4bc827`) before its
+    /// `UNIT_PET` (`0x4bc84f`), and `HasPetUI` resolves the pet from that guid (`0x4be67e`-
+    /// `0x4be690`): a `/reload` with a pet out hears `UNIT_PET` with `HasPetUI()` nil.
+    #[test]
+    fn the_world_entry_pet_reset_signals_unit_pet_with_no_pet_ui() {
+        let spy = r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_PET")
+            f:SetScript("OnEvent", function()
+                local ui, hunter = HasPetUI()
+                table.insert(SEEN, event .. " " .. tostring(ui) .. " " .. tostring(hunter))
+            end)"#;
+        let (mut app, _) = feed_world(&[], spy);
+        app.init_resource::<crate::ui_pet::PetBar>()
+            .init_resource::<crate::ui_pet::PetAttackLatch>();
+        app.world_mut()
+            .resource_mut::<crate::ui_pet::PetBar>()
+            .spells
+            .pet_guid = PET;
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_pet_stats(
+                true,
+                benilla_ui::script::PetStats {
+                    hunter_pet: true,
+                    ..Default::default()
+                },
+            );
+        app.add_systems(Update, super::super::feed_units);
+        app.update();
+        assert_eq!(seen(&mut app), ["UNIT_PET nil nil"]);
+    }
 }
