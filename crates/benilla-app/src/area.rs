@@ -302,9 +302,9 @@ fn latched_realm_pvp(previous: bool, row_pvp: Option<bool>) -> bool {
 }
 
 /// Indoors the whole-WMO row's name replaces the zone text, and clears the subzone, only when it
-/// differs from the subzone text (`0x67e6e4`).
+/// differs from the subzone text, ASCII case folded (`SStrCmpI` at `0x67e6e4`).
 fn whole_wmo_name_takes_the_zone(name: &str, subzone: &str) -> bool {
-    name != subzone
+    !name.eq_ignore_ascii_case(subzone)
 }
 
 /// The shared area catalog and the zone-event feed.
