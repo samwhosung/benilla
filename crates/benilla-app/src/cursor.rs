@@ -302,7 +302,14 @@ fn drive_displayed_cursor(
             }
         }
         if !over_ui.0 {
-            displayed.0 = *world;
+            // The classifier's clear (Point) is `0x523d30`, which shows the base mode: over open
+            // ground (`0x481875`) and at every no-cursor exit of the object classifier (`0x4826cb`,
+            // `0x48272d`, `0x4828bd`, `0x4829cf`), so repair mode and an armed wrap keep theirs.
+            displayed.0 = if *world == WorldCursor::default() {
+                base
+            } else {
+                *world
+            };
             *last = None;
             return;
         }

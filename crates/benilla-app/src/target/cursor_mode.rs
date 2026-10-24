@@ -618,7 +618,8 @@ pub(super) struct CursorInputs<'w, 's> {
     stone: Option<Res<'w, crate::ui_dialog_verbs::MeetingStone>>,
 }
 
-/// The cursor and the attack fork over a pick; no pick, or nothing resolvable, reads Point.
+/// The cursor and the attack fork over a pick; no pick, or nothing resolvable, reads Point, the
+/// classifier's clear (`0x523d30`), which [`crate::cursor`] shows as the base mode.
 pub(super) fn classify(
     inputs: &CursorInputs,
     hovered: &Hovered,
