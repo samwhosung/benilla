@@ -853,3 +853,35 @@ fn a_use_group_spanning_lines_counts_every_member() {
         ]
     );
 }
+
+/// A module the file imports, by `self` in a group, by its own name or under another, counts
+/// every item named through it.
+#[test]
+fn a_path_through_an_imported_module_counts_its_item() {
+    let text = "use benilla_world::map_proj::{self, WorldProj};\n\
+                use benilla_world::{particles::buffer, view as camera_view};\n\
+                fn f() {\n    \
+                    let a = map_proj::world_uv(p, 1.0, 2.0);\n    \
+                    let b = buffer::EffectQuads::default();\n    \
+                    let c = camera_view::CAM_FAR;\n    \
+                    let d = benilla_world::map_proj::zone_uv(r, 1.0, 2.0);\n\
+                }\n";
+    let mut found: Vec<String> = paths_in(text, true, true)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect();
+    found.sort();
+    found.dedup();
+    assert_eq!(
+        found,
+        [
+            "map_proj::WorldProj",
+            "map_proj::world_uv",
+            "map_proj::zone_uv",
+            // The module itself, which `drop_module_paths` folds into its item.
+            "particles::buffer",
+            "particles::buffer::EffectQuads",
+            "view::CAM_FAR",
+        ]
+    );
+}
