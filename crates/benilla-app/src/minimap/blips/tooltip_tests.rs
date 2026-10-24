@@ -119,3 +119,61 @@ fn a_hovered_live_unit_is_asked_by_each_probe_once_per_answer() {
         "the probe after the refusal asks again"
     );
 }
+
+/// What the probe sees with the cursor on the player's own position, the disc 133 yd across.
+fn ctx_at_centre() -> super::BlipCtx {
+    super::BlipCtx {
+        center: Vec2::ZERO,
+        side: super::BLIP_BASIS_PX,
+        px_per_yd: super::BLIP_BASIS_PX * 0.5 / 133.0,
+        radius_yd: 133.0,
+        z: 0,
+        alpha: 1.0,
+        wx: 0.0,
+        wy: 0.0,
+        wz: 0.0,
+        cursor: Some(Vec2::ZERO),
+    }
+}
+
+/// `0x4eb0c0` keeps every landmark icon the cursor is over as a bit of `0xbdcbac`, and the build
+/// joins a line for each in list order, `\n` between them (`0x4eb67a`-`0x4eb6ed`, `0x835144`),
+/// into the one gold line it adds (`0x530380`): the gossip marker's static slot before the
+/// corpse's, both stacked on the player.
+#[test]
+fn stacked_landmarks_each_get_a_line_in_list_order() {
+    let marker = benilla_formats::AreaPoi {
+        importance: 0,
+        icon: 6,
+        faction_id: 0,
+        pos: [0.0; 3],
+        continent_id: 0,
+        flags: 2,
+        area_id: 0,
+        name: "Guards' directions".into(),
+        description: String::new(),
+        world_state_id: 0,
+    };
+    let corpse = super::corpse_landmark([0.0; 3], 0, "Corpse".into());
+    let mut hover = MinimapBlipHover::default();
+    let mut quads = crate::ui_pass::UiQuads::default();
+    super::emit_landmarks(
+        &ctx_at_centre(),
+        None,
+        Some(&marker),
+        Some(&corpse),
+        0,
+        Some(&Handle::default()),
+        &mut quads,
+        &mut hover,
+    );
+    let mut app = minimap_app();
+    blip(&mut app, hover);
+    assert!(shown(&mut app));
+    let text = app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .eval::<String>("return GameTooltipTextLeft1:GetText()")
+        .unwrap();
+    assert_eq!(text, "Guards' directions\nCorpse");
+}
