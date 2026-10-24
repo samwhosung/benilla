@@ -190,6 +190,8 @@ fn a_logon_refusal_opens_its_result_and_ends_the_logon() {
 
 /// The grid seed `0x12345678` builds.
 const GRID: [u8; 10] = [6, 3, 2, 1, 9, 8, 7, 0, 4, 5];
+/// The number of the IO thread's PIN prompt in these tests.
+const PROMPT: u64 = 41;
 
 /// A logon whose challenge asked for a PIN, past the frame that showed the keypad.
 fn at_the_keypad() -> GlueMgr {
@@ -199,7 +201,13 @@ fn at_the_keypad() -> GlueMgr {
     m.on_stage(LoginStage::Connecting, true);
     m.tick();
     settle(&mut m);
-    m.on_stage(LoginStage::Pin { grid: GRID }, true);
+    m.on_stage(
+        LoginStage::Pin {
+            grid: GRID,
+            prompt: PROMPT,
+        },
+        true,
+    );
     m.tick();
     settle(&mut m);
     m
@@ -217,7 +225,13 @@ fn a_pin_challenge_shows_the_keypad_its_grid() {
     m.tick();
     settle(&mut m);
     m.outbox.clear();
-    m.on_stage(LoginStage::Pin { grid: GRID }, true);
+    m.on_stage(
+        LoginStage::Pin {
+            grid: GRID,
+            prompt: PROMPT,
+        },
+        true,
+    );
     m.tick();
     settle(&mut m);
     assert_eq!(
@@ -250,7 +264,8 @@ fn pin_entered_sends_the_keys_on() {
     assert!(
         matches!(
             m.park_out.as_slice(),
-            [ParkRequest::Realm(RealmRequest::Pin { positions, .. })] if positions == &[2, 9, 4, 7]
+            [ParkRequest::Realm(RealmRequest::Pin { prompt: PROMPT, keys: Some(k) })]
+                if k.positions == [2, 9, 4, 7]
         ),
         "{} park asks",
         m.park_out.len()
@@ -262,6 +277,49 @@ fn pin_entered_sends_the_keys_on() {
         m.outbox,
         [open("CANCEL", Some("LOGIN_STATE_CHECKINGVERSIONS"))]
     );
+}
+
+/// A prompt with no logon on the screen to show it (a run with no glue screen, or one in another
+/// state) is answered at once with no keys, so the logon fails rather than wait for good.
+#[test]
+fn a_prompt_with_no_keypad_is_declined() {
+    let mut m = fresh();
+    m.on_stage(LoginStage::Connecting, false);
+    m.on_stage(
+        LoginStage::Pin {
+            grid: GRID,
+            prompt: PROMPT,
+        },
+        false,
+    );
+    settle(&mut m);
+    assert!(
+        matches!(
+            m.park_out.as_slice(),
+            [ParkRequest::Realm(RealmRequest::Pin {
+                prompt: PROMPT,
+                keys: None
+            })]
+        ),
+        "{} park asks",
+        m.park_out.len()
+    );
+    assert!(m.outbox.is_empty(), "{:?}", m.outbox);
+}
+
+/// The keys never print: with the grid `PLAYER_ENTER_PIN` showed, they spell the PIN.
+#[test]
+fn a_pin_request_prints_no_keys() {
+    let shown = format!(
+        "{:?}",
+        RealmRequest::Pin {
+            prompt: 1,
+            keys: Some(benilla_ui::script::GluePin {
+                positions: vec![2, 9, 5, 7],
+            }),
+        }
+    );
+    assert!(!shown.contains(['2', '9', '5', '7']), "{shown}");
 }
 
 /// The proof's refusal of a logon with a PIN counts in the logon object (`0x5b2d0d`): the PIN text
@@ -276,7 +334,13 @@ fn refused_pins_count_to_the_call_text() {
         settle(m);
         m.on_stage(LoginStage::Connecting, true);
         if pin {
-            m.on_stage(LoginStage::Pin { grid: GRID }, true);
+            m.on_stage(
+                LoginStage::Pin {
+                    grid: GRID,
+                    prompt: PROMPT,
+                },
+                true,
+            );
         }
         m.outbox.clear();
         match refusal {
@@ -2347,7 +2411,13 @@ fn the_stock_keypad_shows_the_grid_and_sends_the_keys_pressed() {
     app.update();
     type_and_login(&mut app);
     assert!(rx.try_recv().is_ok());
-    for stage in [LoginStage::Connecting, LoginStage::Pin { grid: GRID }] {
+    for stage in [
+        LoginStage::Connecting,
+        LoginStage::Pin {
+            grid: GRID,
+            prompt: PROMPT,
+        },
+    ] {
         app.world_mut().write_message(LoginStageMessage { stage });
         app.update();
     }
@@ -2375,7 +2445,8 @@ fn the_stock_keypad_shows_the_grid_and_sends_the_keys_pressed() {
     assert!(
         matches!(
             park_rx.try_recv(),
-            Ok(ParkRequest::Realm(RealmRequest::Pin { positions, .. })) if positions == [2, 9, 4, 7]
+            Ok(ParkRequest::Realm(RealmRequest::Pin { prompt: PROMPT, keys: Some(k) }))
+                if k.positions == [2, 9, 4, 7]
         ),
         "the keys reach the logon"
     );

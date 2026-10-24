@@ -26,7 +26,7 @@ use crate::net::{CharRequest, ClientCommand, ParkRequest, ParkSender, RealmReque
 pub(crate) const USER: &str = "empty";
 pub(crate) const PASS: &str = "secret";
 const SALT: [u8; 32] = [0x5a; 32];
-/// The PIN a realmd of [`servers_with_pin`] asks [`USER`] for.
+/// The PIN a realmd of [`servers_with_pin`] asks [`USER`] for, until [`Realmd::set_pin`].
 pub(crate) const PIN: u32 = 2590;
 const PIN_SALT: [u8; 16] = [0x6b; 16];
 /// Every wait in the tests: long enough for a loaded machine, short of a hung gate.
@@ -97,6 +97,11 @@ pub(crate) struct Realmd {
     lists: Arc<AtomicUsize>,
     open: Arc<AtomicUsize>,
     links: Arc<Mutex<Vec<TcpStream>>>,
+    /// The PIN the account asks for now.
+    pin: Arc<AtomicU64>,
+    /// Connections taken, and proofs refused for their PIN.
+    dials: Arc<AtomicUsize>,
+    refusals: Arc<AtomicUsize>,
 }
 
 impl Realmd {
@@ -106,26 +111,32 @@ impl Realmd {
     }
 
     /// [`Self::start`], asking for [`PIN`] when `pin`.
-    fn start_with(realms: Vec<FakeRealm>, keys: Sender<Key>, pin: bool) -> Realmd {
+    fn start_with(realms: Vec<FakeRealm>, keys: Sender<Key>, asks_pin: bool) -> Realmd {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let logons = Arc::new(AtomicUsize::new(0));
         let lists = Arc::new(AtomicUsize::new(0));
         let open = Arc::new(AtomicUsize::new(0));
         let links = Arc::new(Mutex::new(Vec::new()));
+        let pin = Arc::new(AtomicU64::new(u64::from(PIN)));
+        let dials = Arc::new(AtomicUsize::new(0));
+        let refusals = Arc::new(AtomicUsize::new(0));
         let (l, n, o) = (logons.clone(), lists.clone(), open.clone());
+        let (p, d, r) = (pin.clone(), dials.clone(), refusals.clone());
         let held = links.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(s) = stream else { return };
+                d.fetch_add(1, Ordering::SeqCst);
                 if let Ok(c) = s.try_clone() {
                     held.lock().unwrap().push(c);
                 }
                 let (realms, keys) = (realms.clone(), keys.clone());
                 let (l, n, o) = (l.clone(), n.clone(), o.clone());
+                let ask = asks_pin.then(|| (p.clone(), r.clone()));
                 thread::spawn(move || {
                     o.fetch_add(1, Ordering::SeqCst);
-                    serve_realmd(s, &realms, &keys, &l, &n, pin);
+                    serve_realmd(s, &realms, &keys, &l, &n, ask);
                     o.fetch_sub(1, Ordering::SeqCst);
                 });
             }
@@ -136,7 +147,25 @@ impl Realmd {
             lists,
             open,
             links,
+            pin,
+            dials,
+            refusals,
         }
+    }
+
+    /// Change the PIN the account asks for, as a TOTP code moves on.
+    pub(crate) fn set_pin(&self, pin: u32) {
+        self.pin.store(u64::from(pin), Ordering::SeqCst);
+    }
+
+    /// Connections taken so far.
+    pub(crate) fn dials(&self) -> usize {
+        self.dials.load(Ordering::SeqCst)
+    }
+
+    /// Proofs refused for their PIN so far.
+    pub(crate) fn refusals(&self) -> usize {
+        self.refusals.load(Ordering::SeqCst)
     }
 
     /// Close every link from the server's side, as vmangos does at `MaxSessionDuration`.
@@ -185,15 +214,16 @@ fn pin_verifies(seed: u32, pin: u32, data: &[u8]) -> bool {
 static PIN_SEEDS: AtomicU64 = AtomicU64::new(0x1234_5678);
 
 /// One realmd connection: the logon, then the realm list for every request until EOF. With `pin`
-/// the challenge asks for [`PIN`] as vmangos does for a PIN-locked account (`AuthSocket.cpp:509`-
-/// `519`), and a proof whose PIN does not verify is refused `0x04` (`:854`).
+/// (the PIN asked for now and the refusal count) the challenge asks for it as vmangos does for a
+/// PIN-locked account (`AuthSocket.cpp:509`-`519`), and a proof whose PIN does not verify is
+/// refused `0x04` (`:854`).
 fn serve_realmd(
     mut s: TcpStream,
     realms: &[FakeRealm],
     keys: &Sender<Key>,
     logons: &AtomicUsize,
     lists: &AtomicUsize,
-    pin: bool,
+    pin: Option<(Arc<AtomicU64>, Arc<AtomicUsize>)>,
 ) {
     let n = BigUint::from_bytes_le(&LARGE_SAFE_PRIME_LITTLE_ENDIAN);
     let g = BigUint::from(GENERATOR);
@@ -228,7 +258,7 @@ fn serve_realmd(
     reply.extend_from_slice(&SALT);
     reply.extend_from_slice(&[0u8; 16]); // crc_salt
     let seed = PIN_SEEDS.fetch_add(0x0101_0101, Ordering::SeqCst) as u32;
-    if pin {
+    if pin.is_some() {
         reply.push(1); // security_flag: PIN
         reply.extend_from_slice(&seed.to_le_bytes());
         reply.extend_from_slice(&PIN_SALT);
@@ -245,12 +275,14 @@ fn serve_realmd(
     if s.read_exact(&mut proof).is_err() {
         return;
     }
-    if pin {
+    if let Some((pin, refusals)) = &pin {
         let mut data = [0u8; 36];
         if s.read_exact(&mut data).is_err() {
             return;
         }
-        if proof[74] != 1 || !pin_verifies(seed, PIN, &data) {
+        let pin = pin.load(Ordering::SeqCst) as u32;
+        if proof[74] != 1 || !pin_verifies(seed, pin, &data) {
+            refusals.fetch_add(1, Ordering::SeqCst);
             let _ = s.write_all(&[0x01, 0x04]);
             return;
         }
