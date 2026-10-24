@@ -166,8 +166,12 @@ struct TileState {
 /// Whether the load counts the tile as in: furnished, or its ADT read failed, as the reference's
 /// wait-all completes on a failed read (`0x443d30`) and loads on without the tile.
 fn tile_done(t: &TileState, server: &AssetServer) -> bool {
-    let _ = server;
     t.furnished
+        || (t.entity.is_none()
+            && matches!(
+                server.load_state(&t.handle),
+                bevy::asset::LoadState::Failed(_)
+            ))
 }
 
 impl TileState {
@@ -1061,7 +1065,10 @@ fn spawn_streamed_tiles(
         // Judged from the desired set, so a desired tile not yet requested is not there; ground
         // the WDT never authors counts as resident, or the wait would never end.
         p.focus_resident = if desired.contains(&(cx, cy)) {
-            state.tiles.get(&(cx, cy)).is_some_and(|t| t.furnished)
+            state
+                .tiles
+                .get(&(cx, cy))
+                .is_some_and(|t| tile_done(t, &asset_server))
         } else {
             true
         };
@@ -1087,9 +1094,15 @@ fn spawn_streamed_tiles(
             p.complete = false;
         }
         if !p.complete {
-            // Spawned means furnished, root and every cell, so a reveal never shows bare ground;
+            // Spawned means furnished, root and every cell, so a reveal never shows bare ground (or
+            // read and failed, which has nothing to show);
             // it lags the root by a frame, as the furnisher runs after this system.
-            let spawned = |c: &(i32, i32)| state.tiles.get(c).is_some_and(|t| t.furnished);
+            let spawned = |c: &(i32, i32)| {
+                state
+                    .tiles
+                    .get(c)
+                    .is_some_and(|t| tile_done(t, &asset_server))
+            };
             p.total = desired.len();
             p.ready = desired.iter().filter(|c| spawned(c)).count();
             // The focus neighbourhood's placements count too, each up once its model and its WMO
@@ -1103,7 +1116,8 @@ fn spawn_streamed_tiles(
                         continue; // no tile to wait for
                     }
                     match state.tiles.get(&c) {
-                        Some(t) if t.furnished => {
+                        // A failed read has no placements to wait for.
+                        Some(t) if tile_done(t, &asset_server) => {
                             for uid in &t.placements {
                                 if let Some(pl) = placements.by_id.get(uid) {
                                     let up = pl.spawned && pl.doodads.iter().all(|d| d.spawned);

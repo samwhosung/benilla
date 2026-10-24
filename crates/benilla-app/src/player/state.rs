@@ -379,6 +379,9 @@ pub(crate) struct Player {
     /// by reloading the destination before the frame goes on (`0x617e90` calls `0x630bd0` for
     /// `d² > 900`): the frame is held until the settle hold ends ([`Self::holds_the_frame`]).
     pub(crate) world_reload: bool,
+    /// When the reload hold gives up (`Time::elapsed_secs`): the stall budget from its snap, never
+    /// extended, as the reference's wait-all ends once every read has, failed or not (`0x443d30`).
+    pub(crate) reload_ceiling: f32,
     /// The camera pitch the login seize seats: the saved pose's `cameraPitch` when
     /// [`super::camera_saved`] restored one, else the stock opening pitch.
     pub(super) login_pitch: Option<f32>,

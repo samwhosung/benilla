@@ -5,9 +5,10 @@
 //! `0x630bd0` when it moved the mover more than 30 yards (`d² > 900`), and when the mover is the
 //! unit the world view follows, that reloads the destination in place: `0x66fc80` recentres the
 //! streaming windows and `0x694920` runs one full map update (`0x698390`: tiles, doodads, map
-//! objects) with reads made synchronous (`0x86a2d0`) and waits for every one (`0x443d30`). It runs
-//! in the frame-time dispatch (category 5), ahead of the frame pass that presents (0x11), so no
-//! frame is presented until the destination is in, the next one shows it whole, and no loading
+//! objects) with reads made synchronous (`0x86a2d0`) and waits for every one (`0x443d30`). The
+//! ack's apply runs in the frame-time step (category 5), an apply-now `MSG_MOVE_TELEPORT` in the
+//! packet step (category 6), both ahead of the frame pass that presents (0x11), so no frame is
+//! presented until the destination is in, the next one shows it whole, and no loading
 //! screen is raised. Window messages arriving meanwhile wait in the queue and are delivered, in
 //! order, by the next tick's input step (`0x42c9f0`).
 //!
@@ -24,7 +25,7 @@ use std::sync::Arc;
 
 use bevy::ecs::message::{Message, MessageCursor};
 use bevy::ecs::system::SystemParam;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::keyboard::{KeyboardFocusLost, KeyboardInput};
 use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::camera::SortedCameras;
@@ -213,10 +214,56 @@ struct HeldPointer {
     live: Option<Option<Vec2>>,
 }
 
+/// The keys and the window's focus losses, deferred in one order. Bevy's keyboard pass applies a
+/// frame's keys and then releases everything on a focus loss (`keyboard_input_system`), so a loss
+/// is handed back in a frame of its own with the keys that came before it, and the keys after it
+/// follow on the next frame.
+#[derive(Default)]
+struct DeferredKeys {
+    keys: Deferred<KeyboardInput>,
+    losses: Deferred<KeyboardFocusLost>,
+    /// How many of the held keys came before the last focus loss under the hold.
+    lost_after: Option<usize>,
+}
+
+impl DeferredKeys {
+    fn step(
+        &mut self,
+        held: bool,
+        keys: &mut Messages<KeyboardInput>,
+        losses: &mut Messages<KeyboardFocusLost>,
+    ) {
+        if held {
+            self.keys.hold(keys);
+            let lost = self.losses.cursor.read(losses).count() > 0;
+            losses.clear();
+            if lost {
+                self.lost_after = Some(self.keys.held.len());
+            }
+            return;
+        }
+        let Some(cut) = self.lost_after.take() else {
+            self.keys.release(keys);
+            self.losses.release(losses);
+            return;
+        };
+        // The keys up to the loss, then the loss; the rest, and whatever arrived since, wait a
+        // frame behind it.
+        let fresh: Vec<KeyboardInput> = self.keys.cursor.read(keys).cloned().collect();
+        keys.clear();
+        let after = self.keys.held.split_off(cut);
+        keys.write_batch(self.keys.held.drain(..));
+        self.keys.held = after.into_iter().chain(fresh).collect();
+        self.keys.cursor.clear(keys);
+        losses.write(KeyboardFocusLost);
+        self.losses.cursor.clear(losses);
+    }
+}
+
 /// The raw queues the input plane is built from, as the cover's input rule takes them.
 #[derive(Resource, Default)]
 struct HeldInput {
-    keyboard: Deferred<KeyboardInput>,
+    keyboard: DeferredKeys,
     buttons: Deferred<MouseButtonInput>,
     motion: Deferred<MouseMotion>,
     wheel: Deferred<MouseWheel>,
@@ -226,6 +273,7 @@ struct HeldInput {
 #[derive(SystemParam)]
 struct RawQueues<'w> {
     keyboard: ResMut<'w, Messages<KeyboardInput>>,
+    focus_lost: ResMut<'w, Messages<KeyboardFocusLost>>,
     buttons: ResMut<'w, Messages<MouseButtonInput>>,
     motion: ResMut<'w, Messages<MouseMotion>>,
     wheel: ResMut<'w, Messages<MouseWheel>>,
@@ -250,7 +298,9 @@ fn defer_input_through_the_hold(
             .bypass_change_detection()
             .set_physical_cursor_position(pointer.shown.map(|p| p.as_dvec2()));
     }
-    deferred.keyboard.step(held, &mut queues.keyboard);
+    deferred
+        .keyboard
+        .step(held, &mut queues.keyboard, &mut queues.focus_lost);
     deferred.buttons.step(held, &mut queues.buttons);
     deferred.motion.step(held, &mut queues.motion);
     deferred.wheel.step(held, &mut queues.wheel);
@@ -339,7 +389,6 @@ mod tests {
     /// in order, so the key ends released, as the window's own order releases it.
     #[test]
     fn a_press_then_a_focus_loss_under_the_hold_ends_released() {
-        use bevy::input::keyboard::KeyboardFocusLost;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
             .add_message::<CursorMoved>()
@@ -377,6 +426,7 @@ mod tests {
     fn input_through_a_held_frame_waits_and_arrives_in_order() {
         let mut app = App::new();
         app.add_message::<KeyboardInput>()
+            .add_message::<KeyboardFocusLost>()
             .add_message::<MouseButtonInput>()
             .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
@@ -432,6 +482,7 @@ mod tests {
         let at = |x: f64| Some(Vec2::new(x as f32, 100.0));
         let mut app = App::new();
         app.add_message::<KeyboardInput>()
+            .add_message::<KeyboardFocusLost>()
             .add_message::<MouseButtonInput>()
             .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()

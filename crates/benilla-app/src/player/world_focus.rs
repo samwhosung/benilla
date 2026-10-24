@@ -140,7 +140,10 @@ pub(super) fn release_post_snap_hold(
     // the deadline is pushed while the resident world is still the map we left and while the
     // stream advances, so only a stream with no progress for the whole budget times out.
     let now = time.elapsed_secs();
-    if p.presentable() && !player.world_stale && focus_matches {
+    if player.world_reload && now >= player.reload_ceiling {
+        // The reload's ceiling, which nothing below extends.
+        player.end_settle(false, now);
+    } else if p.presentable() && !player.world_stale && focus_matches {
         player.end_settle(true, now);
     } else if player.world_stale || progressed {
         player.settle_deadline = now + SETTLE_TIMEOUT;

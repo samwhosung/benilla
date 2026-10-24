@@ -195,6 +195,8 @@ pub(super) fn apply_server_moves(
     }
     // Cross-map worldport: snap, bump `CurrentMap` for the terrain streamer, ack if required.
     for w in worldports.read() {
+        // A transfer ends any teleport hold, so its loading screen reaches the window.
+        player.world_reload = false;
         let riding = w.transport_entry.is_some() && player.ride.is_some();
         if riding {
             // Riding through: the pose is deck-local (`Player.cpp:2114`) and the boat survived the
@@ -439,7 +441,7 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     player.ride = None;
     let from = player.pos;
     player.pos = wow_to_bevy(t.position);
-    mark_world_reload(player, from);
+    mark_world_reload(player, from, player.pos, now);
     player.face_yaw = t.orientation;
     *cam_yaw = t.orientation;
     player.move_flags = 0;
@@ -456,10 +458,18 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
 /// The teleport apply `0x617e90`'s reload, for every teleport that reaches it (the ack's snap and
 /// our own `MSG_MOVE_TELEPORT`): a move of more than 30 yards (`0x80c730`, squared against `d²`)
 /// of the unit the world view follows reloads the destination before the frame goes on
-/// (`0x630bd0`). Returns whether it does.
-fn mark_world_reload(player: &mut Player, from: Vec3) -> bool {
-    player.world_reload = !player.detached && from.distance_squared(player.pos) > 30.0 * 30.0;
-    player.world_reload
+/// (`0x630bd0`). `from` and `to` are in the mover's frame, deck-local aboard a transport, as `d²` is
+/// taken of the mover's own position (`+0x10`) after the transport is set (`0x617170`). Returns
+/// whether it does. Only marks: a later, shorter teleport (vmangos sends `MSG_MOVE_TELEPORT` twice,
+/// `MovementHandler.cpp:252,255`) leaves a hold up, which only its release ends; a far one restarts
+/// the hold's ceiling.
+fn mark_world_reload(player: &mut Player, from: Vec3, to: Vec3, now: f32) -> bool {
+    let far = !player.detached && from.distance_squared(to) > 30.0 * 30.0;
+    if far {
+        player.world_reload = true;
+        player.reload_ceiling = now + SETTLE_TIMEOUT;
+    }
+    far
 }
 
 /// Hold the body (gravity off) until the destination is resident, which releases it.
@@ -510,6 +520,12 @@ fn apply_self_move(
     player.modes.merge_from_wire(player.move_flags);
     // Neither mode touches `settling`: the terrain streamer releases it in every mode alike.
 
+    // The mover's own frame for the reload's `d²`: deck-local when the packet places us on the
+    // deck we ride, else the world.
+    let deck_local = player.ride.as_ref().and_then(|r| {
+        let t = m.transport.filter(|t| t.guid == r.guid)?;
+        Some((r.local_pos, wow_to_bevy([t.pos.x, t.pos.y, t.pos.z])))
+    });
     let from = player.pos;
     player.pos = wow_to_bevy(m.position);
     // Aim, body and camera turn by the same delta; the reference writes only the mover's facing,
@@ -569,8 +585,10 @@ fn apply_self_move(
     player.wedge_still = 0;
     // A teleport's apply, unlike a placing relay's, reloads a far destination (`0x6186b0` →
     // `0x617e90`), so the body waits for it as the ack's snap does.
-    if m.teleport && mark_world_reload(player, from) {
-        hold_until_resident(player, time.elapsed_secs());
+    let (from, to) = deck_local.unwrap_or((from, player.pos));
+    let now = time.elapsed_secs();
+    if m.teleport && mark_world_reload(player, from, to, now) {
+        hold_until_resident(player, now);
     }
 }
 
