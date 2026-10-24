@@ -23,6 +23,9 @@ pub(crate) struct TradeSteps<'w, 's> {
     errors: Res<'w, UiErrorKeys>,
     objects: Objects<'w, 's>,
     items: Res<'w, Items>,
+    /// The item watchers' trade halves still on the lane, which a close runs first.
+    lane: Option<ResMut<'w, crate::item_lane::ItemLane>>,
+    touch_reads: super::TouchReads<'w, 's>,
 }
 
 impl TradeSteps<'_, '_> {
@@ -35,6 +38,7 @@ impl TradeSteps<'_, '_> {
             errors,
             objects,
             items,
+            ..
         } = self;
         let Some(trade) = trade.as_deref_mut() else {
             debug!("ui_trade: no trade window in this world; {call:?} dropped");
@@ -118,6 +122,24 @@ impl TradeSteps<'_, '_> {
             TradeCall::Close => {}
         }
         None
+    }
+
+    /// The close core's first step here, the trade halves of the item watcher runs still on the
+    /// lane, as the world close core drains them; whether any ran.
+    pub(crate) fn run_trade_touches(&mut self, script: &mut UiScript) -> bool {
+        let touches = self
+            .lane
+            .as_deref_mut()
+            .map(crate::item_lane::ItemLane::take_trade_touches)
+            .unwrap_or_default();
+        let Some(trade) = self.trade.as_deref_mut() else {
+            return false;
+        };
+        let ran = !touches.is_empty();
+        for touch in touches {
+            super::touch_trade(script, trade, touch, &self.touch_reads);
+        }
+        ran
     }
 
     /// The partner's cell `[0xb71728]`, set only while the window is open.

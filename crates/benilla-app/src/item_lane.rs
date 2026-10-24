@@ -126,20 +126,22 @@ pub(crate) struct RunReads<'w, 's> {
     sink: crate::ui_action::MessageSink<'w>,
 }
 
-/// The VM and the trade session a run's trade half writes.
-type RunVm<'w, 's> =
-    crate::script_calls::VmWith<'w, 's, Option<ResMut<'static, crate::ui_trade::TradeSession>>>;
+/// The VM, the trade session a run's trade half writes, and the lane, whose trade halves a close
+/// inside a run's Lua takes.
+type RunVm<'w, 's> = crate::script_calls::VmWith<
+    'w,
+    's,
+    (
+        Option<ResMut<'static, crate::ui_trade::TradeSession>>,
+        ResMut<'static, ItemLane>,
+    ),
+>;
 
 /// The lane's `fire_until` ([`crate::lanes`]): each run `until` admits, whole, its Lua run with the
 /// host lent; the lane stops after a run whose firing stamped anything, so what it pushed fires
 /// next. With no VM the runs are dropped.
-fn fire_item_runs(
-    In(until): In<Until>,
-    mut vm: RunVm,
-    mut lane: ResMut<ItemLane>,
-    mut reads: RunReads,
-) {
-    while let Some((stamp, run, touch)) = lane.pop(until) {
+fn fire_item_runs(In(until): In<Until>, mut vm: RunVm, mut reads: RunReads) {
+    while let Some((stamp, run, touch)) = vm.own().1.pop(until) {
         let ((), moved) = crate::lanes::firing(stamp, || fire_run(&mut vm, &mut reads, run, touch));
         if moved {
             return;
@@ -216,7 +218,7 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
         }
     });
     if let Some(touch) = touch {
-        vm.turn(|script, trade| {
+        vm.turn(|script, (trade, _)| {
             if let (Some(script), Some(mut trade)) = (script, trade) {
                 crate::ui_trade::touch_trade(script, &mut trade, touch, &reads.trade);
             }

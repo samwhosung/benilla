@@ -509,13 +509,13 @@ pub(super) fn feed_item_sets(
 /// names once the enchant catalog is: their consumers are click-driven, and a chat-link tooltip
 /// has no hover loop to repaint a late answer.
 pub(super) fn feed_random_properties(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut props: Option<ResMut<crate::items::RandomProperties>>,
+    // The table is the host's too: a trade scan's placed row reads its rolls.
+    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, crate::items::RandomProperties>>>,
     enchants: Option<Res<crate::items::Enchants>>,
     mut pushed: Local<crate::ui_script::VmMemo<bool>>,
     mut names_pushed: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut props| {
         let Some(script) = script else {
             return;
         };

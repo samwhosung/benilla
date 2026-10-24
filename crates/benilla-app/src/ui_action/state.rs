@@ -860,13 +860,15 @@ impl ActionStates<'_, '_> {
 /// Computes and diff-pushes every occupied slot's state ([`ActionStates`]), and owes the
 /// reference's events to [`fire_action_events`].
 pub(super) fn feed_action_state(
-    mut vm: crate::script_calls::VmWith<ActionStates<'static, 'static>>,
-    // The usable refresh's field-watch callers, the enter cascade, the item lane's
-    // `RaiseBagUpdate` calls and the events owed.
-    (mut edges, mut entries, item_lane, mut owed): (
+    // The states, and the item lane's `RaiseBagUpdate` calls, the lane being the host's too.
+    mut vm: crate::script_calls::VmWith<(
+        ActionStates<'static, 'static>,
+        Option<Res<'static, crate::item_lane::ItemLane>>,
+    )>,
+    // The usable refresh's field-watch callers, the enter cascade and the events owed.
+    (mut edges, mut entries, mut owed): (
         MessageReader<FieldChanged>,
         MessageReader<crate::net::WorldEnterCascadeMessage>,
-        Option<Res<crate::item_lane::ItemLane>>,
         ResMut<ActionEvents>,
     ),
     // The active player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
@@ -878,9 +880,9 @@ pub(super) fn feed_action_state(
 ) {
     let clock = (clock.anchor, clock.ui_now);
     let entered = entries.read().count() > 0;
-    let bag_updates = item_lane.map_or(0, |l| l.bag_raises());
+    let bag_updates = vm.own().1.map_or(0, |l| l.bag_raises());
     let arrived = !created.is_empty();
-    vm.turn(|script, mut states| {
+    vm.turn(|script, (mut states, _)| {
         let Some(script) = script else {
             return;
         };

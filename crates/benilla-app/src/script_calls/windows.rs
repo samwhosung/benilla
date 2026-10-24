@@ -185,10 +185,14 @@ impl ScriptCallHost<'_, '_> {
         self.signalled(script, mark);
     }
 
-    /// The trade window's close core, `0x4bf4e0(0, 0)`: with a window open, the done flag stored
-    /// (`0x4bf4fd`), the release (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`);
-    /// then `CMSG_CANCEL_TRADE`, open or not (`0x4bf527`).
+    /// The trade window's close core, `0x4bf4e0(0, 0)`, after the item watchers' trade halves
+    /// still queued: with a window open, the done flag stored (`0x4bf4fd`), the release
+    /// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`,
+    /// open or not (`0x4bf527`).
     pub(super) fn close_trade(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if self.appliers.p4().p6().run_trade_touches(script) {
+            self.signalled(script, mark);
+        }
         let partner = self.appliers.p4().p6().partner_cell();
         if let Some(partner) = partner {
             script.set_trade_done(false);

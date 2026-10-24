@@ -34,6 +34,7 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<&'static str> {
                 ClientCommand::RandomRoll { .. } => "roll",
                 ClientCommand::CancelTrade => "cancel trade",
                 ClientCommand::QueryNextMailTime => "next mail time",
+                ClientCommand::ClearTradeItem { .. } => "clear trade item",
                 _ => return None,
             })
         })
@@ -292,4 +293,58 @@ fn open_trainer_closes_the_window_before_it_asks_for_the_own_list() {
             assert!(is_open(&app, W::Trainer), "no player: nothing happens");
         }
     }
+}
+
+/// `CloseTrade()` runs the item watchers' trade halves still queued before its core, as the
+/// close core does: a traded item's destroy clears its slot (`0x4bfb10` → `0x5d4480`) and signals
+/// `TRADE_PLAYER_ITEM_CHANGED` (`0x4bfaef`) ahead of `TRADE_CLOSED` (`0x4bf522`) and the cancel
+/// (`0x4bf527`).
+#[test]
+fn close_trade_runs_the_queued_trade_touches_first() {
+    const LINEN: u64 = 0x4000_0000_0000_2589;
+    let (mut app, rx) = client();
+    open(&mut app, W::Trade, NPC);
+    {
+        let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
+        vm.keep_calls();
+        vm.open_trade_window();
+        vm.set_trade(Some(Default::default()));
+        let mut bag = benilla_ui::script::ContainerState::default();
+        bag.slots.insert(
+            1,
+            benilla_ui::script::ContainerSlot {
+                item_id: 2589,
+                guid: LINEN,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        vm.set_container(0, Some(bag));
+        vm.run("PickupContainerItem(0, 1) ClickTradeButton(1)")
+            .unwrap();
+        assert!(
+            vm.trade_slot_holding(LINEN).is_some(),
+            "the linen is offered"
+        );
+    }
+    let _ = sent(&rx);
+    app.world_mut()
+        .resource_mut::<crate::item_lane::ItemLane>()
+        .push(crate::item_watch::Run {
+            notice: Some(crate::item_watch::ItemNotice::Destroyed {
+                guid: LINEN,
+                entry: 2589,
+            }),
+            ..Default::default()
+        });
+    listen(&mut app, &["TRADE_PLAYER_ITEM_CHANGED", "TRADE_CLOSED"], "");
+    eval::<()>(&mut app, "CloseTrade()");
+    assert_eq!(
+        sent(&rx),
+        ["clear trade item", "cancel trade", "cancel trade"]
+    );
+    assert_eq!(
+        eval::<String>(&mut app, "return SEQ"),
+        "TRADE_PLAYER_ITEM_CHANGED TRADE_CLOSED TRADE_CLOSED "
+    );
 }
