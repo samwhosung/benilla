@@ -323,7 +323,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_money(1_000);
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         s.set_trade(Some(crate::script::TradeState::default()));
         s.run("PickupPlayerMoney(300) AddTradeMoney()").unwrap();
         assert_eq!(

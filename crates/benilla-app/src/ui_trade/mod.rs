@@ -1155,7 +1155,7 @@ fn feed_trade(
         if opened {
             // The open clears both offers and our item table before anything is placed
             // (`0x4bf549`).
-            script.open_trade_window();
+            script.open_trade_window(trade.cell().unwrap_or(0));
             *last = None;
         }
         let changed = fresh != *last;

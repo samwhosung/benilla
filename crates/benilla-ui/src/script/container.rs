@@ -3021,7 +3021,7 @@ mod tests {
 
         let mut s = UiScript::new().unwrap();
         s.set_player_control(true);
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         s.set_container(0, Some(crate::script::cursor::two_item_bag()));
         s.keep_calls();
         s.run("PickupContainerItem(0, 2) ClickTradeButton(1) ClearCursor()")

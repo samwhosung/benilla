@@ -307,7 +307,7 @@ fn close_trade_runs_the_queued_trade_touches_first() {
     {
         let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
         vm.keep_calls();
-        vm.open_trade_window();
+        vm.open_trade_window(0x7);
         vm.set_trade(Some(Default::default()));
         let mut bag = benilla_ui::script::ContainerState::default();
         bag.slots.insert(

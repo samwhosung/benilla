@@ -919,9 +919,10 @@ pub(crate) struct Model {
     /// getters' tables (`0xb714f4` and its siblings, `0xb716d0`), which a close leaves alone and
     /// the next open clears (`0x4bf549`-`0x4bf5ef`).
     pub(crate) trade: Option<trade::TradeState>,
-    /// The partner cell `[0xb71728]` is set: the window is open. Read by the checks that test the
-    /// cell first (`0x4bfd20`) and by `GetPlayerTradeMoney` (`0x4c0706`).
-    pub(crate) trade_window: bool,
+    /// The partner cell `[0xb71728]`, 0 for none: nonzero, the window is open. Read by the checks
+    /// that test the cell first (`0x4bfd20`), by `GetPlayerTradeMoney` (`0x4c0706`), and as the
+    /// partner slots' lookup owner (`0x4c016c`).
+    pub(crate) trade_partner: u64,
     /// The close core's done flag `[0xb71748]`, which `CloseTrade` tests (`0x4bfdc0`).
     pub(crate) trade_done: bool,
     /// The placements whose send the host has yet to answer, by the id their call carries
@@ -1626,7 +1627,7 @@ impl Model {
             auction_name_asks: Vec::new(),
             auction_sell_item: None,
             trade: None,
-            trade_window: false,
+            trade_partner: 0,
             trade_done: false,
             trade_placing: std::collections::HashMap::new(),
             trade_place_seq: 0,

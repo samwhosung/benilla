@@ -1658,7 +1658,7 @@ mod tests {
     fn the_entry_unlock_skips_a_trade_offer_only_while_the_window_is_open() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         s.set_trade(Some(Default::default()));
         s.set_container(0, Some(super::two_item_bag()));
         s.run("PickupContainerItem(0, 1) ClickTradeButton(1)")

@@ -87,17 +87,10 @@ fn a_trade_getter_asks_a_missed_template_inside_its_call() {
         count: 1,
         ..Default::default()
     });
+    // The open sets the partner cell `[0xb71728]` (`0x4bf549`), then the statuses fill the offers.
+    vm(&mut app).open_trade_window(0x88);
     vm(&mut app).set_trade(Some(TradeState { player, target }));
     seat_player(&mut app);
-    // The partner rides the `npc` unit, the reference's `[0xb71728]`.
-    vm(&mut app).set_unit(
-        "npc",
-        Some(UnitState {
-            exists: true,
-            guid: 0x88,
-            ..Default::default()
-        }),
-    );
     eval::<()>(
         &mut app,
         "GetTradeTargetItemInfo(1) RandomRoll(1, 2) GetTradePlayerItemInfo(2)",

@@ -446,7 +446,7 @@ fn live_objects_and_blocks_reach_the_flag() {
     }
     // The player's slots are the live item objects their guids name (`0x5342ed`): the flags
     // decide LOCKED, and the block's lock id is zeroed (`0x534341`).
-    s.open_trade_window();
+    s.open_trade_window(0x7);
     s.set_trade(Some(st));
     s.run("PickupContainerItem(0, 1) ClickTradeButton(1) PickupContainerItem(0, 2) ClickTradeButton(2)")
         .unwrap();

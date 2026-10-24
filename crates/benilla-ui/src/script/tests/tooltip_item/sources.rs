@@ -26,7 +26,7 @@ fn texts_after(s: &mut UiScript, call: &str) -> Vec<String> {
 fn offer(s: &mut UiScript, state: TradeState, slots: &[(u32, u32)]) {
     // No host: the placements' calls are kept, and the VM writes our slots as a sent one would.
     s.keep_calls();
-    s.open_trade_window();
+    s.open_trade_window(0x7);
     s.set_trade(Some(state));
     for (bag_slot, trade_slot) in slots {
         s.run(&format!(

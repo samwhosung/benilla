@@ -3397,7 +3397,7 @@ mod tests {
         f.app
             .world_mut()
             .non_send_resource_mut::<UiScript>()
-            .open_trade_window();
+            .open_trade_window(0x7);
         run(
             &mut f,
             "PickupContainerItem(0, 2) ClickTradeButton(1) ClearCursor() PickupContainerItem(0, 1)",

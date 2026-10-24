@@ -162,11 +162,11 @@ impl super::UiScript {
     /// both offers and our item table clear (`0x4bf55d`-`0x4bf5ef`), so the getters answer nil
     /// until the statuses fill them. Only an open clears them, and the world entry's reset
     /// (`0x4909b5` → `0x4bf0e0`, `0x4bf174`-`0x4bf20e`), which clears the tables and the cell too.
-    pub fn open_trade_window(&mut self) {
+    pub fn open_trade_window(&mut self, partner: u64) {
         let mut model = self.model_mut();
         model.trade = None;
         model.trade_offered = Default::default();
-        model.trade_window = true;
+        model.trade_partner = partner;
         // The open zeroes the done flag `[0xb71748]` (`0x4bf5e4`).
         model.trade_done = false;
     }
@@ -364,7 +364,7 @@ impl super::UiScript {
     /// table stay (`0x4bfcf0` only unlocks), so the getters still answer the last offer, in
     /// `TRADE_CLOSED`'s handlers too (`0x4bf522`).
     pub fn close_trade_window(&mut self) {
-        self.model_mut().trade_window = false;
+        self.model_mut().trade_partner = 0;
     }
 
     /// Our column as the VM holds it, `ClickTradeButton`'s writes included: what the slots'
@@ -514,7 +514,7 @@ impl Model {
     /// and one of our slots holds `guid`. The equip refusal (`0x5e1897`) and the stackable
     /// arrival's unlock (`0x622229`) ask it.
     pub(crate) fn trade_holds(&self, guid: u64) -> bool {
-        self.trade_window
+        self.trade_partner != 0
             && self
                 .trade_offered
                 .iter()
@@ -526,8 +526,8 @@ impl Model {
 /// A getter's item-cache lookup when the slot is filled and its template has not answered: the
 /// lookup with the callback `0x4c0340` (`0x4c017f`, `0x4c0582`), one per call, which the host
 /// makes inside the call and whose callback signals `TRADE_UPDATE` when the record lands. The
-/// owner id is the partner for theirs, who rides the `npc` unit (`[0xb71728]`, `0x4c016c`), and
-/// the active player for ours (`0x4c0573`).
+/// owner id is the partner cell for theirs (`[0xb71728]`, `0x4c016c`), and the active player for
+/// ours (`0x4c0573`).
 fn ask_record(lua: &Lua, slot: Option<&TradeSlotItem>, partners: bool) -> mlua::Result<()> {
     let Some(slot) = slot.filter(|s| s.name.is_none()) else {
         return Ok(());
@@ -535,7 +535,7 @@ fn ask_record(lua: &Lua, slot: Option<&TradeSlotItem>, partners: bool) -> mlua::
     let owner = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         if partners {
-            model.unit("npc").map_or(0, |u| u.guid)
+            model.trade_partner
         } else {
             model.unit_guids.player
         }
@@ -1017,7 +1017,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             // Gated on the partner cell (`0x4c0706`-`0x4c0714`); the target's is not (`0x4c0759`).
-            Ok(if model.trade_window {
+            Ok(if model.trade_partner != 0 {
                 i64::from(gold(&model, |t| &t.player))
             } else {
                 0
@@ -1461,7 +1461,7 @@ mod tests {
             0,
             "our getter answers 0 with the partner cell clear"
         );
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         s.set_trade(Some(state()));
         assert_eq!(
             s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(),
@@ -1490,7 +1490,7 @@ mod tests {
     fn a_close_keeps_both_offers_and_the_next_open_clears_them() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         s.set_trade(Some(state()));
         s.close_trade_window();
         for read in [
@@ -1512,7 +1512,7 @@ mod tests {
         s.zero_trade_gold();
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 0);
 
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         assert!(s
             .eval::<bool>("return GetTradePlayerItemInfo(1) == nil")
             .unwrap());
@@ -1528,7 +1528,7 @@ mod tests {
     fn unlocking_the_offered_items_leaves_the_table() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         s.set_trade(Some(TradeState::default()));
         let mut bag = crate::script::ContainerState::default();
         bag.slots.insert(
@@ -1553,7 +1553,7 @@ mod tests {
             Some((0, 0, 1)),
             "past the close"
         );
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         assert_eq!(s.trade_slot_holding(0x2589), None, "the open clears it");
     }
 
@@ -1908,7 +1908,7 @@ mod tests {
     fn a_trade_slots_refusal_shows_inside_its_call() {
         use crate::script::ui_errors::shown::seen_in_call;
         let mut s = UiScript::new().unwrap();
-        s.open_trade_window();
+        s.open_trade_window(0x7);
         let mut bag = crate::script::cursor::two_item_bag();
         bag.slots.get_mut(&1).unwrap().already_bound = true;
         s.set_container(0, Some(bag));
