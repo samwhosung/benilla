@@ -1680,6 +1680,19 @@ fn parse_server_body(
 mod tests {
     use super::*;
 
+    /// `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE` (`0x20d`) has a handler: its jump-table entry leads to
+    /// `0x5e43f8`, which ends far sight on the active player and reads no body.
+    #[test]
+    fn the_clear_far_sight_packet_decodes_to_its_event() {
+        let (packet, tail) = parse_server_with_tail(opcode::SMSG_CLEAR_FAR_SIGHT_IMMEDIATE, &[])
+            .expect("an empty body decodes");
+        assert_eq!(tail, 0);
+        assert!(matches!(
+            crate::events::decode(packet).as_slice(),
+            [crate::SessionEvent::FarSightCleared]
+        ));
+    }
+
     /// `SMSG_AUTH_RESPONSE` as vmangos writes its four shapes: the admitting `AUTH_OK` and the first
     /// `AUTH_WAIT_QUEUE` with the billing group (`World.cpp:325-331`, `:374-381`), then the queue's
     /// later positions and its closing `AUTH_OK` without (`WorldSession.cpp:961-976`).
