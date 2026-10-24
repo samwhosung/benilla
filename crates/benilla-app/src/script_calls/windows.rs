@@ -142,7 +142,7 @@ impl ScriptCallHost<'_, '_> {
 
     /// The vendor's close core `0x4fadf0`: with a vendor open, the release (`0x4fae04`), the cell
     /// cleared (`0x4fae0e`), `MERCHANT_CLOSED` (`0x4fae2c`), then a vendor row held on the cursor
-    /// dropped (`0x4fae31`-`0x4fae4a`).
+    /// dropped (`0x4fae31`-`0x4fae4a`) and a Repair base mode back to Point (`0x4fae4f`-`0x4fae68`).
     pub(super) fn close_merchant(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         let Some(vendor) = self.appliers.p5().p7().vendor() else {
             return;
@@ -152,7 +152,7 @@ impl ScriptCallHost<'_, '_> {
         latch!(self).note_closed(NpcWindow::Merchant);
         script.fire_event("MERCHANT_CLOSED", vec![]);
         self.signalled(script, mark);
-        crate::ui_merchant::drop_held_vendor_row(script);
+        crate::ui_merchant::close_tail(script);
         self.signalled(script, mark);
     }
 

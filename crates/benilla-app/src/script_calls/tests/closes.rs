@@ -348,3 +348,41 @@ fn close_trade_runs_the_queued_trade_touches_first() {
         "TRADE_PLAYER_ITEM_CHANGED TRADE_CLOSED TRADE_CLOSED "
     );
 }
+
+/// The merchant close core's tail returns a Repair base mode to Point after `MERCHANT_CLOSED`
+/// (`0x4fae4f`-`0x4fae68`, behind `0x4fae2c`), on the verb's path and the world's alike. The
+/// release re-enters the core (`0x4fae04` → `0x493310`), whose run signals with repair mode still
+/// on and then ends it, so the outer signal finds it off.
+#[test]
+fn the_merchant_close_ends_repair_mode_after_its_signal() {
+    let (mut app, _rx) = client();
+    listen(
+        &mut app,
+        &["MERCHANT_CLOSED"],
+        "SEQ = SEQ .. tostring(InRepairMode()) .. ' '",
+    );
+    for world_close in [false, true] {
+        open(&mut app, W::Merchant, NPC);
+        {
+            let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
+            vm.set_merchant(Some(benilla_ui::script::MerchantState {
+                can_repair: true,
+                ..Default::default()
+            }));
+            vm.run("SEQ = '' ShowRepairCursor()").unwrap();
+            assert!(vm.repair_mode(), "armed");
+        }
+        let after: String = if world_close {
+            crate::ui_merchant::close_core(app.world_mut());
+            eval(&mut app, "return tostring(InRepairMode())")
+        } else {
+            eval(&mut app, "CloseMerchant() return tostring(InRepairMode())")
+        };
+        assert_eq!(
+            eval::<String>(&mut app, "return SEQ"),
+            "MERCHANT_CLOSED 1 MERCHANT_CLOSED nil ",
+            "world close {world_close}"
+        );
+        assert_eq!(after, "nil", "world close {world_close}");
+    }
+}

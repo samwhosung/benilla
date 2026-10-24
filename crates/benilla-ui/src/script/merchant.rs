@@ -94,14 +94,9 @@ pub struct MerchantState {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open vendor. Clearing it leaves repair mode, as the
-    /// merchant-close handler restores the Point base mode (`0x4fadf0`).
+    /// Push (or clear, with `None`) the open vendor.
     pub fn set_merchant(&mut self, state: Option<MerchantState>) {
-        let closing = state.is_none();
         self.model_mut().merchant = state;
-        if closing {
-            self.model_mut().repair_mode = false;
-        }
     }
 
     /// Push `GetRepairAllCost`'s total in copper, swept by the app ahead of the events that read it.
@@ -166,7 +161,8 @@ impl super::UiScript {
     }
 
     /// Leave repair mode, as `HideRepairCursor` does, for the world's right mouse-down, which
-    /// resets the Repair base mode to Point (`0x492c68`).
+    /// resets the Repair base mode to Point (`0x492c68`), and the merchant close's tail
+    /// (`0x4fae4f`-`0x4fae68`).
     pub fn end_repair_mode(&mut self) {
         self.model_mut().repair_mode = false;
     }
@@ -1015,13 +1011,6 @@ mod tests {
         assert_eq!(s.ui_cursor(), None, "repair clears a stale hover override");
         s.run("HideRepairCursor()").unwrap();
         assert!(!s.repair_mode());
-
-        s.run("ShowRepairCursor()").unwrap();
-        s.set_merchant(None);
-        assert!(
-            !s.repair_mode(),
-            "closing the merchant hides the repair cursor"
-        );
     }
 
     #[test]

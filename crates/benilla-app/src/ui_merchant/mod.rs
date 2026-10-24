@@ -717,7 +717,7 @@ impl LatchedWindow for MerchantOpen {
 }
 
 /// The close core `0x4fadf0`, every close's: with a vendor open, the latch release (`0x4fae04`),
-/// the cell cleared, `MERCHANT_CLOSED` (`0x4fae2c`), then the tail ([`drop_held_vendor_row`]).
+/// the cell cleared, `MERCHANT_CLOSED` (`0x4fae2c`), then the tail ([`close_tail`]).
 /// The leave-world sweep's leg (`0x490ada` → `0x4facc0`) calls it as it is.
 pub(crate) fn close_core(world: &mut World) {
     let Some(vendor) = world.resource::<MerchantOpen>().vendor else {
@@ -729,7 +729,7 @@ pub(crate) fn close_core(world: &mut World) {
     crate::ui_session::fire(world, |script| {
         script.set_merchant(None);
         script.fire_event("MERCHANT_CLOSED", vec![]);
-        drop_held_vendor_row(script);
+        close_tail(script);
     });
 }
 
@@ -742,16 +742,18 @@ pub(crate) fn open_merchant(world: &mut World, vendor: u64, items: Vec<VendorIte
     world.resource_mut::<MerchantOpen>().open(vendor, items);
 }
 
-/// The close core's tail (`0x4fadf0`, every close's): a vendor row held on the cursor, mode 5 with
-/// its entry stored (`0x4fae31`, `[0xb4b41c]` through `0x495170`), is cleared (`0x4fae4a` →
-/// `ClearCursor(1, 1)`), after `MERCHANT_CLOSED`.
-pub(crate) fn drop_held_vendor_row(script: &mut UiScript) {
+/// The close core's tail (`0x4fadf0`, every close's), after `MERCHANT_CLOSED`: a vendor row held
+/// on the cursor, mode 5 with its entry stored (`0x4fae31`, `[0xb4b41c]` through `0x495170`), is
+/// cleared (`0x4fae4a` → `ClearCursor(1, 1)`), then a Repair base mode returns to Point
+/// (`0x4fae4f`-`0x4fae68`).
+pub(crate) fn close_tail(script: &mut UiScript) {
     if matches!(
         script.held_cursor().payload(),
         Some(benilla_ui::script::CursorPayload::Merchant(_))
     ) {
         script.clear_cursor_payload();
     }
+    script.end_repair_mode();
 }
 
 /// A right mouse-down in the world ends repair mode: the WorldFrame hook `0x492c20` resets the
