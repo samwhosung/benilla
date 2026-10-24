@@ -11,6 +11,8 @@ use sha1::{Digest, Sha1};
 use crate::wire::{read_array, read_cstring, read_f32_le, read_u16_le, read_u32_le, read_u8};
 use crate::RealmInfo;
 
+pub mod pin;
+
 const CMD_AUTH_LOGON_CHALLENGE: u8 = 0x00;
 const CMD_AUTH_LOGON_PROOF: u8 = 0x01;
 const CMD_REALM_LIST: u8 = 0x10;
@@ -156,6 +158,27 @@ pub struct ChallengeReply {
     pub salt: [u8; 32],
     /// The version challenge answered by `crc_hash` ([`version_proof`]); not an SRP6 input.
     pub crc_salt: [u8; 16],
+    /// The PIN the account asks for, when the security byte is non-zero.
+    pub pin: Option<PinChallenge>,
+}
+
+/// A challenge's PIN fields, which the reference keeps on the logon object (`0x5b1ed0`): the
+/// security byte (`+0x1ac`), the seed of the keypad's grid ([`pin::grid`], `+0x1ae`) and the
+/// server's salt (`+0x1b8`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PinChallenge {
+    pub flags: u8,
+    pub grid_seed: u32,
+    pub salt: [u8; 16],
+}
+
+/// What a logon proof carries for a PIN ([`PinProof::new`]): the challenge's security byte, the
+/// client's salt (`+0x1c8`) and the hash of the positions pressed (`+0x1d8`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PinProof {
+    pub flags: u8,
+    pub salt: [u8; 16],
+    pub hash: [u8; 20],
 }
 
 /// Send `CMD_AUTH_LOGON_CHALLENGE_Client`. `account_name` must be uppercased, as the SRP6 hashes
@@ -226,21 +249,26 @@ pub fn read_challenge_reply(r: &mut impl Read) -> Result<Option<ChallengeReply>>
         .try_into()
         .map_err(|_| anyhow::anyhow!("large safe prime was {prime_len} bytes, expected 32"))?;
     let salt = read_array::<32>(r)?;
-    // Read to the end: login packets are not length-framed, so leftover bytes desync the next
-    // read. `security_flag` and the PIN block are unused but must be consumed.
     let crc_salt = read_array::<16>(r)?;
-    let security_flag = read_u8(r)?;
-    if security_flag & 0x01 != 0 {
-        // PIN: pin_grid_seed (u32) + pin_salt[16]; vmangos always sends security_flag 0.
-        let _pin_grid_seed = read_u32_le(r)?;
-        let _pin_salt = read_array::<16>(r)?;
-    }
+    // Any non-zero security byte carries the PIN's seed and salt (`0x5bab5a` `test al,al`), as
+    // vmangos sends for an account with a PIN lock (`AuthSocket.cpp:517`).
+    let flags = read_u8(r)?;
+    let pin = if flags != 0 {
+        Some(PinChallenge {
+            flags,
+            grid_seed: read_u32_le(r)?,
+            salt: read_array::<16>(r)?,
+        })
+    } else {
+        None
+    };
     Ok(Some(ChallengeReply {
         server_public_key,
         generator,
         large_safe_prime,
         salt,
         crc_salt,
+        pin,
     }))
 }
 
@@ -298,20 +326,30 @@ pub fn version_proof(crc_salt: &[u8; 16], client_public_key: &[u8; 32]) -> [u8; 
     }
 }
 
-/// Send `CMD_AUTH_LOGON_PROOF_Client`, computing `crc_hash` from the challenge's `crc_salt`.
+/// Send `CMD_AUTH_LOGON_PROOF_Client`, computing `crc_hash` from the challenge's `crc_salt`. The
+/// security byte is the challenge's, 0 with no PIN, and a PIN's salt and hash follow it
+/// (`0x5bbc80`-`0x5bbcad`).
 pub fn write_logon_proof(
     w: &mut impl Write,
     client_public_key: &[u8; 32],
     client_proof: &[u8; 20],
     crc_salt: &[u8; 16],
+    pin: Option<&PinProof>,
 ) -> std::io::Result<()> {
-    let mut packet = Vec::with_capacity(1 + 32 + 20 + 20 + 1 + 1);
+    let mut packet = Vec::with_capacity(1 + 32 + 20 + 20 + 1 + 1 + 16 + 20);
     packet.push(CMD_AUTH_LOGON_PROOF);
     packet.extend_from_slice(client_public_key);
     packet.extend_from_slice(client_proof);
     packet.extend_from_slice(&version_proof(crc_salt, client_public_key));
     packet.push(0); // number_of_telemetry_keys
-    packet.push(0); // security_flag = None
+    match pin {
+        Some(pin) => {
+            packet.push(pin.flags);
+            packet.extend_from_slice(&pin.salt);
+            packet.extend_from_slice(&pin.hash);
+        }
+        None => packet.push(0),
+    }
     w.write_all(&packet)
 }
 

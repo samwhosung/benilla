@@ -1,3 +1,78 @@
+//! The logon's PIN (benilla-re `net/logonlink#pin-challenge`, `#pin-proof`): the keypad grid a
+//! challenge's seed builds, and the proof of the keys pressed on it. The keypad shows the grid's
+//! digits on its ten keys and the script hands back the keys' positions, never the digits, so the
+//! proof is of the positions and only a server that knows the seed can read the PIN out of it.
+
+use sha1::{Digest, Sha1};
+
+use super::{PinChallenge, PinProof};
+
+/// `0x5b1e70`: the grid of a seed, a permutation of the digits 0 to 9. Entry `i` is the digit left
+/// at `seed mod (10 - i)` (`0x5b1e97`), which then closes its gap (`0x5b1eb1`), and the seed is
+/// divided by `10 - i`.
+pub fn grid(mut seed: u32) -> [u8; 10] {
+    let mut left: Vec<u8> = (0..10).collect();
+    let mut out = [0u8; 10];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let n = 10 - i as u32;
+        *slot = left.remove((seed % n) as usize);
+        seed /= n;
+    }
+    out
+}
+
+/// `0x5b3120`'s hash (`0x5b31e0`): `SHA-1(client salt ‖ SHA-1(server salt ‖ text))`, the text
+/// each position plus `0x30` (`0x5b3147`) hashed as a C string (`0x5d1b30`), so a position of
+/// `0xd0`, a NUL digit, ends it.
+pub fn hash(server_salt: &[u8; 16], positions: &[u8], client_salt: &[u8; 16]) -> [u8; 20] {
+    let text: Vec<u8> = positions
+        .iter()
+        .map(|p| p.wrapping_add(0x30))
+        .take_while(|&d| d != 0)
+        .collect();
+    let inner: [u8; 20] = Sha1::new()
+        .chain_update(server_salt)
+        .chain_update(&text)
+        .finalize()
+        .into();
+    Sha1::new()
+        .chain_update(client_salt)
+        .chain_update(inner)
+        .finalize()
+        .into()
+}
+
+impl PinProof {
+    /// `0x5b3120` for the positions pressed: a fresh 16-byte client salt (`0x5b3177`, drawn there
+    /// from a pool the clock seeds) and the hash over it, sent under the challenge's own security
+    /// byte (`0x5b1f10`).
+    pub fn new(challenge: &PinChallenge, positions: &[u8]) -> PinProof {
+        let salt: [u8; 16] = rand::random();
+        PinProof {
+            flags: challenge.flags,
+            salt,
+            hash: hash(&challenge.salt, positions, &salt),
+        }
+    }
+}
+
+/// The digits `grid` shows at `positions`: the PIN itself. `None` for a position off the keypad.
+pub fn digits(grid: &[u8; 10], positions: &[u8]) -> Option<Vec<u8>> {
+    positions
+        .iter()
+        .map(|&p| grid.get(usize::from(p)).copied())
+        .collect()
+}
+
+/// The positions `digits` sit at on `grid`, the keys a player presses for them. `None` for a
+/// digit the grid lacks.
+pub fn positions(grid: &[u8; 10], digits: &[u8]) -> Option<Vec<u8>> {
+    digits
+        .iter()
+        .map(|d| grid.iter().position(|g| g == d).map(|p| p as u8))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
