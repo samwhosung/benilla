@@ -105,12 +105,16 @@ fn elect_event(cache: &ZoneCache, next: &ZoneSignal) -> Option<&'static str> {
 }
 
 /// Resolves the texts and PvP info, pushes the zone caches, then fires the elected zone event and,
-/// independently, `MINIMAP_ZONE_CHANGED`. The poll reports the active mover's position, else the
+/// independently, `MINIMAP_ZONE_CHANGED`. The poll `0x5db900` counts every tick in `ticks`
+/// (`0xc4d790`), which nothing resets, and reports only on the tenth, subtracting ten (`0x5db906`,
+/// `0x5db917`); the other nine return at once. It reports the active mover's position, else the
 /// active player's, and nothing with neither held (`0x5db937`, `0x5db956`, `0x5db95d`): after a
 /// worldport frees every object, the commit waits for our player's create. It runs on the tick
 /// after the tick's packets (category 6's drain `0x403620`, then category 5's `0x401ec0`), so it
 /// reads what the unit feed pushed of a player that arrived this frame.
+#[allow(clippy::too_many_arguments)] // a Bevy system's full input set
 fn feed_zone_events(
+    mut ticks: Local<u32>,
     mut hosted_vm: crate::script_calls::HostedVm,
     me: Query<(), (With<crate::net::SelfPlayer>, With<crate::net::ObjectStore>)>,
     world: benilla_world::world_point::WorldPoint,
@@ -119,6 +123,11 @@ fn feed_zone_events(
     realm_pvp: Option<Res<RealmPvp>>,
     mut cache: Local<crate::ui_script::VmMemo<ZoneCache>>,
 ) {
+    *ticks += 1;
+    let due = *ticks >= 10;
+    if due {
+        *ticks -= 10;
+    }
     hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
@@ -128,6 +137,9 @@ fn feed_zone_events(
         if cache.realm_pvp != Some(realm_pvp) {
             cache.realm_pvp = Some(realm_pvp);
             script.set_realm_pvp(realm_pvp);
+        }
+        if !due {
+            return;
         }
         let Some(areas) = areas else {
             return;
@@ -506,7 +518,10 @@ mod tests {
         let pvp = |app: &mut App| {
             let world = app.world_mut();
             crate::ui_unit::run_feed_units_once(world);
-            world.run_system_cached(feed_zone_events).unwrap();
+            // The poll's tenth tick (`0x5db906`).
+            for _ in 0..10 {
+                world.run_system_cached(feed_zone_events).unwrap();
+            }
             world
                 .non_send_resource::<UiScript>()
                 .eval::<(Option<String>, Option<String>)>(
@@ -571,7 +586,10 @@ mod tests {
         let frame = |app: &mut App| {
             let world = app.world_mut();
             crate::ui_unit::run_feed_units_once(world);
-            world.run_system_cached(feed_zone_events).unwrap();
+            // The poll's tenth tick (`0x5db906`).
+            for _ in 0..10 {
+                world.run_system_cached(feed_zone_events).unwrap();
+            }
             let s = world.non_send_resource::<UiScript>();
             let seen = s.eval::<Vec<String>>("return Seen").unwrap();
             s.run("Seen = {}").unwrap();
