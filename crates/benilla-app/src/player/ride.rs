@@ -11,7 +11,7 @@ pub(super) fn carry(
     player: &mut Player,
     cam: &mut FlyCam,
     transports: &TransportQuery,
-    _index: &crate::net::GuidIndex,
+    index: &crate::net::GuidIndex,
 ) {
     // The transport tick runs on the Net→Input edge, so the deck pose is this frame's; a
     // streamed-out boat detaches into a fall. The yaw delta goes to aim, body and camera alike, on
@@ -37,8 +37,9 @@ pub(super) fn carry(
                 }
             }
             // Seated from our create on a transport whose path is not built yet: held where the
-            // seat put us until it ticks.
-            Err(_) if !ride.placed => {}
+            // seat put us until it ticks. Its object gone, deactivation has taken us off
+            // (`0x5f4fb0`).
+            Err(_) if !ride.placed && held(ride, index) => {}
             Err(_) => player.ride = None,
         }
     }
@@ -55,16 +56,23 @@ impl Player {
     }
 }
 
+/// Whether the object of the transport the ride names is still held: one deactivated takes its
+/// passengers off, the active mover starting a fall (`0x5f4fb0` → `0x617ac0`, `0x617100(0, 0)`).
+fn held(ride: &PlayerRide, index: &crate::net::GuidIndex) -> bool {
+    index.0.get(&ride.guid) == Some(&ride.entity)
+}
+
 /// Whether the rider's feet lie inside the transport it rides (`0x630ba0`): the point in the
 /// transport's frame, as the reference keeps the mover (`0x6173d5` passes `[mover+0x10]`), against
-/// its [`crate::transport::TransportVolume`]. A transport not yet armed has no world entity, which
-/// answers inside (`0x5f55c8`); one whose model has not loaded holds no one (`0x670a70`).
-fn aboard(player: &Player, transports: &TransportQuery, _index: &crate::net::GuidIndex) -> bool {
+/// its [`crate::transport::TransportVolume`]. A transport held but not yet armed has no world
+/// entity, which answers inside (`0x5f55c8`); one whose model has not loaded holds no one
+/// (`0x670a70`), nor one whose object is gone.
+fn aboard(player: &Player, transports: &TransportQuery, index: &crate::net::GuidIndex) -> bool {
     let Some(ride) = player.ride.as_ref() else {
         return false;
     };
     match transports.get(ride.entity) {
-        Err(_) => true,
+        Err(_) => held(ride, index),
         Ok((boat, _, _, Some(volume))) => {
             let local = boat.compute_affine().inverse().transform_point3(player.pos);
             volume.contains(benilla_assets::coords::bevy_to_wow(local))
