@@ -562,6 +562,8 @@ pub(super) fn update_hovered_object(
     self_q: Query<&ObjectStore, With<crate::net::SelfPlayer>>,
     parts: PickParts,
     mut cache: GoPickSet,
+    // The GameObject arm's flag `0x4` and `0x6e62e0` while a word stands (`0x480780`).
+    word: crate::spell::targeting::GoPickChecks,
 ) {
     *cache.frame = cache.frame.wrapping_add(1);
     let added_parts = &cache.added;
@@ -621,6 +623,23 @@ pub(super) fn update_hovered_object(
         return;
     };
     let self_store = self_q.single().ok();
+    // While a word stands, only the objects `0x480780`'s GameObject arm admits are candidates: none
+    // for a word outside `0x4800`, else those whose lock the spell passes.
+    let admitted: bevy::platform::collections::HashSet<Entity>;
+    let pickable: &bevy::platform::collections::HashSet<Entity> = if word.targeting() {
+        admitted = pickable
+            .iter()
+            .copied()
+            .filter(|&part| word.admits(resolve_net(part)))
+            .collect();
+        &admitted
+    } else {
+        pickable
+    };
+    if pickable.is_empty() {
+        *last_pick = None;
+        return;
+    }
 
     // The probe's census, once a second: where the pickable GameObjects are on screen, so a
     // headless miss tells a pick fault from a camera looking elsewhere.
@@ -732,8 +751,9 @@ pub(super) fn update_hovered_object(
     // The mouseover-eligibility gate (vtable `+0x54` at `0x482982`): an ineligible object
     // publishes the null mouseover, so no tooltip, brighten or cursor; the reference reaches
     // `0x492890`, `0x52aa20` and `0x4945e0` only past it. Its null mouseover also hides a unit
-    // behind the object, which our split picks leave hoverable.
-    if let Ok(store) = stores.get(net_entity) {
+    // behind the object, which our split picks leave hoverable. While a word stands the grader
+    // forks before it (`0x4828f4`) and publishes what the pick admitted (`0x4829d4`).
+    if let Some(store) = stores.get(net_entity).ok().filter(|_| !word.targeting()) {
         let tmpl = go_gate.templates.of(&store.0);
         let reaction = crate::target::cursor_mode::go_reaction(
             go_gate.factions.as_deref(),

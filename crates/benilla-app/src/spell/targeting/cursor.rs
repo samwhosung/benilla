@@ -203,7 +203,8 @@ pub(crate) fn drive_targeting_cursor(
     };
 }
 
-/// `0x6e6460`'s GameObject leg past the `& 0x4800` test: the lock predicate `0x5f8260`, then range.
+/// `0x6e6460`'s GameObject leg past the `& 0x4800` test: the lock predicate `0x5f8260`
+/// ([`super::spell_opens_go`]), then range.
 fn object_arm(
     hovered_object: &crate::target::HoveredObject,
     stores: &Query<(
@@ -220,34 +221,11 @@ fn object_arm(
     let Some(entity) = hovered_object.target else {
         return false;
     };
-    // `0x5f8260`'s lookups: the template, then its `Lock.dbc` row. A template in flight is grey.
-    let Some(tmpl) = stores
+    let opens = stores
         .get(entity)
         .ok()
-        .and_then(|(s, ..)| lock_inputs.templates.of(&s.0))
-    else {
-        return false;
-    };
-    let lock_id = tmpl.lock_id;
-    let Some(locks) = lock_inputs.locks.as_deref() else {
-        return false;
-    };
-    let Some(slots) = locks.0.slots(lock_id).filter(|_| lock_id != 0) else {
-        return false;
-    };
-    let Some(spells) = lock_inputs.spells.as_deref() else {
-        return false;
-    };
-    let Some(spell) = spells.catalog.get(spell_id) else {
-        return false;
-    };
-    let facts = crate::target::lock::go_facts(
-        stores
-            .get(entity)
-            .ok()
-            .map(|(s, anim, _)| (s, crate::go_anim::go_state(anim, s))),
-    );
-    if !crate::target::lock::spell_opens_lock(slots, spell, facts) {
+        .is_some_and(|(store, anim, _)| super::spell_opens_go(spell_id, store, anim, lock_inputs));
+    if !opens {
         return false;
     }
     // The range tail: the caster-to-object distance against the spell's min and max.
