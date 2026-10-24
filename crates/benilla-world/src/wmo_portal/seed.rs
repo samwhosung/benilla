@@ -28,7 +28,7 @@ use benilla_assets::{WmoGroupNav, WmoModel, WmoPortalInfo, WmoPortalRef};
 pub use benilla_formats::triangle_z_at as floor_z_at;
 
 use super::{
-    point_in_poly_2d, portal_poly, EXTERIOR, MAX_FLOOR_DROP, NEAREST_TIE_EPS, PORTAL_NEAR_PARALLEL,
+    point_in_poly_2d, portal_poly, EXTERIOR, MAX_FLOOR_DROP, NEAREST_TIE_YD, PORTAL_NEAR_PARALLEL,
     PORTAL_PLANE_SNAP,
 };
 
@@ -44,17 +44,19 @@ pub struct DownRaySeeds {
 /// The eye's current group, by the module doc's mechanism, over the asset's stored pieces;
 /// `terrain_z` is in this model's local space.
 pub fn down_ray_seeds(model: &WmoModel, eye: [f32; 3], terrain_z: Option<f32>) -> DownRaySeeds {
-    down_ray_seeds_scored(model, eye, terrain_z).0
+    down_ray_seeds_scored(model, eye, terrain_z, None).0
 }
 
 /// [`down_ray_seeds`] with the winning hit's depth below the eye, which the placements race on:
-/// `0x6be250` shares one fraction across every instance, and an exterior best clears the claim. An
-/// exterior winner is outside but keeps its depth; a miss, a hit past the floor drop and a hit
-/// the terrain beats have none.
+/// `0x6be250` shares one fraction across every instance, and an exterior best clears the claim.
+/// `shared` is the best depth the earlier placements set: a face must beat it strictly and a
+/// portal comes within the tie of it. An exterior winner is outside but keeps its depth; a miss, a
+/// hit past the floor drop, a hit the terrain beats and nothing past `shared` have none.
 pub(crate) fn down_ray_seeds_scored(
     model: &WmoModel,
     eye: [f32; 3],
     terrain_z: Option<f32>,
+    shared: Option<f32>,
 ) -> (DownRaySeeds, Option<f32>) {
     down_ray_pick_scored(
         &model.group_collision_tris,
@@ -66,6 +68,7 @@ pub(crate) fn down_ray_seeds_scored(
         &model.portal_refs,
         eye,
         terrain_z,
+        shared,
     )
 }
 
@@ -92,6 +95,7 @@ pub(crate) fn down_ray_pick(
         portal_refs,
         eye,
         terrain_z,
+        None,
     )
     .0
 }
@@ -110,6 +114,7 @@ fn down_ray_pick_scored(
     portal_refs: &[WmoPortalRef],
     eye: [f32; 3],
     terrain_z: Option<f32>,
+    shared: Option<f32>,
 ) -> (DownRaySeeds, Option<f32>) {
     // Broad phase: the column inside the group's XY bounds, its bottom at or below the eye.
     let in_column = |g: &WmoGroupNav| {
@@ -120,8 +125,9 @@ fn down_ray_pick_scored(
             && g.bbox_min[2] <= eye[2]
     };
 
-    // Leg A, walking-collision faces: the highest crossing at or below the eye.
-    let mut best_z = f32::NEG_INFINITY;
+    // Leg A, walking-collision faces: the highest crossing at or below the eye, strictly nearer
+    // than the fraction the earlier placements set.
+    let mut best_z = shared.map_or(f32::NEG_INFINITY, |d| eye[2] - d);
     let mut best: Option<usize> = None;
     for (gi, g) in nav.iter().enumerate() {
         if !in_column(g) {
@@ -175,8 +181,9 @@ fn down_ray_pick_scored(
                 }
                 z
             };
-            if z < best_z - NEAREST_TIE_EPS {
-                continue; // a face hit is strictly nearer
+            // Accepted while `best − z < tie`, strictly, a NaN refused.
+            if !(best_z - z < NEAREST_TIE_YD) {
+                continue; // the best hit is nearer by the tie or more
             }
             let Some(verts) = portal_poly(portal_vertices, info) else {
                 continue;
@@ -206,8 +213,9 @@ fn down_ray_pick_scored(
     // Outside: nothing within the ray, or an exterior winner; the client appends no seeds.
     let Some(in_group) = best else {
         // Leg C, the camera-void fallback (the module doc's deviation): only when both legs missed
-        // and no terrain lies at or below the eye. Leg A's rules; one root, no `across`.
-        if terrain_z.is_some_and(|tz| tz <= eye[2]) {
+        // in every placement and no terrain lies at or below the eye. Leg A's rules; one root, no
+        // `across`.
+        if shared.is_some() || terrain_z.is_some_and(|tz| tz <= eye[2]) {
             return (DownRaySeeds::default(), None);
         }
         let mut fb_z = f32::NEG_INFINITY;

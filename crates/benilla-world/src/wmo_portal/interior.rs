@@ -218,13 +218,12 @@ pub(super) fn track_current_interior(
         let local_from_world = inst.world_from_local.inverse();
         let eye_local = bevy_to_wow(local_from_world.transform_point3(eye_world));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye_world, z));
-        let (seeds, depth) = down_ray_seeds_scored(model, eye_local, terrain_local);
+        let shared = best.as_ref().map(|(d, _)| *d);
+        // A depth back is a new winner: a face strictly nearer, or a portal within the tie.
+        let (seeds, depth) = down_ray_seeds_scored(model, eye_local, terrain_local, shared);
         let Some(depth) = depth else {
             continue;
         };
-        if best.as_ref().is_some_and(|(d, _)| *d <= depth) {
-            continue;
-        }
         let claim = seeds.in_group.map(|gi| {
             let keys = WmoInteriorKeys {
                 wmo_id: model.wmo_id,
