@@ -3,9 +3,11 @@
 //! projection, seat, basis); the widgets live in [`benilla_ui::script::nameplate`].
 //!
 //! - Toggles: the `[0xc4da34]` bitmask, bit 0 enemy and bit 3 friendly, both off at boot.
-//! - Gate: never the own unit or a `NOT_SELECTABLE` one; enemy or friendly by `CanAttack` from the
-//!   player (`0x606980`), and a player subject must also pass `CanCooperate` (equal faction-group
-//!   masks); 20 yd; no occlusion; a unit not projected into view loses its plate (`0x60f600`).
+//! - Gate (`0x60f600`): never the camera's unit (`camera+0x88`, `0x60f68c`) or a `NOT_SELECTABLE`
+//!   one; enemy or friendly by `CanAttack` from the active player (`0x606980`), and a player
+//!   subject must also pass `CanCooperate` (equal faction-group masks); no friendly totem
+//!   (`0x60f757`); 20 yd from the camera's unit (`0x60f7b8`); no occlusion; a unit not projected
+//!   into view loses its plate.
 //! - Anchor: the overhead head point (`0x608640`) plus 2/3 yd (`[0x80abfc]`), projected every
 //!   frame (`0x483ee0`), the plate's top centre on it (`0x509ec0`), sized in gx units of the
 //!   screen diagonal (`0x41ad10`), outside uiScale. Deviation: the basis is damped past
@@ -30,7 +32,7 @@ use benilla_ui::script::{
 
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
-use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
+use crate::net::{Embodied, Guid, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{Hovered, Selection, TargetUpdate};
 use benilla_world::view::WorldCamera;
@@ -117,8 +119,10 @@ const SKULL_SIZE: f32 = 0.01;
 const RAID_ICON_SIZE: f32 = 0.02;
 /// `[0x80abfc]`.
 const PLATE_LIFT: f32 = 2.0 / 3.0;
-/// 20 yd, hardcoded in the reference.
+/// 20 yd squared, `[0xc4d988]` (set from `0x5fa130`).
 const MAX_DIST_SQ: f32 = 20.0 * 20.0;
+/// `CreatureType.dbc` id 11, Totem: a friendly one gets no plate (`0x60f757` `cmp eax,0xb`).
+const CREATURE_TYPE_TOTEM: u32 = 11;
 /// Deviation: the reference dims non-target plates to `0x7F`; raised because that fades them too
 /// far to read.
 const DIM_ALPHA: u8 = 178;
@@ -307,9 +311,11 @@ struct PlateWorld<'w, 's> {
             &'static Transform,
             Option<&'static ObjectStore>,
         ),
-        Without<SelfPlayer>,
     >,
-    self_q: Query<'w, 's, (&'static Transform, Option<&'static ObjectStore>), With<SelfPlayer>>,
+    self_q: Query<'w, 's, Option<&'static ObjectStore>, With<SelfPlayer>>,
+    // The camera's unit (`0x4818f0`, its `+0x88` resolved at `0x60f67c`): the plates' centre and
+    // the one unit that never gets one. Our own body unless we are attached to another unit.
+    centre: Query<'w, 's, (Entity, &'static Transform), With<Embodied>>,
     relations: crate::target::RelationWorld<'w, 's>,
     selection: Res<'w, Selection>,
     // With `selection`, the highlight's pair: the watcher's globals `[0xb4e2c8]`/`[0xb4e2d8]`.
@@ -330,6 +336,7 @@ fn drive_vplates(
     mut plate_clicks: ResMut<PlateClicks>,
     rig: Res<crate::player::CameraControl>,
     names: Res<NameCache>,
+    spells: Option<Res<crate::ui_action::Spells>>,
     anchor_q: (
         Query<&BoneAttach>,
         Query<&benilla_world::rig_anim::RigPose>,
@@ -353,9 +360,12 @@ fn drive_vplates(
         if !mode.enemies && !mode.friends {
             return PlateStep::Retire;
         }
-        let (Ok((cam, cam_pose)), Ok((self_tf, self_store))) =
-            (world.camera.single(), world.self_q.single())
-        else {
+        // No camera unit (`0x60f685`) fails every unit at `0x60f77c`.
+        let (Ok((cam, cam_pose)), Ok(self_store), Ok((centre, centre_tf))) = (
+            world.camera.single(),
+            world.self_q.single(),
+            world.centre.single(),
+        ) else {
             return PlateStep::Retire;
         };
         let Some(script) = script else {
@@ -387,6 +397,13 @@ fn drive_vplates(
         let clicked = script.take_nameplate_clicks();
         let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
         let (rel, me) = (world.relations.get(), world.relations.me());
+        let types = crate::creature_type::CreatureTypeSources {
+            names: Some(&names),
+            forms: spells.as_deref().map(|s| &s.forms),
+            words: None,
+        };
+        // `GetUnitName`'s miss (`0x609324`): the `UNKNOWNOBJECT` text, read once a frame.
+        let unknown = script.unknown_object_text();
 
         let (pw, ph) = (gx(PLATE_W), gx(PLATE_H));
         let scale = window.map_or(1.0, |w| w.scale_factor());
@@ -401,7 +418,9 @@ fn drive_vplates(
         let sort_pt = Vec2::new(0.4 * diag, viewport.y - 0.3 * diag);
         let mut cands = Vec::new();
         for (entity, net, guid, tf, store) in &world.units {
-            if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
+            // The camera's own unit (`0x60f68c`); our body is a candidate while we are attached to
+            // another unit.
+            if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) || entity == centre {
                 continue;
             }
             // `NOT_SELECTABLE` (flags bit 25) never gets a plate, re-tested every tick (`0x60f622`,
@@ -420,7 +439,8 @@ fn drive_vplates(
             if store.is_some_and(|s| s.0.unit_is_ghost_visual()) {
                 continue;
             }
-            if (tf.translation - self_tf.translation).length_squared() > MAX_DIST_SQ {
+            // Measured from the camera's unit (`0x60f780`-`0x60f7b8`).
+            if (tf.translation - centre_tf.translation).length_squared() > MAX_DIST_SQ {
                 continue;
             }
             // A CREATEDBY owner, no SUMMONEDBY owner and flags bit 9 (`0x200`): no plate in either
@@ -451,6 +471,11 @@ fn drive_vplates(
             // Only on the hostile side, a dead-looking unit has no plate (`0x60f733`): a feigning
             // hunter's plate hides from enemies and stays for friends.
             if !friendly && store.is_some_and(|s| s.0.unit_reads_dead()) {
+                continue;
+            }
+            // Only on the friendly side, a totem has no plate (`0x60f750`-`0x60f75a`, the type
+            // `0x605570` resolves); an enemy totem keeps its plate.
+            if friendly && store.is_some_and(|s| types.of(s) == CREATURE_TYPE_TOTEM) {
                 continue;
             }
             // Behind the camera or outside the viewport there is no plate: `0x60f600` destroys it
@@ -580,11 +605,11 @@ fn drive_vplates(
                     .unwrap_or(1)
                     .max(1) as f32,
                 bar_colour: [tint[0], tint[1], tint[2]],
-                // Read, never asked: this runs every frame; the unit's create asks.
+                // Read, never asked: this runs every frame; the unit's create asks. A miss is
+                // `GetUnitName`'s `UNKNOWNOBJECT` (`0x609324`), as the bind sets it (`0x7cb70c`).
                 name: names
                     .resolve_unit(guid.0, store, Ask::Read)
-                    .map(str::to_owned)
-                    .unwrap_or_default(),
+                    .map_or_else(|| unknown.clone(), str::to_owned),
                 // The skull (`0x7cbb40`): rank 3 through `gated_rank` (so a charmed boss shows its
                 // level), or a hostile 10 or more levels up that is not grey (`0x5f0700`, vacuous
                 // there but transcribed). A unit with no level yet shows neither.
