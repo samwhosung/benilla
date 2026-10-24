@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use super::{pet_guid, pet_subject, player_temporary_portrait, target_subject, Subject};
+use super::{pet_guid, pet_subject, player_temporary_portrait, target_subject, Subject, Unseen};
 use crate::names::NameCache;
 use crate::target::Selection;
 use crate::ui_party::GroupState;
@@ -32,7 +32,7 @@ fn a_selection_with_no_object_draws_its_stand_in() {
         Subject {
             entity: None,
             occupant: Some(MEMBER),
-            unseen: Some(player_temporary_portrait(Some(4), Some(1))),
+            unseen: Some(Unseen::player(player_temporary_portrait(Some(4), Some(1)))),
         }
     );
     assert_eq!(
