@@ -294,12 +294,20 @@ pub enum RecordAsk {
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
-/// and no harness keeping calls, nothing asks.
+/// and no harness keeping calls, nothing asks, and at the nesting bound ([`MAX_NESTING`]) the ask
+/// is dropped where a verb would raise [`TOO_DEEP`].
 pub(crate) fn ask(lua: &Lua, ask: RecordAsk) -> mlua::Result<()> {
-    let keeping = lua
-        .app_data_ref::<Model>()
-        .is_some_and(|m| m.kept_calls.is_some());
-    if !super::host::open(lua) && !keeping {
+    let open = super::host::open(lua);
+    let Some(model) = lua.app_data_ref::<Model>() else {
+        return Ok(());
+    };
+    let skip = if open {
+        model.call_depth >= MAX_NESTING
+    } else {
+        model.kept_calls.is_none()
+    };
+    drop(model);
+    if skip {
         return Ok(());
     }
     submit(lua, ScriptCall::RecordAsk(ask))
