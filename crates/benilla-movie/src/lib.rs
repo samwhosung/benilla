@@ -289,4 +289,114 @@ mod tests {
         assert_eq!(rgba.len(), 800 * 368 * 4);
         assert_eq!(&rgba[..4], &[0, 0, 0, 255]);
     }
+
+    /// MSB-first bits from `(value, width)` fields, zero-padded to a byte.
+    fn pack(fields: &[(u32, u32)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut bit = 0;
+        for &(v, n) in fields {
+            for i in (0..n).rev() {
+                if bit % 8 == 0 {
+                    out.push(0);
+                }
+                if v >> i & 1 != 0 {
+                    *out.last_mut().unwrap() |= 0x80 >> (bit % 8);
+                }
+                bit += 1;
+            }
+        }
+        out
+    }
+
+    /// A version-1 VOL for an 800×368, 25-tick stream, then a VOP header of `kind` (0 I, 1 P).
+    fn vol_and_vop(kind: u32) -> Vec<u8> {
+        let mut out = vec![0, 0, 1, 0x20];
+        out.extend(pack(&[
+            (0, 1),
+            (1, 8),
+            (0, 1),
+            (1, 4),
+            (0, 1),
+            (0, 2),
+            (1, 1),
+            (25, 16),
+            (1, 1),
+            (0, 1),
+            (1, 1),
+            (800, 13),
+            (1, 1),
+            (368, 13),
+            (1, 1),
+            (0, 1),
+            (1, 1),
+            (0, 1),
+            (0, 1),
+            (0, 1),
+            (1, 1),
+            (1, 1),
+            (0, 1),
+            (0, 1),
+        ]));
+        out.extend([0, 0, 1, 0xb6]);
+        let mut vop = vec![(kind, 2), (0, 1), (1, 1), (3, 5), (1, 1), (1, 1)];
+        if kind == 1 {
+            vop.push((0, 1));
+        }
+        vop.extend([(0, 3), (4, 5)]);
+        if kind == 1 {
+            vop.push((1, 3));
+        }
+        // The macroblocks follow the header unaligned: fill its last byte with ones, which in a
+        // P-VOP are not-coded macroblocks.
+        let bits: u32 = vop.iter().map(|f| f.1).sum();
+        let fill = (8 - bits % 8) % 8;
+        vop.push(((1 << fill) - 1, fill));
+        out.extend(pack(&vop));
+        out
+    }
+
+    #[test]
+    fn a_broken_stream_fails_its_frame_and_never_panics() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let frames: Vec<Vec<u8>> = (0..300)
+            .map(|i| {
+                let mut f = vol_and_vop((i % 3 != 0) as u32);
+                let len = (next() % 3000) as usize;
+                // Mostly ones and runs of zeros, the shapes that stress code lookups and escapes.
+                f.extend((0..len).map(|_| match next() % 4 {
+                    0 => 0,
+                    1 => 0xff,
+                    _ => next() as u8,
+                }));
+                f
+            })
+            .collect();
+        // A P-VOP whose 50 × 23 macroblocks are all not coded decodes: its header's fill holds the
+        // first, 144 bytes of ones the rest.
+        let mut skipped = vol_and_vop(1);
+        skipped.extend([0xff; 144]);
+        let mut frames = frames;
+        frames.push(skipped);
+        let refs: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
+        let mut movie = Movie::open(avi::tests::synthetic(800, 368, &refs, &[])).expect("opens");
+        let mut failed = 0;
+        for _ in 0..300 {
+            match movie.decode_next() {
+                Ok(_) => {}
+                Err(Error::Stream { .. }) => failed += 1,
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert!(movie.decode_next().expect("the not-coded P-VOP"));
+        assert!(!movie.decode_next().expect("the end"));
+        assert!(failed > 250, "only {failed} of 300 garbage frames failed");
+        let mut rgba = Vec::new();
+        movie.write_rgba(&mut rgba);
+    }
 }
