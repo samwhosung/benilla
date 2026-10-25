@@ -237,7 +237,6 @@ pub(super) const INERT: &[Registered] = &[
     same("MapWaterSounds", "1"),            // 0x462ac9
     same("MaxLights", "4").checked(benilla_ui::script::check_max_lights), // 0x688596
     same("mouseInvertYaw", "0"),            // 0x50b72d
-    same("movie", "1"),                     // 0x402bf5
     same("ObjectSelectionCircle", "1"),     // 0x6146ec
     same("occlusion", "1"),                 // 0x6888da
     same("particleDensity", "1.0").checked(benilla_ui::script::check_particle_density), // 0x688738

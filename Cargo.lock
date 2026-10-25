@@ -503,6 +503,7 @@ dependencies = [
  "avian3d",
  "benilla-assets",
  "benilla-formats",
+ "benilla-movie",
  "benilla-protocol",
  "benilla-srp",
  "benilla-ui",
@@ -665,6 +666,7 @@ name = "benilla-ui"
 version = "0.2.0"
 dependencies = [
  "benilla-mlua",
+ "benilla-movie",
  "libc",
  "roxmltree",
 ]

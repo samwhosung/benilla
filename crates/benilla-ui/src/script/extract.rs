@@ -113,6 +113,8 @@ impl UiScript {
                             fog: m.scene_fog(),
                             ffx: m.ffx,
                         },
+                        // A playing movie's picture, once it has shown one (`0x78d68b`).
+                        _ if model.movie_drawn(fh) => QuadContent::Movie { handle: fh },
                         _ => QuadContent::Frame,
                     };
                     (model.frame_rect(fh), alpha, content, clip, scale)
@@ -372,8 +374,11 @@ impl UiScript {
             // quads, text, then render callbacks, and `0x76d160` registers the model's callback
             // for layer 2 only (`0x76d17f cmp ebx,2`). So the world map's player arrow draws over
             // the zone overlays at the same level, below its own OVERLAY and HIGHLIGHT regions.
+            // A movie's picture likewise: `0x78d650` registers its callback for layer 2 alone.
             let z = match &content {
-                QuadContent::ModelPane { .. } => zkey.callback(order::DrawLayer::Artwork).raw(),
+                QuadContent::ModelPane { .. } | QuadContent::Movie { .. } => {
+                    zkey.callback(order::DrawLayer::Artwork).raw()
+                }
                 _ => zkey.raw(),
             };
             // A slot's texture by its stamp; the colour picker's two images, built when it loads

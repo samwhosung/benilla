@@ -23,6 +23,7 @@ pub(crate) mod glue_create;
 /// `CGlueMgr`'s screen states over benilla's login, for the stock glue screens.
 pub(crate) mod glue_mgr;
 pub(crate) mod glue_scene;
+mod movie;
 mod input;
 /// The server alert's fetch and `LaunchURL`'s browser, for the stock glue screens.
 pub(crate) mod server_alert;
@@ -471,6 +472,14 @@ impl Plugin for UiScriptPlugin {
             )
             // After the plate driver seats this frame's nameplates, and before the append lane
             // fills the widget slot this pass parks.
+            // The movie pictures the tick showed, ahead of the paint that draws them.
+            .init_resource::<movie::MovieScreen>()
+            .add_systems(
+                Update,
+                movie::upload_movie_pictures
+                    .in_set(UiPaint)
+                    .before(extract::paint_script),
+            )
             .add_systems(
                 Update,
                 extract::paint_script

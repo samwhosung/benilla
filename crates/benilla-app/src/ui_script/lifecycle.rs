@@ -13,15 +13,19 @@ use super::manifest::silenced_ui_load;
 use super::{load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock, UiKeyboardCapture};
 use crate::ui_script::addons;
 
+/// The startup's glue: built, then put up on the screen the `movie` CVar picks
+/// ([`super::glue::startup_screen`]).
 pub(crate) fn setup_script(world: &mut World) {
-    install_glue_side_vm(world, super::glue::GlueScreen::Login.key());
+    if !install_glue_vm(world, None) {
+        error!("ui_script: the glue VM did not come up with its character select screen");
+    }
 }
 
 /// Install the VM the world holds outside the world: the glue screens', put up on the screen
 /// named `screen`. A glue whose select screen did not load (logged as an error by [`new_vm`] or
 /// the load) asks for no roster, and nothing else does.
 pub(super) fn install_glue_side_vm(world: &mut World, screen: &str) {
-    if !install_glue_vm(world, screen) {
+    if !install_glue_vm(world, Some(screen)) {
         error!("ui_script: the glue VM did not come up with its character select screen");
     }
 }
@@ -45,11 +49,11 @@ pub(crate) fn strings_vm(world: &mut World) -> Option<UiScript> {
     Some(script)
 }
 
-/// Build the glue VM, load the stock GlueXML onto it, install it and put `screen` up: the glue
-/// builder `0x46a7b0` then `SET_GLUE_SCREEN` (`0x402b65` at startup, `0x402090` back from the
-/// world). It holds what the glue state holds and nothing of a boot VM's: no `GlobalStrings.lua`,
-/// no emote tokens.
-fn install_glue_vm(world: &mut World, screen: &str) -> bool {
+/// Build the glue VM, load the stock GlueXML onto it, install it and put `screen` up, or with
+/// `None` the startup's pick: the glue builder `0x46a7b0` then `SET_GLUE_SCREEN` (`0x402b65` at
+/// startup, `0x402090` back from the world). It holds what the glue state holds and nothing of a
+/// boot VM's: no `GlobalStrings.lua`, no emote tokens.
+fn install_glue_vm(world: &mut World, screen: Option<&str>) -> bool {
     let Some(mut script) = new_vm(world, UiScript::new_glue) else {
         return false;
     };
@@ -69,6 +73,12 @@ fn install_glue_vm(world: &mut World, screen: &str) -> bool {
     start_server_alert(world, &script);
     // What the glue carries across its rebuild, in place before the screen's `OnShow` reads it.
     super::glue_mgr::seat_glue_build(world, &mut script);
+    // The startup reads the `movie` CVar after the build (`0x402b3b`), its write reaching the
+    // VM's mirror with the next sync.
+    let screen = match screen {
+        Some(screen) => screen,
+        None => super::glue::startup_screen(world.get_resource_mut::<crate::cvars::Cvars>()),
+    };
     // `SetCurrentScreen`'s buffer is the client's (`[0xb41478]`) and outlives the Lua state: a
     // rebuild signals what it holds (`0x46b9a2`), and the screen's handler writes the same name.
     script.set_glue_screen_name(screen);
@@ -204,7 +214,7 @@ fn seed_game_time(world: &World, script: &mut UiScript) {
 /// authored size on an axis takes it from its art as the client's virtual size getters do. Each
 /// probe resolves through the store and the open its renderer reads (an interface texture's,
 /// [`LooseOpen::Index`], and a font face's, [`LooseOpen::BareNameFirst`]), so the answer is what
-/// draws; they test existence, not decode.
+/// draws; they test existence, not decode. The movie frame's reader rides along.
 fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
     let Some(mut assets) = world.get_resource_mut::<benilla_assets::WorldAssets>() else {
         return;
@@ -218,6 +228,8 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
     let cursor_loose = loose.clone();
     let font_chain = chain.clone();
     let font_loose = loose.clone();
+    let movie_chain = chain.clone();
+    let movie_loose = loose.clone();
     // `SetTexture` runs per frame in the addons that set an icon every `OnUpdate`: the probe
     // keeps what it read of a file.
     let probe = benilla_assets::SpriteProbe::default();
@@ -233,6 +245,15 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
         let measured = benilla_assets::sprite_dimensions(&size_chain, &size_loose, path);
         sizes.borrow_mut().insert(path.to_string(), measured);
         measured
+    }));
+    // The movie frame's files: the `.avi` loose first (`0x78c39f`, flag 1), the `.sbt` from the
+    // archives alone (`0x6485f0`, flags 0).
+    script.set_movie_reader(Box::new(move |path, open| {
+        let open = match open {
+            benilla_ui::script::MovieOpen::LooseFirst => LooseOpen::Index,
+            benilla_ui::script::MovieOpen::Archives => LooseOpen::Archives,
+        };
+        benilla_assets::read_loose_or_chain(&movie_chain, &movie_loose, path, open)
     }));
     // `SetCursor`'s 32×32 test reads the picture the cursor code opens (`0x449610`), its `.blp`
     // alone, decoded each call as `0x523c98` waits on the load.

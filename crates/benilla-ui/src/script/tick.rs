@@ -384,6 +384,7 @@ impl super::UiScript {
             self.mouse_move(x, y);
         }
         self.paint_model_panes();
+        self.paint_movies();
         // `WOW_UI_HANDLERS=<secs>`: last, so its report covers everything this tick fired.
         self.report_handler_profile(elapsed);
     }

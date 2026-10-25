@@ -104,6 +104,13 @@ pub enum QuadContent {
         /// A `ModelFFX` (`0x46fa00`): the glue screens' scene, which the app's glue booth draws.
         ffx: bool,
     },
+    /// A playing `MovieFrame`'s picture, its draw callback's quad (`0x78d1a0`): placed on the
+    /// whole window, not the frame's rect, from the movie's [`crate::script::MovieBitmap`]; the
+    /// pixels are [`crate::script::UiScript::write_movie_rgba`]'s.
+    Movie {
+        /// The movie frame, which keys its picture.
+        handle: crate::widget::FrameHandle,
+    },
     /// A `Texture` region: a BLP path, a solid or vertex colour, or both (a tinted texture).
     Texture {
         path: Option<String>,

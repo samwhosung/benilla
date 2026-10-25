@@ -156,6 +156,8 @@ pub(crate) struct Model {
     /// 1 for a non-empty path: without a font backend nothing failed, and addons revert their font
     /// on a nil.
     pub(crate) font_probe: Option<FontProbe>,
+    /// The movie frames' reader, subtitle flags and playing movies ([`super::movieframe`]).
+    pub(crate) movies: super::movieframe::Movies,
     /// Saved-variables folders, one `<Addon>.lua` each: the account's, then this character's.
     pub(crate) addons_saved_account: Option<std::path::PathBuf>,
     pub(crate) addons_saved_character: Option<std::path::PathBuf>,
@@ -1330,6 +1332,7 @@ impl Model {
             texture_size_probe: None,
             cursor_size_probe: None,
             font_probe: None,
+            movies: Default::default(),
             addons_saved_account: None,
             addons_saved_character: None,
             framexml_templates: Default::default(),

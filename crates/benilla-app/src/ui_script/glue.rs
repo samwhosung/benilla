@@ -17,9 +17,8 @@
 //! file is loaded rather than refused.
 //!
 //! The screen comes after the build: at startup the reference fires `SET_GLUE_SCREEN` with
-//! `"movie"` while the `movie` CVar is 1 (clearing it), else `"login"` (`0x402b3b`–`0x402b65`);
-//! back from the world `0x402090` fires it with `"charselect"` or `"login"`. benilla plays no movie
-//! yet (#968), so its boot screen is `"login"`.
+//! `"movie"` while the `movie` CVar is 1 (clearing it), else `"login"` (`0x402b3b`–`0x402b65`,
+//! [`startup_screen`]); back from the world `0x402090` fires it with `"charselect"` or `"login"`.
 //!
 //! The screens' `ModelFFX` panes drive the glue booth ([`super::glue_scene`]): its scene rig, the
 //! scene M2's own point lights and the `FfxGlow::GLUE_SCENE` pass, never the `ui_models` tile
@@ -190,6 +189,24 @@ fn load_glue_layer(script: &UiScript) -> Vec<String> {
 pub(super) fn finish_glue_load_log(script: &mut UiScript) {
     script.finish_ui_load_log();
     super::load_log::write_glue(script.take_load_log_writes());
+}
+
+/// The screen the startup puts up (`0x402b3b`-`0x402b65`): `"movie"` while the `movie` CVar's
+/// integer (`rec+0x28`, `0x402b41`) is 1, which first sets it to `"0"` (`0x402b54`, `0x82e570`), so
+/// the intro plays once; else `"login"` (`0x82e3e0`). With no CVar table, `"login"`.
+pub(super) fn startup_screen(cvars: Option<Mut<'_, crate::cvars::Cvars>>) -> &'static str {
+    let Some(mut cvars) = cvars else {
+        return GlueScreen::Login.key();
+    };
+    if cvars
+        .get("movie")
+        .is_some_and(|v| benilla_ui::script::s_str_to_int(v) == 1)
+    {
+        cvars.set("movie", "0");
+        "movie"
+    } else {
+        GlueScreen::Login.key()
+    }
 }
 
 /// Put `screen` up: `SET_GLUE_SCREEN` with its key as `arg1` (`0x46b840`, event 0).
@@ -379,6 +396,35 @@ mod tests {
         "RealmWizard",
         "AddonList",
     ];
+
+    /// The startup's screen: the movie while the `movie` CVar's integer is 1, which the pick sets
+    /// to "0" so the next start is the login screen; any other integer, "2" or "0", leaves the CVar
+    /// and puts the login screen up (`0x402b41`-`0x402b60`).
+    #[test]
+    fn the_first_start_plays_the_movie_once_and_clears_its_cvar() {
+        let mut world = World::new();
+        world.insert_resource(crate::cvars::Cvars::default());
+        assert_eq!(
+            world.resource::<crate::cvars::Cvars>().get("movie"),
+            Some("1"),
+            "the registered default"
+        );
+        let pick = |world: &mut World| startup_screen(world.get_resource_mut());
+        assert_eq!(pick(&mut world), "movie");
+        assert_eq!(world.resource::<crate::cvars::Cvars>().get("movie"), Some("0"));
+        assert_eq!(pick(&mut world), "login");
+        for (value, screen, after) in [("2", "login", "2"), ("1x", "movie", "0"), ("-1", "login", "-1")]
+        {
+            world.insert_resource(crate::cvars::Cvars::with_value("movie", value));
+            assert_eq!(pick(&mut world), screen, "{value}");
+            assert_eq!(
+                world.resource::<crate::cvars::Cvars>().get("movie"),
+                Some(after),
+                "{value}"
+            );
+        }
+        assert_eq!(startup_screen(None), "login");
+    }
 
     /// The name a "nil value" call error names, in either of Lua's two spellings of it.
     fn nil_call(error: &str) -> Option<&str> {

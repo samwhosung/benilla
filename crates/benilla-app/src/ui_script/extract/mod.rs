@@ -97,6 +97,7 @@ fn content_kind(c: &QuadContent) -> &'static str {
         QuadContent::Texture { .. } => "texture",
         QuadContent::ColorWheel => "colorwheel",
         QuadContent::ColorValue { .. } => "colorvalue",
+        QuadContent::Movie { .. } => "movie",
         QuadContent::Text { .. } => "text",
     }
 }
@@ -305,6 +306,7 @@ fn splice_simple(eq: &benilla_ui::script::ExtractedQuad) -> bool {
         QuadContent::Frame
         // At most one quad and one idempotent tile request.
         | QuadContent::ModelPane { .. }
+        | QuadContent::Movie { .. }
         | QuadContent::ColorWheel
         | QuadContent::ColorValue { .. } => true,
         // Region text only: a message line's link spans replace the whole set, and a line losing
@@ -334,6 +336,7 @@ fn verify_splice(
     text_ui: Option<&benilla_ui::script::EditBoxTextUi>,
     caret_pinned: bool,
     script: &UiScript,
+    movies: &super::movie::MovieScreen,
 ) {
     let mut check: Vec<UiQuad> = Vec::with_capacity(quads.quads.len());
     let mut spans: Vec<u32> = Vec::with_capacity(prev.extracted.len());
@@ -354,6 +357,7 @@ fn verify_splice(
             &mut check,
             &mut links,
             &mut slot,
+            movies,
         );
         spans.push(check.len() as u32);
     }
@@ -674,6 +678,7 @@ pub(super) fn paint_script(
     mut prev: Local<crate::ui_script::VmMemo<GateInputs>>,
     mut ui_cost: ResMut<super::UiFrameCost>,
     pass: Res<super::UiPassState>,
+    movies: Res<super::movie::MovieScreen>,
 ) {
     hosted_vm.run(|script| {
         let (capture, ui_cost_wanted) = run;
@@ -899,6 +904,7 @@ pub(super) fn paint_script(
                     &mut scratch,
                     &mut scratch_links,
                     &mut scratch_slot,
+                    &movies,
                 );
                 scratch_ranges.push(at..scratch.len());
             }
@@ -984,6 +990,7 @@ pub(super) fn paint_script(
                     text_ui.as_ref(),
                     capture.is_some(),
                     script,
+                    &movies,
                 );
             }
             drop(extract_span);
@@ -1047,6 +1054,7 @@ pub(super) fn paint_script(
                 &mut out,
                 &mut link_spans,
                 &mut minimap_slot,
+                &movies,
             );
             spans.push(out.len() as u32);
         }
@@ -1170,7 +1178,13 @@ fn convert_entry(
         String,
     )>,
     minimap_slot: &mut Option<crate::minimap::MinimapSlot>,
+    movies: &super::movie::MovieScreen,
 ) {
+    // A movie's picture is placed on the window, not on its frame's rect ([`super::movie`]).
+    if let QuadContent::Movie { handle } = eq.content {
+        out.extend(movies.quad(handle, w, h, eq.z));
+        return;
+    }
     let Some(r) = eq.rect else { return };
     // WoW UI space is y-up from the bottom-left: scale ×s, then flip through the window height.
     let rect = Rect::new(r.left * s, h - r.top * s, r.right * s, h - r.bottom * s);
@@ -1182,8 +1196,9 @@ fn convert_entry(
         .clip
         .map(|c| Rect::new(c.left * s, h - c.top * s, c.right * s, h - c.bottom * s));
     match eq.content {
-        // A frame draws nothing itself; its regions carry the visuals.
-        QuadContent::Frame => {}
+        // A frame draws nothing itself; its regions carry the visuals. A movie's picture was
+        // placed above.
+        QuadContent::Frame | QuadContent::Movie { .. } => {}
         // The `<Minimap>` content hole, parked for the minimap renderer to fill at this `z`.
         QuadContent::Minimap { zoom, inside_zoom } => {
             *minimap_slot = Some(crate::minimap::MinimapSlot {
