@@ -62,9 +62,20 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     },
     ProbeVar {
         name: "WOW_PROBE_KEY",
-        purpose: "\"<key>@<secs>[:<hold>][;…]\" — synthesize key presses once in-world (a jump, a mount flourish, a held W)",
+        purpose: "\"<key>@<secs>[:<hold>][;text=<chars>@<secs>…]\" — synthesize key presses and typed text once in-world (a jump, a mount flourish, a held W, a chat line)",
         // Each tap fires at its `@<secs>` and releases `<hold>` later, on `ProbeClock`.
         wall_clock: true,
+    },
+    ProbeVar {
+        name: "WOW_PROBE_CLICK",
+        purpose: "\"<Frame>@<secs>[:Right][;…]\" — click a named frame's centre through the window's own events",
+        // Each click fires at its `@<secs>`, on `ProbeClock`.
+        wall_clock: true,
+    },
+    ProbeVar {
+        name: "WOW_PROBE_INPUT_GLUE",
+        purpose: "1 — arm the key and click probes at boot, for the login screen",
+        wall_clock: false,
     },
     ProbeVar {
         name: "WOW_PROBE_LUA",
