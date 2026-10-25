@@ -334,8 +334,9 @@ fn pet() -> Vec<(u16, u32)> {
 }
 
 /// The client in the world as [`ME`], wearing the weapons, with [`PET`], and [`WOLF`] selected,
-/// targeting us; a VM whose spy records `UNIT_STATS` on `"player"`, `PLAYER_MONEY` and
-/// `PLAYER_XP_UPDATE` with what each one's getter reads as it fires.
+/// targeting us; a VM whose spy records `UNIT_STATS` on `"player"` (with the agility, the wand
+/// and the ranged skill), `PLAYER_MONEY` and `PLAYER_XP_UPDATE` with what each one's getter reads
+/// as it fires.
 fn client() -> Client {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
@@ -359,7 +360,9 @@ fn client() -> Client {
                 if event == "UNIT_STATS" then
                     if arg1 == "player" then
                         local _, effective = UnitStat("player", 2)
-                        table.insert(Seen, event .. ":" .. effective)
+                        local wand, ranged = HasWandEquipped(), UnitRangedAttack("player")
+                        table.insert(Seen, event .. ":" .. effective .. ":" .. tostring(wand)
+                            .. ":" .. ranged)
                     end
                 elseif event == "PLAYER_MONEY" then
                     table.insert(Seen, event .. ":" .. GetMoney())
@@ -466,14 +469,77 @@ fn each_stat_listener_reads_its_own_packets_value() {
     assert_eq!(
         seen,
         [
-            "UNIT_STATS:60",
+            "UNIT_STATS:60:1:93",
             "PLAYER_XP_UPDATE:5000",
             "PLAYER_MONEY:1000",
-            "UNIT_STATS:70",
+            "UNIT_STATS:70:1:93",
             "PLAYER_XP_UPDATE:6000",
             "PLAYER_MONEY:2000",
         ]
     );
+}
+
+/// A listener of an earlier packet reads the weapons it wore then, though a later packet of the
+/// frame unequips the wand and destroys it: `HasWandEquipped` reads the ranged slot's item off the
+/// object manager as the call runs (`0x4c99c2`), and the item is still held at its packet.
+#[test]
+fn an_earlier_listener_reads_the_weapon_a_later_packet_destroys() {
+    let mut c = client();
+    let ranged = FIELD_PLAYER_INV_SLOT_HEAD + 2 * u16::from(WAND.2);
+    c.frame(vec![
+        vec![values(ME, &[(STAT0 + 1, 60)])],
+        vec![values(ME, &[(ranged, 0), (ranged + 1, 0)])],
+        vec![SessionEvent::ObjectDestroyed(WAND.0)],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Seen");
+    assert_eq!(seen, ["UNIT_STATS:60:1:93"]);
+    let now: (Option<i64>, i64) =
+        c.eval(true, "return HasWandEquipped(), UnitRangedAttack('player')");
+    assert_eq!(now, (None, 0), "the wand is gone at the frame's end");
+}
+
+/// With a host lent and no player held, the active player's getters answer as the reference's do
+/// for an absent player, 0 or nil (`GetMoney` `0x5181db`, `IsResting` `0x516ee8`, `GetDodgeChance`
+/// `0x516f42`), never the copy an earlier session left in the VM.
+#[test]
+fn with_no_player_held_the_player_getters_answer_nothing() {
+    let mut c = client();
+    let chunk = "return GetMoney(), GetDodgeChance(), HasWandEquipped(), UnitXP('player'),
+        GetXPExhaustion(), IsResting(), PartialPlayTime(), (GetRestState())";
+    type Answers = (
+        i64,
+        f64,
+        Option<i64>,
+        i64,
+        Option<f64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    );
+    let held: Answers = c.eval(true, chunk);
+    assert_eq!(
+        held,
+        (
+            123_456,
+            7.25,
+            Some(1),
+            4_200,
+            Some(3000.0),
+            Some(1),
+            Some(1),
+            Some(1)
+        )
+    );
+    // Our object gone, as in the logout's frames, with the VM's copies and the seat left behind.
+    let world = c.app.world_mut();
+    let me = world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .remove(&ME)
+        .expect("our object");
+    world.despawn(me);
+    let gone: Answers = c.eval(true, chunk);
+    assert_eq!(gone, (0, 0.0, None, 0, None, None, None, None));
 }
 
 /// The stat getters' per-call cost with the host lent and off the snapshots: 10k calls of each of
