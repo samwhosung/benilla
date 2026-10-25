@@ -165,3 +165,44 @@ pub struct GroupRow {
 impl LiveQuery for RowQuery {
     type Answer = GroupRow;
 }
+
+/// `guid`'s place in the group, live where a host answers, else off the snapshot: the active
+/// player or a party slot (`0x4e7f70`), a raid row below the count (`0x4baee0`) with its rank.
+pub(crate) fn membership(lua: &Lua, snapshot: &PartyState, guid: u64) -> Membership {
+    if let Some(live) = live_membership(lua, guid) {
+        return live;
+    }
+    let rank = snapshot
+        .raid
+        .iter()
+        .find(|m| guid != 0 && m.guid == guid)
+        .map(|m| m.rank);
+    Membership {
+        party: guid != 0
+            && (guid == snapshot.own_guid
+                || snapshot.members.iter().take(4).any(|m| m.guid == guid)),
+        raid: rank.is_some(),
+        rank,
+    }
+}
+
+/// The raid rows below the count (`[0xb712a8]`, `[0xb713e0]`) as `GetRaidRosterInfo` reads them,
+/// live where a host answers, else off the snapshot.
+pub(crate) fn raid_rows(lua: &Lua, snapshot: &PartyState) -> Vec<RaidMemberInfo> {
+    let Some(cells) = live_cells(lua) else {
+        return snapshot.raid.clone();
+    };
+    (0..cells.raid_count as usize)
+        .filter_map(|row| ask(lua, &RaidRowQuery(row)).flatten())
+        .collect()
+}
+
+/// The raid rows' guids below the count, live where a host answers, else off the snapshot.
+pub(crate) fn raid_guids(lua: &Lua, snapshot: &PartyState) -> Vec<u64> {
+    let Some(cells) = live_cells(lua) else {
+        return snapshot.raid.iter().map(|m| m.guid).collect();
+    };
+    (0..cells.raid_count)
+        .filter_map(|row| ask(lua, &RowQuery(UnitBase::Raid(row))).map(|r| r.member))
+        .collect()
+}

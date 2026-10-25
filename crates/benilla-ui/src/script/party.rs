@@ -1,8 +1,9 @@
-//! The party and raid bindings. The app pushes a roster snapshot ([`UiScript::set_party`]) that
-//! the getters read; each verb hands its [`PartyRequest`] to the call host, which sends it before
-//! the verb returns ([`super::calls::submit`]), as the reference's verbs send inside their calls
-//! (`InviteByName` at `0x48a4c8`). Per-member game state is the unit snapshot under
-//! `party1`..`party4` ([`super::unit::UnitState`]).
+//! The party and raid bindings. The getters and the verbs' gates read the group as it stands at
+//! the call through the lent host ([`super::roster_read`]), and the roster snapshot the app pushes
+//! ([`UiScript::set_party`]) with none lent; each verb hands its [`PartyRequest`] to the call host,
+//! which sends it before the verb returns ([`super::calls::submit`]), as the reference's verbs
+//! send inside their calls (`InviteByName` at `0x48a4c8`). Per-member game state is the unit
+//! snapshot under `party1`..`party4` ([`super::unit::UnitState`]).
 //!
 //! The raid roster ([`PartyState::raid`]) is one list, the player included, because the
 //! reference's count (`0xb713e0`) bounds the very array `GetRaidRosterInfo` indexes (`0xb712a8`).
@@ -198,7 +199,7 @@ impl super::UiScript {
                 let own = model.party.own_guid;
                 left && own != 0
                     && own == model.party.leader_guid
-                    && !ready_check_pending_online(&model)
+                    && !ready_check_pending_online(&model, &model.party.raid)
             } else {
                 false
             }
@@ -214,10 +215,11 @@ impl super::UiScript {
     pub fn ready_check_request(&mut self, we_lead: bool) {
         let lua = self.lua();
         let now = clock(lua);
+        let rows = live_raid_rows(lua);
         let close = {
             let mut model = self.model_mut();
             if we_lead {
-                model.ready_check.deadline.is_some() && !ready_check_pending_online(&model)
+                model.ready_check.deadline.is_some() && !ready_check_pending_online(&model, &rows)
             } else {
                 model.ready_check.deadline = Some(now + READY_CHECK_SECONDS);
                 false
@@ -238,9 +240,11 @@ impl super::UiScript {
     /// `_G` `__index` may run and call any verb: the read is made with no Model borrow held.
     pub fn ready_check_answered(&mut self, guid: u64, ready: bool) {
         let lua = self.lua();
+        // The rows as they stand at the answer's handler.
+        let rows = live_raid_rows(lua);
         let name = {
             let mut model = self.model_mut();
-            let Some(member) = model.party.raid.iter().find(|m| m.guid == guid) else {
+            let Some(member) = rows.iter().find(|m| m.guid == guid) else {
                 return; // an unmatched guid writes nothing (`0x4ba491`)
             };
             let name = member.name.clone();
@@ -259,7 +263,7 @@ impl super::UiScript {
         }
         let close = {
             let model = self.model_mut();
-            model.ready_check.deadline.is_some() && !ready_check_pending_online(&model)
+            model.ready_check.deadline.is_some() && !ready_check_pending_online(&model, &rows)
         };
         if close {
             ready_check_force_close(lua);
@@ -346,28 +350,23 @@ fn assistant_by_name(lua: &Lua, name: &str, grant: bool) -> mlua::Result<()> {
 }
 
 /// Whether `guid` is ourselves or on the party slots (`0x4e7f70`), or on the raid roster
-/// (`0x4baee0`); a zero guid is neither.
+/// (`0x4baee0`), as the group stands at the call; a zero guid is neither.
 fn is_group_member(lua: &Lua, guid: u64) -> bool {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let party = &model.party;
-    guid != 0
-        && (guid == party.own_guid
-            || party.members.iter().take(4).any(|m| m.guid == guid)
-            || party.raid.iter().any(|m| m.guid == guid))
+    let at = roster_read::membership(lua, &model.party, guid);
+    at.party || at.raid
 }
 
-/// The checks both loot setters open with: not in a group (the first party guid and the raid
-/// count, `0x4e92a6`, `0x4e92b8`; `0x4e9500`, `0x4e9512`) shows game error 0x48, then not the
-/// group leader (`0x4e92d4`..`0x4e92eb`; `0x4e952b`..`0x4e9542`) 0x4b. `false` once one was shown.
+/// The checks both loot setters open with, on the cells as they stand at the call: not in a group
+/// (the first party slot and the raid count, `0x4e92a6`, `0x4e92b8`; `0x4e9500`, `0x4e9512`) shows
+/// game error 0x48, then the leader cell not our guid, with no zero guard (`0x4e92d4`..`0x4e92eb`;
+/// `0x4e952b`..`0x4e9542`), 0x4b. `false` once one was shown.
 fn loot_gates(lua: &Lua) -> bool {
-    let (grouped, leads) = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        let party = &model.party;
-        (
-            party.members.first().is_some_and(|m| m.guid != 0) || !party.raid.is_empty(),
-            party.own_guid != 0 && party.own_guid == party.leader_guid,
-        )
-    };
+    let cells = cells(lua);
+    let (grouped, leads) = (
+        cells.party[0] != 0 || cells.raid_count != 0,
+        cells.is_raid_leader(),
+    );
     if !grouped {
         chat_error(lua, "ERR_NOT_IN_GROUP", &[]);
         return false;
@@ -779,13 +778,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ConvertToRaid",
         lua.create_function(|lua, ()| {
             // Party slot 1 held (`0x4bbc96`-`0x4bbca3`) and the leader cell our guid
-            // (`0x4bbca5`-`0x4bbcbc`), else nothing.
-            let leads = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let party = &model.party;
-                party.members.first().is_some_and(|m| m.guid != 0)
-                    && party.leader_guid == party.own_guid
-            };
+            // (`0x4bbca5`-`0x4bbcbc`), as they stand at the call, else nothing.
+            let cells = cells(lua);
+            let leads = cells.party[0] != 0 && cells.is_raid_leader();
             if !leads {
                 return Ok(());
             }
@@ -863,30 +858,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "DoReadyCheck",
         lua.create_function(|lua, ()| {
             let now = clock(lua);
+            // The worker `0x4bb1d0` runs for the leader alone: a nonzero active guid equal to the
+            // leader cell (`0x4bb1d6`-`0x4bb1fd`), as they stand at the call.
+            let cells = cells(lua);
+            let own = cells.own_guid;
+            if own == 0 || own != cells.leader_guid {
+                return Ok(());
+            }
+            let roster = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                roster_read::raid_guids(lua, &model.party)
+            };
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                // The worker `0x4bb1d0` runs for the leader alone: a nonzero active guid equal to
-                // the leader cell (`0x4bb1d6`-`0x4bb1fd`).
-                let own = model.party.own_guid;
-                if own == 0 || own != model.party.leader_guid {
-                    return Ok(());
-                }
                 // A running check (`GetReadyCheckMsLeft`, `0x4bb203`) shows message `0x1c7` and
                 // ends the call (`0x4bb20c`).
                 if model.ready_check.deadline.is_some_and(|d| now < d) {
                     drop(model);
                     return display_error(lua, "ERR_READY_CHECK_IN_PROGRESS");
                 }
-                // Every roster member but the caller is flagged pending (`0x4bb24c`, `0x4bb258`).
-                // A party has no raid roster, so nothing is flagged and the leader's echo closes
-                // it.
-                model.ready_check.unanswered = model
-                    .party
-                    .raid
-                    .iter()
-                    .map(|m| m.guid)
-                    .filter(|g| *g != own)
-                    .collect();
+                // Every row below the count but the caller's and a zero guid's is flagged pending
+                // (`0x4bb240`, `0x4bb24c`, `0x4bb258`). A party has no raid roster, so nothing is
+                // flagged and the leader's echo closes it.
+                model.ready_check.unanswered =
+                    roster.into_iter().filter(|&g| g != 0 && g != own).collect();
             }
             // The send (`0x4bb295`), then the 30 s deadline (`0x4bb2b6`), then `READY_CHECK_START`
             // read raw (`0x703bf0` at `0x4bb2bb`, with no Model borrow held) and added as a system
@@ -1022,24 +1017,30 @@ fn clock(lua: &Lua) -> f64 {
 /// so none is made while the Model is borrowed, and an `__index` that re-enters finds the check
 /// already disarmed, as the reference's does.
 fn ready_check_tick(lua: &Lua, now: f64) {
+    let armed = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        model
+            .ready_check
+            .deadline
+            .is_some_and(|deadline| now >= deadline)
+    };
+    if !armed {
+        return;
+    }
+    // The leader cell against our guid, and the rows, as they stand at the call.
+    if !cells(lua).is_raid_leader() {
+        return;
+    }
+    let rows = live_raid_rows(lua);
     let names = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let Some(deadline) = model.ready_check.deadline else {
-            return;
-        };
-        if now < deadline {
-            return;
-        }
-        if model.party.own_guid != model.party.leader_guid {
-            return;
-        }
         model.ready_check.deadline = None;
         // A pending member the roster cannot name is skipped (`0x55f080`, its query arm off).
         let names: Vec<String> = model
             .ready_check
             .unanswered
             .iter()
-            .filter_map(|g| model.party.raid.iter().find(|m| m.guid == *g))
+            .filter_map(|g| rows.iter().find(|m| m.guid == *g))
             .map(|m| m.name.clone())
             .filter(|n| !n.is_empty())
             .collect();
@@ -1062,12 +1063,18 @@ fn ready_check_tick(lua: &Lua, now: f64) {
 /// The `0x322` handler's close test (`0x4ba498`-`0x4ba4cc`): a member holds the check open only
 /// while pending and online (`[entry+0x18]` bit 0, `SMSG_GROUP_LIST`'s online bit). An empty
 /// roster closes at once (`0x4ba3ea`).
-fn ready_check_pending_online(model: &Model) -> bool {
+fn ready_check_pending_online(model: &Model, rows: &[RaidMemberInfo]) -> bool {
     model
         .ready_check
         .unanswered
         .iter()
-        .any(|g| model.party.raid.iter().any(|m| m.guid == *g && m.online))
+        .any(|g| rows.iter().any(|m| m.guid == *g && m.online))
+}
+
+/// The raid rows as they stand at the call ([`roster_read::raid_rows`]).
+fn live_raid_rows(lua: &Lua) -> Vec<RaidMemberInfo> {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    roster_read::raid_rows(lua, &model.party)
 }
 
 /// The force-close sites (`0x4ba4d4`, `0x4bacb4`): an armed deadline becomes `now - 1` and the

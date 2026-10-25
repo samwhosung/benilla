@@ -61,7 +61,7 @@ impl AddonDistribution {
     /// RAID outside a raid silently goes out as PARTY (`0x49fa8b`-`0x49fa93`); vmangos drops a raid
     /// line from a non-raid group (`ChatHandler.cpp:522`). The reference tests the raid member
     /// count at `0xb713e0`, the cell `GetNumRaidMembers` (`0x4bb530`) returns, so `in_raid` is
-    /// `PartyState::raid` being non-empty.
+    /// that count above 0.
     pub fn effective(self, in_raid: bool) -> Self {
         match self {
             Self::Raid if !in_raid => Self::Party,
@@ -138,9 +138,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         })?,
                     None => AddonDistribution::Party,
                 };
+                // The raid count as it stands at the call (`0xb713e0`).
                 let in_raid = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    !model.party.raid.is_empty()
+                    super::roster_read::cells(lua, &model.party).raid_count != 0
                 };
                 super::calls::submit(
                     lua,

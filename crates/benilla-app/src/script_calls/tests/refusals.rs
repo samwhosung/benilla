@@ -287,15 +287,8 @@ fn a_party_verbs_own_refusal_shows_inside_its_call() {
                 ..Default::default()
             }),
         );
-        script.set_party(benilla_ui::script::PartyState {
-            members: vec![benilla_ui::script::PartyMemberInfo {
-                name: "Bob".into(),
-                guid: NEW,
-            }],
-            leader_guid: ME,
-            own_guid: ME,
-            ..Default::default()
-        });
+        // The frame seats Bob in `party1`; we lead, as the gates read the world's group.
+        world.resource_mut::<crate::ui_party::GroupState>().leader = ME;
     }
     assert_eq!(
         shown_in_call(&mut f, r#"InviteByName("probe")"#),
