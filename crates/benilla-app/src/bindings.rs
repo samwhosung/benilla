@@ -467,7 +467,7 @@ pub(crate) struct WorldWheel(pub(crate) i32);
 /// activity cleared, the bulk clears, Lua's binding calls since the last pass, and the
 /// pressed-key reconcile.
 fn begin_dispatch(
-    mut script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<BindingsState>,
     mut same_vm: Local<crate::ui_script::VmMemo<bool>>,
@@ -478,17 +478,7 @@ fn begin_dispatch(
     state.fired.clear();
     state.amounts.clear();
     state.view_calls.clear();
-
-    // Deviation: latches die with the VM that made them, because a latch names a command of that
-    // VM's table and releasing it against a new one would run another load's up-half. The
-    // reference keeps a held key running through `ReloadUI`; here it re-latches on its next press.
-    // The held bits die with it, as the key's Stop would have cleared them.
-    if let Some(script) = script.as_ref() {
-        if same_vm.claim(script) {
-            state.latched.clear();
-            state.held.clear();
-        }
-    }
+    hosted_vm.run(|script| begin_with(script, &mut state, &mut same_vm));
     // The reference's two bulk clears: the window deactivate (`0x514490`'s `and eax,0xfffff00f`,
     // the direction bits only, so the mouse pair and autorun survive) and the world enter behind
     // the loading cover (`0x5144c0`), which clears every bit. A key's latch meets them in the
@@ -501,14 +491,34 @@ fn begin_dispatch(
             .retain(|&i| matches!(i, Input::TurnOrAction | Input::CameraOrSelectOrMove));
     }
     // Lua's binding calls made since the last pass, before this frame's keys.
-    if let Some(s) = script.as_mut() {
-        let inputs = s.take_binding_input();
-        state.apply_script_input(inputs);
-    }
+    hosted_vm.run(|script| {
+        if let Some(s) = script {
+            let inputs = s.take_binding_input();
+            state.apply_script_input(inputs);
+        }
+    });
     // ── The pressed-key reconcile ── against bevy's button planes, before this frame's records: a
     // release the window never saw drops off the list, and a window deactivate empties it, the
     // reference's `0x424790` wipe, so a key held across an alt-tab re-latches on its next repeat.
     state.down.reconcile(&keys);
+}
+
+/// [`begin_dispatch`]'s VM swap: the latches and held bits a new VM finds are dropped.
+fn begin_with(
+    script: Option<&mut UiScript>,
+    state: &mut BindingsState,
+    same_vm: &mut crate::ui_script::VmMemo<bool>,
+) {
+    // Deviation: latches die with the VM that made them, because a latch names a command of that
+    // VM's table and releasing it against a new one would run another load's up-half. The
+    // reference keeps a held key running through `ReloadUI`; here it re-latches on its next press.
+    // The held bits die with it, as the key's Stop would have cleared them.
+    if let Some(script) = script {
+        if same_vm.claim(script) {
+            state.latched.clear();
+            state.held.clear();
+        }
+    }
 }
 
 /// How the interface's walk left one key record, which gates the world frame's binding.
