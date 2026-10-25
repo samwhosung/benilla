@@ -130,7 +130,11 @@ fn unit_character_points_answer_the_active_player_only() {
     assert_eq!(points(&mut s, "PLAYER"), (2, 1));
     assert_eq!(points(&mut s, "target"), (0, 0), "another player");
     assert_eq!(points(&mut s, "party1"), (0, 0), "a party member");
-    assert_eq!(points(&mut s, "pet"), (0, 0), "a recognised token naming nothing");
+    assert_eq!(
+        points(&mut s, "pet"),
+        (0, 0),
+        "a recognised token naming nothing"
+    );
 
     seat(&mut s, ME);
     assert_eq!(points(&mut s, "target"), (2, 1), "the target is the player");

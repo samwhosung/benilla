@@ -12,8 +12,8 @@ use super::super::stat_read::read_self;
 use super::super::Model;
 use super::{
     check_unit_token, classification_word, grey_band, level_is_hidden_at, names_self,
-    object_predicate, read_object, unit_is_grey, unit_predicate, unknownobject, with_object, with_unit, PlayerRecord,
-    SelectionRequest,
+    object_predicate, read_object, unit_is_grey, unit_predicate, unknownobject, with_object,
+    with_unit, PlayerRecord, SelectionRequest,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never

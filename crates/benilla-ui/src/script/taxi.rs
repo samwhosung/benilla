@@ -301,11 +301,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, unit: mlua::Value| {
             let unit =
                 crate::script::binding_abi::string_arg(lua, unit, r#"Usage: UnitOnTaxi("unit")"#)?;
-            Ok(crate::script::binding_abi::flag(
-                super::unit::with_object(lua, &Some(unit), false, |_, o| {
-                    o.flags() & TAXI_FLIGHT != 0
-                })?,
-            ))
+            Ok(crate::script::binding_abi::flag(super::unit::with_object(
+                lua,
+                &Some(unit),
+                false,
+                |_, o| o.flags() & TAXI_FLIGHT != 0,
+            )?))
         })?,
     )?;
 
