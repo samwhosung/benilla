@@ -184,9 +184,10 @@ impl FollowInput<'_, '_> {
         let both_engaged = self.rig.world_mouse.both() && self.rig.world_mouse.rose();
         follow_cancelled(
             self.move_start(),
-            // The on edge: `control` toggles `autorun` after this, so the flag is the pre-toggle
-            // value.
-            self.buttons.just_pressed(MouseButton::Forward) && !player.autorun,
+            // The on edge only, as the start reaches the guard (`0x60dc60` → `0x60e990`) and the
+            // stop does not (`0x60dc90`): the press toggled `autorun` first ([`super::press`]),
+            // so the flag is the post-toggle value.
+            self.buttons.just_pressed(MouseButton::Forward) && player.autorun,
             both_engaged,
             self.rig.look == Some(LookButton::Right),
             // The teardown leg, or the body handed to a server spline; the ride term is not one of

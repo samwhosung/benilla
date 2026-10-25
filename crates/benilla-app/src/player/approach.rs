@@ -828,6 +828,8 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Forward);
+        // Autorun's on press, which the command press toggled ahead of this (`super::press`).
+        app.world_mut().resource_mut::<Player>().autorun = true;
         frame(&mut app, true);
         let approach = app.world().resource::<Approach>();
         assert!(!approach.active() && approach.arrived.is_none());

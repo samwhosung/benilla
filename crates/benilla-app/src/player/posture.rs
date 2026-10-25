@@ -45,21 +45,11 @@ pub(super) fn update(
     turned: bool,
 ) -> u8 {
     let me = me.single();
-    let precast = me.is_some_and(|(.., precast, _)| precast);
     // The driven body is the active player's own, which the movement stand-up needs.
     let embodied = me.is_some_and(|(.., embodied)| embodied);
     // The echo into `UNIT_FIELD_BYTES_1` drives every observer's pose; `pending`, the local
     // commit ([`apply_locally`]), overlays it until it lands.
-    let (stand_byte, gates) = me
-        .and_then(|(_, _, store, ..)| store)
-        .map(|s| (s.0.unit_stand_state(), stand_gates(&s.0, precast)))
-        .unwrap_or((
-            0,
-            state::StandGates {
-                precast,
-                ..default()
-            },
-        ));
+    let (stand_byte, gates) = stand_of(me);
     if pending.0 == Some(stand_byte) {
         pending.0 = None; // the echo landed
     }
@@ -279,6 +269,42 @@ pub(crate) fn stand_up_for_attack(
 }
 
 /// [`state::StandGates`] off the body's descriptor and cast state.
+/// The active player's echoed stand byte and the gates `SetStandState` reads ([`stand_gates`]).
+fn stand_of(me: Option<SelfPostureItem>) -> (u8, state::StandGates) {
+    let precast = me.is_some_and(|(.., precast, _)| precast);
+    me.and_then(|(_, _, store, ..)| store)
+        .map(|s| (s.0.unit_stand_state(), stand_gates(&s.0, precast)))
+        .unwrap_or((
+            0,
+            state::StandGates {
+                precast,
+                ..default()
+            },
+        ))
+}
+
+/// The stand-up a command press's tick runs ahead of its start: the forward emitter stands the
+/// mover on every tick with a nonzero total (`0x514e0c` → `0x60be30(0)` → `0x5ed430`), which sends
+/// `CMSG_STANDSTATECHANGE` at once, before the start is queued (`0x514e6e`). Only for the active
+/// player driving its own body (`0x60be39`, `0x5ed471`). Standing applies nothing locally but the
+/// prediction ([`local_apply`]), so the frame time's stand-up finds the body standing.
+pub(super) fn stand_up_for_movement(
+    pending: &mut super::StandPending,
+    me: &SelfPosture,
+    flags: u32,
+    net: &NetCommands,
+) {
+    let me = me.single();
+    if !me.is_some_and(|(.., embodied)| embodied) {
+        return;
+    }
+    let (stand_byte, gates) = stand_of(me);
+    let stand_now = pending.stand_state(stand_byte);
+    if stand_now != 0 && send_stand_state(0, stand_now, gates, flags, true, net) {
+        pending.0 = Some(0);
+    }
+}
+
 fn stand_gates(fields: &ObjectFields, precast: bool) -> state::StandGates {
     state::StandGates {
         mounted: fields.unit_mount_display_id() != 0,
@@ -400,22 +426,37 @@ fn set_stand_state(
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     loot_close: &mut crate::ui_loot::LootMoveStart,
 ) {
+    if send_stand_state(s, stand_now, gates, flags, me.is_some(), net) {
+        apply_locally(pending, s, stand_now, me, commands, sheath, loot_close);
+    }
+}
+
+/// `SetStandState`'s gate and send (`0x5ed430`): whether `s` went out as `CMSG_STANDSTATECHANGE`,
+/// not refused silently, a change from `stand_now`, and our own object `present`.
+fn send_stand_state(
+    s: u8,
+    stand_now: u8,
+    gates: state::StandGates,
+    flags: u32,
+    present: bool,
+    net: &NetCommands,
+) -> bool {
     if state::stand_state_refused(gates, flags, s) {
         debug!(
             "stand state {s} refused ({gates:?}, move flags {flags:#x} — the client's `0x5ed430` gate)"
         );
         move_trace::posture("REFUSED", s, stand_now, flags);
-        return;
+        return false;
     }
     // Nothing to sit before our own object streams in: the setter runs on the active player.
-    if s == stand_now || me.is_none() {
-        return;
+    if s == stand_now || !present {
+        return false;
     }
     move_trace::posture("commit", s, stand_now, flags);
     let _ = net.0.send(ClientCommand::StandStateChange {
         state: u32::from(s),
     });
-    apply_locally(pending, s, stand_now, me, commands, sheath, loot_close);
+    true
 }
 
 /// One row of [`SelfPosture`], the active player as the posture verbs read it.

@@ -35,6 +35,8 @@ struct Client {
     app: App,
     embody: SystemId,
     sample: SystemId,
+    commands: SystemId,
+    cancel: SystemId,
     press: SystemId,
     drive: SystemId,
     /// What the frames sent, in order.
@@ -77,6 +79,8 @@ impl Client {
         }
         let embody = world.register_system(super::super::embody::maintain_embodiment);
         let sample = world.register_system(sample_look);
+        let commands = world.register_system(super::super::press::press_commands);
+        let cancel = world.register_system(crate::spell::local_self_cancel);
         let press = world.register_system(super::super::press::press_tick);
         let drive = world.register_system(control);
         world.run_system(embody).expect("the embodiment runs");
@@ -88,6 +92,8 @@ impl Client {
             app,
             embody,
             sample,
+            commands,
+            cancel,
             press,
             drive,
             sent,
@@ -104,6 +110,9 @@ impl Client {
         world
             .run_system(self.sample)
             .expect("the mouse's input runs");
+        world
+            .run_system(self.commands)
+            .expect("the press's commands run");
         world.run_system(self.press).expect("the press runs");
         world.run_system(self.embody).expect("the embodiment runs");
         world.run_system(self.drive).expect("the controller runs");
@@ -353,10 +362,19 @@ fn a_late_mouselook_start_over_a_left_drag_hands_the_facing_and_pitch_off() {
         p.mover_pitch = 0.5;
         p.face_yaw = 0.0;
     });
-    let (sample, press, embody, drive) = (client.sample, client.press, client.embody, client.drive);
+    let (sample, commands, press, embody, drive) = (
+        client.sample,
+        client.commands,
+        client.press,
+        client.embody,
+        client.drive,
+    );
     let world = client.app.world_mut();
     *world.resource_mut::<BindingsState>() = BindingsState::after_calls(vec![], vec![]);
     world.run_system(sample).expect("the mouse's input runs");
+    world
+        .run_system(commands)
+        .expect("the press's commands run");
     world.run_system(press).expect("the press runs");
     world
         .query_filtered::<&mut FlyCam, With<Camera>>()
@@ -440,6 +458,8 @@ enum When {
 enum Sent {
     Move(crate::net::MoveKind, u32),
     Ack(benilla_protocol::MoveMode),
+    Stand(u32),
+    CancelCast,
 }
 
 /// A frame's length, which the 500 ms heartbeat counts in.
@@ -497,6 +517,10 @@ impl Client {
         world
             .run_system(self.sample)
             .expect("the mouse's input runs");
+        world
+            .run_system(self.commands)
+            .expect("the press's commands run");
+        world.run_system(self.cancel).expect("the cast cancel runs");
         world.run_system(self.press).expect("the press runs");
         self.drain(When::Input, &mut out);
         let world = self.app.world_mut();
@@ -517,6 +541,8 @@ impl Client {
                     out.push((when, Sent::Move(kind, flags)));
                 }
                 ClientCommand::MoveModeAck { mode, .. } => out.push((when, Sent::Ack(mode))),
+                ClientCommand::StandStateChange { state } => out.push((when, Sent::Stand(state))),
+                ClientCommand::CancelCast { .. } => out.push((when, Sent::CancelCast)),
                 _ => {}
             }
         }
@@ -666,5 +692,141 @@ fn autorun_and_the_both_button_run_start_and_stop_inside_their_calls() {
         ),
         vec![(When::Input, Sent::Move(Stop, 0))],
         "one let go"
+    );
+}
+
+/// Start a `/follow` and hold its forward, as `follow::steer_follow` leaves it each frame.
+fn follow(client: &mut Client) {
+    client
+        .app
+        .world_mut()
+        .resource_mut::<super::super::follow::FollowState>()
+        .start(0xCC, "Leader".into());
+    client.player().auto_forward = true;
+}
+
+fn following(client: &mut Client) -> bool {
+    client
+        .app
+        .world()
+        .resource::<super::super::follow::FollowState>()
+        .guid
+        .is_some()
+}
+
+/// `ToggleAutoRun`'s on press starts the move through `0x60dc60`, whose guard `0x60e990` ends a
+/// follow; its off press stops through `0x60dc90`, which has no guard, so the follow goes on.
+#[test]
+fn autoruns_on_press_ends_a_follow_and_its_off_press_does_not() {
+    let mut client = Client::new(Body::Own, |_| {});
+    let press_button4 = |client: &mut Client| {
+        let world = client.app.world_mut();
+        let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
+        buttons.release_all();
+        buttons.clear();
+        buttons.press(MouseButton::Forward);
+    };
+    follow(&mut client);
+    press_button4(&mut client);
+    client.frame(vec![], toggle());
+    assert!(client.player().autorun);
+    assert!(!following(&mut client), "the on press ends it");
+    follow(&mut client);
+    press_button4(&mut client);
+    client.frame(vec![], toggle());
+    assert!(!client.player().autorun);
+    assert!(following(&mut client), "the off press does not");
+}
+
+/// A press while following: the start emitters' guard `0x60e990` ends the follow first, so the
+/// tick's axis nets without its forward. S reverses at once, with no stop between.
+#[test]
+fn a_back_press_while_following_reverses_with_no_stop() {
+    use crate::creature_anim::move_flags::{BACKWARD, FORWARD};
+    use crate::net::MoveKind::{StartBackward, StartForward};
+    let mut client = Client::standing(Body::Own);
+    follow(&mut client);
+    assert_eq!(
+        client.traced(vec![], vec![], |_| {}),
+        vec![(When::FrameTime, Sent::Move(StartForward, FORWARD))]
+    );
+    assert_eq!(
+        client.traced(vec![], vec![Start(HeldInput::MoveBackward)], |_| {}),
+        vec![(When::Input, Sent::Move(StartBackward, BACKWARD))]
+    );
+    assert!(!following(&mut client));
+}
+
+/// A strafe while following stops the follow's forward and then starts the strafe, the forward
+/// emitter ahead of the strafe emitter (`0x514da0`, `0x514e80`).
+/// Both carry the press's word, as every message of one stream does.
+#[test]
+fn a_strafe_press_while_following_stops_then_strafes() {
+    use crate::creature_anim::move_flags::{FORWARD, STRAFE_LEFT};
+    use crate::net::MoveKind::{StartForward, StartStrafeLeft, Stop};
+    let mut client = Client::standing(Body::Own);
+    follow(&mut client);
+    assert_eq!(
+        client.traced(vec![], vec![], |_| {}),
+        vec![(When::FrameTime, Sent::Move(StartForward, FORWARD))]
+    );
+    assert_eq!(
+        client.traced(vec![], vec![Start(HeldInput::StrafeLeft)], |_| {}),
+        vec![
+            (When::Input, Sent::Move(Stop, STRAFE_LEFT)),
+            (When::Input, Sent::Move(StartStrafeLeft, STRAFE_LEFT)),
+        ]
+    );
+}
+
+/// A move key while seated: the forward emitter stands the body (`0x514e0c` → `0x5ed430`, sent at
+/// once) before it queues the start (`0x514e6e`).
+#[test]
+fn a_move_key_while_seated_stands_before_it_starts() {
+    use crate::creature_anim::move_flags::FORWARD;
+    use crate::net::MoveKind::StartForward;
+    let mut client = Client::standing(Body::Own);
+    *client
+        .app
+        .world_mut()
+        .resource_mut::<super::super::StandPending>() = super::super::StandPending(Some(1));
+    assert_eq!(
+        client.traced(vec![], forward(), |_| {}),
+        vec![
+            (When::Input, Sent::Stand(0)),
+            (When::Input, Sent::Move(StartForward, FORWARD)),
+        ]
+    );
+}
+
+/// The press cancels a cast that movement interrupts at once (`0x51512a` → `0x6e4940`, sent at
+/// `0x6e49ab`), before its tick queues the start: the cancel goes out first, once.
+#[test]
+fn a_press_mid_cast_sends_the_cancel_before_the_start() {
+    use crate::creature_anim::move_flags::FORWARD;
+    use crate::net::MoveKind::StartForward;
+    const FIREBALL: u32 = 133;
+    let mut client = Client::standing(Body::Own);
+    let world = client.app.world_mut();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            FIREBALL,
+            benilla_formats::SpellDisplay {
+                interrupt_flags: 0xf,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let mut pending = world.resource_mut::<crate::spell::PendingCast>();
+    pending.fill_record();
+    pending.fill_record_spell(FIREBALL);
+    pending.push(FIREBALL, None, std::time::Instant::now());
+    assert_eq!(
+        client.traced(vec![], forward(), |_| {}),
+        vec![
+            (When::Input, Sent::CancelCast),
+            (When::Input, Sent::Move(StartForward, FORWARD)),
+        ]
     );
 }

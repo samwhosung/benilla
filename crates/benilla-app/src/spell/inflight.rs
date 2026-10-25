@@ -406,7 +406,7 @@ pub(crate) struct LocalMoveStart {
 /// restored is in flight, and the report fires nothing (`0x6e2228`). The stock
 /// `CastingBarFrame.lua:132-139` steps the flash once per OnUpdate after the 1 s hold, followed
 /// by the fade.
-pub(super) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: SelfCancel) {
+pub(crate) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: SelfCancel) {
     if std::mem::take(&mut moved.pressed) {
         cancel.cancel(false, true, moved.mover_is_player);
     }

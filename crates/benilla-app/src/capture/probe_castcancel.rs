@@ -2,8 +2,9 @@
 //! 10 s cast), then 2 s into the bar presses `W` through `ButtonInput<KeyCode>`, the controller
 //! path a player's key takes to `spell::local_self_cancel` and `CMSG_CANCEL_CAST`.
 //!
-//! With `WOW_CAST_TRACE=1` the `LOCAL self-cancel` line must land frames after the `SEND move
-//! StartForward` line, and the server's `RECV CAST_RESULT failure` must follow without repainting.
+//! With `WOW_CAST_TRACE=1` the `LOCAL self-cancel` line must land just before the `SEND move
+//! StartForward` line, in the same frame, as the press cancels before its tick (`0x51512a` before
+//! `0x5151a0`), and the server's `RECV CAST_RESULT failure` must follow without repainting.
 //! Every bar phase change is logged ([`bar_timeline`]) so the hold, burst and fade are measured
 //! from timestamps. Non-combat: a failed cancel only hearths the character home. The switches are
 //! `docs/CONTRIBUTING.md`, "Running it unattended".

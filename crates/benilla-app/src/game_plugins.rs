@@ -1603,6 +1603,52 @@ pub(crate) mod schedule_tests {
         );
     }
 
+    /// A command press cancels the cast inside `SetCommands` (`0x51512a` → `0x6e4940`), after the
+    /// press's verdict and before its tick (`0x5151a0`), so `CMSG_CANCEL_CAST` goes out ahead of
+    /// the start: the self-cancel sits between the press's two systems in the built graph.
+    #[test]
+    fn the_cast_cancel_runs_inside_the_press_ahead_of_its_tick() {
+        let mut app = headless_client();
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !type_names_available(&c) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            succ.entry(*a).or_default().push(*b);
+        }
+        let after = |from: SystemKey| {
+            let mut seen = HashSet::new();
+            let mut stack = vec![from];
+            while let Some(n) = stack.pop() {
+                for m in succ.get(&n).into_iter().flatten() {
+                    if seen.insert(*m) {
+                        stack.push(*m);
+                    }
+                }
+            }
+            seen
+        };
+        let verdict = one("::player::press::press_commands");
+        let cancel = one("::spell::inflight::local_self_cancel");
+        let tick = one("::player::press::press_tick");
+        assert!(
+            after(verdict).contains(&cancel),
+            "the verdict before the cancel"
+        );
+        assert!(after(cancel).contains(&tick), "the cancel before the tick");
+    }
+
     /// The world click's trade leg runs ahead of its select (`0x4925d0`: the trade request at
     /// `0x49278e`, `SelectTarget` at `0x49280c`), so the targeting cursor it tests (`0x492668`)
     /// is the one the click found, not what the select's bind left.

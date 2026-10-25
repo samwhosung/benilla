@@ -429,6 +429,14 @@ impl Plugin for PlayerPlugin {
                 // Off in capture mode, where the camera is pinned.
                 .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
         )
+        // The cast bar's self-cancel inside the press, between its verdict and its tick, so
+        // `CMSG_CANCEL_CAST` goes out ahead of the start (`0x51512a` before `0x5151a0`).
+        .configure_sets(
+            Update,
+            crate::spell::LocalCancel
+                .after(press::press_commands)
+                .before(press::press_tick),
+        )
         // The world's mouse input records, after the UI's and ahead of the packets.
         .configure_sets(
             Update,
@@ -463,6 +471,7 @@ impl Plugin for PlayerPlugin {
             (
                 camera::send_world_right_press,
                 controller::sample_look,
+                press::press_commands,
                 press::press_tick,
             )
                 .chain()

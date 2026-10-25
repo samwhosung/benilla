@@ -36,8 +36,8 @@ pub(crate) use cast_send::{
 pub(crate) use cast_target::AutoSelfCast;
 pub(crate) use cooldowns::Cooldowns;
 pub(crate) use inflight::{
-    ActiveChannel, AutoRepeatActive, CastState, LocalMoveStart, PendingCast, QueuedMeleeSpell,
-    SelfCancel, SPELL_INTERRUPT_MOVEMENT,
+    local_self_cancel, ActiveChannel, AutoRepeatActive, CastState, LocalMoveStart, PendingCast,
+    QueuedMeleeSpell, SelfCancel, SPELL_INTERRUPT_MOVEMENT,
 };
 pub(crate) use mods::{
     CategoryPad, ModsDiff, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS,
@@ -96,9 +96,10 @@ impl Plugin for SpellPlugin {
             .add_systems(
                 Update,
                 (
+                    // Inside the command press, among the input records (`player::press`).
                     inflight::local_self_cancel
-                        .in_set(UnitFeed)
-                        .in_set(LocalCancel),
+                        .in_set(LocalCancel)
+                        .run_if(crate::ui_script::ingame_ui_up),
                     mods::track_class_family
                         .in_set(crate::ui_script::UiFeed)
                         .before(UnitFeed),
