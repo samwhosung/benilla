@@ -25,10 +25,15 @@ pub(crate) mod glue_mgr;
 pub(crate) mod glue_scene;
 mod input;
 mod movie;
+mod records;
 /// The server alert's fetch and `LaunchURL`'s browser, for the stock glue screens.
 pub(crate) mod server_alert;
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use input::feed_keys;
+#[cfg(test)]
+pub(crate) use records::records_from_planes;
+pub(crate) use records::{collect_input_records, InputRecord, InputRecords, Record};
 // Test-only: the bindings tests run the UI's wheel sweep ahead of the dispatch pass.
 #[cfg(test)]
 pub(crate) use input::feed_wheel;
@@ -191,11 +196,12 @@ pub(crate) struct UiDrain;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiPaint;
 
-/// The player-UI input pass (hit test, handlers, then the bindings): the frame's window input
-/// records, which the reference runs ahead of its packets (`0x423920` at `0x420d23`), so ahead of
-/// the net drain ([`WorldStage::Net`]) and [`UiFeed`]: a handler and the calls it makes read the
-/// world as the last frame left it. First of the frame's input records, so its
-/// [`PlayerUiHover`] reaches `PointerOverUi` before the world's mouse reads it.
+/// The player-UI input pass: the frame's window input records ([`InputRecords`]), each whole
+/// through the interface's walk and the world frame's binding before the next, which the reference
+/// runs ahead of its packets (`0x423920` at `0x420d23`), so ahead of the net drain
+/// ([`WorldStage::Net`]) and [`UiFeed`]: a handler and the calls it makes read the world as the
+/// last frame left it. First of the frame's input records, so its [`PlayerUiHover`] reaches
+/// `PointerOverUi` before the world's mouse reads it.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiInput;
 
@@ -455,6 +461,17 @@ impl Plugin for UiScriptPlugin {
             // records meet the rects its last frame pass drained (`0x7656ba`, `0x765799`), and runs
             // in-world only or on the stock glue screens.
             .init_resource::<UiPassState>()
+            // The frame's window input records, read first, ungated, so no frame dispatches a
+            // stale one.
+            .init_resource::<InputRecords>()
+            .add_message::<bevy::window::WindowEvent>()
+            .add_systems(
+                Update,
+                collect_input_records
+                    .in_set(UiInput)
+                    .before(UiInputViews)
+                    .before(crate::bindings::BindingHead),
+            )
             .add_systems(
                 Update,
                 (
@@ -467,8 +484,9 @@ impl Plugin for UiScriptPlugin {
                 )
                     .chain()
                     .in_set(UiInput)
-                    // So a key a focused box consumed never also fires a binding.
-                    .before(crate::bindings::BindingSet),
+                    // Each record's binding runs inside its walk, between the pass's head and tail.
+                    .after(crate::bindings::BindingHead)
+                    .before(crate::bindings::BindingTail),
             )
             .add_systems(
                 Update,
@@ -552,11 +570,12 @@ impl Plugin for UiScriptPlugin {
     }
 }
 
-/// The mouse and key feed once, for a test over the whole client: the input pass's Lua, with the
-/// call host the world lends.
+/// The mouse and key feed once, for a test over the whole client: the input pass's Lua over the
+/// records the test's planes and key messages make, with the call host the world lends.
 #[cfg(test)]
 pub(crate) fn feed_input_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
+    records_from_planes(world);
     world
         .run_system_once(input::feed_ui_input)
         .expect("the input feeds");
@@ -908,6 +927,8 @@ mod cinematic_tests;
 mod glue_input_tests;
 #[cfg(test)]
 mod key_walk_tests;
+#[cfg(test)]
+mod record_order_tests;
 #[cfg(test)]
 mod tick_order_tests;
 

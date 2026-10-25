@@ -30,6 +30,8 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ("MouseMotion", Swallowed),
     ("MouseWheel", Swallowed),
     ("CursorMoved", Swallowed),
+    // The stream the input records are read from, in the window's order.
+    ("WindowEvent", Swallowed),
     ("AccumulatedMouseMotion", Swallowed),
     ("AccumulatedMouseScroll", Swallowed),
     // The pointer position is a field, not a message; the cover blanks it.

@@ -12,7 +12,7 @@ use bevy::input::keyboard::KeyCode;
 use crate::bindings::chord::KeyName;
 
 /// The modifier snapshot a chord is read against; `sup` is Cmd on macOS, the OS key elsewhere.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Mods {
     pub(crate) shift: bool,
     pub(crate) ctrl: bool,

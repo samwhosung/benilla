@@ -92,9 +92,7 @@ fn in_frame_order(app: &mut App) -> Vec<Step> {
 fn run_frame(world: &mut World, order: &[Step]) {
     for step in order {
         match step {
-            Step::Input => world
-                .run_system_once(input::feed_ui_input)
-                .expect("the input pass runs"),
+            Step::Input => super::feed_input_once(world),
             Step::Net => crate::net::apply_net_updates(world),
             Step::Packets => crate::lanes::fire_in_order(world),
             Step::Update => world
@@ -307,6 +305,7 @@ fn a_click_reads_the_cursor_an_engine_writer_raised_after_the_last_feed() {
     world
         .resource_mut::<ButtonInput<MouseButton>>()
         .press(MouseButton::Left);
+    left_record(world, bevy::input::ButtonState::Pressed);
     world.run_schedule(Update);
     assert_eq!(log(world), "", "the press clicks nothing");
     // After the frame's feed: the cursor goes up outside any script call.
@@ -318,8 +317,20 @@ fn a_click_reads_the_cursor_an_engine_writer_raised_after_the_last_feed() {
     let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
     buttons.clear();
     buttons.release(MouseButton::Left);
+    left_record(world, bevy::input::ButtonState::Released);
     world.run_schedule(Update);
     assert_eq!(log(world), "click true;");
+}
+
+/// The left button's window record, which the input records read; the plane is the test's own.
+fn left_record(world: &mut World, state: bevy::input::ButtonState) {
+    world.write_message(bevy::window::WindowEvent::MouseButtonInput(
+        bevy::input::mouse::MouseButtonInput {
+            button: MouseButton::Left,
+            state,
+            window: Entity::PLACEHOLDER,
+        },
+    ));
 }
 
 /// The cursor moves onto a button and the right button goes down in the same frame: the press is
@@ -347,9 +358,7 @@ fn a_right_press_as_the_cursor_reaches_a_button_is_the_interfaces_alone() {
     world
         .resource_mut::<ButtonInput<MouseButton>>()
         .press(MouseButton::Right);
-    world
-        .run_system_once(input::feed_ui_input)
-        .expect("the input pass runs");
+    super::feed_input_once(world);
     world
         .run_system_once(super::arbitrate_pointer_over_ui)
         .expect("the arbiter runs");

@@ -15,9 +15,9 @@
 //!   frozen point, because ours is quieter and looks the same: the reference's pointer cannot
 //!   move, so its pick changes nothing visible.
 //!
-//! Taken: the button planes ([`swallow`]), the raw message queues, the mouse accumulators, and the
-//! window's cursor position, blanked so every hit-test takes its pointer-outside-the-window path
-//! ([`CoveredPointer`]). Not taken: synthetic probe input, written in `Update` or ordered after
+//! Taken: the button planes ([`swallow`]), the raw message queues and the window's event stream
+//! (no reader but the input records'), the mouse accumulators, and the window's cursor position,
+//! blanked so every hit-test takes its pointer-outside-the-window path ([`CoveredPointer`]). Not taken: synthetic probe input, written in `Update` or ordered after
 //! [`CoverInput`]. The cursor art (`0x6e4940`, the plain arrow) lives in [`crate::cursor`]. There
 //! is no dev exemption; a stuck load is diagnosed by [`super::WAIT_LOG_AFTER`].
 
@@ -27,7 +27,7 @@ use bevy::input::mouse::{
 };
 use bevy::math::DVec2;
 use bevy::prelude::*;
-use bevy::window::{CursorLeft, CursorMoved, PrimaryWindow};
+use bevy::window::{CursorLeft, CursorMoved, PrimaryWindow, WindowEvent};
 
 use super::LoadingScreen;
 
@@ -89,6 +89,8 @@ struct RawInput<'w> {
     motion: ResMut<'w, Messages<MouseMotion>>,
     wheel: ResMut<'w, Messages<MouseWheel>>,
     moved: ResMut<'w, Messages<CursorMoved>>,
+    /// The window's stream, the input records' source (`crate::ui_script::InputRecords`).
+    window: Option<ResMut<'w, Messages<WindowEvent>>>,
 }
 
 impl RawInput<'_> {
@@ -98,6 +100,9 @@ impl RawInput<'_> {
         self.motion.clear();
         self.wheel.clear();
         self.moved.clear();
+        if let Some(window) = self.window.as_mut() {
+            window.clear();
+        }
     }
 }
 

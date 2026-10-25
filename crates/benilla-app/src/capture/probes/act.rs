@@ -191,14 +191,18 @@ struct ProbeKeyTap {
     released: bool,
 }
 
-/// Presses and releases due taps through both `ButtonInput` (held-state readers) and a raw
-/// [`KeyboardInput`] message (the binding dispatch's press/release edges); both are needed.
+/// Presses and releases due taps through `ButtonInput` (held-state readers), a raw
+/// [`KeyboardInput`] message and its window event (the input records, whose binding leg takes the
+/// press and release edges), as winit hands a key over; all are needed.
 fn fire_probe_key(
     mut probe: ResMut<ProbeKeys>,
     time: ProbeClock,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    mut events: MessageWriter<bevy::input::keyboard::KeyboardInput>,
+    mut events: (
+        MessageWriter<bevy::input::keyboard::KeyboardInput>,
+        MessageWriter<bevy::window::WindowEvent>,
+    ),
     mut hold: ResMut<benilla_world::modkeys::SyntheticHold>,
 ) {
     probe.armed |= !self_player.is_empty();
@@ -207,7 +211,7 @@ fn fire_probe_key(
     }
     let now = time.elapsed_secs();
     let mut synth = |key: KeyCode, state: bevy::input::ButtonState| {
-        events.write(bevy::input::keyboard::KeyboardInput {
+        let ev = bevy::input::keyboard::KeyboardInput {
             key_code: key,
             logical_key: bevy::input::keyboard::Key::Unidentified(
                 bevy::input::keyboard::NativeKey::Unidentified,
@@ -216,7 +220,9 @@ fn fire_probe_key(
             text: None,
             repeat: false,
             window: Entity::PLACEHOLDER,
-        });
+        };
+        events.0.write(ev.clone());
+        events.1.write(bevy::window::WindowEvent::KeyboardInput(ev));
     };
     for tap in &mut probe.taps {
         if !tap.pressed && now >= tap.at {
