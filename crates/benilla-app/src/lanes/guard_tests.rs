@@ -472,7 +472,6 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_battlefield_score::feed_battlefield_score", &["names::NameCache",
         "ui_battlefield_score::BattlefieldScoreboard", "ui_dialog_verbs::BattlefieldQueue"]),
     ("::ui_battlefield::reset_on_world_enter", &["ui_battlefield::Battlefield"]),
-    ("::ui_battlefield_score::reset_on_world_enter", &["ui_battlefield_score::BattlefieldScoreboard"]),
     ("::ui_battlefield::feed_battlefield", &["names::NameCache", "ui_battlefield::Battlefield",
         "ui_dialog_verbs::BattlefieldQueue"]),
     ("::ui_battlefield_positions::feed_battlefield_positions", &["names::NameCache",
