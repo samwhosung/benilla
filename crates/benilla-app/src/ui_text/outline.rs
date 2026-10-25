@@ -57,7 +57,8 @@ fn fill_gray(coverage: u8) -> u8 {
 /// 4. Pack: the coverage as a 4-bit gray ([`fill_gray`]), so the pure ring is black and the fill
 ///    ramps toward it.
 ///
-/// Deviation: `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster.
+/// Deviation: `r × floor(dpi)` passes, so the ring keeps its logical weight on a whole-number
+/// high-DPI raster; a fractional scale such as 1.5 rounds down to the reference's one texel a pass.
 ///
 /// It draws as one quad per glyph (`0x5ccbe0`) whose vertex colour tints the fill and leaves the
 /// ring black. Returns `(rgba, out_w, out_h, pad)`: the cell grows `pad` texels each side (the
@@ -114,7 +115,7 @@ pub(super) fn outlined_cell(
 /// Dilation passes for ring reach `r` (logical px) on a `dpi` raster, also the cell's growth on
 /// every side.
 fn passes_of(r: u8, dpi: f32) -> u32 {
-    (u32::from(r) * (dpi.round().max(1.0) as u32)).max(1)
+    (u32::from(r) * (dpi.floor().max(1.0) as u32)).max(1)
 }
 
 /// The ink (`ink != 0`) of a `w × h` glyph marked 1 in a grid grown `passes` texels each side, then
@@ -164,7 +165,7 @@ fn ringed(ink: &[u8], w: u32, h: u32, passes: u32) -> (Vec<u8>, u32, u32) {
 /// theirs a second black ring at alpha 7/15 (`0x7000`): no neighbour-count alpha, so a small
 /// glyph's ring follows its strokes and its counters stay open past the first ring.
 ///
-/// Deviation: `r × round(dpi)` passes as in [`outlined_cell`], the first `round(dpi)` of them the
+/// Deviation: `r × floor(dpi)` passes as in [`outlined_cell`], the first `floor(dpi)` of them the
 /// opaque ring. Same contract as [`outlined_cell`]: `(rgba, out_w, out_h, pad)`, `pad` 0 when plain.
 pub(super) fn mono_cell(bits: &[u8], w: u32, h: u32, r: u8, dpi: f32) -> (Vec<u8>, u32, u32, u32) {
     if r == 0 {
@@ -324,5 +325,14 @@ mod mono_cell_tests {
         assert_eq!((w, h, pad), (5, 5, 2));
         assert_eq!(px(&rgba, w, 0, 0), [0, 0, 0, 255]);
         assert_eq!(px(&rgba, w, 1, 1), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_fractional_dpi_rings_one_texel_a_pass() {
+        // NORMAL at dpi 1.5: one pass, the reference's one-texel ring, not round(1.5) = 2.
+        let (_, w, h, pad) = mono_cell(&[1], 1, 1, 1, 1.5);
+        assert_eq!((w, h, pad), (3, 3, 1));
+        let (_, w, h, pad) = outlined_cell(&[255], 1, 1, 1, 1.5);
+        assert_eq!((w, h, pad), (3, 3, 1));
     }
 }
