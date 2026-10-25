@@ -291,3 +291,33 @@ fn an_on_click_reads_the_unit_before_this_frames_packet() {
     run_frame(world, &c.order);
     assert_eq!(log(world), "click 100;event 60;update 60;");
 }
+
+/// A click's handler reads the targeting cursor as the frame began, though an engine writer after
+/// the last frame's feed raised it (a cast drain, a walk's bind): the frame's input runs against
+/// the cursor's own word, as `SpellIsTargeting` (`0x6e6cd0`) reads it, not the VM's view of a frame
+/// before. The frames run `Update` whole.
+#[test]
+fn a_click_reads_the_cursor_an_engine_writer_raised_after_the_last_feed() {
+    let mut c = client(
+        r#"b:SetScript("OnClick", function()
+            LOG = LOG .. "click " .. tostring(SpellIsTargeting() and true or false) .. ";"
+        end)"#,
+    );
+    let world = c.app.world_mut();
+    world
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    world.run_schedule(Update);
+    assert_eq!(log(world), "", "the press clicks nothing");
+    // After the frame's feed: the cursor goes up outside any script call.
+    world.resource_mut::<crate::spell::SpellTargeting>().enter(
+        133,
+        crate::spell::CastCommit::Spell,
+        0x0002,
+    );
+    let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
+    buttons.clear();
+    buttons.release(MouseButton::Left);
+    world.run_schedule(Update);
+    assert_eq!(log(world), "click true;");
+}

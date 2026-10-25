@@ -199,6 +199,12 @@ pub(crate) struct UiPaint;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiInput;
 
+/// The VM's views the input records read pushed ahead of them, at the head of [`UiInput`]: what an
+/// engine writer outside the calls moved after the last frame's feeds (the targeting cursor's
+/// word).
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct UiInputViews;
+
 /// The tick: the `OnUpdate` walk of the frame pass (category 0x11 at `0x420d6a`, `0x764330` →
 /// `0x765650`), after the input pass and the feeds, so a handler reads this frame's input and
 /// packets applied.
@@ -428,6 +434,10 @@ impl Plugin for UiScriptPlugin {
                     .chain(),
             )
             .configure_sets(Update, UiDrain.after(UiTick))
+            .configure_sets(
+                Update,
+                UiInputViews.in_set(UiInput).before(input::feed_ui_input),
+            )
             // `GetFramerate()`'s ring, a static of the client's that no reload or logout
             // resets: the feed hands a new VM its rate before the tick, and each world frame's
             // step joins the ring after its paint, standing for `CGWorldFrame::OnRender`
@@ -898,6 +908,15 @@ mod glue_input_tests;
 mod key_walk_tests;
 #[cfg(test)]
 mod tick_order_tests;
+
+/// Whether `Update` declares `system` before the tick, the frame pass's `OnUpdate` walk.
+#[cfg(test)]
+pub(crate) fn tick_runs_after<M>(
+    app: &mut App,
+    system: impl bevy::ecs::system::IntoSystem<(), (), M>,
+) -> bool {
+    crate::test_support::runs_before(app, system, extract::tick_script)
+}
 
 #[cfg(test)]
 mod cast_tests;
