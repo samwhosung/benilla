@@ -849,6 +849,63 @@ const GX_RESOLUTION: &str = "gxResolution";
 mod tests {
     use super::*;
 
+    /// A Vulkan presentation stall past wgpu-core's 1 s frame timeout is waited out, not turned
+    /// into a lost device, only while the lock resolves wgpu-hal to `third_party/wgpu-hal`, the
+    /// copy with the stall budget (`third_party/wgpu-hal/BENILLA.md`). A registry entry in the
+    /// lock, a bumped version or a dropped hunk fails here, not on a Windows or Linux player.
+    #[test]
+    fn wgpu_hal_resolves_to_the_vendored_stall_patch() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |rel: &str| {
+            std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+        };
+
+        let lock = read("Cargo.lock");
+        let entry = lock
+            .split("[[package]]")
+            .find(|p| p.trim_start().starts_with("name = \"wgpu-hal\""))
+            .expect("Cargo.lock has no wgpu-hal");
+        assert!(
+            !entry.lines().any(|l| l.starts_with("source = ")),
+            "wgpu-hal resolves to a registry copy, not the path patch:{entry}"
+        );
+        assert!(
+            read("Cargo.toml").contains("wgpu-hal = { path = \"third_party/wgpu-hal\" }"),
+            "the root Cargo.toml lost its [patch.crates-io] wgpu-hal path"
+        );
+
+        let version = |manifest: &str| {
+            manifest
+                .lines()
+                .find_map(|l| l.strip_prefix("version = "))
+                .map(str::to_owned)
+        };
+        assert_eq!(
+            version(entry),
+            version(&read("third_party/wgpu-hal/Cargo.toml")),
+            "the vendored wgpu-hal is not the version the lock resolves"
+        );
+
+        let instance = read("third_party/wgpu-hal/src/vulkan/instance.rs");
+        for hunk in [
+            "const STALL_BUDGET",
+            "Err(vk::Result::TIMEOUT) if retry_stall(stall_start, timeout_ns)",
+            "vkWaitForFences on the acquired image returned",
+        ] {
+            assert!(
+                instance.contains(hunk),
+                "the vendored acquire_texture lost `{hunk}`"
+            );
+        }
+        assert!(
+            instance
+                .matches("retry_stall(stall_start, timeout_ns)")
+                .count()
+                == 2,
+            "acquire_texture retries both the acquire and the post-acquire fence wait"
+        );
+    }
+
     /// Synced is `Fifo`, not `AutoVsync` (`FifoRelaxed`, which tears on a late frame).
     #[test]
     fn the_default_is_synced_like_the_window_literal() {
