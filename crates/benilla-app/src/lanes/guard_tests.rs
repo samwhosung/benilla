@@ -127,12 +127,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_guild::GuildLocal",
-        "the held guild invitation, which `feed_guild` fires from; the guild verbs, acting in \
-         their calls, hold it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_mail::MailOpen",
         "the mailbox's list and results, the send result's equip refusal line among them, which \
          `feed_mail` fires from; the mail verbs, acting in their calls, hold it in the host",
@@ -158,13 +152,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_logout::LogoutState",
         "the logout state, which `feed_logout` fires from; the session verbs, acting in their \
          calls, hold it in the host",
-    ),
-    (
-        Row::Queue,
-        "::ui_guild::GuildState",
-        "the guild state, which `feed_guild` fires from; the guild verbs, acting in their calls, \
-         read it in the host, and `GetGuildInfo` leaves its waiters there through `&self`, which \
-         the query response's handler spends onto the notice lane",
     ),
     (
         Row::Queue,
@@ -481,8 +468,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
     ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
     ("::ui_social::feed::feed_social", &["names::NameCache", "ui_social::SocialState"]),
-    ("::ui_guild::feed::feed_guild", &["net::ObjectStore", "ui_guild::GuildLocal",
-        "ui_guild::GuildState"]),
     ("::ui_petition::feed::feed_petition", &["names::NameCache", "net::ObjectStore",
         "net::SelfGuid", "ui_petition::GuildRegistrarState", "ui_petition::PetitionRecords",
         "ui_petition::PetitionState"]),
@@ -659,9 +644,6 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
     "::tutorial::Tutorials",
     "::ui_session::latch::LatchCloses",
     "::ui_logout::SessionPosts",
-    // The guild cache's waiters, which `GetGuildInfo` leaves inside its call through `&self`
-    // (`0x4c93d2`).
-    "::ui_guild::GuildState",
 ];
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
@@ -777,7 +759,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 17] {
+fn lane_types() -> [TypeId; 18] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -805,12 +787,15 @@ fn lane_types() -> [TypeId; 17] {
         TypeId::of::<crate::ui_pet::PetBar>(),
         // The cast views lane: the view each packet left, stamped ahead of the packet.
         TypeId::of::<crate::ui_cast::CastViews>(),
+        // The guild lane: the roster, event and invitation packets' signals, each with the
+        // version of the guild state its packet left.
+        TypeId::of::<crate::ui_guild::GuildState>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 17] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 18] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -841,6 +826,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 17] {
         ("cooldowns", TypeId::of::<crate::spell::Cooldowns>()),
         ("pet cooldowns", TypeId::of::<crate::ui_pet::PetBar>()),
         ("cast views", TypeId::of::<crate::ui_cast::CastViews>()),
+        ("guild", TypeId::of::<crate::ui_guild::GuildState>()),
     ]
 }
 
@@ -1001,6 +987,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "deaths",
             "equip errors",
             "field notices",
+            "guild",
             "item text",
             "item watchers",
             "list rebuilds",
@@ -1252,6 +1239,11 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",
         "a dead socket ends the channel session, and no packet follows it",
+    ),
+    (
+        "::query_cache::release_on_enter<benilla_app::ui_guild::GuildState>",
+        "the world entry forgets the guild cache's in-flight asks, so each is asked again \
+         (`0x5557c0`): it queues nothing",
     ),
 ];
 

@@ -71,6 +71,8 @@ live_reads! {
         auras: Option<crate::ui_aura::AuraLive<'static, 'static>>,
         /// The player's cooldown lists.
         cooldowns: crate::spell::CooldownLive<'static, 'static>,
+        /// The guild roster, its ranks and the guild record.
+        guild: crate::ui_guild::GuildLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

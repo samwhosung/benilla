@@ -931,6 +931,7 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
     for guid in reactivated {
         reactivated_end(&mut sc, guid, script.as_deref());
     }
+    mirror_guild(&mut sc);
     sc.view_log.close();
 }
 
@@ -1091,6 +1092,29 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     }
     if let Some(((guild_id, stamp), guilds)) = stamp.zip(sc.guilds.as_mut()) {
         guilds.stamp_changed(guild_id, stamp, &sc.net);
+    }
+}
+
+/// Our guild id and rank as the packet left them in our descriptor (fields 191 and 192), which the
+/// guild mirror keeps ([`crate::ui_guild::GuildState::mirror_self`]). Mirrored only while the avatar
+/// is streamed: the frames between a logout's despawn and the teardown must not read as leaving
+/// the guild.
+fn mirror_guild(sc: &mut Scene) {
+    let Some(guilds) = sc.guilds.as_mut() else {
+        return;
+    };
+    let Some(store) = sc
+        .self_guid
+        .0
+        .and_then(|guid| sc.index.0.get(&guid))
+        .and_then(|&e| sc.stores.get(e).ok())
+    else {
+        return;
+    };
+    let (id, rank) = (store.0.player_guild_id(), store.0.player_guild_rank());
+    // A write only on a move: a packet that leaves the guild alone marks it unchanged.
+    if !guilds.mirrors(id, rank) {
+        guilds.mirror_self(id, rank);
     }
 }
 
