@@ -174,11 +174,48 @@ pub(crate) fn measure(world: &mut World) {
     });
 }
 
+/// What runs around the packets of a dispatch: `begin` once ahead of the first, and `end` after
+/// each, with a stamp taken ahead of its handlers, so a state the packet moved can be logged
+/// ahead of what the packet raised ([`crate::lanes`]).
+#[derive(Clone, Copy)]
+struct PacketHook {
+    begin: fn(&mut World),
+    end: fn(&mut World, crate::lanes::Stamp),
+}
+
+/// Every [`PacketHook`], in registration order.
+#[derive(Resource, Default, Clone)]
+struct PacketHooks(Vec<PacketHook>);
+
+/// Register a [`PacketHook`].
+pub(crate) fn add_packet_hook(
+    app: &mut App,
+    begin: fn(&mut World),
+    end: fn(&mut World, crate::lanes::Stamp),
+) {
+    app.world_mut()
+        .get_resource_or_init::<PacketHooks>()
+        .0
+        .push(PacketHook { begin, end });
+}
+
 /// One drain's dispatch in wire order, each handler's commands applied before the next event.
 pub(crate) fn dispatch(world: &mut World, events: Vec<SessionEvent>) {
     let handlers = world.remove_resource::<NetHandlers>().unwrap_or_default();
+    let hooks = world
+        .get_resource::<PacketHooks>()
+        .filter(|_| !events.is_empty())
+        .cloned()
+        .unwrap_or_default();
+    for hook in &hooks.0 {
+        (hook.begin)(world);
+    }
     for ev in events {
+        let at = (!hooks.0.is_empty()).then(crate::lanes::stamp);
         handlers.run(world, ev);
+        for (hook, at) in hooks.0.iter().zip(at.iter().cycle()) {
+            (hook.end)(world, *at);
+        }
     }
     world.insert_resource(handlers);
 }

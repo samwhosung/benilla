@@ -780,7 +780,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 15] {
+fn lane_types() -> [TypeId; 16] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -804,12 +804,14 @@ fn lane_types() -> [TypeId; 15] {
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         // The cooldown lane: the player's list, which logs its writes and flushes at their places.
         TypeId::of::<crate::spell::Cooldowns>(),
+        // The cast views lane: the view each packet left, stamped ahead of the packet.
+        TypeId::of::<crate::ui_cast::CastViews>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 15] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 16] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -838,6 +840,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 15] {
             TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         ),
         ("cooldowns", TypeId::of::<crate::spell::Cooldowns>()),
+        ("cast views", TypeId::of::<crate::ui_cast::CastViews>()),
     ]
 }
 
@@ -992,6 +995,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "auction house",
             "bag view",
             "cast reports",
+            "cast views",
             "chat",
             "cooldowns",
             "deaths",
@@ -1504,6 +1508,7 @@ const QUEUES_NOT_VIEWS: &[&str] = &[
     "item_lane::ItemLane",
     "ui_chat::ChatLog",
     "ui_cast::CastReports",
+    "ui_cast::views::CastViews",
     "ui_auction::net::HouseLane",
     "ui_party::feed::PartyLane",
     "ui_items::EquipErrors",

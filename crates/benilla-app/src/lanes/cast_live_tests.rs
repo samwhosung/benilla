@@ -1,0 +1,283 @@
+//! Our cast's state as a listener reads it, packet by packet. The cast state is the client's
+//! globals: the in-flight slot (`0xceca88`, its item at `0xcecab0`), the targeting word and its
+//! record's spell (`0xceac58`), the auto-repeat key (`0xceac30`) and the attack flag
+//! (`[player+0xc48]`). Each packet's handler writes them and signals inside itself:
+//! `SMSG_SPELL_START` fires `SPELLCAST_START` (`0x6e7a53`) with nothing written, and our cast's
+//! `SMSG_CAST_RESULT` pops the in-flight slot (`0x6e741a` → `0x6e4940` → `0x6e4ad0`) before its
+//! `SPELLCAST_STOP` (`0x6e4a50`). The getters read the globals inside the call: `IsCurrentAction`
+//! (`0x4e72f0` → `0x4e53a0`, the in-flight spell at `0x4e54c1`), `IsAutoRepeatAction`
+//! (`0x4e7360` → `0x4e55b0` → `0x6e9fd0`), `SpellIsTargeting` (`0x6e6cd0`) and `SpellStopCasting`'s
+//! test (`0x6e6e80`). So a cast start and its stop in one frame each read their own packet's state.
+
+use std::collections::HashMap;
+
+use benilla_formats::{SpellCatalog, SpellDisplay};
+use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::messages::{ActionButton, ACTION_KIND_SPELL};
+use benilla_protocol::{EntityKind, SessionEvent};
+use benilla_ui::script::UiScript;
+use bevy::prelude::*;
+use crossbeam_channel::{Receiver, Sender};
+
+use super::unit_view_tests::{created, values, wire_packets};
+use crate::net::ClientCommand;
+
+const ME: u64 = 0x7;
+/// A cast with no target, on bar slot 1 and in the book.
+const HEAL: u32 = 2050;
+
+/// `UNIT_FIELD_FLAGS` and its player-controlled bit, `UNIT_FIELD_POWER1` and its maximum.
+const FLAGS: u16 = 46;
+const PLAYER_CONTROLLED: u32 = 0x8;
+const MANA: u16 = 23;
+const MAX_MANA: u16 = 29;
+
+/// The whole client, headless, in the world with its frame run.
+struct Client {
+    app: App,
+    inbound: Sender<SessionEvent>,
+    sent: Receiver<ClientCommand>,
+}
+
+impl Client {
+    /// One frame of the client's, with `packets` in the inbound channel, each one packet.
+    fn frame(&mut self, packets: Vec<Vec<SessionEvent>>) {
+        for ev in wire_packets(packets) {
+            self.inbound.send(ev).expect("the inbound channel");
+        }
+        self.app.update();
+    }
+
+    /// `chunk` run with the host lent, as a key's body: the press a cast needs.
+    fn press(&mut self, chunk: &str) {
+        crate::script_calls::with_hosted_vm(self.app.world_mut(), |s| {
+            s.expect("a VM").run_binding(chunk)
+        })
+        .expect("runs");
+    }
+
+    /// `chunk`'s answer through the lent host when `live`, else off the snapshots alone.
+    fn eval<T: benilla_ui::mlua::FromLuaMulti>(&mut self, live: bool, chunk: &str) -> T {
+        if live {
+            crate::script_calls::with_hosted_vm(self.app.world_mut(), |s| {
+                s.expect("a VM").eval::<T>(chunk).expect("runs")
+            })
+        } else {
+            crate::script_calls::eval_in_vm(self.app.world(), chunk)
+        }
+    }
+
+    /// What the spy heard since the last call, its events among `events` alone.
+    fn seen(&mut self, events: &[&str]) -> Vec<String> {
+        let seen: Vec<String> = self.eval(false, "local s = Seen Seen = {} return s");
+        seen.into_iter()
+            .filter(|l| events.iter().any(|e| l.split(':').next() == Some(e)))
+            .collect()
+    }
+
+    /// The spells cast since the last call.
+    fn casts(&self) -> Vec<u32> {
+        self.sent
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CastSpell { spell_id, .. } => Some(spell_id),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// The client in the world as [`ME`], Heal in the book and on bar slot 1; and a spy whose line
+/// for each cast event carries what its listener read: `IsCurrentAction(1)` and
+/// `SpellIsTargeting()`.
+fn client() -> Client {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+        bevy::ecs::error::ignore,
+    ));
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let (inbound, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetEvents::for_test(rx));
+    app.update();
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([(
+            HEAL,
+            SpellDisplay {
+                id: HEAL,
+                name: "Heal".into(),
+                icon: Some("Interface\\Icons\\Spell_Holy_Heal".into()),
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let script = UiScript::new().expect("a VM");
+    script
+        .run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"SPELLCAST_START", "SPELLCAST_STOP", "SPELLCAST_FAILED",
+                    "CURRENT_SPELL_CAST_CHANGED", "UNIT_MANA"}) do
+                f:RegisterEvent(e)
+            end
+            local function s(v) return tostring(v) end
+            f:SetScript("OnEvent", function()
+                if event == "UNIT_MANA" and arg1 ~= "player" then return end
+                table.insert(Seen, event .. ":" .. s(IsCurrentAction(1)) .. ":"
+                    .. s(SpellIsTargeting()))
+            end)
+            "#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+    benilla_world::world_point::init_world_point_resources(app.world_mut());
+    let world = app.world_mut();
+    world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    world
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .spells
+        .extend([HEAL]);
+    {
+        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
+        slots.buttons.insert(
+            0,
+            ActionButton {
+                slot: 0,
+                action: HEAL,
+                kind: ACTION_KIND_SPELL,
+            },
+        );
+        slots.dirty = true;
+    }
+    let mut c = Client { app, inbound, sent };
+    c.frame(vec![vec![created(
+        ME,
+        EntityKind::Player,
+        &[
+            (FIELD_UNIT_HEALTH, 100),
+            (FIELD_UNIT_MAXHEALTH, 100),
+            (MANA, 100),
+            (MAX_MANA, 100),
+            (FLAGS, PLAYER_CONTROLLED),
+        ],
+    )]]);
+    c.frame(vec![]);
+    c.frame(vec![]);
+    c.seen(&[]);
+    c.casts();
+    c
+}
+
+/// Heal pressed and sent, in flight as the next frame begins.
+fn cast_heal(c: &mut Client) {
+    c.press("UseAction(1)");
+    assert_eq!(c.casts(), [HEAL], "the cast went out");
+    c.frame(vec![]);
+    c.seen(&[]);
+}
+
+/// Our cast's start and its result in one frame: the start's `SPELLCAST_START` reads Heal still
+/// in flight, and the result pops it (`0x6e741a` → `0x6e4ad0`) before its `SPELLCAST_STOP` and
+/// its `CURRENT_SPELL_CAST_CHANGED`, which read it popped; a power packet between them reads the
+/// slot as the start left it.
+#[test]
+fn a_cast_start_and_its_stop_in_one_frame_each_read_their_own_packets_state() {
+    let mut c = client();
+    cast_heal(&mut c);
+    c.frame(vec![
+        vec![SessionEvent::SpellStart {
+            caster: ME,
+            spell_id: HEAL,
+            cast_flags: 0,
+            cast_time_ms: 2500,
+            target: None,
+            ammo_display_id: None,
+        }],
+        vec![values(ME, &[(MANA, 90)])],
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: true,
+            reason: None,
+            arg: None,
+        }],
+    ]);
+    let seen = c.seen(&[
+        "SPELLCAST_START",
+        "UNIT_MANA",
+        "SPELLCAST_STOP",
+        "CURRENT_SPELL_CAST_CHANGED",
+    ]);
+    assert_eq!(
+        seen,
+        [
+            "SPELLCAST_START:1:nil",
+            "UNIT_MANA:1:nil",
+            "CURRENT_SPELL_CAST_CHANGED:nil:nil",
+            "SPELLCAST_STOP:nil:nil",
+        ]
+    );
+}
+
+/// With the frame's packets fired, the getters answer the frame's last state, live and off the
+/// snapshot alike: Heal in flight, then popped.
+#[test]
+fn the_cast_getters_answer_the_frames_last_state_once_its_packets_fired() {
+    let mut c = client();
+    let chunk = "return IsCurrentAction(1), SpellIsTargeting()";
+    cast_heal(&mut c);
+    for live in [false, true] {
+        assert_eq!(
+            c.eval::<(Option<i64>, Option<i64>)>(live, chunk),
+            (Some(1), None)
+        );
+    }
+    c.frame(vec![vec![SessionEvent::CastResult {
+        spell_id: HEAL,
+        success: true,
+        reason: None,
+        arg: None,
+    }]]);
+    for live in [false, true] {
+        assert_eq!(
+            c.eval::<(Option<i64>, Option<i64>)>(live, chunk),
+            (None, None)
+        );
+    }
+}
+
+/// A listener's call that moves no cast state leaves it its packet's view: the `SPELLCAST_START`
+/// listener's `ClearTarget()` applies inside it, and its next line still reads Heal in flight.
+#[test]
+fn a_listeners_call_that_moves_no_cast_state_leaves_its_packets_view() {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("SPELLCAST_START")
+        g:SetScript("OnEvent", function()
+            ClearTarget()
+            table.insert(Seen, "CALLED:" .. tostring(IsCurrentAction(1)))
+        end)"#,
+    );
+    cast_heal(&mut c);
+    c.frame(vec![
+        vec![SessionEvent::SpellStart {
+            caster: ME,
+            spell_id: HEAL,
+            cast_flags: 0,
+            cast_time_ms: 2500,
+            target: None,
+            ammo_display_id: None,
+        }],
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: true,
+            reason: None,
+            arg: None,
+        }],
+    ]);
+    assert_eq!(c.seen(&["CALLED"]), ["CALLED:1"]);
+}

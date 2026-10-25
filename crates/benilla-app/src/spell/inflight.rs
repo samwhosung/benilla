@@ -275,7 +275,8 @@ pub(super) fn inflight_item(
 }
 
 /// The player's cast state as the VM reads it ([`CastView`]): what the action bar's checked tests
-/// and `SpellStopCasting` hold the slots against, pushed each frame and after every script call.
+/// and `SpellStopCasting` hold the slots against, pushed each frame, as each packet left it at its
+/// place in the drain ([`crate::ui_cast::CastViews`]), and after every script call that moved it.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct CastState<'w, 's> {
     pending: Res<'w, PendingCast>,

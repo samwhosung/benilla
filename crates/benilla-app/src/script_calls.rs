@@ -56,6 +56,9 @@ disjoint::disjoint_set! {
         /// reports the call made.
         self_cancel: crate::spell::SelfCancel<'static>,
         cast_state: crate::spell::CastState<'static, 'static>,
+        /// What the VM last took of the live cast state, and the views lane's log; absent in a
+        /// harness without the cast lanes.
+        cast_views: Option<ResMut<'static, crate::ui_cast::CastViews>>,
         reports: crate::ui_cast::CallReports<'static, 'static>,
         /// The character panel's tabs: talents, skills and reputation.
         talents: crate::ui_talent::TalentSteps<'static, 'static>,
@@ -403,11 +406,18 @@ impl ScriptCallHost<'_, '_> {
         let appliers = &mut self.appliers;
         // The cast state: `SpellStopCasting` (`0x6e6e80`) finds the cast the call sent in flight
         // (`0x6e5026`), and `IsCurrentAction` (`0x4e53a0`) checks its slot, as stock
-        // `ActionButtonUp` reads straight after `UseAction` (`ActionButton.lua:54-55`).
+        // `ActionButtonUp` reads straight after `UseAction` (`ActionButton.lua:54-55`); with the
+        // targeting word `SpellIsTargeting` (`0x6e6cd0`) reads. A call that moved none of it
+        // leaves the view its listener's packet left ([`crate::ui_cast::CastViews::commit`]).
         let view = appliers.cast_state().view();
-        script.set_cast_view(view);
-        // The targeting word: `SpellIsTargeting` (`0x6e6cd0`) reads it, and `SpellTargetUnit`
-        // binds to it.
+        match appliers.cast_views().as_deref_mut() {
+            Some(views) => views.commit(script, view),
+            None => {
+                script.set_cast_view(view);
+                script.set_spell_targeting(view.targeting.is_some());
+            }
+        }
+        // The rest of the targeting word's: `SpellTargetUnit` binds to it.
         appliers.cursor().push_view(script);
     }
 

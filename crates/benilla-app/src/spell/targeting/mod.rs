@@ -558,20 +558,21 @@ pub(crate) fn feed_targeting_to_vm(
 ) {
     vm.turn(|script, (targeting, tokens, checks)| {
         if let Some(script) = script {
+            script.set_spell_targeting(targeting.active());
             push_targeting_view(script, &targeting, &checks, &tokens);
         }
     })
 }
 
-/// Push what the VM reads of the targeting word: `SpellIsTargeting`, the pickup reroute's item
-/// half and `SpellCanTargetUnit`'s units.
+/// Push what the VM reads of the targeting word beside `SpellIsTargeting`, which rides the cast
+/// view ([`crate::ui_cast::CastViews`]): the pickup reroute's item half and `SpellCanTargetUnit`'s
+/// units.
 fn push_targeting_view(
     script: &mut benilla_ui::script::UiScript,
     targeting: &SpellTargeting,
     checks: &BindChecks,
     tokens: &crate::ui_unit::UnitTokens,
 ) {
-    script.set_spell_targeting(targeting.active());
     script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
     // `SpellTargetWantsLocation` (`0x6e6320`), which `Minimap:PingLocation` asks (`0x4eee74`).
     script.set_location_pick_armed(targeting.wants(TargetingWants::Location));

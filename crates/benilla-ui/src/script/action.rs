@@ -166,8 +166,9 @@ impl ActionState {
 
 /// The player's cast state as the reference's globals hold it, which the action bar's checked
 /// tests (`0x4e53a0`, `0x4e55b0`) and `SpellStopCasting` (`0x6e6e80`) read live. The app pushes it
-/// each frame and after every script call it applies, so a script's next line reads what the
-/// call left.
+/// each frame, as each packet left it where that packet's events fire, and after every script call
+/// that moved it, so a listener reads its own packet's and a script's next line what the call
+/// left.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CastView {
     /// The spell in the in-flight slot (`0xceca88`, `0x6e3d10`): a cast from its attempt to its

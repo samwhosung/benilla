@@ -14,6 +14,9 @@ use crate::spell::CastState;
 use crate::ui_action::{CastFail, CastFailLines, MessageSink, Shown, Spells};
 use crate::ui_unit::UnitFeed;
 
+mod views;
+pub(crate) use views::CastViews;
+
 /// One edge of our own cast, queued by the spell's packet handlers, its reports and its cancels.
 pub(crate) enum CastBarEdge {
     /// `SMSG_SPELL_START` with a nonzero cast time; an instant opens no bar, as in the reference.
@@ -473,21 +476,23 @@ impl CallReports<'_, '_> {
 /// `SpellStopCasting` (`0x6e6e80`) and the bar's checked tests read: a queued strike and the spell
 /// awaiting its click count as in flight, so the first Esc stops it and `ToggleGameMenu` skips
 /// `ClearTarget()` (`UIParent.lua:1489-1492`). The reports made outside any script call fire from
-/// their lane after every feed ([`fire_cast_reports`]), so a listener reads this push; a refused
-/// line that waits on its item's record is retried there, behind the frame's packets.
+/// their lane after every feed ([`fire_cast_reports`]), each listener reading the view its own
+/// packet left, which the views lane pushes at its place ([`views`]); a refused line that waits
+/// on its item's record is retried there, behind the frame's packets.
 pub(crate) fn feed_cast_reports(
-    // The reports and the cast state, which the host's casts write.
+    // The reports and the cast state, which the host's casts write, and the views' log.
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, CastReports>,
         CastReporter<'static, 'static>,
         CastState<'static, 'static>,
+        Option<ResMut<'static, CastViews>>,
     )>,
 ) {
-    vm.turn(|script, (mut reports, reporter, cast_state)| {
+    vm.turn(|script, (mut reports, reporter, cast_state, mut views)| {
         let Some(script) = script else {
             return;
         };
-        script.set_cast_view(cast_state.view());
+        views::feed_live(script, views.as_deref_mut(), cast_state.view());
         if reporter.lines.any_waiting() {
             reports.push(CastReport::Redisplay);
         }
@@ -565,6 +570,7 @@ pub(crate) struct UiCastPlugin;
 impl Plugin for UiCastPlugin {
     fn build(&self, app: &mut App) {
         use crate::lanes::LaneApp;
+        views::add_cast_views_lane(app);
         app.init_resource::<CastReports>()
             .add_lane(
                 "cast reports",
