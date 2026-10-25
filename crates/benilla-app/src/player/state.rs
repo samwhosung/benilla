@@ -354,6 +354,16 @@ pub(crate) struct Player {
     /// The movement flags we last streamed; this frame's are diffed against them to emit a
     /// `MSG_MOVE_*` per axis transition.
     pub(super) move_flags: u32,
+    /// The held command bits of `[InputControl+4]` the last input pass found
+    /// ([`super::input::command_word`]): a change is a `SetCommands` that changed a bit, which
+    /// runs the tick inside the press ([`super::press`]).
+    pub(super) input_word: u32,
+    /// The pitch the last stream carried, the swim pitch the frame presented: what a command
+    /// press's message carries, built before the frame's swim step.
+    pub(super) wire_pitch: f32,
+    /// A command press's message ended the mover's precast ([`super::press`]), for the frame time
+    /// to apply with its own.
+    pub(super) press_ended_precast: bool,
     /// Last frame's facing: a change off the turn axis is a mouse turn's facing set (`0x619860`,
     /// drained at `0x615fae`-`0x615fc6`), which offers `MSG_MOVE_SET_FACING` to the throttled send.
     pub(super) last_facing: f32,

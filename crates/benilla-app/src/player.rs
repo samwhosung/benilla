@@ -60,6 +60,8 @@ pub(crate) mod land;
 mod move_trace;
 mod movement_net;
 mod posture;
+// A movement command's press or release, run inside the frame's input records.
+mod press;
 // `pub(crate)`: a remote mover's dead-reckon (`crate::net::motion::remote`) steps through the same
 // walk resolve, as the reference runs every mover through one controller.
 pub(crate) mod mover;
@@ -454,10 +456,15 @@ impl Plugin for PlayerPlugin {
         )
         // The world's right mouse-down, off that latch and ahead of the look session, as
         // `0x483c40` runs its hook before `ExecuteBinding`; off in capture mode, like `control`.
-        // Then the look session, whose release settles the click tests.
+        // Then the look session, whose release settles the click tests, and the tick the frame's
+        // command presses and releases run (`0x515090` → `0x514640`), after the press's hand-off.
         .add_systems(
             Update,
-            (camera::send_world_right_press, controller::sample_look)
+            (
+                camera::send_world_right_press,
+                controller::sample_look,
+                press::press_tick,
+            )
                 .chain()
                 .in_set(WorldMouse)
                 .after(camera::latch_world_mouse)

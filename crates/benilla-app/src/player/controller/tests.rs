@@ -1,6 +1,7 @@
 //! [`super::control`] in the whole client, headless, frame by frame, after the frame's mouse input
-//! ([`super::sample_look`]) as the schedule runs them: the press the cast cancel reads and the
-//! autorun latch it is read against.
+//! ([`super::sample_look`]) and its command presses ([`super::super::press`]) as the schedule runs
+//! them: the press the cast cancel reads, the autorun latch it is read against, and where in the
+//! frame a press's messages go out.
 
 use benilla_ui::script::{BindingInput, FiredInput, HeldInput};
 use bevy::ecs::system::{RunSystemOnce, SystemId};
@@ -34,7 +35,12 @@ struct Client {
     app: App,
     embody: SystemId,
     sample: SystemId,
+    press: SystemId,
     drive: SystemId,
+    /// What the frames sent, in order.
+    sent: crossbeam_channel::Receiver<ClientCommand>,
+    /// The position each move [`Client::traced`] read off it carried, in order.
+    poses: Vec<(crate::net::MoveKind, [f32; 3])>,
 }
 
 impl Client {
@@ -48,7 +54,8 @@ impl Client {
             .run_system_once(super::super::setup::setup_player)
             .expect("the player sets up");
         benilla_world::world_point::init_world_point_resources(world);
-        world.insert_resource(NetCommands(crossbeam_channel::unbounded().0));
+        let (tx, sent) = crossbeam_channel::unbounded();
+        world.insert_resource(NetCommands(tx));
         world.spawn((Window::default(), CursorOptions::default(), PrimaryWindow));
         let me = world.spawn((Transform::default(), SelfPlayer)).id();
         world.insert_resource(SelfGuid(Some(ME)));
@@ -70,6 +77,7 @@ impl Client {
         }
         let embody = world.register_system(super::super::embody::maintain_embodiment);
         let sample = world.register_system(sample_look);
+        let press = world.register_system(super::super::press::press_tick);
         let drive = world.register_system(control);
         world.run_system(embody).expect("the embodiment runs");
         // `wire_in` seizes a streamed body (`0x6006e0`); an unstreamed claim stays a reseat.
@@ -80,7 +88,10 @@ impl Client {
             app,
             embody,
             sample,
+            press,
             drive,
+            sent,
+            poses: Vec::new(),
         }
     }
 
@@ -93,6 +104,7 @@ impl Client {
         world
             .run_system(self.sample)
             .expect("the mouse's input runs");
+        world.run_system(self.press).expect("the press runs");
         world.run_system(self.embody).expect("the embodiment runs");
         world.run_system(self.drive).expect("the controller runs");
         // Taken, as `local_self_cancel` takes it.
@@ -341,10 +353,11 @@ fn a_late_mouselook_start_over_a_left_drag_hands_the_facing_and_pitch_off() {
         p.mover_pitch = 0.5;
         p.face_yaw = 0.0;
     });
-    let (sample, embody, drive) = (client.sample, client.embody, client.drive);
+    let (sample, press, embody, drive) = (client.sample, client.press, client.embody, client.drive);
     let world = client.app.world_mut();
     *world.resource_mut::<BindingsState>() = BindingsState::after_calls(vec![], vec![]);
     world.run_system(sample).expect("the mouse's input runs");
+    world.run_system(press).expect("the press runs");
     world
         .query_filtered::<&mut FlyCam, With<Camera>>()
         .single_mut(world)
@@ -412,4 +425,246 @@ fn a_login_seats_us_only_on_a_game_object_flagged_as_a_transport() {
     assert_eq!(seat(0x21, 0x8 | 0x20), Some((BOAT, [4.0, 5.0, 6.0], 0.5)));
     assert_eq!(seat(0x21, 0x20), None, "no transport bit");
     assert_eq!(seat(0x09, 0x8), None, "no game object");
+}
+
+/// Where in the frame a command went out: in the input records, ahead of the packets, or in the
+/// frame time after them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum When {
+    Input,
+    FrameTime,
+}
+
+/// One sent command, as these tests read it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Sent {
+    Move(crate::net::MoveKind, u32),
+    Ack(benilla_protocol::MoveMode),
+}
+
+/// A frame's length, which the 500 ms heartbeat counts in.
+const FRAME_MS: u64 = 16;
+
+impl Client {
+    /// [`Client::new`] standing at rest on a flat floor, with nothing sent yet: the terrain gate
+    /// off, as in an app with no streamer, so the mover resolves against the floor.
+    fn standing(body: Body) -> Self {
+        use avian3d::prelude::{Collider, RigidBody};
+        let mut client = Self::new(body, |p| p.pos = Vec3::new(0.0, 0.5, 0.0));
+        let world = client.app.world_mut();
+        let corner = |x: f32, z: f32| Vec3::new(x, 0.0, z);
+        world.spawn((
+            RigidBody::Static,
+            Collider::trimesh(
+                vec![
+                    corner(-50.0, -50.0),
+                    corner(50.0, -50.0),
+                    corner(50.0, 50.0),
+                    corner(-50.0, 50.0),
+                ],
+                vec![[0u32, 2, 1], [0, 3, 2]],
+            ),
+            Transform::default(),
+        ));
+        world.remove_resource::<benilla_world::terrain_stream::TerrainResidency>();
+        world.run_schedule(avian3d::schedule::PhysicsSchedule);
+        for _ in 0..60 {
+            client.traced(vec![], vec![], |_| {});
+        }
+        let player = client.player();
+        assert!(
+            player.airborne_since.is_none() && player.move_flags == 0,
+            "the body rests on the floor"
+        );
+        client.poses.clear();
+        client
+    }
+
+    /// One frame of [`FRAME_MS`]: its binding calls after `earlier`'s, then `packets` writing what
+    /// the frame's net drain hands the frame time, then the frame time. What it sent, and where.
+    fn traced(
+        &mut self,
+        earlier: Vec<BindingInput>,
+        now: Vec<BindingInput>,
+        packets: impl FnOnce(&mut World),
+    ) -> Vec<(When, Sent)> {
+        let mut out = Vec::new();
+        let world = self.app.world_mut();
+        world
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(FRAME_MS));
+        *world.resource_mut::<BindingsState>() = BindingsState::after_calls(earlier, now);
+        world
+            .run_system(self.sample)
+            .expect("the mouse's input runs");
+        world.run_system(self.press).expect("the press runs");
+        self.drain(When::Input, &mut out);
+        let world = self.app.world_mut();
+        packets(world);
+        world.run_system(self.embody).expect("the embodiment runs");
+        world.run_system(self.drive).expect("the controller runs");
+        self.drain(When::FrameTime, &mut out);
+        out
+    }
+
+    fn drain(&mut self, when: When, out: &mut Vec<(When, Sent)>) {
+        for c in self.sent.try_iter() {
+            match c {
+                ClientCommand::Move {
+                    kind, flags, pos, ..
+                } => {
+                    self.poses.push((kind, pos));
+                    out.push((when, Sent::Move(kind, flags)));
+                }
+                ClientCommand::MoveModeAck { mode, .. } => out.push((when, Sent::Ack(mode))),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn forward_held() -> Vec<BindingInput> {
+    vec![Start(HeldInput::MoveForward)]
+}
+
+fn forward_released() -> Vec<BindingInput> {
+    vec![BindingInput::Stop(HeldInput::MoveForward)]
+}
+
+/// The root a packet of the frame applies.
+fn root(world: &mut World) {
+    world.write_message(crate::net::MoveModeMessage {
+        guid: ME,
+        counter: 1,
+        mode: benilla_protocol::MoveMode::Root,
+        apply: true,
+    });
+}
+
+/// `SetCommands` (`0x515090`) runs the tick at its tail (`0x5151a0` → `0x514640`) inside the
+/// press, so its root test (`0x514560`) reads the mover before the frame's packets: the start goes
+/// out with the position the press found, and the root that lands after it stops the move.
+#[test]
+fn a_forward_press_in_a_frame_that_roots_us_starts_before_the_root_and_then_stops() {
+    use crate::creature_anim::move_flags::{FORWARD, ROOT};
+    use crate::net::MoveKind::{StartForward, Stop};
+    let mut client = Client::standing(Body::Own);
+    let rest = benilla_assets::coords::bevy_to_wow(client.player().pos);
+    assert_eq!(
+        client.traced(vec![], forward(), root),
+        vec![
+            (When::Input, Sent::Move(StartForward, FORWARD)),
+            (When::FrameTime, Sent::Move(Stop, 0)),
+            (When::FrameTime, Sent::Ack(benilla_protocol::MoveMode::Root)),
+        ]
+    );
+    assert_eq!(
+        client.poses.first(),
+        Some(&(StartForward, rest)),
+        "the start carries the pose the press found, before the frame's movement"
+    );
+    let player = client.player();
+    assert_eq!(player.move_flags & FORWARD, 0, "the root stopped the move");
+    assert_eq!(player.move_flags & ROOT, ROOT, "and the word carries it");
+}
+
+/// A press in a frame with no packets sends what it always has, the start, the heartbeat 500 ms
+/// after it (`0x615b80`) and the stop, on the same frames.
+#[test]
+fn a_press_with_no_packets_sends_the_same_messages_on_the_same_frames() {
+    use crate::creature_anim::move_flags::FORWARD;
+    use crate::net::MoveKind::{Heartbeat, StartForward, Stop};
+    let mut client = Client::standing(Body::Own);
+    let mut log = Vec::new();
+    log.extend(
+        client
+            .traced(vec![], forward(), |_| {})
+            .into_iter()
+            .map(|(_, s)| (0, s)),
+    );
+    let started = client.app.world().resource::<Time>().elapsed_secs();
+    assert_eq!(
+        client.player().last_heartbeat,
+        started,
+        "the start re-arms the deadline"
+    );
+    for n in 1..40 {
+        log.extend(
+            client
+                .traced(forward_held(), vec![], |_| {})
+                .into_iter()
+                .map(|(_, s)| (n, s)),
+        );
+    }
+    log.extend(
+        client
+            .traced(forward_held(), forward_released(), |_| {})
+            .into_iter()
+            .map(|(_, s)| (40, s)),
+    );
+    // The first frame at least 500 ms after the start: 32 frames of 16 ms.
+    assert_eq!(
+        log,
+        vec![
+            (0, Sent::Move(StartForward, FORWARD)),
+            (32, Sent::Move(Heartbeat, FORWARD)),
+            (40, Sent::Move(Stop, 0)),
+        ]
+    );
+}
+
+/// A release mid-move is a `SetCommands` too: its tick stops the move inside the release, ahead of
+/// the frame's packets and its frame time.
+#[test]
+fn a_release_mid_move_stops_inside_the_release() {
+    use crate::net::MoveKind::Stop;
+    let mut client = Client::standing(Body::Own);
+    client.traced(vec![], forward(), |_| {});
+    for _ in 0..5 {
+        client.traced(forward_held(), vec![], |_| {});
+    }
+    assert_eq!(
+        client.traced(forward_held(), forward_released(), |_| {}),
+        vec![(When::Input, Sent::Move(Stop, 0))]
+    );
+}
+
+/// `ToggleAutoRun` presses and releases 0x1000 through `SetCommands` (`0x513e14`), and the two
+/// mouse commands press 0x1 and 0x2 through it (`0x51414c`, `0x5141bc`), which the forward axis
+/// nets as forward (`0x514da0`): each starts and stops inside its call.
+#[test]
+fn autorun_and_the_both_button_run_start_and_stop_inside_their_calls() {
+    use crate::creature_anim::move_flags::FORWARD;
+    use crate::net::MoveKind::{StartForward, Stop};
+    let mut client = Client::standing(Body::Own);
+    assert_eq!(
+        client.traced(vec![], toggle(), |_| {}),
+        vec![(When::Input, Sent::Move(StartForward, FORWARD))],
+        "autorun on"
+    );
+    assert_eq!(
+        client.traced(vec![], toggle(), |_| {}),
+        vec![(When::Input, Sent::Move(Stop, 0))],
+        "autorun off"
+    );
+    let both = || {
+        vec![
+            Start(HeldInput::TurnOrAction),
+            Start(HeldInput::CameraOrSelectOrMove),
+        ]
+    };
+    assert_eq!(
+        client.traced(vec![], both(), |_| {}),
+        vec![(When::Input, Sent::Move(StartForward, FORWARD))],
+        "both mouse commands"
+    );
+    assert_eq!(
+        client.traced(
+            both(),
+            vec![BindingInput::Stop(HeldInput::CameraOrSelectOrMove)],
+            |_| {}
+        ),
+        vec![(When::Input, Sent::Move(Stop, 0))],
+        "one let go"
+    );
 }

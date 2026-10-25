@@ -374,10 +374,10 @@ pub(crate) struct AutoRepeatActive(pub Option<u32>);
 pub(crate) const SPELL_INTERRUPT_MOVEMENT: u32 = 0x1; // SpellRec+0x54 InterruptFlags (SPELL_INTERRUPT_FLAG_MOVEMENT)
 const CHANNEL_INTERRUPT_MOVING: u32 = 0x8; // SpellRec+0x5c ChannelInterruptFlags (AURA_INTERRUPT_MOVING_CANCELS)
 
-/// This frame's cancelling press, set by `player::control` and consumed by
-/// [`local_self_cancel`]: a press that newly set forward, back, strafe or autorun (the mask
-/// `0x10f0`, `0x5150ce`), the press that completed both mouse bits (`0x5150e2`), or the Jump
-/// command (`0x513c43`).
+/// This frame's cancelling press, set by the command press among the input records
+/// (`player::press`) and consumed by [`local_self_cancel`]: a press that newly set forward, back,
+/// strafe or autorun (the mask `0x10f0`, `0x5150ce`), the press that completed both mouse bits
+/// (`0x5150e2`), or the Jump command (`0x513c43`).
 #[derive(Resource, Default)]
 pub(crate) struct LocalMoveStart {
     pub(crate) pressed: bool,

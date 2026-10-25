@@ -281,6 +281,7 @@ pub(super) fn stream_self_movement(
     // leaves no catch-up `SET_FACING` behind.
     player.last_facing = facing;
     player.move_flags = wire_flags;
+    player.wire_pitch = swim_pitch;
     out.precast_ended
 }
 
@@ -331,6 +332,47 @@ fn command_sends(prev: u32, now: u32, air_nudged: bool) -> [Option<MoveKind>; 3]
         None
     };
     [fb, strafe, turn]
+}
+
+/// The bits of the word a command press or release rewrites: the directions and the turns.
+const COMMAND_BITS: u32 = move_flags::ANY_MOVE | move_flags::TURN_LEFT | move_flags::TURN_RIGHT;
+
+/// The messages of a command press or release, the tick `SetCommands` runs at its tail
+/// (`0x5151a0` → `0x514640`): the word's direction and turn bits rewritten to `bits`, and a
+/// `MSG_MOVE_*` for each transition ([`command_sends`]), carrying the mover as the press found it,
+/// before the frame's packets and its movement. Every send re-arms the heartbeat's deadline
+/// (`0x615b80`), as in the frame time's stream, which then finds the word already changed and
+/// sends nothing more for it. Returns whether a message sent ended the mover's precast.
+pub(super) fn stream_commands(
+    sender: &Sender<ClientCommand>,
+    player: &mut Player,
+    bits: u32,
+    now: f32,
+) -> bool {
+    let prev = player.move_flags;
+    let wire_flags = ((prev & !COMMAND_BITS) | bits) & OUTBOUND_FLAG_MASK;
+    let facing = player.face_yaw.rem_euclid(std::f32::consts::TAU);
+    let wire = Wire {
+        flags: wire_flags,
+        pos: bevy_to_wow(player.pos),
+        facing,
+        pitch: player.wire_pitch,
+        fall_time: super::flags::fall_ms(player, now),
+        jump: jump_tail(player, wire_flags, facing),
+        transport: wire_transport(player),
+    };
+    let mut out = Sends {
+        sent: false,
+        precast_ended: false,
+    };
+    for kind in command_sends(prev, wire_flags, false).into_iter().flatten() {
+        send_move(sender, player, &wire, kind, &mut out);
+    }
+    if out.sent {
+        player.last_heartbeat = now;
+    }
+    player.move_flags = wire_flags;
+    out.precast_ended
 }
 
 /// One move message's payload, the mover as the send reads it.

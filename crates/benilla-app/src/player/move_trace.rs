@@ -10,6 +10,8 @@
 //! - `knb`: a knockback ([`knockback`]), flown or refused.
 //! - `snd`: an outbound `MSG_MOVE_*` ([`sent`]), diffable against a 1.12.1 capture's client
 //!   stream; `net::motion`'s `rly` is the receive side.
+//! - `prs`: a command press or release that ran the tick ahead of the frame's packets ([`press`]);
+//!   its `snd` lines follow it, and the net drain's `drn` line marks where the packets land.
 //! - `sett`: how the settle hold ended ([`settle`]) and the time skipped ([`skipped_time`]).
 //! - `gate`: the world query gate starting or ending a hold ([`gate`]): the world's edge, or a
 //!   tile not yet resident.
@@ -56,6 +58,18 @@ pub(super) fn sent(kind: crate::net::MoveKind, flags: u32, facing: f32, pos: [f3
             "{kind:?} flags={flags:#x} o={facing:.4} pos=[{:.2},{:.2},{:.2}]",
             pos[0], pos[1], pos[2]
         ),
+    );
+}
+
+/// One `prs` line per command press or release that ran the tick in the input records: the held
+/// command word, and the move word before and after.
+pub(super) fn press(word: u32, before: u32, after: u32) {
+    if !trace::enabled() {
+        return;
+    }
+    trace::line(
+        "prs",
+        &format!("commands={word:#x} flags={before:#x}->{after:#x}"),
     );
 }
 

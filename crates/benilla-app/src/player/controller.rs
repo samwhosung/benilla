@@ -285,8 +285,6 @@ pub(super) fn control(
         MessageReader<crate::net::MoveModeMessage>,
         // The hard-landing report (`0x602d00`: the wound vocal and the dust).
         MessageWriter<crate::creature_anim::HardLanding>,
-        // The move edges the reference hands `AbortCast` (`0x6e4940`), for the cast bar.
-        ResMut<crate::spell::LocalMoveStart>,
         // The mounted Space flourish plays locally at send; the net drain drops its echo.
         MessageWriter<crate::creature_anim::MountFlourish>,
         // A `MSG_MOVE_*` for our own mover: a pose the server wrote, no ack owed.
@@ -482,9 +480,9 @@ pub(super) fn control(
         &mut net.2,
         &mut net.4,
         &mut net.5,
-        &mut net.12,
-        &mut net.9,
         &mut net.11,
+        &mut net.8,
+        &mut net.10,
         self_guid,
         transports,
         body.single()
@@ -493,7 +491,9 @@ pub(super) fn control(
         self_seat(&world_q.4),
     );
     let speed_acks = server_moves.speed_acks;
-    if let (true, Ok((e, ..))) = (server_moves.precast_ended, body.single()) {
+    // A command press's message that ended the precast ([`super::press`]), with the acks'.
+    let press_precast = std::mem::take(&mut player.press_ended_precast);
+    if let (true, Ok((e, ..))) = (server_moves.precast_ended || press_precast, body.single()) {
         crate::creature_anim::end_precast(&mut commands, e, crate::creature_anim::PrecastTail::Run);
     }
 
@@ -503,25 +503,9 @@ pub(super) fn control(
     ride::carry(&mut player, &mut cam, transports, &world_q.4 .1);
 
     if player.active && !player.detached {
-        // The cast bar's self-cancel, at the command press ([`input::cancels_cast`]) and ahead of
-        // the mover: between the press `0x5150a7` and the cancel `0x51512a` stands only the taint
-        // test `0x494a50`, so it runs whoever drives the body. It reads the commands, never the
-        // streamed word, which a root empties of direction bits. The cast cancel tests no mover
-        // (`0x5150f2`); the channel's compares the player with the active mover
-        // (`0x51517b`-`0x515191`), which possession sets to the creature and lost control zeroes
-        // (`0x5fa600`), so steering a possessed creature, or pressing while feared, ends a cast but
-        // not a channel.
+        // The autorun toggle and the cast bar's self-cancel ran at the press, among the input
+        // records ([`super::press`]).
         let active_mover = world_q.3.iter().next();
-        let autorun_on = input::toggle_autorun(binds, &mut player);
-        if input::cancels_cast(
-            binds,
-            autorun_on,
-            input::both_engaged(binds, &rig, both_buttons),
-            active_mover.is_some(),
-        ) {
-            net.7.pressed = true;
-            net.7.mover_is_player = active_mover == Some(true);
-        }
         // Not driving, while the camera stays on the body and input, physics and the stream yield:
         // - `server_riding`: a server spline (Charge, knockback, taxi, a flee path) owns the body;
         //   `drive_self_ride` has mirrored it into `Player`, reporting FORWARD on purpose.
@@ -612,10 +596,10 @@ pub(super) fn control(
             ..
         } = axes;
         if fwd_axis != 0 || side_axis != 0 {
-            net.13.moved();
+            net.12.moved();
         }
         if mouselook {
-            net.13.mouselooked();
+            net.12.mouselooked();
         }
         // The driven unit's own speeds: the reference's input path never reads ours for another
         // mover, so a possessed creature moves and turns at its own.
@@ -693,9 +677,9 @@ pub(super) fn control(
             &net.0,
             &mut commands,
             &mut net.3,
+            &mut net.13,
+            &mut net.9,
             &mut net.14,
-            &mut net.10,
-            &mut net.15,
             reads,
             speed_capsule.10.as_deref().map(|t| &t.0),
             moving,
@@ -807,7 +791,7 @@ pub(super) fn control(
                     want_jump = false;
                     if !turning {
                         let _ = net.0 .0.send(ClientCommand::MountSpecial);
-                        net.8.write(crate::creature_anim::MountFlourish { unit: e });
+                        net.7.write(crate::creature_anim::MountFlourish { unit: e });
                     }
                 }
             }
@@ -1006,14 +990,8 @@ pub(super) fn control(
         // The loot window's walk-away, the movement-start guard `0x60e990`: forward, back, strafe,
         // keyboard turn, pitch and jump close it, mouse-look facing does not, and only for our
         // own character.
-        if steering_ourselves
-            && (move_flags_now
-                & (move_flags::ANY_MOVE | move_flags::TURN_LEFT | move_flags::TURN_RIGHT)
-                & !player.move_flags
-                != 0
-                || jumped)
-        {
-            net.14 .0 = true;
+        if steering_ourselves && (loot_walk_away(player.move_flags, move_flags_now) || jumped) {
+            net.13 .0 = true;
         }
 
         // Stream the movement: a `MSG_MOVE_*` per axis transition, the jump and fall edges and a
@@ -1060,6 +1038,12 @@ pub(super) fn control(
         movement_net::park_mover(&net.0 .0, &mut player);
         camera::fly_free(dt, &keys, typing, &mut rig, &mut cam, &mut cam_t);
     }
+}
+
+/// Whether a new direction or keyboard-turn bit, `prev` to `now`, closes the loot window: the
+/// movement-start guard `0x60e990` the local movement commands call first.
+pub(super) fn loot_walk_away(prev: u32, now: u32) -> bool {
+    now & (move_flags::ANY_MOVE | move_flags::TURN_LEFT | move_flags::TURN_RIGHT) & !prev != 0
 }
 
 /// Our create's transport block, the [`crate::transport::TransportRider`] tail on the body we
