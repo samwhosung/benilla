@@ -57,6 +57,7 @@ pub(crate) use greeting::NpcGreetingRequest;
 pub(crate) use kit::SoundKits;
 pub(crate) use message::MessageSounds;
 pub(crate) use mixer::Mixer;
+pub(crate) use movie::{MovieAudioReports, MovieAudioRequest};
 #[cfg(test)]
 pub(crate) use spell::HoldLoops;
 pub(crate) use ui::{AutoEquipSound, LootPickupSound};

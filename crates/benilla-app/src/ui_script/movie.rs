@@ -4,7 +4,8 @@
 //! tall, where `A` is the scaled screen aspect (`0x41ad70`, 1.0 at 4:3), blending, lighting and
 //! fog off (`0x78d3f7`-`0x78d414`: render states 14, 15 and 7 set to 0). One texture holds the
 //! bitmap the reference splits into two or six for its power-of-two tiles (`0x81d280`), which
-//! cover it edge to edge.
+//! cover it edge to edge. And its audio's feed: the streams the movies ask for go to the sound
+//! side ([`crate::sound::MovieAudioRequest`]), and the play times it reports come back.
 
 use std::collections::HashMap;
 
@@ -14,7 +15,44 @@ use bevy::window::PrimaryWindow;
 use benilla_ui::script::{movie_bitmap, MovieBitmap};
 use benilla_ui::widget::FrameHandle;
 
+use crate::sound::{MovieAudioReports, MovieAudioRequest};
 use crate::ui_pass::{UiQuad, UvRect};
+
+/// The audio feed, ahead of the tick whose clock reads it: last frame's stream reports into the
+/// movies, then each new movie's stream asked for and each stopped movie's stream let go.
+pub(super) fn feed_movie_audio(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut reports: ResMut<MovieAudioReports>,
+    mut requests: MessageWriter<MovieAudioRequest>,
+    mut held: Local<Vec<u64>>,
+) {
+    hosted_vm.run(|script| {
+        let reports = std::mem::take(&mut reports.0);
+        let live = match script {
+            Some(script) => {
+                for (id, report) in reports {
+                    script.set_movie_audio(id, report);
+                }
+                for start in script.take_movie_audio_starts() {
+                    held.push(start.id);
+                    requests.write(MovieAudioRequest::Start {
+                        id: start.id,
+                        mp3: start.mp3,
+                    });
+                }
+                script.movie_audio_ids()
+            }
+            None => Vec::new(),
+        };
+        held.retain(|id| {
+            let keep = live.contains(id);
+            if !keep {
+                requests.write(MovieAudioRequest::Stop { id: *id });
+            }
+            keep
+        });
+    });
+}
 
 /// The pictures the paint draws, by movie frame, and the scaled aspect they draw at.
 #[derive(Resource, Default)]

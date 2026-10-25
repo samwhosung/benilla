@@ -1,7 +1,8 @@
 //! The movie frame's audio: each movie's MP3 stream, opened from the AVI's audio chunks as the
 //! reference's `0x78ca30` opens a memory stream (`FSOUND_Stream_Open` with `0x8000`, then
-//! `FSOUND_Stream_Play` on channel 0, its volume never set), and its play time and end reported
-//! back to the movie's clock ([`benilla_ui::script::UiScript::set_movie_audio`]).
+//! `FSOUND_Stream_Play` on channel 0, its volume never set). The movie feed
+//! (`ui_script::movie`) asks for each stream and its stop, and reads back each stream's play
+//! time or end, which the movie's clock steps on.
 
 use std::collections::HashMap;
 
@@ -11,51 +12,58 @@ use benilla_ui::script::MovieAudio;
 
 use super::{mixer, SoundConfig, SoundOutput};
 
+/// The movie feed's asks, by movie number.
+#[derive(Message, Clone, Debug)]
+pub(crate) enum MovieAudioRequest {
+    /// Open and play this movie's audio.
+    Start { id: u64, mp3: Vec<u8> },
+    /// The movie stopped: its stream stops with it (`0x78caa0`).
+    Stop { id: u64 },
+}
+
+/// What the streams did since the feed last read: a failed open, then each stream's play time
+/// or its end, by movie number.
+#[derive(Resource, Default)]
+pub(crate) struct MovieAudioReports(pub(crate) Vec<(u64, MovieAudio)>);
+
 /// The streams the movies hold, by movie number.
 #[derive(Default)]
 struct MovieStreams(HashMap<u64, mixer::StreamingSoundHandle<kira::sound::FromFileError>>);
 
-/// Open each new movie's stream, report each stream's play time or end, and stop the stream of a
-/// movie that stopped (`0x78caa0`). With sound off, or no device, no stream opens and the movie
-/// runs on the wall clock, as FMOD unopened fails the stream open.
+/// Carry out the feed's asks and report every stream. With sound off, or no device, no stream
+/// opens and the movie runs on the wall clock, as an open fails with FMOD not started.
 fn drive_movie_audio(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut requests: MessageReader<MovieAudioRequest>,
     mut streams: NonSendMut<MovieStreams>,
     mut out: NonSendMut<SoundOutput>,
     config: Res<SoundConfig>,
+    mut reports: ResMut<MovieAudioReports>,
 ) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            for (_, mut h) in streams.0.drain() {
-                h.stop(mixer::fade(0));
-            }
-            return;
-        };
-        for start in script.take_movie_audio_starts() {
-            match open_stream(&mut out, &config, start.mp3) {
-                Some(h) => {
-                    streams.0.insert(start.id, h);
+    for request in requests.read() {
+        match request {
+            MovieAudioRequest::Start { id, mp3 } => {
+                match open_stream(&mut out, &config, mp3.clone()) {
+                    Some(h) => {
+                        streams.0.insert(*id, h);
+                    }
+                    None => reports.0.push((*id, MovieAudio::Failed)),
                 }
-                None => script.set_movie_audio(start.id, MovieAudio::Failed),
+            }
+            MovieAudioRequest::Stop { id } => {
+                if let Some(mut h) = streams.0.remove(id) {
+                    h.stop(mixer::fade(0));
+                }
             }
         }
-        let live = script.movie_audio_ids();
-        streams.0.retain(|id, h| {
-            if live.contains(id) {
-                return true;
-            }
-            h.stop(mixer::fade(0));
-            false
-        });
-        for (&id, h) in &streams.0 {
-            let report = if h.state() == kira::sound::PlaybackState::Stopped {
-                MovieAudio::Ended
-            } else {
-                MovieAudio::At((h.position() * 1000.0) as u32)
-            };
-            script.set_movie_audio(id, report);
-        }
-    });
+    }
+    for (&id, h) in &streams.0 {
+        let report = if h.state() == kira::sound::PlaybackState::Stopped {
+            MovieAudio::Ended
+        } else {
+            MovieAudio::At((h.position() * 1000.0) as u32)
+        };
+        reports.0.push((id, report));
+    }
     out.movie_streams = streams
         .0
         .values()
@@ -83,10 +91,12 @@ fn open_stream(
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.insert_non_send_resource(MovieStreams::default())
+    app.add_message::<MovieAudioRequest>()
+        .init_resource::<MovieAudioReports>()
+        .insert_non_send_resource(MovieStreams::default())
         .add_systems(
             Update,
-            // A feed of the tick: the clock steps on the play time read here.
-            drive_movie_audio.in_set(crate::ui_script::UiFeed),
+            // After the feed's asks; its reports reach the next frame's feed.
+            drive_movie_audio.after(crate::ui_script::UiFeed),
         );
 }

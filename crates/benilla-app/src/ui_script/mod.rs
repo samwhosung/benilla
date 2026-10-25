@@ -472,6 +472,8 @@ impl Plugin for UiScriptPlugin {
             )
             // After the plate driver seats this frame's nameplates, and before the append lane
             // fills the widget slot this pass parks.
+            // The movie audio's play times, a feed of the tick whose clock reads them.
+            .add_systems(Update, movie::feed_movie_audio.in_set(UiFeed))
             // The movie pictures the tick showed, ahead of the paint that draws them.
             .init_resource::<movie::MovieScreen>()
             .add_systems(

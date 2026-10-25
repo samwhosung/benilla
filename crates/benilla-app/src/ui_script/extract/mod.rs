@@ -678,8 +678,10 @@ pub(super) fn paint_script(
     mut prev: Local<crate::ui_script::VmMemo<GateInputs>>,
     mut ui_cost: ResMut<super::UiFrameCost>,
     pass: Res<super::UiPassState>,
-    movies: Res<super::movie::MovieScreen>,
+    movies: Option<Res<super::movie::MovieScreen>>,
 ) {
+    let no_movies = super::movie::MovieScreen::default();
+    let movies = movies.as_deref().unwrap_or(&no_movies);
     hosted_vm.run(|script| {
         let (capture, ui_cost_wanted) = run;
         // Stand down with the tick half, which already cleared the booth panes.
@@ -904,7 +906,7 @@ pub(super) fn paint_script(
                     &mut scratch,
                     &mut scratch_links,
                     &mut scratch_slot,
-                    &movies,
+                    movies,
                 );
                 scratch_ranges.push(at..scratch.len());
             }
@@ -990,7 +992,7 @@ pub(super) fn paint_script(
                     text_ui.as_ref(),
                     capture.is_some(),
                     script,
-                    &movies,
+                    movies,
                 );
             }
             drop(extract_span);
@@ -1054,7 +1056,7 @@ pub(super) fn paint_script(
                 &mut out,
                 &mut link_spans,
                 &mut minimap_slot,
-                &movies,
+                movies,
             );
             spans.push(out.len() as u32);
         }
