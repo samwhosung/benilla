@@ -637,6 +637,23 @@ impl Dispatch<'_, '_> {
         cursor_mode::go_in_reach(d2, store.0.gameobject_type_id(), opener.range)
     }
 
+    /// The range the walk to a GameObject stops short of: slot 6's handed-back range
+    /// ([`cursor_mode::go_use_range`]), which a chair keeps at 100.0 when its base test failed.
+    fn go_stop_range(&self, entity: Entity, go_type: i32) -> f32 {
+        let base_passed = self.dist_sq(entity).is_none_or(|d2| {
+            let opener = self.stores.get(entity).ok().map(|(store, anim)| {
+                self.opener_reach.go_opener(
+                    &self.go_inputs,
+                    (store, crate::go_anim::go_state(anim, store)),
+                    &self.player_actions.openers,
+                    self.self_store(),
+                )
+            });
+            cursor_mode::go_base_in_reach(d2, go_type, opener.and_then(|o| o.range))
+        });
+        cursor_mode::go_use_range(go_type, base_passed)
+    }
+
     fn melee_reach(&self, target: Entity) -> f32 {
         match (self.stores.get(target).ok(), self.self_store()) {
             (Some((it, _)), Some(me)) => cursor_mode::melee_reach(it, me),
@@ -740,7 +757,7 @@ impl Dispatch<'_, '_> {
                 entity,
                 guid,
                 crate::player::Subject::GameObject,
-                crate::player::RANGE_STOP_FRACTION * cursor_mode::go_use_range(go_type),
+                crate::player::RANGE_STOP_FRACTION * self.go_stop_range(entity, go_type),
             );
         if !walked {
             self.feedback
@@ -3680,18 +3697,20 @@ mod tests {
         range_verdict_in_state(go_type, x, opener, 0)
     }
 
-    /// [`range_verdict`] with the object's wire `GAMEOBJECT_STATE`; the opener's lock slot is
-    /// Action 4 at state 2 (the destroyed state's only action), else any state.
-    fn range_verdict_in_state(
+    /// A world with a GameObject of `go_type` `x` yards off the player; the wire `GAMEOBJECT_STATE`
+    /// is `state` and the opener's lock slot is Action 4 at state 2 (the destroyed state's only
+    /// action), else any state. `walk` is Click to Move.
+    fn go_world(
         go_type: u32,
         x: f32,
         opener: Option<(u32, f32)>,
         state: u32,
-    ) -> (bool, bool, Vec<&'static str>) {
+        walk: bool,
+    ) -> (World, Entity, crossbeam_channel::Receiver<ClientCommand>) {
         use benilla_formats::{LockCatalog, LockSlot, OpenLock, SpellDisplay, SpellRange};
         use benilla_protocol::field::FIELD_OBJECT_ENTRY;
         const LOCK: u32 = 55;
-        let (mut world, _vendor, rx) = walking_world(Vec3::ZERO, false);
+        let (mut world, _vendor, rx) = walking_world(Vec3::ZERO, walk);
         let mut data = [0; 24];
         if let Some((spell, max)) = opener {
             // A lock whose one skill slot (LockType 1, any state) the known spell opens.
@@ -3748,6 +3767,19 @@ mod tests {
             (FIELD_OBJECT_ENTRY, 77),
             (14, state),
         ]));
+        (world, object, rx)
+    }
+
+    /// [`range_verdict`] with the object's wire `GAMEOBJECT_STATE`; the opener's lock slot is
+    /// Action 4 at state 2 (the destroyed state's only action), else any state.
+    /// [`range_verdict`] in a state.
+    fn range_verdict_in_state(
+        go_type: u32,
+        x: f32,
+        opener: Option<(u32, f32)>,
+        state: u32,
+    ) -> (bool, bool, Vec<&'static str>) {
+        let (mut world, object, rx) = go_world(go_type, x, opener, state, false);
         let hovered = HoveredObject {
             target: Some(object),
             guid: Some(CHEST),
@@ -3847,6 +3879,65 @@ mod tests {
             range_verdict_in_state(0, 2.0, Some((6477, 8.0)), 2),
             (false, true, vec![])
         );
+    }
+
+    /// Click to Move on: a door 12 yd off with a known 8 yd opener walks and stops 0.9 of the
+    /// door's own 5.0, not the spell's range (`0x5f86b0` hands the walk `[handler+0xc]`); on
+    /// arrival 7.9 yd off the spell's range reaches (`Dispatch::go_in_reach`) and the opener is
+    /// cast, where the type's 5.0 would walk again.
+    #[test]
+    fn a_far_door_walks_to_four_and_a_half_and_an_openers_range_ends_the_walk() {
+        let (mut world, door, _rx) = go_world(0, 12.0, Some((6477, 8.0)), 0, true);
+        interact_with(&mut world, door);
+        let approach = world.resource::<crate::player::Approach>();
+        assert!(approach.active(), "out of reach, so the walk starts");
+        assert_eq!(approach.stop_distance(), Some(4.5), "0.9 of 5.0");
+        assert!(world
+            .resource::<crate::ui_action::ClickCasts>()
+            .0
+            .is_empty());
+        // Arrival at 7.9 yd, inside the spell's 8.0: the opener goes out and no new walk starts.
+        world.resource_mut::<crate::player::Approach>().stop();
+        world
+            .entity_mut(door)
+            .insert(Transform::from_xyz(7.9, 0.0, 0.0));
+        world.resource_mut::<crate::player::Approach>().arrived =
+            Some((crate::player::ApproachVerb::Use, CHEST));
+        world.run_system_once(act_on_arrival).unwrap();
+        assert!(!world.resource::<crate::player::Approach>().active());
+        assert_eq!(world.resource::<crate::ui_action::ClickCasts>().0.len(), 1);
+        // Past the spell's range the arrival walks again.
+        world
+            .resource_mut::<crate::ui_action::ClickCasts>()
+            .0
+            .clear();
+        world
+            .entity_mut(door)
+            .insert(Transform::from_xyz(8.1, 0.0, 0.0));
+        world.resource_mut::<crate::player::Approach>().arrived =
+            Some((crate::player::ApproachVerb::Use, CHEST));
+        world.run_system_once(act_on_arrival).unwrap();
+        assert!(world.resource::<crate::player::Approach>().active());
+        assert!(world
+            .resource::<crate::ui_action::ClickCasts>()
+            .0
+            .is_empty());
+    }
+
+    /// `0x5f5689`: a chair keeps the 100.0 it was handed when its base test failed, so beyond
+    /// 100 yd the walk stops 90 short; within it, the 3.0 gives 2.7.
+    #[test]
+    fn a_chair_beyond_the_base_test_walks_to_ninety() {
+        // The stop the walk would take, asked of the dispatcher (the leash refuses a start this far).
+        for (x, stop) in [(150.0, 90.0), (20.0, 2.7)] {
+            let (mut world, chair, _rx) = go_world(7, x, None, 0, true);
+            let got = world
+                .run_system_once(move |dispatch: Dispatch| {
+                    crate::player::RANGE_STOP_FRACTION * dispatch.go_stop_range(chair, 7)
+                })
+                .unwrap();
+            assert!((got - stop).abs() < 1e-3, "{x} yd: {got}");
+        }
     }
 
     const WOLF: u64 = 0xF130_0000_0000_0299;

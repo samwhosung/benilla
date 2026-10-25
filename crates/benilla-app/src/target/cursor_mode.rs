@@ -238,10 +238,11 @@ const fn go_handler_range(type_id: i32) -> f32 {
 }
 
 /// The range slot 6 hands back, which the walk to a too-far object stops short of (`0x5f86b0`):
-/// `[handler+0xc]`, except the chair's, which returns 3.0 (`0x5f569d`, `[0x80b0a0]`) after its
-/// base test. An opener spell's range never reaches it (`0x5f32f4` stores it before the spell's).
-pub(super) fn go_use_range(type_id: i32) -> f32 {
-    if type_id == GO_TYPE_CHAIR {
+/// `[handler+0xc]`, written before the opener spell's range (`0x5f32f4`) so that never reaches it.
+/// The chair's replaces it with 3.0 (`0x5f569d`, `[0x80b0a0]`) only when its base test passed
+/// (`0x5f5689 jne`); past that test it keeps the 100.0.
+pub(super) fn go_use_range(type_id: i32, base_passed: bool) -> f32 {
+    if type_id == GO_TYPE_CHAIR && base_passed {
         3.0
     } else {
         go_handler_range(type_id)
@@ -265,8 +266,13 @@ const CHAIR_SEAT_RANGE_SQ: f32 = 9.0;
 /// `0x5f5760`) and vmangos (`GameObject.cpp:2231-2236`) measure to the nearest seat, so only a
 /// multi-seat bench differs, by up to half its span.
 pub(super) fn go_in_reach(dist_sq: f32, type_id: i32, opener_range: Option<f32>) -> bool {
-    let base = dist_sq.is_nan() || dist_sq <= go_reach_sq(type_id, opener_range);
-    base && (type_id != GO_TYPE_CHAIR || dist_sq < CHAIR_SEAT_RANGE_SQ)
+    go_base_in_reach(dist_sq, type_id, opener_range)
+        && (type_id != GO_TYPE_CHAIR || dist_sq < CHAIR_SEAT_RANGE_SQ)
+}
+
+/// The base test alone (`0x5f3346`), before the chair's seat test.
+pub(super) fn go_base_in_reach(dist_sq: f32, type_id: i32, opener_range: Option<f32>) -> bool {
+    dist_sq.is_nan() || dist_sq <= go_reach_sq(type_id, opener_range)
 }
 
 /// `usable 0x5f3130`'s state arm (`0x5f3392`-`0x5f33ac`), after the lock arm and ahead of the
@@ -1465,18 +1471,23 @@ mod tests {
             0, 1, 3, 5, 6, 8, 10, 11, 13, 14, 15, 16, 18, 19, 20, 22, 23, 25, 28, 29, 30,
         ];
         for t in base {
-            assert_eq!(go_use_range(t), 5.0, "type {t}");
+            assert_eq!(go_use_range(t, true), 5.0, "type {t}");
         }
         for t in [2, 9, 24, 26, 27] {
-            assert_eq!(go_use_range(t), 5.555_555_3, "type {t}");
+            assert_eq!(go_use_range(t, true), 5.555_555_3, "type {t}");
         }
-        assert_eq!(go_use_range(4), 10.0);
-        assert_eq!(go_use_range(17), 100.0);
-        assert_eq!(go_use_range(12), 0.0);
+        assert_eq!(go_use_range(4, true), 10.0);
+        assert_eq!(go_use_range(17, true), 100.0);
+        assert_eq!(go_use_range(12, true), 0.0);
         // The chair hands back 3.0 after its 100.0 base test; the static handler has none.
-        assert_eq!(go_use_range(GO_TYPE_CHAIR), 3.0);
-        assert_eq!(go_use_range(21), 0.0);
-        assert_eq!(go_use_range(31), 0.0);
+        assert_eq!(go_use_range(GO_TYPE_CHAIR, true), 3.0);
+        assert_eq!(
+            go_use_range(GO_TYPE_CHAIR, false),
+            100.0,
+            "past the base test"
+        );
+        assert_eq!(go_use_range(21, true), 0.0);
+        assert_eq!(go_use_range(31, true), 0.0);
     }
 
     /// The Hyjal gate's defect: a door lit from beyond its 5.0 yd (`0x5f3346`).
