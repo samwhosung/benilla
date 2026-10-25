@@ -261,8 +261,14 @@ impl Cooldowns {
         self.log.head()
     }
 
-    /// The drain's rewind of the list to the frame's start, once per drain, then the writes
-    /// `until` admits up to the next signal it admits, handed back with its stamp.
+    /// The drain's rewind of the list to the frame's start, once per drain: whether it rewound
+    /// now.
+    pub(crate) fn rewind(&mut self) -> bool {
+        self.log.rewind(&mut self.records)
+    }
+
+    /// The drain's rewind ([`Self::rewind`]), then the writes `until` admits up to the next signal
+    /// it admits, handed back with its stamp.
     pub(crate) fn replay(
         &mut self,
         until: crate::lanes::Until,

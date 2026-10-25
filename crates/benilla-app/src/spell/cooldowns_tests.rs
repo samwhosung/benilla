@@ -392,3 +392,84 @@ fn an_awaited_record_flushes_its_running_cooldown_once_it_lands() {
     cds.answer_awaited_records(&items, None, now);
     assert_eq!(edges(&cds), (before.0 + 1, before.1 + 1), "once");
 }
+
+/// Each flush site logs its signals at its place, in the reference's order: `SMSG_SPELL_COOLDOWN`
+/// the pair (`0x6e95b0`); `SMSG_ITEM_COOLDOWN` the pair and the bags (`0x6e9656`, `0x6e965b`);
+/// the event and the clear the pair, the usable refresh and the bags (`0x6e3071`, `0x6e3076`,
+/// `0x6e3089`); the cheat the pair and the bags (`0x6e9712`, `0x6e9721`); a held global cooldown
+/// the pair and the refresh (`0x6e2e77`, `0x6e2e85`). The pet's list logs nothing: its watcher
+/// reads its counters.
+#[test]
+fn each_flush_site_logs_its_signals_in_the_references_order() {
+    use super::Signal::{Bags, Pair, Usable};
+    let now = Instant::now();
+    let mods = SpellModifiers::default();
+    let mut cds = Cooldowns::default();
+    let mut site = |f: &dyn Fn(&mut Cooldowns)| {
+        let before = cds.logged_signals().len();
+        f(&mut cds);
+        cds.logged_signals()[before..].to_vec()
+    };
+    let nova = spell(0, 8000, 0, (0, 0), 0);
+    assert_eq!(
+        site(&|c| c.apply_spell_cooldowns(
+            [(122, 0, Some(&nova))],
+            &mods,
+            CategoryPad::NoPlayer,
+            now
+        )),
+        [Pair]
+    );
+    assert_eq!(
+        site(&|c| c.apply_wire_item_cooldown(118, 439, now)),
+        [Pair, Bags]
+    );
+    assert_eq!(site(&|c| c.cooldown_event(122, now)), [Pair, Usable, Bags]);
+    assert_eq!(site(&|c| c.clear_spell(122)), [Pair, Usable, Bags]);
+    assert_eq!(site(&|c| c.wipe()), [Pair, Bags]);
+    let held = spell(0, 0, 0, (133, 1500), 0x0200_0000);
+    assert_eq!(
+        site(&|c| c.start_gcd(1784, &held, now, &mods)),
+        [Pair, Usable]
+    );
+    let mut pet = Cooldowns::unlogged();
+    pet.apply_spell_cooldowns([(122, 0, Some(&nova))], &mods, CategoryPad::Skip, now);
+    pet.wipe();
+    assert!(pet.logged_signals().is_empty());
+    assert_eq!(pet.generation, 2, "its watcher's counter moves");
+}
+
+/// The drain rewinds the list to the frame's start and replays each write at its stamp: a read
+/// between two logged packets sees the first one's record alone, and the drain's end leaves the
+/// list as the frame left it.
+#[test]
+fn the_replay_reads_the_list_as_each_write_left_it() {
+    use super::Signal::Pair;
+    let now = Instant::now();
+    let mods = SpellModifiers::default();
+    let (nova, blink) = (
+        spell(0, 10_000, 0, (0, 0), 0),
+        spell(0, 20_000, 0, (0, 0), 0),
+    );
+    let mut cds = Cooldowns::default();
+    cds.apply_spell_cooldowns([(122, 0, Some(&nova))], &mods, CategoryPad::NoPlayer, now);
+    cds.apply_spell_cooldowns([(1953, 0, Some(&blink))], &mods, CategoryPad::NoPlayer, now);
+    let running = |cds: &Cooldowns| {
+        (
+            cds.info(122, 0, Some(&nova), now).remaining_ms > 0,
+            cds.info(1953, 0, Some(&blink), now).remaining_ms > 0,
+        )
+    };
+    let until = crate::lanes::Until::all();
+    assert!(cds.rewind(), "once a drain");
+    assert!(!cds.rewind());
+    assert_eq!(running(&cds), (false, false), "the frame's start");
+    assert_eq!(cds.replay(until).map(|(_, s)| s), Some(Pair));
+    assert_eq!(running(&cds), (true, false), "the first packet's");
+    assert_eq!(cds.replay(until).map(|(_, s)| s), Some(Pair));
+    assert_eq!(running(&cds), (true, true), "the second's");
+    assert_eq!(cds.replay(until), None);
+    cds.end_replay();
+    assert_eq!(running(&cds), (true, true), "as the frame left it");
+    assert!(cds.logged_signals().is_empty());
+}

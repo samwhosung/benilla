@@ -32,14 +32,18 @@ pub(super) fn add_cooldown_lane(app: &mut App) {
         );
 }
 
-/// The lane's firing: the list rewound to the frame's start, once per drain, then each write the
-/// drain admits replayed and each signal fired at its place with the host lent, the usable
-/// refresh through the action states ([`crate::script_calls::VmWith::engine_usable_refresh`]).
-/// It stops after a signal whose firing stamped anything, so what that pushed fires next.
+/// The lane's firing: the list rewound to the frame's start, once per drain, at the origin and
+/// alone, so every other lane's start is pushed before a signal fires; then each write the drain
+/// admits replayed and each signal fired at its place with the host lent, the usable refresh
+/// through the action states ([`crate::script_calls::VmWith::engine_usable_refresh`]). It stops
+/// after a signal whose firing stamped anything, so what that pushed fires next.
 fn fire_cooldowns(
     In(until): In<Until>,
     mut vm: crate::script_calls::VmWith<ResMut<'static, Cooldowns>>,
 ) {
+    if vm.own().rewind() {
+        return;
+    }
     loop {
         let Some((at, signal)) = vm.own().replay(until) else {
             return;

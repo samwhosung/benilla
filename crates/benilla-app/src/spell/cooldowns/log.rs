@@ -162,15 +162,16 @@ impl CooldownLog {
         }
     }
 
-    /// Rewind `records` to the log's start, once per drain.
-    pub(super) fn rewind(&mut self, records: &mut Vec<Record>) {
+    /// Rewind `records` to the log's start, once per drain: whether it did so now.
+    pub(super) fn rewind(&mut self, records: &mut Vec<Record>) -> bool {
         if self.replaying {
-            return;
+            return false;
         }
         self.replaying = true;
         if let Some(start) = self.start.take() {
             *records = start;
         }
+        true
     }
 
     /// Replay onto `records` the writes `until` admits, up to the next signal it admits, which it

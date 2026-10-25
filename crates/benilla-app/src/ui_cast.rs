@@ -479,6 +479,7 @@ impl CallReports<'_, '_> {
 /// their lane after every feed ([`fire_cast_reports`]), each listener reading the view its own
 /// packet left, which the views lane pushes at its place ([`views`]); a refused line that waits
 /// on its item's record is retried there, behind the frame's packets.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(crate) fn feed_cast_reports(
     // The reports and the cast state, which the host's casts write, and the views' log.
     mut vm: crate::script_calls::VmWith<(

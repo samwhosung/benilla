@@ -119,7 +119,7 @@ fn client() -> Client {
             Seen = {}
             local f = CreateFrame("Frame")
             for _, e in ipairs({"SPELLCAST_START", "SPELLCAST_STOP", "SPELLCAST_FAILED",
-                    "CURRENT_SPELL_CAST_CHANGED", "UNIT_MANA"}) do
+                    "CURRENT_SPELL_CAST_CHANGED", "UNIT_MANA", "SPELL_UPDATE_COOLDOWN"}) do
                 f:RegisterEvent(e)
             end
             local function s(v) return tostring(v) end
@@ -280,4 +280,29 @@ fn a_listeners_call_that_moves_no_cast_state_leaves_its_packets_view() {
         }],
     ]);
     assert_eq!(c.seen(&["CALLED"]), ["CALLED:1"]);
+}
+
+/// Another lane's listener ahead of the stop reads the slot as the frame began: a cooldown
+/// packet's `SPELL_UPDATE_COOLDOWN` (`0x6e95b0`), first in the frame, reads Heal in flight, and the
+/// stop's listeners after it read it popped.
+#[test]
+fn a_cooldown_listener_ahead_of_the_stop_reads_the_cast_in_flight() {
+    let mut c = client();
+    cast_heal(&mut c);
+    c.frame(vec![
+        vec![SessionEvent::SpellCooldowns {
+            caster: ME,
+            cooldowns: vec![(HEAL, 5_000)],
+        }],
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: true,
+            reason: None,
+            arg: None,
+        }],
+    ]);
+    assert_eq!(
+        c.seen(&["SPELL_UPDATE_COOLDOWN", "SPELLCAST_STOP"]),
+        ["SPELL_UPDATE_COOLDOWN:1:nil", "SPELLCAST_STOP:nil:nil"]
+    );
 }

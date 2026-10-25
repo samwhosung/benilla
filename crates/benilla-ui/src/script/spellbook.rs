@@ -477,18 +477,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::cooldown_read::read_live(lua, super::CooldownQuery::Spell(spell))
             });
             Ok(match live.unwrap_or(snapshot) {
-                Some((start, duration, enabled)) => {
-                    if start + duration > now || !enabled {
-                        (
-                            crate::script::clock::held_start(start, enabled, now),
-                            duration,
-                            i32::from(enabled),
-                        )
-                    } else {
-                        (0.0, 0.0, 1)
-                    }
-                }
-                None => (0.0, 0.0, 1),
+                Some((start, duration, enabled)) if start + duration > now || !enabled => (
+                    crate::script::clock::held_start(start, enabled, now),
+                    duration,
+                    i32::from(enabled),
+                ),
+                _ => (0.0, 0.0, 1),
             })
         })?,
     )?;
