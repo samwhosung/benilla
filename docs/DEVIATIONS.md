@@ -285,8 +285,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the reference keeps any value; a server rank past 7 would index outside our palette. ([`src/target/relations.rs:487`](../crates/benilla-app/src/target/relations.rs#L487))
 - TAB uses Classic Era's screen-space priority, not 1.12's ±30° facing cone and snapshot cursor (`0x493f60`), because the cone skips a close mob in front of the camera, which sits behind the character. ([`src/target/scan.rs:3`](../crates/benilla-app/src/target/scan.rs#L3))
 - Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:194`](../crates/benilla-app/src/target/scan.rs#L194))
-- No scene-attach gate (the reference's `0x6704c0`), because the draw election hides every body outside the frustum, which would empty the off-screen tier. ([`src/target/scan.rs:368`](../crates/benilla-app/src/target/scan.rs#L368))
-- Sampled each frame, not stamped in `SetSelection`, so every selection writer is covered; a selected unit that turns hostile is remembered, where the reference's is not. ([`src/target/scan.rs:931`](../crates/benilla-app/src/target/scan.rs#L931))
+- No scene-attach gate (the reference's `0x6704c0`), because the draw election hides every body outside the frustum, which would empty the off-screen tier. ([`src/target/scan.rs:369`](../crates/benilla-app/src/target/scan.rs#L369))
+- Sampled each frame, not stamped in `SetSelection`, so every selection writer is covered; a selected unit that turns hostile is remembered, where the reference's is not. ([`src/target/scan.rs:932`](../crates/benilla-app/src/target/scan.rs#L932))
 
 #### textinput
 
@@ -371,10 +371,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_loot
 
-- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:267`](../crates/benilla-app/src/ui_loot/mod.rs#L267))
-- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:681`](../crates/benilla-app/src/ui_loot/mod.rs#L681))
-- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:709`](../crates/benilla-app/src/ui_loot/mod.rs#L709))
-- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:890`](../crates/benilla-app/src/ui_loot/mod.rs#L890))
+- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:265`](../crates/benilla-app/src/ui_loot/mod.rs#L265))
+- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:679`](../crates/benilla-app/src/ui_loot/mod.rs#L679))
+- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:707`](../crates/benilla-app/src/ui_loot/mod.rs#L707))
+- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:888`](../crates/benilla-app/src/ui_loot/mod.rs#L888))
 
 #### ui_loot_roll
 
