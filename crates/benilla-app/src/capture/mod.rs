@@ -1064,3 +1064,42 @@ fn drive_capture(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+    use bevy::prelude::*;
+
+    /// A capture run's systems initialize in the client's own world, so a parameter that overlaps
+    /// the VM turn's call host fails here and not at the first capture's schedule build.
+    #[test]
+    fn every_capture_system_initializes_in_the_client() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = EnvGuard::set("WOW_CAPTURE", "ui-trainer");
+        let mut app = crate::game_plugins::schedule_tests::headless_client_with(|app| {
+            app.add_plugins(super::CapturePlugin);
+        });
+        let world = app.world_mut();
+        let labels: Vec<_> = world
+            .resource::<bevy::ecs::schedule::Schedules>()
+            .iter()
+            .map(|(_, s)| s.label())
+            .collect();
+        let mut seen = false;
+        for label in labels {
+            world.schedule_scope(label, |world, schedule| {
+                schedule.graph_mut().systems.initialize(world);
+                seen |=
+                    schedule.graph().systems.iter().any(|(_, system, _)| {
+                        system.name().to_string().contains("seed_ui_fixture")
+                    });
+            });
+        }
+        assert!(
+            seen,
+            "the census reads the capture seed among the client's systems"
+        );
+    }
+}
