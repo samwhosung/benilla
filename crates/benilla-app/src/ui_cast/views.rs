@@ -184,8 +184,8 @@ thread_local! {
 /// The packet being handled moves the in-flight slot here, after what its handler raised so far:
 /// a failed `SMSG_CAST_RESULT`'s report fires the GCD clear's pair (`0x6e1d89` → `0x6e167d`)
 /// before it pops the slot (`0x6e2218`), so that pair's listeners read the cast still in flight.
-/// The packet's view then lands in two steps: everything but the slot ahead of the packet, and
-/// the slot here.
+/// The packet's view then lands in two steps: everything but the slot and the targeting word,
+/// which `CancelCast 0x6e4940` drops with it (`0x6e4955`), ahead of the packet, and those here.
 pub(crate) fn slot_moves_here() {
     SLOT_MOVES.set(Some(crate::lanes::stamp()));
 }
@@ -215,9 +215,12 @@ fn packet_end(world: &mut World, at: Stamp) {
         return;
     };
     if let Some(moves) = moves {
+        // `CancelCast 0x6e4940` drops the targeting word (`0x6e4955`) and pops the slot
+        // (`0x6e49d6`) at the pop's place.
         let ahead = CastView {
             slot: last.slot,
             item: last.item,
+            targeting: last.targeting,
             ..view
         };
         views.log(at, ahead);
