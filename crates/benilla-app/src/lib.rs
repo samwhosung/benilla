@@ -282,6 +282,8 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     };
 
     let mut app = App::new();
+    // A command on an entity a same-frame despawn removed logs instead of aborting the session.
+    app.set_error_handler(crash::command_error_handler);
     // The panel footer and the build banner read the stamp back.
     app.insert_resource(build);
     // Static-scene transform tracking pinned on: the default threshold re-decides every frame with

@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use bevy::ecs::error::{BevyError, ErrorContext};
+
 use crate::BuildId;
 
 /// Chains the crash-report hook after the current one. Called once as the client launches
@@ -26,6 +28,20 @@ pub(crate) fn install(build: BuildId) {
         previous(info);
         report(info, build, started.elapsed());
     }));
+}
+
+/// The client's default error handler, installed by [`crate::run`] on its `App`: a command that
+/// fails (an entity a same-frame despawn already removed) is logged at `warn` with the command and
+/// the entity, and the session goes on. Every other error stays a panic, as Bevy's default, and
+/// reaches the crash report: a missing resource or a failed system is a bug to see, not to skip.
+/// Only the real launch installs it. Tests build their own `App`, which keeps Bevy's panicking
+/// default, so a command that fails in a test still fails the test.
+pub(crate) fn command_error_handler(error: BevyError, ctx: ErrorContext) {
+    if matches!(ctx, ErrorContext::Command { .. }) {
+        bevy::log::warn!("{ctx}: {error}");
+    } else {
+        bevy::ecs::error::panic(error, ctx);
+    }
 }
 
 // The injected test panic (`WOW_CRASH_INJECT=<at_secs>`) lives in `perf::crash_inject`, behind
@@ -189,5 +205,71 @@ mod tests {
             .starts_with("crash-"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed command is logged with the command and the entity and the frame goes on; any
+    /// other error is still a panic.
+    #[test]
+    fn a_failed_command_logs_and_other_errors_still_panic() {
+        use std::sync::{Arc, Mutex};
+
+        use bevy::prelude::{App, Name};
+
+        use bevy::log::tracing::field::{Field, Visit};
+        use bevy::log::tracing::{Event, Subscriber};
+        use bevy::log::tracing_subscriber::layer::{Context, SubscriberExt};
+        use bevy::log::tracing_subscriber::Layer;
+
+        struct Capture(Arc<Mutex<Vec<String>>>);
+        struct Message(String);
+        impl Visit for Message {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        impl<S: Subscriber> Layer<S> for Capture {
+            fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+                let mut m = Message(String::new());
+                event.record(&mut m);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("{} {}", event.metadata().level(), m.0));
+            }
+        }
+
+        let mut app = App::new();
+        app.set_error_handler(command_error_handler);
+        let gone = app.world_mut().spawn_empty().id();
+        app.world_mut().despawn(gone);
+
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = bevy::log::tracing_subscriber::registry().with(Capture(lines.clone()));
+        bevy::log::tracing::subscriber::with_default(subscriber, || {
+            app.world_mut()
+                .commands()
+                .entity(gone)
+                .insert(Name::new("x"));
+            app.world_mut().flush();
+        });
+        let lines = lines.lock().unwrap();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("WARN "), "{lines:?}");
+        assert!(lines[0].contains("Command"), "names the command: {lines:?}");
+        assert!(
+            lines[0].contains(&gone.to_string())
+                || lines[0].contains(&format!("{}v", gone.index())),
+            "names the entity: {lines:?}"
+        );
+
+        let system = ErrorContext::System {
+            name: bevy::utils::prelude::DebugName::borrowed("s"),
+            last_run: bevy::ecs::change_detection::Tick::new(0),
+        };
+        let panicked =
+            std::panic::catch_unwind(|| command_error_handler(BevyError::from("boom"), system));
+        assert!(panicked.is_err(), "a system error stays a panic");
     }
 }
