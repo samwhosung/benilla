@@ -11,8 +11,8 @@ use super::super::protected::select_may_cast;
 use super::super::stat_read::read_self;
 use super::super::Model;
 use super::{
-    check_unit_token, classification_word, grey_band, level_is_hidden_at, object_predicate,
-    read_object, unit_is_grey, unit_predicate, unknownobject, with_object, with_unit, PlayerRecord,
+    check_unit_token, classification_word, grey_band, level_is_hidden_at, names_self,
+    object_predicate, read_object, unit_is_grey, unit_predicate, unknownobject, with_object, with_unit, PlayerRecord,
     SelectionRequest,
 };
 
@@ -789,11 +789,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // UnitXP/UnitXPMax(unit): the token resolved (`0x51738e`), then the active player's private
     // `PLAYER_XP` pair for its object by whatever token names it (`0x5173ad`-`0x5173c9`), read
     // off the object as the call runs ([`read_self`]), 0 for any other unit or none.
-    fn names_self(model: &Model, token: &str) -> bool {
-        token.eq_ignore_ascii_case("player")
-            || (model.unit_guids.player != 0
-                && model.unit_guids.resolve(token).ok().flatten() == Some(model.unit_guids.player))
-    }
     g.set(
         "UnitXP",
         lua.create_function(|lua, token: Value| {

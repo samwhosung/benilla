@@ -103,6 +103,45 @@ fn bindings_read_the_pushed_snapshot() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `UnitCharacterPoints` resolves its token and reads the two counters (`+0xe48`, `+0xe4c`) only
+/// off the active player's object; any other unit, or none, answers 0, 0 (`0x519420`-`0x5194f8`).
+#[test]
+fn unit_character_points_answer_the_active_player_only() {
+    const ME: u64 = 0x10;
+    const OTHER: u64 = 0x20;
+    let mut s = script();
+    s.set_talents(one_tab_state());
+    let seat = |s: &mut UiScript, target: u64| {
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            target,
+            party: [OTHER, 0, 0, 0],
+            held: [(ME, 0), (OTHER, 0)].into_iter().collect(),
+            ..Default::default()
+        });
+    };
+    let points = |s: &mut UiScript, token: &str| {
+        s.eval::<(i64, i64)>(&format!("return UnitCharacterPoints({token:?})"))
+            .unwrap()
+    };
+
+    seat(&mut s, OTHER);
+    assert_eq!(points(&mut s, "player"), (2, 1));
+    assert_eq!(points(&mut s, "PLAYER"), (2, 1));
+    assert_eq!(points(&mut s, "target"), (0, 0), "another player");
+    assert_eq!(points(&mut s, "party1"), (0, 0), "a party member");
+    assert_eq!(points(&mut s, "pet"), (0, 0), "a recognised token naming nothing");
+
+    seat(&mut s, ME);
+    assert_eq!(points(&mut s, "target"), (2, 1), "the target is the player");
+
+    let err = s
+        .run(r#"UnitCharacterPoints("bogus")"#)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Unknown unit name: bogus"), "{err}");
+}
+
 /// `isExceptional` is `1.0` when `[rec+0x4c] & 1` and nil otherwise (`0x4f33e8`): never `0`, which
 /// Lua reads as true, and `meetsPrereq` and each prereq's `isLearnable` are 1 or nil too
 /// (`0x4f3403`-`0x4f3443`, `0x4f3676`, `0x4f3644`). `GetTalentPrereqs` answers three values per edge.

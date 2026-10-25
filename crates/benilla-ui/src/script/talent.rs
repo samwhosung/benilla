@@ -320,13 +320,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Every unit token answers the player's own pair: `PLAYER_CHARACTER_POINTS1/2` are private
-    // fields only we receive.
+    // UnitCharacterPoints(unit) (`0x519420`): the token resolved (`0x6f3690`, `0x515940`), then the
+    // two counters (`+0xe48`, `+0xe4c`) of the player block, which the object holds for the active
+    // player alone (`0x519463`-`0x51949e`: the guid must equal the active player's); any other
+    // unit, or none, answers 0, 0 (`0x5194da`). An unrecognised token raises in the resolver.
     g.set(
         "UnitCharacterPoints",
-        lua.create_function(|lua, _unit: String| {
+        lua.create_function(|lua, unit: String| {
+            super::unit::check_unit_token(&Some(unit.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let (cp1, cp2) = model.talents.points;
+            let (cp1, cp2) = if super::unit::names_self(&model, &unit) {
+                model.talents.points
+            } else {
+                (0, 0)
+            };
             Ok((i64::from(cp1), i64::from(cp2)))
         })?,
     )?;

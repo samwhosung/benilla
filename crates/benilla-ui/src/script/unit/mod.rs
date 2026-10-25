@@ -601,8 +601,17 @@ fn with_unit<T>(
     })
 }
 
+/// Whether `token` names the active player: `"player"`, or any token the resolver turns into the
+/// player's guid (`target` on yourself, `0x5173ad`-`0x5173c9`). The private player blocks
+/// (`UnitXP`, `UnitCharacterPoints`) answer for this unit alone.
+pub(super) fn names_self(model: &Model, token: &str) -> bool {
+    token.eq_ignore_ascii_case("player")
+        || (model.unit_guids.player != 0
+            && model.unit_guids.resolve(token).ok().flatten() == Some(model.unit_guids.player))
+}
+
 /// [`read_object`] on `token`, or `default` for an absent unit, after the token check.
-fn with_object<T>(
+pub(super) fn with_object<T>(
     lua: &Lua,
     token: &Option<String>,
     default: T,
