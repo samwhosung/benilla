@@ -51,6 +51,11 @@ opt-level = 3
 # build is no slower.
 codegen-units = 1
 
+# The movie decoder at opt-level 3 in dev as well: at 1, decoding the 1024-wide intro takes its
+# install test 29 s, at 3 under 6 s.
+[profile.dev.package.benilla-movie]
+opt-level = 3
+
 # Our crates at opt-level 1: Bevy's generic hot paths monomorphize into them, and at opt-level 0
 # Stormwind drops from a pinned 60 fps to ~45.
 [profile.dev]
