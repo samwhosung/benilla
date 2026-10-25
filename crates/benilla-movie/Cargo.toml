@@ -1,0 +1,16 @@
+[package]
+name = "benilla-movie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The 1.12.1 intro movies: the AVI reader and an MPEG-4 Part 2 Simple-profile decoder"
+
+[lints]
+workspace = true
+
+[dependencies]
+benilla-bytes = { path = "../benilla-bytes" }
+
+[dev-dependencies]
+# The install resolver and `wow_data_or_skip!`, for the tests that read the install's movies.
+benilla-formats = { path = "../benilla-formats" }

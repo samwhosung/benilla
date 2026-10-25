@@ -621,6 +621,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "benilla-movie"
+version = "0.2.0"
+dependencies = [
+ "benilla-bytes",
+ "benilla-formats",
+]
+
+[[package]]
 name = "benilla-mpq"
 version = "0.2.0"
 dependencies = [
