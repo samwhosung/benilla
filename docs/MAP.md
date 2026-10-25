@@ -59,6 +59,7 @@
 - ProbeDragPlugin
 - ProbeHoverPlugin
 - ProbeKeyPlugin
+- ProbeClickPlugin
 - ProbeExitPlugin
 - PickProbePlugin
 - PhaseProbePlugin
@@ -397,6 +398,7 @@
 - `WOW_PROBE_CHAT_EVERY` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_CHEST` — benilla-app/src/capture/probe_chest.rs, benilla-app/src/dev.rs
 - `WOW_PROBE_CLAM` — benilla-app/src/capture/probe_clam.rs, benilla-app/src/dev.rs
+- `WOW_PROBE_CLICK` — benilla-app/src/capture/probes/act.rs, benilla-app/src/dev.rs
 - `WOW_PROBE_DOCK` — benilla-app/src/capture/probe_crossing.rs
 - `WOW_PROBE_DRAG` — benilla-app/src/capture/probes/act.rs, benilla-app/src/dev.rs
 - `WOW_PROBE_DRAG_AT` — benilla-app/src/capture/probes/act.rs
@@ -414,6 +416,7 @@
 - `WOW_PROBE_HOVER_DUTY` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_HOVER_JITTER` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_HOVER_STEP` — benilla-app/src/capture/probes/act.rs
+- `WOW_PROBE_INPUT_GLUE` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_KEY` — benilla-app/src/capture/probes/act.rs, benilla-app/src/dev.rs
 - `WOW_PROBE_LOOK` — benilla-app/src/capture/probe_look.rs
 - `WOW_PROBE_LUA` — benilla-app/src/capture/probes/act.rs, benilla-app/src/dev.rs
