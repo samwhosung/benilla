@@ -105,6 +105,7 @@ mod gm_survey;
 mod gm_ticket;
 mod gossip;
 mod guild;
+mod guild_read;
 mod handler_prof;
 mod host;
 mod hyperlink;
@@ -301,6 +302,7 @@ pub use guild::{
     GuildCall, GuildCells, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline,
     UnitGuild, MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
+pub use guild_read::{GuildAnswer, GuildRead, OwnGuild, UnitGuildRead};
 pub use host::{CallHost, CallTail, Deferring};
 pub use input_verbs::{BindingInput, FiredInput, HeldInput, LookCall, PostureCall, ViewAxis};
 pub use item_calls::ItemCall;
