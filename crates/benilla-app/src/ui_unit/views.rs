@@ -328,7 +328,9 @@ impl UnitViews {
                 break;
             };
             for (guid, change) in &mut entry.changes {
-                applied.insert(*guid);
+                if !benilla_protocol::guid::is_item(*guid) {
+                    applied.insert(*guid);
+                }
                 if let Change::Record(other) = change {
                     if let Some(records) = self.records.as_mut() {
                         swap_record(records, *guid, other);
@@ -421,6 +423,19 @@ impl ViewStores<'_, '_> {
         match (self.views.as_deref(), guid) {
             (Some(views), Some(guid)) => views.as_of(guid.0, Some(store)).ok_or(NotHeld),
             _ => Ok(store),
+        }
+    }
+
+    /// `guid`'s store as of the drain's place, `live` its store now, `None` for no object: one the
+    /// drain rewinds reads as its packet left it, a destroyed one included.
+    pub(crate) fn by_guid<'a>(
+        &'a self,
+        guid: u64,
+        live: Option<&'a ObjectStore>,
+    ) -> Option<&'a ObjectStore> {
+        match self.views.as_deref() {
+            Some(views) => views.as_of(guid, live),
+            None => live,
         }
     }
 }
@@ -620,10 +635,16 @@ struct Readable {
     grouped: HashSet<u64>,
 }
 
+/// The 0-based weapon seats (`EQUIPMENT_SLOT_MAINHAND`, `_OFFHAND`, `_RANGED`), private fields
+/// only the active player's store carries.
+const WEAPON_SLOTS: [u8; 3] = [15, 16, 17];
+
 /// One guid's store from `live` back to the frame's start, undoing `entries`' changes to it in
-/// reverse, checked against the frame-start snapshot `start` when given; with every unit it named
+/// reverse, checked against the frame-start snapshot `start` when given; with every object it named
 /// on the way, by the fields a token resolves through: `UNIT_FIELD_TARGET` (a `target` chain,
-/// `0x515970`), `UNIT_FIELD_CHARM` and `UNIT_FIELD_SUMMON` (a pet token, `0x4e8204`-`0x4e821a`).
+/// `0x515970`), `UNIT_FIELD_CHARM` and `UNIT_FIELD_SUMMON` (a pet token, `0x4e8204`-`0x4e821a`),
+/// and the weapons the active player wears, whose items the stat getters read
+/// (`UnitAttackSpeed` `0x518f19`, `HasWandEquipped` `0x4c99c2`).
 fn undo_frame(
     guid: u64,
     live: Option<ObjectStore>,
@@ -632,7 +653,18 @@ fn undo_frame(
 ) -> (Option<ObjectStore>, Vec<u64>) {
     let hop = |s: &Option<ObjectStore>| {
         s.as_ref()
-            .map(|s| [s.0.unit_target(), s.0.unit_charm(), s.0.unit_summon()])
+            .map(|s| {
+                let f = &s.0;
+                let [main, off, ranged] = WEAPON_SLOTS.map(|slot| f.player_inv_slot(slot));
+                [
+                    f.unit_target(),
+                    f.unit_charm(),
+                    f.unit_summon(),
+                    main,
+                    off,
+                    ranged,
+                ]
+            })
             .into_iter()
             .flatten()
             .flatten()
@@ -826,7 +858,11 @@ impl UnitViews {
                 (!entry.changes.is_empty()).then_some(entry)
             })
             .collect();
-        touched.retain(|g| scratch.contains_key(g) || readable.all.contains(g));
+        // An item no view reads: it is rewound for the getters alone, and builds nothing.
+        touched.retain(|&g| {
+            !benilla_protocol::guid::is_item(g)
+                && (scratch.contains_key(&g) || readable.all.contains(&g))
+        });
         self.named = (seats.target.map(|(g, _)| g), seats.npc.map(|(g, _)| g));
         self.scratch = scratch;
         self.touched = touched;

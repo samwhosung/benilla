@@ -466,11 +466,9 @@ fn write_logged(
 
 /// A held object leaving the live table: the store it takes, logged for any unit, as one a token
 /// names now or named earlier in the frame (the target's target before it changed) reads it in
-/// the frame's earlier listeners.
+/// the frame's earlier listeners, and for any item, as a weapon the active player wore earlier in
+/// the frame reads to the stat getters there.
 fn log_destroy(sc: &mut Scene, guid: u64) {
-    if guid::is_item(guid) {
-        return;
-    }
     let Some(&e) = sc.index.0.get(&guid) else {
         return;
     };
