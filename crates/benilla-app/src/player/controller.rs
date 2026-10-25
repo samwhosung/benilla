@@ -587,9 +587,14 @@ pub(super) fn control(
         }
         // `0x514560`, after `apply_server_moves`, so this frame's root edge is already in `modes`.
         let may_translate = mover.may_translate(player.modes.rooted);
+        // Name an extra mouse button the bindings do not know, rather than fail silently.
+        for b in buttons.get_just_pressed() {
+            if let MouseButton::Other(n) = b {
+                info!("mouse: unmapped button Other({n}) — bindings know BUTTON4/BUTTON5 as winit Forward/Back");
+            }
+        }
         let axes = input::move_axes(
             binds,
-            &buttons,
             &mut player,
             &rig,
             both_buttons,

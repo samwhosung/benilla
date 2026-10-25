@@ -137,24 +137,7 @@ pub(super) fn stream_self_movement(
     // `|o| > 4π` unrelayed (`VerifyMovementInfo`, `GridDefines.h:203`), a stop included.
     let facing = player.face_yaw.rem_euclid(std::f32::consts::TAU);
     let wire_flags = move_flags_now & OUTBOUND_FLAG_MASK;
-    // The jump tail, on every airborne packet: the take-off vertical speed and the horizontal
-    // velocity frozen at take-off, in world XY.
-    let wire_jump = (wire_flags & move_flags::FALLING != 0).then(|| {
-        let v = bevy_to_wow(player.horiz_vel); // WoW velocity [vx, vy, 0] (the transform is linear)
-        let xy = v[0].hypot(v[1]);
-        let (cos_angle, sin_angle) = if xy > 1.0e-4 {
-            (v[0] / xy, v[1] / xy)
-        } else {
-            (facing.cos(), facing.sin()) // a standing jump has no direction: use the facing
-        };
-        JumpInfo {
-            // Down-positive on the wire: the 1.12 client sends -7.955547 (`0xc0fe93d8`) rising.
-            zspeed: -player.jump_zspeed,
-            cos_angle,
-            sin_angle,
-            xy_speed: xy,
-        }
-    });
+    let wire_jump = jump_tail(player, wire_flags, facing);
     // A forced speed change is acked within the server's 4 s window with this frame's live
     // payload, which vmangos relocates us to and runs its anticheat position tests on.
     for ack in speed_acks {
@@ -180,7 +163,7 @@ pub(super) fn stream_self_movement(
     // `launch` is echoed bit for bit, as the reference copies its live fields: vmangos matches the
     // four floats within 0.01 (`Unit.cpp:7097-7100`), and a re-derived quad has no direction at
     // `xy_speed == 0`. Its send ends the precast: 0xf0 is no opcode `0x60e0a0` exempts.
-    let mut precast_ended = knock_ack.is_some();
+    let precast_ended = knock_ack.is_some();
     if let Some(k) = knock_ack {
         let _ = sender.send(ClientCommand::KnockBackAck {
             guid: k.guid,
@@ -197,52 +180,24 @@ pub(super) fn stream_self_movement(
     let prev = player.move_flags;
     let added = wire_flags & !prev;
     let removed = prev & !wire_flags;
-    let mut sent = false;
+    let wire = Wire {
+        flags: wire_flags,
+        pos: wow_pos,
+        facing,
+        pitch: swim_pitch,
+        fall_time,
+        jump: wire_jump,
+        transport,
+    };
+    let mut out = Sends {
+        sent: false,
+        precast_ended,
+    };
     macro_rules! send_move {
-        ($kind:expr) => {{
-            precast_ended |= ends_precast($kind);
-            if *crate::net::CAST_TRACE {
-                bevy::log::info!(
-                    "cast-trace: SEND move {:?} flags={:#x} pos=[{:.3},{:.3},{:.3}] o={:.3}",
-                    $kind,
-                    wire_flags,
-                    wow_pos[0],
-                    wow_pos[1],
-                    wow_pos[2],
-                    facing
-                );
-            }
-            super::move_trace::sent($kind, wire_flags, facing, wow_pos);
-            // The build's copies (`0x600a5d`-`0x600a72`).
-            player.sent_facing = facing;
-            if wire_flags & move_flags::SWIMMING != 0 {
-                player.sent_pitch = player.mover_pitch;
-            }
-            let _ = sender.send(ClientCommand::Move {
-                kind: $kind,
-                flags: wire_flags,
-                pos: wow_pos,
-                orientation: facing,
-                // Written only while SWIMMING is set.
-                pitch: swim_pitch,
-                fall_time,
-                jump: wire_jump,
-                // Written only with ON_TRANSPORT: the rider's deck-local pose.
-                transport,
-            });
-            sent = true;
-            // vmangos relocates the mover to every one of these (`HandleMoverRelocation`).
-            player.last_pos = wow_pos;
-        }};
+        ($kind:expr) => {
+            send_move(sender, player, &wire, $kind, &mut out)
+        };
     }
-    const FB: u32 = move_flags::FORWARD | move_flags::BACKWARD;
-    const STRAFE: u32 = move_flags::STRAFE_LEFT | move_flags::STRAFE_RIGHT;
-    const TURN: u32 = move_flags::TURN_LEFT | move_flags::TURN_RIGHT;
-    // Airborne, the forward, back and strafe transitions are silent: while FALLING the reference's
-    // `StartMove` (`0x7c6ae0`) defers a press into an inert latch (`0x20000`/`0x40000`), so the
-    // broadcaster `0x61a820` sees no flag delta. It defers nothing with nothing moving, so the
-    // standstill air nudge does send, carrying the re-seeded jump tail.
-    let falling = wire_flags & move_flags::FALLING != 0;
     // The arc is JUMP at a keyboard take-off and FALL_LAND at the end, with no trailing Stop, as a
     // mid-air release only updated the flags. A jumpless fall opens with nothing: the broadcaster
     // sends only on a locomotion-nibble change (`0x61a99d` test al,0xf), and vmangos would read
@@ -274,31 +229,11 @@ pub(super) fn stream_self_movement(
     } else if removed & move_flags::WALK_MODE != 0 {
         send_move!(MoveKind::SetRunMode);
     }
-    // The stop arms stay silent while falling even on the nudge frame: a mid-air release is always
-    // deferred, and this keeps one on the other axis from slipping out with the nudge.
-    if !falling || air_nudged {
-        if added & move_flags::FORWARD != 0 {
-            send_move!(MoveKind::StartForward);
-        } else if added & move_flags::BACKWARD != 0 {
-            send_move!(MoveKind::StartBackward);
-        } else if !falling && removed & FB != 0 && wire_flags & FB == 0 {
-            send_move!(MoveKind::Stop);
-        }
-        if added & move_flags::STRAFE_LEFT != 0 {
-            send_move!(MoveKind::StartStrafeLeft);
-        } else if added & move_flags::STRAFE_RIGHT != 0 {
-            send_move!(MoveKind::StartStrafeRight);
-        } else if !falling && removed & STRAFE != 0 && wire_flags & STRAFE == 0 {
-            send_move!(MoveKind::StopStrafe);
-        }
-    }
-    // The turn axis sends airborne too: turning works mid-air.
-    if added & move_flags::TURN_LEFT != 0 {
-        send_move!(MoveKind::StartTurnLeft);
-    } else if added & move_flags::TURN_RIGHT != 0 {
-        send_move!(MoveKind::StartTurnRight);
-    } else if removed & TURN != 0 && wire_flags & TURN == 0 {
-        send_move!(MoveKind::StopTurn);
+    for kind in command_sends(prev, wire_flags, air_nudged)
+        .into_iter()
+        .flatten()
+    {
+        send_move!(kind);
     }
     // The facing set a mouse turn queues each frame the facing changed (`0x619860`, send byte 1
     // at `0x619875`), drained into the send with 0xda (`0x615fae`-`0x615fd2`), which passes it
@@ -306,7 +241,7 @@ pub(super) fn stream_self_movement(
     // packet. None while a turn bit is set, which already rotates the mover for observers, and
     // not gated on `sent`: the facing set and the broadcaster are independent emitters.
     let swimming = wire_flags & move_flags::SWIMMING != 0;
-    if wire_flags & TURN == 0
+    if wire_flags & (move_flags::TURN_LEFT | move_flags::TURN_RIGHT) == 0
         && facing != player.last_facing
         && facing_set_passes(player, facing, swimming)
     {
@@ -323,30 +258,160 @@ pub(super) fn stream_self_movement(
     }
     // Boarding or leaving a deck has no opcode of its own, so a heartbeat carries the flip that
     // frame if nothing else went out.
-    if !sent && (added | removed) & move_flags::ON_TRANSPORT != 0 {
+    if !out.sent && (added | removed) & move_flags::ON_TRANSPORT != 0 {
         send_move!(MoveKind::Heartbeat);
     }
     // The heartbeat runs while any sent flag is set; the reference's (`0x616620`) runs only while
     // `flags & 0x200f`, the directions and FALLING (`0x616725`). Every send re-arms its deadline
     // (`0x600a30` → `0x615b80`), hence the stamp on any send below.
-    if !sent && wire_flags != 0 && now - player.last_heartbeat >= HEARTBEAT_INTERVAL {
+    if !out.sent && wire_flags != 0 && now - player.last_heartbeat >= HEARTBEAT_INTERVAL {
         send_move!(MoveKind::Heartbeat);
     }
     // At rest, a position change goes out the frame it happens: the resolver settles a resting
     // body by fractions of a millimetre after the packet that reported it, and vmangos compares
     // positions exactly (`Player.cpp:6092`), so a stale copy arrives with the next packet as
     // movement and interrupts the cast in flight (`Unit.cpp:10387`).
-    if !sent && wire_flags & IN_MOTION == 0 && wow_pos != player.last_pos {
+    if !out.sent && wire_flags & IN_MOTION == 0 && wow_pos != player.last_pos {
         send_move!(MoveKind::Heartbeat);
     }
-    if sent {
+    if out.sent {
         player.last_heartbeat = now;
     }
     // The facing compare is against the previous frame's facing, sent or not, so a keyboard turn
     // leaves no catch-up `SET_FACING` behind.
     player.last_facing = facing;
     player.move_flags = wire_flags;
-    precast_ended
+    out.precast_ended
+}
+
+/// The emitters' messages for one change of the word's direction and turn bits, `prev` to `now`:
+/// forward and back (`0x514da0`), strafe (`0x514e80`) and turn (`0x514f50`), at most one each, in
+/// that order, as the tick `0x514640` runs them. Airborne, the forward, back and strafe transitions
+/// are silent: while FALLING the reference's `StartMove` (`0x7c6ae0`) defers a press into an inert
+/// latch (`0x20000`/`0x40000`), so the broadcaster `0x61a820` sees no flag delta. It defers nothing
+/// with nothing moving, so the standstill air nudge (`air_nudged`) does send its starts; the stop
+/// arms stay silent while falling even then, as a mid-air release is always deferred. The turn
+/// axis sends airborne too: turning works mid-air.
+fn command_sends(prev: u32, now: u32, air_nudged: bool) -> [Option<MoveKind>; 3] {
+    const FB: u32 = move_flags::FORWARD | move_flags::BACKWARD;
+    const STRAFE: u32 = move_flags::STRAFE_LEFT | move_flags::STRAFE_RIGHT;
+    const TURN: u32 = move_flags::TURN_LEFT | move_flags::TURN_RIGHT;
+    let added = now & !prev;
+    let removed = prev & !now;
+    let falling = now & move_flags::FALLING != 0;
+    let mut fb = None;
+    let mut strafe = None;
+    if !falling || air_nudged {
+        fb = if added & move_flags::FORWARD != 0 {
+            Some(MoveKind::StartForward)
+        } else if added & move_flags::BACKWARD != 0 {
+            Some(MoveKind::StartBackward)
+        } else if !falling && removed & FB != 0 && now & FB == 0 {
+            Some(MoveKind::Stop)
+        } else {
+            None
+        };
+        strafe = if added & move_flags::STRAFE_LEFT != 0 {
+            Some(MoveKind::StartStrafeLeft)
+        } else if added & move_flags::STRAFE_RIGHT != 0 {
+            Some(MoveKind::StartStrafeRight)
+        } else if !falling && removed & STRAFE != 0 && now & STRAFE == 0 {
+            Some(MoveKind::StopStrafe)
+        } else {
+            None
+        };
+    }
+    let turn = if added & move_flags::TURN_LEFT != 0 {
+        Some(MoveKind::StartTurnLeft)
+    } else if added & move_flags::TURN_RIGHT != 0 {
+        Some(MoveKind::StartTurnRight)
+    } else if removed & TURN != 0 && now & TURN == 0 {
+        Some(MoveKind::StopTurn)
+    } else {
+        None
+    };
+    [fb, strafe, turn]
+}
+
+/// One move message's payload, the mover as the send reads it.
+struct Wire {
+    flags: u32,
+    pos: [f32; 3],
+    facing: f32,
+    /// Written only while SWIMMING is set.
+    pitch: f32,
+    fall_time: u32,
+    jump: Option<JumpInfo>,
+    /// Written only with ON_TRANSPORT: the rider's deck-local pose.
+    transport: Option<TransportPose>,
+}
+
+/// What a run of sends did: whether any went out, and whether one ended the precast.
+struct Sends {
+    sent: bool,
+    precast_ended: bool,
+}
+
+/// Send one move message with `wire`'s payload.
+fn send_move(
+    sender: &Sender<ClientCommand>,
+    player: &mut Player,
+    wire: &Wire,
+    kind: MoveKind,
+    out: &mut Sends,
+) {
+    out.precast_ended |= ends_precast(kind);
+    if *crate::net::CAST_TRACE {
+        bevy::log::info!(
+            "cast-trace: SEND move {:?} flags={:#x} pos=[{:.3},{:.3},{:.3}] o={:.3}",
+            kind,
+            wire.flags,
+            wire.pos[0],
+            wire.pos[1],
+            wire.pos[2],
+            wire.facing
+        );
+    }
+    super::move_trace::sent(kind, wire.flags, wire.facing, wire.pos);
+    // The build's copies (`0x600a5d`-`0x600a72`).
+    player.sent_facing = wire.facing;
+    if wire.flags & move_flags::SWIMMING != 0 {
+        player.sent_pitch = player.mover_pitch;
+    }
+    let _ = sender.send(ClientCommand::Move {
+        kind,
+        flags: wire.flags,
+        pos: wire.pos,
+        orientation: wire.facing,
+        pitch: wire.pitch,
+        fall_time: wire.fall_time,
+        jump: wire.jump,
+        transport: wire.transport,
+    });
+    out.sent = true;
+    // vmangos relocates the mover to every one of these (`HandleMoverRelocation`).
+    player.last_pos = wire.pos;
+}
+
+/// The jump tail, on every airborne packet: the take-off vertical speed and the horizontal
+/// velocity frozen at take-off, in world XY.
+fn jump_tail(player: &Player, wire_flags: u32, facing: f32) -> Option<JumpInfo> {
+    (wire_flags & move_flags::FALLING != 0).then(|| {
+        let v = bevy_to_wow(player.horiz_vel); // WoW velocity [vx, vy, 0] (the transform is linear)
+        let xy = v[0].hypot(v[1]);
+        let (cos_angle, sin_angle) = if xy > 1.0e-4 {
+            (v[0] / xy, v[1] / xy)
+        } else {
+            (facing.cos(), facing.sin()) // a standing jump has no direction: use the facing
+        };
+        JumpInfo {
+            // Down-positive on the wire: the 1.12 client sends -7.955547 (`0xc0fe93d8`) rising.
+            zspeed: -player.jump_zspeed,
+            cos_angle,
+            sin_angle,
+            xy_speed: xy,
+        }
+    })
 }
 
 /// `CMSG_MOVE_TIME_SKIPPED`: the milliseconds the mover advanced through without integrating. The
