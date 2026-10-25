@@ -1,58 +1,81 @@
-//! One frame of the whole client in its schedule's order: the window input, then the packets'
-//! events, then the `OnUpdate` walk, as the reference's tick runs them (`0x423920` at `0x420d23`,
-//! category 6 at `0x420d55`, then the frame pass `0x442350` at `0x420d6a`, whose top runs the
-//! walk, `0x764330` → `0x765650` → `0x76b2c0`).
+//! One frame of the whole client in its schedule's order: the window input, then the packets
+//! applied and their events, then the `OnUpdate` walk, as the reference's tick runs them
+//! (`0x423920` at `0x420d23`, category 6 at `0x420d55`, then the frame pass `0x442350` at
+//! `0x420d6a`, whose top runs the walk, `0x764330` → `0x765650` → `0x76b2c0`).
 
+use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::messages::ObjectType;
+use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use benilla_ui::script::UiScript;
 
 use super::{extract, input};
+use crate::net::SelfGuid;
 use crate::test_support::runs_before;
+
+/// Our player's guid in the fixture.
+const ME: u64 = 0x7;
 
 /// A step of the frame the fixture runs, each the client's own system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     /// The UI's input pass.
     Input,
+    /// The net drain, which applies the frame's packets to the world.
+    Net,
     /// The lanes' drain, which fires the packets' events in arrival order.
     Packets,
     /// The tick, which runs the `OnUpdate` walk.
     Update,
 }
 
+const STEPS: [Step; 4] = [Step::Input, Step::Net, Step::Packets, Step::Update];
+
+/// Binds `$s` to the client's system for `$step` and evaluates `$body` with it.
+macro_rules! with_system {
+    ($step:expr, |$s:ident| $body:expr) => {
+        match $step {
+            Step::Input => {
+                let $s = input::feed_ui_input;
+                $body
+            }
+            Step::Net => {
+                let $s = crate::net::apply_net_updates;
+                $body
+            }
+            Step::Packets => {
+                let $s = crate::lanes::fire_in_order;
+                $body
+            }
+            Step::Update => {
+                let $s = extract::tick_script;
+                $body
+            }
+        }
+    };
+}
+
+/// Whether `Update` declares `a` before `b`.
+fn declared_before(app: &mut App, a: Step, b: Step) -> bool {
+    with_system!(a, |x| with_system!(b, |y| runs_before(app, x, y)))
+}
+
 /// The steps in the order `Update` declares them; panics on a pair it leaves unordered.
 fn in_frame_order(app: &mut App) -> Vec<Step> {
-    use Step::*;
     let mut table = Vec::new();
-    for (a, b, ab, ba) in [
-        (
-            Input,
-            Packets,
-            runs_before(app, input::feed_ui_input, crate::lanes::fire_in_order),
-            runs_before(app, crate::lanes::fire_in_order, input::feed_ui_input),
-        ),
-        (
-            Packets,
-            Update,
-            runs_before(app, crate::lanes::fire_in_order, extract::tick_script),
-            runs_before(app, extract::tick_script, crate::lanes::fire_in_order),
-        ),
-        (
-            Input,
-            Update,
-            runs_before(app, input::feed_ui_input, extract::tick_script),
-            runs_before(app, extract::tick_script, input::feed_ui_input),
-        ),
-    ] {
-        assert!(
-            ab != ba,
-            "{a:?} and {b:?} run in an order the executor picks"
-        );
-        table.push(if ab { (a, b) } else { (b, a) });
+    for (i, a) in STEPS.iter().enumerate() {
+        for b in &STEPS[i + 1..] {
+            let (ab, ba) = (declared_before(app, *a, *b), declared_before(app, *b, *a));
+            assert!(
+                ab != ba,
+                "{a:?} and {b:?} run in an order the executor picks"
+            );
+            table.push(if ab { (*a, *b) } else { (*b, *a) });
+        }
     }
-    let mut steps = vec![Input, Packets, Update];
+    let mut steps = STEPS.to_vec();
     steps.sort_by(|x, y| {
         if x == y {
             std::cmp::Ordering::Equal
@@ -65,37 +88,123 @@ fn in_frame_order(app: &mut App) -> Vec<Step> {
     steps
 }
 
-/// One frame over the whole client, with a full-screen button that logs its `OnMouseDown`, its
-/// `CHAT_MSG_SYSTEM` and its `OnUpdate` (with whether `IsShiftKeyDown()` answers), while Shift is
-/// held, the left button goes down over it and a system message has arrived. Returns the log.
-fn one_frame() -> String {
+/// Runs one frame's steps in `order`.
+fn run_frame(world: &mut World, order: &[Step]) {
+    for step in order {
+        match step {
+            Step::Input => world
+                .run_system_once(input::feed_ui_input)
+                .expect("the input pass runs"),
+            Step::Net => crate::net::apply_net_updates(world),
+            Step::Packets => crate::lanes::fire_in_order(world),
+            Step::Update => world
+                .run_system_once(extract::tick_script)
+                .expect("the tick runs"),
+        }
+    }
+}
+
+/// The whole client in the world, our player streamed at full health, and a full-screen button
+/// `b` that `chunk` scripts to log into `LOG`, with the cursor over it.
+struct Client {
+    app: App,
+    /// The order the schedule runs the steps in.
+    order: Vec<Step>,
+    inbound: crossbeam_channel::Sender<SessionEvent>,
+    _sent: crossbeam_channel::Receiver<crate::net::ClientCommand>,
+}
+
+fn client(chunk: &str) -> Client {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let order = in_frame_order(&mut app);
-    let world = app.world_mut();
-    let mut script = UiScript::new().expect("a VM");
-    script.set_screen_size(1024.0, 768.0);
+    app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+        bevy::ecs::error::ignore,
+    ));
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let (inbound, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetEvents::for_test(rx));
+    app.update();
+    let script = UiScript::new().expect("a VM");
     script
-        .run(
+        .run(&format!(
             r#"LOG = ""
             local b = CreateFrame("Button", "TickOrderButton")
             b:SetPoint("BOTTOMLEFT", 0, 0) b:SetWidth(1024) b:SetHeight(768)
             b:EnableMouse(true)
-            b:RegisterEvent("CHAT_MSG_SYSTEM")
-            b:SetScript("OnMouseDown", function() LOG = LOG .. "down;" end)
-            b:SetScript("OnEvent", function() LOG = LOG .. "event;" end)
-            b:SetScript("OnUpdate", function()
-                LOG = LOG .. (IsShiftKeyDown() and "update+shift;" or "update;")
-            end)"#,
-        )
+            {chunk}"#
+        ))
         .expect("the button builds");
-    script.resolve();
-    world.insert_non_send_resource(script);
+    app.insert_non_send_resource(script);
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+    benilla_world::world_point::init_world_point_resources(app.world_mut());
+    app.world_mut().resource_mut::<SelfGuid>().0 = Some(ME);
+    for ev in crate::net::wire([
+        SessionEvent::ObjectCreate {
+            guid: ME,
+            kind: EntityKind::Player,
+            display_id: None,
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: None,
+            transport: None,
+            spline: None,
+            fields: ObjectFields::from_pairs(&[
+                (FIELD_UNIT_HEALTH, 100),
+                (FIELD_UNIT_MAXHEALTH, 100),
+            ])
+            .into_created(ObjectType::Player),
+        },
+        SessionEvent::ObjectUpdateEnd,
+    ]) {
+        inbound.send(ev).unwrap();
+    }
+    app.update();
+    let world = app.world_mut();
+    {
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        script.set_screen_size(1024.0, 768.0);
+        script.resolve();
+        script.run(r#"LOG = """#).expect("the log clears");
+    }
     let mut window = Window {
         resolution: UVec2::new(1024, 768).into(),
         ..default()
     };
     window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
     world.spawn((window, bevy::window::PrimaryWindow));
+    Client {
+        app,
+        order,
+        inbound,
+        _sent: sent,
+    }
+}
+
+/// The fixture's log.
+fn log(world: &World) -> String {
+    world
+        .non_send_resource::<UiScript>()
+        .eval::<String>("return LOG")
+        .expect("the log reads")
+}
+
+/// One frame over the whole client, with a full-screen button that logs its `OnMouseDown`, its
+/// `CHAT_MSG_SYSTEM` and its `OnUpdate` (with whether `IsShiftKeyDown()` answers), while Shift is
+/// held, the left button goes down over it and a system message has arrived. Returns the log.
+fn one_frame() -> String {
+    let mut c = client(
+        r#"b:RegisterEvent("CHAT_MSG_SYSTEM")
+        b:SetScript("OnMouseDown", function() LOG = LOG .. "down;" end)
+        b:SetScript("OnEvent", function() LOG = LOG .. "event;" end)
+        b:SetScript("OnUpdate", function()
+            LOG = LOG .. (IsShiftKeyDown() and "update+shift;" or "update;")
+        end)"#,
+    );
+    let world = c.app.world_mut();
     world
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::ShiftLeft);
@@ -108,21 +217,8 @@ fn one_frame() -> String {
             "Welcome".into(),
         ),
     );
-    for step in order {
-        match step {
-            Step::Input => world
-                .run_system_once(input::feed_ui_input)
-                .expect("the input pass runs"),
-            Step::Packets => crate::lanes::fire_in_order(world),
-            Step::Update => world
-                .run_system_once(extract::tick_script)
-                .expect("the tick runs"),
-        }
-    }
-    world
-        .non_send_resource::<UiScript>()
-        .eval::<String>("return LOG")
-        .expect("the log reads")
+    run_frame(world, &c.order);
+    log(world)
 }
 
 /// An `OnUpdate` reads the modifiers of its own frame: the window input reaches the interface
@@ -147,4 +243,51 @@ fn a_mouse_down_runs_before_the_frames_on_update() {
 fn a_packet_event_fires_between_the_input_and_the_on_update() {
     let log = one_frame();
     assert_eq!(log, "down;event;update+shift;");
+}
+
+/// The frame's input runs ahead of its packets: the input pass, then the net drain that applies
+/// them, then their events, then the `OnUpdate` walk.
+#[test]
+fn the_input_runs_before_the_packets_apply() {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    assert_eq!(
+        in_frame_order(&mut app),
+        [Step::Input, Step::Net, Step::Packets, Step::Update]
+    );
+}
+
+/// An `OnClick` reads a unit as the last frame left it, though this frame's packet changes it:
+/// the click's handler runs in the window input, ahead of the packets, and their event and the
+/// `OnUpdate` after them read the new value.
+#[test]
+fn an_on_click_reads_the_unit_before_this_frames_packet() {
+    let mut c = client(
+        r#"b:RegisterEvent("UNIT_HEALTH")
+        b:SetScript("OnClick", function() LOG = LOG .. "click " .. UnitHealth("player") .. ";" end)
+        b:SetScript("OnEvent", function()
+            if arg1 == "player" then LOG = LOG .. "event " .. UnitHealth("player") .. ";" end
+        end)
+        b:SetScript("OnUpdate", function()
+            if LOG ~= "" then LOG = LOG .. "update " .. UnitHealth("player") .. ";" end
+        end)"#,
+    );
+    let world = c.app.world_mut();
+    // The press, a frame of its own.
+    world
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    run_frame(world, &c.order);
+    assert_eq!(log(world), "", "the press clicks nothing");
+    // The release, in the frame whose packet takes our health to 60.
+    let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
+    buttons.clear();
+    buttons.release(MouseButton::Left);
+    for ev in crate::net::wire([SessionEvent::ObjectValues {
+        guid: ME,
+        fields: ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 60)]),
+    }]) {
+        c.inbound.send(ev).unwrap();
+    }
+    run_frame(world, &c.order);
+    assert_eq!(log(world), "click 100;event 60;update 60;");
 }

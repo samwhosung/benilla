@@ -1063,10 +1063,12 @@ impl Plugin for UiDialogVerbsPlugin {
             .add_systems(
                 Update,
                 (
-                    // Before the pass: `ConfirmPetUnlearn`'s call reads the latch.
+                    // In the frame time, after the drain that despawns the NPC and before the pass
+                    // resumes: `ConfirmPetUnlearn`'s call reads the latch.
                     close_npc_session_out_of_range::<PetUnlearnState>
+                        .after(benilla_world::schedule::WorldStage::Net)
                         .before(feed_dialog_verbs)
-                        .before(crate::vm_pass::VmPass::Start),
+                        .before(crate::vm_pass::VmPass::Resume),
                     // Gated on the in-game interface: vmangos can send `SMSG_RAID_GROUP_ONLY` in
                     // the login burst (`Player.cpp:18686`), and an `INSTANCE_BOOT_START` fired at
                     // the glue VM would be lost; the queue waits instead.

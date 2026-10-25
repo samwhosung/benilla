@@ -244,10 +244,12 @@ impl Plugin for BattlefieldPositionsPlugin {
         app.init_resource::<BattlefieldPositions>().add_systems(
             Update,
             (
-                // Before the pass: the positions request's call reads and stamps the state.
+                // After the drain whose session edge it reads, and before the pass resumes: the
+                // positions request's call reads and stamps the state.
                 reset_on_world_enter
+                    .after(benilla_world::schedule::WorldStage::Net)
                     .before(feed_battlefield_positions)
-                    .before(crate::vm_pass::VmPass::Start),
+                    .before(crate::vm_pass::VmPass::Resume),
                 feed_battlefield_positions.in_set(UiFeed),
             ),
         );

@@ -794,11 +794,12 @@ impl Plugin for TutorialPlugin {
                     judge_selections
                         .after(benilla_world::schedule::WorldStage::Net)
                         .before(feed_tutorials),
-                    // Before the pass, whose trainer and merchant calls write the windows it
-                    // watches.
+                    // After the drain whose packets open the windows it watches, and before the
+                    // pass resumes, whose trainer and merchant calls write them.
                     watch_windows
+                        .after(benilla_world::schedule::WorldStage::Net)
                         .before(feed_tutorials)
-                        .before(crate::vm_pass::VmPass::Start),
+                        .before(crate::vm_pass::VmPass::Resume),
                     watch_self
                         .after(on_world_enter)
                         .after(crate::player::ControlRestore)

@@ -61,9 +61,10 @@ impl Plugin for TransportPlugin {
                     .chain()
                     .after(benilla_world::schedule::WorldStage::Net)
                     .before(benilla_world::schedule::WorldStage::Input)
-                    // A script call applies inside its verb, against the decks as they stand
-                    // this frame: before every system that lends the call host.
-                    .before(crate::vm_pass::VmPass::Start),
+                    // A script call after the packets applies inside its verb, against the decks
+                    // as they stand this frame; the input records' calls read them as the last
+                    // frame left them, as the reference's input runs ahead of its frame time.
+                    .before(crate::vm_pass::VmPass::Resume),
             )
             // The ride frame last, after `PlayerControlSet` decides what we stand on; its
             // consumers, the particle and ribbon sims, run in `PostUpdate`.

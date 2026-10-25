@@ -1098,8 +1098,10 @@ pub(crate) mod schedule_tests {
     /// VM pass's links ignore the deferred buffers between them
     /// ([`crate::vm_pass::order_the_pass`]), so a link's commands wait for the first barrier past
     /// the chain. The count may not rise past the ceiling, and the ceiling follows it down. Read
-    /// on the dev build, whose schedule holds every system the player build does.
-    const UPDATE_SYNC_POINT_CEILING: usize = 54;
+    /// on the dev build, whose schedule holds every system the player build does. Raised from 54
+    /// when the frame's input records moved ahead of the net drain: what their handlers queue
+    /// applies before the drain, as the reference's input acts inside its handlers.
+    const UPDATE_SYNC_POINT_CEILING: usize = 56;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]
@@ -1398,19 +1400,18 @@ pub(crate) mod schedule_tests {
          "level-driven: it writes the fade from the ghost flag every frame and re-reads self each time, so a frame with no self is overwritten by the next"),
         ("::tutorial::run_world_enter_cascade",
          "`armed` stays set until self exists, so the welcome and questgiver triggers wait for the tag rather than being spent, and the arrival's `Added<SelfPlayer>` is relative to this system's own last run, so a tag that lands after a run is still seen at the next"),
-        ("::ui_session::close_npc_session_out_of_range<",
-         "no self returns before anything changes, and a question open on an NPC needs a self that interacted; the leash is re-tested every frame"),
         ("::ui_session::latch::watch_interaction_range",
          "no self returns before anything changes, and a latch needs a self that interacted; the leash is re-tested every frame"),
-        ("::ui_unit::views::mark_frame_start",
-         "a debug snapshot of what the frame starts from, ahead of the net stage by design and with no change detection: a self the frame tags is in no snapshot, and the views' check skips it"),
     ];
 
     /// Every `Update` system that names `SelfPlayer` (reads it, or filters on it) is ordered after
-    /// `tag_self_player`, or argued in [`UNORDERED_AFTER_THE_SELF_TAG`]: a system that reads self
-    /// and uses change detection must run after the tag, or a frame that finds no self still
-    /// advances its change ticks and loses what changed. Fails an unordered user, a row for a
-    /// system that is ordered after all, and a stale row.
+    /// `tag_self_player`, or ahead of the net drain, or argued in
+    /// [`UNORDERED_AFTER_THE_SELF_TAG`]: a system that reads self and uses change detection must
+    /// not run between the drain's changes and the tag, or a frame that finds no self still
+    /// advances its change ticks and loses what changed. One ahead of the drain (the frame's input
+    /// records) reads the world as the last frame left it, and sees the tag and every change the
+    /// drain made at its next run. Fails an unordered user, a row for a system that is ordered
+    /// after all, and a stale row.
     #[test]
     fn every_system_that_names_self_runs_after_the_tag_or_argues_why_not() {
         let mut app = headless_client();
@@ -1446,6 +1447,30 @@ pub(crate) mod schedule_tests {
             seen
         };
         let after_tag = reach(tag);
+        let drain = {
+            let suffix = "::net::apply::apply_net_updates";
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let mut pred: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            pred.entry(*b).or_default().push(*a);
+        }
+        let before_drain = {
+            let mut seen = HashSet::new();
+            let mut stack = vec![drain];
+            while let Some(n) = stack.pop() {
+                for m in pred.get(&n).into_iter().flatten() {
+                    if seen.insert(*m) {
+                        stack.push(*m);
+                    }
+                }
+            }
+            seen
+        };
         let mut users: Vec<SystemKey> = c.uses_self.iter().copied().filter(|k| *k != tag).collect();
         users.sort_by(|a, b| c.name(*a).cmp(c.name(*b)));
         let (mut ordered, mut argued) = (0, 0);
@@ -1456,10 +1481,10 @@ pub(crate) mod schedule_tests {
             let row = UNORDERED_AFTER_THE_SELF_TAG
                 .iter()
                 .find(|(part, _)| name.contains(part));
-            match (after_tag.contains(k), row.is_some()) {
+            match (after_tag.contains(k) || before_drain.contains(k), row.is_some()) {
                 (true, false) => ordered += 1,
                 (true, true) => stale.push(format!(
-                    "{name}: argued in UNORDERED_AFTER_THE_SELF_TAG but ordered after the tag — drop the row"
+                    "{name}: argued in UNORDERED_AFTER_THE_SELF_TAG but ordered after the tag or ahead of the drain — drop the row"
                 )),
                 (false, true) => argued += 1,
                 (false, false) => offenders.push(name.to_string()),
@@ -1473,13 +1498,13 @@ pub(crate) mod schedule_tests {
             }
         }
         eprintln!(
-            "SelfPlayer users in Update: {} — {ordered} after the tag, {argued} argued",
+            "SelfPlayer users in Update: {} — {ordered} after the tag or ahead of the drain, {argued} argued",
             users.len()
         );
         assert!(
             offenders.is_empty(),
             "these systems name `SelfPlayer` in `Update` with no declared order after \
-             `tag_self_player` — `.after(WorldStage::Net)`, or argue it in \
+             `tag_self_player` or ahead of the drain — `.after(WorldStage::Net)`, or argue it in \
              UNORDERED_AFTER_THE_SELF_TAG:\n  {}",
             offenders.join("\n  ")
         );
@@ -1777,13 +1802,16 @@ pub(crate) mod schedule_tests {
         );
     }
 
+    /// The sets of the frame's input records, which run ahead of the net drain.
+    const INPUT_RECORD_SETS: &[&str] = &["UiInput", "WorldMouse", "WorldClicks"];
+
     /// The VM ticks once a frame (`extract::tick_script`, in `UiTick`): the window input rides
-    /// `UiInput` and a push the tick must see rides `UiFeed`, both chained after the net drain
-    /// and before the tick, the input first; a drain of what the tick produced is
-    /// `.after(UiTick)`. Read off the built graph. Fails a holder with no path to or from the
-    /// tick, one before the tick outside both phases and not argued in
-    /// [`OUTSIDE_THE_FEED_PHASE`], a member of either the graph does not place between the drain
-    /// and the tick, and a stale row.
+    /// the input records' sets ([`INPUT_RECORD_SETS`]) ahead of the net drain, and a push the tick
+    /// must see rides `UiFeed`, after the drain; both are before the tick, and a drain of what the
+    /// tick produced is `.after(UiTick)`. Read off the built graph. Fails a holder with no path to
+    /// or from the tick, one before the tick outside the phases and not argued in
+    /// [`OUTSIDE_THE_FEED_PHASE`], an input record the graph does not place before the drain and
+    /// the tick, a feed it does not place between them, and a stale row.
     #[test]
     fn every_vm_holder_in_update_declares_its_side_of_the_tick() {
         let mut app = headless_client();
@@ -1824,6 +1852,7 @@ pub(crate) mod schedule_tests {
         let before_tick = reach(tick, &pred);
         let after_tick = reach(tick, &succ);
         let after_drain = reach(drain, &succ);
+        let before_drain = reach(drain, &pred);
         let mut holders: Vec<SystemKey> = c.holds_vm.iter().copied().collect();
         holders.sort_by(|a, b| c.name(*a).cmp(c.name(*b)));
         let (mut input, mut feed, mut post, mut argued) = (0, 0, 0, 0);
@@ -1834,16 +1863,19 @@ pub(crate) mod schedule_tests {
                 continue;
             }
             let s = &c.systems[k];
-            let in_input = s.sets.iter().any(|set| set == "UiInput");
+            let in_input = s
+                .sets
+                .iter()
+                .any(|set| INPUT_RECORD_SETS.contains(&set.as_str()));
             let in_feed = s.sets.iter().any(|set| set == "UiFeed");
             let row = OUTSIDE_THE_FEED_PHASE
                 .iter()
                 .find(|(suffix, _)| s.name.ends_with(suffix));
             if in_input {
                 input += 1;
-                if !(after_drain.contains(k) && before_tick.contains(k)) {
+                if !(before_drain.contains(k) && before_tick.contains(k)) {
                     offenders.push(format!(
-                        "{}: in `UiInput`, but the graph does not place it after the net drain and before the tick",
+                        "{}: an input record, but the graph does not place it before the net drain and the tick",
                         s.name
                     ));
                 }
@@ -1863,7 +1895,7 @@ pub(crate) mod schedule_tests {
                     continue;
                 }
                 offenders.push(format!(
-                    "{}: ordered before the tick but in neither `UiInput` nor `UiFeed` — it may run before this frame's packets land; `.in_set(UiFeed)`",
+                    "{}: ordered before the tick but in neither the input records nor `UiFeed` — it may run before this frame's packets land; `.in_set(UiFeed)`",
                     s.name
                 ));
             } else {
@@ -1879,7 +1911,7 @@ pub(crate) mod schedule_tests {
                     "{}: argued in OUTSIDE_THE_FEED_PHASE but the graph places it {} — drop the row",
                     s.name,
                     if in_input {
-                        "in the input pass"
+                        "in the input records"
                     } else if in_feed {
                         "in the feed phase"
                     } else {
@@ -1902,7 +1934,7 @@ pub(crate) mod schedule_tests {
         assert!(
             offenders.is_empty(),
             "these systems hold the VM in `Update` without declaring their side of the tick \
-             (`UiInput` or `UiFeed` before it, or `.in_set(crate::ui_script::UiDrain)`):\n  {}",
+             (an input record or `UiFeed` before it, or `.in_set(crate::ui_script::UiDrain)`):\n  {}",
             offenders.join("\n  ")
         );
         assert!(stale.is_empty(), "stale rows:\n  {}", stale.join("\n  "));

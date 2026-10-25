@@ -17,10 +17,14 @@
 //! category's handlers (`0x4239a0`, `0x4245b0`), then category 6 (`0x420d55`), where the packet
 //! dispatch `0x403620` is registered, then the frame time, category 5 (`0x420d63`), and last the
 //! frame pass, category 0x11 (`0x420d6a`, `0x442350`), whose interface layer runs the `OnUpdate`
-//! walk (`0x764330` → `0x765650` → `0x76b2c0`) before the draw. benilla runs the UI's input
-//! records and the bindings, then the feeds, then the tick, then the paint, all after the net
-//! drain, which applies the frame's packets to the world before its input; its world clicks and
-//! the controller's frame-time step follow the tick.
+//! walk (`0x764330` → `0x765650` → `0x76b2c0`) before the draw. benilla runs the frame's input
+//! records first, ahead of the net drain: the UI's input pass and its bindings
+//! ([`crate::ui_script::UiInput`]), the world's mouse with the look session's click tests
+//! ([`crate::player::WorldMouse`]) and the world's clicks ([`crate::target::WorldClicks`]), so a
+//! handler and the calls it makes read the world as the last frame left it. Then the drain applies
+//! the packets, the world systems that move what a call reads with them run before
+//! [`VmPass::Resume`], and every other link follows: the feeds, the tick, the controller's
+//! frame-time step, the target chain's picks, the drains and the paint.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -34,13 +38,19 @@ use bevy::prelude::*;
 /// The pass's sets. [`VmPass::Start`] and [`VmPass::End`] hold the chain between them: every
 /// system whose declared access covers the call host's ([`crate::script_calls::ScriptCallHost`]),
 /// every one that writes the VM, and every other system [`order_the_pass`] takes in. A world
-/// system that moves what a script call reads runs before [`VmPass::Start`]; one that reads what
-/// a call writes runs after [`VmPass::End`]. [`order_the_pass`] links them to the chain's first
-/// and last; the end holds the flush of the unit edits the chain queued
-/// ([`crate::creature_anim::flush_unit_edits`]).
+/// system that moves what a script call reads runs before [`VmPass::Start`], ahead of the frame's
+/// input records, or, when it moves it with the frame's packets or time, after the net drain and
+/// before [`VmPass::Resume`]; one that reads what a call writes runs after [`VmPass::End`].
+/// [`order_the_pass`] links them to the chain's first, first resumed and last links; the end holds
+/// the flush of the unit edits the chain queued ([`crate::creature_anim::flush_unit_edits`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum VmPass {
     Start,
+    /// The pass past the net drain: every link the declared order does not put ahead of the
+    /// drain runs after it, so only the frame's input records see the world as the last frame
+    /// left it. A world system that moves what a call reads with the frame's packets or time (a
+    /// transport's deck) runs after the drain and before this.
+    Resume,
     End,
     /// A world system that reads or writes what a script call reaches and must run among the
     /// hosts, not before or after them all: chained in the pass's order as a host is.
@@ -74,6 +84,11 @@ impl Plugin for VmPassPlugin {
         app.configure_sets(
             Update,
             benilla_world::schedule::WorldStage::Present.after(VmPass::End),
+        );
+        // The frame's packets and their movers ahead of the pass's links that follow them.
+        app.configure_sets(
+            Update,
+            VmPass::Resume.after(benilla_world::schedule::WorldStage::Net),
         );
         // The unit edits the pass's seams queued, flushed at its end: every system after the pass
         // reads them.
@@ -169,7 +184,9 @@ pub(crate) fn shared_sinks(world: &World) -> Vec<ComponentId> {
 }
 
 /// Chains the pass of `label` in a linear extension of the schedule's declared order, with
-/// [`VmPass::Start`] before them all and [`VmPass::End`] after; returns their names in that order.
+/// [`VmPass::Start`] before them all and [`VmPass::End`] after, and [`VmPass::Resume`] before
+/// every link the declared order does not put ahead of the net drain or in it, so the input
+/// records alone run ahead of the frame's packets; returns their names in that order.
 /// Where the declared order leaves it free: a drain that no declared order puts ahead of another
 /// system of the chain runs after every other but the paint and what follows it, with a sync point
 /// before the paint; a drain one does (the input pass's readers wait on it) runs before the
@@ -315,10 +332,16 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                 .find(|(_, set, _)| *set == &end as &dyn SystemSet)
                 .map(|(key, _, _)| key)
         };
-        let (start, end) = (
+        let (start, resume, end) = (
             end_of(VmPass::Start).map(|key| node(NodeId::Set(key))),
+            end_of(VmPass::Resume).map(|key| node(NodeId::Set(key))),
             end_of(VmPass::End).map(|key| node(NodeId::Set(key))),
         );
+        let net = graph
+            .system_sets
+            .iter()
+            .find(|(_, set, _)| *set == &benilla_world::schedule::WorldStage::Net as &dyn SystemSet)
+            .map(|(key, _, _)| node(NodeId::Set(key)));
         let input = graph
             .system_sets
             .iter()
@@ -361,6 +384,9 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
         };
         let before_start = start.map_or(vec![false; nodes], |(_, at)| reach(at, false));
         let after_end = end.map_or(vec![false; nodes], |(at, _)| reach(at, true));
+        // The frame's input records are the links the declared order puts ahead of the net drain
+        // (or in it); every other runs after the drain and the movers before the resume.
+        let ahead_of_net = net.map(|(_, at)| reach(at, false));
         let links: Vec<Option<InternedSystemSet>> = (0..keys.len())
             .map(|i| match joins[i] {
                 Joins::Always => own_set[i],
@@ -434,6 +460,15 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                 {
                     edges.push((i, input_start));
                     early.push((set, i));
+                }
+            }
+        }
+        let mut resumes = vec![false; keys.len()];
+        if let (Some((_, resume_end)), Some(ahead)) = (resume, &ahead_of_net) {
+            for i in 0..keys.len() {
+                if links[i].is_some() && !ahead[i] {
+                    edges.push((resume_end, i));
+                    resumes[i] = true;
                 }
             }
         }
@@ -554,10 +589,15 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                     .unwrap_or_default()
             })
             .collect();
+        let resume_at = chain.iter().find(|(_, i)| resumes[*i]).map(|(set, _)| *set);
         let chain: Vec<InternedSystemSet> = chain.into_iter().map(|(set, _)| set).collect();
         let (Some(&first), Some(&last)) = (chain.first(), chain.last()) else {
             return names;
         };
+        // Every link after the first that resumes follows it in the chain.
+        if let Some(set) = resume_at {
+            schedule.configure_sets(VmPass::Resume.before(set));
+        }
         for (n, (set, _)) in early.into_iter().enumerate() {
             schedule.configure_sets(
                 DrainBeforeInput(n)
@@ -673,8 +713,9 @@ mod tests {
         next
     }
 
-    /// The pass runs its phases in the reference's tick order: the input pass, then the net feeds
-    /// (the unit feed), then the tick, then the drains of what their Lua asked, then the paint.
+    /// The pass runs its phases in the reference's tick order: the input records (the UI's input
+    /// pass, the world's mouse, its clicks), then the net feeds (the unit feed), then the tick,
+    /// then the drains of what their Lua asked, then the paint.
     #[test]
     fn the_pass_runs_the_input_then_the_feeds_then_the_tick_then_the_drains() {
         let app = headless_client();
@@ -682,15 +723,61 @@ mod tests {
             return;
         };
         let at = |name: &str| at(&order, name);
-        let (input, feed, tick) = (
+        let (input, mouse, click, feed, tick) = (
             at("::feed_ui_input"),
+            at("::latch_world_mouse"),
+            at("::select_on_click"),
             at("::ui_unit::feed_units"),
             at("::tick_script"),
         );
         let (drain, paint) = (at("::drain_chat_input"), at("::paint_script"));
         assert!(
-            input < feed && feed < tick && tick < drain && drain < paint,
+            input < mouse
+                && mouse < click
+                && click < feed
+                && feed < tick
+                && tick < drain
+                && drain < paint,
             "{order:?}"
+        );
+    }
+
+    /// Every host runs on a declared side of the net drain, the instruments' and the probes' too:
+    /// the frame's input records ahead of it, reading the world as the last frame left it, and
+    /// every other after it ([`super::VmPass::Resume`]), so none reads the world before or after
+    /// the frame's packets as the executor picks.
+    #[test]
+    fn every_host_runs_on_a_declared_side_of_the_net_drain() {
+        let mut app = headless_client_with(crate::dev::add_every_instrument);
+        if pass_order(&app).is_none() {
+            return;
+        }
+        let update = census(&mut app, Update, SyncPoints::Declared);
+        let drain = one(&update, "::net::apply::apply_net_updates");
+        let next = successors(&update);
+        let after_drain = after(&next, drain);
+        let mut prev: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &update.dependencies {
+            prev.entry(*b).or_default().push(*a);
+        }
+        let before_drain = after(&prev, drain);
+        let ahead = update
+            .hosted
+            .iter()
+            .filter(|k| before_drain.contains(k))
+            .count();
+        let mut unordered: Vec<&str> = update
+            .hosted
+            .iter()
+            .filter(|k| !before_drain.contains(k) && !after_drain.contains(k))
+            .map(|k| update.name(*k))
+            .collect();
+        unordered.sort();
+        assert!(ahead >= 10, "the input records' hosts run ahead: {ahead}");
+        assert!(
+            unordered.is_empty(),
+            "hosts in no declared order against the net drain:\n  {}",
+            unordered.join("\n  ")
         );
     }
 

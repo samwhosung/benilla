@@ -245,11 +245,13 @@ impl Plugin for UiSummonPlugin {
         app.init_resource::<SummonState>().add_systems(
             Update,
             (
-                // Before the feed, so the frame a session ends feeds nothing from it.
-                // Before the pass: `ConfirmSummon`'s call reads the latch.
+                // Before the feed, so the frame a session ends feeds nothing from it. After the
+                // drain whose session edge it reads, and before the pass resumes:
+                // `ConfirmSummon`'s call reads the latch.
                 end_session_summon
+                    .after(benilla_world::schedule::WorldStage::Net)
                     .before(feed_summon)
-                    .before(crate::vm_pass::VmPass::Start),
+                    .before(crate::vm_pass::VmPass::Resume),
                 feed_summon.in_set(UiFeed),
             ),
         );

@@ -188,8 +188,9 @@ pub(super) fn plugin(app: &mut App) {
             load_camera_pose
                 .after(super::ControlRestore)
                 .before(super::control)
-                // And before the VM pass's script calls, which read the player it restores.
-                .before(crate::vm_pass::VmPass::Start)
+                // And before the script calls after the packets, which read the player it
+                // restores; the restore follows the create, a packet.
+                .before(crate::vm_pass::VmPass::Resume)
                 .in_set(InWorldGated),
         )
         .add_systems(OnExit(ClientState::InWorld), save_on_session_end);

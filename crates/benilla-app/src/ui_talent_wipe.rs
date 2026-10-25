@@ -176,10 +176,12 @@ impl Plugin for UiTalentWipePlugin {
         app.init_resource::<TalentWipeState>().add_systems(
             Update,
             (
-                // Range-close ahead of the VM pass, the feed and the Accept's host among it, so
-                // walking away hides the dialog the same frame.
+                // Range-close after the drain that despawns the NPC and ahead of the pass's resume,
+                // the feed and the Accept's host after it, so walking away hides the dialog the
+                // same frame.
                 close_npc_session_out_of_range::<TalentWipeState>
-                    .before(crate::vm_pass::VmPass::Start),
+                    .after(benilla_world::schedule::WorldStage::Net)
+                    .before(crate::vm_pass::VmPass::Resume),
                 feed_talent_wipe.in_set(UiFeed),
             ),
         );

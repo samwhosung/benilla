@@ -230,10 +230,12 @@ impl Plugin for UiBinderPlugin {
             Update,
             (
                 // Range-close before the feed, so walking away hides the dialog the same frame.
-                // Before the pass: `ConfirmBinder`'s call reads the question.
+                // In the frame time, after the drain that despawns the NPC and before the pass
+                // resumes: `ConfirmBinder`'s call reads the question.
                 close_npc_session_out_of_range::<BinderState>
+                    .after(benilla_world::schedule::WorldStage::Net)
                     .before(feed_binder)
-                    .before(crate::vm_pass::VmPass::Start),
+                    .before(crate::vm_pass::VmPass::Resume),
                 feed_binder.in_set(UiFeed),
             ),
         );

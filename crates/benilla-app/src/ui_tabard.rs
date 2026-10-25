@@ -352,8 +352,11 @@ impl Plugin for TabardUiPlugin {
             .add_systems(
                 Update,
                 (
-                    // Moves what the save's call reads, so ahead of every host.
-                    reset_on_world_enter.before(crate::vm_pass::VmPass::Start),
+                    // Moves what the save's call reads, on the drain's session edge: after the
+                    // drain and before the pass resumes.
+                    reset_on_world_enter
+                        .after(benilla_world::schedule::WorldStage::Net)
+                        .before(crate::vm_pass::VmPass::Resume),
                     feed_tabard
                         .in_set(UiFeed)
                         .in_set(crate::ui_session::NpcWindowFeed),

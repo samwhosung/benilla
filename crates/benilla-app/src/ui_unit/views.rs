@@ -201,8 +201,8 @@ impl ViewLog {
 
 /// Each store a token can name as the frame began, with the entity it was read from, the group
 /// records, and how many entries the log held then (`mark`), for the check that the rewind lands
-/// on them: a write the log missed makes it land elsewhere. Taken ahead of the net stage, in
-/// debug builds.
+/// on them: a write the log missed makes it land elsewhere. Taken ahead of the frame's input
+/// records and the net stage, in debug builds.
 #[derive(Resource, Default)]
 pub(crate) struct FrameStart {
     epoch: u64,
@@ -561,7 +561,9 @@ pub(super) fn add_unit_views_lane(app: &mut App) {
     #[cfg(debug_assertions)]
     app.add_systems(
         Update,
-        mark_frame_start.before(benilla_world::schedule::WorldStage::Net),
+        mark_frame_start
+            .before(crate::ui_script::UiInput)
+            .before(benilla_world::schedule::WorldStage::Net),
     );
 }
 
