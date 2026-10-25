@@ -67,23 +67,38 @@ impl GoLockInputs<'_, '_> {
     }
 }
 
+/// What `usable 0x5f3130` takes from the lock's opener (`0x5f330c`): whether a known spell (or a
+/// held key's use spell) opens it, which skips the state test (`0x5f3315`), and that spell's range
+/// for the distance test.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Opener {
+    pub(crate) spell: bool,
+    /// The spell's `GetMinMaxRange` maximum (`0x5f3328`); `None` while it is not in the catalog,
+    /// where the handler's own range stands.
+    pub(crate) range: Option<f32>,
+}
+
 impl OpenerReach<'_, '_> {
-    /// [`Self::range`] for a GameObject, resolving its lock as the cursor does; `go` is its store
-    /// and resolved state. `None`: no template or lock row yet, or no opener spell.
-    pub(crate) fn go_range(
+    /// [`Self::opener`] for a GameObject, resolving its lock as the cursor does; `go` is its
+    /// store and resolved state. Default: no template or lock row yet, or no opener spell.
+    pub(crate) fn go_opener(
         &self,
         inputs: &GoLockInputs,
         go: (&ObjectStore, u32),
         openers: &[u32],
         me: Option<&ObjectStore>,
-    ) -> Option<f32> {
-        let lock_id = inputs.templates.of(&go.0 .0)?.lock_id;
-        let slots = inputs
+    ) -> Opener {
+        let Some(lock_id) = inputs.templates.of(&go.0 .0).map(|t| t.lock_id) else {
+            return Opener::default();
+        };
+        let Some(slots) = inputs
             .locks
-            .as_deref()?
-            .0
-            .slots(lock_id)
-            .filter(|_| lock_id != 0)?;
+            .as_deref()
+            .and_then(|l| l.0.slots(lock_id))
+            .filter(|_| lock_id != 0)
+        else {
+            return Opener::default();
+        };
         let outcome = resolve_lock(
             slots,
             openers,
@@ -94,16 +109,25 @@ impl OpenerReach<'_, '_> {
             go_facts(Some(go)),
             &mut None,
         );
-        self.range(inputs, outcome)
+        self.opener(inputs, outcome)
     }
 
-    /// The range for the distance test when a spell opens the lock (`0x5f3328`): that spell's
-    /// maximum from `GetMinMaxRange 0x6e3480` with the player as caster and target 0, range
-    /// modifier included; a missing or self row gives 0. `None` while the spell is not in the
-    /// catalog, where the handler's own range stands.
-    pub(crate) fn range(&self, inputs: &GoLockInputs, outcome: LockOutcome) -> Option<f32> {
+    /// The opener a lock outcome gives (`0x5f3328`): the spell's maximum from `GetMinMaxRange
+    /// 0x6e3480` with the player as caster and target 0, range modifier included; a missing or
+    /// self row gives 0.
+    pub(crate) fn opener(&self, inputs: &GoLockInputs, outcome: LockOutcome) -> Opener {
+        let Some(spell_id) = inputs.opener_spell(outcome) else {
+            return Opener::default();
+        };
+        Opener {
+            spell: true,
+            range: self.spell_range(inputs, spell_id),
+        }
+    }
+
+    fn spell_range(&self, inputs: &GoLockInputs, spell_id: u32) -> Option<f32> {
         let spells = inputs.spells.as_deref()?;
-        let spell = spells.catalog.get(inputs.opener_spell(outcome)?)?;
+        let spell = spells.catalog.get(spell_id)?;
         let row = spells.ranges.get(spell.range_index);
         let player = inputs.objects.player()?;
         let unit = self

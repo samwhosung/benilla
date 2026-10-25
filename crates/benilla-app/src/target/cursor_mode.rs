@@ -248,25 +248,32 @@ pub(super) fn go_use_range(type_id: i32) -> f32 {
     }
 }
 
-/// The squared distance `usable 0x5f3130` allows (`0x5f3346`): the handler's range, or the maximum
-/// range of the spell that opens the object's lock (`0x5f3328`, `opener_range`). The chair then
-/// runs its own 3.0 yd test (`0x5f5670`), so it takes the lesser. Measured to the object, where
-/// the reference (seats from `0x5f5760`) and vmangos (`GameObject.cpp:2231-2236`) measure to the
-/// nearest seat, so only a multi-seat bench differs, by up to half its span.
+/// The squared distance the base test of `usable 0x5f3130` allows (`0x5f3346`): the handler's
+/// range, or the maximum range of the spell that opens the object's lock (`0x5f3328`).
 pub(super) fn go_reach_sq(type_id: i32, opener_range: Option<f32>) -> f32 {
     let range = opener_range.unwrap_or_else(|| go_handler_range(type_id));
-    let sq = range * range;
-    if type_id == GO_TYPE_CHAIR {
-        let seat = go_use_range(type_id);
-        sq.min(seat * seat)
-    } else {
-        sq
-    }
+    range * range
 }
 
-/// Whether `dist_sq` is within [`go_reach_sq`]: farther gives error 0xe1, equal and NaN pass.
+/// The chair's seat test, 3.0 yd squared (`[0xc4d808]`, `0x5f571a`).
+const CHAIR_SEAT_RANGE_SQ: f32 = 9.0;
+
+/// Whether `dist_sq` passes `usable 0x5f3130`'s distance test, error 0xe1 otherwise: within
+/// [`go_reach_sq`], equal and NaN passing (`0x5f336c`-`0x5f3379`). The chair then runs its own seat
+/// test (`0x5f5670`), which is strict: `fcomp` at `0x5f571a` and `jnp` at `0x5f572b` succeed only
+/// on C0 alone, so equal and NaN fail. Measured to the object, where the reference (seats from
+/// `0x5f5760`) and vmangos (`GameObject.cpp:2231-2236`) measure to the nearest seat, so only a
+/// multi-seat bench differs, by up to half its span.
 pub(super) fn go_in_reach(dist_sq: f32, type_id: i32, opener_range: Option<f32>) -> bool {
-    dist_sq.is_nan() || dist_sq <= go_reach_sq(type_id, opener_range)
+    let base = dist_sq.is_nan() || dist_sq <= go_reach_sq(type_id, opener_range);
+    base && (type_id != GO_TYPE_CHAIR || dist_sq < CHAIR_SEAT_RANGE_SQ)
+}
+
+/// `usable 0x5f3130`'s state arm (`0x5f3392`-`0x5f33ac`), after the lock arm and ahead of the
+/// distance test: without an opener spell, `GAMEOBJECT_STATE` 2 (`go+0x27c`) refuses with error
+/// 0xe5, `ERR_USE_DESTROYED`. A spell that opens the lock skips it (`0x5f3315`).
+pub(super) fn go_destroyed(state: u32, opener_spell: bool) -> bool {
+    state == benilla_formats::GO_STATE_ACTIVE_ALTERNATIVE && !opener_spell
 }
 
 /// Why `usable 0x5f3130`'s player arms, ahead of its lock and range arms, or the door's own slot
@@ -838,9 +845,12 @@ pub(super) fn classify(
             });
         let lock_unmet = outcome.is_some_and(|o| o.blocks_usable(facts.flag_locked));
         // The distance test's range is the opener spell's when one opens the lock (`0x5f3328`).
-        let opener_range = outcome.and_then(|o| opener_reach.range(go_inputs, o));
+        let opener = outcome.map_or_else(Default::default, |o| opener_reach.opener(go_inputs, o));
         let unable = kind != CursorKind::PickLock
-            && (refused || lock_unmet || !go_in_reach(dist_sq, go_type, opener_range));
+            && (refused
+                || lock_unmet
+                || go_destroyed(facts.state, opener.spell)
+                || !go_in_reach(dist_sq, go_type, opener.range));
         Some((kind, unable))
     };
     // The reference picks once over all objects; benilla picks units and GameObjects apart and
@@ -1442,7 +1452,7 @@ mod tests {
         ));
         assert!(highlightable_flags(0, 0, 0, None, GoOverrides::default()));
         assert_eq!(go_reach_sq(GO_TYPE_FISHINGNODE, None), 100.0 * 100.0);
-        assert_eq!(go_reach_sq(GO_TYPE_CHAIR, None), 9.0);
+        assert_eq!(go_reach_sq(GO_TYPE_CHAIR, None), 100.0 * 100.0);
         assert!(!fishing_channel_owned(None, Some(7)));
         assert!(!fishing_channel_owned(None, None));
     }
@@ -1496,6 +1506,30 @@ mod tests {
         // The chair's own 3.0 yd test still follows.
         assert!(!go_in_reach(4.0 * 4.0, GO_TYPE_CHAIR, Some(100.0)));
         assert!(go_in_reach(2.9 * 2.9, GO_TYPE_CHAIR, None));
+    }
+
+    /// `0x5f571a`/`0x5f572b`: the seat test succeeds only strictly below 3.0 yd squared, so exactly
+    /// 9.0 and a NaN fail, where the base test passes both.
+    #[test]
+    fn the_chairs_seat_test_is_strict() {
+        assert!(!go_in_reach(9.0, GO_TYPE_CHAIR, None), "exactly 3.0 yd");
+        assert!(go_in_reach(
+            f32::from_bits(9.0f32.to_bits() - 1),
+            GO_TYPE_CHAIR,
+            None
+        ));
+        assert!(!go_in_reach(f32::NAN, GO_TYPE_CHAIR, None));
+        assert!(go_in_reach(9.0, 0, None), "a door at 3.0 yd, unaffected");
+    }
+
+    /// `0x5f3395`: state 2 refuses unless a spell opens the lock.
+    #[test]
+    fn state_two_refuses_without_an_opener_spell() {
+        use benilla_formats::{GO_STATE_ACTIVE, GO_STATE_READY};
+        assert!(go_destroyed(2, false));
+        assert!(!go_destroyed(2, true));
+        assert!(!go_destroyed(GO_STATE_ACTIVE, false));
+        assert!(!go_destroyed(GO_STATE_READY, false));
     }
 
     #[test]

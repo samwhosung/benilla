@@ -628,13 +628,13 @@ impl Dispatch<'_, '_> {
         let Ok((store, anim)) = self.stores.get(entity) else {
             return false;
         };
-        let opener_range = self.opener_reach.go_range(
+        let opener = self.opener_reach.go_opener(
             &self.go_inputs,
             (store, crate::go_anim::go_state(anim, store)),
             &self.player_actions.openers,
             self.self_store(),
         );
-        cursor_mode::go_in_reach(d2, store.0.gameobject_type_id(), opener_range)
+        cursor_mode::go_in_reach(d2, store.0.gameobject_type_id(), opener.range)
     }
 
     fn melee_reach(&self, target: Entity) -> f32 {
@@ -793,6 +793,24 @@ impl Dispatch<'_, '_> {
             }
             return;
         }
+        // `usable`'s state arm (`0x5f3395`), after its lock arm and ahead of the range arm: state 2
+        // refuses with `ERR_USE_DESTROYED` unless a spell opens the lock. The lock-less legs below
+        // have no opener; a locked object's is known once its lock resolves.
+        let state = go.map_or(0, |(_, state)| state);
+        let flag_locked = super::lock::go_facts(go).flag_locked;
+        let destroyed = cursor_mode::go_destroyed(state, false);
+        let lockless_leg = matches!(
+            go_type,
+            cursor_mode::GO_TYPE_MAILBOX
+                | cursor_mode::GO_TYPE_TEXT
+                | cursor_mode::GO_TYPE_MEETINGSTONE
+        );
+        if destroyed && lockless_leg {
+            self.feedback
+                .errors
+                .push(crate::ui_action::UiError::key("ERR_USE_DESTROYED"));
+            return;
+        }
         // MAILBOX (type 19) opens locally: its use handler `0x5f6820` sends no
         // `CMSG_GAMEOBJ_USE`, and `MAIL_SHOW` → `CheckInbox` asks for the list.
         if go_type == cursor_mode::GO_TYPE_MAILBOX {
@@ -842,6 +860,17 @@ impl Dispatch<'_, '_> {
             self_store,
             &self.seam.net,
         ) {
+            // No opener spell, and the lock arm (flagged locked) did not already refuse.
+            GoAction::Use if destroyed => {
+                self.feedback
+                    .errors
+                    .push(crate::ui_action::UiError::key("ERR_USE_DESTROYED"));
+            }
+            GoAction::Refuse(_) if destroyed && !flag_locked => {
+                self.feedback
+                    .errors
+                    .push(crate::ui_action::UiError::key("ERR_USE_DESTROYED"));
+            }
             GoAction::Use | GoAction::OpenLock(_) | GoAction::OpenByKey(_) if !in_reach => {
                 self.walk_to_object(entity, guid, go_type, walk);
             }
@@ -3648,6 +3677,17 @@ mod tests {
         x: f32,
         opener: Option<(u32, f32)>,
     ) -> (bool, bool, Vec<&'static str>) {
+        range_verdict_in_state(go_type, x, opener, 0)
+    }
+
+    /// [`range_verdict`] with the object's wire `GAMEOBJECT_STATE`; the opener's lock slot is
+    /// Action 4 at state 2 (the destroyed state's only action), else any state.
+    fn range_verdict_in_state(
+        go_type: u32,
+        x: f32,
+        opener: Option<(u32, f32)>,
+        state: u32,
+    ) -> (bool, bool, Vec<&'static str>) {
         use benilla_formats::{LockCatalog, LockSlot, OpenLock, SpellDisplay, SpellRange};
         use benilla_protocol::field::FIELD_OBJECT_ENTRY;
         const LOCK: u32 = 55;
@@ -3660,7 +3700,7 @@ mod tests {
                 key_type: benilla_formats::LOCK_KEY_SKILL,
                 index: 1,
                 skill: 0,
-                action: 5,
+                action: if state == 2 { 4 } else { 5 },
             };
             world.insert_resource(crate::go_templates::Locks(LockCatalog::from_rows([(
                 LOCK, slots,
@@ -3701,9 +3741,13 @@ mod tests {
             .resource_mut::<crate::go_templates::GameObjectTemplates>()
             .insert(77, go_type, "Object".into(), &data);
         let object = spawn_object(&mut world, go_type, Vec3::new(x, 0.0, 0.0));
-        world
-            .entity_mut(object)
-            .insert(store(&[(GO_TYPE_FIELD, go_type), (FIELD_OBJECT_ENTRY, 77)]));
+        world.entity_mut(object).insert(store(&[
+            // `OBJECT_FIELD_TYPE`: object and GameObject, which the lock chain's lookup filters on.
+            (2, 0x21),
+            (GO_TYPE_FIELD, go_type),
+            (FIELD_OBJECT_ENTRY, 77),
+            (14, state),
+        ]));
         let hovered = HoveredObject {
             target: Some(object),
             guid: Some(CHEST),
@@ -3772,6 +3816,36 @@ mod tests {
             range_verdict(0, 3.1, Some((6477, 3.0))),
             (true, false, vec!["ERR_USE_TOO_FAR"]),
             "a shorter spell range shortens the door's"
+        );
+    }
+
+    /// `0x5f3395`: state 2 gives `ERR_USE_DESTROYED` (0xe5) ahead of the distance error and unless
+    /// a spell opens the lock (`0x5f3315`), the cursor graying with it.
+    #[test]
+    fn a_destroyed_object_refuses_unless_a_spell_opens_it() {
+        const DESTROYED: &str = "ERR_USE_DESTROYED";
+        assert_eq!(
+            range_verdict_in_state(0, 2.0, None, 0),
+            (false, true, vec![])
+        );
+        assert_eq!(
+            range_verdict_in_state(0, 2.0, None, 2),
+            (true, false, vec![DESTROYED])
+        );
+        // Beyond the range too, 0xe5 comes first: no walk, no `ERR_USE_TOO_FAR`.
+        assert_eq!(
+            range_verdict_in_state(0, 30.0, None, 2),
+            (true, false, vec![DESTROYED])
+        );
+        // A mailbox is lock-less and refuses the same.
+        assert_eq!(
+            range_verdict_in_state(19, 2.0, None, 2),
+            (true, false, vec![DESTROYED])
+        );
+        // A known spell opens the lock (Action 4, the destroyed state's): the test is skipped.
+        assert_eq!(
+            range_verdict_in_state(0, 2.0, Some((6477, 8.0)), 2),
+            (false, true, vec![])
         );
     }
 
