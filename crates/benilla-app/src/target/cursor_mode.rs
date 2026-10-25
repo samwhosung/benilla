@@ -202,25 +202,71 @@ pub(crate) const GO_TYPE_TEXT: i32 = 9;
 const GO_TYPE_RITUAL: i32 = 18;
 pub(super) const GO_TYPE_MAILBOX: i32 = 19;
 const GO_TYPE_28: i32 = 28;
-/// Every other type's interact range: the NPC-service reach, standing in for the reference's
-/// per-type strategy constant (`[strat+0xc]`, compared squared by `usable 0x5f3130`; base 5.0,
-/// overridden by several types), which is not transcribed.
-const GO_INTERACT_RANGE_SQ: f32 = SERVICE_RANGE_SQ;
 /// `GAMEOBJECT_TYPE_FISHINGNODE` (17), the bobber: its strategy (vtable `0x80bc80`) overrides only
-/// the highlightable slot, and its interact range is 100 yd (`0x5f66b0`, `[0x80b0b0]`).
+/// the highlightable slot.
 pub(crate) const GO_TYPE_FISHINGNODE: i32 = 17;
 /// `GAMEOBJECT_TYPE_CHAIR` (7): its own range predicate `0x5f5670` accepts within 3.0 yd
 /// (`[0xc4d808]`, written only by `0x5f98b0` as 3.0 squared).
 pub(crate) const GO_TYPE_CHAIR: i32 = 7;
-pub(super) fn go_interact_range_sq(type_id: i32) -> f32 {
+/// `GAMEOBJECT_TYPE_QUESTGIVER` (2), TEXT (9), FLAGSTAND (24), FLAGDROP (26), MINIGAME (27): the
+/// 5.5555553 yd range (`[0x80b07c]`, stored at `0x5f45c2`, `0x5f5852`, `0x5f6c12`, `0x5f6c72`,
+/// `0x5f6cd2`).
+const GO_RANGE_NEAR_SERVICE: f32 = 5.555_555_3;
+/// The base handler's range (`[0x80b084]`, `0x5f2f67`, run first by every constructor).
+const GO_RANGE_BASE: f32 = 5.0;
+/// `GAMEOBJECT_TYPE_BINDER` (4): 10.0 yd (`[0x80b088]`, `0x5f478b`).
+const GO_RANGE_BINDER: f32 = 10.0;
+/// The chair's and the bobber's 100.0 yd (`[0x80b0b0]`, `0x5f562a`, `0x5f66d2`).
+const GO_RANGE_FAR: f32 = 100.0;
+
+/// A type's use range, `[handler+0xc]` (`0x5f2f50` stores 5.0 and nine types store another value
+/// over it): the range `usable 0x5f3130` squares for its distance test and hands back. Type 21 and
+/// any type above 30 take the static handler `0xc4d840`, which has none and whose slot 6
+/// (`0x5f3700`) is never usable: 0.0.
+const fn go_handler_range(type_id: i32) -> f32 {
     match type_id {
-        GO_TYPE_FISHINGNODE => 100.0 * 100.0,
-        // Measured to the object; the reference (seats from `0x5f5760`) and vmangos
-        // (`GameObject.cpp:2231-2236`) measure to the nearest seat, so only a multi-seat bench
-        // differs, by up to half its span.
-        GO_TYPE_CHAIR => 9.0,
-        _ => GO_INTERACT_RANGE_SQ,
+        2 | 9 | 24 | 26 | 27 => GO_RANGE_NEAR_SERVICE,
+        4 => GO_RANGE_BINDER,
+        GO_TYPE_CHAIR | GO_TYPE_FISHINGNODE => GO_RANGE_FAR,
+        // AREADAMAGE stores a zeroed register (`0x5f4504`).
+        12 => 0.0,
+        0 | 1 | 3 | 5 | 6 | 8 | 10 | 11 | 13..=16 | 18..=20 | 22 | 23 | 25 | 28..=30 => {
+            GO_RANGE_BASE
+        }
+        _ => 0.0,
     }
+}
+
+/// The range slot 6 hands back, which the walk to a too-far object stops short of (`0x5f86b0`):
+/// `[handler+0xc]`, except the chair's, which returns 3.0 (`0x5f569d`, `[0x80b0a0]`) after its
+/// base test. An opener spell's range never reaches it (`0x5f32f4` stores it before the spell's).
+pub(super) fn go_use_range(type_id: i32) -> f32 {
+    if type_id == GO_TYPE_CHAIR {
+        3.0
+    } else {
+        go_handler_range(type_id)
+    }
+}
+
+/// The squared distance `usable 0x5f3130` allows (`0x5f3346`): the handler's range, or the maximum
+/// range of the spell that opens the object's lock (`0x5f3328`, `opener_range`). The chair then
+/// runs its own 3.0 yd test (`0x5f5670`), so it takes the lesser. Measured to the object, where
+/// the reference (seats from `0x5f5760`) and vmangos (`GameObject.cpp:2231-2236`) measure to the
+/// nearest seat, so only a multi-seat bench differs, by up to half its span.
+pub(super) fn go_reach_sq(type_id: i32, opener_range: Option<f32>) -> f32 {
+    let range = opener_range.unwrap_or_else(|| go_handler_range(type_id));
+    let sq = range * range;
+    if type_id == GO_TYPE_CHAIR {
+        let seat = go_use_range(type_id);
+        sq.min(seat * seat)
+    } else {
+        sq
+    }
+}
+
+/// Whether `dist_sq` is within [`go_reach_sq`]: farther gives error 0xe1, equal and NaN pass.
+pub(super) fn go_in_reach(dist_sq: f32, type_id: i32, opener_range: Option<f32>) -> bool {
+    dist_sq.is_nan() || dist_sq <= go_reach_sq(type_id, opener_range)
 }
 
 /// Why `usable 0x5f3130`'s player arms, ahead of its lock and range arms, or the door's own slot
@@ -681,6 +727,7 @@ pub(super) struct CursorInputs<'w, 's> {
     >,
     self_q: Query<'w, 's, (&'static Transform, &'static ObjectStore), With<SelfPlayer>>,
     go_inputs: super::lock::GoLockInputs<'w, 's>,
+    opener_reach: super::lock::OpenerReach<'w, 's>,
     player_actions: Res<'w, crate::ui_action::PlayerActions>,
     // `[0xb700e4]` and `[0xb700e8]`, the skin legs' learned-spell latches.
     learned: Res<'w, crate::ui_action::LearnedAbilities>,
@@ -708,6 +755,7 @@ pub(super) fn classify(
         units,
         self_q,
         go_inputs,
+        opener_reach,
         player_actions,
         learned,
         quest,
@@ -772,11 +820,11 @@ pub(super) fn classify(
         // The lock arm needs `GO_FLAG_LOCKED`, so an herb the player cannot gather stays lit and
         // refuses on the click, while a padlocked door grays.
         let facts = super::lock::go_facts(Some((store, crate::go_anim::go_state(anim, store))));
-        let lock_unmet = go_inputs
+        let outcome = go_inputs
             .locks
             .as_deref()
             .and_then(|l| l.0.slots(lock_id).filter(|_| lock_id != 0))
-            .is_some_and(|slots| {
+            .map(|slots| {
                 super::lock::resolve_lock(
                     slots,
                     &player_actions.openers,
@@ -787,10 +835,12 @@ pub(super) fn classify(
                     facts,
                     &mut None,
                 )
-                .blocks_usable(facts.flag_locked)
             });
+        let lock_unmet = outcome.is_some_and(|o| o.blocks_usable(facts.flag_locked));
+        // The distance test's range is the opener spell's when one opens the lock (`0x5f3328`).
+        let opener_range = outcome.and_then(|o| opener_reach.range(go_inputs, o));
         let unable = kind != CursorKind::PickLock
-            && (refused || lock_unmet || dist_sq > go_interact_range_sq(go_type));
+            && (refused || lock_unmet || !go_in_reach(dist_sq, go_type, opener_range));
         Some((kind, unable))
     };
     // The reference picks once over all objects; benilla picks units and GameObjects apart and
@@ -1391,15 +1441,61 @@ mod tests {
             }
         ));
         assert!(highlightable_flags(0, 0, 0, None, GoOverrides::default()));
-        assert_eq!(go_interact_range_sq(GO_TYPE_FISHINGNODE), 100.0 * 100.0);
-        assert_eq!(go_interact_range_sq(0), GO_INTERACT_RANGE_SQ);
-        assert_eq!(go_interact_range_sq(GO_TYPE_CHAIR), 9.0);
-        assert!(
-            go_interact_range_sq(GO_TYPE_CHAIR) < GO_INTERACT_RANGE_SQ,
-            "a chair's reach is shorter than the default GameObject reach"
-        );
+        assert_eq!(go_reach_sq(GO_TYPE_FISHINGNODE, None), 100.0 * 100.0);
+        assert_eq!(go_reach_sq(GO_TYPE_CHAIR, None), 9.0);
         assert!(!fishing_channel_owned(None, Some(7)));
         assert!(!fishing_channel_owned(None, None));
+    }
+
+    /// `[handler+0xc]` by type (`0x5f2f67` and the nine stores over it), as the table in
+    /// benilla-re's gameobjecttypes gives it.
+    #[test]
+    fn each_type_has_its_handlers_use_range() {
+        let base = [
+            0, 1, 3, 5, 6, 8, 10, 11, 13, 14, 15, 16, 18, 19, 20, 22, 23, 25, 28, 29, 30,
+        ];
+        for t in base {
+            assert_eq!(go_use_range(t), 5.0, "type {t}");
+        }
+        for t in [2, 9, 24, 26, 27] {
+            assert_eq!(go_use_range(t), 5.555_555_3, "type {t}");
+        }
+        assert_eq!(go_use_range(4), 10.0);
+        assert_eq!(go_use_range(17), 100.0);
+        assert_eq!(go_use_range(12), 0.0);
+        // The chair hands back 3.0 after its 100.0 base test; the static handler has none.
+        assert_eq!(go_use_range(GO_TYPE_CHAIR), 3.0);
+        assert_eq!(go_use_range(21), 0.0);
+        assert_eq!(go_use_range(31), 0.0);
+    }
+
+    /// The Hyjal gate's defect: a door lit from beyond its 5.0 yd (`0x5f3346`).
+    #[test]
+    fn a_door_is_in_reach_to_five_yards_and_no_farther() {
+        assert!(!go_in_reach(5.2 * 5.2, 0, None), "5.2 yd");
+        assert!(go_in_reach(4.9 * 4.9, 0, None), "4.9 yd");
+        assert!(go_in_reach(25.0, 0, None), "equality passes");
+        assert!(go_in_reach(f32::NAN, 0, None), "a NaN passes");
+        // A quest giver keeps 5.5555553, a binder 10.
+        assert!(go_in_reach(5.5 * 5.5, 2, None));
+        assert!(!go_in_reach(5.6 * 5.6, 2, None));
+        assert!(go_in_reach(9.9 * 9.9, 4, None));
+        assert!(!go_in_reach(10.1 * 10.1, 4, None));
+    }
+
+    /// `0x5f3328`: the range of the spell that opens the lock replaces the handler's for the test.
+    #[test]
+    fn an_opener_spells_range_replaces_the_handlers() {
+        assert!(go_in_reach(7.9 * 7.9, 0, Some(8.0)));
+        assert!(go_in_reach(64.0, 0, Some(8.0)), "equality passes");
+        assert!(!go_in_reach(8.1 * 8.1, 0, Some(8.0)));
+        assert!(
+            !go_in_reach(4.0, 0, Some(1.0)),
+            "a shorter spell shortens it"
+        );
+        // The chair's own 3.0 yd test still follows.
+        assert!(!go_in_reach(4.0 * 4.0, GO_TYPE_CHAIR, Some(100.0)));
+        assert!(go_in_reach(2.9 * 2.9, GO_TYPE_CHAIR, None));
     }
 
     #[test]

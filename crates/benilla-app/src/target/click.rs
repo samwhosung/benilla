@@ -382,6 +382,7 @@ pub(crate) struct Dispatch<'w, 's> {
     // Through `creature_anim::gesture`, the chat path's entry, as the reference's dispatcher does.
     gestures: ResMut<'w, crate::creature_anim::GestureQueue>,
     go_inputs: GoLockInputs<'w, 's>,
+    opener_reach: super::lock::OpenerReach<'w, 's>,
     player_actions: Res<'w, crate::ui_action::PlayerActions>,
     // The skin leg's spells (`[0xb700e4]`, `[0xb700e8]`), already gated by the classifier.
     learned: Res<'w, crate::ui_action::LearnedAbilities>,
@@ -621,6 +622,21 @@ impl Dispatch<'_, '_> {
         Some(a.distance_squared(self.places.get(target).ok()?.translation))
     }
 
+    /// A GameObject within `usable 0x5f3130`'s distance test (`0x5f3346`), centre to centre: the
+    /// type's range, or the range of the spell that opens its lock (`0x5f3328`).
+    fn go_in_reach(&self, entity: Entity, d2: f32) -> bool {
+        let Ok((store, anim)) = self.stores.get(entity) else {
+            return false;
+        };
+        let opener_range = self.opener_reach.go_range(
+            &self.go_inputs,
+            (store, crate::go_anim::go_state(anim, store)),
+            &self.player_actions.openers,
+            self.self_store(),
+        );
+        cursor_mode::go_in_reach(d2, store.0.gameobject_type_id(), opener_range)
+    }
+
     fn melee_reach(&self, target: Entity) -> f32 {
         match (self.stores.get(target).ok(), self.self_store()) {
             (Some((it, _)), Some(me)) => cursor_mode::melee_reach(it, me),
@@ -724,8 +740,7 @@ impl Dispatch<'_, '_> {
                 entity,
                 guid,
                 crate::player::Subject::GameObject,
-                crate::player::RANGE_STOP_FRACTION
-                    * cursor_mode::go_interact_range_sq(go_type).sqrt(),
+                crate::player::RANGE_STOP_FRACTION * cursor_mode::go_use_range(go_type),
             );
         if !walked {
             self.feedback
@@ -1220,13 +1235,9 @@ fn interact(
         // Walking, the range arm (`0x5f330c`) is the object's own: the PickLock cursor never
         // grays, and the gray folds the lock in.
         let in_reach = if walk {
-            let go_type = dispatch
-                .stores
-                .get(entity)
-                .map_or(-1, |(s, _)| s.0.gameobject_type_id());
             dispatch
                 .dist_sq(entity)
-                .is_some_and(|d2| d2 <= cursor_mode::go_interact_range_sq(go_type))
+                .is_some_and(|d2| dispatch.go_in_reach(entity, d2))
         } else {
             !cursor.unable
         };
@@ -1585,18 +1596,10 @@ fn act_on_arrival_with(
             }
         }
         ApproachVerb::Use if kind == Some(EntityKind::GameObject) => {
-            let go_type = dispatch
-                .stores
-                .get(entity)
-                .map_or(-1, |(s, _)| s.0.gameobject_type_id());
             // Still out of range, `0x5f86b0`'s range arm walks again (`0x610300`).
             let walk = dispatch.auto.can_auto_interact();
-            dispatch.use_gameobject(
-                entity,
-                guid,
-                d2 <= cursor_mode::go_interact_range_sq(go_type),
-                walk,
-            );
+            let in_reach = dispatch.go_in_reach(entity, d2);
+            dispatch.use_gameobject(entity, guid, in_reach, walk);
         }
         // The spell by the target: a corpse or a player's body takes `[0xb700e8]` (`0x5f0608`).
         ApproachVerb::Skin => {
@@ -3634,6 +3637,142 @@ mod tests {
             .resource::<crate::ui_action::UiErrorKeys>()
             .snapshot()
             .is_empty());
+    }
+
+    /// What the cursor and an interaction make of a GameObject of `go_type` at `x` yards: whether
+    /// the cursor grays, whether the use went out (`CMSG_GAMEOBJ_USE` or an opener cast), and the
+    /// error keys raised. `opener` gives the known spell that opens the template's lock and its
+    /// `SpellRange` maximum.
+    fn range_verdict(
+        go_type: u32,
+        x: f32,
+        opener: Option<(u32, f32)>,
+    ) -> (bool, bool, Vec<&'static str>) {
+        use benilla_formats::{LockCatalog, LockSlot, OpenLock, SpellDisplay, SpellRange};
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        const LOCK: u32 = 55;
+        let (mut world, _vendor, rx) = walking_world(Vec3::ZERO, false);
+        let mut data = [0; 24];
+        if let Some((spell, max)) = opener {
+            // A lock whose one skill slot (LockType 1, any state) the known spell opens.
+            let mut slots = [LockSlot::default(); benilla_formats::MAX_LOCK_SLOTS];
+            slots[0] = LockSlot {
+                key_type: benilla_formats::LOCK_KEY_SKILL,
+                index: 1,
+                skill: 0,
+                action: 5,
+            };
+            world.insert_resource(crate::go_templates::Locks(LockCatalog::from_rows([(
+                LOCK, slots,
+            )])));
+            let mut spells = crate::ui_action::Spells::empty_for_tests();
+            spells.catalog =
+                benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+                    spell,
+                    SpellDisplay {
+                        range_index: 12,
+                        effects: [0x21, 0, 0],
+                        effect_misc_value: [1, 0, 0],
+                        open_lock: Some(OpenLock {
+                            lock_type: 1,
+                            effect: 0,
+                        }),
+                        ..SpellDisplay::default()
+                    },
+                )]));
+            spells.ranges =
+                benilla_formats::SpellRangeCatalog::from_rows(std::collections::HashMap::from([(
+                    12,
+                    SpellRange {
+                        min: 0.0,
+                        max,
+                        flags: 0,
+                    },
+                )]));
+            world.insert_resource(spells);
+            world
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .openers
+                .push(spell);
+            // DOOR(0) and BUTTON(1) hold the lock at `data[1]`, the others at `data[0]`.
+            data[usize::from(go_type <= 1)] = LOCK as i32;
+        }
+        world
+            .resource_mut::<crate::go_templates::GameObjectTemplates>()
+            .insert(77, go_type, "Object".into(), &data);
+        let object = spawn_object(&mut world, go_type, Vec3::new(x, 0.0, 0.0));
+        world
+            .entity_mut(object)
+            .insert(store(&[(GO_TYPE_FIELD, go_type), (FIELD_OBJECT_ENTRY, 77)]));
+        let hovered = HoveredObject {
+            target: Some(object),
+            guid: Some(CHEST),
+            distance: x,
+        };
+        let cursor = world
+            .run_system_once(move |inputs: cursor_mode::CursorInputs| {
+                cursor_mode::classify(&inputs, &Hovered::default(), &hovered).0
+            })
+            .unwrap();
+        interact_with(&mut world, object);
+        let used = rx
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::GameObjUse { .. }))
+            || !world
+                .resource::<crate::ui_action::ClickCasts>()
+                .0
+                .is_empty();
+        let keys = world
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .snapshot()
+            .iter()
+            .map(|e| e.key)
+            .collect();
+        (cursor.unable, used, keys)
+    }
+
+    /// `usable 0x5f3130` tests the distance against the handler's range (`0x5f3346`): a door's
+    /// 5.0, not the NPC services' 5.5556, which lit the Hyjal gate from beyond its reach.
+    #[test]
+    fn a_door_lights_and_opens_within_five_yards_only() {
+        assert_eq!(
+            range_verdict(0, 5.2, None),
+            (true, false, vec!["ERR_USE_TOO_FAR"])
+        );
+        assert_eq!(range_verdict(0, 4.9, None), (false, true, vec![]));
+        // Equality passes.
+        assert_eq!(range_verdict(0, 5.0, None), (false, true, vec![]));
+    }
+
+    /// The nine types that store another range over the base 5.0 (`0x5f45c2`, `0x5f478b`): a quest
+    /// giver 5.5555553, a binder 10.0.
+    #[test]
+    fn a_types_own_range_replaces_the_doors() {
+        assert_eq!(range_verdict(2, 5.5, None), (false, true, vec![]));
+        assert_eq!(
+            range_verdict(2, 5.7, None),
+            (true, false, vec!["ERR_USE_TOO_FAR"])
+        );
+        assert_eq!(range_verdict(4, 9.9, None), (false, true, vec![]));
+        assert_eq!(
+            range_verdict(4, 10.1, None),
+            (true, false, vec!["ERR_USE_TOO_FAR"])
+        );
+    }
+
+    /// `0x5f3328`: a known spell that opens the lock supplies the range, so a longer one reaches
+    /// farther than the handler's 5.0 and a shorter one less far; its absence leaves the handler's.
+    #[test]
+    fn a_known_openers_range_replaces_the_handlers() {
+        let near = |x| range_verdict(0, x, Some((6477, 8.0)));
+        assert_eq!(near(7.9), (false, true, vec![]));
+        assert_eq!(near(8.0), (false, true, vec![]), "equality passes");
+        assert_eq!(near(8.1), (true, false, vec!["ERR_USE_TOO_FAR"]));
+        assert_eq!(
+            range_verdict(0, 3.1, Some((6477, 3.0))),
+            (true, false, vec!["ERR_USE_TOO_FAR"]),
+            "a shorter spell range shortens the door's"
+        );
     }
 
     const WOLF: u64 = 0xF130_0000_0000_0299;

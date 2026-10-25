@@ -38,6 +38,98 @@ pub(crate) struct GoLockInputs<'w, 's> {
     pub(crate) objects: crate::net::Objects<'w, 's>,
 }
 
+/// What `GetMinMaxRange 0x6e3480` reads beyond [`GoLockInputs`], for the range of the spell that
+/// opens a GameObject's lock. Apart from it so the feeds that only name a lock (the tooltip) read
+/// no motion state.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct OpenerReach<'w, 's> {
+    /// The range modifier `GetMinMaxRange` applies (`0x6e3744`); absent, the row's own max.
+    spell_mods: Option<Res<'w, crate::spell::SpellModifiers>>,
+    /// The caster `GetMinMaxRange` reads for the opener spell's range.
+    range_units: crate::spell::RangeUnits<'w, 's>,
+}
+
+impl GoLockInputs<'_, '_> {
+    /// The spell `usable 0x5f3130` takes its distance range from (`0x5f330c`): the known spell
+    /// that opens the lock, or the use spell of a key item the player holds (`0x5f85ac`,
+    /// `0x5d8c80`: the first record spell whose trigger is 0). `None`: no lock, or none satisfied.
+    fn opener_spell(&self, outcome: LockOutcome) -> Option<u32> {
+        match outcome {
+            LockOutcome::OpenBySpell(id) => Some(id),
+            LockOutcome::OpenByKey(entry) => self
+                .items
+                .template(entry, 0, crate::query_cache::Ask::Read)?
+                .use_spell
+                .as_ref()
+                .map(|u| u.spell_id),
+            LockOutcome::Unlocked | LockOutcome::Unmet => None,
+        }
+    }
+}
+
+impl OpenerReach<'_, '_> {
+    /// [`Self::range`] for a GameObject, resolving its lock as the cursor does; `go` is its store
+    /// and resolved state. `None`: no template or lock row yet, or no opener spell.
+    pub(crate) fn go_range(
+        &self,
+        inputs: &GoLockInputs,
+        go: (&ObjectStore, u32),
+        openers: &[u32],
+        me: Option<&ObjectStore>,
+    ) -> Option<f32> {
+        let lock_id = inputs.templates.of(&go.0 .0)?.lock_id;
+        let slots = inputs
+            .locks
+            .as_deref()?
+            .0
+            .slots(lock_id)
+            .filter(|_| lock_id != 0)?;
+        let outcome = resolve_lock(
+            slots,
+            openers,
+            inputs.spells.as_deref(),
+            inputs.skill_lines.as_ref().map(|s| &s.catalog),
+            me,
+            &inputs.objects,
+            go_facts(Some(go)),
+            &mut None,
+        );
+        self.range(inputs, outcome)
+    }
+
+    /// The range for the distance test when a spell opens the lock (`0x5f3328`): that spell's
+    /// maximum from `GetMinMaxRange 0x6e3480` with the player as caster and target 0, range
+    /// modifier included; a missing or self row gives 0. `None` while the spell is not in the
+    /// catalog, where the handler's own range stands.
+    pub(crate) fn range(&self, inputs: &GoLockInputs, outcome: LockOutcome) -> Option<f32> {
+        let spells = inputs.spells.as_deref()?;
+        let spell = spells.catalog.get(inputs.opener_spell(outcome)?)?;
+        let row = spells.ranges.get(spell.range_index);
+        let player = inputs.objects.player()?;
+        let unit = self
+            .range_units
+            .unit(player)
+            .unwrap_or(benilla_formats::RangeUnit::still(
+                crate::spell::DEFAULT_REACH,
+            ));
+        let caster = crate::spell::with_ranged_slot(
+            unit,
+            inputs.objects.player_fields(),
+            |guid| inputs.objects.object(guid),
+            Some(&inputs.items),
+        );
+        let targets = benilla_formats::RangeTargets {
+            target: None,
+            attack_target: self.range_units.attack_target(player),
+        };
+        let range = match self.spell_mods.as_deref() {
+            Some(mods) => mods.min_max_range(spell, row, caster, targets),
+            None => benilla_formats::min_max_range(spell, row, caster, targets),
+        };
+        Some(range.map_or(0.0, |(_, max)| max))
+    }
+}
+
 /// The wire facts the Action gate and the requirement fallback read, gathered by the caller.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GoFacts {
