@@ -149,7 +149,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loading_screen
 
-- The live window's aspect stands in for `gxResolution`'s, as in `portrait`'s `GxAspect`, because the window here takes any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`). ([`src/loading_screen.rs:64`](../crates/benilla-app/src/loading_screen.rs#L64))
+- The live window's aspect stands in for `gxResolution`'s, as in `portrait`'s `GxAspect`, because the window here takes any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`). ([`src/loading_screen.rs:66`](../crates/benilla-app/src/loading_screen.rs#L66))
 - The wheel is swallowed, where the reference still zooms the hidden camera, because nothing should act through the screen. ([`src/loading_screen/input.rs:12`](../crates/benilla-app/src/loading_screen/input.rs#L12))
 - The world pick is cleared, where the reference's `0x481790` keeps picking at the frozen point, because ours is quieter and looks the same: the reference's pointer cannot move, so its pick changes nothing visible. ([`src/loading_screen/input.rs:14`](../crates/benilla-app/src/loading_screen/input.rs#L14))
 
@@ -205,7 +205,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A settle hold is summed and sent once on release, without the push, because it stands in for the reference's blocking load (`0x694920`), not a refused substep, and lasts seconds. ([`src/player/movement_net.rs:357`](../crates/benilla-app/src/player/movement_net.rs#L357))
 - The reference's blocking load (`0x694920`) waits out its reads before the frame goes on and has no such release; without one, a model that never loads would freeze our body for good. ([`src/player/state.rs:120`](../crates/benilla-app/src/player/state.rs#L120))
 - Root is not merged, because a bare pose unrooting us while the server still roots us streams motion into `CHEAT_TYPE_ROOT_MOVE`; vmangos keeps a rooted mover's root bit (`MovementHandler.cpp:1064`), so the reference's merge of it is a no-op anyway. ([`src/player/state.rs:202`](../crates/benilla-app/src/player/state.rs#L202))
-- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:470`](../crates/benilla-app/src/player/wire_in.rs#L470))
+- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:496`](../crates/benilla-app/src/player/wire_in.rs#L496))
 
 #### portrait
 
@@ -906,9 +906,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### terrain_stream
 
-- The debug free-fly eye holds nothing: it is benilla's own tool with no reference counterpart, and a stall there only slows the developer. ([`src/terrain_stream.rs:390`](../crates/benilla-world/src/terrain_stream.rs#L390))
-- A tile is released only one chunk past the outer window (`StreamWindow::keeps`), where the reference releases by window membership (`0x6984f0`), because our reload is a re-decode and re-spawn, not a cheap async read. ([`src/terrain_stream.rs:730`](../crates/benilla-world/src/terrain_stream.rs#L730))
-- A read still loading after `INNER_WAIT_CAP` is given up on with a warning, once per request, and its tile then streams on unwaited like the outer ring, where the reference waits for ever: a hung read costs one capped stall, not one every frame. ([`src/terrain_stream.rs:825`](../crates/benilla-world/src/terrain_stream.rs#L825))
+- The debug free-fly eye holds nothing: it is benilla's own tool with no reference counterpart, and a stall there only slows the developer. ([`src/terrain_stream.rs:401`](../crates/benilla-world/src/terrain_stream.rs#L401))
+- A tile is released only one chunk past the outer window (`StreamWindow::keeps`), where the reference releases by window membership (`0x6984f0`), because our reload is a re-decode and re-spawn, not a cheap async read. ([`src/terrain_stream.rs:741`](../crates/benilla-world/src/terrain_stream.rs#L741))
+- A read still loading after `INNER_WAIT_CAP` is given up on with a warning, once per request, and its tile then streams on unwaited like the outer ring, where the reference waits for ever: a hung read costs one capped stall, not one every frame. ([`src/terrain_stream.rs:836`](../crates/benilla-world/src/terrain_stream.rs#L836))
 - Benilla gates on terrain alone, which is more permissive; the settle hold covers a building or doodad arriving after a teleport. ([`src/terrain_stream/residency.rs:9`](../crates/benilla-world/src/terrain_stream/residency.rs#L9))
 - Tagged per submesh, where the reference tests the whole object, because a placement has no root entity to carry the bound. ([`src/terrain_stream/spawn/mod.rs:229`](../crates/benilla-world/src/terrain_stream/spawn/mod.rs#L229))
 - The box, where the reference tests its circumsphere (`0x683700` → `0x682ef0` → `0x686b80` on the `[rec+0x5c]` centre and `[rec+0x68]` radius × scale), because Bevy culls by box and the box is tighter. ([`src/terrain_stream/spawn/mod.rs:889`](../crates/benilla-world/src/terrain_stream/spawn/mod.rs#L889))
