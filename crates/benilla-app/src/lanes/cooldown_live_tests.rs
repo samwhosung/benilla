@@ -75,6 +75,11 @@ impl Client {
 
 /// The two spells' rows and the potion's spell.
 fn spells() -> crate::ui_action::Spells {
+    spells_with(&[])
+}
+
+/// [`spells`] and the rows of `more`.
+fn spells_with(more: &[u32]) -> crate::ui_action::Spells {
     let row = |id: u32| {
         (
             id,
@@ -87,11 +92,13 @@ fn spells() -> crate::ui_action::Spells {
         )
     };
     crate::ui_action::Spells {
-        catalog: SpellCatalog::from_displays(HashMap::from([
-            row(FROST_NOVA),
-            row(BLINK),
-            row(POTION_SPELL),
-        ])),
+        catalog: SpellCatalog::from_displays(
+            [FROST_NOVA, BLINK, POTION_SPELL]
+                .iter()
+                .chain(more)
+                .map(|&id| row(id))
+                .collect::<HashMap<_, _>>(),
+        ),
         ..crate::ui_action::Spells::empty_for_tests()
     }
 }
@@ -400,4 +407,92 @@ fn a_worn_items_cooldown_reads_live_inside_its_packet() {
     for live in [false, true] {
         assert_eq!(c.eval::<f64>(live, chunk), 30.0, "live {live}");
     }
+}
+
+/// The pet's list read inside the call, through the book and the bar: `GetSpellCooldown(id,
+/// "pet")` queries list 1 (`0x4b40dd` → `0x4b410f` → `0x6e2ea0`), and `GetActionCooldown` on a
+/// slot whose macro is bound to the pet's book likewise (`0x4e6cf7` → `0x4e6d0b`). Two pet
+/// `SMSG_SPELL_COOLDOWN`s in one frame: the first packet's `SPELL_UPDATE_COOLDOWN` reads Bite cold
+/// through both, the second's reads it running.
+#[test]
+fn the_pet_book_and_a_pet_bound_slot_read_the_pets_list_inside_their_packet() {
+    use benilla_protocol::messages::{PetActionEntry, ACTION_KIND_MACRO, PET_ACT_ENABLED};
+    const PET: u64 = 0xF130_0000_0000_0042;
+    const GROWL: u32 = 2649;
+    const BITE: u32 = 17253;
+    let mut c = client();
+    let world = c.app.world_mut();
+    world.insert_resource(spells_with(&[GROWL, BITE]));
+    let entry = |id: u32| PetActionEntry::from(id | (u32::from(PET_ACT_ENABLED) << 24));
+    {
+        let mut bar = world.resource_mut::<crate::ui_pet::PetBar>();
+        bar.spells.pet_guid = PET;
+        bar.spells.bar[0] = entry(GROWL);
+        bar.spells.bar[1] = entry(BITE);
+        bar.spells.spells = vec![entry(GROWL), entry(BITE)];
+    }
+    let pet = world
+        .spawn((
+            crate::net::Guid(PET),
+            Transform::default(),
+            crate::net::ObjectStore(ObjectFields::from_pairs(&[
+                (OBJECT_TYPE, 0x9),
+                (22, 100),
+                (12, ME as u32),
+                (13, (ME >> 32) as u32),
+            ])),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(PET, pet);
+    {
+        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
+        slots.buttons.insert(
+            3,
+            ActionButton {
+                slot: 3,
+                action: 1,
+                kind: ACTION_KIND_MACRO,
+            },
+        );
+        slots.dirty = true;
+    }
+    c.frame(vec![]);
+    c.frame(vec![]);
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_macro::MacroBoundSpells>()
+        .0
+        .insert(
+            1,
+            crate::ui_macro::Bound {
+                spell: crate::ui_macro::BoundSpell::Spell(BITE),
+                pet_book: true,
+            },
+        );
+    c.frame(vec![]);
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+        g:SetScript("OnEvent", function()
+            local _, a = GetSpellCooldown(1, "pet")
+            local _, b = GetSpellCooldown(2, "pet")
+            local _, s = GetActionCooldown(4)
+            table.insert(Seen, "PET:" .. tostring(a) .. ":" .. tostring(b) .. ":" .. tostring(s))
+        end)"#,
+    );
+    c.seen(&[]);
+    let pet_cooldown = |spell: u32, ms: u32| SessionEvent::SpellCooldowns {
+        caster: PET,
+        cooldowns: vec![(spell, ms)],
+    };
+    c.frame(vec![
+        vec![pet_cooldown(GROWL, 3_000)],
+        vec![pet_cooldown(BITE, 4_000)],
+    ]);
+    // The book sorts Bite ahead of Growl.
+    assert_eq!(c.seen(&["PET"]), ["PET:0:3:0", "PET:4:3:4"]);
 }

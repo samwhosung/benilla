@@ -101,6 +101,9 @@ pub struct ActionState {
     /// The entry an item slot holds, which `IsCurrentAction`'s item arm compares with the in-flight
     /// cast's item (`0x4e53fc`-`0x4e5428`); `None` for any other slot.
     pub item: Option<u32>,
+    /// The pet's book spell a macro slot is bound to (`0x4e5a50`'s pet flag), whose cooldown is
+    /// queried on the pet's list (`0x4e6d04` → `0x6e2ea0`); `None` for any other slot.
+    pub pet_spell: Option<u32>,
     /// `(start_ms, duration_ms, enabled)`, the start absolute on the `GetTime` clock, so a running
     /// cooldown re-pushes the same triple and a re-arm a new one (`0x6e13e0` returns the start).
     pub cooldown: Option<(i64, u32, bool)>,
@@ -649,8 +652,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // a slot that reaches no query, an empty one included, answers `(0, 0, 0)`, and one that
     // reaches it with nothing running `(0, 0, 1)`, so a later `CooldownFrame_SetTimer` replays no
     // sweep and no finish flash. The query reads the list inside the call (`0x4e6ca0`: `0x6e2ea0`
-    // for a spell at `0x4e6d0b`, `0x6e2ed0` for an item at `0x4e6ce9`), through the lent host; a slot bound to the
-    // pet's book reads the pet's list off the snapshot.
+    // for a spell at `0x4e6d0b`, `0x6e2ed0` for an item at `0x4e6ce9`), through the lent host; a
+    // slot bound to the pet's book queries the pet's list, the resolve's flag in `edx`
+    // (`0x4e6cf7` → `0x4e6d04`).
     g.set(
         "GetActionCooldown",
         lua.create_function(|lua, action: Value| {
@@ -666,10 +670,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 else {
                     return Ok((0.0, 0.0, 0));
                 };
-                let query = match (state.state.spell, state.state.item) {
-                    (Some(spell), _) => Some(super::CooldownQuery::Spell(spell)),
-                    (None, Some(entry)) => Some(super::CooldownQuery::Item(entry)),
-                    (None, None) => None,
+                let query = match (state.state.spell, state.state.item, state.state.pet_spell) {
+                    (Some(spell), _, _) => Some(super::CooldownQuery::Spell(spell)),
+                    (None, Some(entry), _) => Some(super::CooldownQuery::Item(entry)),
+                    (None, None, Some(spell)) => Some(super::CooldownQuery::PetSpell(spell)),
+                    (None, None, None) => None,
                 };
                 (query, state.cooldown)
             };

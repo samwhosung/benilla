@@ -197,6 +197,7 @@ struct PetBookLeg<'a> {
 fn pet_book_state(leg: PetBookLeg) -> ActionState {
     let mut st = ActionState {
         is_attack: leg.d.is_melee_auto_attack(),
+        pet_spell: Some(leg.spell),
         ..Default::default()
     };
     if let (Some(player), Some(pet)) = (leg.player, leg.pet) {

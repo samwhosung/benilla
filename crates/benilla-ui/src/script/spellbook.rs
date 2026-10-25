@@ -454,28 +454,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetSpellCooldown(id, bookType) -> start, duration, enable in `GetTime` seconds, as
     // `GetActionCooldown`: enable 0 for an on-hold cooldown; an expired or empty one answers the
-    // reference's no-cooldown `(0, 0, 1)`, so a re-feed cannot replay the finish flash. A player's
-    // book slot queries the list inside the call (`0x4b410f` → `0x6e2ea0`), through the lent host;
-    // the pet's book reads the pet's list off the snapshot.
+    // reference's no-cooldown `(0, 0, 1)`, so a re-feed cannot replay the finish flash. The slot
+    // queries its book's list inside the call (`0x4b410f` → `0x6e2ea0`, the book type in `edx`
+    // from `0x4b40dd`), through the lent host.
     g.set(
         "GetSpellCooldown",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "GetSpellCooldown")?;
             let now = crate::script::clock::now(lua);
-            let (spell, snapshot) = {
+            let (query, snapshot) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let slot = book_slot(&model, id, &book_type);
-                let spell = slot
-                    .filter(|_| !is_pet_book(&book_type))
-                    .map(|s| s.spell_id);
+                let query = slot.map(|s| {
+                    if is_pet_book(&book_type) {
+                        super::CooldownQuery::PetSpell(s.spell_id)
+                    } else {
+                        super::CooldownQuery::Spell(s.spell_id)
+                    }
+                });
                 let snapshot = slot
                     .and_then(|s| s.cooldown)
                     .map(super::cooldown_read::seconds);
-                (spell, snapshot)
+                (query, snapshot)
             };
-            let live = spell.and_then(|spell| {
-                super::cooldown_read::read_live(lua, super::CooldownQuery::Spell(spell))
-            });
+            let live = query.and_then(|q| super::cooldown_read::read_live(lua, q));
             Ok(match live.unwrap_or(snapshot) {
                 Some((start, duration, enabled)) if start + duration > now || !enabled => (
                     crate::script::clock::held_start(start, enabled, now),
