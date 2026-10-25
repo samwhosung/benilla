@@ -740,7 +740,12 @@ AucProbeSlots = table.getn({GetAuctionInvTypes(2, 1)})
         .subclasses_of(2)
         .into_iter()
         .filter(|&sub| subclasses.display_flags(2, sub) & 2 == 0)
-        .map(|sub| subclasses.name(2, sub).expect("a subclass name").to_string())
+        .map(|sub| {
+            subclasses
+                .name(2, sub)
+                .expect("a subclass name")
+                .to_string()
+        })
         .collect::<Vec<_>>()
         .join(",");
     assert!(!want_subs.is_empty(), "Weapon has subclasses to offer");
@@ -761,7 +766,10 @@ AucProbeSlots = table.getn({GetAuctionInvTypes(2, 1)})
     let check = |world: &World, leg: &str| {
         let (loads, got_classes, got_subs, slots) = saw(world);
         assert_eq!(loads, 1, "{leg}: a fresh VM ran the file scope once");
-        assert_eq!(got_classes, want_classes, "{leg}: the ten classes, in order");
+        assert_eq!(
+            got_classes, want_classes,
+            "{leg}: the ten classes, in order"
+        );
         assert_eq!(got_subs, want_subs, "{leg}: the Weapon subclasses");
         assert_eq!(slots, 14, "{leg}: Armor's Cloth offers the 14 slots");
     };
