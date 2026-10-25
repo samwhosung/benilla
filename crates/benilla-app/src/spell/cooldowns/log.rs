@@ -193,17 +193,20 @@ impl CooldownLog {
         None
     }
 
-    /// The drain's end, however it ended: what it did not replay is written onto `records`, its
-    /// signals dropped, and the next write opens a new log.
+    /// The drain's end, however it ended: what it did not replay is written onto `records`, so the
+    /// list stands as the frame left it, and its signals wait for the next drain, as every lane's
+    /// unfired items do; the next write opens a new log.
     pub(super) fn finish(&mut self, records: &mut Vec<Record>) {
         if !self.replaying {
             return;
         }
-        for (_, entry) in std::mem::take(&mut self.entries) {
-            if let Entry::Write(w) = entry {
+        self.entries.retain(|(_, entry)| match entry {
+            Entry::Write(w) => {
                 w.apply(records);
+                false
             }
-        }
+            Entry::Signal(_) => true,
+        });
         self.replaying = false;
         self.start = None;
     }

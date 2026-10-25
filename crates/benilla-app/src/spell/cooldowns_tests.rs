@@ -473,3 +473,37 @@ fn the_replay_reads_the_list_as_each_write_left_it() {
     assert_eq!(running(&cds), (true, true), "as the frame left it");
     assert!(cds.logged_signals().is_empty());
 }
+
+/// A drain that stops early writes what it did not replay, so the list stands as the frame left
+/// it, and keeps the signals it did not fire for the next drain, as every lane keeps its items.
+#[test]
+fn a_drain_stopped_early_keeps_its_unfired_signals_for_the_next() {
+    use super::Signal::Pair;
+    let now = Instant::now();
+    let mods = SpellModifiers::default();
+    let (nova, blink) = (
+        spell(0, 10_000, 0, (0, 0), 0),
+        spell(0, 20_000, 0, (0, 0), 0),
+    );
+    let mut cds = Cooldowns::default();
+    cds.apply_spell_cooldowns([(122, 0, Some(&nova))], &mods, CategoryPad::NoPlayer, now);
+    cds.apply_spell_cooldowns([(1953, 0, Some(&blink))], &mods, CategoryPad::NoPlayer, now);
+    let running = |cds: &Cooldowns| {
+        (
+            cds.info(122, 0, Some(&nova), now).remaining_ms > 0,
+            cds.info(1953, 0, Some(&blink), now).remaining_ms > 0,
+        )
+    };
+    let until = crate::lanes::Until::all();
+    assert_eq!(cds.replay(until).map(|(_, s)| s), Some(Pair));
+    cds.end_replay();
+    assert_eq!(running(&cds), (true, true), "as the frame left it");
+    assert_eq!(cds.logged_signals(), [Pair], "the second packet's, unfired");
+    assert_eq!(cds.lane_head(), Some(crate::lanes::Stamp::origin()));
+    assert!(cds.rewind());
+    assert_eq!(running(&cds), (true, true), "nothing to rewind to");
+    assert_eq!(cds.replay(until).map(|(_, s)| s), Some(Pair));
+    assert_eq!(cds.replay(until), None);
+    cds.end_replay();
+    assert!(cds.logged_signals().is_empty());
+}
