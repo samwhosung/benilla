@@ -22,6 +22,9 @@ use benilla_protocol::messages::ObjectFields;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects};
 use crate::query_cache::{Ask, QueryCache, Refused};
 
+mod live;
+pub(crate) use live::NameLive;
+
 /// The creature template's `type_flags` dword from `SMSG_CREATURE_QUERY_RESPONSE`, cached by the
 /// reference at `[CGUnit+0xb30] + 0x14`. Adjacent bits mean unrelated things, and the reference
 /// gives each its own getter, so every consumer names the bit it reads:

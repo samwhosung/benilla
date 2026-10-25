@@ -426,8 +426,9 @@ pub use types::{
 pub use unit::by_name::{self, NameCandidate, SeatedSelection};
 pub use unit::{
     grey_band, level_reads_unknown, parse_unit_token, power_token, resolve_unit_in, unit_is_grey,
-    PlayerRecord, SelectionRequest, UnitBase, UnitGuids, UnitIdentityRead, UnitObject,
-    UnitObjectRead, UnitRelations, UnitState, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
+    PlayerNameQuery, PlayerRecord, SelectionRequest, UnitBase, UnitGuids, UnitIdentityRead,
+    UnitObject, UnitObjectRead, UnitRecord, UnitRecordQuery, UnitRelations, UnitState,
+    UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
 pub use weapon_enchant::WeaponEnchant;
 pub use who_sort::{WhoSortChain, WhoSortKey};

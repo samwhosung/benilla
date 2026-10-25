@@ -563,10 +563,6 @@ impl CallHost for ScriptCallHost<'_, '_> {
         self.appliers.live().items().read(key, read)
     }
 
-    fn player_name(&mut self, guid: u64) -> Option<String> {
-        self.appliers.asks().player_name(guid)
-    }
-
     fn read_unit_object(
         &mut self,
         guid: u64,

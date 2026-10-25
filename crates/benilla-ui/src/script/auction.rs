@@ -860,7 +860,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // (`0x4cf167`), then the seller's (`0x4cf1c8`); the push's only with no host lent. A
             // miss is asked inside the call with the list's callback; nothing else asks a name.
             let mut r = r;
-            let live = |guid: u64| super::host::read_host(lua, |h| h.player_name(guid));
+            let live = |guid: u64| super::live::ask(lua, &super::PlayerNameQuery(guid));
             let bidder = (r.named_bidder != 0).then(|| match live(r.named_bidder) {
                 Some(name) => name,
                 None => match &r.high_bidder {

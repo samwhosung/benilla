@@ -46,7 +46,7 @@ impl AuctionVerbs<'_, '_> {
     /// `GetAuctionItemInfo`'s name lookup inside its call
     /// ([`benilla_ui::script::RecordAsk::AuctionName`]): the cache asks a miss, and the list's
     /// callback waits on the name, once per name and list (`0x55f080`'s dedupe flag 1). The getter
-    /// makes it only on a miss, having read the cache first ([`Self::player_name`]).
+    /// makes it only on a miss, having read the cache first ([`benilla_ui::script::PlayerNameQuery`]).
     pub(crate) fn wait_for_name(&mut self, guid: u64, list: usize) {
         if let Some(names) = self.names.as_deref() {
             let _ = names.resolve_player(guid, Ask::Event(&self.commands));

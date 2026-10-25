@@ -13,8 +13,8 @@ use super::super::stat_read::read_self;
 use super::super::Model;
 use super::{
     check_unit_token, classification_word, grey_band, level_is_hidden_at, names_self,
-    object_predicate, read_identity, read_object, unit_is_grey, unit_predicate, unknownobject,
-    with_object, with_unit, PlayerRecord, SelectionRequest,
+    object_predicate, read_identity, read_object, read_record, unit_is_grey, unit_predicate,
+    unknownobject, with_object, with_unit, PlayerRecord, SelectionRequest,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never
@@ -204,10 +204,15 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .expect("model app_data")
                 .player_req
                 .level;
+            // The rank is the creature record's, read off the name cache as the call runs.
+            let rank = token
+                .as_deref()
+                .and_then(|t| read_record(lua, t, |_, r| r.rank))
+                .unwrap_or(0);
             let Some((hidden, level, has_object, guid)) = token.as_deref().and_then(|t| {
                 read_object(lua, t, |u, o| {
                     let level = o.level();
-                    let hidden = level_is_hidden_at(u, level, player_level);
+                    let hidden = level_is_hidden_at(u, level, rank, player_level);
                     (hidden, level, u.has_object, u.guid)
                 })
             }) else {
@@ -338,9 +343,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .expect("model app_data")
                 .player_req
                 .level;
+            // The record's civilian flag is read off the name cache as the call runs.
             Ok(flag(unit.is_some_and(|t| {
-                read_object(lua, &t, |u, o| super::civilian_kill_of(u, o, player_level))
-                    == Some(true)
+                let civilian = read_record(lua, &t, |_, r| r.civilian).unwrap_or(false);
+                read_object(lua, &t, |u, o| {
+                    super::civilian_kill_of(u, civilian, o, player_level)
+                }) == Some(true)
             })))
         })?,
     )?;
@@ -750,7 +758,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Number(_) | Value::Integer(_) => Some(String::new()),
                 _ => return Err(mlua::Error::runtime("Usage: UnitCreatureType(\"unit\")")),
             };
-            let word = with_unit(lua, &token, None, |u| u.creature_type_name.clone())?;
+            check_unit_token(&token)?;
+            let word = token
+                .as_deref()
+                .and_then(|t| read_record(lua, t, |_, r| r.creature_type.clone()))
+                .flatten();
             match word {
                 Some(w) => Ok(Value::String(lua.create_string(&w)?)),
                 None => Ok(Value::Nil),
@@ -763,7 +775,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitClassification",
         lua.create_function(|lua, token: Option<String>| {
-            let rank = with_unit(lua, &token, 0u32, |u| u.rank)?;
+            check_unit_token(&token)?;
+            let rank = token
+                .as_deref()
+                .and_then(|t| read_record(lua, t, |_, r| r.rank))
+                .unwrap_or(0);
             Ok(classification_word(rank).to_string())
         })?,
     )?;

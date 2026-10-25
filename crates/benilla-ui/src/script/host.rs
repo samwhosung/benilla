@@ -42,13 +42,6 @@ pub trait CallHost {
         false
     }
 
-    /// The player-name cache's record for `guid` as a getter reads it now (`0x55f080` on a valid
-    /// node), reading only: `None` for a miss, a refusal, and from a host that reads none.
-    fn player_name(&mut self, guid: u64) -> Option<String> {
-        let _ = guid;
-        None
-    }
-
     /// Hand `read` the unit object the engine holds under `guid`, as a getter reads it now: its
     /// descriptor's own fields, each derived as it is asked for, as of the place the getter runs
     /// (`UnitHealth` reads the object, `0x5174d0`). Whether there was one to hand: `false` when it

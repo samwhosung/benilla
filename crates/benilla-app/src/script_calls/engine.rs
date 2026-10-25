@@ -68,14 +68,6 @@ pub(crate) struct RecordAsks<'w> {
 }
 
 impl RecordAsks<'_> {
-    /// The player-name cache's record for `guid`, read only ([`benilla_ui::script::CallHost::player_name`]).
-    pub(crate) fn player_name(&self, guid: u64) -> Option<String> {
-        self.names
-            .as_deref()?
-            .resolve_player(guid, crate::query_cache::Ask::Read)
-            .map(str::to_string)
-    }
-
     /// `ask` inside its getter, whose VM a hit the mirror lacked is told.
     pub(crate) fn apply(&mut self, script: &mut UiScript, ask: RecordAsk) {
         use crate::query_cache::Ask;

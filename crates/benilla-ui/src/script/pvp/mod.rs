@@ -19,7 +19,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{number_arg, string_arg};
-use super::unit::{check_unit_token, is_civilian_kill};
+use super::unit::{check_unit_token, is_civilian_kill, read_identity, read_record};
 use super::Model;
 
 /// The local player's honor snapshot, decoded by the app from the private honor descriptor
@@ -542,12 +542,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.player_req.level,
                 )
             };
-            let Some(u) = unit.filter(|u| u.has_object) else {
+            let Some(mut u) = unit.filter(|u| u.has_object) else {
                 return Ok(Value::Nil);
             };
-            let Some(name) = u.name.clone() else {
+            // The name (`GetUnitName`, `0x609210`) and the civilian leg (`0x612550`) are read off
+            // the name caches as the call runs, the snapshot's only with no host free to ask.
+            let tok = token.as_deref().unwrap_or_default();
+            let name = read_identity(lua, tok, |_, id| id.name()).flatten();
+            let Some(name) = name else {
                 return Ok(Value::Nil);
             };
+            if let Some(civilian) = read_record(lua, tok, |_, r| r.civilian) {
+                u.civilian = civilian;
+            }
             let decorated = pvp_name(lua, &u, &name, player_level);
             Ok(Value::String(lua.create_string(&decorated)?))
         })?,

@@ -77,6 +77,8 @@ live_reads! {
         roster: crate::ui_party::RosterLive<'static, 'static>,
         /// The faction rows, the watched slot and the pane's snapshot.
         reputation: crate::ui_reputation::ReputationLive<'static, 'static>,
+        /// The name caches' reads: a player's name and a unit's creature record.
+        names: crate::names::NameLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

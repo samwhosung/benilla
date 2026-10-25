@@ -286,8 +286,8 @@ impl benilla_ui::script::CallHost for AuctionHost<'_, '_, '_> {
         None
     }
 
-    fn player_name(&mut self, guid: u64) -> Option<String> {
-        self.0.player_name(guid)
+    fn read_live(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|q: &benilla_ui::script::PlayerNameQuery| Some(self.0.player_name(q.0)))
     }
 }
 

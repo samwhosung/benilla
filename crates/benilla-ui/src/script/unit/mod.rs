@@ -272,12 +272,18 @@ pub fn unit_is_grey(player_level: u32, unit_level: u32) -> bool {
 /// `UnitReaction` <= 2 here) and grey to it (`0x5f0700`, `0x6125a6`). The tooltip's CIVILIAN line
 /// and `UnitPVPName`'s civilian prefix (`0x609370`) both read it.
 pub fn is_civilian_kill(u: &UnitState, player_level: u32) -> bool {
-    civilian_kill_of(u, u, player_level)
+    civilian_kill_of(u, u.civilian, u, player_level)
 }
 
-/// [`is_civilian_kill`] with the PvP flag and the level off `object`.
-fn civilian_kill_of(u: &UnitState, object: &dyn UnitObjectRead, player_level: u32) -> bool {
-    u.civilian
+/// [`is_civilian_kill`] with the record's civilian flag as given, and the PvP flag and the level
+/// off `object`.
+fn civilian_kill_of(
+    u: &UnitState,
+    civilian: bool,
+    object: &dyn UnitObjectRead,
+    player_level: u32,
+) -> bool {
+    civilian
         && object.pvp()
         && u.reaction != 0
         && u.reaction <= 2
@@ -294,14 +300,15 @@ pub fn level_reads_unknown(u: &UnitState, player_level: u32) -> bool {
 /// `UnitReaction` <= 2 here) at least 10 levels above the player, players among them, since
 /// neither path tests the unit's type; and world-boss rank 3 (`0x51807d`-`0x518087`, `0x52a373`).
 pub fn level_is_hidden(u: &UnitState, player_level: u32) -> bool {
-    level_is_hidden_at(u, u.level, player_level)
+    level_is_hidden_at(u, u.level, u.rank, player_level)
 }
 
-/// [`level_is_hidden`] at `level`, the one read off the unit's object.
-fn level_is_hidden_at(u: &UnitState, level: u32, player_level: u32) -> bool {
+/// [`level_is_hidden`] at `level`, the one read off the unit's object, and `rank`, the one read
+/// off its creature record.
+fn level_is_hidden_at(u: &UnitState, level: u32, rank: u32, player_level: u32) -> bool {
     let much_higher_hostile =
         u.reaction != 0 && u.reaction <= 2 && level >= player_level.saturating_add(10);
-    u.rank == 3 || much_higher_hostile
+    rank == 3 || much_higher_hostile
 }
 
 /// The level a drunk player sees on a unit it can attack, the unit tooltip's arithmetic
@@ -772,6 +779,7 @@ pub mod by_name;
 #[cfg(test)]
 mod chain_tests;
 mod object;
+mod record;
 mod relations;
 mod resolve;
 #[cfg(test)]
@@ -780,6 +788,8 @@ mod selection_tests;
 mod tests;
 
 pub use object::{UnitIdentityRead, UnitObject, UnitObjectRead};
+pub(crate) use record::read_record;
+pub use record::{PlayerNameQuery, UnitRecord, UnitRecordQuery};
 pub use relations::UnitRelations;
 pub use resolve::{
     bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,

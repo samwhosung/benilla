@@ -444,6 +444,8 @@ mod item_live_tests;
 #[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod name_live_tests;
+#[cfg(test)]
 mod packet_signal_tests;
 #[cfg(test)]
 mod quiet_tests;
