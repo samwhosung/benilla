@@ -114,7 +114,7 @@
 - **benilla-lua** (lib.rs): api cfmt compile heap lex lib_base lib_math lib_string lib_table number parse pools proto reload table value vm 
 - **benilla-m2** (lib.rs): error model skin tests track 
 - **benilla-mlua** (lib.rs): conv error 
-- **benilla-movie** (lib.rs): avi bits color decoder headers idct scan vlc 
+- **benilla-movie** (lib.rs): avi bits color decoder headers idct scan testing vlc 
 - **benilla-mpq** (lib.rs): crypto 
 - **benilla-protocol** (lib.rs): auth events guid messages wire world 
 - **benilla-srp** (lib.rs): vanilla_header 
@@ -386,6 +386,7 @@
 - `WOW_PIN_UID` — benilla-world/src/wmo_portal/audit/pin.rs
 - `WOW_PIN_WMO` — benilla-world/src/wmo_portal/audit/pin.rs
 - `WOW_PIPE_TRACE` — benilla-app/src/pipe_warm/mod.rs
+- `WOW_PLAY_MOVIE` — benilla-app/src/ui_script/glue.rs
 - `WOW_POINTS_DUMP` — benilla-world/src/lighting/global_light.rs
 - `WOW_PORTRAIT_TEST` — benilla-app/src/portrait/mod.rs, benilla-app/src/portrait/test_bake.rs, benilla-world/src/bgwin.rs
 - `WOW_PORTRAIT_TEST_SKIN` — benilla-app/src/portrait/test_bake.rs
