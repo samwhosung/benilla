@@ -1165,6 +1165,35 @@ impl UnitObjectRead for StoreObject<'_> {
     }
 }
 
+/// The active player's own fields as the getters read them ([`benilla_ui::script::SelfRead`]),
+/// the derivation the XP and rest pushes take too ([`xp_pair`]).
+impl benilla_ui::script::SelfRead for StoreObject<'_> {
+    fn money(&self) -> u64 {
+        self.0 .0.player_money().map_or(0, u64::from)
+    }
+    fn xp(&self) -> u32 {
+        self.0 .0.player_xp().unwrap_or(0)
+    }
+    fn next_level_xp(&self) -> u32 {
+        self.0 .0.player_next_level_xp().unwrap_or(0)
+    }
+    fn rest_state(&self) -> u8 {
+        self.0 .0.player_rest_state().unwrap_or(0)
+    }
+    fn rest_pool(&self) -> u32 {
+        self.0 .0.player_rest_state_experience().unwrap_or(0)
+    }
+    fn resting(&self) -> bool {
+        self.0 .0.player_flags() & PLAYER_FLAGS_RESTING != 0
+    }
+    fn partial_play_time(&self) -> bool {
+        self.0 .0.player_flags() & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0
+    }
+    fn no_play_time(&self) -> bool {
+        self.0 .0.player_flags() & PLAYER_FLAGS_NO_PLAY_TIME != 0
+    }
+}
+
 /// `PLAYER_FLAGS` bit 7, free-for-all PvP (vmangos `Player.h:322`).
 const PLAYER_FLAGS_FFA_PVP: u32 = 0x80;
 
@@ -1366,10 +1395,9 @@ pub(crate) fn player_token() -> ScriptValue {
 
 /// `UnitXP("player")` and `UnitXPMax("player")` off our own descriptor, zero while unsent.
 fn xp_pair(store: &ObjectStore) -> (u32, u32) {
-    (
-        store.0.player_xp().unwrap_or(0),
-        store.0.player_next_level_xp().unwrap_or(0),
-    )
+    use benilla_ui::script::SelfRead;
+    let own = StoreObject(store);
+    (own.xp(), own.next_level_xp())
 }
 
 /// The live player a UI load seats before any file runs: its snapshot and XP pair, as
@@ -1648,11 +1676,11 @@ fn feed_units(
         // (`crate::field_watch`), fired by `field_events` after this push.
         if let Some((store, _)) = self_q.iter().next() {
             let xp = xp_pair(store);
-            let rest = (
-                store.0.player_rest_state().unwrap_or(0),
-                store.0.player_rest_state_experience().unwrap_or(0),
-                store.0.player_flags(),
-            );
+            let rest = {
+                use benilla_ui::script::SelfRead;
+                let own = StoreObject(store);
+                (own.rest_state(), own.rest_pool(), store.0.player_flags())
+            };
             if memo.last_xp != Some(xp) {
                 gate.audit("feed_units", "the XP pair");
                 memo.last_xp = Some(xp);

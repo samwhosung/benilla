@@ -7,10 +7,11 @@
 
 use bevy::prelude::*;
 
-use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
+use benilla_protocol::messages::{ItemInfo, PLAYER_SKILL_SLOTS};
+use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
-    weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, ItemRead, SkillEntry,
-    SkillsState, UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
+    weapon_subclass_skill, BankBagSlots, CombatRead, InvSlotView, InventorySlots, ItemRead,
+    SkillEntry, SkillsState, UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
 };
 
 use crate::entities::ItemDisplays;
@@ -231,20 +232,13 @@ fn slot_entry(store: &ObjectStore, objects: &Objects, slot0: u8) -> Option<u32> 
     objects.object(guid)?.object_entry()
 }
 
-/// The weapon-skill line for `slot0`: vmangos's subclass table (`Item.cpp:700`) for a weapon,
-/// Unarmed (162) for anything else.
-fn weapon_skill_id(store: &ObjectStore, objects: &Objects, items: &Items, slot0: u8) -> u32 {
-    let Some(entry) = slot_entry(store, objects, slot0) else {
-        return SKILL_UNARMED;
-    };
-    // A worn item's record only read: its create asked.
-    let Some(t) = items.template(entry, 0, Ask::Read) else {
-        return SKILL_UNARMED; // in flight: refined when the template lands
-    };
-    if t.class != ITEM_CLASS_WEAPON {
-        return SKILL_UNARMED;
-    }
-    weapon_subclass_skill(t.subclass).unwrap_or(SKILL_UNARMED)
+/// The weapon-skill line for a worn item's record: vmangos's subclass table (`Item.cpp:700`) for
+/// a weapon, Unarmed (162) for anything else, an empty slot, or a record in flight.
+fn weapon_skill_id(record: Option<&ItemInfo>) -> u32 {
+    record
+        .filter(|t| t.class == ITEM_CLASS_WEAPON)
+        .and_then(|t| weapon_subclass_skill(t.subclass))
+        .unwrap_or(SKILL_UNARMED)
 }
 
 /// A skill's `(value + permanent bonus, temporary bonus)`, split as the reference's `0x5ea460`
@@ -266,121 +260,236 @@ fn skill_pair(store: &ObjectStore, skill_id: u32) -> (i32, i32) {
     (0, 0)
 }
 
-pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
-    let f = &store.0;
+/// The active player's own half of its combat stats: the records of its three worn weapons, each
+/// only read, `None` for an empty slot or a record in flight.
+pub(crate) struct Worn<'a> {
+    main: Option<&'a ItemInfo>,
+    off: Option<&'a ItemInfo>,
+    ranged: Option<&'a ItemInfo>,
+}
 
-    let mut stats = [0i32; 5];
-    let mut stat_pos = [0i32; 5];
-    let mut stat_neg = [0i32; 5];
-    for i in 0..5u8 {
-        stats[usize::from(i)] = f.unit_stat(i).unwrap_or(0) as i32;
-        // The buff-split arrays are integers on the wire, not floats.
-        stat_pos[usize::from(i)] = f.player_posstat(i).unwrap_or(0);
-        stat_neg[usize::from(i)] = f.player_negstat(i).unwrap_or(0);
-    }
-    let mut resistances = [0i32; 7];
-    let mut resistance_pos = [0i32; 7];
-    let mut resistance_neg = [0i32; 7];
-    for i in 0..7u8 {
-        resistances[usize::from(i)] = f.unit_resistance(i).unwrap_or(0);
-        resistance_pos[usize::from(i)] = f.player_resistance_buff_pos(i).unwrap_or(0);
-        resistance_neg[usize::from(i)] = f.player_resistance_buff_neg(i).unwrap_or(0);
-    }
-
-    let (ap_pos, ap_neg) = f.unit_attack_power_mods();
-    let (rap_pos, rap_neg) = f.unit_ranged_attack_power_mods();
-
-    UnitCombatStats {
-        stats,
-        stat_pos,
-        stat_neg,
-        resistances,
-        resistance_pos,
-        resistance_neg,
-        min_damage: f.unit_min_damage().unwrap_or(0.0),
-        max_damage: f.unit_max_damage().unwrap_or(0.0),
-        min_offhand_damage: f.unit_min_offhand_damage().unwrap_or(0.0),
-        max_offhand_damage: f.unit_max_offhand_damage().unwrap_or(0.0),
-        physical_bonus_pos: f.player_mod_damage_done_pos(0).unwrap_or(0),
-        physical_bonus_neg: f.player_mod_damage_done_neg(0).unwrap_or(0),
-        damage_percent: f.player_mod_damage_done_pct(0).unwrap_or(1.0),
-        // School 0 here; the player's ranged school is `combat_stats`' to read.
-        ranged_bonus_pos: f.player_mod_damage_done_pos(0).unwrap_or(0),
-        ranged_bonus_neg: f.player_mod_damage_done_neg(0).unwrap_or(0),
-        ranged_percent: f.player_mod_damage_done_pct(0).unwrap_or(1.0),
-        // As the fields stand, 0 when unsent (`0x518ea0`).
-        main_attack_time_ms: f.unit_base_attack_time(0).unwrap_or(0),
-        offhand_attack_time_ms: f.unit_base_attack_time(1).unwrap_or(0),
-        attack_power: f.unit_attack_power().unwrap_or(0),
-        attack_power_pos: i32::from(ap_pos),
-        attack_power_neg: i32::from(ap_neg),
-        attack_power_multiplier: f.unit_attack_power_multiplier().unwrap_or(0.0),
-        ranged_attack_power: f.unit_ranged_attack_power().unwrap_or(0),
-        ranged_attack_power_pos: i32::from(rap_pos),
-        ranged_attack_power_neg: i32::from(rap_neg),
-        ranged_attack_power_multiplier: f.unit_ranged_attack_power_multiplier().unwrap_or(0.0),
-        ranged_attack_time_ms: f.unit_ranged_attack_time().unwrap_or(0),
-        ranged_min_damage: f.unit_min_ranged_damage().unwrap_or(0.0),
-        ranged_max_damage: f.unit_max_ranged_damage().unwrap_or(0.0),
-        // The equipment and skill half is `combat_stats`'s; any other unit keeps these defaults.
-        has_offhand: false,
-        has_wand: false,
-        main_weapon_skill: (0, 0),
-        offhand_weapon_skill: (0, 0),
-        ranged_weapon_skill: (0, 0),
-        defense_skill: (0, 0),
-        dodge_percent: 0.0,
-        parry_percent: 0.0,
-        block_percent: 0.0,
+impl<'a> Worn<'a> {
+    /// The weapons `store`, the active player's, wears.
+    pub(crate) fn of(store: &ObjectStore, objects: &Objects, items: &'a Items) -> Self {
+        let record =
+            |slot0| slot_entry(store, objects, slot0).and_then(|e| items.template(e, 0, Ask::Read));
+        Worn {
+            main: record(SLOT_MAIN_HAND),
+            off: record(SLOT_OFF_HAND),
+            ranged: record(SLOT_RANGED),
+        }
     }
 }
 
-/// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs.
-fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCombatStats {
-    // The off hand counts only as a weapon (a shield does not swing); both flags read false
-    // until the template lands.
-    let has_offhand = slot_entry(store, objects, SLOT_OFF_HAND)
-        .and_then(|e| items.template(e, 0, Ask::Read))
-        .is_some_and(|t| t.class == ITEM_CLASS_WEAPON);
-    let has_wand = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, Ask::Read))
-        .is_some_and(|t| t.class == ITEM_CLASS_WEAPON && t.subclass == SUBCLASS_WAND);
+/// A unit's combat stats as the stat getters read them ([`CombatRead`]): each field derived off
+/// its descriptor as it is asked for, the active player's with its [`Worn`] weapons and its skill
+/// and avoidance fields; any other unit's leave those at their defaults. The snapshots' builds
+/// take every field from here ([`unit_combat_stats`], [`combat_stats`]), so the live read and the
+/// frame's push are one derivation.
+pub(crate) struct StatsObject<'a> {
+    store: &'a ObjectStore,
+    own: Option<Worn<'a>>,
+}
 
-    let main_skill = weapon_skill_id(store, objects, items, SLOT_MAIN_HAND);
-    let offhand_skill = weapon_skill_id(store, objects, items, SLOT_OFF_HAND);
-    let ranged_skill_id = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, Ask::Read))
-        .filter(|t| t.class == ITEM_CLASS_WEAPON)
-        .and_then(|t| weapon_subclass_skill(t.subclass));
-    // `UnitRangedDamage`'s school (`0x5189e1`-`0x518a45`): the ranged-slot item's record, read
-    // without asking, and its first damage line whose minimum is above 0, else school 0. The
-    // template keeps only lines whose maximum is above 0, which drops no well-formed such line.
-    let ranged_school = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, Ask::Read))
-        .and_then(|t| t.damages.iter().find(|d| d.min > 0.0))
-        .map_or(0, |d| u8::try_from(d.school).unwrap_or(u8::MAX));
-    let f = &store.0;
-
-    UnitCombatStats {
-        has_offhand,
-        has_wand,
-        main_weapon_skill: skill_pair(store, main_skill),
-        // `UnitAttackBothHands`'s second pair; a shield or an empty off hand reads Unarmed.
-        offhand_weapon_skill: skill_pair(store, offhand_skill),
-        ranged_weapon_skill: ranged_skill_id.map_or((0, 0), |id| skill_pair(store, id)),
-        // `UnitDefense`'s pair. The 1.12 player sheet has no Defense row: its `SKILL_LINES_CHANGED`
-        // arm (`PaperDollFrame.lua:70-72`) redraws only the Attack row.
-        defense_skill: skill_pair(store, SKILL_DEFENSE),
-        // `GetDodgeChance`/`GetParryChance`/`GetBlockChance`: player fields, already percentages.
-        dodge_percent: store.0.player_dodge_percentage().unwrap_or(0.0),
-        parry_percent: store.0.player_parry_percentage().unwrap_or(0.0),
-        block_percent: store.0.player_block_percentage().unwrap_or(0.0),
-        // The three at that school (`0x518a77`, `0x518ac0`, `0x518b0e`).
-        ranged_bonus_pos: f.player_mod_damage_done_pos(ranged_school).unwrap_or(0),
-        ranged_bonus_neg: f.player_mod_damage_done_neg(ranged_school).unwrap_or(0),
-        ranged_percent: f.player_mod_damage_done_pct(ranged_school).unwrap_or(1.0),
-        ..unit_combat_stats(store)
+impl<'a> StatsObject<'a> {
+    /// Any unit's: its descriptor alone.
+    pub(crate) fn unit(store: &'a ObjectStore) -> Self {
+        StatsObject { store, own: None }
     }
+
+    /// The active player's, wearing `worn`.
+    pub(crate) fn player(store: &'a ObjectStore, worn: Worn<'a>) -> Self {
+        StatsObject {
+            store,
+            own: Some(worn),
+        }
+    }
+
+    fn f(&self) -> &ObjectFields {
+        &self.store.0
+    }
+
+    /// `UnitRangedDamage`'s school (`0x5189e1`-`0x518a45`): the ranged-slot item's record, read
+    /// without asking, and its first damage line whose minimum is above 0, else school 0. The
+    /// template keeps only lines whose maximum is above 0, which drops no well-formed such line.
+    fn ranged_school(&self) -> u8 {
+        self.own
+            .as_ref()
+            .and_then(|w| w.ranged)
+            .and_then(|t| t.damages.iter().find(|d| d.min > 0.0))
+            .map_or(0, |d| u8::try_from(d.school).unwrap_or(u8::MAX))
+    }
+
+    /// The active player's avoidance chance `read` names; 0 for any other unit.
+    fn own_chance(&self, read: impl FnOnce(&ObjectFields) -> Option<f32>) -> f32 {
+        self.own
+            .as_ref()
+            .and_then(|_| read(self.f()))
+            .unwrap_or(0.0)
+    }
+
+    /// The active player's pair for `skill_id`; `(0, 0)` for any other unit.
+    fn own_skill(&self, skill_id: impl FnOnce(&Worn<'_>) -> Option<u32>) -> (i32, i32) {
+        self.own
+            .as_ref()
+            .and_then(skill_id)
+            .map_or((0, 0), |id| skill_pair(self.store, id))
+    }
+}
+
+impl CombatRead for StatsObject<'_> {
+    fn stats(&self) -> [i32; 5] {
+        std::array::from_fn(|i| self.f().unit_stat(i as u8).unwrap_or(0) as i32)
+    }
+    // The buff-split arrays are integers on the wire, not floats.
+    fn stat_pos(&self) -> [i32; 5] {
+        std::array::from_fn(|i| self.f().player_posstat(i as u8).unwrap_or(0))
+    }
+    fn stat_neg(&self) -> [i32; 5] {
+        std::array::from_fn(|i| self.f().player_negstat(i as u8).unwrap_or(0))
+    }
+    fn resistances(&self) -> [i32; 7] {
+        std::array::from_fn(|i| self.f().unit_resistance(i as u8).unwrap_or(0))
+    }
+    fn resistance_pos(&self) -> [i32; 7] {
+        std::array::from_fn(|i| self.f().player_resistance_buff_pos(i as u8).unwrap_or(0))
+    }
+    fn resistance_neg(&self) -> [i32; 7] {
+        std::array::from_fn(|i| self.f().player_resistance_buff_neg(i as u8).unwrap_or(0))
+    }
+    fn min_damage(&self) -> f32 {
+        self.f().unit_min_damage().unwrap_or(0.0)
+    }
+    fn max_damage(&self) -> f32 {
+        self.f().unit_max_damage().unwrap_or(0.0)
+    }
+    fn min_offhand_damage(&self) -> f32 {
+        self.f().unit_min_offhand_damage().unwrap_or(0.0)
+    }
+    fn max_offhand_damage(&self) -> f32 {
+        self.f().unit_max_offhand_damage().unwrap_or(0.0)
+    }
+    fn physical_bonus_pos(&self) -> i32 {
+        self.f().player_mod_damage_done_pos(0).unwrap_or(0)
+    }
+    fn physical_bonus_neg(&self) -> i32 {
+        self.f().player_mod_damage_done_neg(0).unwrap_or(0)
+    }
+    fn damage_percent(&self) -> f32 {
+        self.f().player_mod_damage_done_pct(0).unwrap_or(1.0)
+    }
+    // The three at the ranged school (`0x518a77`, `0x518ac0`, `0x518b0e`).
+    fn ranged_bonus_pos(&self) -> i32 {
+        self.f()
+            .player_mod_damage_done_pos(self.ranged_school())
+            .unwrap_or(0)
+    }
+    fn ranged_bonus_neg(&self) -> i32 {
+        self.f()
+            .player_mod_damage_done_neg(self.ranged_school())
+            .unwrap_or(0)
+    }
+    fn ranged_percent(&self) -> f32 {
+        self.f()
+            .player_mod_damage_done_pct(self.ranged_school())
+            .unwrap_or(1.0)
+    }
+    // As the fields stand, 0 when unsent (`0x518ea0`).
+    fn main_attack_time_ms(&self) -> u32 {
+        self.f().unit_base_attack_time(0).unwrap_or(0)
+    }
+    fn offhand_attack_time_ms(&self) -> u32 {
+        self.f().unit_base_attack_time(1).unwrap_or(0)
+    }
+    // The off hand counts only as a weapon (a shield does not swing); false until the record
+    // lands.
+    fn has_offhand(&self) -> bool {
+        self.own
+            .as_ref()
+            .and_then(|w| w.off)
+            .is_some_and(|t| t.class == ITEM_CLASS_WEAPON)
+    }
+    fn attack_power(&self) -> i32 {
+        self.f().unit_attack_power().unwrap_or(0)
+    }
+    fn attack_power_pos(&self) -> i32 {
+        i32::from(self.f().unit_attack_power_mods().0)
+    }
+    fn attack_power_neg(&self) -> i32 {
+        i32::from(self.f().unit_attack_power_mods().1)
+    }
+    fn attack_power_multiplier(&self) -> f32 {
+        self.f().unit_attack_power_multiplier().unwrap_or(0.0)
+    }
+    fn ranged_attack_power(&self) -> i32 {
+        self.f().unit_ranged_attack_power().unwrap_or(0)
+    }
+    fn ranged_attack_power_pos(&self) -> i32 {
+        i32::from(self.f().unit_ranged_attack_power_mods().0)
+    }
+    fn ranged_attack_power_neg(&self) -> i32 {
+        i32::from(self.f().unit_ranged_attack_power_mods().1)
+    }
+    fn ranged_attack_power_multiplier(&self) -> f32 {
+        self.f()
+            .unit_ranged_attack_power_multiplier()
+            .unwrap_or(0.0)
+    }
+    fn ranged_attack_time_ms(&self) -> u32 {
+        self.f().unit_ranged_attack_time().unwrap_or(0)
+    }
+    fn ranged_min_damage(&self) -> f32 {
+        self.f().unit_min_ranged_damage().unwrap_or(0.0)
+    }
+    fn ranged_max_damage(&self) -> f32 {
+        self.f().unit_max_ranged_damage().unwrap_or(0.0)
+    }
+    fn main_weapon_skill(&self) -> (i32, i32) {
+        self.own_skill(|w| Some(weapon_skill_id(w.main)))
+    }
+    // `UnitAttackBothHands`'s second pair; a shield or an empty off hand reads Unarmed.
+    fn offhand_weapon_skill(&self) -> (i32, i32) {
+        self.own_skill(|w| Some(weapon_skill_id(w.off)))
+    }
+    fn ranged_weapon_skill(&self) -> (i32, i32) {
+        self.own_skill(|w| {
+            w.ranged
+                .filter(|t| t.class == ITEM_CLASS_WEAPON)
+                .and_then(|t| weapon_subclass_skill(t.subclass))
+        })
+    }
+    // `UnitDefense`'s pair. The 1.12 player sheet has no Defense row: its `SKILL_LINES_CHANGED`
+    // arm (`PaperDollFrame.lua:70-72`) redraws only the Attack row.
+    fn defense_skill(&self) -> (i32, i32) {
+        self.own_skill(|_| Some(SKILL_DEFENSE))
+    }
+    fn has_wand(&self) -> bool {
+        self.own
+            .as_ref()
+            .and_then(|w| w.ranged)
+            .is_some_and(|t| t.class == ITEM_CLASS_WEAPON && t.subclass == SUBCLASS_WAND)
+    }
+    // `GetDodgeChance`/`GetParryChance`/`GetBlockChance`: player fields, already percentages.
+    fn dodge_percent(&self) -> f32 {
+        self.own_chance(ObjectFields::player_dodge_percentage)
+    }
+    fn parry_percent(&self) -> f32 {
+        self.own_chance(ObjectFields::player_parry_percentage)
+    }
+    fn block_percent(&self) -> f32 {
+        self.own_chance(ObjectFields::player_block_percentage)
+    }
+}
+
+/// Any unit's combat stats off its descriptor alone ([`StatsObject::unit`]).
+pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
+    UnitCombatStats::read(&StatsObject::unit(store))
+}
+
+/// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs
+/// ([`StatsObject::player`]).
+fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCombatStats {
+    UnitCombatStats::read(&StatsObject::player(store, Worn::of(store, objects, items)))
 }
 
 /// One slot's view from the item object and its ask-once template (no icon while in flight).
