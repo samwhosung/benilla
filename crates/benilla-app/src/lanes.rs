@@ -420,6 +420,8 @@ pub(crate) fn fire_in_order(world: &mut World) {
 }
 
 #[cfg(test)]
+mod aura_live_tests;
+#[cfg(test)]
 mod aura_view_tests;
 #[cfg(test)]
 mod bag_tests;
