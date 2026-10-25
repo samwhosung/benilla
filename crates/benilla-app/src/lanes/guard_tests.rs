@@ -775,6 +775,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "bevy_time::time::Time<bevy_time::real::Real>",
     // The stores as of the drain's place, which the call host's token lookups read.
     "::ui_unit::views::UnitViews",
+    // The `raidFilter` books the call host's aura walk reads (`0x4b3870`, `0x4b3920`), which
+    // only the aura feed writes.
+    "::ui_aura::AuraFeedMemory",
     // The host's two sinks that raise no event.
     "::sound::message::MessageSounds",
     "::creature_anim::edits::UnitEdits",

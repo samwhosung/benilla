@@ -4,6 +4,9 @@
 //! keeps the reference cache's insertion order (`0xbc6040`, repacked by `PlayerAuras_Update
 //! 0x4e4170`); any other unit's reads its descriptor by ascending slot, or, for a group member or
 //! pet with no live object, its roster record.
+//!
+//! A unit's list is one derivation off its slots ([`UnitAuraSource`]), which the lent host's walk
+//! reads as each getter runs ([`AuraLive`]) and each pushed list's build reads whole.
 
 mod units;
 
@@ -12,8 +15,10 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use benilla_formats::SpellCatalog;
-use benilla_protocol::messages::{UnitAuraSlot, AURA_FLAG_CANCELABLE, UNIT_AURA_POSITIVE_SLOTS};
-use benilla_ui::script::{AuraState, TrackingState, UiScript};
+use benilla_protocol::messages::{
+    PartyMemberStatsInfo, UnitAuraSlot, AURA_FLAG_CANCELABLE, UNIT_AURA_POSITIVE_SLOTS,
+};
+use benilla_ui::script::{AuraListRead, AuraRead, AuraState, TrackingState, UiScript};
 
 use crate::client_state::ClientState;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
@@ -309,29 +314,80 @@ fn aura_list(catalog: Option<&SpellCatalog>, inputs: &[AuraInput]) -> Vec<AuraSt
         .collect()
 }
 
-/// A unit's auras as `UnitBuff 0x519500`, `UnitDebuff 0x5198f0` and the tooltip's
-/// `SetUnitBuff 0x534ac0` read them: ascending slot within each half, no durations, through the
-/// display filter, every one whatever the unit gate says ([`buffs_visible_on`]), which the list
-/// carries beside them, each with its `raidFilter` verdict and, against the active player's
-/// `vision`, the bindings' vision verdict ([`vision_hides`]).
-fn other_unit_inputs<'a>(
-    store: &'a ObjectStore,
+/// What a unit's auras are read against: the spell catalog, the `raidFilter` books
+/// ([`RaidFilter`]) and the active player's `PLAYER_FIELD_BYTES2` byte 1 ([`vision_hides`]),
+/// `None` with no active player.
+#[derive(Clone, Copy)]
+struct AuraReadCtx<'a> {
     catalog: Option<&'a SpellCatalog>,
     raid: &'a RaidFilter,
     vision: Option<u8>,
-) -> impl Iterator<Item = AuraInput> + 'a {
+}
+
+/// One slot's aura of a unit's list as the walks read it, each fact derived as it is asked for:
+/// its slot, spell, stack count, `AURAFLAGS` nibble and `AURALEVELS` byte, read against `ctx`. A
+/// snapshot's [`AuraInput`] is every fact of one ([`AuraInput::of`]), so the live walk and the
+/// pushed list are one derivation.
+struct SlotAura<'a> {
+    slot: u8,
+    spell_id: u32,
+    count: u8,
+    flags: u8,
+    level: u8,
+    ctx: AuraReadCtx<'a>,
+}
+
+impl AuraRead for SlotAura<'_> {
+    fn helpful(&self) -> bool {
+        self.slot < UNIT_AURA_POSITIVE_SLOTS
+    }
+    fn vision_hidden(&self) -> bool {
+        vision_hides(self.ctx.catalog, self.spell_id, self.ctx.vision)
+    }
+    fn raid_listed(&self) -> bool {
+        self.ctx
+            .raid
+            .keeps(self.ctx.catalog, self.slot, self.spell_id)
+    }
+    fn state(&self) -> AuraState {
+        unit_aura_state(self.ctx.catalog, &AuraInput::of(self))
+    }
+}
+
+impl AuraInput {
+    /// Every fact `a` answers.
+    fn of(a: &SlotAura) -> Self {
+        AuraInput {
+            slot: a.slot,
+            spell_id: a.spell_id,
+            count: a.count,
+            flags: a.flags,
+            level: a.level,
+            raid_listed: a.raid_listed(),
+            vision_hidden: a.vision_hidden(),
+        }
+    }
+}
+
+/// A unit's auras as `UnitBuff 0x519500`, `UnitDebuff 0x5198f0` and the tooltip's
+/// `SetUnitBuff 0x534ac0` read them: ascending slot within each half, no durations, through the
+/// display filter, every one whatever the unit gate says ([`buffs_visible_on`]), which the list
+/// carries beside them.
+fn store_slots<'a>(
+    store: &'a ObjectStore,
+    ctx: AuraReadCtx<'a>,
+) -> impl Iterator<Item = SlotAura<'a>> + 'a {
     store
         .0
         .unit_auras()
-        .filter(move |a| shown_in_aura_ui(catalog, a.spell_id))
-        .map(move |a| AuraInput {
+        .filter(move |a| shown_in_aura_ui(ctx.catalog, a.spell_id))
+        .map(move |a| SlotAura {
             slot: a.slot,
             spell_id: a.spell_id,
             count: a.stacks,
             flags: a.flags,
             level: a.level,
-            raid_listed: raid.keeps(catalog, a.slot, a.spell_id),
-            vision_hidden: vision_hides(catalog, a.spell_id, vision),
+            ctx,
         })
 }
 
@@ -340,24 +396,144 @@ fn other_unit_inputs<'a>(
 /// `0x519b8f`), no unit gate and no `AURAFLAGS`, which the record does not hold. The stack count is always 1
 /// (`0x51980f`, `0x519c2d`), nothing is cancelable, and the level is 0, what `SetUnitBuff` passes
 /// for a record (`0x534da8`).
-fn record_inputs<'a>(
+fn record_slots<'a>(
     slots: impl Iterator<Item = (u8, u16)> + 'a,
-    catalog: Option<&'a SpellCatalog>,
-    raid: &'a RaidFilter,
-    vision: Option<u8>,
-) -> impl Iterator<Item = AuraInput> + 'a {
+    ctx: AuraReadCtx<'a>,
+) -> impl Iterator<Item = SlotAura<'a>> + 'a {
     slots
         .map(|(slot, spell)| (slot, u32::from(spell)))
-        .filter(move |&(_, spell)| spell != 0 && shown_in_aura_ui(catalog, spell))
-        .map(move |(slot, spell_id)| AuraInput {
+        .filter(move |&(_, spell)| spell != 0 && shown_in_aura_ui(ctx.catalog, spell))
+        .map(move |(slot, spell_id)| SlotAura {
             slot,
             spell_id,
             count: 1,
             flags: 0,
             level: 0,
-            raid_listed: raid.keeps(catalog, slot, spell_id),
-            vision_hidden: vision_hides(catalog, spell_id, vision),
+            ctx,
         })
+}
+
+/// [`store_slots`] as a list's inputs, each with its `raidFilter` verdict and, against the
+/// active player's `vision`, the bindings' vision verdict.
+#[cfg(test)]
+fn other_unit_inputs<'a>(
+    store: &'a ObjectStore,
+    catalog: Option<&'a SpellCatalog>,
+    raid: &'a RaidFilter,
+    vision: Option<u8>,
+) -> impl Iterator<Item = AuraInput> + 'a {
+    let ctx = AuraReadCtx {
+        catalog,
+        raid,
+        vision,
+    };
+    store_slots(store, ctx).map(|a| AuraInput::of(&a))
+}
+
+/// Where one unit's list is read from, as `UnitBuff 0x519500` finds it: the object its token
+/// resolves (`0x51955e`), else a roster record (`0x519595` → `0x519735`). Both paths read it: the
+/// lent host's walk as the call runs ([`AuraLive`]), and each pushed list's build
+/// ([`UnitAuraSource::list`]).
+pub(crate) struct UnitAuraSource<'a> {
+    from: AuraFrom<'a>,
+    ctx: AuraReadCtx<'a>,
+}
+
+enum AuraFrom<'a> {
+    /// The live unit's slots, and `UnitBuff`'s unit gate on it.
+    Object {
+        guid: u64,
+        store: &'a ObjectStore,
+        gate: &'a dyn Fn(u64, &ObjectStore) -> bool,
+    },
+    /// A roster record's block in `records`, which has no gate (`0x519735`); none without a
+    /// roster.
+    Record {
+        guid: u64,
+        records: Option<&'a HashMap<u64, PartyMemberStatsInfo>>,
+    },
+}
+
+impl<'a> UnitAuraSource<'a> {
+    /// `guid`'s list: off `store`, its object, gated through `gate`; else, when its roster record
+    /// may stand in (`record_ok`), off its record in `records`; `None` for neither, as
+    /// `UnitBuff`'s roster walk finds nothing for a guid with no record.
+    fn of(
+        guid: u64,
+        store: Option<&'a ObjectStore>,
+        record_ok: bool,
+        records: Option<&'a HashMap<u64, PartyMemberStatsInfo>>,
+        gate: &'a dyn Fn(u64, &ObjectStore) -> bool,
+        ctx: AuraReadCtx<'a>,
+    ) -> Option<Self> {
+        let from = match store {
+            Some(store) => AuraFrom::Object { guid, store, gate },
+            None if record_ok => AuraFrom::Record { guid, records },
+            None => return None,
+        };
+        Some(Self { from, ctx })
+    }
+
+    /// Each aura in ascending slot, until `visit` answers `true`.
+    fn each(&self, mut visit: impl FnMut(&SlotAura<'a>) -> bool) {
+        match self.from {
+            AuraFrom::Object { store, .. } => {
+                for a in store_slots(store, self.ctx) {
+                    if visit(&a) {
+                        return;
+                    }
+                }
+            }
+            AuraFrom::Record {
+                guid,
+                records: Some(records),
+            } => {
+                let slots = crate::ui_party::roster_aura_slots_in(records, guid);
+                for a in record_slots(slots, self.ctx) {
+                    if visit(&a) {
+                        return;
+                    }
+                }
+            }
+            AuraFrom::Record { records: None, .. } => {}
+        }
+    }
+
+    /// `UnitBuff`'s unit gate: the object's ([`buffs_visible_on`]); a record's is open.
+    fn gate(&self) -> bool {
+        match self.from {
+            AuraFrom::Object { guid, store, gate } => gate(guid, store),
+            AuraFrom::Record { .. } => true,
+        }
+    }
+
+    /// Every aura's inputs, into `inputs`, with the unit gate.
+    fn inputs(&self, inputs: &mut Vec<AuraInput>) -> bool {
+        self.each(|a| {
+            inputs.push(AuraInput::of(a));
+            false
+        });
+        self.gate()
+    }
+
+    /// The list whole, as a feed pushes it.
+    fn list(&self) -> benilla_ui::script::UnitAuraList {
+        let mut inputs = Vec::new();
+        let buffs_visible = self.inputs(&mut inputs);
+        benilla_ui::script::UnitAuraList {
+            auras: aura_list(self.ctx.catalog, &inputs),
+            buffs_visible,
+        }
+    }
+}
+
+impl AuraListRead for UnitAuraSource<'_> {
+    fn buffs_visible(&self) -> bool {
+        self.gate()
+    }
+    fn find(&self, visit: &mut dyn FnMut(&dyn AuraRead) -> bool) {
+        self.each(|a| visit(a));
+    }
 }
 
 /// What a set `raidFilter` keeps, the same test on the live walk and the record's (`UnitBuff`
@@ -537,9 +713,11 @@ struct AuraUnits<'w> {
 }
 
 fn feed_auras(
+    // The feed's memory beside the VM: the host's aura walk reads its `raidFilter` books.
     mut vm: crate::script_calls::VmWith<(
         AuraUnits<'static>,
         crate::target::RelationWorld<'static, 'static>,
+        ResMut<'static, AuraFeedMemory>,
     )>,
     self_q: Query<(Entity, &ObjectStore, &Guid), With<SelfPlayer>>,
     stores: Query<&ObjectStore>,
@@ -554,10 +732,9 @@ fn feed_auras(
     step: Res<benilla_world::frame_pace::FrameStep>,
     // `Option`: a UI-only harness has no action store, and so no known spell.
     actions: Option<Res<crate::ui_action::PlayerActions>>,
-    mut mem: ResMut<AuraFeedMemory>,
 ) {
     // The `UnitBuff` gate's inputs are the relation model the selection ring and nameplates use.
-    vm.feed(|script, (units, relations), fires| {
+    vm.feed(|script, (units, relations, mut mem), fires| {
         let Some(script) = script else {
             return;
         };
@@ -833,7 +1010,8 @@ impl PlayerAuraWatch<'_, '_> {
 }
 
 /// What the views lane reads to build a unit's aura list as a packet left it
-/// ([`crate::ui_unit::views`]), as [`feed_auras`] builds it.
+/// ([`crate::ui_unit::views`]), as [`feed_auras`] builds it, and the lent host's walk reads it
+/// ([`AuraLive`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuraViews<'w> {
     spells: Option<Res<'w, Spells>>,
@@ -841,9 +1019,42 @@ pub(crate) struct AuraViews<'w> {
 }
 
 impl AuraViews<'_> {
-    /// `guid`'s list off `store`, its descriptor, else, when a group token names it
-    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither. `me` is our
-    /// own descriptor as of the same place, whose vision the list is read against.
+    /// `f` over `guid`'s [`UnitAuraSource`]: off `store`, its descriptor, else, when its roster
+    /// record may stand in (`record_ok`), off its record in `records`; `None` for neither. `me`
+    /// is our own descriptor as of the same place, whose vision the list is read against and
+    /// whose standing `UnitBuff`'s gate reads (`0x5195be`-`0x5195f7`). `None` without the feed's
+    /// memory, which holds the `raidFilter` books.
+    #[allow(clippy::too_many_arguments)] // the list's inputs, each as of the place it is read for
+    pub(crate) fn read<T>(
+        &self,
+        guid: u64,
+        store: Option<&ObjectStore>,
+        record_ok: bool,
+        records: Option<&HashMap<u64, PartyMemberStatsInfo>>,
+        relations: &crate::target::RelationWorld,
+        me: Option<&ObjectStore>,
+        f: impl FnOnce(Option<&UnitAuraSource>) -> T,
+    ) -> Option<T> {
+        let raid = &self.mem.as_deref()?.raid;
+        let ctx = AuraReadCtx {
+            catalog: self.spells.as_ref().map(|s| &s.catalog),
+            raid,
+            vision: me.map(|s| s.0.player_aura_vision()),
+        };
+        let rel = relations.get();
+        let viewer = relations
+            .me_guid()
+            .zip(me)
+            .map(|(g, s)| relations.unit_of(g, s));
+        let gate = |guid: u64, unit: &ObjectStore| {
+            buffs_visible_on(&rel, &relations.unit_of(guid, unit), viewer.as_ref())
+        };
+        let source = UnitAuraSource::of(guid, store, record_ok, records, &gate, ctx);
+        Some(f(source.as_ref()))
+    }
+
+    /// `guid`'s list as [`Self::read`] reads it, whole, a group token's off the roster in
+    /// `group`.
     pub(crate) fn list(
         &self,
         guid: u64,
@@ -853,23 +1064,46 @@ impl AuraViews<'_> {
         relations: &crate::target::RelationWorld,
         me: Option<&ObjectStore>,
     ) -> Option<benilla_ui::script::UnitAuraList> {
-        let raid = &self.mem.as_deref()?.raid;
-        let catalog = self.spells.as_ref().map(|s| &s.catalog);
-        let (rel, viewer) = (relations.get(), relations.me());
-        let buffs_visible = |guid: u64, unit: &ObjectStore| {
-            buffs_visible_on(&rel, &relations.unit_of(guid, unit), viewer.as_ref())
-        };
-        let vision = me.map(|s| s.0.player_aura_vision());
-        units::list_of(
-            guid,
-            store,
-            record_ok,
-            group,
-            &buffs_visible,
-            catalog,
-            raid,
-            vision,
-        )
+        let records = group.map(|g| &g.stats);
+        self.read(guid, store, record_ok, records, relations, me, |source| {
+            source.map(UnitAuraSource::list)
+        })
+        .flatten()
+    }
+}
+
+/// The aura slots the unit aura getters read off as they run, as the reference's walk the object
+/// their token resolves (`UnitBuff` `0x519500`, `0x51955e`): each store and record as of the
+/// drain's place, so a listener reads its own packet's, and the active player as of there, whose
+/// vision and standing the walk reads.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct AuraLive<'w, 's> {
+    objects: crate::net::Objects<'w, 's>,
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
+    views: AuraViews<'w>,
+    relations: crate::target::RelationWorld<'w, 's>,
+    // `Option`: a harness without the party's has no roster, and so no record to read.
+    group: Option<Res<'w, crate::ui_party::GroupState>>,
+}
+
+impl AuraLive<'_, '_> {
+    /// Hand `read` `guid`'s aura list as of here: its object's slots, else its roster record's,
+    /// which `0x496400` and `0x496420` look up by guid whatever token named it (`0x519735`);
+    /// `None` for neither.
+    pub(crate) fn read(&self, guid: u64, read: &mut dyn FnMut(Option<&dyn AuraListRead>)) {
+        let me = self.objects.player().and_then(|e| self.stores.get(e).ok());
+        let store = self.stores.by_guid(guid, self.objects.store(guid));
+        let records = self.group.as_deref().map(|g| self.stores.records(&g.stats));
+        let mut read = Some(read);
+        self.views
+            .read(guid, store, true, records, &self.relations, me, |source| {
+                if let Some(read) = read.take() {
+                    read(source.map(|s| s as &dyn AuraListRead));
+                }
+            });
+        if let Some(read) = read {
+            read(None);
+        }
     }
 }
 

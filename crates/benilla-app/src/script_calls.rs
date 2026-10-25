@@ -134,10 +134,12 @@ disjoint::disjoint_set! {
         /// The console's commands, against what they read and write, and the getters' lookups.
         console: crate::console::ConsoleSteps<'static, 'static>,
         asks: engine::RecordAsks<'static>,
-        /// The unit objects, the items and the stats the getters read as they run.
+        /// The unit objects, the items, the stats and the auras the getters read as they run; the
+        /// auras' absent in a harness without the relations' inputs.
         units: UnitLive<'static, 'static>,
         items_live: crate::ui_items::live::ItemLive<'static, 'static>,
         stats_live: StatsLive<'static, 'static>,
+        auras_live: Option<crate::ui_aura::AuraLive<'static, 'static>>,
     }
 }
 
@@ -670,6 +672,20 @@ impl CallHost for ScriptCallHost<'_, '_> {
     fn read_self(&mut self, read: &mut dyn FnMut(&dyn benilla_ui::script::SelfRead)) -> bool {
         self.appliers.stats_live().read_self(read);
         true
+    }
+
+    fn read_unit_auras(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(Option<&dyn benilla_ui::script::AuraListRead>),
+    ) -> bool {
+        match self.appliers.auras_live() {
+            Some(auras) => {
+                auras.read(guid, read);
+                true
+            }
+            None => false,
+        }
     }
 
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {

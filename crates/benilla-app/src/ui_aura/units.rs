@@ -11,7 +11,7 @@ use std::collections::hash_map::{Entry, HashMap};
 use benilla_formats::SpellCatalog;
 use benilla_ui::script::{UiScript, UnitAuraList, UnitGuids};
 
-use super::{aura_list, other_unit_inputs, record_inputs, AuraInput, RaidFilter};
+use super::{aura_list, AuraInput, AuraReadCtx, RaidFilter, UnitAuraSource};
 use crate::net::ObjectStore;
 use crate::ui_party::{raid_row_guids, GroupState};
 
@@ -261,10 +261,11 @@ impl UnitAuras {
     }
 }
 
-/// What `guid`'s list is built from, into `inputs`, with its unit gate: the live unit's slots
-/// (`store`, the object manager's answer) with its gate, else, for a guid a group token names
-/// (`record_ok`), the roster record's block, which has none (`0x519735`). A guid neither held nor
-/// a group token's gets no list, as `UnitBuff`'s roster walk finds nothing for it.
+/// What `guid`'s list is built from, into `inputs`, with its unit gate, as its
+/// [`UnitAuraSource`] reads it: the live unit's slots (`store`, the object manager's answer) with
+/// its gate, else, for a guid a group token names (`record_ok`), the roster record's block, which
+/// has none (`0x519735`). A guid neither held nor a group token's gets no list, as `UnitBuff`'s
+/// roster walk finds nothing for it.
 #[allow(clippy::too_many_arguments)] // the list's inputs, as the feed reads them
 fn list_inputs(
     inputs: &mut Vec<AuraInput>,
@@ -277,54 +278,14 @@ fn list_inputs(
     raid: &RaidFilter,
     vision: Option<u8>,
 ) -> Option<bool> {
-    match store {
-        Some(store) => {
-            inputs.extend(other_unit_inputs(store, catalog, raid, vision));
-            Some(buffs_visible(guid, store))
-        }
-        None if record_ok => {
-            if let Some(group) = group {
-                inputs.extend(record_inputs(
-                    group.roster_aura_slots(guid),
-                    catalog,
-                    raid,
-                    vision,
-                ));
-            }
-            Some(true)
-        }
-        None => None,
-    }
-}
-
-/// `guid`'s list off `store` and the record `group` holds, as [`UnitAuras::feed`] builds it.
-#[allow(clippy::too_many_arguments)] // the list's inputs, as the feed reads them
-pub(super) fn list_of(
-    guid: u64,
-    store: Option<&ObjectStore>,
-    record_ok: bool,
-    group: Option<&GroupState>,
-    buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
-    catalog: Option<&SpellCatalog>,
-    raid: &RaidFilter,
-    vision: Option<u8>,
-) -> Option<UnitAuraList> {
-    let mut inputs = Vec::new();
-    let gate = list_inputs(
-        &mut inputs,
-        guid,
-        store,
-        record_ok,
-        group,
-        buffs_visible,
+    let ctx = AuraReadCtx {
         catalog,
         raid,
         vision,
-    )?;
-    Some(UnitAuraList {
-        auras: aura_list(catalog, &inputs),
-        buffs_visible: gate,
-    })
+    };
+    let records = group.map(|g| &g.stats);
+    let source = UnitAuraSource::of(guid, store, record_ok, records, buffs_visible, ctx)?;
+    Some(source.inputs(inputs))
 }
 
 #[cfg(test)]
