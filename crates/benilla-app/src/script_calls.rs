@@ -1330,6 +1330,12 @@ pub(crate) fn bind_parked_picks(mut cursor: crate::spell::ScriptCursor) {
     cursor.bind_parked();
 }
 
+/// [`bind_parked_picks`] after a walk's arrival in the frame time, whose dispatch selects through
+/// the same front.
+pub(crate) fn bind_arrival_picks(mut cursor: crate::spell::ScriptCursor) {
+    cursor.bind_parked();
+}
+
 /// The census list ([`benilla_ui::script::census`]).
 #[cfg(test)]
 pub(crate) mod census;

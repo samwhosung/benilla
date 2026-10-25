@@ -14,6 +14,8 @@ use benilla_world::schedule::WorldStage;
 mod by_name;
 // `pub(crate)` for the chest live probe, which drives the mouse's own `click::resolve_go_action`.
 pub(crate) mod click;
+#[cfg(test)]
+mod click_order_tests;
 // `pub(crate)` for the hover inspector, which runs the cursor's `cursor_mode::go_highlightable`.
 pub(crate) mod cursor_mode;
 mod died;
@@ -217,9 +219,9 @@ impl PressPick {
     }
 }
 
-/// Latch the frame's pick as a press begins. It must run at the head of the target chain: input has
-/// already engaged the look session on the press frame, and [`hover::update_hover`] is about to
-/// clear the hover, so what stands here is last frame's pick at the same cursor, the press's.
+/// Latch the frame's pick as a press begins. It runs at the head of the world's clicks, after the
+/// look session engaged on the press frame and before [`hover::update_hover`] refreshes the
+/// hover, so what stands here is last frame's pick at the same cursor, the press's.
 pub(crate) fn latch_press_pick(
     buttons: Res<ButtonInput<MouseButton>>,
     hovered: Res<Hovered>,
@@ -262,10 +264,15 @@ pub(crate) fn go_is_nearest(character: &Hovered, go: &HoveredObject) -> bool {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct SelectionRadius(pub(crate) f32);
 
-/// The set the targeting chain runs in: readers of [`Selection`], [`Hovered`] or [`CombatFlash`]
-/// order after it, or they can read last frame's verdict.
+/// The set the targeting chain's frame-time half runs in: readers of [`Selection`], [`Hovered`]
+/// or [`CombatFlash`] order after it, or they can read last frame's verdict.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TargetUpdate;
+
+/// The world's clicks, among the frame's input records ahead of the net drain: the press's pick,
+/// the selects and the interacts a click makes ([`TargetPlugin`]). [`TargetUpdate`] follows it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct WorldClicks;
 
 /// `deselectOnClick`, 1.12's CVar behind the "Sticky Targeting" checkbox, which shows it inverted
 /// (`UIOptionsFrame.lua:250`). On by default, as in the reference: an empty-world click clears the
@@ -336,42 +343,35 @@ impl Plugin for TargetPlugin {
                     (ring::load_factions, scan::load_creature_types).after(AssetSet::Open),
                 ),
             )
-            // After input, so this frame's `WorldClick` is here, in order: the picks, the cursor,
-            // the clicks, the non-mouse selection writers, then the flash and the ring off the
-            // frame's final selection. Nested tuples keep the chain within Bevy's 20-tuple limit.
+            // The world's clicks among the frame's input records, after the mouse's, whose release
+            // settles the click tests, and ahead of the packets, as the reference's world-frame
+            // handlers run in the window input (`0x423920` at `0x420d23`): a click acts on the
+            // world as the last frame left it, its pick the last frame's, and a unit this frame's
+            // packets remove is clicked first. In order: the press's pick, the right press's legs,
+            // the payload, the selects, the cursor's commits, the right-click's action, the binds
+            // of the units the selects parked and the interacts.
+            .configure_sets(
+                Update,
+                WorldClicks
+                    .after(crate::player::WorldMouse)
+                    .before(WorldStage::Net),
+            )
             .add_systems(
                 Update,
                 (
-                    // The latch first, before any pick refresh clears what the press was over.
-                    // The trace reads the static world after this frame's stream reshapes it.
-                    (
-                        latch_press_pick,
-                        hover::aim_and_trace().after(WorldStage::Stream),
-                    )
-                        .chain(),
-                    hover::update_hover,
-                    hover::update_hovered_object,
-                    cursor_mode::classify_cursor,
+                    // The latch first: what stands is the last frame's pick at the same cursor.
+                    latch_press_pick,
                     // The right press's two legs of the reference's OnMouseDown hook (`0x492c20`),
-                    // the targeting cancel and the repair-mode reset, before the cursor drive, so
-                    // the press frame already reads both modes cleared.
+                    // the targeting cancel and the repair-mode reset, before the frame time's
+                    // cursor drive, so the press frame already reads both modes cleared.
                     (
                         crate::spell::targeting::cancel_targeting_on_right_press,
                         // It lends the call host, whose casts read the player's outdoors answer:
-                        // here this frame's re-place's. A key or action-button cast runs in
-                        // `UiInput`, before `WorldStage::Input`, and reads the last re-place's, as
-                        // the client's bit does.
-                        crate::ui_merchant::end_repair_mode_on_right_press
-                            .after(crate::player::publish_caster_outdoors),
+                        // the last re-place's, as a key or action-button cast in `UiInput` reads
+                        // it, and as the client's bit does.
+                        crate::ui_merchant::end_repair_mode_on_right_press,
                     ),
-                    // Overwrites the classifier's verdict while the targeting cursor is up, as the
-                    // reference's dispatcher runs this branch before the object classifier.
-                    crate::spell::targeting::drive_targeting_cursor,
-                    // Reads that verdict: `WorldCursor.unable` is the frame's range state, as the
-                    // reference's one `CheckGroundPointInRange` caller feeds both.
-                    reticle::update_reticle,
-                    // It lends the call host too, after the repair-mode reset, so its casts read
-                    // this frame's outdoors answer as well.
+                    // It lends the call host too, after the repair-mode reset.
                     click::world_right_click_payload,
                     // The world click's trade leg, ahead of the select in the same click
                     // (`0x4925d0`); then a plate click replayed as a click, then the select that
@@ -384,13 +384,10 @@ impl Plugin for TargetPlugin {
                         .chain(),
                     // After the gated select, which must read the targeting mode before a commit
                     // clears it. The pending spell feeds only one of the two legs, so their mutual
-                    // order is free.
+                    // order is free. Each reads the last frame's cursor verdict, the pick's.
                     crate::spell::targeting::commit_ground_cast_on_click,
                     crate::spell::targeting::commit_object_cast_on_click,
-                    // The verb a walk owes runs at its stop, ahead of this frame's click.
-                    (click::act_on_arrival, click::act_on_right_click).chain(),
-                    // The loot close's guid-scoped deselect.
-                    click::clear_target_requests,
+                    click::act_on_right_click,
                     // The units the writers above parked with the targeting cursor up, bound to its
                     // cast; then the unit interact of a nameplate's right-click and a crate's
                     // `Interact`, so the cast goes out ahead of the interact it came with; then
@@ -401,6 +398,38 @@ impl Plugin for TargetPlugin {
                         crate::ui_action::drop_item::drop_item_on_unit,
                     )
                         .chain(),
+                )
+                    .chain()
+                    .in_set(WorldClicks),
+            )
+            // The frame time's half, after the controller's step and the stream: the picks, the
+            // cursor, a walk's arrival, the non-mouse selection writers, then the flash and the
+            // ring off the frame's final selection. Nested tuples keep the chain within Bevy's
+            // 20-tuple limit.
+            .add_systems(
+                Update,
+                (
+                    // The trace reads the static world after this frame's stream reshapes it.
+                    hover::aim_and_trace().after(WorldStage::Stream),
+                    hover::update_hover,
+                    hover::update_hovered_object,
+                    cursor_mode::classify_cursor,
+                    // Overwrites the classifier's verdict while the targeting cursor is up, as the
+                    // reference's dispatcher runs this branch before the object classifier.
+                    crate::spell::targeting::drive_targeting_cursor,
+                    // Reads that verdict: `WorldCursor.unable` is the frame's range state, as the
+                    // reference's one `CheckGroundPointInRange` caller feeds both.
+                    reticle::update_reticle,
+                    // The verb a walk owes runs at its stop, in the frame time's movement, after
+                    // the frame's clicks; a unit it parked with the targeting cursor up is bound
+                    // as a click's is.
+                    (
+                        click::act_on_arrival,
+                        crate::script_calls::bind_arrival_picks,
+                    )
+                        .chain(),
+                    // The loot close's guid-scoped deselect.
+                    click::clear_target_requests,
                     // The chat layer's by-name asks: `/target` and `/assist` commit through
                     // `scan::commit`; `/follow` hands its subject to `crate::player`.
                     (

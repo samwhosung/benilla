@@ -102,7 +102,10 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            stamp("Update/pre-Net").before(WorldStage::Net),
+            // After the frame's input records, which run ahead of the net drain.
+            stamp("Update/pre-Net")
+                .after(crate::target::WorldClicks)
+                .before(WorldStage::Net),
             stamp("Update/Net")
                 .after(WorldStage::Net)
                 .before(WorldStage::Input),
