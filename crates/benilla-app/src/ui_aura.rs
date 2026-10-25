@@ -1089,21 +1089,17 @@ pub(crate) struct AuraLive<'w, 's> {
 impl AuraLive<'_, '_> {
     /// Hand `read` `guid`'s aura list as of here: its object's slots, else its roster record's,
     /// which `0x496400` and `0x496420` look up by guid whatever token named it (`0x519735`);
-    /// `None` for neither.
-    pub(crate) fn read(&self, guid: u64, read: &mut dyn FnMut(Option<&dyn AuraListRead>)) {
+    /// `None` for neither. Whether it read: not without the aura feed's memory, whose `raidFilter`
+    /// books the walk reads, where the pushed lists answer.
+    pub(crate) fn read(&self, guid: u64, read: &mut dyn FnMut(Option<&dyn AuraListRead>)) -> bool {
         let me = self.objects.player().and_then(|e| self.stores.get(e).ok());
         let store = self.stores.by_guid(guid, self.objects.store(guid));
         let records = self.group.as_deref().map(|g| self.stores.records(&g.stats));
-        let mut read = Some(read);
         self.views
             .read(guid, store, true, records, &self.relations, me, |source| {
-                if let Some(read) = read.take() {
-                    read(source.map(|s| s as &dyn AuraListRead));
-                }
-            });
-        if let Some(read) = read {
-            read(None);
-        }
+                read(source.map(|s| s as &dyn AuraListRead))
+            })
+            .is_some()
     }
 }
 

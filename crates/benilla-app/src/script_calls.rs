@@ -680,10 +680,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
         read: &mut dyn FnMut(Option<&dyn benilla_ui::script::AuraListRead>),
     ) -> bool {
         match self.appliers.auras_live() {
-            Some(auras) => {
-                auras.read(guid, read);
-                true
-            }
+            Some(auras) => auras.read(guid, read),
             None => false,
         }
     }
