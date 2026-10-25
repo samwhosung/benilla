@@ -412,6 +412,17 @@ pub(crate) struct ViewStores<'w, 's> {
     views: Option<Res<'w, UnitViews>>,
 }
 
+/// The objects an inventory walk reads as of the drain's place ([`ViewStores::item_objects`]).
+pub(crate) struct AsOfObjects<'a> {
+    by_guid: Box<dyn Fn(u64) -> Option<&'a ObjectStore> + 'a>,
+}
+
+impl crate::ui_items::ItemObjects for AsOfObjects<'_> {
+    fn object(&self, guid: u64) -> Option<&ObjectFields> {
+        (self.by_guid)(guid).map(|s| &s.0)
+    }
+}
+
 /// No store as of the drain's place: the entity holds none, or its object did not exist yet.
 #[derive(Debug)]
 pub(crate) struct NotHeld;
@@ -459,6 +470,17 @@ impl ViewStores<'_, '_> {
             .as_deref()
             .and_then(|v| v.records.as_ref())
             .unwrap_or(live)
+    }
+
+    /// The item objects as of the drain's place, `objects` the live ones: an item the frame's
+    /// later packets destroy still reads to an earlier listener's walk.
+    pub(crate) fn item_objects<'a>(
+        &'a self,
+        objects: &'a crate::net::Objects<'_, '_>,
+    ) -> AsOfObjects<'a> {
+        AsOfObjects {
+            by_guid: Box::new(move |guid| self.by_guid(guid, objects.store(guid))),
+        }
     }
 }
 
@@ -659,9 +681,22 @@ struct Readable {
     grouped: HashSet<u64>,
 }
 
-/// The 0-based weapon seats (`EQUIPMENT_SLOT_MAINHAND`, `_OFFHAND`, `_RANGED`), private fields
-/// only the active player's store carries.
-const WEAPON_SLOTS: [u8; 3] = [15, 16, 17];
+/// The items a store's seats name that the getters walk at mask 0 (`0x622420`): the active
+/// player's equipment and equipped bags (0-22), backpack and keyring, private fields only its store
+/// carries, whose weapons the stat getters read (`UnitAttackSpeed` `0x518f19`, `HasWandEquipped`
+/// `0x4c99c2`) and whose whole set the bar's worn and reagent walks read; and a container's slots.
+fn carried(f: &ObjectFields) -> Vec<Option<u64>> {
+    use benilla_protocol::messages::ObjectType;
+    match f.created_as() {
+        Some(ObjectType::Player) => (0..23)
+            .map(|i| f.player_inv_slot(i))
+            .chain((0..16).map(|i| f.player_pack_slot(i)))
+            .chain((0..32).map(|i| f.player_keyring_slot(i)))
+            .collect(),
+        Some(ObjectType::Container) => (0..36).map(|i| f.container_slot(i)).collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// One guid's store from `live` back to the frame's start, undoing `entries`' changes to it in
 /// reverse, checked against the frame-start snapshot `start` when given; with every object it named
@@ -679,15 +714,10 @@ fn undo_frame(
         s.as_ref()
             .map(|s| {
                 let f = &s.0;
-                let [main, off, ranged] = WEAPON_SLOTS.map(|slot| f.player_inv_slot(slot));
-                [
-                    f.unit_target(),
-                    f.unit_charm(),
-                    f.unit_summon(),
-                    main,
-                    off,
-                    ranged,
-                ]
+                [f.unit_target(), f.unit_charm(), f.unit_summon()]
+                    .into_iter()
+                    .chain(carried(f))
+                    .collect::<Vec<_>>()
             })
             .into_iter()
             .flatten()

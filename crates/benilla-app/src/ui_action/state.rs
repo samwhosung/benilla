@@ -235,7 +235,11 @@ fn pet_book_state(leg: PetBookLeg) -> ActionState {
 /// `0x622270` at mask 1, `IsEquippedAction`'s walk (`0x4e5380`): whether the worn slots of the
 /// player `store` hold a whole item of `entry`. A broken copy is not worn (`0x6224f4`-`0x62250e`).
 /// The feed's snapshot and the lent host's read at the call are this one walk.
-pub(crate) fn wears_entry(store: &ObjectStore, objects: &crate::net::Objects, entry: u32) -> bool {
+pub(crate) fn wears_entry(
+    store: &ObjectStore,
+    objects: &(impl crate::ui_items::ItemObjects + ?Sized),
+    entry: u32,
+) -> bool {
     crate::ui_items::find_item(
         &store.0,
         objects,
@@ -427,6 +431,24 @@ impl ActionStates<'_, '_> {
         }
     }
 
+    /// `0x4e58e0` for a slot a write outside the feed moved, a recount's (`0x4e5caa` →
+    /// `0x4e5cb1`): its pair recomputed and stored (`0x4e5903`-`0x4e5914`) and pushed, with no
+    /// refresh and no event, ahead of the slot's `ACTIONBAR_SLOT_CHANGED` (`0x4e5998`). The pass
+    /// stores the pair of each slot whose word or count no longer matches the cache's.
+    pub(crate) fn slot_written(&mut self, script: &mut benilla_ui::script::UiScript) {
+        let now = Instant::now();
+        let clock = self.memory.clock.unwrap_or((now, script.now()));
+        let pass = Pass {
+            now,
+            clock,
+            trace_cd: false,
+            refresh: false,
+            refresh_cache: false,
+            arrived: false,
+        };
+        self.pass(script, pass);
+    }
+
     /// The feed's frame: the cooldowns' upkeep, the refreshes this frame's callers owe, then the
     /// pass, owing its events to [`fire_action_events`].
     fn feed(
@@ -575,7 +597,10 @@ impl ActionStates<'_, '_> {
         let me_live = me_entity.and_then(|e| objects.store_of(e));
         let control_lost = own_control.as_ref().is_some_and(|c| c.0);
         // The bags, walked once per pass for every reagent and totem count below.
-        let stacks = me.map(|s| stack_counts(&s.0, objects)).unwrap_or_default();
+        // Its items as of there too, a reagent a later packet destroys still held.
+        let stacks = me
+            .map(|s| stack_counts(&s.0, &views.item_objects(objects)))
+            .unwrap_or_default();
         let selection = &targeting.selection;
         let target = selection
             .guid

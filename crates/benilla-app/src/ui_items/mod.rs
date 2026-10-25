@@ -228,6 +228,20 @@ fn item_is_whole(fields: &ObjectFields) -> bool {
     !broken && flags & 0x10 == 0
 }
 
+/// The item objects an inventory walk finds by guid, as `0x468460` does: the live ones
+/// ([`Objects`]), or each as of the drain's place
+/// ([`crate::ui_unit::views::ViewStores::item_objects`]).
+pub(crate) trait ItemObjects {
+    /// The object held under `guid`, `None` for none.
+    fn object(&self, guid: u64) -> Option<&ObjectFields>;
+}
+
+impl ItemObjects for Objects<'_, '_> {
+    fn object(&self, guid: u64) -> Option<&ObjectFields> {
+        Objects::object(self, guid)
+    }
+}
+
 /// The reference's inventory walk (`0x622420`): one ascending pass over the player's slot array,
 /// recursing into each container as it is passed, `scope` gating the sections. `visit` gets the
 /// wire `(bag_index, slot)` and the guid, and returns `Some` to stop. The order is the reference's
@@ -235,7 +249,7 @@ fn item_is_whole(fields: &ObjectFields) -> bool {
 /// 39-62, each bank bag 63-68 then its contents, keyring.
 fn walk_inventory<T>(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
     scope: InventoryScope,
     mut raw: impl FnMut(u8, u8, u64) -> Option<T>,
 ) -> Option<T> {
@@ -348,7 +362,7 @@ fn walk_inventory<T>(
 /// `0x4f76b2`, `0x4ff7a2`).
 pub(crate) fn count_of(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
     entry: u32,
     scope: InventoryScope,
 ) -> u32 {
@@ -360,7 +374,7 @@ pub(crate) fn count_of(
 /// The sum of `weight` over every copy of `entry` within `scope`; a dword add, so it wraps.
 fn sum_of(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
     entry: u32,
     scope: InventoryScope,
     weight: impl Fn(&ObjectFields) -> u32,
@@ -385,7 +399,7 @@ fn sum_of(
 /// (`0x55ba30` returns null, `0x4e6d7f`).
 pub(crate) fn action_count(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
     entry: u32,
     template: Option<&benilla_protocol::ItemInfo>,
 ) -> u32 {
@@ -402,7 +416,7 @@ pub(crate) fn action_count(
 /// a caller asking about many entries in a frame.
 pub(crate) fn stack_counts(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
 ) -> std::collections::HashMap<u32, u32> {
     let mut counts = std::collections::HashMap::new();
     walk_inventory::<()>(store, objects, InventoryScope::DEFAULT, |_, _, guid| {
@@ -433,7 +447,7 @@ pub(crate) struct ItemSearch {
 /// of [`walk_inventory`] (predicate `OBJECT_FIELD_ENTRY` equality). The bank is not in scope.
 pub(crate) fn find_item(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
     entry: u32,
     search: ItemSearch,
 ) -> Option<(u8, u8, u64)> {
@@ -462,7 +476,7 @@ pub(crate) fn find_item(
 /// against the template cache.
 pub(crate) fn collect_inventory(
     store: &ObjectFields,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
     scope: InventoryScope,
 ) -> Vec<(u8, u8, u64)> {
     let mut out = Vec::new();

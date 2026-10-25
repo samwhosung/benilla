@@ -279,11 +279,12 @@ impl StatsLive<'_, '_> {
         }
     }
 
-    /// Whether the active player's worn slots, as of here, hold a whole item of `entry`; `false`
-    /// while none is held.
+    /// Whether the active player's worn slots, as of here, hold a whole item of `entry`, each item
+    /// found as of here; `false` while none is held.
     fn wears(&self, entry: u32) -> bool {
+        let items = self.stores.item_objects(&self.objects);
         self.player()
-            .is_some_and(|store| crate::ui_action::wears_entry(store, &self.objects, entry))
+            .is_some_and(|store| crate::ui_action::wears_entry(store, &items, entry))
     }
 }
 
@@ -383,6 +384,14 @@ impl ScriptCallHost<'_, '_> {
             .map(|states| states.usable_refresh(script));
         if let Some(signals) = signals {
             script.hosted(self, |script| signals.fire(script));
+        }
+    }
+
+    /// A recount's slot write outside any call (`0x4e58e0`): the slot's usable pair stored and
+    /// pushed, with nothing signalled ([`crate::ui_action::ActionStates::slot_written`]).
+    pub(crate) fn engine_slot_written(&mut self, script: &mut UiScript) {
+        if let Some(states) = self.appliers.action_states().as_mut() {
+            states.slot_written(script);
         }
     }
 
@@ -1219,6 +1228,16 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         if let Some(script) = self.script.as_deref_mut() {
             if let Some(host) = self.set.p1().as_mut() {
                 host.engine_usable_refresh(script);
+            }
+        }
+    }
+
+    /// A recount's slot write with the host ([`ScriptCallHost::engine_slot_written`]); with no VM
+    /// or no host, the next feed stores the pair.
+    pub(crate) fn engine_slot_written(&mut self) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_slot_written(script);
             }
         }
     }

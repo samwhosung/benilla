@@ -25,6 +25,9 @@ const ME: u64 = 0x7;
 /// A sword the player carries, worn or not as the test puts it.
 const SWORD_GUID: u64 = 0x4000_0000_0000_00F0;
 const SWORD: u32 = 2025;
+/// A potion in backpack slot 1, ours (`ITEM_FIELD_OWNER`), the last of its stack.
+const POTION_GUID: u64 = 0x4000_0000_0000_00F1;
+const POTION: u32 = 118;
 
 /// The spells on the bar: a Frostbolt at 50 mana, the druid's Cat and Bear forms, and Attack.
 const FROSTBOLT: u32 = 116;
@@ -45,11 +48,16 @@ const MANA: u16 = 23;
 const MAX_MANA: u16 = 29;
 /// `UNIT_FIELD_BYTES_1`, whose byte 2 is the form.
 const BYTES_1: u16 = 138;
-/// `PLAYER_FIELD_INV_SLOT_HEAD` + 2 × 15, the main hand's guid.
+/// `PLAYER_FIELD_INV_SLOT_HEAD` + 2 × 15, the main hand's guid, and the head's.
 const MAIN_HAND: u16 = 486 + 2 * 15;
+const HEAD: u16 = 486;
+/// `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1's guid.
+const PACK_SLOT_1: u16 = 532;
+/// `ITEM_FIELD_STACK_COUNT`.
+const STACK_COUNT: u16 = 14;
 
 /// The Lua action ids the bar holds, and one past them that holds nothing.
-const SLOTS: [u32; 6] = [1, 2, 3, 4, 5, 6];
+const SLOTS: [u32; 7] = [1, 2, 3, 4, 5, 6, 7];
 
 /// The whole client, headless, in the world with its frame run.
 struct Client {
@@ -192,6 +200,12 @@ fn client() -> Client {
                     .. s(IsEquippedAction(4)) .. ":" .. s(IsCurrentAction(2)) .. ":"
                     .. s(IsCurrentAction(3)) .. ":" .. s(GetBonusBarOffset()))
             end)
+            local slots = CreateFrame("Frame")
+            slots:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+            slots:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. arg1 .. ":" .. s(IsUsableAction(arg1)) .. ":"
+                    .. GetActionCount(arg1))
+            end)
             "#,
         )
         .unwrap();
@@ -207,6 +221,9 @@ fn client() -> Client {
     world
         .resource_mut::<crate::items::Items>()
         .insert_template(SWORD, Some(crate::items::test_template("Sword")));
+    world
+        .resource_mut::<crate::items::Items>()
+        .insert_template(POTION, Some(crate::items::test_template("Potion")));
     {
         let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
         for (slot, action, kind) in [
@@ -215,6 +232,7 @@ fn client() -> Client {
             (2, BEAR, benilla_protocol::messages::ACTION_KIND_SPELL),
             (3, SWORD, benilla_protocol::messages::ACTION_KIND_ITEM),
             (4, ATTACK, benilla_protocol::messages::ACTION_KIND_SPELL),
+            (6, POTION, benilla_protocol::messages::ACTION_KIND_ITEM),
         ] {
             slots
                 .buttons
@@ -227,6 +245,20 @@ fn client() -> Client {
         world,
         SWORD_GUID,
         ObjectFields::from_pairs(&[(3, SWORD), (14, 1), (46, 30), (47, 40)]),
+        false,
+    );
+    // The potion: an item (`OBJECT_FIELD_TYPE` 0x3) of ours, two in the stack.
+    crate::items::test_spawn_item(
+        world,
+        POTION_GUID,
+        ObjectFields::from_pairs(&[
+            (OBJECT_TYPE, 0x3),
+            (3, POTION),
+            (6, ME as u32),
+            (7, (ME >> 32) as u32),
+            (STACK_COUNT, 2),
+        ])
+        .into_created(benilla_protocol::messages::ObjectType::Item),
         false,
     );
     let mut c = Client {
@@ -244,6 +276,8 @@ fn client() -> Client {
             (MANA, 100),
             (MAX_MANA, 100),
             (FLAGS, PLAYER_CONTROLLED),
+            (PACK_SLOT_1, POTION_GUID as u32),
+            (PACK_SLOT_1 + 1, (POTION_GUID >> 32) as u32),
         ],
     )]]);
     c.frame(vec![]);
@@ -410,6 +444,52 @@ fn an_equipped_listener_reads_its_own_packets_main_hand() {
     };
     let seen: Vec<String> = c.seen(&["UNIT_MANA"]).iter().map(worn).collect();
     assert_eq!(seen, ["UNIT_MANA:1", "UNIT_MANA:nil"]);
+}
+
+/// Drinking the last potion: the destroy's recount (`0x4e5c70`) stores the slot's count and, in
+/// its slot write `0x4e58e0`, the slot's usable pair (`0x4e5903`-`0x4e5914`), before its
+/// `ACTIONBAR_SLOT_CHANGED` (`0x4e5998`): the listener reads the button greyed, not lit.
+#[test]
+fn a_slot_changed_listener_reads_the_pair_its_recount_stored() {
+    let mut c = client();
+    c.frame(vec![vec![values(POTION_GUID, &[(STACK_COUNT, 1)])]]);
+    assert_eq!(
+        c.seen(&["ACTIONBAR_SLOT_CHANGED"]),
+        ["ACTIONBAR_SLOT_CHANGED:7:1:1"],
+        "one potion left: lit"
+    );
+    c.frame(vec![vec![SessionEvent::ObjectsRemoved(vec![POTION_GUID])]]);
+    assert_eq!(
+        c.seen(&["ACTIONBAR_SLOT_CHANGED"]),
+        ["ACTIONBAR_SLOT_CHANGED:7:nil:0"],
+        "the last one drunk: greyed in its own signal"
+    );
+}
+
+/// The worn walk resolves each item as of the drain's place, as the getter's `0x468460` finds the
+/// object at the call: a helm a later packet of the frame destroys is still worn to the listener
+/// of an earlier one.
+#[test]
+fn an_equipped_listener_finds_an_item_a_later_packet_destroys() {
+    let mut c = client();
+    c.frame(vec![vec![values(
+        ME,
+        &[
+            (HEAD, SWORD_GUID as u32),
+            (HEAD + 1, (SWORD_GUID >> 32) as u32),
+        ],
+    )]]);
+    c.seen(&[]);
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![SessionEvent::ObjectsRemoved(vec![SWORD_GUID])],
+    ]);
+    let worn = |l: &String| {
+        let f: Vec<&str> = l.split(':').collect();
+        format!("{}:{}", f[0], f[3])
+    };
+    let seen: Vec<String> = c.seen(&["UNIT_MANA"]).iter().map(worn).collect();
+    assert_eq!(seen, ["UNIT_MANA:1"]);
 }
 
 /// The bar's getters' per-call cost with the host lent and off the snapshots: 10k calls of each.

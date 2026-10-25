@@ -197,9 +197,9 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
         return;
     };
     let rebuild = rebuild_at(&notice);
-    vm.run(|script| {
+    let held = vm.run(|script| {
         let Some(script) = script else {
-            return;
+            return false;
         };
         fire_unlocks(script, unlocks);
         if rebuild == Some(Rebuild::BeforeRecount) {
@@ -207,6 +207,9 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
                 carried(&reads.me, &reads.trade.objects, entry)
             });
         }
+        true
+    });
+    if held {
         let counter = crate::ui_action::recount::Counter {
             store: reads.me.iter().next(),
             objects: &reads.trade.objects,
@@ -214,9 +217,9 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
             commands: &reads.trade.commands,
         };
         for entry in notice.recounts() {
-            crate::ui_action::recount::recount(script, &counter, entry);
+            crate::ui_action::recount::recount(vm, &counter, entry);
         }
-    });
+    }
     if let Some(touch) = touch {
         vm.turn(|script, (trade, _)| {
             if let (Some(script), Some(mut trade)) = (script, trade) {

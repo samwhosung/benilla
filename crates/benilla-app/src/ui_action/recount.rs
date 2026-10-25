@@ -88,22 +88,38 @@ impl Counter<'_> {
 }
 
 /// `0x4e5c70(entry)`: no active player counts 0 (`0x4e6d20`). Each slot is read as the VM holds it
-/// when its turn comes, so a handler that rewrites a later slot is seen.
-pub(crate) fn recount(script: &mut UiScript, counter: &Counter, entry: u32) {
+/// when its turn comes, so a handler that rewrites a later slot is seen. Each slot's write is
+/// `0x4e58e0`'s: the count stored (`0x4e5caa`), then the slot's usable pair (`0x4e5903`-
+/// `0x4e5914`, through the host's action states), then `ACTIONBAR_SLOT_CHANGED` (`0x4e5998`)
+/// with the host lent.
+pub(crate) fn recount<P: bevy::ecs::system::SystemParam + 'static>(
+    vm: &mut crate::script_calls::VmWith<P>,
+    counter: &Counter,
+    entry: u32,
+) {
     let count = counter.count(entry);
     for action in ACTION_SLOTS {
-        let Some(mut slot) = script
-            .action_slot(action)
-            .filter(|s| s.kind == ACTION_KIND_ITEM && s.action == entry)
-        else {
+        let written = vm.run(|script| {
+            let script = script?;
+            let mut slot = script
+                .action_slot(action)
+                .filter(|s| s.kind == ACTION_KIND_ITEM && s.action == entry)?;
+            slot.count = count;
+            script.set_action(action, Some(slot));
+            Some(())
+        });
+        if written.is_none() {
             continue;
-        };
-        slot.count = count;
-        script.set_action(action, Some(slot));
-        script.fire_event(
-            "ACTIONBAR_SLOT_CHANGED",
-            vec![ScriptValue::Int(i64::from(action))],
-        );
+        }
+        vm.engine_slot_written();
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.fire_event(
+                    "ACTIONBAR_SLOT_CHANGED",
+                    vec![ScriptValue::Int(i64::from(action))],
+                );
+            }
+        });
     }
 }
 
