@@ -95,13 +95,17 @@ impl ScreenshotState {
 }
 
 /// Captures each `Screenshot()` one frame after the call. Spawn last frame's asks before draining
-/// this frame's: that order is the one-frame hold (module doc).
+/// this frame's: that order is the one-frame hold (module doc). While a movie plays the frame pass
+/// skips its present block, the capture in it (`0x44267c`), so the asks wait for its end.
 fn ask_for_captures(
     mut commands: Commands,
     mut hosted_vm: crate::script_calls::HostedVm,
     mut state: ResMut<ScreenshotState>,
 ) {
     hosted_vm.run(|script| {
+        if script.as_deref().is_some_and(benilla_ui::script::UiScript::movie_playing) {
+            return;
+        }
         spawn_captures(&mut commands, std::mem::take(&mut state.pending));
         if let Some(script) = script {
             state.pending += script.take_screenshot_asks();
