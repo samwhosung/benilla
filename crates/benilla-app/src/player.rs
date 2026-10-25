@@ -443,6 +443,15 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldMouse)
                 .in_set(crate::client_state::InWorldGated),
         )
+        // The look calls the packets' handlers made, after their events and ahead of the tick and
+        // the controller.
+        .add_systems(
+            Update,
+            camera::apply_late_look_calls
+                .in_set(crate::lanes::UiLanes)
+                .after(crate::lanes::fire_in_order)
+                .in_set(crate::client_state::InWorldGated),
+        )
         // The world's right mouse-down, off that latch and ahead of the look session, as
         // `0x483c40` runs its hook before `ExecuteBinding`; off in capture mode, like `control`.
         // Then the look session, whose release settles the click tests.

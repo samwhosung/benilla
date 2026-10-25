@@ -1100,8 +1100,9 @@ pub(crate) mod schedule_tests {
     /// the chain. The count may not rise past the ceiling, and the ceiling follows it down. Read
     /// on the dev build, whose schedule holds every system the player build does. Raised from 54
     /// when the frame's input records moved ahead of the net drain: what their handlers queue
-    /// applies before the drain, as the reference's input acts inside its handlers.
-    const UPDATE_SYNC_POINT_CEILING: usize = 56;
+    /// applies before the drain, as the reference's input acts inside its handlers; and to 57 for
+    /// the input's CVar sync, whose observers must run before the look session reads their knobs.
+    const UPDATE_SYNC_POINT_CEILING: usize = 57;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]
@@ -1312,6 +1313,11 @@ pub(crate) mod schedule_tests {
             "::ui_chat::frames::tee_shown_lines",
             "in the lanes' set after their drain (`lanes::UiLanes`, after `UiFeed` and before the \
              tick), so the log files take the lines the verbs showed after the drain's own",
+        ),
+        (
+            "::player::camera::apply_late_look_calls",
+            "in the lanes' set after their drain, so it takes the look calls the packets' \
+             handlers made, ahead of the tick, whose `OnUpdate` calls wait for the next latch",
         ),
         (
             "::ui_unit::views::mark_frame_start",

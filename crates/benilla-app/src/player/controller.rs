@@ -407,7 +407,7 @@ pub(super) fn control(
     );
     let BodyGates {
         stunned,
-        stand_state: _,
+        stand_state,
         mover,
     } = body_gates(
         body.single().ok().and_then(|(.., store, _, _, _, _)| store),
@@ -435,8 +435,15 @@ pub(super) fn control(
             drunk::wobble(time.elapsed().as_millis() as u32, f)
         }
     };
-    // The mouse's hand-off to the body, as the frame's input decided it.
-    let hands_off = sample.hands_off;
+    // The mouse's hand-off to the body, as the frame's input decided it, or for a
+    // `MouselookStart` a packet's handler made after it that completed both mouse bits, which the
+    // reference's press handler hands off inside the call (`0x514924`-`0x514966`).
+    let hands_off = sample.hands_off
+        || (rig.world_mouse.late_rise()
+            && both_buttons
+            && mover.mouse_may_turn_body(stunned, stand_state)
+            && !player.control_lost
+            && !player.reseat);
 
     // A rebound zoom key steps 1.0 per press, the stock `CameraZoomIn(1.0)` (`Bindings.xml:707`).
     let zoom = binds.amount(crate::bindings::Input::CameraZoomIn)
