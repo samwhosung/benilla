@@ -700,7 +700,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### script
 
-- An out-of-range slot answers nil, because the reference indexes `0xbc6980` with no bounds check and reads the memory beside its 120 slots. ([`src/script/action.rs:414`](../crates/benilla-ui/src/script/action.rs#L414))
+- An out-of-range slot answers nil, because the reference indexes `0xbc6980` with no bounds check and reads the memory beside its 120 slots. ([`src/script/action.rs:417`](../crates/benilla-ui/src/script/action.rs#L417))
 - The files the handler writes beside the install (`<Name>.pub` with the key, `<Name>.url`; `0x51dce0`, `0x51dde0`) are not written, as the install is read-only; the key is never read either, as there is no signature to verify with it. ([`src/script/addon.rs:207`](../crates/benilla-ui/src/script/addon.rs#L207))
 - The reference fails silently; we report it, as a player needs to know, and hold the file so the shutdown write keeps it. ([`src/script/addon.rs:785`](../crates/benilla-ui/src/script/addon.rs#L785))
 - The reference drops a send that resolves to PARTY while party slot 0's guid (`0xbc6f48`) is zero (`0x49fa9f`-`0x49faab`); benilla sends it, because `PartyState` is empty until the first `SMSG_GROUP_LIST` and the gate would swallow a real broadcast. vmangos drops a group-less party line anyway (`ChatHandler.cpp:476`). ([`src/script/addon_message.rs:7`](../crates/benilla-ui/src/script/addon_message.rs#L7))
