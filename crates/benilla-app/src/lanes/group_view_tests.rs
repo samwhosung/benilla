@@ -5,7 +5,9 @@
 //! pass (`0x4651a0`), and `UnitExists` reads the token's object or roster leg at the call
 //! (`0x515ff8` → `0x491900`). So each listener reads its own packet's state.
 
-use benilla_protocol::messages::{member_status, GroupMemberEntry, PartyMemberStatsInfo};
+use benilla_protocol::messages::{
+    member_status, GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo,
+};
 use benilla_protocol::{EntityKind, SessionEvent};
 use benilla_ui::script::{UiScript, UnitGuids};
 use bevy::prelude::*;
@@ -746,4 +748,233 @@ fn a_hunters_new_pet_signals_pet_ui_close_before_the_bar_update() {
         let seen = frame(&mut app, vec![bar_for(PET)]);
         assert_eq!(seen, ["PET_BAR_UPDATE:1"], "the same pet: no change");
     }
+}
+
+/// Another party member, whom the second list adds.
+const MATE2: u64 = 0x23;
+/// A third and a fourth, for the raid.
+const MATE3: u64 = 0x24;
+const MATE4: u64 = 0x25;
+
+/// `SMSG_GROUP_LIST` of `members` (guid, name), led by `leader`, with the loot tail `loot`.
+fn list(group_type: u8, members: &[(u64, &str)], leader: u64, loot: GroupLootInfo) -> SessionEvent {
+    SessionEvent::GroupList {
+        group_type,
+        own_flags: 0,
+        members: members
+            .iter()
+            .map(|&(guid, name)| GroupMemberEntry {
+                name: name.into(),
+                guid,
+                status: member_status::ONLINE,
+                flags: 0,
+            })
+            .collect(),
+        leader,
+        loot: Some(loot),
+    }
+}
+
+/// The names of everyone a list may name, cached so no raid row waits on one, and the world
+/// the party feed reads the area under us from.
+fn know_the_names(app: &mut App) {
+    benilla_world::world_point::init_world_point_resources(app.world_mut());
+    let mut names = app.world_mut().resource_mut::<crate::names::NameCache>();
+    for (guid, name) in [
+        (ME, "Me"),
+        (MATE, "Brisca"),
+        (MATE2, "Dunk"),
+        (MATE3, "Egg"),
+        (MATE4, "Quill"),
+    ] {
+        names.insert_player(guid, name.into(), None);
+    }
+}
+
+/// `body` registered on `events`, appending its returned string to `Roster`.
+fn listen(app: &mut App, events: &[&str], body: &str) {
+    let registers: String = events
+        .iter()
+        .map(|e| format!("f:RegisterEvent(\"{e}\")\n"))
+        .collect();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(&format!(
+            r#"
+            Roster = {{}}
+            local f = CreateFrame("Frame")
+            {registers}
+            f:SetScript("OnEvent", function()
+                table.insert(Roster, (function() {body} end)())
+            end)
+            "#
+        ))
+        .unwrap();
+}
+
+/// A frame with nothing in it, which the party feed's first run takes: it tells a fresh VM the
+/// events it never heard, and passes over the lane's.
+fn prime(app: &mut App) {
+    frame(app, vec![]);
+}
+
+/// What `Roster` heard this frame.
+fn heard_roster(app: &mut App) -> Vec<String> {
+    let s = app.world_mut().non_send_resource_mut::<UiScript>();
+    let out = s.eval::<Vec<String>>("return Roster").unwrap();
+    s.run("Roster = {}").unwrap();
+    out
+}
+
+/// Two group lists in one frame: each `PARTY_MEMBERS_CHANGED` listener reads the slots, the
+/// leader cells and the loot cells its own list left (`GetNumPartyMembers` `0x4e86d0`,
+/// `GetPartyLeaderIndex` `0x4e9104`, `IsPartyLeader` `0x4e9130`, `GetLootMethod` `0x4e91b6`,
+/// `UnitInParty` `0x516290`), not the frame's last.
+#[test]
+fn each_party_listener_reads_its_own_lists_roster() {
+    let mut app = client();
+    know_the_names(&mut app);
+    prime(&mut app);
+    listen(
+        &mut app,
+        &["PARTY_MEMBERS_CHANGED"],
+        r#"
+        local method, master = GetLootMethod()
+        return table.concat({
+            GetNumPartyMembers(), GetPartyLeaderIndex(), tostring(IsPartyLeader()),
+            tostring(GetPartyMember(2)), tostring(UnitInParty("party2")), method,
+            tostring(master), GetLootThreshold(),
+        }, ":")
+        "#,
+    );
+    let seen = frame(
+        &mut app,
+        vec![
+            list(
+                0,
+                &[(MATE, "Brisca")],
+                ME,
+                GroupLootInfo {
+                    method: 1,
+                    master: 0,
+                    threshold: 2,
+                },
+            ),
+            list(
+                0,
+                &[(MATE, "Brisca"), (MATE2, "Dunk")],
+                MATE,
+                GroupLootInfo {
+                    method: 2,
+                    master: MATE2,
+                    threshold: 3,
+                },
+            ),
+        ],
+    );
+    assert!(seen.is_empty(), "{seen:?}");
+    assert_eq!(
+        heard_roster(&mut app),
+        ["1:0:1:nil:nil:roundrobin:nil:2", "2:1:nil:1:1:master:2:3"]
+    );
+}
+
+/// Two raid lists in one frame: each `RAID_ROSTER_UPDATE` listener reads the count and the rows
+/// its own list rebuilt (`GetNumRaidMembers` `0xb713e0`, `GetRaidRosterInfo` `0x4bb560`,
+/// `UnitInRaid` `0x516350`, `IsRaidOfficer` `0x4bb910`), and `raidN` names the row it held then.
+#[test]
+fn each_raid_listener_reads_its_own_lists_rows() {
+    let mut app = client();
+    know_the_names(&mut app);
+    prime(&mut app);
+    listen(
+        &mut app,
+        &["RAID_ROSTER_UPDATE"],
+        r#"
+        local name, rank, group = GetRaidRosterInfo(2)
+        local last = GetRaidRosterInfo(GetNumRaidMembers())
+        return table.concat({
+            GetNumRaidMembers(), tostring(name), rank, group, tostring(last),
+            tostring(UnitInRaid("raid3")), tostring(UnitInRaid("raid4")),
+            tostring(IsRaidOfficer()), tostring(IsRaidLeader()),
+        }, ":")
+        "#,
+    );
+    let loot = GroupLootInfo {
+        method: 3,
+        master: 0,
+        threshold: 2,
+    };
+    frame(
+        &mut app,
+        vec![
+            list(1, &[(MATE, "Brisca"), (MATE2, "Dunk")], ME, loot),
+            list(
+                1,
+                &[
+                    (MATE4, "Quill"),
+                    (MATE, "Brisca"),
+                    (MATE2, "Dunk"),
+                    (MATE3, "Egg"),
+                ],
+                MATE,
+                loot,
+            ),
+        ],
+    );
+    // Our own row is last, after the wire's. The first list: three rows, we lead; the second:
+    // five rows, row 2 is Brisca, who leads, and we are no officer.
+    assert_eq!(
+        heard_roster(&mut app),
+        ["3:Dunk:0:1:Me:1:nil:1:1", "5:Brisca:2:1:Me:1:1:nil:nil"]
+    );
+}
+
+/// `party1` names the member its own list seated, and nobody once a later list empties the slot:
+/// the group tokens are built over the roster as each packet left it (`0x4e81a0`), the slot a
+/// later packet vacates included.
+#[test]
+fn each_listener_finds_the_member_its_own_list_seated_in_party1() {
+    let mut app = client();
+    know_the_names(&mut app);
+    prime(&mut app);
+    listen(
+        &mut app,
+        &["PARTY_MEMBERS_CHANGED"],
+        r#"return tostring(UnitName("party1")) .. ":" .. tostring(UnitExists("party1"))"#,
+    );
+    let loot = GroupLootInfo {
+        method: 0,
+        master: 0,
+        threshold: 2,
+    };
+    frame(
+        &mut app,
+        vec![
+            list(0, &[(MATE, "Brisca")], ME, loot),
+            list(0, &[(MATE2, "Dunk")], ME, loot),
+            list(0, &[], ME, loot),
+        ],
+    );
+    assert_eq!(
+        heard_roster(&mut app),
+        ["Brisca:1", "Dunk:1", "nil:nil"],
+        "the frame's last roster names nobody in party1"
+    );
+}
+
+/// A roster cell written past the log fails the rewind's check against the frame-start snapshot:
+/// here the leader cell, which no entry of the frame names.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a write the log missed")]
+fn a_roster_write_the_log_missed_fails_the_rewind() {
+    let mut app = party_client();
+    frame_after(
+        &mut app,
+        |world| {
+            world.resource_mut::<crate::ui_party::GroupState>().leader = MATE;
+        },
+        vec![hp(70), hp(40)],
+    );
 }

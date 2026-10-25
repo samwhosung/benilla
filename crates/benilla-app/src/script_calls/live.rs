@@ -73,6 +73,8 @@ live_reads! {
         cooldowns: crate::spell::CooldownLive<'static, 'static>,
         /// The guild roster, its ranks and the guild record.
         guild: crate::ui_guild::GuildLive<'static, 'static>,
+        /// The party and raid roster's cells and rows.
+        roster: crate::ui_party::RosterLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

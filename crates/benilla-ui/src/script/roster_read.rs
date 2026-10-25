@@ -1,0 +1,148 @@
+//! The group getters' questions of the roster, asked of the lent host at the call
+//! ([`crate::script::live::ask`]): the reference's getters read the party slots (`0xbc6f48`), the
+//! leader cell (`0xbc75f8`), the loot cells and the raid rows (`0xb712a8`) as they stand when they
+//! run, so a listener reads the roster its own packet left. With no host free to ask, the
+//! snapshot ([`super::PartyState`]) answers.
+
+use mlua::Lua;
+
+use super::live::{ask, LiveQuery};
+use super::party::{PartyState, RaidMemberInfo};
+use super::unit::UnitBase;
+
+/// The cells a getter reads beside the raid rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupCells {
+    /// The four party slots' guids, 0 for an empty one (`0xbc6f48`); `GetNumPartyMembers` counts
+    /// the nonzero (`0x4e86d0`) and `GetPartyMember(n)` tests slot n (`0x4e81a0`).
+    pub party: [u64; 4],
+    /// The raid roster's count (`[0xb713e0]`), `GetNumRaidMembers`'s answer.
+    pub raid_count: u32,
+    /// `GetPartyLeaderIndex`: the index cell plus one (`0x4e9104`).
+    pub leader_index: u32,
+    /// The leader cell (`[0xbc75f8]`), which `IsRaidLeader` (`0x4bb8c0`), `IsPartyLeader`
+    /// (`0x4e9130`) and `UnitIsPartyLeader` (`0x516210`) compare.
+    pub leader_guid: u64,
+    /// The active player's guid (`0x468550`), 0 out of world.
+    pub own_guid: u64,
+    /// `GetLootMethod`'s method word (`0x4e9209`), `"freeforall"` before any group.
+    pub loot_method: String,
+    /// `GetLootMethod`'s second return, the master looter as a party index.
+    pub master_looter: Option<u32>,
+    /// `GetLootThreshold` (`0x4e94e0`).
+    pub loot_threshold: u32,
+}
+
+impl GroupCells {
+    /// The cells off the snapshot.
+    fn of(party: &PartyState) -> Self {
+        let mut slots = [0; 4];
+        for (slot, m) in slots.iter_mut().zip(&party.members) {
+            *slot = m.guid;
+        }
+        Self {
+            party: slots,
+            raid_count: party.raid.len() as u32,
+            leader_index: party.leader_index,
+            leader_guid: party.leader_guid,
+            own_guid: party.own_guid,
+            loot_method: if party.loot_method.is_empty() {
+                // Never grouped, the reference reads zero-filled cells: method 0.
+                "freeforall".to_string()
+            } else {
+                party.loot_method.clone()
+            },
+            master_looter: party.master_looter,
+            loot_threshold: party.loot_threshold,
+        }
+    }
+
+    /// `IsRaidLeader` (`0x4bb8c0`): the cached leader guid (`[0xbc75f8]`, `[0xbc75fc]`) against the
+    /// player's own (`0x468550`), both words (`0x4bb8d6`-`0x4bb8dc`), and nothing else: no raid flag,
+    /// so it is true for a party leader, and no subgroup slot. Unlike `IsPartyLeader` it has no zero
+    /// guard, so with no active player and no group, both zero, it answers 1.
+    pub fn is_raid_leader(&self) -> bool {
+        self.leader_guid == self.own_guid
+    }
+
+    /// `IsPartyLeader` (`0x4e9130`): [`Self::is_raid_leader`]'s compare behind a zero guard on the
+    /// leader cell (`0x4e9141 or ecx,eax; je`), so an ungrouped player is nobody's leader.
+    pub fn is_party_leader(&self) -> bool {
+        self.leader_guid != 0 && self.is_raid_leader()
+    }
+
+    /// How many of the four party slots hold a guid (`0x4e86d0`).
+    pub fn party_count(&self) -> u32 {
+        self.party.iter().filter(|&&g| g != 0).count() as u32
+    }
+}
+
+/// The cells ([`GroupCells`]).
+pub struct GroupCellsQuery;
+
+impl LiveQuery for GroupCellsQuery {
+    type Answer = GroupCells;
+}
+
+/// The cells through the lent host, `None` where none answers.
+pub(crate) fn live_cells(lua: &Lua) -> Option<GroupCells> {
+    ask(lua, &GroupCellsQuery)
+}
+
+/// The cells, live where a host answers, else off the snapshot.
+pub(crate) fn cells(lua: &Lua, snapshot: &PartyState) -> GroupCells {
+    live_cells(lua).unwrap_or_else(|| GroupCells::of(snapshot))
+}
+
+/// The raid row at 0-based `row` as `GetRaidRosterInfo` reads it (`0x4bb560`): `None` past the
+/// count, for an empty slot and for a name the cache lacks.
+pub struct RaidRowQuery(pub usize);
+
+impl LiveQuery for RaidRowQuery {
+    type Answer = Option<RaidMemberInfo>;
+}
+
+/// The row, live where a host answers, else off the snapshot.
+pub(crate) fn raid_row(lua: &Lua, snapshot: &PartyState, row: usize) -> Option<RaidMemberInfo> {
+    ask(lua, &RaidRowQuery(row)).unwrap_or_else(|| snapshot.raid.get(row).cloned())
+}
+
+/// Where a guid stands in the group.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Membership {
+    /// The active player's guid or a party slot's (`0x4e7f70`); a zero guid is neither.
+    pub party: bool,
+    /// On the raid roster below its count (`0x4baee0`); a zero guid is not.
+    pub raid: bool,
+    /// The raid row's rank (`[row+0xc]`), `None` off the roster.
+    pub rank: Option<u32>,
+}
+
+/// Where `guid` stands ([`Membership`]).
+pub struct MemberQuery(pub u64);
+
+impl LiveQuery for MemberQuery {
+    type Answer = Membership;
+}
+
+/// `guid`'s place in the group through the lent host, `None` where none answers.
+pub(crate) fn live_membership(lua: &Lua, guid: u64) -> Option<Membership> {
+    ask(lua, &MemberQuery(guid))
+}
+
+/// A group row the unit-token resolver reads (`0x515970`): `partyN`'s guid (`0x4e81a0`), `raidN`'s
+/// (`0x491940`), and for the pet tokens the member's record pet while its object is not held
+/// (`0x4e81d0`, `0x491960`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowQuery(pub UnitBase);
+
+/// The row's member and the pet its record names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupRow {
+    pub member: u64,
+    pub pet_record: u64,
+}
+
+impl LiveQuery for RowQuery {
+    type Answer = GroupRow;
+}

@@ -37,11 +37,6 @@ pub(crate) struct FedParty {
     raid_units: Vec<Option<UnitState>>,
     /// `partypet1..4` and `raidpet1..40` (see [`pets`]).
     pets: pets::FedPets,
-    saved: Vec<SavedInstanceInfo>,
-    saved_answers: u32,
-    ready_check: u32,
-    ready_check_requests: u32,
-    answers_forwarded: usize,
 }
 
 pub(crate) const PARTY_TOKENS: [&str; 4] = ["party1", "party2", "party3", "party4"];
@@ -49,10 +44,21 @@ pub(crate) const PARTY_TOKENS: [&str; 4] = ["party1", "party2", "party3", "party
 /// `partypet1..partypet4`, the pet of each [`PARTY_TOKENS`] slot (`0x4e81d0`).
 pub(crate) const PARTY_PET_TOKENS: [&str; 4] = ["partypet1", "partypet2", "partypet3", "partypet4"];
 
-/// A new list or a new answer: `RaidFrame.lua:43-52` decides the Raid Info button on the second
-/// `UPDATE_INSTANCE_INFO`, which an unchanging empty list reaches only through the answer count.
-fn saved_instances_moved(saved: &[SavedInstanceInfo], answers: u32, fed: &FedParty) -> bool {
-    saved != fed.saved || answers != fed.saved_answers
+/// The lockouts with their `Map.dbc` names, the map id standing for a name the catalog lacks.
+fn saved_list(
+    entries: &[benilla_protocol::messages::RaidInstanceEntry],
+    catalog: Option<&benilla_formats::MapCatalog>,
+) -> Vec<SavedInstanceInfo> {
+    entries
+        .iter()
+        .map(|e| SavedInstanceInfo {
+            name: catalog
+                .and_then(|c| c.name(e.map))
+                .map_or_else(|| e.map.to_string(), str::to_string),
+            instance: e.instance,
+            reset: e.reset,
+        })
+        .collect()
 }
 
 /// What a world entry's fresh VM is told in place of the signals it never heard: one of each
@@ -93,30 +99,42 @@ pub(super) fn peek_group_signals(world: &World) -> Option<crate::lanes::Stamp> {
 /// its handler's place among the other lanes' items, after the roster and unit snapshots the
 /// feed pushed, which their handlers read. The lane stops after an event whose firing stamped
 /// anything, so what it pushed fires next.
+#[allow(clippy::type_complexity)] // the lane's own state: the log, its place and the map names
 pub(super) fn fire_group_signals(
     In(until): In<crate::lanes::Until>,
-    mut vm: crate::script_calls::VmWith<(Res<'static, GroupState>, ResMut<'static, PartyLane>)>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, GroupState>,
+        ResMut<'static, PartyLane>,
+        Option<Res<'static, benilla_assets::MapCatalogRes>>,
+    )>,
     mut sink: crate::ui_action::MessageSink,
 ) {
     loop {
         let next = {
-            let (group, mut lane) = vm.own();
+            let (group, mut lane, maps) = vm.own();
             let seq = lane.fired.max(group.signals.first());
             match group.signals.at(seq) {
                 Some((stamp, signal)) if until.admits(*stamp) => {
                     lane.fired = seq + 1;
-                    Some((*stamp, signal.clone()))
+                    // The lockouts' names, as the catalog names them now.
+                    let saved = match signal {
+                        GroupSignal::InstanceInfo(entries) => {
+                            saved_list(entries, maps.as_deref().map(|m| &m.0))
+                        }
+                        _ => Vec::new(),
+                    };
+                    Some((*stamp, signal.clone(), saved))
                 }
                 _ => None,
             }
         };
-        let Some((stamp, signal)) = next else {
+        let Some((stamp, signal, saved)) = next else {
             return;
         };
         let ((), moved) = crate::lanes::firing(stamp, || {
             vm.run(|script| {
                 if let Some(script) = script {
-                    fire_signal(script, &mut sink, signal);
+                    fire_signal(script, &mut sink, signal, saved);
                 }
             })
         });
@@ -143,6 +161,7 @@ fn fire_signal(
     script: &mut UiScript,
     sink: &mut crate::ui_action::MessageSink,
     signal: GroupSignal,
+    saved: Vec<SavedInstanceInfo>,
 ) {
     let (signalled, args) = match signal {
         GroupSignal::MembersChanged => ("PARTY_MEMBERS_CHANGED", vec![]),
@@ -173,6 +192,21 @@ fn fire_signal(
                 crate::ui_action::show_now(script, sink, "ui_party", line);
             }
             return;
+        }
+        // The open form arms the engine's side (`0x4ba535`) before the popup's event (`0x4ba53a`).
+        GroupSignal::ReadyCheckRequest { we_lead } => {
+            script.ready_check_request(we_lead);
+            return;
+        }
+        GroupSignal::ReadyCheck => ("READY_CHECK", vec![]),
+        GroupSignal::ReadyCheckAnswer { guid, ready } => {
+            script.ready_check_answered(guid, ready);
+            return;
+        }
+        // The list lands, then the event follows the answer (`0x49e1a7`).
+        GroupSignal::InstanceInfo(_) => {
+            script.set_saved_instances(saved);
+            ("UPDATE_INSTANCE_INFO", vec![])
         }
         GroupSignal::Line(line) => {
             let shown = crate::ui_action::ui_error_text(&line, &|key| {
@@ -427,8 +461,6 @@ pub(crate) fn feed_party(
             return;
         }
         push_group(&view, &ffa, script, fed, &gate);
-        let self_guid = self_q.iter().next().map(|(_, g, _)| g.0);
-
         // ── The group events ────────────────────────────────────────────────────
         //
         // `PARTY_MEMBERS_CHANGED`, `PARTY_LEADER_CHANGED`, `PARTY_LOOT_METHOD_CHANGED`,
@@ -453,7 +485,7 @@ pub(crate) fn feed_party(
                         gate.audit("feed_party", "the catch-up's group signals");
                     }
                     for signal in owed {
-                        fire_signal(script, &mut sink, signal);
+                        fire_signal(script, &mut sink, signal, Vec::new());
                     }
                     group.signals.end()
                 }
@@ -461,61 +493,17 @@ pub(crate) fn feed_party(
             lane.fired = lane.fired.max(from);
         }
 
-        // ── READY_CHECK ─────────────────────────────────────────────────────────
-        //
-        // Fired by the reference's open handler `0x4ba360` (at `0x4ba53a`), once it has armed the
-        // 30 s deadline (`0xb713f4`, `0x4ba535`), so a handler's `ConfirmReadyCheck` finds the
-        // check running. `UIParent.lua:571` shows the popup on it, and UIParent's OnUpdate ticks
-        // the deadline through `CheckReadyCheckTime` (`UIParent.xml:24`): no clock here.
-        //
-        // Each request arms the engine's side first (the leader's close, a member's 30 s
-        // deadline); the answer log then replays from this memo's cursor.
-        if group.ready_check_requests != fed.ready_check_requests {
-            fed.ready_check_requests = group.ready_check_requests;
-            fed.answers_forwarded = 0;
-            if !vm_reset {
-                script.ready_check_request(Some(group.leader) == self_guid);
-            }
-        }
-        if group.ready_check != fed.ready_check {
-            gate.audit("feed_party", "the ready-check edge");
-            fed.ready_check = group.ready_check;
-            // Not on the first look after a VM reset, which would pop a check that has ended.
-            if !vm_reset {
-                script.fire_event("READY_CHECK", vec![]);
-            }
-        }
-        for &(guid, ready) in group.ready_check_answers.iter().skip(fed.answers_forwarded) {
-            script.ready_check_answered(guid, ready);
-        }
-        fed.answers_forwarded = group.ready_check_answers.len();
-
-        // ── UPDATE_INSTANCE_INFO ────────────────────────────────────────────────
+        // ── The saved instances of a fresh VM ───────────────────────────────────
         //
         // The lockout list with its `Map.dbc` names resolved; a missing catalog shows the map id.
-        let saved: Vec<SavedInstanceInfo> = group
-            .saved_instances
-            .iter()
-            .map(|e| SavedInstanceInfo {
-                name: map_catalog
-                    .as_ref()
-                    .and_then(|c| c.0.name(e.map))
-                    .map_or_else(|| e.map.to_string(), str::to_string),
-                instance: e.instance,
-                reset: e.reset,
-            })
-            .collect();
-        // The event follows the answer, as the reference signals once per packet. A fresh VM is
-        // re-seeded in silence, since no packet arrived; the pane's `RequestRaidInfo` on show
+        // A fresh VM is seeded in silence, since no packet arrived to signal `UPDATE_INSTANCE_INFO`
+        // for it (the lane fires that, [`fire_signal`]); the pane's `RequestRaidInfo` on show
         // (`RaidFrame.xml:350`) fetches the real list.
-        if saved_instances_moved(&saved, group.saved_instances_answers, fed) {
-            gate.audit("feed_party", "the saved-instance edge");
-            fed.saved = saved.clone();
-            fed.saved_answers = group.saved_instances_answers;
-            script.set_saved_instances(saved);
-            if !vm_reset {
-                script.fire_event("UPDATE_INSTANCE_INFO", vec![]);
-            }
+        if vm_reset {
+            script.set_saved_instances(saved_list(
+                &group.saved_instances,
+                map_catalog.as_deref().map(|c| &c.0),
+            ));
         }
     })
 }
@@ -643,6 +631,42 @@ impl<'a> GroupSources<'a> {
     }
 }
 
+/// `GetLootMethod`'s method word, its second return and `GetLootThreshold`, off the stored cells
+/// with no group test (`0x4e91b6`, `0x4e91fb`, `0x4e94e0`).
+pub(super) fn loot_read(
+    cells: super::Cells<'_>,
+    self_guid: Option<u64>,
+) -> (&'static str, Option<u32>, u32) {
+    let loot = cells.loot_cells();
+    // Methods 0 to 4 through the table `0x4e9280`, `ERROR!` above (`0x4e91ef`).
+    let method = match loot.method {
+        0 => "freeforall",
+        1 => "roundrobin",
+        2 => "master",
+        3 => "group",
+        4 => "needbeforegreed",
+        _ => "ERROR!",
+    };
+    // `GetLootMethod`'s second return, for any looter in the cell whatever the method
+    // (`0x4e9209`): 0 when it is us (`0x4e9215`), else its party slot + 1 over the four slots
+    // only (`0x4e9238`, `0x4e81a0`, even in a raid), else nil. A looter in another raid
+    // subgroup reads nil, never 0, which would light the crown on our portrait
+    // (`PlayerFrame.lua:48`).
+    let master = (loot.master != 0)
+        .then(|| {
+            if Some(loot.master) == self_guid {
+                Some(0)
+            } else {
+                cells
+                    .party_slots()
+                    .position(|m| m.guid == loot.master)
+                    .map(|i| i as u32 + 1)
+            }
+        })
+        .flatten();
+    (method, master, u32::from(loot.threshold))
+}
+
 /// Push the roster, the party and raid unit snapshots and their pets' into `script`, against what
 /// `fed` says it last pushed: the feed's pass, and a reload's seed ([`seed_reloaded_vm`]).
 fn push_group(
@@ -695,35 +719,8 @@ fn push_group(
             guid: m.guid,
         })
         .collect();
-    // `GetLootMethod` and `GetLootThreshold` read the stored cells, with no group test.
-    let loot = group.loot_cells();
-    // Methods 0 to 4 through the table `0x4e9280`, `ERROR!` above (`0x4e91ef`).
-    let loot_method = match loot.method {
-        0 => "freeforall",
-        1 => "roundrobin",
-        2 => "master",
-        3 => "group",
-        4 => "needbeforegreed",
-        _ => "ERROR!",
-    };
-    // `GetLootMethod`'s second return, for any looter in the cell whatever the method
-    // (`0x4e9209`): 0 when it is us (`0x4e9215`), else its party slot + 1 over the four slots
-    // only (`0x4e9238`, `0x4e81a0`, even in a raid), else nil. A looter in another raid
-    // subgroup reads nil, never 0, which would light the crown on our portrait
-    // (`PlayerFrame.lua:48`).
-    let master_looter = (loot.master != 0)
-        .then(|| {
-            if Some(loot.master) == self_guid {
-                Some(0)
-            } else {
-                slots
-                    .iter()
-                    .position(|m| m.guid == loot.master)
-                    .map(|i| i as u32 + 1)
-            }
-        })
-        .flatten();
-    let (loot_method, loot_threshold) = (loot_method.to_string(), u32::from(loot.threshold));
+    let (loot_method, master_looter, loot_threshold) = loot_read(group.cells(), self_guid);
+    let loot_method = loot_method.to_string();
     // The raid roster, the one list `GetNumRaidMembers`, `GetRaidRosterInfo` and `UnitInRaid`
     // read.
     let me = self_pair.map(|(_, g, store)| RaidSelf {
@@ -883,21 +880,61 @@ fn raid_roster<'a>(
     unit_names: crate::ui_unit::UnitNames<'_>,
     zone_name: &dyn Fn(u32) -> Option<String>,
 ) -> Vec<RaidMemberInfo> {
-    if !group.raid_held() {
-        return Vec::new();
-    }
-    // Rank 2 leader, 1 assistant, 0 member, as the reference's roster rebuild writes it
-    // (`0x4ba90c`, `0x4ba920`, `0x4ba929`) against the leader of that rebuild, and the binding
-    // returns it unchanged.
-    let rank_of = |guid: u64, flags: u8| {
-        if guid == group.raid_leader {
-            2
-        } else if flags & GROUP_MEMBER_ASSISTANT != 0 {
-            1
-        } else {
-            0
-        }
+    let reads = RowReads {
+        cells: group.cells(),
+        records: &group.stats,
+        me,
+        held,
+        names,
+        unit_names,
+        zone_name,
     };
+    (0..group.members.len() + 1)
+        .map_while(|index| raid_row_at(&reads, index))
+        .collect()
+}
+
+/// A raid row's rank: 2 for the leader, 1 for an assistant, 0 for a member, as the reference's
+/// roster rebuild writes it (`0x4ba90c`, `0x4ba920`, `0x4ba929`) against the leader of that
+/// rebuild; the binding returns it unchanged.
+pub(super) fn rank_of(cells: super::Cells<'_>, guid: u64, flags: u8) -> u32 {
+    if guid == cells.raid_leader {
+        2
+    } else if flags & GROUP_MEMBER_ASSISTANT != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// What a raid row reads: the roster's cells and records, our own object, the object manager, the
+/// name cache, the class table and the area names.
+pub(super) struct RowReads<'r, 'a> {
+    pub(super) cells: super::Cells<'r>,
+    pub(super) records: &'r std::collections::HashMap<u64, PartyMemberStatsInfo>,
+    pub(super) me: Option<&'r RaidSelf>,
+    pub(super) held: &'r dyn Fn(u64) -> Option<&'a ObjectStore>,
+    pub(super) names: &'r NameCache,
+    pub(super) unit_names: crate::ui_unit::UnitNames<'r>,
+    pub(super) zone_name: &'r dyn Fn(u32) -> Option<String>,
+}
+
+/// The raid row at 0-based `index` ([`raid_roster`]'s one row): the wire's members in list order,
+/// then us; `None` past the last, and while no roster is held.
+pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> {
+    let RowReads {
+        cells,
+        records,
+        me,
+        held,
+        names,
+        unit_names,
+        zone_name,
+    } = r;
+    if !cells.raid_held() {
+        return None;
+    }
+    let rank_of = |guid: u64, flags: u8| rank_of(*cells, guid, flags);
     // The class byte comes from the name cache for a member, from our descriptor for us.
     let row = |guid: u64,
                name: String,
@@ -923,8 +960,7 @@ fn raid_roster<'a>(
         }
     };
     let our_zone = || me.and_then(|me| me.area).and_then(zone_name);
-    let mut roster = Vec::with_capacity(group.members.len() + 1);
-    for m in &group.members {
+    if let Some(m) = cells.members.get(index) {
         let class = names.player_traits(m.guid).map(|(_, class, _)| class);
         let (level, zone, online, ninth) = match held(m.guid) {
             Some(store) => (
@@ -934,7 +970,7 @@ fn raid_roster<'a>(
                 store.0.unit_health().unwrap_or(0) as i32 <= 0,
             ),
             None => {
-                let record = group.stats.get(&m.guid);
+                let record = records.get(&m.guid);
                 let online = record.is_some_and(PartyMemberStatsInfo::is_online);
                 let status = record.and_then(|r| r.status).unwrap_or(0);
                 (
@@ -953,7 +989,7 @@ fn raid_roster<'a>(
                 )
             }
         };
-        roster.push(row(
+        return Some(row(
             m.guid,
             m.name.clone(),
             m.flags,
@@ -964,24 +1000,24 @@ fn raid_roster<'a>(
             class,
         ));
     }
-    if let Some(guid) = group.own_raid_row {
-        let me = me.filter(|me| me.guid == guid);
-        roster.push(row(
-            guid,
-            // An unresolved name gets the binding's miss tuple, not a half-filled row (`0x4bb5f8`).
-            names
-                .resolve_unit(guid, None, Ask::Read)
-                .unwrap_or_default()
-                .to_string(),
-            group.own_flags,
-            me.map_or(0, |me| me.level),
-            me.and(our_zone()),
-            true,
-            me.is_some_and(|me| me.dead),
-            me.and_then(|me| me.class),
-        ));
-    }
-    roster
+    let guid = cells
+        .own_raid_row
+        .filter(|_| index == cells.members.len())?;
+    let me = me.filter(|me| me.guid == guid);
+    Some(row(
+        guid,
+        // An unresolved name gets the binding's miss tuple, not a half-filled row (`0x4bb5f8`).
+        names
+            .resolve_unit(guid, None, Ask::Read)
+            .unwrap_or_default()
+            .to_string(),
+        cells.own_flags,
+        me.map_or(0, |me| me.level),
+        me.and(our_zone()),
+        true,
+        me.is_some_and(|me| me.dead),
+        me.and_then(|me| me.class),
+    ))
 }
 
 /// One member's merged-view unit snapshot (see [`feed_party`]).
@@ -2466,29 +2502,41 @@ mod tests {
         assert!(errors.is_empty(), "script errors: {errors:?}");
     }
 
+    /// Every `SMSG_RAID_INSTANCE_INFO` signals `UPDATE_INSTANCE_INFO` at its packet, the second
+    /// empty answer too: the Raid Info button is decided on it (`RaidFrame.lua:43`), and a diff over
+    /// the list alone can never reach it. Each listener reads the list its own answer carried.
     #[test]
-    fn a_second_empty_answer_is_still_a_saved_instance_edge() {
-        let mut fed = FedParty::default();
-        assert!(
-            saved_instances_moved(&[], 1, &fed),
-            "the first answer moves it"
-        );
-        fed.saved_answers = 1;
-        assert!(
-            !saved_instances_moved(&[], 1, &fed),
-            "and nothing has happened since"
-        );
-        assert!(
-            saved_instances_moved(&[], 2, &fed),
-            "the SECOND empty answer is an edge too — the button is decided on it, and a diff \
-             over the list alone can never reach it"
-        );
-        let one = [SavedInstanceInfo {
-            name: "Molten Core".into(),
-            instance: 1234,
+    fn every_instance_answer_signals_its_event_with_its_own_list() {
+        let mut app = app();
+        party(&mut app, 1, true);
+        frame(&mut app);
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run(
+                r#"HEARD = {}
+                   local f = CreateFrame("Frame")
+                   f:RegisterEvent("UPDATE_INSTANCE_INFO")
+                   f:SetScript("OnEvent", function() table.insert(HEARD, GetNumSavedInstances()) end)"#,
+            )
+            .unwrap();
+        let lockout = benilla_protocol::messages::RaidInstanceEntry {
+            map: 409,
             reset: 86_400,
-        }];
-        assert!(saved_instances_moved(&one, 1, &fed));
+            instance: 7,
+        };
+        {
+            let mut group = app.world_mut().resource_mut::<GroupState>();
+            group.apply_raid_instance_info(Vec::new());
+            group.apply_raid_instance_info(Vec::new());
+            group.apply_raid_instance_info(vec![lockout]);
+        }
+        frame(&mut app);
+        let heard: Vec<f64> = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("return HEARD")
+            .unwrap();
+        assert_eq!(heard, [0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -2784,16 +2832,16 @@ mod tests {
             "9 is not a subgroup"
         );
 
-        // Echoed to us as leader, our ready check moves the request count, not the popup's.
-        let (ticket, requests) = (group.ready_check, group.ready_check_requests);
+        // Echoed to us as leader, our ready check arms the engine's side, with no popup's event.
+        group.signals.take();
         assert!(test_apply_local(
             &mut group,
             &PartyRequest::ReadyCheckStart,
             me
         ));
         assert_eq!(
-            (group.ready_check, group.ready_check_requests),
-            (ticket, requests + 1)
+            group.signals.take(),
+            [GroupSignal::ReadyCheckRequest { we_lead: true }]
         );
 
         let n = group.members.len();

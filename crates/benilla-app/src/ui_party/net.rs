@@ -151,6 +151,9 @@ fn on_command_result(
     }
 }
 
+/// What a group packet's handler found before it wrote: the records and the roster cells.
+type Found = (HashMap<u64, PartyMemberStatsInfo>, super::RosterCells);
+
 /// The selection teardowns (`0x493910(guid, 1)`) a list or an ending raised
 /// ([`GroupState::take_released`]), resolved while the objects stand as the packet found them and
 /// handed to the guid-scoped deselect ([`DeselectGuid`]). A harness with no object index holds no
@@ -165,19 +168,23 @@ struct RosterTeardown<'w, 's> {
 }
 
 impl RosterTeardown<'_, '_> {
-    /// The records as the packet found them, for [`Self::run`] to log what it changed, with the
-    /// packet's entry opened ahead of its signals: a list writes each member's record
-    /// (`AddPartyMember`, `0x5e6c4a`) before it signals (`0x5e6c61`, `0x5e6c66`).
-    fn before(&mut self, group: &GroupState) -> Option<HashMap<u64, PartyMemberStatsInfo>> {
+    /// The records and the roster cells as the packet found them, for [`Self::run`] to log what
+    /// it changed, with the packet's entry opened ahead of its signals: a list writes each
+    /// member's record (`AddPartyMember`, `0x5e6c4a`) before it signals (`0x5e6c61`, `0x5e6c66`).
+    fn before(&mut self, group: &GroupState) -> Option<Found> {
         let log = self.log.as_deref_mut()?;
         log.open();
-        Some(group.stats.clone())
+        Some((group.stats.clone(), group.cells().to_owned()))
     }
 
-    /// The packet's end: the records it changed against `before` logged, then its teardowns.
-    fn run(&mut self, group: &mut GroupState, before: Option<HashMap<u64, PartyMemberStatsInfo>>) {
-        if let (Some(log), Some(before)) = (self.log.as_deref_mut(), before) {
-            log.records(&before, &group.stats);
+    /// The packet's end: the records and cells it changed against `before` logged, then its
+    /// teardowns.
+    fn run(&mut self, group: &mut GroupState, before: Option<Found>) {
+        if let (Some(log), Some((records, cells))) = (self.log.as_deref_mut(), before) {
+            log.records(&records, &group.stats);
+            if group.cells() != cells.cells() {
+                log.roster(cells);
+            }
             log.close();
         }
         let released = group.take_released();
@@ -289,10 +296,15 @@ fn on_session_end(
     mut group: ResMut<GroupState>,
     log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
 ) {
-    let before = log.is_some().then(|| group.stats.clone());
+    let before = log
+        .is_some()
+        .then(|| (group.stats.clone(), group.cells().to_owned()));
     group.clear_session();
-    if let (Some(mut log), Some(before)) = (log, before) {
-        log.records(&before, &group.stats);
+    if let (Some(mut log), Some((records, cells))) = (log, before) {
+        log.records(&records, &group.stats);
+        if group.cells() != cells.cells() {
+            log.roster(cells);
+        }
         log.close();
     }
 }

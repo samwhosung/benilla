@@ -542,6 +542,22 @@ fn start_duel_casts_inside_its_call() {
         party: [FOE, 0, 0, 0],
         ..Default::default()
     });
+    // The party slot `party1` is read from at the call, as the list left it.
+    app.world_mut()
+        .resource_mut::<crate::ui_party::GroupState>()
+        .apply_list(
+            0,
+            0,
+            vec![benilla_protocol::messages::GroupMemberEntry {
+                name: "Foe".into(),
+                guid: FOE,
+                status: 1,
+                flags: 0,
+            }],
+            ME,
+            None,
+            Some(ME),
+        );
     eval::<()>(&mut app, "StartDuelUnit('party1') RandomRoll(1, 2)");
     assert_eq!(sent(&rx), ["cast 7266", "roll 1"]);
 }

@@ -200,14 +200,24 @@ impl GroupState {
         live: Option<&ObjectFields>,
         online_only: bool,
     ) -> Option<u64> {
-        match live {
-            Some(fields) => fields.unit_pet_guid(),
-            None => self
-                .member_record(member)
-                .filter(|r| !online_only || r.is_online())
-                .and_then(|r| r.pet_guid)
-                .filter(|&g| g != 0),
-        }
+        pet_guid_in(&self.stats, member, live, online_only)
+    }
+}
+
+/// [`GroupState::party_pet_guid`] (`online_only`) and [`GroupState::raid_pet_guid`] over `records`.
+pub(super) fn pet_guid_in(
+    records: &HashMap<u64, PartyMemberStatsInfo>,
+    member: u64,
+    live: Option<&ObjectFields>,
+    online_only: bool,
+) -> Option<u64> {
+    match live {
+        Some(fields) => fields.unit_pet_guid(),
+        None => records
+            .get(&member)
+            .filter(|r| !online_only || r.is_online())
+            .and_then(|r| r.pet_guid)
+            .filter(|&g| g != 0),
     }
 }
 

@@ -80,6 +80,22 @@ fn client() -> (App, Receiver<ClientCommand>) {
         ..Default::default()
     });
     world.insert_non_send_resource(script);
+    // The party slot `party1` is read from at the call, as the list left it.
+    world
+        .resource_mut::<crate::ui_party::GroupState>()
+        .apply_list(
+            0,
+            0,
+            vec![benilla_protocol::messages::GroupMemberEntry {
+                name: "Member".into(),
+                guid: MEMBER,
+                status: 1,
+                flags: 0,
+            }],
+            ME,
+            None,
+            Some(ME),
+        );
     (app, rx)
 }
 

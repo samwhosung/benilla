@@ -17,11 +17,14 @@ use crate::ui_script::UiFeed;
 #[cfg(test)]
 mod call_tests;
 mod calls;
+mod cells;
 mod feed;
+mod live;
 pub(crate) mod net;
 mod pets;
 mod records;
 pub(crate) use calls::PartyCalls;
+pub(crate) use cells::{Cells, RosterCells};
 #[cfg(test)]
 pub(crate) use feed::feed_party;
 pub(crate) use feed::{
@@ -31,6 +34,7 @@ pub(crate) use feed::{
 #[cfg(test)]
 pub(crate) use feed::{fire_party_lane, PartyLane};
 pub(crate) use feed::{GroupSources, PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS};
+pub(crate) use live::RosterLive;
 pub(crate) use pets::Roster;
 pub(crate) use records::{record_notices, roster_aura_slots_in};
 
@@ -135,17 +139,6 @@ pub struct GroupState {
     pub test: bool,
     /// Our raid lockouts, the character's rather than the group's: leaving the group keeps them.
     pub saved_instances: Vec<benilla_protocol::messages::RaidInstanceEntry>,
-    /// How many `SMSG_RAID_INSTANCE_INFO` answers arrived, empty ones included. The reference fires
-    /// `UPDATE_INSTANCE_INFO` once per packet (`0x49e1a7`, straight from `0x49e0d8` when empty)
-    /// and `RaidFrame.lua:43` ignores the first, so the Raid Info button is decided on the second.
-    pub saved_instances_answers: u32,
-    /// Bumped by each ready check that pops for us; a count, so a second one still fires.
-    pub ready_check: u32,
-    /// Bumped by every ready-check open, ours as leader included, where [`Self::ready_check`] skips
-    /// the leader's (`0x4ba360`'s leader arm never reaches the `READY_CHECK` fire at `0x4ba53a`).
-    pub ready_check_requests: u32,
-    /// The answers forwarded to us as leader, append-only until the next request clears them.
-    pub ready_check_answers: Vec<(u64, bool)>,
     /// The roster's own teardowns of the selection (`0x493910(guid, 1)`) the last list or ending
     /// raised, in its order, for the handler to resolve against the objects held
     /// ([`Self::take_released`]).
@@ -235,6 +228,19 @@ pub(crate) enum GroupSignal {
     /// A list handler's line, shown in its place among the list's signals (`0x5e6c19`,
     /// `0x5e6cc1`, `0x5e6d37`, `0x4e87fa`'s setter lines, the raid roster's).
     Line(UiError),
+    /// `MSG_RAID_READY_CHECK`'s open form arms the engine's side ahead of its event: the leader's
+    /// close, a member's 30 s deadline (`0x4ba535`), `we_lead` being the leader cell against the
+    /// active player at the handler (`0x4ba3a0`).
+    ReadyCheckRequest { we_lead: bool },
+    /// `READY_CHECK`, the open form's popup for a member, after the deadline is armed
+    /// (`0x4ba53a`); the leader's arm never reaches it.
+    ReadyCheck,
+    /// One member's answer, relayed to the leader (`0x4ba3f9`, `0x4ba405`).
+    ReadyCheckAnswer { guid: u64, ready: bool },
+    /// `UPDATE_INSTANCE_INFO`, once per `SMSG_RAID_INSTANCE_INFO` (`0x49e1a7`, straight from
+    /// `0x49e0d8` when empty), with the list: `RaidFrame.lua:43` ignores the first, so the Raid
+    /// Info button is decided on the second.
+    InstanceInfo(Vec<benilla_protocol::messages::RaidInstanceEntry>),
 }
 
 /// The group events signalled, oldest first, each stamped where its handler signals it
@@ -623,16 +629,6 @@ impl GroupState {
         lines
     }
 
-    /// The loot cells `GetLootMethod` and `GetLootThreshold` read (`0x4e91b6`, `0x4e91fb`,
-    /// `0x4e94e0`): [`Self::loot_stored`], or in the `/partytest` sandbox, which leaves those as it
-    /// found them, the sandbox's own tail.
-    pub fn loot_cells(&self) -> GroupLootInfo {
-        match self.loot {
-            Some(sandbox) if self.test => sandbox,
-            _ => self.loot_stored,
-        }
-    }
-
     /// Log one event where its handler signals it, behind every signal before it.
     pub(super) fn signal(&mut self, signal: GroupSignal) {
         self.signals.push(signal);
@@ -705,12 +701,7 @@ impl GroupState {
     /// compares the flags under `0x7f`), none once an ending emptied them. A slot's member can
     /// change on any resync.
     pub fn party_slots(&self) -> impl Iterator<Item = &GroupMemberEntry> {
-        let own = self.own_flags & 0x7f;
-        let emptied = self.slots_emptied;
-        self.members
-            .iter()
-            .filter(move |m| !emptied && m.flags & 0x7f == own)
-            .take(4)
+        self.cells().party_slots()
     }
 
     /// `0x4e84a0` with its argument set, then `0x4e8250(0)`, as the leave acknowledgement, the kick
@@ -749,19 +740,14 @@ impl GroupState {
     /// Whether the raid roster holds rows (`[0xb713e0]` above 0), what every raid reader and the
     /// next list's raid legs test (`0x4ba556`, `0x4ba61a`, `0x5e6e65`).
     pub fn raid_held(&self) -> bool {
-        self.own_raid_row.is_some()
+        self.cells().raid_held()
     }
 
     /// The raid roster's rows in order, the one `GetRaidRosterInfo` and `raidN` read: the wire's
     /// members as listed (`0x5e6b8e`-`0x5e6ba3`, kept row for row by `0x4ba8c6`-`0x4ba8d9`), then
     /// us; empty while no roster is held.
     pub fn raid_rows(&self) -> impl Iterator<Item = u64> + '_ {
-        let held = self.own_raid_row.is_some();
-        self.members
-            .iter()
-            .filter(move |_| held)
-            .map(|m| m.guid)
-            .chain(self.own_raid_row)
+        self.cells().raid_rows()
     }
 
     /// The teardowns the last list or ending raised, for its handler to resolve.
@@ -958,10 +944,6 @@ impl GroupState {
             name_waits: _,
             raid_names_pending: _,
             saved_instances: _,
-            saved_instances_answers: _,
-            ready_check: _,
-            ready_check_requests: _,
-            ready_check_answers: _,
             // The list's own teardowns, raised before its reset.
             released: _,
         } = self;
@@ -995,25 +977,24 @@ impl GroupState {
         };
     }
 
-    /// `SMSG_RAID_INSTANCE_INFO`: replaces the lockouts and counts the answer, even an empty one.
+    /// `SMSG_RAID_INSTANCE_INFO`: replaces the lockouts and signals the answer, even an empty one.
     pub fn apply_raid_instance_info(
         &mut self,
         entries: Vec<benilla_protocol::messages::RaidInstanceEntry>,
     ) {
-        self.saved_instances = entries;
-        self.saved_instances_answers = self.saved_instances_answers.wrapping_add(1);
+        self.saved_instances = entries.clone();
+        self.signal(GroupSignal::InstanceInfo(entries));
     }
 
     /// `MSG_RAID_READY_CHECK`, open form, echoed to the whole group: `0x4ba360` splits on the
     /// leader guid, and only a non-leader prints the leader's line and gets the popup. Both arms
-    /// count the request and start a fresh answer log.
+    /// arm the engine's side first.
     pub fn apply_ready_check_request(&mut self, we_lead: bool) -> Vec<UiError> {
-        self.ready_check_requests = self.ready_check_requests.wrapping_add(1);
-        self.ready_check_answers.clear();
+        self.signal(GroupSignal::ReadyCheckRequest { we_lead });
         if we_lead {
             return Vec::new();
         }
-        self.ready_check = self.ready_check.wrapping_add(1);
+        self.signal(GroupSignal::ReadyCheck);
         // The reference prints its name cache's entry for the leader; the roster holds the same.
         let leader = self
             .members
@@ -1026,7 +1007,7 @@ impl GroupState {
 
     /// `MSG_RAID_READY_CHECK`, answer form: one member's answer, forwarded to the leader alone.
     pub fn apply_ready_check_answer(&mut self, guid: u64, ready: bool) {
-        self.ready_check_answers.push((guid, ready));
+        self.signal(GroupSignal::ReadyCheckAnswer { guid, ready });
     }
 }
 
@@ -1049,28 +1030,35 @@ mod tests {
     }
 
     #[test]
-    fn an_unchanged_lockout_list_still_counts_as_an_answer() {
+    fn an_unchanged_lockout_list_still_signals_an_answer() {
+        use benilla_protocol::messages::RaidInstanceEntry;
         let mut g = GroupState::default();
-        assert_eq!(g.saved_instances_answers, 0, "nobody has asked yet");
+        assert!(g.signals.take_events().is_empty(), "nobody has asked yet");
 
         g.apply_raid_instance_info(Vec::new());
-        assert_eq!(g.saved_instances_answers, 1);
         g.apply_raid_instance_info(Vec::new());
         assert_eq!(
-            g.saved_instances_answers, 2,
+            g.signals.take_events(),
+            [
+                GroupSignal::InstanceInfo(Vec::new()),
+                GroupSignal::InstanceInfo(Vec::new())
+            ],
             "the second empty answer is the one the button is decided on"
         );
 
-        g.apply_raid_instance_info(vec![benilla_protocol::messages::RaidInstanceEntry {
+        let lockout = RaidInstanceEntry {
             map: 409,
             reset: 86_400,
             instance: 7,
-        }]);
-        assert_eq!(g.saved_instances_answers, 3);
+        };
+        g.apply_raid_instance_info(vec![lockout]);
+        assert_eq!(
+            g.signals.take_events(),
+            [GroupSignal::InstanceInfo(vec![lockout])]
+        );
         assert_eq!(g.saved_instances.len(), 1, "and the list is the new one");
 
         g.clear_session();
-        assert_eq!(g.saved_instances_answers, 0);
         assert!(g.saved_instances.is_empty());
     }
 
@@ -1448,8 +1436,15 @@ mod tests {
         g.apply_ready_check_request(false);
         g.apply_raid_instance_info(Vec::new());
         g.apply_raid_instance_info(vec![lockout]);
-        assert_eq!((g.ready_check, g.ready_check_requests), (1, 1));
-        assert_eq!(g.saved_instances_answers, 2);
+        assert_eq!(
+            g.signals.take_events(),
+            [
+                GroupSignal::ReadyCheckRequest { we_lead: false },
+                GroupSignal::ReadyCheck,
+                GroupSignal::InstanceInfo(Vec::new()),
+                GroupSignal::InstanceInfo(vec![lockout])
+            ]
+        );
 
         g.apply_list(0, 0, vec![], 0, None, None);
 
@@ -1458,11 +1453,10 @@ mod tests {
         assert_eq!(g.leader, 0);
         assert_eq!(g.raid_targets, [0; 8]);
         assert_eq!(
-            (g.ready_check, g.ready_check_requests),
-            (1, 1),
-            "no READY_CHECK edge"
+            g.signals.take_events(),
+            [GroupSignal::MembersChanged, GroupSignal::RaidTargetUpdate],
+            "no READY_CHECK and no UPDATE_INSTANCE_INFO"
         );
-        assert_eq!(g.saved_instances_answers, 2, "no UPDATE_INSTANCE_INFO edge");
         assert_eq!(
             g.saved_instances,
             vec![lockout],
@@ -1470,7 +1464,6 @@ mod tests {
         );
 
         g.clear_session();
-        assert_eq!((g.ready_check, g.saved_instances_answers), (0, 0));
         assert!(g.saved_instances.is_empty());
     }
 
@@ -1487,10 +1480,17 @@ mod tests {
             g.apply_ready_check_request(false),
             vec![UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", "Alice")]
         );
-        assert_eq!((g.ready_check, g.ready_check_requests), (1, 1));
-        assert!(
-            g.ready_check_answers.is_empty(),
-            "a request starts a fresh log"
+        assert_eq!(
+            g.signals.take_events(),
+            [
+                GroupSignal::ReadyCheckAnswer {
+                    guid: 0xB0B,
+                    ready: true
+                },
+                GroupSignal::ReadyCheckRequest { we_lead: false },
+                GroupSignal::ReadyCheck
+            ],
+            "the engine's side armed, then the popup"
         );
 
         assert!(
@@ -1498,13 +1498,19 @@ mod tests {
             "the leader's echo"
         );
         assert_eq!(
-            (g.ready_check, g.ready_check_requests),
-            (1, 2),
+            g.signals.take_events(),
+            [GroupSignal::ReadyCheckRequest { we_lead: true }],
             "no popup for the leader"
         );
 
         g.apply_ready_check_answer(0xB0B, false);
-        assert_eq!(g.ready_check_answers, vec![(0xB0B, false)]);
+        assert_eq!(
+            g.signals.take_events(),
+            [GroupSignal::ReadyCheckAnswer {
+                guid: 0xB0B,
+                ready: false
+            }]
+        );
     }
 
     /// Our own guid, for the lists that ask whether we lead.

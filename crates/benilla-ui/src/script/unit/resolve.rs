@@ -15,6 +15,8 @@ use std::collections::HashMap;
 
 use mlua::Lua;
 
+use super::super::roster_read::{GroupRow, RowQuery};
+
 /// What `0x515970` reads of the client's own state, no object's field: the reference keeps each in
 /// a global or a table of its own, and no object's update writes them.
 pub trait UnitTokenGlobals {
@@ -277,9 +279,9 @@ fn reads_objects(base: UnitBase, hops: usize) -> bool {
 }
 
 /// The guid a parsed token names as `0x515970` resolves it at the call: the client's globals as
-/// `guids` holds them, and the objects through the lent host, as of the place the call runs; with
-/// no host free to ask (a glue VM, or a call's apply under way), or one that reads none, the
-/// snapshot's.
+/// `guids` holds them, the group rows through the lent host and the objects likewise, as of the
+/// place the call runs; with no host free to ask (a glue VM, or a call's apply under way), or one
+/// that reads none, the snapshot's.
 pub(crate) fn resolve_parsed(
     lua: &Lua,
     guids: &UnitGuids,
@@ -289,18 +291,89 @@ pub(crate) fn resolve_parsed(
     live_parsed(lua, guids, base, hops).unwrap_or_else(|| guids.resolve_unit(base, hops))
 }
 
-/// [`resolve_parsed`]'s live answer, `None` where it reads no object or no host reads them for
-/// it, and the snapshot's answer stands.
+/// [`resolve_parsed`]'s live answer, `None` where it reads no object or group row or no host reads
+/// them for it, and the snapshot's answer stands.
 pub(crate) fn live_parsed(
     lua: &Lua,
     guids: &UnitGuids,
     base: UnitBase,
     hops: usize,
 ) -> Option<Option<u64>> {
-    if !reads_objects(base, hops) {
-        return None;
+    // The group rows first: the host is not free to ask again inside the objects' read.
+    let row = match base {
+        UnitBase::Party(_) | UnitBase::PartyPet(_) | UnitBase::Raid(_) | UnitBase::RaidPet(_) => {
+            crate::script::live::ask(lua, &RowQuery(base))
+        }
+        _ => None,
+    };
+    let globals = LiveRow { guids, base, row };
+    if reads_objects(base, hops) {
+        with_live_objects(lua, |objects| {
+            resolve_unit_in(&globals, objects, base, hops)
+        })
+    } else {
+        // A group row alone reads no object, and a hop-less `partyN` or `raidN` asks for none.
+        row.map(|_| resolve_unit_in(&globals, &NoObjects, base, hops))
     }
-    with_live_objects(lua, |objects| resolve_unit_in(guids, objects, base, hops))
+}
+
+/// The client's globals with one group row read live: the row `base` names, as the lent host reads
+/// it ([`RowQuery`]); every other global as `guids` holds it.
+struct LiveRow<'a> {
+    guids: &'a UnitGuids,
+    base: UnitBase,
+    row: Option<GroupRow>,
+}
+
+impl UnitTokenGlobals for LiveRow<'_> {
+    fn target(&self) -> u64 {
+        self.guids.target
+    }
+    fn mouseover(&self) -> u64 {
+        self.guids.mouseover
+    }
+    fn npc(&self) -> u64 {
+        self.guids.npc
+    }
+    fn party(&self, row: u32) -> u64 {
+        match (self.base, self.row) {
+            (UnitBase::Party(r) | UnitBase::PartyPet(r), Some(live)) if r == row => live.member,
+            _ => self.guids.party(row),
+        }
+    }
+    fn raid(&self, row: u32) -> u64 {
+        match (self.base, self.row) {
+            (UnitBase::Raid(r) | UnitBase::RaidPet(r), Some(live)) if r == row => live.member,
+            _ => self.guids.raid(row),
+        }
+    }
+    fn party_pet_record(&self, row: u32) -> u64 {
+        match (self.base, self.row) {
+            (UnitBase::PartyPet(r), Some(live)) if r == row => live.pet_record,
+            _ => self.guids.party_pet_record(row),
+        }
+    }
+    fn raid_pet_record(&self, row: u32) -> u64 {
+        match (self.base, self.row) {
+            (UnitBase::RaidPet(r), Some(live)) if r == row => live.pet_record,
+            _ => self.guids.raid_pet_record(row),
+        }
+    }
+}
+
+/// No object: a base that reads none and has no hop asks nothing of the objects.
+struct NoObjects;
+
+impl UnitTokenObjects for NoObjects {
+    fn active_player(&self) -> u64 {
+        0
+    }
+    fn pet_of(&self, _: u64) -> Option<u64> {
+        None
+    }
+    fn target_of(&self, _: u64) -> Option<u64> {
+        None
+    }
 }
 
 /// [`resolve_parsed`] on `token`'s text: `Err` for a token none of the nine compares match, where

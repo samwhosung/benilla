@@ -52,6 +52,21 @@ impl TerrainHeights<'_> {
     }
 }
 
+/// The area under the player alone, asked of the world: the narrow read for a caller that holds
+/// the whole of [`WorldPoint`] nowhere, such as the call host's raid rows. Read-only.
+#[derive(SystemParam)]
+pub struct AreaUnderfoot<'w> {
+    /// Absent in an app with no world, where there is no area.
+    area: Option<Res<'w, CurrentArea>>,
+}
+
+impl AreaUnderfoot<'_> {
+    /// The finest area the player stands in, as [`WorldPoint::area`] reads it.
+    pub fn area(&self) -> Option<u32> {
+        self.area.as_deref()?.0
+    }
+}
+
 /// The world, asked about a point; read-only, so it never conflicts with a caller's parameters.
 #[derive(SystemParam)]
 pub struct WorldPoint<'w, 's> {

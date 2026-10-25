@@ -322,12 +322,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Edge,
-        "::ui_party::feed::feed_party",
-        "the ready check, the saved instances and the members' presence, found by comparing \
-         the group's state",
-    ),
-    (
-        Row::Edge,
         "::ui_items::locks::apply_item_releases",
         "the item source's two unlocks a loot close owes (`0x48f2bd`, `0x4c1d36`) and the copier's \
          ending's (`0x5ebc35` → `0x4c1d36`), taken off the loot session, a lane's type the queue \
@@ -438,9 +432,10 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations"]),
     ("::ui_unit::feed_default_language", &["net::ObjectStore"]),
     ("::ui_unit::feed_known_languages", &["net::ObjectStore", "ui_action::PlayerActions"]),
-    // The party and raid tokens read the members' stores and records as of the drain's place
-    // (`ui_unit::views`); the roster `GetRaidRosterInfo` reads, the slots' presence edges and
-    // every snapshot's names, relations and roster read as the frame left them.
+    // The party and raid tokens read the members' stores, records and the roster's cells as of
+    // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
+    // the roster push is their no-host fallback, and every snapshot's names and relations read as
+    // the frame left them.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "ui_guild::GuildState",
         "ui_party::GroupState"]),
@@ -750,6 +745,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "bevy_time::time::Time<bevy_time::real::Real>",
     // The stores as of the drain's place, which the call host's token lookups read.
     "::ui_unit::views::UnitViews",
+    // The area under the player, which the host's raid rows read for our own zone (`0xb4e314`).
+    "::CurrentArea",
     // The `raidFilter` books the call host's aura walk reads (`0x4b3870`, `0x4b3920`), which
     // only the aura feed writes.
     "::ui_aura::AuraFeedMemory",
@@ -1658,11 +1655,11 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // the frame left them.
     ("field notices", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_aura::AuraDurations", "ui_trainer::TrainerOpen"]),
-    // The views lane reads the stores and records it rewinds as of each packet; the names, the
-    // relations' stores and reputations, the selection and the guild as the frame left them
-    // (#2217).
-    // The roster too: the members its party and raid tokens and readable guids come from, past
-    // the records it rewinds, as the frame left it (#2217).
+    // The views lane reads the stores, records and roster cells it rewinds as of each packet; the
+    // names, the relations' stores and reputations, the selection and the guild as the frame left
+    // them (#2217).
+    // The roster's cells and records it rewinds and seats while it builds; the rest as the frame
+    // left it.
     ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::reputations::Reputations", "target::Selection", "ui_guild::GuildState",
         "ui_party::GroupState"]),

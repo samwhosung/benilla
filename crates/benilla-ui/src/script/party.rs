@@ -14,6 +14,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::{self, number_arg};
 use super::by_name::Filter;
 use super::calls::display_error;
+use super::roster_read;
 use super::Model;
 use crate::strings::{fill, global, Arg};
 
@@ -389,18 +390,10 @@ fn chat_error(lua: &Lua, key: &'static str, args: &[Arg<'_>]) {
     }
 }
 
-/// `IsRaidLeader` (`0x4bb8c0`): the cached leader guid (`[0xbc75f8]`, `[0xbc75fc]`) against the
-/// player's own (`0x468550`), both words (`0x4bb8d6`-`0x4bb8dc`), and nothing else: no raid flag,
-/// so it is true for a party leader, and no subgroup slot. Unlike `IsPartyLeader` it has no zero
-/// guard, so with no active player and no group, both zero, it answers 1.
-fn is_raid_leader(party: &PartyState) -> bool {
-    party.leader_guid == party.own_guid
-}
-
-/// `IsPartyLeader` (`0x4e9130`): [`is_raid_leader`]'s compare behind a zero guard on the leader
-/// cell (`0x4e9141 or ecx,eax; je`), so an ungrouped player is nobody's leader.
-fn is_party_leader(party: &PartyState) -> bool {
-    party.leader_guid != 0 && is_raid_leader(party)
+/// The group's cells as the getter runs: through the lent host, else the snapshot's.
+fn cells(lua: &Lua) -> roster_read::GroupCells {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    roster_read::cells(lua, &model.party)
 }
 
 /// `GetRaidRosterInfo`'s values for one row, or the miss tuple for `None`. Nine on every path
@@ -455,22 +448,17 @@ fn raid_roster_info(lua: &Lua, row: Option<RaidMemberInfo>) -> mlua::Result<Mult
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetNumPartyMembers() → the other members, never counting the player; 0 when ungrouped.
+    // GetNumPartyMembers() → the nonzero guids of the four party slots (`0x4e86d0`), never
+    // counting the player; 0 when ungrouped.
     g.set(
         "GetNumPartyMembers",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.party.members.len() as i64)
-        })?,
+        lua.create_function(|lua, ()| Ok(i64::from(cells(lua).party_count())))?,
     )?;
 
-    // GetNumRaidMembers() → the raid roster's length, 0 outside a raid.
+    // GetNumRaidMembers() → the raid roster's count (`[0xb713e0]`), 0 outside a raid.
     g.set(
         "GetNumRaidMembers",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.party.raid.len() as i64)
-        })?,
+        lua.create_function(|lua, ()| Ok(i64::from(cells(lua).raid_count)))?,
     )?;
 
     // GetRaidRosterInfo(index) → name, rank, subgroup, level, class, fileName, zone, online and an
@@ -480,28 +468,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetRaidRosterInfo",
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: GetRaidRosterInfo(index)")?;
-            let row = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                // One unsigned compare after the decrement (`0x4bb5bb dec eax`, `0x4bb5be jae`)
-                // catches an index of 0 or below and one past the count; `dec` wraps, and
-                // `wrapping_sub` keeps that true of `i32::MIN`.
-                usize::try_from(index.wrapping_sub(1))
-                    .ok()
-                    .and_then(|i| model.party.raid.get(i))
-                    // A name-cache miss shares that same arm (`0x4bb5f8 je 0x4bb7b9`).
-                    .filter(|m| !m.name.is_empty())
-                    .cloned()
-            };
+            // One unsigned compare after the decrement (`0x4bb5bb dec eax`, `0x4bb5be jae`)
+            // catches an index of 0 or below and one past the count; `dec` wraps, and
+            // `wrapping_sub` keeps that true of `i32::MIN`.
+            let row = usize::try_from(index.wrapping_sub(1))
+                .ok()
+                .and_then(|i| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    roster_read::raid_row(lua, &model.party, i)
+                })
+                // A name-cache miss shares that same arm (`0x4bb5f8 je 0x4bb7b9`).
+                .filter(|m| !m.name.is_empty());
             raid_roster_info(lua, row)
         })?,
     )?;
 
-    // IsRaidLeader() → 1 or nil, true for a party leader too ([`is_raid_leader`]).
+    // IsRaidLeader() → 1 or nil, true for a party leader too
+    // ([`roster_read::GroupCells::is_raid_leader`]).
     g.set(
         "IsRaidLeader",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if is_raid_leader(&model.party) {
+            let cells = cells(lua);
+            Ok(if cells.is_raid_leader() {
                 Value::Integer(1)
             } else {
                 Value::Nil
@@ -520,31 +508,26 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if id.wrapping_sub(1) >= 4 {
                 return Err(mlua::Error::runtime(USAGE));
             }
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let (id, n) = (i64::from(id), model.party.members.len() as i64);
-            Ok(if id <= n {
-                Value::Integer(1)
-            } else {
-                Value::Nil
-            })
+            let id = i64::from(id);
+            // Slot id-1 holds a guid (`0x4e81a0`).
+            let held = cells(lua).party[(id - 1) as usize] != 0;
+            Ok(if held { Value::Integer(1) } else { Value::Nil })
         })?,
     )?;
 
     // GetPartyLeaderIndex() → the leader-index cell plus one ([`PartyState::leader_index`]).
     g.set(
         "GetPartyLeaderIndex",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(model.party.leader_index))
-        })?,
+        lua.create_function(|lua, ()| Ok(i64::from(cells(lua).leader_index)))?,
     )?;
 
-    // IsPartyLeader() → 1 when the leader cell holds our guid, else nil ([`is_party_leader`]).
+    // IsPartyLeader() → 1 when the leader cell holds our guid, else nil
+    // ([`roster_read::GroupCells::is_party_leader`]).
     g.set(
         "IsPartyLeader",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if is_party_leader(&model.party) {
+            let cells = cells(lua);
+            Ok(if cells.is_party_leader() {
                 Value::Integer(1)
             } else {
                 Value::Nil
@@ -556,29 +539,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetLootMethod",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
             // Never grouped, the reference reads zero-filled cells past `.data`'s end, and method
-            // 0 is `freeforall`.
-            let method = if model.party.loot_method.is_empty() {
-                "freeforall"
-            } else {
-                model.party.loot_method.as_str()
-            };
-            let master = match model.party.master_looter {
+            // 0 is `freeforall` ([`roster_read::GroupCells::loot_method`]).
+            let cells = cells(lua);
+            let master = match cells.master_looter {
                 Some(idx) => Value::Integer(i64::from(idx)),
                 None => Value::Nil,
             };
-            Ok((Value::String(lua.create_string(method)?), master))
+            Ok((
+                Value::String(lua.create_string(&cells.loot_method)?),
+                master,
+            ))
         })?,
     )?;
 
     // GetLootThreshold() → the loot quality threshold.
     g.set(
         "GetLootThreshold",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(model.party.loot_threshold))
-        })?,
+        lua.create_function(|lua, ()| Ok(i64::from(cells(lua).loot_threshold)))?,
     )?;
 
     // AcceptGroup() (`0x48aa80`), DeclineGroup() (`0x48aab0`) and LeaveParty() (`0x4e9180`) send
@@ -772,8 +750,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsRaidOfficer",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let me = crate::script::unit::view(lua, &model, "player").map_or(0, |u| u.guid);
-            let officer = me != 0 && model.party.raid.iter().any(|m| m.guid == me && m.rank > 0);
+            let officer = match roster_read::live_cells(lua) {
+                Some(cells) => {
+                    cells.own_guid != 0
+                        && roster_read::live_membership(lua, cells.own_guid)
+                            .and_then(|m| m.rank)
+                            .is_some_and(|rank| rank > 0)
+                }
+                None => {
+                    let me = crate::script::unit::view(lua, &model, "player").map_or(0, |u| u.guid);
+                    me != 0 && model.party.raid.iter().any(|m| m.guid == me && m.rank > 0)
+                }
+            };
             Ok(if officer {
                 Value::Integer(1)
             } else {

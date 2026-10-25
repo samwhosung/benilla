@@ -13,6 +13,8 @@ use benilla_ui::script::{UiScript, UnitAuraList, UnitState};
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore};
 use crate::target::RelationWorld;
+use benilla_protocol::messages::GroupMemberEntry;
+
 use crate::ui_party::{GroupSources, GroupState, Roster};
 
 /// What the VM held of each view the lane pushed over, by view: put back as the drain ends, when
@@ -104,8 +106,10 @@ pub(super) struct Families<'a, 'w, 's> {
     /// Our guid and descriptor as of here, and as the frame left it.
     pub(super) me: Option<(u64, &'a ObjectStore)>,
     pub(super) live_me: Option<(u64, &'a ObjectStore)>,
-    /// The roster, its records as of here.
+    /// The roster, its cells and records as of here.
     pub(super) group: &'a GroupState,
+    /// The roster's cells moved since the views were built: every group token is built over them.
+    pub(super) roster_moved: bool,
     pub(super) tables: &'a crate::ui_unit::SnapshotTables<'w>,
     pub(super) names: &'a NameCache,
     pub(super) commands: &'a NetCommands,
@@ -136,8 +140,8 @@ pub(super) fn push(script: &mut UiScript, saved: &mut Saved, f: &Families) -> us
 
 /// `party1..4`, `partypet1..4`, `raid1..40` and `raidpet1..40`: a member's token when its
 /// descriptor or record moved, a pet's when its owner's or its own did, and every member's when
-/// the party's faction group, ours, did. The roster itself, which names who each token is, reads
-/// as the frame left it (#2217).
+/// the party's faction group, ours, did or the roster's cells moved, which name who each token is
+/// and empty the rows past its end.
 fn group_tokens(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
     use crate::ui_party::{PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS};
     let src = GroupSources {
@@ -157,10 +161,11 @@ fn group_tokens(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize
         f.live_me
             .and_then(|(_, store)| crate::ui_unit::faction_group(store, f.factions))
     });
-    let all = *built_with != own_group;
-    if all {
+    let faction_moved = *built_with != own_group;
+    if faction_moved {
         *built_with = own_group.clone();
     }
+    let all = faction_moved || f.roster_moved;
     let mut pushes = 0;
     let pet_moved = |owner: u64, roster: Roster| {
         f.moved(owner)
@@ -168,23 +173,28 @@ fn group_tokens(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize
                 .group_pet_guid(owner, roster)
                 .is_some_and(|g| f.moved(g))
     };
-    for (i, m) in f.group.party_slots().take(PARTY_TOKENS.len()).enumerate() {
-        if all || f.moved(m.guid) {
-            let view = Some(src.party_unit(m, &own_group));
+    let slots: Vec<&GroupMemberEntry> = f.group.party_slots().take(PARTY_TOKENS.len()).collect();
+    for i in 0..PARTY_TOKENS.len() {
+        let m = slots.get(i).copied();
+        let guid = m.map_or(0, |m| m.guid);
+        if all || f.moved(guid) {
+            let view = m.map(|m| src.party_unit(m, &own_group));
             pushes += usize::from(saved.token(script, PARTY_TOKENS[i], view));
         }
-        if pet_moved(m.guid, Roster::Party) {
-            let view = src.group_pet(m.guid, Roster::Party);
+        if f.roster_moved || pet_moved(guid, Roster::Party) {
+            let view = m.and_then(|m| src.group_pet(m.guid, Roster::Party));
             pushes += usize::from(saved.token(script, PARTY_PET_TOKENS[i], view));
         }
     }
-    for (i, guid) in f.group.raid_rows().take(RAID_TOKENS.len()).enumerate() {
-        if all || f.moved(guid) {
-            let view = src.raid_unit(guid, &own_group);
+    let rows: Vec<u64> = f.group.raid_rows().take(RAID_TOKENS.len()).collect();
+    for i in 0..RAID_TOKENS.len() {
+        let guid = rows.get(i).copied();
+        if all || f.moved(guid.unwrap_or(0)) {
+            let view = guid.and_then(|g| src.raid_unit(g, &own_group));
             pushes += usize::from(saved.token(script, RAID_TOKENS[i], view));
         }
-        if pet_moved(guid, Roster::Raid) {
-            let view = src.group_pet(guid, Roster::Raid);
+        if f.roster_moved || pet_moved(guid.unwrap_or(0), Roster::Raid) {
+            let view = guid.and_then(|g| src.group_pet(g, Roster::Raid));
             pushes += usize::from(saved.token(script, RAID_PET_TOKENS[i], view));
         }
     }
