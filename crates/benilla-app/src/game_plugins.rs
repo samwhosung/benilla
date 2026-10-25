@@ -995,7 +995,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_749;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_695;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1406,8 +1406,6 @@ pub(crate) mod schedule_tests {
          "level-driven: it writes the fade from the ghost flag every frame and re-reads self each time, so a frame with no self is overwritten by the next"),
         ("::tutorial::run_world_enter_cascade",
          "`armed` stays set until self exists, so the welcome and questgiver triggers wait for the tag rather than being spent, and the arrival's `Added<SelfPlayer>` is relative to this system's own last run, so a tag that lands after a run is still seen at the next"),
-        ("::ui_session::latch::watch_interaction_range",
-         "no self returns before anything changes, and a latch needs a self that interacted; the leash is re-tested every frame"),
     ];
 
     /// Every `Update` system that names `SelfPlayer` (reads it, or filters on it) is ordered after

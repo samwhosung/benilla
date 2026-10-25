@@ -545,3 +545,22 @@ fn a_second_holder_of_a_latched_guid_trips_the_walks_check() {
         .open_for_test(NPC);
     dispatch(world);
 }
+
+/// The leash (`0x493230`) runs in the frame time: the reference calls it from the world frame's
+/// update (`0x4818c0` in `CGWorldFrame::OnUpdate`, `0x481790`), after the frame's input records
+/// and its packets, so a click on an open window's button reads the latch as the last frame left
+/// it and a walk-away closes it after.
+#[test]
+fn the_leash_runs_after_the_input_records_and_the_packets() {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    assert!(crate::test_support::runs_before(
+        &mut app,
+        crate::net::apply_net_updates,
+        super::latch::watch_interaction_range
+    ));
+    assert!(crate::test_support::runs_before(
+        &mut app,
+        crate::player::camera::latch_world_mouse,
+        super::latch::watch_interaction_range
+    ));
+}

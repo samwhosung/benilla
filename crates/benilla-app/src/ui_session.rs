@@ -49,8 +49,12 @@ impl Plugin for UiSessionPlugin {
             .add_systems(
                 Update,
                 (
-                    // Before the feeds, so a walk-away's `*_CLOSED` lands the frame it happens.
-                    latch::watch_interaction_range.before(crate::ui_script::UiFeed),
+                    // In the frame time, after the input records and the packets, as the reference
+                    // calls it from the world frame's update (`0x4818c0`); before the feeds, so a
+                    // walk-away's `*_CLOSED` lands the frame it happens.
+                    latch::watch_interaction_range
+                        .after(WorldStage::Net)
+                        .before(crate::ui_script::UiFeed),
                     // The form change and the service flags that release the latch, off the
                     // apply pass's field edges; a death's are its handler's (`crate::target`).
                     release::release_on_field_edges
