@@ -572,7 +572,7 @@ impl TextEngine {
         let baked = match &outline {
             Some(o) if bake.mono => mono::rasterize(o, ppem).map(|m| {
                 let (bits, rows) = em_rows(m.bits, m.w, m.h, ppem);
-                let (rgba, w, h, pad) = mono_cell(&bits, m.w, rows, bake.radius, self.dpi);
+                let (rgba, w, h, pad) = mono_cell(&bits, m.w, rows, bake.radius);
                 (OwnedCell::Rgba(rgba), w, h, pad, o.bearing(), m.top)
             }),
             Some(o) => smooth::rasterize(o).map(|m| {
@@ -608,7 +608,7 @@ impl TextEngine {
         if bake.radius == 0 {
             return (OwnedCell::Coverage(cov), w, h, 0);
         }
-        let (rgba, ow, oh, pad) = outlined_cell(&cov, w, h, bake.radius, self.dpi);
+        let (rgba, ow, oh, pad) = outlined_cell(&cov, w, h, bake.radius);
         (OwnedCell::Rgba(rgba), ow, oh, pad)
     }
 
@@ -1746,6 +1746,44 @@ mod ppem_tests {
             crate::ui_text::TextSeat::UiGrid,
         );
         assert_eq!(quads[0].rect.min.x, 11.0);
+    }
+
+    /// An outlined cell is the same texels at every DPI: NORMAL dilates once and THICK twice, in
+    /// texels (`0x5cea30`, `0x5ce440`). Friz's "Version" at 17 px, the login screen's at 1080 lines.
+    #[test]
+    fn an_outlined_cell_is_the_same_texels_at_every_dpi() {
+        let Some(mut one) = engine_or_skip() else {
+            return;
+        };
+        let friz = one.face_for(Some(TEST_FACES[0]));
+        let mut others: Vec<(f32, TextEngine)> = [1.5f32, 2.0]
+            .into_iter()
+            .map(|dpi| {
+                (
+                    dpi,
+                    test_engine(dpi).expect("the install that opened at dpi 1"),
+                )
+            })
+            .collect();
+        let seat = |i: &GlyphInfo| (i.px_w, i.px_h, i.bearing_x, i.bearing_top);
+        for bake in [
+            Bake::ring(1),
+            Bake::ring(2),
+            Bake {
+                radius: 1,
+                mono: true,
+            },
+        ] {
+            for ch in "Version".chars() {
+                let (a, want) = cell_texels(&mut one, friz, 17, bake, ch);
+                for (dpi, e) in &mut others {
+                    let face = e.face_for(Some(TEST_FACES[0]));
+                    let (b, got) = cell_texels(e, face, 17, bake, ch);
+                    assert_eq!(seat(&b), seat(&a), "{ch:?} {bake:?} at dpi {dpi}: the cell");
+                    assert!(got == want, "{ch:?} {bake:?} at dpi {dpi}: the texels");
+                }
+            }
+        }
     }
 
     /// The action bar's hotkey numeral, `NumberFontNormalSmallGray` (Arial Narrow, monochrome,

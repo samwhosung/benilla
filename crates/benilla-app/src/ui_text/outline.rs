@@ -9,7 +9,7 @@ use benilla_ui::script::Outline;
 use super::pack::widen4;
 
 /// What a glyph's cell is baked from, the font flags `0x5cf310` picks its bake by: the outline's
-/// ring reach in logical px (NORMAL 1, THICK 2) and the monochrome flag (bit 1). Part of the cell
+/// ring reach in texels (NORMAL 1, THICK 2) and the monochrome flag (bit 1). Part of the cell
 /// cache's key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) struct Bake {
@@ -51,25 +51,17 @@ fn fill_gray(coverage: u8) -> u8 {
 ///
 /// 1. Mark every texel with coverage.
 /// 2. Dilate: each pass marks every unmarked texel 8-adjacent to a marked one, 1 pass for NORMAL
-///    and 2 for THICK.
+///    and 2 for THICK, in texels at any DPI.
 /// 3. Alpha: the [`AA_NEIGHBOUR_LUT`] entry for the marked count in the texel's in-bounds 3×3
 ///    box, for ring and fill edge alike.
 /// 4. Pack: the coverage as a 4-bit gray ([`fill_gray`]), so the pure ring is black and the fill
 ///    ramps toward it.
 ///
-/// Deviation: `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster.
-///
 /// It draws as one quad per glyph (`0x5ccbe0`) whose vertex colour tints the fill and leaves the
 /// ring black. Returns `(rgba, out_w, out_h, pad)`: the cell grows `pad` texels each side (the
 /// reference's `em+2`/`em+4`); the caller shifts the bearings by `pad`, and the advance stays.
-pub(super) fn outlined_cell(
-    cov: &[u8],
-    w: u32,
-    h: u32,
-    r: u8,
-    dpi: f32,
-) -> (Vec<u8>, u32, u32, u32) {
-    let pad = passes_of(r, dpi);
+pub(super) fn outlined_cell(cov: &[u8], w: u32, h: u32, r: u8) -> (Vec<u8>, u32, u32, u32) {
+    let pad = u32::from(r);
     // 1 and 2. The ink marked and dilated; the coverage stays alongside for the pack.
     let (map, out_w, out_h) = ringed(cov, w, h, pad);
     let cells = (out_w * out_h) as usize;
@@ -109,12 +101,6 @@ pub(super) fn outlined_cell(
         }
     }
     (rgba, out_w, out_h, pad)
-}
-
-/// Dilation passes for ring reach `r` (logical px) on a `dpi` raster, also the cell's growth on
-/// every side.
-fn passes_of(r: u8, dpi: f32) -> u32 {
-    (u32::from(r) * (dpi.round().max(1.0) as u32)).max(1)
 }
 
 /// The ink (`ink != 0`) of a `w × h` glyph marked 1 in a grid grown `passes` texels each side, then
@@ -164,9 +150,8 @@ fn ringed(ink: &[u8], w: u32, h: u32, passes: u32) -> (Vec<u8>, u32, u32) {
 /// theirs a second black ring at alpha 7/15 (`0x7000`): no neighbour-count alpha, so a small
 /// glyph's ring follows its strokes and its counters stay open past the first ring.
 ///
-/// Deviation: `r × round(dpi)` passes as in [`outlined_cell`], the first `round(dpi)` of them the
-/// opaque ring. Same contract as [`outlined_cell`]: `(rgba, out_w, out_h, pad)`, `pad` 0 when plain.
-pub(super) fn mono_cell(bits: &[u8], w: u32, h: u32, r: u8, dpi: f32) -> (Vec<u8>, u32, u32, u32) {
+/// Same contract as [`outlined_cell`]: `(rgba, out_w, out_h, pad)`, `pad` 0 when plain.
+pub(super) fn mono_cell(bits: &[u8], w: u32, h: u32, r: u8) -> (Vec<u8>, u32, u32, u32) {
     if r == 0 {
         let rgba = bits
             .iter()
@@ -174,16 +159,14 @@ pub(super) fn mono_cell(bits: &[u8], w: u32, h: u32, r: u8, dpi: f32) -> (Vec<u8
             .collect();
         return (rgba, w, h, 0);
     }
-    let pad = passes_of(r, dpi);
-    // The first ring is the inner `pad / r` passes, a logical pixel's worth.
-    let inner = pad / u32::from(r);
+    let pad = u32::from(r);
     let (map, out_w, out_h) = ringed(bits, w, h, pad);
     let rgba = map
         .iter()
         .flat_map(|&m| match u32::from(m) {
             0 => [0; 4],
             1 => [255; 4],
-            g if g - 1 <= inner => [0, 0, 0, 255],
+            2 => [0, 0, 0, 255],
             _ => [0, 0, 0, 7 * 17],
         })
         .collect();
@@ -202,9 +185,9 @@ mod outlined_cell_tests {
 
     #[test]
     fn normal_ring_takes_the_lut_grades() {
-        // A 1×1 inked glyph, NORMAL at dpi 1: a 3×3 cell, all marked; in-bounds counts are 9 at
+        // A 1×1 inked glyph, NORMAL: a 3×3 cell, all marked; in-bounds counts are 9 at
         // the centre, 6 on an edge, 4 in a corner.
-        let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 1, 1.0);
+        let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 1);
         assert_eq!((w, h, pad), (3, 3, 1));
         assert_eq!(px(&rgba, w, 1, 1), [255, 255, 255, 255], "fill core");
         assert_eq!(px(&rgba, w, 1, 0), [0, 0, 0, 153], "edge-mid ring: count 6");
@@ -216,7 +199,7 @@ mod outlined_cell_tests {
     #[test]
     fn thick_outer_ring_is_the_soft_second_pass() {
         // THICK: 5×5, all marked; the inner ring is fully surrounded, the outer edge grades.
-        let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 2, 1.0);
+        let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 2);
         assert_eq!((w, h, pad), (5, 5, 2));
         assert_eq!(px(&rgba, w, 2, 2), [255, 255, 255, 255], "fill core");
         assert_eq!(
@@ -233,20 +216,10 @@ mod outlined_cell_tests {
     }
 
     #[test]
-    fn retina_scales_the_pass_count_with_the_raster() {
-        // dpi 2, NORMAL: two passes, a 2 px (1 logical px) ring with no holes.
-        let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 1, 2.0);
-        assert_eq!((w, h, pad), (5, 5, 2));
-        assert_eq!(px(&rgba, w, 2, 2), [255, 255, 255, 255]);
-        assert_ne!(px(&rgba, w, 1, 1)[3], 0, "no hole inside the 2-px ring");
-        assert_eq!(px(&rgba, w, 0, 0), [0, 0, 0, 85]);
-    }
-
-    #[test]
     fn aa_fill_ramps_gray_toward_the_ring() {
         // Half coverage packs as gray at the table's alpha, not white at a thin alpha: the gray is
         // the 4-bit `(128 · 255) >> 12` = 7, read back as 7/15.
-        let (rgba, w, _, _) = outlined_cell(&[128], 1, 1, 1, 1.0);
+        let (rgba, w, _, _) = outlined_cell(&[128], 1, 1, 1);
         assert_eq!(
             px(&rgba, w, 1, 1),
             [119, 119, 119, 255],
@@ -271,7 +244,7 @@ mod outlined_cell_tests {
         }
         // Every texel of an outlined cell is 4-bit exact, as the 4444 page holds it.
         let cov: Vec<u8> = (0..=255).collect();
-        let (rgba, ..) = outlined_cell(&cov, 16, 16, 2, 1.0);
+        let (rgba, ..) = outlined_cell(&cov, 16, 16, 2);
         assert!(rgba.iter().all(|&b| b % 17 == 0));
     }
 }
@@ -287,7 +260,7 @@ mod mono_cell_tests {
 
     #[test]
     fn a_plain_bit_is_opaque_white_and_a_clear_one_empty() {
-        let (rgba, w, h, pad) = mono_cell(&[1, 0], 2, 1, 0, 1.0);
+        let (rgba, w, h, pad) = mono_cell(&[1, 0], 2, 1, 0);
         assert_eq!((w, h, pad), (2, 1, 0));
         assert_eq!(px(&rgba, w, 0, 0), [255; 4]);
         assert_eq!(px(&rgba, w, 1, 0), [0; 4]);
@@ -295,7 +268,7 @@ mod mono_cell_tests {
 
     #[test]
     fn thick_rings_a_bit_opaque_then_at_seven_fifteenths() {
-        let (rgba, w, h, pad) = mono_cell(&[1], 1, 1, 2, 1.0);
+        let (rgba, w, h, pad) = mono_cell(&[1], 1, 1, 2);
         assert_eq!((w, h, pad), (5, 5, 2));
         assert_eq!(px(&rgba, w, 2, 2), [255; 4], "the glyph");
         for (x, y) in [(1, 1), (2, 1), (3, 2), (1, 3)] {
@@ -311,18 +284,9 @@ mod mono_cell_tests {
         // Two one-texel strokes four apart, as a small numeral's: THICK leaves the middle column
         // at the second ring's 7/15, where the AA bake's neighbour count turns it opaque.
         let bits = [1, 0, 0, 0, 1];
-        let (rgba, w, _, pad) = mono_cell(&bits, 5, 1, 2, 1.0);
+        let (rgba, w, _, pad) = mono_cell(&bits, 5, 1, 2);
         assert_eq!(px(&rgba, w, pad + 2, pad)[3], 119);
-        let (aa, aw, _, apad) = outlined_cell(&[255, 0, 0, 0, 255], 5, 1, 2, 1.0);
+        let (aa, aw, _, apad) = outlined_cell(&[255, 0, 0, 0, 255], 5, 1, 2);
         assert_eq!(px(&aa, aw, apad + 2, apad)[3], 255);
-    }
-
-    #[test]
-    fn a_ring_keeps_its_logical_weight_at_dpi_two() {
-        // NORMAL at dpi 2: two passes, both the opaque first ring.
-        let (rgba, w, h, pad) = mono_cell(&[1], 1, 1, 1, 2.0);
-        assert_eq!((w, h, pad), (5, 5, 2));
-        assert_eq!(px(&rgba, w, 0, 0), [0, 0, 0, 255]);
-        assert_eq!(px(&rgba, w, 1, 1), [0, 0, 0, 255]);
     }
 }
