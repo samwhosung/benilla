@@ -12,7 +12,7 @@ use super::{
     IRONFORGE, SHADOWFANG, UNDERCITY,
 };
 
-/// The subjects `WOW_PIN_SITE` names: every [`Site`] the harness carries.
+/// The subjects `WOW_WMO_PIN_SITE` names: every [`Site`] the harness carries.
 const NAMED_SITES: &[(&str, Site)] = &[
     ("goldshire", GOLDSHIRE),
     ("fargodeep", FARGODEEP),
@@ -24,10 +24,10 @@ const NAMED_SITES: &[(&str, Site)] = &[
     ("darnassus", DARNASSUS),
 ];
 
-/// `WOW_PIN_SITE=<name>` picks a [`NAMED_SITES`] subject (default [`UNDERCITY`]), and
-/// `WOW_PIN_WMO`, `_MAP`, `_TILE` and `_UID` each override one field of it.
+/// `WOW_WMO_PIN_SITE=<name>` picks a [`NAMED_SITES`] subject (default [`UNDERCITY`]), and
+/// `WOW_WMO_PIN_WMO`, `_MAP`, `_TILE` and `_UID` each override one field of it.
 fn site_from_env() -> Site {
-    let base = match std::env::var("WOW_PIN_SITE") {
+    let base = match std::env::var("WOW_WMO_PIN_SITE") {
         Ok(name) => {
             let key = name.trim().to_ascii_lowercase();
             *NAMED_SITES
@@ -36,34 +36,34 @@ fn site_from_env() -> Site {
                 .map(|(_, s)| s)
                 .unwrap_or_else(|| {
                     let known: Vec<&str> = NAMED_SITES.iter().map(|(n, _)| *n).collect();
-                    panic!("WOW_PIN_SITE={name:?} is not one of {known:?}")
+                    panic!("WOW_WMO_PIN_SITE={name:?} is not one of {known:?}")
                 })
         }
         Err(_) => UNDERCITY,
     };
     Site {
         wmo: Box::leak(
-            std::env::var("WOW_PIN_WMO")
+            std::env::var("WOW_WMO_PIN_WMO")
                 .unwrap_or_else(|_| base.wmo.to_string())
                 .into_boxed_str(),
         ),
         map: Box::leak(
-            std::env::var("WOW_PIN_MAP")
+            std::env::var("WOW_WMO_PIN_MAP")
                 .unwrap_or_else(|_| base.map.to_string())
                 .into_boxed_str(),
         ),
-        tile: std::env::var("WOW_PIN_TILE").map_or(base.tile, |s| {
-            let (a, b) = s.split_once(',').expect("WOW_PIN_TILE wants tx,ty");
+        tile: std::env::var("WOW_WMO_PIN_TILE").map_or(base.tile, |s| {
+            let (a, b) = s.split_once(',').expect("WOW_WMO_PIN_TILE wants tx,ty");
             (a.trim().parse().unwrap(), b.trim().parse().unwrap())
         }),
-        uid: std::env::var("WOW_PIN_UID").map_or(base.uid, |s| s.trim().parse().unwrap()),
+        uid: std::env::var("WOW_WMO_PIN_UID").map_or(base.uid, |s| s.trim().parse().unwrap()),
     }
 }
 
 /// The group census: every group's flags, portal edges and bbox in the model and world frames,
-/// aimed by the same `WOW_PIN_*` variables as the pin probe.
+/// aimed by the same `WOW_WMO_PIN_*` variables as the pin probe.
 #[test]
-#[ignore = "instrument: aimed by WOW_PIN_*, run by hand — cargo test -p benilla-world --lib wmo_portal::audit::pin -- --ignored --nocapture"]
+#[ignore = "instrument: aimed by WOW_WMO_PIN_*, run by hand — cargo test -p benilla-world --lib wmo_portal::audit::pin -- --ignored --nocapture"]
 fn wmo_group_census() {
     let site = site_from_env();
     let subject = load_subject(site.wmo, Some(&site));
@@ -112,9 +112,9 @@ fn wmo_group_census() {
             f.color & 0xff,
         );
     }
-    // `WOW_PIN_COL=<world-x,world-y>`: every walking-collision face crossing that column, per group,
+    // `WOW_WMO_PIN_COL=<world-x,world-y>`: every walking-collision face crossing that column, per group,
     // as world z; the down-ray's Leg A candidates for one spot.
-    if let Some((cx, cy)) = std::env::var("WOW_PIN_COL").ok().and_then(|v| {
+    if let Some((cx, cy)) = std::env::var("WOW_WMO_PIN_COL").ok().and_then(|v| {
         let c: Vec<f32> = v.split(',').filter_map(|p| p.trim().parse().ok()).collect();
         (c.len() == 2).then(|| (c[0], c[1]))
     }) {
@@ -176,9 +176,9 @@ fn wmo_group_census() {
             }
         }
     }
-    // `WOW_PIN_FLOOR=<local-z>`: every walking-collision face whose centroid is within 3 yd of that
+    // `WOW_WMO_PIN_FLOOR=<local-z>`: every walking-collision face whose centroid is within 3 yd of that
     // height, in world coordinates.
-    if let Some(floor_z) = std::env::var("WOW_PIN_FLOOR")
+    if let Some(floor_z) = std::env::var("WOW_WMO_PIN_FLOOR")
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
     {
@@ -309,11 +309,11 @@ fn wmo_group_census() {
 /// set. Its output is derived from the game data: keep it out of the repo.
 ///
 /// ```text
-/// WOW_PIN_EYE=1565.2,417.1,-56.2 WOW_PIN_LOOK=1517.5,406.7,-67.1 \
+/// WOW_WMO_PIN_EYE=1565.2,417.1,-56.2 WOW_WMO_PIN_LOOK=1517.5,406.7,-67.1 \
 ///   cargo test -p benilla-world --lib wmo_pin_probe -- --ignored --nocapture
 /// ```
 #[test]
-#[ignore = "instrument: aimed by WOW_PIN_*, run by hand — cargo test -p benilla-world --lib wmo_portal::audit::pin -- --ignored --nocapture"]
+#[ignore = "instrument: aimed by WOW_WMO_PIN_*, run by hand — cargo test -p benilla-world --lib wmo_portal::audit::pin -- --ignored --nocapture"]
 fn wmo_pin_probe() {
     fn xyz(var: &str, default: [f32; 3]) -> [f32; 3] {
         let Ok(s) = std::env::var(var) else {
@@ -330,8 +330,8 @@ fn wmo_pin_probe() {
         .expect("the pin probe needs a placement");
 
     // The report's coordinates are WoW world space; the flood works in the placement's model space.
-    let eye_world_wow = xyz("WOW_PIN_EYE", [1565.2, 417.1, -56.2]);
-    let look_world_wow = xyz("WOW_PIN_LOOK", [1517.5, 406.7, -67.1]);
+    let eye_world_wow = xyz("WOW_WMO_PIN_EYE", [1565.2, 417.1, -56.2]);
+    let look_world_wow = xyz("WOW_WMO_PIN_LOOK", [1517.5, 406.7, -67.1]);
     let to_local =
         |wow: [f32; 3]| bevy_to_wow(placed.local_from_world.transform_point3(wow_to_bevy(wow)));
     let eye = to_local(eye_world_wow);
@@ -341,7 +341,7 @@ fn wmo_pin_probe() {
     let eye_bevy = placed.world_from_local.transform_point3(wow_to_bevy(eye));
     let look_bevy = placed.world_from_local.transform_point3(wow_to_bevy(look));
     // The app's projection by default (the flood clips only against the side planes, so near and
-    // far do not matter); `WOW_PIN_FOVY` and `WOW_PIN_ASPECT` replay a dump header's values.
+    // far do not matter); `WOW_WMO_PIN_FOVY` and `WOW_WMO_PIN_ASPECT` replay a dump header's values.
     let scalar = |var: &str, default: f32| {
         std::env::var(var).map_or(default, |s| {
             s.trim()
@@ -349,8 +349,8 @@ fn wmo_pin_probe() {
                 .unwrap_or_else(|_| panic!("{var} wants a number; got {s:?}"))
         })
     };
-    let fovy = scalar("WOW_PIN_FOVY", crate::view::CAM_FOVY);
-    let aspect = scalar("WOW_PIN_ASPECT", 16.0 / 9.0);
+    let fovy = scalar("WOW_WMO_PIN_FOVY", crate::view::CAM_FOVY);
+    let aspect = scalar("WOW_WMO_PIN_ASPECT", 16.0 / 9.0);
     let clip = Mat4::perspective_rh(fovy, aspect, 0.1, 1000.0)
         * Mat4::look_at_rh(eye_bevy, look_bevy, Vec3::Y);
 
