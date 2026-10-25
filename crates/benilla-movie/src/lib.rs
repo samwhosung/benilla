@@ -19,6 +19,8 @@ mod decoder;
 mod headers;
 mod idct;
 mod scan;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 mod vlc;
 
 use std::ops::Range;
@@ -98,7 +100,9 @@ pub struct Yuv<'a> {
     pub c_stride: usize,
 }
 
-/// A movie open for decoding, its frames pulled one at a time.
+/// A movie open for decoding, its frames pulled one at a time; a clone decodes on from where
+/// this one is.
+#[derive(Clone)]
 pub struct Movie {
     file: Vec<u8>,
     width: u32,

@@ -12,6 +12,7 @@ use crate::vlc::{
 };
 
 /// One sample plane. `width` and `height` are the VOL's; the buffer covers whole macroblocks.
+#[derive(Clone)]
 pub(crate) struct Plane {
     pub(crate) data: Vec<u8>,
     pub(crate) stride: usize,
@@ -31,6 +32,7 @@ impl Plane {
 }
 
 /// A 4:2:0 picture.
+#[derive(Clone)]
 pub(crate) struct Picture {
     pub(crate) y: Plane,
     pub(crate) cb: Plane,
@@ -291,6 +293,7 @@ fn add_block(p: &mut Plane, x: usize, y: usize, s: &[i32; 64]) {
 
 /// The decoder's state across VOPs: the picture being built, the last one decoded, and the
 /// per-macroblock and per-block predictors of the VOP in progress.
+#[derive(Clone)]
 pub(crate) struct Decoder {
     mb_w: usize,
     mb_h: usize,

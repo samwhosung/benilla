@@ -8,6 +8,10 @@ description = "The 1.12.1 intro movies: the AVI reader and an MPEG-4 Part 2 Simp
 [lints]
 workspace = true
 
+[features]
+# `testing`: the synthetic AVI the players' tests open.
+test-support = []
+
 [dependencies]
 benilla-bytes = { path = "../benilla-bytes" }
 
