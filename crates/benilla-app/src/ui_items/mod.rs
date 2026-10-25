@@ -1014,8 +1014,8 @@ impl Plugin for UiItemsPlugin {
                         .in_set(UnitFeed)
                         .in_set(crate::ui_unit::WorldEnterSeats)
                         .before(crate::ui_action::CooldownEvents),
-                    // The item-tooltip store answers before the input pass, so a re-hover the
-                    // next frame sees the answer, and seats a new VM before its world entry; a
+                    // The item-tooltip store answers in the feed, so the next frame's input
+                    // records, a re-hover among them, see the answer, and seats a new VM before its world entry; a
                     // refused cast's item name reads the store it leaves.
                     feed_item_stats
                         .in_set(UnitFeed)

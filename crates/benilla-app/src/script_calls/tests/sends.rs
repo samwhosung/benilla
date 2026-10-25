@@ -420,8 +420,8 @@ fn ping_location_sends_inside_its_call() {
     assert_eq!(sent(&rx), ["ping 100 200", "roll 1"]);
 }
 
-/// A ground spell armed: the word set to `word` for `spell`, and the view the frame's feed pushes
-/// before the input pass.
+/// A ground spell armed: the word set to `word` for `spell`, and the view pushed ahead of the
+/// frame's input records.
 fn arm_ground_spell(app: &mut App, spell: u32, word: u16) {
     app.world_mut()
         .resource_mut::<crate::spell::targeting::SpellTargeting>()

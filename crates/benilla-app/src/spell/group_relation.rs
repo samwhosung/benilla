@@ -4,8 +4,9 @@
 //! (`480686`, `4806b8`) asks `0x606c20`.
 //!
 //! - [`GroupRoster`]: the guids the reference's two tables hold, and [`publish_group_roster`],
-//!   which copies them out of `GroupState` before the input pass, so no cast or hover system
-//!   reads that resource and orders against the drains that write it.
+//!   which copies them out of `GroupState` in the feed, after the packets that write it, so no
+//!   cast or hover system reads that resource and orders against the drains that write it; the
+//!   frame's input records read the copy the last frame's feed made.
 //! - [`GroupInputs`]: what a [`TargetRelations`] carries beside its stores for the two
 //!   predicates, and [`TargetRelations::in_party`] and [`TargetRelations::in_group`], which ask
 //!   them.
@@ -17,7 +18,7 @@ use crate::net::ObjectStore;
 use crate::ui_party::{raid_row_guids, GroupState};
 
 /// The two tables `0x4e7f70` and `0x4baee0` read: the guids in the party slots and in the raid
-/// roster, as the frame began.
+/// roster, as the feed last published them.
 #[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GroupRoster {
     /// The party slots `[0xbc6f48 + 8i]`, `i < 4` (`4e7f96`-`4e7fb0`); none once an opcode emptied
@@ -53,7 +54,7 @@ impl GroupRoster {
     }
 }
 
-/// Publish [`GroupRoster`] before the input pass, beside the pick's other published inputs. The
+/// Publish [`GroupRoster`] in the feed, beside the pick's other published inputs. The
 /// party slots are the ones `partyN` reads (`GroupState::party_slots`), none after a leave or a
 /// kick (`slots_emptied`, `0x4e84a0`); the raid roster is the rows `raidN` reads
 /// ([`raid_row_guids`]).

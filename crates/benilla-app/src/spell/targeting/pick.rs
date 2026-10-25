@@ -5,7 +5,7 @@
 //!
 //! - [`PickFlags`]: the unit-shaped bits of the flags, [`PickFlags::of`], and the legs of
 //!   `0x480610` they switch on, [`PickFlags::admits`].
-//! - [`UnitPick`]: the flags as the frame began, [`publish_unit_pick`], beside
+//! - [`UnitPick`]: the flags as the feed published it, [`publish_unit_pick`], beside
 //!   [`super::PicksSelf`] (flag `0x20`) and [`super::CorpsePick`] (flag `0x40`), which own the
 //!   other two bits the flags carry for these arms.
 //! - [`PickChecks`]: what the hover reads per candidate, the relation checks the bind runs
@@ -120,7 +120,7 @@ impl PickFlags {
     }
 }
 
-/// The unit pick's flags as the frame began, which [`crate::target`]'s hover reads: `None`
+/// The unit pick's flags as the feed published it, which [`crate::target`]'s hover reads: `None`
 /// outside targeting, where they carry `0x5c` and the filter's three legs never run. The press
 /// latches the hover's pick, so both read this.
 #[derive(Resource, Default)]
@@ -128,7 +128,8 @@ pub(crate) struct UnitPick {
     pub(crate) flags: Option<PickFlags>,
 }
 
-/// Publish [`UnitPick`] before the input pass, beside [`super::PicksSelf`].
+/// Publish [`UnitPick`] in the feed, after the packets and the clicks, beside
+/// [`super::PicksSelf`].
 pub(crate) fn publish_unit_pick(targeting: Res<SpellTargeting>, mut pick: ResMut<UnitPick>) {
     let flags = targeting
         .0
@@ -139,7 +140,7 @@ pub(crate) fn publish_unit_pick(targeting: Res<SpellTargeting>, mut pick: ResMut
     }
 }
 
-/// The world pick's GameObject admission as the frame began, `0x480780`'s GameObject arm
+/// The world pick's GameObject admission as the feed published it, `0x480780`'s GameObject arm
 /// (`0x4807f4`-`0x48080c`): `None` outside targeting, where the flags carry `0x5c` and so `0x4`,
 /// and every GameObject is a candidate; while targeting, the standing word, its spell and the cast
 /// item's guid, which [`GoPickChecks::admits`] asks of each.
@@ -157,7 +158,7 @@ pub(crate) struct GoPickWord {
     item: Option<u64>,
 }
 
-/// Publish [`GoPick`] before the input pass, beside [`UnitPick`].
+/// Publish [`GoPick`] in the feed, beside [`UnitPick`].
 pub(crate) fn publish_go_pick(targeting: Res<SpellTargeting>, mut pick: ResMut<GoPick>) {
     let now = targeting.0.as_ref().map(|t| GoPickWord {
         word: t.word,
@@ -223,7 +224,7 @@ pub(crate) struct GoPickChecks<'w, 's> {
 }
 
 impl GoPickChecks<'_, '_> {
-    /// Whether a word stands as the frame began (`IsTargeting 0x6e48a0`).
+    /// Whether a word stands as the feed published it (`IsTargeting 0x6e48a0`).
     pub(crate) fn targeting(&self) -> bool {
         self.pick.0.is_some()
     }
@@ -262,12 +263,12 @@ pub(crate) struct PickChecks<'w, 's> {
     reputations: Res<'w, Reputations>,
     self_guid: Res<'w, SelfGuid>,
     guids: Query<'w, 's, &'static Guid>,
-    /// The party slots and raid roster as the frame began; a harness without them has no group.
+    /// The party slots and raid roster as the feed published it; a harness without them has no group.
     roster: Option<Res<'w, GroupRoster>>,
 }
 
 impl PickChecks<'_, '_> {
-    /// Whether a word stands as the frame began (`IsTargeting 0x6e48a0`), which forks the hover
+    /// Whether a word stands as the feed published it (`IsTargeting 0x6e48a0`), which forks the hover
     /// grader (`0x4828f4`).
     pub(crate) fn targeting(&self) -> bool {
         self.pick.flags.is_some()

@@ -154,7 +154,7 @@ pub(crate) struct QuestSharePlugin;
 impl Plugin for QuestSharePlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        // Feed before the input pass, so a line shows the frame its packet lands; the popup's Yes
+        // Feed after the packets, so a line shows the frame its packet lands; the popup's Yes
         // sends in its call (`QuestCall::ConfirmAccept`).
         app.init_resource::<QuestShare>()
             .add_systems(Update, feed_quest_share.in_set(UiFeed));

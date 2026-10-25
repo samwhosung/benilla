@@ -1470,7 +1470,7 @@ mod tests {
             }],
         });
         if selected {
-            // The frame's unit snapshot, as the feed pushed it before the input pass.
+            // The frame's unit snapshot, as the last feed pushed it.
             script.set_unit(
                 "target",
                 Some(benilla_ui::script::UnitState {

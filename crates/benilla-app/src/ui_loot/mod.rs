@@ -806,7 +806,8 @@ impl Plugin for UiLootPlugin {
             .add_systems(
                 Update,
                 (
-                    // The window as it stands before the input pass and the drain after it. The
+                    // The window as the packets left it, before the tick and the drain after it;
+                    // the next frame's input records read it. The
                     // drain's deselect lands before the selection writers read it, and their
                     // teardown's close finds this frame's window.
                     feed_loot.in_set(UiFeed),

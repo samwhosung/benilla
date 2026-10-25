@@ -326,7 +326,7 @@ impl Plugin for UiLootRollPlugin {
         net::register(app);
         app.init_resource::<LootRolls>().add_systems(
             Update,
-            // The feed before the input pass shows a new roll the same frame.
+            // The feed after the packets shows a new roll the same frame, before the tick.
             feed_loot_rolls.in_set(UiFeed),
         );
     }

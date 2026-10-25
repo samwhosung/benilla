@@ -519,7 +519,7 @@ impl Plugin for UiAuctionPlugin {
             .add_sweep_leg(SweepLeg::Auction, close_core)
             .add_systems(
                 Update,
-                // The feed before the input pass, and after `UnitFeed` so a row's tooltip reads a
+                // The feed after the packets, and after `UnitFeed` so a row's tooltip reads a
                 // landed template. Only with the interface up: a sale notice landing in the login
                 // burst would otherwise be shown on the glue VM and lost.
                 feed_auction

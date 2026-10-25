@@ -643,7 +643,7 @@ impl RelationWorld<'_, '_> {
         self.names.as_ref().is_some_and(|n| n.is_changed())
     }
 
-    /// The party slots and raid roster as the frame began.
+    /// The party slots and raid roster as the feed last published them.
     pub(crate) fn roster(&self) -> Option<&GroupRoster> {
         self.roster.as_deref()
     }

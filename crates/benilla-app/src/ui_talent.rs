@@ -38,7 +38,8 @@ impl Plugin for UiTalentPlugin {
             .add_systems(
                 Update,
                 (
-                    // Feed before the input pass, so an open this frame sees a populated window.
+                    // Feed after the packets and before the tick, so an open this frame sees a
+                    // populated window.
                     feed_talents.in_set(UnitFeed),
                 ),
             );

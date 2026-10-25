@@ -31,7 +31,8 @@ pub enum WorldStage {
     /// `net::apply_net_updates`: the world stream into entities, teleport and worldport surfaced
     /// before the player reads them.
     Net,
-    /// `player::control`: input and the teleport or worldport snap.
+    /// `player::control`, the controller's frame-time step: the movement off the input the frame's
+    /// input records latched ahead of [`WorldStage::Net`], and the teleport or worldport snap.
     Input,
     /// `terrain_stream::stream_terrain`: tiles around the possibly just-snapped position, and the
     /// residency (`loading_screen::WorldLoadProgress`) the cover reads.

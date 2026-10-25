@@ -85,13 +85,14 @@ fn bind_arm(word: u16, f: CorpseFacts) -> Option<CorpseTarget> {
     }
 }
 
-/// The world pick's corpse admission as the frame began, which [`crate::target`]'s hover reads:
+/// The world pick's corpse admission as the feed published it, which [`crate::target`]'s hover reads:
 /// `None` outside targeting, where the pick flags carry `0x5c` and so `0x40`, and every corpse is a
 /// candidate (`0x480816`); while targeting, the standing word, through [`pick_admits`].
 #[derive(Resource, Default)]
 pub(crate) struct CorpsePick(pub(crate) Option<u16>);
 
-/// Publish [`CorpsePick`] before the input pass, beside [`super::PicksSelf`].
+/// Publish [`CorpsePick`] in the feed, after the packets and the clicks, beside
+/// [`super::PicksSelf`].
 pub(crate) fn publish_corpse_pick(
     targeting: Res<super::SpellTargeting>,
     mut pick: ResMut<CorpsePick>,
