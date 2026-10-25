@@ -289,6 +289,10 @@ pub enum ServerPacket {
     },
     /// `0x297`/`0x298`/`0x299`/`0x2BB`: the meeting stone's display-only replies.
     MeetingStoneNotice(crate::messages::MeetingStoneNotice),
+    /// `SMSG_ACCOUNT_DATA_MD5`: the server's digest of each account-data section.
+    AccountDataMd5(crate::messages::AccountDataMd5),
+    /// `SMSG_UPDATE_ACCOUNT_DATA`: one account-data section's file, compressed.
+    UpdateAccountData(crate::messages::UpdateAccountData),
     /// `SMSG_TUTORIAL_FLAGS`: the account's tutorial bank.
     TutorialFlags(crate::messages::TutorialFlags),
     /// `SMSG_SUMMON_REQUEST`: someone asks to pull us to them; nothing moves until
@@ -1379,6 +1383,8 @@ impl ServerPacket {
             ServerPacket::MeetingStoneNotice(crate::messages::MeetingStoneNotice::JoinFailed {
                 ..
             }) => "SMSG_MEETINGSTONE_JOIN_FAILED".into(),
+            ServerPacket::AccountDataMd5(_) => "SMSG_ACCOUNT_DATA_MD5".into(),
+            ServerPacket::UpdateAccountData(_) => "SMSG_UPDATE_ACCOUNT_DATA".into(),
             ServerPacket::TutorialFlags(_) => "SMSG_TUTORIAL_FLAGS".into(),
             ServerPacket::SetProficiency { .. } => "SMSG_SET_PROFICIENCY".into(),
             ServerPacket::InitializeFactions { .. } => "SMSG_INITIALIZE_FACTIONS".into(),

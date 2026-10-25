@@ -65,7 +65,15 @@ const HEADER: &str = "\
 /// may hold `ZONECHANNELS 0` words from an empty roster, which strip window 1 of its channels;
 /// [`restore_chat_looks`] re-seeds such a file once, and the next save stamps the marker. It is
 /// matched with `contains`, so a marker line with more text after it still counts.
-const WRITER_GENERATION: &str = "# benilla-writer 2";
+pub(crate) const WRITER_GENERATION: &str = "# benilla-writer 2";
+
+/// A `chat-cache.txt` from the server ([`crate::account_data`]) as the file kept here. Nothing on
+/// the server came from the writer the repair is for, which never uploaded, so it is marked.
+pub(crate) fn from_server(bytes: &[u8]) -> Vec<u8> {
+    let mut out = format!("{WRITER_GENERATION}\n").into_bytes();
+    out.extend_from_slice(bytes);
+    out
+}
 
 /// Which character's file we are on, where it lives, and whether it is owed a write.
 #[derive(Resource, Default)]
@@ -127,7 +135,7 @@ fn render(
         "STANDARD"
     };
     out.push_str(&format!(
-        "\nVERSION 2\n\nADDEDVERSION 2\n\nOPTION_GUILD_RECRUITMENT_CHANNEL {recruitment}\n\nCHANNELS\n"
+        "VERSION 2\n\nADDEDVERSION 2\n\nOPTION_GUILD_RECRUITMENT_CHANNEL {recruitment}\n\nCHANNELS\n"
     ));
     for name in custom {
         out.push_str(name);
@@ -393,10 +401,30 @@ fn shortcut_rows(channels: &super::edit::ChannelState) -> Vec<(u32, String)> {
 /// (`ChatFrame.lua:1357-1365`), whose `.id` is 0, and `UpdateColorByID(0, …)` recolours every line
 /// printed with no explicit colour, an addon's login `Print` among them.
 pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
-    let Some(id) = world
-        .get_resource::<crate::glue_session::roster::Roster>()
-        .and_then(crate::ui_macro::identity)
-    else {
+    // A chat section the server's file replaced before this load is the file read here, not
+    // again: the handlers run ahead of the deferred entry load.
+    if let Some(data) = world.get_resource::<crate::account_data::AccountData>() {
+        data.take_arrived(crate::account_data::CHAT);
+    }
+    restore_chat_looks_again(world, script, false);
+}
+
+/// [`restore_chat_looks`], into a VM that restored the file already when `again`: a chat section
+/// the server's file replaced, read as the reference's reader (`0x498a60`) runs once the section
+/// lands (`0x5afd19`).
+fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: bool) {
+    // Again, the character the VM restored for, not the roster's pick, which the session's edges
+    // move in no order against the lanes.
+    let id = if again {
+        world
+            .get_resource_mut::<ChatWindowFile>()
+            .and_then(|mut file| file.identity.get(script).clone())
+    } else {
+        world
+            .get_resource::<crate::glue_session::roster::Roster>()
+            .and_then(crate::ui_macro::identity)
+    };
+    let Some(id) = id else {
         return;
     };
     // Owned rows up front: `ChatWindowFile` is borrowed mutably below.
@@ -417,7 +445,7 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
         let Some(mut file) = world.get_resource_mut::<ChatWindowFile>() else {
             return;
         };
-        if file.identity.get(script).as_ref() == Some(&id) {
+        if !again && file.identity.get(script).as_ref() == Some(&id) {
             return; // already restored for this character into this VM
         }
         let who = format!("{} on {}", id.1, id.0);
@@ -611,6 +639,52 @@ fn save_chat_looks(
     })
 }
 
+/// The chat section's arrival, the head of its lane: the reader runs where its packet's handler
+/// ran (`0x5afd19`), in the packets' order with the other lanes' events.
+fn peek_arrived_chat_looks(world: &World) -> Option<crate::lanes::Stamp> {
+    world
+        .get_resource::<crate::account_data::AccountData>()?
+        .arrived_at(crate::account_data::CHAT)
+}
+
+/// The section the server's file replaced, restored again, its burst fired as the firing of the
+/// arrival's stamp; the load's own restore took what came before it.
+fn fire_arrived_chat_looks(In(until): In<crate::lanes::Until>, world: &mut World) {
+    let Some(at) = peek_arrived_chat_looks(world).filter(|at| until.admits(*at)) else {
+        return;
+    };
+    // No VM: the arrival waits for one.
+    let Some(mut script) = world.remove_non_send_resource::<UiScript>() else {
+        return;
+    };
+    world
+        .resource::<crate::account_data::AccountData>()
+        .take_arrived(crate::account_data::CHAT);
+    info!("chat cache: the server's file read");
+    crate::lanes::firing(at, || restore_chat_looks_again(world, &mut script, true));
+    world.insert_non_send_resource(script);
+}
+
+/// What the chat lane's firing touches beside the call host and its own lane: the restore's
+/// reads and writes.
+fn arrived_chat_looks_reads(world: &mut World) -> bevy::ecs::query::FilteredAccessSet {
+    fn restore(
+        _: Option<ResMut<super::edit::ChannelState>>,
+        _: Option<ResMut<super::channels::ZoneChannelWalk>>,
+        _: Option<ResMut<ChatWindowFile>>,
+    ) {
+    }
+    crate::lanes::system_access(world, restore)
+}
+
+/// Every chat arrival fired alone, for a test that drives it without the other lanes.
+#[cfg(test)]
+fn reread_arrived_chat_looks(world: &mut World) {
+    world
+        .run_system_cached_with(fire_arrived_chat_looks, crate::lanes::Until::all())
+        .expect("the chat lane fires");
+}
+
 /// The session-end flush, the reference's chat teardown (`0x499a80` from `0x490c55`), called from
 /// the shutdown ([`crate::ui_script::SessionEnd::Shutdown`]) after its events and before the VM
 /// is replaced, on logout, character switch and `/reload` alike. Not an `OnExit(InWorld)` system:
@@ -633,6 +707,7 @@ pub(crate) fn fold_dying_vm_chat_cache(world: &mut World) {
 }
 
 pub(super) fn plugin(app: &mut App) {
+    use crate::lanes::LaneApp;
     app.init_resource::<ChatWindowFile>()
         // The restore runs from the world-entry UI load, not here: its events must follow
         // `VARIABLES_LOADED` inside the load, where the reference registers its reader
@@ -649,6 +724,12 @@ pub(super) fn plugin(app: &mut App) {
             save_chat_looks
                 .in_set(crate::ui_script::UiDrain)
                 .in_set(crate::client_state::InWorldGated),
+        )
+        .add_exclusive_lane(
+            "chat setup arrivals",
+            peek_arrived_chat_looks,
+            fire_arrived_chat_looks,
+            arrived_chat_looks_reads,
         );
     // The session-end flush is `fold_dying_vm_chat_cache`; the quit flush rides the exit edge,
     // as the close button's `AppExit` is written in `PostUpdate`, after an `Update` save.
@@ -1283,5 +1364,148 @@ mod tests {
         drop(world);
         let _ = std::fs::remove_dir_all(&tmp);
         on_disk
+    }
+
+    /// A chat section the server's file replaced is restored again into the live VM, as the
+    /// reference's reader (`0x498a60`) runs once the section lands (`0x5afd19`); without the
+    /// arrival nothing reads it twice.
+    #[test]
+    fn a_chat_section_from_the_server_is_restored_again() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-chat-arrival-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _capture = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _home = crate::local_state::test_env::EnvGuard::set(
+            "BENILLA_HOME",
+            tmp.to_str().expect("utf-8 temp path"),
+        );
+        let roster = probe_roster("Chatarrival");
+        let id = crate::ui_macro::identity(&roster).expect("a picked character");
+        let path = crate::local_state::chat_character_path(&id.0, &id.1).expect("a cache path");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the character dir");
+        let file = |name: &str| {
+            format!("{WRITER_GENERATION}\nVERSION 2\nWINDOW 1\nNAME {name}\nSIZE 0\nEND\n")
+        };
+        std::fs::write(&path, file("Alpha")).expect("seed the file");
+
+        let mut world = World::new();
+        world.init_resource::<super::super::edit::ChannelState>();
+        world.init_resource::<super::super::channels::ZoneChannelWalk>();
+        world.init_resource::<ChatWindowFile>();
+        world.init_resource::<crate::account_data::AccountData>();
+        world.insert_resource(roster);
+        world.insert_non_send_resource(UiScript::new().expect("a VM"));
+        let name = |world: &World| {
+            world
+                .non_send_resource::<UiScript>()
+                .eval::<String>("return (GetChatWindowInfo(1))")
+                .expect("the window's name")
+        };
+        let mut script = world.remove_non_send_resource::<UiScript>().unwrap();
+        restore_chat_looks(&mut world, &mut script);
+        world.insert_non_send_resource(script);
+        assert_eq!(name(&world), "Alpha");
+
+        std::fs::write(&path, file("Bravo")).expect("the server's file");
+        reread_arrived_chat_looks(&mut world);
+        assert_eq!(name(&world), "Alpha", "no arrival, no read");
+        world
+            .resource::<crate::account_data::AccountData>()
+            .owe_reader_for_test(crate::account_data::CHAT);
+        reread_arrived_chat_looks(&mut world);
+        assert_eq!(name(&world), "Bravo", "the server's file restored");
+        assert!(
+            !world
+                .resource::<crate::account_data::AccountData>()
+                .arrived(crate::account_data::CHAT),
+            "the restore took the arrival"
+        );
+        drop(world);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A chat section the server's answer stores before the interface loads (the handlers run
+    /// ahead of the deferred entry load) is the file the load restores, and its arrival is taken:
+    /// nothing reads it twice, and nothing writes the stock setup over it.
+    #[test]
+    fn a_chat_section_that_lands_before_the_load_is_what_it_restores() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-chat-early-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _capture = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _home = crate::local_state::test_env::EnvGuard::set(
+            "BENILLA_HOME",
+            tmp.to_str().expect("utf-8 temp path"),
+        );
+        let roster = probe_roster("Chatearly");
+        let id = crate::ui_macro::identity(&roster).expect("a picked character");
+
+        let mut world = World::new();
+        world.init_resource::<crate::ui_script::AddOnIdentity>();
+        world.init_resource::<crate::minimap::MinimapZoom>();
+        world.init_resource::<crate::ui_script::ReloadUiPending>();
+        world.init_resource::<super::super::edit::ChannelState>();
+        world.init_resource::<super::super::channels::ZoneChannelWalk>();
+        world.init_resource::<super::super::recruitment::GuildRecruitmentCascade>();
+        world.init_resource::<ChatWindowFile>();
+        world.init_resource::<crate::account_data::AccountData>();
+        crate::ui_script::setup_script(&mut world);
+        world.insert_resource(roster);
+        world
+            .resource::<crate::account_data::AccountData>()
+            .arrive_for_test(
+            id,
+            crate::account_data::CHAT as u32,
+            b"VERSION 2\n\nADDEDVERSION 2\n\nWINDOW 1\nNAME Arrived\nSIZE 0\nSHOWN 1\n\nEND\n\n",
+        );
+        crate::ui_script::load_ingame_ui_on_world_entry(&mut world);
+        let name = world
+            .non_send_resource::<UiScript>()
+            .eval::<String>("return (GetChatWindowInfo(1))")
+            .expect("the window's name");
+        assert_eq!(name, "Arrived");
+        assert!(
+            !world
+                .resource::<crate::account_data::AccountData>()
+                .arrived(crate::account_data::CHAT),
+            "the load took the arrival"
+        );
+        drop(world);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The section's bytes are what 1.12.1's writer writes for the same state (`0x499a80`: every
+    /// line `_snprintf` from the formats at `0x8444ec`-`0x844424`), benilla's note lines aside.
+    #[test]
+    fn the_chat_section_is_the_references_file_byte_for_byte() {
+        let mut look = ChatWindowLook::stock(0);
+        look.name = "General".into();
+        look.font_size = 14;
+        look.r = 1;
+        look.g = 2;
+        look.b = 3;
+        look.a = 4;
+        look.locked = true;
+        look.docked = Some(1);
+        look.shown = true;
+        look.messages = vec!["SAY".into(), "YELL".into()];
+        look.channels = vec![("Mine".into(), 0), ("General".into(), 1)];
+        let colors = vec![ChatTypeColor {
+            name: "SAY".into(),
+            rgb: [255, 254, 253],
+        }];
+        let text = render(&[look], &colors, &["Mine".into()], 3, true);
+        let section = crate::account_data::sections::without_notes(text.as_bytes());
+        assert_eq!(
+            String::from_utf8(section).unwrap(),
+            "VERSION 2\n\nADDEDVERSION 2\n\nOPTION_GUILD_RECRUITMENT_CHANNEL AUTO\n\n\
+             CHANNELS\nMine\nEND\n\nZONECHANNELS 3\n\nCOLORS\nSAY 255 254 253\nEND\n\n\
+             WINDOW 1\nNAME General\nSIZE 14\nCOLOR 1 2 3 4\nLOCKED 1\nDOCKED 1\nSHOWN 1\n\n\
+             MESSAGES\nSAY\nYELL\nEND\n\nCHANNELS\nMine\nEND\n\nZONECHANNELS 1\n\nEND\n\n"
+        );
     }
 }

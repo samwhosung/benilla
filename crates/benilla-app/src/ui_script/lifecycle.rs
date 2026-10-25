@@ -991,6 +991,11 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
                 shutdown_ui_state(script, identity.as_ref());
             }
         });
+        // The shutdown's account-data writes (`0x490c55`-`0x490c79` through `0x5afed0`) arm
+        // their uploads, which a `/reload`, staying in the world, lets run.
+        if let Some(data) = world.get_resource::<crate::account_data::AccountData>() {
+            data.shut_down_ui();
+        }
     }
     if silenced {
         unsilence_ui_shutdown(world);

@@ -19,6 +19,7 @@
 #[global_allocator]
 static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+mod account_data;
 pub mod addon_harness;
 mod area;
 mod area_poi;

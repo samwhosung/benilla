@@ -78,6 +78,8 @@ rtrb = "0.3"
 mint = "0.5"
 # The gossip greeting's weighted draw, re-rolled per open as in the reference.
 rand = "0.8"
+# The account-data sections' digests, MD5 as the reference's (`0x5af940`) and the server's.
+md-5 = "0.10.6"
 
 # Wayland clipboard over the standard `wl_data_device`; arboard's speaks `wlr-data-control`,
 # which GNOME does not implement.

@@ -13,7 +13,7 @@
 //! Deviation: the reference saves a full snapshot (`bindings-cache.wtf`); a diff is stored
 //! because a full snapshot would leave every command added later unbound for a saved file.
 
-use benilla_ui::script::keybind::KeyBinding;
+use benilla_ui::script::keybind::{normalize_binding_key, parse_bindings_wtf, KeyBinding};
 
 /// A key list grouped by command, in first-appearance order; names compare case-insensitively.
 fn by_command(list: &[KeyBinding]) -> Vec<(String, Vec<String>)> {
@@ -30,7 +30,7 @@ fn by_command(list: &[KeyBinding]) -> Vec<(String, Vec<String>)> {
     out
 }
 
-/// Serialize the live `(command, keys)` table (`keybind_snapshot`) as the diff file against the
+/// Serialize a `(command, keys)` table (`stored_binding_snapshot`) as the diff file against the
 /// defaults (`WTF\DefaultBindings.wtf`): a line for each command whose keys differ, including a
 /// defaulted command the live table left unbound.
 pub(crate) fn to_diff(snapshot: &[(String, Vec<String>)], defaults: &[KeyBinding]) -> String {
@@ -93,6 +93,50 @@ pub(crate) fn resolve(diff: &[(String, Vec<String>)], defaults: &[KeyBinding]) -
         table.extend(keys.iter().map(|k| (k.clone(), name.clone())));
     }
     table
+}
+
+/// `pairs` applied in order as the `.wtf` loader applies them (`0x4b6140` through `SetBinding`'s
+/// `0x4b7490`): a key the validator refuses is dropped, a key bound again moves, and an empty
+/// command unbinds it.
+pub(crate) fn key_table(pairs: impl IntoIterator<Item = KeyBinding>) -> Vec<KeyBinding> {
+    let mut table: Vec<KeyBinding> = Vec::new();
+    for (key, command) in pairs {
+        let Some(key) = normalize_binding_key(&key) else {
+            continue;
+        };
+        table.retain(|(k, _)| k != &key);
+        if !command.is_empty() {
+            table.push((key, command));
+        }
+    }
+    table
+}
+
+/// A stored set as the reference's `bindings-cache.wtf` holds it, the account-data section that
+/// carries it: the whole key table, `bind <key> <command>` and CR LF per key, in the table's order
+/// (`0x4b6520`, the format at `0x846e5c`).
+pub(crate) fn to_cache(diff: &[(String, Vec<String>)], defaults: &[KeyBinding]) -> String {
+    let mut out = String::new();
+    for (key, command) in resolve(diff, defaults) {
+        out.push_str("bind ");
+        out.push_str(&key);
+        out.push(' ');
+        out.push_str(&command);
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// A `bindings-cache.wtf` from the server as the diff file a set is kept in here, or `None` when it
+/// binds no key: read as the reference's loader reads it ([`parse_bindings_wtf`], [`key_table`]),
+/// grouped by command, then held against the defaults, so a command the file leaves unbound is
+/// unbound here too.
+pub(crate) fn from_cache(text: &str, defaults: &[KeyBinding]) -> Option<String> {
+    let table = key_table(parse_bindings_wtf(text));
+    if table.is_empty() {
+        return None;
+    }
+    Some(to_diff(&by_command(&table), defaults))
 }
 
 #[cfg(test)]
@@ -185,5 +229,51 @@ mod tests {
             keys(&resolved, "STRAFELEFT").is_empty(),
             "Q was stolen by the unknown command's line"
         );
+    }
+
+    /// The section is the whole table in the reference's line form: every default key not moved,
+    /// then the overrides, each `bind <key> <command>` with CR LF (`0x846e5c`).
+    #[test]
+    fn a_set_goes_to_the_server_as_the_whole_table_in_the_cache_form() {
+        let diff = from_diff("bind JUMP F\nbind TOGGLESHEATH\n");
+        assert_eq!(
+            to_cache(&diff, &defaults()),
+            "bind W MOVEFORWARD\r\nbind UP MOVEFORWARD\r\nbind Q STRAFELEFT\r\nbind F JUMP\r\n"
+        );
+        assert_eq!(
+            to_cache(&[], &defaults()).lines().count(),
+            6,
+            "an empty diff is the defaults, every one written"
+        );
+    }
+
+    /// A cache from another client: its table read as the loader reads it, so a key bound twice
+    /// keeps its last command, a refused key is dropped, and what it leaves unbound is unbound.
+    #[test]
+    fn a_cache_from_the_server_becomes_the_diff_of_its_whole_table() {
+        let cache =
+            "bind W MOVEFORWARD\r\nbind SPACE JUMP\r\nbind F JUMP\r\nbind F TOGGLESHEATH\r\n\
+                     bind mousewheelup JUMP\r\nnot a line\r\n";
+        let diff = from_cache(cache, &defaults()).expect("keys bound");
+        let resolved = resolve(&from_diff(&diff), &defaults());
+        assert_eq!(
+            keys(&resolved, "MOVEFORWARD"),
+            ["W"],
+            "UP is unbound by its absence"
+        );
+        assert_eq!(
+            keys(&resolved, "JUMP"),
+            ["SPACE"],
+            "F moved on to the later line"
+        );
+        assert_eq!(keys(&resolved, "TOGGLESHEATH"), ["F"]);
+        assert!(keys(&resolved, "STRAFELEFT").is_empty());
+        assert_eq!(
+            to_cache(&from_diff(&diff), &defaults()),
+            "bind W MOVEFORWARD\r\nbind SPACE JUMP\r\nbind F TOGGLESHEATH\r\n",
+            "the same table goes back up"
+        );
+        assert_eq!(from_cache("", &defaults()), None);
+        assert_eq!(from_cache("junk\r\n", &defaults()), None, "no key bound");
     }
 }

@@ -109,6 +109,14 @@ pub const CMSG_TUTORIAL_FLAG: u16 = 0x00FE; // 254
 pub const CMSG_TUTORIAL_CLEAR: u16 = 0x00FF; // 255
 /// `ResetTutorials()`: empty body; every bit is cleared locally and on the server.
 pub const CMSG_TUTORIAL_RESET: u16 = 0x0100; // 256
+/// The server's digest of each of the eight account-data sections (`0x5af8e0`), sent at login.
+pub const SMSG_ACCOUNT_DATA_MD5: u16 = 0x0209;
+/// Ask for one section's file (`0x5afbe0`): one `u32`, the section.
+pub const CMSG_REQUEST_ACCOUNT_DATA: u16 = 0x020A;
+/// Store one section's file (`0x5afae0`): the section, its size and its zlib stream.
+pub const CMSG_UPDATE_ACCOUNT_DATA: u16 = 0x020B;
+/// One section's file (`0x5afc60`), the answer to [`CMSG_REQUEST_ACCOUNT_DATA`].
+pub const SMSG_UPDATE_ACCOUNT_DATA: u16 = 0x020C;
 pub const SMSG_PLAY_MUSIC: u16 = 0x0277;
 pub const SMSG_PLAY_OBJECT_SOUND: u16 = 0x0278;
 pub const SMSG_PLAY_SOUND: u16 = 0x02D2;

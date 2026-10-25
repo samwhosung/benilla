@@ -1,6 +1,7 @@
 //! World (`mangosd`) packet bodies: server packets decode into [`ServerPacket`] via
 //! [`parse_server`], client bodies are built here; the header framing lives in [`crate::world`].
 
+mod account_data;
 mod action_bar;
 pub mod addons;
 mod area_trigger;
@@ -59,6 +60,10 @@ mod unserved;
 mod update_object;
 mod vendor;
 mod world_state;
+pub use account_data::{
+    request_account_data, update_account_data, AccountDataDigest, AccountDataMd5,
+    UpdateAccountData, ACCOUNT_DATA_SECTIONS,
+};
 pub use action_bar::{
     set_action_button, set_actionbar_toggles, ActionButton, ACTION_KIND_ITEM, ACTION_KIND_MACRO,
     ACTION_KIND_SPELL,

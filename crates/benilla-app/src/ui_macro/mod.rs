@@ -1,6 +1,7 @@
 //! The app half of `benilla_ui::script::macros`: the icon chooser's catalog, the files under
-//! `benilla-config/macros/`, the runner, and the bound spell the action bar reads. 1.12 macros are
-//! client state only: no opcode carries them, and the reference saves them to `macros-cache.txt`.
+//! `benilla-config/macros/`, the runner, and the bound spell the action bar reads. The reference
+//! saves them to `macros-cache.txt`, account-data sections 4 and 5, which the server keeps a copy
+//! of ([`crate::account_data`]).
 
 use bevy::prelude::*;
 
@@ -121,11 +122,19 @@ fn load_macros(
     mut vm: crate::script_calls::VmWith<crate::ui_action::ActionBarSteps<'static>>,
     roster: Res<crate::glue_session::roster::Roster>,
     mut files: ResMut<MacroFiles>,
+    data: Option<Res<crate::account_data::AccountData>>,
 ) {
     vm.feed(|script, mut bar, fires| {
         let Some(script) = script else { return };
         let Some(id) = identity(&roster) else { return };
-        if files.identity.get(script).as_ref() == Some(&id) {
+        // A macro section the server's file replaced is read again, as the reference's readers
+        // (`0x4f0a70`) run once it lands (`0x5afd19`); the first load takes what came before it.
+        let arrived = data.as_deref().is_some_and(|data| {
+            crate::account_data::MACROS
+                .iter()
+                .fold(false, |any, &section| data.take_arrived(section) | any)
+        });
+        if !arrived && files.identity.get(script).as_ref() == Some(&id) {
             return; // already loaded into this VM
         }
         let (realm, character) = (&id.0, &id.1);
@@ -214,7 +223,11 @@ fn migrate_character_bar(
 
 /// Persist on the engine's dirty edge. The verbs signal `UPDATE_MACROS` themselves, inside their
 /// calls.
-fn save_dirty_macros(mut hosted_vm: crate::script_calls::HostedVm, files: Res<MacroFiles>) {
+fn save_dirty_macros(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    files: Res<MacroFiles>,
+    data: Option<Res<crate::account_data::AccountData>>,
+) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
         if !script.take_macros_dirty() {
@@ -227,6 +240,11 @@ fn save_dirty_macros(mut hosted_vm: crate::script_calls::HostedVm, files: Res<Ma
             if let Err(e) = crate::local_state::write_atomic(path, &text) {
                 warn!("ui_macro: saving {}: {e}", path.display());
             }
+        }
+        // Both sections owed the shutdown's write, as `0x4f0c60` writes both (`0x4f0c7f`,
+        // `0x4f0c90`).
+        if let Some(data) = &data {
+            data.saved(&crate::account_data::MACROS);
         }
     })
 }

@@ -47,6 +47,12 @@ enum Row {
 const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (
         Row::Queue,
+        "::account_data::AccountData",
+        "the account-data sections a download replaced, whose readers (the binding sets, the \
+         macros, the layout) run again off it; the chat setup's fires on its lane",
+    ),
+    (
+        Row::Queue,
         "::ui_action::errors::UiErrorKeys",
         "the refusals the handlers push, which the action feed shows",
     ),
@@ -631,6 +637,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
 /// counts a window's core adds to and what a session verb posts. The lanes and the host's two
 /// other sinks (the message sounds and the unit edits, which raise no event) are not queues here.
 const FILLED_THROUGH_A_READ: &[&str] = &[
+    // The account-data sections, which the download's handler stores through `&self`.
+    "::account_data::AccountData",
     "::ui_action::errors::UiErrorKeys",
     // The far-sight machine the call host's buff cancel runs (`0x6e70ad`).
     "::player::view_subject::FarSight",
@@ -646,6 +654,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // The login pick, which names the character the account-data sections belong to.
+    "::glue_session::roster::Roster",
     "::ui_chat::edit::ChannelState",
     // The console's registry, which a `ConsoleExec` a listener makes reads.
     "::console::ConsoleCommands",
@@ -983,6 +993,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "cast reports",
             "cast views",
             "chat",
+            "chat setup arrivals",
             "cooldowns",
             "deaths",
             "equip errors",
@@ -1657,6 +1668,9 @@ const VERSIONED_FOR_THE_DRAIN: &[&str] = &["net::reputations::Reputations"];
 /// longer matches its firing fails.
 #[rustfmt::skip]
 const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
+    // The chat setup's restore reads the channel rows its shortcuts and auto-joins come from as
+    // the frame left them, past the notices of the packets after the section's.
+    ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
     // The watchers' callbacks: the quest log's slots, the skill line's race and class and the
     // bonus bar's form off our live descriptor, as the frame left them (#2217); the aura
     // watcher's own store is the one its packet left, and the buff timers read the duration

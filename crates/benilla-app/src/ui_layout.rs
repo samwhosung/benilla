@@ -208,13 +208,19 @@ pub(crate) fn load_layout(
     mut hosted_vm: crate::script_calls::HostedVm,
     roster: Res<crate::glue_session::roster::Roster>,
     mut file: ResMut<LayoutFile>,
+    data: Option<Res<crate::account_data::AccountData>>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
         let Some(id) = crate::ui_macro::identity(&roster) else {
             return;
         };
-        if file.identity.get(script).as_ref() == Some(&id) {
+        // The section the server's file replaced is read again, as the reference's reader
+        // (`0x490380`) runs once it lands (`0x5afd19`); the first restore takes what came before.
+        let arrived = data
+            .as_deref()
+            .is_some_and(|data| data.take_arrived(crate::account_data::LAYOUT));
+        if !arrived && file.identity.get(script).as_ref() == Some(&id) {
             return; // already restored into the live VM
         }
         file.path = crate::local_state::layout_character_path(&id.0, &id.1);

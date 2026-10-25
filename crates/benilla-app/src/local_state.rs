@@ -134,6 +134,38 @@ pub(crate) fn bindings_character_path(realm: &str, character: &str) -> Option<Pa
     character_path(CharacterFile::Bindings, realm, character)
 }
 
+/// `benilla-config/cache.md5`: the eight account-data sections' digests as they stood when each
+/// last agreed with the server, 16 bytes each in section order, the reference's
+/// `WTF\Account\<account>\cache.md5` (`0x5af880`, `0x5af9c0`). One file, as the account-wide
+/// files here are one set whatever the account.
+pub(crate) fn account_data_digests_path() -> Option<PathBuf> {
+    home().map(|h| h.join("cache.md5"))
+}
+
+/// `benilla-config/config-cache/account.wtf`: account-data section 0, the reference's account-wide
+/// `config-cache.wtf`, kept as the server sends it; nothing reads it.
+pub(crate) fn config_cache_account_path() -> Option<PathBuf> {
+    home().map(|h| h.join("config-cache/account.wtf"))
+}
+
+/// `benilla-config/config-cache/<realm>-<character>.wtf`: account-data section 1, the reference's
+/// per-character `config-cache.wtf`, kept as the server sends it; nothing reads it.
+pub(crate) fn config_cache_character_path(realm: &str, character: &str) -> Option<PathBuf> {
+    character_path(CharacterFile::ConfigCache, realm, character)
+}
+
+/// `benilla-config/bindings/account.wtf`: account-data section 2 as the reference's
+/// `bindings-cache.wtf` holds it, the whole table, kept beside the diff the set is loaded from.
+pub(crate) fn bindings_cache_account_path() -> Option<PathBuf> {
+    home().map(|h| h.join("bindings/account.wtf"))
+}
+
+/// `benilla-config/bindings/<realm>-<character>.wtf`: account-data section 3 as the reference's
+/// per-character `bindings-cache.wtf` holds it, empty while the account set is in use.
+pub(crate) fn bindings_cache_character_path(realm: &str, character: &str) -> Option<PathBuf> {
+    character_path(CharacterFile::BindingsCache, realm, character)
+}
+
 /// `benilla-config/saved-variables.lua`: the flat channel our FrameXML saves through
 /// `RegisterForSave` (the `SavedVariables.lua` analog), written whole at logout, read at UI load.
 pub(crate) fn saved_variables_path() -> Option<PathBuf> {
@@ -251,8 +283,9 @@ pub(crate) fn legacy_account_path() -> Option<PathBuf> {
     home().map(|h| h.join("account"))
 }
 
-/// `benilla-config/chat/<realm>-<character>.txt`: the chat windows' tint, alpha, font size and
-/// lock, the four the reference keeps in its per-character `chat-cache.txt`.
+/// `benilla-config/chat/<realm>-<character>.txt`: the chat setup, the whole record of the
+/// reference's per-character `chat-cache.txt` (its channels, colours and windows), in its grammar;
+/// [`crate::ui_chat`] owns the shape.
 pub(crate) fn chat_character_path(realm: &str, character: &str) -> Option<PathBuf> {
     character_path(CharacterFile::Chat, realm, character)
 }
@@ -284,10 +317,14 @@ pub(crate) enum CharacterFile {
     Chat,
     /// [`layout_character_path`].
     Layout,
+    /// [`config_cache_character_path`].
+    ConfigCache,
+    /// [`bindings_cache_character_path`].
+    BindingsCache,
 }
 
 impl CharacterFile {
-    pub(crate) const ALL: [CharacterFile; 7] = [
+    pub(crate) const ALL: [CharacterFile; 9] = [
         CharacterFile::AddonState,
         CharacterFile::Macros,
         CharacterFile::Bindings,
@@ -295,6 +332,8 @@ impl CharacterFile {
         CharacterFile::Camera,
         CharacterFile::Chat,
         CharacterFile::Layout,
+        CharacterFile::ConfigCache,
+        CharacterFile::BindingsCache,
     ];
 
     /// The folder under the home, and the suffix of the key (none for a folder).
@@ -307,6 +346,8 @@ impl CharacterFile {
             CharacterFile::Camera => ("camera", ".txt"),
             CharacterFile::Chat => ("chat", ".txt"),
             CharacterFile::Layout => ("layout", ".txt"),
+            CharacterFile::ConfigCache => ("config-cache", ".wtf"),
+            CharacterFile::BindingsCache => ("bindings", ".wtf"),
         }
     }
 }
@@ -517,6 +558,8 @@ mod tests {
                 camera_character_path(realm, character),
                 chat_character_path(realm, character),
                 layout_character_path(realm, character),
+                config_cache_character_path(realm, character),
+                bindings_cache_character_path(realm, character),
             ]
             .map(Option::unwrap)
         };

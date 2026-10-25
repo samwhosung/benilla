@@ -40,7 +40,7 @@ use crate::ui_script::{PlayerUiHover, UiKeyboardCapture};
 pub(crate) mod chord;
 mod layout;
 mod script_input;
-mod store;
+pub(crate) mod store;
 
 use chord::{BindKey, Chord};
 pub(crate) use layout::LayoutNames;
@@ -203,6 +203,9 @@ impl BindingsState {
 struct BindingFiles {
     account: Option<std::path::PathBuf>,
     character: Option<std::path::PathBuf>,
+    /// The account-data sections' files, the reference's `bindings-cache.wtf` pair.
+    account_cache: Option<std::path::PathBuf>,
+    character_cache: Option<std::path::PathBuf>,
 }
 
 /// This module's systems inside [`crate::ui_script::UiInput`]: the pass's head ([`BindingHead`])
@@ -247,6 +250,10 @@ impl Plugin for BindingsPlugin {
                     // After the tick: the requests are Lua's own (`SaveBindings`), queued by
                     // handlers the tick dispatched, and a save must not wait a frame.
                     drain_binding_requests.in_set(crate::ui_script::UiDrain),
+                    reread_arrived_bindings
+                        .run_if(crate::ui_script::ingame_ui_up)
+                        .in_set(crate::ui_script::UiFeed)
+                        .in_set(InWorldGated),
                 ),
             );
     }
@@ -263,13 +270,7 @@ impl Plugin for BindingsPlugin {
 pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     let defaults = crate::ui_script::default_bindings();
     script.set_default_bindings(defaults);
-    let defaults = script.default_bindings();
     let account = crate::local_state::bindings_account_path();
-    let overrides = read_diff(&account).unwrap_or_default();
-    script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults)));
-    script.load_binding_set(1);
-
-    // The character's own set: its file existing makes it the active set, the reference's rule.
     // No roster identity (a rigged or capture run) leaves set 2 unseeded.
     let id = world
         .get_resource::<crate::glue_session::roster::Roster>()
@@ -277,7 +278,35 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     let character = id
         .as_ref()
         .and_then(|(realm, name)| crate::local_state::bindings_character_path(realm, name));
-    match read_diff(&character) {
+    // A binding section the server's file replaced before this load is read here, not again.
+    if let Some(data) = world.get_resource::<crate::account_data::AccountData>() {
+        for section in crate::account_data::BINDINGS {
+            data.take_arrived(section);
+        }
+    }
+    seed_sets(script, &account, &character);
+    if let Some(mut files) = world.get_resource_mut::<BindingFiles>() {
+        files.account = account;
+        files.character = character;
+        files.account_cache = crate::local_state::bindings_cache_account_path();
+        files.character_cache = id.as_ref().and_then(|(realm, name)| {
+            crate::local_state::bindings_cache_character_path(realm, name)
+        });
+    }
+}
+
+/// Seed sets 1 and 2 from their files and load the one in use: the character's own set when its
+/// file exists, the reference's rule (`0x4b64b0`), else the account's.
+fn seed_sets(
+    script: &mut UiScript,
+    account: &Option<std::path::PathBuf>,
+    character: &Option<std::path::PathBuf>,
+) {
+    let defaults = script.default_bindings();
+    let overrides = read_diff(account).unwrap_or_default();
+    script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults)));
+    script.load_binding_set(1);
+    match read_diff(character) {
         Some(overrides) => {
             script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults)));
             script.load_binding_set(2);
@@ -288,10 +317,27 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
             script.load_binding_set(1);
         }
     }
-    if let Some(mut files) = world.get_resource_mut::<BindingFiles>() {
-        files.account = account;
-        files.character = character;
-    }
+}
+
+/// A binding section the server's file replaced: both sets read again and the one in use loaded,
+/// as the reference's readers (`0x4b6240`) run once the section lands (`0x5afd19`).
+fn reread_arrived_bindings(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    files: Res<BindingFiles>,
+    data: Option<Res<crate::account_data::AccountData>>,
+) {
+    let Some(data) = data else { return };
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        let mut arrived = false;
+        for section in crate::account_data::BINDINGS {
+            arrived |= data.take_arrived(section);
+        }
+        if arrived {
+            info!("bindings: the server's sets read");
+            seed_sets(script, &files.account, &files.character);
+        }
+    })
 }
 
 /// Read and parse one diff file; `None` (the defaults) when absent or unreadable.
@@ -309,22 +355,33 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
 
 /// Drain the VM's binding requests: `SaveBindings` writes the set's diff; saving the account set
 /// deletes the character file.
-fn drain_binding_requests(mut hosted_vm: crate::script_calls::HostedVm, files: Res<BindingFiles>) {
+fn drain_binding_requests(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    files: Res<BindingFiles>,
+    data: Option<Res<crate::account_data::AccountData>>,
+) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
         for req in script.take_keybind_requests() {
             let KeybindRequest::Save(which) = req;
-            let text = store::to_diff(&script.keybind_snapshot(), &script.default_bindings());
-            let path = match which {
-                1 => &files.account,
-                2 => &files.character,
+            // The set as the call stored it (`0x4b6310`), not the live table a later binding in
+            // the frame moved. None: a later `SaveBindings(1)` in the frame dropped set 2, and
+            // its own request writes the files that leaves.
+            let Some(saved) = script.stored_binding_snapshot(which) else {
+                continue;
+            };
+            let defaults = script.default_bindings();
+            let text = store::to_diff(&saved, &defaults);
+            // The section's file beside the diff, the whole table in the reference's form
+            // (`0x4b65b0`).
+            let table = store::to_cache(&store::from_diff(&text), &defaults);
+            let (path, cache) = match which {
+                1 => (&files.account, &files.account_cache),
+                2 => (&files.character, &files.character_cache),
                 _ => continue,
             };
-            if let Some(path) = path {
-                if let Err(e) = crate::local_state::write_atomic(path, &text) {
-                    warn!("bindings: saving {}: {e}", path.display());
-                }
-            }
+            write_file(path, &text);
+            write_file(cache, &table);
             if which == 1 {
                 if let Some(chr) = &files.character {
                     match std::fs::remove_file(chr) {
@@ -333,9 +390,26 @@ fn drain_binding_requests(mut hosted_vm: crate::script_calls::HostedVm, files: R
                         Err(e) => warn!("bindings: deleting {}: {e}", chr.display()),
                     }
                 }
+                // The character's section file emptied, as the account set is the one in use
+                // (`0x4b65c6` writes set 2 only when it is current).
+                write_file(&files.character_cache, "");
+            }
+            // Owed the shutdown's write: the account set's save both sections, the character's its
+            // own (`0x4b65ed`, `0x4b6617`).
+            if let Some(data) = &data {
+                data.saved(if which == 1 { &[2, 3] } else { &[3] });
             }
         }
     })
+}
+
+/// Write one bindings file, if this session has it.
+fn write_file(path: &Option<std::path::PathBuf>, text: &str) {
+    if let Some(path) = path {
+        if let Err(e) = crate::local_state::write_atomic(path, text) {
+            warn!("bindings: saving {}: {e}", path.display());
+        }
+    }
 }
 
 /// Rebuild the dispatch map when the engine table moved (a rebind, a set switch, the seed, a
@@ -2451,5 +2525,156 @@ mod tests {
             "let a = \"x\\\"y\"; // \"comment\"\nlet c = '\"'; let b = r#\"ToggleBackpack();\"#;",
         );
         assert_eq!(found, ["x\\\"y", "ToggleBackpack();"]);
+    }
+
+    /// The binding harness over the files of a state folder of its own, with the account-data
+    /// state the save and the reread talk to, every section settled.
+    fn file_harness(home: &std::path::Path) -> (App, std::path::PathBuf, std::path::PathBuf) {
+        let account = home.join("bindings/account.txt");
+        let character = home.join("bindings/Realm-Probesix.txt");
+        let mut app = App::new();
+        app.insert_resource(BindingFiles {
+            account: Some(account.clone()),
+            character: Some(character.clone()),
+            account_cache: Some(home.join("bindings/account.wtf")),
+            character_cache: Some(home.join("bindings/Realm-Probesix.wtf")),
+        })
+        .init_resource::<crate::account_data::AccountData>()
+        .insert_non_send_resource(core_script())
+        .add_systems(Update, (drain_binding_requests, reread_arrived_bindings));
+        app.world()
+            .resource::<crate::account_data::AccountData>()
+            .settle_for_test(Some(("Realm".into(), "Probesix".into())));
+        (app, account, character)
+    }
+
+    fn eval_str(app: &App, chunk: &str) -> String {
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval::<String>(chunk)
+            .expect("eval")
+    }
+
+    /// A binding section the server's file replaced is read again: both sets from their files and
+    /// the one in use loaded, the character's when its file exists (`0x4b64b0`).
+    #[test]
+    fn a_binding_section_from_the_server_is_read_again() {
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-reread-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let (mut app, account, character) = file_harness(&tmp);
+        crate::local_state::write_atomic(&account, "bind JUMP G\n").unwrap();
+        app.update();
+        let jump = r#"return GetBindingKey("JUMP") or """#;
+        assert_ne!(eval_str(&app, jump), "G", "nothing came down: no read");
+
+        let data = || app.world().resource::<crate::account_data::AccountData>();
+        data().owe_reader_for_test(2);
+        app.update();
+        assert_eq!(eval_str(&app, jump), "G", "the account set read again");
+
+        crate::local_state::write_atomic(&character, "bind JUMP H\n").unwrap();
+        app.world()
+            .resource::<crate::account_data::AccountData>()
+            .owe_reader_for_test(3);
+        app.update();
+        assert_eq!(
+            eval_str(&app, jump),
+            "H",
+            "the character's set is the one in use"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `SaveBindings(1)` marks both sections and `SaveBindings(2)` the character's (`0x4b65ed`,
+    /// `0x4b6617`) for the interface's shutdown, the reference's one write of them (`0x490c64`);
+    /// the save itself arms no upload.
+    #[test]
+    fn saving_a_set_marks_its_sections_for_the_shutdown() {
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-save-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let (mut app, _, _) = file_harness(&tmp);
+        let armed = |app: &App, section: usize| {
+            let data = app.world().resource::<crate::account_data::AccountData>();
+            assert!(!data.armed_for_test(section), "a save arms nothing");
+            data.saved_for_test(section)
+        };
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("SaveBindings(2)")
+            .unwrap();
+        app.update();
+        assert!(
+            !armed(&app, 2) && armed(&app, 3),
+            "the character's set alone"
+        );
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("SaveBindings(1)")
+            .unwrap();
+        app.update();
+        assert!(
+            armed(&app, 2) && armed(&app, 3),
+            "the account set writes both"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A save writes the set's section file as the reference does (`0x4b65b0`): the account's
+    /// whole table, and the character's file emptied while the account set is in use
+    /// (`0x4b65c6`), or holding set 2 when it is.
+    #[test]
+    fn a_save_writes_the_sections_files_as_the_reference_does() {
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-wtf-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let (mut app, _, character) = file_harness(&tmp);
+        let run = |app: &mut App, chunk: &str| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .run(chunk)
+                .unwrap();
+            app.update();
+        };
+        let read = |name: &str| std::fs::read_to_string(tmp.join("bindings").join(name)).ok();
+        run(&mut app, r#"SetBinding("G", "JUMP") SaveBindings(2)"#);
+        let set2 = read("Realm-Probesix.wtf").expect("the character's file");
+        assert!(set2.contains("bind G JUMP\r\n"), "{set2}");
+        run(&mut app, "SaveBindings(1)");
+        let set1 = read("account.wtf").expect("the account's file");
+        assert!(set1.contains("bind G JUMP\r\n"), "{set1}");
+        assert_eq!(
+            read("Realm-Probesix.wtf").as_deref(),
+            Some(""),
+            "emptied, not removed: its digest is MD5 of nothing"
+        );
+        assert!(
+            !character.exists(),
+            "the character's diff goes: set 1 is in use"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A save writes the set `SaveBindings` stored, copied from the live table inside the call
+    /// (`0x4b8260` -> `0x4b6310`): a binding made after it in the same frame is in neither file.
+    #[test]
+    fn a_save_writes_the_set_as_it_was_saved() {
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-saved-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let (mut app, account, _) = file_harness(&tmp);
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run(r#"SetBinding("F6", "JUMP") SaveBindings(1) SetBinding("F7", "SITORSTAND")"#)
+            .unwrap();
+        app.update();
+        let wtf = std::fs::read_to_string(tmp.join("bindings/account.wtf")).expect("the .wtf");
+        let diff = std::fs::read_to_string(&account).expect("the diff");
+        assert!(wtf.contains("bind F6 JUMP\r\n"), "the saved binding: {wtf}");
+        assert!(!wtf.contains("bind F7 "), "no later binding: {wtf}");
+        assert!(
+            diff.lines()
+                .any(|l| l.starts_with("bind JUMP ") && l.ends_with(" F6")),
+            "the saved binding: {diff}"
+        );
+        assert!(!diff.contains("SITORSTAND"), "no later binding: {diff}");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

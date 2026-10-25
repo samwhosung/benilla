@@ -230,6 +230,35 @@ impl KeybindState {
             .map(|(k, _)| k)
     }
 
+    /// `set` as `(command, chords)`: every declared command in registration order, then any other
+    /// name a key is bound to.
+    fn snapshot(&self, set: &[KeyBinding]) -> Vec<(String, Vec<String>)> {
+        let keys_of = |command: &str| {
+            set.iter()
+                .filter(|(_, c)| c.eq_ignore_ascii_case(command))
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        let mut out: Vec<(String, Vec<String>)> = self
+            .entries
+            .iter()
+            .map(|e| (e.name.clone(), keys_of(&e.name)))
+            .collect();
+        for (key, command) in set {
+            if self.by_name.contains_key(&command.to_ascii_uppercase()) {
+                continue;
+            }
+            match out
+                .iter_mut()
+                .find(|(n, _)| n.eq_ignore_ascii_case(command))
+            {
+                Some((_, keys)) => keys.push(key.clone()),
+                None => out.push((command.clone(), vec![key.clone()])),
+            }
+        }
+        out
+    }
+
     /// Open a section: a `HEADER_<header>` row, unless one of that name exists, which the reference
     /// refuses (`0x4b71c9`-`0x4b7258`) and loads the binding under the section already open.
     fn open_header(&mut self, header: &str) {
@@ -388,28 +417,19 @@ impl super::UiScript {
     }
 
     /// The live table as `(command, chords)`: every declared command in registration order, then
-    /// any other name a key is bound to, for the save and the tests.
+    /// any other name a key is bound to, for the tests.
     pub fn keybind_snapshot(&self) -> Vec<(String, Vec<String>)> {
-        let model = self.model_mut();
-        let kb = &model.keybinds;
-        let mut out: Vec<(String, Vec<String>)> = kb
-            .entries
-            .iter()
-            .map(|e| (e.name.clone(), kb.keys_of(&e.name).cloned().collect()))
-            .collect();
-        for (key, command) in &kb.live {
-            if kb.by_name.contains_key(&command.to_ascii_uppercase()) {
-                continue;
-            }
-            match out
-                .iter_mut()
-                .find(|(n, _)| n.eq_ignore_ascii_case(command))
-            {
-                Some((_, keys)) => keys.push(key.clone()),
-                None => out.push((command.clone(), vec![key.clone()])),
-            }
-        }
-        out
+        let kb = &self.model_mut().keybinds;
+        kb.snapshot(&kb.live)
+    }
+
+    /// Stored set `which` (1 account, 2 character) in [`Self::keybind_snapshot`]'s form, the copy
+    /// `SaveBindings` took of the live table inside the call (`0x4b8260` -> `0x4b6310`), for the
+    /// save; `None` for a set that is not stored, as a later `SaveBindings(1)` drops set 2.
+    pub fn stored_binding_snapshot(&self, which: u32) -> Option<Vec<(String, Vec<String>)>> {
+        let kb = &self.model_mut().keybinds;
+        let set = kb.stored.get(which.checked_sub(1)? as usize)?.as_ref()?;
+        Some(kb.snapshot(set))
     }
 
     /// Bumped by every table change; re-derive dispatch when it moves.

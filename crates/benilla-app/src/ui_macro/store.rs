@@ -1,7 +1,7 @@
 //! The macro file format, the reference's own: a `MACRO %d "%s" %s` header (`0x84cb60`), the body
 //! lines and a bare `END`, in `macros-cache.txt` and `macros-local.txt` (`0x85de74`, `0x85de88`).
-//! benilla ends lines with `\n` where the reference writes `\r\n`, and reads either, so a 1.12
-//! `macros-cache.txt` drops into `benilla-config/macros/`. The number is the macro's id, which an
+//! Lines end in CR LF as the reference's formats do (`0x84cb60`, `0x84cb58`), and either end
+//! reads, so a 1.12 `macros-cache.txt` drops into `benilla-config/macros/`. The number is the macro's id, which an
 //! action slot holds. A save writes a scope in name order, the sorted table's (`0x4f0ad0`); a load
 //! keeps the file's order as the list order the reference's sort and name lookups start from
 //! (`MacroState`). The writer's `"%s"` is unescaped and the reader's name token ends at the next
@@ -156,12 +156,15 @@ pub(super) fn write<'a>(macros: impl Iterator<Item = &'a MacroView>) -> String {
     for m in macros {
         let icon = m.texture.as_deref().map(icon_token).unwrap_or_default();
         // `%d`: the id signed.
-        out.push_str(&format!("MACRO {} \"{}\" {}\n", m.id as i32, m.name, icon));
+        out.push_str(&format!(
+            "MACRO {} \"{}\" {}\r\n",
+            m.id as i32, m.name, icon
+        ));
         for line in lines(&m.body) {
             out.push_str(&line);
-            out.push('\n');
+            out.push_str("\r\n");
         }
-        out.push_str("END\n");
+        out.push_str("END\r\n");
     }
     out
 }
@@ -222,12 +225,16 @@ mod tests {
         let macros = parse(REAL_112_FILE, false);
         let text = write(macros.iter());
         // The reference's line shape, each record under its own id.
-        assert!(text.starts_with("MACRO 1 \"f\" Ability_Ambush\n"));
-        assert!(text.contains("\nMACRO 3 \"ns\" Ability_BackStab\n"));
-        assert!(text.contains("\nMACRO 2 \"w\" Ability_Creature_Cursed_05\n"));
-        assert!(text.ends_with("END\n"));
+        assert!(text.starts_with("MACRO 1 \"f\" Ability_Ambush\r\n"));
+        assert!(text.contains("\nMACRO 3 \"ns\" Ability_BackStab\r\n"));
+        assert!(text.contains("\nMACRO 2 \"w\" Ability_Creature_Cursed_05\r\n"));
+        assert!(text.ends_with("END\r\n"));
         assert_eq!(parse(&text, false), macros, "round trip");
-        assert_eq!(text, REAL_112_FILE, "the file as it was read");
+        assert_eq!(
+            text,
+            REAL_112_FILE.replace('\n', "\r\n"),
+            "the file as the reference wrote it, CR LF and all (`0x84cb60`, `0x84cb58`)"
+        );
     }
 
     #[test]
@@ -240,7 +247,7 @@ mod tests {
             local_only: false,
         }];
         let text = write(m.iter());
-        assert_eq!(text, "MACRO 1 \"bare\" \nEND\n");
+        assert_eq!(text, "MACRO 1 \"bare\" \r\nEND\r\n");
         assert_eq!(parse(&text, false), m);
     }
 
@@ -313,7 +320,10 @@ mod tests {
             body: "/say one\n\n/say two\r\n".into(),
             local_only: false,
         }];
-        assert_eq!(write(m.iter()), "MACRO 1 \"a\" \n/say one\n/say two\nEND\n");
+        assert_eq!(
+            write(m.iter()),
+            "MACRO 1 \"a\" \r\n/say one\r\n/say two\r\nEND\r\n"
+        );
     }
 
     /// The name token is the tokenizer's with `` "\r\n`` as delimiters and quotes on (`0x4f07bb`,
@@ -332,7 +342,7 @@ mod tests {
         let text = write(m.iter());
         assert_eq!(
             text,
-            "MACRO 4 \"say \"hi\"\" Ability_Ambush\n/say hi\nEND\n"
+            "MACRO 4 \"say \"hi\"\" Ability_Ambush\r\n/say hi\r\nEND\r\n"
         );
         let back = parse(&text, false);
         assert_eq!(back.len(), 1);
@@ -411,7 +421,7 @@ mod tests {
             body: String::new(),
             local_only: false,
         }];
-        assert_eq!(write(m.iter()), "MACRO -5 \"n\" \nEND\n");
+        assert_eq!(write(m.iter()), "MACRO -5 \"n\" \r\nEND\r\n");
     }
 
     /// The reader's line buffer and the writer's are 0x100 bytes (`0x4f0677`, `0x4f0b93`), so each
@@ -436,7 +446,7 @@ mod tests {
         assert_eq!(
             write(m.iter()),
             format!(
-                "MACRO 1 \"m\" \n{}\n{}\nEND\n",
+                "MACRO 1 \"m\" \r\n{}\r\n{}\r\nEND\r\n",
                 "a".repeat(255),
                 "\u{e9}".repeat(127)
             )
@@ -451,7 +461,11 @@ mod tests {
             macros[0].texture.as_deref(),
             Some("Interface\\Buttons\\UI-Panel-Button")
         );
-        assert_eq!(write(macros.iter()), text, "and writes back unchanged");
+        assert_eq!(
+            write(macros.iter()),
+            text.replace('\n', "\r\n"),
+            "and writes back unchanged, CR LF ended"
+        );
     }
 
     /// The table keeps 18 per scope (`0x4f06ee`), never wrapping into the other tab: the two scopes
@@ -474,7 +488,7 @@ mod tests {
         let state = MacroState::from_scopes(Vec::new(), parse(text, true));
         let saved = write(state.saved(true).into_iter());
         assert!(
-            saved.starts_with("MACRO 16777217 \"mine\" Ability_Ambush\n"),
+            saved.starts_with("MACRO 16777217 \"mine\" Ability_Ambush\r\n"),
             "{saved}"
         );
         let again = MacroState::from_scopes(Vec::new(), parse(&saved, true));

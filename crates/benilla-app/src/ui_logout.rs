@@ -171,6 +171,8 @@ pub(crate) struct SessionSteps<'w> {
     commands: Res<'w, NetCommands>,
     reload: Option<ResMut<'w, crate::ui_script::ReloadUiPending>>,
     posts: Option<Res<'w, SessionPosts>>,
+    /// The account-data timers a logout request runs first; absent in a harness without them.
+    account_data: Option<Res<'w, crate::account_data::AccountData>>,
 }
 
 impl SessionSteps<'_> {
@@ -202,6 +204,7 @@ impl SessionSteps<'_> {
                     if let Some(logout) = self.logout.as_deref_mut() {
                         logout.quitting = false;
                     }
+                    self.flush_account_data();
                     let _ = self.commands.0.send(ClientCommand::ForceLogout);
                 }
             }
@@ -228,6 +231,14 @@ impl SessionSteps<'_> {
             && self.logout.as_deref().is_some_and(|l| l.world_handle)
     }
 
+    /// `0x5ab049`, on the request's path past the world test: the account-data timers run first
+    /// (`0x5afd30`), so their uploads leave ahead of it.
+    fn flush_account_data(&self) {
+        if let Some(data) = &self.account_data {
+            data.flush(&self.commands);
+        }
+    }
+
     fn exit_now(&self) {
         if let Some(posts) = &self.posts {
             posts.exit.store(true, Ordering::Relaxed);
@@ -249,6 +260,10 @@ impl SessionSteps<'_> {
         // glue-screen `Quit()` does, and a logout does nothing.
         if in_world {
             logout.quitting = quit;
+            // The field, not [`Self::flush_account_data`]: `logout` holds `self.logout`.
+            if let Some(data) = &self.account_data {
+                data.flush(&self.commands);
+            }
         }
         if !in_world || self.commands.0.send(ClientCommand::Logout).is_err() {
             if quit {
@@ -749,5 +764,56 @@ mod tests {
             !complete(&mut app),
             "a later logout's completion ends the session alone"
         );
+    }
+
+    /// `0x5ab049`: a logout request runs the armed account-data timers first (`0x5afd30`), so a
+    /// section a `/reload`'s shutdown wrote in the last 30 seconds goes up ahead of
+    /// `CMSG_LOGOUT_REQUEST`; a forced logout passes the same call.
+    #[test]
+    fn a_logout_request_sends_the_armed_sections_first() {
+        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-logout-flush-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let macros = crate::local_state::macros_account_path().unwrap();
+
+        let (mut app, rx) = client();
+        let data = || app.world().resource::<crate::account_data::AccountData>();
+        data().settle_for_test(None);
+        crate::local_state::write_atomic(&macros, "MACRO 1 \"A\" X\nEND\n").unwrap();
+        data().saved(&[4]);
+        data().shut_down_ui();
+        let sent = |app: &mut App, chunk: &str| {
+            crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+                vm.expect("a VM").run(chunk).expect("the chunk runs")
+            });
+            rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::UpdateAccountData { section, .. } => {
+                        Some(format!("update {section}"))
+                    }
+                    ClientCommand::Logout => Some("logout".into()),
+                    ClientCommand::ForceLogout => Some("force".into()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sent(&mut app, "Logout()"), ["update 4", "logout"]);
+        assert_eq!(
+            sent(&mut app, "CancelLogout() Logout()"),
+            ["logout"],
+            "the flush ran the timer: nothing armed is left"
+        );
+
+        crate::local_state::write_atomic(&macros, "MACRO 1 \"B\" X\nEND\n").unwrap();
+        let data = app.world().resource::<crate::account_data::AccountData>();
+        data.saved(&[4]);
+        data.shut_down_ui();
+        assert_eq!(sent(&mut app, "ForceLogout()"), ["update 4", "force"]);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

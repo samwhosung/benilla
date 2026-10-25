@@ -1787,6 +1787,77 @@ fn an_anchor_form_file_is_restored_and_rewritten_as_the_rect() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A layout section the server's file replaced is seated again into the live tree, as the
+/// reference's reader (`0x490380`) runs once the section lands (`0x5afd19`); without the arrival
+/// the loader reads once per VM.
+#[test]
+fn a_layout_section_from_the_server_is_seated_again() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("layout-arrival");
+    let mut world = booted_world();
+    world.init_resource::<crate::ui_layout::LayoutFile>();
+    world.init_resource::<crate::account_data::AccountData>();
+
+    log_in_as(&mut world, "Onehunter", 1);
+    let path = crate::local_state::layout_character_path("Realm", "Onehunter")
+        .expect("a layout path in the hermetic state folder");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "Frame: LayoutProbe\nW: 413\nH: 147\n").unwrap();
+    author_a_window(&mut world);
+    let load = |world: &mut World| {
+        world
+            .run_system_once(crate::ui_layout::load_layout)
+            .expect("the layout loader ran")
+    };
+    load(&mut world);
+    assert_eq!(window_geometry(&world).0, 413.0);
+
+    std::fs::write(&path, "Frame: LayoutProbe\nW: 222\nH: 111\n").unwrap();
+    load(&mut world);
+    assert_eq!(window_geometry(&world).0, 413.0, "read once per VM");
+    world
+        .resource::<crate::account_data::AccountData>()
+        .owe_reader_for_test(crate::account_data::LAYOUT);
+    load(&mut world);
+    let (w, h, _, _) = window_geometry(&world);
+    assert_eq!((w, h), (222.0, 111.0), "the server's file seated");
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A `/reload` runs the interface's shutdown, which writes the chat and layout sections and arms
+/// their uploads (`0x495664` → `0x490bd0`, `0x490c55`, `0x490c79` → `0x5afed0`); the world stays,
+/// so the timers run. Nothing before it armed them.
+#[test]
+fn a_reload_arms_the_sections_its_shutdown_writes() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("acctdata-reload");
+    let mut world = booted_world();
+    world.init_resource::<crate::ui_layout::LayoutFile>();
+    world.init_resource::<crate::account_data::AccountData>();
+    log_in_as(&mut world, "Onehunter", 1);
+    world
+        .resource::<crate::account_data::AccountData>()
+        .settle_for_test(Some(("Realm".into(), "Onehunter".into())));
+    let armed = |world: &World| -> Vec<usize> {
+        let data = world.resource::<crate::account_data::AccountData>();
+        (0..8).filter(|&s| data.armed_for_test(s)).collect()
+    };
+    assert!(armed(&world).is_empty());
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    assert_eq!(armed(&world), [6, 7]);
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The probe window as FrameXML authors it, the fresh tree a relog meets: not user-placed, with the
 /// authored `movable`/`resizable` pair the cache's apply reads off the live frame.
 fn author_a_window(world: &mut World) {

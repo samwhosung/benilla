@@ -463,6 +463,11 @@ pub enum SessionEvent {
     MeetingStoneSetQueue { area: u32, status: u8 },
     /// One of the meeting stone's four chat-line-only replies (`0x297/0x298/0x299/0x2BB`).
     MeetingStoneNotice(crate::messages::MeetingStoneNotice),
+    /// The server's digest of each account-data section (`SMSG_ACCOUNT_DATA_MD5`), in section
+    /// order.
+    AccountDataMd5([crate::messages::AccountDataDigest; crate::messages::ACCOUNT_DATA_SECTIONS]),
+    /// One account-data section's file from the server (`SMSG_UPDATE_ACCOUNT_DATA`).
+    UpdateAccountData(crate::messages::UpdateAccountData),
     /// The tutorial bank bytes (`SMSG_TUTORIAL_FLAGS`); the client copies both its banks from them.
     TutorialFlags(Vec<u8>),
     /// The bind took (`SMSG_PLAYERBOUND`); `area` matches the [`Self::BindPoint`] sent beside it.

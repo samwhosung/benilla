@@ -1,7 +1,8 @@
-//! Player macros. 1.12 keeps them client-side with no opcode (`macros-cache.txt`), and
-//! `CreateMacro` must return the new index at once, so the table lives here: the app seeds it
-//! ([`UiScript::set_macros`]), saves it when [`UiScript::take_macros_dirty`] says, and installs
-//! what lists the icon chooser ([`UiScript::set_macro_icon_source`]), run on first use.
+//! Player macros. 1.12 keeps them in `macros-cache.txt`, two account-data sections the server
+//! holds a copy of, and `CreateMacro` must return the new index at once, so the table lives here:
+//! the app seeds it ([`UiScript::set_macros`]), saves it when [`UiScript::take_macros_dirty`]
+//! says, and installs what lists the icon chooser ([`UiScript::set_macro_icon_source`]), run on
+//! first use.
 //!
 //! A macro is a record with an id, kept in one list in the order it was made or loaded
 //! (`0xbdcc44`). Lua addresses it by position in a table of 36 ids (`0xbdcc60`): positions 1..=18
@@ -61,7 +62,7 @@ pub struct MacroView {
     /// by `\n` (`0x4f0a2b`).
     pub body: String,
     /// `isLocal` and the `local` argument, carried but not saved here. The 1.12 client saves these
-    /// to `macros-local.txt` beside `macros-cache.txt` (`0x45de74`, `0x45de88`); the stock UI never
+    /// to `macros-local.txt` beside `macros-cache.txt` (`0x85de74`, `0x85de88`); the stock UI never
     /// sets it.
     pub local_only: bool,
 }

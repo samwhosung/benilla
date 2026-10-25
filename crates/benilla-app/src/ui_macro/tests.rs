@@ -47,12 +47,12 @@ fn a_saved_macro_table_round_trips_through_benilla_macros() {
     // The reference's format, with `\n` line ends.
     assert_eq!(
         std::fs::read_to_string(&account).unwrap(),
-        "MACRO 1 \"Ambush\" Ability_Ambush\n/cast Ambush\n/say pew\nEND\n"
+        "MACRO 1 \"Ambush\" Ability_Ambush\r\n/cast Ambush\r\n/say pew\r\nEND\r\n"
     );
     // A character macro keeps its full id, the scope's base and one (`0x4eff90`).
     assert_eq!(
         std::fs::read_to_string(&character).unwrap(),
-        "MACRO 16777217 \"Charge\" Ability_Ambush\n/cast Charge\nEND\n"
+        "MACRO 16777217 \"Charge\" Ability_Ambush\r\n/cast Charge\r\nEND\r\n"
     );
 
     let back = MacroState::from_scopes(
@@ -939,4 +939,94 @@ fn a_load_and_an_arrival_in_one_pass_derive_once() {
         BoundSpell::Unresolved,
         "the load's flag was taken with the arrival's"
     );
+}
+
+/// The macro load's harness over a state folder of its own: the loader and the saver, with the
+/// account-data state they talk to, every section settled.
+fn file_app(script: UiScript) -> bevy::prelude::App {
+    use bevy::prelude::*;
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    app.insert_resource(crate::ui_action::PlayerActions::default())
+        .init_resource::<crate::ui_action::ActionSlots>()
+        .insert_resource(crate::net::NetCommands(tx))
+        .insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+            vec![crate::glue_session::roster::test_character(7, "Probeone")],
+            7,
+        ))
+        .init_resource::<super::MacroFiles>()
+        .init_resource::<crate::account_data::AccountData>()
+        .insert_non_send_resource(script)
+        .add_systems(Update, (super::load_macros, super::save_dirty_macros));
+    app.world()
+        .resource::<crate::account_data::AccountData>()
+        .settle_for_test(Some(("Realm".into(), "Probeone".into())));
+    app
+}
+
+fn macro_names(app: &bevy::prelude::App) -> Vec<String> {
+    app.world()
+        .non_send_resource::<UiScript>()
+        .macros()
+        .views()
+        .map(|m| m.name.clone())
+        .collect()
+}
+
+/// A macro section the server's file replaced is read again into the VM that loaded the old
+/// file, as the reference's reader runs once the section lands (`0x5afd19`).
+#[test]
+fn a_macro_section_from_the_server_is_read_again() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-macros-reread-{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+    let account = crate::local_state::macros_account_path().unwrap();
+    crate::local_state::write_atomic(&account, "MACRO 1 \"Old\" Ability_Ambush\nEND\n").unwrap();
+    let mut app = file_app(UiScript::new().unwrap());
+    app.update();
+    assert_eq!(macro_names(&app), ["Old"]);
+
+    crate::local_state::write_atomic(&account, "MACRO 1 \"New\" Ability_Ambush\nEND\n").unwrap();
+    app.update();
+    assert_eq!(macro_names(&app), ["Old"], "loaded once per VM");
+    app.world()
+        .resource::<crate::account_data::AccountData>()
+        .owe_reader_for_test(4);
+    app.update();
+    assert_eq!(macro_names(&app), ["New"], "the server's file read again");
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// A save writes both macro files, so both sections are marked for the interface's shutdown,
+/// where the reference writes them (`0x490c5a` → `0x4f0c7f`, `0x4f0c90`); the save arms nothing.
+#[test]
+fn a_macro_save_marks_both_sections_for_the_shutdown() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-macros-arm-{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+    let mut script = UiScript::new().unwrap();
+    script.set_macro_icons(vec!["Interface\\Icons\\Ability_Ambush".into()]);
+    let mut app = file_app(script);
+    app.update();
+    let armed = |app: &bevy::prelude::App, section: usize| {
+        let data = app.world().resource::<crate::account_data::AccountData>();
+        assert!(!data.armed_for_test(section), "a save arms nothing");
+        data.saved_for_test(section)
+    };
+    assert!(!armed(&app, 4) && !armed(&app, 5));
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(r#"CreateMacro("Hi", 1, "/say hi")"#)
+        .unwrap();
+    app.update();
+    assert!(armed(&app, 4) && armed(&app, 5));
+    std::fs::remove_dir_all(&tmp).ok();
 }

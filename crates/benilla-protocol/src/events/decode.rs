@@ -813,6 +813,8 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             vec![SessionEvent::MeetingStoneSetQueue { area, status }]
         }
         ServerPacket::MeetingStoneNotice(notice) => vec![SessionEvent::MeetingStoneNotice(notice)],
+        ServerPacket::AccountDataMd5(md5) => vec![SessionEvent::AccountDataMd5(md5.digests)],
+        ServerPacket::UpdateAccountData(data) => vec![SessionEvent::UpdateAccountData(data)],
         ServerPacket::TutorialFlags(flags) => vec![SessionEvent::TutorialFlags(flags.bytes)],
         ServerPacket::PlayerBound { binder, area } => {
             vec![SessionEvent::PlayerBound { binder, area }]
