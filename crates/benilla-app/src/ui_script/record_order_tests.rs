@@ -25,12 +25,19 @@ fn client() -> App {
     app.update();
     let mut script = UiScript::new().expect("a VM");
     script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(
-        "bind 1 PROBEKEY\r\n",
+        "bind 1 PROBEKEY\r\nbind SHIFT-1 PROBESHIFT\r\nbind ENTER PROBEBOX\r\n\
+         bind W PROBEW\r\nbind BUTTON1 PROBEBUTTON\r\n",
     ));
     script.load_binding_set(1);
     script.register_bindings(
         &benilla_ui::bindings_xml::parse(
-            r#"<Bindings><Binding name="PROBEKEY">LOG = LOG .. "key;"</Binding></Bindings>"#,
+            r#"<Bindings>
+                <Binding name="PROBEKEY">LOG = LOG .. "key;"</Binding>
+                <Binding name="PROBESHIFT">LOG = LOG .. "shift;"</Binding>
+                <Binding name="PROBEBOX">ProbeBox:Show() ProbeBox:SetFocus()</Binding>
+                <Binding name="PROBEW">LOG = LOG .. "w;"</Binding>
+                <Binding name="PROBEBUTTON" runOnUp="true">LOG = LOG .. "b1 " .. keystate .. ";"</Binding>
+            </Bindings>"#,
         )
         .expect("well-formed"),
     );
@@ -41,7 +48,10 @@ fn client() -> App {
             local b = CreateFrame("Button", "RecordOrderButton")
             b:SetPoint("BOTTOMLEFT", 0, 0) b:SetWidth(512) b:SetHeight(768)
             b:EnableMouse(true)
-            b:SetScript("OnClick", function() LOG = LOG .. "click;" end)"#,
+            b:SetScript("OnClick", function() LOG = LOG .. "click;" end)
+            local e = CreateFrame("EditBox", "ProbeBox")
+            e:SetPoint("TOPLEFT", 600, -10) e:SetWidth(200) e:SetHeight(20)
+            e:SetAutoFocus(false) e:Hide()"#,
         )
         .expect("the button builds");
     script.set_screen_size(1024.0, 768.0);
@@ -89,18 +99,41 @@ fn send(app: &mut App, event: WindowEvent) {
 }
 
 fn key(app: &mut App, code: KeyCode, state: ButtonState) {
+    typed(app, code, state, None);
+}
+
+/// A key with the character it types.
+fn typed(app: &mut App, code: KeyCode, state: ButtonState, text: Option<&str>) {
     let window = app.world().resource::<PrimaryId>().0;
     send(
         app,
         WindowEvent::KeyboardInput(KeyboardInput {
             key_code: code,
-            logical_key: Key::Character("1".into()),
+            logical_key: Key::Character(text.unwrap_or("1").into()),
             state,
-            text: None,
+            text: text.map(Into::into),
             repeat: false,
             window,
         }),
     );
+}
+
+/// A cursor move to `at`, the window's cursor left there.
+fn move_to(app: &mut App, at: Vec2) {
+    let window = app.world().resource::<PrimaryId>().0;
+    send(
+        app,
+        WindowEvent::CursorMoved(CursorMoved {
+            window,
+            position: at,
+            delta: None,
+        }),
+    );
+    app.world_mut()
+        .query::<&mut Window>()
+        .single_mut(app.world_mut())
+        .expect("the window")
+        .set_cursor_position(Some(at));
 }
 
 fn button(app: &mut App, state: ButtonState) {
@@ -169,4 +202,60 @@ fn a_click_lands_where_the_cursor_was_at_the_press() {
         .set_cursor_position(Some(off));
     app.update();
     assert_eq!(log(&app), "click;");
+}
+
+/// Shift goes down, `1`, and Shift comes up, all in one frame: the `1` reads the Shift its place
+/// left (`0x423d06`), so `SHIFT-1` runs, though the frame ends with Shift up.
+#[test]
+fn a_key_reads_the_modifiers_of_its_place_in_the_frame() {
+    let mut app = client();
+    key(&mut app, KeyCode::ShiftLeft, ButtonState::Pressed);
+    key(&mut app, KeyCode::Digit1, ButtonState::Pressed);
+    key(&mut app, KeyCode::ShiftLeft, ButtonState::Released);
+    app.update();
+    assert_eq!(log(&app), "shift;");
+}
+
+/// Enter's binding focuses a box, then `W` in the same frame: the box holds the keyboard by the
+/// time `W` comes, so `W` types into it and its binding does not run.
+#[test]
+fn a_box_a_key_focused_takes_the_next_key_of_the_frame() {
+    let mut app = client();
+    key(&mut app, KeyCode::Enter, ButtonState::Pressed);
+    typed(&mut app, KeyCode::KeyW, ButtonState::Pressed, Some("w"));
+    app.update();
+    let s = app.world().non_send_resource::<UiScript>();
+    assert_eq!(s.eval::<String>("return ProbeBox:GetText()").unwrap(), "w");
+    assert_eq!(log(&app), "", "the box took W");
+}
+
+/// A press over the world whose cursor reaches the button before the frame ends: the press is the
+/// world frame's, so its binding runs and the world's mouse holds the button; one over the button
+/// whose cursor leaves it is neither's.
+#[test]
+fn a_press_and_its_binding_agree_when_the_cursor_crosses_a_frame_in_the_frame() {
+    let held = |app: &App| {
+        app.world()
+            .resource::<crate::player::CameraControl>()
+            .world_mouse
+            .held_left()
+    };
+    let mut app = client();
+    move_to(&mut app, Vec2::new(900.0, 100.0));
+    app.update();
+    button(&mut app, ButtonState::Pressed);
+    move_to(&mut app, Vec2::new(100.0, 100.0));
+    app.update();
+    assert_eq!(log(&app), "b1 down;");
+    assert!(
+        held(&app),
+        "the world's mouse took the press its binding ran on"
+    );
+
+    let mut app = client();
+    button(&mut app, ButtonState::Pressed);
+    move_to(&mut app, Vec2::new(900.0, 100.0));
+    app.update();
+    assert_eq!(log(&app), "");
+    assert!(!held(&app), "the press was the button's");
 }

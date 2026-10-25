@@ -33,6 +33,9 @@ pub(super) struct PointerFeed<'w> {
     /// A capture owns the pointer ([`super::CapturePointerPinned`]): no OS cursor in the shot.
     capture_pinned: Res<'w, super::CapturePointerPinned>,
     egui_keyboard: Res<'w, super::EguiKeyboard>,
+    /// The dev overlay holds the pointer: a press then is no frame's and not the world's.
+    egui_pointer: Option<Res<'w, super::EguiPointerOver>>,
+    presses: ResMut<'w, super::WorldPresses>,
 }
 
 impl PointerFeed<'_> {
@@ -198,34 +201,56 @@ pub(super) fn feed_ui_input(
     // egui's keyboard focus is the last pass's: a key in the very frame a click focuses an egui
     // field still reaches the game.
     let egui_keyboard = pointer.egui_keyboard.0;
-    let (hover, click_consumed, press_consumed, payload_held) = (
+    let egui_pointer = pointer.egui_pointer.as_ref().is_some_and(|e| e.0);
+    let (hover, click_consumed, press_consumed, payload_held, presses) = (
         &mut pointer.hover,
         &mut pointer.click_consumed,
         &mut pointer.press_consumed,
         &mut pointer.payload_held,
+        &mut pointer.presses,
     );
     click_consumed.0 = false;
     press_consumed.0 = false;
+    presses.0.clear();
     capture.consumed.clear();
     let window = window.single().ok();
-    let (Some(mut script), Some((window, raw_handle))) = (script, window) else {
-        // No VM or no window: no walk, and the world frame's binding meets every record.
-        capture.typing = false;
-        capture.arrows_fall_through = false;
-        payload_held.0 = false;
-        if in_world {
-            for r in records.iter() {
-                world_frame_leg(
-                    &mut world_frame,
-                    None,
-                    r,
-                    crate::bindings::KeyVerdict::default(),
-                    hover.0.is_some(),
-                    &layout,
-                );
+    let (mut script, (window, raw_handle)) = match (script, window) {
+        (Some(script), Some(window)) => (script, window),
+        (script, _) => {
+            // No VM or no window: no walk, and the world frame's binding meets every record, the VM's
+            // bodies running when there is one.
+            capture.typing = false;
+            capture.arrows_fall_through = false;
+            payload_held.0 = false;
+            if in_world {
+                let over_ui = hover.0.is_some() || egui_pointer;
+                let mut legs = |mut s: Option<&mut UiScript>| {
+                    for r in records.iter() {
+                        if let super::Record::Button { button, state } = &r.record {
+                            if *state == ButtonState::Pressed {
+                                presses.0.push((*button, over_ui));
+                            }
+                        }
+                        let verdict = crate::bindings::KeyVerdict::default();
+                        world_frame_leg(
+                            &mut world_frame,
+                            s.as_deref_mut(),
+                            r,
+                            verdict,
+                            over_ui,
+                            &layout,
+                        );
+                    }
+                };
+                match script {
+                    Some(mut script) => {
+                        crate::script_calls::lent(&mut script, host.as_mut(), |s| legs(Some(s)))
+                    }
+                    None => legs(None),
+                }
             }
+            return;
         }
-        return;
     };
     let wl_display = textinput::wayland_display(raw_handle);
     let height = window.height();
@@ -271,6 +296,9 @@ pub(super) fn feed_ui_input(
                 move_to(script, hover, at);
             }
             let mut verdict = crate::bindings::KeyVerdict::default();
+            // Whose the record's press is: a hovered frame's, the interface's when it consumed the
+            // press, the dev overlay's, else the world frame's (`WorldPresses`).
+            let mut over_ui = hover.0.is_some() || egui_pointer;
             match &r.record {
                 super::Record::Button { button, state } => {
                     if let (Some(at), Some(name)) = (at, ui_button_name(*button)) {
@@ -292,7 +320,11 @@ pub(super) fn feed_ui_input(
                         let took = script.mouse_button(at.x, at.y, name, down);
                         if down {
                             press_consumed.0 |= took;
+                            over_ui |= took;
                         }
+                    }
+                    if *state == ButtonState::Pressed {
+                        presses.0.push((*button, over_ui));
                     }
                 }
                 super::Record::Key(ev) => {
@@ -343,14 +375,18 @@ pub(super) fn feed_ui_input(
                     Some(&mut *script),
                     r,
                     verdict,
-                    hover.0.is_some(),
+                    over_ui,
                     &layout,
                 );
             }
         }
-        // The modifiers as the frame's records leave them, which the tick's scripts read.
+        // The modifiers as the frame's records leave them, which the tick's scripts read, and the
+        // keyboard's owner as they leave it, which the frame's later readers take.
         script.set_modifiers(plane.shift, plane.ctrl, plane.alt);
         script.set_alt_down(plane.alt);
+        capture.typing = script.has_keyboard_focus() || egui_keyboard;
+        capture.arrows_fall_through =
+            !plane.alt && script.editbox_alt_arrow_mode() && !egui_keyboard;
         // ── The hover after the frame's records ── at the window's cursor, so a frame that moved
         // under a still cursor is re-picked. A cursor off the window leaves the hovered frame once
         // and disarms any press or drag every frame, since no release ends it and a stale gesture

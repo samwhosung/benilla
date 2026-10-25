@@ -724,6 +724,12 @@ impl WorldMouse {
         self.held(LookButton::Right)
     }
 
+    /// The left button, as the world holds it, for a test of who owns a press.
+    #[cfg(test)]
+    pub(crate) fn held_left(&self) -> bool {
+        self.held(LookButton::Left)
+    }
+
     /// A `MouselookStart` made after this frame's look session raised the channel, as a packet's
     /// handler makes one: the session saw no rise, so the controller hands the body off for it,
     /// as the reference's press handler does inside the call (`0x514924`-`0x514966`).
@@ -744,12 +750,16 @@ impl WorldMouse {
 
     /// Latch this frame; `world_press` says whether a down edge belongs to the world. A held bit
     /// rides to its release, including a cover's emptying of the button planes.
-    fn update(&mut self, buttons: &ButtonInput<MouseButton>, world_press: bool) {
+    fn update(
+        &mut self,
+        buttons: &ButtonInput<MouseButton>,
+        world_press: impl Fn(MouseButton) -> bool,
+    ) {
         self.scripted_rise = false;
         self.late_rise = false;
         for b in [LookButton::Right, LookButton::Left] {
             let i = b as usize;
-            self.down[i] = world_press && buttons.just_pressed(b.button());
+            self.down[i] = world_press(b.button()) && buttons.just_pressed(b.button());
             self.held[i] = (self.held[i] || self.down[i]) && buttons.pressed(b.button());
         }
     }
@@ -804,6 +814,8 @@ pub(crate) fn latch_world_mouse(
     // A press the UI consumed with nothing hovered, the layout drag's or a right press that
     // dropped a payload: no frame saw it, the world's included (`0x766353`, `0x766370`).
     press_consumed: Option<Res<crate::ui_script::PlayerUiPressConsumed>>,
+    // Who each of the frame's press records went to, as the world frame's binding read it.
+    presses: Option<Res<crate::ui_script::WorldPresses>>,
     mut rig: ResMut<CameraControl>,
     cameras: Query<&Camera, With<FlyCam>>,
     window: Single<&Window, With<PrimaryWindow>>,
@@ -818,8 +830,18 @@ pub(crate) fn latch_world_mouse(
         let Ok(camera) = cameras.single() else {
             return;
         };
+        // A press's owner is its record's, as its binding read it, so the latch and the binding
+        // agree; a press no record made (a test's plane) reads the frame's hover.
         let over_ui = pointer_over_ui.0 || press_consumed.is_some_and(|c| c.0);
-        let world_press = rig.look.is_some() || (cursor_in_viewport(&window, camera) && !over_ui);
+        let looking = rig.look.is_some();
+        let in_viewport = cursor_in_viewport(&window, camera);
+        let world_press = |b: MouseButton| {
+            let over = presses
+                .as_ref()
+                .and_then(|p| p.over_ui(b))
+                .unwrap_or(over_ui);
+            looking || (in_viewport && !over)
+        };
         let wm = &mut rig.world_mouse;
         wm.update(&buttons, world_press);
         // The script's calls, made since the last latch, before this frame's release.
@@ -2197,7 +2219,7 @@ mod tests {
             let mut rig = CameraControl::default();
             let mut buttons = ButtonInput::<MouseButton>::default();
             buttons.press(MouseButton::Right);
-            rig.world_mouse.update(&buttons, world_press);
+            rig.world_mouse.update(&buttons, |_| world_press);
             super::super::input::look_input(
                 &crate::bindings::BindingsState::default(),
                 &super::super::Player::default(),
@@ -2238,10 +2260,10 @@ mod tests {
 
         // Pressed over a UI row: never claimed, and no amount of later frames claims it.
         buttons.press(MouseButton::Right);
-        rig.world_mouse.update(&buttons, false);
+        rig.world_mouse.update(&buttons, |_| false);
         assert!(!rig.world_mouse.held(LookButton::Right));
         buttons.clear();
-        rig.world_mouse.update(&buttons, true);
+        rig.world_mouse.update(&buttons, |_| true);
         assert!(
             !rig.world_mouse.held(LookButton::Right),
             "a press the UI ate is never handed back mid-hold"
@@ -2251,10 +2273,10 @@ mod tests {
 
         // Pressed in the world: claimed, and it survives the UI arriving under the locked cursor.
         buttons.press(MouseButton::Right);
-        rig.world_mouse.update(&buttons, true);
+        rig.world_mouse.update(&buttons, |_| true);
         assert!(rig.world_mouse.down(LookButton::Right));
         buttons.clear();
-        rig.world_mouse.update(&buttons, false);
+        rig.world_mouse.update(&buttons, |_| false);
         assert!(rig.world_mouse.held(LookButton::Right));
         assert!(
             !rig.world_mouse.down(LookButton::Right),
@@ -2263,7 +2285,7 @@ mod tests {
 
         // The chord's second button joins the gesture the world already holds…
         buttons.press(MouseButton::Left);
-        rig.world_mouse.update(&buttons, true);
+        rig.world_mouse.update(&buttons, |_| true);
         assert!(
             rig.world_mouse.both(),
             "both primaries = the both-button run"
@@ -2271,7 +2293,7 @@ mod tests {
 
         // …and the release ends it, including a cover's synthetic one (emptied button planes).
         buttons = ButtonInput::<MouseButton>::default();
-        rig.world_mouse.update(&buttons, false);
+        rig.world_mouse.update(&buttons, |_| false);
         assert!(!rig.world_mouse.both());
         assert!(!rig.world_mouse.held(LookButton::Right));
         assert!(!rig.world_mouse.held(LookButton::Left));

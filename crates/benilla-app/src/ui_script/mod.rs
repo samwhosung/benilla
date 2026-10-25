@@ -29,7 +29,6 @@ mod records;
 /// The server alert's fetch and `LaunchURL`'s browser, for the stock glue screens.
 pub(crate) mod server_alert;
 #[cfg(test)]
-#[cfg(test)]
 pub(crate) use input::feed_keys;
 #[cfg(test)]
 pub(crate) use records::records_from_planes;
@@ -154,6 +153,24 @@ pub(crate) struct PlayerUiClickConsumed(pub(crate) bool);
 /// the world latch takes no press this frame even with no UI frame hovered.
 #[derive(Resource, Default)]
 pub(crate) struct PlayerUiPressConsumed(pub(crate) bool);
+
+/// Who this frame's button presses went to, as the records dispatched them: `(button, over_ui)`
+/// per press, `over_ui` when a frame was hovered, the interface consumed it or the dev overlay held
+/// the pointer. The world frame's binding and the world's mouse latch both read it, so they agree
+/// on who owns a press; a button no record pressed this frame is absent.
+#[derive(Resource, Default)]
+pub(crate) struct WorldPresses(pub(crate) Vec<(MouseButton, bool)>);
+
+impl WorldPresses {
+    /// Whether the frame's last press of `button` was the interface's, `None` with no press.
+    pub(crate) fn over_ui(&self, button: MouseButton) -> Option<bool> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(b, _)| *b == button)
+            .map(|(_, over)| *over)
+    }
+}
 
 /// Whether the cursor carries a payload, a `Send` mirror. A click on sky with one held never
 /// deselects: the reference gates its nothing-leg `SetSelection(0,0)` on no payload (`0x492d30`).
@@ -372,6 +389,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<UiKeyboardCapture>()
             .init_resource::<PlayerUiClickConsumed>()
             .init_resource::<PlayerUiPressConsumed>()
+            .init_resource::<WorldPresses>()
             .init_resource::<CursorPayloadHeld>()
             .init_resource::<UiClock>()
             .init_resource::<benilla_world::frame_pace::FrameStep>()
@@ -478,6 +496,9 @@ impl Plugin for UiScriptPlugin {
                     .before(UiInputViews)
                     .before(crate::bindings::BindingHead),
             )
+            // In `Last`, after a look session's end has put the cursor back, so the next frame's
+            // records start from where the pointer is.
+            .add_systems(Last, records::note_frame_end_cursor)
             .add_systems(
                 Update,
                 (

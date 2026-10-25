@@ -4,9 +4,11 @@
 //! 0x4245b0`). Bevy's typed input messages each keep only their own order; winit's window-event
 //! stream ([`WindowEvent`]) keeps them interleaved, so the records are read from it.
 //!
-//! Each record carries what its own record carries in the reference: the cursor where it was when
-//! the record was queued (`0x42dd00` reads `GetCursorPos`), and the modifier mask as the record's
-//! kind handler leaves it (`0x423d06`, `0x423d56`, before the dispatch).
+//! Each record carries the modifier mask as its kind handler leaves it (`0x423d06`, `0x423d56`,
+//! before the dispatch), and the cursor where it was when the record was queued: a button record
+//! carries it in the reference (`0x42dd00` reads `GetCursorPos`); a key record does not
+//! (`{key, mods, repeat, time}`), and its position stands in for the move records queued before
+//! it, which here are not records of their own.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::ButtonState;
@@ -41,8 +43,8 @@ pub(crate) struct InputRecord {
 #[derive(Resource, Default)]
 pub(crate) struct InputRecords {
     records: Vec<InputRecord>,
-    /// Where the last frame's records left the cursor, this frame's position before its first
-    /// move; `None` before the first frame read.
+    /// Where the last frame left the cursor, this frame's position before its first move: read in
+    /// `Last`, after a look session's end has put the cursor back. `None` before the first frame.
     cursor: Option<Option<Vec2>>,
     /// The modifier keys held when the last frame's records were read.
     modifiers: Vec<KeyCode>,
@@ -142,11 +144,19 @@ pub(crate) fn collect_input_records(
         }
     }
     records.records = out;
-    records.cursor = Some(now);
     records.modifiers = MODIFIER_KEYS
         .into_iter()
         .filter(|&k| keys.pressed(k))
         .collect();
+}
+
+/// Where the frame leaves the cursor, read after every writer of it: a look session's end puts the
+/// pointer back where the look began (`player::camera`), after this frame's records were read.
+pub(crate) fn note_frame_end_cursor(
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut records: ResMut<InputRecords>,
+) {
+    records.cursor = Some(window.single().ok().and_then(Window::cursor_position));
 }
 
 /// For a test that drives the client through bevy's planes and typed messages rather than the
@@ -253,6 +263,9 @@ mod tests {
             world.write_message(e);
         }
         world.run_system(*system).expect("the records collect");
+        world
+            .run_system_cached(note_frame_end_cursor)
+            .expect("the frame's end is noted");
         world.resource::<InputRecords>().iter().cloned().collect()
     }
 
