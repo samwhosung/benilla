@@ -100,6 +100,31 @@ pub(super) fn publish_view_focus(
     };
 }
 
+/// The reference's reload gate: a forced move of more than 30 yards (`d² > 900`, `0x80c730` is
+/// 30.0 and the compare is strict, `0x617ee5`; the cinematic shot gates `0x48eec1` and `0x48f0fc`
+/// compare the same 30.0 of `0x804554` and `0x804558`) reloads the destination before the frame
+/// goes on. `from` and `to` are in one frame.
+pub(crate) fn is_far_reload(from: Vec3, to: Vec3) -> bool {
+    from.distance_squared(to) > 30.0 * 30.0
+}
+
+/// Is the load's focus the tile under `at` (a Bevy position)? Residency counts only for the tile
+/// the held thing stands on: on a mismatch (the snap frame, a free-fly eye) a release is refused.
+pub(crate) fn focus_is_under(p: &WorldLoadProgress, at: Vec3) -> bool {
+    p.focus_tile.is_some_and(|t| {
+        let wow = benilla_assets::coords::bevy_to_wow(at);
+        let (tx, ty) = benilla_formats::world_to_tile(wow[0], wow[1]);
+        t == (tx as i32, ty as i32)
+    })
+}
+
+/// The tile under `at` is in: this map's own tile (a WMO-only map's one building) is spawned or
+/// its read failed, which a swap reaches only after draining every tile of the map we left. A
+/// destination is presentable ([`WorldLoadProgress::presentable`]) only once this holds too.
+pub(crate) fn residency_reached(p: &WorldLoadProgress, at: Vec3) -> bool {
+    p.focus_resident && p.total > 0 && focus_is_under(p, at)
+}
+
 /// Ends the post-snap hold when the destination's world has arrived. Runs after the stream stage,
 /// so `colliders_pending` is this frame's count.
 pub(super) fn release_post_snap_hold(
@@ -112,14 +137,8 @@ pub(super) fn release_post_snap_hold(
     let Some(p) = progress else { return };
     // Residency counts only for the tile under the body. On a mismatch (the teleport's snap frame,
     // a free-fly eye) the release and the stale-clear are refused and only the backstop runs.
-    let focus_matches = p.focus_tile.is_some_and(|t| {
-        let wow = benilla_assets::coords::bevy_to_wow(player.pos);
-        let (tx, ty) = benilla_formats::world_to_tile(wow[0], wow[1]);
-        t == (tx as i32, ty as i32)
-    });
-    // Residency means this map's own tile (a WMO-only map's one building) is spawned, which a
-    // swap reaches only after draining every tile of the map we left.
-    if p.focus_resident && p.total > 0 && focus_matches {
+    let focus_matches = focus_is_under(&p, player.pos);
+    if residency_reached(&p, player.pos) {
         player.world_stale = false;
     }
     // Any counter moving is the destination still arriving; tracked every frame, so the first

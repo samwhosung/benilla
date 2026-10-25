@@ -464,7 +464,7 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
 /// `MovementHandler.cpp:252,255`) leaves a hold up, which only its release ends; a far one restarts
 /// the hold's ceiling.
 fn mark_world_reload(player: &mut Player, from: Vec3, to: Vec3, now: f32) -> bool {
-    let far = !player.detached && from.distance_squared(to) > 30.0 * 30.0;
+    let far = !player.detached && super::world_focus::is_far_reload(from, to);
     if far {
         player.world_reload = true;
         player.reload_ceiling = now + SETTLE_TIMEOUT;

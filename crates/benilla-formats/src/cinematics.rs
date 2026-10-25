@@ -278,6 +278,40 @@ impl CinematicPath {
         })
     }
 
+    /// A shot that holds one eye and target (raw WoW coordinates) for `duration_ms`, built from no
+    /// model: the seam for tests of whatever plays shots, which would otherwise need a shipped
+    /// `Cameras\*.m2`.
+    pub fn held_pose(
+        row: &CinematicCameraRow,
+        eye: [f32; 3],
+        target: [f32; 3],
+        duration_ms: u32,
+    ) -> Self {
+        let camera = M2Camera {
+            camera_type: -1,
+            fov: 45f32.to_radians(),
+            far_clip: 1000.0 / 36.0,
+            near_clip: 8.0 / 36.0,
+            positions: Default::default(),
+            position_base: eye,
+            target: Default::default(),
+            target_base: target,
+            roll: Default::default(),
+        };
+        Self {
+            camera_id: row.id,
+            sound_id: row.sound_id,
+            fov: camera.fov,
+            near_clip: camera.near_clip,
+            far_clip: camera.far_clip,
+            duration_ms,
+            band_start: 0,
+            origin: [0.0; 3],
+            facing_sin_cos: 0f32.sin_cos(),
+            camera,
+        }
+    }
+
     /// Sample the shot `ms` after its start, clamped at both ends: each track composed against its
     /// base, then planted in the world by the row's origin and facing, with no scale or flip.
     pub fn sample(&self, ms: u32) -> CinematicView {
