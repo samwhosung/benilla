@@ -326,7 +326,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // unit, or none, answers 0, 0 (`0x5194da`). An unrecognised token raises in the resolver.
     g.set(
         "UnitCharacterPoints",
-        lua.create_function(|lua, unit: String| {
+        lua.create_function(|lua, unit: mlua::Value| {
+            let unit =
+                super::binding_abi::string_arg(lua, unit, r#"Usage: UnitCharacterPoints("unit")"#)?;
             super::unit::check_unit_token(&Some(unit.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let (cp1, cp2) = if super::unit::names_self(&model, &unit) {

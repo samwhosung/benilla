@@ -146,6 +146,26 @@ fn unit_character_points_answer_the_active_player_only() {
     assert!(err.contains("Unknown unit name: bogus"), "{err}");
 }
 
+/// A token that is neither string nor number raises the reference's usage (`0x51943a`,
+/// `0x851294`), not a type error; a number is stringified and then fails the resolver.
+#[test]
+fn unit_character_points_raises_the_reference_usage() {
+    let mut s = script();
+    for call in [
+        "UnitCharacterPoints()",
+        "UnitCharacterPoints(nil)",
+        "UnitCharacterPoints({})",
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(
+            err.contains(r#"Usage: UnitCharacterPoints("unit")"#),
+            "{call}: {err}"
+        );
+    }
+    let err = s.run("UnitCharacterPoints(5)").unwrap_err().to_string();
+    assert!(err.contains("Unknown unit name: 5"), "{err}");
+}
+
 /// `isExceptional` is `1.0` when `[rec+0x4c] & 1` and nil otherwise (`0x4f33e8`): never `0`, which
 /// Lua reads as true, and `meetsPrereq` and each prereq's `isLearnable` are 1 or nil too
 /// (`0x4f3403`-`0x4f3443`, `0x4f3676`, `0x4f3644`). `GetTalentPrereqs` answers three values per edge.
