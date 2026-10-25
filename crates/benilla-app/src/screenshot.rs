@@ -334,6 +334,40 @@ mod tests {
     }
 
     /// The real [`ask_for_captures`] with no VM, as at character select.
+    /// While a movie plays the frame pass presents nothing, so an ask waits (`0x44267c`): no
+    /// capture until the movie stops, then the held one.
+    #[test]
+    fn an_ask_waits_while_a_movie_plays() {
+        let mut s = benilla_ui::script::UiScript::new_glue().unwrap();
+        s.set_movie_reader(Box::new(|path, _| {
+            path.ends_with(".avi").then(|| {
+                benilla_movie::testing::synthetic_avi(1024, 464, (1, 25), 9, &[&[][..]; 9], &[])
+            })
+        }));
+        s.run(r#"M = CreateFrame("MovieFrame", "MovieProbe") M:StartMovie("A")"#)
+            .unwrap();
+        let mut app = App::new();
+        app.init_resource::<ScreenshotState>();
+        app.insert_non_send_resource(s);
+        app.add_systems(Update, ask_for_captures);
+        app.world_mut().resource_mut::<ScreenshotState>().pending = 1;
+        let shots = |app: &mut App| {
+            app.world_mut()
+                .query::<&Screenshot>()
+                .iter(app.world())
+                .count()
+        };
+        app.update();
+        app.update();
+        assert_eq!(shots(&mut app), 0, "held while the movie plays");
+        app.world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .run("M:StopMovie()")
+            .unwrap();
+        app.update();
+        assert_eq!(shots(&mut app), 1, "taken once it stops");
+    }
+
     fn spawn_pending_only(mut commands: Commands, mut state: ResMut<ScreenshotState>) {
         spawn_captures(&mut commands, std::mem::take(&mut state.pending));
     }
