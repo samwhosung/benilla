@@ -74,7 +74,7 @@ pub struct ReputationState {
 
 /// What a reputation getter asks the lent host of one faction, answered as of the place it runs
 /// ([`super::live::ask`]); the getters read the slot's flag byte and standing and the player's
-/// watched field at the call (`0x4d654f`, `0x4d6608`).
+/// watched field at the call (`0x4d65ac`, `0x4d65ea`, `0x4d6613`, `0x4d6660`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FactionQuery {
     /// The faction by its `Faction.dbc` id.
@@ -133,12 +133,10 @@ pub enum ReputationCall {
 /// after the snapshot they ride on ([`super::UiScript::push_reputation`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReputationListOp {
-    /// `SMSG_SET_FACTION_VISIBLE` listing a slot it made visible: the adder, then the sort
-    /// (`0x4d5738`, `0x4d574a`).
-    Visible(u32),
-    /// `SMSG_SET_FACTION_STANDING`: the adder for each slot it made visible, in its entries' order
-    /// (`0x4d5826`), then the sort when a slot's flag byte moved (`0x4d5876` → `0x4d58c8`).
-    Standing { listed: Vec<u32>, flags_moved: bool },
+    /// An edit of the list inside a handler: the adder for each of `listed`, in order
+    /// (`0x4d5738`, `0x4d5826`), then the sort when `sort` (`0x4d574a`, `0x4d58c8`). A message
+    /// hands the adder at the listing and the sort after its writes, as the reference's does.
+    Edit { listed: Vec<u32>, sort: bool },
     /// `SMSG_INITIALIZE_FACTIONS` with the player held: the rebuild (`0x4d5694`).
     Rebuild,
 }
@@ -196,11 +194,26 @@ impl super::UiScript {
     /// The snapshot as of the place the list is built or sorted, taken off the lent host: the sort
     /// reads the slots' flags and the rows' names as the reference's reads the slots (`0x4d6210`).
     /// With no host to ask the snapshot stands as it was pushed.
-    fn pull_reputation(&mut self) {
-        if let Some(book) = super::live::ask(&self.lua, &ReputationBook) {
+    fn pull_reputation(&mut self) -> bool {
+        let Some(book) = super::live::ask(&self.lua, &ReputationBook) else {
+            return false;
+        };
+        let mut model = self.model_mut();
+        model.reputation = book.state;
+        model.faction_standings = book.standings;
+        true
+    }
+
+    /// A new VM's seat at the head of the world-enter cascade: the reference keeps its list and
+    /// standings across a `/reload`, so the events ahead of the cascade's own rebuild
+    /// (`PLAYER_ENTERING_WORLD`, the quest log's rebuild `0x4909a1`) read them. With no host to
+    /// ask the VM keeps what it was pushed.
+    pub(crate) fn seat_reputation(&mut self) {
+        if self.pull_reputation() {
             let mut model = self.model_mut();
-            model.reputation = book.state;
-            model.faction_standings = book.standings;
+            if model.reputation_headers.is_empty() {
+                rebuild(&mut model);
+            }
         }
     }
 
@@ -221,18 +234,14 @@ impl super::UiScript {
         }
         for op in ops {
             match op {
-                ReputationListOp::Visible(slot) => {
-                    add_slot(&mut model, slot);
-                    sort(&mut model);
-                }
-                ReputationListOp::Standing {
+                ReputationListOp::Edit {
                     listed,
-                    flags_moved,
+                    sort: sorted,
                 } => {
                     for slot in listed {
                         add_slot(&mut model, slot);
                     }
-                    if flags_moved {
+                    if sorted {
                         sort(&mut model);
                     }
                 }
@@ -574,7 +583,7 @@ fn entry_of(model: &Model, faction: i64) -> Option<&FactionEntry> {
 
 /// A faction's row and the watched slot as the getter reads them at its call: the lent host's
 /// answer, as the reference reads the slots' flag bytes and standings and the player's field there
-/// (`0x4d654f`, `0x4d6608`), else the snapshot pushed last.
+/// (`0x4d65ac`, `0x4d65ea`, `0x4d6613`, `0x4d6660`), else the snapshot pushed last.
 fn read_faction(lua: &Lua, model: &Model, query: FactionQuery) -> FactionRead {
     if let Some(read) = super::live::ask(lua, &query) {
         return read;
@@ -1415,10 +1424,13 @@ mod tests {
         assert_eq!(
             rows(vec![
                 ReputationListOp::Rebuild,
-                ReputationListOp::Visible(19),
-                ReputationListOp::Standing {
+                ReputationListOp::Edit {
+                    listed: vec![19],
+                    sort: true
+                },
+                ReputationListOp::Edit {
                     listed: vec![],
-                    flags_moved: true
+                    sort: true
                 },
             ]),
             built
@@ -1442,8 +1454,14 @@ mod tests {
         s.run("CollapseFactionHeader(0)").unwrap();
         s.set_reputation(state());
         s.apply_reputation_ops(vec![
-            ReputationListOp::Visible(20),
-            ReputationListOp::Visible(0),
+            ReputationListOp::Edit {
+                listed: vec![20],
+                sort: true,
+            },
+            ReputationListOp::Edit {
+                listed: vec![0],
+                sort: true,
+            },
         ]);
         let all = s
             .eval::<Vec<String>>(
@@ -1611,9 +1629,9 @@ mod tests {
         let before = names(&s);
         let mut host = slots(4000, true);
         s.hosted(&mut host, |s| {
-            s.apply_reputation_ops(vec![ReputationListOp::Standing {
+            s.apply_reputation_ops(vec![ReputationListOp::Edit {
                 listed: vec![],
-                flags_moved: true,
+                sort: true,
             }]);
         });
         let after = names(&s);

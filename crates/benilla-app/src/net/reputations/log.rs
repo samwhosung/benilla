@@ -1,6 +1,6 @@
 //! The reputation store as each packet left it. In the reference each reputation message's handler
 //! writes the slots, edits the pane's list and signals `UPDATE_FACTION` inside itself (`0x4d56f6`,
-//! `0x4d5699`, `0x4d5984`), and the getters read the slots at their calls (`0x4d654f`), so a
+//! `0x4d5699`, `0x4d5984`), and the getters read the slots at their calls (`0x4d65ac`, `0x4d65ea`), so a
 //! listener reads its own packet's standings. Here every handler of the frame writes the store
 //! before any listener runs, so each write is logged with its stamp, as is each list operation
 //! the message made ([`ReputationListOp`]); the lane (`ui_reputation`) rewinds the store to the
@@ -27,8 +27,9 @@ pub(super) enum Write {
     Slots(Vec<(u8, i32)>),
     /// A slot's wire standing (`0x4d6330`).
     Standing(usize, i32),
-    /// A slot's flag byte (`0x4d5fc0`).
-    Flags(usize, u8),
+    /// The bits a store of a slot's flag byte (`0x4d5fc0`) moved, applied to the byte as the
+    /// replay finds it: a verb's write in a listener stays through a later message's.
+    Flags { slot: usize, set: u8, clear: u8 },
     /// `SMSG_SET_FORCED_REACTIONS`: the table whole (`0x4d59a0`).
     Forced(Vec<(u32, u32)>),
     /// The teardown (`0x4d5360`): the forced table and every slot zeroed.

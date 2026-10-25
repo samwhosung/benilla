@@ -114,6 +114,7 @@ impl super::UiScript {
     /// log's (`0x4909a1`). `usable_changed` is whether the action bar's refresh found a slot's pair
     /// changed, which the caller's slots decide. [`Self::fire_world_enter_tail`] closes it.
     pub fn fire_world_enter_head(&mut self, bonus_bar_offset: u8, usable_changed: bool) {
+        self.seat_reputation();
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
         // `0x703bc0` with 1: the threshold set to 0 (`0x703bd6`), so the collection runs now.

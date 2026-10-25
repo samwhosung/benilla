@@ -488,10 +488,8 @@ impl Relations<'_> {
 /// reference keeps any value; a server rank past 7 would index outside our palette.
 pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
     reputations
-        .forced
-        .iter()
-        .find(|&&(id, _)| id == faction)
-        .map(|&(_, rank)| rank.min(7) as u8)
+        .forced_rank(faction)
+        .map(|rank| rank.min(7) as u8)
 }
 
 /// Whether we are at war with the `Faction.dbc` faction a template names (`0x4d61b0`, bit 1 of its

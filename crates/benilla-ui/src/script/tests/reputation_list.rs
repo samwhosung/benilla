@@ -109,7 +109,10 @@ fn a_standing_push_keeps_the_folds_and_a_new_header_opens_every_one() {
         .push(entry(889, 21, 892, "Warsong Outriders"));
     ticked.entries.push(header(892, 22, "Horde Forces"));
     s.set_reputation(ticked);
-    s.apply_reputation_ops(vec![crate::script::ReputationListOp::Visible(21)]);
+    s.apply_reputation_ops(vec![crate::script::ReputationListOp::Edit {
+        listed: vec![21],
+        sort: true,
+    }]);
     let all = names(&s);
     assert!(
         all.iter().any(|n| n == "Ironforge") && all.iter().any(|n| n == "Warsong Outriders"),

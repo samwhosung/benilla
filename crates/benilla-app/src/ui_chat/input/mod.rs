@@ -391,7 +391,7 @@ pub(super) fn drain_chat_input(
                             "reaction: faction {} is FORCED to rank {rank} by the server's table \
                              ({} entries); the faction rules below are not reached",
                             tpl.faction,
-                            reputations.forced.len(),
+                            reputations.forced().len(),
                         ))
                     })() {
                         lines.push(line);

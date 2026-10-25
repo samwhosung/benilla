@@ -447,9 +447,9 @@ fn on_reputations(
             // (`0x4d574a` → `0x4d5dab`), which signals.
             let facts = self_facts(&b);
             let listed = reputation_visible(list_id, &mut b.reputations, |store| {
-                store.list_op(ReputationListOp::Standing {
+                store.list_op(ReputationListOp::Edit {
                     listed: vec![list_id],
-                    flags_moved: false,
+                    sort: false,
                 });
                 // The chat line names the rank, so it reads the store before the flag lands.
                 if let (Some(f), Some(me)) = (factions.as_deref(), facts.as_ref()) {
@@ -464,15 +464,20 @@ fn on_reputations(
                 }
             });
             if listed {
-                b.reputations.list_op(ReputationListOp::Standing {
+                b.reputations.list_op(ReputationListOp::Edit {
                     listed: vec![],
-                    flags_moved: true,
+                    sort: true,
                 });
             }
             signal(usize::from(listed), &mut lane);
         }
         SessionEvent::ReputationAtWar { list_id, flags } => {
             reputation_at_war(list_id, flags, &mut b.reputations);
+            // The bit moved a row's war state and no list: the lane takes the snapshot there.
+            b.reputations.list_op(ReputationListOp::Edit {
+                listed: vec![],
+                sort: false,
+            });
             // Whether or not the bit moved (`0x4d56f6`).
             signal(1, &mut lane);
         }
@@ -990,9 +995,9 @@ fn reputation_delta(
             flags |= flag::VISIBLE;
             // The adder, which lists the slot (`0x4d5826`) and prints its rank (`0x4d5bfb`), the
             // flag byte not yet written.
-            reputations.list_op(ReputationListOp::Standing {
+            reputations.list_op(ReputationListOp::Edit {
                 listed: vec![list_id],
-                flags_moved: false,
+                sort: false,
             });
             if let Some(line) = line {
                 said(Said::Line(line));
@@ -1017,9 +1022,9 @@ fn reputation_delta(
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
     quest.bump_reask();
-    reputations.list_op(ReputationListOp::Standing {
+    reputations.list_op(ReputationListOp::Edit {
         listed: vec![],
-        flags_moved: latches.flags_moved,
+        sort: latches.flags_moved,
     });
     latches
 }
@@ -1211,7 +1216,7 @@ mod forced_reaction_tests {
     }
 
     fn forced(app: &App) -> Vec<(u32, u32)> {
-        app.world().resource::<Reputations>().forced.clone()
+        app.world().resource::<Reputations>().forced()
     }
 
     fn arrive(app: &mut App, table: &[(u32, u32)]) {

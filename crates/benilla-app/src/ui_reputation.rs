@@ -107,7 +107,7 @@ fn drop_reputation_log(store: Option<ResMut<Reputations>>) {
 /// What the reputation getters read as they run, through the call host: the slots' flag bytes and
 /// standings as of the drain's place ([`Reputations`] is rewound packet by packet), the player's
 /// race, class and watched field off the stores as of there, and the faction rows derived from
-/// them and `Faction.dbc` ([`reputation_row`]; `0x4d654f`, `0x4d6608`, `0x4d6820`).
+/// them and `Faction.dbc` ([`reputation_row`]; `0x4d65ac`, `0x4d65ea`, `0x4d6613`, `0x4d6660`, `0x4d6820`).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ReputationLive<'w, 's> {
     reputations: Option<Res<'w, Reputations>>,

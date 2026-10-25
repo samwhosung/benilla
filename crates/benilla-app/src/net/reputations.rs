@@ -71,12 +71,13 @@ impl Default for Slots {
 /// templates or our standing say. Both halves live on one resource so a change to either wakes the
 /// unit feed and the questgiver-marker re-query that read reactions.
 ///
-/// A clone shares the slots and copies the rest: the shared handle is there for the Lua API's
-/// relation snapshot alone, which reads the slots live between pushes.
+/// A clone shares the slots and the forced table and carries no log: the shared handle is there for
+/// the Lua API's relation snapshot alone, which reads them live between pushes.
 #[derive(Resource, Default, Clone)]
 pub(crate) struct Reputations {
     slots: Arc<Slots>,
-    pub(crate) forced: Vec<(u32, u32)>,
+    /// The forced table, shared as the slots are: the relation snapshot's reads see the replay.
+    forced: Arc<std::sync::RwLock<Vec<(u32, u32)>>>,
     /// The frame's writes and the pane's list operations each message made, for the lane to replay
     /// ([`log`]).
     log: ReputationLog,
@@ -133,27 +134,53 @@ impl Reputations {
 
     /// A wire message's store of slot `slot`'s flag byte (`0x4d5fc0`).
     pub(crate) fn set_flags(&mut self, slot: usize, flags: u8) {
-        self.logged(Write::Flags(slot, flags));
+        let held = self.flags(slot);
+        self.logged(Write::Flags {
+            slot,
+            set: flags & !held,
+            clear: held & !flags,
+        });
         self.put_flags(slot, flags);
     }
 
     /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`).
     pub(crate) fn set_forced(&mut self, table: Vec<(u32, u32)>) {
         self.logged(Write::Forced(table.clone()));
-        self.forced = table;
+        self.put_forced(table);
     }
 
     /// The teardown (`0x4d5360`): the forced table's count zeroed (`0x4d5419`) and all 64 slots
     /// with it (`0x4d541f`-`0x4d542b`).
     pub(crate) fn tear_down(&mut self) {
         self.logged(Write::TearDown);
-        self.forced.clear();
+        self.put_forced(Vec::new());
         self.put_slots(&[]);
     }
 
     /// A message's edit of the pane's list, applied by the lane at the message's place.
     pub(crate) fn list_op(&mut self, op: ReputationListOp) {
         self.log.listed(op);
+    }
+
+    fn put_forced(&self, table: Vec<(u32, u32)>) {
+        *self.forced.write().unwrap_or_else(|e| e.into_inner()) = table;
+    }
+
+    /// The rank the server forces for `faction`, if it does (`0x4d6490`).
+    pub(crate) fn forced_rank(&self, faction: u32) -> Option<u32> {
+        let table = self.forced.read().unwrap_or_else(|e| e.into_inner());
+        table
+            .iter()
+            .find(|&&(id, _)| id == faction)
+            .map(|&(_, r)| r)
+    }
+
+    /// The forced table, copied.
+    pub(crate) fn forced(&self) -> Vec<(u32, u32)> {
+        self.forced
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn put_slots(&self, slots: &[(u8, i32)]) {
@@ -184,7 +211,7 @@ impl Reputations {
         log.wrote(
             || Saved {
                 slots: (0..FACTION_LIST_LEN).map(|i| slots.read(i)).collect(),
-                forced: forced.clone(),
+                forced: forced.read().unwrap_or_else(|e| e.into_inner()).clone(),
             },
             write,
         );
@@ -202,7 +229,7 @@ impl Reputations {
         };
         if let Some(start) = start {
             self.put_slots(&start.slots);
-            self.forced = start.forced;
+            self.put_forced(start.forced);
         }
         true
     }
@@ -242,10 +269,13 @@ impl Reputations {
         match write {
             Write::Slots(slots) => self.put_slots(&slots),
             Write::Standing(slot, standing) => self.put_standing(slot, standing),
-            Write::Flags(slot, flags) => self.put_flags(slot, flags),
-            Write::Forced(table) => self.forced = table,
+            Write::Flags { slot, set, clear } => {
+                let held = self.flags(slot);
+                self.put_flags(slot, held & !clear | set);
+            }
+            Write::Forced(table) => self.put_forced(table),
             Write::TearDown => {
-                self.forced.clear();
+                self.put_forced(Vec::new());
                 self.put_slots(&[]);
             }
         }
@@ -265,7 +295,10 @@ mod tests {
         store.list_op(ReputationListOp::Rebuild);
         store.set_flags(3, 1);
         store.set_standing(3, 200);
-        store.list_op(ReputationListOp::Visible(3));
+        store.list_op(ReputationListOp::Edit {
+            listed: vec![3],
+            sort: true,
+        });
         assert_eq!((store.standing(3), store.flags(3)), (200, 1));
         let until = Until::all();
         assert!(store.rewind());
@@ -286,7 +319,10 @@ mod tests {
         );
         assert_eq!(
             store.replay(until).map(|(_, op)| op),
-            Some(ReputationListOp::Visible(3))
+            Some(ReputationListOp::Edit {
+                listed: vec![3],
+                sort: true
+            })
         );
         assert_eq!((store.standing(3), store.flags(3)), (200, 1));
         assert!(store.replay(until).is_none());
@@ -302,7 +338,10 @@ mod tests {
         store.set_standing(3, 100);
         store.list_op(ReputationListOp::Rebuild);
         store.set_standing(3, 200);
-        store.list_op(ReputationListOp::Visible(3));
+        store.list_op(ReputationListOp::Edit {
+            listed: vec![3],
+            sort: true,
+        });
         assert!(store.rewind());
         assert!(store.replay(Until::all()).is_some());
         // The first listener's `FactionToggleAtWar`.
@@ -314,7 +353,13 @@ mod tests {
             "the writes it did not replay are made"
         );
         assert_eq!(store.flags(4), 2, "and the verb's stands");
-        assert_eq!(store.take_ops(), [ReputationListOp::Visible(3)]);
+        assert_eq!(
+            store.take_ops(),
+            [ReputationListOp::Edit {
+                listed: vec![3],
+                sort: true
+            }]
+        );
     }
 
     /// The forced table and the teardown are replayed with the slots.
@@ -326,15 +371,28 @@ mod tests {
         store.tear_down();
         store.set_forced(vec![(47, 7)]);
         assert!(store.rewind());
-        assert!(store.forced.is_empty() && store.standing(1) == 0);
+        assert!(store.forced().is_empty() && store.standing(1) == 0);
         store.list_op(ReputationListOp::Rebuild);
         // Replay stops at the operation only after the writes ahead of it: all four are stamped
         // before it, so they are applied by then.
         assert!(store.replay(Until::all()).is_some());
-        assert_eq!(
-            (store.forced.clone(), store.standing(1)),
-            (vec![(47, 7)], 0)
-        );
+        assert_eq!((store.forced(), store.standing(1)), (vec![(47, 7)], 0));
+        store.end_replay();
+    }
+
+    /// The relation snapshot's clone shares the forced table with the slots, so the replay reaches
+    /// its reads (`0x4d6490`).
+    #[test]
+    fn a_clone_reads_the_forced_table_the_replay_stands_at() {
+        let mut store = Reputations::default();
+        store.set_forced(vec![(72, 0)]);
+        store.set_forced(vec![(72, 7)]);
+        let clone = store.clone();
+        assert_eq!(clone.forced_rank(72), Some(7));
+        assert!(store.rewind());
+        assert_eq!(clone.forced_rank(72), None, "the frame's start");
+        store.replay(Until::all());
+        assert_eq!(clone.forced_rank(72), Some(7));
         store.end_replay();
     }
 }

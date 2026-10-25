@@ -3,7 +3,7 @@
 //! (`SMSG_SET_FACTION_STANDING` `0x4d5760` ends at `0x4d5984`, `SMSG_SET_FACTION_ATWAR` `0x4d56b0`
 //! at `0x4d56f6`, `SMSG_SET_FACTION_VISIBLE` `0x4d5710` sorts at `0x4d574a`), and the getters read
 //! the slots at their calls: `GetFactionInfo` the standing, the flag byte and the player's watched
-//! field (`0x4d654f`, `0x4d6608`), `GetWatchedFactionInfo` the watched slot's (`0x4d6820`),
+//! field (`0x4d65ac`, `0x4d65ea`, `0x4d6613`), `GetWatchedFactionInfo` the watched slot's (`0x4d6820`),
 //! `GetNumFactions` the list the sorts left (`0xb73764`). So two messages in one frame signal
 //! twice, and each listener reads its own message's state.
 
@@ -256,17 +256,93 @@ fn each_watched_listener_reads_its_own_updates_faction() {
     assert!(seen[4].ends_with("nil/0"), "{seen:?}");
 }
 
-/// With no host lent the getters answer from the snapshot the list last took: the same rows.
+/// With no host lent the getters answer from the snapshot the list last took: the same rows,
+/// after a standing, a watch and an at-war message (each message hands the lane its snapshot).
 #[test]
 fn the_snapshot_answers_what_the_lent_host_does() {
     let mut c = client();
-    c.frame(vec![vec![delta(STORMWIND.1, 100)]]);
     let chunk = "local t = {} for i = 1, GetNumFactions() do \
-                 t[i] = table.concat({GetFactionInfo(i)}, ',', 1, 6) end return t";
+                 local _, _, _, _, _, _, war = GetFactionInfo(i) \
+                 t[i] = table.concat({GetFactionInfo(i)}, ',', 1, 6) .. tostring(war) end \
+                 local n, _, _, _, v = GetWatchedFactionInfo() t[0] = tostring(n) .. v return t";
+    c.frame(vec![
+        vec![delta(STORMWIND.1, 100)],
+        vec![values(ME, &[(WATCHED, STORMWIND.1)])],
+        vec![SessionEvent::ReputationAtWar {
+            list_id: STORMWIND.1,
+            flags: flag::AT_WAR,
+        }],
+    ]);
     let live: Vec<String> = c.eval(true, chunk);
     let snapshot: Vec<String> = c.eval(false, chunk);
     assert_eq!(live, snapshot);
     assert_eq!(live.len(), 2, "{live:?}");
+}
+
+/// A listener's `SetFactionInactive` writes the slot's flag byte inside its call (`0x4d612c`), and a
+/// later message in the same frame read-modify-writes the byte as it then stands (`0x4d56d9`,
+/// `0x4d5fc0`): the verb's bit survives the at-war packet.
+#[test]
+fn a_verbs_flag_bit_survives_a_later_packets_write() {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        r#"
+        local g = CreateFrame("Frame")
+        local done
+        g:RegisterEvent("UPDATE_FACTION")
+        g:SetScript("OnEvent", function()
+            if done then return end
+            done = true
+            for i = 1, GetNumFactions() do
+                if (GetFactionInfo(i)) == "Stormwind" then SetFactionInactive(i) end
+            end
+        end)
+        "#,
+    );
+    let at_war = |flags| SessionEvent::ReputationAtWar {
+        list_id: STORMWIND.1,
+        flags,
+    };
+    c.frame(vec![vec![at_war(0)], vec![at_war(flag::AT_WAR)]]);
+    let flags = c
+        .app
+        .world()
+        .resource::<crate::net::Reputations>()
+        .flags(STORMWIND.1 as usize);
+    assert_eq!(
+        flags,
+        flag::VISIBLE | flag::INACTIVE | flag::AT_WAR,
+        "{flags:#x}"
+    );
+}
+
+/// A `/reload` makes a new VM mid-session: the cascade's first events, `PLAYER_ENTERING_WORLD`
+/// and the quest log's rebuild (`0x49096a`, `0x4909a1`), read the list and the standings the
+/// client kept (`0xb73764`, `0x4d6370`), ahead of the cascade's own rebuild (`0x4909d3`).
+#[test]
+fn a_reloaded_vm_reads_the_list_and_standings_in_the_first_cascade_events() {
+    let mut c = client();
+    c.frame(vec![vec![delta(STORMWIND.1, 100)]]);
+    let fresh = UiScript::new().expect("a VM");
+    fresh
+        .run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_ENTERING_WORLD")
+            f:SetScript("OnEvent", function()
+                local _, _, _, _, _, value = GetFactionInfo(2)
+                table.insert(Seen, event .. " " .. GetNumFactions() .. " " .. tostring(value))
+            end)
+            "#,
+        )
+        .unwrap();
+    c.app.insert_non_send_resource(fresh);
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM").fire_world_enter();
+    });
+    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD 2 4100"]);
 }
 
 /// Two `SMSG_SET_FACTION_ATWAR`s in one frame, and the relation getters beside them: the bit is

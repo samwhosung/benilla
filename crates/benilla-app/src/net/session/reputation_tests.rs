@@ -518,7 +518,7 @@ fn the_initialize_message_signals_both_rebuild_sorts_and_its_own() {
 
 /// Each message hands the pane's list what its handler does to it: a visible message the slot it
 /// lists (`0x4d5738`), a standing message the slots its entries made visible and whether a flag
-/// byte moved (`0x4d5826`, `0x4d58c8`), an at-war message nothing, as it sorts nothing
+/// byte moved (`0x4d5826`, `0x4d58c8`), an at-war message an edit of nothing, as it sorts nothing
 /// (`0x4d56b0`).
 #[test]
 fn each_message_hands_the_list_its_own_ops() {
@@ -533,13 +533,13 @@ fn each_message_hands_the_list_its_own_ops() {
     assert_eq!(
         ops(&mut app),
         [
-            Op::Standing {
+            Op::Edit {
                 listed: vec![40],
-                flags_moved: false
+                sort: false
             },
-            Op::Standing {
+            Op::Edit {
                 listed: vec![],
-                flags_moved: true
+                sort: true
             }
         ],
         "the adder ahead of the flag write, the sort after it"
@@ -551,18 +551,25 @@ fn each_message_hands_the_list_its_own_ops() {
             flags: AT_WAR,
         },
     );
-    assert!(ops(&mut app).is_empty());
+    assert_eq!(
+        ops(&mut app),
+        [Op::Edit {
+            listed: vec![],
+            sort: false
+        }],
+        "no row listed, no sort"
+    );
     delta(&mut app, 30, 5);
     assert_eq!(
         ops(&mut app),
         [
-            Op::Standing {
+            Op::Edit {
                 listed: vec![30],
-                flags_moved: false
+                sort: false
             },
-            Op::Standing {
+            Op::Edit {
                 listed: vec![],
-                flags_moved: true
+                sort: true
             }
         ],
         "the adder at the listing, then the sort once the entries are in"
