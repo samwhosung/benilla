@@ -15,7 +15,7 @@ use benilla_protocol::messages::PvpLogData;
 use benilla_ui::script::{BattlefieldScoreRow, BattlefieldScores, BattlefieldStatColumn};
 
 use crate::names::NameCache;
-use crate::net::NetCommands;
+use crate::net::{NetCommands, WorldEnterCascadeMessage};
 use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_script::UiFeed;
@@ -46,6 +46,19 @@ impl BattlefieldScoreboard {
             self.last_request = Some(now);
         }
         !throttled
+    }
+}
+
+/// The world-enter cascade's score reset (`0x4909fb` → `0x4a9db0`): the ended flag `0xb6ebcc`, the
+/// winner `0xb6ebd0`, the wire and filtered counts `0xb6ebc0`/`0xb6ebc4`, the pending-name count
+/// `0xb6ebd4` and the score request stamp `0xb6ebc8` all zero. The feed then clears the VM's
+/// board. The cascade fires no event, and `SMSG_BATTLEFIELD_STATUS` is no part of it.
+pub(crate) fn reset_on_world_enter(
+    mut cascades: MessageReader<WorldEnterCascadeMessage>,
+    mut board: ResMut<BattlefieldScoreboard>,
+) {
+    if cascades.read().next().is_some() {
+        *board = BattlefieldScoreboard::default();
     }
 }
 
@@ -144,6 +157,11 @@ pub(crate) fn feed_battlefield_score(
             })
         });
         let last = last.get(script);
+        // The cascade's reset (`0x4a9db0`) leaves no board: the VM's is cleared too, with the
+        // filter back to every team and no event, as the reference fires none.
+        if board.log.is_none() && last.take().is_some() {
+            script.clear_battlefield_scores();
+        }
         // A held-back board is the reference's pending names: the VM's rebuild waits on it.
         script.set_battlefield_score_names_pending(board.log.is_some() && fresh.is_none());
         if queue.take_score_dirty() {
@@ -190,10 +208,15 @@ impl Plugin for BattlefieldScorePlugin {
         net::register(app);
         app.init_resource::<BattlefieldScoreboard>().add_systems(
             Update,
-            // Before the queue feed: on status 3 the score event precedes the status event.
-            feed_battlefield_score
-                .before(crate::ui_dialog_verbs::feed_dialog_verbs)
-                .in_set(UiFeed),
+            (
+                reset_on_world_enter
+                    .before(feed_battlefield_score)
+                    .in_set(UiFeed),
+                // Before the queue feed: on status 3 the score event precedes the status event.
+                feed_battlefield_score
+                    .before(crate::ui_dialog_verbs::feed_dialog_verbs)
+                    .in_set(UiFeed),
+            ),
         );
     }
 }
@@ -293,6 +316,74 @@ mod tests {
             .map(|c| c.text)
             .collect();
         assert_eq!(cols, ["Flags Returned"]);
+    }
+
+    /// The world-enter cascade (`0x4909fb` → `0x4a9db0`) zeroes the ended flag `0xb6ebcc`, the
+    /// winner `0xb6ebd0`, the counts `0xb6ebc0`/`0xb6ebc4` and the score request stamp `0xb6ebc8`:
+    /// the stock end-of-match panel (`WorldStateFrame.lua:192`) reads `GetBattlefieldWinner()`.
+    #[test]
+    fn a_world_enter_clears_the_finished_board_and_its_request_stamp() {
+        use benilla_protocol::messages::PvpLogRow;
+        let mut app = App::new();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx))
+            .add_message::<crate::net::WorldEnterCascadeMessage>()
+            .init_resource::<BattlefieldScoreboard>()
+            .init_resource::<BattlefieldQueue>()
+            .init_resource::<NameCache>()
+            .add_systems(
+                Update,
+                (reset_on_world_enter, feed_battlefield_score).chain(),
+            );
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let guid = 0x9;
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(guid, "Rik".into(), None);
+        let now = Instant::now();
+        {
+            let mut board = app.world_mut().resource_mut::<BattlefieldScoreboard>();
+            board.apply(PvpLogData {
+                ended: true,
+                winner: Some(1),
+                rows: vec![PvpLogRow {
+                    guid,
+                    rank: 0,
+                    killing_blows: 3,
+                    honorable_kills: 0,
+                    deaths: 0,
+                    honor_gained: 0,
+                    stats: Vec::new(),
+                }],
+            });
+            assert!(board.request_due(now));
+        }
+        app.update();
+        let eval = |app: &App, lua: &str| -> i64 {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval(lua)
+                .unwrap()
+        };
+        assert_eq!(eval(&app, "return GetBattlefieldWinner()"), 1);
+        assert_eq!(eval(&app, "return GetNumBattlefieldScores()"), 1);
+
+        app.world_mut()
+            .write_message(crate::net::WorldEnterCascadeMessage);
+        app.update();
+
+        assert!(app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<bool>("return GetBattlefieldWinner() == nil")
+            .unwrap());
+        assert_eq!(eval(&app, "return GetNumBattlefieldScores()"), 0);
+        let mut board = app.world_mut().resource_mut::<BattlefieldScoreboard>();
+        assert!(board.log.is_none());
+        assert!(
+            board.request_due(now),
+            "the stamp is zeroed, so the next request is not throttled"
+        );
     }
 
     #[test]
