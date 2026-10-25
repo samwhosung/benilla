@@ -34,12 +34,13 @@ pub(crate) fn gather<P: SystemParam>(
 
 /// A set of named members that may conflict with one another, lent one at a time through a
 /// method of the member's name, each member's access gathered once ([`gather`]). Each member's
-/// type is written with `'static` lifetimes; its method lends it for the borrow of the set.
+/// type is written with `'static` lifetimes; its method lends it for the borrow of the set. A
+/// member may carry one `cfg` after its docs.
 macro_rules! disjoint_set {
     (
         $(#[$meta:meta])*
         $vis:vis struct $name:ident, $state:ident {
-            $($(#[$fmeta:meta])* $field:ident: $ty:ty,)*
+            $($(#[doc = $doc:literal])* $(#[cfg($cfg:meta)])? $field:ident: $ty:ty,)*
         }
     ) => {
         $(#[$meta])*
@@ -52,7 +53,7 @@ macro_rules! disjoint_set {
 
         #[doc(hidden)]
         $vis struct $state {
-            $($field: <$ty as bevy::ecs::system::SystemParam>::State,)*
+            $($(#[cfg($cfg)])? $field: <$ty as bevy::ecs::system::SystemParam>::State,)*
         }
 
         // SAFETY: the set registers every member's access, each checked against what the system
@@ -64,7 +65,10 @@ macro_rules! disjoint_set {
 
             fn init_state(world: &mut bevy::ecs::world::World) -> Self::State {
                 $state {
-                    $($field: <$ty as bevy::ecs::system::SystemParam>::init_state(world),)*
+                    $(
+                        $(#[cfg($cfg)])?
+                        $field: <$ty as bevy::ecs::system::SystemParam>::init_state(world),
+                    )*
                 }
             }
 
@@ -76,6 +80,7 @@ macro_rules! disjoint_set {
             ) {
                 let mut gathered = bevy::ecs::query::FilteredAccessSet::new();
                 $(
+                    $(#[cfg($cfg)])?
                     crate::script_calls::disjoint::gather::<$ty>(
                         &state.$field,
                         meta,
@@ -93,7 +98,10 @@ macro_rules! disjoint_set {
                 meta: &bevy::ecs::system::SystemMeta,
                 world: &mut bevy::ecs::world::World,
             ) {
-                $(<$ty as bevy::ecs::system::SystemParam>::apply(&mut state.$field, meta, world);)*
+                $(
+                    $(#[cfg($cfg)])?
+                    <$ty as bevy::ecs::system::SystemParam>::apply(&mut state.$field, meta, world);
+                )*
             }
 
             fn queue(
@@ -101,7 +109,7 @@ macro_rules! disjoint_set {
                 meta: &bevy::ecs::system::SystemMeta,
                 mut world: bevy::ecs::world::DeferredWorld,
             ) {
-                $(<$ty as bevy::ecs::system::SystemParam>::queue(
+                $($(#[cfg($cfg)])? <$ty as bevy::ecs::system::SystemParam>::queue(
                     &mut state.$field,
                     meta,
                     world.reborrow(),
@@ -115,7 +123,7 @@ macro_rules! disjoint_set {
             ) -> Result<(), bevy::ecs::system::SystemParamValidationError> {
                 // SAFETY: upheld by the caller, for every member's access as for the set's.
                 unsafe {
-                    $(<$ty as bevy::ecs::system::SystemParam>::validate_param(
+                    $($(#[cfg($cfg)])? <$ty as bevy::ecs::system::SystemParam>::validate_param(
                         &mut state.$field,
                         meta,
                         world,
@@ -141,7 +149,8 @@ macro_rules! disjoint_set {
 
         impl $name<'_, '_> {
             $(
-                $(#[$fmeta])*
+                $(#[doc = $doc])*
+                $(#[cfg($cfg)])?
                 pub(crate) fn $field(
                     &mut self,
                 ) -> bevy::ecs::system::SystemParamItem<'_, '_, $ty> {

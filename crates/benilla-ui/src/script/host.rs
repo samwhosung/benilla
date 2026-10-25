@@ -131,24 +131,12 @@ pub trait CallHost {
         false
     }
 
-    /// Whether the active player's worn slots hold a whole item of `entry`, as `IsEquippedAction`
-    /// walks them now (`0x4e5310` → `0x622270` at mask 1, `0x4e5380`), as of the place the getter
-    /// runs: `Some(false)` with no player held, `None` from a host that reads none.
-    fn wears_item(&mut self, entry: u32) -> Option<bool> {
-        let _ = entry;
-        None
-    }
-
-    /// The cooldown query a getter makes now (`0x6e2ea0`, `0x6e2ed0`), on the player's list as
-    /// of the place it runs: `Some(None)` for the query's empty answer, a cold spell's or an item
-    /// copy's that skips the query; `None` for an item object it does not hold, and from a host
-    /// that reads none.
-    fn read_cooldown(
-        &mut self,
-        query: super::CooldownQuery,
-    ) -> Option<Option<super::CooldownTriple>> {
-        let _ = query;
-        None
+    /// Answer a getter's question of the live state ([`super::live::ask`]), as of the place it
+    /// runs, by the family its type names: whether one of the host's families took it. A host
+    /// that reads none takes none.
+    fn read_live(&mut self, ask: &mut super::live::LiveAsk<'_>) -> bool {
+        let _ = ask;
+        false
     }
 }
 

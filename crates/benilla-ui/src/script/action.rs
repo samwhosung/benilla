@@ -96,7 +96,7 @@ pub struct ActionState {
     /// `IsAttackAction`: the action is the melee auto-attack.
     pub is_attack: bool,
     /// `IsEquippedAction`: an item action currently worn, the snapshot of the walk the lent host
-    /// makes at the call ([`super::CallHost::wears_item`]).
+    /// makes at the call ([`WearsItem`]).
     pub equipped: bool,
     /// The entry an item slot holds, which `IsCurrentAction`'s item arm compares with the in-flight
     /// cast's item (`0x4e53fc`-`0x4e5428`); `None` for any other slot.
@@ -112,6 +112,15 @@ pub struct ActionState {
     /// the enable flag (`0x6e1406`), so `GetActionCooldown` answers the binding's `(0, 0, 0)`
     /// (`0x4e6f0d`), as for an empty slot.
     pub no_cooldown_query: bool,
+}
+
+/// `IsEquippedAction`'s walk of the active player's worn slots for a whole item of the entry, at
+/// the call (`0x4e5310` → `0x622270` at mask 1, `0x4e5380`): `false` with no player held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WearsItem(pub u32);
+
+impl super::live::LiveQuery for WearsItem {
+    type Answer = bool;
 }
 
 /// The profession window a spell opens (`Effect[0]` 47, `TRADE_SKILL`, tested at `0x4e54fe`): a
@@ -637,9 +646,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .get(&action)
                 .filter(|s| s.kind == ACTION_KIND_ITEM)
                 .map(|s| s.action);
-            let live = entry.and_then(|entry| {
-                crate::script::host::read_host(lua, |h| h.wears_item(entry)).flatten()
-            });
+            let live = entry.and_then(|entry| super::live::ask(lua, &WearsItem(entry)));
             Ok(match live {
                 Some(worn) => flag(worn),
                 None => state_flag(lua, action, |s| s.equipped),

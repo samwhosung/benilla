@@ -4,7 +4,7 @@
 //! `GetPetActionCooldown` (`0x4bdfa0`) the pet's (`GetSpellCooldown 0x6e2ea0` and `GetItemCooldown
 //! 0x6e2ed0`, both through `GetCooldownInfo 0x6e13e0`), so a listener reads its own packet's
 //! records. Through the lent host when one is
-//! free ([`crate::script::CallHost::read_cooldown`]); with none, the frame's snapshot answers.
+//! free ([`crate::script::live::ask`]); with none, the frame's snapshot answers.
 
 use mlua::Lua;
 
@@ -29,13 +29,17 @@ pub enum CooldownQuery {
 /// `(start_ms on the GetTime clock, duration_ms, enabled)`, the shape the snapshots push.
 pub type CooldownTriple = (i64, u32, bool);
 
+/// The query's own answer, `None` for its empty one: a cold spell's, or an item copy's that skips
+/// the query.
+impl crate::script::live::LiveQuery for CooldownQuery {
+    type Answer = Option<CooldownTriple>;
+}
+
 /// `query` through the lent host, in `GetTime` seconds: `Some(None)` for the query's own empty
 /// answer (a cold spell, an item whose query answers zeros), `None` with no host free to ask or
 /// for an item it does not hold, where the snapshot answers.
 pub(crate) fn read_live(lua: &Lua, query: CooldownQuery) -> Option<Option<(f64, f64, bool)>> {
-    crate::script::host::read_host(lua, |h| h.read_cooldown(query))
-        .flatten()
-        .map(|triple| triple.map(seconds))
+    crate::script::live::ask(lua, &query).map(|triple| triple.map(seconds))
 }
 
 /// A pushed triple in `GetTime` seconds, as the stores keep it.
