@@ -926,56 +926,71 @@ const ENV_DAMAGE_SCHOOLS: [u32; 6] = [0, 0, 0, 2, 3, 2];
 /// update silently. No range gate or classifier: the chat type is the literal `0x55`
 /// `COMBAT_FACTION_CHANGE`. The wire's list id is `Faction.dbc`'s `rep_index`. The line
 /// (`0x62c5f0`) raises `FACTION` with the faction's name and the signed change, whoever's line it
-/// is (`0x62c661`-`0x62c667`).
+/// is (`0x62c661`-`0x62c667`). The tests' form, for a whole message ahead of its overwrite; the
+/// handler prints each entry where the reference does ([`faction_standing_change`]).
+#[cfg(test)]
 pub(crate) fn faction_standing(
     deltas: &[(u32, i32)],
     reputations: &Reputations,
     factions: Option<&crate::target::ring::Factions>,
     log: &ChatLog,
 ) {
+    for &(list_id, standing) in deltas.iter().take(1) {
+        let (flags, old) = reputations.slot(list_id as usize);
+        faction_standing_change(list_id, flags, old, standing, factions, log);
+    }
+}
+
+/// The line of one entry whose slot was `old` under `flags`, for the handler that prints it
+/// where `0x4d6330` does: with the new standing stored (`0x4d634a`) and the flags not yet moved.
+pub(crate) fn faction_standing_change(
+    list_id: u32,
+    flags: u8,
+    old: i32,
+    standing: i32,
+    factions: Option<&crate::target::ring::Factions>,
+    log: &ChatLog,
+) {
     let Some(catalog) = factions.map(|f| f.catalog()) else {
         return;
     };
-    for &(list_id, standing) in deltas.iter().take(1) {
-        let (flags, old) = reputations.slot(list_id as usize);
-        if flags & benilla_formats::faction_flags::HIDDEN != 0 {
-            continue;
-        }
-        let delta = standing - old;
-        if delta == 0 {
-            continue;
-        }
-        let Ok(index) = i32::try_from(list_id) else {
-            continue;
-        };
-        let Some(name) = catalog
-            .reputation_factions()
-            .find(|(_, f)| f.rep_index == index)
-            .and_then(|(id, _)| catalog.faction_name(id))
-        else {
-            continue;
-        };
-        log.push_combat(combat::PendingCombat {
-            kind: crate::ui_chat::ChatEventKind::CombatFactionChange,
-            family: if delta > 0 {
-                combat::FACTION_STANDING_INCREASED
-            } else {
-                combat::FACTION_STANDING_DECREASED
-            },
-            // A `Single` family reads no variant; `OtherOther` is what `tests::variants_of` sweeps.
-            variant: combat::Variant::OtherOther,
-            subject: 0,
-            object: 0,
-            fills: Fills {
-                named: name.to_string(),
-                amount: i64::from(delta.abs()),
-                ..Default::default()
-            },
-            named: combat::Named::Ready,
-            tries: 0,
-            word: Some(LineWord::text_number("FACTION", name, delta)),
-        });
+    if flags & benilla_formats::faction_flags::HIDDEN != 0 {
+        return;
     }
+    let delta = standing - old;
+    if delta == 0 {
+        return;
+    }
+    let Ok(index) = i32::try_from(list_id) else {
+        return;
+    };
+    let Some(name) = catalog
+        .reputation_factions()
+        .find(|(_, f)| f.rep_index == index)
+        .and_then(|(id, _)| catalog.faction_name(id))
+    else {
+        return;
+    };
+    log.push_combat(combat::PendingCombat {
+        kind: crate::ui_chat::ChatEventKind::CombatFactionChange,
+        family: if delta > 0 {
+            combat::FACTION_STANDING_INCREASED
+        } else {
+            combat::FACTION_STANDING_DECREASED
+        },
+        // A `Single` family reads no variant; `OtherOther` is what `tests::variants_of` sweeps.
+        variant: combat::Variant::OtherOther,
+        subject: 0,
+        object: 0,
+        fills: Fills {
+            named: name.to_string(),
+            amount: i64::from(delta.abs()),
+            ..Default::default()
+        },
+        named: combat::Named::Ready,
+        tries: 0,
+        word: Some(LineWord::text_number("FACTION", name, delta)),
+    });
 }
 
 /// The tail every arm ends in: build the queued line (dropping a class-9 endpoint) and park it

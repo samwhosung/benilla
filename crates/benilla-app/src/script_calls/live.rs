@@ -75,6 +75,8 @@ live_reads! {
         guild: crate::ui_guild::GuildLive<'static, 'static>,
         /// The party and raid roster's cells and rows.
         roster: crate::ui_party::RosterLive<'static, 'static>,
+        /// The faction rows, the watched slot and the pane's snapshot.
+        reputation: crate::ui_reputation::ReputationLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

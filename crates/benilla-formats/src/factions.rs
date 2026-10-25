@@ -285,6 +285,24 @@ impl FactionCatalog {
         self
     }
 
+    /// This catalog with `faction_id`'s `team` (its parent, the pane's grouping key), name and
+    /// description. Fixture constructor for tests; the row must exist ([`Self::with_reputation`]).
+    pub fn with_faction_text(
+        mut self,
+        faction_id: u32,
+        team: u32,
+        name: &str,
+        description: &str,
+    ) -> Self {
+        if let Some(info) = self.factions.get_mut(&faction_id) {
+            info.team = team;
+        }
+        self.names.insert(faction_id, name.to_string());
+        self.descriptions
+            .insert(faction_id, description.to_string());
+        self
+    }
+
     /// The template row for a `UNIT_FIELD_FACTIONTEMPLATE` id.
     pub fn template(&self, id: u32) -> Option<&FactionTemplate> {
         self.templates.get(&id)

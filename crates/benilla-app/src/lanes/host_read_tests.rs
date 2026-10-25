@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 92;
-const FRAME_FINAL_INPUTS: usize = 445;
+const FRAME_FINAL_FEEDS: usize = 91;
+const FRAME_FINAL_INPUTS: usize = 443;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -74,8 +74,8 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_pet::unit::feed_pet_unit", &["UiScript", "names::NameCache"],
         "a field event's listeners read its push; it watches the name cache's record of the pet's name"),
     ("::ui_pet_stats::feed_pet_stats", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_reputation::feed_reputation", &["UiScript", "net::reputations::Reputations"],
-        "a field event's listeners read its push; it takes the list's pending operations off the reputations"),
+    ("::ui_reputation::drop_reputation_log", &["net::reputations::Reputations"],
+        "drops the reputation log with no in-game interface up; it goes with the log"),
     ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Items"],
         "writes the item cache as it builds the spell tooltips"),
     ("::ui_unit::feed_units", &["UiScript", "ui_pet::PetBar"],

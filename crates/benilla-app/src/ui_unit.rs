@@ -36,7 +36,8 @@ pub(crate) struct UnitFeed;
 
 /// The feeds that seat a new VM with what the reference's caches hold across a `/reload`, ahead of
 /// the world-enter cascade whose handlers read it: the quest log's records, slots and creature
-/// names, the item records, and the reputation list the cascade's rebuild signals over.
+/// names, and the item records. The reputation list is built by the cascade itself, off the lent
+/// host ([`benilla_ui::script::UiScript::fire_world_enter_tail`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct WorldEnterSeats;
 
@@ -1538,6 +1539,15 @@ pub(crate) fn run_feed_units_once(world: &mut World) {
     world
         .run_system_once(fire_unit_events)
         .expect("the unit events run as a one-shot system");
+}
+
+/// [`relations::feed_unit_relations`] once, for a test that drives the feeds by hand.
+#[cfg(test)]
+pub(crate) fn run_feed_unit_relations_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(relations::feed_unit_relations)
+        .expect("the relations feed runs as a one-shot system");
 }
 
 /// Whether the unit feed runs before `system` in `app`'s `Update`, for a reader of its pushes.

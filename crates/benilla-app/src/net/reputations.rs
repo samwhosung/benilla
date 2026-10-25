@@ -9,12 +9,22 @@
 //! handle for one reader outside the world: the Lua API's relation functions, whose snapshot the
 //! VM holds between pushes, hold a clone, which is the same slots, so a verb's write is in their
 //! answer on the call's next line.
+//!
+//! Each message's writes are logged with their stamp, and the reputation lane rewinds the store to
+//! the frame's start and replays them packet by packet ([`log`]), so a listener's getters read
+//! the standings its own packet left.
 
 use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use benilla_protocol::messages::FACTION_LIST_LEN;
+use benilla_ui::script::ReputationListOp;
 use bevy::prelude::*;
+
+use crate::lanes::{Stamp, Until};
+use log::{Next, ReputationLog, Saved, Write};
+
+mod log;
 
 /// One slot's flag byte and wire standing.
 #[derive(Default)]
@@ -26,6 +36,18 @@ struct Slot {
 /// The 64 slots.
 struct Slots {
     cells: [Slot; FACTION_LIST_LEN],
+}
+
+impl Slots {
+    /// Slot `slot`'s `(flags, standing)`, `(0, 0)` past the 64.
+    fn read(&self, slot: usize) -> (u8, i32) {
+        self.cells.get(slot).map_or((0, 0), |c| {
+            (
+                c.flags.load(Ordering::Relaxed),
+                c.standing.load(Ordering::Relaxed),
+            )
+        })
+    }
 }
 
 impl Default for Slots {
@@ -55,9 +77,9 @@ impl Default for Slots {
 pub(crate) struct Reputations {
     slots: Arc<Slots>,
     pub(crate) forced: Vec<(u32, u32)>,
-    /// What each message did to the pane's list, in arrival order, for the reputation feed to
-    /// hand over after the snapshot ([`crate::ui_reputation::feed_reputation`]).
-    pub(crate) list_ops: Vec<benilla_ui::script::ReputationListOp>,
+    /// The frame's writes and the pane's list operations each message made, for the lane to replay
+    /// ([`log`]).
+    log: ReputationLog,
 }
 
 impl Reputations {
@@ -78,12 +100,7 @@ impl Reputations {
 
     /// Slot `slot`'s flag byte and wire standing, `(0, 0)` past the 64.
     pub(crate) fn slot(&self, slot: usize) -> (u8, i32) {
-        self.slots.cells.get(slot).map_or((0, 0), |c| {
-            (
-                c.flags.load(Ordering::Relaxed),
-                c.standing.load(Ordering::Relaxed),
-            )
-        })
+        self.slots.read(slot)
     }
 
     /// Slot `slot`'s flag byte (`[slot * 16 + 0xb73294]`), 0 past the 64.
@@ -104,6 +121,42 @@ impl Reputations {
     /// `SMSG_INITIALIZE_FACTIONS`: the list whole, from slot 0; a slot it does not reach reads
     /// `(0, 0)`, and one past the 64 is dropped.
     pub(crate) fn set_slots(&mut self, slots: &[(u8, i32)]) {
+        self.logged(Write::Slots(slots.to_vec()));
+        self.put_slots(slots);
+    }
+
+    /// A wire message's store of slot `slot`'s wire standing (`0x4d6330`).
+    pub(crate) fn set_standing(&mut self, slot: usize, standing: i32) {
+        self.logged(Write::Standing(slot, standing));
+        self.put_standing(slot, standing);
+    }
+
+    /// A wire message's store of slot `slot`'s flag byte (`0x4d5fc0`).
+    pub(crate) fn set_flags(&mut self, slot: usize, flags: u8) {
+        self.logged(Write::Flags(slot, flags));
+        self.put_flags(slot, flags);
+    }
+
+    /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`).
+    pub(crate) fn set_forced(&mut self, table: Vec<(u32, u32)>) {
+        self.logged(Write::Forced(table.clone()));
+        self.forced = table;
+    }
+
+    /// The teardown (`0x4d5360`): the forced table's count zeroed (`0x4d5419`) and all 64 slots
+    /// with it (`0x4d541f`-`0x4d542b`).
+    pub(crate) fn tear_down(&mut self) {
+        self.logged(Write::TearDown);
+        self.forced.clear();
+        self.put_slots(&[]);
+    }
+
+    /// A message's edit of the pane's list, applied by the lane at the message's place.
+    pub(crate) fn list_op(&mut self, op: ReputationListOp) {
+        self.log.listed(op);
+    }
+
+    fn put_slots(&self, slots: &[(u8, i32)]) {
         for (i, cell) in self.slots.cells.iter().enumerate() {
             let (flags, standing) = slots.get(i).copied().unwrap_or((0, 0));
             cell.flags.store(flags, Ordering::Relaxed);
@@ -111,29 +164,177 @@ impl Reputations {
         }
     }
 
-    /// A wire message's store of slot `slot`'s wire standing (`0x4d6330`).
-    pub(crate) fn set_standing(&mut self, slot: usize, standing: i32) {
+    fn put_standing(&self, slot: usize, standing: i32) {
         if let Some(cell) = self.slots.cells.get(slot) {
             cell.standing.store(standing, Ordering::Relaxed);
         }
     }
 
-    /// A wire message's store of slot `slot`'s flag byte (`0x4d5fc0`).
-    pub(crate) fn set_flags(&mut self, slot: usize, flags: u8) {
+    fn put_flags(&self, slot: usize, flags: u8) {
         if let Some(cell) = self.slots.cells.get(slot) {
             cell.flags.store(flags, Ordering::Relaxed);
         }
     }
 
-    /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`).
-    pub(crate) fn set_forced(&mut self, table: Vec<(u32, u32)>) {
-        self.forced = table;
+    /// Log `write`, made next, with the tables before it.
+    fn logged(&mut self, write: Write) {
+        let Self {
+            slots, forced, log, ..
+        } = self;
+        log.wrote(
+            || Saved {
+                slots: (0..FACTION_LIST_LEN).map(|i| slots.read(i)).collect(),
+                forced: forced.clone(),
+            },
+            write,
+        );
     }
 
-    /// The teardown (`0x4d5360`): the forced table's count zeroed (`0x4d5419`) and all 64 slots
-    /// with it (`0x4d541f`-`0x4d542b`).
-    pub(crate) fn tear_down(&mut self) {
-        self.forced.clear();
-        self.set_slots(&[]);
+    /// The lane's head ([`log`]).
+    pub(crate) fn lane_head(&self) -> Option<Stamp> {
+        self.log.head()
+    }
+
+    /// Rewind the store to the log's start, once per drain: whether it did so now.
+    pub(crate) fn rewind(&mut self) -> bool {
+        let Some(start) = self.log.rewind() else {
+            return false;
+        };
+        if let Some(start) = start {
+            self.put_slots(&start.slots);
+            self.forced = start.forced;
+        }
+        true
+    }
+
+    /// Replay the writes `until` admits, up to the next list operation it admits, which it hands
+    /// back with its stamp.
+    pub(crate) fn replay(&mut self, until: Until) -> Option<(Stamp, ReputationListOp)> {
+        self.rewind();
+        while let Some((at, next)) = self.log.next(until) {
+            match next {
+                Next::Write(write) => self.apply(write),
+                Next::Op(op) => return Some((at, op)),
+            }
+        }
+        None
+    }
+
+    /// The drain's end, however it ended: the store as the frame left it.
+    pub(crate) fn end_replay(&mut self) {
+        for write in self.log.finish() {
+            self.apply(write);
+        }
+    }
+
+    /// The log dropped unreplayed, while no in-game interface is up to hear it.
+    pub(crate) fn drop_log(&mut self) {
+        self.log.drop_all();
+    }
+
+    /// The operations logged and not yet applied, taken, for the tests.
+    #[cfg(test)]
+    pub(crate) fn take_ops(&mut self) -> Vec<ReputationListOp> {
+        self.log.take_ops()
+    }
+
+    fn apply(&mut self, write: Write) {
+        match write {
+            Write::Slots(slots) => self.put_slots(&slots),
+            Write::Standing(slot, standing) => self.put_standing(slot, standing),
+            Write::Flags(slot, flags) => self.put_flags(slot, flags),
+            Write::Forced(table) => self.forced = table,
+            Write::TearDown => {
+                self.forced.clear();
+                self.put_slots(&[]);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lane's replay: the store rewound to the frame's start, each write applied at its place
+    /// ahead of the operation stamped after it, and the frame's last state once it ends.
+    #[test]
+    fn the_replay_walks_the_frames_writes_between_its_operations() {
+        let mut store = Reputations::default();
+        store.set_standing(3, 100);
+        store.list_op(ReputationListOp::Rebuild);
+        store.set_flags(3, 1);
+        store.set_standing(3, 200);
+        store.list_op(ReputationListOp::Visible(3));
+        assert_eq!((store.standing(3), store.flags(3)), (200, 1));
+        let until = Until::all();
+        assert!(store.rewind());
+        assert!(!store.rewind(), "once per drain");
+        assert_eq!(
+            (store.standing(3), store.flags(3)),
+            (0, 0),
+            "the frame's start"
+        );
+        assert_eq!(
+            store.replay(until).map(|(_, op)| op),
+            Some(ReputationListOp::Rebuild)
+        );
+        assert_eq!(
+            (store.standing(3), store.flags(3)),
+            (100, 0),
+            "the first message's"
+        );
+        assert_eq!(
+            store.replay(until).map(|(_, op)| op),
+            Some(ReputationListOp::Visible(3))
+        );
+        assert_eq!((store.standing(3), store.flags(3)), (200, 1));
+        assert!(store.replay(until).is_none());
+        store.end_replay();
+        assert!(store.lane_head().is_none());
+    }
+
+    /// A drain that stops early leaves the store as the frame wrote it, and its operations for the
+    /// next drain; a verb's write during the replay lands in place and is not logged.
+    #[test]
+    fn a_drain_that_stops_early_leaves_the_final_store_and_a_verbs_write_stands() {
+        let mut store = Reputations::default();
+        store.set_standing(3, 100);
+        store.list_op(ReputationListOp::Rebuild);
+        store.set_standing(3, 200);
+        store.list_op(ReputationListOp::Visible(3));
+        assert!(store.rewind());
+        assert!(store.replay(Until::all()).is_some());
+        // The first listener's `FactionToggleAtWar`.
+        store.set_flags(4, 2);
+        store.end_replay();
+        assert_eq!(
+            store.standing(3),
+            200,
+            "the writes it did not replay are made"
+        );
+        assert_eq!(store.flags(4), 2, "and the verb's stands");
+        assert_eq!(store.take_ops(), [ReputationListOp::Visible(3)]);
+    }
+
+    /// The forced table and the teardown are replayed with the slots.
+    #[test]
+    fn the_forced_table_and_the_teardown_replay_with_the_slots() {
+        let mut store = Reputations::default();
+        store.set_forced(vec![(72, 0)]);
+        store.set_standing(1, 5);
+        store.tear_down();
+        store.set_forced(vec![(47, 7)]);
+        assert!(store.rewind());
+        assert!(store.forced.is_empty() && store.standing(1) == 0);
+        store.list_op(ReputationListOp::Rebuild);
+        // Replay stops at the operation only after the writes ahead of it: all four are stamped
+        // before it, so they are applied by then.
+        assert!(store.replay(Until::all()).is_some());
+        assert_eq!(
+            (store.forced.clone(), store.standing(1)),
+            (vec![(47, 7)], 0)
+        );
+        store.end_replay();
     }
 }

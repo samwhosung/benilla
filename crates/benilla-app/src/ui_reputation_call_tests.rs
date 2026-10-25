@@ -76,6 +76,8 @@ fn client(unit_flags: u32, stormwind: u8, list: ReputationState) -> (App, Receiv
             Guid(ME),
             ObjectStore(ObjectFields::from_pairs(&[
                 (2, 0x19),
+                // A male human warrior.
+                (36, 1 | (1 << 8)),
                 (UNIT_FLAGS, unit_flags),
                 (WATCHED, u32::MAX),
             ])),
@@ -202,14 +204,11 @@ fn a_peace_forced_war_request_sends_and_leaves_the_bit_clear() {
     assert!(eval::<benilla_ui::mlua::Value>(&mut app, "return War").is_nil());
 }
 
-/// The two requests write the slot's flag byte at once (`0x4d6074`, `0x4d612c`), so the next push
-/// of the list keeps what they set.
+/// The two requests write the slot's flag byte at once (`0x4d6074`, `0x4d612c`).
 #[test]
 fn the_requests_write_the_slots_flags() {
     let (mut app, _rx) = client(0, flag::VISIBLE, state());
     run(&mut app, "FactionToggleAtWar(3) SetFactionInactive(3)");
-    use bevy::ecs::system::RunSystemOnce;
-    app.world_mut().run_system_once(feed_reputation).unwrap();
     let flags = app.world().resource::<Reputations>().flags(19);
     assert_eq!(
         flags,
@@ -249,7 +248,8 @@ fn the_reaction_after_a_toggle_reads_the_bit_the_toggle_wrote() {
         ]),
         HashMap::new(),
     )
-    .with_reputation(72, 19, 1, 4000);
+    .with_reputation(72, 19, 1, 4000)
+    .with_faction_text(72, 469, "Stormwind", "");
     let factions = crate::target::Factions::from_catalog(catalog);
     let (mut app, _rx) = client(0, flag::VISIBLE, state());
     app.insert_resource(factions.clone());

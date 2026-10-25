@@ -526,12 +526,24 @@ fn each_message_hands_the_list_its_own_ops() {
     use benilla_ui::script::ReputationListOp as Op;
     let mut app = synthetic_app();
     seat(&mut app, VISIBLE, 0);
-    let ops =
-        |app: &mut App| std::mem::take(&mut app.world_mut().resource_mut::<Reputations>().list_ops);
+    let ops = |app: &mut App| app.world_mut().resource_mut::<Reputations>().take_ops();
     let _ = ops(&mut app);
     visible(&mut app, 40);
     visible(&mut app, 40);
-    assert_eq!(ops(&mut app), [Op::Visible(40)]);
+    assert_eq!(
+        ops(&mut app),
+        [
+            Op::Standing {
+                listed: vec![40],
+                flags_moved: false
+            },
+            Op::Standing {
+                listed: vec![],
+                flags_moved: true
+            }
+        ],
+        "the adder ahead of the flag write, the sort after it"
+    );
     send(
         &mut app,
         SessionEvent::ReputationAtWar {
@@ -543,10 +555,17 @@ fn each_message_hands_the_list_its_own_ops() {
     delta(&mut app, 30, 5);
     assert_eq!(
         ops(&mut app),
-        [Op::Standing {
-            listed: vec![30],
-            flags_moved: true
-        }]
+        [
+            Op::Standing {
+                listed: vec![30],
+                flags_moved: false
+            },
+            Op::Standing {
+                listed: vec![],
+                flags_moved: true
+            }
+        ],
+        "the adder at the listing, then the sort once the entries are in"
     );
 }
 

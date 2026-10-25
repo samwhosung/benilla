@@ -1486,11 +1486,6 @@ mod tests {
             ),
             crate::test_support::runs_before(
                 &mut headless,
-                crate::ui_reputation::feed_reputation,
-                crate::lanes::fire_in_order,
-            ),
-            crate::test_support::runs_before(
-                &mut headless,
                 crate::ui_party::feed_party,
                 crate::lanes::fire_in_order,
             ),
@@ -1512,8 +1507,8 @@ mod tests {
             ),
         ];
         assert_eq!(
-            ahead, [true; 8],
-            "feed_units, char, honor, reputation, party, pet, pet stats, inspect"
+            ahead, [true; 7],
+            "feed_units, char, honor, party, pet, pet stats, inspect"
         );
 
         // In that order: the block lands, the push, the firing.
@@ -1680,7 +1675,7 @@ mod tests {
     }
 
     /// The login in the server's order: the faction list lands before the player's create (vmangos
-    /// `SendInitialPacketsBeforeAddToMap`, `Player.cpp:19256`), so the list's first push and the
+    /// `SendInitialPacketsBeforeAddToMap`, `Player.cpp:19256`), so the list's first build and the
     /// world-enter cascade share the create's frame. The cascade's rebuild signals
     /// `UPDATE_FACTION` after `PLAYER_ENTERING_WORLD` (`0x4909d3`), the player seated, so
     /// `ReputationWatchBar_Update` reads the level and a 60 trades the XP bar for the max-level art
@@ -1690,13 +1685,6 @@ mod tests {
         benilla_formats::wow_data_or_skip!();
         const WATCHED: u16 = 1261;
         const XP: u16 = 716;
-        let mut headless = crate::game_plugins::schedule_tests::headless_client();
-        assert!(crate::test_support::runs_before(
-            &mut headless,
-            crate::ui_reputation::feed_reputation,
-            super::super::feed_units
-        ));
-
         for (level, xp_bar) in [(60, false), (59, true)] {
             let (mut app, _) = feed_world(
                 &[
@@ -1743,9 +1731,6 @@ mod tests {
                     crate::ui_script::test_ui::load_ui(s, file);
                 }
             }
-            app.world_mut()
-                .run_system_once(crate::ui_reputation::feed_reputation)
-                .unwrap();
             app.world_mut()
                 .run_system_once(super::super::feed_units)
                 .unwrap();

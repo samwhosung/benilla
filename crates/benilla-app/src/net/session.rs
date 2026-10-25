@@ -431,7 +431,7 @@ fn on_reputations(
             // (`0x4d55d9` → `0x4d6457`, and `0x4d55de`), then the message's own (`0x4d5699`).
             let held = self_facts(&b).is_some();
             if held {
-                b.reputations.list_ops.push(ReputationListOp::Rebuild);
+                b.reputations.list_op(ReputationListOp::Rebuild);
             }
             signal(1 + 2 * usize::from(held), &mut lane);
         }
@@ -442,24 +442,32 @@ fn on_reputations(
             }
         }
         SessionEvent::ReputationVisible { list_id } => {
-            // The chat line names the rank, so it reads the store before the flag lands.
-            if let (Some(f), Some(me)) = (factions.as_deref(), self_facts(&b)) {
-                let line = crate::ui_reputation::visible_line(
-                    list_id,
-                    &b.reputations,
-                    f.catalog(),
-                    me.race,
-                    me.class,
-                );
-                crate::ui_reputation::queue_standing_lines(line, f.catalog(), me.female, &chat);
-            }
-            // A slot newly visible is added and sorted, which signals (`0x4d5738`, `0x4d574a` →
-            // `0x4d5dab`).
-            let listed = reputation_visible(list_id, &mut b.reputations);
+            // The adder lists the slot and prints its rank, the flag byte not yet moved
+            // (`0x4d5733`-`0x4d5738`); then the flag is stored (`0x4d5745`) and the list sorts
+            // (`0x4d574a` → `0x4d5dab`), which signals.
+            let facts = self_facts(&b);
+            let listed = reputation_visible(list_id, &mut b.reputations, |store| {
+                store.list_op(ReputationListOp::Standing {
+                    listed: vec![list_id],
+                    flags_moved: false,
+                });
+                // The chat line names the rank, so it reads the store before the flag lands.
+                if let (Some(f), Some(me)) = (factions.as_deref(), facts.as_ref()) {
+                    let line = crate::ui_reputation::visible_line(
+                        list_id,
+                        store,
+                        f.catalog(),
+                        me.race,
+                        me.class,
+                    );
+                    crate::ui_reputation::queue_standing_lines(line, f.catalog(), me.female, &chat);
+                }
+            });
             if listed {
-                b.reputations
-                    .list_ops
-                    .push(ReputationListOp::Visible(list_id));
+                b.reputations.list_op(ReputationListOp::Standing {
+                    listed: vec![],
+                    flags_moved: true,
+                });
             }
             signal(usize::from(listed), &mut lane);
         }
@@ -493,9 +501,11 @@ fn self_facts(b: &Bridge) -> Option<SelfFacts> {
     })
 }
 
-/// The chat lines read the deltas against the store, so they must run before the overwrite. The
-/// "increased by" line comes first, then the rank lines, as the reference's entry loop orders them
-/// (`0x4d57f5`, `0x4d5896`).
+/// `SMSG_SET_FACTION_STANDING` (`0x4d5760`) entry by entry, each printing where the reference's
+/// does: the first entry's "increased by" line with its standing stored and its flags not yet
+/// moved (`0x4d6330`, `0x4d57f5`), a listed slot's rank line in the adder (`0x4d5826`), a moved
+/// rank's after the flag write (`0x4d5896`). A line reads the entry against the store as it stood,
+/// so each is decided ahead of the write it follows and parked in the chat log after it.
 fn on_reputation_delta(
     In(ev): In<SessionEvent>,
     mut b: Bridge,
@@ -508,31 +518,37 @@ fn on_reputation_delta(
     tutorials: Option<Res<crate::tutorial::Tutorials>>,
 ) {
     if let SessionEvent::ReputationDelta { standings } = ev {
-        crate::combat_log::chat::faction_standing(
-            &standings,
-            &b.reputations,
-            factions.as_deref(),
-            &chat_log,
-        );
-        if let (Some(f), Some(me)) = (factions.as_deref(), self_facts(&b)) {
-            let lines = crate::ui_reputation::delta_lines(
-                &standings,
-                &b.reputations,
-                f.catalog(),
-                me.race,
-                me.class,
-            );
-            crate::ui_reputation::queue_standing_lines(lines, f.catalog(), me.female, &chat_log);
-        }
+        let facts = self_facts(&b);
         let ranks = factions
             .as_deref()
-            .zip(self_facts(&b))
+            .zip(facts.as_ref())
             .map(|(f, me)| (f.catalog(), me.race, me.class));
-        let latches = reputation_delta(standings, &mut b.reputations, ranks, &mut quest);
-        b.reputations.list_ops.push(ReputationListOp::Standing {
-            listed: latches.listed.clone(),
-            flags_moved: latches.flags_moved,
-        });
+        let mut said = |said: Said| match said {
+            Said::Change {
+                list_id,
+                flags,
+                old,
+                standing,
+            } => crate::combat_log::chat::faction_standing_change(
+                list_id,
+                flags,
+                old,
+                standing,
+                factions.as_deref(),
+                &chat_log,
+            ),
+            Said::Line(line) => {
+                if let (Some(f), Some(me)) = (factions.as_deref(), facts.as_ref()) {
+                    crate::ui_reputation::queue_standing_lines(
+                        [line],
+                        f.catalog(),
+                        me.female,
+                        &chat_log,
+                    );
+                }
+            }
+        };
+        let latches = reputation_delta(standings, &mut b.reputations, ranks, &mut quest, &mut said);
         // A flag byte that moved re-sorts, which signals (`0x4d58c8` → `0x4d5dab`).
         if latches.flags_moved {
             if let Some(lane) = lane.as_deref_mut() {
@@ -913,17 +929,34 @@ fn forced_reactions(reactions: Vec<(u32, u32)>, reputations: &mut Reputations) {
     reputations.set_forced(reactions);
 }
 
+/// What an entry of a standing message says, where it says it.
+enum Said {
+    /// The first entry's "increased by" line, for the slot as it was.
+    Change {
+        list_id: u32,
+        flags: u8,
+        old: i32,
+        standing: i32,
+    },
+    /// A rank line.
+    Line(crate::ui_reputation::StandingLine),
+}
+
 /// `SMSG_SET_FACTION_STANDING` (`0x4d5760`), entry by entry: the slot's standing stored, the
 /// slot made visible unless it is visible or `HIDDEN` already (`0x4d5815`), and its at-war bit
 /// set by the faction's rank after the entry below Unfriendly (`0x4d5833`), else cleared when that
 /// rank rose (`0x4d583f`). `ranks` is the catalog and the active player's race and class the rank
 /// reads its base by (`0x4d63a0`); without them the rule is skipped, as every rank reads Neutral
-/// before the player's rebuild names the slots (`0x4d54ee`).
+/// before the player's rebuild names the slots (`0x4d54ee`). `said` hears each line at its place
+/// among the writes, and the pane's list is handed the adder at the listing (`0x4d5826`) and the
+/// sort after the entries (`0x4d58c8`); the message always hands it one operation, which the lane
+/// takes the snapshot at.
 fn reputation_delta(
     standings: Vec<(u32, i32)>,
     reputations: &mut Reputations,
     ranks: Option<(&benilla_formats::FactionCatalog, u8, u8)>,
     quest: &mut QuestGiver,
+    said: &mut dyn FnMut(Said),
 ) -> DeltaLatches {
     use benilla_formats::faction_flags as flag;
     let rank = |reputations: &Reputations, slot: usize| {
@@ -932,17 +965,38 @@ fn reputation_delta(
         })
     };
     let mut latches = DeltaLatches::default();
-    for (list_id, standing) in standings {
+    for (n, (list_id, standing)) in standings.into_iter().enumerate() {
         let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_STANDING") else {
             continue;
         };
+        let (stored, was) = reputations.slot(i);
         let old = rank(reputations, i);
         reputations.set_standing(i, standing);
-        let mut flags = reputations.flags(i);
-        if flags & (flag::VISIBLE | flag::HIDDEN) == 0 {
+        // `0x4d6330` prints the first entry's change with the standing stored (`0x4d634a`).
+        if n == 0 {
+            said(Said::Change {
+                list_id,
+                flags: stored,
+                old: was,
+                standing,
+            });
+        }
+        let line = ranks.and_then(|(catalog, race, class)| {
+            crate::ui_reputation::delta_line((list_id, standing), stored, was, catalog, race, class)
+        });
+        let mut flags = stored;
+        let listed = flags & (flag::VISIBLE | flag::HIDDEN) == 0;
+        if listed {
             flags |= flag::VISIBLE;
-            // The adder, which lists the slot (`0x4d5826`).
-            latches.listed.push(list_id);
+            // The adder, which lists the slot (`0x4d5826`) and prints its rank (`0x4d5bfb`), the
+            // flag byte not yet written.
+            reputations.list_op(ReputationListOp::Standing {
+                listed: vec![list_id],
+                flags_moved: false,
+            });
+            if let Some(line) = line {
+                said(Said::Line(line));
+            }
         }
         if let (Some(old), Some(new)) = (old, rank(reputations, i)) {
             latches.rank_moved |= new != old;
@@ -952,11 +1006,21 @@ fn reputation_delta(
                 flags &= !flag::AT_WAR;
             }
         }
-        latches.flags_moved |= flags != reputations.flags(i);
-        reputations.set_flags(i, flags);
+        if flags != stored {
+            latches.flags_moved = true;
+            reputations.set_flags(i, flags);
+        }
+        // A moved rank prints after the flag write (`0x4d5896`), unless the adder printed.
+        if let Some(line) = line.filter(|_| !listed) {
+            said(Said::Line(line));
+        }
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
     quest.bump_reask();
+    reputations.list_op(ReputationListOp::Standing {
+        listed: vec![],
+        flags_moved: latches.flags_moved,
+    });
     latches
 }
 
@@ -965,23 +1029,30 @@ fn reputation_delta(
 struct DeltaLatches {
     /// A slot's flag byte moved (`0x4d585d`-`0x4d5876`): the list re-sorts.
     flags_moved: bool,
-    /// The slots the entries made visible, in their order, each handed to the adder (`0x4d5826`).
-    listed: Vec<u32>,
     /// A slot's rank moved, `HIDDEN` or not (`0x4d5880`, `0x4d58a9`, `0x4d58ac`): the quest log and
     /// the reaction refresh read it.
     rank_moved: bool,
 }
 
 /// `SMSG_SET_FACTION_VISIBLE`: sets `FACTION_FLAG_VISIBLE` on a slot without it, which the pane
-/// lists by (`0x4d572e`-`0x4d5745`); it carries no standing. Whether the slot was newly listed.
-fn reputation_visible(list_id: u32, reputations: &mut Reputations) -> bool {
+/// lists by (`0x4d572e`-`0x4d5745`); it carries no standing. `listing` runs ahead of the write, on
+/// a slot newly listed (the adder, `0x4d5738`). Whether the slot was newly listed.
+fn reputation_visible(
+    list_id: u32,
+    reputations: &mut Reputations,
+    listing: impl FnOnce(&mut Reputations),
+) -> bool {
     use benilla_formats::faction_flags::VISIBLE;
     let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_VISIBLE") else {
         return false;
     };
     let flags = reputations.flags(i);
+    let listed = flags & VISIBLE == 0;
+    if listed {
+        listing(reputations);
+    }
     reputations.set_flags(i, flags | VISIBLE);
-    flags & VISIBLE == 0
+    listed
 }
 
 /// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`): bit `0x02` of the wire byte becomes the slot's at-war
