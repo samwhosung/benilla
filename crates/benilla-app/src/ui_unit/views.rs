@@ -439,6 +439,16 @@ impl ViewStores<'_, '_> {
         }
     }
 
+    /// `guid`'s store as of the drain's place, `entity` the one the object manager holds it under
+    /// now ([`Self::by_guid`]): a unit a later packet of the frame destroys still reads as its
+    /// packet left it.
+    pub(crate) fn at(&self, guid: u64, entity: Option<Entity>) -> Option<&ObjectStore> {
+        let live = entity
+            .and_then(|e| self.live.get(e).ok())
+            .map(|(store, _)| store);
+        self.by_guid(guid, live)
+    }
+
     /// The group records as of the drain's place, `live` the roster's now: while the drain replays
     /// a frame that wrote any, as its packet left them.
     pub(crate) fn records<'a>(

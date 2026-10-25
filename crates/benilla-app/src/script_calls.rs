@@ -169,12 +169,9 @@ impl UnitLive<'_, '_> {
         guid: u64,
         read: &mut dyn FnMut(&dyn benilla_ui::script::UnitObjectRead),
     ) -> bool {
-        let Some(store) = self
-            .index
-            .as_deref()
-            .and_then(|i| i.0.get(&guid))
-            .and_then(|&e| self.stores.get(e).ok())
-        else {
+        // As of here, one a later packet destroys included.
+        let entity = self.index.as_deref().and_then(|i| i.0.get(&guid).copied());
+        let Some(store) = self.stores.at(guid, entity) else {
             return false;
         };
         read(&crate::ui_unit::StoreObject(store));

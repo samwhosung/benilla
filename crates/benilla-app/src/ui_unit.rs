@@ -801,17 +801,18 @@ pub(crate) struct TokenObjects<'a, 'w, 's> {
 }
 
 impl TokenObjects<'_, '_, '_> {
-    /// The object held under `guid` as of here (`0x468460`).
+    /// The object held under `guid` as of here (`0x468460`), one a later packet destroys
+    /// included.
     fn store(&self, guid: u64) -> Option<&ObjectStore> {
-        let entity = *self.index?.0.get(&guid)?;
-        self.stores.get(entity).ok()
+        let entity = self.index.and_then(|i| i.0.get(&guid).copied());
+        self.stores.at(guid, entity)
     }
 }
 
 impl UnitTokenObjects for TokenObjects<'_, '_, '_> {
     fn active_player(&self) -> u64 {
         self.me
-            .filter(|&(entity, _)| self.stores.get(entity).is_ok())
+            .filter(|&(entity, guid)| self.stores.at(guid, Some(entity)).is_some())
             .map_or(0, |(_, guid)| guid)
     }
     fn pet_of(&self, guid: u64) -> Option<u64> {
