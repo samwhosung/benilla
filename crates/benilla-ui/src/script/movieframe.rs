@@ -134,9 +134,11 @@ pub fn movie_bitmap(width: u32) -> Option<MovieBitmap> {
 pub(crate) struct Movies {
     reader: Option<MovieReader>,
     frames: HashMap<FrameHandle, MovieFrameState>,
-    /// The last start's number.
-    last_id: u64,
 }
+
+/// Hands out each start's number: process-wide, so a stream the host still holds for a VM that
+/// is gone never shares a number with a movie of the VM that replaced it.
+static NEXT_MOVIE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Clone, Default)]
 struct MovieFrameState {
@@ -177,8 +179,7 @@ impl Model {
         let captions = reader(&movie_path(name, "sbt"), MovieOpen::Archives)
             .map(|f| captions::parse(&f))
             .unwrap_or_default();
-        self.movies.last_id += 1;
-        let id = self.movies.last_id;
+        let id = NEXT_MOVIE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let state = self.movies.frames.entry(h).or_default();
         state.playback = Some(Playback::new(id, movie, audio, captions));
         state.audio_asked = false;
@@ -422,7 +423,15 @@ impl UiScript {
         match report {
             MovieAudio::Failed => p.audio = Audio::None,
             MovieAudio::At(ms) => p.audio = Audio::At(ms),
-            MovieAudio::Ended => p.finished = true,
+            MovieAudio::Ended => {
+                p.finished = true;
+                // A stream that ended having played nothing gives the clock no time to anchor
+                // to, where `0x78cf5d` waits on it: it counts as no stream, so the clock runs
+                // and the flag stops the movie.
+                if !matches!(p.audio, Audio::At(t) if t > 0) {
+                    p.audio = Audio::None;
+                }
+            }
         }
     }
 
@@ -468,6 +477,25 @@ impl UiScript {
                 true
             }
             None => false,
+        }
+    }
+
+    /// The frames' destructor's teardown (`0x78c280` calls `0x78ced0`), as the VM goes: each
+    /// playing movie stops and fires its `OnMovieFinished`.
+    pub(super) fn stop_movies(&mut self) {
+        let mut frames: Vec<FrameHandle> = {
+            let model = self.model_ref();
+            model
+                .movies
+                .frames
+                .iter()
+                .filter(|(_, s)| s.playback.is_some())
+                .map(|(&h, _)| h)
+                .collect()
+        };
+        frames.sort_by_key(|h| self.model_ref().arena.frame(*h).map(|f| f.insertion_seq));
+        for h in frames {
+            stop_movie(&self.lua, h);
         }
     }
 

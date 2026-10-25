@@ -647,6 +647,16 @@ pub struct UiScript {
     session: u64,
 }
 
+/// A VM's end destroys its frames, and a movie frame's destructor stops its movie, firing
+/// `OnMovieFinished` (`0x78c280`).
+impl Drop for UiScript {
+    fn drop(&mut self) {
+        if self.lua.app_data_ref::<Model>().is_some() {
+            self.stop_movies();
+        }
+    }
+}
+
 /// Hands out [`UiScript::session`] ids: process-global and monotone, so an id is never reused.
 static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 

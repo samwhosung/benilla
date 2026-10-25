@@ -207,6 +207,48 @@ pub(super) fn upload_movie_pictures(
 mod tests {
     use super::*;
 
+    /// A glue VM whose `MovieProbe` frame plays a 1024-wide movie with audio.
+    fn playing_vm() -> benilla_ui::script::UiScript {
+        let mut s = benilla_ui::script::UiScript::new_glue().unwrap();
+        s.set_movie_reader(Box::new(|path, _| {
+            path.ends_with(".avi").then(|| {
+                benilla_movie::testing::synthetic_avi(1024, 464, (1, 25), 2, &[b"", b""], &[b"mp3"])
+            })
+        }));
+        s.run(r#"M = CreateFrame("MovieFrame", "MovieProbe") M:StartMovie("A")"#)
+            .unwrap();
+        s
+    }
+
+    /// The feed asks for each new movie's stream once, and lets it go when its movie is gone,
+    /// the VM that played it replaced by one that never did.
+    #[test]
+    fn the_feed_starts_a_movies_stream_and_stops_it_with_its_vm() {
+        let mut world = World::new();
+        // One schedule, so the feed keeps its own record of the streams it asked for.
+        let mut schedule = Schedule::default();
+        schedule.add_systems(feed_movie_audio);
+        world.init_resource::<MovieAudioReports>();
+        world.init_resource::<Messages<MovieAudioRequest>>();
+        world.insert_non_send_resource(playing_vm());
+        let mut asked = |world: &mut World| -> Vec<String> {
+            schedule.run(world);
+            world
+                .resource_mut::<Messages<MovieAudioRequest>>()
+                .drain()
+                .map(|r| match r {
+                    MovieAudioRequest::Start { mp3, .. } => format!("start {mp3:?}"),
+                    MovieAudioRequest::Stop { .. } => "stop".to_string(),
+                })
+                .collect()
+        };
+        assert_eq!(asked(&mut world), [format!("start {:?}", b"mp3".to_vec())]);
+        assert!(asked(&mut world).is_empty(), "asked once");
+        world.insert_non_send_resource(benilla_ui::script::UiScript::new_glue().unwrap());
+        assert_eq!(asked(&mut world), ["stop"]);
+        assert!(asked(&mut world).is_empty());
+    }
+
     /// The picture starts `0x81d400`'s rows above the bitmap's bottom (19200 bytes, 6 rows of
     /// 800; 98304, 24 rows of 1024) and the rest stays opaque black: 800×368 is texture rows
     /// 10..378 of 384, 1024×464 rows 24..488 of 512.

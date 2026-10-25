@@ -296,3 +296,55 @@ fn the_picture_is_extracted_while_the_movie_shows_one() {
     s.run("M:StopMovie()").unwrap();
     assert_eq!(movie_quads(&mut s), 0);
 }
+
+/// A movie's number is the process's, not the VM's: a rebuilt glue VM's first movie never takes
+/// the number of a stream the host still holds for the old VM's.
+#[test]
+fn movie_numbers_are_never_reused_across_vms() {
+    let start = || {
+        let (mut s, _) = movie_vm(vec![("A.avi", avi(10, &[b"mp3"]))]);
+        s.run(r#"M:StartMovie("A")"#).unwrap();
+        let ids: Vec<u64> = s.take_movie_audio_starts().iter().map(|a| a.id).collect();
+        (s, ids)
+    };
+    let (_old, first) = start();
+    let (_new, second) = start();
+    assert_eq!((first.len(), second.len()), (1, 1));
+    assert_ne!(first, second);
+}
+
+/// A stream that ends before it played a millisecond ends the movie: with no play time to anchor
+/// to, the clock runs on the wall clock, and the finished flag the end set stops it.
+#[test]
+fn a_stream_that_ends_unplayed_still_ends_the_movie() {
+    let (mut s, _) = movie_vm(vec![("A.avi", avi(100, &[b"mp3"]))]);
+    s.run(r#"M:StartMovie("A")"#).unwrap();
+    let id = s.take_movie_audio_starts()[0].id;
+    s.tick(0.0);
+    s.set_movie_audio(id, MovieAudio::Ended);
+    s.tick(0.0);
+    assert_eq!(log(&s), "finished");
+    assert!(!s.movie_playing());
+}
+
+/// The frame's destructor runs the teardown (`0x78c280` calls `0x78ced0`), so a VM dropped with a
+/// movie playing fires its `OnMovieFinished`.
+#[test]
+fn a_vm_dropped_mid_movie_finishes_its_movie() {
+    let (mut s, _) = movie_vm(vec![("A.avi", avi(100, &[]))]);
+    let fired = Rc::new(RefCell::new(0));
+    let count = fired.clone();
+    let f = s
+        .lua()
+        .create_function(move |_, ()| {
+            *count.borrow_mut() += 1;
+            Ok(())
+        })
+        .unwrap();
+    s.lua().globals().set("note_finished", f).unwrap();
+    s.run(r#"M:SetScript("OnMovieFinished", function() note_finished() end) M:StartMovie("A")"#)
+        .unwrap();
+    s.tick(0.0);
+    drop(s);
+    assert_eq!(*fired.borrow(), 1);
+}

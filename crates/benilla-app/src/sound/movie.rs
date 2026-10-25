@@ -44,7 +44,10 @@ fn drive_movie_audio(
             MovieAudioRequest::Start { id, mp3 } => {
                 match open_stream(&mut out, &config, mp3.clone()) {
                     Some(h) => {
-                        streams.0.insert(*id, h);
+                        // A number is never handed out twice; a stream under it would leak.
+                        if let Some(mut old) = streams.0.insert(*id, h) {
+                            old.stop(mixer::fade(0));
+                        }
                     }
                     None => reports.0.push((*id, MovieAudio::Failed)),
                 }
