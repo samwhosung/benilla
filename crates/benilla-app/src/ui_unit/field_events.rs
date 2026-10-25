@@ -467,13 +467,15 @@ pub(crate) fn fire(
         // `0x5ddffa`.
         FieldNotice::ComboPoints => script.fire_event("PLAYER_COMBO_POINTS", vec![]),
         FieldNotice::LevelUp(info) => level_up(script, &info),
+        // Caught by [`fire_lane`] before it reaches here: the refresh runs on the host's action
+        // states ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
+        FieldNotice::UsableRefresh => {}
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
         // table, the aura cache and the skill lines.
         FieldNotice::QuestLog
         | FieldNotice::Tutorial { .. }
         | FieldNotice::Drunk { .. }
         | FieldNotice::Shapeshift
-        | FieldNotice::UsableRefresh
         | FieldNotice::PlayerAuras
         | FieldNotice::SkillLines
         | FieldNotice::SkillMax
