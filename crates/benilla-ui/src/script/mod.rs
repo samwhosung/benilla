@@ -127,6 +127,7 @@ mod keyboard;
 mod layer_batch;
 mod lock_check;
 mod protected;
+mod stat_read;
 pub(crate) mod taint;
 pub(crate) mod texel;
 pub(crate) mod use_gates;
@@ -242,8 +243,8 @@ pub use calls::{spell_owner, ItemCallback, NearestMode, QueuedCall, RecordAsk, S
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
 pub use channel::{ChannelCommand, JoinedChannel, RecruitmentPlan, ZoneChannelRow};
 pub use char_stats::{
-    weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, UnitCombatStats,
-    BANK_BAG_SLOT_COUNT, INVENTORY_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,
+    weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, BANK_BAG_SLOT_COUNT,
+    INVENTORY_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,
 };
 pub use chat_misc::EmoteRequest;
 pub use chat_send::{
@@ -309,6 +310,7 @@ pub use petition::{
     PETITION_TYPE_PETITION,
 };
 pub use protected::InputEvents;
+pub use stat_read::{CombatRead, SelfRead, UnitCombatStats};
 pub use tabard::{
     emblem_mask_path, TabardCall, TabardHost, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
     TABARD_CREATION_COST,

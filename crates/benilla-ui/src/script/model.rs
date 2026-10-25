@@ -1066,7 +1066,7 @@ pub(crate) struct Model {
     pub(crate) exhaustion: HashMap<u8, (String, f64)>,
 
     /// The paper doll's combat stats, `None` until the first push.
-    pub(crate) player_combat_stats: Option<char_stats::UnitCombatStats>,
+    pub(crate) player_combat_stats: Option<super::stat_read::UnitCombatStats>,
     pub(crate) inventory_slots: char_stats::InventorySlots,
     /// The six bank-bag slots, ids 64..=69, fed from the player descriptor's guids.
     pub(crate) bank_bag_slots: char_stats::BankBagSlots,

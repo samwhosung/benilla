@@ -8,6 +8,7 @@ use mlua::{Lua, Value};
 use super::super::binding_abi::flag;
 use super::super::calls::{submit, ScriptCall};
 use super::super::protected::select_may_cast;
+use super::super::stat_read::read_self;
 use super::super::Model;
 use super::{
     check_unit_token, classification_word, grey_band, level_is_hidden_at, object_predicate,
@@ -786,8 +787,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitXP/UnitXPMax(unit): the token resolved (`0x51738e`), then the active player's private
-    // `PLAYER_XP` pair for its object by whatever token names it (`0x5173ad`-`0x5173c9`), 0 for
-    // any other unit or none.
+    // `PLAYER_XP` pair for its object by whatever token names it (`0x5173ad`-`0x5173c9`), read
+    // off the object as the call runs ([`read_self`]), 0 for any other unit or none.
     fn names_self(model: &Model, token: &str) -> bool {
         token.eq_ignore_ascii_case("player")
             || (model.unit_guids.player != 0
@@ -801,7 +802,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(if names_self(&model, &token) {
-                i64::from(model.player_xp)
+                i64::from(read_self(lua, |own| own.xp()))
             } else {
                 0
             })
@@ -815,7 +816,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(if names_self(&model, &token) {
-                i64::from(model.player_next_level_xp)
+                i64::from(read_self(lua, |own| own.next_level_xp()))
             } else {
                 0
             })
@@ -831,12 +832,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetMoney() (`0x518160`): the active player's coinage (`+0xf70`, `0x5181ae`) as the call
+    // runs.
     g.set(
         "GetMoney",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.money as i64)
-        })?,
+        lua.create_function(|lua, ()| Ok(read_self(lua, |own| own.money()) as i64))?,
     )?;
 
     // GetComboPoints() (`0x51a190`): `PLAYER_FIELD_BYTES` byte 1, behind two gates stock
@@ -860,14 +860,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetRestState() (`0x48d350`) → the Exhaustion.dbc row's ID, name and factor, indexed directly
-    // by `PLAYER_BYTES_2` byte 3 (`0xc0dd78`); nil, nil, nil when there is no such row.
+    // by `PLAYER_BYTES_2` byte 3 (`0xc0dd78`) as the call runs; nil, nil, nil when there is no
+    // such row.
     g.set(
         "GetRestState",
         lua.create_function(|lua, ()| {
+            let state = read_self(lua, |own| own.rest_state());
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match model.exhaustion.get(&model.rest_state) {
+            Ok(match model.exhaustion.get(&state) {
                 Some((name, factor)) => (
-                    Value::Number(f64::from(model.rest_state)),
+                    Value::Number(f64::from(state)),
                     Value::String(lua.create_string(name)?),
                     Value::Number(*factor),
                 ),
@@ -881,38 +883,30 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetXPExhaustion",
         lua.create_function(|lua, ()| {
+            let (state, pool) = read_self(lua, |own| (own.rest_state(), own.rest_pool()));
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if model.rest_state != 1 {
+            Ok(if state != 1 {
                 Value::Nil
             } else {
                 let factor = model.exhaustion.get(&1).map_or(2.0, |(_, f)| *f);
-                Value::Number(f64::from(model.rest_pool) * factor)
+                Value::Number(f64::from(pool) * factor)
             })
         })?,
     )?;
-    // IsResting() (`0x516ea0`): `PLAYER_FLAGS` bit 0x20, in a rest area.
+    // IsResting() (`0x516ea0`): `PLAYER_FLAGS` bit 0x20, in a rest area, as the call runs.
     g.set(
         "IsResting",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.resting))
-        })?,
+        lua.create_function(|lua, ()| Ok(flag(read_self(lua, |own| own.resting()))))?,
     )?;
     // PartialPlayTime()/NoPlayTime(): the play-time limit flags, `PLAYER_FLAGS` bits 0x1000
-    // (`0x48eb70`) and 0x2000 (`0x48ebe0`).
+    // (`0x48eb70`) and 0x2000 (`0x48ebe0`), as the call runs.
     g.set(
         "PartialPlayTime",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.partial_play_time))
-        })?,
+        lua.create_function(|lua, ()| Ok(flag(read_self(lua, |own| own.partial_play_time()))))?,
     )?;
     g.set(
         "NoPlayTime",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.no_play_time))
-        })?,
+        lua.create_function(|lua, ()| Ok(flag(read_self(lua, |own| own.no_play_time()))))?,
     )?;
     // GetBillingTimeRested() (`0x48ec50`): always one number, unconverted (`0x48ec5e`); stock
     // `PlayerFrame.lua:246` reads it as minutes. vmangos always sends 0 (`World.cpp:331`).

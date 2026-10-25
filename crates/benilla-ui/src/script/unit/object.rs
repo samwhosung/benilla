@@ -22,9 +22,10 @@ macro_rules! unit_object {
         /// `UnitIsGhost`, `UnitIsDeadOrGhost`, `UnitIsTapped`, `UnitIsTappedByPlayer`,
         /// `UnitIsCharmed`, `UnitIsTrivial`, `UnitIsPlusMob`, `UnitPlayerControlled`,
         /// `UnitAffectingCombat`, `UnitIsPartyLeader`, `UnitIsCivilian`, `UnitPlayerOrPetInParty`,
-        /// `UnitPlayerOrPetInRaid` and `UnitSex`. The rest of these fields (the quest log, the
-        /// combat stats, the guild id, the PvP rank and medal, the raw flags dwords) are read off
-        /// the snapshot by their getters, until those read the object too.
+        /// `UnitPlayerOrPetInRaid` and `UnitSex`; the stat getters read the level and
+        /// SUMMONEDBY, and the stats themselves through [`crate::script::CombatRead`]. The rest of
+        /// these fields (the quest log, the guild id, the PvP rank and medal, the raw flags
+        /// dwords) are read off the snapshot by their getters, until those read the object too.
         pub trait UnitObjectRead {
             $(
                 #[doc = concat!("[`UnitState::", stringify!($field), "`].")]

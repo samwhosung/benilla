@@ -225,7 +225,7 @@ pub struct UnitState {
     /// The unit's own stat, resistance, damage, speed and attack-power fields, which the stat
     /// getters read for any unit but the active player (`ui/unitstats`); zeros where the server
     /// sends the field to the owner alone.
-    pub combat: super::char_stats::UnitCombatStats,
+    pub combat: super::stat_read::UnitCombatStats,
     /// `UNIT_FIELD_SUMMONEDBY` (fields 12-13), 0 for none: `UnitDefense` and `UnitAttackBothHands`
     /// answer a unit the active player summoned (`0x519272`, `0x518881`).
     pub summoned_by: u64,

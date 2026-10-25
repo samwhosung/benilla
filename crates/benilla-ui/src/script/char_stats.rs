@@ -1,5 +1,7 @@
-//! The paper doll's data feed: the stat and equipment-slot globals, read from the combat-stats
-//! snapshots the app pushes for `"player"` and `"pet"` and from its inventory-slot snapshot.
+//! The paper doll's data feed: the stat and equipment-slot globals. The stat getters read the
+//! unit's object as the call runs, through the lent host ([`super::stat_read`]), and with no host
+//! to ask, the combat-stats snapshots the app pushes for the active player and with each unit; the
+//! slot getters read the inventory-slot snapshot and its items live ([`super::item_read`]).
 //!
 //! As in the reference, the pet sheet calls the same `PaperDollFrame_Set*` helpers with `"pet"`
 //! (`PetPaperDollFrame.lua:75-81`). Any other token, or a snapshot not yet pushed, serves the
@@ -17,6 +19,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::item_read::{read_item, read_live};
+use super::stat_read::{read_unit_stats, CombatRead, UnitCombatStats};
 use super::{binding_abi, Model};
 
 /// The `SkillLine.dbc` id behind weapon subclass `0..=20` (vmangos `Item.cpp:700-707`), `None`
@@ -54,127 +57,6 @@ pub const SKILL_UNARMED: u32 = 162;
 
 /// The `SkillLine.dbc` Defense row `UnitDefense` reports (vmangos `SharedDefines.h:961`).
 pub const SKILL_DEFENSE: u32 = 95;
-
-/// One unit's combat stats behind a paper doll, from its descriptor. Arrays are in field order:
-/// stats Str/Agi/Sta/Int/Spi, schools with `[0]` armor. A pet leaves the PLAYER-block fields (buff
-/// splits, damage-done mods, skill pairs) at their defaults.
-#[derive(Clone, Debug, PartialEq)]
-pub struct UnitCombatStats {
-    /// Effective (post-buff) primary stats (`UNIT_FIELD_STAT0..4`).
-    pub stats: [i32; 5],
-    /// Positive stat buff deltas (`PLAYER_FIELD_POSSTAT0..4`, ≥ 0).
-    pub stat_pos: [i32; 5],
-    /// Negative stat buff deltas (`PLAYER_FIELD_NEGSTAT0..4`, ≤ 0).
-    pub stat_neg: [i32; 5],
-    /// Effective resistances (`UNIT_FIELD_RESISTANCES`, `[0]` = armor).
-    pub resistances: [i32; 7],
-    /// Positive resistance buffs (`PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE`, ≥ 0).
-    pub resistance_pos: [i32; 7],
-    /// Negative resistance buffs (`PLAYER_FIELD_RESISTANCEBUFFMODSNEGATIVE`, ≤ 0).
-    pub resistance_neg: [i32; 7],
-    /// Mainhand damage range (`UNIT_FIELD_MINDAMAGE`/`MAXDAMAGE`).
-    pub min_damage: f32,
-    pub max_damage: f32,
-    /// Offhand damage range (`UNIT_FIELD_MINOFFHANDDAMAGE`/`MAXOFFHANDDAMAGE`).
-    pub min_offhand_damage: f32,
-    pub max_offhand_damage: f32,
-    /// Physical damage-done bonuses (`PLAYER_FIELD_MOD_DAMAGE_DONE_POS[0]` / `_NEG[0]`, neg ≤ 0).
-    pub physical_bonus_pos: i32,
-    pub physical_bonus_neg: i32,
-    /// The physical damage multiplier (`PLAYER_FIELD_MOD_DAMAGE_DONE_PCT[0]`), 1.0 until streamed.
-    pub damage_percent: f32,
-    /// The same three at the ranged weapon's damage school, which `UnitRangedDamage` reads
-    /// (`0x518a77`, `0x518ac0`, `0x518b0e`): the school of the first damage line of the ranged
-    /// slot's record with a minimum above 0, else 0 (`0x5189e1`-`0x518a45`).
-    pub ranged_bonus_pos: i32,
-    pub ranged_bonus_neg: i32,
-    pub ranged_percent: f32,
-    /// Attack speeds in ms (`UNIT_FIELD_BASEATTACKTIME[0..2]`).
-    pub main_attack_time_ms: u32,
-    pub offhand_attack_time_ms: u32,
-    /// Whether an off-hand weapon is equipped, which gates `UnitAttackSpeed`'s second return.
-    pub has_offhand: bool,
-    /// Melee AP + its split mods (`UNIT_FIELD_ATTACK_POWER` / `_MODS`, neg ≤ 0).
-    pub attack_power: i32,
-    pub attack_power_pos: i32,
-    pub attack_power_neg: i32,
-    /// `UNIT_FIELD_ATTACK_POWER_MULTIPLIER`, the percent bonus minus 1.0.
-    pub attack_power_multiplier: f32,
-    /// Ranged AP + its split mods.
-    pub ranged_attack_power: i32,
-    pub ranged_attack_power_pos: i32,
-    pub ranged_attack_power_neg: i32,
-    /// `UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER`, the same.
-    pub ranged_attack_power_multiplier: f32,
-    /// Ranged attack speed in ms (`UNIT_FIELD_RANGEDATTACKTIME`).
-    pub ranged_attack_time_ms: u32,
-    /// Ranged damage range (`UNIT_FIELD_MINRANGEDDAMAGE`/`MAXRANGEDDAMAGE`).
-    pub ranged_min_damage: f32,
-    pub ranged_max_damage: f32,
-    /// The main hand's skill line (picked by [`weapon_subclass_skill`]) as `(value + perm, temp)`,
-    /// the split the reference's skill reader `0x5ea460` makes for all four skill pairs.
-    pub main_weapon_skill: (i32, i32),
-    /// The off hand's pair, read the same way; an empty or non-weapon off hand is Unarmed.
-    pub offhand_weapon_skill: (i32, i32),
-    /// The ranged weapon's pair, the same split. Player only: `UnitRangedAttack` (`0x518b90`)
-    /// has no creature fallback, so a pet answers `(0, 0)` where `UnitDefense` answers level * 5.
-    pub ranged_weapon_skill: (i32, i32),
-    /// The [`SKILL_DEFENSE`] pair, the same split. The player's only: `UnitDefense` gives a
-    /// non-player level * 5 instead (`cgunit_skill`), so the pet feed leaves it unset.
-    pub defense_skill: (i32, i32),
-    /// Whether a wand is equipped (`HasWandEquipped`).
-    pub has_wand: bool,
-    /// Avoidance chances, already percents on the wire (`PLAYER_DODGE_PERCENTAGE` and siblings).
-    pub dodge_percent: f32,
-    pub parry_percent: f32,
-    pub block_percent: f32,
-}
-
-impl Default for UnitCombatStats {
-    /// All zeros but `damage_percent` 1.0, which stock divides by (`PaperDollFrame.lua:298`).
-    fn default() -> Self {
-        UnitCombatStats {
-            stats: [0; 5],
-            stat_pos: [0; 5],
-            stat_neg: [0; 5],
-            resistances: [0; 7],
-            resistance_pos: [0; 7],
-            resistance_neg: [0; 7],
-            min_damage: 0.0,
-            max_damage: 0.0,
-            min_offhand_damage: 0.0,
-            max_offhand_damage: 0.0,
-            physical_bonus_pos: 0,
-            physical_bonus_neg: 0,
-            damage_percent: 1.0,
-            ranged_bonus_pos: 0,
-            ranged_bonus_neg: 0,
-            ranged_percent: 1.0,
-            main_attack_time_ms: 0,
-            offhand_attack_time_ms: 0,
-            has_offhand: false,
-            attack_power: 0,
-            attack_power_pos: 0,
-            attack_power_neg: 0,
-            attack_power_multiplier: 0.0,
-            ranged_attack_power: 0,
-            ranged_attack_power_pos: 0,
-            ranged_attack_power_neg: 0,
-            ranged_attack_power_multiplier: 0.0,
-            ranged_attack_time_ms: 0,
-            ranged_min_damage: 0.0,
-            ranged_max_damage: 0.0,
-            main_weapon_skill: (0, 0),
-            offhand_weapon_skill: (0, 0),
-            ranged_weapon_skill: (0, 0),
-            defense_skill: (0, 0),
-            has_wand: false,
-            dodge_percent: 0.0,
-            parry_percent: 0.0,
-            block_percent: 0.0,
-        }
-    }
-}
 
 /// One equipment or ammo slot as the `GetInventoryItem*` family reads it, resolved by the app like
 /// [`super::container::ContainerSlot`].
@@ -432,9 +314,10 @@ const TUTORIAL_BROKEN_ITEMS: u32 = 0x24;
 /// The unit a stat getter asks after `GetUnitFromToken` (`0x515940`), the gates' inputs beside
 /// its fields; `None` is no object, whose answer is each function's zeros.
 struct Asked<'a> {
-    /// The fields read: the active player's own snapshot, with its PLAYER block and equipment,
-    /// else the unit's ([`super::UnitState::combat`]).
-    fields: &'a UnitCombatStats,
+    /// The fields read: the unit's object through the lent host as the call runs, the active
+    /// player's with its PLAYER block and equipment; with no host to ask, the active player's own
+    /// snapshot, else the unit's ([`super::UnitState::combat`]).
+    fields: &'a dyn CombatRead,
     /// SELF: the object's GUID is the active player's (`0x468550`).
     me: bool,
     /// PLAYER: the type word's player bit (`shr ecx,4; test cl,1`).
@@ -448,28 +331,68 @@ struct Asked<'a> {
 
 /// [`Asked`] for `token`, after the resolver's raise for a token it does not know (`0x515c14`).
 /// The `"player"` token's own push is the active player whatever its guid reads, as the resolver
-/// names it.
+/// names it. The token resolves through the snapshots; the fields, the level and SUMMONEDBY are
+/// then read off the object the lent host holds ([`read_unit_stats`]), as the reference's
+/// getters read the object they resolved, and with no host or no object, off the snapshots.
 fn asked<T>(lua: &Lua, token: &str, f: impl FnOnce(Option<Asked<'_>>) -> T) -> mlua::Result<T> {
     super::unit::check_unit_token(&Some(token.to_string()))?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     let player_guid = model.unit_guids.player;
     let player_push = model.pushed_unit("player");
-    let asked = model.unit(token).filter(|u| u.has_object).map(|u| {
-        let me = player_push.is_some_and(|p| std::ptr::eq(p, u))
-            || (u.guid != 0 && u.guid == player_guid);
-        Asked {
-            fields: if me {
-                model.player_combat_stats.as_ref().unwrap_or(&u.combat)
-            } else {
-                &u.combat
-            },
-            me,
-            player: me || u.is_player,
-            me_or_mine: me || u.summoned_by == player_guid,
-            level: u.level,
-        }
-    });
-    Ok(f(asked))
+    let Some(u) = model.unit(token).filter(|u| u.has_object) else {
+        return Ok(f(None));
+    };
+    let me =
+        player_push.is_some_and(|p| std::ptr::eq(p, u)) || (u.guid != 0 && u.guid == player_guid);
+    let player = me || u.is_player;
+    let mut f = Some(f);
+    let live = read_unit_stats(lua, u.guid, |object, fields| {
+        f.take().map(|f| {
+            f(Some(Asked {
+                fields,
+                me,
+                player,
+                me_or_mine: me || object.summoned_by() == player_guid,
+                level: object.level(),
+            }))
+        })
+    })
+    .flatten();
+    if let Some(out) = live {
+        return Ok(out);
+    }
+    let fields: &dyn CombatRead = match &model.player_combat_stats {
+        Some(own) if me => own,
+        _ => &u.combat,
+    };
+    Ok(f.take().expect("an unread `f`")(Some(Asked {
+        fields,
+        me,
+        player,
+        me_or_mine: me || u.summoned_by == player_guid,
+        level: u.level,
+    })))
+}
+
+/// The active player's combat stats, `None` before any: through the lent host as the call runs,
+/// else its snapshot. The getters with no unit argument read the active player's field block
+/// (`GetDodgeChance` `0x516f00`, `HasWandEquipped` `0x4c99a0`).
+fn own_stats<T>(lua: &Lua, f: impl FnOnce(Option<&dyn CombatRead>) -> T) -> T {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let mut f = Some(f);
+    let live = read_unit_stats(lua, model.unit_guids.player, |_, stats| {
+        f.take().map(|f| f(Some(stats)))
+    })
+    .flatten();
+    match live {
+        Some(out) => out,
+        None => f.take().expect("an unread `f`")(
+            model
+                .player_combat_stats
+                .as_ref()
+                .map(|s| s as &dyn CombatRead),
+        ),
+    }
 }
 
 /// [`asked`] behind the `Usage:` gate the one-argument getters open with (`0x6f3510`).
@@ -837,9 +760,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return (0, 0, 0, 0);
                 };
                 let s = a.fields;
-                let raw = s.stats[idx];
+                let raw = s.stats()[idx];
                 let (pos, neg) = if a.me {
-                    (s.stat_pos[idx], s.stat_neg[idx])
+                    (s.stat_pos()[idx], s.stat_neg()[idx])
                 } else {
                     (0, 0)
                 };
@@ -872,12 +795,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return (0, 0, 0, 0);
                 };
                 let s = a.fields;
-                let raw = s.resistances[idx];
+                let raw = s.resistances()[idx];
                 if !a.me {
                     let shown = i64::from(raw.max(0));
                     return (shown, shown, 0, 0);
                 }
-                let (pos, neg) = (s.resistance_pos[idx], s.resistance_neg[idx]);
+                let (pos, neg) = (s.resistance_pos()[idx], s.resistance_neg()[idx]);
                 (
                     i64::from(raw - pos - neg),
                     i64::from(raw.max(0)),
@@ -899,12 +822,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return (0, 0, 0, 0, 0);
                 };
                 let s = a.fields;
-                let raw = s.resistances[0];
+                let raw = s.resistances()[0];
                 let shown = i64::from(raw.max(0));
                 if !a.me {
                     return (shown, shown, shown, 0, 0);
                 }
-                let (pos, neg) = (s.resistance_pos[0], s.resistance_neg[0]);
+                let (pos, neg) = (s.resistance_pos()[0], s.resistance_neg()[0]);
                 (
                     i64::from(raw - pos - neg),
                     shown,
@@ -930,13 +853,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let s = a.fields;
                 let (pos, neg, percent) = damage_bonus(
                     &a,
-                    (s.physical_bonus_pos, s.physical_bonus_neg, s.damage_percent),
+                    (
+                        s.physical_bonus_pos(),
+                        s.physical_bonus_neg(),
+                        s.damage_percent(),
+                    ),
                 );
                 (
-                    f64::from(s.min_damage),
-                    f64::from(s.max_damage),
-                    f64::from(s.min_offhand_damage),
-                    f64::from(s.max_offhand_damage),
+                    f64::from(s.min_damage()),
+                    f64::from(s.max_damage()),
+                    f64::from(s.min_offhand_damage()),
+                    f64::from(s.max_offhand_damage()),
                     pos,
                     neg,
                     percent,
@@ -958,8 +885,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 let s = a.fields;
                 (
-                    swing_seconds(s.main_attack_time_ms),
-                    (a.player && s.has_offhand).then(|| swing_seconds(s.offhand_attack_time_ms)),
+                    swing_seconds(s.main_attack_time_ms()),
+                    (a.player && s.has_offhand())
+                        .then(|| swing_seconds(s.offhand_attack_time_ms())),
                 )
             })
         })?,
@@ -975,11 +903,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             asked_arg(lua, token, r#"Usage: UnitAttackPower("unit")"#, |a| {
                 a.map_or((0, 0, 0), |a| {
                     let s = a.fields;
-                    let m = s.attack_power_multiplier;
+                    let m = s.attack_power_multiplier();
                     (
-                        scaled_attack_power(m, s.attack_power),
-                        scaled_attack_power(m, s.attack_power_pos),
-                        scaled_attack_power(m, s.attack_power_neg),
+                        scaled_attack_power(m, s.attack_power()),
+                        scaled_attack_power(m, s.attack_power_pos()),
+                        scaled_attack_power(m, s.attack_power_neg()),
                     )
                 })
             })
@@ -994,11 +922,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             asked_arg(lua, token, r#"Usage: UnitAttackPower("unit")"#, |a| {
                 a.map_or((0, 0, 0), |a| {
                     let s = a.fields;
-                    let m = s.ranged_attack_power_multiplier;
+                    let m = s.ranged_attack_power_multiplier();
                     (
-                        scaled_attack_power(m, s.ranged_attack_power),
-                        scaled_attack_power(m, s.ranged_attack_power_pos),
-                        scaled_attack_power(m, s.ranged_attack_power_neg),
+                        scaled_attack_power(m, s.ranged_attack_power()),
+                        scaled_attack_power(m, s.ranged_attack_power_pos()),
+                        scaled_attack_power(m, s.ranged_attack_power_neg()),
                     )
                 })
             })
@@ -1014,7 +942,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, token: Value| {
             asked_arg(lua, token, r#"Usage: UnitAttackBothHands("unit")"#, |a| {
                 let own = a.as_ref().map_or(((0, 0), (0, 0)), |a| {
-                    (a.fields.main_weapon_skill, a.fields.offhand_weapon_skill)
+                    (
+                        a.fields.main_weapon_skill(),
+                        a.fields.offhand_weapon_skill(),
+                    )
                 });
                 let (mb, mm) = skill_clamped(vtable_skill(a.as_ref(), own.0));
                 let (ob, om) = skill_clamped(vtable_skill(a.as_ref(), own.1));
@@ -1034,8 +965,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 r#"Usage: UnitRangedAttack("unit")"#,
                 |a| match a {
                     Some(a) if a.player && a.me => (
-                        i64::from(a.fields.ranged_weapon_skill.0),
-                        i64::from(a.fields.ranged_weapon_skill.1),
+                        i64::from(a.fields.ranged_weapon_skill().0),
+                        i64::from(a.fields.ranged_weapon_skill().1),
                     ),
                     _ => (0, 0),
                 },
@@ -1051,14 +982,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitDefense",
         lua.create_function(|lua, token: Value| {
             asked_arg(lua, token, r#"Usage: UnitDefense("unit")"#, |a| {
-                let own = a.as_ref().map_or((0, 0), |a| a.fields.defense_skill);
+                let own = a.as_ref().map_or((0, 0), |a| a.fields.defense_skill());
                 skill_clamped(vtable_skill(a.as_ref(), own))
             })
         })?,
     )?;
 
     // GetDodgeChance(), GetParryChance(), GetBlockChance() → one number each, no unit argument
-    // (`0x516f00`, `0x516fc0`, `0x516f60`); 0 before the field streams.
+    // (`0x516f00`, `0x516fc0`, `0x516f60`), off the active player's field block as the call runs; 0
+    // before the field streams.
     for (name, pick) in [
         ("GetDodgeChance", 0usize),
         ("GetParryChance", 1),
@@ -1067,15 +999,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                Ok(model
-                    .player_combat_stats
-                    .as_ref()
-                    .map_or(0.0, |s| match pick {
-                        0 => f64::from(s.dodge_percent),
-                        1 => f64::from(s.parry_percent),
-                        _ => f64::from(s.block_percent),
-                    }))
+                Ok(own_stats(lua, |s| {
+                    s.map_or(0.0, |s| match pick {
+                        0 => f64::from(s.dodge_percent()),
+                        1 => f64::from(s.parry_percent()),
+                        _ => f64::from(s.block_percent()),
+                    })
+                }))
             })?,
         )?;
     }
@@ -1094,12 +1024,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let s = a.fields;
                 let (pos, neg, percent) = damage_bonus(
                     &a,
-                    (s.ranged_bonus_pos, s.ranged_bonus_neg, s.ranged_percent),
+                    (
+                        s.ranged_bonus_pos(),
+                        s.ranged_bonus_neg(),
+                        s.ranged_percent(),
+                    ),
                 );
                 (
-                    swing_seconds(s.ranged_attack_time_ms),
-                    f64::from(s.ranged_min_damage),
-                    f64::from(s.ranged_max_damage),
+                    swing_seconds(s.ranged_attack_time_ms()),
+                    f64::from(s.ranged_min_damage()),
+                    f64::from(s.ranged_max_damage()),
                     pos,
                     neg,
                     percent,
@@ -1108,17 +1042,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // HasWandEquipped() → 1 or nil, for the player.
+    // HasWandEquipped() → 1 or nil, for the player: the ranged slot's item and its record as
+    // the call runs (`0x4c99c2`-`0x4c9a04`).
     g.set(
         "HasWandEquipped",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(
-                model
-                    .player_combat_stats
-                    .as_ref()
-                    .is_some_and(|s| s.has_wand),
-            ))
+            Ok(flag(own_stats(lua, |s| s.is_some_and(|s| s.has_wand()))))
         })?,
     )?;
 
