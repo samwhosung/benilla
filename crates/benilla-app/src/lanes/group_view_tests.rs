@@ -826,10 +826,13 @@ fn heard_roster(app: &mut App) -> Vec<String> {
     out
 }
 
-/// Two group lists in one frame: each `PARTY_MEMBERS_CHANGED` listener reads the slots, the
-/// leader cells and the loot cells its own list left (`GetNumPartyMembers` `0x4e86d0`,
-/// `GetPartyLeaderIndex` `0x4e9104`, `IsPartyLeader` `0x4e9130`, `GetLootMethod` `0x4e91b6`,
-/// `UnitInParty` `0x516290`), not the frame's last.
+/// Two group lists in one frame: each event's listener reads what its own list left of the cells
+/// the event follows. The slots at `PARTY_MEMBERS_CHANGED` (`GetNumPartyMembers` `0x4e86d0`,
+/// `GetPartyMember` `0x4e81a0`, `UnitInParty` `0x516290`), the leader cells at
+/// `PARTY_LEADER_CHANGED` (`GetPartyLeaderIndex` `0x4e9104`, `IsPartyLeader` `0x4e9130`) and the
+/// loot cells at `PARTY_LOOT_METHOD_CHANGED` (`GetLootMethod` `0x4e91b6`), not the frame's last.
+/// (The reference stores the leader and the loot after the members event, `0x5e6c7e`, `0x5e6e52`;
+/// a packet's cells are read whole here, so the members event is asserted on its slots alone.)
 #[test]
 fn each_party_listener_reads_its_own_lists_roster() {
     let mut app = client();
@@ -837,14 +840,24 @@ fn each_party_listener_reads_its_own_lists_roster() {
     prime(&mut app);
     listen(
         &mut app,
-        &["PARTY_MEMBERS_CHANGED"],
+        &[
+            "PARTY_MEMBERS_CHANGED",
+            "PARTY_LEADER_CHANGED",
+            "PARTY_LOOT_METHOD_CHANGED",
+        ],
         r#"
+        if event == "PARTY_MEMBERS_CHANGED" then
+            return table.concat({
+                event, GetNumPartyMembers(), tostring(GetPartyMember(2)),
+                tostring(UnitInParty("party2")),
+            }, ":")
+        elseif event == "PARTY_LEADER_CHANGED" then
+            return table.concat({
+                event, GetPartyLeaderIndex(), tostring(IsPartyLeader()),
+            }, ":")
+        end
         local method, master = GetLootMethod()
-        return table.concat({
-            GetNumPartyMembers(), GetPartyLeaderIndex(), tostring(IsPartyLeader()),
-            tostring(GetPartyMember(2)), tostring(UnitInParty("party2")), method,
-            tostring(master), GetLootThreshold(),
-        }, ":")
+        return table.concat({event, method, tostring(master), GetLootThreshold()}, ":")
         "#,
     );
     let seen = frame(
@@ -875,8 +888,99 @@ fn each_party_listener_reads_its_own_lists_roster() {
     assert!(seen.is_empty(), "{seen:?}");
     assert_eq!(
         heard_roster(&mut app),
-        ["1:0:1:nil:nil:roundrobin:nil:2", "2:1:nil:1:1:master:2:3"]
+        [
+            "PARTY_MEMBERS_CHANGED:1:nil:nil",
+            "PARTY_LEADER_CHANGED:0:1",
+            "PARTY_LOOT_METHOD_CHANGED:roundrobin:nil:2",
+            "PARTY_MEMBERS_CHANGED:2:1:1",
+            "PARTY_LEADER_CHANGED:1:nil",
+            "PARTY_LOOT_METHOD_CHANGED:master:2:3",
+        ]
     );
+}
+
+/// The slots are compact: a list entry with a zero guid counts against the four (`0x5e6c4f`) but
+/// `0x4e82d0` skips it (`0x4e82eb`) and fills the first empty slot, so `[A, 0, B]` puts B in
+/// `party2` and the count is the nonzero slots (`0x4e86d0`).
+#[test]
+fn a_zero_guid_entry_leaves_no_gap_in_the_party_slots() {
+    let mut app = client();
+    know_the_names(&mut app);
+    prime(&mut app);
+    listen(
+        &mut app,
+        &["PARTY_MEMBERS_CHANGED"],
+        r#"return table.concat({
+            GetNumPartyMembers(), tostring(GetPartyMember(2)), tostring(GetPartyMember(3)),
+            tostring(UnitInParty("party2")), tostring(UnitInParty("party3")),
+        }, ":")"#,
+    );
+    let loot = GroupLootInfo {
+        method: 0,
+        master: 0,
+        threshold: 2,
+    };
+    frame(
+        &mut app,
+        vec![list(
+            0,
+            &[(MATE, "Brisca"), (0, "Ghost"), (MATE2, "Dunk")],
+            ME,
+            loot,
+        )],
+    );
+    assert_eq!(heard_roster(&mut app), ["2:1:nil:1:nil"]);
+}
+
+/// `UnitPlayerOrPetInParty` asks `0x4e8fa0` of the token's guid: a party slot's member or the pet
+/// its record names, never the player, who is no slot; `UnitPlayerOrPetInRaid` asks `0x4bafd0`:
+/// a roster row, ours included, or a row's pet. Neither needs the unit to exist.
+#[test]
+fn the_member_or_pet_tests_match_slots_and_their_pets_not_the_player() {
+    let mut app = party_client();
+    frame(
+        &mut app,
+        vec![stats(
+            false,
+            PartyMemberStatsInfo {
+                pet_guid: Some(PET),
+                ..Default::default()
+            },
+        )],
+    );
+    let ask = |app: &mut App| -> String {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM")
+                .eval::<String>(
+                    r#"return table.concat({
+                        tostring(UnitPlayerOrPetInParty("party1")),
+                        tostring(UnitPlayerOrPetInParty("partypet1")),
+                        tostring(UnitPlayerOrPetInParty("player")),
+                        tostring(UnitPlayerOrPetInParty("target")),
+                        tostring(UnitPlayerOrPetInRaid("party1")),
+                        tostring(UnitPlayerOrPetInRaid("player")),
+                        tostring(UnitPlayerOrPetInRaid("raid1")),
+                        tostring(UnitPlayerOrPetInRaid("raidpet1")),
+                    }, ":")"#,
+                )
+                .unwrap()
+        })
+    };
+    assert_eq!(ask(&mut app), "1:1:nil:nil:nil:nil:nil:nil", "a party");
+    frame(
+        &mut app,
+        vec![list(
+            1,
+            &[(MATE, "Brisca")],
+            ME,
+            GroupLootInfo {
+                method: 0,
+                master: 0,
+                threshold: 2,
+            },
+        )],
+    );
+    assert_eq!(ask(&mut app), "1:1:nil:nil:1:1:1:1", "a raid");
 }
 
 /// Two raid lists in one frame: each `RAID_ROSTER_UPDATE` listener reads the count and the rows

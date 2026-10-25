@@ -130,6 +130,25 @@ pub(crate) fn live_membership(lua: &Lua, guid: u64) -> Option<Membership> {
     ask(lua, &MemberQuery(guid))
 }
 
+/// Whether `guid` is a member of the party slots or of the raid roster, or the pet of one
+/// (`0x4e8fa0`, `0x4bafd0`): the member's own guid, else its object's charm or summon while the
+/// object is held, else its record's pet while the record reads online. A zero guid is nobody, and
+/// the party's test never matches the active player, who is no slot; the raid's roster holds us.
+pub struct MemberOrPetQuery {
+    pub guid: u64,
+    /// The raid roster's test, else the party slots'.
+    pub raid: bool,
+}
+
+impl LiveQuery for MemberOrPetQuery {
+    type Answer = bool;
+}
+
+/// [`MemberOrPetQuery`] through the lent host, `None` where none answers.
+pub(crate) fn live_member_or_pet(lua: &Lua, guid: u64, raid: bool) -> Option<bool> {
+    ask(lua, &MemberOrPetQuery { guid, raid })
+}
+
 /// A group row the unit-token resolver reads (`0x515970`): `partyN`'s guid (`0x4e81a0`), `raidN`'s
 /// (`0x491940`), and for the pet tokens the member's record pet while its object is not held
 /// (`0x4e81d0`, `0x491960`).

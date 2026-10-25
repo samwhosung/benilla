@@ -399,6 +399,11 @@ impl GroupState {
     ) -> ListOutcome {
         let missed = |guid: u64| lookup(guid).is_none();
         self.listed = true;
+        // The entry naming the active player is skipped ahead of the raid arrays and the seats
+        // (`0x5e6b77`-`0x5e6b88`); the wire omits the recipient, so it drops nothing there.
+        let active = self_guid.unwrap_or(0);
+        let members: Vec<GroupMemberEntry> =
+            members.into_iter().filter(|m| m.guid != active).collect();
         let mut out = ListOutcome::default();
         let raid = group_type == GROUPTYPE_RAID;
         // The two stores as this list finds them: the party slots unless an opcode emptied them,

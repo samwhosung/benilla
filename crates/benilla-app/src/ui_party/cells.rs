@@ -53,8 +53,11 @@ impl<'a> Cells<'a> {
         }
     }
 
-    /// The `party1..party4` slots: our own subgroup in packet order, at most four (`0x5e6baa`
-    /// compares the flags under `0x7f`), none once an ending emptied them.
+    /// The `party1..party4` slots: our own subgroup in packet order, at most four entries counted
+    /// (`0x5e6baa` compares the flags under `0x7f`, `0x5e6bb8` bounds the count, `0x5e6c4f`
+    /// counts the entry), none once an ending emptied them. `0x4e82d0` skips a zero guid
+    /// (`0x4e82eb`) and fills the first empty slot, so the slots are compact: `[A, 0, B]` puts B in
+    /// `party2`.
     pub(crate) fn party_slots(self) -> impl Iterator<Item = &'a GroupMemberEntry> {
         let own = self.own_flags & 0x7f;
         let emptied = self.slots_emptied;
@@ -62,6 +65,7 @@ impl<'a> Cells<'a> {
             .iter()
             .filter(move |m| !emptied && m.flags & 0x7f == own)
             .take(4)
+            .filter(|m| m.guid != 0)
     }
 
     /// Whether the raid roster holds rows (`[0xb713e0]` above 0).

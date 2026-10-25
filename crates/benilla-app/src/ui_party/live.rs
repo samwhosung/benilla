@@ -10,8 +10,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    GroupCells, GroupCellsQuery, GroupRow, MemberQuery, Membership, RaidMemberInfo, RaidRowQuery,
-    RowQuery, UnitBase,
+    GroupCells, GroupCellsQuery, GroupRow, MemberOrPetQuery, MemberQuery, Membership,
+    RaidMemberInfo, RaidRowQuery, RowQuery, UnitBase,
 };
 
 use super::feed::{loot_read, raid_row_at, rank_of, RaidSelf, RowReads};
@@ -125,6 +125,32 @@ impl RosterLive<'_, '_> {
         })
     }
 
+    /// `0x4e8fa0` (party slots) or `0x4bafd0` (raid rows): `guid` is a row's member, or the pet of
+    /// one, which a held member's descriptor names (charm, else summon), else its record while the
+    /// record reads online. A zero guid is nobody, and the party's slots hold no player.
+    fn member_or_pet(&self, guid: u64, raid: bool) -> Option<bool> {
+        let group = self.group.as_deref()?;
+        let cells = self.stores.roster(group);
+        let records = self.stores.records(&group.stats);
+        let rows: Vec<u64> = if raid {
+            cells.raid_rows().collect()
+        } else {
+            cells.party_slots().map(|m| m.guid).collect()
+        };
+        Some(
+            guid != 0
+                && rows.into_iter().any(|member| {
+                    member == guid
+                        || super::records::pet_guid_in(
+                            records,
+                            member,
+                            self.held(member).map(|s| &s.0),
+                            true,
+                        ) == Some(guid)
+                }),
+        )
+    }
+
     /// The group row a token names: its member, and the pet its record names.
     fn row(&self, base: UnitBase) -> Option<GroupRow> {
         let group = self.group.as_deref()?;
@@ -159,5 +185,6 @@ impl crate::script_calls::live::LiveFamily for RosterLive<'_, '_> {
             || ask.answer(|q: &RaidRowQuery| self.raid_row(q.0))
             || ask.answer(|q: &MemberQuery| self.member(q.0))
             || ask.answer(|q: &RowQuery| self.row(q.0))
+            || ask.answer(|q: &MemberOrPetQuery| self.member_or_pet(q.guid, q.raid))
     }
 }
