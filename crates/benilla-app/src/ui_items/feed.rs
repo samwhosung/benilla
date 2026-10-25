@@ -1594,10 +1594,10 @@ pub(crate) fn feed_containers(
 }
 
 /// The bag view the lanes' events read, as the packets left it. The feed pushes the frame's whole
-/// view, which the feeds' own events after it read (the world-enter cascade's `BAG_UPDATE`s, the
-/// cooldown flush's `BAG_UPDATE_COOLDOWN`). An event a handler raised before the frame's first
-/// write of our player or an item reads the view that write changed, so when a lane holds one the
-/// drain starts on last frame's view and swaps to this frame's at that write's stamp.
+/// view, which the feeds' own events after it read (the world-enter cascade's `BAG_UPDATE`s). An
+/// event a handler raised before the frame's first write of our player or an item reads the view
+/// that write changed, so when a lane holds one the drain starts on last frame's view and swaps to
+/// this frame's at that write's stamp.
 ///
 /// The exact form is a view per packet (#2217): the bags here are last frame's or this frame's,
 /// never the one a packet between two writes left. And only the bag view swaps: while the old

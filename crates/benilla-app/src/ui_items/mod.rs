@@ -1020,10 +1020,10 @@ impl Plugin for UiItemsPlugin {
                         .in_set(crate::ui_script::UiFeed)
                         .before(feed_containers)
                         .before(crate::ui_char::feed_char),
-                    // The slot cooldowns must be in the VM before the action feed's
-                    // `BAG_UPDATE_COOLDOWN` makes the bag handlers re-read them
-                    // (`crate::ui_action`'s schedule), and the bags before the world-enter
-                    // cascade's `BAG_UPDATE`s (`UiScript::fire_world_enter`).
+                    // The slot cooldowns precede `CooldownEvents`, as every cooldown push does
+                    // (the cooldown lane's `BAG_UPDATE_COOLDOWN` fires after every feed), and the
+                    // bags precede the world-enter cascade's `BAG_UPDATE`s
+                    // (`UiScript::fire_world_enter`).
                     feed_containers
                         .in_set(UnitFeed)
                         .in_set(crate::ui_unit::WorldEnterSeats)

@@ -18,7 +18,7 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
-use super::unit_view_tests::{created, wire_packets};
+use super::unit_view_tests::{created, values, wire_packets};
 use crate::net::ClientCommand;
 
 const ME: u64 = 0x7;
@@ -319,4 +319,85 @@ fn the_cooldown_getters_read_the_list_as_they_run() {
                  return a, b";
     assert_eq!(c.eval::<(f64, f64)>(true, chunk), (15.0, 15.0));
     assert_eq!(c.eval::<(f64, f64)>(false, chunk), (0.0, 0.0));
+}
+
+/// `GetInventoryItemCooldown` (`0x4c8a60`) reads the list inside the call: the worn slot found as
+/// of there (`0x4c8b10`), its record queried through `0x6e2ed0` (`0x4c8b86`). The potion's
+/// `ITEM_COOLDOWN` first, then the worn trinket's, in one frame: the first's `BAG_UPDATE_COOLDOWN`
+/// reads the trinket cold, the second's reads it running, and live and off the snapshot agree once
+/// the frame's feeds ran.
+#[test]
+fn a_worn_items_cooldown_reads_live_inside_its_packet() {
+    const TRINKET_GUID: u64 = 0x4000_0000_0000_00F2;
+    const TRINKET: u32 = 119;
+    /// `PLAYER_FIELD_INV_SLOT_HEAD` + 2 × 12: the first trinket slot, 13 to Lua.
+    const INV_TRINKET_1: u16 = 486 + 24;
+    let mut c = client();
+    let world = c.app.world_mut();
+    let mut trinket = crate::items::test_template("Trinket");
+    trinket.use_spell = Some(benilla_protocol::messages::ItemUseSpell {
+        spell_id: BLINK,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    });
+    // Block 0 names the spell, without which the getter runs no query (`0x4c8b47`).
+    trinket.spells = vec![benilla_protocol::messages::ItemSpellEntry {
+        index: 0,
+        spell_id: BLINK,
+        trigger: 0,
+        charges: 0,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    }];
+    world
+        .resource_mut::<crate::items::Items>()
+        .insert_template(TRINKET, Some(trinket));
+    crate::items::test_spawn_item(
+        world,
+        TRINKET_GUID,
+        ObjectFields::from_pairs(&[
+            (OBJECT_TYPE, 0x3),
+            (3, TRINKET),
+            (6, ME as u32),
+            (7, (ME >> 32) as u32),
+            (14, 1),
+        ])
+        .into_created(benilla_protocol::messages::ObjectType::Item),
+        false,
+    );
+    c.frame(vec![vec![values(
+        ME,
+        &[
+            (INV_TRINKET_1, TRINKET_GUID as u32),
+            (INV_TRINKET_1 + 1, (TRINKET_GUID >> 32) as u32),
+        ],
+    )]]);
+    c.frame(vec![]);
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("BAG_UPDATE_COOLDOWN")
+        g:SetScript("OnEvent", function()
+            local _, d = GetInventoryItemCooldown("player", 13)
+            table.insert(Seen, "WORN:" .. tostring(d))
+        end)"#,
+    );
+    let chunk = "local _, d = GetInventoryItemCooldown('player', 13) return d";
+    assert_eq!(c.eval::<f64>(true, chunk), 0.0, "cold before");
+    c.frame(vec![
+        vec![SessionEvent::ItemCooldown {
+            item_guid: POTION_GUID,
+            spell_id: POTION_SPELL,
+        }],
+        vec![SessionEvent::ItemCooldown {
+            item_guid: TRINKET_GUID,
+            spell_id: BLINK,
+        }],
+    ]);
+    assert_eq!(c.seen(&["WORN"]), ["WORN:0", "WORN:30"]);
+    for live in [false, true] {
+        assert_eq!(c.eval::<f64>(live, chunk), 30.0, "live {live}");
+    }
 }

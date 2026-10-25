@@ -385,9 +385,10 @@ mod tests {
     }
 
     /// The feeds' own events after the bag feed read this frame's bags, whatever the lanes owe:
-    /// the world-enter cascade `feed_units` fires after the seats it reads, and the cooldown
-    /// flush's `BAG_UPDATE_COOLDOWN` `fire_action_events` fires after the feed, while the refusal
-    /// a key followed reads the bags before the key.
+    /// the world-enter cascade `feed_units` fires after the seats it reads, and the usable
+    /// refresh's events `fire_action_events` fires after the feed, as a lane's
+    /// `BAG_UPDATE_COOLDOWN` does once the drain reaches it, while the refusal a key followed reads
+    /// the bags before the key.
     #[test]
     fn the_feeds_events_after_the_bag_feed_read_this_frames_bags() {
         use crate::game_plugins::schedule_tests::{census, SyncPoints};
