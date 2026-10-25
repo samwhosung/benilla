@@ -416,7 +416,7 @@ const HOST_HELD_UNREAD: &[&str] = &[
 /// feed goes once a log versions what it reads ([`crate::ui_unit::views`]), a new one fails, and
 /// a row whose feed or inputs moved fails until it matches.
 #[rustfmt::skip]
-const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
+pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::player::net::feed_player_skinned", &["player::net::SkinnedFeed"]),
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
@@ -849,7 +849,7 @@ fn is_messages(world: &World, id: ComponentId) -> bool {
     name(world, id).contains("Messages<")
 }
 
-fn name(world: &World, id: ComponentId) -> String {
+pub(super) fn name(world: &World, id: ComponentId) -> String {
     world
         .components()
         .get_name(id)
@@ -1519,7 +1519,7 @@ const QUEUES_NOT_VIEWS: &[&str] = &[
 
 /// A type's name as [`READS_FRAME_FINAL`] spells it: the crate's own by its path in the crate, an
 /// engine type by its own name.
-fn short_name(full: &str) -> String {
+pub(super) fn short_name(full: &str) -> String {
     match full.strip_prefix("benilla_app::") {
         Some(rest) => rest.to_string(),
         None => full.rsplit("::").next().unwrap_or(full).to_string(),
