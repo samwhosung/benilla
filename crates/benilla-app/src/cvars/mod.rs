@@ -1072,6 +1072,27 @@ pub(crate) fn sync_input_cvars(
     })
 }
 
+/// The device's multisample formats as `GetMultisampleFormats` lists them; none before
+/// `view::MsaaSupportPlugin` has enumerated them.
+pub(crate) fn multisample_formats(
+    formats: Option<&benilla_world::view::MsaaFormats>,
+) -> Vec<benilla_ui::script::MultisampleFormat> {
+    formats
+        .map(|f| {
+            f.formats
+                .iter()
+                .map(
+                    |&(color_bits, depth_bits, samples)| benilla_ui::script::MultisampleFormat {
+                        color_bits,
+                        depth_bits,
+                        samples,
+                    },
+                )
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Per frame: seed a new VM's mirror, drain its registrations and writes into the registry, push
 /// the registry's writes into the mirror, and trigger every accepted move.
 pub(crate) fn sync_cvars(
@@ -1119,23 +1140,7 @@ pub(crate) fn sync_cvars(
             }
             // The Video dropdown's menu: what this device accepts, enumerated by
             // `view::MsaaSupportPlugin`.
-            script.set_multisample_formats(
-                msaa_formats
-                    .as_deref()
-                    .map(|f| {
-                        f.formats
-                            .iter()
-                            .map(|&(color_bits, depth_bits, samples)| {
-                                benilla_ui::script::MultisampleFormat {
-                                    color_bits,
-                                    depth_bits,
-                                    samples,
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            );
+            script.set_multisample_formats(multisample_formats(msaa_formats.as_deref()));
             // `GetVideoCaps`, the seven values `OptionsFrame_Load` destructures. Shaders,
             // trilinear, anisotropy and the hardware cursor are always there (`crate::cursor`
             // composites the reference's cursors into an OS cursor); `max_anisotropy` is reported

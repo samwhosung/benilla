@@ -603,13 +603,7 @@ fn publish_display_modes(
         let Ok(window) = windows.single() else {
             return;
         };
-        let res = &window.resolution;
-        let current = Some(ScreenResolution {
-            width: res.width() as u32,
-            height: res.height() as u32,
-        })
-        .filter(|r| r.width > 0 && r.height > 0);
-        let offered = offered_modes(monitors.iter(), widescreen);
+        let (offered, current) = display_modes(window, monitors.iter(), widescreen);
         // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
         let memo = last.get(script);
         if memo.as_ref() == Some(&(offered.clone(), current)) {
@@ -618,6 +612,50 @@ fn publish_display_modes(
         *memo = Some((offered.clone(), current));
         script.set_screen_resolutions(offered, current);
     })
+}
+
+/// The list [`publish_display_modes`] pushes and the live window size as its current entry.
+fn display_modes<'a>(
+    window: &Window,
+    monitors: impl IntoIterator<Item = &'a Monitor>,
+    widescreen: bool,
+) -> (Vec<ScreenResolution>, Option<ScreenResolution>) {
+    let res = &window.resolution;
+    let current = Some(ScreenResolution {
+        width: res.width() as u32,
+        height: res.height() as u32,
+    })
+    .filter(|r| r.width > 0 && r.height > 0);
+    (offered_modes(monitors, widescreen), current)
+}
+
+/// The resolution list read at the call, the call host's half of
+/// [`benilla_ui::script::ScreenModesQuery`]: the reference builds it on the first use of any
+/// resolution verb (`0x48bc90`), so a file-scope `GetScreenResolutions()` during the UI load
+/// answers the full list, from the same source as [`publish_display_modes`]; the multisample list
+/// likewise ([`benilla_ui::script::MultisampleFormatsQuery`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct DisplayLive<'w, 's> {
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    monitors: Query<'w, 's, &'static Monitor>,
+    widescreen: Option<Res<'w, Widescreen>>,
+    /// The device's multisample formats, which the multisample verbs read (`0x48c3e0`).
+    msaa: Option<Res<'w, benilla_world::view::MsaaFormats>>,
+}
+
+impl crate::script_calls::live::LiveFamily for DisplayLive<'_, '_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &benilla_ui::script::ScreenModesQuery| {
+            let window = self.windows.single().ok()?;
+            let widescreen = self.widescreen.as_deref().is_none_or(|w| w.0);
+            let (offered, current) = display_modes(window, self.monitors.iter(), widescreen);
+            Some(benilla_ui::script::ScreenModes { offered, current })
+        }) || ask.answer(|_: &benilla_ui::script::MultisampleFormatsQuery| {
+            self.msaa
+                .as_deref()
+                .map(|f| crate::cvars::multisample_formats(Some(f)))
+        })
+    }
 }
 
 /// Check the window got the size `$WOW_WIN` asked for: the window manager may clamp it to the

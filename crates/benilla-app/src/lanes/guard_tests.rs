@@ -668,6 +668,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::RacePvpTeams",
     "::MacroBoundSpells",
     "::NameCache",
+    // The Video menus' lists the host's resolution and multisample verbs read (`0x48bc90`, `0x48c3e0`).
+    "::video::Widescreen",
+    "::view::MsaaFormats",
     "::ServerTime",
     "::GuidIndex",
     // The bag cache the open-container handler numbers its `BAG_OPEN`s from.

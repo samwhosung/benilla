@@ -79,6 +79,8 @@ live_reads! {
         reputation: crate::ui_reputation::ReputationLive<'static, 'static>,
         /// The name caches' reads: a player's name and a unit's creature record.
         names: crate::names::NameLive<'static, 'static>,
+        /// The Video menus' lists: the display's resolutions and the device's multisample formats.
+        display: crate::video::DisplayLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

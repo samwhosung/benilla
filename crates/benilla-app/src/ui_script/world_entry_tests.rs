@@ -2135,6 +2135,70 @@ ScreenProbeHeight = GetScreenHeight()
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The Video menus' lists answer during the entry load: the reference builds them on their verbs'
+/// first call (`0x48bc90`, `0x48c3e0`), and an addon reading them at file scope keeps that answer.
+#[test]
+fn an_addon_reads_the_video_lists_at_file_scope() {
+    const TOC: &str = "\
+## Interface: 11200
+VideoProbe.lua
+";
+    const LUA: &str = "\
+VideoProbeModes = { GetScreenResolutions() }
+VideoProbeCurrent = GetCurrentResolution()
+VideoProbeFormats = { GetMultisampleFormats() }
+";
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon("videoprobe", "VideoProbe", TOC, LUA);
+    // The whole client, whose call host the load lends.
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    let world = app.world_mut();
+    boot(world);
+    world.spawn((
+        Window {
+            resolution: bevy::window::WindowResolution::new(2560, 1440),
+            ..Default::default()
+        },
+        bevy::window::PrimaryWindow,
+    ));
+    world.insert_resource(benilla_world::view::MsaaFormats {
+        formats: vec![(24, 24, 1), (24, 24, 4)],
+    });
+
+    log_in_as(world, "Onewarrior", 1);
+
+    let script = app
+        .world()
+        .get_non_send_resource::<benilla_ui::script::UiScript>()
+        .expect("VM");
+    let count = |table: &str| script.eval::<Option<u32>>(&format!("return getn({table})"));
+    // No monitor: the four fixed modes, and the live window inserted as the largest.
+    assert_eq!(
+        count("VideoProbeModes").ok().flatten(),
+        Some(5),
+        "file scope must see the resolution list; 0 is the list pushed only after the load"
+    );
+    assert_eq!(
+        script
+            .eval::<Option<String>>("return VideoProbeModes[VideoProbeCurrent]")
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("2560x1440"),
+        "...with the window's size as the current entry"
+    );
+    assert_eq!(
+        count("VideoProbeFormats").ok().flatten(),
+        Some(6),
+        "file scope must see the multisample formats, three numbers each"
+    );
+
+    drop(app);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// [`super::seat_from_roster`]'s `"player"` push is replaced when the descriptor streams in, but
 /// `UnitName("player")` reads only the record seeded beside it, which neither a nameless snapshot
 /// nor a despawn clears, as the reference never clears `0xc27d88`.
