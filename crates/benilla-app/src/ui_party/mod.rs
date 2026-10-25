@@ -32,7 +32,7 @@ pub(crate) use feed::{
 pub(crate) use feed::{fire_party_lane, PartyLane};
 pub(crate) use feed::{GroupSources, PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS};
 pub(crate) use pets::Roster;
-pub(crate) use records::record_notices;
+pub(crate) use records::{record_notices, roster_aura_slots_in};
 
 pub(crate) struct UiPartyPlugin;
 

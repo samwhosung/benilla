@@ -2,6 +2,8 @@
 //! (`0x496400`), the pet record (`0x496420`) and the party and raid pets' guids (`0x4e81d0`,
 //! `0x491960`); and the unit events a stats packet's change of a record raises (`0x5e5720`).
 
+use std::collections::HashMap;
+
 use benilla_protocol::messages::{ObjectFields, PartyMemberStatsInfo};
 
 use super::GroupState;
@@ -129,9 +131,7 @@ impl GroupState {
     /// The record whose pet block names `guid` (`0x496420`); a pet is found only while its owner's
     /// record reads online, party (`0x4e8860`) or raid (`0x4bb130`).
     pub(crate) fn pet_record(&self, guid: u64) -> Option<&PartyMemberStatsInfo> {
-        self.stats
-            .values()
-            .find(|r| guid != 0 && r.pet_guid == Some(guid) && r.is_online())
+        pet_record_in(&self.stats, guid)
     }
 
     /// Whether the roster fallback of `UnitExists` (`0x491900`) names `member`'s pet, which the
@@ -209,23 +209,37 @@ impl GroupState {
                 .filter(|&g| g != 0),
         }
     }
+}
 
-    /// The aura slots `UnitBuff` and `UnitDebuff` walk for a guid with no live object
-    /// (`0x519735`, `0x519b25`), ascending, buffs then debuffs: a member record's block (`+0x1a`)
-    /// unless it reads offline, which answers nothing and never tries the pet records
-    /// (`0x519741`); on a miss, the block of the pet record naming the guid (`+0xe4`, `0x519760`).
-    pub(crate) fn roster_aura_slots(&self, guid: u64) -> impl Iterator<Item = (u8, u16)> + '_ {
-        let blocks = match self.member_record(guid) {
-            Some(r) if !r.is_online() => None,
-            Some(r) => Some((&r.auras, &r.auras_negative)),
-            None => self
-                .pet_record(guid)
-                .map(|r| (&r.pet_auras, &r.pet_auras_negative)),
-        };
-        blocks
-            .into_iter()
-            .flat_map(|(buffs, debuffs)| buffs.iter().chain(debuffs).flatten().copied())
-    }
+/// [`GroupState::pet_record`] over `stats`.
+fn pet_record_in(
+    stats: &HashMap<u64, PartyMemberStatsInfo>,
+    guid: u64,
+) -> Option<&PartyMemberStatsInfo> {
+    stats
+        .values()
+        .find(|r| guid != 0 && r.pet_guid == Some(guid) && r.is_online())
+}
+
+/// The aura slots `UnitBuff` and `UnitDebuff` walk for a guid with no live object
+/// (`0x519735`, `0x519b25`), ascending, buffs then debuffs: a member record's block (`+0x1a`)
+/// unless it reads offline, which answers nothing and never tries the pet records
+/// (`0x519741`); on a miss, the block of the pet record naming the guid (`+0xe4`, `0x519760`).
+/// `stats` is the member records as of some place: the roster's now, or a packet's in the frame
+/// ([`crate::ui_unit::views::ViewStores::records`]).
+pub(crate) fn roster_aura_slots_in(
+    stats: &HashMap<u64, PartyMemberStatsInfo>,
+    guid: u64,
+) -> impl Iterator<Item = (u8, u16)> + '_ {
+    // The member record (`0x496400`), then the pet's (`0x496420`).
+    let blocks = match stats.get(&guid) {
+        Some(r) if !r.is_online() => None,
+        Some(r) => Some((&r.auras, &r.auras_negative)),
+        None => pet_record_in(stats, guid).map(|r| (&r.pet_auras, &r.pet_auras_negative)),
+    };
+    blocks
+        .into_iter()
+        .flat_map(|(buffs, debuffs)| buffs.iter().chain(debuffs).flatten().copied())
 }
 
 #[cfg(test)]
@@ -270,7 +284,7 @@ mod tests {
     #[test]
     fn a_member_record_answers_its_own_block_and_an_offline_one_answers_nothing() {
         let g = group_with(record(member_status::ONLINE));
-        let slots = |g: &GroupState, guid| g.roster_aura_slots(guid).collect::<Vec<_>>();
+        let slots = |g: &GroupState, guid| roster_aura_slots_in(&g.stats, guid).collect::<Vec<_>>();
         assert_eq!(
             slots(&g, MEMBER),
             [(0, 1126), (4, 21562), (32, 589)],
@@ -320,7 +334,7 @@ mod tests {
                 record(member_status::DEAD | member_status::PVP),
                 "the bit clears and the rest of the record stays as it was"
             );
-            assert!(g.roster_aura_slots(MEMBER).next().is_none());
+            assert!(roster_aura_slots_in(&g.stats, MEMBER).next().is_none());
             assert_eq!(g.party_pet_guid(MEMBER, None), None);
 
             relist(&mut g, member_status::ONLINE | member_status::AFK);
@@ -382,7 +396,7 @@ mod tests {
         let g = group_with(record(member_status::OFFLINE));
         assert_eq!(g.raid_pet_guid(MEMBER, None), Some(PET));
         assert!(
-            g.roster_aura_slots(PET).next().is_none(),
+            roster_aura_slots_in(&g.stats, PET).next().is_none(),
             "named, but the pet record is not found behind an offline owner"
         );
     }

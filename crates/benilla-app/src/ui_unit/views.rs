@@ -438,6 +438,18 @@ impl ViewStores<'_, '_> {
             None => live,
         }
     }
+
+    /// The group records as of the drain's place, `live` the roster's now: while the drain replays
+    /// a frame that wrote any, as its packet left them.
+    pub(crate) fn records<'a>(
+        &'a self,
+        live: &'a HashMap<u64, PartyMemberStatsInfo>,
+    ) -> &'a HashMap<u64, PartyMemberStatsInfo> {
+        self.views
+            .as_deref()
+            .and_then(|v| v.records.as_ref())
+            .unwrap_or(live)
+    }
 }
 
 /// What the four tokens' snapshots read beside their stores.
