@@ -83,16 +83,37 @@ fn fire_probe_chat(
 /// `WOW_PROBE_KEY="<key>@<secs>[:<hold>][;…]"`: presses each key at its time once in-world and
 /// releases it `<hold>` seconds later ([`PROBE_KEY_TAP_SECS`] when omitted). Reaches input no chat
 /// line or Lua chunk can (1.12 has no jump Lua API). Runs in `PreUpdate` after
-/// [`bevy::input::InputSystems`], so every `Update` reader sees the `just_pressed` that frame.
+/// [`bevy::input::InputSystems`], so every `Update` reader sees the `just_pressed` that frame. A
+/// `text=<chars>@<secs>` step types the characters in one frame, each a press carrying its text
+/// and a release, as winit delivers typing. `WOW_PROBE_INPUT_GLUE=1` arms the key and click probes
+/// at boot, for the login screen, their times counted from it.
 pub(crate) struct ProbeKeyPlugin;
+
+/// Whether the input probes arm at boot rather than at world entry (`WOW_PROBE_INPUT_GLUE=1`).
+fn input_probes_arm_at_boot() -> bool {
+    std::env::var("WOW_PROBE_INPUT_GLUE").as_deref() == Ok("1")
+}
 
 impl Plugin for ProbeKeyPlugin {
     fn build(&self, app: &mut App) {
         let spec = std::env::var("WOW_PROBE_KEY").unwrap_or_default();
+        let texts = spec
+            .split(';')
+            .map(str::trim)
+            .filter_map(|s| s.strip_prefix("text="))
+            .filter_map(|s| {
+                let (text, at) = s.rsplit_once('@')?;
+                Some(ProbeText {
+                    text: text.to_string(),
+                    at: at.trim().parse().ok()?,
+                    sent: false,
+                })
+            })
+            .collect();
         let taps = spec
             .split(';')
             .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && !s.starts_with("text="))
             .filter_map(|s| {
                 let (key, rest) = s.split_once('@')?;
                 let (at, hold) = match rest.split_once(':') {
@@ -114,14 +135,18 @@ impl Plugin for ProbeKeyPlugin {
                 }
             })
             .collect();
-        app.insert_resource(ProbeKeys { taps, armed: false })
-            .add_systems(
-                bevy::app::PreUpdate,
-                fire_probe_key
-                    .after(bevy::input::InputSystems)
-                    // After the loading cover empties every button plane, so the press survives.
-                    .after(crate::loading_screen::CoverInput),
-            );
+        app.insert_resource(ProbeKeys {
+            taps,
+            texts,
+            armed: input_probes_arm_at_boot(),
+        })
+        .add_systems(
+            bevy::app::PreUpdate,
+            fire_probe_key
+                .after(bevy::input::InputSystems)
+                // After the loading cover empties every button plane, so the press survives.
+                .after(crate::loading_screen::CoverInput),
+        );
     }
 }
 
@@ -178,8 +203,67 @@ fn probe_key_by_name(name: &str) -> Option<KeyCode> {
 #[derive(Resource)]
 struct ProbeKeys {
     taps: Vec<ProbeKeyTap>,
+    texts: Vec<ProbeText>,
     /// A self player has existed this run: latched, so taps reach glue screens after a `/logout`.
     armed: bool,
+}
+
+/// A `text=` step: characters typed in one frame.
+struct ProbeText {
+    text: String,
+    at: f32,
+    sent: bool,
+}
+
+/// The key a typed character comes in on: its letter, digit or the space bar, else a key 1.12
+/// cannot name, whose character still reaches the box.
+fn probe_key_of_char(c: char) -> KeyCode {
+    const LETTERS: [KeyCode; 26] = [
+        KeyCode::KeyA,
+        KeyCode::KeyB,
+        KeyCode::KeyC,
+        KeyCode::KeyD,
+        KeyCode::KeyE,
+        KeyCode::KeyF,
+        KeyCode::KeyG,
+        KeyCode::KeyH,
+        KeyCode::KeyI,
+        KeyCode::KeyJ,
+        KeyCode::KeyK,
+        KeyCode::KeyL,
+        KeyCode::KeyM,
+        KeyCode::KeyN,
+        KeyCode::KeyO,
+        KeyCode::KeyP,
+        KeyCode::KeyQ,
+        KeyCode::KeyR,
+        KeyCode::KeyS,
+        KeyCode::KeyT,
+        KeyCode::KeyU,
+        KeyCode::KeyV,
+        KeyCode::KeyW,
+        KeyCode::KeyX,
+        KeyCode::KeyY,
+        KeyCode::KeyZ,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        KeyCode::Digit0,
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    match c.to_ascii_uppercase() {
+        u @ 'A'..='Z' => LETTERS[u as usize - 'A' as usize],
+        d @ '0'..='9' => DIGITS[d as usize - '0' as usize],
+        ' ' => KeyCode::Space,
+        _ => KeyCode::Unidentified(bevy::input::keyboard::NativeKeyCode::Unidentified),
+    }
 }
 
 struct ProbeKeyTap {
@@ -206,12 +290,36 @@ fn fire_probe_key(
     mut hold: ResMut<benilla_world::modkeys::SyntheticHold>,
 ) {
     probe.armed |= !self_player.is_empty();
-    if probe.taps.is_empty() || !probe.armed {
+    if (probe.taps.is_empty() && probe.texts.is_empty()) || !probe.armed {
         return;
     }
     let now = time.elapsed_secs();
+    let mut write = |ev: bevy::input::keyboard::KeyboardInput| {
+        events.0.write(ev.clone());
+        events.1.write(bevy::window::WindowEvent::KeyboardInput(ev));
+    };
+    for step in probe.texts.iter_mut().filter(|t| !t.sent && now >= t.at) {
+        info!("probe-key: typing {:?} ({now:.1}s)", step.text);
+        step.sent = true;
+        for c in step.text.chars() {
+            let typed = bevy::input::keyboard::KeyboardInput {
+                key_code: probe_key_of_char(c),
+                logical_key: bevy::input::keyboard::Key::Character(c.to_string().into()),
+                state: bevy::input::ButtonState::Pressed,
+                text: Some(c.to_string().into()),
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            };
+            write(typed.clone());
+            write(bevy::input::keyboard::KeyboardInput {
+                state: bevy::input::ButtonState::Released,
+                text: None,
+                ..typed
+            });
+        }
+    }
     let mut synth = |key: KeyCode, state: bevy::input::ButtonState| {
-        let ev = bevy::input::keyboard::KeyboardInput {
+        write(bevy::input::keyboard::KeyboardInput {
             key_code: key,
             logical_key: bevy::input::keyboard::Key::Unidentified(
                 bevy::input::keyboard::NativeKey::Unidentified,
@@ -220,9 +328,7 @@ fn fire_probe_key(
             text: None,
             repeat: false,
             window: Entity::PLACEHOLDER,
-        };
-        events.0.write(ev.clone());
-        events.1.write(bevy::window::WindowEvent::KeyboardInput(ev));
+        });
     };
     for tap in &mut probe.taps {
         if !tap.pressed && now >= tap.at {
@@ -660,6 +766,121 @@ struct ProbeDrag {
 
 /// A frame's centre from its live `GetLeft`/`GetRight`/`GetTop`/`GetBottom`, times its effective
 /// scale: the edges answer in the frame's own units, the cursor is fed in the root's.
+/// `WOW_PROBE_CLICK="<Frame>@<secs>[:Right][;…]"`: clicks each named frame's centre at its time,
+/// once in-world (at boot with `WOW_PROBE_INPUT_GLUE=1`), through the window's own events: the
+/// cursor move onto the frame and the button's press and release in one frame, typed and on the
+/// window's stream as winit writes them. The OS pointer is never warped, so the frame's last move
+/// is back to it. Runs in `PreUpdate` before [`bevy::input::InputSystems`], so the button plane
+/// takes the same edges that frame.
+pub(crate) struct ProbeClickPlugin;
+
+impl Plugin for ProbeClickPlugin {
+    fn build(&self, app: &mut App) {
+        let clicks = std::env::var("WOW_PROBE_CLICK")
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| {
+                let (frame, rest) = s.split_once('@')?;
+                let (at, button) = match rest.split_once(':') {
+                    Some((at, "Right")) => (at, MouseButton::Right),
+                    Some((at, _)) => (at, MouseButton::Left),
+                    None => (rest, MouseButton::Left),
+                };
+                Some(ProbeClickStep {
+                    frame: frame.trim().to_string(),
+                    at: at.trim().parse().ok()?,
+                    button,
+                    done: false,
+                })
+            })
+            .collect();
+        app.insert_resource(ProbeClicks {
+            clicks,
+            armed: input_probes_arm_at_boot(),
+        })
+        .add_systems(
+            bevy::app::PreUpdate,
+            fire_probe_click.before(bevy::input::InputSystems),
+        );
+    }
+}
+
+#[derive(Resource)]
+struct ProbeClicks {
+    clicks: Vec<ProbeClickStep>,
+    armed: bool,
+}
+
+struct ProbeClickStep {
+    frame: String,
+    at: f32,
+    button: MouseButton,
+    done: bool,
+}
+
+/// Writes each due click as the window's cursor move, press and release.
+fn fire_probe_click(
+    mut probe: ResMut<ProbeClicks>,
+    time: ProbeClock,
+    self_player: Query<(), With<crate::net::SelfPlayer>>,
+    script: Option<NonSend<benilla_ui::script::UiScript>>,
+    window: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
+    mut events: (
+        MessageWriter<bevy::window::CursorMoved>,
+        MessageWriter<bevy::input::mouse::MouseButtonInput>,
+        MessageWriter<bevy::window::WindowEvent>,
+    ),
+) {
+    probe.armed |= !self_player.is_empty();
+    let (Some(script), Ok((entity, window))) = (script, window.single()) else {
+        return;
+    };
+    if !probe.armed {
+        return;
+    }
+    let now = time.elapsed_secs();
+    for step in probe.clicks.iter_mut().filter(|c| !c.done && now >= c.at) {
+        step.done = true;
+        let Some((x, y)) = frame_centre(&script, &step.frame) else {
+            warn!(
+                "probe-click: {} has no resolved rect — not clicked",
+                step.frame
+            );
+            continue;
+        };
+        let position = crate::ui_script::ui_to_window(window.height(), Vec2::new(x, y));
+        info!(
+            "probe-click: {} {:?} at ui ({x:.0},{y:.0}) window ({:.0},{:.0}) ({now:.1}s)",
+            step.frame, step.button, position.x, position.y
+        );
+        let moved = bevy::window::CursorMoved {
+            window: entity,
+            position,
+            delta: None,
+        };
+        events.0.write(moved.clone());
+        events
+            .2
+            .write(bevy::window::WindowEvent::CursorMoved(moved));
+        for state in [
+            bevy::input::ButtonState::Pressed,
+            bevy::input::ButtonState::Released,
+        ] {
+            let ev = bevy::input::mouse::MouseButtonInput {
+                button: step.button,
+                state,
+                window: entity,
+            };
+            events.1.write(ev);
+            events
+                .2
+                .write(bevy::window::WindowEvent::MouseButtonInput(ev));
+        }
+    }
+}
+
 fn frame_centre(script: &benilla_ui::script::UiScript, name: &str) -> Option<(f32, f32)> {
     let read = |edge: &str| {
         script

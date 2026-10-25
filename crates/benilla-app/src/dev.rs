@@ -115,9 +115,13 @@ impl Plugin for DevProbesPlugin {
             if std::env::var("WOW_PROBE_HOVER").is_ok() {
                 app.add_plugins(crate::capture::ProbeHoverPlugin);
             }
-            // `WOW_PROBE_KEY="Space@14"`: presses keys once in-world.
+            // `WOW_PROBE_KEY="Space@14;text=hi@16"`: presses keys and types text once in-world.
             if std::env::var("WOW_PROBE_KEY").is_ok() {
                 app.add_plugins(crate::capture::ProbeKeyPlugin);
+            }
+            // `WOW_PROBE_CLICK="Frame@14"`: clicks a frame's centre through the window's events.
+            if std::env::var("WOW_PROBE_CLICK").is_ok() {
+                app.add_plugins(crate::capture::ProbeClickPlugin);
             }
             // `WOW_PROBE_EXIT_AT=<secs>`: bounds any scripted live probe's lifetime.
             if std::env::var("WOW_PROBE_EXIT_AT").is_ok() {
@@ -315,6 +319,7 @@ pub(crate) fn add_every_instrument(app: &mut App) {
         app.add_plugins(crate::capture::ProbeDragPlugin);
         app.add_plugins(crate::capture::ProbeHoverPlugin);
         app.add_plugins(crate::capture::ProbeKeyPlugin);
+        app.add_plugins(crate::capture::ProbeClickPlugin);
         app.add_plugins(crate::capture::ProbeExitPlugin);
         app.add_plugins(crate::capture::PickProbePlugin);
         app.add_plugins(crate::capture::PhaseProbePlugin);

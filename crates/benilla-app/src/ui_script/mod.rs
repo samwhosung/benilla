@@ -300,6 +300,12 @@ pub(crate) fn seam_scale(window_h: f32) -> f32 {
     }
 }
 
+/// [`window_to_ui`]'s inverse: a point in the VM's root units as a window cursor.
+pub(crate) fn ui_to_window(window_h: f32, at: Vec2) -> Vec2 {
+    let s = seam_scale(window_h);
+    Vec2::new(at.x * s, window_h - at.y * s)
+}
+
 /// A window cursor (logical px, y-down from the top left) in the VM's root units, y up: what the
 /// pointer feed hands the engine and `GetCursorPosition` answers (`0x48b820`, no scale divided out).
 pub(crate) fn window_to_ui(window_h: f32, cursor: Vec2) -> Vec2 {
