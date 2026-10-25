@@ -241,3 +241,36 @@ fn the_group_verbs_gate_on_the_world_group_at_the_call() {
         "the push's party, the world's nothing"
     );
 }
+
+/// The by-name verbs find the name in the roster as it stands at the call (`0x493aa0`'s roster
+/// passes, `0x493b22` and `0x493ba7`): `PromoteByName` names `party1`'s unheld member the world
+/// seats though the push holds no party.
+#[test]
+fn the_by_name_verbs_find_the_name_in_the_world_group_at_the_call() {
+    let (mut app, rx) = client();
+    let world = app.world_mut();
+    lead(world, 0x10, &[(0x21, "Bob")]);
+    world.non_send_resource_mut::<UiScript>().set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            has_object: true,
+            guid: 0x10,
+            ..Default::default()
+        }),
+    );
+    with_hosted_vm(world, |script| {
+        script
+            .expect("a VM")
+            .run(r#"PromoteByName("Bo")"#)
+            .expect("the chunk runs")
+    });
+    let promoted: Vec<u64> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::GroupSetLeader { guid } => Some(guid),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(promoted, [0x21]);
+}

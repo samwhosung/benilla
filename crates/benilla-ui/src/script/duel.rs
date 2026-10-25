@@ -57,7 +57,7 @@ impl super::UiScript {
 fn start_duel_by_name(lua: &Lua, name: &str) -> mlua::Result<()> {
     let guid = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        model.closest_player(name, Filter::AcceptAll)
+        model.closest_player(lua, name, Filter::AcceptAll)
     };
     match guid {
         Some(guid) => submit(lua, DuelRequest::StartByGuid(guid)),
@@ -96,7 +96,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let guid = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.closest_player(&name, Filter::AcceptAll)
+                model.closest_player(lua, &name, Filter::AcceptAll)
             };
             match guid.filter(|_| protected::gate(lua, Tag::CAST)) {
                 Some(guid) => submit(lua, DuelRequest::StartByGuid(guid)),

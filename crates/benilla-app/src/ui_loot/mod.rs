@@ -2517,6 +2517,30 @@ mod tests {
         );
     }
 
+    /// `0x61c550` places a candidate only off its row below the roster's count: a guid on no row
+    /// is skipped (`0x61c5f9`), taking no slot, so the next candidate of that block files first.
+    #[test]
+    fn a_raid_candidate_on_no_row_is_placed_nowhere() {
+        let mut raid = GroupState {
+            group_type: crate::ui_party::GROUPTYPE_RAID,
+            members: vec![GroupMemberEntry {
+                name: "Cairne".into(),
+                guid: 0xB,
+                status: 0,
+                flags: 0,
+            }],
+            ..GroupState::default()
+        };
+        raid.rebuild_raid(0xA);
+        let mut loot = LootState::default();
+        loot.set_master_candidates(vec![0xE, 0xB, 0xA]);
+        loot.open(0x42, loot_type::CORPSE, 0, vec![master_item(0, 117, 1)]);
+        let placed: Vec<Option<u64>> = (1..=4)
+            .map(|i| loot.window.master_candidate(i, &raid))
+            .collect();
+        assert_eq!(placed, [Some(0xB), Some(0xA), None, None], "0xE has no row");
+    }
+
     /// `0x61c550`'s raid placement: each guid in the first free slot of its subgroup's block.
     #[test]
     fn raid_candidates_file_into_their_own_subgroup_block() {

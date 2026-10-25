@@ -206,3 +206,32 @@ pub(crate) fn raid_guids(lua: &Lua, snapshot: &PartyState) -> Vec<u64> {
         .filter_map(|row| ask(lua, &RowQuery(UnitBase::Raid(row))).map(|r| r.member))
         .collect()
 }
+
+/// One group member as the by-name resolver's roster passes see it (`0x493b22`, `0x493ba7`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RosterName {
+    /// The member's name; empty for none, which the matcher skips (`0x493c68`).
+    pub name: String,
+    pub guid: u64,
+    /// The object manager holds a unit under the guid (`0x493b46`, `0x493bde`).
+    pub held: bool,
+}
+
+/// The party slots and the raid rows below the count, as the roster passes walk them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RosterNames {
+    pub party: Vec<RosterName>,
+    pub raid: Vec<RosterName>,
+}
+
+/// The roster passes' members ([`RosterNames`]).
+pub struct RosterNamesQuery;
+
+impl LiveQuery for RosterNamesQuery {
+    type Answer = RosterNames;
+}
+
+/// The roster passes' members through the lent host, `None` where none answers.
+pub(crate) fn live_roster_names(lua: &Lua) -> Option<RosterNames> {
+    ask(lua, &RosterNamesQuery)
+}

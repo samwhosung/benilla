@@ -141,7 +141,7 @@ impl ChatSender<'_, '_> {
         let Some(mut kind) = SendType::from_token(&send.chat_type) else {
             return;
         };
-        match group_gate(kind, script.chat_group()) {
+        match group_gate(kind, send.group) {
             Ok(promoted) => kind = promoted,
             Err(key) => {
                 self.refuse(script, key);

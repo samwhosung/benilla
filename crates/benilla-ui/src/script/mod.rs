@@ -325,7 +325,7 @@ pub use petition::{
 pub use protected::InputEvents;
 pub use roster_read::{
     GroupCells, GroupCellsQuery, GroupRow, MemberOrPetQuery, MemberQuery, Membership, RaidRowQuery,
-    RowQuery,
+    RosterName, RosterNames, RosterNamesQuery, RowQuery,
 };
 pub use stat_read::{CombatRead, NoPlayer, SelfRead, UnitCombatStats};
 pub use tabard::{

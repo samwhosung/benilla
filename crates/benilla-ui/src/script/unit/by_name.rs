@@ -376,7 +376,37 @@ impl Model {
     /// exact-only flag, `filter` the binding's mode): the party slots, then the raid roster, each
     /// member offered while no object is held for it, then the pushed candidates. Our own row is
     /// held, as the active player object always is, and is offered by the object pass at distance 0.
-    pub(crate) fn closest_player(&self, name: &str, filter: Filter) -> Option<u64> {
+    /// The roster passes read the party slots and the raid rows as they stand at the call, through
+    /// the lent host, and the pushed roster with none lent.
+    pub(crate) fn closest_player(
+        &self,
+        lua: &mlua::Lua,
+        name: &str,
+        filter: Filter,
+    ) -> Option<u64> {
+        let search = Search {
+            query: name,
+            kinds: Kinds::PlayerOnly,
+            filter,
+            exact: Match::PrefixOk,
+            active_player: self.snapshot_unit("player").is_some_and(|u| u.has_object),
+        };
+        if let Some(live) = super::super::roster_read::live_roster_names(lua) {
+            fn entry(m: &super::super::RosterName) -> RosterEntry<'_> {
+                RosterEntry {
+                    name: &m.name,
+                    guid: m.guid,
+                    held: m.held,
+                }
+            }
+            return resolve(
+                search,
+                live.party.iter().map(entry),
+                live.raid.iter().map(entry),
+                self.held_candidates(),
+            )
+            .map(|pick| pick.guid);
+        }
         let party = &self.party;
         let held = |token: String| self.snapshot_unit(&token).is_some_and(|u| u.has_object);
         let members = party
@@ -395,13 +425,6 @@ impl Model {
             held: (party.own_guid != 0 && m.guid == party.own_guid)
                 || held(format!("raid{}", i + 1)),
         });
-        let search = Search {
-            query: name,
-            kinds: Kinds::PlayerOnly,
-            filter,
-            exact: Match::PrefixOk,
-            active_player: held("player".to_string()),
-        };
         resolve(search, members, raid, self.held_candidates()).map(|pick| pick.guid)
     }
 

@@ -433,6 +433,11 @@ impl GroupState {
                 .filter(|&g| g != 0 && missed(g))
                 .map(NameWait::Seat),
         );
+        // The emptier ahead of the seat loop (`0x5e6b19` into `0x4e84a0(0)`) zeroes the leader
+        // cell and the index cell (`0x4e85a9`, `0x4e85b5`), which the leader store fills only after
+        // the event (`0x5e6c7e`).
+        self.leader = 0;
+        self.store_leader_index();
         for m in &seated {
             if !held {
                 // Seated into no group: no line, but the chime (`0x5e6dc6`).
@@ -1187,10 +1192,11 @@ mod tests {
         );
     }
 
-    /// The raid rows are their own state: a list writes the party slots ahead of
-    /// `PARTY_MEMBERS_CHANGED` (`0x5e6c4a`, `0x5e6c66`), then the leader (`0x5e6c7e`) and the loot
-    /// cells (`0x5e6e52`), and the rows only at its rebuild (`0x5e6eb4` into `0x4ba5f0`), so each
-    /// signal's place holds the new slots beside the old rows until the rebuild's own event.
+    /// The raid rows are their own state: a list zeroes the leader cells (`0x4e85a9`, `0x4e85b5`)
+    /// and writes the party slots ahead of `PARTY_MEMBERS_CHANGED` (`0x5e6c4a`, `0x5e6c66`), then
+    /// the leader (`0x5e6c7e`) and the loot cells (`0x5e6e52`), and the rows only at its rebuild
+    /// (`0x5e6eb4` into `0x4ba5f0`), so each signal's place holds the new slots beside the old rows
+    /// until the rebuild's own event.
     #[test]
     fn the_raid_rows_stay_as_stored_until_the_rebuild_writes_them() {
         use GroupSignal::*;
@@ -1227,6 +1233,12 @@ mod tests {
                 .find(|(s, _)| s == signal)
                 .unwrap_or_else(|| panic!("{signal:?} signalled"));
             let cells = cells.cells();
+            if *signal == MembersChanged {
+                assert_eq!(
+                    cells.leader_index, 1,
+                    "the index cell zeroed, read plus one"
+                );
+            }
             (
                 cells.party_slots().map(|m| m.guid).collect::<Vec<_>>(),
                 cells.leader,
@@ -1236,8 +1248,8 @@ mod tests {
         };
         assert_eq!(
             at(&MembersChanged),
-            (vec![1, 3], ME, 0, old_rows.clone()),
-            "the new slots beside the old leader, loot and rows"
+            (vec![1, 3], 0, 0, old_rows.clone()),
+            "the new slots beside the emptier's zeroed leader and the old loot and rows"
         );
         assert_eq!(
             at(&LeaderChanged),

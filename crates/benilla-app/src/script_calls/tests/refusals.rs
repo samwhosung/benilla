@@ -37,6 +37,12 @@ fn in_world(f: &mut Frame) {
 fn a_chat_lines_refusal_shows_inside_its_call() {
     let mut f = frame(true);
     in_world(&mut f);
+    // No party slot held in the world, which the gate reads at the call.
+    f.app
+        .world_mut()
+        .resource_mut::<crate::ui_party::GroupState>()
+        .members
+        .clear();
     assert_eq!(
         shown_in_call(&mut f, r#"SendChatMessage("hi", "PARTY")"#),
         "ERR_NOT_IN_GROUP"
@@ -244,20 +250,16 @@ fn a_raid_lines_refusal_shows_inside_its_call() {
     );
     let mut f = frame(true);
     in_world(&mut f);
-    let member = |guid, rank| benilla_ui::script::RaidMemberInfo {
-        guid,
-        rank,
-        ..Default::default()
-    };
-    f.app
-        .world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .set_party(benilla_ui::script::PartyState {
-            leader_guid: NEW,
-            own_guid: ME,
-            raid: vec![member(ME, 0), member(NEW, 2)],
-            ..Default::default()
-        });
+    // The world's raid, as the gate reads it at the call: Bob leads, we hold rank 0.
+    {
+        let mut group = f
+            .app
+            .world_mut()
+            .resource_mut::<crate::ui_party::GroupState>();
+        group.group_type = crate::ui_party::GROUPTYPE_RAID;
+        group.leader = NEW;
+        group.rebuild_raid(ME);
+    }
     assert_eq!(
         shown_in_call(&mut f, r#"SendChatMessage("hi", "RAID_WARNING")"#),
         "ERR_NOT_LEADER"

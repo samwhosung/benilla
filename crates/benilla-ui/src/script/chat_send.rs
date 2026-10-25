@@ -93,6 +93,8 @@ pub struct ChatSend {
     pub target: Option<String>,
     /// The `Languages.dbc` id the third argument named; `None` is the speaker's default.
     pub language: Option<u32>,
+    /// The group as it stood at the call, which the gates the host applies read.
+    pub group: ChatGroup,
 }
 
 /// The empty-line gate (`0x49f28d`-`0x49f2a1`): a line whose first byte is NUL ends the call,
@@ -118,26 +120,30 @@ pub struct ChatGroup {
     pub leads_or_assists: bool,
 }
 
+/// The group facts `SendChatMessage`'s gates and leader promotion read, as the group stands at
+/// the call: through the lent host, else off the pushed roster.
+fn chat_group(lua: &Lua) -> ChatGroup {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let cells = super::roster_read::cells(lua, &model.party);
+    let own = cells.own_guid;
+    let leads = own != 0 && cells.is_raid_leader();
+    // `0x4bb080`: a zero GUID or one off the roster fails; a member above rank 0 passes, and one
+    // at rank 0 passes only as the group leader.
+    let leads_or_assists = super::roster_read::membership(lua, &model.party, own)
+        .rank
+        .is_some_and(|rank| rank > 0 || leads);
+    ChatGroup {
+        in_party: cells.party[0] != 0,
+        raid_members: cells.raid_count as usize,
+        leads,
+        leads_or_assists,
+    }
+}
+
 impl super::UiScript {
-    /// The group facts `SendChatMessage`'s gates and leader promotion read.
+    /// The group facts `SendChatMessage`'s gates and leader promotion read ([`chat_group`]).
     pub fn chat_group(&self) -> ChatGroup {
-        let model = self.model_ref();
-        let party = &model.party;
-        let own = party.own_guid;
-        let leads = own != 0 && own == party.leader_guid;
-        // `0x4bb080`: a zero GUID or one off the roster fails; a member above rank 0 passes, and
-        // one at rank 0 passes only as the group leader.
-        let leads_or_assists = party
-            .raid
-            .iter()
-            .find(|m| own != 0 && m.guid == own)
-            .is_some_and(|m| m.rank > 0 || leads);
-        ChatGroup {
-            in_party: party.members.first().is_some_and(|m| m.guid != 0),
-            raid_members: party.raid.len(),
-            leads,
-            leads_or_assists,
-        }
+        chat_group(self.lua())
     }
 }
 
@@ -286,6 +292,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         chat_type,
                         target,
                         language,
+                        // Read before the send, as the binding reads it (`0x49f343`-`0x49f4b2`).
+                        group: chat_group(lua),
                     }),
                 )
             },
@@ -338,12 +346,14 @@ mod tests {
                     chat_type: "SAY".into(),
                     target: None,
                     language: None,
+                    group: ChatGroup::default(),
                 },
                 ChatSend {
                     text: "/dance".into(),
                     chat_type: "SAY".into(),
                     target: None,
                     language: None,
+                    group: ChatGroup::default(),
                 },
             ]
         );
@@ -599,6 +609,7 @@ mod tests {
                 chat_type: "GUILD".into(),
                 target: None,
                 language: None,
+                group: ChatGroup::default(),
             })]
         );
     }

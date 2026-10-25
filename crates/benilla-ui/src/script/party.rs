@@ -327,7 +327,7 @@ fn player_object(lua: &Lua) -> bool {
 /// The best player of `name` (`0x493aa0`, typemask 0x10, mode 2), as the name verbs resolve it.
 fn player_named(lua: &Lua, name: &str) -> Option<u64> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    model.closest_player(name, Filter::AssistableAlive)
+    model.closest_player(lua, name, Filter::AssistableAlive)
 }
 
 /// `PromoteByName`: `0x493aa0` with typemask 0x10 and mode 2 (`0x48a86a`), then
@@ -680,7 +680,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model.closest_player(&name, Filter::AssistableAlive)
+                    model.closest_player(lua, &name, Filter::AssistableAlive)
                 };
                 // The pick must be ourselves (`0x4e7f70`, which also tests the four party slots)
                 // or in the raid (`0x4baee0`); a stranger the resolver preferred is refused with

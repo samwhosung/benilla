@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{
     GroupCells, GroupCellsQuery, GroupRow, MemberOrPetQuery, MemberQuery, Membership,
-    RaidMemberInfo, RaidRowQuery, RowQuery, UnitBase,
+    RaidMemberInfo, RaidRowQuery, RosterName, RosterNames, RosterNamesQuery, RowQuery, UnitBase,
 };
 
 use super::feed::{loot_read, raid_row_at, RaidSelf, RowReads};
@@ -144,6 +144,26 @@ impl RosterLive<'_, '_> {
         )
     }
 
+    /// The party slots and the stored raid rows as the by-name roster passes walk them
+    /// (`0x493b22`, `0x493ba7`), each held while the object manager holds a unit under its guid
+    /// (`0x493b46`, `0x493bde`).
+    fn roster_names(&self) -> Option<RosterNames> {
+        let group = self.group.as_deref()?;
+        let cells = self.stores.roster(group);
+        let entry = |name: &str, guid: u64| RosterName {
+            name: name.to_string(),
+            guid,
+            held: self.held(guid).is_some_and(|s| s.is_unit()),
+        };
+        Some(RosterNames {
+            party: cells
+                .party_slots()
+                .map(|m| entry(&m.name, m.guid))
+                .collect(),
+            raid: cells.raid.iter().map(|r| entry(&r.name, r.guid)).collect(),
+        })
+    }
+
     /// The group row a token names: its member, and the pet its record names.
     fn row(&self, base: UnitBase) -> Option<GroupRow> {
         let group = self.group.as_deref()?;
@@ -179,5 +199,6 @@ impl crate::script_calls::live::LiveFamily for RosterLive<'_, '_> {
             || ask.answer(|q: &MemberQuery| self.member(q.0))
             || ask.answer(|q: &RowQuery| self.row(q.0))
             || ask.answer(|q: &MemberOrPetQuery| self.member_or_pet(q.guid, q.raid))
+            || ask.answer(|_: &RosterNamesQuery| self.roster_names())
     }
 }
