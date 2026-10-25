@@ -19,6 +19,10 @@
 //! - Every boundary (start, shot advance, end) cuts through black: a 0.25 s fade-out
 //!   (`[0x804550]`, `0x4c0d10`) whose completion runs the step, then a fade-in (`0x4c1280`). There
 //!   is no audio fade on this path.
+//! - A shot that moves the camera more than 30 yards (`0x48eec1`, `0x48f0fc`; start and advance
+//!   are one arm, `0x48edf0`) loads its destination in full before it fades in: `0x66fc80` runs
+//!   the synchronous map update `0x694920` at the black. Here the black is held instead, until
+//!   the camera's spot is presentable or the teleport hold's ceiling runs out ([`ShotHold`]).
 //!
 //! Playback takes over, and releases, the camera pose, the streaming focus (which follows the
 //! camera, so the flight is over streamed terrain) and the UI's cinematic flag, which drives
@@ -35,7 +39,7 @@ use bevy::prelude::*;
 use crate::client_state::ClientState;
 use crate::loading_screen::LoadingScreen;
 use crate::net::{CinematicTriggeredMessage, ClientCommand, NetCommands};
-use crate::player::PlayerControlSet;
+use crate::player::{PlayerControlSet, SETTLE_TIMEOUT};
 use crate::ui_script::SweepApp;
 
 /// Both cinematic DBCs, read once at startup.
@@ -56,6 +60,23 @@ pub(crate) struct Cinematic {
     /// A skip not yet paid: `StopCinematic` runs EndCinematic as its fade-out's completion
     /// (`0x48f067`, `0x48f080`), so [`stop`] sets this and [`drive`] pays it at full black.
     skip: bool,
+    /// A far shot's black, held until the world at its first eye is in ([`ShotHold`]).
+    hold: Option<ShotHold>,
+}
+
+/// The black a shot that moved the camera past the reload gate holds before it fades in.
+///
+/// The reference's arm (`0x48edf0`, and `0x48efe0` into it) loads that spot synchronously with the
+/// screen at black and only then restarts the shot's clock and fades in (`0x48eed3` to `0x48ef43`).
+/// The stream cannot block, so the black holds with the shot's clock stopped. It ends on the same
+/// residency a teleport's hold does ([`crate::player::residency_reached`] and a presentable
+/// world), or at [`SETTLE_TIMEOUT`] from the shot's arm, which nothing extends.
+struct ShotHold {
+    /// `Time::elapsed_secs` at which the hold gives up.
+    ceiling: f32,
+    /// The arm's own frame: the stream has not yet seen the camera at the new spot, so the world
+    /// it reports is the last shot's.
+    fresh: bool,
 }
 
 /// One cinematic in flight.
@@ -122,7 +143,22 @@ impl Cinematic {
             }),
             settling: None,
             skip: false,
+            hold: None,
         }
+    }
+
+    /// A cinematic playing `shots`, for tests of the driver.
+    pub(crate) fn playing_shots_for_test(shots: Vec<CinematicPath>) -> Self {
+        let mut cine = Self::playing_for_test();
+        if let Some(play) = cine.playing.as_mut() {
+            play.shots = shots;
+        }
+        cine
+    }
+
+    /// Is a far shot's black being held for its world?
+    pub(crate) fn holds_black_for_shot(&self) -> bool {
+        self.hold.is_some()
     }
 }
 
@@ -330,6 +366,7 @@ fn take_trigger(
 fn relinquish(cine: &mut Cinematic, net: Option<&NetCommands>, why: &str) {
     if let Some(play) = cine.playing.take() {
         info!("cinematic: {} {why}", play.sequence_id);
+        cine.hold = None;
         ack(net);
     }
     if let Some(id) = cine.pending.take() {
@@ -347,6 +384,8 @@ fn start_pending(
     net: Option<Res<NetCommands>>,
     state: Res<State<ClientState>>,
     mut fade: ResMut<crate::screen_fade::ScreenFade>,
+    time: Res<Time>,
+    camera: Query<&Transform, With<WorldCamera>>,
 ) {
     let Some(id) = cine.pending else { return };
     // The world-load gate: in the world, where `CinematicFrame` (the only ESC route) exists, and
@@ -397,6 +436,7 @@ fn start_pending(
         );
         ack(net.as_deref());
     }
+    cine.hold = None;
     static RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     cine.playing = Some(Playing {
         run: RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -406,8 +446,57 @@ fn start_pending(
         elapsed: Duration::ZERO,
     });
     announce_shot(net.as_deref());
-    // `0x48ef43`, the tail of the shot arm: the shot fades in from the black it was armed under.
-    fade.fade_in(crate::screen_fade::CINEMATIC);
+    let from = camera.single().ok().map(|t| t.translation);
+    open_shot(&mut cine, &mut fade, from, time.elapsed_secs());
+}
+
+/// The tail of the shot arm (`0x48edf0`), for the first shot and every advance alike: the shot
+/// comes in from the black it was armed under (`0x48ef43`), unless its first eye is more than 30
+/// yards from the camera (`0x48eec1`), where the arm first loads that spot at the black
+/// (`0x48eed3`) and restarts the shot's clock. So a far shot keeps the black with its clock at
+/// zero ([`ShotHold`]); `from` is the camera as it stands, none with no camera to move.
+fn open_shot(
+    cine: &mut Cinematic,
+    fade: &mut crate::screen_fade::ScreenFade,
+    from: Option<Vec3>,
+    now: f32,
+) {
+    let Some(play) = cine.playing.as_mut() else {
+        return;
+    };
+    let eye = benilla_assets::coords::wow_to_bevy(play.shot().sample(0).eye);
+    if from.is_some_and(|from| crate::player::is_far_reload(from, eye)) {
+        play.elapsed = Duration::ZERO;
+        cine.hold = Some(ShotHold {
+            ceiling: now + SETTLE_TIMEOUT,
+            fresh: true,
+        });
+        info!("cinematic: far shot — the black holds while its world loads");
+    } else {
+        fade.fade_in(crate::screen_fade::CINEMATIC);
+    }
+}
+
+/// Is a held far shot's world in? `Some(true)` once the camera's spot is resident and presentable,
+/// `Some(false)` when the ceiling ran out first, `None` while it waits. With no world progress to
+/// read, or no camera, there is nothing to wait on.
+fn shot_hold_over(
+    hold: &mut ShotHold,
+    progress: Option<&benilla_world::terrain_stream::WorldLoadProgress>,
+    at: Option<Vec3>,
+    now: f32,
+) -> Option<bool> {
+    // The arm's own frame reads a world that has not seen the new spot.
+    if std::mem::take(&mut hold.fresh) {
+        return None;
+    }
+    if now >= hold.ceiling {
+        return Some(false);
+    }
+    let (Some(p), Some(at)) = (progress, at) else {
+        return Some(true);
+    };
+    (crate::player::residency_reached(p, at) && p.presentable()).then_some(true)
 }
 
 /// `CMSG_NEXT_CINEMATIC_CAMERA`, sent as each shot is armed, the first included (`0x48ef11`).
@@ -462,15 +551,21 @@ fn drive(
 
     // A skip with only a latch in flight is settled by [`stop`], so here a skip has a shot to fade.
     let skip = cine.skip;
+    // A far shot's clock restarts once its world is in (`0x50ca10` after the load), so it stands
+    // at zero under the black.
+    let holding = cine.hold.is_some();
+    let camera_at = camera.single().ok().map(|t| t.translation);
     let Some(play) = cine.playing.as_mut() else {
         return;
     };
-    play.elapsed += time.delta();
+    if !holding {
+        play.elapsed += time.delta();
+    }
 
     // --- Every boundary cuts through black: a run-out shot or a skip fades out and steps at full
     // black, as the fade's completion (`0x48efd7` to `0x48efe0` to advance, `0x48f067` to
     // `0x48f080` to stop), which keeps the cut invisible under a hitch.
-    if skip || play.elapsed.as_millis() as u32 >= play.shot().duration_ms {
+    if skip || (!holding && play.elapsed.as_millis() as u32 >= play.shot().duration_ms) {
         if !fade.is_black() {
             fade.fade_out(crate::screen_fade::CINEMATIC);
             // Fall through to seat the camera: what darkens is the shot's own last pose.
@@ -494,6 +589,7 @@ fn drive(
             }
             if ended {
                 cine.skip = false;
+                cine.hold = None;
                 if skip {
                     // A skip takes a latched trigger with it, acked all the same.
                     relinquish(&mut cine, net.as_deref(), "stopped");
@@ -510,7 +606,23 @@ fn drive(
                 cine.settling = Some(SETTLE_BUDGET);
                 return;
             }
-            // `0x48ef43`: the next shot comes in from the black it was armed under.
+            // `0x48ef43`: the next shot comes in from the black it was armed under, after its
+            // world if it is far.
+            open_shot(&mut cine, &mut fade, camera_at, time.elapsed_secs());
+        }
+    }
+
+    // --- A far shot's black ends with its world, or at the ceiling.
+    if let Some(hold) = cine.hold.as_mut().filter(|_| !skip) {
+        let over = shot_hold_over(hold, progress.as_deref(), camera_at, time.elapsed_secs());
+        if let Some(resident) = over {
+            if !resident {
+                warn!(
+                    "cinematic: the shot's world did not load inside the settle budget — \
+                     revealing anyway"
+                );
+            }
+            cine.hold = None;
             fade.fade_in(crate::screen_fade::CINEMATIC);
         }
     }
@@ -595,6 +707,7 @@ fn abandon(cine: &mut Cinematic, fade: &mut crate::screen_fade::ScreenFade) {
     cine.pending = None;
     cine.skip = false;
     cine.settling = None;
+    cine.hold = None;
     // Clear any fade: the glue comes up next and must not sit behind our black.
     fade.clear();
 }
@@ -921,5 +1034,312 @@ mod settling_under_black {
                 .is_black(),
             "the screen comes back even though the world did not"
         );
+    }
+}
+
+/// A shot that moves the camera past the reload gate keeps the black until its world is in
+/// (`0x48eec1`, `0x48f0fc`, then the synchronous load `0x66fc80` at the black).
+#[cfg(test)]
+mod far_shots {
+    use super::*;
+    use benilla_formats::{CinematicCameraRow, CinematicPath};
+    use benilla_world::terrain_stream::WorldLoadProgress;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// Where the camera stands before the shot, wow coordinates.
+    const HERE: [f32; 3] = [-8_949.0, -132.0, 83.0];
+    /// Ten minutes of flight from `HERE`, on another tile.
+    const FAR: [f32; 3] = [-3_000.0, 2_500.0, 90.0];
+
+    fn tile_of(wow: [f32; 3]) -> (i32, i32) {
+        let (tx, ty) = benilla_formats::world_to_tile(wow[0], wow[1]);
+        (tx as i32, ty as i32)
+    }
+
+    fn shot(eye: [f32; 3], ms: u32) -> CinematicPath {
+        let row = CinematicCameraRow {
+            id: 1,
+            model: String::new(),
+            sound_id: 0,
+            origin: [0.0; 3],
+            origin_facing: 0.0,
+        };
+        CinematicPath::held_pose(&row, eye, [eye[0] + 10.0, eye[1], eye[2]], ms)
+    }
+
+    /// `HERE`, moved `yards` along x.
+    fn from_here(yards: f32) -> [f32; 3] {
+        [HERE[0] + yards, HERE[1], HERE[2]]
+    }
+
+    /// The world's report about the tile at `wow`: in, or still out.
+    fn world_at(wow: [f32; 3], resident: bool) -> WorldLoadProgress {
+        WorldLoadProgress {
+            ready: usize::from(resident),
+            total: 1,
+            focus_resident: resident,
+            scene_ready: resident,
+            focus_tile: Some(tile_of(wow)),
+            ..Default::default()
+        }
+    }
+
+    fn black() -> crate::screen_fade::ScreenFade {
+        let mut fade = crate::screen_fade::ScreenFade::default();
+        fade.fade_out(0.0);
+        assert!(fade.is_black());
+        fade
+    }
+
+    /// The driver over a camera at `HERE`, at full black, the clock stepping 100 ms a frame.
+    fn app_with(cine: Cinematic, world: WorldLoadProgress) -> App {
+        let mut app = App::new();
+        app.insert_resource(cine)
+            .insert_resource(black())
+            .insert_resource(world)
+            .init_resource::<Time>();
+        app.world_mut().spawn((
+            WorldCamera,
+            Transform::from_translation(benilla_assets::coords::wow_to_bevy(HERE)),
+        ));
+        app.add_systems(Update, drive);
+        app
+    }
+
+    /// One frame: the clock steps, then the driver runs.
+    fn frame(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(100));
+        app.update();
+    }
+
+    fn black_now(app: &App) -> bool {
+        app.world()
+            .resource::<crate::screen_fade::ScreenFade>()
+            .is_black()
+    }
+
+    fn holding(app: &App) -> bool {
+        app.world().resource::<Cinematic>().holds_black_for_shot()
+    }
+
+    fn set_world(app: &mut App, world: WorldLoadProgress) {
+        app.insert_resource(world);
+    }
+
+    /// What `start_pending` does with a started cinematic: the shot arm's tail, from the camera.
+    fn open_first_shot(app: &mut App) {
+        app.world_mut()
+            .run_system_once(
+                |mut cine: ResMut<Cinematic>,
+                 mut fade: ResMut<crate::screen_fade::ScreenFade>,
+                 time: Res<Time>,
+                 camera: Query<&Transform, With<WorldCamera>>| {
+                    let from = camera.single().ok().map(|t| t.translation);
+                    open_shot(&mut cine, &mut fade, from, time.elapsed_secs());
+                },
+            )
+            .expect("runs");
+    }
+
+    /// The first shot, far: the black holds through stale and half-loaded worlds, and the fade-in
+    /// comes with the destination.
+    #[test]
+    fn a_far_shot_start_holds_the_black_until_its_world_is_in() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            // The world as the body's spot left it, resident there.
+            world_at(HERE, true),
+        );
+        open_first_shot(&mut app);
+        assert!(holding(&app), "past 30 yards the black is held");
+        assert!(black_now(&app), "and there is no fade-in");
+
+        // The old spot's residency is not the destination's, whatever the frame count.
+        for _ in 0..5 {
+            frame(&mut app);
+        }
+        assert!(black_now(&app) && holding(&app), "the old world is not it");
+        set_world(&mut app, world_at(FAR, false));
+        frame(&mut app);
+        assert!(black_now(&app) && holding(&app), "its tile still loading");
+
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert!(!holding(&app), "the destination is in");
+        assert!(!black_now(&app), "and the shot fades in");
+    }
+
+    /// The arm's own frame reads a world that has not seen the new spot, even when it reports the
+    /// destination's tile (a shot within one tile of the camera).
+    #[test]
+    fn the_arms_own_frame_does_not_release_the_hold() {
+        // 100 yards along x is far, and the same tile.
+        let there = from_here(100.0);
+        assert_eq!(tile_of(there), tile_of(HERE));
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(there, 60_000)]),
+            world_at(there, true),
+        );
+        open_first_shot(&mut app);
+        frame(&mut app);
+        assert!(
+            holding(&app),
+            "the stream has not looked from the new spot yet"
+        );
+        frame(&mut app);
+        assert!(!holding(&app), "the next frame's report is about it");
+        assert!(!black_now(&app));
+    }
+
+    /// The gate is `d² > 900` (`0x48eec1`: the compare falls through for a strictly larger one).
+    #[test]
+    fn a_shot_within_30_yards_fades_in_at_once() {
+        for yards in [0.0, 12.0, 29.5, 30.0] {
+            let mut app = app_with(
+                Cinematic::playing_shots_for_test(vec![shot(from_here(yards), 60_000)]),
+                world_at(HERE, false),
+            );
+            open_first_shot(&mut app);
+            assert!(!holding(&app), "{yards} yd holds nothing");
+            assert!(!black_now(&app), "{yards} yd fades in as it always has");
+        }
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(from_here(30.5), 60_000)]),
+            world_at(HERE, false),
+        );
+        open_first_shot(&mut app);
+        assert!(holding(&app) && black_now(&app), "30.5 yd holds");
+    }
+
+    /// The shot's clock stands at zero under the hold and runs from release.
+    #[test]
+    fn the_shots_clock_restarts_when_the_world_is_in() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            world_at(HERE, true),
+        );
+        open_first_shot(&mut app);
+        for _ in 0..8 {
+            frame(&mut app);
+        }
+        let elapsed = |app: &App| {
+            app.world()
+                .resource::<Cinematic>()
+                .playing
+                .as_ref()
+                .expect("playing")
+                .elapsed
+        };
+        assert_eq!(
+            elapsed(&app),
+            Duration::ZERO,
+            "no time passes under the black"
+        );
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert!(!holding(&app));
+        frame(&mut app);
+        assert_eq!(elapsed(&app), Duration::from_millis(100), "then it runs");
+    }
+
+    /// A world that never loads is let through at the teleport hold's budget from the arm.
+    #[test]
+    fn the_ceiling_releases_a_stalled_load_and_is_never_extended() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            world_at(FAR, false),
+        );
+        open_first_shot(&mut app);
+        let frames = |secs: f32| (secs * 10.0).round() as usize;
+        for i in 0..frames(SETTLE_TIMEOUT - 0.5) {
+            // The stream keeps advancing, which a stall budget would count as progress.
+            let mut world = world_at(FAR, false);
+            world.ready = i;
+            world.total = i + 1;
+            set_world(&mut app, world);
+            frame(&mut app);
+        }
+        assert!(
+            holding(&app) && black_now(&app),
+            "inside the budget it holds"
+        );
+        for _ in 0..frames(1.0) {
+            frame(&mut app);
+        }
+        assert!(!holding(&app), "past it the hold is over");
+        assert!(
+            !black_now(&app),
+            "and the shot fades in on the world as it is"
+        );
+    }
+
+    /// A shot's advance is the same arm: the next shot, far from where the last one ended, keeps
+    /// the black; a near one does not.
+    #[test]
+    fn a_far_shot_advance_holds_like_a_far_start() {
+        let two = |next: [f32; 3]| {
+            let mut app = app_with(
+                Cinematic::playing_shots_for_test(vec![shot(HERE, 1_000), shot(next, 60_000)]),
+                world_at(HERE, true),
+            );
+            // The first shot has run out, and the fade-out has reached black.
+            app.world_mut()
+                .resource_mut::<Cinematic>()
+                .playing
+                .as_mut()
+                .expect("playing")
+                .elapsed = Duration::from_millis(1_000);
+            frame(&mut app);
+            app
+        };
+
+        let mut app = two(FAR);
+        assert_eq!(
+            app.world()
+                .resource::<Cinematic>()
+                .playing_shot()
+                .map(|s| s.1),
+            Some(1),
+            "the next shot is up"
+        );
+        assert!(holding(&app) && black_now(&app), "its world is not in");
+        for _ in 0..5 {
+            frame(&mut app);
+        }
+        assert!(
+            holding(&app) && black_now(&app),
+            "the last shot's world is not it"
+        );
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert!(
+            !holding(&app) && !black_now(&app),
+            "its world is in, and it fades in"
+        );
+
+        let app = two(from_here(10.0));
+        assert!(
+            !holding(&app) && !black_now(&app),
+            "a near shot fades in at once"
+        );
+    }
+
+    /// ESC under a far shot's black ends the cinematic, and the hold goes with it.
+    #[test]
+    fn a_skip_under_the_hold_ends_it() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            world_at(HERE, true),
+        );
+        open_first_shot(&mut app);
+        frame(&mut app);
+        assert!(holding(&app));
+        app.world_mut().resource_mut::<Cinematic>().skip = true;
+        frame(&mut app);
+        let cine = app.world().resource::<Cinematic>();
+        assert!(!cine.is_playing() && !cine.holds_black_for_shot());
+        assert!(cine.settling.is_some(), "and the end holds its own black");
     }
 }
