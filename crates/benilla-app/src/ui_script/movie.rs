@@ -61,7 +61,7 @@ fn fill_bitmap(bitmap: MovieBitmap, picture: &[u8], rows: u32, out: &mut Vec<u8>
     let pad = bitmap.height.saturating_sub(rows) as usize;
     out.clear();
     out.resize(row_bytes * bitmap.height as usize, 0);
-    for px in out[..pad * row_bytes].chunks_exact_mut(4) {
+    for px in out[..pad * row_bytes].as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     let shown = (rows.min(bitmap.height) as usize) * row_bytes;
@@ -179,8 +179,10 @@ mod tests {
         fill_bitmap(bitmap, &picture, 368, &mut out);
         assert_eq!(out.len(), 800 * 384 * 4);
         assert!(out[..800 * 16 * 4]
-            .chunks_exact(4)
-            .all(|px| px == [0, 0, 0, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|px| *px == [0, 0, 0, 255]));
         assert_eq!(&out[800 * 16 * 4..], &picture[..]);
     }
 
