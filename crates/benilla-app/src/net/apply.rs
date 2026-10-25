@@ -22,6 +22,10 @@ mod world_enter_tests;
 /// [`benilla_world::schedule::WorldStage::Net`] runs.
 pub(crate) fn apply_net_updates(world: &mut World) {
     let events: Vec<SessionEvent> = world.resource::<NetEvents>().0.try_iter().collect();
+    // `drn`: where the frame's packets land, against the input records' `prs` and `snd` lines.
+    if !events.is_empty() && benilla_assets::trace::enabled_for("drn") {
+        benilla_assets::trace::line("drn", &format!("events={}", events.len()));
+    }
     super::handlers::dispatch(world, events);
 }
 
