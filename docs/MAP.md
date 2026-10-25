@@ -17,6 +17,7 @@
 - **benilla-lua** (no Bevy) — The Lua interpreter benilla's script host runs: 5.1.5 with the 1.12.1 client's grammar, its state as plain Rust data
 - **benilla-m2** (no Bevy) — M2 (MD20) model reader for WoW 1.12.1 (build 5875)
 - **benilla-mlua** (no Bevy) — The slice of mlua's API benilla uses, over benilla-lua
+- **benilla-movie** (no Bevy) — The 1.12.1 intro movies: the AVI reader and an MPEG-4 Part 2 Simple-profile decoder
 - **benilla-mpq** (no Bevy) — Read-only MPQ archive reader for WoW 1.12.1 (build 5875)
 - **benilla-protocol** (no Bevy) — WoW 1.12.1 auth (SRP6) + world wire protocol and the benilla-auth CLI
 - **benilla-srp** (no Bevy) — WoW 1.12.1 (build 5875) SRP6 client and world-header crypto
@@ -113,6 +114,7 @@
 - **benilla-lua** (lib.rs): api cfmt compile heap lex lib_base lib_math lib_string lib_table number parse pools proto reload table value vm 
 - **benilla-m2** (lib.rs): error model skin tests track 
 - **benilla-mlua** (lib.rs): conv error 
+- **benilla-movie** (lib.rs): avi bits color decoder headers idct scan vlc 
 - **benilla-mpq** (lib.rs): crypto 
 - **benilla-protocol** (lib.rs): auth events guid messages wire world 
 - **benilla-srp** (lib.rs): vanilla_header 
