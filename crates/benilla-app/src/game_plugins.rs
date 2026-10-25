@@ -1100,9 +1100,10 @@ pub(crate) mod schedule_tests {
     /// the chain. The count may not rise past the ceiling, and the ceiling follows it down. Read
     /// on the dev build, whose schedule holds every system the player build does. Raised from 54
     /// when the frame's input records moved ahead of the net drain: what their handlers queue
-    /// applies before the drain, as the reference's input acts inside its handlers; and to 57 for
-    /// the input's CVar sync, whose observers must run before the look session reads their knobs.
-    const UPDATE_SYNC_POINT_CEILING: usize = 57;
+    /// applies before the drain, as the reference's input acts inside its handlers; to 57 for the
+    /// input's CVar sync, whose observers must run before the look session reads their knobs; and
+    /// to 58 on the rebase onto the movie frame (#2398), whose systems joined the schedule.
+    const UPDATE_SYNC_POINT_CEILING: usize = 58;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]
