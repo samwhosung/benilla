@@ -69,8 +69,8 @@ fn fill_bitmap(bitmap: MovieBitmap, picture: &[u8], rows: u32, out: &mut Vec<u8>
 }
 
 /// Upload each playing movie's new picture, drop the pictures of movies that stopped, and take
-/// the frame's scaled aspect; a line per hundred frames and one at each movie's end, the
-/// instrument a run's log reads the playback off.
+/// the frame's scaled aspect; a line per hundred frames and one at each movie's end with the glue
+/// screen it left up, the instrument a run's log reads the playback off.
 pub(super) fn upload_movie_pictures(
     mut hosted_vm: crate::script_calls::HostedVm,
     window: Query<&Window, With<PrimaryWindow>>,
@@ -92,11 +92,12 @@ pub(super) fn upload_movie_pictures(
         screen
             .images
             .retain(|frame, image| pictures.iter().any(|p| p.frame == *frame && p.id == image.id));
+        let screen_now = script.as_deref().map(|s| s.glue_screen()).unwrap_or_default();
         seen.retain(|id, (name, shown, count)| {
             if pictures.iter().any(|p| p.id == *id) {
                 return true;
             }
-            info!("movie: {name} stopped at frame {shown}/{count}");
+            info!("movie: {name} stopped at frame {shown}/{count}, glue screen \"{screen_now}\"");
             false
         });
         let Some(script) = script else {
