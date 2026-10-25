@@ -10,24 +10,34 @@ use mlua::Lua;
 
 use super::{Model, UnitObjectRead};
 
-/// [`UnitCombatStats`] and [`CombatRead`], and the moves between them, from one list of fields.
+/// [`UnitCombatStats`] and [`CombatRead`], and the moves between them, from one list of fields:
+/// the per-school and per-stat arrays, which the trait reads one entry at a time, then the rest.
 macro_rules! combat_stats {
-    ($($(#[$doc:meta])* $field:ident: $ty:ty,)*) => {
+    (
+        arrays { $($(#[$adoc:meta])* $arr:ident: [$aty:ty; $n:literal],)* }
+        scalars { $($(#[$doc:meta])* $field:ident: $ty:ty,)* }
+    ) => {
         /// One unit's combat stats behind a paper doll, from its descriptor. Arrays are in field
         /// order: stats Str/Agi/Sta/Int/Spi, schools with `[0]` armor. A unit other than the active
         /// player leaves the fields its equipment and skills answer (and the avoidance chances) at
         /// their defaults, and a pet the PLAYER-block fields too.
         #[derive(Clone, Debug, PartialEq)]
         pub struct UnitCombatStats {
+            $($(#[$adoc])* pub $arr: [$aty; $n],)*
             $($(#[$doc])* pub $field: $ty,)*
         }
 
-        /// What a unit's combat stats answer, each field read on its own: off the held object
-        /// through the lent host ([`crate::script::CallHost::read_unit_stats`]), or off a
-        /// snapshot, which holds them as its build read them. The app's one derivation of each
-        /// from a descriptor is its implementation of this, which its snapshots' builds read too
+        /// What a unit's combat stats answer, each field read on its own, and an array one entry
+        /// at a time: off the held object through the lent host
+        /// ([`crate::script::CallHost::read_unit_stats`]), or off a snapshot, which holds them as
+        /// its build read them. The app's one derivation of each from a descriptor is its
+        /// implementation of this, which its snapshots' builds read too
         /// ([`UnitCombatStats::read`]).
         pub trait CombatRead {
+            $(
+                #[doc = concat!("Entry `i`, in range, of [`UnitCombatStats::", stringify!($arr), "`].")]
+                fn $arr(&self, i: usize) -> $aty;
+            )*
             $(
                 #[doc = concat!("[`UnitCombatStats::", stringify!($field), "`].")]
                 fn $field(&self) -> $ty;
@@ -35,6 +45,11 @@ macro_rules! combat_stats {
         }
 
         impl CombatRead for UnitCombatStats {
+            $(
+                fn $arr(&self, i: usize) -> $aty {
+                    self.$arr[i]
+                }
+            )*
             $(
                 fn $field(&self) -> $ty {
                     self.$field
@@ -45,25 +60,31 @@ macro_rules! combat_stats {
         impl UnitCombatStats {
             /// Every field `stats` answers.
             pub fn read(stats: &dyn CombatRead) -> Self {
-                UnitCombatStats { $($field: stats.$field(),)* }
+                UnitCombatStats {
+                    $($arr: std::array::from_fn(|i| stats.$arr(i)),)*
+                    $($field: stats.$field(),)*
+                }
             }
         }
     };
 }
 
 combat_stats! {
-    /// Effective (post-buff) primary stats (`UNIT_FIELD_STAT0..4`).
-    stats: [i32; 5],
-    /// Positive stat buff deltas (`PLAYER_FIELD_POSSTAT0..4`, ≥ 0).
-    stat_pos: [i32; 5],
-    /// Negative stat buff deltas (`PLAYER_FIELD_NEGSTAT0..4`, ≤ 0).
-    stat_neg: [i32; 5],
-    /// Effective resistances (`UNIT_FIELD_RESISTANCES`, `[0]` = armor).
-    resistances: [i32; 7],
-    /// Positive resistance buffs (`PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE`, ≥ 0).
-    resistance_pos: [i32; 7],
-    /// Negative resistance buffs (`PLAYER_FIELD_RESISTANCEBUFFMODSNEGATIVE`, ≤ 0).
-    resistance_neg: [i32; 7],
+    arrays {
+        /// Effective (post-buff) primary stats (`UNIT_FIELD_STAT0..4`).
+        stats: [i32; 5],
+        /// Positive stat buff deltas (`PLAYER_FIELD_POSSTAT0..4`, ≥ 0).
+        stat_pos: [i32; 5],
+        /// Negative stat buff deltas (`PLAYER_FIELD_NEGSTAT0..4`, ≤ 0).
+        stat_neg: [i32; 5],
+        /// Effective resistances (`UNIT_FIELD_RESISTANCES`, `[0]` = armor).
+        resistances: [i32; 7],
+        /// Positive resistance buffs (`PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE`, ≥ 0).
+        resistance_pos: [i32; 7],
+        /// Negative resistance buffs (`PLAYER_FIELD_RESISTANCEBUFFMODSNEGATIVE`, ≤ 0).
+        resistance_neg: [i32; 7],
+    }
+    scalars {
     /// Mainhand damage range (`UNIT_FIELD_MINDAMAGE`/`MAXDAMAGE`).
     min_damage: f32,
     max_damage: f32,
@@ -120,6 +141,7 @@ combat_stats! {
     dodge_percent: f32,
     parry_percent: f32,
     block_percent: f32,
+    }
 }
 
 impl Default for UnitCombatStats {
@@ -193,6 +215,37 @@ pub trait SelfRead {
     fn no_play_time(&self) -> bool;
 }
 
+/// No active player held, as the reference's player getters answer one: 0, nil, three nils
+/// (`GetMoney` `0x5181db`, `IsResting` `0x516ee8`; rest state 0 is no `Exhaustion.dbc` row).
+pub struct NoPlayer;
+
+impl SelfRead for NoPlayer {
+    fn money(&self) -> u64 {
+        0
+    }
+    fn xp(&self) -> u32 {
+        0
+    }
+    fn next_level_xp(&self) -> u32 {
+        0
+    }
+    fn rest_state(&self) -> u8 {
+        0
+    }
+    fn rest_pool(&self) -> u32 {
+        0
+    }
+    fn resting(&self) -> bool {
+        false
+    }
+    fn partial_play_time(&self) -> bool {
+        false
+    }
+    fn no_play_time(&self) -> bool {
+        false
+    }
+}
+
 /// The VM's copy, as the pushes left it.
 impl SelfRead for Model {
     fn money(&self) -> u64 {
@@ -242,8 +295,34 @@ pub(crate) fn read_unit_stats<T>(
     out
 }
 
-/// `f` over the active player's own fields: through the lent host when one is free and holds the
-/// player, else off the VM's copy.
+/// `f` over the active player's combat stats, `None` with no player held: through the lent host
+/// when one is free to ask, else off the VM's copy, the snapshot. The getters with no unit
+/// argument read the active player's field block (`GetDodgeChance` `0x516f00`, 0 with none at
+/// `0x516f42`).
+pub(crate) fn read_own_stats<T>(lua: &Lua, f: impl FnOnce(Option<&dyn CombatRead>) -> T) -> T {
+    let mut f = Some(f);
+    let mut out = None;
+    super::host::read_host(lua, |h| {
+        h.read_own_stats(&mut |stats| {
+            out = f.take().map(|f| f(stats));
+        })
+    });
+    match out {
+        Some(out) => out,
+        None => {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            f.take().expect("an unread `f`")(
+                model
+                    .player_combat_stats
+                    .as_ref()
+                    .map(|s| s as &dyn CombatRead),
+            )
+        }
+    }
+}
+
+/// `f` over the active player's own fields: through the lent host when one is free to ask, which
+/// hands [`NoPlayer`] while it holds none, else off the VM's copy.
 pub(crate) fn read_self<T>(lua: &Lua, f: impl FnOnce(&dyn SelfRead) -> T) -> T {
     let mut f = Some(f);
     let mut out = None;

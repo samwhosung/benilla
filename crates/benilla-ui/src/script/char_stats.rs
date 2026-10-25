@@ -19,7 +19,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::item_read::{read_item, read_live};
-use super::stat_read::{read_unit_stats, CombatRead, UnitCombatStats};
+use super::stat_read::{read_own_stats, read_unit_stats, CombatRead, UnitCombatStats};
 use super::{binding_abi, Model};
 
 /// The `SkillLine.dbc` id behind weapon subclass `0..=20` (vmangos `Item.cpp:700-707`), `None`
@@ -372,27 +372,6 @@ fn asked<T>(lua: &Lua, token: &str, f: impl FnOnce(Option<Asked<'_>>) -> T) -> m
         me_or_mine: me || u.summoned_by == player_guid,
         level: u.level,
     })))
-}
-
-/// The active player's combat stats, `None` before any: through the lent host as the call runs,
-/// else its snapshot. The getters with no unit argument read the active player's field block
-/// (`GetDodgeChance` `0x516f00`, `HasWandEquipped` `0x4c99a0`).
-fn own_stats<T>(lua: &Lua, f: impl FnOnce(Option<&dyn CombatRead>) -> T) -> T {
-    let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let mut f = Some(f);
-    let live = read_unit_stats(lua, model.unit_guids.player, |_, stats| {
-        f.take().map(|f| f(Some(stats)))
-    })
-    .flatten();
-    match live {
-        Some(out) => out,
-        None => f.take().expect("an unread `f`")(
-            model
-                .player_combat_stats
-                .as_ref()
-                .map(|s| s as &dyn CombatRead),
-        ),
-    }
 }
 
 /// [`asked`] behind the `Usage:` gate the one-argument getters open with (`0x6f3510`).
@@ -760,9 +739,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return (0, 0, 0, 0);
                 };
                 let s = a.fields;
-                let raw = s.stats()[idx];
+                let raw = s.stats(idx);
                 let (pos, neg) = if a.me {
-                    (s.stat_pos()[idx], s.stat_neg()[idx])
+                    (s.stat_pos(idx), s.stat_neg(idx))
                 } else {
                     (0, 0)
                 };
@@ -795,12 +774,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return (0, 0, 0, 0);
                 };
                 let s = a.fields;
-                let raw = s.resistances()[idx];
+                let raw = s.resistances(idx);
                 if !a.me {
                     let shown = i64::from(raw.max(0));
                     return (shown, shown, 0, 0);
                 }
-                let (pos, neg) = (s.resistance_pos()[idx], s.resistance_neg()[idx]);
+                let (pos, neg) = (s.resistance_pos(idx), s.resistance_neg(idx));
                 (
                     i64::from(raw - pos - neg),
                     i64::from(raw.max(0)),
@@ -822,12 +801,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return (0, 0, 0, 0, 0);
                 };
                 let s = a.fields;
-                let raw = s.resistances()[0];
+                let raw = s.resistances(0);
                 let shown = i64::from(raw.max(0));
                 if !a.me {
                     return (shown, shown, shown, 0, 0);
                 }
-                let (pos, neg) = (s.resistance_pos()[0], s.resistance_neg()[0]);
+                let (pos, neg) = (s.resistance_pos(0), s.resistance_neg(0));
                 (
                     i64::from(raw - pos - neg),
                     shown,
@@ -999,7 +978,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
-                Ok(own_stats(lua, |s| {
+                Ok(read_own_stats(lua, |s| {
                     s.map_or(0.0, |s| match pick {
                         0 => f64::from(s.dodge_percent()),
                         1 => f64::from(s.parry_percent()),
@@ -1047,7 +1026,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "HasWandEquipped",
         lua.create_function(|lua, ()| {
-            Ok(flag(own_stats(lua, |s| s.is_some_and(|s| s.has_wand()))))
+            Ok(flag(read_own_stats(lua, |s| {
+                s.is_some_and(|s| s.has_wand())
+            })))
         })?,
     )?;
 

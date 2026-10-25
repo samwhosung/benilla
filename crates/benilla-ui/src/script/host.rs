@@ -77,9 +77,19 @@ pub trait CallHost {
         false
     }
 
+    /// Hand `read` the active player's combat stats as a getter with no unit argument reads them
+    /// now, with what its equipment and skills answer, as of the place it runs
+    /// (`GetDodgeChance`, `0x516f00`); `None` while it holds no player (0 at `0x516f42`). Whether
+    /// it read: `false` from a host that reads none. `read` runs no Lua.
+    fn read_own_stats(&mut self, read: &mut dyn FnMut(Option<&dyn super::CombatRead>)) -> bool {
+        let _ = read;
+        false
+    }
+
     /// Hand `read` the active player's own fields as a getter reads them now (`GetMoney` reads
-    /// the coinage, `0x518160`), as of the place it runs. Whether there was a player to hand:
-    /// `false` before the world, and from a host that reads none. `read` runs no Lua.
+    /// the coinage, `0x518160`), as of the place it runs; [`super::NoPlayer`] while it holds no
+    /// player (`0x5181db`). Whether it read: `false` from a host that reads none. `read` runs no
+    /// Lua.
     fn read_self(&mut self, read: &mut dyn FnMut(&dyn super::SelfRead)) -> bool {
         let _ = read;
         false

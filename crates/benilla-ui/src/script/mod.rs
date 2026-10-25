@@ -310,7 +310,7 @@ pub use petition::{
     PETITION_TYPE_PETITION,
 };
 pub use protected::InputEvents;
-pub use stat_read::{CombatRead, SelfRead, UnitCombatStats};
+pub use stat_read::{CombatRead, NoPlayer, SelfRead, UnitCombatStats};
 pub use tabard::{
     emblem_mask_path, TabardCall, TabardHost, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
     TABARD_CREATION_COST,

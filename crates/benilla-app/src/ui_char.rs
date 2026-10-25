@@ -226,12 +226,6 @@ impl SkillSteps<'_> {
     }
 }
 
-/// The item entry in an equipped slot; `None` for an empty slot or an item not yet streamed.
-fn slot_entry(store: &ObjectStore, objects: &Objects, slot0: u8) -> Option<u32> {
-    let guid = store.0.player_inv_slot(slot0)?;
-    objects.object(guid)?.object_entry()
-}
-
 /// The weapon-skill line for a worn item's record: vmangos's subclass table (`Item.cpp:700`) for
 /// a weapon, Unarmed (162) for anything else, an empty slot, or a record in flight.
 fn weapon_skill_id(record: Option<&ItemInfo>) -> u32 {
@@ -260,24 +254,36 @@ fn skill_pair(store: &ObjectStore, skill_id: u32) -> (i32, i32) {
     (0, 0)
 }
 
-/// The active player's own half of its combat stats: the records of its three worn weapons, each
-/// only read, `None` for an empty slot or a record in flight.
+/// The active player's own half of its combat stats: its worn weapons, each slot's item resolved
+/// by `entry` and its record only read, as the getter that asks reads it (`0x518f19`, `0x4c99c2`),
+/// so the getters that read no weapon look none up.
 pub(crate) struct Worn<'a> {
-    main: Option<&'a ItemInfo>,
-    off: Option<&'a ItemInfo>,
-    ranged: Option<&'a ItemInfo>,
+    /// The active player's store, whose seats name the items.
+    store: &'a ObjectStore,
+    /// An item's entry by guid, `None` for no object.
+    entry: &'a dyn Fn(u64) -> Option<u32>,
+    items: &'a Items,
 }
 
 impl<'a> Worn<'a> {
-    /// The weapons `store`, the active player's, wears.
-    pub(crate) fn of(store: &ObjectStore, objects: &Objects, items: &'a Items) -> Self {
-        let record =
-            |slot0| slot_entry(store, objects, slot0).and_then(|e| items.template(e, 0, Ask::Read));
+    /// The weapons `store`, the active player's, wears, each item looked up through `entry`.
+    pub(crate) fn new(
+        store: &'a ObjectStore,
+        entry: &'a dyn Fn(u64) -> Option<u32>,
+        items: &'a Items,
+    ) -> Self {
         Worn {
-            main: record(SLOT_MAIN_HAND),
-            off: record(SLOT_OFF_HAND),
-            ranged: record(SLOT_RANGED),
+            store,
+            entry,
+            items,
         }
+    }
+
+    /// The record of the item in 0-based `slot0`; `None` for an empty slot, an item not held or a
+    /// record in flight.
+    fn record(&self, slot0: u8) -> Option<&'a ItemInfo> {
+        let guid = self.store.0.player_inv_slot(slot0)?;
+        (self.entry)(guid).and_then(|e| self.items.template(e, 0, Ask::Read))
     }
 }
 
@@ -289,12 +295,18 @@ impl<'a> Worn<'a> {
 pub(crate) struct StatsObject<'a> {
     store: &'a ObjectStore,
     own: Option<Worn<'a>>,
+    /// [`Self::ranged_school`], once looked up: `UnitRangedDamage` reads three fields at it.
+    school: std::cell::OnceCell<u8>,
 }
 
 impl<'a> StatsObject<'a> {
     /// Any unit's: its descriptor alone.
     pub(crate) fn unit(store: &'a ObjectStore) -> Self {
-        StatsObject { store, own: None }
+        StatsObject {
+            store,
+            own: None,
+            school: Default::default(),
+        }
     }
 
     /// The active player's, wearing `worn`.
@@ -302,6 +314,7 @@ impl<'a> StatsObject<'a> {
         StatsObject {
             store,
             own: Some(worn),
+            school: Default::default(),
         }
     }
 
@@ -313,11 +326,13 @@ impl<'a> StatsObject<'a> {
     /// without asking, and its first damage line whose minimum is above 0, else school 0. The
     /// template keeps only lines whose maximum is above 0, which drops no well-formed such line.
     fn ranged_school(&self) -> u8 {
-        self.own
-            .as_ref()
-            .and_then(|w| w.ranged)
-            .and_then(|t| t.damages.iter().find(|d| d.min > 0.0))
-            .map_or(0, |d| u8::try_from(d.school).unwrap_or(u8::MAX))
+        *self.school.get_or_init(|| {
+            self.own
+                .as_ref()
+                .and_then(|w| w.record(SLOT_RANGED))
+                .and_then(|t| t.damages.iter().find(|d| d.min > 0.0))
+                .map_or(0, |d| u8::try_from(d.school).unwrap_or(u8::MAX))
+        })
     }
 
     /// The active player's avoidance chance `read` names; 0 for any other unit.
@@ -338,24 +353,24 @@ impl<'a> StatsObject<'a> {
 }
 
 impl CombatRead for StatsObject<'_> {
-    fn stats(&self) -> [i32; 5] {
-        std::array::from_fn(|i| self.f().unit_stat(i as u8).unwrap_or(0) as i32)
+    fn stats(&self, i: usize) -> i32 {
+        self.f().unit_stat(i as u8).unwrap_or(0) as i32
     }
     // The buff-split arrays are integers on the wire, not floats.
-    fn stat_pos(&self) -> [i32; 5] {
-        std::array::from_fn(|i| self.f().player_posstat(i as u8).unwrap_or(0))
+    fn stat_pos(&self, i: usize) -> i32 {
+        self.f().player_posstat(i as u8).unwrap_or(0)
     }
-    fn stat_neg(&self) -> [i32; 5] {
-        std::array::from_fn(|i| self.f().player_negstat(i as u8).unwrap_or(0))
+    fn stat_neg(&self, i: usize) -> i32 {
+        self.f().player_negstat(i as u8).unwrap_or(0)
     }
-    fn resistances(&self) -> [i32; 7] {
-        std::array::from_fn(|i| self.f().unit_resistance(i as u8).unwrap_or(0))
+    fn resistances(&self, i: usize) -> i32 {
+        self.f().unit_resistance(i as u8).unwrap_or(0)
     }
-    fn resistance_pos(&self) -> [i32; 7] {
-        std::array::from_fn(|i| self.f().player_resistance_buff_pos(i as u8).unwrap_or(0))
+    fn resistance_pos(&self, i: usize) -> i32 {
+        self.f().player_resistance_buff_pos(i as u8).unwrap_or(0)
     }
-    fn resistance_neg(&self) -> [i32; 7] {
-        std::array::from_fn(|i| self.f().player_resistance_buff_neg(i as u8).unwrap_or(0))
+    fn resistance_neg(&self, i: usize) -> i32 {
+        self.f().player_resistance_buff_neg(i as u8).unwrap_or(0)
     }
     fn min_damage(&self) -> f32 {
         self.f().unit_min_damage().unwrap_or(0.0)
@@ -406,7 +421,7 @@ impl CombatRead for StatsObject<'_> {
     fn has_offhand(&self) -> bool {
         self.own
             .as_ref()
-            .and_then(|w| w.off)
+            .and_then(|w| w.record(SLOT_OFF_HAND))
             .is_some_and(|t| t.class == ITEM_CLASS_WEAPON)
     }
     fn attack_power(&self) -> i32 {
@@ -445,15 +460,15 @@ impl CombatRead for StatsObject<'_> {
         self.f().unit_max_ranged_damage().unwrap_or(0.0)
     }
     fn main_weapon_skill(&self) -> (i32, i32) {
-        self.own_skill(|w| Some(weapon_skill_id(w.main)))
+        self.own_skill(|w| Some(weapon_skill_id(w.record(SLOT_MAIN_HAND))))
     }
     // `UnitAttackBothHands`'s second pair; a shield or an empty off hand reads Unarmed.
     fn offhand_weapon_skill(&self) -> (i32, i32) {
-        self.own_skill(|w| Some(weapon_skill_id(w.off)))
+        self.own_skill(|w| Some(weapon_skill_id(w.record(SLOT_OFF_HAND))))
     }
     fn ranged_weapon_skill(&self) -> (i32, i32) {
         self.own_skill(|w| {
-            w.ranged
+            w.record(SLOT_RANGED)
                 .filter(|t| t.class == ITEM_CLASS_WEAPON)
                 .and_then(|t| weapon_subclass_skill(t.subclass))
         })
@@ -466,7 +481,7 @@ impl CombatRead for StatsObject<'_> {
     fn has_wand(&self) -> bool {
         self.own
             .as_ref()
-            .and_then(|w| w.ranged)
+            .and_then(|w| w.record(SLOT_RANGED))
             .is_some_and(|t| t.class == ITEM_CLASS_WEAPON && t.subclass == SUBCLASS_WAND)
     }
     // `GetDodgeChance`/`GetParryChance`/`GetBlockChance`: player fields, already percentages.
@@ -489,7 +504,8 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
 /// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs
 /// ([`StatsObject::player`]).
 fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCombatStats {
-    UnitCombatStats::read(&StatsObject::player(store, Worn::of(store, objects, items)))
+    let entry = |guid| objects.object(guid)?.object_entry();
+    UnitCombatStats::read(&StatsObject::player(store, Worn::new(store, &entry, items)))
 }
 
 /// One slot's view from the item object and its ask-once template (no icon while in flight).

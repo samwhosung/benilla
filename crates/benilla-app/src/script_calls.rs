@@ -198,10 +198,11 @@ impl StatsLive<'_, '_> {
         let Ok(store) = self.stores.get(entity) else {
             return false;
         };
+        let entry = |guid| self.item_entry(guid);
         let stats = if self.objects.player() == Some(entity) {
             crate::ui_char::StatsObject::player(
                 store,
-                crate::ui_char::Worn::of(store, &self.objects, &self.items),
+                crate::ui_char::Worn::new(store, &entry, &self.items),
             )
         } else {
             crate::ui_char::StatsObject::unit(store)
@@ -210,13 +211,38 @@ impl StatsLive<'_, '_> {
         true
     }
 
-    /// Hand `read` the active player's own fields, as of here; whether it was held.
-    fn read_self(&self, read: &mut dyn FnMut(&dyn benilla_ui::script::SelfRead)) -> bool {
-        let Some(store) = self.objects.player().and_then(|e| self.stores.get(e).ok()) else {
-            return false;
+    /// An item's entry as of here, a worn weapon a later packet destroys included.
+    fn item_entry(&self, guid: u64) -> Option<u32> {
+        self.stores
+            .by_guid(guid, self.objects.store(guid))?
+            .0
+            .object_entry()
+    }
+
+    /// The active player's store as of here, `None` while none is held.
+    fn player(&self) -> Option<&crate::net::ObjectStore> {
+        self.objects.player().and_then(|e| self.stores.get(e).ok())
+    }
+
+    /// Hand `read` the active player's stats, as of here, `None` while none is held.
+    fn read_own(&self, read: &mut dyn FnMut(Option<&dyn benilla_ui::script::CombatRead>)) {
+        let Some(store) = self.player() else {
+            return read(None);
         };
-        read(&crate::ui_unit::StoreObject(store));
-        true
+        let entry = |guid| self.item_entry(guid);
+        read(Some(&crate::ui_char::StatsObject::player(
+            store,
+            crate::ui_char::Worn::new(store, &entry, &self.items),
+        )));
+    }
+
+    /// Hand `read` the active player's own fields as of here, [`benilla_ui::script::NoPlayer`]'s
+    /// while none is held.
+    fn read_self(&self, read: &mut dyn FnMut(&dyn benilla_ui::script::SelfRead)) {
+        match self.player() {
+            Some(store) => read(&crate::ui_unit::StoreObject(store)),
+            None => read(&benilla_ui::script::NoPlayer),
+        }
     }
 }
 
@@ -633,8 +659,17 @@ impl CallHost for ScriptCallHost<'_, '_> {
         self.appliers.stats_live().read(guid, read)
     }
 
+    fn read_own_stats(
+        &mut self,
+        read: &mut dyn FnMut(Option<&dyn benilla_ui::script::CombatRead>),
+    ) -> bool {
+        self.appliers.stats_live().read_own(read);
+        true
+    }
+
     fn read_self(&mut self, read: &mut dyn FnMut(&dyn benilla_ui::script::SelfRead)) -> bool {
-        self.appliers.stats_live().read_self(read)
+        self.appliers.stats_live().read_self(read);
+        true
     }
 
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
