@@ -213,7 +213,10 @@ mod tests {
         assert_eq!((p.shown, p.dropped), (1, 0));
         // 300 ms is frame 8 (7.5 rounded up): frames 2..=7 decoded unshown, 8 shown.
         assert_eq!(p.step(5300), Step::Shown);
-        assert_eq!((p.shown, p.serial, p.movie.next_frame(), p.dropped), (8, 3, 9, 1));
+        assert_eq!(
+            (p.shown, p.serial, p.movie.next_frame(), p.dropped),
+            (8, 3, 9, 1)
+        );
         assert_eq!(p.clock, 300);
     }
 
@@ -274,7 +277,10 @@ mod tests {
         // Two apart and the target the frame shown: the nudge, back toward the audio.
         p.audio = Audio::At(440);
         assert_eq!(p.step(6080), Step::Hold);
-        assert_eq!(p.offset, 0, "the audio frame 11 is two behind the target 13");
+        assert_eq!(
+            p.offset, 0,
+            "the audio frame 11 is two behind the target 13"
+        );
         // The target never falls behind the frame shown.
         assert_eq!((p.target, p.shown), (13, 13));
     }

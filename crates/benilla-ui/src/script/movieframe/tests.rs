@@ -11,7 +11,9 @@ fn avi(frames: u32, sounds: &[&[u8]]) -> Vec<u8> {
 
 /// A glue VM whose reader answers `files` by exact path and logs every ask, with `M` a movie
 /// frame whose three scripts append to the Lua list `log`.
-fn movie_vm(files: Vec<(&'static str, Vec<u8>)>) -> (UiScript, Rc<RefCell<Vec<(String, MovieOpen)>>>) {
+fn movie_vm(
+    files: Vec<(&'static str, Vec<u8>)>,
+) -> (UiScript, Rc<RefCell<Vec<(String, MovieOpen)>>>) {
     let mut s = UiScript::new_glue().unwrap();
     let asked = Rc::new(RefCell::new(Vec::new()));
     let seen = asked.clone();
@@ -57,7 +59,9 @@ fn start_movie_answers_1_for_a_movie_that_starts_and_nil_otherwise() {
     assert!(s
         .eval::<bool>(r#"return M:StartMovie("Missing") == nil"#)
         .unwrap());
-    assert!(s.eval::<bool>(r#"return M:StartMovie("Bad") == nil"#).unwrap());
+    assert!(s
+        .eval::<bool>(r#"return M:StartMovie("Bad") == nil"#)
+        .unwrap());
     assert!(s
         .eval::<bool>(r#"return M:StartMovie("Narrow") == nil"#)
         .unwrap());
@@ -119,12 +123,16 @@ fn the_movie_methods_check_their_arguments_and_their_frame() {
     }
     s.run(r#"P = CreateFrame("Frame", "NotAMovie")"#).unwrap();
     assert!(s.eval::<bool>("return P.StartMovie == nil").unwrap());
-    let err = s
-        .run("M.StopMovie(P)")
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("Wrong object type for member function"), "{err}");
-    assert_eq!(log(&s), "", "a StopMovie with nothing playing fires nothing");
+    let err = s.run("M.StopMovie(P)").unwrap_err().to_string();
+    assert!(
+        err.contains("Wrong object type for member function"),
+        "{err}"
+    );
+    assert_eq!(
+        log(&s),
+        "",
+        "a StopMovie with nothing playing fires nothing"
+    );
 }
 
 /// `StopMovie` tears a playing movie down and fires `OnMovieFinished` once (`0x78cf1e`); with
@@ -183,9 +191,17 @@ fn captions_go_up_and_come_down_on_shown_frames() {
     s.tick(0.0625);
     assert_eq!(log(&s), "show:Hi there", "187 ms is before 205 ms");
     s.tick(0.015625);
-    assert_eq!((shown(&s), log(&s).as_str()), (Some(5), "show:Hi there"), "203 ms shows no new frame");
+    assert_eq!(
+        (shown(&s), log(&s).as_str()),
+        (Some(5), "show:Hi there"),
+        "203 ms shows no new frame"
+    );
     s.tick(0.03125);
-    assert_eq!(log(&s), "show:Hi there hide", "234 ms, frame 6, is past the end");
+    assert_eq!(
+        log(&s),
+        "show:Hi there hide",
+        "234 ms, frame 6, is past the end"
+    );
 
     let sbt = b"00:00:00:00 - 00:00:10:00\nLong\n".to_vec();
     let (mut s, _) = movie_vm(vec![("A.avi", avi(100, &[])), ("A.sbt", sbt)]);

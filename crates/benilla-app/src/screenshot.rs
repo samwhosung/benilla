@@ -103,7 +103,10 @@ fn ask_for_captures(
     mut state: ResMut<ScreenshotState>,
 ) {
     hosted_vm.run(|script| {
-        if script.as_deref().is_some_and(benilla_ui::script::UiScript::movie_playing) {
+        if script
+            .as_deref()
+            .is_some_and(benilla_ui::script::UiScript::movie_playing)
+        {
             return;
         }
         spawn_captures(&mut commands, std::mem::take(&mut state.pending));

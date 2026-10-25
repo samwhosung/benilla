@@ -88,11 +88,19 @@ pub(super) fn upload_movie_pictures(
         crate::loading_screen::widescreen(cvars.as_deref()),
     );
     hosted_vm.run(|script| {
-        let pictures = script.as_deref().map(|s| s.movie_pictures()).unwrap_or_default();
-        screen
-            .images
-            .retain(|frame, image| pictures.iter().any(|p| p.frame == *frame && p.id == image.id));
-        let screen_now = script.as_deref().map(|s| s.glue_screen()).unwrap_or_default();
+        let pictures = script
+            .as_deref()
+            .map(|s| s.movie_pictures())
+            .unwrap_or_default();
+        screen.images.retain(|frame, image| {
+            pictures
+                .iter()
+                .any(|p| p.frame == *frame && p.id == image.id)
+        });
+        let screen_now = script
+            .as_deref()
+            .map(|s| s.glue_screen())
+            .unwrap_or_default();
         seen.retain(|id, (name, shown, count)| {
             if pictures.iter().any(|p| p.id == *id) {
                 return true;
@@ -164,7 +172,9 @@ mod tests {
     #[test]
     fn the_picture_sits_on_the_bitmap_bottom_under_black_rows() {
         let bitmap = movie_bitmap(800).unwrap();
-        let picture: Vec<u8> = (0..800 * 368).flat_map(|i| [1, 2, 3, (i % 251) as u8]).collect();
+        let picture: Vec<u8> = (0..800 * 368)
+            .flat_map(|i| [1, 2, 3, (i % 251) as u8])
+            .collect();
         let mut out = Vec::new();
         fill_bitmap(bitmap, &picture, 368, &mut out);
         assert_eq!(out.len(), 800 * 384 * 4);
@@ -199,7 +209,8 @@ mod tests {
         assert_eq!(q.rect.max.x, 1024.0);
         assert!((q.rect.min.y - 128.256).abs() < 1e-3, "{:?}", q.rect);
         assert!((q.rect.max.y - 639.744).abs() < 1e-3, "{:?}", q.rect);
-        screen.scaled_aspect = crate::loading_screen::scaled_aspect(Vec2::new(1920.0, 1080.0), true);
+        screen.scaled_aspect =
+            crate::loading_screen::scaled_aspect(Vec2::new(1920.0, 1080.0), true);
         let q = screen.quad(frame, 1920.0, 1080.0, 7).unwrap();
         let tall = q.rect.max.y - q.rect.min.y;
         assert!((tall - 0.666 * 1080.0 * 4.0 / 3.0).abs() < 0.01, "{tall}");

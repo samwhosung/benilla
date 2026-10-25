@@ -150,7 +150,10 @@ fn the_movies_end_returns_to_the_login_screen_and_its_music() {
     s.resolve();
     assert!(s.eval::<bool>("return MovieFrame:IsShown() == 1").unwrap());
     let requests = |s: &mut UiScript| format!("{:?}", s.take_glue_requests());
-    assert_eq!(requests(&mut s), format!("{:?}", [GlueRequest::StopGlueMusic]));
+    assert_eq!(
+        requests(&mut s),
+        format!("{:?}", [GlueRequest::StopGlueMusic])
+    );
     // The logo: frame 0 at the first step, its count of 3 reached at 100 ms.
     s.tick(0.0);
     s.tick(0.125);

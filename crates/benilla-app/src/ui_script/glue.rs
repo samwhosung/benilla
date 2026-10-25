@@ -411,10 +411,16 @@ mod tests {
         );
         let pick = |world: &mut World| startup_screen(world.get_resource_mut());
         assert_eq!(pick(&mut world), "movie");
-        assert_eq!(world.resource::<crate::cvars::Cvars>().get("movie"), Some("0"));
+        assert_eq!(
+            world.resource::<crate::cvars::Cvars>().get("movie"),
+            Some("0")
+        );
         assert_eq!(pick(&mut world), "login");
-        for (value, screen, after) in [("2", "login", "2"), ("1x", "movie", "0"), ("-1", "login", "-1")]
-        {
+        for (value, screen, after) in [
+            ("2", "login", "2"),
+            ("1x", "movie", "0"),
+            ("-1", "login", "-1"),
+        ] {
             world.insert_resource(crate::cvars::Cvars::with_value("movie", value));
             assert_eq!(pick(&mut world), screen, "{value}");
             assert_eq!(

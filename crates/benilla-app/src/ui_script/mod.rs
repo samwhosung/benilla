@@ -23,8 +23,8 @@ pub(crate) mod glue_create;
 /// `CGlueMgr`'s screen states over benilla's login, for the stock glue screens.
 pub(crate) mod glue_mgr;
 pub(crate) mod glue_scene;
-mod movie;
 mod input;
+mod movie;
 /// The server alert's fetch and `LaunchURL`'s browser, for the stock glue screens.
 pub(crate) mod server_alert;
 #[cfg(test)]
