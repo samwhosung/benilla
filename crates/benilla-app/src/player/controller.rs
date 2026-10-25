@@ -437,13 +437,17 @@ pub(super) fn control(
     };
     // The mouse's hand-off to the body, as the frame's input decided it, or for a
     // `MouselookStart` a packet's handler made after it that completed both mouse bits, which the
-    // reference's press handler hands off inside the call (`0x514924`-`0x514966`).
-    let hands_off = sample.hands_off
-        || (rig.world_mouse.late_rise()
-            && both_buttons
-            && mover.mouse_may_turn_body(stunned, stand_state)
-            && !player.control_lost
-            && !player.reseat);
+    // reference's press handler hands off inside the call (`0x514924`-`0x514966`): the camera's
+    // facing here, its pitch below (`0x5103e0`).
+    let late_hand_off = rig.world_mouse.late_rise()
+        && both_buttons
+        && mover.mouse_may_turn_body(stunned, stand_state)
+        && !player.control_lost
+        && !player.reseat;
+    if late_hand_off {
+        player.face_yaw = cam.yaw;
+    }
+    let hands_off = sample.hands_off || late_hand_off;
 
     // A rebound zoom key steps 1.0 per press, the stock `CameraZoomIn(1.0)` (`Bindings.xml:707`).
     let zoom = binds.amount(crate::bindings::Input::CameraZoomIn)

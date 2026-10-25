@@ -330,6 +330,37 @@ fn the_both_button_press_hands_the_pitch_off() {
     assert_ne!(player.mover_pitch, 0.5, "the aim took it");
 }
 
+/// A `MouselookStart` a packet's handler makes after the frame's look session, completing both
+/// mouse bits over a left drag, hands the camera's facing and pitch to the body in the frame's
+/// controller, as the reference's press handler does inside the call (`0x514924`-`0x514966` →
+/// `0x5103e0`).
+#[test]
+fn a_late_mouselook_start_over_a_left_drag_hands_the_facing_and_pitch_off() {
+    let mut client = Client::new(Body::Own, |p| {
+        p.pitch_keys = Some(true);
+        p.mover_pitch = 0.5;
+        p.face_yaw = 0.0;
+    });
+    let (sample, embody, drive) = (client.sample, client.embody, client.drive);
+    let world = client.app.world_mut();
+    *world.resource_mut::<BindingsState>() = BindingsState::after_calls(vec![], vec![]);
+    world.run_system(sample).expect("the mouse's input runs");
+    world
+        .query_filtered::<&mut FlyCam, With<Camera>>()
+        .single_mut(world)
+        .expect("the camera")
+        .yaw = 1.0;
+    world
+        .resource_mut::<CameraControl>()
+        .world_mouse
+        .late_mouselook_start_over_a_left_drag();
+    world.run_system(embody).expect("the embodiment runs");
+    world.run_system(drive).expect("the controller runs");
+    let player = client.player();
+    assert_eq!(player.face_yaw, 1.0, "the body took the camera's facing");
+    assert_eq!(player.pitch_keys, None, "and its pitch");
+}
+
 /// The filter [`super::self_seat`] reads a deck's pose through.
 type Decks = (
     Without<crate::net::Embodied>,

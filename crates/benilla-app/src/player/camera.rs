@@ -563,7 +563,7 @@ pub(crate) struct CameraControl {
     /// Written by [`run_look_session`], read the same frame for `cameraTerrainTilt`'s hand-off.
     pub(super) freelook: bool,
     /// The mouse buttons the world owns this frame, latched by [`latch_world_mouse`].
-    pub(super) world_mouse: WorldMouse,
+    pub(crate) world_mouse: WorldMouse,
     /// `ToggleMouseMove` entered mouselook with no mouse bit (`0x50f910` → `0x50f930`): the
     /// session lasts with no channel held, until a toggle or a button's release leaves it.
     pub(super) toggled: bool,
@@ -653,7 +653,7 @@ impl LookButton {
 /// The world's down sets the bit and that button's up clears it, so a frame appearing under the
 /// locked cursor cannot steal it. `MouselookStart` sets the TurnOrAction bit with no button.
 #[derive(Default)]
-pub(super) struct WorldMouse {
+pub(crate) struct WorldMouse {
     /// Held by the world right now, indexed by [`LookButton`].
     held: [bool; 2],
     /// Took its down edge from the world this frame, same index.
@@ -708,6 +708,20 @@ impl WorldMouse {
     /// transition into the both-button run (`0x514a73`, in the set helper both reach).
     pub(super) fn rose(&self) -> bool {
         self.down(LookButton::Left) || self.down(LookButton::Right) || self.scripted_rise
+    }
+
+    /// The left button held by the world, then a `MouselookStart` made after the frame's look
+    /// session, as a packet's handler makes one: the call that completes both mouse bits.
+    #[cfg(test)]
+    pub(crate) fn late_mouselook_start_over_a_left_drag(&mut self) {
+        self.held[LookButton::Left as usize] = true;
+        self.call_late(benilla_ui::script::LookCall::Mouselook(true));
+    }
+
+    /// The right button, as the world holds it, for a test of who owns a press.
+    #[cfg(test)]
+    pub(crate) fn holds_right(&self) -> bool {
+        self.held(LookButton::Right)
     }
 
     /// A `MouselookStart` made after this frame's look session raised the channel, as a packet's
@@ -777,7 +791,7 @@ impl WorldMouse {
 /// or any press while a look session owns the cursor (a chord's second button). Its own system,
 /// first of the world's mouse input ([`super::WorldMouse`]), ahead of the look session and of
 /// `/follow`'s both-button cancel ([`super::follow::steer_follow`]) in the frame time.
-pub(super) fn latch_world_mouse(
+pub(crate) fn latch_world_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     // The raw flag: a press on a nameplate is the plate's, so dragging from a plate never turns the
     // camera, as in 1.12. `0x7662c0` hands a mouse-down to one frame (capture at `0x7663e9`), and

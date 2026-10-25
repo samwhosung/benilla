@@ -544,8 +544,8 @@ fn a_mouselook_start_after_the_latch_reaches_the_frames_controller() {
     w.run_system_once(apply_late_look_calls).unwrap();
     let wm = &w.resource::<CameraControl>().world_mouse;
     assert!(
-        wm.turn() && wm.rose(),
-        "the controller reads the channel risen"
+        wm.turn() && wm.rose() && wm.late_rise(),
+        "the controller reads the channel risen after its session"
     );
     w.resource_mut::<ButtonInput<MouseButton>>().clear();
     frame(&mut w, 40.0);
