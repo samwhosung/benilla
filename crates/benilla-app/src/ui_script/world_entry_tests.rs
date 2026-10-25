@@ -710,6 +710,76 @@ fn reload_ui_is_a_fresh_login_in_place() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The auction filter tables are DBC data the reference reads inside the call (`0x4cf970`,
+/// `0x4cf9c0`, `0x4cfab0`), so an addon's file scope sees them: on the first load, in a new VM
+/// after a logout and login, and after a `/reload`.
+#[test]
+fn the_auction_classes_are_there_at_file_scope_in_every_vm() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    const TOC: &str = "## Interface: 11200\nAucProbe.lua\n";
+    const LUA: &str = "\
+AucProbeLoads = (AucProbeLoads or 0) + 1
+AucProbeClasses = table.concat({GetAuctionItemClasses()}, \",\")
+AucProbeSubs = table.concat({GetAuctionItemSubClasses(1)}, \",\")
+AucProbeSlots = table.getn({GetAuctionInvTypes(2, 1)})
+";
+    let (tmp, _c, _h) = hermetic_addon("auction-classes", "AucProbe", TOC, LUA);
+    let mut world = booted_world();
+    let mut chain = benilla_formats::open_chain(&data).expect("chain");
+    let classes = benilla_formats::load_item_classes(&mut chain).expect("ItemClass.dbc");
+    let subclasses = benilla_formats::load_item_sub_classes(&mut chain).expect("ItemSubClass.dbc");
+    // The reference's menu order (`0x807060`): Weapon, Armor, Container, Consumable, Trade Goods,
+    // Projectile, Quiver, Recipe, Reagent, Miscellaneous.
+    let want_classes = [2, 4, 1, 0, 7, 6, 11, 9, 5, 15]
+        .map(|id| classes.name(id).expect("a class name").to_string())
+        .join(",");
+    let want_subs = subclasses
+        .subclasses_of(2)
+        .into_iter()
+        .filter(|&sub| subclasses.display_flags(2, sub) & 2 == 0)
+        .map(|sub| subclasses.name(2, sub).expect("a subclass name").to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    assert!(!want_subs.is_empty(), "Weapon has subclasses to offer");
+    world.insert_resource(crate::ui_items::ItemClasses(classes));
+    world.insert_resource(crate::ui_items::ItemSubClasses(subclasses));
+
+    let saw = |world: &World| {
+        let script = world.non_send_resource::<benilla_ui::script::UiScript>();
+        (
+            script.eval::<u32>("return AucProbeLoads").expect("loads"),
+            script
+                .eval::<String>("return AucProbeClasses")
+                .expect("classes"),
+            script.eval::<String>("return AucProbeSubs").expect("subs"),
+            script.eval::<u32>("return AucProbeSlots").expect("slots"),
+        )
+    };
+    let check = |world: &World, leg: &str| {
+        let (loads, got_classes, got_subs, slots) = saw(world);
+        assert_eq!(loads, 1, "{leg}: a fresh VM ran the file scope once");
+        assert_eq!(got_classes, want_classes, "{leg}: the ten classes, in order");
+        assert_eq!(got_subs, want_subs, "{leg}: the Weapon subclasses");
+        assert_eq!(slots, 14, "{leg}: Armor's Cloth offers the 14 slots");
+    };
+
+    log_in_as(&mut world, "Onehunter", 1);
+    check(&world, "first load");
+
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    check(&world, "after a reload");
+
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onewarrior", 2);
+    check(&world, "after a logout and login");
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The ready check's deadline is engine state (`[0xb713f4]`): its writers are the request handler
 /// (`0x4ba4d4`, `0x4ba535`), the name callback (`0x4bacb4`), `DoReadyCheck` (`0x4bb2b6`) and the
 /// timeout (`0x4bb377`), and only `InitializeGame`'s group init zeroes it (`0x4ba130`, from

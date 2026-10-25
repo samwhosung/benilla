@@ -905,7 +905,7 @@ pub(crate) struct Model {
     /// first push, and the auction calls. `auction_selected` is each list's selected auction id, 0
     /// for none (`0x4cfda0`/`0x4cfec0`); `auction_can_query` is the 5 s throttle.
     pub(crate) auction: Option<auction::AuctionState>,
-    /// The Browse tab's class tree, pushed once per login.
+    /// The Browse tab's class tree, seeded once per VM.
     pub(crate) auction_item_classes: Vec<auction::AuctionCategory>,
     pub(crate) auction_selected: [u32; 3],
     pub(crate) auction_can_query: bool,

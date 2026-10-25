@@ -816,11 +816,21 @@ pub(crate) fn categories(
         .collect()
 }
 
-/// The DBC catalogs as one system param, since [`feed_auction`] is at Bevy's 16-param limit: the
-/// class tables for the category tree and the random-suffix pair for a rolled listing.
+/// Push the filter menus' tables into a VM before any interface file runs, from the prepare of
+/// every load seat: `GetAuctionItemClasses`, `GetAuctionItemSubClasses` and `GetAuctionInvTypes`
+/// read `ItemClass.dbc` and `ItemSubClass.dbc` inside the call (`0x4cf970`, `0x4cf9c0`,
+/// `0x4cfab0`), so an addon's file scope gets the names. Nothing else feeds them.
+pub(crate) fn seed_item_classes(world: &World, script: &mut UiScript) {
+    let tree = categories(
+        world.get_resource::<crate::ui_items::ItemClasses>(),
+        world.get_resource::<crate::ui_items::ItemSubClasses>(),
+    );
+    script.set_auction_item_classes(tree);
+}
+
+/// The random-suffix pair for a rolled listing, as one system param, since [`feed_auction`] is at
+/// Bevy's 16-param limit.
 type AuctionCatalogs<'w> = (
-    Option<Res<'w, crate::ui_items::ItemClasses>>,
-    Option<Res<'w, crate::ui_items::ItemSubClasses>>,
     Option<Res<'w, crate::items::RandomProperties>>,
     Option<Res<'w, crate::items::Enchants>>,
 );
@@ -846,7 +856,6 @@ fn feed_auction(
     mut last: crate::ui_script::WindowMemo<Option<AuctionState>>,
     mut last_open: crate::ui_script::WindowMemo<Option<u64>>,
     mut last_can_query: Local<crate::ui_script::VmMemo<bool>>,
-    mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
     mut closes: CoreCloses,
 ) {
     vm.turn(|script, (mut auction, mut steps)| {
@@ -860,15 +869,6 @@ fn feed_auction(
             *last_open = None;
         }
         let last_can_query = last_can_query.get(script);
-
-        // The class tree needs no session: the stock `AuctionFrameBrowse_OnLoad` reads
-        // `GetAuctionItemClasses()` when the addon loads (`Blizzard_AuctionUI.lua:174`).
-        let classes_now = categories(catalogs.0.as_deref(), catalogs.1.as_deref());
-        let last_classes = last_classes.get(script);
-        if *last_classes != classes_now {
-            *last_classes = classes_now.clone();
-            script.set_auction_item_classes(classes_now);
-        }
 
         // A `_S` line whose item was not cached when its handler ran, shown once the record lands,
         // as the reference defers it through `0x4cd190`; the `items.template` call below asks for
@@ -912,8 +912,8 @@ fn feed_auction(
 
         let self_guid = self_q.iter().next().map(|g| g.0);
         let rolls = crate::items::RollCatalogs {
-            props: catalogs.2.as_deref(),
-            enchants: catalogs.3.as_deref(),
+            props: catalogs.0.as_deref(),
+            enchants: catalogs.1.as_deref(),
         };
         // A list's result, and the window's show, are the frames the stock tabs call their getters
         // on.

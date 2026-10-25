@@ -366,8 +366,9 @@ pub enum AuctionCall {
 }
 
 impl super::UiScript {
-    /// Push the Browse tab's class tree. Login-scoped: the stock `AuctionFrameBrowse_OnLoad` reads
-    /// the classes when the addon loads, before any auctioneer session.
+    /// Seat the Browse tab's class tree. Seeded in each VM's prepare: the reference reads the DBCs
+    /// inside the verbs, so file scope and the stock `AuctionFrameBrowse_OnLoad` see the classes
+    /// before any auctioneer session.
     pub fn set_auction_item_classes(&mut self, classes: Vec<AuctionCategory>) {
         self.model_mut().auction_item_classes = classes;
     }
@@ -1089,7 +1090,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetAuctionItemClasses() → the ten auctionable class names in the reference's menu order, off
-    // the player's ItemClass.dbc; pushed at login, no session needed.
+    // the player's ItemClass.dbc; seeded in the prepare, no session needed.
     g.set(
         "GetAuctionItemClasses",
         lua.create_function(|lua, ()| {
