@@ -62,6 +62,9 @@ pub(crate) struct Cinematic {
     skip: bool,
     /// A far shot's black, held until the world at its first eye is in ([`ShotHold`]).
     hold: Option<ShotHold>,
+    /// How many far shots have asked for a reload so far: the stream's focus carries it, so its
+    /// load re-arms for each (a cinematic's focus is unpaced throughout, with no pacing edge).
+    reloads: u32,
 }
 
 /// The black a shot that moved the camera past the reload gate holds before it fades in.
@@ -111,6 +114,16 @@ impl Cinematic {
         self.playing.is_some()
     }
 
+    /// The far reloads shots have asked for so far.
+    pub(crate) fn reloads(&self) -> u32 {
+        self.reloads
+    }
+
+    /// A far shot asks the stream for a new load.
+    pub(crate) fn mark_reload(&mut self) {
+        self.reloads = self.reloads.wrapping_add(1);
+    }
+
     /// The shot on screen: `(run, shot index, narration sound id)`, keyed on [`Playing::run`] so a
     /// re-trigger counts as a new shot.
     pub(crate) fn playing_shot(&self) -> Option<(u64, usize, u32)> {
@@ -144,6 +157,7 @@ impl Cinematic {
             settling: None,
             skip: false,
             hold: None,
+            reloads: 0,
         }
     }
 
@@ -475,6 +489,7 @@ fn open_shot(
     let eye = benilla_assets::coords::wow_to_bevy(play.shot().sample(0).eye);
     if from.is_some_and(|from| crate::player::is_far_reload(from, eye)) {
         play.elapsed = Duration::ZERO;
+        cine.mark_reload();
         cine.hold = Some(ShotHold {
             ceiling: now + SETTLE_TIMEOUT,
             fresh: true,
@@ -1201,6 +1216,11 @@ mod far_shots {
         );
         open_first_shot(&mut app);
         assert!(holding(&app), "past 30 yards the black is held");
+        assert_eq!(
+            app.world().resource::<Cinematic>().reloads(),
+            1,
+            "and the stream is asked for a new load"
+        );
         assert!(black_now(&app), "and there is no fade-in");
 
         // The old spot's residency is not the destination's, whatever the frame count.
@@ -1250,6 +1270,11 @@ mod far_shots {
             );
             open_first_shot(&mut app);
             assert!(!holding(&app), "{yards} yd holds nothing");
+            assert_eq!(
+                app.world().resource::<Cinematic>().reloads(),
+                0,
+                "{yards} yd asks for no load"
+            );
             assert!(!black_now(&app), "{yards} yd fades in as it always has");
         }
         let mut app = app_with(

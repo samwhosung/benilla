@@ -467,6 +467,7 @@ fn mark_world_reload(player: &mut Player, from: Vec3, to: Vec3, now: f32) -> boo
     let far = !player.detached && super::world_focus::is_far_reload(from, to);
     if far {
         player.world_reload = true;
+        player.reloads = player.reloads.wrapping_add(1);
         player.reload_ceiling = now + SETTLE_TIMEOUT;
     }
     far
@@ -965,6 +966,13 @@ mod teleport_tests {
         assert!(holds([16_222.0, 16_282.5, 12.5], false), "30.5 yards");
         assert!(!holds([16_222.0, 16_281.5, 12.5], false), "29.5 yards");
         assert!(!holds(south_seas, true), "the eye does not follow");
+
+        assert_eq!(
+            snapped(from, south_seas, false).reloads,
+            1,
+            "a far snap marks"
+        );
+        assert_eq!(snapped(from, [16_222.0, 16_281.5, 12.5], false).reloads, 0);
 
         let mut player = snapped(from, south_seas, false);
         player.end_settle(true, 11.0);

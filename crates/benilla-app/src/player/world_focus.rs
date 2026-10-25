@@ -77,6 +77,12 @@ pub(super) fn publish_view_focus(
         }
     }
     *was_flying = flying;
+    // Far reloads, a teleport's snap or a cinematic's far cut, are one mark to the stream: a change
+    // re-arms its load, which a pacing edge does only for a focus that was settled.
+    let reloads = player
+        .as_deref()
+        .map_or(0, |p| p.reloads)
+        .wrapping_add(cinematic.as_deref().map_or(0, |c| c.reloads()));
     // Spawn caps pace only a live avatar in a settled world; through entry, a teleport or a world
     // swap a cap would only lengthen the load.
     *focus = match player.as_deref() {
@@ -97,7 +103,8 @@ pub(super) fn publish_view_focus(
             Some((map, pos)) => ViewFocus::entry(map, pos),
             None => ViewFocus::camera(),
         },
-    };
+    }
+    .with_reload(reloads);
 }
 
 /// The reference's reload gate: a forced move of more than 30 yards (`d² > 900`, `0x80c730` is
@@ -382,6 +389,36 @@ mod tests {
             !p.world_stale,
             "and re-staled a world the streamer had cleared"
         );
+    }
+
+    /// A teleport's far snap and a cinematic's far cut reach the stream as the same mark, so its
+    /// load re-arms for either, with the focus unpaced or not.
+    #[test]
+    fn far_reloads_of_the_body_and_of_a_shot_both_reach_the_stream() {
+        let mut app = App::new();
+        app.insert_resource(ViewFocus::default())
+            .insert_resource(Player {
+                active: true,
+                ..Player::default()
+            })
+            .insert_resource(crate::cinematic::Cinematic::playing_for_test())
+            .add_systems(Update, publish_view_focus);
+        app.update();
+        let mark = |app: &App| app.world().resource::<ViewFocus>().reload();
+        let steady = mark(&app);
+        app.update();
+        assert_eq!(mark(&app), steady, "a frame with no reload keeps the mark");
+
+        app.world_mut().resource_mut::<Player>().reloads += 1;
+        app.update();
+        let after_snap = mark(&app);
+        assert_ne!(after_snap, steady, "a far snap");
+
+        app.world_mut()
+            .resource_mut::<crate::cinematic::Cinematic>()
+            .mark_reload();
+        app.update();
+        assert_ne!(mark(&app), after_snap, "a far shot");
     }
 
     #[test]

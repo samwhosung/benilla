@@ -89,6 +89,8 @@ pub struct TerrainStreamer {
     /// [`ViewFocus::paced`] last frame: the residency latch re-arms on the edge into a load, since
     /// a viewer with no avatar is unpaced forever and the level would re-arm it every frame.
     was_paced: bool,
+    /// [`ViewFocus::reload`] as last seen.
+    reload_seen: u32,
     /// Last frame had nothing to request, drop or spawn and every tile stood furnished, so an
     /// unchanged frame skips the walk.
     settled: bool,
@@ -116,6 +118,11 @@ struct StreamPlan {
 const GLOBAL_WMO_UID: u32 = u32::MAX;
 
 impl TerrainStreamer {
+    /// Whether a far reload was asked for since the last look ([`ViewFocus::reload`]).
+    fn take_reload(&mut self, focus: &ViewFocus) -> bool {
+        std::mem::replace(&mut self.reload_seen, focus.reload) != focus.reload
+    }
+
     /// Whether the loaded map, whose `Map.dbc` directory is `dir`, has its WDT's one-object flag
     /// set; false until that WDT has loaded.
     pub(crate) fn is_one_object_map(&self, dir: &str) -> bool {
@@ -161,6 +168,17 @@ struct TileState {
     /// The inner wait gave up on this request's read ([`INNER_WAIT_CAP`]); it streams on
     /// unwaited, and a fresh request after a drop is waited on again.
     gave_up: bool,
+}
+
+/// The counting of the load latches off once fully ready (`complete`); a new load re-arms it. A
+/// focus on unfurnished ground is one. So is a snap onto furnished ground, whose buildings and
+/// neighbours may still be arriving: on the edge into the load, not the level, and on a far
+/// reload's mark ([`ViewFocus::reload`]), which a focus already unpaced (a cinematic's) shows no
+/// edge for.
+fn rearm_load(p: &mut WorldLoadProgress, was_paced: bool, focus: &ViewFocus, reloaded: bool) {
+    if !p.focus_resident || (was_paced && !focus.paced) || reloaded {
+        p.complete = false;
+    }
 }
 
 /// Whether the load counts the tile as in: furnished, or its ADT read failed, as the reference's
@@ -311,6 +329,10 @@ pub struct ViewFocus {
     pub(crate) paced: bool,
     /// The eye is a cinematic's camera, which the tile pass follows as it follows a body.
     cinematic: bool,
+    /// How many far reloads the owners of the view have asked for so far (a teleport's snap past
+    /// 30 yards, a cinematic shot's far cut, `0x66fc80`). A change is a new load, whatever the
+    /// pacing was: the stream re-arms its latch.
+    reload: u32,
 }
 
 impl ViewFocus {
@@ -327,7 +349,18 @@ impl ViewFocus {
             entry: None,
             paced,
             cinematic: false,
+            reload: 0,
         }
+    }
+
+    /// The far reloads asked for so far; only a change from the last frame's matters.
+    pub fn with_reload(self, reload: u32) -> Self {
+        Self { reload, ..self }
+    }
+
+    /// The far reloads asked for so far.
+    pub fn reload(&self) -> u32 {
+        self.reload
     }
 
     /// The stream follows the body's own ground, so residency is a fact about the player; a
@@ -678,6 +711,7 @@ fn stream_terrain(
         && state.settled
         && focus.paced
         && state.was_paced == focus.paced
+        && state.reload_seen == focus.reload
         && (wdt_index.is_some() || state.wdt_ungated)
         && load_progress
             .as_ref()
@@ -1060,6 +1094,7 @@ fn spawn_streamed_tiles(
             .values()
             .all(|t| t.entity.is_some() && t.furnished);
     let was_paced = std::mem::replace(&mut state.was_paced, focus.paced);
+    let reloaded = state.take_reload(&focus);
     if let Some(p) = load_progress.as_mut() {
         p.focus_tile = Some((cx, cy));
         // Judged from the desired set, so a desired tile not yet requested is not there; ground
@@ -1083,16 +1118,7 @@ fn spawn_streamed_tiles(
                 .get(&GLOBAL_WMO_UID)
                 .is_some_and(|p| p.spawned);
         }
-        // The counting below latches off once fully ready (`complete`); a focus on unfurnished
-        // ground is a new load and re-arms it.
-        if !p.focus_resident {
-            p.complete = false;
-        }
-        // So does a snap onto furnished ground, whose buildings may still be arriving; on the edge
-        // into the load, not the level.
-        if was_paced && !focus.paced {
-            p.complete = false;
-        }
+        rearm_load(p, was_paced, &focus, reloaded);
         if !p.complete {
             // Spawned means furnished, root and every cell, so a reveal never shows bare ground (or
             // read and failed, which has nothing to show);
@@ -1536,6 +1562,64 @@ fn terrain_base_material() -> StandardMaterial {
 #[cfg(test)]
 mod focus_tests {
     use super::*;
+
+    /// A far reload (a teleport's snap, a cinematic's far shot) is a new load whatever the pacing:
+    /// the latch that froze the last load's counts re-arms, so the new spot's neighbours that are
+    /// not requested yet are waited for. A focus that just stands there re-arms nothing.
+    #[test]
+    fn a_reload_mark_re_arms_a_latched_load_once() {
+        let at = [SPAWN_XY.0, SPAWN_XY.1, 100.0];
+        let mut state = TerrainStreamer::default();
+        // A cinematic's focus is unpaced throughout, so no pacing edge ever shows between shots,
+        // and the focus tile stays furnished.
+        let steady = ViewFocus::cinematic(at, false);
+        let latched = || WorldLoadProgress {
+            complete: true,
+            focus_resident: true,
+            ..Default::default()
+        };
+
+        let mut p = latched();
+        let reloaded = state.take_reload(&steady);
+        rearm_load(&mut p, false, &steady, reloaded);
+        assert!(p.complete, "nothing asked for a new load");
+
+        let marked = steady.with_reload(1);
+        let mut p = latched();
+        let reloaded = state.take_reload(&marked);
+        assert!(reloaded, "the mark is seen");
+        rearm_load(&mut p, false, &marked, reloaded);
+        assert!(
+            !p.complete,
+            "a furnished focus tile does not keep the old counts"
+        );
+
+        let mut p = latched();
+        let reloaded = state.take_reload(&marked);
+        assert!(!reloaded, "and it is seen once");
+        rearm_load(&mut p, false, &marked, reloaded);
+        assert!(p.complete);
+    }
+
+    /// The edge into a load and a focus on unfurnished ground still re-arm, as before.
+    #[test]
+    fn the_pacing_edge_and_bare_ground_still_re_arm() {
+        let at = [SPAWN_XY.0, SPAWN_XY.1, 100.0];
+        let latched = |resident| WorldLoadProgress {
+            complete: true,
+            focus_resident: resident,
+            ..Default::default()
+        };
+        let mut p = latched(true);
+        rearm_load(&mut p, true, &ViewFocus::body(at, false), false);
+        assert!(!p.complete, "paced to unpaced");
+        let mut p = latched(true);
+        rearm_load(&mut p, false, &ViewFocus::body(at, true), false);
+        assert!(p.complete, "a settled body stays complete");
+        let mut p = latched(false);
+        rearm_load(&mut p, false, &ViewFocus::body(at, true), false);
+        assert!(!p.complete, "unfurnished ground");
+    }
 
     /// Stratholme's map and position.
     const PICK: (u32, [f32; 3]) = (329, [3398.9, -3381.8, 142.7]);

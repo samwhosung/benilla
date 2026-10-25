@@ -379,6 +379,9 @@ pub(crate) struct Player {
     /// by reloading the destination before the frame goes on (`0x617e90` calls `0x630bd0` for
     /// `d² > 900`): the frame is held until the settle hold ends ([`Self::holds_the_frame`]).
     pub(crate) world_reload: bool,
+    /// How many far reloads the body's snaps have asked for ([`Self::world_reload`]'s marks), which
+    /// the stream's focus carries so it re-arms its load on each.
+    pub(crate) reloads: u32,
     /// When the reload hold gives up (`Time::elapsed_secs`): the stall budget from its snap, never
     /// extended, as the reference's wait-all ends once every read has, failed or not (`0x443d30`).
     pub(crate) reload_ceiling: f32,
