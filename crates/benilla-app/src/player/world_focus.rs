@@ -108,9 +108,9 @@ pub(super) fn publish_view_focus(
 }
 
 /// The reference's reload gate: a forced move of more than 30 yards (`d² > 900`, `0x80c730` is
-/// 30.0 and the compare is strict, `0x617ee5`; the cinematic shot gates `0x48eec1` and `0x48f0fc`
-/// compare the same 30.0 of `0x804554` and `0x804558`) reloads the destination before the frame
-/// goes on. `from` and `to` are in one frame.
+/// 30.0 and the compare is strict, `0x617ee5`; the cinematic shot arm's gate `0x48eec1` compares
+/// the 30.0 of `0x804554`, and EndCinematic's `0x48f0fc`, camera against the followed object, that
+/// of `0x804558`) reloads the destination before the frame goes on. `from` and `to` are in one frame.
 pub(crate) fn is_far_reload(from: Vec3, to: Vec3) -> bool {
     from.distance_squared(to) > 30.0 * 30.0
 }

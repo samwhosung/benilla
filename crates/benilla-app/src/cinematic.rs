@@ -19,10 +19,13 @@
 //! - Every boundary (start, shot advance, end) cuts through black: a 0.25 s fade-out
 //!   (`[0x804550]`, `0x4c0d10`) whose completion runs the step, then a fade-in (`0x4c1280`). There
 //!   is no audio fade on this path.
-//! - A shot that moves the camera more than 30 yards (`0x48eec1`, `0x48f0fc`; start and advance
-//!   are one arm, `0x48edf0`) loads its destination in full before it fades in: `0x66fc80` runs
-//!   the synchronous map update `0x694920` at the black. Here the black is held instead, until
-//!   the camera's spot is presentable or the teleport hold's ceiling runs out ([`ShotHold`]).
+//! - A shot that moves the camera more than 30 yards (`0x48eec1`; start and advance share the
+//!   arm `0x48edf0`) loads its destination in full before it fades in: `0x48eed3` calls
+//!   `0x66fc80`, which runs the synchronous map update `0x694920` at the black, and only then are
+//!   the clock restarted, the shot's sound played (`0x48ef2e`) and the shot announced. Here the
+//!   black is held instead, until the camera's spot is presentable or the teleport hold's
+//!   ceiling runs out ([`ShotHold`]). The end does the same for the body's spot when the camera
+//!   ends more than 30 yards from the followed object (`0x48f0fc` to `0x48f118`).
 //!
 //! Playback takes over, and releases, the camera pose, the streaming focus (which follows the
 //! camera, so the flight is over streamed terrain) and the UI's cinematic flag, which drives
@@ -125,8 +128,12 @@ impl Cinematic {
     }
 
     /// The shot on screen: `(run, shot index, narration sound id)`, keyed on [`Playing::run`] so a
-    /// re-trigger counts as a new shot.
+    /// re-trigger counts as a new shot. None while a far shot's world loads (the black holds): its
+    /// sound plays after the load (`0x48ef2e`), and the shot left had its sound cut at the advance.
     pub(crate) fn playing_shot(&self) -> Option<(u64, usize, u32)> {
+        if self.hold.is_some() {
+            return None;
+        }
         let play = self.playing.as_ref()?;
         Some((play.run, play.index, play.shot().sound_id))
     }
@@ -548,6 +555,7 @@ fn drive(
     mut fade: ResMut<crate::screen_fade::ScreenFade>,
     progress: Option<Res<benilla_world::terrain_stream::WorldLoadProgress>>,
     screen: Option<Res<LoadingScreen>>,
+    player: Option<Res<crate::player::Player>>,
     mut camera: Query<&mut Transform, With<WorldCamera>>,
 ) {
     // --- The end boundary's tail: hold the black while the world comes back around the body.
@@ -637,7 +645,17 @@ fn drive(
             }
             if ended {
                 // Not faded in yet: the world around the body streamed away during the flight, so
-                // hold the black the reference shows while its own load blocks.
+                // hold the black the reference shows while its own load blocks. EndCinematic
+                // reloads the body's spot only when the camera ended more than 30 yards from the
+                // followed object (`0x48f0fc` to `0x48f118`); counts latched under the camera say
+                // nothing of it, so the stream is asked for a new load behind the same gate.
+                let body = player.as_deref().filter(|p| p.active).map(|p| p.pos);
+                if camera_at
+                    .zip(body)
+                    .is_some_and(|(cam, body)| crate::player::is_far_reload(cam, body))
+                {
+                    cine.mark_reload();
+                }
                 cine.settling = Some(SETTLE_BUDGET);
                 return;
             }
@@ -1081,7 +1099,7 @@ mod settling_under_black {
 }
 
 /// A shot that moves the camera past the reload gate keeps the black until its world is in
-/// (`0x48eec1`, `0x48f0fc`, then the synchronous load `0x66fc80` at the black).
+/// (`0x48eec1`, then the synchronous load `0x66fc80` at the black, `0x48eed3`).
 #[cfg(test)]
 mod far_shots {
     use super::*;
@@ -1371,8 +1389,9 @@ mod far_shots {
         assert_eq!(
             app.world()
                 .resource::<Cinematic>()
-                .playing_shot()
-                .map(|s| s.1),
+                .playing
+                .as_ref()
+                .map(|p| p.index),
             Some(1),
             "the next shot is up"
         );
@@ -1492,6 +1511,82 @@ mod far_shots {
             Some(2)
         );
         assert_eq!(announced(&app), 2);
+    }
+
+    /// The shot's narration starts after the load (`0x48ef2e` follows `0x48eed3`): the shot is not
+    /// the one on screen, as the voice follows it, until its hold ends. A far first shot, as the
+    /// Tauren intro's, and a far advance alike; the voice of the shot left is cut at the black.
+    #[test]
+    fn a_held_shot_is_not_narrated_until_its_world_is_in() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            world_at(HERE, true),
+        );
+        let on_screen = |app: &App| app.world().resource::<Cinematic>().playing_shot();
+        assert!(on_screen(&app).is_some(), "before the arm it is the shot");
+        open_first_shot(&mut app);
+        for _ in 0..4 {
+            frame(&mut app);
+        }
+        assert!(holding(&app));
+        assert_eq!(on_screen(&app), None, "no voice under the load");
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert_eq!(
+            on_screen(&app).map(|s| s.1),
+            Some(0),
+            "the voice starts with it"
+        );
+
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(HERE, 1_000), shot(FAR, 60_000)]),
+            world_at(HERE, true),
+        );
+        app.world_mut()
+            .resource_mut::<Cinematic>()
+            .playing
+            .as_mut()
+            .expect("playing")
+            .elapsed = Duration::from_millis(1_000);
+        frame(&mut app);
+        assert!(holding(&app));
+        assert_eq!(
+            on_screen(&app),
+            None,
+            "the last shot's voice is cut, the next waits"
+        );
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert_eq!(on_screen(&app).map(|s| s.1), Some(1));
+    }
+
+    /// EndCinematic (`0x48f080`) reloads the body's spot when the camera ended more than 30 yards
+    /// from the followed object (`0x48f0fc` to `0x48f118`), so the end asks the stream for a new
+    /// load behind the same gate; counts latched under the camera say nothing of the body's.
+    #[test]
+    fn the_end_asks_for_a_load_only_when_the_camera_is_far_from_the_body() {
+        let ended_with_body_at = |body: [f32; 3]| {
+            let mut app = app_with(
+                Cinematic::playing_shots_for_test(vec![shot(HERE, 60_000)]),
+                world_at(HERE, true),
+            );
+            let mut player = crate::player::Player::default();
+            player.active = true;
+            player.pos = benilla_assets::coords::wow_to_bevy(body);
+            app.insert_resource(player);
+            app.world_mut().resource_mut::<Cinematic>().skip = true;
+            frame(&mut app);
+            let cine = app.world().resource::<Cinematic>();
+            assert!(!cine.is_playing() && cine.settling.is_some(), "it ended");
+            cine.reloads()
+        };
+        assert_eq!(
+            ended_with_body_at(FAR),
+            1,
+            "the camera is far from the body"
+        );
+        assert_eq!(ended_with_body_at(from_here(29.5)), 0, "29.5 yd");
+        assert_eq!(ended_with_body_at(from_here(30.5)), 1, "30.5 yd");
     }
 
     /// ESC under a far shot's black ends the cinematic, and the hold goes with it.
