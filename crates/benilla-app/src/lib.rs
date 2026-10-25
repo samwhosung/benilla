@@ -234,8 +234,18 @@ pub fn config_dir() -> Option<std::path::PathBuf> {
 /// What a crate on top of benilla adds to the built app ([`run_with`]).
 type Extension<'a> = Box<dyn FnOnce(&mut App) + 'a>;
 
+/// The main thread joins a single-threaded apartment before any window, which winit's `OleInitialize` needs (#2422).
+#[cfg(windows)]
+fn main_apartment() {
+    use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    // SAFETY: no pointers; never balanced, so the apartment lasts the process; cpal's thread has its own.
+    let _ = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+}
+
 /// The one body behind [`run`] and [`run_with`], not generic, so a launcher compiles none of it.
 fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
+    #[cfg(windows)]
+    main_apartment();
     // `WOW_HOVER_LOG_REPORT=<csv>` and `WOW_CAPTURE=list` print and exit before any setup.
     if let Ok(path) = std::env::var("WOW_HOVER_LOG_REPORT") {
         dev::report_recorded_hover_log(&path);
