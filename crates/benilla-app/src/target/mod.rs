@@ -398,6 +398,9 @@ impl Plugin for TargetPlugin {
                         crate::ui_action::drop_item::drop_item_on_unit,
                     )
                         .chain(),
+                    // The casts the click's dispatch queued, sent inside the click, as the
+                    // reference's dispatchers try them (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`).
+                    crate::ui_action::drain_click_casts,
                 )
                     .chain()
                     .in_set(WorldClicks),
@@ -421,11 +424,12 @@ impl Plugin for TargetPlugin {
                     // reference's one `CheckGroundPointInRange` caller feeds both.
                     reticle::update_reticle,
                     // The verb a walk owes runs at its stop, in the frame time's movement, after
-                    // the frame's clicks; a unit it parked with the targeting cursor up is bound
-                    // as a click's is.
+                    // the frame's clicks; a unit it parked with the targeting cursor up is bound,
+                    // and a cast it queued sent, as a click's are.
                     (
                         click::act_on_arrival,
                         crate::script_calls::bind_arrival_picks,
+                        crate::ui_action::drain_arrival_casts,
                     )
                         .chain(),
                     // The loot close's guid-scoped deselect.

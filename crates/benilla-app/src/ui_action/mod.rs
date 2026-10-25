@@ -10,7 +10,6 @@ use bevy::prelude::*;
 use benilla_formats::SpellCatalog;
 use benilla_protocol::messages::ActionButton;
 
-use crate::ui_script::UiTick;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
@@ -19,11 +18,12 @@ mod cast_lines;
 pub(crate) use cast_lines::{CastFailLines, CastFailRedisplays};
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
-pub(crate) use drain::{attack_nearest_probe, use_action, ActionPress, AttackPress, UseOutcome};
+pub(crate) use drain::{
+    attack_nearest_probe, drain_arrival_casts, use_action, ActionPress, AttackPress, UseOutcome,
+};
 // The bar's sends and slot writes inside their calls.
 pub(crate) use drain::ActionBarSteps;
-// The right-click casts' drain, which the click's tests run after the click.
-#[cfg(test)]
+// The right-click casts' drain, which the world's clicks run inside the click.
 pub(crate) use drain::drain_click_casts;
 #[cfg(test)]
 mod drain_tests;
@@ -465,10 +465,6 @@ impl Plugin for UiActionPlugin {
                         .after(state::feed_action_state)
                         .after(crate::ui_unit::UnitSnapshots)
                         .before(crate::ui_cast::feed_cast_reports),
-                    // The target chain queues the right-click casts earlier in the frame.
-                    drain::drain_click_casts
-                        .after(UiTick)
-                        .after(crate::target::TargetUpdate),
                     // The latches must be current before the target chain's cursor reads them.
                     track_learned_abilities
                         .in_set(UnitFeed)

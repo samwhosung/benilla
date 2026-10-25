@@ -165,7 +165,23 @@ impl AttackPress<'_, '_> {
     }
 }
 
-/// Sends the queued right-click casts through the cast ladder. The reference reaches `TryCast`
+/// [`drain_click_casts`] after a walk's arrival in the frame time, whose dispatch queues the
+/// cast the walk owed.
+pub(crate) fn drain_arrival_casts(
+    vm: crate::script_calls::VmWith<(
+        cast_target::CastTargeting<'static, 'static>,
+        CastLadder<'static, 'static>,
+        crate::ui_bind_confirm::BindGate<'static>,
+    )>,
+    queue: ResMut<crate::ui_action::ClickCasts>,
+    ui_errors: Res<UiErrorKeys>,
+) {
+    drain_click_casts(vm, queue, ui_errors);
+}
+
+/// Sends the queued right-click casts through the cast ladder, inside the click among the
+/// frame's input records: the reference's release handler reaches the click router (`0x514b70`
+/// → `0x481f60`), whose dispatchers try the cast. The reference reaches `TryCast`
 /// from a right-click as from a button (`0x5f35c0` and `0x5f06dc`, then `0x6e5a90`, `0x6e4b60`),
 /// so every rung applies: a second click on a chest mid-cast is `0x6e4d43`'s silent same-spell
 /// bail, and a skin while another spell is in flight `0x6e4d97`'s 0x61.

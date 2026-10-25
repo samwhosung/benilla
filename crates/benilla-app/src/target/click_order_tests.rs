@@ -170,3 +170,32 @@ fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
     );
     assert_eq!(world.resource::<Selection>().guid, None);
 }
+
+/// A right-click's cast goes out inside the click, among the frame's input records and ahead of
+/// the packets: the reference's release handler reaches the click router (`0x514b70` →
+/// `0x481f60`), whose dispatchers try the cast (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`). A walk's
+/// arrival casts in the frame time, after its stop.
+#[test]
+fn a_right_clicks_cast_goes_out_ahead_of_the_packets() {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    assert!(runs_before(
+        &mut app,
+        click::act_on_right_click,
+        crate::ui_action::drain_click_casts
+    ));
+    assert!(runs_before(
+        &mut app,
+        click::act_on_interact,
+        crate::ui_action::drain_click_casts
+    ));
+    assert!(runs_before(
+        &mut app,
+        crate::ui_action::drain_click_casts,
+        crate::net::apply_net_updates
+    ));
+    assert!(runs_before(
+        &mut app,
+        click::act_on_arrival,
+        crate::ui_action::drain_arrival_casts
+    ));
+}
