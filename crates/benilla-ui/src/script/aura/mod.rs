@@ -13,12 +13,22 @@
 //!
 //! `source` is always nil, and only the player's auras carry a duration: the 1.12 wire has no aura
 //! caster and sends durations for the player alone, so the stock target frame shows no timers.
+//!
+//! The unit walks read the unit's slots as the call runs, through the lent host ([`read`]); the
+//! pushed lists answer only with no host to ask. The `GetPlayerBuff` family reads no object: the
+//! cache it reads is the client's own, rebuilt at each packet that moves the aura fields
+//! (`0x4e4140` → `0x4e4170`), and its timers the expiry array the duration packet writes
+//! (`0x4e4390` into `0xbc5f68`).
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
 mod player_buff;
+mod read;
+
+pub(crate) use read::{aura_unit, nth_kept, read_auras_of};
+pub use read::{AuraListRead, AuraRead};
 
 /// One aura on one unit, as the app's feed pushes it ([`crate::script::UiScript::set_unit_auras`],
 /// [`crate::script::UiScript::set_player_auras`]).
@@ -152,9 +162,11 @@ pub(crate) fn raid_filter_arg(v: Option<&Value>) -> bool {
     crate::script::binding_abi::flag_or_default(v, 0) != 0
 }
 
-/// The `index`-th (1-based) buff (`helpful`) or debuff of `token`, in pushed order, counting only
-/// the `raid_listed` ones under `raid`; out of range answers one nil on every miss leg
-/// (`0x5195fe`, `0x5197d4`, `0x519a51`), the loop terminator.
+/// The `index`-th (1-based) buff (`helpful`) or debuff of `token`, in slot order, counting only
+/// the `raid_listed` ones under `raid`, read off the unit as the call runs ([`read_auras_of`]);
+/// out of range answers one nil on every miss leg (`0x5195fe`, `0x5197d4`, `0x519a51`), the loop
+/// terminator. The buffs only through the unit gate ([`UnitAuraList::buffs_visible`]), read before
+/// any slot (`0x5195aa`), and both halves past the vision test ([`AuraState::vision_hidden`]).
 fn nth_aura(
     lua: &Lua,
     token: &Option<String>,
@@ -164,20 +176,19 @@ fn nth_aura(
 ) -> mlua::Result<MultiValue> {
     // The token resolves before the index is read (`0x519542`, then `0x51957a`), so a bad token
     // raises at any index.
-    let hit = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        match token {
-            Some(t) => auras_of(&model, t)?
-                .filter(|_| index >= 1)
-                .and_then(|list| {
-                    listed(list, helpful)
-                        .filter(|a| !raid || a.raid_listed)
-                        .nth((index - 1) as usize)
-                        .cloned()
-                }),
-            None => None,
-        }
+    let guid = match token {
+        Some(t) => aura_unit(lua, t)?,
+        None => None,
     };
+    let hit = read_auras_of(lua, guid, |list| {
+        let list = list.filter(|_| index >= 1)?;
+        if helpful && !list.buffs_visible() {
+            return None;
+        }
+        nth_kept(list, (index - 1) as usize, |a| {
+            a.helpful() == helpful && !a.vision_hidden() && (!raid || a.raid_listed())
+        })
+    });
     match hit {
         Some(a) => returns(lua, &a, !helpful),
         None => Ok(MultiValue::from_vec(vec![Value::Nil])),

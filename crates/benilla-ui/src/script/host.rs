@@ -94,6 +94,20 @@ pub trait CallHost {
         let _ = read;
         false
     }
+
+    /// Hand `read` the aura list of the unit held under `guid` as the aura walks read it now: the
+    /// object's slots with `UnitBuff`'s gate on the active player as it stands (`0x519617`,
+    /// `0x5195be`), else the roster record of a member with no object (`0x519735`), as of the
+    /// place the getter runs; `None` for neither. Whether it read: `false` from a host that reads
+    /// none. `read` runs no Lua.
+    fn read_unit_auras(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(Option<&dyn super::AuraListRead>),
+    ) -> bool {
+        let _ = (guid, read);
+        false
+    }
 }
 
 /// What a call leaves for the VM to run once its host is back in the VM.

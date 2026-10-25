@@ -285,33 +285,30 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let token = token.to_string_lossy();
                 // The token resolves before the index is read (`0x534b8b`), as `UnitBuff`'s does,
                 // so an unknown one raises at any index.
-                let hit = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let list = crate::script::aura::auras_of(&model, &token)?;
-                    // `_ftol`, then `index - 1` compared unsigned, so 0 and a negative index are
-                    // past the range (`0x534bc4`).
-                    let ordinal = binding_abi::ftol(index).wrapping_sub(1) as u32;
-                    if ordinal >= slots {
-                        return Ok(());
-                    }
-                    // Every aura of the half, past `UnitBuff`'s unit gate, which this walk lacks; a
-                    // set `raidFilter` (`0x534bda`) counts the kept ones alone (`0x534c6c`).
-                    let raid = crate::script::aura::raid_filter_arg(raid_filter.as_ref());
-                    list.and_then(|l| {
-                        l.auras
-                            .iter()
-                            .filter(|a| a.helpful == helpful && (!raid || a.raid_listed))
-                            .nth(ordinal as usize)
+                let guid = crate::script::aura::aura_unit(lua, &token)?;
+                // `_ftol`, then `index - 1` compared unsigned, so 0 and a negative index are past
+                // the range (`0x534bc4`).
+                let ordinal = binding_abi::ftol(index).wrapping_sub(1) as u32;
+                if ordinal >= slots {
+                    return Ok(());
+                }
+                // Every aura of the half, past `UnitBuff`'s unit gate, which this walk lacks, read
+                // off the unit as the call runs; a set `raidFilter` (`0x534bda`) counts the kept
+                // ones alone (`0x534c6c`).
+                let raid = crate::script::aura::raid_filter_arg(raid_filter.as_ref());
+                let hit = crate::script::aura::read_auras_of(lua, guid, |list| {
+                    crate::script::aura::nth_kept(list?, ordinal as usize, |a| {
+                        a.helpful() == helpful && (!raid || a.raid_listed())
                     })
-                    .map(|a| {
-                        let key = AuraKey {
-                            spell_id: a.spell_id,
-                            level: a.level,
-                            stack: a.count,
-                        };
-                        (key, a.name.clone())
-                    })
-                };
+                })
+                .map(|a| {
+                    let key = AuraKey {
+                        spell_id: a.spell_id,
+                        level: a.level,
+                        stack: a.count,
+                    };
+                    (key, a.name)
+                });
                 let Some((key, name)) = hit else {
                     return Ok(());
                 };
