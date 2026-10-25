@@ -902,7 +902,7 @@ mod tests {
             instance
                 .matches("retry_stall(stall_start, timeout_ns)")
                 .count()
-                == 2,
+                == 3,
             "acquire_texture retries the previous-submission wait, the acquire and the post-acquire fence wait"
         );
     }
