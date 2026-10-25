@@ -2070,6 +2070,8 @@ pub(crate) mod schedule_tests {
          "the outcome chain starts with the VM's own `Screenshot()` call"),
         ("target/click.rs", "select_on_plate_click", Because::FilledByVm,
          "filled only by a nameplate frame's click, which a frameless VM has no plate to make"),
+        ("ui_action/cooldown_lane.rs", "fire_cooldowns", Because::Deliberate,
+         "a lane's firing, run only by the drain: `drop_cooldown_log`, gated on the interface being down, drops the log the frame it is written, so no signal fires into a later VM"),
         ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,
          "filled only by a world right-click on a GameObject or a body; the drain sends casts to the wire"),
         ("ui_action/recount.rs", "recount", Because::Deliberate,

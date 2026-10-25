@@ -82,22 +82,20 @@ fn drop_cooldown_log(mut cooldowns: ResMut<Cooldowns>) {
 #[cfg(test)]
 pub(crate) fn fire_cooldown_lane(world: &mut World) {
     let until = Until::all();
-    let fire = |world: &mut World, events: &[&str]| {
-        if let Some(mut script) = world.get_non_send_resource_mut::<benilla_ui::script::UiScript>()
-        {
-            for event in events {
-                script.fire_event(event, vec![]);
-            }
-        }
-    };
     while let Some((_, signal)) = world.resource_mut::<Cooldowns>().replay(until) {
-        match signal {
-            Signal::Pair => fire(
-                world,
-                &["ACTIONBAR_UPDATE_COOLDOWN", "SPELL_UPDATE_COOLDOWN"],
-            ),
-            Signal::Usable => super::run_watcher_refresh_once(world),
-            Signal::Bags => fire(world, &["BAG_UPDATE_COOLDOWN"]),
+        if signal == Signal::Usable {
+            super::run_watcher_refresh_once(world);
+            continue;
+        }
+        let Some(mut script) = world.get_non_send_resource_mut::<benilla_ui::script::UiScript>()
+        else {
+            continue;
+        };
+        if signal == Signal::Pair {
+            script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
+            script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
+        } else {
+            script.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
         }
     }
     end_cooldowns(world);
