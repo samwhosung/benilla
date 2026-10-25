@@ -97,6 +97,11 @@ impl super::UiScript {
         self.model_mut().taxi_riding = riding;
     }
 
+    /// What [`Self::set_on_taxi`] last pushed.
+    pub fn on_taxi(&self) -> bool {
+        self.model_ref().taxi_riding
+    }
+
     /// The taxi calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_taxi_calls(&mut self) -> Vec<TaxiCall> {
         self.take_calls_where(|call| match call {
