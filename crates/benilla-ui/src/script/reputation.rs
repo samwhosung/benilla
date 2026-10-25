@@ -72,6 +72,47 @@ pub struct ReputationState {
     pub watched: Option<u32>,
 }
 
+/// What a reputation getter asks the lent host of one faction, answered as of the place it runs
+/// ([`super::live::ask`]); the getters read the slot's flag byte and standing and the player's
+/// watched field at the call (`0x4d654f`, `0x4d6608`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FactionQuery {
+    /// The faction by its `Faction.dbc` id.
+    Of(u32),
+    /// The faction in the player's watched slot (`0x4d6820`).
+    Watched,
+}
+
+/// A [`FactionQuery`]'s answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FactionRead {
+    /// The faction's row, `None` when the player has none for it.
+    pub entry: Option<FactionEntry>,
+    /// The watched slot (`PLAYER_FIELD_WATCHED_FACTION_INDEX`), `None` for none.
+    pub watched: Option<u32>,
+}
+
+impl super::live::LiveQuery for FactionQuery {
+    type Answer = FactionRead;
+}
+
+/// The whole list as of the place the VM's list is built or sorted: every faction the player has a
+/// slot for, and every standing the quest log's turn-in test reads.
+#[derive(Clone, Copy, Debug)]
+pub struct ReputationBook;
+
+/// A [`ReputationBook`]'s answer.
+#[derive(Clone, Debug, Default)]
+pub struct Book {
+    pub state: ReputationState,
+    /// `GetFactionStanding` (`0x4d6370`) per faction with a reputation index.
+    pub standings: HashMap<u32, i32>,
+}
+
+impl super::live::LiveQuery for ReputationBook {
+    type Answer = Book;
+}
+
 /// A reputation verb the host applies inside its call, by reputation-list slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReputationCall {
@@ -126,9 +167,10 @@ pub(crate) struct HeaderObject {
 }
 
 impl super::UiScript {
-    /// Push the reputation snapshot, the slots' names, standings and flags: the list moves only by
-    /// the messages' ops ([`Self::apply_reputation_ops`]) and the verbs, and no row leaves it but
-    /// at the rebuild. The first push into a VM is the rebuild's
+    /// Push the reputation snapshot, the slots' names, standings and flags, the fallback of the
+    /// getters that read the lent host ([`FactionQuery`]) and what the list sorts by: the list
+    /// moves only by the messages' ops ([`Self::apply_reputation_ops`]) and the verbs, and no row
+    /// leaves it but at the rebuild. The first push into a VM is the rebuild's
     /// ([`Self::reputation_enter_world`]).
     pub fn set_reputation(&mut self, state: ReputationState) {
         let mut model = self.model_mut();
@@ -138,9 +180,9 @@ impl super::UiScript {
         }
     }
 
-    /// The feed's push: `state` when the snapshot moved, then the messages' list ops over it. A
-    /// push that builds the list drops the ops, all queued before its rebuild, which clears the
-    /// list first (`0x4d547f`-`0x4d5493`).
+    /// `state` when the snapshot moved, then the messages' list ops over it. A push that builds the
+    /// list drops the ops, all queued before its rebuild, which clears the list first
+    /// (`0x4d547f`-`0x4d5493`).
     pub fn push_reputation(&mut self, state: Option<ReputationState>, ops: Vec<ReputationListOp>) {
         let builds = state.is_some() && self.model_ref().reputation_headers.is_empty();
         if let Some(state) = state {
@@ -151,11 +193,32 @@ impl super::UiScript {
         }
     }
 
-    /// Apply the list's half of the reputation messages, in arrival order.
-    /// An added row that registers a header opens every header (`0x4d5c34`), Inactive's
-    /// included; no message writes the folds otherwise (`0x4d5760`, `0x4d56b0`, `0x4d5710`).
+    /// The snapshot as of the place the list is built or sorted, taken off the lent host: the sort
+    /// reads the slots' flags and the rows' names as the reference's reads the slots (`0x4d6210`).
+    /// With no host to ask the snapshot stands as it was pushed.
+    fn pull_reputation(&mut self) {
+        if let Some(book) = super::live::ask(&self.lua, &ReputationBook) {
+            let mut model = self.model_mut();
+            model.reputation = book.state;
+            model.faction_standings = book.standings;
+        }
+    }
+
+    /// Apply the list's half of the reputation messages, in arrival order, over the snapshot as of
+    /// here ([`Self::pull_reputation`]). An added row that registers a header opens every header
+    /// (`0x4d5c34`), Inactive's included; no message writes the folds otherwise (`0x4d5760`,
+    /// `0x4d56b0`, `0x4d5710`). A list not yet built is built instead, which clears it first and
+    /// so drops the ops (`0x4d547f`-`0x4d5493`).
     pub fn apply_reputation_ops(&mut self, ops: Vec<ReputationListOp>) {
+        if ops.is_empty() {
+            return;
+        }
+        self.pull_reputation();
         let mut model = self.model_mut();
+        if model.reputation_headers.is_empty() {
+            rebuild(&mut model);
+            return;
+        }
         for op in ops {
             match op {
                 ReputationListOp::Visible(slot) => {
@@ -183,6 +246,7 @@ impl super::UiScript {
     /// and each of its two sorts signals `UPDATE_FACTION` (`0x4d55d9` → `0x4d6457`, `0x4d55de`;
     /// `0x4d5dab`).
     pub(crate) fn reputation_enter_world(&mut self) {
+        self.pull_reputation();
         let state = {
             let mut model = self.model_mut();
             model.reputation_headers.clear();
@@ -194,8 +258,9 @@ impl super::UiScript {
     }
 
     /// Push every reputation-indexed faction's standing, the base plus the wire (`0x4d6370`): what
-    /// the quest log's turn-in test reads (`0x4df6ce`, `0x4df6e3`). A faction left out reads 0, as
-    /// one with no reputation index does (`0x4d6377`).
+    /// the quest log's turn-in test reads (`0x4df6ce`, `0x4df6e3`), as the lent host last gave them
+    /// ([`Self::pull_reputation`]) or a harness pushes them. A faction left out reads 0, as one
+    /// with no reputation index does (`0x4d6377`).
     pub fn set_faction_standings(&mut self, standings: HashMap<u32, i32>) {
         self.model_mut().faction_standings = standings;
     }
@@ -219,6 +284,7 @@ impl super::UiScript {
     /// re-sort (`0x4d617b` → `0x4d5c40`), which moves the row and signals `UPDATE_FACTION`
     /// (`0x4d5dab`), which the pane repaints on.
     pub fn set_faction_inactive(&mut self, rep_list_id: u32, inactive: bool) {
+        self.pull_reputation();
         {
             let mut model = self.model_mut();
             for e in model.reputation.entries.iter_mut() {
@@ -506,9 +572,43 @@ fn entry_of(model: &Model, faction: i64) -> Option<&FactionEntry> {
         .find(|e| e.faction_id == faction)
 }
 
+/// A faction's row and the watched slot as the getter reads them at its call: the lent host's
+/// answer, as the reference reads the slots' flag bytes and standings and the player's field there
+/// (`0x4d654f`, `0x4d6608`), else the snapshot pushed last.
+fn read_faction(lua: &Lua, model: &Model, query: FactionQuery) -> FactionRead {
+    if let Some(read) = super::live::ask(lua, &query) {
+        return read;
+    }
+    let watched = model.reputation.watched;
+    let entry = match query {
+        FactionQuery::Of(id) => entry_of(model, i64::from(id)).cloned(),
+        FactionQuery::Watched => watched.and_then(|slot| {
+            model
+                .reputation
+                .entries
+                .iter()
+                .find(|e| e.rep_list_id == slot)
+                .cloned()
+        }),
+    };
+    FactionRead { entry, watched }
+}
+
+/// [`read_faction`] of an entry's faction id, none for 0 and -1.
+fn read_entry(lua: &Lua, model: &Model, faction: i64) -> FactionRead {
+    match u32::try_from(faction).ok().filter(|&f| f != 0) {
+        Some(id) => read_faction(lua, model, FactionQuery::Of(id)),
+        None => FactionRead {
+            entry: None,
+            watched: model.reputation.watched,
+        },
+    }
+}
+
 /// A faction's slot (`0x4d5600`), when it has one below 64 (`0x4d5ffe`-`0x4d6007`).
-fn slot_of(model: &Model, faction: i64) -> Option<u32> {
-    entry_of(model, faction)
+fn slot_of(lua: &Lua, model: &Model, faction: i64) -> Option<u32> {
+    read_entry(lua, model, faction)
+        .entry
         .map(|e| e.rep_list_id)
         .filter(|&slot| slot < 64)
 }
@@ -596,7 +696,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let faction = faction_at(&model, index);
             let is_header = is_header_key(&model, faction);
             let collapsed = is_header && model.reputation_collapsed.contains(&faction);
-            if let Some(e) = entry_of(&model, faction) {
+            let read = read_entry(lua, &model, faction);
+            if let Some(e) = read.entry {
                 return Ok(MultiValue::from_vec(vec![
                     Value::String(lua.create_string(&e.name)?),
                     Value::String(lua.create_string(&e.description)?),
@@ -608,7 +709,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     binding_abi::flag(e.can_toggle_at_war),
                     binding_abi::flag(is_header),
                     binding_abi::flag(collapsed),
-                    binding_abi::flag(model.reputation.watched == Some(e.rep_list_id)),
+                    binding_abi::flag(read.watched == Some(e.rep_list_id)),
                 ]));
             }
             if !is_header || faction < KEY_INACTIVE {
@@ -709,12 +810,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let faction = faction_at(&model, index);
                 (faction != 0)
                     .then(|| {
-                        let entry = entry_of(&model, faction);
-                        let at_war = !entry.is_some_and(|e| e.at_war);
+                        let entry = read_entry(lua, &model, faction).entry;
+                        let at_war = !entry.as_ref().is_some_and(|e| e.at_war);
                         // `GetFactionStanding` (`0x4d6370`), 0 for a faction with no slot.
-                        let standing = entry.map_or(0, |e| e.standing);
+                        let standing = entry.as_ref().map_or(0, |e| e.standing);
                         let floored = !at_war && standing < -3000;
-                        let rep_list_id = slot_of(&model, faction).filter(|_| !floored)?;
+                        let rep_list_id = entry
+                            .map(|e| e.rep_list_id)
+                            .filter(|&slot| slot < 64 && !floored)?;
                         Some(ReputationCall::AtWar {
                             rep_list_id,
                             at_war,
@@ -739,7 +842,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let faction = faction_at(&model, index);
             Ok(binding_abi::flag(
-                entry_of(&model, faction).is_some_and(|e| e.inactive),
+                read_entry(lua, &model, faction)
+                    .entry
+                    .is_some_and(|e| e.inactive),
             ))
         })?,
     )?;
@@ -762,7 +867,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let index = binding_abi::index_arg(lua, index, usage)?;
                 let slot = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    slot_of(&model, faction_at(&model, index))
+                    slot_of(lua, &model, faction_at(&model, index))
                 };
                 match slot {
                     Some(rep_list_id) => submit(
@@ -784,13 +889,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetWatchedFactionInfo",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let watched = model.reputation.watched.and_then(|slot| {
-                model
-                    .reputation
-                    .entries
-                    .iter()
-                    .find(|e| e.rep_list_id == slot)
-            });
+            let watched = read_faction(lua, &model, FactionQuery::Watched).entry;
             let Some(e) = watched else {
                 // Five values here too, `nil, 0, 0, 0, 0`: `0x4d6820`'s four guards share one exit
                 // and none raises. `0x4d5620` maps the out-of-range sentinel to 0, so it is refused
@@ -824,7 +923,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: SetWatchedFactionIndex(index)")?;
             let slot = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                entry_of(&model, faction_at(&model, index)).map_or(-1, |e| e.rep_list_id as i32)
+                read_entry(lua, &model, faction_at(&model, index))
+                    .entry
+                    .map_or(-1, |e| e.rep_list_id as i32)
             };
             submit(lua, ReputationCall::Watch(slot))
         })?,
@@ -1397,5 +1498,129 @@ mod tests {
         .unwrap();
         assert_eq!(names(&s)[5], "Elsewhere");
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
+    }
+
+    /// A host that answers the family's questions from its own rows, as the app's reads the
+    /// slots: the faction's row, the watched slot's, and the whole book.
+    struct Slots {
+        /// Stormwind's row as the host has it, with the watched slot beside it.
+        stormwind: FactionEntry,
+        watched: Option<u32>,
+        asked: std::cell::Cell<usize>,
+    }
+
+    impl crate::script::CallHost for Slots {
+        fn apply(
+            &mut self,
+            _: &mut UiScript,
+            _: crate::script::ScriptCall,
+        ) -> Option<crate::script::CallTail> {
+            None
+        }
+
+        fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+            self.asked.set(self.asked.get() + 1);
+            let row = |q: &FactionQuery| match q {
+                FactionQuery::Of(72) => Some(self.stormwind.clone()),
+                FactionQuery::Watched => self
+                    .watched
+                    .filter(|&w| w == self.stormwind.rep_list_id)
+                    .map(|_| self.stormwind.clone()),
+                FactionQuery::Of(_) => None,
+            };
+            ask.answer(|q: &FactionQuery| {
+                Some(FactionRead {
+                    entry: row(q),
+                    watched: self.watched,
+                })
+            }) || ask.answer(|_: &ReputationBook| {
+                let mut state = state();
+                for e in &mut state.entries {
+                    if e.faction_id == 72 {
+                        *e = self.stormwind.clone();
+                    }
+                }
+                state.watched = self.watched;
+                Some(Book {
+                    state,
+                    standings: HashMap::new(),
+                })
+            })
+        }
+    }
+
+    fn slots(standing: i32, inactive: bool) -> Slots {
+        Slots {
+            stormwind: FactionEntry {
+                standing,
+                standing_id: 6,
+                at_war: true,
+                inactive,
+                ..entry(72, 19, 469, "Stormwind")
+            },
+            watched: Some(19),
+            asked: Default::default(),
+        }
+    }
+
+    /// With a host lent the values come from its answers, not the pushed snapshot: the standing, the
+    /// at-war and watched bits, the inactive bit, and the watched faction; a faction it has no row
+    /// for reads as a miss.
+    #[test]
+    fn the_getters_read_the_lent_hosts_rows_over_the_snapshot() {
+        let mut s = seated();
+        let mut host = slots(9100, true);
+        s.hosted(&mut host, |s| {
+            let (value, id, war, watched) = s
+                .eval::<(i64, i64, Value, Value)>(
+                    "local _, _, id, _, _, v, war, _, _, _, w = GetFactionInfo(3) return v, id, war, w",
+                )
+                .unwrap();
+            assert_eq!((value, id), (9100, 6), "the standing the host holds");
+            assert_eq!(war, Value::Integer(1));
+            assert_eq!(watched, Value::Integer(1), "the watched slot is the host's");
+            assert_eq!(
+                s.eval::<Value>("return IsFactionInactive(3)").unwrap(),
+                Value::Integer(1)
+            );
+            assert_eq!(
+                s.eval::<(String, i64, i64)>(
+                    "local n, r, _, _, v = GetWatchedFactionInfo() return n, r, v"
+                )
+                .unwrap(),
+                ("Stormwind".to_string(), 6, 9100)
+            );
+            assert_eq!(
+                s.eval::<Value>("local _, _, id = GetFactionInfo(4) return id").unwrap(),
+                Value::Integer(1),
+                "a row the host has none for answers a miss"
+            );
+        });
+        assert!(host.asked.get() > 0);
+        let snapshot = s
+            .eval::<i64>("local _, _, _, _, _, v = GetFactionInfo(3) return v")
+            .unwrap();
+        assert_eq!(snapshot, 4000, "with no host the pushed snapshot answers");
+    }
+
+    /// The list's ops are applied over the book the host answers as of there: a row the host holds
+    /// inactive sorts under Inactive though the snapshot pushed earlier held it active.
+    #[test]
+    fn the_ops_sort_over_the_book_as_of_their_place() {
+        let mut s = seated();
+        let before = names(&s);
+        let mut host = slots(4000, true);
+        s.hosted(&mut host, |s| {
+            s.apply_reputation_ops(vec![ReputationListOp::Standing {
+                listed: vec![],
+                flags_moved: true,
+            }]);
+        });
+        let after = names(&s);
+        assert!(before.iter().any(|n| n == "Stormwind"), "{before:?}");
+        assert!(
+            !after.iter().any(|n| n == "Stormwind"),
+            "folded away under the collapsed Inactive header: {after:?}"
+        );
     }
 }
