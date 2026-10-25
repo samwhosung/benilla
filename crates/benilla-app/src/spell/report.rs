@@ -274,6 +274,11 @@ impl CastCore<'_> {
         }
         match self.slot() {
             Some(slot) if slot.spell_id() == spell_id => {
+                // The server's report pops the slot here (`0x6e2218`), after the GCD clear's pair
+                // its packet signalled (`0x6e167d`), which reads the cast still in flight.
+                if from_server {
+                    crate::ui_cast::slot_moves_here();
+                }
                 self.cancel(true, !from_server, reason);
             }
             Some(_) => {}

@@ -134,6 +134,22 @@ impl CastViews {
         self.shown = Some(view);
     }
 
+    /// `view` logged at `at`, when it differs from the one before it.
+    fn log(&mut self, at: Stamp, view: CastView) {
+        let Some(last) = self.last else {
+            return;
+        };
+        if last == view {
+            return;
+        }
+        if self.entries.is_empty() && !self.started && self.start.is_none() {
+            self.start = Some(last);
+        }
+        let i = self.entries.partition_point(|(s, _)| *s < at);
+        self.entries.insert(i, (at, view));
+        self.last = Some(view);
+    }
+
     /// A logged `view` into the VM, with the fields the drain's calls moved as they stand live.
     fn replay(&mut self, script: &mut UiScript, view: CastView) {
         let view = self.called.over(view, self.live.unwrap_or(view));
@@ -159,9 +175,25 @@ fn live_view(world: &mut World) -> Option<CastView> {
     view
 }
 
+thread_local! {
+    /// Where the packet being handled moves the in-flight slot, past what it raised before
+    /// ([`slot_moves_here`]).
+    static SLOT_MOVES: std::cell::Cell<Option<Stamp>> = const { std::cell::Cell::new(None) };
+}
+
+/// The packet being handled moves the in-flight slot here, after what its handler raised so far:
+/// a failed `SMSG_CAST_RESULT`'s report fires the GCD clear's pair (`0x6e1d89` → `0x6e167d`)
+/// before it pops the slot (`0x6e2218`), so that pair's listeners read the cast still in flight.
+/// The packet's view then lands in two steps: everything but the slot ahead of the packet, and
+/// the slot here.
+pub(crate) fn slot_moves_here() {
+    SLOT_MOVES.set(Some(crate::lanes::stamp()));
+}
+
 /// The net stage's start: the view as the frame's input left it, which the first packet that
 /// moves it is compared with.
 fn packets_begin(world: &mut World) {
+    SLOT_MOVES.set(None);
     let view = live_view(world);
     if let Some(mut views) = world.get_resource_mut::<CastViews>() {
         views.last = view;
@@ -169,8 +201,10 @@ fn packets_begin(world: &mut World) {
 }
 
 /// A packet handled: its view logged at `at`, the stamp taken ahead of its handler, when it
-/// differs from the one before it.
+/// differs from the one before it; with its slot at the stamp its handler moved it, when it
+/// named one ([`slot_moves_here`]).
 fn packet_end(world: &mut World, at: Stamp) {
+    let moves = SLOT_MOVES.take().filter(|s| *s > at);
     let Some(view) = live_view(world) else {
         return;
     };
@@ -180,15 +214,17 @@ fn packet_end(world: &mut World, at: Stamp) {
     let Some(last) = views.last else {
         return;
     };
-    if last == view {
-        return;
+    if let Some(moves) = moves {
+        let ahead = CastView {
+            slot: last.slot,
+            item: last.item,
+            ..view
+        };
+        views.log(at, ahead);
+        views.log(moves, view);
+    } else {
+        views.log(at, view);
     }
-    if views.entries.is_empty() && !views.started && views.start.is_none() {
-        views.start = Some(last);
-    }
-    let i = views.entries.partition_point(|(s, _)| *s < at);
-    views.entries.insert(i, (at, view));
-    views.last = Some(view);
 }
 
 /// The lane's head: its start, at the origin, while the frame logged a view; then its next entry.

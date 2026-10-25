@@ -15,7 +15,7 @@ use crate::ui_action::{CastFail, CastFailLines, MessageSink, Shown, Spells};
 use crate::ui_unit::UnitFeed;
 
 mod views;
-pub(crate) use views::CastViews;
+pub(crate) use views::{slot_moves_here, CastViews};
 
 /// One edge of our own cast, queued by the spell's packet handlers, its reports and its cancels.
 pub(crate) enum CastBarEdge {
