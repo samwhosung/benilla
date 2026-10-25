@@ -474,6 +474,7 @@
 - `WOW_STATIC_MERGE` — benilla-world/src/terrain_stream/merge.rs
 - `WOW_STOCK_UI` — benilla-app/src/ui_script/manifest.rs
 - `WOW_STREAM_TRACE` — benilla-app/src/perf/mod.rs
+- `WOW_SYNC_DUMP` — benilla-app/src/game_plugins.rs
 - `WOW_TAB_TRACE` — benilla-app/src/target/scan.rs
 - `WOW_TABHOVER` — benilla-app/src/capture/fixtures.rs
 - `WOW_TEARDOWN_INJECT` — benilla-app/src/perf/stall.rs
