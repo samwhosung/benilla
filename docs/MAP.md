@@ -373,18 +373,7 @@
 - `WOW_PICK_COUNT` — benilla-app/src/capture/pick_probe.rs
 - `WOW_PICK_EVERY` — benilla-app/src/capture/pick_probe.rs
 - `WOW_PIN` — benilla-app/src/run_mode.rs
-- `WOW_PIN_ASPECT` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_COL` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_EYE` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_FLOOR` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_FOVY` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_LOOK` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_MAP` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_SITE` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_TILE` — benilla-world/src/wmo_portal/audit/pin.rs
 - `WOW_PIN_TOTP` — benilla-app/src/run_mode.rs
-- `WOW_PIN_UID` — benilla-world/src/wmo_portal/audit/pin.rs
-- `WOW_PIN_WMO` — benilla-world/src/wmo_portal/audit/pin.rs
 - `WOW_PIPE_TRACE` — benilla-app/src/pipe_warm/mod.rs
 - `WOW_PLAY_MOVIE` — benilla-app/src/ui_script/glue.rs
 - `WOW_POINTS_DUMP` — benilla-world/src/lighting/global_light.rs
@@ -524,6 +513,17 @@
 - `WOW_WFX_SPEED` — benilla-app/src/capture/mod.rs
 - `WOW_WIN` — benilla-app/src/video.rs, benilla-world/src/worldview.rs
 - `WOW_WMO_BIAS` — benilla-world/src/model_render.rs, benilla-world/src/static_gx/mod.rs
+- `WOW_WMO_PIN_ASPECT` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_COL` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_EYE` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_FLOOR` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_FOVY` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_LOOK` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_MAP` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_SITE` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_TILE` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_UID` — benilla-world/src/wmo_portal/audit/pin.rs
+- `WOW_WMO_PIN_WMO` — benilla-world/src/wmo_portal/audit/pin.rs
 - `WOW_WORLDVIEW_` — benilla-world/src/bgwin.rs
 - `WOW_WORLDVIEW_AT` — benilla-world/src/worldview.rs
 - `WOW_WORLDVIEW_CHECK` — benilla-world/src/bgwin.rs, benilla-world/src/worldview.rs
