@@ -91,7 +91,8 @@ impl super::UiScript {
         }
     }
 
-    /// Whether the player is riding a taxi, for `UnitOnTaxi("player")`.
+    /// Whether the player is riding a taxi (`UNIT_FLAG_TAXI_FLIGHT`), for the equip control gate
+    /// (`0x494ba6`); `UnitOnTaxi` reads the flag off the unit itself.
     pub fn set_on_taxi(&mut self, riding: bool) {
         self.model_mut().taxi_riding = riding;
     }
@@ -291,22 +292,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `0x517a40`: the number 1 or nil, never a boolean; an argument neither string nor number
-    // raises the reference's usage (`0x517a48`). Only the player is tracked, as the stock UI asks
-    // about no other unit.
+    // raises the reference's usage (`0x517a48`). The token resolves (`0x515940`) and bit 20 of the
+    // unit's `UNIT_FIELD_FLAGS` (`0x517a80`-`0x517a8c`, `UNIT_FLAG_TAXI_FLIGHT`) answers, for any
+    // unit it names; a token naming nothing is nil. Read off the object as the call runs, else off
+    // the snapshot's flags ([`crate::script::unit`]'s `with_object`).
     g.set(
         "UnitOnTaxi",
         lua.create_function(|lua, unit: mlua::Value| {
             let unit =
                 crate::script::binding_abi::string_arg(lua, unit, r#"Usage: UnitOnTaxi("unit")"#)?;
-            let model = lua.app_data_ref::<Model>().expect("model");
             Ok(crate::script::binding_abi::flag(
-                unit.eq_ignore_ascii_case("player") && model.taxi_riding,
+                super::unit::with_object(lua, &Some(unit), false, |_, o| {
+                    o.flags() & TAXI_FLIGHT != 0
+                })?,
             ))
         })?,
     )?;
 
     Ok(())
 }
+
+/// `UNIT_FIELD_FLAGS` bit 20 (`0x517a86`), vmangos `UNIT_FLAG_TAXI_FLIGHT`.
+const TAXI_FLIGHT: u32 = 1 << 20;
 
 #[cfg(test)]
 mod tests {

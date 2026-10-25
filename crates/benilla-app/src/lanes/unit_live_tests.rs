@@ -3,7 +3,9 @@
 //! answer and the frame's snapshot agree on every getter wherever the snapshot is current, and the
 //! object answers where it is not.
 
-use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_LEVEL, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::field::{
+    FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH, FIELD_UNIT_LEVEL, FIELD_UNIT_MAXHEALTH,
+};
 use benilla_protocol::messages::GroupMemberEntry;
 use benilla_protocol::{EntityKind, SessionEvent};
 use benilla_ui::script::UiScript;
@@ -35,7 +37,7 @@ const TOKENS: [&str; 6] = [
 ];
 
 /// The one-token getters of the `Unit*` family.
-const GETTERS: [&str; 39] = [
+const GETTERS: [&str; 40] = [
     "UnitExists",
     "UnitIsVisible",
     "UnitIsTapped",
@@ -75,6 +77,7 @@ const GETTERS: [&str; 39] = [
     "UnitManaMax",
     "UnitIsCharmed",
     "UnitXP",
+    "UnitOnTaxi",
 ];
 
 /// The whole client, headless, in the world with its frame run.
@@ -251,4 +254,24 @@ fn a_getter_reads_the_object_as_it_runs() {
     assert_eq!(live, (15, 5, 5));
     let snapshot: (i64, i64, i64) = crate::script_calls::eval_in_vm(c.app.world(), chunk);
     assert_eq!(snapshot, (80, 90, 90));
+}
+
+/// `UnitOnTaxi` tests bit 20 of the resolved object's flags as it runs (`0x517a80`-`0x517a8c`): a
+/// party member whose store gained the flag after the frame's pushes answers 1 live, the snapshot
+/// still nil, and the flag cleared answers nil again.
+#[test]
+fn unit_on_taxi_reads_a_party_members_flag_off_the_object() {
+    let mut c = client();
+    let ask = |c: &mut Client| -> (Option<i64>, Option<i64>) {
+        let chunk = "return UnitOnTaxi('party1')";
+        let live = crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+            s.expect("a VM").eval(chunk).expect("runs")
+        });
+        (live, crate::script_calls::eval_in_vm(c.app.world(), chunk))
+    };
+    assert_eq!(ask(&mut c), (None, None));
+    c.write_store(MATE, &[(FIELD_UNIT_FLAGS, 1 << 20)]);
+    assert_eq!(ask(&mut c), (Some(1), None));
+    c.write_store(MATE, &[(FIELD_UNIT_FLAGS, 0)]);
+    assert_eq!(ask(&mut c), (None, None));
 }

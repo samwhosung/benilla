@@ -69,7 +69,14 @@ fn taxi_snapshot_surfaces_and_calls() {
         "the continent art draws on the SetTaxiMap target"
     );
 
-    s.set_on_taxi(true);
+    s.set_unit(
+        "player",
+        Some(UnitState {
+            exists: true,
+            flags: 1 << 20,
+            ..Default::default()
+        }),
+    );
     s.run(r#"assert(UnitOnTaxi("player") == 1)"#).unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

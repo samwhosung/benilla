@@ -2027,8 +2027,8 @@ fn the_equals_one_idiom_branches_correctly_on_a_live_and_a_dead_token() {
     );
 }
 
-/// `UnitOnTaxi` (`0x517a40`), registered with the taxi module's ride flag, has the family's shape
-/// and raises `Usage:` from its gate (`0x517a48`).
+/// `UnitOnTaxi` (`0x517a40`) has the family's shape: the number 1 or nil, and `Usage:` from its
+/// gate (`0x517a48`).
 #[test]
 fn unit_on_taxi_is_one_or_nil_and_raises_the_reference_usage() {
     let mut s = UiScript::new().unwrap();
@@ -2037,7 +2037,13 @@ fn unit_on_taxi_is_one_or_nil_and_raises_the_reference_usage() {
     assert!(s
         .eval::<bool>(r#"return UnitOnTaxi("player") == nil"#)
         .unwrap());
-    s.set_on_taxi(true);
+    s.set_unit(
+        "player",
+        Some(UnitState {
+            flags: TAXI_FLIGHT,
+            ..player()
+        }),
+    );
     assert_eq!(
         s.eval::<String>(r#"return type(UnitOnTaxi("player"))"#)
             .unwrap(),
@@ -2047,16 +2053,55 @@ fn unit_on_taxi_is_one_or_nil_and_raises_the_reference_usage() {
     assert!(!s
         .eval::<bool>(r#"return UnitOnTaxi("player") == true"#)
         .unwrap());
-    // Only the player's ride is tracked: any other token is nil.
-    assert!(s
-        .eval::<bool>(r#"return UnitOnTaxi("target") == nil"#)
-        .unwrap());
 
     let err = s.eval::<mlua::Value>("return UnitOnTaxi()").unwrap_err();
     assert!(
         err.to_string().contains(r#"Usage: UnitOnTaxi("unit")"#),
         "the gate's own message, not mlua's type error: {err}"
     );
+}
+
+/// `UNIT_FIELD_FLAGS` bit 20, `UNIT_FLAG_TAXI_FLIGHT` (`0x517a86`).
+const TAXI_FLIGHT: u32 = 1 << 20;
+
+/// `UnitOnTaxi` resolves the token and tests bit 20 of that unit's flags (`0x517a76`-`0x517a8c`),
+/// so a party member or the target answers, a neighbouring bit does not, and a token naming
+/// nothing is nil; an unrecognised token raises in the resolver (`0x515c14`).
+#[test]
+fn unit_on_taxi_reads_the_flag_of_any_resolved_unit() {
+    let mut s = UiScript::new().unwrap();
+    let with = |flags: u32| {
+        Some(UnitState {
+            exists: true,
+            flags,
+            ..Default::default()
+        })
+    };
+    s.set_unit("party1", with(TAXI_FLIGHT | 0x8));
+    s.set_unit("party2", with(!TAXI_FLIGHT));
+    s.set_unit("target", with(TAXI_FLIGHT));
+    for token in ["party1", "PARTY1", "target"] {
+        assert_eq!(
+            s.eval::<i64>(&format!("return UnitOnTaxi({token:?})"))
+                .unwrap(),
+            1,
+            "{token}"
+        );
+    }
+    assert!(
+        s.eval::<Option<i64>>(r#"return UnitOnTaxi("party2")"#)
+            .unwrap()
+            .is_none(),
+        "every other bit set"
+    );
+    assert!(
+        s.eval::<Option<i64>>(r#"return UnitOnTaxi("party3")"#)
+            .unwrap()
+            .is_none(),
+        "recognised but naming nothing"
+    );
+    let err = s.run(r#"UnitOnTaxi("bogus")"#).unwrap_err().to_string();
+    assert!(err.contains("Unknown unit name: bogus"), "{err}");
 }
 
 /// The reference's `"player"` arm reads the record (`0x51708c` reads `0xc27d88`), never the
