@@ -121,7 +121,7 @@ pub(super) fn emit(
     // band, at the bottom edge only: the top edge still clips a half-fitting scrollback line.
     if matches!(host.target, ZTarget::Frame(_)) {
         if let Some(c) = text_clip.as_mut() {
-            c.max.y += band_clip_slack(shadow_delta.map(|(_, dy)| dy));
+            c.max.y += band_clip_slack(shadow_delta.map(|(_, dy)| dy), atlas.dpi());
         }
     }
     let mut ebox_geom = None;
@@ -386,9 +386,9 @@ fn caret_width_px(scale: f32, font_scale: f32) -> f32 {
 }
 
 /// How far below its band a message-frame line's ink reaches, in the rect's px space: the seat
-/// nudge ([`crate::ui_text::UI_SEAT_NUDGE`]) plus a falling shadow's offset.
-fn band_clip_slack(shadow_dy: Option<f32>) -> f32 {
-    crate::ui_text::UI_SEAT_NUDGE + shadow_dy.map_or(0.0, |dy| dy.max(0.0))
+/// nudge ([`crate::ui_text::UI_SEAT_NUDGE`] device px at `dpi`) plus a falling shadow's offset.
+fn band_clip_slack(shadow_dy: Option<f32>, dpi: f32) -> f32 {
+    crate::ui_text::UI_SEAT_NUDGE / dpi + shadow_dy.map_or(0.0, |dy| dy.max(0.0))
 }
 
 /// One axis of the drop shadow's offset in the rect's px space, rounded half away from zero to a
@@ -426,10 +426,12 @@ mod tests {
     #[test]
     fn the_band_scissor_gives_back_exactly_the_seat_and_the_shadow() {
         // The shipped GameFont case: seat nudge 1 + a 1px drop shadow.
-        assert_eq!(band_clip_slack(Some(1.0)), 2.0);
-        assert_eq!(band_clip_slack(None), 1.0);
-        assert_eq!(band_clip_slack(Some(-1.0)), 1.0);
-        assert_eq!(band_clip_slack(Some(2.0)), 3.0);
+        assert_eq!(band_clip_slack(Some(1.0), 1.0), 2.0);
+        assert_eq!(band_clip_slack(None, 1.0), 1.0);
+        assert_eq!(band_clip_slack(Some(-1.0), 1.0), 1.0);
+        assert_eq!(band_clip_slack(Some(2.0), 1.0), 3.0);
+        // The nudge is one device row: half a logical px at 2 device px per logical px.
+        assert_eq!(band_clip_slack(None, 2.0), 0.5);
     }
 
     /// `1.0546875` is a 1600×900 window's seam times the 0.9 UI scale; 0.4418 a 377-tall window's
@@ -514,10 +516,15 @@ mod caret_tests {
     }
 
     /// The whole UI pass on a `w`×`h` window over `script`.
-    fn app_sized(script: UiScript, w: u32, h: u32) -> App {
+    pub(super) fn app_sized(script: UiScript, w: u32, h: u32) -> App {
+        app_at_dpi(script, w, h, 1.0)
+    }
+
+    /// The whole UI pass on a window of `w`×`h` physical px at `dpi` device px per logical px.
+    pub(super) fn app_at_dpi(script: UiScript, w: u32, h: u32, dpi: f32) -> App {
         let mut app = App::new();
         app.insert_non_send_resource(script);
-        app.insert_resource(UiFontAtlas::for_test(1.0).expect("the client faces open"));
+        app.insert_resource(UiFontAtlas::for_test(dpi).expect("the client faces open"));
         app.init_resource::<UiQuads>();
         app.init_resource::<crate::ui_script::UiPassState>();
         app.init_resource::<Assets<Image>>();
@@ -535,7 +542,8 @@ mod caret_tests {
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
             Window {
-                resolution: UVec2::new(w, h).into(),
+                resolution: bevy::window::WindowResolution::new(w, h)
+                    .with_scale_factor_override(dpi),
                 ..default()
             },
             PrimaryWindow,
@@ -806,5 +814,84 @@ mod link_span_tests {
             "the error line's link is text"
         );
         assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+}
+
+/// The stock login screen's text rows through the whole UI pass, at the display densities a
+/// 1920×1080 framebuffer comes with.
+#[cfg(test)]
+mod login_row_tests {
+    use bevy::prelude::App;
+
+    use benilla_ui::script::{GlueNotice, NoticeState, UiScript};
+
+    use super::super::UiQuads;
+    use super::caret_tests::app_at_dpi;
+    use crate::ui_script::glue::{load_glue, set_glue_screen, GlueScreen};
+    use crate::ui_text::UiFontAtlas;
+
+    /// The sheet coverage that reads as yellow in a shot (`r > 180`, `g > 140` over the dark ring).
+    const INK: u8 = 181;
+
+    /// The first row of yellow fill in `[x0, y0, x1, y1]` device px, over every glyph quad. The
+    /// sheet holds the fill and its NORMAL outline together, so its first inked row is the ring's,
+    /// one row above the fill.
+    fn ink_top(app: &App, [x0, y0, x1, y1]: [f32; 4]) -> Option<f32> {
+        let atlas = app.world().resource::<UiFontAtlas>();
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let mut top: Option<f32> = None;
+        for q in quads
+            .iter()
+            .filter(|q| q.texture.is_some() && q.color[0] > 0.5)
+        {
+            let (x, y) = (q.rect.min.x, q.rect.min.y);
+            if !(x0..x1).contains(&x) || !(y0..y1).contains(&y) {
+                continue;
+            }
+            let cell = crate::ui_text::glyph_texels(&q.uv);
+            let row = (cell.min.y as u32..cell.max.y as u32).find(|&r| {
+                (cell.min.x as u32..cell.max.x as u32)
+                    .any(|c| atlas.pending_alpha_for_test(c, r).unwrap_or(0) >= INK)
+            });
+            if let Some(r) = row {
+                let fill = y + (r - cell.min.y as u32) as f32 + 1.0;
+                top = Some(top.map_or(fill, |t| t.min(fill)));
+            }
+        }
+        top
+    }
+
+    /// 1.12.1's 1920×1080 login, read off its D3D shots: the first row of yellow in the Account
+    /// Name label, the Account Password label, the version line and the copyright line. The
+    /// two labels share one anchor shape, 75 units apart; at 1.40625 px a unit their exact rows
+    /// are 519.66 and 625.13, which only the snap's ceiling splits 106 rows apart.
+    #[test]
+    fn the_login_text_sits_on_the_reference_rows() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        let accepted = NoticeState {
+            accepted: true,
+            show_notice: false,
+        };
+        for notice in [GlueNotice::Eula, GlueNotice::Tos] {
+            s.set_glue_notice(notice, accepted);
+        }
+        let _ = load_glue(&mut s);
+        set_glue_screen(&mut s, GlueScreen::Login);
+        s.resolve();
+        let _ = s.take_errors();
+        let app = app_at_dpi(s, 1920, 1080, 1.0);
+        let rows = [
+            ink_top(&app, [800.0, 500.0, 1100.0, 560.0]),
+            ink_top(&app, [800.0, 600.0, 1100.0, 660.0]),
+            ink_top(&app, [0.0, 1020.0, 300.0, 1058.0]),
+            ink_top(&app, [650.0, 1046.0, 1300.0, 1075.0]),
+        ];
+        assert_eq!(
+            rows,
+            [Some(524.0), Some(630.0), Some(1035.0), Some(1052.0)],
+            "account name, account password, version, copyright"
+        );
     }
 }

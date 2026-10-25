@@ -486,7 +486,7 @@ pub(crate) fn line_origin(
             JustifyV::Middle => (rect.height() - r.size) * 0.5,
             JustifyV::Bottom => rect.height() - r.size,
         };
-        super::snap_block_top(rect.min.y + v_offset)
+        super::snap_block_top(rect.min.y + v_offset, e.dpi())
     } else {
         rect.min.y
     };
