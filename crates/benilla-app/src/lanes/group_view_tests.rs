@@ -314,10 +314,15 @@ fn a_chain_end_reads_its_own_packets_health() {
     frame(
         &mut app,
         crate::lanes::unit_view_tests::wire_packets(vec![
+            // The mate targets the add (`UNIT_FIELD_TARGET`, fields 16 and 17).
             vec![created(
                 MATE,
                 EntityKind::Player,
-                &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 100)],
+                &[
+                    (benilla_protocol::field::FIELD_UNIT_HEALTH, 100),
+                    (16, ADD as u32),
+                    (17, (ADD >> 32) as u32),
+                ],
             )],
             vec![created(
                 ADD,

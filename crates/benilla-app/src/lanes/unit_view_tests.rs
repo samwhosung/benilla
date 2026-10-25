@@ -57,12 +57,25 @@ pub(super) fn wire_packets(packets: Vec<Vec<SessionEvent>>) -> Vec<SessionEvent>
         .collect()
 }
 
-/// A create block of `kind` whose fields are `pairs`, as the wire's whole descriptor.
+/// A create block of `kind` whose fields are `pairs`, as the wire's whole descriptor, with the
+/// `OBJECT_FIELD_TYPE` every create carries (object, unit and, for a player, player bits) unless
+/// `pairs` sets its own: the resolver's hop and the getters' lookups test it (typemask 8,
+/// `0x515a0f`).
 pub(super) fn created(guid: u64, kind: EntityKind, pairs: &[(u16, u32)]) -> SessionEvent {
     let as_type = match kind {
         EntityKind::Player => ObjectType::Player,
         _ => ObjectType::Unit,
     };
+    const OBJECT_TYPE: u16 = 2;
+    let mut pairs = pairs.to_vec();
+    if !pairs.iter().any(|&(i, _)| i == OBJECT_TYPE) {
+        let mask = match as_type {
+            ObjectType::Player => 0x19,
+            _ => 0x9,
+        };
+        pairs.insert(0, (OBJECT_TYPE, mask));
+    }
+    let pairs = &pairs[..];
     SessionEvent::ObjectCreate {
         guid,
         kind,

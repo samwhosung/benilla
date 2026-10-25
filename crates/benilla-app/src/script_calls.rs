@@ -150,9 +150,19 @@ disjoint::disjoint_set! {
 pub(crate) struct UnitLive<'w, 's> {
     index: Option<Res<'w, crate::net::GuidIndex>>,
     stores: crate::ui_unit::views::ViewStores<'w, 's>,
+    me: Query<'w, 's, (Entity, &'static crate::net::Guid), With<crate::net::SelfPlayer>>,
 }
 
 impl UnitLive<'_, '_> {
+    /// Hand `read` what the unit-token resolver reads off the objects, as of here (`0x515970`).
+    fn read_tokens(&self, read: &mut dyn FnMut(&dyn benilla_ui::script::UnitTokenObjects)) {
+        read(&crate::ui_unit::TokenObjects {
+            index: self.index.as_deref(),
+            stores: &self.stores,
+            me: self.me.iter().next().map(|(e, g)| (e, g.0)),
+        });
+    }
+
     /// Hand `read` the object held under `guid`, as of here; whether one was held.
     fn read(
         &self,
@@ -648,6 +658,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
         read: &mut dyn FnMut(&dyn benilla_ui::script::UnitObjectRead),
     ) -> bool {
         self.appliers.units().read(guid, read)
+    }
+
+    fn read_unit_tokens(
+        &mut self,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitTokenObjects),
+    ) -> bool {
+        self.appliers.units().read_tokens(read);
+        true
     }
 
     fn read_unit_stats(
@@ -1825,11 +1843,13 @@ mod tests {
         use benilla_ui::script::UnitState;
         let mut f = frame(true);
         let world = f.app.world_mut();
-        // `party1` targets us (`UNIT_FIELD_TARGET`, fields 16 and 17).
+        // `party1`, a player (`OBJECT_FIELD_TYPE`), targets us (`UNIT_FIELD_TARGET`, fields 16
+        // and 17).
         let new = world.resource::<GuidIndex>().0[&NEW];
         world
             .entity_mut(new)
             .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
                 (22, 100),
                 (28, 100),
                 (16, ME as u32),

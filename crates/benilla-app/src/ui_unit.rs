@@ -9,8 +9,8 @@ use bevy::prelude::*;
 use benilla_formats::{ChrClasses, ChrRaces, Reaction};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
-    parse_unit_token, ScriptValue, UiScript, UnitBase, UnitObject, UnitObjectRead, UnitState,
-    UnitTokenParse, WornDisplay,
+    parse_unit_token, resolve_unit_in, ScriptValue, UiScript, UnitObject, UnitObjectRead,
+    UnitState, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse, WornDisplay,
 };
 
 use crate::creature_type::CreatureTypeSources;
@@ -699,33 +699,24 @@ pub(crate) struct UnitTokens<'w, 's> {
 }
 
 impl UnitTokens<'_, '_> {
-    fn me(&self) -> Option<(Entity, u64)> {
-        self.me.iter().next().map(|(e, g)| (e, g.0))
-    }
-
     /// The guid lookup (`0x468460`), `pub(crate)` for `TargetLastEnemy`, which starts from a guid.
     pub(crate) fn held(&self, guid: u64) -> Option<(Entity, u64)> {
         Some((*self.index.as_ref()?.0.get(&guid)?, guid))
     }
 
-    /// `0x515970` on `token`: the guid its base names, then each `target` hop off the unit it has
-    /// reached. The text is read by [`parse_unit_token`], which the VM's resolver shares, so both
-    /// take the same tokens. A base needs no object, as a slot's guid (`0x4e81a0`) or the target's
-    /// (`[0xb4e2d8]`) names a party member out of range, save `mouseover`, which names a held unit
-    /// alone (`0x515bd9`); a hop reads the held unit's `UNIT_FIELD_TARGET` (`0x515a0f`-`0x515a25`),
-    /// so a hop off a unit the object manager does not hold is nobody (`0x515a16`). `None` is
-    /// nobody.
+    /// `0x515970` on `token`, through the one derivation the VM's resolver shares
+    /// ([`resolve_unit_in`]): the client's globals off the selection, the hover, the interaction
+    /// latch and the roster ([`TokenGlobals`]), and the objects as of the drain's place
+    /// ([`TokenObjects`]). `None` is nobody.
     pub(crate) fn guid(&self, token: &str, selection: &Selection) -> Option<u64> {
         let UnitTokenParse::Unit { base, hops } = parse_unit_token(token) else {
             return None;
         };
-        let mut guid = self.base(base, selection).filter(|&g| g != 0)?;
-        for _ in 0..hops {
-            let (entity, _) = self.held(guid)?;
-            let store = self.stores.get(entity).ok().filter(|s| s.is_unit())?;
-            guid = store.0.unit_target().filter(|&g| g != 0)?;
-        }
-        Some(guid)
+        let globals = TokenGlobals {
+            tokens: self,
+            selection,
+        };
+        resolve_unit_in(&globals, &self.objects(), base, hops)
     }
 
     /// `GetUnitFromToken 0x515940`: the object of the guid `token` names ([`Self::guid`]), held.
@@ -733,31 +724,12 @@ impl UnitTokens<'_, '_> {
         self.held(self.guid(token, selection)?)
     }
 
-    /// The guid a token's base names, before any `target` hop.
-    fn base(&self, base: UnitBase, selection: &Selection) -> Option<u64> {
-        match base {
-            UnitBase::Player => self.me().map(|(_, guid)| guid),
-            UnitBase::Target => selection.guid,
-            // The same pick `ui_tooltip` pushes `"mouseover"` from.
-            UnitBase::Mouseover => self
-                .hovered
-                .as_ref()?
-                .mouseover(&self.hovered_go.as_deref().copied().unwrap_or_default())
-                .map(|(_, guid)| guid),
-            UnitBase::Pet => {
-                let (entity, _) = self.me()?;
-                Some(pet_token_guid(self.stores.get(entity).ok()))
-            }
-            UnitBase::PartyPet(row) => self
-                .party_member(row)
-                .and_then(|member| self.pet_of(member, false)),
-            UnitBase::RaidPet(row) => self
-                .raid_member(row)
-                .and_then(|member| self.pet_of(member, true)),
-            UnitBase::Raid(row) => self.raid_member(row),
-            UnitBase::Party(row) => self.party_member(row),
-            // The interaction NPC's guid, `[0xb4e2d0]` (`0x515c00`).
-            UnitBase::Npc => self.interact.as_ref()?.1,
+    /// What the resolver reads off the objects, as of the drain's place.
+    fn objects(&self) -> TokenObjects<'_, '_, '_> {
+        TokenObjects {
+            index: self.index.as_deref(),
+            stores: &self.stores,
+            me: self.me.iter().next().map(|(e, g)| (e, g.0)),
         }
     }
 
@@ -772,19 +744,82 @@ impl UnitTokens<'_, '_> {
         let index = usize::try_from(row).ok()?.checked_add(1)?;
         crate::ui_party::raid_row_guid(&self.group, index)
     }
+}
 
-    /// A group member's pet: `CHARM`, else `SUMMON`, off the member's descriptor while it is held,
-    /// else off the roster record's pet guid (`partypetN` `0x4e81d0`, `raidpetN` `0x491960`).
-    fn pet_of(&self, member: u64, raid: bool) -> Option<u64> {
-        let live = self
-            .held(member)
-            .and_then(|(entity, _)| self.stores.get(entity).ok())
-            .map(|store| &store.0);
-        if raid {
-            self.group.raid_pet_guid(member, live)
-        } else {
-            self.group.party_pet_guid(member, live)
-        }
+/// The client's state [`UnitTokens`] resolves through, as the app holds it: the selection, the
+/// hover, the interaction latch and the roster.
+struct TokenGlobals<'a, 'w, 's> {
+    tokens: &'a UnitTokens<'w, 's>,
+    selection: &'a Selection,
+}
+
+impl UnitTokenGlobals for TokenGlobals<'_, '_, '_> {
+    fn target(&self) -> u64 {
+        self.selection.guid.unwrap_or(0)
+    }
+    /// The same pick `ui_tooltip` publishes `"mouseover"` from.
+    fn mouseover(&self) -> u64 {
+        let t = self.tokens;
+        t.hovered
+            .as_ref()
+            .and_then(|h| h.mouseover(&t.hovered_go.as_deref().copied().unwrap_or_default()))
+            .map_or(0, |(_, guid)| guid)
+    }
+    fn npc(&self) -> u64 {
+        self.tokens.interact.as_ref().and_then(|i| i.1).unwrap_or(0)
+    }
+    fn party(&self, row: u32) -> u64 {
+        self.tokens.party_member(row).unwrap_or(0)
+    }
+    fn raid(&self, row: u32) -> u64 {
+        self.tokens.raid_member(row).unwrap_or(0)
+    }
+    fn party_pet_record(&self, row: u32) -> u64 {
+        let group = &self.tokens.group;
+        self.tokens
+            .party_member(row)
+            .and_then(|m| group.party_pet_guid(m, None))
+            .unwrap_or(0)
+    }
+    fn raid_pet_record(&self, row: u32) -> u64 {
+        let group = &self.tokens.group;
+        self.tokens
+            .raid_member(row)
+            .and_then(|m| group.raid_pet_guid(m, None))
+            .unwrap_or(0)
+    }
+}
+
+/// What the unit-token resolver reads off the objects, each store as of the drain's place
+/// ([`views::ViewStores`]), so a listener resolves as its own packet left them: the one reading of
+/// each that the lent host hands the VM's resolver and [`UnitTokens`] reads itself.
+pub(crate) struct TokenObjects<'a, 'w, 's> {
+    pub(crate) index: Option<&'a crate::net::GuidIndex>,
+    pub(crate) stores: &'a views::ViewStores<'w, 's>,
+    /// Our player's entity and guid.
+    pub(crate) me: Option<(Entity, u64)>,
+}
+
+impl TokenObjects<'_, '_, '_> {
+    /// The object held under `guid` as of here (`0x468460`).
+    fn store(&self, guid: u64) -> Option<&ObjectStore> {
+        let entity = *self.index?.0.get(&guid)?;
+        self.stores.get(entity).ok()
+    }
+}
+
+impl UnitTokenObjects for TokenObjects<'_, '_, '_> {
+    fn active_player(&self) -> u64 {
+        self.me
+            .filter(|&(entity, _)| self.stores.get(entity).is_ok())
+            .map_or(0, |(_, guid)| guid)
+    }
+    fn pet_of(&self, guid: u64) -> Option<u64> {
+        Some(self.store(guid)?.0.unit_pet_guid().unwrap_or(0))
+    }
+    fn target_of(&self, guid: u64) -> Option<u64> {
+        let store = self.store(guid).filter(|s| s.is_unit())?;
+        Some(store.0.unit_target().unwrap_or(0))
     }
 }
 
@@ -1994,7 +2029,14 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<crate::ui_party::GroupState>()
             .init_resource::<HoveredObject>();
-        let wolf = app.world_mut().spawn_empty().id();
+        // A unit's object (`OBJECT_FIELD_TYPE` unit), which the resolver's lookup tests
+        // (`0x515bd2`, typemask 8).
+        let wolf = app
+            .world_mut()
+            .spawn(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x9),
+            ])))
+            .id();
         app.insert_resource(crate::net::GuidIndex([(WOLF, wolf)].into_iter().collect()));
         app.insert_resource(Hovered {
             target: Some(wolf),
