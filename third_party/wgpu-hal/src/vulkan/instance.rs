@@ -1117,11 +1117,24 @@ impl crate::Surface for super::Surface {
         // thus waited for `locked_swapchain_semaphores.acquire`, wait for all
         // of them to finish, thus ensuring that it's okay to pass `acquire` to
         // `vkAcquireNextImageKHR` again.
-        swapchain.device.wait_for_fence(
+        //
+        // BENILLA: `Ok(false)` is a timeout, which upstream drops and acquires with a semaphore
+        // the GPU may still hold. The wait is issued again inside the stall budget; past it the
+        // acquire goes on as upstream's does.
+        while !swapchain.device.wait_for_fence(
             fence,
             acquire_semaphore_guard.previously_used_submission_index,
             timeout_ns,
-        )?;
+        )? {
+            if !retry_stall(stall_start, timeout_ns) {
+                break;
+            }
+            log::error!(
+                "waiting for the previous submission timed out after {:?} of a stalled GPU; \
+                 waiting again",
+                stall_start.elapsed()
+            );
+        }
 
         // will block if no image is available
         //

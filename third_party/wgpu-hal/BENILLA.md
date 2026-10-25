@@ -37,6 +37,10 @@ poll, which answers at once by design). Past the budget the result is what upstr
   already acquired and its fence has a signal operation submitted, so waiting is the only
   correct move; the spec lets a wait be repeated and returns `VK_TIMEOUT` only when the fence is
   not yet signalled.
+- **The wait on the previous submission, before the acquire, times out:** upstream drops
+  `wait_for_fence`'s `Ok(false)` and acquires with a semaphore the GPU may still hold, which the
+  spec forbids ("unsignaled, with no signal or wait operations pending"). The wait is issued
+  again under the same budget; past it the acquire goes on as upstream's does.
 - **Logging:** each retry logs at `error!` with the time stalled, so a stall shows in the log. A
   result that is not retried is logged raw (`{:?}` of the `vk::Result`) before it is mapped to
   `DeviceError::Unexpected` or `Ok(None)`; the ordinary resize results (`NOT_READY`,
@@ -45,9 +49,6 @@ poll, which answers at once by design). Past the budget the result is what upstr
 What changes in play: a stall under 30 s only delays the frame. A caller that passes a timeout
 now waits up to the budget instead of one timeout, so `Ok(None)` ("not ready, skip the frame")
 comes only after 30 s.
-
-Not changed: the first `wait_for_fence` in the function, on the previous submission, returns
-`Ok(false)` on a timeout and upstream ignores it.
 
 ## How to check
 

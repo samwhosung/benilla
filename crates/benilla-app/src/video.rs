@@ -891,6 +891,7 @@ mod tests {
             "const STALL_BUDGET",
             "Err(vk::Result::TIMEOUT) if retry_stall(stall_start, timeout_ns)",
             "vkWaitForFences on the acquired image returned",
+            "waiting for the previous submission timed out",
         ] {
             assert!(
                 instance.contains(hunk),
@@ -902,7 +903,7 @@ mod tests {
                 .matches("retry_stall(stall_start, timeout_ns)")
                 .count()
                 == 2,
-            "acquire_texture retries both the acquire and the post-acquire fence wait"
+            "acquire_texture retries the previous-submission wait, the acquire and the post-acquire fence wait"
         );
     }
 
