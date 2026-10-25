@@ -3,11 +3,11 @@
 //! `0x6e95b0`), and the getters query the list inside their calls (`0x6e2ea0` → `0x6e13e0`), so a
 //! listener reads its own packet's records. Here every handler of the frame writes the list before
 //! any listener runs, so each write is logged with its stamp, as are the flushes' signals
-//! ([`Signal`]); the cooldown lane rewinds the list to the frame's start and replays the log in
-//! stamp order among the other lanes, firing each signal at its place
-//! ([`crate::ui_action::CooldownLanePlugin`]). A write made during the drain, a listener's cast
-//! arming its global cooldown, lands at its own place and is not logged; its signal is, stamped
-//! under the item firing, and fires straight after it.
+//! ([`Signal`]); the cooldown lane (`ui_action::cooldown_lane`) rewinds the list to the frame's
+//! start and replays the log in stamp order among the other lanes, firing each signal at its
+//! place. A write made during the drain, a listener's cast arming its global cooldown, lands at
+//! its own place and is not logged; its signal is, stamped under the item firing, and fires
+//! straight after it.
 
 use std::collections::VecDeque;
 use std::time::Instant;
