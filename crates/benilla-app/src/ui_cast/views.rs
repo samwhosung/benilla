@@ -8,6 +8,9 @@
 //! its own packet's. Here every handler of the frame runs before any listener, so the view each
 //! packet left is logged, stamped ahead of what the packet raised ([`CastViews`]); the views lane
 //! pushes the frame's start, then each packet's view at its place among the other lanes' items.
+//! A listener's call that moves the state moves it live, after every handler, so what it moved
+//! is the live state's from then on: each later view carries the call's fields as they stand
+//! live ([`Moved`]), and the rest as its packet left them.
 
 use std::collections::VecDeque;
 
@@ -33,27 +36,112 @@ pub(crate) struct CastViews {
     /// The live view the VM last took, from the frame's feed or a call: a call that leaves it as
     /// it stands pushes nothing, so the drain's view stays its listener's packet's.
     live: Option<CastView>,
+    /// The view the VM holds.
+    shown: Option<CastView>,
+    /// The fields the drain's calls moved, which every later view takes from the live state.
+    called: Moved,
 }
 
-impl CastViews {
-    /// The VM takes the live `view` after a call ([`crate::script_calls`]): pushed when it moved
-    /// since the VM last took the live state, else left, so a listener that cast nothing reads its
-    /// own packet's view.
-    pub(crate) fn commit(&mut self, script: &mut UiScript, view: CastView) {
-        if self.live != Some(view) {
-            push(script, view);
-            self.live = Some(view);
+/// The fields of a view that moved between two of them, the in-flight item with its slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Moved {
+    slot: bool,
+    targeting: bool,
+    auto_repeat: bool,
+    attacking: bool,
+    form: bool,
+}
+
+impl Moved {
+    /// Every field.
+    const ALL: Self = Self {
+        slot: true,
+        targeting: true,
+        auto_repeat: true,
+        attacking: true,
+        form: true,
+    };
+
+    /// What differs between `a` and `b`.
+    fn between(a: &CastView, b: &CastView) -> Self {
+        Self {
+            slot: a.slot != b.slot || a.item != b.item,
+            targeting: a.targeting != b.targeting,
+            auto_repeat: a.auto_repeat != b.auto_repeat,
+            attacking: a.attacking != b.attacking,
+            form: a.form != b.form,
         }
     }
 
-    /// The frame's feed pushed the live `view`.
-    fn fed(&mut self, view: CastView) {
-        self.live = Some(view);
+    /// The fields either moved.
+    fn or(self, o: Self) -> Self {
+        Self {
+            slot: self.slot || o.slot,
+            targeting: self.targeting || o.targeting,
+            auto_repeat: self.auto_repeat || o.auto_repeat,
+            attacking: self.attacking || o.attacking,
+            form: self.form || o.form,
+        }
+    }
+
+    /// `base` with these fields as `live` holds them.
+    fn over(self, base: CastView, live: CastView) -> CastView {
+        let mut v = base;
+        if self.slot {
+            (v.slot, v.item) = (live.slot, live.item);
+        }
+        if self.targeting {
+            v.targeting = live.targeting;
+        }
+        if self.auto_repeat {
+            v.auto_repeat = live.auto_repeat;
+        }
+        if self.attacking {
+            v.attacking = live.attacking;
+        }
+        if self.form {
+            v.form = live.form;
+        }
+        v
     }
 }
 
-/// `view` into the VM: the cast state the checked tests and `SpellStopCasting` read, and the
-/// targeting word `SpellIsTargeting` tests, up while the view holds the record's spell.
+impl CastViews {
+    /// The VM takes the live `view` after a call ([`crate::script_calls`]) where it moved since
+    /// the VM last took the live state: inside the drain, the fields that moved, over the view the
+    /// VM holds, which later views take from the live state too; else the whole. A listener that
+    /// cast nothing reads its own packet's view.
+    pub(crate) fn commit(&mut self, script: &mut UiScript, view: CastView) {
+        if self.live == Some(view) {
+            return;
+        }
+        let moved = self.live.map_or(Moved::ALL, |l| Moved::between(&l, &view));
+        self.live = Some(view);
+        match self.shown.filter(|_| self.started) {
+            Some(shown) => {
+                self.called = self.called.or(moved);
+                self.show(script, moved.over(shown, view));
+            }
+            None => self.show(script, view),
+        }
+    }
+
+    /// `view` into the VM: the cast state the checked tests and `SpellStopCasting` read, and the
+    /// targeting word `SpellIsTargeting` tests, up while the view holds the record's spell.
+    fn show(&mut self, script: &mut UiScript, view: CastView) {
+        script.set_cast_view(view);
+        script.set_spell_targeting(view.targeting.is_some());
+        self.shown = Some(view);
+    }
+
+    /// A logged `view` into the VM, with the fields the drain's calls moved as they stand live.
+    fn replay(&mut self, script: &mut UiScript, view: CastView) {
+        let view = self.called.over(view, self.live.unwrap_or(view));
+        self.show(script, view);
+    }
+}
+
+/// `view` into the VM with no log kept, in a harness without one.
 fn push(script: &mut UiScript, view: CastView) {
     script.set_cast_view(view);
     script.set_spell_targeting(view.targeting.is_some());
@@ -124,7 +212,7 @@ fn fire_cast_views(
     if !views.started {
         views.started = true;
         if let (Some(start), Some(script)) = (views.start.take(), script.as_deref_mut()) {
-            push(script, start);
+            views.replay(script, start);
         }
     }
     while views.entries.front().is_some_and(|(s, _)| until.admits(*s)) {
@@ -132,7 +220,7 @@ fn fire_cast_views(
             break;
         };
         if let Some(script) = script.as_deref_mut() {
-            push(script, view);
+            views.replay(script, view);
         }
     }
 }
@@ -143,27 +231,27 @@ fn end_cast_views(world: &mut World) {
         return;
     }
     let view = live_view(world);
-    if let Some(mut views) = world.get_resource_mut::<CastViews>() {
+    world.resource_scope(|world, mut views: Mut<CastViews>| {
         views.entries.clear();
         views.start = None;
         views.started = false;
-    }
-    let Some(view) = view else {
-        return;
-    };
-    if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-        push(&mut script, view);
-    }
-    if let Some(mut views) = world.get_resource_mut::<CastViews>() {
+        views.called = Moved::default();
+        let Some(view) = view else {
+            return;
+        };
+        if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
+            views.show(&mut script, view);
+        }
         views.live = Some(view);
-    }
+    });
 }
 
 /// What the packets moved while no in-game interface is up, left unpushed: no VM reads it.
 fn drop_cast_views(mut views: ResMut<CastViews>) {
-    let live = views.live;
+    let (live, shown) = (views.live, views.shown);
     *views = CastViews {
         live,
+        shown,
         ..Default::default()
     };
 }
@@ -171,9 +259,12 @@ fn drop_cast_views(mut views: ResMut<CastViews>) {
 /// The frame's feed of the live view, which the drain's start replaces while the frame logged
 /// any ([`super::feed_cast_reports`]).
 pub(super) fn feed_live(script: &mut UiScript, views: Option<&mut CastViews>, view: CastView) {
-    push(script, view);
-    if let Some(views) = views {
-        views.fed(view);
+    match views {
+        Some(views) => {
+            views.show(script, view);
+            views.live = Some(view);
+        }
+        None => push(script, view),
     }
 }
 

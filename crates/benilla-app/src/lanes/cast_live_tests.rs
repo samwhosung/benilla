@@ -180,9 +180,9 @@ fn cast_heal(c: &mut Client) {
 }
 
 /// Our cast's start and its result in one frame: the start's `SPELLCAST_START` reads Heal still
-/// in flight, and the result pops it (`0x6e741a` → `0x6e4ad0`) before its `SPELLCAST_STOP` and
-/// its `CURRENT_SPELL_CAST_CHANGED`, which read it popped; a power packet between them reads the
-/// slot as the start left it.
+/// in flight, and the result's `0x6e741a` → `0x6e4940` pops it (`0x6e4ad0` at `0x6e49d6`), then
+/// signals `CURRENT_SPELL_CAST_CHANGED` (`0x4b3250`) and `SPELLCAST_STOP` (`0x6e4a50`), which read
+/// it popped; a power packet between them reads the slot as the start left it.
 #[test]
 fn a_cast_start_and_its_stop_in_one_frame_each_read_their_own_packets_state() {
     let mut c = client();
@@ -304,5 +304,68 @@ fn a_cooldown_listener_ahead_of_the_stop_reads_the_cast_in_flight() {
     assert_eq!(
         c.seen(&["SPELL_UPDATE_COOLDOWN", "SPELLCAST_STOP"]),
         ["SPELL_UPDATE_COOLDOWN:1:nil", "SPELLCAST_STOP:nil:nil"]
+    );
+}
+
+/// A listener's cast holds through the packets after its own: the stop's listener casts Heal
+/// again, and the next packet, which moves the form byte, reads it in flight, as the slot the
+/// call wrote is the live one.
+#[test]
+fn a_listeners_cast_keeps_its_slot_through_the_next_packets_view() {
+    use benilla_protocol::field::FIELD_UNIT_BYTES_1;
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("SPELLCAST_STOP")
+        g:SetScript("OnEvent", function()
+            if not Recast then Recast = true UseAction(1) end
+        end)"#,
+    );
+    cast_heal(&mut c);
+    c.frame(vec![
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: true,
+            reason: None,
+            arg: None,
+        }],
+        vec![values(ME, &[(MANA, 90), (FIELD_UNIT_BYTES_1, 1 << 16)])],
+    ]);
+    assert_eq!(c.casts(), [HEAL], "the listener's cast went out");
+    assert_eq!(
+        c.seen(&["SPELLCAST_STOP", "UNIT_MANA"]),
+        ["SPELLCAST_STOP:nil:nil", "UNIT_MANA:1:nil"]
+    );
+}
+
+/// Our cast's failed `SMSG_CAST_RESULT` on the lane: a power packet ahead of it reads Heal in
+/// flight, and the refusal (`0x6e1a00`) pops it (`0x6e2218`) before its own listeners,
+/// `CURRENT_SPELL_CAST_CHANGED` then `SPELLCAST_FAILED` (`0x6e2238`), which read it popped.
+#[test]
+fn a_failed_cast_result_pops_the_slot_at_its_place_in_the_drain() {
+    let mut c = client();
+    cast_heal(&mut c);
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: false,
+            reason: Some(0x0b),
+            arg: None,
+        }],
+    ]);
+    assert_eq!(
+        c.seen(&[
+            "UNIT_MANA",
+            "SPELLCAST_STOP",
+            "SPELLCAST_FAILED",
+            "CURRENT_SPELL_CAST_CHANGED",
+        ]),
+        [
+            "UNIT_MANA:1:nil",
+            "CURRENT_SPELL_CAST_CHANGED:nil:nil",
+            "SPELLCAST_FAILED:nil:nil",
+        ]
     );
 }
