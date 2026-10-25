@@ -234,7 +234,8 @@ pub fn config_dir() -> Option<std::path::PathBuf> {
 /// What a crate on top of benilla adds to the built app ([`run_with`]).
 type Extension<'a> = Box<dyn FnOnce(&mut App) + 'a>;
 
-/// The main thread joins a single-threaded apartment before any window, which winit's `OleInitialize` needs (#2422).
+/// The main thread joins a single-threaded apartment before any window, as winit's `OleInitialize`
+/// for drag and drop needs; a hook that joined it to the MTA first would make window creation panic.
 #[cfg(windows)]
 fn main_apartment() {
     use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
