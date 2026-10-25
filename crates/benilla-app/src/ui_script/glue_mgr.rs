@@ -523,6 +523,8 @@ enum Outgoing {
     ForceRename(&'static str),
     /// `PLAYER_ENTER_PIN` (event 25, `0x46bb15`) with the keypad's grid.
     EnterPin([u8; 10]),
+    /// The stock keypad's buttons at these positions, then its Okay, pressed.
+    PressKeypad(Vec<u8>),
     /// A CVar the manager set.
     Cvar { name: &'static str, value: String },
     /// The manager's step that follows the signals before it ([`Step`]).
@@ -548,6 +550,7 @@ impl Outgoing {
             Outgoing::SelectLast => GlueSignal::SelectLast,
             Outgoing::ForceRename(key) => GlueSignal::ForceRename(key),
             Outgoing::EnterPin(grid) => GlueSignal::EnterPin(grid),
+            Outgoing::PressKeypad(positions) => GlueSignal::PressKeypad(positions),
             Outgoing::Cvar { name, value } => GlueSignal::Cvar { name, value },
             out @ (Outgoing::Begin(_)
             | Outgoing::Queue
@@ -773,8 +776,9 @@ impl GlueMgr {
     /// The PIN prompt this attempt waits on, answered from the environment ([`EnvPin`]) in place of
     /// a key press: the digits go to the keys they sit at on the prompt's grid and on as
     /// `PINEntered` hands its keys on, to the same prompt, reporting the same state 9. With the
-    /// keypad up that is its own tail ([`Self::pin_entered`]); with none on the screen, the step
-    /// without the dialog. A setting that cannot answer is logged and answers the prompt with no
+    /// keypad up the stock keypad is pressed key by key and Okay, so its own `PINEntered` call
+    /// ([`Self::pin_entered`]) and its hide run; with none on the screen, the step without the
+    /// dialog. A setting that cannot answer is logged and answers the prompt with no
     /// keys, which fails the logon as an unanswerable keypad does. `false` when the environment
     /// holds no PIN, and nothing is done.
     fn answer_pin_from_env(&mut self, keypad_up: bool) -> bool {
@@ -792,7 +796,7 @@ impl GlueMgr {
             Ok(keys) => {
                 info!("login: the PIN prompt is answered from the environment");
                 if keypad_up {
-                    self.pin_entered(keys);
+                    self.outbox.push(Outgoing::PressKeypad(keys.positions));
                 } else {
                     self.run_step(Step::SubmitPin(keys));
                 }

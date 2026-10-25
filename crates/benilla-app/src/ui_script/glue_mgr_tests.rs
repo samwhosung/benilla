@@ -292,21 +292,29 @@ fn keys_for(digits: &[u8]) -> Vec<u8> {
     benilla_protocol::auth::pin::positions(&GRID, digits).unwrap()
 }
 
-/// What the keypad's `PINEntered` leaves: the `CANCEL` dialog, the keys on to the prompt, and the
-/// report of state 9 on the next frame.
+/// What the environment's answer leaves: the stock keypad's keys and Okay pressed, whose
+/// `PINEntered` (run here as the stock Lua calls it) opens the `CANCEL` dialog and sends the keys
+/// on to the prompt, and the report of state 9 on the next frame.
 fn assert_answered_with(m: &mut GlueMgr, keys: &[u8]) {
-    // The keypad opened first (`PLAYER_ENTER_PIN` with the grid), then its tail ran.
+    // The keypad opened first (`PLAYER_ENTER_PIN` with the grid), then its keys were pressed.
     assert_eq!(
         m.outbox,
         [
             open("CANCEL", Some("LOGIN_STATE_PIN")),
             Outgoing::Close,
             Outgoing::EnterPin(GRID),
-            open("CANCEL", None),
+            Outgoing::PressKeypad(keys.to_vec()),
         ],
         "{:?}",
         m.outbox
     );
+    assert!(m.park_out.is_empty(), "the keys wait for the keypad's Okay");
+    m.outbox.clear();
+    m.call(GlueCall::PinEntered(benilla_ui::script::GluePin {
+        positions: keys.to_vec(),
+    }));
+    settle(m);
+    assert_eq!(m.outbox, [open("CANCEL", None)]);
     assert!(
         matches!(
             m.park_out.as_slice(),
@@ -2613,6 +2621,62 @@ fn the_stock_keypad_shows_the_grid_and_sends_the_keys_pressed() {
     assert!(!vm(&app)
         .eval::<bool>("return VirtualKeypadFrame:IsShown() == 1")
         .unwrap());
+    let checking = vm(&app).global_text("LOGIN_STATE_CHECKINGVERSIONS");
+    assert_eq!(dialog(&app), Some(("CANCEL".into(), checking)));
+}
+
+/// `WOW_PIN` over the stock screens presses the stock keypad's keys and Okay, so the stock
+/// `VirtualKeypadOkayButton_OnClick` hands the positions to `PINEntered` and hides the keypad,
+/// which no later screen then finds still up.
+#[test]
+fn wow_pin_presses_the_stock_keypad_and_it_hides() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, rx, _) = stock_app();
+    let (park_tx, park_rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::RealmChoice(crate::net::ParkSender::Park(
+        park_tx,
+        std::marker::PhantomData,
+    )));
+    app.insert_resource(EnvPin::new(Some("4821"), None, || 0));
+    // The returning player's login screen, whose boxes the keypad stands in.
+    vm(&app)
+        .run("AcceptEULA() AcceptTOS() AccountLoginUI:Show()")
+        .unwrap();
+    app.update();
+    type_and_login(&mut app);
+    assert!(rx.try_recv().is_ok());
+    for stage in [
+        LoginStage::Connecting,
+        LoginStage::Pin {
+            grid: GRID,
+            prompt: PROMPT,
+        },
+    ] {
+        app.world_mut().write_message(LoginStageMessage { stage });
+        app.update();
+    }
+    assert!(
+        matches!(
+            park_rx.try_recv(),
+            Ok(ParkRequest::Realm(RealmRequest::Pin { prompt: PROMPT, keys: Some(k) }))
+                if k.positions == keys_for(&[4, 8, 2, 1])
+        ),
+        "the stock Okay hands the pressed positions to PINEntered"
+    );
+    assert!(
+        !vm(&app)
+            .eval::<bool>("return VirtualKeypadFrame:IsShown() == 1")
+            .unwrap(),
+        "the stock Okay hides the keypad"
+    );
+    assert_eq!(
+        vm(&app)
+            .eval::<String>("return VirtualKeypadFrame.PIN")
+            .unwrap(),
+        "",
+        "the hide cleared the keys"
+    );
+    app.update();
     let checking = vm(&app).global_text("LOGIN_STATE_CHECKINGVERSIONS");
     assert_eq!(dialog(&app), Some(("CANCEL".into(), checking)));
 }

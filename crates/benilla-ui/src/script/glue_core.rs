@@ -263,6 +263,9 @@ pub enum GlueSignal {
     ForceRename(&'static str),
     /// `PLAYER_ENTER_PIN` (event 25, `0x46bb15`): the keypad's grid, ten numbers.
     EnterPin([u8; 10]),
+    /// The stock keypad pressed by its buttons: the keys at these positions (button `p + 1`
+    /// carries id `p`), then Okay, each by `Click` (`0x7826c0`), the physical click's path.
+    PressKeypad(Vec<u8>),
     /// A CVar the manager set (`CVar::Set`, `0x63df50`), written to the VM's table as the
     /// engine's write.
     Cvar { name: &'static str, value: String },
@@ -735,6 +738,19 @@ fn fire_signal(lua: &Lua, signal: GlueSignal) {
                 .map(|&d| ScriptValue::Int(i64::from(d)))
                 .collect(),
         ),
+        GlueSignal::PressKeypad(positions) => {
+            let keys = positions
+                .iter()
+                .map(|p| format!("VirtualKeypadButton{}", p + 1));
+            for name in keys.chain(["VirtualKeypadOkayButton".to_string()]) {
+                if let Err(e) = click_global(lua, &name) {
+                    lua.app_data_mut::<Model>()
+                        .expect("model app_data")
+                        .record_lua_error(&e);
+                    return;
+                }
+            }
+        }
         GlueSignal::Cvar { name, value } => {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             super::cvars::set_from_engine(&mut model, name, value);
@@ -753,6 +769,14 @@ fn fire_signal(lua: &Lua, signal: GlueSignal) {
             }
         }
     }
+}
+
+/// `Click` on the button the global `name` holds, the stock handlers running as for a press.
+fn click_global(lua: &Lua, name: &str) -> mlua::Result<()> {
+    use mlua::ObjectLike;
+    lua.globals()
+        .get::<mlua::Table>(name)?
+        .call_method::<()>("Click", ())
 }
 
 /// The text of a string global, as [`super::UiScript::global_text`] reads it.
