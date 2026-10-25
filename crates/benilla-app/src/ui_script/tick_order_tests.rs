@@ -321,3 +321,46 @@ fn a_click_reads_the_cursor_an_engine_writer_raised_after_the_last_feed() {
     world.run_schedule(Update);
     assert_eq!(log(world), "click true;");
 }
+
+/// The cursor moves onto a button and the right button goes down in the same frame: the press is
+/// the interface's alone, and the world's mouse takes none of it, as the reference hands a
+/// mouse-down to the one frame under the cursor (`0x7662c0`, capture at `0x7663e9`). The pointer
+/// arbiter publishes the frame's hover before the world's mouse reads it.
+#[test]
+fn a_right_press_as_the_cursor_reaches_a_button_is_the_interfaces_alone() {
+    let mut c = client("");
+    assert!(runs_before(
+        &mut c.app,
+        input::feed_ui_input,
+        super::arbitrate_pointer_over_ui
+    ));
+    assert!(runs_before(
+        &mut c.app,
+        super::arbitrate_pointer_over_ui,
+        crate::player::camera::latch_world_mouse
+    ));
+    let world = c.app.world_mut();
+    assert!(
+        !world.resource::<super::PointerOverUi>().0,
+        "the last frame's cursor was over nothing"
+    );
+    world
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Right);
+    world
+        .run_system_once(input::feed_ui_input)
+        .expect("the input pass runs");
+    world
+        .run_system_once(super::arbitrate_pointer_over_ui)
+        .expect("the arbiter runs");
+    world
+        .run_system_once(crate::player::camera::latch_world_mouse)
+        .expect("the world's mouse latches");
+    assert!(
+        !world
+            .resource::<crate::player::CameraControl>()
+            .world_mouse
+            .holds_right(),
+        "the world took the button's press"
+    );
+}

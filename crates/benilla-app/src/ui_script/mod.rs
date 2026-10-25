@@ -512,12 +512,14 @@ impl Plugin for UiScriptPlugin {
                     .after(crate::vplates::VPlateSet)
                     .before(crate::ui_pass::UiQuadAppend),
             )
-            // After the hover is known and before gameplay reads `PointerOverUi`.
+            // After the hover is known and before gameplay reads `PointerOverUi`: the world's
+            // mouse among the input records, so a press the cursor brings onto a frame is the
+            // frame's alone.
             .add_systems(
                 Update,
                 arbitrate_pointer_over_ui
                     .after(UiInput)
-                    .before(WorldStage::Input),
+                    .before(crate::player::WorldMouse),
             )
             .add_message::<server_alert::LaunchUrl>()
             .add_message::<server_alert::LaunchAddonUrl>()
