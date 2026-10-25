@@ -436,6 +436,8 @@ mod packet_signal_tests;
 #[cfg(test)]
 mod quiet_tests;
 #[cfg(test)]
+mod stat_live_tests;
+#[cfg(test)]
 mod storm_tests;
 #[cfg(test)]
 mod tests;
