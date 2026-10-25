@@ -86,7 +86,6 @@ live_reads! {
 
 impl LiveFamily for UnitLive<'_, '_> {}
 impl LiveFamily for crate::ui_items::live::ItemLive<'_, '_> {}
-impl LiveFamily for crate::ui_aura::AuraLive<'_, '_> {}
 
 impl LiveFamily for StatsLive<'_, '_> {
     fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {

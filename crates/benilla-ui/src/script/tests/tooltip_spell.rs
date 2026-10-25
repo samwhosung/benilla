@@ -605,6 +605,7 @@ fn a_vision_hidden_aura_is_skipped_by_unit_buff_and_counted_by_the_tooltip() {
                     name: Some("Amorous".into()),
                     icon: Some("Amorous".into()),
                     helpful: true,
+                    slot: 0,
                     vision_hidden: true,
                     ..Default::default()
                 },

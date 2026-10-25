@@ -208,38 +208,42 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 return Ok(());
             };
             let now = crate::script::clock::now(lua);
-            let (key, name, remaining_ms) = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                match model.player_auras.get(pos) {
-                    Some(a) => {
-                        // The gate is `untilCancelled`, not a known duration: `0x532b00` skips
-                        // the line when the record's `+0xc` is set (`0x532bdf`), a DBC flag that
-                        // holds before any `SMSG_UPDATE_AURA_DURATION` lands; a lapsed aura shows
-                        // "0 seconds remaining".
-                        let ms = (!a.until_cancelled).then(|| {
-                            // The reference counts integer milliseconds off `GetTickCount`;
-                            // this rounds the float clock to the nearest one.
-                            ((a.expiration_time - now) * 1000.0)
-                                .round()
-                                .clamp(0.0, f64::from(u32::MAX)) as u32
-                        });
-                        let key = AuraKey {
-                            spell_id: a.spell_id,
-                            level: a.level,
-                            stack: a.count,
-                        };
-                        (key, a.name.clone(), ms)
-                    }
-                    // An empty record: spell 0, which the builder clears and hides on
-                    // (`0x52f8ae`). Deviation: no time line follows, where the reference's rides
-                    // the record's `+0xc` (`0x532bdf`), a byte an empty record keeps from its
-                    // history. 0 after `ClearBuffRecord 0x4e4490` prints a lone "0 seconds
-                    // remaining" (`0x4e447e`); else it is whatever the last occupant left, as
-                    // `ResetBuffCache 0x4e40c0` and the compaction's tail reset (`0x4e4237`)
-                    // call `0x4e44b0` with slot -1, which writes `+0x0` and `+0x4` alone
-                    // (`0x4e44bc`-`0x4e44c0`). A line on a stale byte is a fault to not ape.
-                    None => (AuraKey::default(), None, None),
+            let record = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .player_auras
+                .get(pos)
+                .cloned();
+            let (key, name, remaining_ms) = match record {
+                Some(a) => {
+                    // The gate is `untilCancelled`, not a known duration: `0x532b00` skips
+                    // the line when the record's `+0xc` is set (`0x532bdf`), a DBC flag that
+                    // holds before any `SMSG_UPDATE_AURA_DURATION` lands; a lapsed aura shows
+                    // "0 seconds remaining".
+                    let ms = (!a.until_cancelled).then(|| {
+                        // The reference counts integer milliseconds off `GetTickCount`; this
+                        // rounds the float clock to the nearest one. The expiry is read at the
+                        // call (`0x4e4450`).
+                        ((super::aura::expiry_of(lua, &a) - now) * 1000.0)
+                            .round()
+                            .clamp(0.0, f64::from(u32::MAX)) as u32
+                    });
+                    let key = AuraKey {
+                        spell_id: a.spell_id,
+                        level: a.level,
+                        stack: a.count,
+                    };
+                    (key, a.name.clone(), ms)
                 }
+                // An empty record: spell 0, which the builder clears and hides on
+                // (`0x52f8ae`). Deviation: no time line follows, where the reference's rides
+                // the record's `+0xc` (`0x532bdf`), a byte an empty record keeps from its
+                // history. 0 after `ClearBuffRecord 0x4e4490` prints a lone "0 seconds
+                // remaining" (`0x4e447e`); else it is whatever the last occupant left, as
+                // `ResetBuffCache 0x4e40c0` and the compaction's tail reset (`0x4e4237`)
+                // call `0x4e44b0` with slot -1, which writes `+0x0` and `+0x4` alone
+                // (`0x4e44bc`-`0x4e44c0`). A line on a stale byte is a fault to not ape.
+                None => (AuraKey::default(), None, None),
             };
             // `0x52fa50`'s text from the player's own strings; without them the line is skipped.
             let remaining = remaining_ms.and_then(|ms| {

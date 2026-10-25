@@ -372,6 +372,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::target::Selection",
     "::ui_action::PlayerActions",
     "::ui_auction::AuctionOpen",
+    // Read, and quiet: the buff timers read the stamps through the host and no feed fires off
+    // them; the aura fields' watcher raises `PLAYER_AURAS_CHANGED`.
+    "::ui_aura::AuraDurations",
     // Read, and quiet: `feed_dialog_verbs` pushes the deadline the time packet stores and fires
     // nothing off it, as the packet's `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
     "::ui_dialog_verbs::AreaSpiritHealer",
@@ -511,8 +514,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // relations and the world entry's rebuild read as the frame left them.
     ("::ui_aura::feed_auras", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
-        "ui_action::PlayerActions", "ui_aura::AuraDurations", "ui_party::GroupState",
-        "ui_pet::PetBar"]),
+        "ui_action::PlayerActions", "ui_party::GroupState", "ui_pet::PetBar"]),
     ("::ui_spellbook::feed_spellbook", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
         "ui_spellbook::LearnedInTab"]),
@@ -742,6 +744,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The `raidFilter` books the call host's aura walk reads (`0x4b3870`, `0x4b3920`), which
     // only the aura feed writes.
     "::ui_aura::AuraFeedMemory",
+    // The duration packet's stamps (`0x4e4390`), which the call host's buff timers read at the
+    // call (`0x4e4450`); a hosted handler reads them, the packet's handler writes them.
+    "::ui_aura::AuraDurations",
     // The host's two sinks that raise no event.
     "::sound::message::MessageSounds",
     "::creature_anim::edits::UnitEdits",
@@ -1650,13 +1655,12 @@ const VERSIONED_FOR_THE_DRAIN: &[&str] = &["net::reputations::Reputations"];
 #[rustfmt::skip]
 const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The watchers' callbacks: the quest log's slots, the skill line's race and class and the
-    // bonus bar's form off our live descriptor, and the aura watcher's join of the durations the
-    // duration packet writes (`0x4e4390` into `0xbc5f68`), as the frame left them (#2217); the
-    // aura watcher's own store is the one its packet left. The drunk line's name is read through
-    // the host. `SetPetGuid`'s trainer refresh reads the open trainer, and its `PET_UI_CLOSE` the
-    // new pet's object and ours, as the frame left them.
-    ("field notices", &["net::GuidIndex", "net::ObjectStore",
-        "ui_aura::AuraDurations", "ui_trainer::TrainerOpen"]),
+    // bonus bar's form off our live descriptor, as the frame left them (#2217); the aura
+    // watcher's own store is the one its packet left, and the buff timers read the duration
+    // packet's stamps through the call host. The drunk line's name is read through the host.
+    // `SetPetGuid`'s trainer refresh reads the open trainer, and its `PET_UI_CLOSE` the new
+    // pet's object and ours, as the frame left them.
+    ("field notices", &["net::GuidIndex", "net::ObjectStore", "ui_trainer::TrainerOpen"]),
     // The views lane reads the stores, records and roster cells it rewinds as of each packet, and
     // the reputations as the reputation lane replays them; the names, the relations' stores, the
     // selection and the guild as the frame left them (#2217).

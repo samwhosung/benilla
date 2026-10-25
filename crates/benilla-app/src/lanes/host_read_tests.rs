@@ -25,7 +25,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
 const FRAME_FINAL_FEEDS: usize = 91;
-const FRAME_FINAL_INPUTS: usize = 443;
+const FRAME_FINAL_INPUTS: usize = 442;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -58,7 +58,8 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "keeps the frame's `GetTime` clock the cooldown reads map each start through, and \
          writes the list as it walks the slots"),
     ("::ui_aura::feed_auras", &["ui_aura::AuraFeedMemory"],
-        "rebuilds the raid filter's books and the world entry's player the aura walk reads"),
+        "rebuilds the raid filter's books and the world entry's player the aura walk reads, and \
+         keeps the clock pair the buff timers map the duration stamps through"),
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_char::feed_skills", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_honor::feed_honor", &["UiScript"], "a field event's listeners read its push"),

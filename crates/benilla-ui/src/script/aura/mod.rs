@@ -27,6 +27,8 @@ use super::Model;
 mod player_buff;
 mod read;
 
+pub(crate) use player_buff::expiry_of;
+pub use player_buff::PlayerBuffExpiry;
 pub(crate) use read::{aura_unit, nth_kept, read_auras_of};
 pub use read::{AuraListRead, AuraRead};
 
@@ -36,6 +38,9 @@ pub use read::{AuraListRead, AuraRead};
 pub struct AuraState {
     /// `Spell.dbc` id, what `CMSG_CANCEL_AURA` names and the app's icon lookup keys on.
     pub spell_id: u32,
+    /// The descriptor slot the aura sits in, the cache record's `+0x0`: what the expiry array
+    /// (`0xbc5f68`) is indexed by (`0x4e4450`).
+    pub slot: u8,
     /// The spell's name; `None` when the catalog lacks the id.
     pub name: Option<String>,
     /// The icon's extensionless MPQ path (`Interface\Icons\…`).
@@ -49,8 +54,11 @@ pub struct AuraState {
     /// `"Magic"`, `"Curse"`, `"Disease"`, `"Poison"` or `None`; the debuff border tints by it.
     pub debuff_type: Option<String>,
     /// Seconds, from the last apply or refresh; 0 when permanent or on a unit not the player.
+    /// The player's list carries none: the getters read it through the lent host
+    /// ([`PlayerBuffExpiry`]).
     pub duration: f64,
-    /// The `GetTime()` instant it runs out; 0 when [`Self::duration`] is 0.
+    /// The `GetTime()` instant it runs out; 0 when [`Self::duration`] is 0. The snapshot's, which
+    /// the getters read only with no host to ask ([`PlayerBuffExpiry`]).
     pub expiration_time: f64,
     /// A buff rather than a debuff: the `HELPFUL`/`HARMFUL` filter's test.
     pub helpful: bool,
@@ -391,6 +399,7 @@ mod tests {
             until_cancelled: false,
             channeled: false,
             raid_listed: false,
+            slot: 0,
             vision_hidden: false,
         }
     }

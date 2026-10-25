@@ -232,7 +232,9 @@ pub use auction::{
     AuctionStartRequest, AuctionState, AuctionSubCategory, BidVerdict, BIDDER, LIST, OWNER,
     SORT_KEYS,
 };
-pub use aura::{AuraCall, AuraListRead, AuraRead, AuraState, TrackingState, UnitAuraList};
+pub use aura::{
+    AuraCall, AuraListRead, AuraRead, AuraState, PlayerBuffExpiry, TrackingState, UnitAuraList,
+};
 pub use backdrop::{Backdrop, Insets};
 pub use bank::{BankCall, BankState};
 pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
