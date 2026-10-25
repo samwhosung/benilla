@@ -495,3 +495,91 @@ fn a_damaged_items_start_is_refused_inside_the_call() {
         "the slot stays"
     );
 }
+
+/// `0x4cc460` shows a placed bid's line (`0x4cc507`) before it removes the outbid pair
+/// (`0x4cc517`), arms the bidder flag (`0x4cc522`) and sends the bidder request (`0x4cc528`), so
+/// the line's `CHAT_MSG_SYSTEM` listener calls `GetBidderAuctionItems` on the house as it stood:
+/// the flag the hello armed, both pairs, the offset 0. Here the handlers run first and send in
+/// their own order, the next packet's handler reading what the first wrote; the listener's call
+/// then sends at its page with both ids, and its offset stands after the frame.
+#[test]
+fn a_placed_bids_line_listener_reads_the_requests_as_its_handler_found_them() {
+    use benilla_protocol::messages::{auction_action, auction_error, AuctionCommandTail};
+    let mut h = House::new(1_000_000);
+    h.house().outbid = vec![(1, 7), (1, 9)];
+    h.run(
+        r#"ERR_AUCTION_BID_PLACED = "Bid accepted."
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_SYSTEM")
+        g:SetScript("OnEvent", function()
+            if arg1 == ERR_AUCTION_BID_PLACED then GetBidderAuctionItems(2) end
+        end)"#,
+    );
+    let placed = |auction_id: u32| benilla_protocol::SessionEvent::AuctionCommandResult {
+        auction_id,
+        action: auction_action::BID_PLACED,
+        error: auction_error::OK,
+        tail: AuctionCommandTail::BidPlaced { new_min_outbid: 25 },
+    };
+    crate::net::handlers::dispatch(h.app.world_mut(), vec![placed(7), placed(9)]);
+    crate::lanes::fire_in_order(h.app.world_mut());
+    let bidder = |list_from: u32, auction_ids: Vec<u32>| ClientCommand::AuctionListBidderItems {
+        auctioneer: AUCTIONEER,
+        list_from,
+        auction_ids,
+    };
+    let wave = || ClientCommand::Emote { emote: 3 };
+    assert_eq!(
+        text(h.sent()),
+        text([
+            bidder(0, vec![9]),
+            wave(),
+            bidder(0, vec![]),
+            wave(),
+            bidder(100, vec![7, 9]),
+        ])
+    );
+    let house = h.house();
+    assert_eq!(
+        (
+            house.bidder_armed,
+            house.bidder_offset,
+            house.outbid.clone()
+        ),
+        (false, 100, vec![])
+    );
+}
+
+/// A started auction's line (`0x4cc4c7`) comes before the owner request (`0x4cc4da`,
+/// `0x4cc4e0`), which spends the flag: its listener's `GetOwnerAuctionItems` finds the flag the
+/// hello armed and sends at its page, whose offset then stands.
+#[test]
+fn a_started_auctions_line_listener_reads_the_owner_flag_before_its_request() {
+    use benilla_protocol::messages::{auction_action, auction_error, AuctionCommandTail};
+    let mut h = House::new(1_000_000);
+    h.run(
+        r#"ERR_AUCTION_STARTED = "Auction created."
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_SYSTEM")
+        g:SetScript("OnEvent", function()
+            if arg1 == ERR_AUCTION_STARTED then GetOwnerAuctionItems(1) end
+        end)"#,
+    );
+    crate::net::handlers::dispatch(
+        h.app.world_mut(),
+        vec![benilla_protocol::SessionEvent::AuctionCommandResult {
+            auction_id: 11,
+            action: auction_action::STARTED,
+            error: auction_error::OK,
+            tail: AuctionCommandTail::Empty,
+        }],
+    );
+    crate::lanes::fire_in_order(h.app.world_mut());
+    let owner = |list_from: u32| ClientCommand::AuctionListOwnerItems {
+        auctioneer: AUCTIONEER,
+        list_from,
+    };
+    assert_eq!(text(h.sent()), text([owner(0), owner(50)]));
+    let house = h.house();
+    assert_eq!((house.owner_armed, house.owner_offset), (false, 50));
+}

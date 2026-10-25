@@ -14,7 +14,7 @@ use benilla_ui::script::{BIDDER, LIST, OWNER};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use super::{AuctionMessage, AuctionOpen, HouseEffect, RowPatch};
+use super::{AuctionMessage, AuctionOpen, HouseEffect, Requests, RequestsMoved, RowPatch};
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, NetHandlerApp, SelfPlayer};
@@ -33,6 +33,7 @@ pub(super) fn register(app: &mut App) {
             fire_house,
             None,
         )
+        .add_drain_end(end_house_drain)
         .add_systems(
             OnExit(crate::client_state::ClientState::InWorld),
             end_session_house.in_set(crate::ui_script::SessionEnd::Clears),
@@ -121,8 +122,9 @@ fn handle(vm: &mut HouseVm, body: impl FnOnce(&mut AuctionOpen, Wire)) {
 /// lane to apply at the packet's place: the handler's own reads (its strings, its tick, the rows
 /// it wrote) are taken as it runs, and only the VM's writes and the signals wait.
 pub(crate) enum HouseStep {
-    /// A line shown (`0x496720`), whose chat line fires inside it (`0x49a870`).
-    Line(Shown),
+    /// A line shown (`0x496720`), whose chat line fires inside it (`0x49a870`), and the
+    /// [`Requests`] as the handler stood at it, which its listeners' verbs read.
+    Line(Shown, Requests),
     /// A row a bid patched, then its list's update ([`UiScript::patch_auction_row`]).
     Patch {
         list: usize,
@@ -158,6 +160,10 @@ pub(crate) enum HouseStep {
 pub(crate) struct HouseLane {
     steps: std::collections::VecDeque<(crate::lanes::Stamp, HouseStep)>,
     waits: Vec<(u64, usize)>,
+    /// What the drain's line listeners moved in the [`Requests`], which every later line's view
+    /// takes over the state its handler found: they ran after every handler, so their writes
+    /// stand.
+    called: RequestsMoved,
 }
 
 impl HouseLane {
@@ -230,6 +236,7 @@ impl HouseLane {
     pub(super) fn clear(&mut self) {
         self.steps.clear();
         self.waits.clear();
+        self.called = RequestsMoved::default();
     }
 
     /// The lists whose tails wait, in order.
@@ -253,7 +260,7 @@ fn settle(vm: &mut HouseVm) {
     let effects = std::mem::take(&mut vm.own().auction.effects);
     for effect in effects {
         match effect {
-            HouseEffect::Line(msg) => show_line(vm, msg),
+            HouseEffect::Line(msg, requests) => show_line(vm, msg, requests),
             HouseEffect::Edit { list, auction_id } => {
                 let mut h = vm.own();
                 let self_guid = h.self_q.iter().next().map(|g| g.0);
@@ -320,9 +327,10 @@ fn land_page(vm: &mut HouseVm, list: usize) {
     });
 }
 
-/// A line worded now through the VM's strings and readied onto the house lane, unless it names
-/// an item not cached: then the feed shows it once the record lands (`0x4cd190`), asking for it.
-fn show_line(vm: &mut HouseVm, msg: AuctionMessage) {
+/// A line worded now through the VM's strings and readied onto the house lane with the
+/// [`Requests`] it found, unless it names an item not cached: then the feed shows it once the
+/// record lands (`0x4cd190`), asking for it.
+fn show_line(vm: &mut HouseVm, msg: AuctionMessage, requests: Requests) {
     vm.turn(|script, mut h| {
         let fill = match msg.item {
             None => None,
@@ -346,9 +354,19 @@ fn show_line(vm: &mut HouseVm, msg: AuctionMessage) {
             return;
         };
         if let Some(line) = msg.shown(script, fill) {
-            h.lane.push(HouseStep::Line(line));
+            h.lane.push(HouseStep::Line(line, requests));
         }
     });
+}
+
+/// The drain's end: the next drain's lines read their own handlers' requests.
+fn end_house_drain(world: &mut World) {
+    if world
+        .get_resource::<HouseLane>()
+        .is_some_and(|l| l.called != RequestsMoved::default())
+    {
+        world.resource_mut::<HouseLane>().called = RequestsMoved::default();
+    }
 }
 
 /// The house lane's `fire_until` ([`crate::lanes`]): each step `until` admits applied to the VM
@@ -358,16 +376,38 @@ fn show_line(vm: &mut HouseVm, msg: AuctionMessage) {
 /// stops after a step whose firing stamped anything, so what it pushed fires next. With no VM the
 /// steps are dropped.
 fn fire_house(In(until): In<crate::lanes::Until>, mut vm: HouseVm, mut sink: MessageSink) {
-    while let Some((stamp, step)) = vm.own().lane.pop(until) {
+    while let Some((stamp, mut step)) = vm.own().lane.pop(until) {
         let ((), moved) = crate::lanes::firing(stamp, || {
             if let HouseStep::Tail(list) | HouseStep::Update(list) = step {
                 resolve_list(&mut vm, list);
             }
+            // A line's listeners read the requests as its handler found them (`0x4cc4c7` and
+            // `0x4cc507` show the line before `0x4cc4da`-`0x4cc528` arm, remove and send), with
+            // what earlier listeners moved; the house then takes back the frame's state, with
+            // what these listeners moved.
+            let view = match &mut step {
+                HouseStep::Line(_, found) => {
+                    let mut h = vm.own();
+                    let mut view = std::mem::take(found);
+                    h.lane.called.apply(&mut view);
+                    let live = h.auction.requests();
+                    h.auction.set_requests(view.clone());
+                    Some((view, live))
+                }
+                _ => None,
+            };
             vm.run(|script| {
                 if let Some(script) = script {
                     apply_step(script, &mut sink, step);
                 }
-            })
+            });
+            if let Some((view, mut live)) = view {
+                let mut h = vm.own();
+                let moved = RequestsMoved::between(&view, &h.auction.requests());
+                moved.apply(&mut live);
+                h.auction.set_requests(live);
+                h.lane.called.absorb(moved);
+            }
         });
         if moved {
             return;
@@ -402,7 +442,7 @@ fn resolve_list(vm: &mut HouseVm, list: usize) {
 /// One step's VM half.
 fn apply_step(script: &mut benilla_ui::script::UiScript, sink: &mut MessageSink, step: HouseStep) {
     match step {
-        HouseStep::Line(line) => show_now(script, sink, "ui_auction", line),
+        HouseStep::Line(line, _) => show_now(script, sink, "ui_auction", line),
         HouseStep::Patch {
             list,
             page,
@@ -443,6 +483,7 @@ pub(crate) fn fire_house_lane(world: &mut World) {
     {
         world.run_system_once_with(fire_house, until).unwrap();
     }
+    end_house_drain(world);
 }
 
 /// The `MSG_AUCTION_HELLO` reply opens the window, as in the reference's hello handler `0x4cc420`.
@@ -894,12 +935,19 @@ mod tests {
 
     /// What the handler left to settle, in order, as debug text.
     fn fx(auction: &AuctionOpen) -> Vec<String> {
-        auction.effects.iter().map(|e| format!("{e:?}")).collect()
+        auction
+            .effects
+            .iter()
+            .map(|e| match e {
+                HouseEffect::Line(m, _) => format!("Line({m:?})"),
+                e => format!("{e:?}"),
+            })
+            .collect()
     }
 
     /// A chat line's effect, as [`fx`] prints it.
     fn line(key: &'static str) -> String {
-        format!("{:?}", HouseEffect::Line(AuctionMessage::chat(key)))
+        format!("Line({:?})", AuctionMessage::chat(key))
     }
 
     /// A send's effect, as [`fx`] prints it.
@@ -913,7 +961,9 @@ mod tests {
             .effects
             .iter()
             .filter_map(|e| match e {
-                HouseEffect::Line(m) => Some((m.key, benilla_ui::messages::kind_of(m.key), m.item)),
+                HouseEffect::Line(m, _) => {
+                    Some((m.key, benilla_ui::messages::kind_of(m.key), m.item))
+                }
                 _ => None,
             })
             .collect()
@@ -1323,7 +1373,7 @@ mod tests {
                 assert!(row(&a, list, 8).is_some());
                 assert_eq!(a.lists[list].total, 2, "the total stays");
             }
-            assert!(matches!(a.effects[0], HouseEffect::Line(_)));
+            assert!(matches!(a.effects[0], HouseEffect::Line(..)));
             assert_eq!(
                 fx(&a)[1..],
                 [format!(
