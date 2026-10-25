@@ -1,5 +1,6 @@
-//! [`super::control`] in the whole client, headless, frame by frame: the press the cast cancel
-//! reads and the autorun latch it is read against.
+//! [`super::control`] in the whole client, headless, frame by frame, after the frame's mouse input
+//! ([`super::sample_look`]) as the schedule runs them: the press the cast cancel reads and the
+//! autorun latch it is read against.
 
 use benilla_ui::script::{BindingInput, FiredInput, HeldInput};
 use bevy::ecs::system::{RunSystemOnce, SystemId};
@@ -32,6 +33,7 @@ enum Body {
 struct Client {
     app: App,
     embody: SystemId,
+    sample: SystemId,
     drive: SystemId,
 }
 
@@ -67,21 +69,31 @@ impl Client {
             set(&mut player);
         }
         let embody = world.register_system(super::super::embody::maintain_embodiment);
+        let sample = world.register_system(sample_look);
         let drive = world.register_system(control);
         world.run_system(embody).expect("the embodiment runs");
         // `wire_in` seizes a streamed body (`0x6006e0`); an unstreamed claim stays a reseat.
         if body != Body::Unstreamed {
             world.resource_mut::<Player>().reseat = false;
         }
-        Self { app, embody, drive }
+        Self {
+            app,
+            embody,
+            sample,
+            drive,
+        }
     }
 
     /// One frame, its binding calls after `earlier`'s: the press it left, as whether the player
-    /// was its mover.
+    /// was its mover. The mouse's input runs with the bindings, ahead of the frame time's
+    /// embodiment and controller.
     fn frame(&mut self, earlier: Vec<BindingInput>, now: Vec<BindingInput>) -> Option<bool> {
         let world = self.app.world_mut();
-        world.run_system(self.embody).expect("the embodiment runs");
         *world.resource_mut::<BindingsState>() = BindingsState::after_calls(earlier, now);
+        world
+            .run_system(self.sample)
+            .expect("the mouse's input runs");
+        world.run_system(self.embody).expect("the embodiment runs");
         world.run_system(self.drive).expect("the controller runs");
         // Taken, as `local_self_cancel` takes it.
         let mut press = world.resource_mut::<LocalMoveStart>();

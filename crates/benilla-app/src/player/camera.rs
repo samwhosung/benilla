@@ -752,8 +752,8 @@ impl WorldMouse {
 
 /// Decide once per frame which mouse buttons the world owns: a press in the viewport off the UI,
 /// or any press while a look session owns the cursor (a chord's second button). Its own system,
-/// ahead of `/follow`'s both-button cancel ([`super::follow::steer_follow`]), which runs before
-/// the controller and would otherwise read it a frame late.
+/// first of the world's mouse input ([`super::WorldMouse`]), ahead of the look session and of
+/// `/follow`'s both-button cancel ([`super::follow::steer_follow`]) in the frame time.
 pub(super) fn latch_world_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     // The raw flag: a press on a nameplate is the plate's, so dragging from a plate never turns the

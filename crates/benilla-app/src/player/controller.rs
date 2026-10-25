@@ -8,6 +8,254 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
+/// What the frame's mouse input handed the controller: [`sample_look`] writes it among the input
+/// records, ahead of the packets, and [`control`] reads it in the frame time.
+#[derive(Resource, Default, Clone, Copy)]
+pub(crate) struct LookSample {
+    /// The mouse's hand-off of the camera's facing and pitch to the body (`0x5103e0`) ran this
+    /// frame: a motion while the mouse turns the body, or the press that completed both buttons.
+    pub(super) hands_off: bool,
+    /// The mover's facing as the input found it, before the look session turned it: the word the
+    /// motion handler's caller reads (`0x514446`, ahead of the mover lookup).
+    pub(super) facing: f32,
+}
+
+/// The gates the driven body's descriptor sets on the input. Stunned is `UNIT_FIELD_FLAGS &
+/// 0x40000` (`0x5145b0`), which skips the turn and pitch emitters (`0x514755`). Dead fails the
+/// shared precondition `0x5144e0` (health above zero), so a corpse is stunned to the input tick; a
+/// ghost has health 1. The stand state gates the mouse alone: `0x5145e0` wants the predicted
+/// `GetStandState() == 0` (`0x5ed570`; [`super::StandPending`] is `[player+0x1d68]`).
+pub(super) struct BodyGates {
+    pub(super) stunned: bool,
+    pub(super) stand_state: u8,
+    pub(super) mover: state::MoverInput,
+}
+
+/// [`BodyGates`] off the driven body's descriptor; `self_driven` when the body is the active
+/// player's, whose stand state is its prediction ([`posture`]), where a possessed body reads its own
+/// byte.
+pub(super) fn body_gates(
+    store: Option<&crate::net::ObjectStore>,
+    self_driven: bool,
+    pending: &super::StandPending,
+    player: &Player,
+    view_subject: &view_subject::ViewSubject,
+) -> BodyGates {
+    let (stunned, dead, stand_byte) = store
+        .map(|s| {
+            (
+                s.0.unit_flags() & UNIT_FLAG_STUNNED != 0,
+                s.0.unit_is_dead(),
+                s.0.unit_stand_state(),
+            )
+        })
+        .unwrap_or((false, false, 0));
+    let stand_state = if self_driven {
+        pending.stand_state(stand_byte)
+    } else {
+        stand_byte
+    };
+    // The shared precondition `0x5144e0`, once per tick. Its far-sight conjunct,
+    // `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)`, reads the resolved subject (`0x5ee290`
+    // latches only once resolved) and spares a possessed mover, which sets the same field.
+    let mover = state::MoverInput {
+        dead,
+        view_is_out: state::view_is_out(
+            player.foreign_mover.is_none(),
+            view_subject.remote.is_some(),
+        ),
+    };
+    BodyGates {
+        stunned,
+        stand_state,
+        mover,
+    }
+}
+
+/// The camera dynamics' inputs, last frame's word as `0x50fee0` reads it: its caller `0x514446`
+/// precedes the mover lookup. `body` is the driven body's descriptor and speeds; `facing` the
+/// mover's facing as the frame's input found it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn dynamics_input(
+    options: &camera_dynamics::CameraOptions,
+    nearclip: f32,
+    follow: &camera::FollowConfig,
+    player: &Player,
+    body: Option<(
+        Option<&crate::net::ObjectStore>,
+        Option<&crate::net::UnitSpeeds>,
+    )>,
+    follow_command: u32,
+    scoped: bool,
+    facing: f32,
+) -> camera_dynamics::DynamicsInput {
+    let (store, speeds) = body.unwrap_or((None, None));
+    camera_dynamics::DynamicsInput {
+        options: *options,
+        nearclip,
+        // Last frame's cached surface, the reference's own lag.
+        surface_y: player.liquid_surface,
+        smooth_style: follow.style,
+        tracking_style: follow.tracking_style,
+        subject: camera_dynamics::SubjectState {
+            move_flags: player.move_flags,
+            // The driven body's descriptor: a possessed creature's taxi state, not ours.
+            taxi: store.is_some_and(|s| s.0.unit_flags() & 0x0010_0000 != 0),
+            track: player.server_riding,
+            fear: player.control_lost,
+            facing,
+            mounted: store.is_some_and(|s| s.0.unit_mount_display_id() > 0),
+            // `GetCurrentSpeed` (`0x7c4c90`) on the mover's speeds and last frame's word.
+            speed: speeds.map_or(0.0, |s| crate::net::current_speed(&s.0, player.move_flags)),
+            command: follow_command,
+            scoped,
+        },
+    }
+}
+
+/// The mouse's input records: the look session ([`run_look_session`]), its turn of the camera and
+/// its hand-off to the body, and the click tests behind [`WorldClick`] and [`WorldRightClick`].
+/// The reference's mouse handlers run in the frame's window input (`0x423920` at `0x420d23`): the
+/// press `0x514810`/`0x51491f`, the motion `0x514400` and the release `0x514b70`, ahead of the
+/// packets, so this reads the body as the last frame left it and a click it settles reaches the
+/// world's click handlers before the packets apply. [`control`], the frame time's step, reads
+/// what it handed on ([`LookSample`]).
+#[allow(clippy::type_complexity)]
+pub(super) fn sample_look(
+    time: Res<Time>,
+    pointer: (
+        Res<AccumulatedMouseMotion>,
+        Res<camera::LookConfig>,
+        Res<camera::FollowConfig>,
+        Res<camera_dynamics::CameraOptions>,
+        // Only `nearclip` is read here, for the dynamics.
+        Res<benilla_world::view::ViewDistance>,
+    ),
+    gates: (
+        Res<InspectMode>,
+        Res<crate::ui_script::PlayerUiClickConsumed>,
+        Res<crate::bindings::BindingsState>,
+        Res<view_subject::ViewSubject>,
+        Res<scoped_view::ScopedView>,
+        // The loading cover blanks input at the source; a gesture in flight is unwound below.
+        Res<crate::loading_screen::LoadingScreen>,
+        Res<super::StandPending>,
+        Query<Has<Embodied>, With<crate::net::SelfPlayer>>,
+    ),
+    mut player: ResMut<Player>,
+    mut rig: ResMut<CameraControl>,
+    mut cameras: Query<&mut FlyCam, With<Camera>>,
+    body: Query<
+        (
+            Option<&crate::net::ObjectStore>,
+            Option<&crate::net::UnitSpeeds>,
+        ),
+        (With<Embodied>, Without<FlyCam>),
+    >,
+    window: Single<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
+    // A press starts a look and arms a click test, which the release settles on time and travel.
+    mut world_clicks: (MessageWriter<WorldClick>, MessageWriter<WorldRightClick>),
+    mut click_test: (
+        Local<Option<camera::PressGesture>>,
+        Local<Option<camera::PressGesture>>,
+    ),
+    mut sample: ResMut<LookSample>,
+) {
+    let (left_click, right_click) = (&mut *click_test.0, &mut *click_test.1);
+    let Ok(mut cam) = cameras.single_mut() else {
+        return;
+    };
+    let (mut window, mut cursor_opts) = window.into_inner();
+    let (inspect, click_consumed, binds, view_subject, scoped) =
+        (&gates.0, &gates.1, &gates.2, &gates.3, &gates.4);
+    let input::LookInput {
+        both_buttons,
+        follow_command,
+    } = input::look_input(binds, &player, &rig);
+    let body = body.single().ok();
+    let dynamics = dynamics_input(
+        &pointer.3,
+        pointer.4.nearclip,
+        &pointer.2,
+        &player,
+        body,
+        follow_command,
+        scoped.active(),
+        player.face_yaw,
+    );
+    let BodyGates {
+        stunned,
+        stand_state,
+        mover,
+    } = body_gates(
+        body.and_then(|(store, _)| store),
+        gates.7.single().unwrap_or(false),
+        &gates.6,
+        &player,
+        view_subject,
+    );
+    // `0x5145e0`: `0x5145b0` and standing; a turn key stands a seated body up instead.
+    let mouse_turns_body = mover.mouse_may_turn_body(stunned, stand_state);
+
+    // A shadow copy, written back only on change: a `Mut` each frame marks `CursorOptions` changed,
+    // and bevy_winit then re-applies the cursor to the OS every frame, which can stall.
+    let mut opts_shadow = cursor_opts.bypass_change_detection().clone();
+    // The facing before the look session, restored below when the mouse may not turn the body.
+    let yaw_before_look = player.face_yaw;
+    // A loading cover cancels a gesture in flight: ending the look session would settle its click
+    // test and click the world we just left, so the tests are dropped first.
+    if gates.5.covering() {
+        *left_click = None;
+        *right_click = None;
+    }
+    let focused = window.focused;
+    let looked = run_look_session(
+        &pointer.0,
+        both_buttons,
+        &mut rig,
+        &mut cam,
+        &mut player.face_yaw,
+        &mut window,
+        &mut opts_shadow,
+        inspect.enabled,
+        click_consumed.0,
+        &mut world_clicks.0,
+        &mut world_clicks.1,
+        left_click,
+        right_click,
+        *pointer.1,
+        &dynamics,
+        time.elapsed_secs(),
+        focused,
+    );
+    // The mouse turns the view, but the body hand-off (`0x514474`) skips a body that is stunned,
+    // dead or seated (`0x5145e0`) or not ours to drive (`control_lost`, `reseat`), while the
+    // camera rotate (`0x514444`) still runs. The reference never writes the facing; writing and
+    // restoring is the same downstream. Standing up hands the camera's yaw back at the next
+    // motion sample, a snap, as `0x5103e0` commits the camera's facing rather than a delta.
+    if !mouse_turns_body || player.control_lost || player.reseat {
+        player.face_yaw = yaw_before_look;
+    }
+    // The hand-off runs on each motion and on the press that completes both mouse bits, motion or
+    // none (`0x514924`-`0x514966`), behind the same body gate `0x5145e0`.
+    *sample = LookSample {
+        hands_off: (looked || input::both_engaged(binds, &rig, both_buttons))
+            && mouse_turns_body
+            && !player.control_lost
+            && !player.reseat,
+        facing: yaw_before_look,
+    };
+    {
+        let cur = cursor_opts.bypass_change_detection();
+        if cur.visible != opts_shadow.visible
+            || cur.grab_mode != opts_shadow.grab_mode
+            || cur.hit_test != opts_shadow.hit_test
+        {
+            *cursor_opts = opts_shadow;
+        }
+    }
+}
+
 /// Free-flies until the server places us, then drives the avatar and streams its movement as the
 /// mover; the dev chord with `F` toggles free fly.
 #[allow(clippy::type_complexity)]
@@ -57,9 +305,9 @@ pub(super) fn control(
     mut speed_capsule: (
         Res<MoveSpeed>,
         Res<PlayerCapsule>,
-        Res<InspectMode>,
+        // What the frame's mouse input handed on ([`sample_look`]).
+        Res<LookSample>,
         Res<crate::ui_script::UiKeyboardCapture>,
-        Res<crate::ui_script::PlayerUiClickConsumed>,
         // Every rebindable input reads here; raw `keys` serve only free fly and its chord.
         Res<crate::bindings::BindingsState>,
         // The far-sight subject, resolved earlier since this system holds our `Transform` mutably.
@@ -67,8 +315,6 @@ pub(super) fn control(
         // Tells a revoked body from a granted creature in the control handoff.
         Res<crate::net::SelfGuid>,
         Res<scoped_view::ScopedView>,
-        // The loading cover blanks input at the source; a gesture in flight is unwound below.
-        Res<crate::loading_screen::LoadingScreen>,
         // Our own `[0xb4b3e4]`, which a control verdict on our character writes.
         ResMut<super::OwnControlLost>,
         // The active player, whom the posture verbs read and act on whichever body is driven.
@@ -85,13 +331,6 @@ pub(super) fn control(
     mut cameras: Query<(&mut Transform, &mut FlyCam), With<Camera>>,
     // The body we drive, a possessed creature's included ([`BodyQuery`]).
     mut body: BodyQuery,
-    window: Single<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
-    // A press starts a look and arms a click test, which the release settles on time and travel.
-    mut world_clicks: (MessageWriter<WorldClick>, MessageWriter<WorldRightClick>),
-    mut click_test: (
-        Local<Option<camera::PressGesture>>,
-        Local<Option<camera::PressGesture>>,
-    ),
     // The liquid query, the transports, the parent chain from a deck collider to its transport,
     // and the active mover `0xc4da98`, as whether it is our own character.
     world_q: (
@@ -109,26 +348,22 @@ pub(super) fn control(
     ),
 ) {
     let (world, transports, child_of) = (&world_q.0, &world_q.1, &world_q.2);
-    let (left_click, right_click) = (&mut *click_test.0, &mut *click_test.1);
     let Ok((mut cam_t, mut cam)) = cameras.single_mut() else {
         return;
     };
-    let (mut window, mut cursor_opts) = window.into_inner();
     let mouse_motion = &pointer.0;
     let look_cfg = *pointer.1;
     let zoom_max = pointer.2.max;
-    let (move_speed, capsule, inspect, ui_capture, click_consumed) = (
+    let (move_speed, capsule, sample, ui_capture) = (
         &speed_capsule.0,
         &speed_capsule.1 .0,
         &speed_capsule.2,
         &speed_capsule.3,
-        &speed_capsule.4,
     );
-    let binds = &speed_capsule.5;
-    let view_subject = &speed_capsule.6;
-    let self_guid = speed_capsule.7 .0;
-    let scoped = &speed_capsule.8;
-    let covered = speed_capsule.9.covering();
+    let binds = &speed_capsule.4;
+    let view_subject = &speed_capsule.5;
+    let self_guid = speed_capsule.6 .0;
+    let scoped = &speed_capsule.7;
     // Far sight turns the auto-follow off: our facing is not "behind" for a body we only watch.
     let follow_cfg = camera::FollowConfig {
         style: if view_subject.remote.is_some() {
@@ -150,95 +385,42 @@ pub(super) fn control(
     let typing = ui_capture.typing;
 
     // Every press below comes from `camera::latch_world_mouse`, so one the UI ate reaches none of
-    // them; the raw buttons only hold and release a gesture the world already owns. Read before
-    // the look session: the not-driving path seats its camera from this word and returns early.
+    // them; the raw buttons only hold and release a gesture the world already owns. The
+    // not-driving path seats its camera from this word and returns early.
     let input::LookInput {
         both_buttons,
         follow_command,
     } = input::look_input(binds, &player, &rig);
 
-    // Last frame's word, as `0x50fee0` reads it: its caller `0x514446` precedes the mover lookup.
-    let dynamics = camera_dynamics::DynamicsInput {
-        options: *pointer.4,
-        nearclip: pointer.5.nearclip,
-        // Last frame's cached surface, the reference's own lag.
-        surface_y: player.liquid_surface,
-        smooth_style: pointer.3.style,
-        tracking_style: pointer.3.tracking_style,
-        subject: camera_dynamics::SubjectState {
-            move_flags: player.move_flags,
-            // The driven body's descriptor: a possessed creature's taxi state, not ours.
-            taxi: body
-                .single()
-                .ok()
-                .and_then(|(_, _, _, _, _, store, ..)| store)
-                .is_some_and(|s| s.0.unit_flags() & 0x0010_0000 != 0),
-            track: player.server_riding,
-            fear: player.control_lost,
-            facing: player.face_yaw,
-            mounted: body
-                .single()
-                .ok()
-                .and_then(|(_, _, _, _, _, store, ..)| store)
-                .is_some_and(|s| s.0.unit_mount_display_id() > 0),
-            // `GetCurrentSpeed` (`0x7c4c90`) on the mover's speeds and last frame's word.
-            speed: body
-                .single()
-                .ok()
-                .and_then(|(_, _, _, _, _, _, speeds, ..)| speeds)
-                .map_or(0.0, |s| crate::net::current_speed(&s.0, player.move_flags)),
-            command: follow_command,
-            scoped: scoped.active(),
-        },
-    };
-
-    // A shadow copy, written back only on change: a `Mut` each frame marks `CursorOptions` changed,
-    // and bevy_winit then re-applies the cursor to the OS every frame, which can stall.
-    let mut opts_shadow = cursor_opts.bypass_change_detection().clone();
-    // The facing before the look session, restored below when the mouse may not turn the body.
-    let yaw_before_look = player.face_yaw;
-    // Off the driven body's descriptor. Stunned is `UNIT_FIELD_FLAGS & 0x40000` (`0x5145b0`),
-    // which skips the turn and pitch emitters (`0x514755`). Dead fails the shared precondition
-    // `0x5144e0` (health above zero), so a corpse is stunned to the input tick; a ghost has
-    // health 1. The stand state gates the mouse alone: `0x5145e0` wants the predicted
-    // `GetStandState() == 0` (`0x5ed570`; [`super::StandPending`] is `[player+0x1d68]`).
-    let (stunned, dead, stand_byte) = body
-        .single()
-        .ok()
-        .and_then(|(.., store, _, _, _, _)| {
-            store.map(|s| {
-                (
-                    s.0.unit_flags() & UNIT_FLAG_STUNNED != 0,
-                    s.0.unit_is_dead(),
-                    s.0.unit_stand_state(),
-                )
-            })
-        })
-        .unwrap_or((false, false, 0));
-    // The prediction is the active player's ([`posture`]): a possessed body reads its own byte.
-    let self_driven = speed_capsule
-        .11
-        .single()
-        .is_some_and(|(.., embodied)| embodied);
-    let stand_state = if self_driven {
-        speed_capsule.13.stand_state(stand_byte)
-    } else {
-        stand_byte
-    };
-    // The shared precondition `0x5144e0`, once per tick. Its far-sight conjunct,
-    // `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)`, reads the resolved subject (`0x5ee290`
-    // latches only once resolved) and spares a possessed mover, which sets the same field.
-    let mover = state::MoverInput {
-        dead,
-        view_is_out: state::view_is_out(
-            player.foreign_mover.is_none(),
-            view_subject.remote.is_some(),
-        ),
-    };
-    // `0x5145b0` now, for the mouse turn; its translate sibling waits for this frame's root edge.
+    // The word as `0x50fee0` read it in the frame's input, with the facing the input found.
+    let dynamics = dynamics_input(
+        &pointer.4,
+        pointer.5.nearclip,
+        &pointer.3,
+        &player,
+        body.single()
+            .ok()
+            .map(|(_, _, _, _, _, store, speeds, ..)| (store, speeds)),
+        follow_command,
+        scoped.active(),
+        sample.facing,
+    );
+    let BodyGates {
+        stunned,
+        stand_state: _,
+        mover,
+    } = body_gates(
+        body.single().ok().and_then(|(.., store, _, _, _, _)| store),
+        speed_capsule
+            .9
+            .single()
+            .is_some_and(|(.., embodied)| embodied),
+        &speed_capsule.11,
+        &player,
+        view_subject,
+    );
+    // `0x5145b0` now, for the key turn; its translate sibling waits for this frame's root edge.
     let may_turn = mover.may_turn(stunned);
-    // `0x5145e0`: `may_turn` and standing; a turn key stands a seated body up instead.
-    let mouse_turns_body = mover.mouse_may_turn_body(stunned, stand_state);
     // The drunk wobble, for the veer and the swim porpoise; zero when turning is refused, as the
     // reference's sits behind `0x5145b0` (`0x60aa47`).
     let drunk_wobble = {
@@ -253,55 +435,8 @@ pub(super) fn control(
             drunk::wobble(time.elapsed().as_millis() as u32, f)
         }
     };
-    // A loading cover cancels a gesture in flight: ending the look session would settle its click
-    // test and click the world we just left, so the tests are dropped first.
-    if covered {
-        *left_click = None;
-        *right_click = None;
-    }
-    let focused = window.focused;
-    let looked = run_look_session(
-        mouse_motion,
-        both_buttons,
-        &mut rig,
-        &mut cam,
-        &mut player.face_yaw,
-        &mut window,
-        &mut opts_shadow,
-        inspect.enabled,
-        click_consumed.0,
-        &mut world_clicks.0,
-        &mut world_clicks.1,
-        left_click,
-        right_click,
-        look_cfg,
-        &dynamics,
-        time.elapsed_secs(),
-        focused,
-    );
-    // The mouse turns the view, but the body hand-off (`0x514474`) skips a body that is stunned,
-    // dead or seated (`0x5145e0`) or not ours to drive (`control_lost`, `reseat`), while the
-    // camera rotate (`0x514444`) still runs. The reference never writes the facing; writing and
-    // restoring is the same downstream. Standing up hands the camera's yaw back at the next
-    // motion sample, a snap, as `0x5103e0` commits the camera's facing rather than a delta.
-    if !mouse_turns_body || player.control_lost || player.reseat {
-        player.face_yaw = yaw_before_look;
-    }
-    // The hand-off runs on each motion and on the press that completes both mouse bits, motion or
-    // none (`0x514924`-`0x514966`), behind the same body gate `0x5145e0`.
-    let hands_off = (looked || input::both_engaged(binds, &rig, both_buttons))
-        && mouse_turns_body
-        && !player.control_lost
-        && !player.reseat;
-    {
-        let cur = cursor_opts.bypass_change_detection();
-        if cur.visible != opts_shadow.visible
-            || cur.grab_mode != opts_shadow.grab_mode
-            || cur.hit_test != opts_shadow.hit_test
-        {
-            *cursor_opts = opts_shadow;
-        }
-    }
+    // The mouse's hand-off to the body, as the frame's input decided it.
+    let hands_off = sample.hands_off;
 
     // A rebound zoom key steps 1.0 per press, the stock `CameraZoomIn(1.0)` (`Bindings.xml:707`).
     let zoom = binds.amount(crate::bindings::Input::CameraZoomIn)
@@ -329,7 +464,7 @@ pub(super) fn control(
         &time,
         &mut commands,
         &mut player,
-        &mut speed_capsule.10,
+        &mut speed_capsule.8,
         &mut cam,
         &net.0,
         &mut net.1,
@@ -531,13 +666,13 @@ pub(super) fn control(
         walk::update(&mut player, &body, binds);
         // The stand state and the sheath toggle, which interlock; returns the committed stand.
         let reads = posture::PlayerReads {
-            control_lost: speed_capsule.10 .0,
+            control_lost: speed_capsule.8 .0,
         };
         let stand_now = posture::update(
             &mut player,
-            &mut speed_capsule.13,
+            &mut speed_capsule.11,
             &body,
-            &speed_capsule.11,
+            &speed_capsule.9,
             binds,
             &net.0,
             &mut commands,
@@ -546,7 +681,7 @@ pub(super) fn control(
             &mut net.10,
             &mut net.15,
             reads,
-            speed_capsule.12.as_deref().map(|t| &t.0),
+            speed_capsule.10.as_deref().map(|t| &t.0),
             moving,
             turned,
         );
