@@ -66,22 +66,35 @@ impl super::UiScript {
         self.model_ref().unit_guids.held.keys().copied().collect()
     }
 
-    /// The unit tokens that name a unit now ([`super::UnitGuids::bound_tokens`]): the set a
-    /// field's change is fanned out to (`0x515e50`).
+    /// The unit tokens that name a unit now ([`super::unit::bound_tokens_in`]): the set a field's
+    /// change is fanned out to (`0x515e50`). The objects are read through the lent host as of the
+    /// place this runs, the client's globals as the VM holds them; with no host to ask, the
+    /// snapshot's ([`super::UnitGuids::bound_tokens`]).
     pub fn bound_unit_tokens(&self) -> Vec<String> {
-        self.model_ref().unit_guids.bound_tokens()
+        let model = self.model_ref();
+        let guids = &model.unit_guids;
+        super::unit::with_live_objects(self.lua(), |o| super::unit::bound_tokens_in(guids, o))
+            .unwrap_or_else(|| guids.bound_tokens())
     }
 
-    /// The tokens naming one unit now ([`super::UnitGuids::tokens_of`]), the list `0x515e50`
-    /// signals a unit event for.
+    /// The tokens naming one unit as its event is signalled ([`super::unit::tokens_in`]), the list
+    /// `0x515e50` signals a unit event for, read as [`Self::bound_unit_tokens`] reads.
     pub fn unit_tokens_of(&self, guid: u64) -> Vec<String> {
-        self.model_ref().unit_guids.tokens_of(guid)
+        let model = self.model_ref();
+        let guids = &model.unit_guids;
+        super::unit::with_live_objects(self.lua(), |o| super::unit::tokens_in(guids, o, guid))
+            .unwrap_or_else(|| guids.tokens_of(guid))
     }
 
-    /// Whether one unit carries the unit-field watchers now
-    /// ([`super::UnitGuids::has_field_watchers`]).
+    /// Whether one unit carries the unit-field watchers now ([`super::unit::field_watchers_in`]),
+    /// read as [`Self::bound_unit_tokens`] reads.
     pub fn unit_has_field_watchers(&self, guid: u64) -> bool {
-        self.model_ref().unit_guids.has_field_watchers(guid)
+        let model = self.model_ref();
+        let guids = &model.unit_guids;
+        super::unit::with_live_objects(self.lua(), |o| {
+            super::unit::field_watchers_in(guids, o, guid)
+        })
+        .unwrap_or_else(|| guids.has_field_watchers(guid))
     }
 
     /// Push, or clear with `None`, the visible items of the player `guid` by slot id 1..=19:

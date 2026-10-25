@@ -167,6 +167,14 @@ fn client() -> Client {
             Seen = {{}}
             local f = CreateFrame("Frame")
             f:RegisterEvent("UNIT_HEALTH")
+            PetSeen = {{}}
+            local pets = CreateFrame("Frame")
+            pets:RegisterEvent("UNIT_HEALTH")
+            pets:SetScript("OnEvent", function()
+                if string.find(arg1, "pet") then
+                    table.insert(PetSeen, arg1 .. ":" .. UnitHealth(arg1))
+                end
+            end)
             f:SetScript("OnEvent", function()
                 if arg1 ~= "target" then return end
                 for _, t in ipairs({{ "targettarget", "targettargettarget", "party1target" }}) do
@@ -244,7 +252,7 @@ fn client() -> Client {
     };
     c.frame(vec![]);
     c.frame(vec![]);
-    c.eval::<()>(false, "Seen = {}");
+    c.eval::<()>(false, "Seen = {} PetSeen = {}");
     c
 }
 
@@ -332,6 +340,27 @@ fn a_listener_resolves_the_chains_as_its_own_packet_left_them() {
             "1,33,0,nil,nil,1,nil,nil,nil,nil",
         ]
     );
+}
+
+/// Two packets in one frame: the first moves our pet's health, the second summons another. The
+/// first's `UNIT_HEALTH` fires under the tokens its own packet's state gives the pet: the watchers
+/// it still carries (`0x60c520`), and `0x515e50` lists its tokens through `0x515c50` as it
+/// signals, reading our `UNIT_FIELD_SUMMON` there (`0x515cb9`) and our raid row's pet
+/// (`0x491960`), not the frame's last.
+#[test]
+fn a_pet_event_fires_under_its_own_packets_tokens() {
+    let mut c = client();
+    c.frame(vec![
+        vec![values(PET, &[(FIELD_UNIT_HEALTH, 55)])],
+        vec![values(ME, &summons(BOAR))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return PetSeen");
+    assert_eq!(seen, ["pet:55", "raidpet3:55"]);
+    let now: (i64, Option<i64>) = c.eval(
+        true,
+        "return UnitHealth('pet'), UnitIsUnit('pet', 'raidpet3')",
+    );
+    assert_eq!(now, (40, Some(1)), "the boar is our pet at the frame's end");
 }
 
 /// A selection a chunk makes is the target its next line resolves through: `TargetUnit` commits

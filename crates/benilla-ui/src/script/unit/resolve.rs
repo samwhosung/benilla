@@ -107,6 +107,161 @@ fn follow(objects: &dyn UnitTokenObjects, mut guid: u64, hops: usize) -> Option<
     Some(guid).filter(|&g| g != 0)
 }
 
+/// The party rows and the raid rows `0x515c50` walks (`0x515d49`, `0x515dac`).
+const PARTY_ROWS: u32 = 4;
+const RAID_ROWS: u32 = 40;
+
+/// A group row's pet as `0x4e81d0` and `0x491960` read it: the member's descriptor while held,
+/// else the record.
+fn row_pet(objects: &dyn UnitTokenObjects, member: u64, record: impl FnOnce() -> u64) -> u64 {
+    objects.pet_of(member).unwrap_or_else(record)
+}
+
+/// Every token that names a unit now, the base spellings `0x515c50` builds for a guid (it tests
+/// the guid against each global and table in turn and keeps every match, so a unit two tokens
+/// name is fired for twice), taken over all units at once: `player`, `pet`, `target`,
+/// `mouseover`, `npc`, then each `partyN`, `partypetN`, `raidN` and `raidpetN` with a guid, each
+/// resolved through [`resolve_unit_in`]. Hop tokens are not among them: the reference's array
+/// holds none.
+pub fn bound_tokens_in(
+    globals: &dyn UnitTokenGlobals,
+    objects: &dyn UnitTokenObjects,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut name = |token: String, base: UnitBase| {
+        if resolve_unit_in(globals, objects, base, 0).is_some() {
+            out.push(token);
+        }
+    };
+    name("player".into(), UnitBase::Player);
+    name("pet".into(), UnitBase::Pet);
+    name("target".into(), UnitBase::Target);
+    name("mouseover".into(), UnitBase::Mouseover);
+    name("npc".into(), UnitBase::Npc);
+    for row in 0..PARTY_ROWS {
+        name(format!("party{}", row + 1), UnitBase::Party(row));
+    }
+    for row in 0..PARTY_ROWS {
+        name(format!("partypet{}", row + 1), UnitBase::PartyPet(row));
+    }
+    for row in 0..RAID_ROWS {
+        name(format!("raid{}", row + 1), UnitBase::Raid(row));
+    }
+    for row in 0..RAID_ROWS {
+        name(format!("raidpet{}", row + 1), UnitBase::RaidPet(row));
+    }
+    out
+}
+
+/// The tokens naming `guid`, as `0x515c50` lists them for one unit when its event is signalled
+/// (`0x515e50`): `player` (the active player's object, `0x515c80`), `pet` (that object's
+/// `UNIT_FIELD_CHARM`, else `SUMMON`, `0x515cb9`), `target`, the first of party rows 1 to 4 whose
+/// member or pet it is (`0x491920`, `0x491930`; `0x515d61` stops there), the first such of raid
+/// rows 1 to 40 (`0x491940`, `0x491960`; `0x515dc4`), then `npc` and `mouseover`, each compared
+/// with its global (`0x515de6`, `0x515e14`). Nothing removes duplicates; nobody and a missing
+/// player give none (`0x515c62`, `0x515c89`).
+pub fn tokens_in(
+    globals: &dyn UnitTokenGlobals,
+    objects: &dyn UnitTokenObjects,
+    guid: u64,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let me = objects.active_player();
+    if guid == 0 || me == 0 {
+        return out;
+    }
+    let pet = objects.pet_of(me).unwrap_or(0);
+    for (token, at) in [("player", me), ("pet", pet), ("target", globals.target())] {
+        if at == guid {
+            out.push(token.to_string());
+        }
+    }
+    let rows = |n: u32, member: &dyn Fn(u32) -> u64, record: &dyn Fn(u32) -> u64| {
+        (0..n).find_map(|row| {
+            let m = member(row);
+            if m == guid {
+                Some((row, false))
+            } else if row_pet(objects, m, || record(row)) == guid {
+                Some((row, true))
+            } else {
+                None
+            }
+        })
+    };
+    let party = rows(PARTY_ROWS, &|r| globals.party(r), &|r| {
+        globals.party_pet_record(r)
+    });
+    if let Some((row, pet)) = party {
+        out.push(format!(
+            "{}{}",
+            if pet { "partypet" } else { "party" },
+            row + 1
+        ));
+    }
+    let raid = rows(RAID_ROWS, &|r| globals.raid(r), &|r| {
+        globals.raid_pet_record(r)
+    });
+    if let Some((row, pet)) = raid {
+        out.push(format!(
+            "{}{}",
+            if pet { "raidpet" } else { "raid" },
+            row + 1
+        ));
+    }
+    for (token, at) in [("npc", globals.npc()), ("mouseover", globals.mouseover())] {
+        if at == guid {
+            out.push(token.to_string());
+        }
+    }
+    out
+}
+
+/// Whether `guid` carries the unit-field watchers: `0x51bbb0` registers them while the unit's
+/// token flags are nonzero (`0x60c4a0`), and `0x60c520` sets those for the active player, its
+/// pet, a party member or its pet, a raid member or its pet, and the target. `npc` and
+/// `mouseover` set none.
+pub fn field_watchers_in(
+    globals: &dyn UnitTokenGlobals,
+    objects: &dyn UnitTokenObjects,
+    guid: u64,
+) -> bool {
+    if guid == 0 {
+        return false;
+    }
+    let me = objects.active_player();
+    let in_rows = |n: u32, member: &dyn Fn(u32) -> u64, record: &dyn Fn(u32) -> u64| {
+        (0..n).any(|row| {
+            let m = member(row);
+            m == guid || row_pet(objects, m, || record(row)) == guid
+        })
+    };
+    guid == me
+        || (me != 0 && objects.pet_of(me).unwrap_or(0) == guid)
+        || guid == globals.target()
+        || in_rows(PARTY_ROWS, &|r| globals.party(r), &|r| {
+            globals.party_pet_record(r)
+        })
+        || in_rows(RAID_ROWS, &|r| globals.raid(r), &|r| {
+            globals.raid_pet_record(r)
+        })
+}
+
+/// `f` over the objects as the lent host reads them now ([`crate::script::CallHost::read_unit_tokens`]),
+/// `None` with no host free to ask or one that reads none.
+pub(crate) fn with_live_objects<T>(
+    lua: &Lua,
+    f: impl FnOnce(&dyn UnitTokenObjects) -> T,
+) -> Option<T> {
+    let mut f = Some(f);
+    let mut out = None;
+    crate::script::host::read_host(lua, |h| {
+        h.read_unit_tokens(&mut |objects| {
+            out = f.take().map(|f| f(objects));
+        })
+    });
+    out
+}
+
 /// Whether resolving `base` with `hops` reads any object, so asks the host: a hop, or a base the
 /// objects answer. `target`, `npc`, `partyN` and `raidN` read the client's globals alone.
 fn reads_objects(base: UnitBase, hops: usize) -> bool {
@@ -145,13 +300,7 @@ pub(crate) fn live_parsed(
     if !reads_objects(base, hops) {
         return None;
     }
-    let mut live = None;
-    crate::script::host::read_host(lua, |h| {
-        h.read_unit_tokens(&mut |objects| {
-            live = Some(resolve_unit_in(guids, objects, base, hops));
-        })
-    });
-    live
+    with_live_objects(lua, |objects| resolve_unit_in(guids, objects, base, hops))
 }
 
 /// [`resolve_parsed`] on `token`'s text: `Err` for a token none of the nine compares match, where
@@ -361,85 +510,14 @@ impl UnitGuids {
         self.held.values().copied().filter(|&guid| guid != 0)
     }
 
-    /// Every token that names a unit now, the base spellings `0x515c50` builds for a guid (it
-    /// tests the guid against each global and table in turn and keeps every match, so a unit two
-    /// tokens name is fired for twice), taken over all units at once: `player`, `pet`, `target`,
-    /// `mouseover`, `npc`, then each `partyN`, `partypetN`, `raidN` and `raidpetN` with a guid.
-    /// Hop tokens are not among them: the reference's array holds none.
+    /// Every token that names a unit off the snapshot alone ([`bound_tokens_in`] over it).
     pub fn bound_tokens(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut name = |token: String, base: UnitBase| {
-            if self.resolve_unit(base, 0).is_some() {
-                out.push(token);
-            }
-        };
-        name("player".into(), UnitBase::Player);
-        name("pet".into(), UnitBase::Pet);
-        name("target".into(), UnitBase::Target);
-        name("mouseover".into(), UnitBase::Mouseover);
-        name("npc".into(), UnitBase::Npc);
-        for row in 0..self.party.len() {
-            name(format!("party{}", row + 1), UnitBase::Party(row as u32));
-        }
-        for row in 0..self.party_pets.len() {
-            name(
-                format!("partypet{}", row + 1),
-                UnitBase::PartyPet(row as u32),
-            );
-        }
-        for row in 0..self.raid.len() {
-            name(format!("raid{}", row + 1), UnitBase::Raid(row as u32));
-        }
-        for row in 0..self.raid_pets.len() {
-            name(format!("raidpet{}", row + 1), UnitBase::RaidPet(row as u32));
-        }
-        out
+        bound_tokens_in(self, self)
     }
 
-    /// The tokens naming `guid`, as `0x515c50` lists them for one unit: `player`, `pet`, `target`,
-    /// the first of party rows 1 to 4 whose member or pet it is (`0x515d61` stops there), the
-    /// first such of raid rows 1 to 40 (`0x515dc4`), then `npc` and `mouseover`, each compared
-    /// with its global (`0x515de6`, `0x515e14`). Nothing removes duplicates; nobody and a missing
-    /// player give none (`0x515c62`, `0x515c89`).
+    /// The tokens naming `guid` off the snapshot alone ([`tokens_in`] over it).
     pub fn tokens_of(&self, guid: u64) -> Vec<String> {
-        let mut out = Vec::new();
-        if guid == 0 || self.player == 0 {
-            return out;
-        }
-        for (token, at) in [
-            ("player", self.player),
-            ("pet", self.pet),
-            ("target", self.target),
-        ] {
-            if at == guid {
-                out.push(token.to_string());
-            }
-        }
-        if let Some(row) = (0..4).find(|&i| self.party[i] == guid || self.party_pets[i] == guid) {
-            let base = if self.party[row] == guid {
-                "party"
-            } else {
-                "partypet"
-            };
-            out.push(format!("{base}{}", row + 1));
-        }
-        let pet_of = |i: usize| self.raid_pets.get(i).copied().unwrap_or(0);
-        if let Some(row) =
-            (0..self.raid.len().min(40)).find(|&i| self.raid[i] == guid || pet_of(i) == guid)
-        {
-            let base = if self.raid[row] == guid {
-                "raid"
-            } else {
-                "raidpet"
-            };
-            out.push(format!("{base}{}", row + 1));
-        }
-        for (token, at) in [("npc", self.npc), ("mouseover", self.mouseover)] {
-            if at == guid {
-                out.push(token.to_string());
-            }
-        }
-        out
+        tokens_in(self, self, guid)
     }
 
     /// The base token of the first group row naming `guid`, as a member or its pet, or `None`
@@ -469,19 +547,10 @@ impl UnitGuids {
             .or_else(|| row(&self.raid, &self.raid_pets, "raid", "raidpet"))
     }
 
-    /// Whether `guid` carries the unit-field watchers: `0x51bbb0` registers them while the unit's
-    /// token flags are nonzero (`0x60c4a0`), and `0x60c520` sets those for the active player,
-    /// its pet, a party member or its pet, a raid member or its pet, and the target. `npc` and
-    /// `mouseover` set none.
+    /// Whether `guid` carries the unit-field watchers off the snapshot alone
+    /// ([`field_watchers_in`] over it).
     pub fn has_field_watchers(&self, guid: u64) -> bool {
-        guid != 0
-            && (guid == self.player
-                || (self.player != 0 && guid == self.pet)
-                || guid == self.target
-                || self.party.contains(&guid)
-                || self.party_pets.contains(&guid)
-                || self.raid.contains(&guid)
-                || self.raid_pets.contains(&guid))
+        field_watchers_in(self, self, guid)
     }
 }
 

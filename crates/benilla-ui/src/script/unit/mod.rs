@@ -729,10 +729,10 @@ mod tests;
 
 pub use object::{UnitObject, UnitObjectRead};
 pub use relations::UnitRelations;
-pub(crate) use resolve::token_guid;
 pub use resolve::{
-    parse_unit_token, resolve_unit_in, UnitBase, UnitGuids, UnitTokenGlobals, UnitTokenObjects,
-    UnitTokenParse,
+    bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,
+    UnitGuids, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
+pub(crate) use resolve::{token_guid, with_live_objects};
 
 pub(super) use bindings::install;
