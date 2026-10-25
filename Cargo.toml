@@ -42,6 +42,9 @@ kira = { path = "third_party/kira" }
 # A lock-only stand-in: bevy_audio's unbuilt cpal 0.15 would otherwise hold `alsa-sys` 0.3 against
 # cpal 0.17's 0.4, and a lock holds one `links = "alsa"` (`third_party/alsa-0.9/BENILLA.md`).
 alsa = { path = "third_party/alsa-0.9" }
+# wgpu-hal 27.0.4, patched so a presentation stall past wgpu-core's 1 s frame timeout is waited out
+# and not turned into a lost device (`third_party/wgpu-hal/BENILLA.md`).
+wgpu-hal = { path = "third_party/wgpu-hal" }
 
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]
