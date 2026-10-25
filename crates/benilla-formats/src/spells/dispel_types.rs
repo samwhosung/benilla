@@ -21,6 +21,15 @@ pub struct SpellDispelTypes {
 }
 
 impl SpellDispelTypes {
+    /// Fixture constructor for tests, each class's key its label too; the live path is
+    /// [`load_spell_dispel_types`].
+    pub fn from_names(names: HashMap<u32, String>) -> Self {
+        Self {
+            labels: names.clone(),
+            names,
+        }
+    }
+
     /// The class's key, column 11: `Magic` on every locale, as `UnitDebuff` returns it; `None` for
     /// no dispel class (0) or one the gate withholds.
     pub fn name(&self, dispel: u32) -> Option<&str> {

@@ -360,6 +360,12 @@ impl SpellCatalog {
         }
     }
 
+    /// The catalog with `dispel_types` for its dispel table, for the aura tests.
+    pub fn with_dispel_types(mut self, dispel_types: SpellDispelTypes) -> Self {
+        self.dispel_types = dispel_types;
+        self
+    }
+
     /// The spell that teaches the skill of a weapon of `subclass`, the table `0xc4d738` that
     /// `GetSkillSpell 0x5ea5d0` indexes by a hand's weapon subclass; `None` for a subclass with no
     /// such spell (`0x5ea666`).
