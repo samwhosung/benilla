@@ -150,7 +150,7 @@ fn unit_character_points_answer_the_active_player_only() {
 /// `0x851294`), not a type error; a number is stringified and then fails the resolver.
 #[test]
 fn unit_character_points_raises_the_reference_usage() {
-    let mut s = script();
+    let s = script();
     for call in [
         "UnitCharacterPoints()",
         "UnitCharacterPoints(nil)",
