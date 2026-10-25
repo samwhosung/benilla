@@ -9,10 +9,10 @@
 //!
 //! The chat chokepoint, the mail list's subjects (`0x4ad5b2`), `GetInboxText`'s letter (`0x4af203`)
 //! and the guild's sites are wired: the guild event's message of the day (`0x5e7277`), the roster's
-//! message and information text (`0x4d0b71`, `0x4d0b8e`) and the rank names `GetGuildRosterInfo`,
-//! `GuildControlGetRankName` and `GetGuildInfo` return (`0x4d12fd`, `0x4d1f62`, `0x4c9402`). The
-//! reference masks four more sites, not built here: the roster notes' two accessors (`0x4d09df`,
-//! `0x4d09ec`), item text, and `SendChatMessage`. Seven callers pass the
+//! message and information text (`0x4d0b71`, `0x4d0b8e`), the members' notes at their first read
+//! (`0x4d09df`, `0x4d09ec`) and the rank names `GetGuildRosterInfo`, `GuildControlGetRankName` and
+//! `GetGuildInfo` return (`0x4d12fd`, `0x4d1f62`, `0x4c9402`). The reference masks two more sites,
+//! not built here: item text, and `SendChatMessage`. Seven callers pass the
 //! `dl = 1` cache, which answers a text it masked before without advancing the index
 //! ([`TextFilter::mask_cached`]).
 //!

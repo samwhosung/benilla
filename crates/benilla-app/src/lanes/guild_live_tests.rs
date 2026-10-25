@@ -493,6 +493,58 @@ fn a_profane_rank_name_comes_back_masked_and_the_same_each_time() {
     assert_eq!(names, ["!@#$", "!@#$", "!@#$"]);
 }
 
+/// A member's notes are masked by the first read of their list (`0x4d09d0`, `dl = 1`, public
+/// note then officer note) and keep what that read left: the mark clears (`0x4d09f1`), so a list
+/// read with `profanityFilter` off stays plain after it turns on, and one read with it on stays
+/// masked, until the next roster message brings a new mark.
+#[test]
+fn a_guild_members_notes_are_masked_once_by_their_first_read() {
+    let on = guild_presence::ONLINE;
+    let noted = |public: &str, officer: &str| {
+        let mut m = member(1, "Alder", 1, on);
+        m.public_note = public.into();
+        m.officer_note = officer.into();
+        m
+    };
+    let notes = |c: &mut Client| -> Vec<String> {
+        c.eval(
+            true,
+            "local _, _, _, _, _, _, a, b = GetGuildRosterInfo(1) return {a, b}",
+        )
+    };
+    let mut c = named();
+    c.frame(vec![vec![roster("one", vec![noted("twat", "you twat")])]]);
+    assert_eq!(notes(&mut c), ["!@#$", "you %^&*"], "both notes, in order");
+    assert_eq!(notes(&mut c), ["!@#$", "you %^&*"], "the same again");
+
+    c.app
+        .world_mut()
+        .resource_mut::<crate::text_filter::TextFilterSwitches>()
+        .profanity = false;
+    assert_eq!(
+        notes(&mut c),
+        ["!@#$", "you %^&*"],
+        "the mark is cleared: a list read once is not read again"
+    );
+    c.frame(vec![vec![roster("two", vec![noted("twat", "you twat")])]]);
+    assert_eq!(
+        notes(&mut c),
+        ["twat", "you twat"],
+        "a new list, read with the filter off"
+    );
+    c.app
+        .world_mut()
+        .resource_mut::<crate::text_filter::TextFilterSwitches>()
+        .profanity = true;
+    assert_eq!(notes(&mut c), ["twat", "you twat"], "and it stays plain");
+    c.frame(vec![vec![roster("three", vec![noted("twat", "you twat")])]]);
+    assert_eq!(
+        notes(&mut c),
+        ["!@#$", "you %^&*"],
+        "a third list, read with it on: the cached masks of the same texts"
+    );
+}
+
 /// `GetGuildRosterLastOnline` has no player gate (`0x4d14a0`), where `GetGuildRosterInfo` fails
 /// with none (`0x4d125f`).
 #[test]

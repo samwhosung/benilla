@@ -198,6 +198,8 @@ pub(crate) struct GuildLocal {
     sort: SortStack,
     /// The display order last built, which a loop over the rows reads once ([`Self::ordered`]).
     order: live::OrderCache,
+    /// The member notes as masked at their first read, for the member list they belong to.
+    notes: live::NoteStore,
 }
 
 impl GuildLocal {
@@ -1095,7 +1097,7 @@ mod tests {
 
         let local = GuildLocal::default();
         let roster = &guild.now.roster;
-        let rows = local.ordered(roster, false, None, Default::default());
+        let rows = local.ordered(roster, false, None, Default::default(), &|_| {});
         assert_eq!(rows.len(), 3, "every member, always");
         assert_eq!(roster.online, 2, "but the count is the online tally");
         assert!(
@@ -1104,7 +1106,7 @@ mod tests {
         );
         assert!(!rows[2].info.online);
 
-        let rows = local.ordered(roster, true, None, Default::default());
+        let rows = local.ordered(roster, true, None, Default::default(), &|_| {});
         assert_eq!(rows.len(), 3);
         assert_eq!(roster.members.len(), 3, "now the count is everybody");
     }
@@ -1450,7 +1452,7 @@ mod tests {
             ..Default::default()
         });
         let at = |local: &GuildLocal, index: i64| {
-            let rows = local.ordered(&guild.now.roster, true, None, Default::default());
+            let rows = local.ordered(&guild.now.roster, true, None, Default::default(), &|_| {});
             live::row_at(&rows, index).map(|r| r.info.name.clone())
         };
         local.sort.select(sort::SortField::Name);
@@ -1477,7 +1479,13 @@ mod tests {
         };
         guild.apply_roster(roster(&["Alder", "Birch"]));
         let order = |guild: &GuildState, local: &GuildLocal, show_offline| {
-            local.ordered(&guild.now.roster, show_offline, None, Default::default())
+            local.ordered(
+                &guild.now.roster,
+                show_offline,
+                None,
+                Default::default(),
+                &|_| {},
+            )
         };
         let first = order(&guild, local, false);
         assert!(

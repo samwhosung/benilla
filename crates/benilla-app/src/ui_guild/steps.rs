@@ -24,6 +24,8 @@ pub(crate) struct GuildSteps<'w> {
     /// The tables the order names the zones and classes from.
     areas: Option<Res<'w, AreaTableRes>>,
     unit_names: NameTables<'w>,
+    /// The notes' masker: a setter's compare reads them through `0x4d09b0`, which masks them.
+    masker: super::Masker<'w>,
     net: Res<'w, NetCommands>,
     /// The roster request's deadline clock. Real time: the virtual clock's 250 ms `max_delta`
     /// lags in a hitch.
@@ -38,6 +40,7 @@ impl GuildSteps<'_> {
             local,
             areas,
             unit_names,
+            masker,
             net,
             time,
         } = self;
@@ -61,6 +64,7 @@ impl GuildSteps<'_> {
                 script.guild_show_offline() != 0,
                 areas.as_deref().map(|a| &a.0),
                 unit_names.get(),
+                &|text| masker.cached(text),
             );
             live::row_at(&rows, i64::from(index)).cloned()
         };

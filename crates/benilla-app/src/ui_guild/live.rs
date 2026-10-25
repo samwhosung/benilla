@@ -38,18 +38,36 @@ pub(super) struct OrderKey {
 /// The last display order built, kept so the loop over a roster's rows sorts it once.
 pub(super) type OrderCache = Mutex<Option<(OrderKey, Arc<Vec<RosterRow>>)>>;
 
+/// The member list's notes as the first read left them, by wire index: the reference's mark byte
+/// (`+0x4d`, set at the parse `0x4d0cd0`) says a record's notes are still to be masked, and
+/// `0x4d09d0` masks them in place once and clears it. A slot is `None` while its mark stands.
+#[derive(Default)]
+pub(super) struct NoteMarks {
+    members_rev: u64,
+    notes: Vec<Option<(String, String)>>,
+}
+
+pub(super) type NoteStore = Mutex<NoteMarks>;
+
 impl GuildLocal {
     /// `roster` in display order, every member, sorted and never filtered: the array the
     /// reference sorts after each roster message and each sort change (`0x4d0d50`, `0x4d0d32`,
     /// `0x4d0f95`, `0x4d1018`), which is a function of the list, the chain and show-offline, so
     /// built again only when one moves. The rows carry no rank name: the guild's record names it
     /// where the row is read.
+    ///
+    /// The rows carry the notes `mask` leaves them (the cached form, `0x4d09df`, `0x4d09ec`) at
+    /// the list's first read, which every later read of that list keeps, whatever
+    /// `profanityFilter` has become. The reference masks a record at its own first read, the
+    /// sort's tie-break (`0x4d0ee6`), a getter (`0x4d13a7`, `0x4d13b7`) or a setter's compare
+    /// (`0x4d1662`, `0x4d1782`); here the first of them masks the list.
     pub(super) fn ordered(
         &self,
         roster: &Roster,
         show_offline: bool,
         areas: Option<&AreaTableCatalog>,
         names: UnitNames<'_>,
+        mask: &dyn Fn(&mut String),
     ) -> Arc<Vec<RosterRow>> {
         let key = OrderKey {
             members_rev: roster.members_rev,
@@ -62,11 +80,30 @@ impl GuildLocal {
                 return rows.clone();
             }
         }
+        let mut marks = self.notes.lock().unwrap_or_else(PoisonError::into_inner);
+        if marks.members_rev != roster.members_rev || marks.notes.len() != roster.members.len() {
+            marks.members_rev = roster.members_rev;
+            marks.notes = vec![None; roster.members.len()];
+        }
         let mut rows: Vec<RosterRow> = roster
             .members
             .iter()
-            .map(|m| feed::row(m, areas, None, names))
+            .zip(marks.notes.iter_mut())
+            .map(|(m, marked)| {
+                let mut row = feed::row(m, areas, None, names);
+                let (note, officer_note) = marked.get_or_insert_with(|| {
+                    let (mut note, mut officer_note) =
+                        (m.public_note.clone(), m.officer_note.clone());
+                    mask(&mut note);
+                    mask(&mut officer_note);
+                    (note, officer_note)
+                });
+                row.info.note.clone_from(note);
+                row.info.officer_note.clone_from(officer_note);
+                row
+            })
             .collect();
+        drop(marks);
         self.sort.order(&mut rows, show_offline);
         let rows = Arc::new(rows);
         *slot = Some((key, rows.clone()));
@@ -138,6 +175,7 @@ impl GuildLive<'_, '_> {
                 show_offline,
                 self.areas.as_deref().map(|a| &a.0),
                 self.tables.get(),
+                &|text| self.masker.cached(text),
             )
         };
         Some(match read {
