@@ -7,14 +7,14 @@
 //! (`[0xb6e5f0]`) that is never reset, so the phase carries across matches and messages. Patterns
 //! apply in list order, not text order, every occurrence, and the length never changes.
 //!
-//! The chat chokepoint, the mail list's subjects (`0x4ad5b2`), `GetInboxText`'s letter (`0x4af203`)
-//! and the guild's sites are wired: the guild event's message of the day (`0x5e7277`), the roster's
-//! message and information text (`0x4d0b71`, `0x4d0b8e`), the members' notes at their first read
-//! (`0x4d09df`, `0x4d09ec`) and the rank names `GetGuildRosterInfo`, `GuildControlGetRankName` and
-//! `GetGuildInfo` return (`0x4d12fd`, `0x4d1f62`, `0x4c9402`). The reference masks two more sites,
-//! not built here: item text, and `SendChatMessage`. Seven callers pass the
-//! `dl = 1` cache, which answers a text it masked before without advancing the index
-//! ([`TextFilter::mask_cached`]).
+//! All thirteen call sites are wired: the chat chokepoint (`0x49abc6`), the drunk transform of
+//! `SendChatMessage` (`0x508891`), the mail list's subjects (`0x4ad5b2`), `GetInboxText`'s letter
+//! (`0x4af203`), a letter's item text (`0x4e3672`; a book's pages are not masked), and the guild's:
+//! the event's message of the day (`0x5e7277`), the roster's message and information text
+//! (`0x4d0b71`, `0x4d0b8e`), the members' notes at their first read (`0x4d09df`, `0x4d09ec`) and the
+//! rank names `GetGuildRosterInfo`, `GuildControlGetRankName` and `GetGuildInfo` return
+//! (`0x4d12fd`, `0x4d1f62`, `0x4c9402`). Seven callers pass the `dl = 1` cache, which answers a
+//! text it masked before without advancing the index ([`TextFilter::mask_cached`]).
 //!
 //! The predicate has one call site, in the chat chokepoint; it never edits the text, and a hit
 //! drops the line silently.

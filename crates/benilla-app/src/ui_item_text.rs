@@ -671,6 +671,8 @@ fn feed_item_text(
     self_q: Query<(&crate::net::ObjectStore, &crate::net::Guid), With<crate::net::SelfPlayer>>,
     states: Res<crate::world_state::WorldStates>,
     unit_names: crate::ui_unit::NameTables,
+    filter: Option<Res<crate::text_filter::TextFilter>>,
+    switches: Option<Res<crate::text_filter::TextFilterSwitches>>,
 ) {
     vm.feed(|script, (mut open, mail), fires| {
         let Some(script) = script else {
@@ -698,6 +700,7 @@ fn feed_item_text(
             return; // template in flight; the reference re-enters the open when it lands
         };
 
+        let is_letter = matches!(sess.source, ReadSource::Letter { .. });
         let (creator, text, page, has_next) = match &mut sess.source {
             ReadSource::Letter { text_id } => {
                 let creator_guid = objects
@@ -746,13 +749,18 @@ fn feed_item_text(
         // Server-authored text runs the `$`-macro expander, as in the reference's
         // `ItemTextFrame.cpp`.
         let subject = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
-        let text = crate::npc_text::substitute(
+        let mut text = crate::npc_text::substitute(
             &text,
             &crate::npc_text::MacroContext {
                 subject: subject.as_ref(),
                 states: &states,
             },
         );
+        // A single item text is masked after the expansion (`0x4e3672`, `dl = 0`); a page chain's
+        // pages are not (`0x4e3744`-`0x4e3860` reach no masker).
+        if let (true, Some(filter)) = (is_letter, filter.as_deref()) {
+            filter.mask(switches.as_deref().is_some_and(|s| s.profanity), &mut text);
+        }
         script.set_item_text(Some(ItemTextState {
             item: readable.title,
             creator,
@@ -913,6 +921,145 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(names_asked(&rx), 1, "the next read asks it, once");
+    }
+
+    /// A profanity list masking the one word `darn`.
+    fn darn_filter() -> crate::text_filter::TextFilter {
+        crate::text_filter::TextFilter::new(
+            &[benilla_formats::FilterPattern {
+                id: 1,
+                pattern: r"\<darn\>".into(),
+            }],
+            &[],
+        )
+    }
+
+    /// A single item text (a letter's body) is masked after the expansion (`0x4e3672`, `dl = 0`),
+    /// gated by `profanityFilter`; `ItemTextGetText` returns the masked text.
+    #[test]
+    fn a_letters_text_is_masked_when_the_filter_is_on() {
+        const FIELD_OBJECT_ENTRY: u16 = 3;
+        const LETTER: u64 = 0x4000_0000_0000_0009;
+        for (profanity, want) in [(true, "Oh !@#$ it."), (false, "Oh darn it.")] {
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.insert_resource(NetCommands(tx))
+                .init_resource::<ItemTextOpen>()
+                .init_resource::<PageTexts>()
+                .init_resource::<MailOpen>()
+                .init_resource::<Items>()
+                .init_resource::<NameCache>()
+                .init_resource::<GameObjectTemplates>()
+                .init_resource::<crate::net::GuidIndex>()
+                .init_resource::<crate::world_state::WorldStates>()
+                .insert_resource(darn_filter())
+                .insert_resource(crate::text_filter::TextFilterSwitches {
+                    profanity,
+                    ..Default::default()
+                })
+                .add_systems(
+                    Update,
+                    (apply_reads, begin_item_text, feed_item_text).chain(),
+                );
+            app.insert_non_send_resource(UiScript::new().unwrap());
+            app.world_mut()
+                .resource_mut::<Items>()
+                .insert_template(5_000, Some(crate::items::test_template("Letter")));
+            crate::items::test_spawn_item(
+                app.world_mut(),
+                LETTER,
+                benilla_protocol::ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, 5_000)]),
+                false,
+            );
+            app.world_mut()
+                .resource_mut::<MailOpen>()
+                .bodies
+                .insert(77, "Oh darn it.".into());
+            app.world_mut()
+                .resource_mut::<ItemTextOpen>()
+                .read_letter(LETTER, 77);
+            for _ in 0..4 {
+                app.update();
+            }
+            let text: String = app
+                .world()
+                .non_send_resource::<UiScript>()
+                .eval("return ItemTextGetText()")
+                .expect("runs");
+            assert_eq!(text, want, "profanityFilter {profanity}");
+        }
+    }
+
+    /// A page chain's pages reach no masker: `0x4e35b0`'s page arm (`0x4e3744`-`0x4e3860`) never
+    /// calls `0x4a1a60`, so a book shows its words as written whatever `profanityFilter` is.
+    #[test]
+    fn a_books_page_is_not_masked() {
+        const TABLET: u64 = 0xF110_0043_2400_0001;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<ItemTextOpen>()
+            .init_resource::<ItemTextLane>()
+            .init_resource::<PageTexts>()
+            .init_resource::<MailOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<GameObjectTemplates>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .insert_resource(darn_filter())
+            .init_resource::<crate::text_filter::TextFilterSwitches>()
+            .add_systems(
+                Update,
+                (apply_reads, begin_item_text, feed_item_text).chain(),
+            );
+        net::register(&mut app);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let mut data = [0i32; 24];
+        data[7] = 358;
+        app.world_mut()
+            .resource_mut::<GameObjectTemplates>()
+            .insert(17188, 10, "The Lay".into(), &data);
+        let tablet = app
+            .world_mut()
+            .spawn((
+                crate::net::Guid(TABLET),
+                crate::net::ObjectStore(crate::go_templates::test_typed_fields(17188, 10)),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(TABLET, tablet);
+        let fire = |app: &mut App, events| {
+            crate::net::handlers::dispatch(app.world_mut(), events);
+            app.world_mut()
+                .run_system_cached_with(fire_item_text, crate::lanes::Until::all())
+                .expect("the item-text lane fires");
+        };
+        fire(
+            &mut app,
+            vec![benilla_protocol::SessionEvent::GameObjectPageText { guid: TABLET }],
+        );
+        app.update();
+        app.update();
+        fire(
+            &mut app,
+            vec![benilla_protocol::SessionEvent::PageText {
+                page_id: 358,
+                text: "Oh darn it.".into(),
+                next_page_id: 0,
+            }],
+        );
+        for _ in 0..4 {
+            app.update();
+        }
+        let text: String = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return ItemTextGetText()")
+            .expect("runs");
+        assert_eq!(text, "Oh darn it.");
     }
 
     /// `SMSG_GAMEOBJECT_PAGETEXT` (`0x5f88c0`) resolves the GameObject and opens the reader on it
