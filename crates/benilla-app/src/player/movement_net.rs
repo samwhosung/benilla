@@ -338,8 +338,9 @@ fn command_sends(prev: u32, now: u32, air_nudged: bool) -> [Option<MoveKind>; 3]
 const COMMAND_BITS: u32 = move_flags::ANY_MOVE | move_flags::TURN_LEFT | move_flags::TURN_RIGHT;
 
 /// The messages of a command press or release, the tick `SetCommands` runs at its tail
-/// (`0x5151a0` → `0x514640`): the word's direction and turn bits rewritten to `bits`, and a
-/// `MSG_MOVE_*` for each transition ([`command_sends`]), carrying the mover as the press found it,
+/// (`0x5151a0` → `0x514640`): the word's direction and turn bits rewritten to `bits` and its pitch
+/// bits to the pitch keys', a `MSG_MOVE_*` for each transition ([`command_sends`]), then the pitch
+/// send the pitch arm queued after the turn arm (`0x514777`), carrying the mover as the press found it,
 /// before the frame's packets and its movement. Every send re-arms the heartbeat's deadline
 /// (`0x615b80`), as in the frame time's stream, which then finds the word already changed and
 /// sends nothing more for it. Returns whether a message sent ended the mover's precast.
@@ -350,7 +351,9 @@ pub(super) fn stream_commands(
     now: f32,
 ) -> bool {
     let prev = player.move_flags;
-    let wire_flags = ((prev & !COMMAND_BITS) | bits) & OUTBOUND_FLAG_MASK;
+    const PITCH: u32 = move_flags::PITCH_UP | move_flags::PITCH_DOWN;
+    let wire_flags = ((prev & !(COMMAND_BITS | PITCH)) | bits | super::flags::pitch_bits(player))
+        & OUTBOUND_FLAG_MASK;
     let facing = player.face_yaw.rem_euclid(std::f32::consts::TAU);
     let wire = Wire {
         flags: wire_flags,
@@ -366,6 +369,9 @@ pub(super) fn stream_commands(
         precast_ended: false,
     };
     for kind in command_sends(prev, wire_flags, false).into_iter().flatten() {
+        send_move(sender, player, &wire, kind, &mut out);
+    }
+    if let Some(kind) = player.pitch_send.take() {
         send_move(sender, player, &wire, kind, &mut out);
     }
     if out.sent {

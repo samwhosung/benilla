@@ -830,3 +830,27 @@ fn a_press_mid_cast_sends_the_cancel_before_the_start() {
         ]
     );
 }
+
+/// A pitch key's press while swimming runs the tick's pitch arm inside the press, after the turn
+/// arm (`0x514777` → `0x515010`), so its start goes out ahead of a root the frame's packets apply
+/// and of the frame time's swim decision, which here leaves the water.
+#[test]
+fn a_pitch_press_while_swimming_starts_before_the_frames_packets() {
+    use crate::creature_anim::move_flags::{PITCH_UP, SWIMMING};
+    use crate::net::MoveKind::{StartPitchUp, Stop};
+    let mut client = Client::standing(Body::Own);
+    {
+        let mut player = client.player();
+        player.swimming = true;
+        player.move_flags = SWIMMING;
+    }
+    assert_eq!(
+        client.traced(vec![], vec![Start(HeldInput::PitchUp)], root),
+        vec![
+            (When::Input, Sent::Move(StartPitchUp, SWIMMING | PITCH_UP)),
+            (When::FrameTime, Sent::Move(Stop, 0)),
+            (When::FrameTime, Sent::Ack(benilla_protocol::MoveMode::Root)),
+        ]
+    );
+    assert!(client.player().pitch_latch, "the latch outlives the root");
+}

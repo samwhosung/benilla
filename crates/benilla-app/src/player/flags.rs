@@ -20,6 +20,16 @@ pub(super) struct FrameFlags {
     pub fall_time: u32,
 }
 
+/// The pitch keys' bit, which `0x7c6df0` sets only on a swimmer but nothing clears on leaving the
+/// water by a jump (`0x7c61f0` keeps it), so it rides the fall and the land after it.
+pub(super) fn pitch_bits(player: &Player) -> u32 {
+    match player.pitch_keys {
+        Some(true) => move_flags::PITCH_UP,
+        Some(false) => move_flags::PITCH_DOWN,
+        None => 0,
+    }
+}
+
 /// Milliseconds since the arc began, 0 on the ground: the wire's `fall_time`.
 pub(super) fn fall_ms(player: &Player, now: f32) -> u32 {
     player
@@ -122,13 +132,7 @@ pub(super) fn this_frame(
             move_flags_now = 0;
         }
     }
-    // The pitch keys' bit, which `0x7c6df0` sets only on a swimmer but nothing clears on leaving
-    // the water by a jump (`0x7c61f0` keeps it), so it rides the fall and the land after it.
-    match player.pitch_keys {
-        Some(true) => move_flags_now |= move_flags::PITCH_UP,
-        Some(false) => move_flags_now |= move_flags::PITCH_DOWN,
-        None => {}
-    }
+    move_flags_now |= pitch_bits(player);
     // `MOVEFLAG_WALK_MODE` (`0x100`) is a mode, not a motion, so it goes on after the settle's
     // wipe and survives the root and stun suppressions: the reference's input allow-list
     // (`0x615c71`, table `0x618054`) blocks translation under a root and permits run/walk.

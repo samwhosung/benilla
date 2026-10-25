@@ -133,10 +133,23 @@ pub(super) fn press_tick(
     if may_translate && axes.translating || axes.turning {
         posture::stand_up_for_movement(&mut pending, &me, player.move_flags, &net);
     }
-    let swim = (player.move_flags & move_flags::SWIMMING != 0)
-        .then(|| swim::translate_amounts(&axes, !may_translate));
+    let swimming = player.move_flags & move_flags::SWIMMING != 0;
+    let swim = swimming.then(|| swim::translate_amounts(&axes, !may_translate));
     let bits =
         state::incapacitated_flags(flags::command_bits(&axes, swim), !may_translate, !may_turn);
+    // The pitch arm, after the turn arm (`0x514777` → `0x515010`): its latch, and its start or stop
+    // for the stream to send after the turn's. It runs only while swimming (`0x514766`); stunned,
+    // it stops a swimmer's pitch and clears the latch either way (`0x5147e9`, `0x5147fa`).
+    swim::pitch_emitter(
+        &mut player,
+        (
+            binds.pressed(crate::bindings::Input::PitchUp),
+            binds.pressed(crate::bindings::Input::PitchDown),
+        ),
+        word & super::camera::follow_cmd::RIGHT_MOUSE != 0,
+        may_turn,
+        swimming,
+    );
     let prev = player.move_flags;
     let ended = movement_net::stream_commands(&net.0, &mut player, bits, time.elapsed_secs());
     player.press_ended_precast |= ended;
