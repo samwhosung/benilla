@@ -12,8 +12,8 @@ use super::super::stat_read::read_self;
 use super::super::Model;
 use super::{
     check_unit_token, classification_word, grey_band, level_is_hidden_at, names_self,
-    object_predicate, read_object, unit_is_grey, unit_predicate, unknownobject, with_object,
-    with_unit, PlayerRecord, SelectionRequest,
+    object_predicate, read_identity, read_object, unit_is_grey, unit_predicate, unknownobject,
+    with_object, with_unit, PlayerRecord, SelectionRequest,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never
@@ -139,9 +139,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 return Ok((name, Value::Nil));
             }
-            let name = with_unit(lua, &token, None, |u| {
-                Some((u.name.clone(), u.has_object, u.guid))
-            })?;
+            // A held unit is named off its object as the call runs ([`read_identity`]).
+            check_unit_token(&token)?;
+            let name = token
+                .as_deref()
+                .and_then(|t| read_identity(lua, t, |u, id| (id.name(), u.has_object, u.guid)));
             let name = match name {
                 None => Value::Nil,
                 Some((Some(n), _, _)) => Value::String(lua.create_string(&n)?),
@@ -617,9 +619,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Ok((Value::Nil, Value::Nil)),
                 };
             }
-            let pair = with_unit(lua, &token, None, |u| {
-                u.race.clone().zip(u.race_file.clone())
-            })?;
+            // A held unit's race byte, read off its object as the call runs ([`read_identity`]).
+            check_unit_token(&token)?;
+            let pair = token
+                .as_deref()
+                .and_then(|t| read_identity(lua, t, |_, id| id.race()))
+                .flatten();
             match pair {
                 Some((loc, file)) => Ok((
                     Value::String(lua.create_string(&loc)?),
@@ -648,9 +653,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Ok((Value::Nil, Value::Nil)),
                 };
             }
-            let pair = with_unit(lua, &token, None, |u| {
-                u.class.clone().zip(u.class_file.clone())
-            })?;
+            // A held unit's class byte, read off its object as the call runs ([`read_identity`]).
+            check_unit_token(&token)?;
+            let pair = token
+                .as_deref()
+                .and_then(|t| read_identity(lua, t, |_, id| id.class()))
+                .flatten();
             match pair {
                 Some((loc, file)) => Ok((
                     Value::String(lua.create_string(&loc)?),

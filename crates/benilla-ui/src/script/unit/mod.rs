@@ -693,6 +693,58 @@ pub(crate) fn read_object<T>(
     }
 }
 
+/// The unit `token` names, mapped through `f` with its snapshot and what names it; `None` for no
+/// unit. The token resolves at the call ([`view`]); a held unit's name, race and class are read
+/// off its object and the name caches through the lent host, as the reference's getters name any
+/// unit the object manager holds (`0x51710c` → `0x609210`), so a unit no snapshot holds is named
+/// too; a field the caches or tables miss answers from the snapshot, which a feed may have named
+/// from the roster. With no host free to ask, or no object held, the snapshot answers.
+pub(crate) fn read_identity<T>(
+    lua: &Lua,
+    token: &str,
+    f: impl FnOnce(&UnitState, &dyn UnitIdentityRead) -> T,
+) -> Option<T> {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let unit = view(lua, &model, token)?;
+    let unit: &UnitState = &unit;
+    let mut f = Some(f);
+    let mut out = None;
+    if unit.has_object && unit.guid != 0 {
+        super::host::read_host(lua, |h| {
+            h.read_unit_identity(unit.guid, &mut |live| {
+                out = f.take().map(|f| f(unit, &LiveOr { live, unit }));
+            })
+        });
+    }
+    match (out, f) {
+        (Some(out), _) => Some(out),
+        (None, Some(f)) => Some(f(unit, unit)),
+        (None, None) => None,
+    }
+}
+
+/// A live identity read, each field the snapshot's where the live read has none.
+struct LiveOr<'a> {
+    live: &'a dyn UnitIdentityRead,
+    unit: &'a UnitState,
+}
+
+impl UnitIdentityRead for LiveOr<'_> {
+    fn name(&self) -> Option<String> {
+        self.live.name().or_else(|| self.unit.name.clone())
+    }
+    fn race(&self) -> Option<(String, String)> {
+        self.live
+            .race()
+            .or_else(|| UnitIdentityRead::race(self.unit))
+    }
+    fn class(&self) -> Option<(String, String)> {
+        self.live
+            .class()
+            .or_else(|| UnitIdentityRead::class(self.unit))
+    }
+}
+
 /// A unit predicate's body: the number 1 or nil through [`super::binding_abi::flag`], never a Lua
 /// boolean, as the reference pushes only `lua_pushnumber` (`0x6f3810`) or `lua_pushnil`
 /// (`0x6f37f0`). `UnitReaction`, `UnitLevel` and `UnitPowerType` are getters with their own
@@ -727,7 +779,7 @@ mod selection_tests;
 #[cfg(test)]
 mod tests;
 
-pub use object::{UnitObject, UnitObjectRead};
+pub use object::{UnitIdentityRead, UnitObject, UnitObjectRead};
 pub use relations::UnitRelations;
 pub use resolve::{
     bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,

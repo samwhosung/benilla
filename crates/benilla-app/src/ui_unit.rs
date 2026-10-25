@@ -1011,9 +1011,9 @@ pub(crate) fn snapshot(
     tables: UnitNames<'_>,
     types: CreatureTypeSources<'_>,
 ) -> UnitState {
-    let race = store.0.unit_race().and_then(|r| tables.race(r));
+    let race = unit_race_names(store, &tables);
     let class_id = store.0.unit_class();
-    let class = class_id.and_then(|c| tables.class(c));
+    let class = unit_class_names(store, &tables);
     let classes = tables.classes;
     let creature_type = types.of(store);
     let mut s = UnitState {
@@ -1064,6 +1064,54 @@ pub(crate) fn snapshot(
     };
     s.set_object(unit_object(store));
     s
+}
+
+/// A unit's race as `UnitRace` names it (`0x518200`): its `UNIT_FIELD_BYTES_0` race byte through
+/// `ChrRaces.dbc`, the localised name and the file token; the one reading a snapshot's build and
+/// the live read ([`LiveIdentity`]) share.
+pub(crate) fn unit_race_names<'a>(
+    store: &ObjectStore,
+    tables: &UnitNames<'a>,
+) -> Option<(&'a str, &'a str)> {
+    store.0.unit_race().and_then(|r| tables.race(r))
+}
+
+/// A unit's class as `UnitClass` names it (`0x518350`): its class byte through `ChrClasses.dbc`,
+/// read as [`unit_race_names`] reads the race.
+pub(crate) fn unit_class_names<'a>(
+    store: &ObjectStore,
+    tables: &UnitNames<'a>,
+) -> Option<(&'a str, &'a str)> {
+    store.0.unit_class().and_then(|c| tables.class(c))
+}
+
+/// What names a held unit as the getters read it now ([`benilla_ui::script::UnitIdentityRead`]):
+/// its name off the name caches as `GetUnitName` (`0x609210`) reads them, asking a miss once while
+/// it is pending, and its race and class bytes through the tables.
+pub(crate) struct LiveIdentity<'a> {
+    pub(crate) guid: u64,
+    pub(crate) store: &'a ObjectStore,
+    pub(crate) names: Option<&'a NameCache>,
+    pub(crate) commands: Option<&'a NetCommands>,
+    pub(crate) tables: UnitNames<'a>,
+}
+
+impl benilla_ui::script::UnitIdentityRead for LiveIdentity<'_> {
+    fn name(&self) -> Option<String> {
+        let ask = match self.commands {
+            Some(commands) => Ask::New(commands),
+            None => Ask::Read,
+        };
+        self.names?
+            .resolve_unit(self.guid, Some(self.store), ask)
+            .map(str::to_string)
+    }
+    fn race(&self) -> Option<(String, String)> {
+        unit_race_names(self.store, &self.tables).map(|(n, f)| (n.to_string(), f.to_string()))
+    }
+    fn class(&self) -> Option<(String, String)> {
+        unit_class_names(self.store, &self.tables).map(|(n, f)| (n.to_string(), f.to_string()))
+    }
 }
 
 /// What a unit's descriptor alone answers ([`UnitObject`]), read off `store` with no table or

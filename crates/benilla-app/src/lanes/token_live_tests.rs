@@ -29,6 +29,11 @@ const FAR: u64 = 0x23;
 const FAR_PET: u64 = 0xF140_0000_0048_0005;
 /// A creature beside the wolf.
 const BOAR: u64 = 0xF130_0000_0047_0004;
+/// A player no token names, a night elf rogue, and the rat it targets, a warrior-class creature
+/// of template [`RAT_ENTRY`].
+const ROGUE: u64 = 0x31;
+const RAT: u64 = 0xF130_0000_0049_0006;
+const RAT_ENTRY: u32 = 4075;
 
 /// `UNIT_FIELD_SUMMON`, and `PLAYER_XP`, which `UnitXP` answers only for a token naming us.
 const SUMMON: u16 = 8;
@@ -37,6 +42,9 @@ const PLAYER_XP: u16 = 716;
 const OBJECT_TYPE: u16 = 2;
 const TYPE_UNIT: u32 = 0x9;
 const TYPE_PLAYER: u32 = 0x19;
+/// `UNIT_FIELD_BYTES_0`: race, class and gender bytes; `OBJECT_FIELD_ENTRY`, the template.
+const BYTES_0: u16 = 36;
+const ENTRY: u16 = 3;
 
 /// Every token form the agreement walks: each base, a `target` hop off each, the chains, a member
 /// out of view and its record's pet, our own raid row, and the forms naming nobody.
@@ -111,6 +119,19 @@ impl Client {
         }
     }
 
+    /// `guid`'s store, written in place with no packet or frame, as a packet's handler leaves it
+    /// before the feeds have pushed.
+    fn write_store(&mut self, guid: u64, pairs: &[(u16, u32)]) {
+        let world = self.app.world_mut();
+        let entity = world.resource::<crate::net::GuidIndex>().0[&guid];
+        let mut store = world
+            .get_mut::<crate::net::ObjectStore>(entity)
+            .expect("a store");
+        store
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(pairs));
+    }
+
     /// Every token's row of [`GETTERS`], one line each.
     fn answers(&mut self, live: bool) -> Vec<String> {
         let tokens = TOKENS
@@ -165,6 +186,7 @@ fn client() -> Client {
             r#"
             {GETTERS}
             Seen = {{}}
+            DeepSeen = {{}}
             local f = CreateFrame("Frame")
             f:RegisterEvent("UNIT_HEALTH")
             PetSeen = {{}}
@@ -177,6 +199,9 @@ fn client() -> Client {
             end)
             f:SetScript("OnEvent", function()
                 if arg1 ~= "target" then return end
+                if UnitHealth("target") == 33 then
+                    table.insert(DeepSeen, tostring(UnitHealth("targettargettargettarget")))
+                end
                 for _, t in ipairs({{ "targettarget", "targettargettarget", "party1target" }}) do
                     table.insert(Seen, UnitHealth("target") .. " " .. t .. " " .. row(t))
                 end
@@ -192,7 +217,24 @@ fn client() -> Client {
         let mut names = app.world_mut().resource_mut::<crate::names::NameCache>();
         names.insert_player(ME, "Me".into(), None);
         names.insert_player(MATE, "Mate".into(), None);
+        names.insert_player(ROGUE, "Shade".into(), None);
+        names.insert_creature(
+            RAT_ENTRY,
+            Some(crate::names::CreatureRecord {
+                name: "Rat".into(),
+                subname: None,
+                creature_type: 8,
+                pet_family: 0,
+                rank: 0,
+                type_flags: 0,
+                pet_spell_list: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 0,
+            }),
+        );
     }
+    crate::ui_unit::TestNames::english().insert(&mut app);
     let mut c = Client {
         app,
         inbound,
@@ -226,6 +268,11 @@ fn client() -> Client {
     let mut me = unit(90, &summons(PET));
     me.extend(targets(WOLF));
     me.extend([(PLAYER_XP, 1234), (OBJECT_TYPE, TYPE_PLAYER)]);
+    let mut rat = unit(20, &targets(ME));
+    rat.extend([(ENTRY, RAT_ENTRY), (BYTES_0, 1 << 8)]);
+    // Night elf (4), rogue (4), female (1).
+    let mut rogue = unit(75, &targets(RAT));
+    rogue.extend([(BYTES_0, 4 | 4 << 8 | 1 << 16), (OBJECT_TYPE, TYPE_PLAYER)]);
     let mut mate = unit(60, &summons(MATE_PET));
     mate.extend(targets(ME));
     mate.push((OBJECT_TYPE, TYPE_PLAYER));
@@ -242,6 +289,8 @@ fn client() -> Client {
         )],
         vec![created(WOLF, EntityKind::Unit, &unit(80, &targets(MATE)))],
         vec![created(BOAR, EntityKind::Unit, &unit(40, &[]))],
+        vec![created(ROGUE, EntityKind::Player, &rogue)],
+        vec![created(RAT, EntityKind::Unit, &rat)],
     ]);
     let world = c.app.world_mut();
     let wolf = world.resource::<crate::net::GuidIndex>().0[&WOLF];
@@ -252,7 +301,7 @@ fn client() -> Client {
     };
     c.frame(vec![]);
     c.frame(vec![]);
-    c.eval::<()>(false, "Seen = {} PetSeen = {}");
+    c.eval::<()>(false, "Seen = {} PetSeen = {} DeepSeen = {}");
     c
 }
 
@@ -361,6 +410,74 @@ fn a_pet_event_fires_under_its_own_packets_tokens() {
         "return UnitHealth('pet'), UnitIsUnit('pet', 'raidpet3')",
     );
     assert_eq!(now, (40, Some(1)), "the boar is our pet at the frame's end");
+}
+
+/// A unit a chain ends on that no snapshot holds is named off its object as the getter runs: the
+/// name cache for its name (`0x51710c` → `GetUnitName 0x609210`) and its descriptor's race, class
+/// and gender bytes, as for any held unit.
+#[test]
+fn a_chain_end_no_snapshot_holds_is_named_off_its_object() {
+    let mut c = client();
+    // The boar, the last target, now targets the rat no token names; no snapshot of the rat
+    // exists, nor a by-name candidate's, which only players are.
+    c.write_store(BOAR, &targets(RAT));
+    c.app
+        .world_mut()
+        .resource_mut::<crate::target::Selection>()
+        .last = Some(BOAR);
+    let got: Vec<String> = c.eval(
+        true,
+        "TargetLastTarget()
+        local race, race_file = UnitRace('targettarget')
+        local class, class_file = UnitClass('targettarget')
+        return { tostring(UnitName('targettarget')), tostring(race), tostring(race_file),
+            tostring(class), tostring(class_file), UnitSex('targettarget'),
+            UnitHealth('targettarget') }",
+    );
+    assert_eq!(got, ["Rat", "nil", "nil", "Warrior", "WARRIOR", "2", "20"]);
+}
+
+/// Two packets in one frame: the first turns the wolf onto the rogue and moves the rogue, the
+/// second destroys the rat the rogue targets and turns the wolf back. The first's listener reads
+/// the rat as that packet left it, held, though the object manager no longer holds it when the
+/// listener runs: the resolver's hop off it and the getters' lookup of it read the stores as of
+/// the listener's packet.
+#[test]
+fn a_listener_reads_a_unit_a_later_packet_destroys() {
+    let mut c = client();
+    c.frame(vec![
+        vec![
+            values(
+                WOLF,
+                &[
+                    (FIELD_UNIT_HEALTH, 33),
+                    targets(ROGUE)[0],
+                    targets(ROGUE)[1],
+                ],
+            ),
+            values(ROGUE, &[(FIELD_UNIT_HEALTH, 70)]),
+        ],
+        vec![
+            SessionEvent::ObjectsRemoved(vec![RAT]),
+            values(WOLF, &targets(MATE)),
+        ],
+    ]);
+    let seen: Vec<String> = c.eval(
+        false,
+        "local out = {} for _, l in ipairs(Seen) do
+            if string.find(l, '^33 targettargettarget') then table.insert(out, l) end
+        end return out",
+    );
+    assert_eq!(
+        seen,
+        ["33 targettargettarget 1,20,0,nil,nil,nil,nil,nil,nil,nil"]
+    );
+    let deep: Vec<String> = c.eval(false, "return DeepSeen");
+    assert_eq!(
+        deep,
+        ["90"],
+        "the rat's target, us, off the rat as the packet left it"
+    );
 }
 
 /// A selection a chunk makes is the target its next line resolves through: `TargetUnit` commits

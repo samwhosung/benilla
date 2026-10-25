@@ -151,9 +151,34 @@ pub(crate) struct UnitLive<'w, 's> {
     index: Option<Res<'w, crate::net::GuidIndex>>,
     stores: crate::ui_unit::views::ViewStores<'w, 's>,
     me: Query<'w, 's, (Entity, &'static crate::net::Guid), With<crate::net::SelfPlayer>>,
+    /// The name caches and the race and class tables a held unit is named through.
+    names: Option<Res<'w, crate::names::NameCache>>,
+    commands: Option<Res<'w, crate::net::NetCommands>>,
+    tables: crate::ui_unit::NameTables<'w>,
 }
 
 impl UnitLive<'_, '_> {
+    /// Hand `read` what names the object held under `guid`, as of here; whether one was held as
+    /// a unit (`0x51710c`, then `0x609210` for a unit).
+    fn read_identity(
+        &self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitIdentityRead),
+    ) -> bool {
+        let entity = self.index.as_deref().and_then(|i| i.0.get(&guid).copied());
+        let Some(store) = self.stores.at(guid, entity).filter(|s| s.is_unit()) else {
+            return false;
+        };
+        read(&crate::ui_unit::LiveIdentity {
+            guid,
+            store,
+            names: self.names.as_deref(),
+            commands: self.commands.as_deref(),
+            tables: self.tables.get(),
+        });
+        true
+    }
+
     /// Hand `read` what the unit-token resolver reads off the objects, as of here (`0x515970`).
     fn read_tokens(&self, read: &mut dyn FnMut(&dyn benilla_ui::script::UnitTokenObjects)) {
         read(&crate::ui_unit::TokenObjects {
@@ -655,6 +680,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
         read: &mut dyn FnMut(&dyn benilla_ui::script::UnitObjectRead),
     ) -> bool {
         self.appliers.units().read(guid, read)
+    }
+
+    fn read_unit_identity(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitIdentityRead),
+    ) -> bool {
+        self.appliers.units().read_identity(guid, read)
     }
 
     fn read_unit_tokens(

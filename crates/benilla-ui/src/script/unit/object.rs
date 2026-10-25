@@ -98,3 +98,30 @@ unit_object! {
     combat: UnitCombatStats,
     summoned_by: u64,
 }
+
+/// What names a held unit as its getters read it, past its descriptor's own fields: its name off
+/// the name caches (`UnitName` looks the object up at `0x51710c` and names a unit through
+/// `GetUnitName 0x609210`, `0x517131`) and its race and class bytes through `ChrRaces.dbc` and
+/// `ChrClasses.dbc` (`UnitRace 0x518200`, `UnitClass 0x518350`). Off the held object through the
+/// lent host ([`crate::script::CallHost::read_unit_identity`]), or off a snapshot, which holds them
+/// as its build read them.
+pub trait UnitIdentityRead {
+    /// [`UnitState::name`].
+    fn name(&self) -> Option<String>;
+    /// [`UnitState::race`] and [`UnitState::race_file`].
+    fn race(&self) -> Option<(String, String)>;
+    /// [`UnitState::class`] and [`UnitState::class_file`].
+    fn class(&self) -> Option<(String, String)>;
+}
+
+impl UnitIdentityRead for UnitState {
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+    fn race(&self) -> Option<(String, String)> {
+        self.race.clone().zip(self.race_file.clone())
+    }
+    fn class(&self) -> Option<(String, String)> {
+        self.class.clone().zip(self.class_file.clone())
+    }
+}
