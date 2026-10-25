@@ -422,10 +422,10 @@ fn query(
 ) -> bool {
     let mut ok = logon.refresh_realms(REALM_REFRESH_TIMEOUT);
     if !ok && logon.can_redial() {
-        let pin = logon.pin().map(<[u8]>::to_vec);
+        let kept = logon.pin().map(<[u8]>::to_vec);
         let mut press = |grid: &[u8; 10]| {
-            pin.as_deref()
-                .and_then(|digits| benilla_protocol::auth::pin::positions(grid, digits))
+            redial_digits(kept.as_deref(), crate::run_mode::EnvPin::process())
+                .and_then(|digits| benilla_protocol::auth::pin::positions(grid, &digits))
                 .ok_or_else(|| anyhow!("the re-dial has no PIN to press"))
         };
         // A hidden re-dial for the realm list: no logon on the screen to tell the states to.
@@ -450,6 +450,16 @@ fn query(
         }
     }
     publish(events_tx, &logon.realms, !ok)
+}
+
+/// The PIN digits a re-dial's prompt is answered with: the environment's, derived from the clock
+/// as the prompt arrives (a TOTP code moves on every 30 s, so one kept from the first logon is
+/// stale after a long park), else the digits the logon proved.
+fn redial_digits(kept: Option<&[u8]>, env: &crate::run_mode::EnvPin) -> Option<Vec<u8>> {
+    match env.digits_now() {
+        Ok(Some(digits)) => Some(digits),
+        _ => kept.map(<[u8]>::to_vec),
+    }
 }
 
 /// The pre-logon park: waits for credentials. With no realmd link, a realm list query fails at

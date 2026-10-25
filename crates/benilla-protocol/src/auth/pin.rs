@@ -73,6 +73,108 @@ pub fn positions(grid: &[u8; 10], digits: &[u8]) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// The seconds of one TOTP step (RFC 6238; vmangos `AuthSocket::GenerateTotpPin`,
+/// `AuthSocket.cpp:1274`).
+pub const TOTP_STEP_SECS: u64 = 30;
+
+/// The steps around the current one that vmangos accepts for a TOTP account: -2 to 1
+/// (`AuthSocket.cpp:720`, `for (i = -2; i != 2; ++i)`).
+const TOTP_OFFSETS: [i64; 4] = [0, -1, 1, -2];
+
+/// A base32 secret (RFC 4648: `A-Z`, `2-7`, case-insensitive) as bytes. Spaces and dashes, how
+/// authenticator apps group a secret, and trailing `=` padding are skipped; anything else, or an
+/// empty secret, is `None`.
+pub fn base32_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 5 / 8);
+    let (mut bits, mut have) = (0u32, 0u32);
+    let mut padded = false;
+    for c in text.chars() {
+        let value = match c {
+            ' ' | '-' => continue,
+            '=' => {
+                padded = true;
+                continue;
+            }
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32,
+            '2'..='7' => c as u32 - '2' as u32 + 26,
+            _ => return None,
+        };
+        if padded {
+            return None;
+        }
+        bits = bits << 5 | value;
+        have += 5;
+        if have >= 8 {
+            have -= 8;
+            out.push((bits >> have) as u8);
+            bits &= (1 << have) - 1;
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// HMAC-SHA1 (RFC 2104) over the `sha1` the SRP code already uses.
+fn hmac_sha1(key: &[u8], message: &[u8]) -> [u8; 20] {
+    const BLOCK: usize = 64;
+    let mut block = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        block[..20].copy_from_slice(&Sha1::digest(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let pad = |byte: u8| block.map(|b| b ^ byte);
+    let inner = Sha1::new()
+        .chain_update(pad(0x36))
+        .chain_update(message)
+        .finalize();
+    Sha1::new()
+        .chain_update(pad(0x5c))
+        .chain_update(inner)
+        .finalize()
+        .into()
+}
+
+/// The six-digit RFC 6238 code for the HOTP counter `step` (`GenerateTotpPin`: the big-endian
+/// counter, HMAC-SHA1, the RFC 4226 dynamic truncation, modulo 10^6).
+pub fn totp_code(key: &[u8], step: u64) -> u32 {
+    let mac = hmac_sha1(key, &step.to_be_bytes());
+    let offset = usize::from(mac[19] & 0xf);
+    let word = u32::from_be_bytes([
+        mac[offset],
+        mac[offset + 1],
+        mac[offset + 2],
+        mac[offset + 3],
+    ]);
+    (word & 0x7fff_ffff) % 1_000_000
+}
+
+/// The decimal digits of a code as vmangos reads it (`VerifyPinData`, `AuthSocket.cpp:1235`): the
+/// number's own digits, so a code with leading zeros loses them (`081804` is the five keys
+/// `81804`) and one below 1000 has fewer than the 4 keys a PIN needs, which no proof can pass.
+pub fn code_digits(code: u32) -> Vec<u8> {
+    let mut digits = Vec::new();
+    let mut rest = code;
+    while rest != 0 {
+        digits.push((rest % 10) as u8);
+        rest /= 10;
+    }
+    digits.reverse();
+    digits
+}
+
+/// The PIN digits for a TOTP `key` at `unix_secs`: the current step's code, or when that one has
+/// fewer than 4 digits (about 1 in 1000, which vmangos rejects) the nearest other step it accepts
+/// (`TOTP_OFFSETS`). `None` only if every step is too short.
+pub fn totp_digits(key: &[u8], unix_secs: u64) -> Option<Vec<u8>> {
+    let now = unix_secs / TOTP_STEP_SECS;
+    TOTP_OFFSETS
+        .iter()
+        .filter_map(|&o| now.checked_add_signed(o))
+        .map(|step| code_digits(totp_code(key, step)))
+        .find(|digits| digits.len() >= 4)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +250,64 @@ mod tests {
         let next = grid(u32::MAX);
         assert_eq!(positions(&next, &[2, 5, 9, 0]), Some(vec![2, 0, 5, 3]));
         assert_eq!(positions(&next, &[2, 11]), None, "no digit 11");
+    }
+
+    /// RFC 6238 appendix B's SHA-1 vectors (secret `12345678901234567890`), read at six digits:
+    /// the 8-digit values 94287082, 07081804, 14050471, 89005924 and 69279037.
+    #[test]
+    fn totp_codes_match_rfc_6238() {
+        let key = b"12345678901234567890";
+        for (time, code) in [
+            (59, 287_082),
+            (1_111_111_109, 81_804),
+            (1_111_111_111, 50_471),
+            (1_234_567_890, 5_924),
+            (2_000_000_000, 279_037),
+        ] {
+            assert_eq!(totp_code(key, time / TOTP_STEP_SECS), code, "t={time}");
+        }
+    }
+
+    #[test]
+    fn base32_reads_rfc_4648_and_authenticator_spelling() {
+        let key = b"12345678901234567890".to_vec();
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        assert_eq!(base32_decode(secret), Some(key.clone()));
+        assert_eq!(base32_decode(&secret.to_lowercase()), Some(key.clone()));
+        assert_eq!(
+            base32_decode("GEZD GNBV-GY3T QOJQ GEZD GNBV GY3T QOJQ"),
+            Some(key)
+        );
+        // RFC 4648 section 10: padding after a partial group.
+        assert_eq!(base32_decode("MZXW6YQ="), Some(b"foob".to_vec()));
+        assert_eq!(base32_decode("MZXQ===="), Some(b"fo".to_vec()));
+        assert_eq!(base32_decode("MZXW6YQ=A"), None, "data after padding");
+        assert_eq!(base32_decode("GEZ1"), None, "1 is no base32 digit");
+        assert_eq!(base32_decode(""), None);
+    }
+
+    /// vmangos reads the code as a number (`VerifyPinData`), so `081804` is `81804`.
+    #[test]
+    fn a_code_with_leading_zeros_is_sent_without_them() {
+        assert_eq!(code_digits(81_804), vec![8, 1, 8, 0, 4]);
+        assert_eq!(code_digits(5_924), vec![5, 9, 2, 4]);
+        assert_eq!(code_digits(287_082), vec![2, 8, 7, 0, 8, 2]);
+        assert_eq!(code_digits(0), Vec::<u8>::new());
+        let key = b"12345678901234567890";
+        assert_eq!(totp_digits(key, 1_111_111_109), Some(vec![8, 1, 8, 0, 4]));
+    }
+
+    /// A step's code below 1000 has under 4 digits and fails vmangos' length check, so the
+    /// nearest accepted step answers instead.
+    #[test]
+    fn a_too_short_code_falls_back_to_another_accepted_step() {
+        let key = b"12345678901234567890";
+        // Find a step whose code is under 1000 with a search over the key's own steps.
+        let step = (1..200_000u64)
+            .find(|&s| totp_code(key, s) < 1000)
+            .expect("one in a thousand steps");
+        let digits = totp_digits(key, step * TOTP_STEP_SECS).unwrap();
+        assert!(digits.len() >= 4);
+        assert_eq!(digits, code_digits(totp_code(key, step - 1)));
     }
 }

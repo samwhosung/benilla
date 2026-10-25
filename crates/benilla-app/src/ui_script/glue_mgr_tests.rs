@@ -7,6 +7,7 @@ use crate::net::{
     AddonInfoMessage, AddonInfoReply, LoginAbandon, LoginRequest, LoginSubmit, RosterFailedMessage,
     WorldAuthMessage,
 };
+use crate::run_mode::EnvPin;
 use benilla_protocol::{RealmInfo, SessionEnd};
 
 /// Run the steps the outbox holds past their signals and drop them, as the frame's flush does
@@ -195,12 +196,19 @@ const PROMPT: u64 = 41;
 
 /// A logon whose challenge asked for a PIN, past the frame that showed the keypad.
 fn at_the_keypad() -> GlueMgr {
+    at_the_keypad_with(EnvPin::default())
+}
+
+/// [`at_the_keypad`] for a run whose environment holds `env`.
+fn at_the_keypad_with(env: EnvPin) -> GlueMgr {
     let mut m = fresh();
+    m.env_pin = env;
     m.login("a".into(), "b".into());
     settle(&mut m);
     m.on_stage(LoginStage::Connecting, true);
     m.tick();
     settle(&mut m);
+    m.outbox.clear();
     m.on_stage(
         LoginStage::Pin {
             grid: GRID,
@@ -277,6 +285,158 @@ fn pin_entered_sends_the_keys_on() {
         m.outbox,
         [open("CANCEL", Some("LOGIN_STATE_CHECKINGVERSIONS"))]
     );
+}
+
+/// The keys the digits sit at on [`GRID`].
+fn keys_for(digits: &[u8]) -> Vec<u8> {
+    benilla_protocol::auth::pin::positions(&GRID, digits).unwrap()
+}
+
+/// What the keypad's `PINEntered` leaves: the `CANCEL` dialog, the keys on to the prompt, and the
+/// report of state 9 on the next frame.
+fn assert_answered_with(m: &mut GlueMgr, keys: &[u8]) {
+    // The keypad opened first (`PLAYER_ENTER_PIN` with the grid), then its tail ran.
+    assert_eq!(
+        m.outbox,
+        [
+            open("CANCEL", Some("LOGIN_STATE_PIN")),
+            Outgoing::Close,
+            Outgoing::EnterPin(GRID),
+            open("CANCEL", None),
+        ],
+        "{:?}",
+        m.outbox
+    );
+    assert!(
+        matches!(
+            m.park_out.as_slice(),
+            [ParkRequest::Realm(RealmRequest::Pin { prompt: PROMPT, keys: Some(k) })]
+                if k.positions == keys
+        ),
+        "{} park asks",
+        m.park_out.len()
+    );
+    m.outbox.clear();
+    m.tick();
+    settle(m);
+    assert_eq!(
+        m.outbox,
+        [open("CANCEL", Some("LOGIN_STATE_CHECKINGVERSIONS"))]
+    );
+}
+
+/// `WOW_PIN` answers the prompt the keypad opened, as a press of the keys its digits sit at.
+#[test]
+fn wow_pin_answers_the_keypad() {
+    let mut m = at_the_keypad_with(EnvPin::new(Some("4821"), None, || 0));
+    assert_eq!(keys_for(&[4, 8, 2, 1]), [8, 5, 2, 3]);
+    assert_answered_with(&mut m, &[8, 5, 2, 3]);
+}
+
+thread_local! {
+    /// The mocked clock of [`TOTP_CLOCK`]'s tests, in unix seconds.
+    static NOW: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn mocked_now() -> u64 {
+    NOW.with(std::cell::Cell::get)
+}
+
+/// `WOW_PIN_TOTP` answers each prompt with the code of the clock at that prompt: two prompts more
+/// than a step apart get different steps' codes, never the first one kept. The codes are read as
+/// vmangos reads a number (RFC 6238 at 59 is 287082; at 1111111109, 081804, which is 81804).
+#[test]
+fn wow_pin_totp_answers_each_prompt_from_the_clock() {
+    let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let mut m = fresh();
+    m.env_pin = EnvPin::new(None, Some(secret), mocked_now);
+    let mut answers = Vec::new();
+    for (now, digits) in [
+        (59, vec![2, 8, 7, 0, 8, 2]),
+        (89, vec![]),
+        (1_111_111_109, vec![8, 1, 8, 0, 4]),
+    ] {
+        NOW.with(|n| n.set(now));
+        m.park_out.clear();
+        m.on_stage(LoginStage::Connecting, false);
+        m.on_stage(
+            LoginStage::Pin {
+                grid: GRID,
+                prompt: PROMPT,
+            },
+            false,
+        );
+        let keys = match m.park_out.as_slice() {
+            [ParkRequest::Realm(RealmRequest::Pin { keys: Some(k), .. })] => k.positions.clone(),
+            other => panic!("{} park asks", other.len()),
+        };
+        answers.push((keys, digits));
+    }
+    // 59 s and 89 s are steps 1 and 2.
+    assert_eq!(answers[0].0, keys_for(&answers[0].1), "t=59");
+    assert_eq!(answers[2].0, keys_for(&answers[2].1), "t=1111111109");
+    assert_ne!(
+        answers[0].0, answers[2].0,
+        "a later prompt is not the first's code"
+    );
+    assert_ne!(
+        answers[0].0, answers[1].0,
+        "a prompt a step later is not the first's code"
+    );
+}
+
+/// A keypad prompt answered from the clock is also the full keypad tail.
+#[test]
+fn wow_pin_totp_answers_the_keypad() {
+    let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    NOW.with(|n| n.set(59));
+    let mut m = at_the_keypad_with(EnvPin::new(None, Some(secret), mocked_now));
+    assert_answered_with(&mut m, &keys_for(&[2, 8, 7, 0, 8, 2]));
+}
+
+/// Both variables set is an error the log names: the prompt gets no keys, and no keypad is left to
+/// wait on a person who is not there.
+#[test]
+fn both_pin_variables_set_refuse_the_prompt() {
+    let m = at_the_keypad_with(EnvPin::new(Some("4821"), Some("GEZDGNBV"), || 0));
+    assert!(
+        matches!(
+            m.park_out.as_slice(),
+            [ParkRequest::Realm(RealmRequest::Pin {
+                prompt: PROMPT,
+                keys: None
+            })]
+        ),
+        "{} park asks",
+        m.park_out.len()
+    );
+}
+
+/// With no keypad on the screen the environment still answers, past the dialog the keypad's tail
+/// would open.
+#[test]
+fn wow_pin_answers_a_prompt_with_no_keypad() {
+    let mut m = fresh();
+    m.env_pin = EnvPin::new(Some("4821"), None, || 0);
+    m.on_stage(LoginStage::Connecting, false);
+    m.on_stage(
+        LoginStage::Pin {
+            grid: GRID,
+            prompt: PROMPT,
+        },
+        false,
+    );
+    settle(&mut m);
+    assert!(
+        matches!(
+            m.park_out.as_slice(),
+            [ParkRequest::Realm(RealmRequest::Pin { prompt: PROMPT, keys: Some(k) })]
+                if k.positions == [8, 5, 2, 3]
+        ),
+        "{} park asks",
+        m.park_out.len()
+    );
+    assert!(m.outbox.is_empty(), "{:?}", m.outbox);
 }
 
 /// A prompt with no logon on the screen to show it (a run with no glue screen, or one in another

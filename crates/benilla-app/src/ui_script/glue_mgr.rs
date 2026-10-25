@@ -184,6 +184,7 @@ use crate::net::{
     LoginQueuedMessage, LoginStageMessage, ParkRequest, RealmListMessage, RealmRequest,
     RosterFailedMessage, WorldAuthMessage,
 };
+use crate::run_mode::EnvPin;
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
 /// states the login, the realm list, the character list, the create, the delete, the rename and
@@ -652,6 +653,9 @@ pub(crate) struct GlueMgr {
     /// Refusals 4 and 5 of logons with a PIN (`+0x1ad`), a byte that wraps, zeroed by a success
     /// (`0x5b2e1f`) and kept across logons, as the logon object is (`0x5ab4b0`).
     pin_failures: u8,
+    /// `$WOW_PIN` or `$WOW_PIN_TOTP`, which answers the keypad in place of a key press
+    /// ([`Self::answer_pin_from_env`]).
+    env_pin: EnvPin,
 }
 
 impl GlueMgr {
@@ -764,6 +768,42 @@ impl GlueMgr {
     fn pin_entered(&mut self, pin: benilla_ui::script::GluePin) {
         self.open("CANCEL", None);
         self.outbox.push(Outgoing::Begin(Step::SubmitPin(pin)));
+    }
+
+    /// The PIN prompt this attempt waits on, answered from the environment ([`EnvPin`]) in place of
+    /// a key press: the digits go to the keys they sit at on the prompt's grid and on as
+    /// `PINEntered` hands its keys on, to the same prompt, reporting the same state 9. With the
+    /// keypad up that is its own tail ([`Self::pin_entered`]); with none on the screen, the step
+    /// without the dialog. A setting that cannot answer is logged and answers the prompt with no
+    /// keys, which fails the logon as an unanswerable keypad does. `false` when the environment
+    /// holds no PIN, and nothing is done.
+    fn answer_pin_from_env(&mut self, keypad_up: bool) -> bool {
+        let Some((grid, prompt)) = self.pin else {
+            return false;
+        };
+        let keys = match self.env_pin.digits_now() {
+            Ok(None) => return false,
+            Ok(Some(digits)) => benilla_protocol::auth::pin::positions(&grid, &digits)
+                .map(|positions| benilla_ui::script::GluePin { positions })
+                .ok_or("the PIN has a digit the keypad lacks"),
+            Err(why) => Err(why),
+        };
+        match keys {
+            Ok(keys) => {
+                info!("login: the PIN prompt is answered from the environment");
+                if keypad_up {
+                    self.pin_entered(keys);
+                } else {
+                    self.run_step(Step::SubmitPin(keys));
+                }
+            }
+            Err(why) => {
+                error!("login: the PIN prompt cannot be answered from the environment — {why}");
+                self.park_out
+                    .push(RealmRequest::Pin { prompt, keys: None }.into());
+            }
+        }
+        true
     }
 
     /// `0x5b2d00` for a refusal 4 or 5 with a PIN this attempt: one more failure (`0x5b2d13`),
@@ -973,7 +1013,11 @@ impl GlueMgr {
                     self.outbox.push(Outgoing::Begin(Step::PinWait));
                 }
             }
-            Step::PinWait => self.cells.state = LOGIN_PIN_WAIT,
+            Step::PinWait => {
+                self.cells.state = LOGIN_PIN_WAIT;
+                // The keypad is up and waiting (state 8): an unattended run presses its keys.
+                self.answer_pin_from_env(true);
+            }
             Step::SubmitPin(pin) => {
                 self.cells.state = LOGIN_CHECKINGVERSIONS;
                 self.cells.result = 0;
@@ -1324,7 +1368,7 @@ impl GlueMgr {
                 if self.state == ScreenState::Logon {
                     self.cells.state = LOGIN_PIN;
                     self.cells.result = 0;
-                } else {
+                } else if !self.answer_pin_from_env(false) {
                     self.park_out
                         .push(RealmRequest::Pin { prompt, keys: None }.into());
                 }
@@ -1912,6 +1956,7 @@ pub(crate) fn drive_glue_mgr(
     mut asks: GlueAsks,
     tables: Option<Res<crate::glue_session::realm::RealmTables>>,
     run: Option<Res<RunModeRealm>>,
+    env_pin: Option<Res<EnvPin>>,
     mut realmlist: Option<ResMut<crate::realmlist::Realmlist>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     sources: super::glue_create::CreateSources,
@@ -1974,6 +2019,10 @@ pub(crate) fn drive_glue_mgr(
 
         {
             let mut mgr = shared.get_mut();
+            // The environment's answer, taken when the resource is added.
+            if let Some(pin) = env_pin.as_ref().filter(|p| p.is_changed()) {
+                mgr.env_pin = EnvPin::clone(pin);
+            }
             // The alert a finished fetch left, shown before anything else this frame (`0x46b939`).
             mgr.poll_alert();
             if glue_up {

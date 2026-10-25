@@ -35,6 +35,7 @@ pub(crate) struct LoginPolicy;
 
 pub(super) fn build(app: &mut App) {
     app.init_resource::<LoginIntent>()
+        .insert_resource(crate::run_mode::EnvPin::process().clone())
         .add_message::<GlueLogin>()
         .add_message::<LoginGuardRefused>()
         .add_systems(

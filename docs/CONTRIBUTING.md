@@ -129,6 +129,13 @@ out of scope is closed with the reason.
   - `WOW_UNATTENDED=1` reconnects instead of waiting at a dialog, and exits non-zero on a login
     it cannot pass. `WOW_NOSOUND=1` runs silent. A capture (`WOW_CAPTURE`) is both, and a rig
     (`WOW_RIG`) is unattended. `WOW_ALLOW_ACCOUNT=1` overrides the account guard.
+  - A PIN-protected account needs one more variable, which answers the keypad's prompt in place
+    of a key press. Set one: `WOW_PIN` is the PIN's 4 to 10 digits, sent as typed;
+    `WOW_PIN_TOTP` is a base32 secret, whose current RFC 6238 code (HMAC-SHA1, 30 s step,
+    6 digits) is the PIN, the scheme vmangos checks. vmangos reads a code as a number, so a code
+    with leading zeros goes without them (`081804` is the five digits `81804`). Both set is an
+    error: it is logged and the logon fails. Neither value is ever logged. The scripts under
+    `scripts/` clear inherited `WOW_*` variables and do not carry these.
   - An unattended run starts from defaults in a fresh state folder of its own, printed at boot
     (`state:`), so it never reads or overwrites your settings, layout or addons. `BENILLA_HOME`
     pins a folder, for a run that needs addons, seeded files or state kept across runs.

@@ -1014,6 +1014,36 @@ fn a_redial_presses_the_kept_pin_on_its_new_grid() {
     assert_eq!(realmd.logons(), 2);
 }
 
+thread_local! {
+    static REDIAL_NOW: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A re-dial's prompt is answered with a TOTP code of the clock at that prompt, not the digits
+/// the first logon proved; with no environment PIN it presses the kept ones.
+#[test]
+fn a_redial_derives_a_totp_code_per_prompt() {
+    use crate::run_mode::EnvPin;
+    let kept = [1u8, 3, 5, 7];
+    let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let env = EnvPin::new(None, Some(secret), || REDIAL_NOW.with(std::cell::Cell::get));
+    REDIAL_NOW.with(|n| n.set(59));
+    assert_eq!(
+        super::redial_digits(Some(&kept), &env),
+        Some(vec![2, 8, 7, 0, 8, 2])
+    );
+    REDIAL_NOW.with(|n| n.set(1_111_111_109));
+    assert_eq!(
+        super::redial_digits(Some(&kept), &env),
+        Some(vec![8, 1, 8, 0, 4])
+    );
+    let none = EnvPin::default();
+    assert_eq!(
+        super::redial_digits(Some(&kept), &none),
+        Some(kept.to_vec())
+    );
+    assert_eq!(super::redial_digits(None, &none), None);
+}
+
 /// A re-dial whose kept PIN is refused (a TOTP code that has expired, vmangos
 /// `AuthSocket.cpp:720`) forgets it and dials no more: each refusal is a wrong password to the
 /// server (`:856`), and the list refreshes every 5 s. The queries fail from then on.
