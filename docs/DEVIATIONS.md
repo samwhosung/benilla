@@ -465,8 +465,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference evicts the least recently used glyph and repacks its hole (`0x5cad2b`, over `[CGxFont+0x64..0x6c]`); this drops every cell, because a shelf allocator cannot reclaim an interior cell and the sheet is far larger than the reference's 256×256 pages. ([`src/ui_text/engine/mod.rs:652`](../crates/benilla-app/src/ui_text/engine/mod.rs#L652))
 - Every UI text block sits 1 device px below the reference's snapped row, because at that row UI text reads high. ([`src/ui_text/layout/mod.rs:119`](../crates/benilla-app/src/ui_text/layout/mod.rs#L119))
 - The cap is 32 logical units, not 32 device px, because the reference's raster-memory ceiling draws all big text at the same 32 device px on a modern display; at the 768-tall design height the two agree. ([`src/ui_text/mod.rs:54`](../crates/benilla-app/src/ui_text/mod.rs#L54))
-- `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster. ([`src/ui_text/outline.rs:60`](../crates/benilla-app/src/ui_text/outline.rs#L60))
-- `r × round(dpi)` passes as in `outlined_cell`, the first `round(dpi)` of them the opaque ring. ([`src/ui_text/outline.rs:167`](../crates/benilla-app/src/ui_text/outline.rs#L167))
+- `r × floor(dpi)` passes, so the ring keeps its logical weight on a whole-number high-DPI raster; a fractional scale such as 1.5 rounds down to the reference's one texel a pass. ([`src/ui_text/outline.rs:60`](../crates/benilla-app/src/ui_text/outline.rs#L60))
+- `r × floor(dpi)` passes as in `outlined_cell`, the first `floor(dpi)` of them the opaque ring. ([`src/ui_text/outline.rs:168`](../crates/benilla-app/src/ui_text/outline.rs#L168))
 - One sheet, where the reference keeps up to 8 pages per font (`[CGxFont+0x18c]`), because a nameplate bakes its glyphs into one mesh with one material, which a page would split. ([`src/ui_text/pack.rs:11`](../crates/benilla-app/src/ui_text/pack.rs#L11))
 
 #### ui_tooltip
