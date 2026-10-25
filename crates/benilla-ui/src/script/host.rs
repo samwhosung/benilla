@@ -62,6 +62,15 @@ pub trait CallHost {
         false
     }
 
+    /// Hand `read` what the unit-token resolver reads off the objects as it resolves now
+    /// (`0x515970`): the active player's object, a player's pet off its descriptor and a unit's
+    /// `UNIT_FIELD_TARGET`, as of the place the getter runs. Whether it read: `false` from a host
+    /// that reads none. `read` runs no Lua.
+    fn read_unit_tokens(&mut self, read: &mut dyn FnMut(&dyn super::UnitTokenObjects)) -> bool {
+        let _ = read;
+        false
+    }
+
     /// Hand `read` the unit object the engine holds under `guid` and its combat stats, as a stat
     /// getter reads them now, each field derived as it is asked for, as of the place the getter
     /// runs (`UnitStat` reads the object it resolved, `0x518600`): the active player's with what

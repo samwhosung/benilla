@@ -354,7 +354,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, unit: Option<String>| {
             crate::script::unit::check_unit_token(&unit)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(state) = unit.as_deref().and_then(|u| model.unit(u)) else {
+            let Some(state) = unit
+                .as_deref()
+                .and_then(|u| crate::script::unit::view(lua, &model, u))
+            else {
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             let Some(guild) = state.guild.as_ref() else {

@@ -339,9 +339,10 @@ fn asked<T>(lua: &Lua, token: &str, f: impl FnOnce(Option<Asked<'_>>) -> T) -> m
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     let player_guid = model.unit_guids.player;
     let player_push = model.pushed_unit("player");
-    let Some(u) = model.unit(token).filter(|u| u.has_object) else {
+    let Some(u) = super::unit::view(lua, &model, token).filter(|u| u.has_object) else {
         return Ok(f(None));
     };
+    let u: &super::UnitState = &u;
     let me =
         player_push.is_some_and(|p| std::ptr::eq(p, u)) || (u.guid != 0 && u.guid == player_guid);
     let player = me || u.is_player;
@@ -434,7 +435,8 @@ fn player_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSl
     let token = token.as_deref()?;
     let idx = usize::try_from(slot).ok()?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    model.inv_slot(token, idx)
+    let reader = inventory_reader(lua, &model, token);
+    model.inv_slot_as(reader?, idx)
 }
 
 /// [`player_inv_slot`] for the getters that read the unit's item table (`0x6228a0`), which only
@@ -442,7 +444,7 @@ fn player_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSl
 fn own_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSlotView> {
     let own = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        model.inventory_reader(token.as_deref()?) == Some(InvReader::Own)
+        inventory_reader(lua, &model, token.as_deref()?) == Some(InvReader::Own)
     };
     own.then(|| player_inv_slot(lua, token, slot)).flatten()
 }
@@ -463,7 +465,10 @@ fn ask_ammo_record(
     // guid, the active player's, as the owner id (`0x4c83ad`-`0x4c83c4`).
     let owner = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        let own = token.as_deref().and_then(|t| model.inventory_reader(t)) == Some(InvReader::Own);
+        let own = token
+            .as_deref()
+            .and_then(|t| inventory_reader(lua, &model, t))
+            == Some(InvReader::Own);
         own.then_some(model.unit_guids.player)
     };
     let Some(owner) = owner else {
@@ -502,14 +507,19 @@ pub(super) enum InvReader {
     Visible(u64),
 }
 
+/// [`InvReader`] for `token`, `None` for a unit the getters may not read or no unit at all, the
+/// token resolved at the call ([`super::unit::guid_of`]). `"player"` is the active player whatever
+/// its guid reads.
+pub(super) fn inventory_reader(lua: &Lua, model: &Model, token: &str) -> Option<InvReader> {
+    if token.eq_ignore_ascii_case("player") {
+        return Some(InvReader::Own);
+    }
+    model.inventory_reader_of(super::unit::guid_of(lua, model, token).ok().flatten()?)
+}
+
 impl Model {
-    /// [`InvReader`] for `token`, `None` for a unit the getters may not read or no unit at all.
-    /// `"player"` is the active player whatever its guid reads.
-    pub(super) fn inventory_reader(&self, token: &str) -> Option<InvReader> {
-        if token.eq_ignore_ascii_case("player") {
-            return Some(InvReader::Own);
-        }
-        let guid = self.unit_guids.resolve(token).ok().flatten()?;
+    /// [`InvReader`] for the unit `guid`, `None` for one the getters may not read.
+    fn inventory_reader_of(&self, guid: u64) -> Option<InvReader> {
         if guid == self.unit_guids.player {
             return Some(InvReader::Own);
         }
@@ -518,13 +528,19 @@ impl Model {
             .then_some(InvReader::Visible(guid))
     }
 
-    /// The item `token` exposes at live-API id `slot`, the one routing the `GetInventoryItem*`
-    /// getters and `GameTooltip:SetInventoryItem` share. Stock paints the bank through this API
-    /// (`BankFrame.lua:35`) and hovers a key through it (`ContainerFrame.lua:616-619`), so the
-    /// bank and keyring bands are answered from the container snapshots. Another player answers
-    /// its visible items alone, slots 1-19 (`0x5f0d60`).
-    pub(super) fn inv_slot(&self, token: &str, slot: usize) -> Option<InvSlotView> {
-        match self.inventory_reader(token)? {
+    /// The active player's item at live-API id `slot` ([`Self::inv_slot_as`] of our own).
+    pub(super) fn own_inv_view(&self, slot: usize) -> Option<InvSlotView> {
+        self.inv_slot_as(InvReader::Own, slot)
+    }
+
+    /// The item `reader`'s unit exposes at live-API id `slot`, the one routing the
+    /// `GetInventoryItem*` getters and `GameTooltip:SetInventoryItem` share. Stock paints the bank
+    /// through this API (`BankFrame.lua:35`) and hovers a key through it
+    /// (`ContainerFrame.lua:616-619`), so the bank and keyring bands are answered from the
+    /// container snapshots. Another player answers its visible items alone, slots 1-19
+    /// (`0x5f0d60`).
+    pub(super) fn inv_slot_as(&self, reader: InvReader, slot: usize) -> Option<InvSlotView> {
+        match reader {
             InvReader::Own => self.own_inv_slot(slot),
             InvReader::Visible(guid) => (1..=19)
                 .contains(&slot)
@@ -548,7 +564,7 @@ impl Model {
     /// The item object at the active player's live-API id `slot`, with no bank gate: what the
     /// client finds by the held item's guid (the object manager, not `GetItemInSlot`), so an item
     /// held from a bank slot is still found after the banker closes. For the readers that stand in
-    /// for that guid lookup; a slot getter reads [`Self::inv_slot`].
+    /// for that guid lookup; a slot getter reads [`Self::inv_slot_as`].
     pub(crate) fn player_slot_object(&self, slot: usize) -> Option<InvSlotView> {
         if let Some(view) = self.bank_inv_slot(slot) {
             return Some(view);
@@ -1254,12 +1270,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             super::unit::check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let live = usize::try_from(slot0 + 1).ok();
-            let own = model.inventory_reader(&token) == Some(InvReader::Own);
+            let own = inventory_reader(lua, &model, &token) == Some(InvReader::Own);
             let answer = live
                 .filter(|_| own)
                 .filter(|&live| {
                     model
-                        .inv_slot("player", live)
+                        .own_inv_view(live)
                         .is_some_and(|v| v.item_id != 0 && v.spell_0)
                 })
                 .and_then(|live| model.inv_slot_cooldown(live));
@@ -2650,7 +2666,7 @@ mod tests {
                 },
             );
             s.set_container(bag, Some(state));
-            let view = s.model_ref().inv_slot("player", live_id).unwrap();
+            let view = s.model_ref().own_inv_view(live_id).unwrap();
             assert_eq!(view.item_id, 7000, "bag {bag}");
             assert_eq!(view.field_duration, 3_600_000, "bag {bag}");
         }

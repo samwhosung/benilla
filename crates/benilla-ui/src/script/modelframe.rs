@@ -597,7 +597,7 @@ pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let guid = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.unit_guids.guid_of(&token)?.unwrap_or(0)
+                crate::script::unit::guid_of(lua, &model, &token)?.unwrap_or(0)
             };
             lua.app_data_mut::<Model>()
                 .expect("model app_data")

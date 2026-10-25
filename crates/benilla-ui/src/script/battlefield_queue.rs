@@ -73,7 +73,7 @@ fn slot_index(index: i32, n: usize) -> Option<usize> {
 /// The local-player gate of `GetBattlefieldInfo` and `GetBattlefieldInstanceInfo`, read at call
 /// time (`0x468550`, `0x468460` with `ecx = 0x10`): the answer `UnitExists("player")` gives.
 pub(super) fn player_exists(model: &Model) -> bool {
-    model.unit("player").is_some_and(|u| u.exists)
+    model.snapshot_unit("player").is_some_and(|u| u.exists)
 }
 
 /// The reference's four-entry status jump table with its `"error"` default (`0x4ab604`).

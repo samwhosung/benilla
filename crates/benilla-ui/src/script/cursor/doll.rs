@@ -78,7 +78,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
     );
     if !placing && (model.item_pick_armed || model.repair_mode) {
         let usable = model
-            .inv_slot("player", id as usize)
+            .own_inv_view(id as usize)
             .is_some_and(|s| s.item_id != 0 && !item_locked(model, s.guid));
         if usable && model.item_pick_armed {
             return DollClick::Pick(super::ItemPick {
@@ -101,7 +101,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
             | CursorPayload::Money(_),
         ) => {
             let picked = model
-                .inv_slot("player", id as usize)
+                .own_inv_view(id as usize)
                 .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
                 .map(|s| CursorItem {
                     item_class: None,
@@ -130,7 +130,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
         Some(CursorPayload::Item(held)) => {
             // A locked occupant refuses the drop, the payload kept (`0x4c787b`).
             let occupant = model
-                .inv_slot("player", id as usize)
+                .own_inv_view(id as usize)
                 .filter(|s| s.item_id != 0)
                 .map_or(0, |s| s.guid);
             if item_locked(model, occupant) {
@@ -223,7 +223,7 @@ fn equip_held(model: &mut Model, id: u32) -> Option<u64> {
     // The occupant of the player's slot, none past its 113 (`0x4896f8`-`0x489714`).
     let occupant = usize::try_from(id)
         .ok()
-        .and_then(|slot| model.inv_slot("player", slot))
+        .and_then(|slot| model.own_inv_view(slot))
         .filter(|s| s.item_id != 0)
         .map_or(0, |s| s.guid);
     if occupant != 0 && occupant == held.guid {
@@ -299,12 +299,12 @@ fn use_cleared(
 ) {
     if !model.repair_mode {
         let locked = model
-            .inv_slot("player", id as usize)
+            .own_inv_view(id as usize)
             .is_some_and(|s| super::item_locked(model, s.guid));
         // Then the dispatcher's requirement and control gates (`0x5d8e0e`, `0x5d8eaa`), which an
         // empty slot never reaches.
         let refusal = model
-            .inv_slot("player", id as usize)
+            .own_inv_view(id as usize)
             // A container returns ahead of both gates (`0x5d8d26`).
             .filter(|s| s.item_id != 0 && s.contents_count.is_none())
             .and_then(|s| {
@@ -330,7 +330,7 @@ fn use_cleared(
     }
     if (1..=19).contains(&id)
         && model
-            .inv_slot("player", id as usize)
+            .own_inv_view(id as usize)
             .is_some_and(|s| s.item_id != 0)
     {
         model.item_calls.push(ItemCall::RepairWorn(id));
@@ -342,7 +342,7 @@ fn use_cleared(
 pub(super) fn is_inventory_item_locked(model: &Model, id: u32) -> bool {
     usize::try_from(id)
         .ok()
-        .and_then(|i| model.inv_slot("player", i))
+        .and_then(|i| model.own_inv_view(i))
         .is_some_and(|s| s.item_id != 0 && item_locked(model, s.guid))
 }
 

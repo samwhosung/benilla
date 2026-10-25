@@ -215,7 +215,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let h = this_tabard(lua, &this)?;
             let host = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                if !model.unit("player").is_some_and(|u| u.exists) {
+                if !crate::script::unit::view(lua, &model, "player").is_some_and(|u| u.exists) {
                     return Ok(());
                 }
                 model.tabard_host
@@ -232,7 +232,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let h = this_tabard(lua, &this)?;
             let five = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                if !model.unit("player").is_some_and(|u| u.exists) {
+                if !crate::script::unit::view(lua, &model, "player").is_some_and(|u| u.exists) {
                     return Ok(());
                 }
                 design(&model, h)
@@ -314,7 +314,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CanSaveTabardNow",
         lua.create_function(|lua, _: mlua::MultiValue| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let can = model.unit("player").is_some_and(|u| u.exists)
+            let can = crate::script::unit::view(lua, &model, "player").is_some_and(|u| u.exists)
                 && model.tabard_host.guild_record.is_some()
                 && !model.tabard_host.save_pending;
             Ok(if can { Value::Integer(1) } else { Value::Nil })

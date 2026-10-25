@@ -101,7 +101,7 @@ fn put_item(model: &mut Model, dest: Dest) -> bool {
             }
             let occupant = usize::try_from(live)
                 .ok()
-                .and_then(|slot| model.inv_slot("player", slot))
+                .and_then(|slot| model.own_inv_view(slot))
                 .map(|s| s.guid);
             let Some(occupant) = occupant else {
                 // The doll click on the empty slot: it places or buys what is held, and with
@@ -172,7 +172,7 @@ fn place_held(model: &mut Model, dest: Dest, held: CursorItem) -> bool {
             // split count, so a split carry swaps its whole stack.
             let occupant = usize::try_from(live)
                 .ok()
-                .and_then(|slot| model.inv_slot("player", slot))
+                .and_then(|slot| model.own_inv_view(slot))
                 .map_or(0, |s| s.guid);
             lock_item(model, occupant);
             super::swap::swap_and_file(
@@ -227,7 +227,7 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) -> mlua::Result<()> {
             !model.player_control || (BANK_BAG_INV_SLOTS.contains(&live) && model.bank.is_none());
         let occupied = usize::try_from(live)
             .ok()
-            .and_then(|slot| model.inv_slot("player", slot))
+            .and_then(|slot| model.own_inv_view(slot))
             .is_some_and(|s| s.item_id != 0);
         (gated, occupied)
     };
@@ -258,7 +258,7 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) -> mlua::Result<()> {
 fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
     usize::try_from(live)
         .ok()
-        .and_then(|slot| model.inv_slot("player", slot))
+        .and_then(|slot| model.own_inv_view(slot))
         .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
         .map(|s| CursorItem {
             item_class: None,

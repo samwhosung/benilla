@@ -331,7 +331,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::binding_abi::string_arg(lua, unit, r#"Usage: UnitCharacterPoints("unit")"#)?;
             super::unit::check_unit_token(&Some(unit.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let (cp1, cp2) = if super::unit::names_self(&model, &unit) {
+            let (cp1, cp2) = if super::unit::names_self(lua, &model, &unit) {
                 model.talents.points
             } else {
                 (0, 0)

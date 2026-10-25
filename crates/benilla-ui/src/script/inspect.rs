@@ -130,7 +130,7 @@ pub enum InspectCall {
 fn reach(lua: &Lua, token: &str) -> mlua::Result<Option<UnitReach>> {
     super::unit::check_unit_token(&Some(token.to_string()))?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let guid = model.unit_guids.resolve(token).ok().flatten();
+    let guid = super::unit::guid_of(lua, &model, token)?;
     Ok(guid.and_then(|guid| model.unit_reach.get(&guid).copied()))
 }
 

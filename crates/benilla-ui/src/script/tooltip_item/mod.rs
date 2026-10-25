@@ -493,7 +493,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     let pending = lua
                         .app_data_ref::<Model>()
                         .expect("model app_data")
-                        .inv_slot("player", slot)
+                        .own_inv_view(slot)
                         .filter(|s| s.record_pending())
                         .map(|s| s.item_id);
                     if let Some(entry) = pending {
@@ -504,14 +504,14 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                     // Only the active player's slots hold item objects; another player's item is
                     // a block (`0x533354`).
-                    let player =
-                        model.inventory_reader(&unit) == Some(super::char_stats::InvReader::Own);
+                    let reader = super::char_stats::inventory_reader(lua, &model, &unit);
+                    let player = reader == Some(super::char_stats::InvReader::Own);
                     let armed = match super::tooltip::tip_mut(&mut model, h) {
                         Ok(t) => std::mem::take(&mut t.equipped_header_armed),
                         Err(_) => false,
                     };
-                    let view = model
-                        .inv_slot(&unit, slot)
+                    let view = reader
+                        .and_then(|r| model.inv_slot_as(r, slot))
                         .filter(|s| s.item_id != 0)
                         .map(|s| {
                             (s.item_id, s.name.clone(), s.quality, s.count.max(1), {

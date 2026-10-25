@@ -712,9 +712,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 r#"Usage: SpellCanTargetUnit("unit")"#,
             )?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let can = model
-                .unit_guids
-                .guid_of(&token)?
+            let can = crate::script::unit::guid_of(lua, &model, &token)?
                 .is_some_and(|guid| model.spell_targetable_units.contains(&guid));
             Ok(flag(can))
         })?,

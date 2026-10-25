@@ -66,7 +66,7 @@ fn type_list(model: &Model, kind: usize) -> (usize, Vec<String>) {
         return (count, titles.into_iter().map(str::to_string).collect());
     }
     // The recount needs the active player (`0x4e89cc`).
-    let Some(player) = model.unit("player").filter(|p| p.level > 0) else {
+    let Some(player) = model.snapshot_unit("player").filter(|p| p.level > 0) else {
         return (0, Vec::new());
     };
     let level = player.level;

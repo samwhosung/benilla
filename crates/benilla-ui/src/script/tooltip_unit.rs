@@ -95,7 +95,7 @@ fn viewer(model: &Model, u: &UnitState) -> Option<Viewer> {
     if me == 0 {
         return None;
     }
-    let player = model.unit("player");
+    let player = model.snapshot_unit("player");
     let rel = model.unit_relations.as_deref();
     let ask = |f: &dyn Fn(&dyn super::UnitRelations) -> Option<bool>| {
         u.has_object && rel.and_then(f).unwrap_or(false)
@@ -227,9 +227,8 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
     let (unit, viewer, player_level, skinning, me) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
-        let unit = model
-            .unit(token)
-            .cloned()
+        let unit = crate::script::unit::view(lua, &model, token)
+            .map(std::borrow::Cow::into_owned)
             .filter(|u| u.exists && u.guid != 0);
         // The group record by guid, for every unit shown (`0x52a02b`): its member row's.
         let unit = unit.map(|mut u| {

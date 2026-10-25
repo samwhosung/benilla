@@ -764,7 +764,7 @@ fn line_parts(model: &mut Model, index: usize, line: usize) -> Option<LineParts>
                 // `0x4d6370`, as the turn-in test reads it: 0 for a faction not pushed.
                 let standing = model.faction_standings.get(&faction).copied().unwrap_or(0);
                 // `0x612bf0` on the active player: its gender 1 takes the `_FEMALE` text.
-                let female = model.unit("player").is_some_and(|u| u.sex == 3);
+                let female = model.snapshot_unit("player").is_some_and(|u| u.sex == 3);
                 return Some(LineParts {
                     text: LineText::Faction {
                         name,
@@ -1519,8 +1519,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetQuestLogRewardMoney",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let top = model
-                .unit("player")
+            let top = crate::script::unit::view(lua, &model, "player")
                 .is_some_and(|p| p.exists && p.level as i32 >= 60);
             Ok(model.selected_quest_record().map_or(0, |r| {
                 let bonus = if top { r.reward_money_max_level } else { 0 };
@@ -1899,12 +1898,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             // The token's guid (`0x515970`), which raises on an unknown token.
             super::unit::check_unit_token(&Some(token.clone()))?;
-            let Some(unit) = model.unit(&token) else {
+            let Some(unit) = crate::script::unit::view(lua, &model, &token) else {
                 return Ok(Value::Nil);
             };
             // The active player or one of the four party slots, by guid (`0x4e7f70`): a raid mate
             // outside our subgroup, a pet or a stranger answers nil.
-            let me = model.unit("player").map_or(0, |p| p.guid);
+            let me = crate::script::unit::view(lua, &model, "player").map_or(0, |p| p.guid);
             let grouped = unit.guid != 0
                 && (unit.guid == me || model.party.members.iter().any(|m| m.guid == unit.guid));
             // Held as a player (`0x468460`, typemask `0x10`) and not deactivated (`0x614ea0`, a

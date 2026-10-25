@@ -220,18 +220,18 @@ fn team_arg(lua: &Lua, v: Value) -> mlua::Result<i64> {
     let Some(token) = lua.coerce_string(v)? else {
         // Absent, boolean or table: the local player.
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        return Ok(model.unit("player").map_or(0, team_of));
+        return Ok(crate::script::unit::view(lua, &model, "player").map_or(0, |u| team_of(&u)));
     };
     let token = Some(token.to_str()?.to_owned());
     check_unit_token(&token)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     Ok(token
         .as_ref()
-        .and_then(|t| model.unit(t))
+        .and_then(|t| crate::script::unit::view(lua, &model, t))
         // `0x51a9af`'s player gate (`shr edx,4; test dl,1`), applied here unlike in `UnitPVPRank`:
         // on this arm nothing else tells a creature, which has a race too, from a player.
         .filter(|u| u.is_player)
-        .map_or(0, team_of))
+        .map_or(0, |u| team_of(&u)))
 }
 
 /// `PVP_RANK_<internal>_<team>`, ungendered: `GetPVPRankInfo`'s lookup, `0x703bf0(key, -1, 0)`
@@ -504,7 +504,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(token
                 .as_ref()
-                .and_then(|t| model.unit(t))
+                .and_then(|t| crate::script::unit::view(lua, &model, t))
                 .map_or(0i64, |u| i64::from(u.pvp_rank)))
         })?,
     )?;
@@ -535,7 +535,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (unit, player_level) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 (
-                    token.as_ref().and_then(|t| model.unit(t)).cloned(),
+                    token
+                        .as_ref()
+                        .and_then(|t| crate::script::unit::view(lua, &model, t))
+                        .map(std::borrow::Cow::into_owned),
                     model.player_req.level,
                 )
             };

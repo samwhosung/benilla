@@ -116,7 +116,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::binding_abi::string_arg(lua, unit, r#"Usage: StartDuelUnit("unit")"#)?;
             let guid = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.unit_guids.guid_of(&token)?.unwrap_or(0)
+                crate::script::unit::guid_of(lua, &model, &token)?.unwrap_or(0)
             };
             if guid != 0 && protected::gate(lua, Tag::CAST) {
                 submit(lua, DuelRequest::StartByGuid(guid))

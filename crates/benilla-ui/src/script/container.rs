@@ -942,7 +942,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 usize::try_from(inv)
                     .ok()
                     .filter(|_| !model.bank_bag_shut(container))
-                    .and_then(|slot| model.inv_slot("player", slot))
+                    .and_then(|slot| model.own_inv_view(slot))
                     .and_then(|v| v.icon.clone())
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");

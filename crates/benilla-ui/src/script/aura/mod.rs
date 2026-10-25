@@ -133,17 +133,16 @@ fn returns(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<Mul
     Ok(MultiValue::from_vec(out))
 }
 
-/// The list of the unit `token` names, through the resolver (`0x515970`, which `UnitBuff` calls at
-/// `0x519542`), the player's by slot as any unit's; `None` for nobody or a unit with no list. A
-/// token the resolver does not recognise raises `Unknown unit name`.
-pub(crate) fn auras_of<'m>(
-    model: &'m Model,
-    token: &str,
-) -> mlua::Result<Option<&'m UnitAuraList>> {
-    Ok(model
+/// The list of the unit `token` names off the snapshots, for a reader outside any call: the pushed
+/// resolver inputs (`0x515970`, which `UnitBuff` calls at `0x519542`), the player's by slot as any
+/// unit's; `None` for nobody, a unit with no list, and a token the resolver does not recognise.
+pub(crate) fn auras_of<'m>(model: &'m Model, token: &str) -> Option<&'m UnitAuraList> {
+    model
         .unit_guids
-        .guid_of(token)?
-        .and_then(|g| model.unit_auras.get(&g)))
+        .resolve(token)
+        .ok()
+        .flatten()
+        .and_then(|g| model.unit_auras.get(&g))
 }
 
 /// `UnitBuff`'s and `UnitDebuff`'s walk over `list`: the half the verb names, the buffs only
@@ -257,8 +256,6 @@ impl super::UiScript {
     pub fn aura_spell_ids(&self, token: &str, helpful: bool) -> Vec<u32> {
         let model = self.model_ref();
         auras_of(&model, token)
-            .ok()
-            .flatten()
             .map(|list| listed(list, helpful).map(|a| a.spell_id).collect())
             .unwrap_or_default()
     }

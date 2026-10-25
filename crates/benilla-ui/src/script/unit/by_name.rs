@@ -298,7 +298,7 @@ impl super::super::UiScript {
     /// the next frame's unit feed replaces it with the committed selection's own push.
     ///
     /// A selection whose object is not held, a party member out of range, seats as its guid: the
-    /// getters read it as they read any guid with no object ([`Model::unit`]).
+    /// getters read it as they read any guid with no object ([`Model::snapshot_unit`]).
     ///
     /// `"targettarget"` follows: `0x515970` reads the target's `UNIT_FIELD_TARGET` as it resolves,
     /// so it names the new target's target at once, a held unit as its snapshot, and an unheld or
@@ -378,7 +378,7 @@ impl Model {
     /// held, as the active player object always is, and is offered by the object pass at distance 0.
     pub(crate) fn closest_player(&self, name: &str, filter: Filter) -> Option<u64> {
         let party = &self.party;
-        let held = |token: String| self.unit(&token).is_some_and(|u| u.has_object);
+        let held = |token: String| self.snapshot_unit(&token).is_some_and(|u| u.has_object);
         let members = party
             .members
             .iter()

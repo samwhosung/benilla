@@ -191,7 +191,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(MultiValue::new());
             };
             let req = model.player_req.clone();
-            let player = model.unit("player").map(|u| (u.pvp_team, u.sex == 3));
+            let player =
+                crate::script::unit::view(lua, &model, "player").map(|u| (u.pvp_team, u.sex == 3));
             let knows = view.required_spell != 0
                 && model
                     .spellbook

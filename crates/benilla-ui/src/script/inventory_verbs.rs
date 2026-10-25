@@ -61,7 +61,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let sellable = usize::try_from(slot0 + 1)
                 .ok()
-                .and_then(|slot| model.inv_slot("player", slot))
+                .and_then(|slot| model.own_inv_view(slot))
                 .is_some_and(|v| v.item_id != 0 && !super::cursor::item_locked(&model, v.guid));
             if sellable {
                 model.ui_cursor = Some(UiCursorMode::Buy);

@@ -1060,7 +1060,7 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
     s.seat_selection(Some(alone(0x40)));
     assert!(s.eval::<bool>("return UnitExists('target') == 1").unwrap());
     assert_eq!(
-        s.model_ref().unit("target").map(|u| u.guid),
+        s.model_ref().snapshot_unit("target").map(|u| u.guid),
         Some(0x40),
         "neither: the unit as its guid alone"
     );

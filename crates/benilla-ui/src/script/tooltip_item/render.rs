@@ -230,8 +230,7 @@ pub(super) fn render_view_flagged(
         // The required rank's title for the player's side and gender (`0x5efe60` on the active
         // player): `PVP_RANK_<rank>_<side>`, its `_FEMALE` twin first (`0x612bf0`).
         let rank_title = (v.required_honor_rank != 0).then(|| {
-            let (side, female) = model
-                .unit("player")
+            let (side, female) = crate::script::unit::view(lua, &model, "player")
                 .map_or((0, false), |u| (u.pvp_team, u.sex == 3));
             (format!("PVP_RANK_{}_{side}", v.required_honor_rank), female)
         });
