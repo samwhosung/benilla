@@ -454,18 +454,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetSpellCooldown(id, bookType) -> start, duration, enable in `GetTime` seconds, as
     // `GetActionCooldown`: enable 0 for an on-hold cooldown; an expired or empty one answers the
-    // reference's no-cooldown `(0, 0, 1)`, so a re-feed cannot replay the finish flash.
+    // reference's no-cooldown `(0, 0, 1)`, so a re-feed cannot replay the finish flash. A player's
+    // book slot queries the list inside the call (`0x4b410f` → `0x6e2ea0`), through the lent host;
+    // the pet's book reads the pet's list off the snapshot.
     g.set(
         "GetSpellCooldown",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "GetSpellCooldown")?;
             let now = crate::script::clock::now(lua);
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let cooldown = book_slot(&model, id, &book_type).and_then(|s| s.cooldown);
-            Ok(match cooldown {
-                Some((start_ms, duration_ms, enabled)) => {
-                    let (start, duration) =
-                        (start_ms as f64 / 1000.0, f64::from(duration_ms) / 1000.0);
+            let (spell, snapshot) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let slot = book_slot(&model, id, &book_type);
+                let spell = slot
+                    .filter(|_| !is_pet_book(&book_type))
+                    .map(|s| s.spell_id);
+                let snapshot = slot
+                    .and_then(|s| s.cooldown)
+                    .map(super::cooldown_read::seconds);
+                (spell, snapshot)
+            };
+            let live = spell.and_then(|spell| {
+                super::cooldown_read::read_live(lua, super::CooldownQuery::Spell(spell))
+            });
+            Ok(match live.unwrap_or(snapshot) {
+                Some((start, duration, enabled)) => {
                     if start + duration > now || !enabled {
                         (
                             crate::script::clock::held_start(start, enabled, now),

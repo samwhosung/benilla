@@ -140,6 +140,8 @@ disjoint::disjoint_set! {
         items_live: crate::ui_items::live::ItemLive<'static, 'static>,
         stats_live: StatsLive<'static, 'static>,
         auras_live: Option<crate::ui_aura::AuraLive<'static, 'static>>,
+        /// The player's cooldown list the cooldown getters query as they run.
+        cooldowns_live: crate::spell::CooldownLive<'static, 'static>,
     }
 }
 
@@ -755,6 +757,13 @@ impl CallHost for ScriptCallHost<'_, '_> {
 
     fn wears_item(&mut self, entry: u32) -> Option<bool> {
         Some(self.appliers.stats_live().wears(entry))
+    }
+
+    fn read_cooldown(
+        &mut self,
+        query: benilla_ui::script::CooldownQuery,
+    ) -> Option<Option<benilla_ui::script::CooldownTriple>> {
+        self.appliers.cooldowns_live().read(query)
     }
 
     fn read_unit_auras(
@@ -4558,13 +4567,17 @@ mod tests {
         f
     }
 
-    /// A feed's event handler casts inside its call: the action feed pushes as an engine turn,
-    /// and the events it owes are signalled with the host lent, each handler run in place
-    /// (`SignalEvent` `0x703e50`). Here the bar's first `ACTIONBAR_UPDATE_COOLDOWN`.
+    /// A lane's event handler casts inside its call: the cooldown lane signals each flush with
+    /// the host lent, each handler run in place (`SignalEvent` `0x703e50`). Here the cheat's
+    /// `ACTIONBAR_UPDATE_COOLDOWN` (`0x6e9712`).
     #[test]
-    fn a_feeds_event_handler_casts_and_binds_inside_its_call() {
+    fn a_cooldown_flushs_handler_casts_and_binds_inside_its_call() {
         let mut f = cork_on("ACTIONBAR_UPDATE_COOLDOWN");
-        crate::ui_action::run_action_events_once(f.app.world_mut());
+        f.app
+            .world_mut()
+            .resource_mut::<crate::spell::Cooldowns>()
+            .wipe();
+        crate::lanes::fire_in_order(f.app.world_mut());
         assert_eq!(global(&mut f, "RAN"), Some(1), "the handler ran");
         assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
         assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");

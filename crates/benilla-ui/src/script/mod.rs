@@ -66,6 +66,7 @@ mod char_name;
 mod client;
 pub use client::FrameTimeRing;
 mod clock;
+mod cooldown_read;
 mod cvar_checks;
 mod cvars;
 mod dressup;
@@ -259,6 +260,7 @@ pub use container::{
     BagAutoStore, ContainerMove, ContainerSlot, ContainerState, ContainerUse, EnchantView,
     PendingWrap, PetitionSlotView, RandomPropertyView, UiCursorMode, UseArm, UseFork,
 };
+pub use cooldown_read::{CooldownQuery, CooldownTriple};
 pub use craft::{CraftCall, CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
 pub use cursor::equip::{AutoEquip, BIND_WHEN_EQUIPPED};
 pub use cursor::money::coin_icon;

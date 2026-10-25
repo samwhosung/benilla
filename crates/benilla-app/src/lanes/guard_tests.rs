@@ -356,14 +356,11 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         Row::Edge,
         "::ui_action::state::fire_action_events",
         "the usable refresh `0x4b31c0` (`ACTIONBAR_UPDATE_USABLE`, `SPELL_ACTIVE`, \
-         `SPELL_UPDATE_USABLE`), which the reference runs inside each caller's packet: the form \
-         and combo watchers (`0x5de011`, `0x5ddff0`), the unit-flags, health, power and \
-         aura-state watchers, the selection and the cooldowns. Here it is one pass a frame over \
-         the bar's 120 slots and the reactive list, diffed against the usable cache, so one \
-         caller's run cannot be cut out to fire at its own notice. It also fires \
-         `SMSG_ITEM_COOLDOWN`'s `BAG_UPDATE_COOLDOWN` (`0x6e965b`), which the reference signals \
-         inside that packet's handler and which reaches here through the cooldowns' flush, a \
-         queue the call host holds and so no row of its own shows",
+         `SPELL_UPDATE_USABLE`) of the callers outside the field watchers and the cooldown list, \
+         which refresh on their lanes: the selection's select and release where no call made \
+         them (`0x493892`, `0x493a69`) and the control flag (`0x4958fc`, `0x495910`), one pass \
+         a frame over the bar's 120 slots and the reactive list, diffed against the usable \
+         cache",
     ),
 ];
 
@@ -387,7 +384,6 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::spell::cast_send::ScriptCastPermit",
     "::spell::cast_send::unit_caster::PetGcdsOwed",
     "::spell::cast_send::unit_caster::UnitAttackOwed",
-    "::spell::cooldowns::Cooldowns",
     "::spell::inflight::ActiveChannel",
     "::spell::inflight::AutoRepeatActive",
     "::spell::inflight::PendingCast",
@@ -784,7 +780,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 14] {
+fn lane_types() -> [TypeId; 15] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -806,12 +802,14 @@ fn lane_types() -> [TypeId; 14] {
         TypeId::of::<crate::target::Deaths>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
+        // The cooldown lane: the player's list, which logs its writes and flushes at their places.
+        TypeId::of::<crate::spell::Cooldowns>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 14] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 15] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -839,6 +837,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 14] {
             "item text",
             TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         ),
+        ("cooldowns", TypeId::of::<crate::spell::Cooldowns>()),
     ]
 }
 
@@ -994,6 +993,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "bag view",
             "cast reports",
             "chat",
+            "cooldowns",
             "deaths",
             "equip errors",
             "field notices",

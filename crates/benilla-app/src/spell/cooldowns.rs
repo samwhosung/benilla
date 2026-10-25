@@ -15,7 +15,8 @@
 //! Each of the reference's sites of the flush `0x4b31b0` (`ACTIONBAR_UPDATE_COOLDOWN`,
 //! `SPELL_UPDATE_COOLDOWN`) calls [`Cooldowns::flush`], whether or not its insert added a record:
 //! the insert `0x6e12c0` and `StartCooldown 0x6e2c60` flush nothing, and nor does a natural expiry,
-//! since the stock `Cooldown.lua` frame hides itself at the end.
+//! since the stock `Cooldown.lua` frame hides itself at the end. The player's list logs each write
+//! and each signal at its place ([`log`]), so the drain replays them packet by packet.
 
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,12 @@ use super::mods::OP_COOLDOWN;
 use super::{CategoryPad, SpellModifiers, OP_GCD};
 use benilla_formats::SpellDisplay;
 use benilla_protocol::messages::{ItemInfo, ItemSpellEntry, ItemUseSpell};
+
+mod live;
+mod log;
+pub(crate) use live::CooldownLive;
+pub(crate) use log::Signal;
+use log::{expired, CooldownLog, Write};
 
 /// A signed millisecond time as a timer's duration, untracked at or below zero: a negative time
 /// ends before its start, so no leg of a read passes it (`0x6e14f7`, `0x6e1588`, `0x6e15df`).
@@ -146,22 +153,24 @@ impl CooldownInfo {
 
 /// One cooldown list, the client's `SpellHistory`: the player's is this resource (`0xcecaec`), the
 /// pet's is [`crate::ui_pet::PetBar::cooldowns`] (`0xcecb04`), which the pet bar, the pet book and
-/// the pet's `SMSG_SPELL_GO` leg read and write. Each list's edges feed its own events: the
-/// player's `feed_action_state`, the pet's `ui_pet::bar::fire_pet_cooldown_events`.
+/// the pet's `SMSG_SPELL_GO` leg read and write. The player's list signals at each flush site in
+/// its place on the cooldown lane ([`log`]); the pet's, which keeps no log, through its counters,
+/// once a frame (`ui_pet::bar::fire_pet_cooldown_events`).
 #[derive(Resource, Default)]
 pub(crate) struct Cooldowns {
     records: Vec<Record>,
-    /// Bumped by [`Self::flush`], the edge of `0x4b31b0`. Only counts up, across
-    /// [`Self::clear_silent`] too, so a watcher reads a reset as no mutation.
+    /// The frame's writes and signals, which the drain replays (the player's list alone).
+    log: CooldownLog,
+    /// Bumped by [`Self::flush`], `0x4b31b0`. Only counts up, across [`Self::clear_silent`] too,
+    /// so a watcher reads a reset as no mutation.
     pub(crate) generation: u64,
-    /// Bumped by the list's own calls of the usable refresh `0x4b31c0`, the edge of its
-    /// `SPELL_UPDATE_USABLE`: a held global cooldown's start (`0x6e2e85`) and `0x6e3050`'s
-    /// (`0x6e3076`). Only counts up.
+    /// Bumped by the list's own calls of the usable refresh `0x4b31c0`: a held global cooldown's
+    /// start (`0x6e2e85`) and `0x6e3050`'s (`0x6e3076`). Only counts up.
     pub(crate) usable_refreshes: u64,
-    /// Bumped by the list's calls of `0x4f93d0`, the edge of `BAG_UPDATE_COOLDOWN`:
-    /// `SMSG_ITEM_COOLDOWN` (`0x6e965b`), the spell go's item leg (`0x6e8505`, `0x6e8570`),
-    /// `0x6e3050` (`0x6e3089`) and the cheat (`0x6e9721`). The pet's list calls the pet's flush
-    /// `0x4bce90` in its place (`0x6e3080`), so only the player's feed reads it. Only counts up.
+    /// Bumped by the list's calls of `0x4f93d0`, `BAG_UPDATE_COOLDOWN`: `SMSG_ITEM_COOLDOWN`
+    /// (`0x6e965b`), the spell go's item leg (`0x6e8505`, `0x6e8570`), `0x6e3050` (`0x6e3089`)
+    /// and the cheat (`0x6e9721`). The pet's list calls the pet's flush `0x4bce90` in its place
+    /// (`0x6e3080`). Only counts up.
     pub(crate) bag_flushes: u64,
     /// Bumped when [`Self::prune`] removes records. Kept apart from [`Self::generation`]: gated
     /// feeds must see an expiry, but the reference never fires the event for one.
@@ -200,29 +209,82 @@ struct PendingItem {
 }
 
 impl Cooldowns {
+    /// A list that keeps no log, the pet's: its watcher reads its counters once a frame.
+    pub(crate) fn unlogged() -> Self {
+        Self {
+            log: CooldownLog::new(false),
+            ..Default::default()
+        }
+    }
+
+    /// Make `write` on the records, logged at its place.
+    fn write(&mut self, write: Write) {
+        self.log.wrote(&self.records, &write);
+        write.apply(&mut self.records);
+    }
+
     /// `0x4b31b0`, the cooldown pair: `ACTIONBAR_UPDATE_COOLDOWN` and `SPELL_UPDATE_COOLDOWN`. On
     /// the pet's list its watcher adds `PET_BAR_UPDATE_COOLDOWN`, the `0x4bce90` each pet site
     /// calls after it.
     pub(crate) fn flush(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        self.log.signalled(Signal::Pair);
     }
 
     fn refresh_usable(&mut self) {
         self.usable_refreshes = self.usable_refreshes.wrapping_add(1);
+        self.log.signalled(Signal::Usable);
+    }
+
+    fn flush_bags(&mut self) {
+        self.bag_flushes = self.bag_flushes.wrapping_add(1);
+        self.log.signalled(Signal::Bags);
     }
 
     /// `0x4b31b0` then `0x4f93d0`, the pair every item leg calls.
     pub(crate) fn flush_item_leg(&mut self) {
         self.flush();
-        self.bag_flushes = self.bag_flushes.wrapping_add(1);
+        self.flush_bags();
     }
 
     /// `0x6e3050`'s tail after its walk, whether or not a record matched: the pair (`0x6e3071`),
     /// the usable refresh (`0x6e3076`), then the bags for the player (`0x6e3089`) or the pet's flush
     /// for the pet (`0x6e3080`), which reads [`Self::generation`].
     fn flush_records(&mut self) {
+        self.flush();
         self.refresh_usable();
-        self.flush_item_leg();
+        self.flush_bags();
+    }
+
+    /// The cooldown lane's head ([`log`]).
+    pub(crate) fn lane_head(&self) -> Option<crate::lanes::Stamp> {
+        self.log.head()
+    }
+
+    /// The drain's rewind of the list to the frame's start, once per drain, then the writes
+    /// `until` admits up to the next signal it admits, handed back with its stamp.
+    pub(crate) fn replay(
+        &mut self,
+        until: crate::lanes::Until,
+    ) -> Option<(crate::lanes::Stamp, Signal)> {
+        self.log.rewind(&mut self.records);
+        self.log.next(&mut self.records, until)
+    }
+
+    /// The drain's end: the list as the frame left it, with whatever the drain wrote in its place.
+    pub(crate) fn end_replay(&mut self) {
+        self.log.finish(&mut self.records);
+    }
+
+    /// The log dropped unreplayed, while no in-game interface is up to hear it.
+    pub(crate) fn drop_log(&mut self) {
+        self.log.drop_all();
+    }
+
+    /// The signals logged and not yet fired, in order.
+    #[cfg(test)]
+    pub(crate) fn logged_signals(&self) -> Vec<Signal> {
+        self.log.signals()
     }
 
     /// How many records the list holds, elapsed ones included.
@@ -241,12 +303,7 @@ impl Cooldowns {
     /// An elapsed record awaits its prune. The feeds run before `feed_action_state`'s prune, so
     /// on the frame a timer crosses zero the read changes a frame before [`Self::feed_epoch`].
     pub(crate) fn sweep_pending(&self, now: Instant) -> bool {
-        self.records.iter().any(|r| {
-            !r.on_hold
-                && r.recovery.remaining(now).is_zero()
-                && r.category_recovery.remaining(now).is_zero()
-                && r.gcd_remaining(now).is_zero()
-        })
+        self.records.iter().any(|r| expired(r, now))
     }
 
     /// `AddCooldown 0x6e12c0`: always appends, never matching by id, so one spell holds separate
@@ -282,8 +339,10 @@ impl Cooldowns {
         {
             return;
         }
-        self.prune(now);
-        self.records.push(Record {
+        if self.sweep_pending(now) {
+            self.expiry_epoch = self.expiry_epoch.wrapping_add(1);
+        }
+        let record = Record {
             spell_id,
             item_id,
             recovery,
@@ -293,7 +352,8 @@ impl Cooldowns {
             on_hold,
             gcd_category,
             gcd: millis(gcd_ms),
-        });
+        };
+        self.write(Write::Add(now, record));
         self.insert_epoch = self.insert_epoch.wrapping_add(1);
     }
 
@@ -302,14 +362,8 @@ impl Cooldowns {
     /// flushes no event. [`Self::add`] runs it at every insert, and the player's feed each frame,
     /// which the gated feeds need to see an expiry with no insert.
     pub(crate) fn prune(&mut self, now: Instant) {
-        let before = self.records.len();
-        self.records.retain(|r| {
-            r.on_hold
-                || !r.recovery.remaining(now).is_zero()
-                || !r.category_recovery.remaining(now).is_zero()
-                || !r.gcd_remaining(now).is_zero()
-        });
-        if self.records.len() != before {
+        if self.sweep_pending(now) {
+            self.write(Write::Prune(now));
             self.expiry_epoch = self.expiry_epoch.wrapping_add(1);
         }
     }
@@ -589,36 +643,30 @@ impl Cooldowns {
     /// `0x6e1663`); with a match, the sweep of the whole list at now, every spell's records
     /// (`0x6e1678` → `0x6e1910(list, now)`), and the flush (`0x6e167d`).
     pub(crate) fn clear_gcd(&mut self, spell_id: u32, now: Instant) {
-        let mut touched = false;
-        for r in &mut self.records {
-            if r.spell_id == spell_id {
-                r.gcd_category = 0;
-                r.gcd = Duration::ZERO;
-                touched = true;
-            }
+        if !self.records.iter().any(|r| r.spell_id == spell_id) {
+            return;
         }
-        if touched {
-            if benilla_assets::trace::enabled() {
-                benilla_assets::trace::line(
-                    "cd",
-                    &format!("clear-gcd spell={spell_id} (cast-fail)"),
-                );
-            }
-            self.prune(now);
-            self.flush();
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line("cd", &format!("clear-gcd spell={spell_id} (cast-fail)"));
         }
+        let before = self.records.len();
+        self.write(Write::ClearGcd(spell_id, now));
+        if self.records.len() != before {
+            self.expiry_epoch = self.expiry_epoch.wrapping_add(1);
+        }
+        self.flush();
     }
 
     /// `SMSG_COOLDOWN_EVENT` (`0x6e3050` → `0x6e1790`, force 0): an on-hold record's recovery and
     /// category starts become now (`0x6e185a`-`0x6e1863`), and with the recovery start the GCD
     /// leg's; then [`Self::flush_records`].
     pub(crate) fn cooldown_event(&mut self, spell_id: u32, now: Instant) {
-        for r in &mut self.records {
-            if r.spell_id == spell_id && r.on_hold {
-                r.recovery.start = now;
-                r.category_recovery.start = now;
-                r.on_hold = false;
-            }
+        if self
+            .records
+            .iter()
+            .any(|r| r.spell_id == spell_id && r.on_hold)
+        {
+            self.write(Write::Start(spell_id, now));
         }
         self.flush_records();
     }
@@ -626,15 +674,24 @@ impl Cooldowns {
     /// `SMSG_CLEAR_COOLDOWN` and the cast-fail revert (`0x6e3050` → `0x6e1790`, force 1), then
     /// [`Self::flush_records`].
     pub(crate) fn clear_spell(&mut self, spell_id: u32) {
-        self.records.retain(|r| r.spell_id != spell_id);
+        if self.records.iter().any(|r| r.spell_id == spell_id) {
+            self.write(Write::Remove(spell_id));
+        }
         self.flush_records();
     }
 
     /// `SMSG_COOLDOWN_CHEAT` (`0x6e9700`): the list emptied, then the pair (`0x6e9712`) and the
     /// bags for the player (`0x6e9721`) or the pet's flush, on an empty list too; no usable refresh.
     pub(crate) fn wipe(&mut self) {
-        self.records.clear();
+        self.clear_records();
         self.flush_item_leg();
+    }
+
+    /// `0x6e1880`, every record gone, flushing nothing.
+    fn clear_records(&mut self) {
+        if !self.records.is_empty() {
+            self.write(Write::Clear);
+        }
     }
 
     /// Empty the list with no flush: `SMSG_PET_SPELLS` clears the pet's list (`0x6e9b60` →
@@ -642,7 +699,7 @@ impl Cooldowns {
     /// calls no `0x4b31b0`. The counters keep their place, so a watcher never reads the reset as
     /// a mutation.
     pub(crate) fn clear_silent(&mut self) {
-        self.records.clear();
+        self.clear_records();
     }
 
     /// Session end ([`crate::net::session::disconnected`]): `SMSG_INITIAL_SPELLS` re-sends every
@@ -652,7 +709,7 @@ impl Cooldowns {
         // The shutdown frees the held item cooldowns with both lists (`0x6e9ad0`).
         self.pending_items.clear();
         if !self.records.is_empty() {
-            self.records.clear();
+            self.clear_records();
             self.flush();
         }
     }

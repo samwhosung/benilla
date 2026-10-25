@@ -1061,7 +1061,7 @@ fn resolve_slot(
 /// template, which skips the query (`0x5347e3`, `0x53318a`, `0x4f9a48`, `0x4c8b55`), and a
 /// template with no on-use spell, which the query leaves untouched (`0x6e2f34`). A cold on-use
 /// spell answers enabled (`0x6e1406`).
-fn use_cooldown(
+pub(crate) fn use_cooldown(
     t: &ItemInfo,
     entry: u32,
     charges_left: i32,
@@ -1099,15 +1099,41 @@ fn worn_cooldowns(
     (0..WORN_SLOTS)
         .filter_map(|slot0| {
             let guid = store.0.player_inv_slot(slot0).filter(|&g| g != 0)?;
-            let fields = objects.object(guid)?;
-            let entry = fields.object_entry()?;
-            // Only read (`0x4c8b3a`).
-            let t = items.template(entry, guid, Ask::Read)?;
-            let charges_left = fields.item_spell_charges(0).unwrap_or(0);
-            let triple = use_cooldown(t, entry, charges_left, cooldowns, spells, now, ui_now)?;
+            let triple =
+                object_cooldown(objects, guid, items, cooldowns, spells, now, ui_now).flatten()?;
             Some((usize::from(slot0) + 1, triple))
         })
         .collect()
+}
+
+/// [`use_cooldown`] for the item object held under `guid` in `objects`, its record only read
+/// (`0x4c8b3a`, `0x4f9a3f`): `None` for no object or no entry, `Some(None)` for the all-zero
+/// answer, a record not cached included. The worn feed and the getters' query at the call
+/// ([`crate::spell::CooldownLive`]) are this one read.
+pub(crate) fn object_cooldown(
+    objects: &(impl super::ItemObjects + ?Sized),
+    guid: u64,
+    items: &Items,
+    cooldowns: &crate::spell::Cooldowns,
+    spells: Option<&benilla_formats::SpellCatalog>,
+    now: std::time::Instant,
+    ui_now: f64,
+) -> Option<Option<(i64, u32, bool)>> {
+    let fields = objects.object(guid)?;
+    let entry = fields.object_entry()?;
+    let Some(t) = items.template(entry, guid, Ask::Read) else {
+        return Some(None);
+    };
+    let charges_left = fields.item_spell_charges(0).unwrap_or(0);
+    Some(use_cooldown(
+        t,
+        entry,
+        charges_left,
+        cooldowns,
+        spells,
+        now,
+        ui_now,
+    ))
 }
 
 /// The item build's own lookups, asked as it asks them. The creator's and the giver's names

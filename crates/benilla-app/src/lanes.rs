@@ -428,6 +428,8 @@ mod aura_view_tests;
 #[cfg(test)]
 mod bag_tests;
 #[cfg(test)]
+mod cooldown_live_tests;
+#[cfg(test)]
 mod group_view_tests;
 #[cfg(test)]
 mod guard_tests;

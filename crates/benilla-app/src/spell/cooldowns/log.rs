@@ -1,0 +1,228 @@
+//! The player's list as each packet left it. In the reference each cooldown packet's handler
+//! writes the list and signals inside itself (`0x6e9460` adds its records, then `0x4b31b0` at
+//! `0x6e95b0`), and the getters query the list inside their calls (`0x6e2ea0` → `0x6e13e0`), so a
+//! listener reads its own packet's records. Here every handler of the frame writes the list before
+//! any listener runs, so each write is logged with its stamp, as are the flushes' signals
+//! ([`Signal`]); the cooldown lane rewinds the list to the frame's start and replays the log in
+//! stamp order among the other lanes, firing each signal at its place
+//! ([`crate::ui_action::CooldownLanePlugin`]). A write made during the drain, a listener's cast
+//! arming its global cooldown, lands at its own place and is not logged; its signal is, stamped
+//! under the item firing, and fires straight after it.
+
+use std::collections::VecDeque;
+use std::time::Instant;
+
+use super::Record;
+use crate::lanes::{Stamp, Until};
+
+/// One write to a list's records, replayable: each carries the time its handler read.
+#[derive(Clone, Debug)]
+pub(super) enum Write {
+    /// `AddCooldown 0x6e12c0` past its early-out: the records run out by the time dropped, then the
+    /// record appended.
+    Add(Instant, Record),
+    /// The records run out by the time dropped (the expiry sweep `0x6e1910`).
+    Prune(Instant),
+    /// `ClearGlobalCooldown 0x6e1630` on a match: every record of the spell has its GCD category
+    /// and time zeroed, then the sweep at the time.
+    ClearGcd(u32, Instant),
+    /// `0x6e1790` with no `remove`: every held record of the spell starts at the time.
+    Start(u32, Instant),
+    /// `0x6e1790` with `remove`: every record of the spell goes.
+    Remove(u32),
+    /// `0x6e1880`: every record goes.
+    Clear,
+}
+
+/// Whether a record has run out by `now`: unheld, with its recovery, category recovery and GCD
+/// over.
+pub(super) fn expired(r: &Record, now: Instant) -> bool {
+    !r.on_hold
+        && r.recovery.remaining(now).is_zero()
+        && r.category_recovery.remaining(now).is_zero()
+        && r.gcd_remaining(now).is_zero()
+}
+
+impl Write {
+    /// Make the write on `records`.
+    pub(super) fn apply(&self, records: &mut Vec<Record>) {
+        match self {
+            Self::Add(now, record) => {
+                records.retain(|r| !expired(r, *now));
+                records.push(record.clone());
+            }
+            Self::Prune(now) => records.retain(|r| !expired(r, *now)),
+            Self::ClearGcd(spell, now) => {
+                for r in records.iter_mut().filter(|r| r.spell_id == *spell) {
+                    r.gcd_category = 0;
+                    r.gcd = std::time::Duration::ZERO;
+                }
+                records.retain(|r| !expired(r, *now));
+            }
+            Self::Start(spell, now) => {
+                for r in records
+                    .iter_mut()
+                    .filter(|r| r.spell_id == *spell && r.on_hold)
+                {
+                    r.recovery.start = *now;
+                    r.category_recovery.start = *now;
+                    r.on_hold = false;
+                }
+            }
+            Self::Remove(spell) => records.retain(|r| r.spell_id != *spell),
+            Self::Clear => records.clear(),
+        }
+    }
+}
+
+/// What a list's flush site signals, each one routine of the reference's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Signal {
+    /// `0x4b31b0`: `ACTIONBAR_UPDATE_COOLDOWN`, then `SPELL_UPDATE_COOLDOWN`.
+    Pair,
+    /// `0x4b31c0`, the usable refresh: `ACTIONBAR_UPDATE_USABLE` on a change, each reactive
+    /// spell's `SPELL_ACTIVE`, then `SPELL_UPDATE_USABLE`.
+    Usable,
+    /// `0x4f93d0`: `BAG_UPDATE_COOLDOWN`.
+    Bags,
+}
+
+/// One logged item.
+#[derive(Debug)]
+enum Entry {
+    Write(Write),
+    Signal(Signal),
+}
+
+/// A list's log of the frame's writes and signals ([`super::Cooldowns`]), which only the
+/// player's list keeps: the pet's list signals its own watcher once a frame
+/// (`crate::ui_pet::bar`).
+#[derive(Debug)]
+pub(crate) struct CooldownLog {
+    /// The list keeps the log.
+    on: bool,
+    /// The records before the log's first write.
+    start: Option<Vec<Record>>,
+    /// The writes and signals not yet replayed, in stamp order.
+    entries: VecDeque<(Stamp, Entry)>,
+    /// The drain has rewound the list and replays the log: a write lands in place, unlogged.
+    replaying: bool,
+}
+
+impl Default for CooldownLog {
+    /// The player's list's: one that keeps.
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl CooldownLog {
+    /// A log that keeps the list's writes and signals, or one that keeps nothing.
+    pub(super) fn new(on: bool) -> Self {
+        Self {
+            on,
+            start: None,
+            entries: VecDeque::new(),
+            replaying: false,
+        }
+    }
+
+    /// Insert `entry` at `at` behind everything stamped before it: one pushed while an item fires
+    /// is stamped under that item and goes ahead of the later ones.
+    fn push(&mut self, at: Stamp, entry: Entry) {
+        let i = self.entries.partition_point(|(s, _)| *s < at);
+        self.entries.insert(i, (at, entry));
+    }
+
+    /// Log `write`, made on `records`, unless the drain is replaying.
+    pub(super) fn wrote(&mut self, records: &[Record], write: &Write) {
+        if !self.on || self.replaying {
+            return;
+        }
+        if self.start.is_none() {
+            self.start = Some(records.to_vec());
+        }
+        self.push(crate::lanes::stamp(), Entry::Write(write.clone()));
+    }
+
+    /// Log `signal`, the replay's included: a listener's flush fires after its cause.
+    pub(super) fn signalled(&mut self, signal: Signal) {
+        if self.on {
+            self.push(crate::lanes::stamp(), Entry::Signal(signal));
+        }
+    }
+
+    /// The lane's head: the rewind, at the origin, while the log holds what the drain has not
+    /// begun to replay; else the next entry.
+    pub(super) fn head(&self) -> Option<Stamp> {
+        if self.replaying {
+            self.entries.front().map(|(s, _)| *s)
+        } else {
+            (!self.entries.is_empty()).then(Stamp::origin)
+        }
+    }
+
+    /// Rewind `records` to the log's start, once per drain.
+    pub(super) fn rewind(&mut self, records: &mut Vec<Record>) {
+        if self.replaying {
+            return;
+        }
+        self.replaying = true;
+        if let Some(start) = self.start.take() {
+            *records = start;
+        }
+    }
+
+    /// Replay onto `records` the writes `until` admits, up to the next signal it admits, which it
+    /// hands back with its stamp.
+    pub(super) fn next(
+        &mut self,
+        records: &mut Vec<Record>,
+        until: Until,
+    ) -> Option<(Stamp, Signal)> {
+        while self.entries.front().is_some_and(|(s, _)| until.admits(*s)) {
+            let Some((at, entry)) = self.entries.pop_front() else {
+                break;
+            };
+            match entry {
+                Entry::Write(w) => w.apply(records),
+                Entry::Signal(s) => return Some((at, s)),
+            }
+        }
+        None
+    }
+
+    /// The drain's end, however it ended: what it did not replay is written onto `records`, its
+    /// signals dropped, and the next write opens a new log.
+    pub(super) fn finish(&mut self, records: &mut Vec<Record>) {
+        if !self.replaying {
+            return;
+        }
+        for (_, entry) in std::mem::take(&mut self.entries) {
+            if let Entry::Write(w) = entry {
+                w.apply(records);
+            }
+        }
+        self.replaying = false;
+        self.start = None;
+    }
+
+    /// Everything logged, dropped unreplayed: no in-game interface is up to hear it.
+    pub(super) fn drop_all(&mut self) {
+        self.entries.clear();
+        self.start = None;
+        self.replaying = false;
+    }
+
+    /// The signals logged and not yet fired, in order.
+    #[cfg(test)]
+    pub(super) fn signals(&self) -> Vec<Signal> {
+        self.entries
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Entry::Signal(s) => Some(*s),
+                Entry::Write(_) => None,
+            })
+            .collect()
+    }
+}

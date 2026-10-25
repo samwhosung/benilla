@@ -42,6 +42,8 @@ fn add_action_feed(app: &mut App) {
                 fire_action_events
                     .in_set(crate::ui_action::CooldownEvents)
                     .after(crate::ui_unit::UnitSnapshots),
+                // The cooldown lane, after every feed, as the drain fires it.
+                crate::ui_action::fire_cooldown_lane,
             )
                 .chain(),
         );
@@ -1369,13 +1371,13 @@ fn an_item_slot_is_current_while_its_items_cast_is_in_flight() {
         .unwrap());
 }
 
-/// Every caller of the usable refresh `0x4b31c0` the feed hears signals `SPELL_UPDATE_USABLE`
-/// (`0x4b3246`), with `ACTIONBAR_UPDATE_USABLE` ahead of it only when a slot's pair changed: the
-/// target's select and clear (`0x493892`, `0x493a69`), the control flag (`0x4958fc`,
-/// `0x495910`), a held global cooldown's start (`0x6e2e85`) and the start or removal of a spell's
-/// records (`0x6e3076`). One frame's such callers signal it once. The field watchers' callers
-/// refresh inside their packets instead (`crate::field_watch`), so a descriptor change alone
-/// signals nothing here.
+/// Every caller of the usable refresh `0x4b31c0` signals `SPELL_UPDATE_USABLE` (`0x4b3246`),
+/// with `ACTIONBAR_UPDATE_USABLE` ahead of it only when a slot's pair changed: the target's select
+/// and clear (`0x493892`, `0x493a69`) and the control flag (`0x4958fc`, `0x495910`), which the
+/// feed hears once a frame, and a held global cooldown's start (`0x6e2e85`) and the start or
+/// removal of a spell's records (`0x6e3076`), which the cooldown lane signals at each. The field
+/// watchers' callers refresh inside their packets (`crate::field_watch`), so a descriptor change
+/// alone signals nothing here.
 #[test]
 fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
     let mut app = feed_app(&[], Spells::empty_for_tests(), 5.0);
@@ -1598,8 +1600,8 @@ fn a_calls_refresh_ahead_of_the_feed_leaves_the_new_vm_its_first_pass() {
 /// (`0x6e9721`), and the spell charges watcher (`0x5d9587`). The global cooldown's start
 /// (`0x6e2e77`) and `SMSG_SPELL_COOLDOWN` (`0x6e95b0`) flush the cooldown pair only, and a held
 /// global cooldown adds the usable refresh (`0x6e2e85`). Each handler flushes whether or not it
-/// matched a record. Each frame's events come in the reference's order: the pair (`0x4b31b0`),
-/// the usable refresh (`0x4b31c0`), then the bags.
+/// matched a record, its events in the reference's order on the cooldown lane: the pair
+/// (`0x4b31b0`), the usable refresh (`0x4b31c0`), then the bags.
 #[test]
 fn bag_update_cooldown_fires_from_the_item_legs_alone() {
     const PAIR: [&str; 2] = ["ACTIONBAR_UPDATE_COOLDOWN", "SPELL_UPDATE_COOLDOWN"];

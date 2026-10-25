@@ -34,7 +34,7 @@ pub(crate) use cast_send::{
     UnitAttackOwed, UnitPress,
 };
 pub(crate) use cast_target::AutoSelfCast;
-pub(crate) use cooldowns::Cooldowns;
+pub(crate) use cooldowns::{CooldownLive, Cooldowns, Signal};
 pub(crate) use inflight::{
     ActiveChannel, AutoRepeatActive, CastState, LocalMoveStart, PendingCast, QueuedMeleeSpell,
     SelfCancel, SPELL_INTERRUPT_MOVEMENT,

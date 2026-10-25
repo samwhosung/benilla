@@ -54,14 +54,14 @@ pub(crate) fn pet_bar_feed(world: &mut World) -> bevy::ecs::system::SystemId {
 
 /// The pet action bar's state. A zero `spells.pet_guid` means no bar: the teardown packet carries
 /// only that guid.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub(crate) struct PetBar {
     /// The last `SMSG_PET_SPELLS`, with `SMSG_PET_MODE` and local presses folded in.
     pub(crate) spells: PetSpells,
     /// The pet's own cooldowns, the list at `0xcecb04`. Seeded from `SMSG_PET_SPELLS`, topped up
     /// by `SMSG_SPELL_COOLDOWN` for the pet's guid, by the pet's own `SMSG_SPELL_GO` and by a
     /// press's GCD. Each mutation but the seed fires the flush, off [`Cooldowns::generation`]
-    /// (`bar::fire_pet_cooldown_events`).
+    /// (`bar::fire_pet_cooldown_events`), once a frame: it keeps no log.
     pub(crate) cooldowns: Cooldowns,
     /// `PET_BAR_UPDATE` signals, counted. Both state writes signal unconditionally (`0x4bc940`,
     /// `0x4bc960`), and `OnClick`'s `SetChecked(0)` needs that repaint to relight a press on the
@@ -90,6 +90,19 @@ impl PetAttackLatch {
     /// Whether the latch is up.
     pub(crate) fn up(&self) -> bool {
         self.0.is_some()
+    }
+}
+
+impl Default for PetBar {
+    /// No bar, and the pet's list, which keeps no log ([`Cooldowns::unlogged`]).
+    fn default() -> Self {
+        Self {
+            spells: PetSpells::default(),
+            cooldowns: Cooldowns::unlogged(),
+            bar_signals: 0,
+            book_sorts: 0,
+            expires: None,
+        }
     }
 }
 

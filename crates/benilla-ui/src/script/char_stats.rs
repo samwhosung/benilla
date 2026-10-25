@@ -1268,18 +1268,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(super::container::item_cooldown_triple(None, model.now));
             }
             super::unit::check_unit_token(&Some(token.clone()))?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let live = usize::try_from(slot0 + 1).ok();
-            let own = inventory_reader(lua, &model, &token) == Some(InvReader::Own);
-            let answer = live
-                .filter(|_| own)
-                .filter(|&live| {
+            let (asked, snapshot, now) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let live = usize::try_from(slot0 + 1).ok();
+                let own = inventory_reader(lua, &model, &token) == Some(InvReader::Own);
+                let asked = live.filter(|_| own).filter(|&live| {
                     model
                         .own_inv_view(live)
                         .is_some_and(|v| v.item_id != 0 && v.spell_0)
-                })
-                .and_then(|live| model.inv_slot_cooldown(live));
-            Ok(super::container::item_cooldown_triple(answer, model.now))
+                });
+                let snapshot = asked.and_then(|live| model.inv_slot_cooldown(live));
+                (asked, snapshot, model.now)
+            };
+            // A worn item's query reads the list inside the call (`0x4c8b86` → `0x6e2ed0`),
+            // through the lent host; the bank and keyring bands answer off their snapshots.
+            let live = asked
+                .filter(|live| (1..=19).contains(live))
+                .and_then(|live| u8::try_from(live - 1).ok())
+                .and_then(|slot0| {
+                    super::cooldown_read::read_live(lua, super::CooldownQuery::Worn(slot0))
+                });
+            let answer = match asked {
+                Some(_) => live.unwrap_or(snapshot),
+                None => None,
+            };
+            Ok(super::container::item_cooldown_triple(answer, now))
         })?,
     )?;
 

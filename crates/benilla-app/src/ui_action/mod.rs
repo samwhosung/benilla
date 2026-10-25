@@ -39,20 +39,23 @@ mod net;
 mod ranks;
 // The rank pass, which the macro load orders itself ahead of: it rewrites a bar word, too.
 pub(crate) use ranks::normalize_action_ranks;
+mod cooldown_lane;
+#[cfg(test)]
+pub(crate) use cooldown_lane::fire_cooldown_lane;
 mod reactive;
 #[cfg(test)]
 mod reactive_tests;
 pub(crate) mod recount;
 mod state;
-pub(crate) use state::{wears_entry, ActionStates, EnterUsable};
+pub(crate) use state::{wears_entry, ActionStateMemory, ActionStates, EnterUsable};
 pub(crate) mod toggle;
 mod unlearn;
 mod weapon_icon;
 
-/// Every feed that pushes cooldown triples runs `.before` this set: [`state::fire_action_events`]
-/// fires the cooldown events synchronously, so a triple pushed later goes unread until the next
-/// cooldown change. The pet list's flush, `ui_pet::bar::fire_pet_cooldown_events`, runs `.after`
-/// it on the same rule.
+/// Every feed that pushes cooldown triples runs `.before` this set: the pet list's flush,
+/// `ui_pet::bar::fire_pet_cooldown_events`, runs `.after` it and fires the pet's events
+/// synchronously, so a triple pushed later goes unread until the next cooldown change. The player's
+/// list fires on the cooldown lane, after every feed ([`cooldown_lane`]).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CooldownEvents;
 
@@ -410,6 +413,7 @@ pub(crate) struct UiActionPlugin;
 impl Plugin for UiActionPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        cooldown_lane::add_cooldown_lane(app);
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<state::ActionEvents>()

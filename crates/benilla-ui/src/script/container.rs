@@ -1009,7 +1009,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // clock, as `GetActionCooldown`; enable 0 is a held cooldown. No resolved slot or no item in it
     // pushes three zeros, the enable included (`0x4f9ae9`), and so does the slot's own answer when
     // it is all zero ([`item_cooldown_triple`]). Unlike the worn getter it asks no use-spell test
-    // of the template (`0x4f9a48`).
+    // of the template (`0x4f9a48`). The query reads the list inside the call (`0x4f9a7f` → `0x6e2ed0`), through
+    // the lent host for an item object it holds.
     lua.globals().set(
         "GetContainerItemCooldown",
         lua.create_function(|lua, (bag, slot): (Value, Value)| {
@@ -1020,18 +1021,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 slot,
                 "Usage: GetContainerItemCooldown(index, slot)",
             )?;
-            let (pending, triple) = {
+            let (pending, object, snapshot) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let slot = key.and_then(|k| model.bag_slot(k.0, k.1));
                 let pending = slot.filter(|s| s.record_pending()).map(|s| s.item_id);
-                let triple = match slot {
-                    Some(_) => item_cooldown_triple(
-                        key.and_then(|k| model.container_cooldowns.get(&k).copied()),
-                        now,
-                    ),
-                    None => (0.0, 0.0, 0),
-                };
-                (pending, triple)
+                let object = slot.and_then(ContainerSlot::item_key);
+                let snapshot =
+                    slot.map(|_| key.and_then(|k| model.container_cooldowns.get(&k).copied()));
+                (pending, object, snapshot)
+            };
+            let triple = match snapshot {
+                Some(snapshot) => {
+                    let live = object.and_then(|key| match key {
+                        super::ItemKey::Object(guid) => super::cooldown_read::read_live(
+                            lua,
+                            super::CooldownQuery::ItemObject(guid),
+                        ),
+                        super::ItemKey::Record { .. } => None,
+                    });
+                    item_cooldown_triple(live.unwrap_or(snapshot), now)
+                }
+                None => (0.0, 0.0, 0),
             };
             // The query asks a missing record with the callback `0x6e2f70` inside the call
             // (`0x6e2efb`).

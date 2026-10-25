@@ -138,6 +138,18 @@ pub trait CallHost {
         let _ = entry;
         None
     }
+
+    /// The cooldown query a getter makes now (`0x6e2ea0`, `0x6e2ed0`), on the player's list as
+    /// of the place it runs: `Some(None)` for the query's empty answer, a cold spell's or an item
+    /// copy's that skips the query; `None` for an item object it does not hold, and from a host
+    /// that reads none.
+    fn read_cooldown(
+        &mut self,
+        query: super::CooldownQuery,
+    ) -> Option<Option<super::CooldownTriple>> {
+        let _ = query;
+        None
+    }
 }
 
 /// What a call leaves for the VM to run once its host is back in the VM.

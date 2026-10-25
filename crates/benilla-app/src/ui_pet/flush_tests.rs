@@ -138,8 +138,8 @@ fn a_strangers_pet_go_flushes_nothing() {
     assert!(rig.frame().is_empty());
 }
 
-/// `0x6e95b0`, `0x6e95b9`: the flush follows `SMSG_SPELL_COOLDOWN` for the pet's guid, and for it
-/// alone; the player's own list flushes through the action state's feed.
+/// `0x6e95b0`, `0x6e95b9`: the pet's flush follows `SMSG_SPELL_COOLDOWN` for the pet's guid, and
+/// for it alone; the player's own list signals the pair alone, on the cooldown lane.
 #[test]
 fn a_pet_addressed_spell_cooldown_fires_the_flush() {
     let mut rig = growl_rig();
@@ -148,8 +148,9 @@ fn a_pet_addressed_spell_cooldown_fires_the_flush() {
         caster: ME,
         cooldowns: vec![(GROWL, 3000)],
     }]);
-    assert!(
-        rig.frame().is_empty(),
+    assert_eq!(
+        rig.frame(),
+        FLUSH[..2],
         "the player's list is not the pet's flush"
     );
 
