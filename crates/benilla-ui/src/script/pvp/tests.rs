@@ -873,10 +873,19 @@ fn unit_pvp_name_decorates_a_ranked_player_and_falls_back_three_ways() {
             ..Default::default()
         }),
     );
-    assert!(
-        s.eval::<bool>(r#"return UnitPVPName("mouseover") == nil"#)
+    // `0x609210` returns UNKNOWNOBJECT on a miss (`0x609324`-`0x60933c`), and `0x5172b0` pushes
+    // the buffer: the held unit's name is the unknown object's until the cache answers.
+    assert_eq!(
+        s.eval::<String>(r#"return UnitPVPName("mouseover")"#)
             .unwrap(),
-        "a snapshot whose name has not resolved is nil, not an empty decoration"
+        "Unknown Being",
+        "a held unit whose name has not resolved reads the unknown object"
+    );
+    s.run(r#"UNKNOWNOBJECT = "Unknown""#).unwrap();
+    assert_eq!(
+        s.eval::<String>(r#"return UnitPVPName("mouseover")"#)
+            .unwrap(),
+        "Unknown"
     );
     assert!(s.eval::<String>("return UnitPVPName()").is_err());
 }

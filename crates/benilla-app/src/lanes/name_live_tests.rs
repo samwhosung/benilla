@@ -112,8 +112,14 @@ fn the_creature_getters_read_the_record_as_they_run() {
     let before: Answer = hosted(&mut app, CHUNK);
     assert_eq!(
         before,
-        (Some("Unknown Being".into()), None, None, "normal".into(), 0),
-        "no record yet: no name, no type, the normal rank"
+        (
+            Some("Unknown Being".into()),
+            Some("Unknown Being".into()),
+            None,
+            "normal".into(),
+            0
+        ),
+        "no record yet: both name the unknown object (`0x609324`), no type, the normal rank"
     );
     // A boss template: its rank 3 hides the level (`0x51807d`).
     let mut record = wolf_record();
@@ -211,4 +217,60 @@ fn a_creature_answers_its_name_events_at_its_packets_place() {
             "UNIT_HEALTH:target:40",
         ]
     );
+}
+
+/// The civilian flag is the record's, read as the call runs: `UnitIsCivilian` and the `UnitPVPName`
+/// prefix (`0x612550`, `0x609370`) see a template that landed after the frame's push, where the
+/// snapshot holds a record-less unit. The PvP flag, the level and the reaction are held as the
+/// push has them.
+#[test]
+fn the_civilian_flag_is_read_off_the_record_as_the_call_runs() {
+    let mut app = named_client();
+    let world = app.world_mut();
+    let entity = world.resource::<crate::net::GuidIndex>().0[&WOLF];
+    // `UNIT_FIELD_FLAGS` PvP, and a level far below the player's.
+    world
+        .get_mut::<crate::net::ObjectStore>(entity)
+        .expect("a store")
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (benilla_protocol::field::FIELD_UNIT_FLAGS, 0x1000),
+            (benilla_protocol::field::FIELD_UNIT_LEVEL, 1),
+        ]));
+    {
+        let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        script.run(r#"PVP_RANK_CIVILIAN = "Civilian""#).unwrap();
+        script.set_player_req_state(benilla_ui::script::PlayerReqState {
+            level: 60,
+            ..Default::default()
+        });
+        // The push, as a record-less unit hostile to us holds it.
+        script.set_unit(
+            "target",
+            Some(benilla_ui::script::UnitState {
+                exists: true,
+                has_object: true,
+                is_connected: true,
+                guid: WOLF,
+                name: Some("Wolf".into()),
+                reaction: 1,
+                pvp: true,
+                level: 1,
+                ..Default::default()
+            }),
+        );
+    }
+    const CHUNK: &str = "return UnitIsCivilian('target'), UnitPVPName('target')";
+    let before: (Option<i64>, Option<String>) = hosted(&mut app, CHUNK);
+    assert_eq!(before, (None, Some("Wolf".into())), "no record yet");
+    let mut record = wolf_record();
+    record.civilian = true;
+    app.world_mut()
+        .resource_mut::<NameCache>()
+        .insert_creature(WOLF_ENTRY, Some(record));
+    let live: (Option<i64>, Option<String>) = hosted(&mut app, CHUNK);
+    assert_eq!(live, (Some(1), Some("Civilian Wolf".into())));
+    let snapshot: (Option<i64>, Option<String>) =
+        crate::script_calls::eval_in_vm(app.world(), CHUNK);
+    assert_eq!(snapshot.0, None, "the push held no record");
 }

@@ -19,7 +19,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{number_arg, string_arg};
-use super::unit::{check_unit_token, is_civilian_kill, read_identity, read_record};
+use super::unit::{check_unit_token, is_civilian_kill, read_identity, read_record, unknownobject};
 use super::Model;
 
 /// The local player's honor snapshot, decoded by the app from the private honor descriptor
@@ -517,8 +517,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //   B  else a unit passing the civilian predicate (`0x612550`): `PVP_RANK_CIVILIAN`, a space
     //      and the name. Only creatures reach it.
     //   C  else the plain name.
-    // No snapshot, no object (the unit lookup `0x517309`, typemask 8, finds none and pushes nil
-    // at `0x51733e`) or an unresolved name answers nil.
+    // No snapshot or no object (the unit lookup `0x517309`, typemask 8, finds none and pushes nil
+    // at `0x51733e`) answers nil. A held unit whose name is not cached yet is built from
+    // `UNKNOWNOBJECT` (`0x609210` returns it on a miss, `0x609324`-`0x60933c`; `0x5172b0` always
+    // pushes the buffer), and the miss asks the name cache with its callback (`0x55f080`,
+    // `0x5fb840`) as `UnitName`'s does.
     //
     // Deviation: a token resolving to guid 0 answers nil too. The reference jumps from the guid
     // test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its
@@ -548,9 +551,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The name (`GetUnitName`, `0x609210`) and the civilian leg (`0x612550`) are read off
             // the name caches as the call runs, the snapshot's only with no host free to ask.
             let tok = token.as_deref().unwrap_or_default();
-            let name = read_identity(lua, tok, |_, id| id.name()).flatten();
-            let Some(name) = name else {
-                return Ok(Value::Nil);
+            let name = match read_identity(lua, tok, |_, id| id.name()).flatten() {
+                Some(name) => name,
+                None => unknownobject(lua)?.to_str()?.to_string(),
             };
             if let Some(civilian) = read_record(lua, tok, |_, r| r.civilian) {
                 u.civilian = civilian;
