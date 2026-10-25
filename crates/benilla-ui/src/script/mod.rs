@@ -167,6 +167,7 @@ mod petition;
 mod pointer;
 mod pvp;
 mod quest;
+mod quest_live;
 mod quest_log;
 pub(crate) mod region;
 mod region_map;
@@ -377,6 +378,9 @@ pub use pvp::{
     decorated_name, pvp_name_global_keys, HonorState, InspectHonorData, PvpCall, RankTitle,
 };
 pub use quest::{QuestCall, QuestItemView, QuestPanel, QuestRewardSpell, QuestSelect, QuestState};
+pub use quest_live::{
+    QuestClock, QuestClockRead, QuestCoinage, QuestHeld, QuestSlots, QuestStanding,
+};
 pub use quest_log::{
     QuestLogCarry, QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS,
 };

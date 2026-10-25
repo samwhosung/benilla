@@ -1942,7 +1942,8 @@ fn the_destroy_run_recounts_scans_asks_then_signals() {
     vm.set_quest_log_player(true);
     let mut slots = [QuestSlotView::default(); QUEST_LOG_SLOTS];
     slots[0].quest_id = 77;
-    vm.quest_log_changed(slots);
+    vm.set_quest_slots(slots);
+    vm.quest_log_changed();
     vm.run(
         "f = CreateFrame('Frame') \
          for _, e in ipairs({'ACTIONBAR_SLOT_CHANGED', 'QUEST_LOG_UPDATE', \

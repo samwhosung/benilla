@@ -450,6 +450,8 @@ mod name_live_tests;
 #[cfg(test)]
 mod packet_signal_tests;
 #[cfg(test)]
+mod quest_log_live_tests;
+#[cfg(test)]
 mod quiet_tests;
 #[cfg(test)]
 mod reputation_live_tests;

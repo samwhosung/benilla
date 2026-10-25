@@ -66,12 +66,6 @@ impl ItemLane {
         self.1
     }
 
-    /// The notices queued, in stamp order: what the readers that push ahead of the lane read to
-    /// know the bags moved.
-    pub(crate) fn notices(&self) -> impl Iterator<Item = &ItemNotice> {
-        self.0.iter().filter_map(|(_, r, _)| r.notice.as_ref())
-    }
-
     /// Take every run waiting with its stamp, in order, unfired.
     #[cfg(test)]
     pub(crate) fn drain_stamped(&mut self) -> Vec<(Stamp, Run)> {

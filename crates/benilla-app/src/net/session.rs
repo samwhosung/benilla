@@ -362,7 +362,12 @@ fn on_transfer(In(ev): In<SessionEvent>, mut e: Edges) {
 
 /// The game clock's four messages (`SMSG_LOGIN_SETTIMESPEED`, `SMSG_GAMESPEED_SET`,
 /// `SMSG_GAMETIME_UPDATE`, `SMSG_GAMETIME_SET`) and the server's wall clock.
-fn on_clock(In(ev): In<SessionEvent>, mut b: Bridge, step: Res<FrameStep>) {
+fn on_clock(
+    In(ev): In<SessionEvent>,
+    mut b: Bridge,
+    step: Res<FrameStep>,
+    quest_log: Option<ResMut<crate::ui_quest_log::QuestLog>>,
+) {
     match ev {
         SessionEvent::TimeSpeed { .. }
         | SessionEvent::GameSpeedSet { .. }
@@ -374,7 +379,11 @@ fn on_clock(In(ev): In<SessionEvent>, mut b: Bridge, step: Res<FrameStep>) {
             }
         }
         SessionEvent::ServerUnixTime { unix_time } => {
-            server_unix_time(unix_time, &mut b.wall_clock)
+            server_unix_time(unix_time, &mut b.wall_clock);
+            // The setter stores the offset and signals the quest log (`0x4deef0`, `0x4def1b`).
+            if let Some(mut quest_log) = quest_log {
+                quest_log.note_clock_synced();
+            }
         }
         _ => {}
     }

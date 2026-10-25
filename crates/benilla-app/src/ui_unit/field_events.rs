@@ -26,7 +26,6 @@ pub(crate) struct FieldEventPushes;
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct NoticeFiring<'w, 's> {
     sink: crate::ui_action::MessageSink<'w>,
-    // The quest log's watcher reads the slots.
     me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     // The form table the bonus bar's offset reads (`0x4e4fc0`), and the player's store as of the
@@ -66,9 +65,8 @@ impl NoticeFiring<'_, '_> {
             return false;
         }
         if notice == FieldNotice::QuestLog {
-            if let Some(store) = self.me.iter().next() {
-                script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
-            }
+            // The slots are read where the list is built, off the store as the packet left it.
+            script.quest_log_changed();
             return false;
         }
         if let FieldNotice::Tutorial { id } = notice {

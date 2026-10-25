@@ -188,11 +188,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "::ui_quest_log::QuestLog",
-        "the quest packets' log state",
-    ),
-    (
-        Row::Queue,
         "::ui_quest_share::QuestShare",
         "the quest share",
     ),
@@ -363,6 +358,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::items::Items",
     "::net::GuidIndex",
     "::net::SelfGuid",
+    // Read by the quest log getters through the host (`QuestClock`), and quiet: the time
+    // response's `QUEST_LOG_UPDATE` fires on the quest log lane.
+    "::net::ServerWallClock",
     "::net::game_time::ServerTime",
     "::spell::cast_send::HeldForPick",
     "::spell::cast_send::ScriptCastPermit",
@@ -622,10 +620,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_quest::feed_quest", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_quest::QuestGiver", "world_state::WorldStates"]),
-    ("::ui_quest_log::feed_quest_log", &["items::Countdowns", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "ui_quest::QuestGiver", "ui_quest::lines::QuestLines",
-        "ui_quest_log::QuestLog", "world_state::WorldStates"]),
-    ("::ui_quest_log::feed_server_clock", &["net::ServerWallClock"]),
+    ("::ui_quest_log::feed_quest_log", &["names::NameCache", "net::ObjectStore",
+        "ui_quest::QuestGiver", "ui_quest::lines::QuestLines", "ui_quest_log::QuestLog",
+        "world_state::WorldStates"]),
     ("::ui_quest_share::feed_quest_share", &["names::NameCache", "ui_quest_share::QuestShare"]),
     ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
@@ -662,6 +659,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The creature families the cast send's pet learn rung reads (`0x60c7c0`).
     "::ui_pet_stats::PetFamilyTables",
     "::AreaTableRes",
+    // The server clock the quest log getters read in the host.
+    "::ServerWallClock",
     "::DamageTextGates",
     "::EnvDamageTable",
     "::SpellVisuals",
@@ -740,7 +739,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::BattlefieldQueue",
     "::DuelState",
     "::SummonState",
-    "::QuestLog",
     "::UiClock",
     "::InteractNpc",
     "::SocialState",
@@ -766,7 +764,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 19] {
+fn lane_types() -> [TypeId; 20] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -794,6 +792,8 @@ fn lane_types() -> [TypeId; 19] {
         TypeId::of::<crate::ui_pet::PetBar>(),
         // The reputation lane: the store's writes and the pane's list operations, at their places.
         TypeId::of::<crate::net::Reputations>(),
+        // The quest log lane: the templates, toasts, rank moves and time syncs, at their packets.
+        TypeId::of::<crate::ui_quest_log::QuestLog>(),
         // The cast views lane: the view each packet left, stamped ahead of the packet.
         TypeId::of::<crate::ui_cast::CastViews>(),
         // The guild lane: the roster, event and invitation packets' signals, each with the
@@ -804,7 +804,7 @@ fn lane_types() -> [TypeId; 19] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 19] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 20] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -835,6 +835,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 19] {
         ("cooldowns", TypeId::of::<crate::spell::Cooldowns>()),
         ("pet cooldowns", TypeId::of::<crate::ui_pet::PetBar>()),
         ("reputation", TypeId::of::<crate::net::Reputations>()),
+        (
+            "quest events",
+            TypeId::of::<crate::ui_quest_log::QuestLog>(),
+        ),
         ("cast views", TypeId::of::<crate::ui_cast::CastViews>()),
         ("guild", TypeId::of::<crate::ui_guild::GuildState>()),
     ]
@@ -1005,6 +1009,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "loot",
             "party",
             "pet cooldowns",
+            "quest events",
             "reputation",
             "unit views"
         ]
@@ -1255,6 +1260,11 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     (
         "::query_cache::release_on_enter<benilla_app::ui_guild::GuildState>",
         "the world entry forgets the guild cache's in-flight asks, so each is asked again \
+         (`0x5557c0`): it queues nothing",
+    ),
+    (
+        "::query_cache::release_on_enter<benilla_app::ui_quest_log::QuestLog>",
+        "the world entry forgets the quest cache's in-flight asks, so each is asked again \
          (`0x5557c0`): it queues nothing",
     ),
 ];
@@ -1685,6 +1695,9 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // left it.
     ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "target::Selection", "ui_guild::GuildState", "ui_party::GroupState"]),
+    // A landing's record expands its text's macros against the player's name and the world states
+    // as the frame left them, as the quest log's feed expands the held ones (#2217).
+    ("quest events", &["names::NameCache", "net::ObjectStore", "world_state::WorldStates"]),
     ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_action::cast_lines::CastFailRedisplays"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",

@@ -154,7 +154,7 @@ mod tests {
     const WATER: u32 = 159;
 
     /// A vendor open on [`VENDOR`] selling water in slot 3, quest 7 in the log needing five
-    /// waters, the quest and item records cached, the quest log's feed showing the toasts, and the
+    /// waters, the quest and item records cached, the quest log's lane showing the toasts, and the
     /// shown lines recorded in `SEEN`.
     fn quest_rig() -> App {
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -173,7 +173,14 @@ mod tests {
             .init_resource::<MerchantErrors>()
             .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::field_watch::NoticeLane>()
-            .add_systems(Update, crate::ui_quest_log::feed_quest_log);
+            .add_systems(
+                Update,
+                (
+                    crate::ui_quest_log::feed_quest_log,
+                    crate::ui_quest_log::fire_quest_events,
+                )
+                    .chain(),
+            );
         register(&mut app);
         let world = app.world_mut();
         let mut objectives = std::array::from_fn(|_| QuestObjective {

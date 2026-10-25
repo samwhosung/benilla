@@ -40,15 +40,15 @@ impl super::UiScript {
 
 /// A type's displayed entries and their count (`0xbc6f18[type]`): the first `count` names of the
 /// sorted list, which are all there is for the quest list, whose count is its length.
-fn type_list(model: &Model, kind: usize) -> (usize, Vec<String>) {
+fn type_list(lua: &Lua, model: &Model, kind: usize) -> (usize, Vec<String>) {
     if kind == 3 {
         // Every nonzero quest id of the log's 20 slots (`0x4e8c1e`-`0x4e8c32`), cached titles
         // first, by title (`0x4e8c80`), the count stored at `0x4e8c5b`. The reference's list is a
         // snapshot `0x4e8be0` rebuilds when the slot watcher runs (`0x5dde98`); this reads the
-        // slots and the records at the call, so a record landing since re-sorts it.
+        // slots off the host and the records at the call, so a record landing since re-sorts it.
         let store = &model.quest_store;
-        let mut titles: Vec<&str> = store
-            .slots
+        let slots = super::quest_live::slots(lua, model);
+        let mut titles: Vec<&str> = slots
             .iter()
             .filter(|s| s.quest_id != 0)
             .map(|s| {
@@ -123,7 +123,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let inside = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                kind < 6 && (entry as usize) < type_list(&model, kind as usize).0
+                kind < 6 && (entry as usize) < type_list(lua, &model, kind as usize).0
             };
             if !inside {
                 return Ok(());
@@ -174,7 +174,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if kind >= 6 {
                 return Ok(MultiValue::new());
             }
-            let (count, names) = type_list(&model, kind as usize);
+            let (count, names) = type_list(lua, &model, kind as usize);
             let out = names
                 .iter()
                 .take(count)

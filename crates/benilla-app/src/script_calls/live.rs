@@ -81,6 +81,9 @@ live_reads! {
         names: crate::names::NameLive<'static, 'static>,
         /// The Video menus' lists: the display's resolutions and the device's multisample formats.
         display: crate::video::DisplayLive<'static, 'static>,
+        /// The quest slots, the held counts, the standings, the coinage and the clock the quest
+        /// log getters read.
+        quest_log: crate::ui_quest_log::QuestLogLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

@@ -654,7 +654,8 @@ fn the_quest_log_getters_ask_a_missed_record_inside_their_calls() {
         let mut s = vm(&mut app);
         s.seed_quest_record(50, record);
         s.set_quest_log_player(true);
-        s.quest_log_changed(slots);
+        s.set_quest_slots(slots);
+        s.quest_log_changed();
     }
     eval::<()>(
         &mut app,

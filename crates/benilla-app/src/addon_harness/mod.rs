@@ -1249,7 +1249,8 @@ fn seat_a_session(script: &mut UiScript) {
             ..Default::default()
         };
         script.set_quest_log_player(true);
-        script.quest_log_changed(slots);
+        script.set_quest_slots(slots);
+        script.quest_log_changed();
         script.flush_quest_log_refires();
     }
 

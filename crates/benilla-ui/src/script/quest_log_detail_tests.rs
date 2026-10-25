@@ -131,7 +131,8 @@ fn two_abandoned_items_join_with_the_list_separator() {
     // Quest 11 leaves the log, so nothing else needs the fangs.
     let mut slots = [Default::default(); super::QUEST_LOG_SLOTS];
     slots[0] = slot(10, 0, 0);
-    s.quest_log_changed(slots);
+    s.set_quest_slots(slots);
+    s.quest_log_changed();
     assert_eq!(
         s.eval::<String>("return GetAbandonQuestItems()").unwrap(),
         "Tusk, Fang"
@@ -300,7 +301,8 @@ fn rebuild(s: &mut UiScript, ids: &[u32]) {
     for (i, &id) in ids.iter().enumerate() {
         slots[i] = slot(id, 0, 0);
     }
-    s.quest_log_changed(slots);
+    s.set_quest_slots(slots);
+    s.quest_log_changed();
 }
 
 /// Each header's fold is its own bit of `0xbb748c`, by its place among the sorted ids
