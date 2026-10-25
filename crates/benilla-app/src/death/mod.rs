@@ -108,8 +108,8 @@ impl DeathNet {
     }
 }
 
-/// The feed's memory in two scopes: the body's state survives a `/reload`, as the reference's
-/// engine-side death mirror (`[0xb4e340]`) does, while what the VM was told dies with the VM.
+/// The feed's memory in two scopes: the body's state and the release window's anchor survive a
+/// `/reload`, while what the VM was told dies with the VM.
 #[derive(Resource, Default)]
 struct DeathFeedState {
     /// World-scoped: the last `(guid, dead, ghost)` the self body showed.
@@ -123,6 +123,10 @@ struct DeathFeedState {
 
 /// What the live VM has been told; a first snapshot counts as an edge, so logging in or
 /// reloading dead brings the popup up.
+///
+/// Deviation: a `/reload` dead keeps the release window and signals `PLAYER_DEAD` again, where
+/// the reference zeroes the timer at every UI start (`0x490131`) and its cascade never calls
+/// `0x495850` (`0x490168`), because without both a player who reloads dead has no Release.
 #[derive(Default)]
 struct DeathAnnounced {
     /// The last `(guid, dead, ghost)` this VM was given an event for.
@@ -199,8 +203,10 @@ impl DeathView<'_, '_> {
         let release_remaining = match death_net.release {
             ReleaseTimer::At(at) => Some((at - now).max(0.0) as f32),
             ReleaseTimer::Off => None, // GetReleaseTimeRemaining() == -1, the no-timer DEATH text
-            // No death this session armed it (dead at login): the window from the first sight
-            // of the body dead, while the bit is set.
+            // Deviation: with no death this session to arm it (dead at login or after a
+            // `/reload`), the window runs from the first sight of the body dead, while the bit is
+            // set. The reference zeroes the timer at every UI start (`0x490131`) and answers 0
+            // (`0x4962a0`), so its DEATH popup never shows and the player has no Release.
             ReleaseTimer::Unset if store.0.player_release_timer_running() => {
                 died_at.map(|t| ((t + RELEASE_WINDOW_SECS - now).max(0.0)) as f32)
             }
@@ -303,7 +309,8 @@ fn feed_death(
             _ => {}
         }
 
-        // ── The VM edges: a fresh VM's memo is empty, so reloading dead re-fires PLAYER_DEAD.
+        // ── The VM edges: a fresh VM's memo is empty, so reloading dead re-fires PLAYER_DEAD
+        // (the Deviation on `DeathAnnounced`).
         let memo = feed.vm.get(script);
         let prev = memo.last.filter(|&(g, ..)| g == guid);
         memo.last = Some((guid, dead, ghost));
