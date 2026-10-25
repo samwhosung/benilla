@@ -7,3 +7,6 @@ reference/*.tsv -text
 
 # The vendored kira tree is CRLF in the index and stays byte for byte.
 third_party/kira/** -text
+
+# The vendored wgpu-hal tree is the registry crate byte for byte (one CRLF file stays CRLF).
+third_party/wgpu-hal/** -text
