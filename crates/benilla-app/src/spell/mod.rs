@@ -36,9 +36,12 @@ pub(crate) use cast_send::{
 pub(crate) use cast_target::AutoSelfCast;
 pub(crate) use cooldowns::Cooldowns;
 pub(crate) use inflight::{
-    local_self_cancel, ActiveChannel, AutoRepeatActive, CastState, LocalMoveStart, PendingCast,
-    QueuedMeleeSpell, SelfCancel, SPELL_INTERRUPT_MOVEMENT,
+    ActiveChannel, AutoRepeatActive, CastState, LocalMoveStart, PendingCast, QueuedMeleeSpell,
+    SelfCancel, SPELL_INTERRUPT_MOVEMENT,
 };
+// The command press's harness runs the self-cancel between its two systems.
+#[cfg(test)]
+pub(crate) use inflight::local_self_cancel;
 pub(crate) use mods::{
     CategoryPad, ModsDiff, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS,
 };
