@@ -90,20 +90,21 @@ impl MovieScreen {
     }
 }
 
-/// `picture`, `width` by `rows` RGBA8 rows top down, into its bitmap as the tiles show it: the
-/// bitmap's first row draws at the bottom and the decoder writes the picture bottom-up from it,
-/// so the rows past the picture are the top's, black (`0x78c89b` zeroes the bitmap; blending is
-/// off, so they draw opaque).
+/// `picture`, `width` by `rows` RGBA8 rows top down, into its bitmap as the tiles show it, top
+/// down: the bitmap's first row draws at the bottom, and the decoder writes the picture bottom-up
+/// from [`MovieBitmap::picture_row`]; every other row stays black (`0x78c89b` zeroes the bitmap;
+/// blending is off, so they draw opaque).
 fn fill_bitmap(bitmap: MovieBitmap, picture: &[u8], rows: u32, out: &mut Vec<u8>) {
     let row_bytes = bitmap.width as usize * 4;
-    let pad = bitmap.height.saturating_sub(rows) as usize;
+    let rows = rows.min(bitmap.height.saturating_sub(bitmap.picture_row));
+    let top = (bitmap.height - bitmap.picture_row - rows) as usize * row_bytes;
+    let shown = rows as usize * row_bytes;
     out.clear();
     out.resize(row_bytes * bitmap.height as usize, 0);
-    for px in out[..pad * row_bytes].as_chunks_mut::<4>().0 {
+    for px in out.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
-    let shown = (rows.min(bitmap.height) as usize) * row_bytes;
-    out[pad * row_bytes..pad * row_bytes + shown].copy_from_slice(&picture[..shown]);
+    out[top..top + shown].copy_from_slice(&picture[..shown]);
 }
 
 /// Upload each playing movie's new picture, drop the pictures of movies that stopped, and take
@@ -206,22 +207,38 @@ pub(super) fn upload_movie_pictures(
 mod tests {
     use super::*;
 
-    /// The picture's rows fill the bitmap's bottom, the rows above them opaque black.
+    /// The picture starts `0x81d400`'s rows above the bitmap's bottom (19200 bytes, 6 rows of
+    /// 800; 98304, 24 rows of 1024) and the rest stays opaque black: 800×368 is texture rows
+    /// 10..378 of 384, 1024×464 rows 24..488 of 512.
     #[test]
-    fn the_picture_sits_on_the_bitmap_bottom_under_black_rows() {
-        let bitmap = movie_bitmap(800).unwrap();
-        let picture: Vec<u8> = (0..800 * 368)
-            .flat_map(|i| [1, 2, 3, (i % 251) as u8])
-            .collect();
-        let mut out = Vec::new();
-        fill_bitmap(bitmap, &picture, 368, &mut out);
-        assert_eq!(out.len(), 800 * 384 * 4);
-        assert!(out[..800 * 16 * 4]
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .all(|px| *px == [0, 0, 0, 255]));
-        assert_eq!(&out[800 * 16 * 4..], &picture[..]);
+    fn the_picture_sits_where_the_decoder_writes_it_between_black_rows() {
+        for (width, rows, top, bottom) in [(800u32, 368u32, 10usize, 6usize), (1024, 464, 24, 24)] {
+            let bitmap = movie_bitmap(width).unwrap();
+            let picture: Vec<u8> = (0..width * rows)
+                .flat_map(|i| [1, 2, 3, (i % 251) as u8])
+                .collect();
+            let mut out = Vec::new();
+            fill_bitmap(bitmap, &picture, rows, &mut out);
+            let row = width as usize * 4;
+            assert_eq!(out.len(), row * bitmap.height as usize, "{width}");
+            let black = |bytes: &[u8]| {
+                bytes
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|px| *px == [0, 0, 0, 255])
+            };
+            assert!(black(&out[..top * row]), "{width}: the rows above");
+            assert!(
+                out[top * row..top * row + picture.len()] == picture[..],
+                "{width}: the picture's rows"
+            );
+            assert!(
+                black(&out[out.len() - bottom * row..]),
+                "{width}: the rows below"
+            );
+            assert_eq!(top + rows as usize + bottom, bitmap.height as usize);
+        }
     }
 
     /// At 4:3 the 1024 bitmap is the window's width and two thirds of its height, centred: rows

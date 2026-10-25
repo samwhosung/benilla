@@ -92,11 +92,16 @@ pub struct MoviePicture {
 /// x from 0 to 1 across the window, y from -0.5 to 0.5 up it), y before the scaled screen aspect
 /// multiplies it (`0x41ad70`, `0x78d480`). The bitmap's first row draws at the bottom
 /// (`0x78d46a`-`0x78d4d0`), so the decoder's bottom-up picture stands upright on it, and the rows
-/// past the picture stay black (`0x78c89b`).
+/// around the picture stay black (`0x78c89b`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MovieBitmap {
     pub width: u32,
     pub height: u32,
+    /// The bitmap row the decoder's output starts at, counted from its first: the frame decode
+    /// hands `DivxDecode` the bitmap plus `0x81d400`'s bytes for the size class (`0x78d58e`),
+    /// 19200 (6 rows of 800) and 98304 (24 rows of 1024), as the tiles' update rects at
+    /// `0x81d340` start at row 6 and 24.
+    pub picture_row: u32,
     pub y_bottom: f32,
     pub y_top: f32,
 }
@@ -108,12 +113,14 @@ pub fn movie_bitmap(width: u32) -> Option<MovieBitmap> {
         800 => Some(MovieBitmap {
             width: 800,
             height: 384,
+            picture_row: 6,
             y_bottom: -0.33,
             y_top: 0.33,
         }),
         1024 => Some(MovieBitmap {
             width: 1024,
             height: 512,
+            picture_row: 24,
             y_bottom: -0.333,
             y_top: 0.333,
         }),
