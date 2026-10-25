@@ -209,6 +209,39 @@ pub(super) fn startup_screen(cvars: Option<Mut<'_, crate::cvars::Cvars>>) -> &'s
     }
 }
 
+/// Whether a run skips the startup's movie: one nobody watches ([`crate::run_mode::unattended`])
+/// does, unless it asks to play it (`WOW_PLAY_MOVIE=1`). Tooling: the client plays it as the
+/// reference does, and a probe, a capture or a smoke run skips it as a player can.
+fn skips_startup_movie(unattended: bool, play_movie: bool) -> bool {
+    unattended && !play_movie
+}
+
+/// Skip a playing movie as Escape does: `MovieFrame_OnKeyUp` hides the frame, whose `OnHide`
+/// stops the movie and puts the login screen up (`MovieFrame.lua:40-44`, `:59-61`).
+fn skip_startup_movie(vm: StockVm) {
+    if vm.frame_visible("MovieFrame") {
+        info!("glue: an unattended run skips the startup movie (WOW_PLAY_MOVIE=1 plays it)");
+        vm.press("MovieFrame:Hide()");
+    }
+}
+
+/// The first frame the glue stands, an unattended run's startup movie is skipped
+/// ([`skips_startup_movie`]); a movie asked for later plays.
+pub(crate) fn skip_unattended_startup_movie(stock: StockGlueProbe, mut done: Local<bool>) {
+    if *done {
+        return;
+    }
+    let vm = stock.vm();
+    if !vm.is_up() {
+        return;
+    }
+    *done = true;
+    let play = std::env::var("WOW_PLAY_MOVIE").as_deref() == Ok("1");
+    if skips_startup_movie(crate::run_mode::unattended(), play) {
+        skip_startup_movie(vm);
+    }
+}
+
 /// Put `screen` up: `SET_GLUE_SCREEN` with its key as `arg1` (`0x46b840`, event 0).
 #[cfg(test)]
 pub(super) fn set_glue_screen(script: &mut UiScript, screen: GlueScreen) {
@@ -430,6 +463,34 @@ mod tests {
             );
         }
         assert_eq!(startup_screen(None), "login");
+    }
+
+    /// An unattended run lets nobody watch the startup's movie: it is skipped at once, by the
+    /// stock Escape path's `Hide()`, unless the run asks to play it (`WOW_PLAY_MOVIE=1`); an
+    /// attended run plays it. The skip puts the login screen up and leaves no movie playing.
+    #[test]
+    fn an_unattended_run_skips_the_startup_movie_as_escape_does() {
+        assert!(skips_startup_movie(true, false));
+        assert!(!skips_startup_movie(true, true));
+        assert!(!skips_startup_movie(false, false));
+        let _ = benilla_formats::wow_data_or_skip!();
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        s.register_cvars([("movieSubtitle", "0"), ("gxResolution", "1024x768")]);
+        s.set_movie_reader(Box::new(|path, _| {
+            path.ends_with(".avi").then(|| {
+                benilla_movie::testing::synthetic_avi(1024, 464, (1, 25), 9, &[&[][..]; 9], &[])
+            })
+        }));
+        let _ = load_glue(&mut s);
+        signal_glue_screen(&mut s, "movie");
+        s.resolve();
+        assert!(s.movie_playing());
+        skip_startup_movie(StockVm(Some(&s)));
+        s.resolve();
+        assert!(!s.movie_playing());
+        assert!(!s.frame_visible("MovieFrame"));
+        assert_eq!(s.glue_screen(), "login");
     }
 
     /// The name a "nil value" call error names, in either of Lua's two spellings of it.

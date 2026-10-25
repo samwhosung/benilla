@@ -672,7 +672,6 @@ impl Plugin for CapturePlugin {
             .add_systems(
                 Update,
                 (
-                    skip_movie,
                     accept_agreements,
                     realm_list::seed_realm_list,
                     create_stage::seed_create_stage,
@@ -680,18 +679,6 @@ impl Plugin for CapturePlugin {
                     .chain(),
             )
             .add_systems(Last, drive_capture);
-    }
-}
-
-/// A glue capture photographs the account form, not the intro movie a fresh state folder boots on
-/// (the `movie` CVar): it is skipped as a player skips it, Escape's `MovieFrame_OnKeyUp` hiding the
-/// frame, whose `OnHide` puts the login screen up (`MovieFrame.lua:40-44`, `:59-61`).
-fn skip_movie(ctx: Res<CaptureCtx>, stock: crate::ui_script::glue::StockGlueProbe) {
-    if ctx.scenario.is_some() {
-        return;
-    }
-    if let Some(vm) = Some(stock.vm()).filter(|vm| vm.frame_visible("MovieFrame")) {
-        vm.press("MovieFrame:Hide()");
     }
 }
 
