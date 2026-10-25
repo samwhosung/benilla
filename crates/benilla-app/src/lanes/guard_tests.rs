@@ -400,7 +400,6 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
     "::ui_merchant::MerchantOpen",
-    "::ui_pet::PetBar",
     "::ui_petition::GuildRegistrarState",
     "::ui_petition::PetitionRecords",
     "::ui_session::latch::InteractLatch",
@@ -554,7 +553,6 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "spell::mods::SpellModifiers", "target::Selection", "ui_action::PlayerActions"]),
     ("::ui_pet::bar::feed_pet_bar", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
-    ("::ui_pet::bar::fire_pet_cooldown_events", &["ui_pet::PetBar"]),
     // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); its name
     // reads as the frame left it.
     ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
@@ -758,7 +756,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::BattlefieldQueue",
     "::DuelState",
     "::SummonState",
-    "::PetBar",
     "::QuestLog",
     "::UiClock",
     "::InteractNpc",
@@ -780,7 +777,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 16] {
+fn lane_types() -> [TypeId; 17] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -802,8 +799,10 @@ fn lane_types() -> [TypeId; 16] {
         TypeId::of::<crate::target::Deaths>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
-        // The cooldown lane: the player's list, which logs its writes and flushes at their places.
+        // The cooldown lanes: the player's list and the pet's, which log their writes and flushes
+        // at their places.
         TypeId::of::<crate::spell::Cooldowns>(),
+        TypeId::of::<crate::ui_pet::PetBar>(),
         // The cast views lane: the view each packet left, stamped ahead of the packet.
         TypeId::of::<crate::ui_cast::CastViews>(),
     ]
@@ -811,7 +810,7 @@ fn lane_types() -> [TypeId; 16] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 16] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 17] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -840,6 +839,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 16] {
             TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         ),
         ("cooldowns", TypeId::of::<crate::spell::Cooldowns>()),
+        ("pet cooldowns", TypeId::of::<crate::ui_pet::PetBar>()),
         ("cast views", TypeId::of::<crate::ui_cast::CastViews>()),
     ]
 }
@@ -1006,6 +1006,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "list rebuilds",
             "loot",
             "party",
+            "pet cooldowns",
             "unit views"
         ]
     );

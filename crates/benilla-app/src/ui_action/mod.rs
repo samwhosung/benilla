@@ -52,10 +52,8 @@ pub(crate) mod toggle;
 mod unlearn;
 mod weapon_icon;
 
-/// Every feed that pushes cooldown triples runs `.before` this set: the pet list's flush,
-/// `ui_pet::bar::fire_pet_cooldown_events`, runs `.after` it and fires the pet's events
-/// synchronously, so a triple pushed later goes unread until the next cooldown change. The player's
-/// list fires on the cooldown lane, after every feed ([`cooldown_lane`]).
+/// Every feed that pushes cooldown triples runs `.before` this set. Both lists' flushes fire on
+/// their cooldown lanes, after every feed ([`cooldown_lane`]).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CooldownEvents;
 

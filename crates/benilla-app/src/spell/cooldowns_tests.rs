@@ -397,11 +397,12 @@ fn an_awaited_record_flushes_its_running_cooldown_once_it_lands() {
 /// the pair (`0x6e95b0`); `SMSG_ITEM_COOLDOWN` the pair and the bags (`0x6e9656`, `0x6e965b`);
 /// the event and the clear the pair, the usable refresh and the bags (`0x6e3071`, `0x6e3076`,
 /// `0x6e3089`); the cheat the pair and the bags (`0x6e9712`, `0x6e9721`); a held global cooldown
-/// the pair and the refresh (`0x6e2e77`, `0x6e2e85`). The pet's list logs nothing: its watcher
-/// reads its counters.
+/// the pair and the refresh (`0x6e2e77`, `0x6e2e85`). The pet's list ends each site in its flush
+/// `0x4bce90`, in the bags' place or after the pair and the refresh (`0x6e95b9`, `0x6e3080`,
+/// `0x6e971c`, `0x6e2e8e`, the GO's pet leg `0x6e8601`).
 #[test]
 fn each_flush_site_logs_its_signals_in_the_references_order() {
-    use super::Signal::{Bags, Pair, Usable};
+    use super::Signal::{Bags, Pair, Pet, Usable};
     let now = Instant::now();
     let mods = SpellModifiers::default();
     let mut cds = Cooldowns::default();
@@ -432,11 +433,35 @@ fn each_flush_site_logs_its_signals_in_the_references_order() {
         site(&|c| c.start_gcd(1784, &held, now, &mods)),
         [Pair, Usable]
     );
-    let mut pet = Cooldowns::unlogged();
-    pet.apply_spell_cooldowns([(122, 0, Some(&nova))], &mods, CategoryPad::Skip, now);
-    pet.wipe();
-    assert!(pet.logged_signals().is_empty());
-    assert_eq!(pet.generation, 2, "its watcher's counter moves");
+    let mut pet = Cooldowns::pet();
+    let mut pet_site = |f: &dyn Fn(&mut Cooldowns)| {
+        let before = pet.logged_signals().len();
+        f(&mut pet);
+        pet.logged_signals()[before..].to_vec()
+    };
+    assert_eq!(
+        pet_site(&|c| c.apply_spell_cooldowns(
+            [(122, 0, Some(&nova))],
+            &mods,
+            CategoryPad::Skip,
+            now
+        )),
+        [Pair, Pet]
+    );
+    assert_eq!(
+        pet_site(&|c| c.cooldown_event(122, now)),
+        [Pair, Usable, Pet]
+    );
+    assert_eq!(pet_site(&|c| c.clear_spell(122)), [Pair, Usable, Pet]);
+    assert_eq!(pet_site(&|c| c.wipe()), [Pair, Pet]);
+    assert_eq!(
+        pet_site(&|c| c.start_gcd(1784, &held, now, &mods)),
+        [Pair, Usable, Pet]
+    );
+    assert_eq!(
+        pet_site(&|c| c.start_spell(122, &nova, 0, now, None)),
+        [Pair, Pet]
+    );
 }
 
 /// The drain rewinds the list to the frame's start and replays each write at its stamp: a read

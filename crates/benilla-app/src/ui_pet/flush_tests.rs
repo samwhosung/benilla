@@ -232,20 +232,62 @@ fn the_pets_event_and_clear_refresh_the_usable_state_inside_the_flush() {
     assert_eq!(rig.frame(), FLUSH, "the cheat on an empty list");
 }
 
-/// The frame's mutations are one flush for the frame, as the player's list has them.
+/// Each packet's handler flushes inside itself (`0x6e95b0`, `0x6e95b9`): two pet cooldown packets
+/// in one frame fire the flush twice, and each `PET_BAR_UPDATE_COOLDOWN` listener's
+/// `GetPetActionCooldown` (`0x4be03c` → `0x6e2ea0` on the pet's list) reads the list as its own
+/// packet left it: Claw cold to the first, running to the second.
 #[test]
-fn several_mutations_in_a_frame_fire_the_flush_once() {
+fn each_pet_cooldown_packet_flushes_and_reads_its_own_list() {
+    let mut rig = rig(
+        vec![(GROWL, growl()), (CLAW, claw())],
+        &[GROWL, CLAW],
+        Some(summoned_pet()),
+    );
+    ui(&mut rig)
+        .run(
+            "READ = {} local f = CreateFrame('Frame') f:RegisterEvent('PET_BAR_UPDATE_COOLDOWN') \
+             f:SetScript('OnEvent', function() local _, a = GetPetActionCooldown(1) \
+             local _, b = GetPetActionCooldown(2) \
+             table.insert(READ, tostring(a) .. ':' .. tostring(b)) end)",
+        )
+        .unwrap();
+
+    rig.receive(vec![
+        SessionEvent::SpellCooldowns {
+            caster: PET,
+            cooldowns: vec![(GROWL, 3000)],
+        },
+        SessionEvent::SpellCooldowns {
+            caster: PET,
+            cooldowns: vec![(CLAW, 4000)],
+        },
+    ]);
+
+    assert_eq!(rig.frame(), [FLUSH, FLUSH].concat());
+    assert_eq!(
+        ui(&mut rig).eval::<Vec<String>>("return READ").unwrap(),
+        ["3:0", "3:4"]
+    );
+}
+
+/// The pet's flush falls in packet order with the player's: a player's `SMSG_SPELL_COOLDOWN`
+/// ahead of the pet's signals its pair first, then the pet's packet its pair and its flush.
+#[test]
+fn the_pets_flush_falls_in_packet_order_with_the_players() {
     let mut rig = growl_rig();
 
     rig.receive(vec![
-        go(PET, GROWL),
+        SessionEvent::SpellCooldowns {
+            caster: ME,
+            cooldowns: vec![(GROWL, 3000)],
+        },
         SessionEvent::SpellCooldowns {
             caster: PET,
             cooldowns: vec![(GROWL, 3000)],
         },
     ]);
 
-    assert_eq!(rig.frame(), FLUSH);
+    assert_eq!(rig.frame(), [&FLUSH[..2], &FLUSH[..]].concat());
 }
 
 /// `SMSG_PET_SPELLS` seeds the list through `0x6e2c60`, which flushes nothing, and ends in
@@ -348,60 +390,6 @@ fn a_new_vm_is_not_flushed_for_a_list_that_already_moved() {
 
     rig.receive(vec![go(PET, GROWL)]);
     assert_eq!(rig.frame(), FLUSH, "the next mutation is a flush");
-}
-
-/// The flush reads what the feeds pushed: it runs after the bar's feed and the book's, which
-/// push the pet's cooldown triples the handlers ask for, and (declared through the cooldown
-/// events) after the player's own flush. Skips where bevy carries no system names.
-#[test]
-fn the_flush_runs_after_every_feed_that_pushes_a_pet_cooldown() {
-    use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
-    use bevy::prelude::Update;
-    use std::collections::{HashMap, HashSet};
-
-    let mut app = headless_client();
-    let c = census(&mut app, Update, SyncPoints::Declared);
-    let named = |needle: &str| {
-        let hits: Vec<_> = c
-            .systems
-            .iter()
-            .filter(|(_, s)| s.name.ends_with(needle))
-            .map(|(k, _)| *k)
-            .collect();
-        (!hits.is_empty()).then(|| {
-            assert_eq!(hits.len(), 1, "one system named {needle}");
-            hits[0]
-        })
-    };
-    let Some(fire) = named("::fire_pet_cooldown_events") else {
-        eprintln!("skipped: this build carries no system names");
-        return;
-    };
-    let mut after: HashMap<_, Vec<_>> = HashMap::new();
-    for (a, b) in &c.dependencies {
-        after.entry(*a).or_default().push(*b);
-    }
-    let runs_before = |first| {
-        let (mut seen, mut stack) = (HashSet::new(), vec![first]);
-        while let Some(n) = stack.pop() {
-            if n == fire {
-                return true;
-            }
-            if seen.insert(n) {
-                stack.extend(after.get(&n).into_iter().flatten().copied());
-            }
-        }
-        false
-    };
-    for feed in [
-        "::feed_pet_bar",
-        "::feed_pet_book",
-        "::feed_action_state",
-        "::fire_action_events",
-    ] {
-        let key = named(feed).unwrap_or_else(|| panic!("{feed} is scheduled"));
-        assert!(runs_before(key), "{feed} runs before the pet's flush");
-    }
 }
 
 /// The stock spellbook (`SpellBookFrame.lua:209`-`231`): a `SpellButton` redraws on
@@ -567,7 +555,7 @@ fn an_inserts_prune_fires_only_the_inserts_own_flush() {
     for _ in 0..5 {
         rig.press(1);
     }
-    assert_eq!(rig.frame(), FLUSH, "the presses' own flush");
+    assert_eq!(rig.frame(), FLUSH.repeat(5), "each press's own flush");
     let held = rig.generation();
     let_the_gcds_run_out();
     let pressed = Instant::now();
@@ -611,7 +599,11 @@ fn an_insert_changes_no_bar_read_of_the_records_that_stay() {
     for _ in 0..5 {
         rig.press(1);
     }
-    assert_eq!(rig.frame(), FLUSH);
+    assert_eq!(
+        rig.frame(),
+        FLUSH.repeat(7),
+        "the go, the packet and each press"
+    );
     let (running, parked_read) = (rig.cooldown(2), rig.cooldown(3));
     assert_eq!(running.1, 5.0, "Growl sweeps its 5 s");
     assert!(

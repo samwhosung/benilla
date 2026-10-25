@@ -1,6 +1,6 @@
 //! The cooldown getters' query at the call, the call host's half of
-//! [`benilla_ui::script::CooldownQuery`]: the player's list as of the drain's place (the cooldown
-//! lane replays it packet by packet, [`super::log`]), each item found as of there too
+//! [`benilla_ui::script::CooldownQuery`]: the player's list and the pet's as of the drain's place
+//! (their cooldown lanes replay them packet by packet, [`super::log`]), each item found as of there too
 //! ([`crate::ui_unit::views::ViewStores`]), each answer derived as the feeds derive their
 //! snapshots.
 
@@ -16,6 +16,7 @@ use crate::query_cache::Ask;
 #[derive(SystemParam)]
 pub(crate) struct CooldownLive<'w, 's> {
     cooldowns: Option<Res<'w, Cooldowns>>,
+    pet: Option<Res<'w, crate::ui_pet::PetBar>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     items: Option<Res<'w, crate::items::Items>>,
     /// The frame's clock pair every pushed start is mapped through, as the action feed last read
@@ -29,9 +30,24 @@ impl CooldownLive<'_, '_> {
     /// `query`'s answer as of here; `None` for an item object not held then, and in a harness
     /// without the list, the items or the clock.
     pub(crate) fn read(&self, query: CooldownQuery) -> Option<Option<CooldownTriple>> {
-        let (cooldowns, items) = (self.cooldowns.as_deref()?, self.items.as_deref()?);
         let (anchor, ui_now) = self.clock.as_deref()?.clock()?;
         let catalog = self.spells.as_deref().map(|s| &s.catalog);
+        // `0x6e2ea0` on list 1 with item 0, as the pet bar's feed reads it.
+        if let CooldownQuery::PetSpell(spell) = query {
+            return Some(
+                self.pet
+                    .as_deref()?
+                    .cooldowns
+                    .info(
+                        spell,
+                        0,
+                        catalog.and_then(|c| c.get(spell)),
+                        std::time::Instant::now(),
+                    )
+                    .ui_triple(anchor, ui_now),
+            );
+        }
+        let (cooldowns, items) = (self.cooldowns.as_deref()?, self.items.as_deref()?);
         let objects = self.stores.item_objects(&self.objects);
         match query {
             // `0x6e2ea0`: the spell with item 0, as the bar's and the book's pushes read it.
@@ -82,6 +98,7 @@ impl CooldownLive<'_, '_> {
                     .flatten(),
                 )
             }
+            CooldownQuery::PetSpell(_) => None,
         }
     }
 }

@@ -1,11 +1,11 @@
-//! The player's list as each packet left it. In the reference each cooldown packet's handler
-//! writes the list and signals inside itself (`0x6e9460` adds its records, then `0x4b31b0` at
-//! `0x6e95b0`), and the getters query the list inside their calls (`0x6e2ea0` → `0x6e13e0`), so a
-//! listener reads its own packet's records. Here every handler of the frame writes the list before
-//! any listener runs, so each write is logged with its stamp, as are the flushes' signals
-//! ([`Signal`]); the cooldown lane (`ui_action::cooldown_lane`) rewinds the list to the frame's
-//! start and replays the log in stamp order among the other lanes, firing each signal at its
-//! place. A write made during the drain, a listener's cast arming its global cooldown, lands at
+//! Each list as each packet left it, the player's and the pet's. In the reference each cooldown
+//! packet's handler writes its list and signals inside itself (`0x6e9460` adds its records, then
+//! `0x4b31b0` at `0x6e95b0`, and for the pet's list `0x4bce90` at `0x6e95b9`), and the getters
+//! query the list inside their calls (`0x6e2ea0` → `0x6e13e0`, the pet's through `0x4be03c`), so
+//! a listener reads its own packet's records. Here every handler of the frame writes the lists
+//! before any listener runs, so each write is logged with its stamp, as are the flushes' signals
+//! ([`Signal`]); each list's lane (`ui_action::cooldown_lane`) rewinds it to the frame's start and
+//! replays its log in stamp order among the other lanes, firing each signal at its place. A write made during the drain, a listener's cast arming its global cooldown, lands at
 //! its own place and is not logged; its signal is, stamped under the item firing, and fires
 //! straight after it.
 
@@ -85,6 +85,8 @@ pub(crate) enum Signal {
     Usable,
     /// `0x4f93d0`: `BAG_UPDATE_COOLDOWN`.
     Bags,
+    /// `0x4bce90`: `PET_BAR_UPDATE_COOLDOWN`, the pet's list's tail in place of the bags.
+    Pet,
 }
 
 /// One logged item.
@@ -94,13 +96,10 @@ enum Entry {
     Signal(Signal),
 }
 
-/// A list's log of the frame's writes and signals ([`super::Cooldowns`]), which only the
-/// player's list keeps: the pet's list signals its own watcher once a frame
-/// (`crate::ui_pet::bar`).
-#[derive(Debug)]
+/// A list's log of the frame's writes and signals ([`super::Cooldowns`]), the player's and the
+/// pet's alike.
+#[derive(Debug, Default)]
 pub(crate) struct CooldownLog {
-    /// The list keeps the log.
-    on: bool,
     /// The records before the log's first write.
     start: Option<Vec<Record>>,
     /// The writes and signals not yet replayed, in stamp order.
@@ -109,24 +108,7 @@ pub(crate) struct CooldownLog {
     replaying: bool,
 }
 
-impl Default for CooldownLog {
-    /// The player's list's: one that keeps.
-    fn default() -> Self {
-        Self::new(true)
-    }
-}
-
 impl CooldownLog {
-    /// A log that keeps the list's writes and signals, or one that keeps nothing.
-    pub(super) fn new(on: bool) -> Self {
-        Self {
-            on,
-            start: None,
-            entries: VecDeque::new(),
-            replaying: false,
-        }
-    }
-
     /// Insert `entry` at `at` behind everything stamped before it: one pushed while an item fires
     /// is stamped under that item and goes ahead of the later ones.
     fn push(&mut self, at: Stamp, entry: Entry) {
@@ -136,7 +118,7 @@ impl CooldownLog {
 
     /// Log `write`, made on `records`, unless the drain is replaying.
     pub(super) fn wrote(&mut self, records: &[Record], write: &Write) {
-        if !self.on || self.replaying {
+        if self.replaying {
             return;
         }
         if self.start.is_none() {
@@ -147,9 +129,7 @@ impl CooldownLog {
 
     /// Log `signal`, the replay's included: a listener's flush fires after its cause.
     pub(super) fn signalled(&mut self, signal: Signal) {
-        if self.on {
-            self.push(crate::lanes::stamp(), Entry::Signal(signal));
-        }
+        self.push(crate::lanes::stamp(), Entry::Signal(signal));
     }
 
     /// The lane's head: the rewind, at the origin, while the log holds what the drain has not

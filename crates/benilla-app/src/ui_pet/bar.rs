@@ -24,7 +24,7 @@ pub(super) struct PetBarMemory {
     slots: Vec<PetActionView>,
     state: Option<u32>,
     /// The ten cooldown triples as last pushed, so a cooldown alone is pushed with no event: its
-    /// events are [`fire_pet_cooldown_events`]'s.
+    /// events are the list's flush, on the pet's cooldown lane (`crate::ui_action::cooldown_lane`).
     cooldowns: Vec<Option<(i64, u32, bool)>>,
 }
 
@@ -222,8 +222,8 @@ pub(crate) fn active_aura_press(
 }
 
 /// Push the ten slot views on a change, and `PET_BAR_UPDATE` when the bar itself moved. A change
-/// of the cooldowns alone is pushed without an event: the pet's cooldown events fire off the
-/// list's generation, so a natural expiry fires none, as in the reference.
+/// of the cooldowns alone is pushed without an event: the pet's cooldown events are its list's
+/// flushes, so a natural expiry fires none, as in the reference.
 pub(super) fn feed_pet_bar(
     mut vm: crate::script_calls::VmWith<(
         Res<'static, PetBar>,
@@ -359,54 +359,6 @@ pub(super) fn feed_pet_bar(
             if !resignalled {
                 fires.post("PET_BAR_UPDATE", vec![]);
             }
-        }
-    })
-}
-
-/// The flush behind every mutation of the pet's cooldown list: `0x4b31b0` fires
-/// `ACTIONBAR_UPDATE_COOLDOWN` (`0x4e5c60`, event `0xd8`) then `SPELL_UPDATE_COOLDOWN` (`0x106`),
-/// and `0x4bce90` fires `PET_BAR_UPDATE_COOLDOWN` (`0x162`). Its callers are the pet's
-/// `SMSG_SPELL_GO` leg (`0x6e85fc`), `StartGlobalCooldown` for the list (`0x6e2e77`, `0x6e2e8e`),
-/// `SMSG_SPELL_COOLDOWN` for the pet's guid (`0x6e95b0`, `0x6e95b9`), `SMSG_COOLDOWN_EVENT` and
-/// `SMSG_CLEAR_COOLDOWN` (`0x6e3071`, `0x6e3080`) and `SMSG_COOLDOWN_CHEAT` (`0x6e9712`,
-/// `0x6e971c`); each is a change of [`Cooldowns::generation`](crate::spell::Cooldowns), and one
-/// frame's changes fire it once. Between the two, the list's own usable refresh `0x4b31c0`
-/// (`0x6e2e85`, `0x6e3076`) signals `SPELL_UPDATE_USABLE` on a change of
-/// [`Cooldowns::usable_refreshes`](crate::spell::Cooldowns). `SMSG_PET_SPELLS` seeds without it,
-/// so the events never fire for a rebuild. Runs after
-/// [`CooldownEvents`](crate::ui_action::CooldownEvents): every feed that pushes a pet cooldown,
-/// the bar's and the book's, has pushed by then, so the handlers read the new list.
-pub(super) fn fire_pet_cooldown_events(
-    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
-    mut memory: Local<
-        crate::ui_script::VmMemo<(crate::ui_script::gate::Watch, crate::ui_script::gate::Watch)>,
-    >,
-) {
-    let (generation, usable_refreshes) = {
-        let bar = vm.own();
-        (bar.cooldowns.generation, bar.cooldowns.usable_refreshes)
-    };
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        // A new VM starts from the list as it stands: the reference flushes on a mutation, not at
-        // load.
-        let ((flushes, refreshes), fresh) = memory.get_reset(script);
-        let flushed = flushes.moved(generation);
-        let refreshed = refreshes.moved(usable_refreshes);
-        if fresh || !(flushed || refreshed) {
-            return;
-        }
-        if flushed {
-            script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
-            script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
-        }
-        if refreshed {
-            script.fire_event("SPELL_UPDATE_USABLE", vec![]);
-        }
-        if flushed {
-            script.fire_event("PET_BAR_UPDATE_COOLDOWN", vec![]);
         }
     })
 }

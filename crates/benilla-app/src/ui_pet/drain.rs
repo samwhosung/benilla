@@ -358,9 +358,8 @@ impl PetPress<'_, '_> {
 /// The spell arm's tail (`0x4bd367`-`0x4bd36e`) for a press past the usability gate whose
 /// `Spell.dbc` record resolved and that neither cancels an aura nor takes the attempt: it calls
 /// `StartGlobalCooldown 0x6e2de0(spellId, 1)` before the send (`0x4bd444`), the spell's own
-/// `StartRecovery*` pair, under op 21, into the pet's list (`0xcecaec + 0x18`). The insert moves
-/// the list's generation, which carries the flush that follows it (`0x6e2e77`, `0x6e2e8e`) to
-/// `bar::fire_pet_cooldown_events`.
+/// `StartRecovery*` pair, under op 21, into the pet's list (`0xcecaec + 0x18`), and the flush
+/// that follows it (`0x6e2e77`, `0x6e2e8e`), at its place on the pet's cooldown lane.
 ///
 /// The pet's GCD starts in three places, and this arm is one. A `SMSG_SPELL_COOLDOWN` addressed
 /// to the pet's guid inserts the same pair for every entry whose spell lacks `Attributes` bit 25

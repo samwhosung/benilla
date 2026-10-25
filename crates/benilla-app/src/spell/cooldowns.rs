@@ -153,14 +153,16 @@ impl CooldownInfo {
 
 /// One cooldown list, the client's `SpellHistory`: the player's is this resource (`0xcecaec`), the
 /// pet's is [`crate::ui_pet::PetBar::cooldowns`] (`0xcecb04`), which the pet bar, the pet book and
-/// the pet's `SMSG_SPELL_GO` leg read and write. The player's list signals at each flush site in
-/// its place on the cooldown lane ([`log`]); the pet's, which keeps no log, through its counters,
-/// once a frame (`ui_pet::bar::fire_pet_cooldown_events`).
+/// the pet's `SMSG_SPELL_GO` leg read and write. Each signals at each flush site in its place on
+/// its lane ([`log`]).
 #[derive(Resource, Default)]
 pub(crate) struct Cooldowns {
     records: Vec<Record>,
-    /// The frame's writes and signals, which the drain replays (the player's list alone).
+    /// The frame's writes and signals, which the drain replays.
     log: CooldownLog,
+    /// The pet's list (`0xcecb04`, the list index 1 every site tests): its sites end in the pet's
+    /// flush `0x4bce90` where the player's call the bags' or nothing.
+    pet: bool,
     /// Bumped by [`Self::flush`], `0x4b31b0`. Only counts up, across [`Self::clear_silent`] too,
     /// so a watcher reads a reset as no mutation.
     pub(crate) generation: u64,
@@ -209,10 +211,10 @@ struct PendingItem {
 }
 
 impl Cooldowns {
-    /// A list that keeps no log, the pet's: its watcher reads its counters once a frame.
-    pub(crate) fn unlogged() -> Self {
+    /// The pet's list.
+    pub(crate) fn pet() -> Self {
         Self {
-            log: CooldownLog::new(false),
+            pet: true,
             ..Default::default()
         }
     }
@@ -223,9 +225,7 @@ impl Cooldowns {
         write.apply(&mut self.records);
     }
 
-    /// `0x4b31b0`, the cooldown pair: `ACTIONBAR_UPDATE_COOLDOWN` and `SPELL_UPDATE_COOLDOWN`. On
-    /// the pet's list its watcher adds `PET_BAR_UPDATE_COOLDOWN`, the `0x4bce90` each pet site
-    /// calls after it.
+    /// `0x4b31b0`, the cooldown pair: `ACTIONBAR_UPDATE_COOLDOWN` and `SPELL_UPDATE_COOLDOWN`.
     pub(crate) fn flush(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.log.signalled(Signal::Pair);
@@ -236,12 +236,27 @@ impl Cooldowns {
         self.log.signalled(Signal::Usable);
     }
 
+    /// `0x4f93d0`, `BAG_UPDATE_COOLDOWN`, on the player's list; on the pet's, its flush
+    /// `0x4bce90` in its place (`0x6e3080`, `0x6e971c`).
     fn flush_bags(&mut self) {
-        self.bag_flushes = self.bag_flushes.wrapping_add(1);
-        self.log.signalled(Signal::Bags);
+        if self.pet {
+            self.log.signalled(Signal::Pet);
+        } else {
+            self.bag_flushes = self.bag_flushes.wrapping_add(1);
+            self.log.signalled(Signal::Bags);
+        }
     }
 
-    /// `0x4b31b0` then `0x4f93d0`, the pair every item leg calls.
+    /// `0x4bce90`, `PET_BAR_UPDATE_COOLDOWN`, the tail of a site that calls the bags' for neither
+    /// list: the pet's alone (`0x6e2e8e`, `0x6e8601`, `0x6e95b9`).
+    fn flush_pet(&mut self) {
+        if self.pet {
+            self.log.signalled(Signal::Pet);
+        }
+    }
+
+    /// `0x4b31b0` then `0x4f93d0`, the pair every item leg calls, and the cheat's (`0x6e9712`,
+    /// then `0x6e9721` or the pet's flush at `0x6e971c`).
     pub(crate) fn flush_item_leg(&mut self) {
         self.flush();
         self.flush_bags();
@@ -249,7 +264,7 @@ impl Cooldowns {
 
     /// `0x6e3050`'s tail after its walk, whether or not a record matched: the pair (`0x6e3071`),
     /// the usable refresh (`0x6e3076`), then the bags for the player (`0x6e3089`) or the pet's flush
-    /// for the pet (`0x6e3080`), which reads [`Self::generation`].
+    /// for the pet (`0x6e3080`).
     fn flush_records(&mut self) {
         self.flush();
         self.refresh_usable();
@@ -418,7 +433,10 @@ impl Cooldowns {
             0,
             0,
         );
+        // The self leg's pair (`0x6e849d`), or the pet leg's, then its flush (`0x6e85fc`,
+        // `0x6e8601`).
         self.flush();
+        self.flush_pet();
     }
 
     /// The go's item leg when the item's record names the spell (`0x6e8511`-`0x6e8566`), then
@@ -642,6 +660,8 @@ impl Cooldowns {
         if spell.cooldown_on_event() {
             self.refresh_usable();
         }
+        // The pet's list's flush last (`0x6e2e8a`-`0x6e2e8e`).
+        self.flush_pet();
     }
 
     /// `ClearGlobalCooldown 0x6e1630`, on a failed cast: every record of the spell matches
@@ -736,6 +756,8 @@ impl Cooldowns {
             }
         }
         self.flush();
+        // The pet's list's flush (`0x6e95b5`-`0x6e95b9`).
+        self.flush_pet();
     }
 
     /// One `SMSG_SPELL_COOLDOWN` entry, started at the packet:

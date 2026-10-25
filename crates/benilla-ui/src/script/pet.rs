@@ -504,8 +504,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetPetActionCooldown(index)` (`0x8478d8`, `0x4bdfb7`).
             let i = binding_abi::index_arg32(lua, i, "Usage: GetPetActionCooldown(index)")?;
             let now = crate::script::clock::now(lua);
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match slot_at(&model, i).and_then(|s| s.cooldown) {
+            let (spell, snapshot) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let slot = slot_at(&model, i);
+                (
+                    slot.and_then(|s| s.view.spell_id),
+                    slot.and_then(|s| s.cooldown),
+                )
+            };
+            // A spell slot's query reads the pet's list inside the call (`0x4be03c` →
+            // `0x6e2ea0`), through the lent host; with none, the frame's snapshot answers.
+            let live = spell.and_then(|spell| {
+                super::cooldown_read::read_live(lua, super::CooldownQuery::PetSpell(spell))
+            });
+            Ok(match live.unwrap_or(snapshot) {
                 Some((start, duration, enabled)) if start + duration > now || !enabled => (
                     crate::script::clock::held_start(start, enabled, now),
                     duration,

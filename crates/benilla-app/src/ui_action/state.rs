@@ -364,6 +364,12 @@ impl ActionStateMemory {
     pub(crate) fn clock(&self) -> Option<(Instant, f64)> {
         self.clock
     }
+
+    /// The pair a feed would have read, for a rig that runs no action feed.
+    #[cfg(test)]
+    pub(crate) fn set_clock(&mut self, clock: (Instant, f64)) {
+        self.clock = Some(clock);
+    }
 }
 
 /// One pass over the slots: when it runs, and which of the refreshes it is.

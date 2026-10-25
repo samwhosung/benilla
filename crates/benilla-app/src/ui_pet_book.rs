@@ -112,8 +112,8 @@ pub(crate) fn feed_pet_book(
             // The push signals nothing: the book's `SPELLS_CHANGED` is its packet's sort
             // (`0x4bdadb` → `0x4b2fd0`, `crate::ui_pet`'s handler), on the notice lane after this
             // push. A cooldown repaints the pet page through the flush's `SPELL_UPDATE_COOLDOWN`
-            // (`SpellBookFrame.lua:209`, `221`), which `ui_pet`'s `fire_pet_cooldown_events` fires
-            // after this feed's push; autocast, through `PET_BAR_UPDATE` (`227-231`).
+            // (`SpellBookFrame.lua:209`, `221`), which the pet's cooldown lane fires after every
+            // feed; autocast, through `PET_BAR_UPDATE` (`227-231`).
         }
     })
 }

@@ -20,7 +20,7 @@ use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfG
 use crate::spell::Cooldowns;
 use crate::ui_action::Spells;
 
-use super::bar::{feed_pet_bar, fire_pet_cooldown_events};
+use super::bar::feed_pet_bar;
 use super::drain::PetPress;
 use super::PetBar;
 
@@ -178,14 +178,14 @@ pub(super) fn rig(
     }
     world.insert_non_send_resource(listening_vm());
     world.init_resource::<super::PetBarFeed>();
-    // The order the plugin gives them: the feeds that push a pet cooldown, then the flush.
+    // The order the plugin gives them: the feeds that push a pet cooldown; the flush is the pet's
+    // cooldown lane's, in the drain.
     let mut feed = Schedule::default();
     feed.add_systems(
         (
             super::drain::arm_owed_pet_gcds,
             crate::ui_pet_book::feed_pet_book,
             feed_pet_bar,
-            fire_pet_cooldown_events,
         )
             .chain(),
     );
@@ -204,6 +204,15 @@ impl Rig {
     /// The bar's feeds for one frame, then the lanes' drain, and the events they fired.
     pub(super) fn frame(&mut self) -> Vec<String> {
         self.feed.run(self.app.world_mut());
+        // The frame's clock pair, as the action feed hands it to the call host's cooldown reads.
+        let clock = {
+            let c = self.app.world().resource::<crate::ui_script::UiClock>();
+            (c.anchor, c.ui_now)
+        };
+        self.app
+            .world_mut()
+            .resource_mut::<crate::ui_action::ActionStateMemory>()
+            .set_clock(clock);
         crate::lanes::fire_in_order(self.app.world_mut());
         let mut script = self
             .app
