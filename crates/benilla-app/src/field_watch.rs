@@ -84,13 +84,22 @@ pub(crate) enum FieldNotice {
     /// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`: `PLAYER_LEVEL_UP` with the
     /// message's level, health, first power, `level >= 10` and five stats (`0x5e413e`).
     LevelUp(benilla_protocol::messages::LevelUpInfo),
+    /// `FireUsableEvents` (`0x4b31c0`) from a field watcher, inside its packet: the action bar's
+    /// usable cache refreshed off the stores as the packet left them (`0x4e5c00`), with its
+    /// `ACTIONBAR_UPDATE_USABLE` on a change, each reactive spell's `SPELL_ACTIVE`, then
+    /// `SPELL_UPDATE_USABLE` ([`crate::ui_action::ActionStates::usable_refresh`]). The callers:
+    /// the active player's health (`0x604848`), powers (`0x604876`) and aura state, the target's
+    /// too (`0x6048b6`); its unit flags' bits `0x1c20000` and combat bit `0x80000` (`0x5ff50e`,
+    /// `0x5ff51b`), `UNIT_FIELD_BYTES_1` byte 3's bit `0x2` (`0x5ff83a`), its form and its combo
+    /// points (`0x5de011`, `0x5ddff0`).
+    UsableRefresh,
     /// `OnShapeshiftFormChanged` (`0x5de010`) on the active player's form byte: after the usable
-    /// refresh (`0x5de011`, the action feed's), `ACTIONBAR_UPDATE_STATE` and
+    /// refresh (`0x5de011`, its [`Self::UsableRefresh`]), `ACTIONBAR_UPDATE_STATE` and
     /// `CURRENT_SPELL_CAST_CHANGED` (`0x5de016` → `0x4b3250`), then the bonus bar's offset and
     /// `UPDATE_BONUS_ACTIONBAR` (`0x5de01b` → `0x4e4fc0`).
     Shapeshift,
     /// `OnComboPointsChanged` (`0x5ddff0`) on the active player's combo count: after the usable
-    /// refresh (the action feed's), `PLAYER_COMBO_POINTS` (`0x5ddffa`).
+    /// refresh (its [`Self::UsableRefresh`]), `PLAYER_COMBO_POINTS` (`0x5ddffa`).
     ComboPoints,
     /// The temporary bonus's watch `0x5de470`: the rebuild of the skill list (`0x4d2cb0`,
     /// `0x5de49a`), which signals `SKILL_LINES_CHANGED` (`0x4d2fec`).
@@ -370,6 +379,15 @@ const PET_NUMBER: (u16, u16) = (0x214, 4);
 const DYNAMIC_FLAGS: (u16, u16) = (0x224, 4);
 const ENTRY: (u16, u16) = (0xc, 4);
 
+/// The unit type watchers of `0x6041f0` whose callbacks run the usable refresh `0x4b31c0`: the
+/// health (`0x604294`, `0x6046f0`), the five powers as one watch (`0x6042ae`, `0x604860`), the
+/// aura state (`0x6042c8`, `0x604890`) and `UNIT_FIELD_BYTES_1` byte 3 (`0x6042fc`, `0x6044f0` →
+/// `0x5ff800`).
+const HEALTH: (u16, u16) = (0x40, 4);
+const POWERS: (u16, u16) = (0x44, 0x14);
+const AURA_STATE: (u16, u16) = (0x1dc, 4);
+const BYTES_1_BYTE_3: (u16, u16) = (0x213, 1);
+
 /// The player type watchers of `0x5e2510` whose callbacks signal, as (byte offset, length) in the
 /// player section: `PLAYER_FLAGS` (`0x5e2850` → `0x5ee990`), `PLAYER_GUILDID` (`0x5e258f` →
 /// `0x5e2770`), `PLAYER_GUILDRANK` (`0x5e25a7` → `0x5e27b0`), `PLAYER_BYTES_3` bytes 2, 3 and 1
@@ -413,6 +431,8 @@ pub(crate) enum List {
 pub(crate) struct Around<'a> {
     /// The active player's guid.
     pub(crate) me: Option<u64>,
+    /// The selection's guid (`0xb4e2d8`), whose aura state refreshes the bar (`0x6048a6`).
+    pub(crate) target: Option<u64>,
     /// The creature cache's lookup with a callback (`0x60463f`): whether it holds `entry`'s
     /// record, which `0x604600` answers with the name signal at once; a miss asks for it and waits
     /// for the answer (`crate::names`).
@@ -648,6 +668,26 @@ pub(crate) fn placed_values(
     let mut pass = Pass::default();
 
     // The unit type watchers (`0x6041f0`), on every unit.
+    let mine = around.me == Some(guid);
+    // The health's and the powers' for the active player (`0x60483c`, `0x604868`), the aura
+    // state's for it or the target (`0x604898`-`0x6048b4`).
+    for (range, runs) in [
+        (HEALTH, mine),
+        (POWERS, mine),
+        (AURA_STATE, mine || around.target == Some(guid)),
+    ] {
+        if let Some(at) = at(UNIT_SECTION, range, List::Type).filter(|_| runs) {
+            pass.push(at, FieldNotice::UsableRefresh);
+        }
+    }
+    // `0x5ff800` on byte 3's bit 0x2 against its copy, for the active player (`0x5ff81a`,
+    // `0x5ff831`).
+    if let Some(at) = at(UNIT_SECTION, BYTES_1_BYTE_3, List::Type) {
+        let flipped = block.flipped(UNIT_SECTION + BYTES_1_BYTE_3.0 / 4);
+        if mine && flipped & 0x0200_0000 != 0 {
+            pass.push(at, FieldNotice::UsableRefresh);
+        }
+    }
     if let Some(at) = at(OBJECT_SECTION, ENTRY, List::Type) {
         // `0x604600`: a cached record names the unit at once (`0x604651`); a miss asks.
         if (around.creature_lookup)(fields.object_entry().unwrap_or(0)) {
@@ -663,10 +703,15 @@ pub(crate) fn placed_values(
         // `0x5ff580` on the flipped bits, against the new flags.
         let flipped = block.flipped(UNIT_SECTION + UNIT_FLAGS.0 / 4);
         let flags = fields.unit_flags();
-        // The active player's arm first (`0x5ff5b4`, `0x5ff5c7` → `0x5ff4e0`): the in-combat bit
-        // 0x80000 signals `PLAYER_REGEN_DISABLED` when now set, else `PLAYER_REGEN_ENABLED`
-        // (`0x5ff513`-`0x5ff533`).
-        if around.me == Some(guid) && flipped & 0x8_0000 != 0 {
+        // The active player's arm first (`0x5ff5b4`, `0x5ff5c7` → `0x5ff4e0`): a usable refresh
+        // on bits 0x1c20000 (`0x5ff50e`), then the in-combat bit 0x80000's own (`0x5ff51b`) and
+        // `PLAYER_REGEN_DISABLED` when now set, else `PLAYER_REGEN_ENABLED` (`0x5ff513`-
+        // `0x5ff533`).
+        if mine && flipped & 0x01c2_0000 != 0 {
+            pass.push(at, FieldNotice::UsableRefresh);
+        }
+        if mine && flipped & 0x8_0000 != 0 {
+            pass.push(at, FieldNotice::UsableRefresh);
             let id = if flags & 0x8_0000 != 0 {
                 id::PLAYER_REGEN_DISABLED
             } else {
@@ -837,12 +882,14 @@ pub(crate) fn placed_values(
             pass.reaction(at, guid, fields, around);
         }
         if let Some(at) = at(UNIT_SECTION, SHAPESHIFT_FORM, List::Object) {
+            pass.push(at, FieldNotice::UsableRefresh);
             pass.push(at, FieldNotice::Shapeshift);
         }
         if let Some(at) = at(UNIT_SECTION, PLAYER_AURAS, List::Object) {
             pass.push(at, FieldNotice::PlayerAuras);
         }
         if let Some(at) = at(PLAYER_SECTION, COMBO_POINTS, List::Object) {
+            pass.push(at, FieldNotice::UsableRefresh);
             pass.push(at, FieldNotice::ComboPoints);
         }
         // Registered at world entry (`0x4de430`), after the bridge's watch on the same range.
@@ -1005,6 +1052,7 @@ mod tests {
     ) -> Vec<FieldNotice> {
         let around = Around {
             me,
+            target: None,
             creature_lookup: &|_| false,
             others: &Vec::new,
             pet_bar: 0,
@@ -1521,6 +1569,7 @@ mod tests {
             .into_created(ObjectType::Player);
         let around = Around {
             me: Some(ME),
+            target: None,
             creature_lookup: &|_| false,
             others: &|| vec![MOB, OTHER],
             pet_bar: 0,
@@ -1637,6 +1686,7 @@ mod tests {
         );
         let cached = Around {
             me: Some(ME),
+            target: None,
             creature_lookup: &|entry| entry == 299,
             others: &Vec::new,
             pet_bar: 0,
@@ -1654,6 +1704,7 @@ mod tests {
     fn the_bar_pets_number_signals_the_pet_ui() {
         let bar = Around {
             me: Some(ME),
+            target: None,
             creature_lookup: &|_| false,
             others: &Vec::new,
             pet_bar: PET,
@@ -1751,14 +1802,19 @@ mod tests {
         );
     }
 
-    /// `0x5ff580` on `UNIT_FIELD_FLAGS`: the active player's combat bit first (`0x5ff4e0`), the
-    /// reactions, then the combat bit of a unit whose charmer, else summoner, is the player.
+    /// `0x5ff580` on `UNIT_FIELD_FLAGS`: the active player's combat bit first (`0x5ff4e0`, its
+    /// usable refresh ahead of its regen event), the reactions, then the combat bit of a unit
+    /// whose charmer, else summoner, is the player.
     #[test]
     fn the_unit_flags_arms_signal_combat_for_the_player_and_its_pet() {
         let mut me = player();
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(46, 0x8_0000)]),
-            [FieldNotice::Global { id: 190 }, bridge(ME, 40)]
+            [
+                FieldNotice::UsableRefresh,
+                FieldNotice::Global { id: 190 },
+                bridge(ME, 40)
+            ]
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(46, 0x8_0080)]),
@@ -1768,6 +1824,7 @@ mod tests {
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(46, 0)]),
             [
+                FieldNotice::UsableRefresh,
                 FieldNotice::Global { id: 191 },
                 signal(ME, 29),
                 bridge(ME, 40)
@@ -1922,6 +1979,7 @@ mod tests {
         let mut me = player();
         let around = Around {
             me: Some(ME),
+            target: None,
             creature_lookup: &|_| false,
             others: &|| vec![MOB],
             pet_bar: 0,
@@ -1942,6 +2000,101 @@ mod tests {
         );
     }
 
+    /// Each caller of the usable refresh `0x4b31c0` among the watchers places it where it runs,
+    /// ahead of the bridge's signal on the same field (the type watchers run first): the active
+    /// player's health (`0x604848`), powers (`0x604876`), aura state (`0x6048b6`, the target's
+    /// too), unit flags bits `0x1c20000` and `0x80000` (`0x5ff50e`, `0x5ff51b`, two refreshes when
+    /// both move), `UNIT_FIELD_BYTES_1` byte 3's bit `0x2` (`0x5ff83a`), its form and its combo
+    /// points (`0x5de011`, `0x5ddff0`). Another unit's, and the bits no caller compares, place
+    /// none.
+    #[test]
+    fn each_usable_refresh_caller_places_it_where_its_watcher_runs() {
+        use FieldNotice::UsableRefresh as R;
+        let refreshes = |notices: &[FieldNotice]| notices.iter().filter(|n| **n == R).count();
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(22, 90)]),
+            [R, bridge(ME, 16)],
+            "the health"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(23, 480)]),
+            [R, bridge(ME, 17)],
+            "the mana, ahead of its UNIT_MANA"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(26, 80)]),
+            [R, bridge(ME, 20)],
+            "the energy"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(125, 2)])),
+            1,
+            "the aura state"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(46, 0x2_0000)])),
+            1,
+            "a usable bit (pacified)"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(46, 0xa_0000)])),
+            1,
+            "the combat bit"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(46, 0)])),
+            2,
+            "both at once: the usable bits' and the combat bit's"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(138, 0x0200_0000)])),
+            1,
+            "byte 3's bit 0x2"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(138, 0x0201_0000)])),
+            1,
+            "the form byte"
+        );
+        assert_eq!(
+            refreshes(&block(&mut me, Some(ME), ME, &[(pf(0x1028), 0x0100)])),
+            1,
+            "the combo points"
+        );
+        for (pairs, why) in [
+            (&[(46, 0x1000)][..], "a unit-flag bit no refresh compares"),
+            (&[(138, 0x0301_0000)][..], "byte 3's bit 0x1"),
+            (&[(pf(0x1028), 0x0108)][..], "PLAYER_FIELD_BYTES byte 0"),
+            (&[(34, 2)][..], "the level"),
+        ] {
+            assert_eq!(refreshes(&block(&mut me, Some(ME), ME, pairs)), 0, "{why}");
+        }
+        let mut mob = unit();
+        assert_eq!(
+            refreshes(&block(&mut mob, Some(ME), MOB, &[(23, 480), (125, 2)])),
+            0,
+            "another unit's power and aura state"
+        );
+        let target = Around {
+            me: Some(ME),
+            target: Some(MOB),
+            creature_lookup: &|_| false,
+            others: &Vec::new,
+            pet_bar: 0,
+        };
+        assert_eq!(
+            refreshes(&block_around(
+                &mut mob,
+                &target,
+                MOB,
+                &[(23, 470), (125, 0)]
+            )),
+            1,
+            "the target's aura state alone"
+        );
+    }
+
     /// The form watch `0x5de010` is one byte, `UNIT_FIELD_BYTES_1` byte 2, and the combo watch
     /// `0x5ddff0` one byte, `PLAYER_FIELD_BYTES` byte 1, both on the active player's own object
     /// (`0x5dda18`, `0x5dd9d0`): another byte of either dword, or another player, runs neither.
@@ -1951,7 +2104,14 @@ mod tests {
         let ours = |notices: Vec<FieldNotice>| -> Vec<FieldNotice> {
             notices
                 .into_iter()
-                .filter(|n| matches!(n, FieldNotice::Shapeshift | FieldNotice::ComboPoints))
+                .filter(|n| {
+                    matches!(
+                        n,
+                        FieldNotice::UsableRefresh
+                            | FieldNotice::Shapeshift
+                            | FieldNotice::ComboPoints
+                    )
+                })
                 .collect()
         };
         let mut me = player();
@@ -1964,7 +2124,12 @@ mod tests {
                 ME,
                 &[(bytes_1, 0x0001_0001), (bytes, 0x0201)]
             )),
-            [FieldNotice::Shapeshift, FieldNotice::ComboPoints]
+            [
+                FieldNotice::UsableRefresh,
+                FieldNotice::Shapeshift,
+                FieldNotice::UsableRefresh,
+                FieldNotice::ComboPoints
+            ]
         );
         let theirs = block(
             &mut other,
@@ -1988,6 +2153,7 @@ mod tests {
         mob.merge_diff(delta, |i, o, n| moved.push((i, o, n)));
         let around = Around {
             me: Some(ME),
+            target: None,
             creature_lookup: &|_| false,
             others: &Vec::new,
             pet_bar: 0,

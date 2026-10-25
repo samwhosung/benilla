@@ -31,8 +31,11 @@ pub(crate) struct NoticeFiring<'w, 's> {
     // The quest log's watcher reads the slots.
     me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
-    // The form table the bonus bar's offset reads (`0x4e4fc0`).
+    // The form table the bonus bar's offset reads (`0x4e4fc0`), and the player's store as of the
+    // drain's place, whose form byte it pages by.
     spells: Option<Res<'w, crate::ui_action::Spells>>,
+    player: Query<'w, 's, Entity, With<crate::net::SelfPlayer>>,
+    views: super::views::ViewStores<'w, 's>,
     // The skill value watch's line reads the line's name and race-class row (`0x5de2f2`,
     // `0x5de340`).
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
@@ -108,9 +111,14 @@ impl NoticeFiring<'_, '_> {
             // `0x5de016` → `0x4b3250`: `0x4e5bf0`'s event, then its own (`0x4b325a`).
             script.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);
             script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
-            // `0x5de01b` → `0x4e4fc0`: the offset stored, then the event, on every form change.
-            let offset =
-                crate::ui_action::bonus_bar_offset(self.me.iter().next(), self.spells.as_deref());
+            // `0x5de01b` → `0x4e4fc0`: the offset stored, then the event, on every form change,
+            // off the form byte as the watcher's packet left it.
+            let me = self
+                .player
+                .iter()
+                .next()
+                .and_then(|e| self.views.get(e).ok());
+            let offset = crate::ui_action::bonus_bar_offset(me, self.spells.as_deref());
             script.set_bonus_bar_offset(offset);
             script.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
             return false;
@@ -236,6 +244,13 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
         return;
     }
     while let Some((stamp, notice)) = lane.pop(until) {
+        if notice == FieldNotice::UsableRefresh {
+            let ((), moved) = crate::lanes::firing(stamp, || vm.engine_usable_refresh());
+            if moved {
+                break;
+            }
+            continue;
+        }
         let trainer = match &notice {
             FieldNotice::PetGuidSet { changed: true, .. } => {
                 crate::ui_trainer::open_pet_trainer(vm.own().as_deref())
@@ -458,6 +473,7 @@ pub(crate) fn fire(
         | FieldNotice::Tutorial { .. }
         | FieldNotice::Drunk { .. }
         | FieldNotice::Shapeshift
+        | FieldNotice::UsableRefresh
         | FieldNotice::PlayerAuras
         | FieldNotice::SkillLines
         | FieldNotice::SkillMax
@@ -1526,6 +1542,7 @@ mod tests {
         let notices = crate::field_watch::values(
             &crate::field_watch::Around {
                 me: Some(ME),
+                target: None,
                 creature_lookup: &|_| false,
                 others: &Vec::new,
                 pet_bar: 0,

@@ -1276,6 +1276,9 @@ impl benilla_ui::script::SelfRead for StoreObject<'_> {
     fn no_play_time(&self) -> bool {
         self.0 .0.player_flags() & PLAYER_FLAGS_NO_PLAY_TIME != 0
     }
+    fn shapeshift_form(&self) -> u8 {
+        self.0 .0.unit_shapeshift_form()
+    }
 }
 
 /// `PLAYER_FLAGS` bit 7, free-for-all PvP (vmangos `Player.h:322`).

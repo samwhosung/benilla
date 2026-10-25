@@ -451,6 +451,7 @@ fn own_watches(delta: &[(u16, u32)]) -> Vec<FieldNotice> {
     me.merge_diff(delta, |i, o, n| moved.push((i, o, n)));
     let around = crate::field_watch::Around {
         me: Some(ME),
+        target: None,
         creature_lookup: &|_| false,
         others: &Vec::new,
         pet_bar: 0,

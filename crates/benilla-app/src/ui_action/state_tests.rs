@@ -1205,27 +1205,6 @@ fn frame(app: &mut App) -> Vec<String> {
     heard
 }
 
-/// One descriptor edge on `guid`, as a values block reports it.
-fn edge(
-    app: &mut App,
-    guid: u64,
-    kind: benilla_protocol::messages::ObjectType,
-    index: u16,
-    old: u32,
-    new: u32,
-) {
-    let entity = app.world().resource::<crate::net::GuidIndex>().0[&guid];
-    app.world_mut().write_message(crate::net::FieldChanged {
-        at: crate::lanes::stamp(),
-        entity,
-        guid,
-        kind,
-        index,
-        old,
-        new,
-    });
-}
-
 /// `IsActionInRange` (`0x4e56f0`) runs the pre-check `0x6e4440` on the selection, which compares
 /// the distance only when a relation the spell's targets name admits the target, then answers 1
 /// only for a first implicit target in the table at `0x4e57cc`. A Fireball (enemy, 6) is 0 past
@@ -1390,17 +1369,15 @@ fn an_item_slot_is_current_while_its_items_cast_is_in_flight() {
         .unwrap());
 }
 
-/// Every caller of the usable refresh `0x4b31c0` signals `SPELL_UPDATE_USABLE` (`0x4b3246`), with
-/// `ACTIONBAR_UPDATE_USABLE` ahead of it only when a slot's pair changed: the active player's
-/// health, power and aura state watchers (`0x604848`, `0x604876`, `0x6048b6`), the target's aura
-/// state (`0x6048b6`), the combo points (`0x5ddff0`), the form (`0x5de011`), the unit flags' bits
-/// 0x1c20000 and the combat bit 0x80000 (`0x5ff50e`, `0x5ff51b`), byte 3's bit 0x2 of
-/// `UNIT_FIELD_BYTES_1` (`0x5ff83a`), the target's select and clear (`0x493892`, `0x493a69`), the
-/// control flag (`0x4958fc`, `0x495910`), a held global cooldown's start (`0x6e2e85`) and the start
-/// or removal of a spell's records (`0x6e3076`). One frame's callers signal it once.
+/// Every caller of the usable refresh `0x4b31c0` the feed hears signals `SPELL_UPDATE_USABLE`
+/// (`0x4b3246`), with `ACTIONBAR_UPDATE_USABLE` ahead of it only when a slot's pair changed: the
+/// target's select and clear (`0x493892`, `0x493a69`), the control flag (`0x4958fc`,
+/// `0x495910`), a held global cooldown's start (`0x6e2e85`) and the start or removal of a spell's
+/// records (`0x6e3076`). One frame's such callers signal it once. The field watchers' callers
+/// refresh inside their packets instead (`crate::field_watch`), so a descriptor change alone
+/// signals nothing here.
 #[test]
 fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
-    use benilla_protocol::messages::ObjectType::{Player, Unit};
     let mut app = feed_app(&[], Spells::empty_for_tests(), 5.0);
     record(
         &mut app,
@@ -1410,41 +1387,12 @@ fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
     assert!(frame(&mut app).is_empty(), "a new VM hears no refresh");
     assert!(frame(&mut app).is_empty(), "nor a quiet frame");
 
-    for (index, old, new, why) in [
-        (22, 100, 90, "health"),
-        (23, 500, 480, "mana"),
-        (26, 100, 80, "energy"),
-        (125, 0, 2, "aura state"),
-        (46, 0x8, 0x8_0008, "the combat bit"),
-        (46, 0x8, 0x2_0008, "a usable bit (pacified)"),
-        (138, 0, 0x0001_0000, "the form byte"),
-        (138, 0, 0x0200_0000, "byte 3's bit 0x2"),
-        (1222, 0, 0x0100, "the combo points"),
-    ] {
-        edge(&mut app, ME, Player, index, old, new);
-        assert_eq!(frame(&mut app), USABLE, "{why}");
-    }
-    for (index, old, new, why) in [
-        (46, 0x8, 0x8 | 0x1000, "a unit-flag bit no refresh watches"),
-        (138, 0, 0x0100_0000, "byte 3's bit 0x1"),
-        (1222, 0, 0x08, "PLAYER_FIELD_BYTES byte 0"),
-        (34, 1, 2, "the level"),
-    ] {
-        edge(&mut app, ME, Player, index, old, new);
-        assert!(frame(&mut app).is_empty(), "{why}");
-    }
-    edge(&mut app, OTHER, Unit, 23, 500, 480);
-    edge(&mut app, OTHER, Unit, 125, 0, 2);
-    assert!(
-        frame(&mut app).is_empty(),
-        "another unit's power and aura state"
-    );
+    set_mana_quietly(&mut app, 480);
+    assert!(frame(&mut app).is_empty(), "a power change the feed sees");
 
     select(&mut app, Some(OTHER));
     assert_eq!(frame(&mut app), USABLE, "the select");
     assert!(frame(&mut app).is_empty(), "the same target again");
-    edge(&mut app, OTHER, Unit, 125, 2, 0);
-    assert_eq!(frame(&mut app), USABLE, "the target's aura state");
     select(&mut app, None);
     assert_eq!(frame(&mut app), USABLE, "the clear");
 
@@ -1479,8 +1427,6 @@ fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
         .clear_spell(1784);
     assert_eq!(frame(&mut app), USABLE, "a clear");
 
-    edge(&mut app, ME, Player, 22, 90, 80);
-    edge(&mut app, ME, Player, 23, 480, 470);
     select(&mut app, Some(OTHER));
     app.world_mut()
         .resource_mut::<crate::player::OwnControlLost>()
@@ -1488,7 +1434,7 @@ fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
     assert_eq!(
         frame(&mut app),
         USABLE,
-        "four callers in one frame, one signal"
+        "two callers in one frame, one signal"
     );
 }
 
@@ -1582,11 +1528,10 @@ fn a_usable_handler_hears_the_control_edge_first_and_reads_its_flag() {
 
 /// `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`) before
 /// `PLAYER_TARGET_CHANGED` (`0x49389c`), as a release does (`0x4939d3`, `0x493a69`,
-/// `0x493a73`), and the health watch (`0x604848`) runs after its field is written: a usable
-/// handler reads this frame's target and health, and the target's event comes after it.
+/// `0x493a73`): a usable handler reads this frame's target and health, and the target's event
+/// comes after it.
 #[test]
 fn a_usable_handler_reads_this_frames_target_and_health() {
-    use benilla_protocol::messages::ObjectType;
     let mut app = usable_reader_app();
     let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
     app.world_mut()
@@ -1597,7 +1542,6 @@ fn a_usable_handler_reads_this_frames_target_and_health() {
             benilla_protocol::ObjectFields::from_pairs(&[(22, 80)]),
             |_, _, _| {},
         );
-    edge(&mut app, ME, ObjectType::Player, 22, 100, 80);
     select(&mut app, Some(OTHER));
     assert_eq!(
         frame(&mut app),
@@ -2024,14 +1968,7 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
             },
         );
     assert!(frame(&mut app).is_empty(), "a placed spell");
-    edge(
-        &mut app,
-        ME,
-        benilla_protocol::messages::ObjectType::Player,
-        22,
-        100,
-        90,
-    );
+    super::super::run_watcher_refresh_once(app.world_mut());
     assert_eq!(
         frame(&mut app),
         ["SPELL_UPDATE_USABLE"],

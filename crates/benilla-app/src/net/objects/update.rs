@@ -984,6 +984,7 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     };
     let around = crate::field_watch::Around {
         me,
+        target: sc.selection.as_deref().and_then(|s| s.guid),
         // An entry of 0 has no key (`0x556aad`).
         creature_lookup: &|entry| {
             names

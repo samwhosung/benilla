@@ -5,14 +5,18 @@
 //! order: the cooldown pair (`0x4b31b0`) on a cooldown change; `ACTIONBAR_UPDATE_USABLE` when a
 //! refresh of the usable cache (`0x4e5c00`) finds a pair changed, each reactive spell's
 //! `SPELL_ACTIVE` ([`super::reactive`]) and `SPELL_UPDATE_USABLE` from the usable refresh
-//! `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the cooldown flush, as the spell
-//! charges watcher's own fires on the item lane ([`crate::item_lane`]). Combat enter and
-//! leave are signalled in their attack packets (`crate::creature_anim`).
+//! `0x4b31c0`'s callers outside the field watchers, whose refreshes run inside their packets on
+//! the notice lane ([`crate::field_watch::FieldNotice::UsableRefresh`]); `BAG_UPDATE_COOLDOWN`
+//! (`0x4f93d0`) from the cooldown flush, as the spell charges watcher's own fires on the item lane
+//! ([`crate::item_lane`]). Combat enter and leave are signalled in their attack packets
+//! (`crate::creature_anim`).
 //! `IsCurrentAction` reads the cast state live, and its pair (`0x4b3250`) is signalled where the
 //! cast changes, as are autorepeat start and stop where the key is stored and cleared
 //! (`0x6e5952`, `0x6ea170`; [`crate::ui_cast`]).
-//! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
-//! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
+//! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), read off the player's and
+//! the target's stores as of the drain's place, and `IsUsableAction` answers the bar's cache of it
+//! (`0x4e5230`); auto-repeat is the `0xceac30` key, and range the pre-check `0x6e4440` on the
+//! selection ([`crate::spell::range_check`]).
 
 use crate::ui_items::stack_counts;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -25,7 +29,7 @@ use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use benilla_ui::script::{macro_slot_id, ActionState};
 
 use crate::items::Items;
-use crate::net::{FieldChanged, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
 
 use super::{ActionSlots, PlayerActions, Spells};
@@ -98,36 +102,10 @@ impl UsableCache {
     fn refresh(&mut self, pairs: HashMap<u32, (bool, bool)>) -> bool {
         std::mem::replace(&mut self.pairs, pairs) != self.pairs
     }
-}
 
-/// `UNIT_FIELD_POWER1` to `POWER5`, one watch (`0x604876`).
-const UNIT_FIELD_POWERS: std::ops::RangeInclusive<u16> = 23..=27;
-/// `UNIT_FIELD_AURASTATE`.
-const UNIT_FIELD_AURASTATE: u16 = 125;
-/// `PLAYER_FIELD_BYTES`, whose byte 1 is the combo points.
-const PLAYER_FIELD_BYTES: u16 = 1222;
-
-/// Whether a descriptor edge is one the usable refresh `0x4b31c0`'s field-watch callers watch,
-/// each comparing its own bytes: the active player's health (`0x604848`), powers (`0x604876`) and
-/// aura state (`0x6048b6`, the target's as well), its unit flags' bits 0x1c20000 and combat bit
-/// 0x80000 (`0x5ff50e`, `0x5ff51b`), `UNIT_FIELD_BYTES_1`'s form byte (`0x5de011`) and byte 3's
-/// bit 0x2 (`0x5ff83a`), and its combo points, `PLAYER_FIELD_BYTES` byte 1 (`0x5ddff0`).
-fn refreshes_usable(e: &FieldChanged, me: Option<u64>, target: Option<u64>) -> bool {
-    use benilla_protocol::field::{FIELD_UNIT_BYTES_1, FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH};
-    let flipped = e.old ^ e.new;
-    let mine = me == Some(e.guid);
-    if !e.is_unit() {
-        return false;
-    }
-    match e.index {
-        UNIT_FIELD_AURASTATE => mine || target == Some(e.guid),
-        _ if !mine => false,
-        FIELD_UNIT_HEALTH => true,
-        i if UNIT_FIELD_POWERS.contains(&i) => true,
-        FIELD_UNIT_FLAGS => flipped & (0x01c2_0000 | 0x0008_0000) != 0,
-        FIELD_UNIT_BYTES_1 => flipped & (0x00ff_0000 | 0x0200_0000) != 0,
-        PLAYER_FIELD_BYTES => flipped & 0xff00 != 0,
-        _ => false,
+    /// `0x4e5230`: the slot's stored `(usable, notEnoughMana)`, what `IsUsableAction` answers.
+    fn pair(&self, action: u32) -> (bool, bool) {
+        self.pairs.get(&action).copied().unwrap_or_default()
     }
 }
 
@@ -254,6 +232,22 @@ fn pet_book_state(leg: PetBookLeg) -> ActionState {
     st
 }
 
+/// `0x622270` at mask 1, `IsEquippedAction`'s walk (`0x4e5380`): whether the worn slots of the
+/// player `store` hold a whole item of `entry`. A broken copy is not worn (`0x6224f4`-`0x62250e`).
+/// The feed's snapshot and the lent host's read at the call are this one walk.
+pub(crate) fn wears_entry(store: &ObjectStore, objects: &crate::net::Objects, entry: u32) -> bool {
+    crate::ui_items::find_item(
+        &store.0,
+        objects,
+        entry,
+        crate::ui_items::ItemSearch {
+            equipment_only: true,
+            ..Default::default()
+        },
+    )
+    .is_some()
+}
+
 /// The float `ActionHasRange` compares each range with (`0x8029d4`): 0x34800000, 2^-22.
 const HAS_RANGE_BOUND: f32 = f32::from_bits(0x3480_0000);
 
@@ -340,10 +334,10 @@ pub(crate) struct ActionStates<'w, 's> {
         // lines the walk's cost finds its level through.
         Option<Res<'w, crate::ui_spellbook::SkillLines>>,
     ),
-    self_q: Query<'w, 's, (&'static ObjectStore, &'static Transform), With<SelfPlayer>>,
-    // The guid index and the item store.
+    // The guid index and the item store, and the units' stores as of the drain's place: a field
+    // watcher's refresh reads its own packet's power, aura state and form.
     objects: crate::net::Objects<'w, 's>,
-    units: Query<'w, 's, (&'static ObjectStore, &'static Transform), Without<SelfPlayer>>,
+    views: crate::ui_unit::views::ViewStores<'w, 's>,
     relations: crate::target::RelationWorld<'w, 's>,
     // The item cache and the channel its misses query on.
     items: Res<'w, Items>,
@@ -439,7 +433,6 @@ impl ActionStates<'_, '_> {
         &mut self,
         script: &mut benilla_ui::script::UiScript,
         clock: (Instant, f64),
-        edges: &mut MessageReader<FieldChanged>,
         entered: bool,
         bag_updates: u64,
         arrived: bool,
@@ -467,16 +460,13 @@ impl ActionStates<'_, '_> {
         }
         let control_lost = self.cast_state.2.as_ref().is_some_and(|c| c.0);
         let selection = self.targeting.selection.guid;
-        let self_guid = self.targeting.context().self_guid;
 
-        // The frame's callers of the usable refresh `0x4b31c0` and of `0x4f93d0`; a new VM meets
-        // the state as it stands and hears none.
-        let mut refresh = edges.read().fold(false, |hit, e| {
-            hit | refreshes_usable(e, self_guid, selection)
-        });
-        // The target's select and release (`0x493892`, `0x493a69`), where no script call made
-        // them, and `SetPlayerControl` (`0x4958fc`, `0x495910`), each on a change.
-        refresh |= selection != memory.selection || control_lost != memory.control_lost;
+        // The frame's callers of the usable refresh `0x4b31c0` and of `0x4f93d0` but the field
+        // watchers, which refresh inside their packets; a new VM meets the state as it stands
+        // and hears none. The target's select and release (`0x493892`, `0x493a69`), where no
+        // script call made them, and `SetPlayerControl` (`0x4958fc`, `0x495910`), each on a
+        // change.
+        let mut refresh = selection != memory.selection || control_lost != memory.control_lost;
         (memory.selection, memory.control_lost) = (selection, control_lost);
         // The cooldown list's own (`0x6e2e85`, `0x6e3076`).
         refresh |= cooldowns.usable_refreshes != memory.usable_refreshes;
@@ -559,9 +549,8 @@ impl ActionStates<'_, '_> {
             slots,
             spells,
             cast_state,
-            self_q,
             objects,
-            units,
+            views,
             relations,
             items,
             commands,
@@ -578,17 +567,21 @@ impl ActionStates<'_, '_> {
         let (bound, spell_mods, own_control, skill_lines) = &*cast_state;
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let sub_classes = sub_classes.as_deref().map(|s| &s.0);
-        let me = self_q.iter().next();
+        // The player and the target as the usable walk reads them, as of the drain's place: a
+        // field watcher's refresh walks its own packet's. The rest of a slot's state, which no
+        // refresh stores, is derived off the live player, the frame's.
+        let me_entity = objects.player();
+        let me = me_entity.and_then(|e| views.get(e).ok());
+        let me_live = me_entity.and_then(|e| objects.store_of(e));
         let control_lost = own_control.as_ref().is_some_and(|c| c.0);
         // The bags, walked once per pass for every reagent and totem count below.
-        let stacks = me
-            .map(|(s, _)| stack_counts(&s.0, objects))
-            .unwrap_or_default();
+        let stacks = me.map(|s| stack_counts(&s.0, objects)).unwrap_or_default();
         let selection = &targeting.selection;
         let target = selection
             .guid
             .and_then(|g| objects.entity(g))
-            .and_then(|e| units.get(e).ok());
+            .filter(|&e| Some(e) != me_entity)
+            .and_then(|e| views.get(e).ok());
         let cast_ctx = targeting.context();
         let range_leg = RangeLeg {
             // The context's caster carries the ranged-slot item the scale reads.
@@ -600,9 +593,9 @@ impl ActionStates<'_, '_> {
         // The pet gate `0x4bcf70`, asked once for every slot bound to a pet spell: the bar those
         // slots read the history of, and the pet's object when the gate holds.
         let pet_leg = pet_bar.as_deref().map(|bar| {
-            let pet = objects.store(bar.spells.pet_guid);
-            let held =
-                crate::ui_pet::pet_actions_usable(bar, cast_ctx.self_guid, me.map(|(s, _)| s), pet);
+            let guid = bar.spells.pet_guid;
+            let pet = views.by_guid(guid, objects.store(guid));
+            let held = crate::ui_pet::pet_actions_usable(bar, cast_ctx.self_guid, me, pet);
             (bar, pet.filter(|_| held))
         });
 
@@ -632,7 +625,7 @@ impl ActionStates<'_, '_> {
                         st = pet_book_state(PetBookLeg {
                             d,
                             spell,
-                            player: me.map(|(s, _)| s),
+                            player: me,
                             pet,
                             skills: crate::spell::PlayerSkills {
                                 lines: skill_catalog,
@@ -673,14 +666,14 @@ impl ActionStates<'_, '_> {
                     // granted by another spell lights the check but not the icon.
                     st.spell = Some(button.action);
                     st.form = d.shapeshift_form;
-                    let race_class = me.map_or((0, 0), |(store, _)| store.race_class());
+                    let race_class = me_live.map_or((0, 0), |store| store.race_class());
                     st.profession =
                         profession(button.action, d, skill_lines.as_deref(), race_class);
                     // The usable walk (`0x6e3d60`); only its power gate sets `notEnoughMana`.
-                    if let (Some((store, _)), Some(sp)) = (me, spells.as_deref()) {
+                    if let (Some(store), Some(sp)) = (me, spells.as_deref()) {
                         let ctx = usable::UsableCtx {
                             store,
-                            target: selection.guid.zip(target.map(|(s, _)| s)),
+                            target: selection.guid.zip(target),
                             rel: relations.get(),
                             cooldowns,
                             stacks: &stacks,
@@ -734,25 +727,14 @@ impl ActionStates<'_, '_> {
                     // `IsEquippedAction`, the green border: `0x622270` at mask 1
                     // (`0x4e5377`-`0x4e5380`), the walker over the worn slots, so a broken copy is
                     // not worn.
-                    st.equipped = me.is_some_and(|(s, _)| {
-                        crate::ui_items::find_item(
-                            &s.0,
-                            objects,
-                            button.action,
-                            crate::ui_items::ItemSearch {
-                                equipment_only: true,
-                                ..Default::default()
-                            },
-                        )
-                        .is_some()
-                    });
+                    st.equipped = me_live.is_some_and(|s| wears_entry(s, objects, button.action));
                     // `0x4e5050`'s item arm runs the count, `IsItemOnCooldown` and the on-use spell
                     // through the same `0x6e3d60` walk. With no player the reference answers (0, 0)
                     // (`0x4e5080`), the default state.
-                    if let Some((store, _)) = me {
+                    if let Some(store) = me {
                         let ctx = usable::UsableCtx {
                             store,
-                            target: selection.guid.zip(target.map(|(s, _)| s)),
+                            target: selection.guid.zip(target),
                             rel: relations.get(),
                             cooldowns,
                             stacks: &stacks,
@@ -813,6 +795,11 @@ impl ActionStates<'_, '_> {
             .collect();
         cache.notify(words, &pairs, arrived.then_some(&actions.spells));
         let usable_changed = refresh_cache && cache.refresh(pairs);
+        // `IsUsableAction` reads the cache (`0x4e5230`), not the walk: a pair that moved with no
+        // refresh and no slot write is not yet seen.
+        for (&action, st) in &mut fresh {
+            (st.usable, st.not_enough_mana) = cache.pair(action);
+        }
 
         let keys: Vec<u32> = fresh
             .keys()
@@ -844,10 +831,10 @@ impl ActionStates<'_, '_> {
 
         let list = reactive;
         let activated = match (me, spells.as_deref()) {
-            (Some((store, _)), Some(sp)) if refresh => {
+            (Some(store), Some(sp)) if refresh => {
                 let ctx = usable::UsableCtx {
                     store,
-                    target: selection.guid.zip(target.map(|(s, _)| s)),
+                    target: selection.guid.zip(target),
                     rel: relations.get(),
                     cooldowns,
                     stacks: &stacks,
@@ -877,10 +864,8 @@ pub(super) fn feed_action_state(
         ActionStates<'static, 'static>,
         Option<Res<'static, crate::item_lane::ItemLane>>,
     )>,
-    // The usable refresh's field-watch callers, the enter cascade and the events owed, the
-    // cascade's own apart.
-    (mut edges, mut entries, mut owed, mut enter_usable): (
-        MessageReader<FieldChanged>,
+    // The enter cascade and the events owed, the cascade's own apart.
+    (mut entries, mut owed, mut enter_usable): (
         MessageReader<crate::net::WorldEnterCascadeMessage>,
         ResMut<ActionEvents>,
         ResMut<EnterUsable>,
@@ -903,7 +888,6 @@ pub(super) fn feed_action_state(
         states.feed(
             script,
             clock,
-            &mut edges,
             entered,
             bag_updates,
             arrived,
@@ -914,10 +898,10 @@ pub(super) fn feed_action_state(
 }
 
 /// Signals what [`feed_action_state`] owes, after the unit snapshots: `SelectTarget` stores the
-/// target (`0x4936e2`) before its refresh (`0x493892`), and a watched field is written before its
-/// watch runs, so a handler reads the units the refresh followed. In the reference's order: each
-/// flush's `ACTIONBAR_*` event first; the cooldown pair ahead of the usable refresh a held cooldown
-/// or `0x6e3050` runs (`0x6e2e77`, `0x6e3071`), and both ahead of the bags (`0x6e3089`).
+/// target (`0x4936e2`) before its refresh (`0x493892`), so a handler reads the units the refresh
+/// followed. In the reference's order: each flush's `ACTIONBAR_*` event first; the cooldown pair
+/// ahead of the usable refresh a held cooldown or `0x6e3050` runs (`0x6e2e77`, `0x6e3071`), and
+/// both ahead of the bags (`0x6e3089`).
 /// `ACTIONBAR_UPDATE_USABLE` comes from the cache's refresh alone, `SPELL_UPDATE_USABLE` from
 /// `0x4b31c0` alone (`0x4b3246`), so the cache's other callers signal the first without the second.
 pub(super) fn fire_action_events(

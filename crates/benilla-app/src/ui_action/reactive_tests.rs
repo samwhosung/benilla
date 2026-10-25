@@ -83,8 +83,7 @@ fn app() -> App {
         .init_resource::<crate::ui_script::LeavingWorldArmed>()
         .init_resource::<crate::ui_script::SweptWorlds>()
         .insert_resource(NetCommands(tx))
-        // The usable refresh's callers and the cast targeting the walk reads.
-        .add_message::<crate::net::FieldChanged>()
+        // The enter cascade and the cast targeting the walk reads.
         .add_message::<crate::net::WorldEnterCascadeMessage>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
@@ -141,27 +140,19 @@ fn listener() -> UiScript {
     script
 }
 
-/// Set the player's aura state, its watch's edge (`0x6048b6`, a caller of the usable refresh) on a
-/// change, and run the feed once: what the VM heard.
+/// Set the player's aura state, run the feed once, and on a change its watch's usable refresh
+/// (`0x6048b6`), as the drain after the feed runs it: what the VM heard.
 fn step(app: &mut App, aura_state: u32) -> Vec<String> {
     let mut q = app
         .world_mut()
-        .query_filtered::<(Entity, &mut ObjectStore), With<SelfPlayer>>();
-    let (entity, mut store) = q.single_mut(app.world_mut()).unwrap();
+        .query_filtered::<&mut ObjectStore, With<SelfPlayer>>();
+    let mut store = q.single_mut(app.world_mut()).unwrap();
     let old = store.0.unit_aura_state();
     store.0 = ObjectFields::from_pairs(&[(22, 100), (23, 500), (AURA_STATE, aura_state)]);
-    if old != aura_state {
-        app.world_mut().write_message(crate::net::FieldChanged {
-            at: crate::lanes::stamp(),
-            entity,
-            guid: ME,
-            kind: benilla_protocol::messages::ObjectType::Player,
-            index: AURA_STATE,
-            old,
-            new: aura_state,
-        });
-    }
     app.update();
+    if old != aura_state {
+        super::run_watcher_refresh_once(app.world_mut());
+    }
     let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
     s.resolve();
     s.eval::<Vec<String>>("local h = HEARD; HEARD = {}; return h")

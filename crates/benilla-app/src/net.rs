@@ -649,6 +649,11 @@ impl Objects<'_, '_> {
             .and_then(|&e| self.stores.get(e).ok())
     }
 
+    /// The store of `entity`, as the net stage left it.
+    pub(crate) fn store_of(&self, entity: Entity) -> Option<&ObjectStore> {
+        self.stores.get(entity).ok()
+    }
+
     /// Every streamed object, items included.
     pub fn iter(&self) -> impl Iterator<Item = (u64, Entity, &ObjectFields)> + '_ {
         self.index

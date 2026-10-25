@@ -278,6 +278,13 @@ impl StatsLive<'_, '_> {
             None => read(&benilla_ui::script::NoPlayer),
         }
     }
+
+    /// Whether the active player's worn slots, as of here, hold a whole item of `entry`; `false`
+    /// while none is held.
+    fn wears(&self, entry: u32) -> bool {
+        self.player()
+            .is_some_and(|store| crate::ui_action::wears_entry(store, &self.objects, entry))
+    }
 }
 
 /// The engine half of every script call: one applier per owner of the state a call touches.
@@ -362,6 +369,21 @@ impl ScriptCallHost<'_, '_> {
             self.commit_views(script);
         });
         script.hosted(self, |_| ());
+    }
+
+    /// A field watcher's usable refresh (`0x4b31c0`) outside any call, inside its packet: the bar's
+    /// states and cache derived off the stores as of the drain's place and pushed, then its signals
+    /// with the host lent, so their listeners' calls apply inside the verb. A harness without the
+    /// action feed's inputs refreshes nothing.
+    pub(crate) fn engine_usable_refresh(&mut self, script: &mut UiScript) {
+        let signals = self
+            .appliers
+            .action_states()
+            .as_mut()
+            .map(|states| states.usable_refresh(script));
+        if let Some(signals) = signals {
+            script.hosted(self, |script| signals.fire(script));
+        }
     }
 
     /// Push the views a call left for the script's next line, and for the listeners at a signal
@@ -720,6 +742,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
     fn read_self(&mut self, read: &mut dyn FnMut(&dyn benilla_ui::script::SelfRead)) -> bool {
         self.appliers.stats_live().read_self(read);
         true
+    }
+
+    fn wears_item(&mut self, entry: u32) -> Option<bool> {
+        Some(self.appliers.stats_live().wears(entry))
     }
 
     fn read_unit_auras(
@@ -1185,6 +1211,16 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
             }
         }
         pay(self.set.p0(), select.owed);
+    }
+
+    /// A field watcher's usable refresh in place with the host
+    /// ([`ScriptCallHost::engine_usable_refresh`]); with no VM or no host, nobody listens.
+    pub(crate) fn engine_usable_refresh(&mut self) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_usable_refresh(script);
+            }
+        }
     }
 
     /// An engine writer's StartAttack at `guid`, its select signalled in place with the host

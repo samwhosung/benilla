@@ -110,6 +110,8 @@ pub(crate) struct Scene<'w, 's> {
     death_net: ResMut<'w, crate::death::DeathNet>,
     group: ResMut<'w, crate::ui_party::GroupState>,
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
+    /// The selection, whose aura state the usable refresh watches (`0x6048a6`).
+    selection: Option<Res<'w, crate::target::Selection>>,
     guilds: Option<ResMut<'w, crate::ui_guild::GuildState>>,
     // The own offer the coinage watcher trims (`0x5ddf30`).
     trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,

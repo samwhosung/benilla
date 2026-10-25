@@ -44,7 +44,7 @@ mod reactive;
 mod reactive_tests;
 pub(crate) mod recount;
 mod state;
-pub(crate) use state::{ActionStates, EnterUsable};
+pub(crate) use state::{wears_entry, ActionStates, EnterUsable};
 pub(crate) mod toggle;
 mod unlearn;
 mod weapon_icon;
@@ -279,6 +279,21 @@ pub(crate) fn run_feed_action_state_once(world: &mut World) {
     world
         .run_system_once(state::feed_action_state)
         .expect("the action-state feed runs as a one-shot system");
+}
+
+/// A field watcher's usable refresh (`0x4b31c0`), as its notice runs it inside the drain
+/// ([`crate::field_watch::FieldNotice::UsableRefresh`]), for a test with no notice lane.
+#[cfg(test)]
+pub(crate) fn run_watcher_refresh_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(
+            |mut states: state::ActionStates,
+             mut script: NonSendMut<benilla_ui::script::UiScript>| {
+                states.usable_refresh(&mut script).fire(&mut script);
+            },
+        )
+        .expect("the watcher's refresh runs as a one-shot system");
 }
 
 /// One pass of the action-state feed and the events it owes, for a test that hears them.
