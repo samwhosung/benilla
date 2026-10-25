@@ -1102,7 +1102,11 @@ pub(crate) mod schedule_tests {
     /// when the frame's input records moved ahead of the net drain: what their handlers queue
     /// applies before the drain, as the reference's input acts inside its handlers; to 57 for the
     /// input's CVar sync, whose observers must run before the look session reads their knobs; and
-    /// to 58 on the rebase onto the movie frame (#2398), whose systems joined the schedule.
+    /// to 58 on the movie frame (#2398): `movie::upload_movie_pictures` runs after
+    /// `video::apply_present_mode` and `video::apply_window_mode` and before `paint_script`, which
+    /// puts the barrier between `video::drain_restart_gx` and those two applies on the paint's path
+    /// (its commands fire the `gx*` CVar events whose observer writes the `VideoConfig` they read).
+    /// Without those two edges the count is 57. `WOW_SYNC_DUMP=1` lists each barrier's neighbours.
     const UPDATE_SYNC_POINT_CEILING: usize = 58;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
@@ -1125,6 +1129,36 @@ pub(crate) mod schedule_tests {
             "Update: {n} sync points (ceiling {UPDATE_SYNC_POINT_CEILING}, slack \
              {UPDATE_SYNC_POINT_SLACK})"
         );
+        // `WOW_SYNC_DUMP=1`: each barrier with the systems the build placed it after and before,
+        // sorted, so two dumps diff by text to name the pair a change added.
+        if std::env::var_os("WOW_SYNC_DUMP").is_some() {
+            let mut into: HashMap<SystemKey, Vec<&str>> = HashMap::new();
+            let mut out: HashMap<SystemKey, Vec<&str>> = HashMap::new();
+            for (a, b) in &update.built {
+                into.entry(*b).or_default().push(update.name(*a));
+                out.entry(*a).or_default().push(update.name(*b));
+            }
+            let mut rows: Vec<String> = update
+                .systems
+                .iter()
+                .filter(|(_, s)| is_sync_point(&s.name))
+                .map(|(k, _)| {
+                    let mut before = into.remove(k).unwrap_or_default();
+                    let mut after = out.remove(k).unwrap_or_default();
+                    before.sort();
+                    after.sort();
+                    format!(
+                        "  after {}\n      before {}",
+                        before.join(", "),
+                        after.join(", ")
+                    )
+                })
+                .collect();
+            rows.sort();
+            for r in rows {
+                eprintln!("{r}");
+            }
+        }
         assert!(
             n <= UPDATE_SYNC_POINT_CEILING,
             "{n} sync points in Update; the ceiling is {UPDATE_SYNC_POINT_CEILING}. A system with \
