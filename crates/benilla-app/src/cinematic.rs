@@ -9,7 +9,7 @@
 //! - The path plays as an M2 animation (`0x7121a0`, sequence 0, rate 1.0), and a shot ends at its
 //!   sequence band's end ([`CinematicPath::duration_ms`]); shipped fly-bys clamp and play once.
 //! - Every shot, the first included, is announced with `CMSG_NEXT_CINEMATIC_CAMERA` from the shot
-//!   arm (`0x48edf0`, sent at `0x48ef11`). A camera id of 0 ends the cinematic (`0x48efe0`).
+//!   arm (`0x48edf0`, sent at `0x48ef11`, after a far shot's load). A camera id of 0 ends the cinematic (`0x48efe0`).
 //! - ESC is no engine binding: `StopCinematic` has no native caller, and the only skip is
 //!   `CinematicFrame.xml`'s `OnKeyDown`, whose Lua queues
 //!   [`SessionRequest::StopCinematic`](benilla_ui::script::SessionRequest).
@@ -445,19 +445,27 @@ fn start_pending(
         index: 0,
         elapsed: Duration::ZERO,
     });
-    announce_shot(net.as_deref());
     let from = camera.single().ok().map(|t| t.translation);
-    open_shot(&mut cine, &mut fade, from, time.elapsed_secs());
+    open_shot(
+        &mut cine,
+        &mut fade,
+        net.as_deref(),
+        from,
+        time.elapsed_secs(),
+    );
 }
 
 /// The tail of the shot arm (`0x48edf0`), for the first shot and every advance alike: the shot
 /// comes in from the black it was armed under (`0x48ef43`), unless its first eye is more than 30
 /// yards from the camera (`0x48eec1`), where the arm first loads that spot at the black
 /// (`0x48eed3`) and restarts the shot's clock. So a far shot keeps the black with its clock at
-/// zero ([`ShotHold`]); `from` is the camera as it stands, none with no camera to move.
+/// zero ([`ShotHold`]); `from` is the camera as it stands, none with no camera to move. The shot's
+/// `CMSG_NEXT_CINEMATIC_CAMERA` (`0x48ef11`) follows that load, so a far shot sends it when the
+/// hold ends.
 fn open_shot(
     cine: &mut Cinematic,
     fade: &mut crate::screen_fade::ScreenFade,
+    net: Option<&NetCommands>,
     from: Option<Vec3>,
     now: f32,
 ) {
@@ -473,6 +481,7 @@ fn open_shot(
         });
         info!("cinematic: far shot — the black holds while its world loads");
     } else {
+        announce_shot(net);
         fade.fade_in(crate::screen_fade::CINEMATIC);
     }
 }
@@ -499,7 +508,8 @@ fn shot_hold_over(
     (crate::player::residency_reached(p, at) && p.presentable()).then_some(true)
 }
 
-/// `CMSG_NEXT_CINEMATIC_CAMERA`, sent as each shot is armed, the first included (`0x48ef11`).
+/// `CMSG_NEXT_CINEMATIC_CAMERA`, sent as each shot is shown, the first included (`0x48ef11`): at
+/// its arm, or for a far shot once its world is in ([`open_shot`]).
 /// vmangos ignores it (`MiscHandler.cpp:919`) and flies its camera copy on its own clock.
 fn announce_shot(net: Option<&NetCommands>) {
     if let Some(net) = net {
@@ -573,6 +583,7 @@ fn drive(
             // Walk past every shot this frame's delta ran through, each owed its
             // `CMSG_NEXT_CINEMATIC_CAMERA`, inside one black.
             let mut ended = skip;
+            let mut passed = 0usize;
             while !ended {
                 let play = cine.playing.as_mut().expect("checked above");
                 if (play.elapsed.as_millis() as u32) < play.shot().duration_ms {
@@ -585,6 +596,15 @@ fn drive(
                 }
                 play.index += 1;
                 play.elapsed = over;
+                passed += 1;
+            }
+            // The shot left up announces itself from [`open_shot`], after its load; the ones
+            // passed through are owed theirs now.
+            for _ in 0..(if ended {
+                passed
+            } else {
+                passed.saturating_sub(1)
+            }) {
                 announce_shot(net.as_deref());
             }
             if ended {
@@ -608,7 +628,13 @@ fn drive(
             }
             // `0x48ef43`: the next shot comes in from the black it was armed under, after its
             // world if it is far.
-            open_shot(&mut cine, &mut fade, camera_at, time.elapsed_secs());
+            open_shot(
+                &mut cine,
+                &mut fade,
+                net.as_deref(),
+                camera_at,
+                time.elapsed_secs(),
+            );
         }
     }
 
@@ -623,6 +649,8 @@ fn drive(
                 );
             }
             cine.hold = None;
+            // `0x48ef11`: the shot is announced after its load, then it fades in.
+            announce_shot(net.as_deref());
             fade.fade_in(crate::screen_fade::CINEMATIC);
         }
     }
@@ -1042,9 +1070,14 @@ mod settling_under_black {
 #[cfg(test)]
 mod far_shots {
     use super::*;
+    use crate::net::ClientCommand;
     use benilla_formats::{CinematicCameraRow, CinematicPath};
     use benilla_world::terrain_stream::WorldLoadProgress;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// The receiving end of the cinematic's outgoing packets.
+    #[derive(Resource)]
+    struct Wire(crossbeam_channel::Receiver<ClientCommand>);
 
     /// Where the camera stands before the shot, wow coordinates.
     const HERE: [f32; 3] = [-8_949.0, -132.0, 83.0];
@@ -1093,8 +1126,11 @@ mod far_shots {
 
     /// The driver over a camera at `HERE`, at full black, the clock stepping 100 ms a frame.
     fn app_with(cine: Cinematic, world: WorldLoadProgress) -> App {
+        let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(cine)
+            .insert_resource(NetCommands(tx))
+            .insert_resource(Wire(rx))
             .insert_resource(black())
             .insert_resource(world)
             .init_resource::<Time>();
@@ -1124,6 +1160,16 @@ mod far_shots {
         app.world().resource::<Cinematic>().holds_black_for_shot()
     }
 
+    /// How many `CMSG_NEXT_CINEMATIC_CAMERA` went out since the last look.
+    fn announced(app: &App) -> usize {
+        app.world()
+            .resource::<Wire>()
+            .0
+            .try_iter()
+            .filter(|c| matches!(c, ClientCommand::NextCinematicCamera))
+            .count()
+    }
+
     fn set_world(app: &mut App, world: WorldLoadProgress) {
         app.insert_resource(world);
     }
@@ -1135,9 +1181,10 @@ mod far_shots {
                 |mut cine: ResMut<Cinematic>,
                  mut fade: ResMut<crate::screen_fade::ScreenFade>,
                  time: Res<Time>,
+                 net: Res<NetCommands>,
                  camera: Query<&Transform, With<WorldCamera>>| {
                     let from = camera.single().ok().map(|t| t.translation);
-                    open_shot(&mut cine, &mut fade, from, time.elapsed_secs());
+                    open_shot(&mut cine, &mut fade, Some(&net), from, time.elapsed_secs());
                 },
             )
             .expect("runs");
@@ -1324,6 +1371,102 @@ mod far_shots {
             !holding(&app) && !black_now(&app),
             "a near shot fades in at once"
         );
+    }
+
+    /// The reference sends the shot's `CMSG_NEXT_CINEMATIC_CAMERA` after the synchronous load
+    /// (`0x48ef11` follows `0x48eed3`), so a far start sends it with the world, a near one at once.
+    #[test]
+    fn a_far_start_announces_its_shot_when_the_world_is_in() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            world_at(HERE, true),
+        );
+        open_first_shot(&mut app);
+        for _ in 0..5 {
+            frame(&mut app);
+        }
+        assert_eq!(announced(&app), 0, "nothing goes out while it loads");
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert!(!holding(&app));
+        assert_eq!(announced(&app), 1, "it goes out with the fade-in");
+        frame(&mut app);
+        assert_eq!(announced(&app), 0, "and only once");
+
+        let mut near = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(from_here(10.0), 60_000)]),
+            world_at(HERE, true),
+        );
+        open_first_shot(&mut near);
+        assert_eq!(announced(&near), 1, "a near shot announces at the arm");
+    }
+
+    /// The ceiling's release shows the shot, so it announces it too.
+    #[test]
+    fn a_stalled_far_start_announces_its_shot_at_the_ceiling() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(FAR, 60_000)]),
+            world_at(FAR, false),
+        );
+        open_first_shot(&mut app);
+        for _ in 0..((SETTLE_TIMEOUT * 10.0) as usize + 2) {
+            frame(&mut app);
+        }
+        assert!(!holding(&app));
+        assert_eq!(announced(&app), 1);
+    }
+
+    /// An advance is the same arm: one announce for the shot, with its world if it is far.
+    #[test]
+    fn a_far_advance_announces_its_shot_when_the_world_is_in() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![shot(HERE, 1_000), shot(FAR, 60_000)]),
+            world_at(HERE, true),
+        );
+        app.world_mut()
+            .resource_mut::<Cinematic>()
+            .playing
+            .as_mut()
+            .expect("playing")
+            .elapsed = Duration::from_millis(1_000);
+        frame(&mut app);
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        assert!(holding(&app));
+        assert_eq!(announced(&app), 0, "not while it loads");
+        set_world(&mut app, world_at(FAR, true));
+        frame(&mut app);
+        assert_eq!(announced(&app), 1, "once, with the world");
+    }
+
+    /// A hitch that runs through two shots owes each its announce: the one passed through at the
+    /// black, and the one shown.
+    #[test]
+    fn a_hitch_through_two_shots_announces_both() {
+        let mut app = app_with(
+            Cinematic::playing_shots_for_test(vec![
+                shot(HERE, 1_000),
+                shot(HERE, 1_000),
+                shot(from_here(5.0), 60_000),
+            ]),
+            world_at(HERE, true),
+        );
+        app.world_mut()
+            .resource_mut::<Cinematic>()
+            .playing
+            .as_mut()
+            .expect("playing")
+            .elapsed = Duration::from_millis(2_000);
+        frame(&mut app);
+        assert_eq!(
+            app.world()
+                .resource::<Cinematic>()
+                .playing_shot()
+                .map(|s| s.1),
+            Some(2)
+        );
+        assert_eq!(announced(&app), 2);
     }
 
     /// ESC under a far shot's black ends the cinematic, and the hold goes with it.
