@@ -171,8 +171,8 @@ fn slot_view(
 }
 
 /// The as-group refusal (`0x4a9f60`): the map's `MaxPlayers` must cover the party count (the
-/// members besides us, 0..4) and the raid roster count. The raid count here is the wire list in a
-/// raid and 0 in a party; which members the reference's raid roster counts is untraced.
+/// members besides us, 0..4, `0x4e86d0`) and the raid roster's count, us included (`[0xb713e0]`,
+/// `0x4a9fa0`), 0 while no roster is held.
 fn group_fits(catalog: Option<&MapCatalog>, map_id: u32, group: Option<&GroupState>) -> bool {
     let max = catalog
         .and_then(|c| c.battleground(map_id))
@@ -181,11 +181,7 @@ fn group_fits(catalog: Option<&MapCatalog>, map_id: u32, group: Option<&GroupSta
         return true;
     };
     let party = group.party_slots().count();
-    let raid = if group.group_type == 1 {
-        group.members.len()
-    } else {
-        0
-    };
+    let raid = group.raid_rows().count();
     max >= party && max >= raid
 }
 
@@ -590,10 +586,17 @@ mod tests {
             "a full party fits WSG's 10"
         );
         group.group_type = 1;
-        group.members = (1..=12).map(member).collect();
+        group.members = (1..=9).map(member).collect();
+        group.rebuild_raid(0x5E1F);
+        assert!(
+            group_fits(Some(&catalog), 489, Some(&group)),
+            "a raid of nine and us fits WSG's 10"
+        );
+        group.members = (1..=10).map(member).collect();
+        group.rebuild_raid(0x5E1F);
         assert!(
             !group_fits(Some(&catalog), 489, Some(&group)),
-            "a 12-member raid outruns WSG's 10"
+            "the roster counts us: ten and us outrun WSG's 10"
         );
         assert!(
             group_fits(Some(&catalog), 30, Some(&group)),

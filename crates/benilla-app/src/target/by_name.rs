@@ -300,14 +300,17 @@ impl<'a> Roster<'a> {
             guid: m.guid,
             held: index.0.contains_key(&m.guid),
         };
-        let in_raid = group.group_type == crate::ui_party::GROUPTYPE_RAID;
         Roster {
             party: group.party_slots().map(entry).collect(),
+            // The stored rows below the count (`0x493b9d`-`0x493bb5`), ours unnamed and held.
             raid: group
-                .members
+                .raid
                 .iter()
-                .filter(|_| in_raid)
-                .map(entry)
+                .map(|r| RosterEntry {
+                    name: &r.name,
+                    guid: r.guid,
+                    held: index.0.contains_key(&r.guid),
+                })
                 .collect(),
         }
     }

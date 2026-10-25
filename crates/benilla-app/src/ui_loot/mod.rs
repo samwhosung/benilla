@@ -171,14 +171,12 @@ impl Window {
         }
         let mut slots: Vec<Option<u64>> = vec![None; MASTER_LOOT_CANDIDATE_SLOTS];
         for &guid in &self.master_candidates {
-            // A guid missing from the roster is ours: `SMSG_GROUP_LIST` lists only the others,
-            // and `Group::MasterLoot` includes us.
-            let flags = group
-                .members
-                .iter()
-                .find(|m| m.guid == guid)
-                .map_or(group.own_flags, |m| m.flags);
-            let base = usize::from(flags & GROUP_MEMBER_SUBGROUP) * MEMBERS_PER_RAID_GROUP;
+            // The stored row's subgroup (`[row+8]`, `0x61c606`); a guid on no row below the count,
+            // ours included, is placed nowhere (`0x61c5f9`).
+            let Some(row) = group.raid.iter().find(|r| r.guid == guid) else {
+                continue;
+            };
+            let base = usize::from(row.subgroup & GROUP_MEMBER_SUBGROUP) * MEMBERS_PER_RAID_GROUP;
             let end = (base + MEMBERS_PER_RAID_GROUP).min(MASTER_LOOT_CANDIDATE_SLOTS);
             if let Some(free) = (base..end).find(|&i| slots[i].is_none()) {
                 slots[free] = Some(guid);
@@ -2531,7 +2529,6 @@ mod tests {
         let mut raid = GroupState {
             group_type: crate::ui_party::GROUPTYPE_RAID,
             own_flags: 0, // we are in subgroup 0
-            own_raid_row: Some(0xA),
             ..GroupState::default()
         };
         raid.members = vec![
@@ -2539,6 +2536,7 @@ mod tests {
             member(0xC, "Vol", 2),
             member(0xD, "Sylvanas", 2),
         ];
+        raid.rebuild_raid(0xA);
 
         let mut loot = LootState::default();
         // The wire order interleaves the subgroups; placement ignores it.

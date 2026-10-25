@@ -738,8 +738,8 @@ mod tests {
         {
             let mut group = world.resource_mut::<GroupState>();
             group.group_type = crate::ui_party::GROUPTYPE_RAID;
-            group.own_raid_row = Some(ME);
             group.members = vec![entry(MEMBER, 0), entry(RAIDER, 1), entry(STRANGER, 0)];
+            group.rebuild_raid(ME);
         }
         assert_eq!(
             publish(&mut world),

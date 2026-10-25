@@ -673,11 +673,11 @@ fn feed_world_map(
         // The `party1..4` blips: a streamed member's transform, else the `i16` position from
         // `SMSG_PARTY_MEMBER_STATS`. That packet carries a zone, not a map, so the map is the
         // continent owning that zone, else ours.
-        let member_uv = |m: &benilla_protocol::messages::GroupMemberEntry| {
-            let (px, py) = crate::minimap::party_member_pos(m, &group, &guids, &unit_pos)?;
+        let member_uv = |guid: u64| {
+            let (px, py) = crate::minimap::party_member_pos(guid, &group, &guids, &unit_pos)?;
             let member_map = group
                 .stats
-                .get(&m.guid)
+                .get(&guid)
                 .and_then(|st| st.zone)
                 .and_then(|zone| {
                     data.continents
@@ -688,16 +688,15 @@ fn feed_world_map(
                 .unwrap_or(map.0);
             project(member_map, px, py).filter(|uv| *uv != (0.0, 0.0))
         };
-        let party_uv: Vec<Option<(f32, f32)>> = group.party_slots().map(member_uv).collect();
+        let party_uv: Vec<Option<(f32, f32)>> =
+            group.party_slots().map(|m| member_uv(m.guid)).collect();
 
-        // The `raid1..40` blips in the raid roster's order, so `raidN` matches: the members, then
+        // The `raid1..40` blips in the stored rows' order, so `raidN` matches: the members, then
         // our own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
         let raid_uv: Vec<Option<(f32, f32)>> = group
-            .raid_rows()
-            .map(|guid| match group.members.iter().find(|m| m.guid == guid) {
-                Some(m) => member_uv(m),
-                None => uv,
-            })
+            .raid
+            .iter()
+            .map(|row| if row.own { uv } else { member_uv(row.guid) })
             .collect();
 
         script.set_world_map_feed(

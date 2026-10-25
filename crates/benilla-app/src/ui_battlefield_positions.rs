@@ -179,7 +179,9 @@ pub(crate) fn feed_battlefield_positions(
         };
         let mut players = Vec::with_capacity(packet.players.len());
         for p in &packet.players {
-            if me.0 == Some(p.guid) || group.members.iter().any(|m| m.guid == p.guid) {
+            // Ourselves or a party slot (`0x4e7f70` at `0x4ac00b`), or a raid row (`0x4baee0` at
+            // `0x4ac017`).
+            if me.0 == Some(p.guid) || group.party_or_raid_member(p.guid) {
                 continue;
             }
             let (x, y) = live_or_packet(p, &guids, &unit_pos);

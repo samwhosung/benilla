@@ -469,7 +469,7 @@ pub(crate) fn feed_party(
         // handlers read. Nothing gates one on a difference: a list that changes nothing still
         // signals, and a stats packet signals none. `RAID_ROSTER_UPDATE`'s fourth site, the world
         // entry's fill of a zero row (`0x4ba1a2`), is not built: our row holds our guid
-        // ([`GroupState::own_raid_row`]). A world entry's fresh VM heard none of them and is told
+        // ([`GroupState::raid`]). A world entry's fresh VM heard none of them and is told
         // [`catch_up`] here instead, the lane passing over what was logged; a reload's seeded VM
         // hears from the lane only what came after its seed.
         if vm_reset {
@@ -570,12 +570,18 @@ impl<'a> GroupSources<'a> {
         s
     }
 
-    /// `raidN`'s snapshot for the row's guid. Our own row comes off our descriptor: the wire list
-    /// never contains us.
+    /// `raidN`'s snapshot for the row's guid, off the stored row. Our own row comes off our
+    /// descriptor: the wire list never contains us.
     pub(crate) fn raid_unit(&self, guid: u64, own_group: &Option<String>) -> Option<UnitState> {
-        if Some(guid) != self.group.own_raid_row {
-            let m = self.group.members.iter().find(|m| m.guid == guid)?;
-            return Some(self.party_unit(m, own_group));
+        let row = self.group.raid.iter().find(|r| r.guid == guid)?;
+        if !row.own {
+            let m = GroupMemberEntry {
+                name: row.name.clone(),
+                guid,
+                status: 0,
+                flags: row.subgroup,
+            };
+            return Some(self.party_unit(&m, own_group));
         }
         let name = self
             .names
@@ -808,7 +814,7 @@ fn push_group(
 }
 
 /// What our own raid row reads off our object: `SMSG_GROUP_LIST` never lists the recipient, and
-/// the row itself is [`GroupState::own_raid_row`].
+/// the row itself is the one [`super::RaidRow::own`] marks.
 pub(super) struct RaidSelf {
     pub(super) guid: u64,
     pub(super) level: u32,
@@ -844,13 +850,7 @@ pub(super) fn raid_guid_at(group: &GroupState, index: u32) -> Option<u64> {
 /// (`0x5e6e82`). No row, no subgroup.
 pub(super) fn raid_row_subgroup(group: &GroupState, index: u32) -> Option<u8> {
     let row = usize::try_from(index).ok()?.checked_sub(1)?;
-    if !group.raid_held() {
-        return None;
-    }
-    match group.members.get(row) {
-        Some(m) => Some(m.flags & 0x7f),
-        None => (row == group.members.len()).then_some(group.own_flags & 0x7f),
-    }
+    group.raid.get(row).map(|r| r.subgroup)
 }
 
 /// The name the subgroup verbs send: the cache's record, looked up with no callback
@@ -889,22 +889,9 @@ fn raid_roster<'a>(
         unit_names,
         zone_name,
     };
-    (0..group.members.len() + 1)
+    (0..group.raid.len())
         .map_while(|index| raid_row_at(&reads, index))
         .collect()
-}
-
-/// A raid row's rank: 2 for the leader, 1 for an assistant, 0 for a member, as the reference's
-/// roster rebuild writes it (`0x4ba90c`, `0x4ba920`, `0x4ba929`) against the leader of that
-/// rebuild; the binding returns it unchanged.
-pub(super) fn rank_of(cells: super::Cells<'_>, guid: u64, flags: u8) -> u32 {
-    if guid == cells.raid_leader {
-        2
-    } else if flags & GROUP_MEMBER_ASSISTANT != 0 {
-        1
-    } else {
-        0
-    }
 }
 
 /// What a raid row reads: the roster's cells and records, our own object, the object manager, the
@@ -919,8 +906,8 @@ pub(super) struct RowReads<'r, 'a> {
     pub(super) zone_name: &'r dyn Fn(u32) -> Option<String>,
 }
 
-/// The raid row at 0-based `index` ([`raid_roster`]'s one row): the wire's members in list order,
-/// then us; `None` past the last, and while no roster is held.
+/// The stored raid row at 0-based `index` ([`raid_roster`]'s one row): the wire's members in list
+/// order, then us; `None` past the last, and while no roster is held.
 pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> {
     let RowReads {
         cells,
@@ -931,14 +918,9 @@ pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> 
         unit_names,
         zone_name,
     } = r;
-    if !cells.raid_held() {
-        return None;
-    }
-    let rank_of = |guid: u64, flags: u8| rank_of(*cells, guid, flags);
+    let stored = cells.raid.get(index)?;
     // The class byte comes from the name cache for a member, from our descriptor for us.
-    let row = |guid: u64,
-               name: String,
-               flags: u8,
+    let row = |name: String,
                level: u32,
                zone: Option<String>,
                online: bool,
@@ -947,10 +929,10 @@ pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> 
         let class = class_byte.and_then(|c| unit_names.class(c));
         RaidMemberInfo {
             name,
-            guid,
-            rank: rank_of(guid, flags),
+            guid: stored.guid,
+            rank: stored.rank,
             // Stored 0-based; the binding adds one (`0x4bb61a`).
-            subgroup: u32::from(flags & GROUP_MEMBER_SUBGROUP),
+            subgroup: u32::from(stored.subgroup & GROUP_MEMBER_SUBGROUP),
             level,
             class: class.map(|(n, _)| n.to_string()),
             class_file: class.map(|(_, f)| f.to_string()),
@@ -960,9 +942,10 @@ pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> 
         }
     };
     let our_zone = || me.and_then(|me| me.area).and_then(zone_name);
-    if let Some(m) = cells.members.get(index) {
-        let class = names.player_traits(m.guid).map(|(_, class, _)| class);
-        let (level, zone, online, ninth) = match held(m.guid) {
+    let guid = stored.guid;
+    if !stored.own {
+        let class = names.player_traits(guid).map(|(_, class, _)| class);
+        let (level, zone, online, ninth) = match held(guid) {
             Some(store) => (
                 store.0.unit_level().unwrap_or(0),
                 our_zone(),
@@ -970,7 +953,7 @@ pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> 
                 store.0.unit_health().unwrap_or(0) as i32 <= 0,
             ),
             None => {
-                let record = records.get(&m.guid);
+                let record = records.get(&guid);
                 let online = record.is_some_and(PartyMemberStatsInfo::is_online);
                 let status = record.and_then(|r| r.status).unwrap_or(0);
                 (
@@ -989,29 +972,15 @@ pub(super) fn raid_row_at(r: &RowReads, index: usize) -> Option<RaidMemberInfo> 
                 )
             }
         };
-        return Some(row(
-            m.guid,
-            m.name.clone(),
-            m.flags,
-            level,
-            zone,
-            online,
-            ninth,
-            class,
-        ));
+        return Some(row(stored.name.clone(), level, zone, online, ninth, class));
     }
-    let guid = cells
-        .own_raid_row
-        .filter(|_| index == cells.members.len())?;
     let me = me.filter(|me| me.guid == guid);
     Some(row(
-        guid,
         // An unresolved name gets the binding's miss tuple, not a half-filled row (`0x4bb5f8`).
         names
             .resolve_unit(guid, None, Ask::Read)
             .unwrap_or_default()
             .to_string(),
-        cells.own_flags,
         me.map_or(0, |me| me.level),
         me.and(our_zone()),
         true,
@@ -1249,8 +1218,15 @@ fn test_apply_local(group: &mut GroupState, req: &PartyRequest, self_guid: Optio
             | PartyRequest::AssistantLeader { .. }
     ) {
         let raid = group.group_type == GROUPTYPE_RAID;
-        group.own_raid_row = (raid && !group.members.is_empty()).then(|| self_guid.unwrap_or(0));
-        group.raid_leader = if raid { group.leader } else { 0 };
+        group.raid = if raid {
+            super::RaidRow::rebuilt(
+                &group.members,
+                (self_guid.unwrap_or(0), group.own_flags),
+                group.leader,
+            )
+        } else {
+            Vec::new()
+        };
         group.store_leader_index();
         group.listed = true;
         group.signal(GroupSignal::MembersChanged);
@@ -2617,9 +2593,7 @@ mod tests {
         let mut group = GroupState {
             group_type: GROUPTYPE_RAID,
             own_flags: 0,
-            own_raid_row: Some(0x5E1F),
             leader: 0x5E1F,
-            raid_leader: 0x5E1F,
             members: vec![
                 // Alice: subgroup 2 (stored), an assistant; the byte says offline.
                 member(
@@ -2635,6 +2609,7 @@ mod tests {
             ],
             ..Default::default()
         };
+        group.rebuild_raid(0x5E1F);
         let record = |status: u8, level: u16| PartyMemberStatsInfo {
             status: Some(status),
             level: Some(level),
@@ -2733,7 +2708,7 @@ mod tests {
 
         // No roster held, as after a party list (`0x4ba550`): empty, so `GetNumRaidMembers()`
         // answers 0, while `IsRaidLeader()` still answers 1.
-        group.own_raid_row = None;
+        group.raid.clear();
         assert!(raid_roster(&group, Some(&me), &held, &names, korean.names(), &zone).is_empty());
     }
 
@@ -2741,7 +2716,6 @@ mod tests {
     fn a_raid_row_index_names_the_same_player_the_roster_array_does() {
         let mut group = GroupState {
             group_type: GROUPTYPE_RAID,
-            own_raid_row: Some(0x5E1F),
             ..Default::default()
         };
         let wire = |name: &str, guid: u64| GroupMemberEntry {
@@ -2751,6 +2725,7 @@ mod tests {
             flags: 0,
         };
         group.members = vec![wire("Alice", 0xA11CE), wire("Bob", 0xB0B)];
+        group.rebuild_raid(0x5E1F);
 
         assert_eq!(raid_row_guids(&group), vec![0xA11CE, 0xB0B, 0x5E1F]);
         assert_eq!(
@@ -2770,11 +2745,12 @@ mod tests {
         // Each row's subgroup is its flags under 0x7f, ours our own, the row after the members.
         group.members[1].flags = 0x82;
         group.own_flags = 3;
+        group.rebuild_raid(0x5E1F);
         let subgroups: Vec<Option<u8>> = (0..=4).map(|i| raid_row_subgroup(&group, i)).collect();
         assert_eq!(subgroups, [None, Some(0), Some(2), Some(3), None]);
 
         // With no roster held all are empty, so a raid verb in a party sends nothing.
-        group.own_raid_row = None;
+        group.raid.clear();
         assert!(raid_row_guids(&group).is_empty());
         assert_eq!(raid_guid_at(&group, 1), None);
         assert_eq!(raid_row_subgroup(&group, 1), None);

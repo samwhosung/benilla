@@ -14,7 +14,7 @@ use benilla_ui::script::{
     RaidMemberInfo, RaidRowQuery, RowQuery, UnitBase,
 };
 
-use super::feed::{loot_read, raid_row_at, rank_of, RaidSelf, RowReads};
+use super::feed::{loot_read, raid_row_at, RaidSelf, RowReads};
 use super::GroupState;
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
@@ -107,16 +107,9 @@ impl RosterLive<'_, '_> {
         let group = self.group.as_deref()?;
         let cells = self.stores.roster(group);
         let own = self.own().map_or(0, |(guid, _)| guid);
+        // The stored row's rank (`[row+0xc]`).
         let rank = (guid != 0)
-            .then(|| {
-                let member = cells.members.iter().find(|m| m.guid == guid);
-                match (member, cells.own_raid_row) {
-                    _ if !cells.raid_held() => None,
-                    (Some(m), _) => Some(rank_of(cells, guid, m.flags)),
-                    (None, Some(row)) if row == guid => Some(rank_of(cells, guid, cells.own_flags)),
-                    _ => None,
-                }
-            })
+            .then(|| cells.raid.iter().find(|r| r.guid == guid).map(|r| r.rank))
             .flatten();
         Some(Membership {
             party: guid != 0 && (guid == own || cells.party_slots().any(|m| m.guid == guid)),

@@ -595,7 +595,8 @@ pub(crate) fn meeting_stone_join_refusal(
     if level < min_level || level > max_level {
         return StoneJoin::Refuse("ERR_MEETING_STONE_INVALID_LEVEL");
     }
-    if in_group && group.is_some_and(|g| g.group_type == crate::ui_party::GROUPTYPE_RAID) {
+    // The raid roster's count, whatever the party test found (`0x5f6aca`).
+    if group.is_some_and(GroupState::raid_held) {
         return StoneJoin::Refuse("ERR_MEETING_STONE_NO_RAID_GROUP");
     }
     StoneJoin::Send
@@ -1435,19 +1436,25 @@ mod tests {
             max_level: 60,
             area: 1519,
         });
-        let party = |leader: u64, others: usize, group_type: u8| GroupState {
-            in_group: true,
-            group_type,
-            leader,
-            members: (0..others)
-                .map(|i| benilla_protocol::messages::GroupMemberEntry {
-                    name: format!("Mate{i}"),
-                    guid: 0xb000 + i as u64,
-                    status: 1,
-                    flags: 0,
-                })
-                .collect(),
-            ..GroupState::default()
+        let party = |leader: u64, others: usize, group_type: u8| {
+            let mut group = GroupState {
+                in_group: true,
+                group_type,
+                leader,
+                members: (0..others)
+                    .map(|i| benilla_protocol::messages::GroupMemberEntry {
+                        name: format!("Mate{i}"),
+                        guid: 0xb000 + i as u64,
+                        status: 1,
+                        flags: 0,
+                    })
+                    .collect(),
+                ..GroupState::default()
+            };
+            if group_type == crate::ui_party::GROUPTYPE_RAID {
+                group.rebuild_raid(ME);
+            }
+            group
         };
 
         assert_eq!(

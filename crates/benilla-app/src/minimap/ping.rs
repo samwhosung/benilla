@@ -229,10 +229,10 @@ mod tests {
                 .resource_mut::<crate::ui_party::GroupState>();
             group.group_type = crate::ui_party::GROUPTYPE_RAID;
             group.own_flags = 0;
-            group.own_raid_row = Some(ME);
             // Subgroup 0 (ours) holds 0xA1; 0xB1 and 0xB2 are in subgroup 1. The rows are the
             // wire's order, then us.
             group.members = vec![member(0xB1, 1), member(0xA1, 0), member(0xB2, 1)];
+            group.rebuild_raid(ME);
         }
         for (sender, want) in [
             (0xA1, "party1"),

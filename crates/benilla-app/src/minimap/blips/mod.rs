@@ -377,18 +377,18 @@ pub(super) fn rim_arrow_records(
 /// A party member's position: the streamed transform, else the `PARTY_MEMBER_STATS` position
 /// (whole yards on the wire).
 pub(crate) fn party_member_pos<F: bevy::ecs::query::QueryFilter>(
-    m: &benilla_protocol::messages::GroupMemberEntry,
+    guid: u64,
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
     unit_pos: &Query<&GlobalTransform, F>,
 ) -> Option<(f32, f32)> {
-    if let Some(tf) = guids.0.get(&m.guid).and_then(|e| unit_pos.get(*e).ok()) {
+    if let Some(tf) = guids.0.get(&guid).and_then(|e| unit_pos.get(*e).ok()) {
         let w = bevy_to_wow(tf.translation());
         return Some((w[0], w[1]));
     }
     group
         .stats
-        .get(&m.guid)
+        .get(&guid)
         .and_then(|s| s.position)
         .map(|(x, y)| (f32::from(x), f32::from(y)))
 }
@@ -405,7 +405,7 @@ pub(super) fn group_records<F: bevy::ecs::query::QueryFilter>(
 ) -> [Option<(u64, (f32, f32))>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
     let mut records = [None; benilla_ui::widget::MINIMAP_GROUP_ARROWS];
     for (i, m) in group.party_slots().enumerate().take(4) {
-        records[i] = party_member_pos(m, group, guids, unit_pos).map(|p| (m.guid, p));
+        records[i] = party_member_pos(m.guid, group, guids, unit_pos).map(|p| (m.guid, p));
     }
     records[4] = pet.and_then(|g| {
         let tf = unit_pos.get(*guids.0.get(&g)?).ok()?;

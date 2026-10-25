@@ -262,10 +262,11 @@ impl TargetScan<'_, '_> {
                 .group
                 .as_ref()
                 .is_some_and(|g| g.party_slots().any(|m| m.guid == guid)),
-            ScanSide::Raid => self.group.as_ref().is_some_and(|g| {
-                g.party_slots().any(|m| m.guid == guid)
-                    || (g.group_type == 1 && g.members.iter().any(|m| m.guid == guid))
-            }),
+            // A party slot or a stored raid row (`0x4918e0` past its own test).
+            ScanSide::Raid => self
+                .group
+                .as_ref()
+                .is_some_and(|g| g.party_or_raid_member(guid)),
         }
     }
 
@@ -1664,12 +1665,14 @@ mod tests {
             flags,
         };
         // A raid: our subgroup 0 holds PARTY and PARTY_DEAD; RAID is in subgroup 1.
-        world.insert_resource(crate::ui_party::GroupState {
+        let mut group = crate::ui_party::GroupState {
             in_group: true,
             group_type: 1,
             members: vec![member(PARTY, 0), member(PARTY_DEAD, 0), member(RAID, 1)],
             ..Default::default()
-        });
+        };
+        group.rebuild_raid(0x5E1F);
+        world.insert_resource(group);
         let pool = |world: &mut World, side: ScanSide| {
             world
                 .run_system_once(move |scan: TargetScan| {
@@ -1682,7 +1685,8 @@ mod tests {
         // Out of a raid, mode 4's raid half has no roster: it is the party test.
         world
             .resource_mut::<crate::ui_party::GroupState>()
-            .group_type = 0;
+            .raid
+            .clear();
         assert_eq!(pool(&mut world, ScanSide::Raid), [PARTY, PARTY_DEAD]);
     }
 
