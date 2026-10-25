@@ -27,8 +27,8 @@ use super::Model;
 mod player_buff;
 mod read;
 
-pub(crate) use player_buff::expiry_of;
 pub use player_buff::PlayerBuffExpiry;
+pub(crate) use player_buff::{expiry_of, until_cancelled_of};
 pub(crate) use read::{aura_unit, nth_kept, read_auras_of};
 pub use read::{AuraListRead, AuraRead};
 
@@ -68,6 +68,9 @@ pub struct AuraState {
     /// from the spell (`0x4e452e`-`0x4e45c5`), not from `expiration_time`, so it holds before any
     /// `SMSG_UPDATE_AURA_DURATION` and a permanent aura never shows a `0 s` timer.
     pub until_cancelled: bool,
+    /// The spell is not in the catalog, so the record's flag is not known: the call reads it as
+    /// `expiry == 0` ([`until_cancelled_of`]).
+    pub until_cancelled_unknown: bool,
     /// `AttributesEx & 0x4` (`SPELL_ATTR_EX_IS_CHANNELED`), [`cancel_authorized`]'s second arm.
     pub channeled: bool,
     /// Kept by a set `raidFilter`: a buff the player could cast (`0x4b3870`), a debuff whose
@@ -400,6 +403,7 @@ mod tests {
             channeled: false,
             raid_listed: false,
             slot: 0,
+            until_cancelled_unknown: false,
             vision_hidden: false,
         }
     }

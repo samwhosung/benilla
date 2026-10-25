@@ -19,6 +19,16 @@ impl LiveQuery for PlayerBuffExpiry {
     type Answer = f64;
 }
 
+/// The record's `+0xc` flag as the call reads it: the flag, or for a record whose spell the
+/// catalog lacks, whether its slot holds no stamp.
+pub(crate) fn until_cancelled_of(lua: &Lua, a: &AuraState) -> bool {
+    if a.until_cancelled_unknown {
+        expiry_of(lua, a) == 0.0
+    } else {
+        a.until_cancelled
+    }
+}
+
 /// `a`'s expiry as the call reads it: through the lent host, else the snapshot's.
 pub(crate) fn expiry_of(lua: &Lua, a: &AuraState) -> f64 {
     ask(lua, &PlayerBuffExpiry { slot: a.slot }).unwrap_or(a.expiration_time)
@@ -130,7 +140,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = buff_index_arg(lua, index, r#"Usage: GetPlayerBuff(index [, "filter"])"#)?;
             let hit = enumerate_player_buff(lua, index, PlayerBuffFilter::parse(filter.as_deref()));
             let (pos, until_cancelled) = match hit {
-                Some((pos, a)) => (pos as i64, i64::from(a.until_cancelled)),
+                Some((pos, a)) => (pos as i64, i64::from(until_cancelled_of(lua, &a))),
                 None => (-1, 0),
             };
             Ok(MultiValue::from_vec(vec![
@@ -225,6 +235,7 @@ mod tests {
             channeled: false,
             raid_listed: false,
             slot: 0,
+            until_cancelled_unknown: false,
             vision_hidden: false,
         }
     }

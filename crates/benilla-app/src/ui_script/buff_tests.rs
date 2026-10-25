@@ -71,6 +71,7 @@ fn aura(
         channeled: false,
         raid_listed: false,
         slot: 0,
+        until_cancelled_unknown: false,
         vision_hidden: false,
     }
 }

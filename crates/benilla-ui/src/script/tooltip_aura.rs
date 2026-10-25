@@ -220,7 +220,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // the line when the record's `+0xc` is set (`0x532bdf`), a DBC flag that
                     // holds before any `SMSG_UPDATE_AURA_DURATION` lands; a lapsed aura shows
                     // "0 seconds remaining".
-                    let ms = (!a.until_cancelled).then(|| {
+                    let ms = (!super::aura::until_cancelled_of(lua, &a)).then(|| {
                         // The reference counts integer milliseconds off `GetTickCount`; this
                         // rounds the float clock to the nearest one. The expiry is read at the
                         // call (`0x4e4450`).

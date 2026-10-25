@@ -276,6 +276,7 @@ fn unit_aura_state(catalog: Option<&SpellCatalog>, input: &AuraInput) -> AuraSta
         cancelable: flags & AURA_FLAG_CANCELABLE != 0,
         // `untilCancelled` is the player cache record's alone (`0xbc6040` `+0xc`).
         until_cancelled: false,
+        until_cancelled_unknown: false,
         channeled: display.is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
         raid_listed,
         vision_hidden,
@@ -651,26 +652,27 @@ const SPELL_ATTR_EX_IS_CHANNELED: u32 = 0x4;
 /// (`0x4e456e`-`0x4e457a`), or no row (`0x4e4580`); or when the aura is not cancelable and an
 /// effect is an area aura, `0x23`, `0x77`, `0x80` or `0x81` (`0x4e4588`-`0x4e45be`).
 /// `BuffFrame.lua:124` then shows no countdown. Deviation: on a catalog miss the reference keeps
-/// the record's stale value (`0x4e4533`, `0x4e4550` skip the write); this answers true, because a
-/// stale value is no mechanism to reproduce.
+/// the record's stale value (`0x4e4533`, `0x4e4550` skip the write); this answers from the joined
+/// expiry, because a stale value is no mechanism to reproduce. `None` is that miss: the call reads
+/// the expiry ([`AuraState::until_cancelled_unknown`]).
 fn until_cancelled(
     display: Option<&benilla_formats::SpellDisplay>,
     duration_row: Option<&benilla_formats::SpellDuration>,
     cancelable: bool,
-) -> bool {
-    let Some(d) = display else {
-        return true;
-    };
+) -> Option<bool> {
+    let d = display?;
     let permanent = match duration_row {
         Some(row) => row.base_ms < 0 && row.per_level_ms <= 0,
         // A negative, out-of-range or empty `DurationIndex`: all three reach `0x4e4580`.
         None => true,
     };
-    permanent
-        || (!cancelable
-            && d.effects
-                .iter()
-                .any(|e| matches!(e, 0x23 | 0x77 | 0x80 | 0x81)))
+    Some(
+        permanent
+            || (!cancelable
+                && d.effects
+                    .iter()
+                    .any(|e| matches!(e, 0x23 | 0x77 | 0x80 | 0x81))),
+    )
 }
 
 /// The filter of every aura display, the player's bar and other units' rows alike: never-display
@@ -927,6 +929,11 @@ fn player_list(
         .iter()
         .map(|c| {
             let display = catalog.and_then(|cat| cat.get(c.spell_id));
+            let flag = until_cancelled(
+                display,
+                display.and_then(|d| spell_durations.and_then(|c| c.get(d.duration_index))),
+                c.flags & AURA_FLAG_CANCELABLE != 0,
+            );
             AuraState {
                 spell_id: c.spell_id,
                 slot: c.slot,
@@ -942,11 +949,8 @@ fn player_list(
                 expiration_time: 0.0,
                 helpful: c.slot < UNIT_AURA_POSITIVE_SLOTS,
                 cancelable: c.flags & AURA_FLAG_CANCELABLE != 0,
-                until_cancelled: until_cancelled(
-                    display,
-                    display.and_then(|d| spell_durations.and_then(|c| c.get(d.duration_index))),
-                    c.flags & AURA_FLAG_CANCELABLE != 0,
-                ),
+                until_cancelled: flag.unwrap_or(false),
+                until_cancelled_unknown: flag.is_none(),
                 channeled: display
                     .is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
                 // No reader of the buff cache takes a `raidFilter`, nor runs the vision test
@@ -1781,24 +1785,38 @@ mod tests {
         let area = spell([0x23, 0, 0]);
 
         // Clause 1: the duration row decides, cancelable or not.
-        assert!(!until_cancelled(Some(&ordinary), Some(&timed_row), true));
-        assert!(!until_cancelled(Some(&ordinary), Some(&timed_row), false));
-        assert!(until_cancelled(Some(&ordinary), Some(&permanent_row), true));
-        assert!(
-            !until_cancelled(Some(&ordinary), Some(&scaling_row), true),
+        assert_eq!(
+            until_cancelled(Some(&ordinary), Some(&timed_row), true),
+            Some(false)
+        );
+        assert_eq!(
+            until_cancelled(Some(&ordinary), Some(&timed_row), false),
+            Some(false)
+        );
+        assert_eq!(
+            until_cancelled(Some(&ordinary), Some(&permanent_row), true),
+            Some(true)
+        );
+        assert_eq!(
+            until_cancelled(Some(&ordinary), Some(&scaling_row), true),
+            Some(false),
             "a negative base with a positive per-level term is a SCALING duration, not permanence"
         );
         // No row: permanent (`0x4e4580`).
-        assert!(until_cancelled(Some(&ordinary), None, true));
+        assert_eq!(until_cancelled(Some(&ordinary), None, true), Some(true));
 
         // Clause 2: the area-aura override applies only to a non-cancelable aura (`0x4e4588`).
-        assert!(until_cancelled(Some(&area), Some(&timed_row), false));
-        assert!(
-            !until_cancelled(Some(&area), Some(&timed_row), true),
+        assert_eq!(
+            until_cancelled(Some(&area), Some(&timed_row), false),
+            Some(true)
+        );
+        assert_eq!(
+            until_cancelled(Some(&area), Some(&timed_row), true),
+            Some(false),
             "a CANCELABLE aura skips the effect scan entirely"
         );
 
-        // A catalog miss answers true.
-        assert!(until_cancelled(None, None, false));
+        // A catalog miss reads the expiry at the call.
+        assert_eq!(until_cancelled(None, None, false), None);
     }
 }
