@@ -306,7 +306,8 @@ pub use lfg::LfgDungeon;
 pub use lottery::UnservedSend;
 pub use modelframe::{CharacterPaneFrame, ModelPaneFrame, ModelWanted};
 pub use movieframe::{
-    movie_bitmap, MovieAudio, MovieAudioStart, MovieBitmap, MovieOpen, MoviePicture, MovieReader,
+    movie_bitmap, MovieAudio, MovieAudioStart, MovieBitmap, MovieOpen, MoviePicture, MovieReadFn,
+    MovieReader,
 };
 pub use petition::{
     validate_guild_name, PetitionCall, PetitionRecordView, PetitionState, PETITION_TYPE_CHARTER,

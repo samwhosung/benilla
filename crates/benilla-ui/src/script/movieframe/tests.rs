@@ -3,6 +3,9 @@ use std::rc::Rc;
 
 use crate::script::{MovieAudio, MovieOpen, QuadContent, UiScript};
 
+/// Every path the reader was asked for, and how it opened.
+type Asked = Rc<RefCell<Vec<(String, MovieOpen)>>>;
+
 /// A 1024-wide movie of `frames` empty chunks at 25 frames a second, `sounds` its audio chunks.
 fn avi(frames: u32, sounds: &[&[u8]]) -> Vec<u8> {
     let empty: Vec<&[u8]> = vec![b""; frames as usize];
@@ -11,9 +14,7 @@ fn avi(frames: u32, sounds: &[&[u8]]) -> Vec<u8> {
 
 /// A glue VM whose reader answers `files` by exact path and logs every ask, with `M` a movie
 /// frame whose three scripts append to the Lua list `log`.
-fn movie_vm(
-    files: Vec<(&'static str, Vec<u8>)>,
-) -> (UiScript, Rc<RefCell<Vec<(String, MovieOpen)>>>) {
+fn movie_vm(files: Vec<(&'static str, Vec<u8>)>) -> (UiScript, Asked) {
     let mut s = UiScript::new_glue().unwrap();
     let asked = Rc::new(RefCell::new(Vec::new()));
     let seen = asked.clone();

@@ -41,7 +41,10 @@ pub enum MovieOpen {
 }
 
 /// The host's file reader for the movie files: a path's bytes, or `None` when nothing opens it.
-pub type MovieReader = std::rc::Rc<dyn Fn(&str, MovieOpen) -> Option<Vec<u8>>>;
+pub type MovieReadFn = dyn Fn(&str, MovieOpen) -> Option<Vec<u8>>;
+
+/// [`MovieReadFn`] as the model holds it.
+pub type MovieReader = std::rc::Rc<MovieReadFn>;
 
 /// A new movie's audio, for the host to open as a stream and play (`0x78ca30`).
 pub struct MovieAudioStart {
@@ -346,7 +349,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 impl UiScript {
     /// Install the host's reader for the movie files.
-    pub fn set_movie_reader(&mut self, reader: Box<dyn Fn(&str, MovieOpen) -> Option<Vec<u8>>>) {
+    pub fn set_movie_reader(&mut self, reader: Box<MovieReadFn>) {
         self.model_mut().movies.reader = Some(reader.into());
     }
 
