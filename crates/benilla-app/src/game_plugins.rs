@@ -737,6 +737,15 @@ pub(crate) mod schedule_tests {
             })
     }
 
+    /// A test client opens no audio device: one stream per test process, one process per test,
+    /// floods the system audio server and crackles every sound on the machine.
+    #[test]
+    fn a_test_client_opens_no_audio_device() {
+        let app = headless_client_unrun();
+        let output = app.world().non_send_resource::<crate::sound::SoundOutput>();
+        assert!(output.mixer.is_none());
+    }
+
     /// The glue booth has one feeder, in any schedule: the glue VM's, which reads the stock
     /// screens' models off the VM. Beside it only the booth's own create instrument writes
     /// `GluePreview`.

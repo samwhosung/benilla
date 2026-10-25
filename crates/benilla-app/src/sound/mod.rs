@@ -226,8 +226,8 @@ fn feed_music_suppression(
     }
 }
 
-/// The backend output; `mixer` is `None` with no device or under `$WOW_NOSOUND`. Non-Send: the
-/// device stream is not `Send` on every platform, so audio systems run on the main thread.
+/// The backend output; `mixer` is `None` with no device, under `$WOW_NOSOUND` or in a test.
+/// Non-Send: the device stream is not `Send` on every platform, so audio systems run on the main thread.
 pub(crate) struct SoundOutput {
     pub(crate) mixer: Option<Mixer>,
     /// Live kit channels, pumped by [`kit::pump_channels`].
@@ -348,19 +348,21 @@ impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.add_observer(on_cvar);
-        // `$WOW_NOSOUND` (a silent unattended run) and `$WOW_CAPTURE` open no device at all, so
-        // they never hold the audio hardware against a session someone is listening to.
+        // `$WOW_NOSOUND` (a silent unattended run), `$WOW_CAPTURE` and a test build open no device
+        // at all, so they never hold the audio hardware against a session someone is listening to.
         let silent = ["WOW_NOSOUND", "WOW_CAPTURE"]
             .into_iter()
-            .find(|v| std::env::var_os(v).is_some());
+            .find(|v| std::env::var_os(v).is_some())
+            .map(|v| format!("${v} set"))
+            .or_else(|| cfg!(test).then(|| "a test build".to_owned()));
         // Before the mixer: the probe's taps are main-track effects, fixed when kira builds it.
         let probe_dir = if silent.is_some() {
             None
         } else {
             probe::output_dir()
         };
-        let mixer = if let Some(var) = silent {
-            info!("${var} set — audio disabled");
+        let mixer = if let Some(why) = silent {
+            info!("{why} — audio disabled");
             None
         } else {
             match Mixer::new(probe_dir.as_deref()) {
