@@ -7,11 +7,14 @@
 //! (`[0xb6e5f0]`) that is never reset, so the phase carries across matches and messages. Patterns
 //! apply in list order, not text order, every occurrence, and the length never changes.
 //!
-//! The chat chokepoint, the mail list's subjects (`0x4ad5b2`) and `GetInboxText`'s letter
-//! (`0x4af203`) are wired. The reference masks ten more sites, not built here: `GetGuildInfo`, the
-//! two guild-record accessors, the roster MOTD and info, `GetGuildRosterInfo`,
-//! `GuildControlGetRankName`, item text, `SendChatMessage` and the guild-event MOTD; seven of them
-//! pass the `dl = 1` memo, which re-blits a cached string without advancing the index.
+//! The chat chokepoint, the mail list's subjects (`0x4ad5b2`), `GetInboxText`'s letter (`0x4af203`)
+//! and the guild's sites are wired: the guild event's message of the day (`0x5e7277`), the roster's
+//! message and information text (`0x4d0b71`, `0x4d0b8e`) and the rank names `GetGuildRosterInfo`,
+//! `GuildControlGetRankName` and `GetGuildInfo` return (`0x4d12fd`, `0x4d1f62`, `0x4c9402`). The
+//! reference masks four more sites, not built here: the roster notes' two accessors (`0x4d09df`,
+//! `0x4d09ec`), item text, and `SendChatMessage`. Seven callers pass the
+//! `dl = 1` cache, which answers a text it masked before without advancing the index
+//! ([`TextFilter::mask_cached`]).
 //!
 //! The predicate has one call site, in the chat chokepoint; it never edits the text, and a hit
 //! drops the line silently.
@@ -297,6 +300,10 @@ pub(crate) struct TextFilter {
     /// filter (the chat chokepoint, the mail calls) shares the one index without excluding the
     /// others.
     mask_index: std::sync::atomic::AtomicUsize,
+    /// The masker's cache (`0xb50548`) for the callers that pass `dl = 1`: each original it masked,
+    /// by the exact text (the bucket's chain compares with `0x64a480`, `0x4a1c4f`), with whether
+    /// anything matched and the masked text.
+    cache: std::sync::Mutex<std::collections::HashMap<String, (bool, String)>>,
 }
 
 impl Default for TextFilter {
@@ -306,6 +313,7 @@ impl Default for TextFilter {
             profanity: Arc::new(PatternList::empty()),
             spam: PatternList::empty(),
             mask_index: std::sync::atomic::AtomicUsize::new(0),
+            cache: Default::default(),
         }
     }
 }
@@ -316,6 +324,7 @@ impl TextFilter {
             profanity: Arc::new(PatternList::compile(profanity, "chat profanity filter")),
             spam: PatternList::compile(spam, "chat spam filter"),
             mask_index: std::sync::atomic::AtomicUsize::new(0),
+            cache: Default::default(),
         }
     }
 
@@ -358,6 +367,28 @@ impl TextFilter {
             return false;
         }
         self.mask_uncached(text)
+    }
+
+    /// `0x4a1a60` with `dl = 1`: [`Self::mask`], but a text it masked before is answered from the
+    /// cache, its masked form copied back with the latch (`0x4a1c74`-`0x4a1c8a`) and the mask index
+    /// left where it was; a text new to it is masked and kept (`0x4a1b22`, `0x4a1bd4`-`0x4a1bf5`).
+    /// The gates come first, so a gated or empty call touches no cache (`0x4a1a66`, `0x4a1a80`).
+    pub(crate) fn mask_cached(&self, enabled: bool, text: &mut String) -> bool {
+        if !enabled || text.is_empty() {
+            return false;
+        }
+        use benilla_assets::LockRecover;
+        if let Some((latch, masked)) = self.cache.lock_recover().get(text.as_str()) {
+            if *latch {
+                text.clone_from(masked);
+            }
+            return *latch;
+        }
+        let original = text.clone();
+        let latch = self.profanity.len() != 0 && self.mask_uncached(text);
+        let kept = if latch { text.clone() } else { String::new() };
+        self.cache.lock_recover().insert(original, (latch, kept));
+        latch
     }
 
     /// The index's current token, and the index advanced past it.
@@ -630,6 +661,30 @@ mod tests {
         assert!(!f.mask(false, &mut line));
         assert_eq!(line, "you are a twat");
         assert_eq!(f.mask_index.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// `dl = 1` keeps what it masked: the same text again is answered from the cache with the mask
+    /// index where it was, a new text advances it, and a text nothing matched is cached as such.
+    #[test]
+    fn the_cached_masker_does_not_advance_the_phase_for_a_text_it_has_masked() {
+        let f = TextFilter::new(&list(&["shit"]), &[]);
+        let phase = |f: &TextFilter| f.mask_index.load(std::sync::atomic::Ordering::Relaxed);
+        let mut a = "oh shit".to_string();
+        assert!(f.mask_cached(true, &mut a));
+        assert_eq!(a, "oh !@#$");
+        assert_eq!(phase(&f), 4);
+        let mut again = "oh shit".to_string();
+        assert!(f.mask_cached(true, &mut again));
+        assert_eq!(again, "oh !@#$", "the cached masking, not the next tokens");
+        assert_eq!(phase(&f), 4);
+        let mut clean = "fine".to_string();
+        assert!(!f.mask_cached(true, &mut clean));
+        assert!(!f.mask_cached(true, &mut clean));
+        assert_eq!(clean, "fine");
+        let mut other = "shit".to_string();
+        assert!(f.mask_cached(true, &mut other));
+        assert_eq!(other, "%^&*", "a new text moves the phase");
+        assert!(!f.mask_cached(false, &mut "shit".to_string()), "gated");
     }
 
     /// A multi-byte match is masked byte for byte.

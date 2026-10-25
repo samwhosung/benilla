@@ -21,7 +21,7 @@ use benilla_ui::script::{
 
 use super::sort::{RosterRow, SortStack};
 use super::view::{GuildView, Roster};
-use super::{feed, GuildLocal, GuildState, Identity};
+use super::{feed, GuildLocal, GuildState, Identity, Masker};
 use crate::area::AreaTableRes;
 use crate::net::{NetCommands, ObjectStore};
 use crate::query_cache::Ask;
@@ -83,12 +83,13 @@ pub(super) fn row_at(rows: &[RosterRow], index: i64) -> Option<&RosterRow> {
 }
 
 /// `row`'s info with its rank named by `identity`, the guild's record (`record + 0x64 + 0x40 *
-/// rank`, `0x4d12e2`).
-fn named(row: &RosterRow, identity: Option<&Identity>) -> GuildMemberInfo {
+/// rank`, `0x4d12e2`), masked as the getter masks it (`0x4d12fd`, `dl = 1`).
+fn named(row: &RosterRow, identity: Option<&Identity>, masker: &Masker) -> GuildMemberInfo {
     let mut info = row.info.clone();
     info.rank = identity
         .map(|i| i.rank_name(info.rank_index).to_string())
         .unwrap_or_default();
+    masker.cached(&mut info.rank);
     info
 }
 
@@ -102,6 +103,7 @@ pub(crate) struct GuildLive<'w, 's> {
     commands: Option<Res<'w, NetCommands>>,
     objects: crate::net::Objects<'w, 's>,
     stores: crate::ui_unit::views::ViewStores<'w, 's>,
+    masker: Masker<'w>,
 }
 
 impl GuildLive<'_, '_> {
@@ -115,9 +117,8 @@ impl GuildLive<'_, '_> {
     /// record that landed in a later packet is not yet there.
     fn record(&self, guild: &GuildState, view: &GuildView, guild_id: u32) -> Option<Arc<Identity>> {
         match self.commands.as_deref() {
-            Some(commands) => {
-                guild.resolve_identity(guild_id, Ask::Event(commands));
-            }
+            // The lookup of `0x4d1291` and `0x4d1f29`, with the callback `0x4d1480` and no dedupe.
+            Some(commands) => guild.wait_for_roster(guild_id, commands),
             None => {
                 guild.resolve_identity(guild_id, Ask::Read);
             }
@@ -197,14 +198,20 @@ impl GuildLive<'_, '_> {
         show_offline: bool,
         wants_record: bool,
     ) -> Option<GuildMemberInfo> {
-        let store = self.player()?;
+        // `GetGuildRosterLastOnline` has no player gate (`0x4d14a0`): the call fails with no
+        // player only where it names the rank (`0x4d125f`).
         let identity = if wants_record {
+            let store = self.player()?;
             Some(self.record(guild, view, store.0.player_guild_id())?)
         } else {
             None
         };
         let rows = ordered(show_offline);
-        Some(named(row_at(&rows, index)?, identity.as_deref()))
+        Some(named(
+            row_at(&rows, index)?,
+            identity.as_deref(),
+            &self.masker,
+        ))
     }
 
     /// `GuildControlGetRankName`'s name (`0x4d1e90`): nil with no player or past the rank count
@@ -215,7 +222,9 @@ impl GuildLive<'_, '_> {
             return None;
         }
         let identity = self.record(guild, view, store.0.player_guild_id())?;
-        Some(identity.rank_name(rank).to_string())
+        let mut name = identity.rank_name(rank).to_string();
+        self.masker.cached(&mut name);
+        Some(name)
     }
 
     /// `GetGuildInfo`'s unit (`0x4c9330`): a held object of the player type (`0x4c9397`) with a
@@ -234,11 +243,16 @@ impl GuildLive<'_, '_> {
             return UnitGuildRead::None;
         }
         match view.identities.get(&guild_id) {
-            Some(identity) => UnitGuildRead::Named(UnitGuild {
-                name: identity.name.clone(),
-                rank_name: identity.rank_name(rank_index).to_string(),
-                rank_index,
-            }),
+            Some(identity) => {
+                // The rank's name is masked as the call returns it (`0x4c9402`, `dl = 1`).
+                let mut rank_name = identity.rank_name(rank_index).to_string();
+                self.masker.cached(&mut rank_name);
+                UnitGuildRead::Named(UnitGuild {
+                    name: identity.name.clone(),
+                    rank_name,
+                    rank_index,
+                })
+            }
             None => UnitGuildRead::Miss { guild_id },
         }
     }

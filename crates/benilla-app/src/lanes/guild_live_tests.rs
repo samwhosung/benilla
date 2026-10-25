@@ -118,8 +118,35 @@ fn event(event: u8, params: &[&str]) -> SessionEvent {
 
 /// The client in the world as [`ME`], in [`GUILD`] at [`RANK`], and a spy whose line for each
 /// guild event carries what its listener read: the roster's size, its first row's name, the
-/// message of the day and the first rank's name. The guild's record is not cached.
+/// message of the day and the first rank's name. The guild's record is not cached, and `twat` is
+/// on the profanity list.
 fn client() -> Client {
+    let mut c = world();
+    c.frame(vec![vec![created(
+        ME,
+        EntityKind::Player,
+        &[
+            (HEALTH, 100),
+            (MAX_HEALTH, 100),
+            (GUILD_ID, GUILD),
+            (GUILD_RANK, RANK),
+        ],
+    )]]);
+    c.frame(vec![]);
+    c.frame(vec![]);
+    c.seen();
+    // The asks the player's create left in flight (`0x5dec19`) are forgotten, as a world entry
+    // forgets them: the getters' own lookups are what these tests watch.
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_guild::GuildState>()
+        .drop_pending_for_test();
+    c.queries();
+    c
+}
+
+/// [`client`] before our player is created.
+fn world() -> Client {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
@@ -150,28 +177,14 @@ fn client() -> Client {
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    let mut c = Client { app, inbound, sent };
-    c.frame(vec![vec![created(
-        ME,
-        EntityKind::Player,
-        &[
-            (HEALTH, 100),
-            (MAX_HEALTH, 100),
-            (GUILD_ID, GUILD),
-            (GUILD_RANK, RANK),
-        ],
-    )]]);
-    c.frame(vec![]);
-    c.frame(vec![]);
-    c.seen();
-    // The asks the player's create left in flight (`0x5dec19`) are forgotten, as a world entry
-    // forgets them: the getters' own lookups are what these tests watch.
-    c.app
-        .world_mut()
-        .resource_mut::<crate::ui_guild::GuildState>()
-        .drop_pending_for_test();
-    c.queries();
-    c
+    app.insert_resource(crate::text_filter::TextFilter::new(
+        &[benilla_formats::FilterPattern {
+            id: 1,
+            pattern: "twat".into(),
+        }],
+        &[],
+    ));
+    Client { app, inbound, sent }
 }
 
 /// A client whose guild record is cached.
@@ -206,8 +219,9 @@ fn two_roster_packets_signal_twice_each_as_its_packet_left_the_roster() {
 }
 
 /// The message-of-the-day event signals `GUILD_MOTD` with the text and then the update with arg1
-/// (`0x5e728d`, `0x5e74c4`), between two roster messages: each listener reads the message of the
-/// day its packet left, the roster message's or the event's.
+/// (`0x5e728d`, `0x5e74c4`), between two roster messages: the event's text goes to its listener
+/// and is stored nowhere (`0xb72f00` is the roster message's alone, `0x4d0b6d`), so
+/// `GetGuildRosterMOTD` reads the roster message's.
 #[test]
 fn a_motd_event_between_two_rosters_reads_its_own_text() {
     let on = guild_presence::ONLINE;
@@ -221,8 +235,8 @@ fn a_motd_event_between_two_rosters_reads_its_own_text() {
         c.seen(),
         [
             "GUILD_ROSTER_UPDATE:nil:nil:1:Alder:one:Master",
-            "GUILD_MOTD:two:nil:1:Alder:two:Master",
-            "GUILD_ROSTER_UPDATE:1:nil:1:Alder:two:Master",
+            "GUILD_MOTD:two:nil:1:Alder:one:Master",
+            "GUILD_ROSTER_UPDATE:1:nil:1:Alder:one:Master",
             "GUILD_ROSTER_UPDATE:nil:nil:1:Alder:three:Master",
         ]
     );
@@ -278,8 +292,13 @@ fn a_roster_getter_fails_and_asks_until_the_guilds_record_lands() {
     assert_eq!(row, "nil,0,0,,10");
     assert!(c.queries().is_empty(), "the ask is pending: not sent again");
 
+    // The record lands: its callback runs once for each call that missed (`0x4d1480`, `0x4d148c`
+    // from `0x556f91`): the listener's two getters, and the two calls of the chunk above.
     c.frame(vec![vec![record(GUILD, "Legacy")]]);
-    assert_eq!(c.seen(), ["GUILD_ROSTER_UPDATE:nil:nil:1:Alder:one:Master"]);
+    assert_eq!(
+        c.seen(),
+        ["GUILD_ROSTER_UPDATE:nil:nil:1:Alder:one:Master"; 4]
+    );
     let rank: String = c.eval(true, "local _, rank = GetGuildRosterInfo(1) return rank");
     assert_eq!(rank, "Officer", "the member's rank name from the record");
 }
@@ -418,4 +437,74 @@ fn the_ginfo_lines_print_at_their_packets_place() {
             "GUILD_ROSTER_UPDATE:nil:nil:1:Alder:two:Master",
         ]
     );
+}
+
+/// The guild event's message of the day is masked as it lands (`0x5e7277`, `dl = 0`: each text
+/// advances the mask index), the roster's at its parse (`0x4d0b71`, `dl = 1`: a text masked
+/// before is answered from the cache with the index where it was).
+#[test]
+fn the_message_of_the_day_is_masked_as_it_lands() {
+    let mut c = named();
+    c.frame(vec![vec![event(guild_event::MOTD, &["you twat"])]]);
+    assert!(
+        c.seen()[0].starts_with("GUILD_MOTD:you !@#$:"),
+        "the event's text, masked, to its listener"
+    );
+    let motd = |c: &mut Client| -> String { c.eval(true, "return GetGuildRosterMOTD()") };
+    c.frame(vec![vec![roster("twat", vec![])]]);
+    assert_eq!(motd(&mut c), "%^&*", "a new text takes the next tokens");
+    c.frame(vec![vec![roster("twat", vec![])]]);
+    assert_eq!(
+        motd(&mut c),
+        "%^&*",
+        "the same text again: the cache, no new tokens"
+    );
+    c.seen();
+    c.frame(vec![vec![event(guild_event::MOTD, &["twat"])]]);
+    let seen = c.seen();
+    assert!(
+        seen[0].starts_with("GUILD_MOTD:!@#$:"),
+        "the index stood at the cycle's start: {seen:?}"
+    );
+}
+
+/// The rank names the getters return are masked (`0x4d12fd`, `0x4d1f62`, `0x4c9402`, `dl = 1`),
+/// and one text masked before comes back the same from the cache, whichever getter asks.
+#[test]
+fn a_profane_rank_name_comes_back_masked_and_the_same_each_time() {
+    let on = guild_presence::ONLINE;
+    let mut c = client();
+    let mut rank_names: [String; 10] = Default::default();
+    rank_names[1] = "twat".into();
+    c.frame(vec![
+        vec![SessionEvent::GuildQueryResponse(GuildQueryResponse {
+            guild_id: GUILD,
+            name: "Legacy".into(),
+            rank_names,
+            ..Default::default()
+        })],
+        vec![roster("one", vec![member(1, "Alder", 1, on)])],
+    ]);
+    let names: Vec<String> = c.eval(
+        true,
+        "local _, a = GetGuildRosterInfo(1) local _, b = GetGuildInfo('player') \
+         return {a, GuildControlGetRankName(2), b}",
+    );
+    assert_eq!(names, ["!@#$", "!@#$", "!@#$"]);
+}
+
+/// `GetGuildRosterLastOnline` has no player gate (`0x4d14a0`), where `GetGuildRosterInfo` fails
+/// with none (`0x4d125f`).
+#[test]
+fn last_online_answers_with_no_player_and_the_row_does_not() {
+    let mut c = world();
+    let mut gone = member(2, "Birch", 2, guild_presence::OFFLINE);
+    gone.last_online_days = 400.5;
+    c.frame(vec![vec![roster("one", vec![gone])]]);
+    let got: Vec<String> = c.eval(
+        true,
+        "SetGuildRosterShowOffline(1) local a, b, c, d = GetGuildRosterLastOnline(1) \
+         return {tostring(a), tostring(b), tostring(c), tostring(d), tostring((GetGuildRosterInfo(1)))}",
+    );
+    assert_eq!(got, ["1", "1", "5", "12", "nil"]);
 }
