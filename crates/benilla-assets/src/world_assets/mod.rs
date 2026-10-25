@@ -13,8 +13,8 @@ use bevy::render::render_resource::{Buffer, Face};
 use crate::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 use crate::SpatialCache;
 use benilla_formats::{
-    blp_to_rgba, read_texture_native_chain, tga_texture_size, tga_to_rgba, Chain, ModelBlend,
-    TGA_GATE_PREFIX,
+    blp_to_rgba, makes_device_texture, read_texture_native_chain, tga_texture_size, tga_to_rgba,
+    Chain, ModelBlend, TGA_GATE_PREFIX,
 };
 pub use benilla_formats::{LooseFile, LooseIndex, LooseIndexCell, LooseOpen};
 
@@ -134,8 +134,9 @@ enum OnRefusal {
     /// (`0x835538`), with no next candidate. A header that makes no texture (`0x448450`, see
     /// [`tga_texture_size`]) fails the candidate as a missing file does, whether the pixels would
     /// decode or not. The BLP loader `0x44a310` returns the texture once the file opens
-    /// (`0x44a399`), and a parse or decode its callback refuses (`0x44a560`) leaves the solid
-    /// green texture (`0x44a50e`), with no next candidate either.
+    /// (`0x44a399`), and a parse, a decode or a size (`0x448450`, see [`makes_device_texture`]) its
+    /// callback refuses (`0x44a560`) leaves the solid green texture (`0x44a50e`), with no next
+    /// candidate either.
     WhiteDefault,
 }
 
@@ -302,8 +303,9 @@ fn solid_green() -> (u32, u32, Vec<u8>) {
 
 /// One candidate's bytes through the decoder its name picks ([`decode_by_name`]). By
 /// `on_refusal`, a TGA load gates its header's size first ([`makes_texture`]), decoded or not, and
-/// a refused decode of one that passes leaves that size of opaque white; a refused BLP is the
-/// solid green.
+/// a refused decode of one that passes leaves that size of opaque white; a refused BLP, or a
+/// decoded one at a size the device texture path refuses ([`makes_device_texture`]), is the solid
+/// green.
 fn decode_candidate(candidate: &str, bytes: &[u8], on_refusal: OnRefusal) -> Candidate {
     let texture = on_refusal == OnRefusal::WhiteDefault;
     let size = if texture && is_tga_name(candidate) {
@@ -315,7 +317,13 @@ fn decode_candidate(candidate: &str, bytes: &[u8], on_refusal: OnRefusal) -> Can
         None
     };
     if let Ok((width, height, rgba)) = decode_by_name(candidate, bytes) {
-        return Candidate::Pixels(width, height, rgba);
+        // The BLP callback `0x44a560` asks `0x448450` for a texture of the decoded size; a size it
+        // or `GxTexCreate` refuses (`0x448665`, `0x58ab40`) returns 0 and `0x44a500` leaves the
+        // solid green (`0x44a50e`), with no next candidate.
+        let refused = texture && !is_tga_name(candidate) && !makes_device_texture(width, height);
+        if !refused {
+            return Candidate::Pixels(width, height, rgba);
+        }
     }
     match size {
         Some((width, height)) => {
@@ -1517,6 +1525,51 @@ mod tests {
     /// `TextureCreate`'s solid texture, `0xff00ff00` (`0x447c00`), 8 by 8 (`0x44a900`).
     fn green() -> Candidate {
         Candidate::Pixels(8, 8, [0, 0xff, 0, 0xff].repeat(64))
+    }
+
+    /// The BLP callback `0x44a560` hands `0x448450` the decoded size: it makes no texture for a
+    /// side that is not a power of two or is 1024 or more (`0x4484ae`-`0x4484d0`), `GxTexCreate`
+    /// refuses a side below 8 (`0x58ab40`, `0x58ab4c`), and `0x44a500` leaves the solid green
+    /// (`0x44a50e`) with no next candidate. A side of 8 to 16 goes to `GxTexCreate` and passes.
+    #[test]
+    fn a_blp_texture_size_the_device_path_refuses_is_the_solid_green() {
+        let blp = "interface\\addons\\foo\\icon.blp";
+        let load = |w, h| decode_candidate(blp, &tiny_blp(w, h, 7), OnRefusal::WhiteDefault);
+        for (w, h) in [
+            (8, 8),
+            (16, 16),
+            (16, 8),
+            (64, 32),
+            (512, 512),
+            (8, 512),
+            (512, 8),
+        ] {
+            assert!(
+                matches!(load(w, h), Candidate::Pixels(pw, ph, _) if (pw, ph) == (w, h)),
+                "{w}x{h} is the image"
+            );
+        }
+        for (w, h) in [
+            (7, 7),
+            (7, 8),
+            (8, 7),
+            (4, 4),
+            (3, 4),
+            (1, 1),
+            (24, 8),
+            (8, 24),
+            (1024, 8),
+            (8, 1024),
+            (1024, 1024),
+            (2048, 64),
+        ] {
+            assert_eq!(load(w, h), green(), "{w}x{h} is the solid green");
+        }
+        // A load that is not `TextureCreate`'s makes no `0x448450` request.
+        assert!(matches!(
+            decode_candidate(blp, &tiny_blp(1024, 8, 7), OnRefusal::Miss),
+            Candidate::Pixels(1024, 8, _)
+        ));
     }
 
     /// `TextureCreate` takes the loader by the candidate's extension (`0x449e16`-`0x449e3d`), never

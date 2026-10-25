@@ -65,8 +65,7 @@ pub fn tga_texture_size(bytes: &[u8]) -> Option<(u32, u32)> {
     }
     let width = u32::from(u16::from_le_bytes([header[12], header[13]]));
     let height = u32::from(u16::from_le_bytes([header[14], header[15]]));
-    let fits = |n: u32| n.is_power_of_two() && (8..1024).contains(&n);
-    (fits(width) && fits(height)).then_some((width, height))
+    crate::makes_device_texture(width, height).then_some((width, height))
 }
 
 /// Decode a TGA to RGBA8 `(width, height, pixels)`, rows top-down like [`crate::blp_to_rgba`].

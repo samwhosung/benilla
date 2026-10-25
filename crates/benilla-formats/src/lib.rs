@@ -488,6 +488,15 @@ pub fn blp_mips_to_png(blp_bytes: &[u8], out: &Path) -> Result<Vec<BlpMipStats>>
     blp_mip_stats(blp_bytes)
 }
 
+/// Whether the device texture path makes a texture of this size on a device that halves nothing
+/// (`0x448b60`): `0x448450` makes none for a side that is not a power of two or is 1024 or more
+/// (`0x4484ae`-`0x4484d0`), and a side of 16 or less goes to `GxTexCreate` (`0x58ab10`), which
+/// refuses one below 8 (`0x58ab40`, `0x58ab4c`). A side of 0 is refused there.
+pub fn makes_device_texture(width: u32, height: u32) -> bool {
+    let fits = |n: u32| n.is_power_of_two() && (8..1024).contains(&n);
+    fits(width) && fits(height)
+}
+
 /// Decode a BLP's level 0 to RGBA8: `(width, height, pixels)`.
 pub fn blp_to_rgba(blp_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let decoded =
