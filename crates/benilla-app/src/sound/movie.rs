@@ -99,7 +99,12 @@ pub(super) fn plugin(app: &mut App) {
         .insert_non_send_resource(MovieStreams::default())
         .add_systems(
             Update,
-            // After the feed's asks; its reports reach the next frame's feed.
-            drive_movie_audio.after(crate::ui_script::UiFeed),
+            // After the feed's asks and the tick, its reports reaching the next frame's feed;
+            // after the frame's mute toggle and the cinematic's music hold settle the config it
+            // opens under, and after the streaming stage's main-thread work.
+            drive_movie_audio
+                .after(crate::ui_script::UiTick)
+                .after(super::toggle_mute)
+                .after(benilla_world::schedule::WorldStage::Stream),
         );
 }

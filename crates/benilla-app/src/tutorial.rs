@@ -535,7 +535,7 @@ fn feed_tutorials(
 
 /// Before the feed: the selections' ladder (`0x493789`-`0x49383c`), in their order, each judged
 /// against the bank as the ones before it left it.
-fn judge_selections(
+pub(crate) fn judge_selections(
     tutorials: Res<Tutorials>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     stores: Query<&ObjectStore>,
