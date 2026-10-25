@@ -1099,6 +1099,26 @@ mod tests {
         );
     }
 
+    /// A `SetCVar` an input record makes reaches the look session the frame it is made: the
+    /// registry's sync after the UI's input pass triggers the observers (the look's rates, the
+    /// camera's dynamics) and a sync point runs them ahead of the world's mouse, as the
+    /// reference's `CVar::Set` (`0x63df50`) calls the change callback inside the call
+    /// (`0x63df7d`), before the next mouse message.
+    #[test]
+    fn a_set_cvar_an_input_record_makes_reaches_the_look_session_that_frame() {
+        let mut app = headless_client();
+        if pass_order(&app).is_none() {
+            return;
+        }
+        let built = census(&mut app, Update, SyncPoints::Built);
+        let sync = one(&built, "cvars::sync_input_cvars");
+        let sample = one(&built, "controller::sample_look");
+        assert!(
+            built.applies_before(sync, sample),
+            "the CVar observers run after the look session reads their knobs"
+        );
+    }
+
     /// The stream focus's publish and the post-snap hold's release, which write the player's
     /// settle state the hosts read, run among the hosts in the world's order (after the input
     /// stage, around the stream), so a host after them reads this frame's: the zone channels'

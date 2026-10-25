@@ -868,6 +868,14 @@ impl Plugin for CvarPlugin {
                     .in_set(crate::ui_script::UiDrain)
                     .before(benilla_world::schedule::WorldStage::Input),
             )
+            // And after the input records' calls, ahead of the world's mouse, whose look session
+            // reads the knobs their observers write.
+            .add_systems(
+                Update,
+                sync_input_cvars
+                    .in_set(crate::ui_script::UiInput)
+                    .after(crate::bindings::BindingSet),
+            )
             // In `Last`, after every `Update` writer of the registry, so the save reads the frame's
             // settled state; before the exit flush, which finds it clean on a quiet exit frame.
             .add_systems(
@@ -1031,6 +1039,37 @@ pub(crate) fn boot_cvar(name: &str) -> Option<String> {
             .map(|(_, v)| v),
         StoredConfig::Absent | StoredConfig::Bad(_) => None,
     }
+}
+
+/// After the UI's input pass and its bindings: drain the writes their calls made into the registry,
+/// push the registry's writes into the mirror and trigger the accepted moves, so the observers
+/// (the look's rates, the camera's dynamics) run before the world's mouse reads their knobs, as
+/// the reference's `CVar::Set` (`0x63df50`) calls the change callback inside the call
+/// (`0x63df7d`). A new VM is seeded by [`sync_cvars`], which drains its writes first as well.
+pub(crate) fn sync_input_cvars(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut cvars: ResMut<Cvars>,
+    mut commands: Commands,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
+            cvars.drain_vm(script);
+            cvars.log_console_lines();
+        }
+        if cvars.has_outbox() {
+            for (name, value) in cvars.take_outbox() {
+                script.set_cvar_host(&name, &value);
+            }
+        }
+        if cvars.has_events() {
+            for event in cvars.take_events() {
+                commands.trigger(event);
+            }
+        }
+    })
 }
 
 /// Per frame: seed a new VM's mirror, drain its registrations and writes into the registry, push
