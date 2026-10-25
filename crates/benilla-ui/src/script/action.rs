@@ -68,13 +68,16 @@ pub struct ActionSlot {
     pub use_spell: Option<u32>,
 }
 
-/// One action's per-frame state, read by `IsUsableAction`, `IsActionInRange`, `GetActionCooldown`
-/// and kin; kept apart from [`ActionSlot`] so its churn never fires `ACTIONBAR_SLOT_CHANGED`.
+/// One action's state, read by `IsUsableAction`, `IsActionInRange`, `GetActionCooldown` and kin;
+/// kept apart from [`ActionSlot`] so its churn never fires `ACTIONBAR_SLOT_CHANGED`. The app pushes
+/// it each frame and at every usable refresh, the field watchers' inside their packets.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ActionState {
-    /// `IsUsableAction`'s first return: castable now.
+    /// `IsUsableAction`'s first return: the bar's cached usable flag (`0xbc6b60`), which only a
+    /// slot write (`0x4e58e0`) and a refresh (`0x4e5c00`) store.
     pub usable: bool,
-    /// `IsUsableAction`'s second return: unusable only for lack of power (FrameXML's blue tint).
+    /// `IsUsableAction`'s second return, the cached no-power flag (`0xbc67a0`): unusable only for
+    /// lack of power (FrameXML's blue tint).
     pub not_enough_mana: bool,
     /// `IsActionInRange`: `None` (nil) for a rangeless action or no target, else 1 or 0.
     pub in_range: Option<bool>,
@@ -92,7 +95,8 @@ pub struct ActionState {
     pub profession: Option<Profession>,
     /// `IsAttackAction`: the action is the melee auto-attack.
     pub is_attack: bool,
-    /// `IsEquippedAction`: an item action currently worn.
+    /// `IsEquippedAction`: an item action currently worn, the snapshot of the walk the lent host
+    /// makes at the call ([`super::CallHost::wears_item`]).
     pub equipped: bool,
     /// The entry an item slot holds, which `IsCurrentAction`'s item arm compares with the in-flight
     /// cast's item (`0x4e53fc`-`0x4e5428`); `None` for any other slot.
@@ -522,7 +526,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "IsUsableAction",
         lua.create_function(|lua, action: Value| {
-            // `is-number` else `Usage: IsUsableAction(slot)` (`0x84c0f0`, `0x4e744f`).
+            // `is-number` else `Usage: IsUsableAction(slot)` (`0x84c0f0`, `0x4e744f`). The pair is
+            // the bar's cache (`0x4e5230`), as the last refresh or slot write stored it.
             let action = binding_abi::index_arg32(lua, action, "Usage: IsUsableAction(slot)")?;
             Ok((
                 state_flag(lua, action, |s| s.usable),
@@ -570,10 +575,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: IsCurrentAction(slot)` (`0x84c0b0`, `0x4e733f`).
             let action = binding_abi::index_arg32(lua, action, "Usage: IsCurrentAction(slot)")?;
+            // The form arm reads the active player's form byte at the call (`0x4e558b`).
+            let form = super::stat_read::read_self(lua, |own| own.shapeshift_form());
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let open = model.open_professions();
+            let view = CastView {
+                form,
+                ..model.cast_view
+            };
             Ok(match model.action_states.get(&action) {
-                Some(s) if s.state.is_current(&model.cast_view, open) => Value::Integer(1),
+                Some(s) if s.state.is_current(&view, open) => Value::Integer(1),
                 _ => Value::Nil,
             })
         })?,
@@ -613,7 +624,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: IsEquippedAction(slot)` (`0x84c12c`, `0x4e752f`).
             let action = binding_abi::index_arg32(lua, action, "Usage: IsEquippedAction(slot)")?;
-            Ok(state_flag(lua, action, |s| s.equipped))
+            // An item word walks the worn slots for its entry at the call (`0x4e5380` →
+            // `0x622270`), through the lent host; with none free to ask, the snapshot answers.
+            let entry = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .actions
+                .get(&action)
+                .filter(|s| s.kind == ACTION_KIND_ITEM)
+                .map(|s| s.action);
+            let live = entry.and_then(|entry| {
+                crate::script::host::read_host(lua, |h| h.wears_item(entry)).flatten()
+            });
+            Ok(match live {
+                Some(worn) => flag(worn),
+                None => state_flag(lua, action, |s| s.equipped),
+            })
         })?,
     )?;
 

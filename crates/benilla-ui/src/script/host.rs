@@ -130,6 +130,14 @@ pub trait CallHost {
         let _ = (guid, read);
         false
     }
+
+    /// Whether the active player's worn slots hold a whole item of `entry`, as `IsEquippedAction`
+    /// walks them now (`0x4e5310` → `0x622270` at mask 1, `0x4e5380`), as of the place the getter
+    /// runs: `Some(false)` with no player held, `None` from a host that reads none.
+    fn wears_item(&mut self, entry: u32) -> Option<bool> {
+        let _ = entry;
+        None
+    }
 }
 
 /// What a call leaves for the VM to run once its host is back in the VM.

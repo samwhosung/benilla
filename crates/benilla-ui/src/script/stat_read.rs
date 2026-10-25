@@ -213,6 +213,9 @@ pub trait SelfRead {
     fn partial_play_time(&self) -> bool;
     /// `PLAYER_FLAGS` bit `0x2000`, `NoPlayTime`'s (`0x48ebe0`).
     fn no_play_time(&self) -> bool;
+    /// `UNIT_FIELD_BYTES_1` byte 2 (`+0x212`), the form `IsCurrentAction`'s form arm compares
+    /// (`0x4e558b`).
+    fn shapeshift_form(&self) -> u8;
 }
 
 /// No active player held, as the reference's player getters answer one: 0, nil, three nils
@@ -244,6 +247,9 @@ impl SelfRead for NoPlayer {
     fn no_play_time(&self) -> bool {
         false
     }
+    fn shapeshift_form(&self) -> u8 {
+        0
+    }
 }
 
 /// The VM's copy, as the pushes left it.
@@ -271,6 +277,9 @@ impl SelfRead for Model {
     }
     fn no_play_time(&self) -> bool {
         self.no_play_time
+    }
+    fn shapeshift_form(&self) -> u8 {
+        self.cast_view.form
     }
 }
 
