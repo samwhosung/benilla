@@ -29,14 +29,14 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 245
+- [benilla-app](#benilla-app): 246
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 30
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 132
+- [benilla-ui](#benilla-ui): 131
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -447,6 +447,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_social
 
+- After a full 50 the reference reads the 160 bytes past the array (`0xc2a0f8`, the counts at `0xc2a120` among them); benilla answers the miss. ([`src/ui_social/live.rs:72`](../crates/benilla-app/src/ui_social/live.rs#L72))
 - A filter of 127 bytes or more puts the copy's NUL in the name buffer's first byte (`0x5aec1a`), so a name an earlier tag set is scanned as more filter. benilla ends the copy at its own NUL: the run-on reads one stack buffer through another. ([`src/ui_social/query.rs:76`](../crates/benilla-app/src/ui_social/query.rs#L76))
 - `C1_SPACE` from `GetStringTypeW` is the Windows system's own table, which no file of the client holds; benilla answers Unicode's `White_Space` for those units, and nothing for a lone surrogate. ([`src/ui_social/query.rs:164`](../crates/benilla-app/src/ui_social/query.rs#L164))
 
@@ -766,8 +767,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:537`](../crates/benilla-ui/src/script/macros.rs#L537))
 - Each line is trimmed, because the reference sends an indented `" /say hi"` as plain chat, never as the command meant. ([`src/script/macros/bind.rs:30`](../crates/benilla-ui/src/script/macros/bind.rs#L30))
 - The `/cast` argument is trimmed, because the reference binds `/cast  Fireball` (two spaces) to a name that never resolves. ([`src/script/macros/bind.rs:50`](../crates/benilla-ui/src/script/macros/bind.rs#L50))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:948`](../crates/benilla-ui/src/script/mod.rs#L948))
-- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:1010`](../crates/benilla-ui/src/script/mod.rs#L1010))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:950`](../crates/benilla-ui/src/script/mod.rs#L950))
+- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:1012`](../crates/benilla-ui/src/script/mod.rs#L1012))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:339`](../crates/benilla-ui/src/script/modelframe.rs#L339))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:455`](../crates/benilla-ui/src/script/nameplate.rs#L455))
 - The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:911`](../crates/benilla-ui/src/script/nameplate.rs#L911))
@@ -790,7 +791,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference prints these to the console; here they are host warnings, because a malformed page is bad content, not a script error. ([`src/script/simplehtml/mod.rs:104`](../crates/benilla-ui/src/script/simplehtml/mod.rs#L104))
 - Only `%s` and `%%` are expanded and other specs copied, because the real `printf` would read the string pointers as other types. ([`src/script/simplehtml/parse.rs:247`](../crates/benilla-ui/src/script/simplehtml/parse.rs#L247))
 - Skipped because it is no command; the reference raises. ([`src/script/slash.rs:65`](../crates/benilla-ui/src/script/slash.rs#L65))
-- After a full 50 the reference reads the 160 bytes past the array (`0xc2a0f8`, the counts at `0xc2a120` among them); benilla answers the miss. ([`src/script/social.rs:451`](../crates/benilla-ui/src/script/social.rs#L451))
 - The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:68`](../crates/benilla-ui/src/script/sound.rs#L68))
 - `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file. ([`src/script/spellbook.rs:10`](../crates/benilla-ui/src/script/spellbook.rs#L10))
 - Ours answers milliseconds, since a cycle count of unknown rate is no use to an addon timing its code. ([`src/script/stdlib.rs:77`](../crates/benilla-ui/src/script/stdlib.rs#L77))
