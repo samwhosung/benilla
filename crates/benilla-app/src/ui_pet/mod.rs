@@ -15,8 +15,10 @@ use crate::ui_action::CooldownEvents;
 use crate::ui_unit::UnitFeed;
 
 mod bar;
-pub(crate) use bar::{active_aura_press, drop_bar, PetBarFeed};
+pub(crate) use bar::{active_aura_press, drop_bar};
 mod drain;
+mod live;
+pub(crate) use live::PetLive;
 mod menu;
 mod net;
 mod steps;
@@ -25,11 +27,9 @@ mod usable;
 // The predicate `0x4bcf70` over what the caller already holds, for the action bar's pet legs.
 pub(crate) use usable::actions_usable as pet_actions_usable;
 
-use bar::feed_pet_bar;
 // A pet bar press and the pet's other verbs, applied in call order by `crate::script_calls`.
 pub(crate) use drain::call_pet_off;
 pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
-use menu::feed_pet_menu;
 pub(crate) use steps::PetSteps;
 pub(crate) use unit::{feed_pet_unit, pet_state, PetSources};
 
@@ -44,14 +44,6 @@ mod tests;
 #[cfg(test)]
 mod usable_tests;
 
-/// The bar's feed as a system a test outside the pet module runs pass by pass, its memory kept
-/// between them.
-#[cfg(test)]
-pub(crate) fn pet_bar_feed(world: &mut World) -> bevy::ecs::system::SystemId {
-    world.init_resource::<bar::PetBarFeed>();
-    world.register_system(feed_pet_bar)
-}
-
 /// The pet action bar's state. A zero `spells.pet_guid` means no bar: the teardown packet carries
 /// only that guid.
 #[derive(Resource)]
@@ -63,10 +55,6 @@ pub(crate) struct PetBar {
     /// press's GCD. Each mutation but the seed fires the flush at its place, on the pet's cooldown
     /// lane (`crate::ui_action::cooldown_lane`).
     pub(crate) cooldowns: Cooldowns,
-    /// `PET_BAR_UPDATE` signals, counted. Both state writes signal unconditionally (`0x4bc940`,
-    /// `0x4bc960`), and `OnClick`'s `SetChecked(0)` needs that repaint to relight a press on the
-    /// current mode, so the count is in the feed's dedup key. Wrapping: only a change is read.
-    pub(crate) bar_signals: u32,
     /// The pet book's sorts, one per `SMSG_PET_SPELLS` (`0x4bdadb`), each followed by the
     /// derivation of the macros that follow the pet's book (`0x4bdae0` → `0x4f0ce0`). Wrapping:
     /// only a change is read, and [`Self::clear`] keeps it.
@@ -99,7 +87,6 @@ impl Default for PetBar {
         Self {
             spells: PetSpells::default(),
             cooldowns: Cooldowns::pet(),
-            bar_signals: 0,
             book_sorts: 0,
             expires: None,
         }
@@ -163,30 +150,20 @@ impl Plugin for UiPetPlugin {
         net::register(app);
         app.init_resource::<PetBar>()
             .init_resource::<PetAttackLatch>()
-            .init_resource::<bar::PetBarFeed>()
             // `SMSG_PET_SPELLS` writes its `UNIT_PET` there; the unit plugin fires the lane.
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
                 Update,
                 (
-                    // Feeds ride the unit feed, before the VM ticks; every verb is a script call
-                    // (`PetPress`, `PetSteps`).
-                    // The GCDs the attempt's sends owe the pet's list, in before the bar reads it.
+                    // The getters read the bar, its pet and its book at the call (`PetLive`), and
+                    // every verb is a script call (`PetPress`, `PetSteps`). The GCDs the attempt's
+                    // sends owe the pet's list go in before the cooldown events.
                     drain::arm_owed_pet_gcds
                         .in_set(UnitFeed)
-                        .before(feed_pet_bar),
-                    // After the pet snapshot: these feeds' events reach Lua at once, and their
-                    // handlers read `HasPetUI()`, which `crate::ui_pet_stats` pushes. The bar pushes
-                    // its cooldown triples before the cooldown events, as every cooldown feed does.
-                    feed_pet_bar
-                        .in_set(UnitFeed)
-                        .after(crate::ui_pet_stats::PetSnapshot)
                         .before(CooldownEvents),
                     feed_pet_unit
                         .in_set(UnitFeed)
-                        .in_set(crate::ui_unit::field_events::FieldEventPushes)
-                        .after(crate::ui_pet_stats::PetSnapshot),
-                    feed_pet_menu.in_set(UnitFeed),
+                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
                 ),
             );
     }

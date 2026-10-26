@@ -170,8 +170,9 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         Row::HostHeld,
         "::ui_pet::PetAttackLatch",
         "the pet's attack latch, which a new pet's `SMSG_PET_SPELLS` lowers (`0x4bc8ce`) inside \
-         `SetPet`, whose own `PET_BAR_UPDATE` (`0x4bc90c`) `feed_pet_bar` fires; the selection's \
-         release and `PetStopAttack`, acting in their calls, hold it in the host",
+         `SetPet`, whose own `PET_BAR_UPDATE` (`0x4bc90c`) fires on the notice lane; the \
+         selection's release and `PetStopAttack`, acting in their calls, hold it in the host, \
+         and the bar's getters read it there",
     ),
     (
         Row::HostHeld,
@@ -382,7 +383,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::HomeBind", "net::ObjectStore", "net::UnitSpeeds",
         "net::motion::modes::UnitMoveModes", "net::motion::remote::RemoteMotion",
         "net::reputations::Reputations", "spell::mods::SpellModifiers",
-        "ui_action::PlayerActions"]),
+        "ui_action::PlayerActions", "ui_pet::PetBar"]),
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
@@ -416,17 +417,13 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_macro::rebind_macro_spells", &["ui_action::ActionSlots", "ui_action::PlayerActions",
         "ui_pet::PetBar"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
-    ("::ui_pet::bar::feed_pet_bar", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
     // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); its name
     // reads as the frame left it.
     ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "ui_party::GroupState"]),
-    ("::ui_pet::menu::feed_pet_menu", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+    // `UNIT_HAPPINESS`'s edge under its `Deviation:`, the bucket compared as the frame left it.
+    ("::ui_pet_stats::feed_pet_stats", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "ui_pet::PetBar"]),
-    ("::ui_pet_book::feed_pet_book", &["net::GuidIndex", "net::ObjectStore", "ui_pet::PetBar"]),
-    ("::ui_pet_stats::feed_pet_stats", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "ui_pet::PetBar"]),
     ("::ui_cast::feed_cast_reports", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
         "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",
@@ -528,7 +525,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::console::ConsoleCommands",
     // The creature families the cast send's pet learn rung reads (`0x60c7c0`).
     "::ui_pet_stats::PetFamilyTables",
-    // The loyalty names and the slot prices the host's stable getters read.
+    // The personality and loyalty names and the slot prices the host's stat and stable getters read.
     "::ui_pet_stats::PetStatTables",
     // The area names a trainer description's `$z` reads through the host.
     "::QuestHeaderNamesRes",

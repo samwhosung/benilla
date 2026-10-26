@@ -516,6 +516,8 @@ mod packet_signal_tests;
 #[cfg(test)]
 mod petition_live_tests;
 #[cfg(test)]
+mod pet_live_tests;
+#[cfg(test)]
 mod quest_log_live_tests;
 #[cfg(test)]
 mod quiet_tests;

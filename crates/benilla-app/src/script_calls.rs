@@ -370,7 +370,6 @@ impl ScriptCallHost<'_, '_> {
         let appliers = &mut self.appliers;
         script.seat_selection(appliers.select().seated());
         if at.latched && !appliers.pet().attack_latched() {
-            script.lower_pet_attack();
             script.fire_event("PET_BAR_UPDATE", vec![]);
         }
         if let Some(states) = appliers.action_states().as_mut() {
@@ -400,7 +399,6 @@ impl ScriptCallHost<'_, '_> {
                 // The teardown's StopAttack reported first (`0x493a08`); `PetStopAttack` lowered
                 // the latch and signals with the selection zeroed (`0x4bd6ae`, `0x4939d3`).
                 self.signal_reports(script, &mut at.mark);
-                script.lower_pet_attack();
                 script.fire_event("PET_BAR_UPDATE", vec![]);
                 at.latched = false;
                 script.seat_selection(self.appliers.select().seated());
@@ -470,12 +468,20 @@ impl ScriptCallHost<'_, '_> {
                 if finished.as_ref().is_some_and(|&(_, latched)| latched) {
                     // The latch (`0x4bd42e`) signals `PET_BAR_UPDATE` (`0x4bd438`), whose
                     // listeners run before the order goes (`0x4bd4a4`).
-                    script.raise_pet_attack();
                     script.fire_event("PET_BAR_UPDATE", vec![]);
                     self.at_point(script, &mut at.mark);
                     self.listened(at);
                 }
                 finished.map(|(send, _)| PetStep::Order(send))
+            }
+            // A reaction's or Stay's and Follow's state write signals `PET_BAR_UPDATE`
+            // (`0x4bc956`, `0x4bc979`), whose listeners read the lit token before the send
+            // (`0x4bd444`).
+            Some(PetStep::Order(send)) if send.signals() => {
+                script.fire_event("PET_BAR_UPDATE", vec![]);
+                self.at_point(script, &mut at.mark);
+                self.listened(at);
+                Some(PetStep::Order(send))
             }
             step => step,
         };

@@ -48,12 +48,9 @@ fn scene() -> Rig {
     rig
 }
 
+/// `f` on the VM with the call host lent, as every production entry lends it.
 fn ui<R>(rig: &mut Rig, f: impl FnOnce(&mut benilla_ui::script::UiScript) -> R) -> R {
-    let mut script = rig
-        .app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>();
-    f(&mut script)
+    crate::script_calls::with_hosted_vm(rig.app.world_mut(), |s| f(s.expect("a VM")))
 }
 
 fn lines(commands: Vec<ClientCommand>) -> Vec<String> {

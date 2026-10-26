@@ -72,7 +72,6 @@ impl PetSteps<'_, '_> {
             PetCall::StopAttack => {
                 if stop_pet_attack(&mut self.latch, &self.commands) {
                     debug!("ui_pet: stop attack");
-                    script.lower_pet_attack();
                     script.fire_event("PET_BAR_UPDATE", vec![]);
                 }
             }

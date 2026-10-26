@@ -1543,32 +1543,11 @@ fn firebolt() -> SpellTooltipView {
     }
 }
 
-/// Pet-bar tokens and craft item subjects name no spell, so they are left out; the auras are the
-/// aura builder's subjects, by spell, level and stack.
+/// Craft item subjects name no spell, so they are left out; the auras are the aura builder's
+/// subjects, by spell, level and stack.
 #[test]
 fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
     let mut s = script();
-    s.set_pet_actions(
-        true,
-        true,
-        true,
-        vec![
-            PetActionView {
-                name: Some("PET_ACTION_ATTACK".into()),
-                is_token: true,
-                ..Default::default()
-            },
-            firebolt_slot(),
-        ],
-    );
-    s.set_pet_book(PetBookState {
-        token: Some("DEMON".into()),
-        slots: vec![SpellSlotView {
-            spell_id: 6307,
-            name: "Blood Pact".into(),
-            ..Default::default()
-        }],
-    });
     let reward = |spell_id| {
         Some(QuestRewardSpell {
             spell_id,
@@ -1641,10 +1620,6 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
             (11597, 30, 5)
         ]
     );
-    // The pet's bar and book are read through the builder's unit selector: the pet's views.
-    let mut pet_subjects = s.pet_spell_tooltip_subjects();
-    pet_subjects.sort_unstable();
-    assert_eq!(pet_subjects, vec![3110, 6307]);
 }
 
 /// The builder's unit selector picks the view built against the pet: `SetPetAction` passes it
@@ -1735,6 +1710,30 @@ fn the_unit_selector_setters_read_the_pet_view() {
     assert_eq!(got("CRAFT"), "absorb 305 damage");
     assert!(s.take_spell_tooltip_asks().is_empty());
     assert!(s.take_pet_spell_tooltip_asks().is_empty());
+    assert!(s.take_errors().is_empty());
+}
+
+/// `SetPetAction(0)` is past the bar: the index less one, compared unsigned (`0x532806`,
+/// `0x532812`), so it answers nil and builds nothing, where slot 1 renders.
+#[test]
+fn set_pet_action_zero_is_past_the_bar() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_pet_actions(true, true, true, vec![firebolt_slot()]);
+    s.set_pet_spell_tooltip(3110, firebolt());
+    let shown = |s: &mut UiScript, index: u32| {
+        s.eval::<(Option<i64>, i64)>(&format!(
+            r#"local a = PB0 or CreateFrame("Button", "PB0"); a:SetPoint("CENTER", 0, 0)
+            a:SetWidth(10); a:SetHeight(10)
+            local tt = TT or CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+            tt:SetOwner(a, "ANCHOR_RIGHT")
+            local r = tt:SetPetAction({index})
+            return r, tt:NumLines()"#
+        ))
+        .unwrap()
+    };
+    assert_eq!(shown(&mut s, 0), (None, 0));
+    assert_eq!(shown(&mut s, 1).1, 4, "slot 1 renders");
     assert!(s.take_errors().is_empty());
 }
 

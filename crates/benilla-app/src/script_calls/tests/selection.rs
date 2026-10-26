@@ -780,8 +780,8 @@ fn a_pet_attacks_pick_signals_its_target_change_before_the_order() {
 
 /// A possessed unit's Attack raises its attack latch (`0x4bd42e`) and signals `PET_BAR_UPDATE`
 /// (`0x4bd438`) past the validator and ahead of `CMSG_PET_ACTION` (`0x4bd4a4`): the listener's
-/// packet goes out between the pick's selection and the order, it reads the Attack button lit,
-/// and the bar's feed signals no second time.
+/// packet goes out between the pick's selection and the order, and it reads the Attack button lit
+/// through the lent host.
 #[test]
 fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
     let attack = benilla_protocol::messages::PET_COMMAND_ATTACK
@@ -791,12 +791,6 @@ fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
     spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
     with_pet(&mut f, true, attack);
     feeds(&mut f);
-    // The bar as its feed paints it, Attack a command token.
-    let bar_feed = crate::ui_pet::pet_bar_feed(f.app.world_mut());
-    f.app
-        .world_mut()
-        .run_system(bar_feed)
-        .expect("the feed runs");
     f.rx.try_iter().for_each(drop);
     run(
         &mut f,
@@ -819,15 +813,6 @@ fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
     assert!(
         eval::<bool>(&mut f, "return LIT == 1"),
         "the latch lit Attack"
-    );
-    f.app
-        .world_mut()
-        .run_system(bar_feed)
-        .expect("the feed runs");
-    assert_eq!(
-        eval::<i64>(&mut f, "return HEARD"),
-        1,
-        "the feed signals no second time"
     );
 }
 

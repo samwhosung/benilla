@@ -1,7 +1,5 @@
-//! The pet action bar's feed: the ten packed words of the last `SMSG_PET_SPELLS`, which the
-//! server owns whole, rendered as ten `PetActionView`s each frame.
-
-use bevy::prelude::*;
+//! The pet action bar's paint: the ten packed words of the last `SMSG_PET_SPELLS`, which the
+//! server owns whole, as the getters read each one at the call ([`super::live`]).
 
 use benilla_protocol::messages::{
     PetActionEntry, PetSpells, PET_COMMAND_ATTACK, PET_COMMAND_DISMISS, PET_COMMAND_FOLLOW,
@@ -10,35 +8,14 @@ use benilla_protocol::messages::{
 use benilla_ui::script::PetActionView;
 
 use crate::net::ObjectStore;
-use crate::target::UNIT_FLAG_POSSESSED;
-use crate::ui_action::Spells;
 
-use super::{PetBar, PetUnit};
-
-/// What the feed last computed from its own sources, so it pushes only what moved since: the
-/// bar-wide key, whose leading `u32` is [`PetBar::bar_signals`] so a signal that changes nothing
-/// still repaints, the ten slot views without their cooldowns, and the state word.
-#[derive(Default)]
-pub(super) struct PetBarMemory {
-    pushed: Option<(u32, bool, bool, bool)>,
-    slots: Vec<PetActionView>,
-    state: Option<u32>,
-    /// The ten cooldown triples as last pushed, so a cooldown alone is pushed with no event: its
-    /// events are the list's flush, on the pet's cooldown lane (`crate::ui_action::cooldown_lane`).
-    cooldowns: Vec<Option<(i64, u32, bool)>>,
-}
-
-/// [`feed_pet_bar`]'s memory per VM, a resource so the world entry's reset ([`drop_bar`]) records
-/// what it pushed and the feed does not push or signal it again.
-#[derive(Resource, Default)]
-pub(crate) struct PetBarFeed(crate::ui_script::VmMemo<PetBarMemory>);
+use super::PetBar;
 
 /// The world entry's `SetPetGuid(0, 0)` (`0x4bc6f0` → `0x4bc7e0` at `0x4bc6fd`): the guid and the
-/// expiry cleared (`0x4bc822`, `0x4bc83d`), the attack latch lowered (`0x4bc8ce`), one more bar
-/// signal (`0x4bc90c`), and the VM given the bar gone, as [`feed_pet_bar`] would push it, and no
-/// pet UI, as `HasPetUI` resolves the pet from the cleared guid (`0x4be67e`-`0x4be690`) and the
-/// stats feed would push it. Whether the guid changed, for `UNIT_PET` (`0x4bc84f`); the caller
-/// signals both.
+/// expiry cleared (`0x4bc822`, `0x4bc83d`) and the attack latch lowered (`0x4bc8ce`), so the
+/// getters read no bar and no pet UI, as `HasPetUI` resolves the pet from the cleared guid
+/// (`0x4be67e`-`0x4be690`); the VM's copy goes too. Whether the guid changed, for `UNIT_PET`
+/// (`0x4bc84f`); the caller signals it and `PET_BAR_UPDATE` (`0x4bc90c`).
 ///
 /// The rest stays as the reference leaves it: the slots and the mode word, whose every reader
 /// tests the guid first (`GetPetActionInfo` `0x4bdc9d`, `GetPetActionCooldown` `0x4bdff2`,
@@ -50,34 +27,15 @@ pub(crate) fn drop_bar(
     script: &mut benilla_ui::script::UiScript,
     bar: &mut PetBar,
     latch: &mut super::PetAttackLatch,
-    feed: Option<&mut PetBarFeed>,
-    stats_feed: Option<&mut crate::ui_pet_stats::PetStatsFeed>,
 ) -> bool {
     let changed = bar.has_bar();
-    let signals = bar.bar_signals.wrapping_add(1);
     bar.spells.pet_guid = 0;
     bar.expires = None;
-    bar.bar_signals = signals;
     // `0x4bc8ce` runs on a change only, and the latch is only ever up under a guid.
     if changed {
         latch.0 = None;
     }
     script.drop_pet_bar();
-    script.set_pet_state(bar.spells.state);
-    // What the stats feed's push of no pet records.
-    if let Some(stats_feed) = stats_feed {
-        stats_feed.0.get(script).pushed = Some((false, benilla_ui::script::PetStats::default()));
-    }
-    // What the feed's own push of a cleared bar records: no slots, not usable, nothing to lift.
-    let Some(feed) = feed else {
-        return changed;
-    };
-    *feed.0.get(script) = PetBarMemory {
-        pushed: Some((signals, false, false, false)),
-        slots: Vec::new(),
-        state: Some(bar.spells.state),
-        cooldowns: Vec::new(),
-    };
     changed
 }
 
@@ -219,146 +177,4 @@ pub(crate) fn active_aura_press(
     }
     let spell_id = entry.action();
     crate::ui_action::toggle::active_action_toggle(spell_id, spell?, pet?).then_some(spell_id)
-}
-
-/// Push the ten slot views on a change, and `PET_BAR_UPDATE` when the bar itself moved. A change
-/// of the cooldowns alone is pushed without an event: the pet's cooldown events are its list's
-/// flushes, so a natural expiry fires none, as in the reference.
-pub(super) fn feed_pet_bar(
-    mut vm: crate::script_calls::VmWith<(
-        Res<'static, PetBar>,
-        Res<'static, super::PetAttackLatch>,
-    )>,
-    spells: Option<Res<Spells>>,
-    clock: Res<crate::ui_script::UiClock>,
-    pet: PetUnit,
-    mut memory: ResMut<PetBarFeed>,
-) {
-    vm.feed(|script, (bar, latch), fires| {
-        let Some(script) = script else {
-            return;
-        };
-        let memory = memory.0.get(script);
-        // Every read takes the frame's anchor, the instant its starts project from: one frame,
-        // one time, however long the frame runs.
-        let (anchor, ui_now) = (clock.anchor, clock.ui_now);
-        let has_bar = bar.has_bar();
-        // An unstreamed pet is not usable (`0x4bd034`), and no slot shows active.
-        let pet_store = pet.store(bar.spells.pet_guid);
-        let pet_flags = pet_store.map(|s| s.0.unit_flags());
-        let usable = pet.actions_usable(&bar);
-        // `PickupPetAction`'s gate alone: the pet's object must resolve (`0x4be1f7`) and not be
-        // possessed (`0x4be20a`). A possessed unit's bar cannot be rearranged but its buttons work,
-        // so possession stays out of `usable`; an unstreamed pet has no flags to test and lifts
-        // nothing.
-        let pickup_allowed = pet_flags.is_some_and(|flags| flags & UNIT_FLAG_POSSESSED == 0);
-        let pet_attacking = latch.up();
-        // `GetPetTimeRemaining`'s expiry on the VM clock, signed both ways around the anchor
-        // sample.
-        script.set_pet_expiry(bar.expires.map(|t| match t.checked_duration_since(anchor) {
-            Some(ahead) => ui_now + ahead.as_secs_f64(),
-            None => ui_now - anchor.duration_since(t).as_secs_f64(),
-        }));
-
-        let fresh: Vec<PetActionView> = if has_bar {
-            bar.spells
-                .bar
-                .iter()
-                .map(|&entry| {
-                    let display = entry
-                        .is_spell()
-                        .then(|| spells.as_ref().and_then(|s| s.catalog.get(entry.action())))
-                        .flatten();
-                    let cooldown = display.and_then(|d| {
-                        bar.cooldowns
-                            .info(entry.action(), 0, Some(d), anchor)
-                            .ui_triple(anchor, ui_now)
-                    });
-                    slot_view(
-                        entry,
-                        &bar.spells,
-                        display,
-                        cooldown,
-                        pet_attacking,
-                        active_aura_press(entry, pet_store, display).is_some(),
-                    )
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // `bar_signals` in the key repaints a signal that moved nothing (`SetPet`'s `0x4bc90c`);
-        // the cooldown triples are keyed apart, since they carry no `PET_BAR_UPDATE`.
-        let cooldowns: Vec<Option<(i64, u32, bool)>> = fresh.iter().map(|s| s.cooldown).collect();
-        let content: Vec<PetActionView> = fresh
-            .iter()
-            .cloned()
-            .map(|mut s| {
-                s.cooldown = None;
-                s
-            })
-            .collect();
-        // A slot is pushed only when this feed's own source moved since its last push: the drag,
-        // the autocast toggles and the reaction and Stay/Follow presses write the VM and fire
-        // `PET_BAR_UPDATE` in place (`0x4bcb6d`, `0x4bcc81`, `0x4bcdcb`, `0x4bc956`, `0x4bc979`),
-        // so a store that has not caught up never rolls them back, and one that has is no change.
-        // The event fires only when what is pushed differs from what the VM shows.
-        let held = script.pet_action_views();
-        let key = (bar.bar_signals, has_bar, usable, pickup_allowed);
-        let key_changed = memory.pushed.as_ref() != Some(&key);
-        // A signal from this side (`SMSG_PET_SPELLS` through `SetPet`, `0x4bc90c`) is the whole
-        // bar's source moving, even with equal values: it overwrites the VM whole, so a latch the
-        // VM made and this side refused to send cannot outlive the packet.
-        let resignalled = memory.pushed.map(|k| k.0) != Some(bar.bar_signals);
-        let resized =
-            resignalled || memory.slots.len() != content.len() || held.len() != content.len();
-        let next: Vec<PetActionView> = content
-            .iter()
-            .enumerate()
-            .map(|(i, view)| {
-                if resized || memory.slots.get(i) != Some(view) {
-                    view.clone()
-                } else {
-                    held[i].clone()
-                }
-            })
-            .collect();
-        let slots_moved = resized || memory.slots != content;
-        let bar_changed = key_changed || next != held;
-        let cooldowns_changed = memory.cooldowns != cooldowns;
-        if resignalled || memory.state != Some(bar.spells.state) {
-            script.set_pet_state(bar.spells.state);
-            memory.state = Some(bar.spells.state);
-        }
-        if key_changed || slots_moved || cooldowns_changed {
-            let views = next
-                .iter()
-                .zip(&cooldowns)
-                .map(|(view, &cooldown)| PetActionView {
-                    cooldown,
-                    ..view.clone()
-                })
-                .collect();
-            script.set_pet_actions(has_bar, usable, pickup_allowed, views);
-            memory.cooldowns = cooldowns;
-            memory.slots = content.clone();
-        }
-        if bar_changed {
-            debug!(
-                "ui_pet: bar {} ({} occupied slot(s), {}{})",
-                if key.1 { "shown" } else { "hidden" },
-                content.iter().filter(|s| s.name.is_some()).count(),
-                if key.2 { "usable" } else { "disabled" },
-                if key.3 { "" } else { ", possessed" },
-            );
-            memory.pushed = Some(key);
-            // A signal from this side is fired at its place: `SetPetGuid`'s (the notice lane's
-            // `PetGuidSet`, the world entry's reset) and `SMSG_PET_MODE`'s (`0x4bdb4f`); a repaint
-            // off any other source is the feed's.
-            if !resignalled {
-                fires.post("PET_BAR_UPDATE", vec![]);
-            }
-        }
-    })
 }

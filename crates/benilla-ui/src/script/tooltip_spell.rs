@@ -144,21 +144,6 @@ impl super::UiScript {
         self.model_mut().pet_spell_tooltip_asks.drain().collect()
     }
 
-    /// The spells whose pet view a hover reads from the VM's own state: the pet's bar and book,
-    /// whose setters pass the builder's unit selector (`0x532888`, `0x532e23`). The app pushes
-    /// their views ahead of a hover.
-    pub fn pet_spell_tooltip_subjects(&self) -> Vec<u32> {
-        let model = self.model_ref();
-        let pet_bar = model
-            .pet_bar
-            .slots
-            .iter()
-            .filter(|s| !s.view.is_token)
-            .filter_map(|s| s.view.spell_id);
-        let pet_book = model.pet_book.slots.iter().map(|s| s.spell_id);
-        pet_bar.chain(pet_book).filter(|&id| id != 0).collect()
-    }
-
     /// The spells whose player view a hover reads from the VM's own state rather than the
     /// player's book: the open quest's and each log entry's reward spell and the open craft's
     /// spell subjects. The app pushes their views ahead of a hover; the auras' views are
@@ -815,21 +800,29 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // `is-number` else `Usage: SetPetAction(slot)` (`0x855220`, `0x5328f4`).
             let index = binding_abi::index_arg(lua, index, "Usage: SetPetAction(slot)")?;
             let now = crate::script::clock::now(lua);
-            let (spell_id, name, remaining_ms) = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                match model
-                    .pet_bar
-                    .slots
-                    .get(index.saturating_sub(1))
-                    .filter(|s| !s.view.is_token)
-                {
-                    Some(s) => match s.view.spell_id {
-                        Some(id) => (id, s.view.name.clone(), live_remaining_ms(s.cooldown, now)),
-                        None => return Ok(Value::Nil),
-                    },
-                    None => return Ok(Value::Nil),
-                }
+            // The slot as it stands, and its spell's cooldown off the pet's list (`0x6e2ea0`); the
+            // index less one, compared unsigned, so 0 is past the bar (`0x532806`, `0x532812`).
+            let Some(view) = u32::try_from(index)
+                .ok()
+                .and_then(|i| super::pet::slot_now(lua, i))
+                .filter(|v| !v.is_token)
+            else {
+                return Ok(Value::Nil);
             };
+            let Some(spell_id) = view.spell_id else {
+                return Ok(Value::Nil);
+            };
+            let cooldown =
+                super::cooldown_read::read_live(lua, super::CooldownQuery::PetSpell(spell_id))
+                    .unwrap_or_else(|| {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        model
+                            .pet_bar
+                            .slots
+                            .get(index.saturating_sub(1))
+                            .and_then(|s| s.cooldown)
+                    });
+            let (name, remaining_ms) = (view.name, live_remaining_ms(cooldown, now));
             // The unit selector and the rank on both legs (`0x532886`, `0x5328ce`).
             let opts = SpellRenderOpts {
                 alt_caster: true,

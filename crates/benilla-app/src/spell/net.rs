@@ -3174,14 +3174,14 @@ mod tests {
 
     /// One SPELL_GO of `display` (as spell 2649) by `caster` in a world holding us (guid 10) and,
     /// when given, the casting item; `mods` is the player's table. Returns the player bank's and
-    /// the pet bank's armed durations, the pet bar's repaint count and the pet list's generation.
+    /// the pet bank's armed durations and the pet list's generation.
     fn go_cooldowns(
         caster: u64,
         store: ObjectStore,
         item: Option<(u64, ObjectStore)>,
         display: fn() -> benilla_formats::SpellDisplay,
         mods: crate::spell::SpellModifiers,
-    ) -> (u32, u32, u32, u64) {
+    ) -> (u32, u32, u64) {
         use crate::combat_text::CombatTextSpawn;
         use crate::creature_anim::Casting;
         use crate::go_anim::GoLidOpen;
@@ -3310,7 +3310,6 @@ mod tests {
         (
             armed(world.resource::<Cooldowns>()),
             armed(&world.resource::<crate::ui_pet::PetBar>().cooldowns),
-            world.resource::<crate::ui_pet::PetBar>().bar_signals,
             world
                 .resource::<crate::ui_pet::PetBar>()
                 .cooldowns
@@ -3332,35 +3331,34 @@ mod tests {
     #[test]
     fn a_pets_own_go_arms_the_pet_bank_and_only_the_pet_bank() {
         let fire = |caster: u64, store: ObjectStore| {
-            let (player, pet, signals, generation) = go_cooldowns(
+            let (player, pet, generation) = go_cooldowns(
                 caster,
                 store,
                 None,
                 growl,
                 crate::spell::SpellModifiers::default(),
             );
-            (player > 0, pet > 0, signals, generation)
+            (player > 0, pet > 0, generation)
         };
 
         // Our pet: the PET bank only. The insert moves the list's generation, which is the flush's
-        // edge (`0x6e85fc`, `0x6e8601`: the cooldown events), and signals no `PET_BAR_UPDATE`.
-        let (player, pet, signals, generation) = fire(20, owned(SUMMONEDBY, 10));
+        // edge (`0x6e85fc`, `0x6e8601`: the cooldown events).
+        let (player, pet, generation) = fire(20, owned(SUMMONEDBY, 10));
         assert!(pet, "our pet's GO arms the pet bank");
         assert!(!player, "…and never the player's");
         assert_eq!(generation, 1, "the pet list's flush edge");
-        assert_eq!(signals, 0, "the bar's own signal is not the GO's");
 
         // A charm reads CHARMEDBY first: the same leg, the other field.
-        let (_, charmed, _, _) = fire(20, owned(CHARMEDBY, 10));
+        let (_, charmed, _) = fire(20, owned(CHARMEDBY, 10));
         assert!(charmed, "a charmed unit's GO arms it too");
 
         // A totem carries CREATEDBY and no SUMMONEDBY: `0x5ee5a0` would accept it, `0x6e859a` does
         // not.
-        let (_, totem, _, _) = fire(30, owned(CREATEDBY, 10));
+        let (_, totem, _) = fire(30, owned(CREATEDBY, 10));
         assert!(!totem, "CREATEDBY alone is not this leg's owner test");
 
         // Somebody else's pet: neither bank, no flush.
-        let (p2, pet2, _, generation) = fire(40, owned(SUMMONEDBY, 99));
+        let (p2, pet2, generation) = fire(40, owned(SUMMONEDBY, 99));
         assert!(!p2 && !pet2, "a stranger's pet arms nothing");
         assert_eq!(generation, 0, "and moves no edge");
     }

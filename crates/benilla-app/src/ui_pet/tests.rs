@@ -324,58 +324,46 @@ fn a_press_latches_the_state_the_server_never_echoes() {
     );
 }
 
-/// The reaction and Stay/Follow presses signal in the VM's verb (`0x4bc956`, `0x4bc979`), and the
-/// possessed Attack latch in the call host (`0x4bd438`), so the app's mirror of the latch signals
-/// nothing.
+/// The reaction and Stay/Follow presses write the state word, which signals `PET_BAR_UPDATE`
+/// ahead of the send (`0x4bc956`, `0x4bc979`); Dismiss, a spell and Attack write none, the
+/// possessed Attack's latch signalling in the call host instead (`0x4bd438`).
 #[test]
-fn no_press_signals_from_the_apps_latch() {
+fn only_the_state_writes_signal() {
     let mut bar = PetBar {
         spells: state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE),
         ..Default::default()
     };
     let mut latch = PetAttackLatch::default();
-    let signals = |b: &PetBar| b.bar_signals;
-
-    let before = signals(&bar);
-    latch_press(
+    let mut press =
+        |bar: &mut PetBar, word, possessing| latch_press(bar, Some(&mut latch), word, possessing);
+    assert!(press(
         &mut bar,
-        Some(&mut latch),
         packed(PET_COMMAND_STAY, PET_ACT_COMMAND),
-        false,
-    );
+        false
+    ));
     assert_eq!(bar.spells.command_state(), PET_COMMAND_STAY, "mirrored");
-    latch_press(
+    assert!(press(
         &mut bar,
-        Some(&mut latch),
         packed(PET_REACT_PASSIVE, PET_ACT_REACTION),
-        false,
-    );
+        false
+    ));
     assert_eq!(bar.spells.react_state(), PET_REACT_PASSIVE, "mirrored");
-    latch_press(
+    assert!(!press(
         &mut bar,
-        Some(&mut latch),
         packed(PET_COMMAND_DISMISS, PET_ACT_COMMAND),
-        false,
-    );
-    latch_press(
+        false
+    ));
+    assert!(!press(&mut bar, packed(3010, PET_ACT_ENABLED), false));
+    assert!(!press(
         &mut bar,
-        Some(&mut latch),
-        packed(3010, PET_ACT_ENABLED),
-        false,
-    );
-    latch_press(
-        &mut bar,
-        Some(&mut latch),
         packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND),
-        false,
-    );
-    latch_press(
+        false
+    ));
+    assert!(!press(
         &mut bar,
-        Some(&mut latch),
         packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND),
-        true,
-    );
-    assert_eq!(signals(&bar), before, "none of these signals from the app");
+        true
+    ));
 }
 
 /// The latch's possession gate is `0x4bd420`.
@@ -750,85 +738,6 @@ fn the_dismiss_word_is_the_carved_literal() {
     assert_eq!(entry.kind(), PET_ACT_COMMAND);
     assert_eq!(entry.action(), PET_COMMAND_DISMISS);
     assert!(!entry.is_spell(), "dismiss is a command, never a cast");
-}
-
-/// A cooldown moves no bar: the feed pushes the new triple and fires nothing, for its events are
-/// the list's flush (`0x4b31b0`, `0x4bce90`), which `flush_tests` covers.
-#[test]
-fn a_cooldown_alone_is_pushed_with_no_event_from_the_bar_feed() {
-    use bevy::prelude::*;
-    use std::collections::HashMap;
-    const CLAW: u32 = 3010;
-    let claw = || benilla_formats::SpellDisplay {
-        recovery_ms: 8_000,
-        ..spell("Claw", None)
-    };
-    let mut bar = PetBar {
-        spells: state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE),
-        ..Default::default()
-    };
-    bar.spells.bar[3] = packed(CLAW, PET_ACT_ENABLED);
-    let mut app = App::new();
-    app.init_resource::<crate::ui_script::UiClock>()
-        .init_resource::<crate::net::GuidIndex>()
-        .init_resource::<crate::net::SelfGuid>()
-        .insert_resource(crate::ui_action::Spells {
-            catalog: benilla_formats::SpellCatalog::from_displays(HashMap::from([(CLAW, claw())])),
-            ..crate::ui_action::Spells::empty_for_tests()
-        })
-        .insert_resource(bar)
-        .init_resource::<PetAttackLatch>()
-        .init_resource::<super::PetBarFeed>()
-        .add_systems(Update, super::bar::feed_pet_bar);
-    let script = benilla_ui::script::UiScript::new().unwrap();
-    script
-        .run(
-            r#"
-            SEEN = {}
-            local f = CreateFrame("Frame")
-            f:RegisterEvent("PET_BAR_UPDATE")
-            f:RegisterEvent("PET_BAR_UPDATE_COOLDOWN")
-            f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
-        "#,
-        )
-        .unwrap();
-    app.insert_non_send_resource(script);
-    let seen = |app: &mut App| -> Vec<String> {
-        app.update();
-        let mut s = app
-            .world_mut()
-            .non_send_resource_mut::<benilla_ui::script::UiScript>();
-        s.resolve();
-        let out = s.eval::<Vec<String>>("return SEEN").unwrap();
-        s.run("SEEN = {}").unwrap();
-        out
-    };
-    assert_eq!(
-        seen(&mut app),
-        Vec::<String>::new(),
-        "the bar arrives, its event its packet's (`0x4bc90c`)"
-    );
-    assert_eq!(seen(&mut app), Vec::<String>::new(), "nothing moved");
-
-    app.world_mut()
-        .resource_mut::<PetBar>()
-        .cooldowns
-        .start_spell(CLAW, &claw(), 0, std::time::Instant::now(), None);
-    assert_eq!(
-        seen(&mut app),
-        Vec::<String>::new(),
-        "a cooldown alone is neither the bar's event nor this feed's"
-    );
-    let (start, duration, enable): (f64, f64, i32) = app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .eval("return GetPetActionCooldown(4)")
-        .unwrap();
-    assert!(
-        duration > 7.9 && duration < 8.1,
-        "the triple was pushed: {start} {duration}"
-    );
-    assert_eq!(enable, 1);
 }
 
 /// `0x4bcc19` calls `0x4bd190`, which copies the toggled word into the pet spellbook.

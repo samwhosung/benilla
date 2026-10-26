@@ -147,13 +147,11 @@ impl Plugin for UiUnitPlugin {
         .add_systems(
             Update,
             (
-                // After the seats the world-enter cascade's handlers read, the pet's among them:
-                // its pet reset signals `UNIT_PET` (`0x4bc84f`), whose handlers ask `HasPetUI()`.
+                // After the seats the world-enter cascade's handlers read.
                 feed_units
                     .in_set(field_events::FieldEventPushes)
                     .in_set(UnitSnapshots)
-                    .after(WorldEnterSeats)
-                    .after(crate::ui_pet_stats::PetSnapshot),
+                    .after(WorldEnterSeats),
                 // After the snapshots its handlers read, and ahead of the action feed's events:
                 // `SetPlayerControl` stores the flag (`0x4958ea`) and signals its event
                 // (`0x4958f7`, `0x49590b`) before the usable refresh (`0x4958fc`, `0x495910`).
@@ -1576,8 +1574,6 @@ fn feed_units(
     // Our player's create since this feed last ran: an arrival (`0x5dea50`), which a `/reload`'s
     // cascade lacks. The feed runs only with an interface up, so an arrival before one waits.
     arrivals: Query<(), Added<SelfPlayer>>,
-    pet_bar_feed: Option<ResMut<crate::ui_pet::PetBarFeed>>,
-    pet_stats_feed: Option<ResMut<crate::ui_pet_stats::PetStatsFeed>>,
     mut enter_usable: Option<ResMut<crate::ui_action::EnterUsable>>,
 ) {
     let arrived = !arrivals.is_empty();
@@ -1939,17 +1935,12 @@ fn feed_units(
     // signals, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`), then the cascade's rest. Its trainer
     // refresh (`0x4bc872`) never runs here: the cascade zeroes the trainer cell before it
     // (`0x4909ab` → `0x4d73e0`).
-    let (mut pet_bar_feed, mut pet_stats_feed) = (pet_bar_feed, pet_stats_feed);
     let dropped = vm.turn(|script, (_, _, bar, latch)| {
         let script = script?;
         Some(match (bar, latch) {
-            (Some(mut bar), Some(mut latch)) => crate::ui_pet::drop_bar(
-                script,
-                &mut bar,
-                &mut latch,
-                pet_bar_feed.as_deref_mut(),
-                pet_stats_feed.as_deref_mut(),
-            ),
+            (Some(mut bar), Some(mut latch)) => {
+                crate::ui_pet::drop_bar(script, &mut bar, &mut latch)
+            }
             _ => script.drop_pet_bar(),
         })
     });

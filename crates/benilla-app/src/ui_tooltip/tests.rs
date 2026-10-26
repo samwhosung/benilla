@@ -1778,6 +1778,13 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     .init_resource::<crate::net::GuidIndex>()
     .init_resource::<crate::spell::SpellModifiers>()
     .add_systems(Update, feed_spell_tooltips);
+    // Firebolt on the pet's bar, the word the feed reads its subject off.
+    let mut bar = crate::ui_pet::PetBar::default();
+    bar.spells.pet_guid = 0x2A;
+    bar.spells.bar[0] = benilla_protocol::messages::PetActionEntry::from(
+        3110 | (u32::from(benilla_protocol::messages::PET_ACT_ENABLED) << 24),
+    );
+    app.insert_resource(bar);
 
     let mut script = UiScript::new().unwrap();
     crate::ui_script::test_ui::load_tooltip_template(&script);
@@ -1922,6 +1929,15 @@ fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level(
     let mut index = app.world_mut().resource_mut::<crate::net::GuidIndex>();
     index.0.insert(ME, me);
     index.0.insert(IMP, imp);
+    // Blood Pact on the imp's bar and in its book, the words the feed reads its subjects off.
+    let word = benilla_protocol::messages::PetActionEntry::from(
+        6307 | (u32::from(benilla_protocol::messages::PET_ACT_ENABLED) << 24),
+    );
+    let mut bar = crate::ui_pet::PetBar::default();
+    bar.spells.pet_guid = IMP;
+    bar.spells.bar[0] = word;
+    bar.spells.spells = vec![word];
+    app.insert_resource(bar);
 
     let mut script = UiScript::new().unwrap();
     crate::ui_script::test_ui::load_tooltip_template(&script);

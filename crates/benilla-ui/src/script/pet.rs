@@ -1,6 +1,7 @@
 //! The pet bindings: the action bar `PetActionBarFrame.lua` drives, the stat block the pet frames
-//! read, and the pet menu's predicates and verbs. The app resolves every slot and pushes it
-//! ([`super::UiScript::set_pet_actions`]); presses queue back out for the app to send. A token
+//! read, and the pet menu's predicates and verbs. Each getter reads the bar, the pet and its book
+//! at the call through the lent host ([`live`]), else the copy a VM with no host holds
+//! ([`super::UiScript::set_pet_actions`]); the verbs apply inside their calls. A token
 //! slot's name and texture are the names of globals, which the stock Lua resolves
 //! (`PetActionBarFrame.lua:98-104`). Booleans are 1/nil and cooldowns go cold once elapsed, as in
 //! [`super::action`].
@@ -10,6 +11,12 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi;
 use super::protected::{self, Tag};
 use super::Model;
+
+mod live;
+pub(crate) use live::{book_now, flags_now, menu_now, seat_bar, slot_now, stats_now};
+pub use live::{
+    PetBarFlags, PetBarFlagsView, PetBookNow, PetMenuNow, PetSlot, PetSlots, PetStatsNow,
+};
 
 // The slot-word values the one-shot orders synthesize, restated from
 // `benilla_protocol::messages::pet` because this crate does not depend on the protocol.
@@ -184,6 +191,20 @@ fn latch_press(model: &mut Model, packed: u32) {
     model.raise("PET_BAR_UPDATE", Vec::new());
 }
 
+/// A press's local half for a VM with no host open: [`latch_press`] on the copy, for the slot word
+/// `word` names. With one open the press applies inside its call, where the host latches the state
+/// word and signals `PET_BAR_UPDATE` ahead of the send (`0x4bc956`, `0x4bc979`, `0x4bd444`).
+fn press_locally(lua: &Lua, word: impl FnOnce(&Model) -> Option<u32>) {
+    if super::host::open(lua) {
+        return;
+    }
+    super::tick::verb(lua, |model| {
+        if let Some(packed) = word(model) {
+            latch_press(model, packed);
+        }
+    });
+}
+
 /// The token slots' checked ring from the state word, as `GetPetActionInfo` lights them: a
 /// command when the unmasked `state >> 8` equals it or Attack's latch is up (`0x4bdf01`-`0x4bdf22`),
 /// a reaction when byte 0 does, a disabled bar reading as Passive (`0x4bde3c`).
@@ -205,21 +226,7 @@ fn repaint_tokens(bar: &mut PetBarState) {
 }
 
 impl super::UiScript {
-    /// The ten slot views as the VM holds them, the drag's and the toggles' writes included, each
-    /// without its cooldown: what the bar's `PET_BAR_UPDATE` handler last read.
-    pub fn pet_action_views(&self) -> Vec<PetActionView> {
-        self.model_ref()
-            .pet_bar
-            .slots
-            .iter()
-            .map(|s| PetActionView {
-                cooldown: None,
-                ..s.view.clone()
-            })
-            .collect()
-    }
-
-    /// Push the whole pet bar; the app diffs and fires `PET_BAR_UPDATE`.
+    /// Replace the whole pet bar, for a VM with no host to ask.
     pub fn set_pet_actions(
         &mut self,
         has_bar: bool,
@@ -248,11 +255,11 @@ impl super::UiScript {
             .collect();
     }
 
-    /// `SetPetGuid(0, 0)`'s VM half (`0x4bc6fd` → `0x4bc7e0`), the world entry's pet reset: no
-    /// bar and no expiry, as a bar with no guid pushes it, and no pet UI or stats, as `HasPetUI`
-    /// and the stat getters resolve the pet from the cleared guid (`0x4be67e`-`0x4be690`); the
-    /// state word stays, which no reader asks without a guid. Whether a bar was showing, the
-    /// guid's change its `UNIT_PET` signals on. A caller that holds the guid pushes the same.
+    /// `SetPetGuid(0, 0)`'s VM half (`0x4bc6fd` → `0x4bc7e0`), the world entry's pet reset on the
+    /// copy: no bar and no expiry, and no pet UI or stats, as `HasPetUI` and the stat getters
+    /// resolve the pet from the cleared guid (`0x4be67e`-`0x4be690`); the state word stays, which
+    /// no reader asks without a guid. Whether a bar was showing, the guid's change its `UNIT_PET`
+    /// signals on. A caller that holds the guid clears it there too.
     pub fn drop_pet_bar(&mut self) -> bool {
         let dropped = self.model_ref().pet_bar.has_bar;
         self.set_pet_expiry(None);
@@ -276,8 +283,7 @@ impl super::UiScript {
         self.model_mut().pet_bar.state = state;
     }
 
-    /// Push the stat block and `HasPetUI`'s first return, which move on descriptor updates rather
-    /// than with the bar.
+    /// Replace the stat block and `HasPetUI`'s first return, for a VM with no host to ask.
     pub fn set_pet_stats(&mut self, has_ui: bool, stats: PetStats) {
         let bar = &mut self.model_mut().pet_bar;
         bar.has_ui = has_ui;
@@ -290,7 +296,7 @@ impl super::UiScript {
         self.model_mut().pet_bar.expiry = expiry;
     }
 
-    /// Push the menu's two predicates, which move with the pet's `UNIT_FIELD_FLAGS`.
+    /// Replace the menu's two predicates, for a VM with no host to ask.
     pub fn set_pet_menu(&mut self, can_be_abandoned: bool, can_be_renamed: bool) {
         let bar = &mut self.model_mut().pet_bar;
         bar.can_be_abandoned = can_be_abandoned;
@@ -364,29 +370,6 @@ impl super::UiScript {
             _ => None,
         })
     }
-
-    /// A possessed unit's Attack latch raised (`0x4bd42e`): the Attack token lit on it, as the bar
-    /// paints it (`0x4bdf01`-`0x4bdf22`), for the `PET_BAR_UPDATE` the host signals (`0x4bd438`).
-    pub fn raise_pet_attack(&mut self) {
-        let bar = &mut self.model_mut().pet_bar;
-        for slot in bar.slots.iter_mut().filter(|s| s.view.is_token) {
-            let kind = ((slot.view.packed >> 24) & 0x3F) as u8;
-            if kind == PET_ACT_COMMAND && slot.view.packed & 0xFFFF == PET_COMMAND_ATTACK {
-                slot.view.attack_active = true;
-            }
-        }
-        repaint_tokens(bar);
-    }
-
-    /// `PetStopAttack`'s repaint (`0x4bd6ae`-`0x4bd6b4`): the attack latch down on every slot and
-    /// the command tokens relit from the state word, for the `PET_BAR_UPDATE` the host signals.
-    pub fn lower_pet_attack(&mut self) {
-        let bar = &mut self.model_mut().pet_bar;
-        for slot in &mut bar.slots {
-            slot.view.attack_active = false;
-        }
-        repaint_tokens(bar);
-    }
 }
 
 /// A pet word's autocast-on bit (30); bit 31 allows it.
@@ -439,35 +422,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetTimeRemaining",
         lua.create_function(|lua, ()| {
-            let expiry = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .pet_bar
-                .expiry;
-            let Some(expiry) = expiry else {
+            // `0x4be607`: the expiry tick as it stands, against the clock now (`0x4be614`).
+            let Some(remaining) = flags_now(lua).remaining_ms else {
                 return Ok(Value::Nil);
             };
-            let now = crate::script::clock::now(lua);
             #[allow(clippy::cast_possible_truncation)] // a tick difference, wrapped as the u32 is
-            let ms = ((expiry - now) * 1000.0).round() as i64 as u32;
+            let ms = remaining as u32;
             Ok(Value::Number(f64::from(ms)))
         })?,
     )?;
 
     g.set(
         "PetHasActionBar",
-        lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.pet_bar.has_bar))
-        })?,
+        lua.create_function(move |lua, ()| Ok(flag(flags_now(lua).has_bar)))?,
     )?;
 
     g.set(
         "GetPetActionsUsable",
-        lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.pet_bar.actions_usable))
-        })?,
+        lua.create_function(move |lua, ()| Ok(flag(flags_now(lua).actions_usable)))?,
     )?;
 
     // An out-of-range index answers seven nils (`0x4bdf3e`), which the Lua reads as an empty slot.
@@ -476,11 +448,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(move |lua, i: Value| {
             // `is-number` else `Usage: GetPetActionInfo(index)` (`0x8478b8`, `0x4bdc67`).
             let i = binding_abi::index_arg32(lua, i, "Usage: GetPetActionInfo(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(slot) = slot_at(&model, i) else {
+            let Some(v) = slot_now(lua, i) else {
                 return Ok(super::binding_abi::tuple(&[None; 7]));
             };
-            let v = &slot.view;
             let text = |s: &Option<String>| match s {
                 Some(s) => Ok(Value::String(lua.create_string(s)?)),
                 None => Ok::<_, mlua::Error>(Value::Nil),
@@ -504,13 +474,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetPetActionCooldown(index)` (`0x8478d8`, `0x4bdfb7`).
             let i = binding_abi::index_arg32(lua, i, "Usage: GetPetActionCooldown(index)")?;
             let now = crate::script::clock::now(lua);
-            let (spell, snapshot) = {
+            let spell = slot_now(lua, i).and_then(|v| v.spell_id);
+            let snapshot = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let slot = slot_at(&model, i);
-                (
-                    slot.and_then(|s| s.view.spell_id),
-                    slot.and_then(|s| s.cooldown),
-                )
+                slot_at(&model, i).and_then(|s| s.cooldown)
             };
             // A spell slot's query reads the pet's list inside the call (`0x4be03c` →
             // `0x6e2ea0`), through the lent host; with none, the frame's snapshot answers.
@@ -534,8 +501,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(move |lua, i: Value| {
             // `is-number` else `Usage: IsPetAttackActive(index)` (`0x8478fc`, `0x4be0f1`).
             let i = binding_abi::index_arg32(lua, i, "Usage: IsPetAttackActive(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(slot_at(&model, i).is_some_and(|s| s.view.attack_active))
+            Ok(slot_now(lua, i).is_some_and(|v| v.attack_active))
         })?,
     )?;
 
@@ -557,24 +523,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     "Invalid slot in CastPetAction".into(),
                 ));
             }
-            let (pickup_allowed, has_bar) = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                (model.pet_bar.pickup_allowed, model.pet_bar.has_bar)
-            };
-            if pickup_allowed && super::cursor::pet::clear_and_drop(lua, i)?.is_some() {
+            let flags = flags_now(lua);
+            if flags.pickup_allowed && super::cursor::pet::clear_and_drop(lua, i)?.is_some() {
                 return Ok(());
             }
-            if !has_bar || i > 10 {
+            if !flags.has_bar || i > 10 {
                 return Ok(());
             }
             // `PressPetAction 0x4bd1d0` opens on the gate's tag 2 (`0x4bd1e5`), ahead of its bar
             // test and every effect; a refusal is silent.
             if protected::gate(lua, Tag::CAST) {
-                super::tick::verb(lua, |model| {
-                    if let Some(packed) = slot_at(model, i).map(|s| s.view.packed) {
-                        latch_press(model, packed);
-                    }
-                });
+                press_locally(lua, |model| slot_at(model, i).map(|s| s.view.packed));
                 super::calls::submit(lua, super::ScriptCall::PetAction(i))?;
             }
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -612,6 +571,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !protected::gate(lua, Tag::CAST) {
                 return Ok(());
             }
+            // The gate (`0x4bcbcf`) and the word's bit 31 (`0x4bcbf1`), as they stand.
+            seat_bar(lua);
             let flipped = super::tick::verb(lua, |model| {
                 let Some(n) = i
                     .checked_sub(1)
@@ -653,9 +614,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "HasPetUI",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let bar = &model.pet_bar;
-            Ok((flag(bar.has_ui), flag(bar.has_ui && bar.stats.hunter_pet)))
+            let (has_ui, stats) = stats_now(lua);
+            Ok((flag(has_ui), flag(has_ui && stats.hunter_pet)))
         })?,
     )?;
 
@@ -664,8 +624,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetHappiness",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let s = &model.pet_bar.stats;
+            let (_, s) = stats_now(lua);
             let happiness = match s.happiness.filter(|_| s.hunter_pet) {
                 Some(b) => Value::Integer(i64::from(b)),
                 None => Value::Nil,
@@ -687,8 +646,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetLoyalty",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let s = &model.pet_bar.stats;
+            let (_, s) = stats_now(lua);
             Ok(match s.loyalty.as_deref().filter(|_| s.hunter_pet) {
                 Some(name) => Value::String(lua.create_string(name)?),
                 None => Value::Nil,
@@ -700,8 +658,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetTrainingPoints",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let s = &model.pet_bar.stats;
+            let (_, s) = stats_now(lua);
             let (total, spent) = if s.hunter_pet {
                 s.training_points
             } else {
@@ -715,8 +672,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetExperience",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let s = &model.pet_bar.stats;
+            let (_, s) = stats_now(lua);
             let (cur, next) = if s.hunter_pet { s.experience } else { (0, 0) };
             Ok((f64::from(cur), f64::from(next)))
         })?,
@@ -729,11 +685,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitCreatureFamily",
         lua.create_function(move |lua, token: Option<String>| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
             let family = token
                 .filter(|t| t.eq_ignore_ascii_case("pet"))
-                .and_then(|_| model.pet_bar.stats.family.as_deref());
-            Ok(match family {
+                .and_then(|_| stats_now(lua).1.family);
+            Ok(match family.as_deref() {
                 Some(name) => Value::String(lua.create_string(name)?),
                 None => Value::Nil,
             })
@@ -745,8 +700,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetIcon",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match model.pet_bar.stats.icon.as_deref() {
+            Ok(match stats_now(lua).1.icon.as_deref() {
                 Some(path) => Value::String(lua.create_string(path)?),
                 None => Value::Nil,
             })
@@ -758,10 +712,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPetFoodTypes",
         lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let values: Vec<Value> = model
-                .pet_bar
-                .stats
+            let values: Vec<Value> = stats_now(lua)
+                .1
                 .food_types
                 .iter()
                 .map(|f| lua.create_string(f).map(Value::String))
@@ -794,13 +746,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !protected::gate(lua, Tag::CAST) {
                     return Ok(());
                 }
-                let pressed = super::tick::verb(lua, |model| {
-                    if model.pet_bar.has_bar {
-                        latch_press(model, packed);
-                    }
-                    model.pet_bar.has_bar
-                });
-                if pressed {
+                if flags_now(lua).has_bar {
+                    press_locally(lua, |_| Some(packed));
                     super::calls::submit(lua, super::ScriptCall::PetOrder(packed))?;
                 }
                 Ok(())
@@ -820,18 +767,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "PetCanBeAbandoned",
-        lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.pet_bar.can_be_abandoned))
-        })?,
+        lua.create_function(move |lua, ()| Ok(flag(menu_now(lua).0)))?,
     )?;
 
     g.set(
         "PetCanBeRenamed",
-        lua.create_function(move |lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.pet_bar.can_be_renamed))
-        })?,
+        lua.create_function(move |lua, ()| Ok(flag(menu_now(lua).1)))?,
     )?;
 
     // The `ABANDON_PET` popup's OnAccept, after its confirm.

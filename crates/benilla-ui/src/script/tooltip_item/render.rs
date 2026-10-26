@@ -215,15 +215,18 @@ pub(super) fn render_view_flagged(
     inst: Option<&ItemInstance>,
 ) -> mlua::Result<Option<bool>> {
     let mut live = false;
+    // The pet's book as it stands, which a pet teach's known test reads (`0x52d5ad` → `0x60c740`).
+    let pet_book = crate::script::live::ask(lua, &crate::script::PetBookNow);
     let (req, known_spell, taught_known, set_view, equipped, rank_title) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let pet_slots = &pet_book.as_ref().unwrap_or(&model.pet_book).slots;
         let known =
             v.required_spell != 0 && v.knows_required_spell(|id| model.known_spells.contains(&id));
         // The first slot's taught spell, or a higher rank of it, known to the player, or to the
         // pet for a pet-target teach (`0x52d54f`..`0x52d5bb`): the always-red ITEM_SPELL_KNOWN.
         let taught = v.teaches.as_ref().is_some_and(|t| {
             t.ranks.iter().any(|id| match t.pet {
-                true => model.pet_book.slots.iter().any(|s| s.spell_id == *id),
+                true => pet_slots.iter().any(|s| s.spell_id == *id),
                 false => model.known_spells.contains(id),
             })
         });

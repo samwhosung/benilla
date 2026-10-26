@@ -1818,7 +1818,6 @@ mod tests {
         let (mut app, me) = feed_world(&[(BYTES_0, 3 << 8)], spy);
         app.init_resource::<crate::ui_pet::PetBar>()
             .init_resource::<crate::ui_pet::PetAttackLatch>()
-            .init_resource::<crate::ui_pet_stats::PetStatsFeed>()
             .init_resource::<crate::net::GuidIndex>()
             .insert_resource(crate::net::SelfGuid(Some(ME)));
         let pet = app

@@ -110,6 +110,8 @@ fn assign(slots: &mut [u32], target: usize, source: u32, passive: bool) -> Optio
 /// is copied, not moved; the blank comes after the setter's events, so they read the slot as it
 /// was. Returns whether to repaint.
 pub(super) fn pickup_pet_action(lua: &Lua, slot: u32) -> mlua::Result<bool> {
+    // The gate and the words as they stand.
+    crate::script::pet::seat_bar(lua);
     {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         if !model.pet_bar.pickup_allowed {
@@ -173,6 +175,8 @@ pub(in crate::script) fn clear_and_drop(lua: &Lua, slot: u32) -> mlua::Result<Op
     let Some(held) = held else {
         return Ok(None);
     };
+    // The core runs on the words as they stand (`0x4bc9a0`).
+    crate::script::pet::seat_bar(lua);
     let (entries, displaced) = verb(lua, |model| place_pet_action(model, slot, &held));
     let wrote = entries.is_some();
     if let Some(entries) = entries {

@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 63;
-const FRAME_FINAL_INPUTS: usize = 325;
+const FRAME_FINAL_FEEDS: usize = 60;
+const FRAME_FINAL_INPUTS: usize = 313;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -60,6 +60,9 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::spell::mods::track_class_family", &["spell::mods::SpellModifiers"],
         "keeps the class family the stance bar's usability walk prices a cost through; the \
          reference stores it inside our own create (`0x5debcc` → `0x6e6ca0`)"),
+    ("::swing_refusal::apply_swing_refusals", &["ui_pet::PetAttackLatch"],
+        "holds the attack seam, whose selection release lowers the pet's attack latch \
+         (`0x493a18`); the server's silent stop it runs (`0x625ab8`) reaches no release"),
     ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::spell::cooldowns::Cooldowns>",
         &["spell::cooldowns::Cooldowns"],
         "drops the player's cooldown log with no in-game interface up; it goes with the log"),
@@ -108,7 +111,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          (`0x6e58fb`)"),
     ("::ui_pet::unit::feed_pet_unit", &["UiScript", "names::NameCache"],
         "a field event's listeners read its push; it watches the name cache's record of the pet's name"),
-    ("::ui_pet_stats::feed_pet_stats", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",
         &["ui_binder::BinderState"],
         "closes the bind question once the player leaves service range, which \
@@ -125,8 +127,9 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "drops the reputation log with no in-game interface up; it goes with the log"),
     ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Items"],
         "writes the item cache as it builds the spell tooltips"),
-    ("::ui_unit::feed_units", &["UiScript", "ui_pet::PetBar"],
-        "a field event's listeners read its push; the world entry's pet reset writes the bar (`0x4bc6f0`)"),
+    ("::ui_unit::feed_units", &["UiScript", "ui_pet::PetAttackLatch", "ui_pet::PetBar"],
+        "a field event's listeners read its push; the world entry's pet reset writes the bar and \
+         lowers the attack latch (`0x4bc6f0`, `0x4bc8ce`)"),
     ("::ui_unit::views::drop_unit_views", &["ui_unit::views::UnitViews"],
         "drops the unit views' log with no in-game interface up; it goes with the log"),
 ];

@@ -52,8 +52,7 @@ impl Plugin for UiMacroPlugin {
                     // follows it ([`crate::ui_action`]).
                     rebind_macro_spells
                         .in_set(crate::ui_unit::UnitFeed)
-                        .in_set(MacroBindings)
-                        .after(crate::ui_pet_book::feed_pet_book),
+                        .in_set(MacroBindings),
                     // In-world only: the per-character file needs the character. Ahead of the
                     // rank pass, which rewrites the bar's words too, as the one-time move of a
                     // character's old buttons does.

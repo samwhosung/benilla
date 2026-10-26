@@ -5,7 +5,8 @@
 //! `UNIT_FIELD_PETNUMBER`, is ours, and our class byte is Hunter, so a warlock's imp answers
 //! nothing. `UnitCreatureFamily("pet")` (`0x51a310`) has no class test, so the imp still shows
 //! "Imp", while `GetPetFoodTypes()` (`0x4bea10`) shares the `0x6116e0` gate, so a non-hunter's pet
-//! has no diet even when its family row has a food mask.
+//! has no diet even when its family row has a food mask. Each reads the pet at the call through
+//! the host (`crate::ui_pet::PetLive`).
 
 use bevy::prelude::*;
 
@@ -40,26 +41,13 @@ pub(crate) struct PetFamilyTables {
     pub(crate) foods: benilla_formats::PetFoodNames,
 }
 
-/// The pet snapshot's push; anything that fires a pet event orders after it. `fire_event` runs Lua
-/// handlers synchronously and `PetTab_Update` tests only `HasPetUI()`, so a `UNIT_PET` fired
-/// before the push keeps the Pet tab hidden for the session.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PetSnapshot;
-
-/// [`feed_pet_stats`]' memory per VM, a resource so the world entry's reset
-/// ([`crate::ui_pet::drop_bar`]) records what it pushed and the feed neither pushes nor signals it
-/// again.
-#[derive(Resource, Default)]
-pub(crate) struct PetStatsFeed(pub(crate) crate::ui_script::VmMemo<StatsMemory>);
-
 /// The bucket and its two tooltip figures, the `UNIT_HAPPINESS` key.
 type Happiness = (Option<u32>, u32, u32);
 
-/// What [`feed_pet_stats`] last pushed to a VM, and the happiness of the last pet it saw, by guid.
+/// The streamed pet's guid and its [`Happiness`] when [`feed_pet_stats`] last saw it, per VM; a
+/// frame with no pet keeps it.
 #[derive(Default)]
 pub(crate) struct StatsMemory {
-    pub(crate) pushed: Option<(bool, PetStats)>,
-    /// The streamed pet's guid and its [`Happiness`] when last pushed; a push with no pet keeps it.
     happiness: Option<(u64, Happiness)>,
 }
 
@@ -75,14 +63,9 @@ pub(crate) struct UiPetStatsPlugin;
 
 impl Plugin for UiPetStatsPlugin {
     fn build(&self, app: &mut App) {
-        // In the unit feed, so the pet frame repaints in the pass that pushes its health.
-        app.init_resource::<PetStatsFeed>().add_systems(
-            Update,
-            feed_pet_stats
-                .in_set(UnitFeed)
-                .in_set(PetSnapshot)
-                .in_set(crate::ui_unit::field_events::FieldEventPushes),
-        );
+        // The getters read the stat block at the call (`crate::ui_pet::PetLive`); this feed
+        // fires the happiness repaint alone.
+        app.add_systems(Update, feed_pet_stats.in_set(UnitFeed));
     }
 }
 
@@ -92,7 +75,7 @@ impl Plugin for UiPetStatsPlugin {
 /// record is only read, as `GetPetIcon` and `GetPetFoodTypes` read the unit's (`0x4beb10`,
 /// `0x4bea10`), which the unit's create asked for; a miss answers all-absent until it lands. The
 /// icon is `CreatureFamily.dbc`'s own column: `GetPetIcon`'s answer and the stable's slot art.
-fn family_for(
+pub(crate) fn family_for(
     pet: Option<&ObjectStore>,
     names: &NameCache,
     tables: Option<&PetFamilyTables>,
@@ -122,7 +105,7 @@ fn family_for(
 }
 
 /// The whole stat block for the current pet, or [`PetStats::default`] with none.
-fn stats_for(
+pub(crate) fn stats_for(
     pet: Option<&ObjectStore>,
     self_store: Option<&ObjectStore>,
     tables: Option<&PetStatTables>,
@@ -182,66 +165,45 @@ fn stats_for(
     )
 }
 
+/// `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`), the pet's happiness field's
+/// watch: it fires for a change on the pet the feed last saw, never for a VM's first frame, a pet's
+/// arrival or the bar's return. Deviation: fired when the bucket or its two tooltip figures change,
+/// not on every change of the happiness field as in the reference, because no stock consumer reads
+/// the raw value.
 pub(crate) fn feed_pet_stats(
     mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
     pet: PetUnit,
-    self_store: Query<&ObjectStore, With<crate::net::SelfPlayer>>,
     tables: Option<Res<PetStatTables>>,
-    family_tables: Option<Res<PetFamilyTables>>,
-    names: Res<NameCache>,
-    mut last: ResMut<PetStatsFeed>,
+    mut last: Local<crate::ui_script::VmMemo<StatsMemory>>,
 ) {
     vm.feed(|script, bar, fires| {
         let Some(script) = script else {
             return;
         };
-        let memory = last.0.get(script);
+        let memory = last.get(script);
         let store = pet.store(bar.spells.pet_guid);
-        let family = family_for(store, &names, family_tables.as_deref());
-        let fresh = stats_for(store, self_store.iter().next(), tables.as_deref(), family);
-        // `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`), is the pet's
-        // happiness field's watch: it fires for a change on the pet the feed last saw, never for a
-        // VM's first push, a pet's arrival or the bar's return. Deviation: fired when the bucket
-        // or its two tooltip figures change, not on every change of the happiness field as in the
-        // reference, because no stock consumer reads the raw value.
-        let now = store.map(|_| (bar.spells.pet_guid, happiness(&fresh.1)));
-        let happiness_moved = matches!(
+        let (_, stats) = stats_for(
+            store,
+            pet.player_store(),
+            tables.as_deref(),
+            (None, None, Vec::new()),
+        );
+        let now = store.map(|_| (bar.spells.pet_guid, happiness(&stats)));
+        let moved = matches!(
             (memory.happiness, now),
             (Some((was_pet, was)), Some((pet, is))) if was_pet == pet && was != is
         );
         if now.is_some() {
             memory.happiness = now;
         }
-        let last = &mut memory.pushed;
-        if last.as_ref() == Some(&fresh) {
-            return;
-        }
-        if happiness_moved {
+        if moved {
             debug!(
                 "ui_pet_stats: happiness {:?} ({}% damage), loyalty {:?}",
-                fresh.1.happiness, fresh.1.damage_percentage, fresh.1.loyalty
+                stats.happiness, stats.damage_percentage, stats.loyalty
             );
-        }
-        // The family lands with the creature-query answer and fires nothing: the pet page registers
-        // no event known to fire then (not the reference's query event,
-        // `UNIT_CLASSIFICATION_CHANGED`). The page's `OnShow` covers an open; a page already open
-        // repaints on its next `UNIT_STATS`.
-        if last.as_ref().map(|(_, s)| &s.family) != Some(&fresh.1.family) {
-            debug!(
-                "ui_pet_stats: pet family {:?}, diet {:?}",
-                fresh.1.family, fresh.1.food_types
-            );
-        }
-        *last = Some(fresh.clone());
-        script.set_pet_stats(fresh.0, fresh.1);
-        // The push before the post: the handlers run when it fires, after the turn, and read it.
-        if happiness_moved {
             // `arg1` is the unit token, as on every 1.12 `UNIT_*` event; its handlers gate on it.
             fires.post("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);
         }
-        // The pet page's other repaint events, `UNIT_PET_EXPERIENCE` and `UNIT_PET_TRAINING_POINTS`
-        // (`PetPaperDollFrame.lua:9,21`), are the bridge's watches on fields 141/142 and 149
-        // (`crate::field_watch`), fired after this push.
     })
 }
 

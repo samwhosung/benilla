@@ -106,8 +106,14 @@ impl Rig {
             .world_mut()
             .resource_mut::<crate::ui_script::UiClock>();
         let anchor = Instant::now() + ahead;
-        clock.ui_now += anchor.duration_since(clock.anchor).as_secs_f64();
+        let step = anchor.duration_since(clock.anchor).as_secs_f64();
+        clock.ui_now += step;
         clock.anchor = anchor;
+        // The VM's `GetTime` moves with the frame's clock, as the script tick moves it.
+        self.app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .tick(step as f32);
     }
 }
 
@@ -428,8 +434,13 @@ fn a_pet_gcd_sweeps_the_spellbooks_pet_tab_button() {
 
     // The book arrives, and the window opens on its pet tab.
     rig.frame();
+    // With the host lent, as the key binding's entry lends it: the tab reads the book at the call.
+    crate::script_calls::with_hosted_vm(rig.app.world_mut(), |s| {
+        s.expect("a VM")
+            .run("ToggleSpellBook(BOOKTYPE_PET)")
+            .unwrap();
+    });
     let mut s = ui(&mut rig);
-    s.run("ToggleSpellBook(BOOKTYPE_PET)").unwrap();
     s.resolve();
     assert!(
         s.eval::<bool>("return SpellBookFrame.bookType == BOOKTYPE_PET")
@@ -716,13 +727,7 @@ fn the_world_entry_reset_clears_the_guid_and_keeps_the_book() {
     }
     rig.receive(vec![go(PET, GROWL)]);
     rig.frame();
-    let book = |rig: &mut Rig| -> Option<f64> {
-        rig.app
-            .world_mut()
-            .non_send_resource_mut::<benilla_ui::script::UiScript>()
-            .eval("return (HasPetSpells())")
-            .unwrap()
-    };
+    let book = |rig: &mut Rig| -> Option<f64> { rig.eval("return (HasPetSpells())") };
     assert_eq!(book(&mut rig), Some(1.0), "the book before");
     let before = rig.app.world().resource::<PetBar>().spells.clone();
 
@@ -730,20 +735,12 @@ fn the_world_entry_reset_clears_the_guid_and_keeps_the_book() {
     world.resource_scope(|world, mut bar: bevy::prelude::Mut<PetBar>| {
         world.resource_scope(
             |world, mut latch: bevy::prelude::Mut<super::PetAttackLatch>| {
-                world.resource_scope(|world, mut feed: bevy::prelude::Mut<super::PetBarFeed>| {
-                    let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
-                    assert!(super::drop_bar(
-                        &mut script,
-                        &mut bar,
-                        &mut latch,
-                        Some(&mut feed),
-                        None
-                    ));
-                })
+                let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+                assert!(super::drop_bar(&mut script, &mut bar, &mut latch));
             },
         )
     });
-    assert_eq!(rig.frame(), Vec::<String>::new(), "the feed adds no signal");
+    assert_eq!(rig.frame(), Vec::<String>::new(), "nothing else signals");
 
     {
         let bar = rig.app.world().resource::<PetBar>();
@@ -761,12 +758,8 @@ fn the_world_entry_reset_clears_the_guid_and_keeps_the_book() {
         assert!(growl_cd > 0, "the pet's cooldown list stays");
     }
     assert_eq!(book(&mut rig), Some(1.0), "the book stays");
-    let (bar_shown, info): (Option<f64>, Option<String>) = rig
-        .app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .eval("return PetHasActionBar(), (GetPetActionInfo(1))")
-        .unwrap();
+    let (bar_shown, info): (Option<f64>, Option<String>) =
+        rig.eval("return PetHasActionBar(), (GetPetActionInfo(1))");
     assert_eq!(
         (bar_shown, info),
         (None, None),

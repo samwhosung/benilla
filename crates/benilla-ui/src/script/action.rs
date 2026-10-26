@@ -373,8 +373,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 })
                 .unwrap_or((0, true));
             let autocast = match resolved {
-                (spell, true) => model
-                    .pet_book
+                (spell, true) => super::pet::book_now(lua, &model)
                     .slots
                     .iter()
                     .find(|s| s.spell_id & 0xffff == spell)

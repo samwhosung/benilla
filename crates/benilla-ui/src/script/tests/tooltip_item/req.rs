@@ -134,6 +134,64 @@ fn already_known_tests_the_taught_spell_and_its_higher_ranks() {
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
+/// A host answering the pet's book with `.0`, as the app's pet family does.
+struct PetBookHost(PetBookState);
+
+impl CallHost for PetBookHost {
+    fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+        None
+    }
+
+    fn read_live(&mut self, ask: &mut live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &PetBookNow| Some(self.0.clone()))
+    }
+}
+
+/// A pet teach's known test reads the pet's book as it stands (`0x52d5ad` → `0x60c740`): the
+/// host's, where the VM's copy holds nothing, and the host's empty one over a stale copy.
+#[test]
+fn a_pet_teach_reads_the_pets_book_as_it_stands() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        9503,
+        ItemTemplateView {
+            name: "Grimoire of Firebolt".into(),
+            quality: 1,
+            teaches: Some(TaughtSpell {
+                ranks: vec![3110],
+                pet: true,
+            }),
+            ..Default::default()
+        },
+    );
+    let known = |s: &mut UiScript, book: Vec<u32>| {
+        let mut host = PetBookHost(PetBookState {
+            token: Some("DEMON".into()),
+            slots: book
+                .into_iter()
+                .map(|spell_id| SpellSlotView {
+                    spell_id,
+                    ..Default::default()
+                })
+                .collect(),
+        });
+        s.hosted(&mut host, |s| render(s, 9503))
+            .iter()
+            .any(|(t, c)| t == "[ITEM_SPELL_KNOWN]" && *c == RED)
+    };
+    assert!(known(&mut s, vec![3110]), "the host's book knows it");
+    s.set_pet_book(PetBookState {
+        token: Some("DEMON".into()),
+        slots: vec![SpellSlotView {
+            spell_id: 3110,
+            ..Default::default()
+        }],
+    });
+    assert!(!known(&mut s, Vec::new()), "the host's book, not the copy");
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
 /// A required honor rank names the rank by the player's side and gender (`0x5efe60`,
 /// `PVP_RANK_%d_%d`, `_FEMALE` first), white at or above it (`fields+0x102b`); a required medal
 /// reads `PVP_MEDAL<n>`, white when bit `n-1` of `PLAYER_FIELD_PVP_MEDALS` is set (`fields+0x1034`).
