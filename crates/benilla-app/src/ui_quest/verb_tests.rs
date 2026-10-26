@@ -349,13 +349,20 @@ fn the_log_verbs_are_on_the_wire_before_the_next_line() {
         let mut q = crate::ui_quest_log::fixture::quest(7, "Deliver the Message", 1);
         q.record.pushable = true;
         crate::ui_quest_log::fixture::seat(&mut script, &[q]);
-        script.set_party(benilla_ui::script::PartyState {
-            members: vec![benilla_ui::script::PartyMemberInfo {
-                name: "Mate".into(),
-                guid: 0x300,
-            }],
-            ..Default::default()
-        });
+    }
+    // A party the world holds, whose first slot the push reads at the call (`0x4e13a6`).
+    {
+        let mut group = c
+            .app
+            .world_mut()
+            .resource_mut::<crate::ui_party::GroupState>();
+        group.in_group = true;
+        group.members = vec![benilla_protocol::messages::GroupMemberEntry {
+            name: "Mate".into(),
+            guid: 0x300,
+            status: 1,
+            flags: 0,
+        }];
     }
     c.run("SelectQuestLogEntry(2) QuestLogPushQuest() RandomRoll(1, 100)")
         .unwrap();

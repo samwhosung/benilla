@@ -1970,12 +1970,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "QuestLogPushQuest",
         lua.create_function(|lua, ()| {
-            // The verb checks the party and the sharable bit itself (`0x4e13a6`), as a macro can
-            // call it solo; a header has no quest and sends nothing.
+            // The verb checks the sharable bit (`0x4e13a0`) and the first party slot's guid as
+            // it stands at the call (`0x4e13a6`-`0x4e13b2`) itself, as a macro can call it solo; a
+            // header has no quest and sends nothing.
             let id = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let index = model.quest_log_selection as usize;
-                (!model.party.members.is_empty())
+                (super::roster_read::cells(lua, &model.party).party[0] != 0)
                     .then(|| {
                         model
                             .quest_row_parts(index)
@@ -3492,6 +3493,47 @@ mod tests {
         assert!(
             s.take_quest_log_pushes().is_empty(),
             "an unsharable quest pushes nothing even in a party"
+        );
+    }
+
+    /// The party gate reads the first party slot as the host holds it at the call (`0x4e13a6`),
+    /// not the VM's roster copy: a party the world formed pushes, one it left does not.
+    #[test]
+    fn push_reads_the_party_slot_the_host_holds() {
+        use crate::script::live::LiveAsk;
+        use crate::script::{CallHost, CallTail, GroupCells, GroupCellsQuery, ScriptCall};
+        struct Party(u64, Vec<u32>);
+        impl CallHost for Party {
+            fn apply(&mut self, _: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+                if let ScriptCall::Quest(crate::script::QuestCall::Push(id)) = call {
+                    self.1.push(id);
+                }
+                None
+            }
+            fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
+                let first = self.0;
+                ask.answer(|_: &GroupCellsQuery| {
+                    Some(GroupCells {
+                        party: [first, 0, 0, 0],
+                        ..GroupCells::default()
+                    })
+                })
+            }
+        }
+        let mut s = UiScript::new().unwrap();
+        let mut log = two_quests_log();
+        log[0].1.pushable = true; // quest id 783
+        seat(&mut s, &log);
+        s.run("SelectQuestLogEntry(2)").unwrap();
+        let mut formed = Party(0x300, Vec::new());
+        s.hosted(&mut formed, |s| s.run("QuestLogPushQuest()").unwrap());
+        assert_eq!(formed.1, [783], "the world's party, the copy solo");
+        in_a_party(&mut s);
+        let mut left = Party(0, Vec::new());
+        s.hosted(&mut left, |s| s.run("QuestLogPushQuest()").unwrap());
+        assert!(
+            left.1.is_empty(),
+            "the world's empty slot, the copy grouped"
         );
     }
 
