@@ -62,15 +62,16 @@ pub enum ItemTextCall {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
+    // `ItemTextGetItem()` (`0x4e38f0`): the open object's name (`0x4e391f`), nil with no object
+    // (`0x4e3919`), `lua_pushstring(NULL)` (`0x4e3928`).
     g.set(
         "ItemTextGetItem",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model
-                .item_text
-                .as_ref()
-                .map(|s| s.item.clone())
-                .unwrap_or_default())
+            match model.item_text.as_ref() {
+                Some(s) => Ok(Value::String(lua.create_string(&s.item)?)),
+                None => Ok(Value::Nil),
+            }
         })?,
     )?;
 
@@ -170,8 +171,9 @@ mod tests {
     fn getters_mirror_the_pushed_state() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        // No session: empty defaults; the frame reads these only while shown.
-        assert_eq!(s.eval::<String>("return ItemTextGetItem()").unwrap(), "");
+        // No session: no object to name, so nil (`0x4e3919`); the frame reads these only while
+        // shown.
+        assert!(s.eval::<bool>("return ItemTextGetItem() == nil").unwrap());
         assert!(s
             .eval::<bool>("return ItemTextGetCreator() == nil")
             .unwrap());
@@ -193,6 +195,10 @@ mod tests {
         assert!(s
             .eval::<bool>("return ItemTextGetMaterial() == nil")
             .unwrap());
+
+        // The close clears the session: `if ItemTextGetItem() then` is false again.
+        s.set_item_text(None);
+        assert!(s.eval::<bool>("return ItemTextGetItem() == nil").unwrap());
     }
 
     #[test]
