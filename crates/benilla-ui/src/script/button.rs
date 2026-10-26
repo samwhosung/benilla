@@ -970,14 +970,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // RegisterForClicks(...) (`0x782490`) replaces the registered set rather than adding to it
     // (`0x779730` stores the mask), matching the names in any case (`0x64a4c0`); [`wants_click`]
-    // reads it.
+    // reads it. The list runs only while `lua_isstring` holds (`0x78268f`-`0x782696`): the first
+    // nil, boolean or table ends it, and a number reads as its text, which names no click.
     m.set(
         "RegisterForClicks",
         lua.create_function(|lua, (this, args): (Table, MultiValue)| {
             let mut set = std::collections::HashSet::new();
             for v in args.iter() {
-                if let Value::String(s) = v {
-                    set.insert(s.to_str()?.to_string());
+                match v {
+                    Value::String(s) => {
+                        set.insert(s.to_str()?.to_string());
+                    }
+                    Value::Integer(_) | Value::Number(_) => {}
+                    _ => break,
                 }
             }
             with_button(lua, &this, |bs| bs.registered_clicks = set)

@@ -48,6 +48,9 @@ pub enum ItemCall {
     /// callback `0x5e17a0` (`0x5e15f4`-`0x5e1603`), which runs the call again
     /// ([`super::UiScript::replay_auto_equip`]).
     AutoEquipWait { entry: u32 },
+    /// `CMSG_SET_AMMO` by item entry, 0 unloading the ammo: the doll's ammo slot (`0x4c741a`,
+    /// `0x4c74c4`, `0x4c762a`) and `AutoEquipCursorItem` on held ammo (`0x5e14c4`).
+    SetAmmo { entry: u32 },
     /// `DeleteCursorItem`'s destroy (`0x489854`), a 0 count being the whole stack.
     Destroy { bag: i64, slot: u32, count: u32 },
     /// `EquipPendingItem` (`0x4898f0`) or `CancelPendingEquip` (`0x489960`), into `0x5e1be0`.

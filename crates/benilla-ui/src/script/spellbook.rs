@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
-use super::cursor::{clear_cursor, set_cursor, CursorPayload, CursorSpell};
+use super::cursor::{clear_cursor, set_cursor, CursorPayload, CursorSpell, Setter};
 use super::live::{ask, LiveQuery};
 use super::protected::{self, Tag};
 use super::tick::verb;
@@ -388,7 +388,7 @@ fn pickup_spell(lua: &Lua, id: u32, book_type: &str) -> bool {
     if target == held || held != 0 {
         return false;
     }
-    payload.is_some_and(|payload| set_cursor(lua, true, |_| Some(payload)))
+    payload.is_some_and(|payload| set_cursor(lua, true, Setter::of(&payload), |_| Some(payload)))
 }
 
 /// Register the spellbook globals.

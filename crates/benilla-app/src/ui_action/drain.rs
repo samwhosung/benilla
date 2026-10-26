@@ -439,6 +439,10 @@ pub(crate) fn use_action(
                     benilla_ui::script::AutoEquip::Waits { entry } => {
                         gate.await_auto_equip(entry, &ladder.items, &ladder.commands);
                     }
+                    // With no control the set refused and held ammo loads (`0x5e1486`).
+                    benilla_ui::script::AutoEquip::Ammo { entry } => {
+                        let _ = ladder.commands.0.send(ClientCommand::SetAmmo { entry });
+                    }
                     benilla_ui::script::AutoEquip::Back | benilla_ui::script::AutoEquip::None => {}
                 }
             } else {

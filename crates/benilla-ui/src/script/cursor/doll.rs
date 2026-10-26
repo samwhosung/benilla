@@ -10,8 +10,8 @@ use crate::script::tick::verb;
 use crate::script::{ItemCall, Model};
 
 use super::{
-    clear_cursor, equip::auto_equip_cursor_item, item_locked, lock_item, pick_up_item, CursorItem,
-    CursorPayload, EQUIPMENT_BAG,
+    clear_cursor, equip::auto_equip_cursor_item, item_locked, lock_item, pick_up_item, set_cursor,
+    CursorAmmo, CursorItem, CursorPayload, Setter, EQUIPMENT_BAG, ITEM_CLASS_PROJECTILE,
 };
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
@@ -39,6 +39,17 @@ pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
             crate::script::calls::submit(lua, crate::script::ScriptCall::PickItem(pick))?;
             false
         }
+        // The lift: the preview setter with mode 9 (`0x4c7600`), then the unload, `CMSG_SET_AMMO`
+        // with 0 (`0x4c762a`-`0x4c7646`), whether or not anything went on.
+        DollClick::PickUpAmmo(ammo) => {
+            if let Some(ammo) = ammo {
+                set_cursor(lua, true, Setter::Controlled, |_| {
+                    Some(CursorPayload::Ammo(ammo))
+                });
+            }
+            crate::script::item_calls::submit(lua, ItemCall::SetAmmo { entry: 0 })?;
+            true
+        }
     })
 }
 
@@ -54,6 +65,8 @@ pub(super) enum DollClick {
     PickUp(CursorItem),
     /// The armed item-targeting spell's pick (`0x4c76df`), a call for the host.
     Pick(super::ItemPick),
+    /// The ammo leg's lift of the loaded ammo, `None` when its record is not cached.
+    PickUpAmmo(Option<CursorAmmo>),
 }
 
 /// [`pickup_inventory_item`]'s decision and every arm but the pickup.
@@ -64,8 +77,17 @@ pub(super) fn doll_click(
     may_cast: bool,
     vendor: crate::script::merchant::VendorAtCall,
 ) -> DollClick {
+    // Without control and off a taxi the click ends before the cursor is read
+    // (`0x4c7345`-`0x4c7360`).
+    if !super::equip::has_cursor_control(model) {
+        return DollClick::Done(false);
+    }
+    // Lua 0, the 0-based slot -1, is the ammo leg (`0x4c73a6`).
+    if id == 0 {
+        return ammo_click(lua, model);
+    }
     // Head 1 to Tabard 19, the bag slots 20-23, and the bank bag slots, which only `PutItemInBag`
-    // reaches (`0x4c7c00` calls `0x4c7300`). Ammo (0) is refused; its leg is not built.
+    // reaches (`0x4c7c00` calls `0x4c7300`).
     if !(1..=23).contains(&id) && !super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) {
         return DollClick::Done(false);
     }
@@ -81,7 +103,12 @@ pub(super) fn doll_click(
     // is picked up (`0x4c7838`), its setter's clear dropping whatever else is held.
     let placing = matches!(
         model.cursor,
-        Some(CursorPayload::Item(_) | CursorPayload::Merchant(_) | CursorPayload::Action(_))
+        Some(
+            CursorPayload::Item(_)
+                | CursorPayload::Merchant(_)
+                | CursorPayload::Action(_)
+                | CursorPayload::Ammo(_)
+        )
     );
     if !placing && (model.item_pick_armed || model.repair_mode) {
         let usable = model
@@ -190,9 +217,54 @@ pub(super) fn doll_click(
             clear_cursor(model);
             DollClick::Done(true)
         }
-        // Mode 7, an item off the bar, is a held row but no vendor's: it stays held (`0x4c78fd`).
-        Some(CursorPayload::Action(_)) => DollClick::Done(false),
+        // Mode 7, an item off the bar, and mode 9, ammo, are held rows but no vendor's: they stay
+        // held (`0x4c78fd`).
+        Some(CursorPayload::Action(_) | CursorPayload::Ammo(_)) => DollClick::Done(false),
     }
+}
+
+/// The ammo leg (`0x4c73a6`). A held item loads by its entry with `CMSG_SET_AMMO` when its object
+/// resolves as a projectile (`0x4c73d9`, `0x4c73e6`, `0x4c741a`); any other goes through
+/// `AutoEquipCursorItem(0)` (`0x4c747b`). Held ammo loads by its entry (`0x4c748c`-`0x4c74e7`).
+/// Each then clears with `ClearCursor(1,1)` (`0x4c794d`). Anything else, an empty hand, a vendor
+/// row or a spell, lifts the loaded ammo while the player carries some (`0x4c752a`, `0x4c757b`),
+/// else only clears.
+fn ammo_click(lua: &Lua, model: &mut Model) -> DollClick {
+    match model.cursor.clone() {
+        Some(CursorPayload::Item(held)) => {
+            let projectile = held.item_class == Some(ITEM_CLASS_PROJECTILE)
+                && super::equip::held_facts(model, &held).is_some();
+            if projectile {
+                model.item_calls.push(ItemCall::SetAmmo {
+                    entry: held.item_id,
+                });
+            } else {
+                auto_equip_cursor_item(lua, model);
+            }
+        }
+        Some(CursorPayload::Ammo(held)) => model.item_calls.push(ItemCall::SetAmmo {
+            entry: held.item_id,
+        }),
+        _ => {
+            let loaded = model
+                .own_inv_view(0)
+                .filter(|v| v.item_id != 0 && v.count > 0);
+            if let Some(v) = loaded {
+                // The record through the item cache (`0x4c75c1`): an uncached one lifts nothing
+                // (`0x4c75cb`).
+                let ammo = model
+                    .item_templates
+                    .contains_key(&v.item_id)
+                    .then(|| CursorAmmo {
+                        item_id: v.item_id,
+                        texture: v.icon.clone(),
+                    });
+                return DollClick::PickUpAmmo(ammo);
+            }
+        }
+    }
+    clear_cursor(model);
+    DollClick::Done(true)
 }
 
 /// `EquipCursorItem(id)` (`0x489660`), its body apart from the doll click's: it acts only on a held
@@ -268,6 +340,8 @@ fn auto_equip_unasked(lua: &Lua, model: &mut Model) {
 pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
     match &model.cursor {
         Some(CursorPayload::Item(item)) => super::bag_verbs::fits_slot(item, id),
+        // Held ammo goes in the ammo slot (`0x4c9074`-`0x4c9080`).
+        Some(CursorPayload::Ammo(_)) => id == 0,
         _ => false,
     }
 }
@@ -632,6 +706,26 @@ mod tests {
         assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
     }
 
+    /// `PickupInventoryItem` ends before it reads the cursor without control, unless the player
+    /// is on a taxi (`0x4c7345`-`0x4c7360`).
+    #[test]
+    fn pickup_inventory_item_needs_control_or_a_taxi() {
+        let mut s = UiScript::new().unwrap();
+        s.set_inventory_slots(doll_slots());
+        s.set_player_control(false);
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
+        assert!(s.cursor_item().is_none(), "no pickup");
+        assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
+
+        s.set_on_taxi(true);
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
+        assert!(s.cursor_item().is_some(), "a taxi passenger picks up");
+
+        s.set_on_taxi(false);
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
+        assert!(s.cursor_item().is_some(), "the cancel is refused too");
+    }
+
     #[test]
     fn pickup_same_doll_slot_cancels_no_move() {
         let mut s = UiScript::new().unwrap();
@@ -717,16 +811,9 @@ mod tests {
     }
 
     #[test]
-    fn pickup_inventory_item_refuses_ammo_but_takes_a_bag_slot() {
+    fn pickup_inventory_item_takes_a_bag_slot() {
         let mut s = UiScript::new().unwrap();
         let mut slots = doll_slots();
-        slots[0] = Some(InvSlotView {
-            durability: None,
-            flags: 0,
-            item_id: 2512,
-            equip_slots: Vec::new(),
-            ..Default::default()
-        });
         // An equipped bag in Bag0Slot (id 20): its equip_slots is the four bag slots.
         slots[20] = Some(InvSlotView {
             roll: Default::default(),
@@ -762,14 +849,148 @@ mod tests {
         });
         s.set_inventory_slots(slots);
 
-        // Ammo (0) is refused; Bag0Slot (20) picks up the equipped bag.
-        assert!(!pickup_inventory_item(&s.lua, 0).unwrap());
+        // Bag0Slot (20) picks up the equipped bag.
         assert!(pickup_inventory_item(&s.lua, 20).unwrap());
         let held = s.cursor_item().expect("bag picked up from the bar");
         assert_eq!(
             (held.bag, held.slot, held.item_id),
             (EQUIPMENT_BAG, 20, 4496)
         );
+    }
+
+    /// The rough arrows loaded in the ammo slot, 200 carried, their record cached.
+    fn loaded_ammo(s: &mut UiScript) {
+        let mut slots = doll_slots();
+        slots[0] = Some(InvSlotView {
+            item_id: 2512,
+            count: 200,
+            icon: Some("Interface\\Icons\\INV_Ammo_Arrow_02".into()),
+            ..Default::default()
+        });
+        s.set_inventory_slots(slots);
+        s.set_item_template(
+            2512,
+            crate::script::ItemTemplateView {
+                class: 6,
+                ..Default::default()
+            },
+        );
+    }
+
+    fn spell() -> CursorPayload {
+        CursorPayload::Spell(CursorSpell {
+            passive: false,
+            spell_id: 133,
+            texture: None,
+        })
+    }
+
+    /// The ammo leg with no item held (`0x4c7509`): the loaded ammo goes on the cursor as mode 9
+    /// through the preview setter, whose clear drops a held spell, and `CMSG_SET_AMMO` 0 unloads
+    /// it (`0x4c7600`, `0x4c762a`). Held ammo dropped back loads by its entry and clears
+    /// (`0x4c748c`-`0x4c74e7`, `0x4c794d`); a bag click only clears it (`0x4f9f41`). With no
+    /// ammo carried the leg only clears; with the record uncached it lifts nothing, the held
+    /// payload staying, and unloads all the same.
+    #[test]
+    fn the_ammo_slot_lifts_the_loaded_ammo_and_takes_it_back() {
+        use crate::script::cursor::CursorAmmo;
+        use crate::script::ItemCall;
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        loaded_ammo(&mut s);
+        let ammo = CursorPayload::Ammo(CursorAmmo {
+            item_id: 2512,
+            texture: Some("Interface\\Icons\\INV_Ammo_Arrow_02".into()),
+        });
+        s.set_cursor_for_test(spell());
+        s.run("PickupInventoryItem(0)").unwrap();
+        assert_eq!(s.cursor_payload(), Some(ammo.clone()));
+        assert_eq!(s.take_item_calls(), [ItemCall::SetAmmo { entry: 0 }]);
+        assert!(s.eval::<bool>("return CursorHasItem() == 1").unwrap());
+        assert!(s.eval::<bool>("return CursorCanGoInSlot(0) == 1").unwrap());
+        assert!(s
+            .eval::<bool>("return CursorCanGoInSlot(1) == nil")
+            .unwrap());
+
+        s.run("PickupInventoryItem(0)").unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(s.take_item_calls(), [ItemCall::SetAmmo { entry: 2512 }]);
+
+        s.set_container(0, Some(one_fitting_bag_item()));
+        s.set_cursor_for_test(ammo);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "a bag slot only clears it");
+        assert!(s.take_item_calls().is_empty());
+
+        s.set_inventory_slots(doll_slots());
+        s.set_cursor_for_test(spell());
+        s.run("PickupInventoryItem(0)").unwrap();
+        assert!(s.cursor_payload().is_none(), "no ammo: the clear alone");
+        assert!(s.take_item_calls().is_empty());
+
+        loaded_ammo(&mut s);
+        s.model_mut().item_templates.remove(&2512);
+        s.set_cursor_for_test(spell());
+        s.run("PickupInventoryItem(0)").unwrap();
+        assert_eq!(
+            s.cursor_payload(),
+            Some(spell()),
+            "nothing set, nothing cleared"
+        );
+        assert_eq!(s.take_item_calls(), [ItemCall::SetAmmo { entry: 0 }]);
+    }
+
+    /// A held item on the ammo slot: a projectile loads by its entry, anything else goes through
+    /// `AutoEquipCursorItem(0)`, and each then clears (`0x4c73bf`-`0x4c7480`, `0x4c794d`).
+    /// `AutoEquipCursorItem` itself loads held ammo by its entry (`0x5e1486`-`0x5e14ec`).
+    #[test]
+    fn the_ammo_slot_loads_a_held_projectile_and_auto_equips_anything_else() {
+        use crate::script::cursor::CursorAmmo;
+        use crate::script::ItemCall;
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let item = |guid, item_id, item_class| ContainerSlot {
+            guid,
+            item_id,
+            count: 1,
+            item_class: Some(item_class),
+            equip_slots: if item_class == 6 { Vec::new() } else { vec![1] },
+            ..Default::default()
+        };
+        s.set_container(
+            0,
+            Some(ContainerState {
+                name: None,
+                num_slots: 16,
+                slots: [(1, item(0x21, 2515, 6)), (2, item(0x22, 1234, 4))].into(),
+            }),
+        );
+        s.set_item_template(1234, Default::default());
+
+        s.run("PickupContainerItem(0, 1) PickupInventoryItem(0)")
+            .unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert!(
+            !s.item_locked(0x21),
+            "the arrows stay in their bag, unlocked"
+        );
+        assert_eq!(s.take_item_calls(), [ItemCall::SetAmmo { entry: 2515 }]);
+
+        s.run("PickupContainerItem(0, 2) PickupInventoryItem(0)")
+            .unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(
+            s.take_item_calls(),
+            [ItemCall::AutoEquip { bag: 0, slot: 2 }]
+        );
+
+        s.set_cursor_for_test(CursorPayload::Ammo(CursorAmmo {
+            item_id: 2512,
+            texture: None,
+        }));
+        s.run("AutoEquipCursorItem()").unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(s.take_item_calls(), [ItemCall::SetAmmo { entry: 2512 }]);
     }
 
     #[test]

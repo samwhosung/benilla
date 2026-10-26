@@ -54,6 +54,13 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
     }
 }
 
+/// Seat the backpack of [`one_item_backpack`] and its item's record: the world drop raises its
+/// popup only for a cached record (`0x4953a5`, `0x4953ac`).
+fn seat_backpack(s: &mut UiScript, item_id: u32, name: &str, quality: u32) {
+    s.set_container(0, Some(one_item_backpack(item_id, name, quality)));
+    s.set_item_template(item_id, Default::default());
+}
+
 /// The stock popup stack and the world frame the drop is clicked on.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
@@ -122,7 +129,7 @@ fn pick_up_and_drop_in_world(s: &mut UiScript) {
 
 /// The world drop for any fixture item; its quality (`arg2`) picks the popup.
 fn drop_in_world(s: &mut UiScript, item_id: u32, name: &str, quality: u32) {
-    s.set_container(0, Some(one_item_backpack(item_id, name, quality)));
+    seat_backpack(s, item_id, name, quality);
     s.run("PickupContainerItem(0, 1)").unwrap();
     assert!(s.cursor_item().is_some(), "fixture: the item is held");
     world_click(s);
@@ -173,7 +180,7 @@ fn delete_item_confirm_shows_the_real_strings_and_yes_deletes() {
 fn delete_item_confirm_no_clears_without_destroying() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = bag_setup();
-    s.set_container(0, Some(one_item_backpack(117, "Tough Jerky", 1)));
+    seat_backpack(&mut s, 117, "Tough Jerky", 1);
     s.run("ToggleBackpack()").unwrap();
     assert!(bag_open(&s, 0), "the backpack window is up");
     // `ContainerFrame_GenerateFrame` numbers buttons backwards (`ContainerFrame.lua:426-428`).
@@ -494,7 +501,7 @@ fn the_world_drop_survives_the_whole_shipped_interface() {
     let failures = super::load_default_ui(&s);
     assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
     s.set_money(0);
-    s.set_container(0, Some(one_item_backpack(117, "Tough Jerky", 1)));
+    seat_backpack(&mut s, 117, "Tough Jerky", 1);
     s.resolve();
 
     s.run("PickupContainerItem(0, 1)").unwrap();

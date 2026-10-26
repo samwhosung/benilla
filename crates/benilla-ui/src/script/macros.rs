@@ -22,7 +22,7 @@ pub use bind::macro_lines;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
-use super::cursor::{set_cursor, CursorMacro, CursorPayload};
+use super::cursor::{set_cursor, CursorMacro, CursorPayload, Setter};
 use super::{Model, SpellBookState};
 
 /// Macros per scope (`0x4f1010` refuses the 19th, `cmp edx,0x12`), and so the character tab's base.
@@ -540,7 +540,9 @@ fn pickup_macro(lua: &Lua, index: usize) -> bool {
             texture: entry.texture.clone(),
         }
     };
-    set_cursor(lua, true, |_| Some(CursorPayload::Macro(payload)))
+    set_cursor(lua, true, Setter::Free, |_| {
+        Some(CursorPayload::Macro(payload))
+    })
 }
 
 /// Build the icon list if it is empty, as the three verbs do before they read it (`0x4f0090`

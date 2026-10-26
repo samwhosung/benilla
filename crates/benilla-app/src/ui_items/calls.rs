@@ -153,6 +153,11 @@ impl ItemSteps<'_, '_> {
                 let guid = store.and_then(|s| slot_guid(&s.0, bag, slot0, objects));
                 send_auto_equip(script, objects, items, net, bag_index, wire_slot, guid);
             }
+            // By entry, the stack staying in its bag; the call cleared the cursor.
+            ItemCall::SetAmmo { entry } => {
+                debug!("ui_items: set ammo entry {entry}");
+                let _ = net.0.send(ClientCommand::SetAmmo { entry });
+            }
             // The question the call raised (`0x5e16c6`), filed though the slot moved since: the
             // item is on the cursor, and the answer re-judges the slot.
             ItemCall::EquipAsk { bag, slot, guid } => {

@@ -1612,7 +1612,9 @@ mod tests {
             .unwrap()
         };
         let pick_up = f(&lua, |lua, guid| {
-            cursor::set_cursor(lua, true, |_| Some(CursorPayload::Item(held_item(guid))));
+            cursor::set_cursor(lua, true, cursor::Setter::Item, |_| {
+                Some(CursorPayload::Item(held_item(guid)))
+            });
             super::super::tick::verb(lua, |model| cursor::lock_item(model, guid));
         });
         let put_down = f(&lua, |lua, _| {

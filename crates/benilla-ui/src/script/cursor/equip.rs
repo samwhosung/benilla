@@ -7,7 +7,7 @@ use crate::script::tick::verb;
 use crate::script::{ItemCall, Model};
 
 use super::{
-    clear, clear_cursor, set_cursor, Clear, CursorItem, CursorPayload, EQUIPMENT_BAG,
+    clear, clear_cursor, set_cursor, Clear, CursorItem, CursorPayload, Setter, EQUIPMENT_BAG,
     ITEM_CLASS_PROJECTILE,
 };
 
@@ -27,6 +27,9 @@ pub enum AutoEquip {
     /// lock it held, for the question's answer. The app files the record under this `(bag, slot)`
     /// and `guid`.
     Asked { bag: i64, slot: u32, guid: u64 },
+    /// Held ammo, mode 9, loads by its `entry` with `CMSG_SET_AMMO` and the cursor clears with
+    /// `ClearCursor(1,1)` (`0x5e1486`-`0x5e14ec`).
+    Ammo { entry: u32 },
     /// The held item's record is not cached: the lookup asked it with the callback `0x5e17a0`
     /// and the call returned (`0x5e160c`), nothing sent and the item still held. The record's
     /// arrival runs the call again ([`crate::script::UiScript::replay_auto_equip`]).
@@ -104,7 +107,7 @@ pub(super) fn equip_question(
 
 /// The held item's object as `AutoEquipCursorItem` finds it by guid (`0x5e15b2`): the view of the
 /// slot it came from, else any bag slot or player slot holding that guid.
-fn held_facts(model: &Model, item: &CursorItem) -> Option<EquipFacts> {
+pub(super) fn held_facts(model: &Model, item: &CursorItem) -> Option<EquipFacts> {
     let from_slot = |bag: i64, slot: u32| {
         if bag == EQUIPMENT_BAG {
             usize::try_from(slot)
@@ -144,6 +147,12 @@ fn held_facts(model: &Model, item: &CursorItem) -> Option<EquipFacts> {
 pub(crate) fn auto_equip_held(lua: &Lua, model: &mut Model, suppress: bool) -> AutoEquip {
     let item = match &model.cursor {
         Some(CursorPayload::Item(item)) => item.clone(),
+        // A zero entry sends nothing (`0x5e14a6`).
+        Some(CursorPayload::Ammo(ammo)) if ammo.item_id != 0 => {
+            let entry = ammo.item_id;
+            clear_cursor(model);
+            return AutoEquip::Ammo { entry };
+        }
         _ => return AutoEquip::None,
     };
     if item.bag == EQUIPMENT_BAG && item.slot <= 23 {
@@ -186,6 +195,10 @@ pub(super) fn file_auto_equip(model: &mut Model, step: AutoEquip) -> bool {
             model.item_calls.push(ItemCall::AutoEquipWait { entry });
             false
         }
+        AutoEquip::Ammo { entry } => {
+            model.item_calls.push(ItemCall::SetAmmo { entry });
+            true
+        }
         AutoEquip::Back => true,
         AutoEquip::None => false,
     }
@@ -201,17 +214,19 @@ pub(crate) fn auto_equip_cursor_item(lua: &Lua, model: &mut Model) -> bool {
 
 /// `SetCursorItem`'s control gate (`0x494b8d`): without control of the character
 /// (`[0xb4b3e4]`, `SMSG_CLIENT_CONTROL_UPDATE`) the set returns before its clear, unless the
-/// player is on a taxi (`UNIT_FLAG_TAXI_FLIGHT`). The UseContainerItem equip arm tests the same
-/// pair first (`0x4fa3ce`-`0x4fa3ec`).
+/// player is on a taxi (`UNIT_FLAG_TAXI_FLIGHT`). The UseContainerItem equip arm
+/// (`0x4fa3ce`-`0x4fa3ec`), `PickupContainerItem` (`0x4f9b87`-`0x4f9ba3`) and
+/// `PickupInventoryItem` (`0x4c7345`-`0x4c7360`) test the same pair first.
 pub(crate) fn has_cursor_control(model: &Model) -> bool {
     model.player_control || model.taxi_riding
 }
 
 /// `0x5e1840`: `SetCursorItem(1, …)` puts the item on the cursor, its inner clear dropping and
 /// unlocking whatever is held (`0x494bb6`), then `AutoEquipCursorItem(suppress)`. The item is not
-/// locked. An item in the trade window is refused first with its line. A refused set (no control, not on a taxi) clears and sets nothing, and
-/// `AutoEquipCursorItem` runs all the same (`0x5e18c9` falls through to `0x5e18d5` with no test),
-/// on whatever the cursor holds.
+/// locked. An item in the trade window is refused first with its line. A refused set (no control,
+/// not on a taxi, [`Setter::Item`]) clears nothing and sets nothing, and `AutoEquipCursorItem` runs
+/// all the same (`0x5e18c9` falls through to `0x5e18d5` with no test), on whatever the cursor
+/// holds.
 pub(crate) fn auto_equip_from(
     lua: &Lua,
     item: CursorItem,
@@ -227,10 +242,7 @@ pub(crate) fn auto_equip_from(
         crate::script::calls::display_error(lua, "ERR_EQUIP_TRADE_ITEM")?;
         return Ok(AutoEquip::None);
     }
-    let control = has_cursor_control(&lua.app_data_ref::<Model>().expect("model app_data"));
-    if control {
-        set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
-    }
+    set_cursor(lua, true, Setter::Item, |_| Some(CursorPayload::Item(item)));
     Ok(verb(lua, |model| auto_equip_held(lua, model, suppress)))
 }
 

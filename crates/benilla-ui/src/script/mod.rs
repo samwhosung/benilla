@@ -282,9 +282,9 @@ pub use cursor::equip::{AutoEquip, BIND_WHEN_EQUIPPED};
 pub use cursor::money::coin_icon;
 pub use cursor::swap::Swap;
 pub use cursor::{
-    CursorAction, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney, CursorPayload,
-    CursorPetAction, CursorSpell, CursorStablePet, EnchantAnswer, EnchantConfirm, HeldCursor,
-    ItemPick, WorldPick, EQUIPMENT_BAG,
+    CursorAction, CursorAmmo, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney,
+    CursorPayload, CursorPetAction, CursorSpell, CursorStablePet, EnchantAnswer, EnchantConfirm,
+    HeldCursor, ItemPick, WorldPick, EQUIPMENT_BAG,
 };
 pub use cvar_checks::{
     check_base_mip, check_camera_decay, check_camera_distance_max, check_camera_pitch,

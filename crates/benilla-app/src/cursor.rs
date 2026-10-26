@@ -33,9 +33,10 @@ fn payload_icon(script: &benilla_ui::script::UiScript, covered: bool) -> Option<
         CursorPayload::Money(m) => {
             Some(benilla_ui::script::coin_icon(i64::from(m.copper)).to_string())
         }
-        // Mode 5: the vendor row's icon, which the reference resolves from its `ItemDisplayInfo`
-        // id (`0xb4d8ec`).
+        // Modes 5 and 9: the vendor row's or the ammo's icon, which the reference resolves from
+        // its `ItemDisplayInfo` id (`0xb4d8ec`).
         CursorPayload::Merchant(m) => m.texture,
+        CursorPayload::Ammo(a) => a.texture,
     }
 }
 

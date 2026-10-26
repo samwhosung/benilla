@@ -10,7 +10,9 @@ use crate::script::binding_abi;
 use crate::script::tick::verb;
 use crate::script::{ActionSlot, Model, SpellBookState};
 
-use super::{clear_cursor, set_cursor, CursorAction, CursorMacro, CursorPayload, CursorSpell};
+use super::{
+    clear_cursor, set_cursor, CursorAction, CursorMacro, CursorPayload, CursorSpell, Setter,
+};
 
 /// The passive-spell refusal's error, errorId `0x9e`: entry `0xb4c0f0` of the table at `0xb4b498`
 /// (stride `0x14`) names this key (`0x84133c`).
@@ -96,7 +98,7 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
         return Ok(false);
     };
     if let Some(payload) = payload {
-        set_cursor(lua, true, |_| Some(payload));
+        set_cursor(lua, true, Setter::of(&payload), |_| Some(payload));
     }
     verb(lua, |model| {
         model.actions.remove(&id);
@@ -177,7 +179,7 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
     };
     match displaced {
         Some(Some(displaced)) => {
-            set_cursor(lua, true, |_| Some(displaced));
+            set_cursor(lua, true, Setter::of(&displaced), |_| Some(displaced));
         }
         Some(None) | None => verb(lua, clear_cursor),
     }
@@ -263,8 +265,8 @@ fn plan_place(model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Plac
             slot(ACTION_KIND_SPELL, s.spell_id, &face)
         }
         // `PlaceAction` accepts modes 1, 3, 7 and 8 (`0x4e62e0`): a macro, mode 8, packs its id
-        // under the macro tag. Pet actions (4), coins (2), stabled pets (10) and vendor rows (5)
-        // are refused and stay held.
+        // under the macro tag. Pet actions (4), coins (2), stabled pets (10), vendor rows (5) and
+        // ammo (9) are refused and stay held.
         CursorPayload::Macro(m) => {
             let (kind, action) = macro_slot_word(m.id);
             slot(kind, action, &m.texture)
@@ -272,7 +274,8 @@ fn plan_place(model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Plac
         CursorPayload::PetAction(_)
         | CursorPayload::StablePet(_)
         | CursorPayload::Money(_)
-        | CursorPayload::Merchant(_) => return Place::Refused,
+        | CursorPayload::Merchant(_)
+        | CursorPayload::Ammo(_) => return Place::Refused,
     };
     // Each arm compares the held action with the slot's: the spell arm a spell id with the spell
     // the slot resolves to (`0x4e63d0`, [`resolved_spell`]), so a macro bound to it or an item

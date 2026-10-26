@@ -2,7 +2,7 @@
 
 use mlua::{Lua, Value};
 
-use super::{clear, clear_cursor, set_cursor, Clear, CursorMoney, CursorPayload};
+use super::{clear, clear_cursor, set_cursor, Clear, CursorMoney, CursorPayload, Setter};
 use crate::script::binding_abi::{flag, number_arg};
 use crate::script::tick::verb;
 use crate::script::Model;
@@ -41,25 +41,21 @@ pub(crate) fn cursor_money(model: &Model) -> u32 {
 /// Put coins on the cursor as `0x494cc0` does. Its inner `ClearCursor(1,1)` (`0x494cd9`) drops
 /// whatever is held with that arm's events, an item's unlock or coins' `PLAYER_MONEY`, and fires
 /// `CURSOR_UPDATE` (`0x4952cc`) on the empty cursor, so that handler sees no coins; then the coins
-/// land and `PLAYER_MONEY` fires (`0x494d0a`), with no second `CURSOR_UPDATE`.
-fn install_money(lua: &Lua, copper: u32) {
-    set_cursor(lua, true, |_| {
+/// land and `PLAYER_MONEY` fires (`0x494d0a`), with no second `CURSOR_UPDATE`. Without control
+/// the setter does nothing (`0x494cc5`). Returns whether the coins went on.
+fn install_money(lua: &Lua, copper: u32) -> bool {
+    set_cursor(lua, true, Setter::Controlled, |_| {
         Some(CursorPayload::Money(CursorMoney { copper }))
-    });
+    })
 }
 
 /// `PickupPlayerMoney` after the argument gate; each refusal is silent.
 pub(crate) fn pickup_player_money(lua: &Lua, copper: u32) -> bool {
     let allowed = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        copper != 0
-            && model.player_control
-            && u64::from(copper) <= crate::script::stat_read::purse(lua, &model)
+        copper != 0 && u64::from(copper) <= crate::script::stat_read::purse(lua, &model)
     };
-    if allowed {
-        install_money(lua, copper);
-    }
-    allowed
+    allowed && install_money(lua, copper)
 }
 
 /// `DropCursorMoney` (`0x48aba0`), `SetCursorMoney(0)`: its `ClearCursor(1,1)` fires the coin

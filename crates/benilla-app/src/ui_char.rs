@@ -675,7 +675,8 @@ fn inventory_slots(
             name: live.name(),
             link: live.link(),
             roll: Default::default(),
-            // No click or drag path reaches the ammo slot: nothing locks it, it fits nowhere.
+            // The ammo leg names the ammo by entry, never by an item object (`0x4c7509`): no guid
+            // to lock, and no equip slots, as `CursorCanGoInSlot(0)` answers held ammo alone.
             guid: 0,
             equip_slots: Vec::new(),
             bar_placeable: false,

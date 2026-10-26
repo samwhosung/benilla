@@ -390,17 +390,19 @@ fn grab_index(index: Option<f64>) -> Option<u32> {
 
 /// The row `PickupMerchantItem` grabs, its 0-based index and row read at the call before its
 /// clear ([`grab_index`]): `None` for each silent refusal, no index, `index > count`
-/// (`0x4fb7e9`), no merchant (`0x4fb7f7`), a dead row (`0x4fb80b`), or the held row again
-/// (`0x4fb818`, the toggle-off). Neither stock nor the item cache is tested: a sold-out row grabs,
-/// and the server refuses the buy.
+/// (`0x4fb7e9`), no merchant (`0x4fb7f7`), a dead row (`0x4fb80b`), or the toggle-off: a held
+/// preview whose entry is the row's (`0x4fb811`-`0x4fb818`). Neither stock nor the item cache is
+/// tested: a sold-out row grabs, and the server refuses the buy.
 fn merchant_grab(model: &Model, grab_row: Option<(u32, MerchantItem)>) -> Option<CursorPayload> {
+    // The preview entry `[0xb4b41c]` (`0x495170`), set for modes 5, 7 and 9 alike.
     let held = match &model.cursor {
-        Some(CursorPayload::Merchant(m)) => Some(m.row),
+        Some(CursorPayload::Merchant(m)) => Some(m.item_id),
+        Some(CursorPayload::Action(a)) => Some(a.action),
+        Some(CursorPayload::Ammo(a)) => Some(a.item_id),
         _ => None,
     };
     let (row0, item) = grab_row?;
-    // The toggle-off: naming the held row puts nothing back.
-    if held == Some(row0) {
+    if held == Some(item.item_id) {
         return None;
     }
     Some(CursorPayload::Merchant(super::cursor::CursorMerchantItem {
@@ -581,9 +583,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // refusal, `0x495112` in the grab), not a bare drop: a held spell fires `CURSOR_UPDATE`
             // and hides the bar grid, and an armed gift wrap is cancelled (`0x5edf10`). Its events
             // run before the grab sets the row, so that `CURSOR_UPDATE` reads an empty cursor.
-            // The grab is the setter (`0x4950f0`): its clear, then the row and its
-            // `CURSOR_UPDATE` (`0x49515e`); mode 5 skips the mode-7 `ACTIONBAR_SHOWGRID` branch.
-            crate::script::cursor::set_cursor(lua, true, |_| grab);
+            // The grab is the setter (`0x4950f0`): its control test (`0x4950f3`), its clear, then
+            // the row and its `CURSOR_UPDATE` (`0x49515e`); mode 5 skips the mode-7
+            // `ACTIONBAR_SHOWGRID` branch. A refusal's clear is the binding's own, untested.
+            match grab {
+                Some(grab) => {
+                    crate::script::cursor::set_cursor(
+                        lua,
+                        true,
+                        crate::script::cursor::Setter::Controlled,
+                        |_| Some(grab),
+                    );
+                }
+                None => super::tick::verb(lua, crate::script::cursor::clear_cursor),
+            }
             Ok(())
         })?,
     )?;
@@ -1381,6 +1394,79 @@ mod tests {
         s.run(r#"PickupMerchantItem("1")"#).unwrap();
         s.run("PickupMerchantItem(1.9)").unwrap();
         assert!(s.cursor_payload().is_none());
+    }
+
+    /// The grab is the preview setter, which needs control for mode 5 (`0x4950f3`): refused, it
+    /// clears nothing, a held spell staying. A refusal's clear is the binding's own
+    /// (`0x4fb83f`), which runs without control.
+    #[test]
+    fn pickup_merchant_item_grabs_only_with_control() {
+        use crate::script::cursor::{CursorPayload, CursorSpell};
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_merchant(Some(stock()));
+        let spell = CursorPayload::Spell(CursorSpell {
+            spell_id: 1,
+            texture: None,
+            passive: false,
+        });
+        s.set_cursor_for_test(spell.clone());
+        s.set_player_control(false);
+        s.run("PickupMerchantItem(1)").unwrap();
+        assert_eq!(
+            s.cursor_payload(),
+            Some(spell),
+            "the setter refused before its clear"
+        );
+        s.run("PickupMerchantItem(99)").unwrap();
+        assert!(
+            s.cursor_payload().is_none(),
+            "the refusal clears all the same"
+        );
+
+        s.set_player_control(true);
+        s.run("PickupMerchantItem(1)").unwrap();
+        assert!(matches!(
+            s.cursor_payload(),
+            Some(CursorPayload::Merchant(_))
+        ));
+    }
+
+    /// The toggle-off compares the held preview's entry, any of modes 5, 7 and 9, with the row's
+    /// (`0x4fb811`-`0x4fb818`): held ammo or a bar item of row 1's entry drops, and grabs
+    /// nothing; another row's grab replaces a held one.
+    #[test]
+    fn the_toggle_off_matches_any_held_preview_by_entry() {
+        use crate::script::cursor::{CursorAction, CursorAmmo, CursorPayload};
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_merchant(Some(stock()));
+        let row = |s: &UiScript| match s.cursor_payload() {
+            Some(CursorPayload::Merchant(m)) => Some(m.row),
+            _ => None,
+        };
+        s.run("PickupMerchantItem(2) PickupMerchantItem(1)")
+            .unwrap();
+        assert_eq!(row(&s), Some(0), "row 1 replaces row 2");
+
+        s.set_cursor_for_test(CursorPayload::Ammo(CursorAmmo {
+            item_id: 159,
+            texture: None,
+        }));
+        s.run("PickupMerchantItem(1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "the same entry toggles off");
+
+        s.set_cursor_for_test(CursorPayload::Action(CursorAction {
+            src_slot: 1,
+            kind: 0x80,
+            action: 159,
+            texture: None,
+            count: 0,
+            consumable: false,
+            state: None,
+        }));
+        s.run("PickupMerchantItem(1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "a bar item of the entry too");
     }
 
     #[test]

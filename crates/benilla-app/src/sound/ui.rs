@@ -144,26 +144,14 @@ fn play_item_gesture_sounds(
         return;
     };
 
-    let mut play = |payload: &CursorPayload, gesture: CursorGesture| match payload {
-        // Mode 5 takes the item arm: the vendor grab `0x4950f0` is handed the row's
-        // `ItemDisplayInfo` id, so it plays the item's own pickup and put-down.
-        CursorPayload::Item(_) | CursorPayload::Merchant(_) => {
-            let item_id = match payload {
-                CursorPayload::Item(i) => i.item_id,
-                CursorPayload::Merchant(m) => m.item_id,
-                _ => unreachable!("guarded by the arm's own pattern"),
-            };
-            let (Some(displays), Some(sounds)) = (&displays, &sounds) else {
-                return;
-            };
-            // The template is cached by now (the bag drew the icon); one still in flight is
-            // silent, like the client's null-record return.
-            let Some(display_id) = items
-                .template(item_id, 0, Ask::Read)
-                .map(|t| t.display_info_id)
-            else {
-                return;
-            };
+    let mut play = |payload: &CursorPayload, gesture: CursorGesture| {
+        let (item_id, kit_id) = gesture_plan(payload, gesture);
+        // The template is cached by now (the bag drew the icon); one still in flight is silent,
+        // like the client's null-record return.
+        let display_id = item_id
+            .and_then(|id| items.template(id, 0, Ask::Read))
+            .map(|t| t.display_info_id);
+        if let (Some(display_id), Some(displays), Some(sounds)) = (display_id, &displays, &sounds) {
             let item_gesture = match gesture {
                 CursorGesture::Gain => ItemGesture::Pickup,
                 CursorGesture::Loss => ItemGesture::PutDown,
@@ -179,34 +167,8 @@ fn play_item_gesture_sounds(
                 &config,
             );
         }
-        // The generic pair: the macro grab (mode 8, `0x494f60`/`0x494f80`) reaches the same
-        // pair as spells and actions, and the pet-action builder `0x494e20` names it outright.
-        CursorPayload::Spell(_)
-        | CursorPayload::Action(_)
-        | CursorPayload::Macro(_)
-        | CursorPayload::PetAction(_)
-        // Mode 10: the stabled-pet grab `0x495010` calls the same generic path.
-        | CursorPayload::StablePet(_)
-        // Mode 2: money pickup and drop both play `LOOTWINDOWCOINSOUND`, never the generic drop
-        // kit (`0x494cfe`/`0x49523a`).
-        | CursorPayload::Money(_) => {
-            let kit_id = match (&payload, gesture) {
-                (CursorPayload::Money(_), _) => LOOTWINDOWCOINSOUND,
-                (_, CursorGesture::Gain) => INTERFACESOUND_CURSORGRABOBJECT,
-                (_, CursorGesture::Loss) => INTERFACESOUND_CURSORDROPOBJECT,
-            };
-            if let Err(e) = kit::play_kit(
-                &mut kits,
-                &assets,
-                &mut out,
-                &config,
-                Vec3::ZERO,
-                KitRef::Id(kit_id),
-                None,
-                kit::SoundCategory::Sfx,
-            ) {
-                debug!("sound(ui): generic cursor kit {kit_id} — {e:#}");
-            }
+        if let Some(kit_id) = kit_id {
+            play_generic_kit(&mut kits, &assets, &mut out, &config, kit_id);
         }
     };
 
@@ -219,6 +181,60 @@ fn play_item_gesture_sounds(
             play(o, CursorGesture::Loss);
             play(n, CursorGesture::Gain);
         }
+    }
+}
+
+/// What a cursor gesture plays, in order: the item display's own pickup or put-down for the item
+/// entry, then a generic kit.
+/// - An item plays its display's sound alone (`SetCursorItem`, `ClearCursor`'s item arm).
+/// - A preview (modes 5, 7, 9) grabs with its display's pickup alone (`0x495154`), and clears with
+///   its put-down, then `INTERFACESOUND_CURSORDROPOBJECT` (`0x49526a`, `0x495291`).
+/// - A spell, macro (`0x494f60`), pet action (`0x494e20`) or stabled pet (`0x495010`) plays the
+///   generic grab or drop.
+/// - Coins play `LOOTWINDOWCOINSOUND` both ways, never the generic drop (`0x494cfe`, `0x49523a`).
+fn gesture_plan(payload: &CursorPayload, gesture: CursorGesture) -> (Option<u32>, Option<u32>) {
+    let loss = matches!(gesture, CursorGesture::Loss);
+    let preview_drop = loss.then_some(INTERFACESOUND_CURSORDROPOBJECT);
+    match payload {
+        CursorPayload::Item(i) => (Some(i.item_id), None),
+        CursorPayload::Merchant(m) => (Some(m.item_id), preview_drop),
+        // Mode 7 lifts only an item action, its id the item entry.
+        CursorPayload::Action(a) => (Some(a.action), preview_drop),
+        CursorPayload::Ammo(a) => (Some(a.item_id), preview_drop),
+        CursorPayload::Money(_) => (None, Some(LOOTWINDOWCOINSOUND)),
+        CursorPayload::Spell(_)
+        | CursorPayload::Macro(_)
+        | CursorPayload::PetAction(_)
+        | CursorPayload::StablePet(_) => (
+            None,
+            Some(if loss {
+                INTERFACESOUND_CURSORDROPOBJECT
+            } else {
+                INTERFACESOUND_CURSORGRABOBJECT
+            }),
+        ),
+    }
+}
+
+/// Play a cursor kit by id, 2D.
+fn play_generic_kit(
+    kits: &mut SoundKits,
+    assets: &WorldAssets,
+    out: &mut SoundOutput,
+    config: &SoundConfig,
+    kit_id: u32,
+) {
+    if let Err(e) = kit::play_kit(
+        kits,
+        assets,
+        out,
+        config,
+        Vec3::ZERO,
+        KitRef::Id(kit_id),
+        None,
+        kit::SoundCategory::Sfx,
+    ) {
+        debug!("sound(ui): generic cursor kit {kit_id} — {e:#}");
     }
 }
 
@@ -356,4 +372,60 @@ pub(super) fn plugin(app: &mut App) {
             )
                 .in_set(crate::ui_script::UiDrain),
         );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        gesture_plan, CursorGesture, INTERFACESOUND_CURSORDROPOBJECT,
+        INTERFACESOUND_CURSORGRABOBJECT,
+    };
+    use benilla_ui::script::{ActionSlot, CursorAmmo, CursorPayload, CursorSpell, UiScript};
+
+    /// A preview grabs with its display's pickup alone (`0x495154`) and clears with its put-down,
+    /// then the generic drop (`0x49526a`, `0x495291`); a spell takes the generic pair.
+    #[test]
+    fn previews_play_their_display_then_the_generic_drop() {
+        // A bar item lifted as mode 7.
+        let mut s = UiScript::new().unwrap();
+        s.set_action(
+            1,
+            Some(ActionSlot {
+                texture: None,
+                kind: 0x80,
+                action: 159,
+                count: 1,
+                consumable: false,
+                use_spell: None,
+            }),
+        );
+        s.run("PickupAction(1)").unwrap();
+        let action = s.cursor_payload().expect("mode 7 held");
+        assert!(matches!(action, CursorPayload::Action(_)));
+        let ammo = CursorPayload::Ammo(CursorAmmo {
+            item_id: 2512,
+            texture: None,
+        });
+        assert_eq!(
+            gesture_plan(&action, CursorGesture::Gain),
+            (Some(159), None)
+        );
+        assert_eq!(
+            gesture_plan(&action, CursorGesture::Loss),
+            (Some(159), Some(INTERFACESOUND_CURSORDROPOBJECT))
+        );
+        assert_eq!(
+            gesture_plan(&ammo, CursorGesture::Loss),
+            (Some(2512), Some(INTERFACESOUND_CURSORDROPOBJECT))
+        );
+        let spell = CursorPayload::Spell(CursorSpell {
+            spell_id: 133,
+            texture: None,
+            passive: false,
+        });
+        assert_eq!(
+            gesture_plan(&spell, CursorGesture::Gain),
+            (None, Some(INTERFACESOUND_CURSORGRABOBJECT))
+        );
+    }
 }

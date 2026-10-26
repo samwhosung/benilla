@@ -548,7 +548,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 slot_index(i).and_then(|i| view.state.as_mut()?.slots[i].take())
             };
             if let Some(pet) = pet {
-                super::cursor::set_cursor(lua, true, |_| {
+                super::cursor::set_cursor(lua, true, super::cursor::Setter::Free, |_| {
                     let texture = pet.icon?;
                     Some(super::cursor::CursorPayload::StablePet(
                         super::cursor::CursorStablePet {

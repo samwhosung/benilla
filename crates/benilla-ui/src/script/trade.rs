@@ -628,7 +628,9 @@ fn click_trade_button(lua: &Lua, id: i32) -> mlua::Result<()> {
     match index {
         Some(i) => place(lua, i, held, AfterPlace::Click { old }),
         None => {
-            cursor::set_cursor(lua, true, |_| old.map(CursorPayload::Item));
+            cursor::set_cursor(lua, true, cursor::Setter::Item, |_| {
+                old.map(CursorPayload::Item)
+            });
             Ok(())
         }
     }
@@ -725,7 +727,9 @@ fn finish_placement(lua: &Lua, place: u64, sent: bool) {
     }
     match then {
         AfterPlace::Click { old } => {
-            cursor::set_cursor(lua, !wrote, |_| old.map(CursorPayload::Item));
+            cursor::set_cursor(lua, !wrote, cursor::Setter::Item, |_| {
+                old.map(CursorPayload::Item)
+            });
         }
         AfterPlace::Offer if wrote => {
             super::tick::verb(lua, |model| cursor::clear(model, cursor::Clear::KEEP_LOCK));

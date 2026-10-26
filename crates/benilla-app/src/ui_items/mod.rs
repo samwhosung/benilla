@@ -1327,14 +1327,14 @@ mod tests {
         }
     }
 
-    /// Doll live id `n` (1..=23) is player-array slot `n - 1`; ammo (0) is refused, as
-    /// `pickup_inventory_item`'s range guard does.
+    /// Doll live id `n` (1..=23) is player-array slot `n - 1`; ammo (0) has none, as its leg
+    /// names the ammo by entry with `CMSG_SET_AMMO`.
     #[test]
     fn wire_pos_maps_equipment_bag_to_the_player_grid() {
         assert_eq!(wire_pos(EQUIPMENT_BAG, 1), Some((255, 0)), "HeadSlot");
         assert_eq!(wire_pos(EQUIPMENT_BAG, 19), Some((255, 18)), "TabardSlot");
         assert_eq!(wire_pos(EQUIPMENT_BAG, 16), Some((255, 15)), "MainHandSlot");
-        assert_eq!(wire_pos(EQUIPMENT_BAG, 0), None, "ammo — out of scope");
+        assert_eq!(wire_pos(EQUIPMENT_BAG, 0), None, "ammo has no wire slot");
         // The four equipped-bag icons map onto the wire's bag inventory slots (19..22).
         assert_eq!(wire_pos(EQUIPMENT_BAG, 20), Some((255, 19)), "Bag0Slot");
         assert_eq!(wire_pos(EQUIPMENT_BAG, 23), Some((255, 22)), "Bag3Slot");

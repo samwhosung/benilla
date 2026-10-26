@@ -35,7 +35,7 @@ pub const EQUIPMENT_BAG: i64 = -100;
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// What the cursor carries, by the client's payload mode `[0xb4d900]`: 1 item, 2 money, 3 spell,
-/// 4 pet action, 5 vendor row, 8 macro, 10 stabled pet; `Action` is the bar-slot pickup.
+/// 4 pet action, 5 vendor row, 8 macro, 9 ammo, 10 stabled pet; `Action` is the bar-slot pickup.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CursorPayload {
     Item(CursorItem),
@@ -50,6 +50,9 @@ pub enum CursorPayload {
     StablePet(CursorStablePet),
     /// Mode 2, coins taken off a money frame.
     Money(CursorMoney),
+    /// Mode 9, the equipped ammo lifted off the paper doll's ammo slot (`0x4c7600`). Like mode 1
+    /// it answers `CursorHasItem` (`0x4895da`).
+    Ammo(CursorAmmo),
 }
 
 impl CursorPayload {
@@ -107,6 +110,10 @@ impl CursorPayload {
                 texture: String::new(),
             }),
             CursorPayload::Money(_) => CursorPayload::Money(CursorMoney { copper: 0 }),
+            CursorPayload::Ammo(_) => CursorPayload::Ammo(CursorAmmo {
+                item_id: 0,
+                texture: None,
+            }),
         }
     }
 }
@@ -129,6 +136,16 @@ pub struct CursorMerchantItem {
     /// same row drops the grab.
     pub row: u32,
     /// The icon at the mouse, resolved from the display id the reference stores (`0xb4d8ec`).
+    pub texture: Option<String>,
+}
+
+/// The equipped ammo held on the cursor, mode 9: its entry (`0xb4b41c`), which a drop on the ammo
+/// slot or `AutoEquipCursorItem` sends with `CMSG_SET_AMMO` (`0x4c74c4`, `0x5e14c4`). Lifting it
+/// already unloaded it, so any other drop just clears.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CursorAmmo {
+    pub item_id: u32,
+    /// The icon at the mouse, resolved from the record's display id (`0x4c75f9`).
     pub texture: Option<String>,
 }
 
@@ -467,7 +484,7 @@ fn put_now(model: &mut Model, payload: CursorPayload) {
             grid: item.bar_placeable,
         },
         CursorPayload::Action(_) => Tail::Update { grid: true },
-        CursorPayload::Merchant(_) => Tail::Update { grid: false },
+        CursorPayload::Merchant(_) | CursorPayload::Ammo(_) => Tail::Update { grid: false },
         CursorPayload::Spell(_) | CursorPayload::Macro(_) => Tail::BarGrid,
         CursorPayload::PetAction(_) => Tail::PetGrid,
         CursorPayload::Money(_) => Tail::Money,
@@ -495,18 +512,63 @@ fn put_now(model: &mut Model, payload: CursorPayload) {
     }
 }
 
-/// A cursor setter from a Lua verb. Its inner `ClearCursor(unlock, 1)` runs as one segment, so
-/// that clear's `CURSOR_UPDATE` reads the emptied cursor as the reference's does; then `payload`,
-/// read past the clear, goes on with its tail as a second ([`put`]). `None` leaves the cursor clear,
-/// as `SetCursorItem` with a zero guid (`0x494bc5`) or a stable grab whose slot fails its check
-/// past the clear (`0x49505e`). Only `SetCursorItem` passes `unlock` through; every other setter
-/// clears with `ClearCursor(1,1)`. Returns whether a payload went on.
+/// Which cursor setter a [`set_cursor`] is, for the control test it opens with, ahead of its
+/// inner clear: a refused setter clears nothing and sets nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Setter {
+    /// `SetCursorItem` (`0x494b60`): control, or a taxi flight (`0x494b8d`, `0x494ba3`).
+    Item,
+    /// The money (`0x494cc5`) and pet-action (`0x494e26`) setters, and the preview setter for any
+    /// mode but 7 (`0x4950f3`): control alone.
+    Controlled,
+    /// The spell, macro and stabled-pet setters (`0x494d20`, `0x494f80`, `0x495010`), and the
+    /// preview setter for a bar item, mode 7 (`0x495106`): no test.
+    Free,
+}
+
+impl Setter {
+    /// The setter that puts `payload` on the cursor.
+    pub(crate) fn of(payload: &CursorPayload) -> Setter {
+        match payload {
+            CursorPayload::Item(_) => Setter::Item,
+            CursorPayload::Money(_)
+            | CursorPayload::PetAction(_)
+            | CursorPayload::Merchant(_)
+            | CursorPayload::Ammo(_) => Setter::Controlled,
+            CursorPayload::Spell(_)
+            | CursorPayload::Macro(_)
+            | CursorPayload::StablePet(_)
+            | CursorPayload::Action(_) => Setter::Free,
+        }
+    }
+
+    /// Whether the setter runs, by the player-control flag `[0xb4b3e4]`.
+    fn admits(self, model: &Model) -> bool {
+        match self {
+            Setter::Item => equip::has_cursor_control(model),
+            Setter::Controlled => model.player_control,
+            Setter::Free => true,
+        }
+    }
+}
+
+/// A cursor setter from a Lua verb. Its control test runs first ([`Setter`]); then its inner
+/// `ClearCursor(unlock, 1)` runs as one segment, so that clear's `CURSOR_UPDATE` reads the emptied
+/// cursor as the reference's does; then `payload`, read past the clear, goes on with its tail as a
+/// second ([`put`]). `None` leaves the cursor clear, as `SetCursorItem` with a zero guid
+/// (`0x494bc5`) or a stable grab whose slot fails its check past the clear (`0x49505e`). Only
+/// `SetCursorItem` passes `unlock` through; every other setter clears with `ClearCursor(1,1)`.
+/// Returns whether a payload went on.
 pub(crate) fn set_cursor(
     lua: &Lua,
     unlock: bool,
+    setter: Setter,
     payload: impl FnOnce(&Model) -> Option<CursorPayload>,
 ) -> bool {
-    verb(lua, |model| {
+    let admitted = verb(lua, |model| {
+        if !setter.admits(model) {
+            return false;
+        }
         clear(
             model,
             Clear {
@@ -514,7 +576,11 @@ pub(crate) fn set_cursor(
                 signal_money: true,
             },
         );
+        true
     });
+    if !admitted {
+        return false;
+    }
     verb(lua, |model| match payload(model) {
         Some(payload) => {
             put(model, payload);
@@ -529,7 +595,7 @@ pub(crate) fn set_cursor(
 /// `0x4f9df0`), doll (`0x4c7838`) and bag-slot (`0x4c7be2`) pickups and the split (`0x4fa0aa`) do.
 pub(crate) fn pick_up_item(lua: &Lua, item: CursorItem) {
     let guid = item.guid;
-    set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
+    set_cursor(lua, true, Setter::Item, |_| Some(CursorPayload::Item(item)));
     verb(lua, |model| lock_item(model, guid));
 }
 
@@ -574,9 +640,38 @@ pub(crate) fn item_locked(model: &Model, guid: u64) -> bool {
     guid != 0 && model.item_locks.contains(&guid)
 }
 
-/// Raise `DELETE_ITEM_CONFIRM(name, quality)` for an item dropped on the world. The payload stays
-/// held: the popup's `DeleteCursorItem` or `ClearCursor` clears it.
+/// The item template flag that refuses a destroy (`0x495370`, `0x489836`).
+const ITEM_FLAG_INDESTRUCTIBLE: u32 = 0x20;
+
+/// The message both destroy paths show for an indestructible item, error `0x152`.
+const CANT_BE_DESTROYED: &str = "ERR_ITEM_CANT_BE_DESTROYED";
+
+/// Whether the held item's record carries [`ITEM_FLAG_INDESTRUCTIBLE`], read through the item
+/// cache at the call (`0x5da2a0`), an uncached record reading 0.
+fn indestructible(model: &Model, item: &CursorItem) -> bool {
+    model
+        .item_templates
+        .get(&item.item_id)
+        .is_some_and(|t| t.flags & ITEM_FLAG_INDESTRUCTIBLE != 0)
+}
+
+/// `0x495300`, an item released over the world: nothing unless the held item's object resolves
+/// and is the active player's (`0x49533e`-`0x495360`), as every item a pickup here resolves is;
+/// an indestructible one shows its error and no popup (`0x495370`-`0x495379`); else, with its
+/// record cached, `DELETE_ITEM_CONFIRM(name, quality)`. The record lookup passes no callback, so a
+/// miss returns with nothing raised (`0x4953a5`, `0x4953ac`). The payload stays held: the popup's
+/// `DeleteCursorItem` or `ClearCursor` clears it.
 fn raise_delete_item_confirm(model: &mut Model, item: &CursorItem) {
+    if equip::held_facts(model, item).is_none() {
+        return;
+    }
+    if indestructible(model, item) {
+        model.push_ui_error(CANT_BE_DESTROYED);
+        return;
+    }
+    if !model.item_templates.contains_key(&item.item_id) {
+        return;
+    }
     let name = item_link_name(item.link.as_deref());
     let quality = item.quality.unwrap_or(0);
     model.raise(
@@ -633,7 +728,8 @@ enum WorldDrop {
 
 /// A left click on the world with a payload held (`ui/mouseover`, "Payloads on the world" and
 /// "The nothing leg"), and whether the click is then the payload's, taken from the world's own
-/// click: the object leg (`0x492ce0`) clears a vendor row or a bar item (`[0xb4b41c]`) and goes on
+/// click: the object leg (`0x492ce0`) clears a preview, a vendor row, a bar item or ammo
+/// (`[0xb4b41c]`), and goes on
 /// to select; the ground leg (`0x492c90`) clears one too (`0x492c99`) and goes on to the ground
 /// click (`0x492cb0`), where an item raises the delete confirmation (`0x5e03a9`) in place of the
 /// deselect; the nothing leg (`0x492d30`) confirms an item and clears any other payload
@@ -648,7 +744,7 @@ fn world_drop(model: &Model) -> (WorldDrop, bool) {
     };
     let preview = matches!(
         payload,
-        CursorPayload::Merchant(_) | CursorPayload::Action(_)
+        CursorPayload::Merchant(_) | CursorPayload::Action(_) | CursorPayload::Ammo(_)
     );
     match (payload, model.world_pick) {
         (_, WorldPick::Object) if preview => (WorldDrop::Clear, false),
@@ -662,7 +758,9 @@ fn world_drop(model: &Model) -> (WorldDrop, bool) {
             | CursorPayload::PetAction(_),
             WorldPick::Terrain,
         ) => (WorldDrop::Clear, true),
-        (CursorPayload::Merchant(_), WorldPick::Terrain) => (WorldDrop::Clear, false),
+        (CursorPayload::Merchant(_) | CursorPayload::Ammo(_), WorldPick::Terrain) => {
+            (WorldDrop::Clear, false)
+        }
         (_, WorldPick::Terrain) => (WorldDrop::Keep, false),
     }
 }
@@ -697,6 +795,10 @@ pub(crate) fn split_container_item(
 ) -> mlua::Result<bool> {
     let item = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
+        // Without control and off a taxi the split ends first (`0x4f9fdb`-`0x4f9ff7`).
+        if !equip::has_cursor_control(&model) {
+            return Ok(false);
+        }
         // The slot resolver (`0x4fa00a`), through the bag lookup `0x4f93e0`.
         let Some(s) = model.bag_slot(bag, slot) else {
             return Ok(false);
@@ -736,15 +838,19 @@ pub(crate) fn split_container_item(
     Ok(true)
 }
 
-/// `DeleteCursorItem()` (`0x4897b0`), the delete popup's accept: a held item files its
-/// `(bag, slot, count)` destroy for the host, count 0 for the whole stack, then `ClearCursor(1,1)`
-/// (`0x4898af`) and `LockItem` on it again (`0x4898bc`) for the server's answer; anything else is
-/// a no-op.
-pub(crate) fn delete_cursor_item(model: &mut Model) {
+/// `DeleteCursorItem()` (`0x4897b0`), the delete popup's accept: a held item whose object resolves
+/// as indestructible is refused with its error, the item still held (`0x489823`-`0x48983f`);
+/// otherwise it files its `(bag, slot, count)` destroy for the host, count 0 for the whole stack,
+/// then `ClearCursor(1,1)` (`0x4898af`) and `LockItem` on it again (`0x4898bc`) for the server's
+/// answer. Anything else is a no-op. Returns the refusal's message.
+pub(crate) fn delete_cursor_item(model: &mut Model) -> Option<&'static str> {
     let Some(CursorPayload::Item(item)) = &model.cursor else {
-        return;
+        return None;
     };
     let item = item.clone();
+    if equip::held_facts(model, &item).is_some() && indestructible(model, &item) {
+        return Some(CANT_BE_DESTROYED);
+    }
     model.item_calls.push(super::ItemCall::Destroy {
         bag: item.bag,
         slot: item.slot,
@@ -752,6 +858,7 @@ pub(crate) fn delete_cursor_item(model: &mut Model) {
     });
     clear_cursor(model);
     lock_item(model, item.guid);
+    None
 }
 
 /// An attach slot's click, `ClickSendMailItemButton` (`0x4adef0`) and
@@ -781,7 +888,7 @@ pub(crate) fn click_attach_slot(
         return false;
     }
     verb(lua, |model| *slot(model) = held);
-    set_cursor(lua, false, |_| old.map(CursorPayload::Item));
+    set_cursor(lua, false, Setter::Item, |_| old.map(CursorPayload::Item));
     true
 }
 
@@ -956,12 +1063,12 @@ impl super::UiScript {
     }
 
     /// The world click router's object leg (`0x492ce0`): `ClearCursor(1, 1)` only while a preview
-    /// payload is held, `[0xb4b41c]` set, which is a vendor row (mode 5) or an item action lifted
-    /// off the bar (mode 7); any other payload stays held.
+    /// payload is held, `[0xb4b41c]` set, which is a vendor row (mode 5), an item action lifted
+    /// off the bar (mode 7) or ammo (mode 9); any other payload stays held.
     pub fn clear_preview_payload(&mut self) {
         let preview = matches!(
             self.model_ref().cursor,
-            Some(CursorPayload::Merchant(_) | CursorPayload::Action(_))
+            Some(CursorPayload::Merchant(_) | CursorPayload::Action(_) | CursorPayload::Ammo(_))
         );
         if preview {
             self.clear_cursor_payload();
@@ -1064,7 +1171,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CursorHasItem",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(matches!(model.cursor, Some(CursorPayload::Item(_)))))
+            // Modes 1 and 9 (`0x4895d5`, `0x4895da`).
+            Ok(flag(matches!(
+                model.cursor,
+                Some(CursorPayload::Item(_) | CursorPayload::Ammo(_))
+            )))
         })?,
     )?;
     g.set(
@@ -1112,7 +1223,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "DeleteCursorItem",
         lua.create_function(|lua, ()| {
-            super::tick::verb(lua, delete_cursor_item);
+            // The refusal is shown inside the verb, as `DisplayError` (`0x496720`) signals.
+            if let Some(key) = super::tick::verb(lua, delete_cursor_item) {
+                return super::calls::display_error(lua, key);
+            }
             super::item_calls::submit_item_calls(lua)
         })?,
     )?;
@@ -1127,7 +1241,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// Test-only: a `CursorKind()` global naming the payload a handler reads (`none`, `item`,
-/// `spell`, `action`, `macro`, `pet`, `row`, `stable`, `money`), since 1.12's Lua has no getter for
+/// `spell`, `action`, `macro`, `pet`, `row`, `stable`, `money`, `ammo`), since 1.12's Lua has no getter for
 /// most modes.
 #[cfg(test)]
 pub(crate) fn install_kind_probe(s: &super::UiScript) {
@@ -1145,6 +1259,7 @@ pub(crate) fn install_kind_probe(s: &super::UiScript) {
                 Some(CursorPayload::Merchant(_)) => "row",
                 Some(CursorPayload::StablePet(_)) => "stable",
                 Some(CursorPayload::Money(_)) => "money",
+                Some(CursorPayload::Ammo(_)) => "ammo",
             })
         })
         .unwrap();
@@ -1593,6 +1708,104 @@ mod tests {
             "object: nothing drops at all"
         );
         assert!(s.cursor_item().is_some());
+    }
+
+    /// The record's flag `0x20` refuses both destroy paths with error `0x152`: the world drop
+    /// raises no popup (`0x495370`-`0x495379`) and `DeleteCursorItem` sends nothing
+    /// (`0x489836`-`0x48983f`), the item held throughout. An item the cache does not flag gets
+    /// both.
+    #[test]
+    fn an_indestructible_item_is_refused_by_both_destroy_paths() {
+        use super::{world_drop_click, WorldPick};
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.run(
+            r#"
+            heard = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("DELETE_ITEM_CONFIRM")
+            f:SetScript("OnEvent", function() heard = heard + 1 end)
+            "#,
+        )
+        .unwrap();
+        s.set_container(0, Some(one_item_backpack()));
+        s.set_item_template(
+            117,
+            crate::script::ItemTemplateView {
+                flags: 0x20,
+                ..Default::default()
+            },
+        );
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        s.model_mut().world_pick = WorldPick::Nothing;
+        assert!(
+            world_drop_click(&mut s.model_mut()),
+            "the click is the payload's"
+        );
+        s.tick(0.01);
+        s.run("DeleteCursorItem()").unwrap();
+        assert_eq!(s.eval::<i64>("return heard").unwrap(), 0, "no popup");
+        assert_eq!(
+            s.take_ui_errors(),
+            ["ERR_ITEM_CANT_BE_DESTROYED", "ERR_ITEM_CANT_BE_DESTROYED"]
+        );
+        assert!(s.take_container_destroys().is_empty(), "no destroy");
+        assert!(s.cursor_item().is_some(), "still held");
+
+        s.set_item_template(117, crate::script::ItemTemplateView::default());
+        assert!(world_drop_click(&mut s.model_mut()));
+        s.tick(0.01);
+        assert_eq!(s.eval::<i64>("return heard").unwrap(), 1, "the popup");
+        s.run("DeleteCursorItem()").unwrap();
+        assert_eq!(s.take_container_destroys(), vec![(0, 1, 0)]);
+        assert!(s.take_ui_errors().is_empty());
+
+        // A held item whose object no longer resolves raises nothing (`0x49533e`).
+        let mut gone = one_item_backpack().slots[&1].cursor_item(0, 1);
+        gone.guid = 0x999;
+        s.set_cursor_for_test(CursorPayload::Item(gone));
+        assert!(world_drop_click(&mut s.model_mut()));
+        s.tick(0.01);
+        assert_eq!(
+            s.eval::<i64>("return heard").unwrap(),
+            1,
+            "no popup for a lost item"
+        );
+
+        // An uncached record raises nothing, no popup and no error (`0x4953a5`, `0x4953ac`).
+        s.unlock_item(0x105);
+        s.model_mut().item_templates.remove(&117);
+        s.run("ClearCursor() PickupContainerItem(0, 1)").unwrap();
+        assert!(s.cursor_item().is_some_and(|i| i.guid == 0x105));
+        assert!(world_drop_click(&mut s.model_mut()));
+        s.tick(0.01);
+        assert_eq!(
+            s.eval::<i64>("return heard").unwrap(),
+            1,
+            "no popup for a miss"
+        );
+        assert!(s.take_ui_errors().is_empty());
+    }
+
+    /// The object leg clears whenever the preview entry `[0xb4b41c]` is set (`0x492ce0`), held
+    /// ammo included; a spell stays held.
+    #[test]
+    fn the_object_leg_clears_held_ammo() {
+        let mut s = UiScript::new().unwrap();
+        s.set_cursor_for_test(CursorPayload::Ammo(super::CursorAmmo {
+            item_id: 2512,
+            texture: None,
+        }));
+        s.clear_preview_payload();
+        assert!(s.cursor_payload().is_none());
+        let spell = CursorPayload::Spell(CursorSpell {
+            passive: false,
+            spell_id: 133,
+            texture: None,
+        });
+        s.set_cursor_for_test(spell.clone());
+        s.clear_preview_payload();
+        assert_eq!(s.cursor_payload(), Some(spell));
     }
 
     #[test]

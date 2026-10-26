@@ -511,6 +511,43 @@ fn down_registration_fires_on_press_and_toggles_checked_once() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// `RegisterForClicks` reads its list only while `lua_isstring` holds (`0x78268f`-`0x782696`):
+/// a nil ends it, so a name past the hole is never registered, while a number passes and names
+/// nothing.
+#[test]
+fn register_for_clicks_stops_at_the_first_non_string() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        clicks = {}
+        local function make(name, x)
+            local b = CreateFrame("Button", name)
+            b:SetPoint("BOTTOMLEFT", x, 0); b:SetWidth(100); b:SetHeight(100)
+            b:SetScript("OnClick", function() table.insert(clicks, name .. ":" .. arg1) end)
+            return b
+        end
+        make("HoleBtn", 0):RegisterForClicks("LeftButtonUp", nil, "RightButtonUp")
+        make("NumBtn", 200):RegisterForClicks("LeftButtonUp", 5, "RightButtonUp")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    for x in [50.0, 250.0] {
+        for button in ["LeftButton", "RightButton"] {
+            s.mouse_button(x, 50.0, button, true);
+            s.mouse_button(x, 50.0, button, false);
+        }
+    }
+    assert_eq!(
+        s.eval::<String>("return table.concat(clicks, ' ')")
+            .unwrap(),
+        "HoleBtn:LeftButton NumBtn:LeftButton NumBtn:RightButton",
+        "the nil ends the list; the number does not"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 #[test]
 fn highlight_is_additive_and_state_textures_fill_then_anchor() {
     let mut s = script();
