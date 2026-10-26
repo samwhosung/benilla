@@ -7,7 +7,6 @@ use benilla_protocol::messages::{
 };
 use benilla_protocol::SessionEvent;
 use benilla_ui::script::UiScript;
-use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -21,8 +20,6 @@ const CHARTER: u64 = 0x4000_0000_0000_0099;
 struct Charter {
     app: App,
     rx: Receiver<ClientCommand>,
-    /// The charter feed, registered once so its memories persist.
-    feed: SystemId,
 }
 
 /// The whole client, headless, with a VM that records the charter's events and lines.
@@ -51,11 +48,10 @@ fn client() -> Charter {
         )
         .expect("the recorder installs");
     app.world_mut().insert_non_send_resource(script);
-    let feed = app.world_mut().register_system(super::feed::feed_petition);
-    Charter { app, rx, feed }
+    Charter { app, rx }
 }
 
-/// Another player's charter offered to us, its record landed, and the feed's show.
+/// Another player's charter offered to us, its record landed, and the drain's show.
 fn offered(c: &mut Charter) {
     crate::net::handlers::dispatch(
         c.app.world_mut(),
@@ -81,11 +77,10 @@ fn offered(c: &mut Charter) {
     assert_eq!(heard(c), "PETITION_SHOW(nil) ");
 }
 
-/// The feed, as a frame runs it.
+/// The lanes' drain, as a frame runs it.
 fn frame(c: &mut Charter) {
-    let feed = c.feed;
     c.app.world_mut().flush();
-    c.app.world_mut().run_system(feed).expect("the feed runs");
+    crate::lanes::fire_in_order(c.app.world_mut());
 }
 
 fn run(c: &mut Charter, lua: &str) {
@@ -170,7 +165,7 @@ fn a_signature_sends_inside_its_call() {
 /// `ClosePetition` (`0x4f43c0` → `0x4f3f60`) sends the decline for another's charter with a
 /// record cached (`0x4f3ff3`) and signals `PETITION_CLOSED` before it returns (`0x4f402c`), with
 /// the item's guid already zeroed (`0x4f4020`), so the handler's own `ClosePetition` finds
-/// nothing; the feed announces nothing more.
+/// nothing; the drain signals nothing more.
 #[test]
 fn a_close_declines_and_signals_inside_its_call() {
     let mut c = client();
@@ -249,33 +244,47 @@ fn offered_again(c: &mut Charter, record: bool) {
 
 const SECOND: u64 = 0x4000_0000_0000_009a;
 
-/// The replace leg of `0x4f3f60`: the old charter's `PETITION_CLOSED` signals over its own record
-/// with the item's guid zeroed (`0x4f4020`-`0x4f402c`), and only then is the next charter's record
-/// looked up (`0x4f4061`) and shown.
+/// The replace leg of `0x4f3f60`: the old charter's `PETITION_CLOSED` is signalled with the item's
+/// guid zeroed (`0x4f4020`-`0x4f402c`), so the stock `OnHide`'s `ClosePetition()` finds nothing,
+/// and only then is the next charter's record looked up (`0x4f4061`) and shown. The listener's
+/// title reads the drain's record.
 #[test]
-fn a_replaced_charter_closes_over_its_own_record_first() {
+fn a_replaced_charter_closes_before_the_next_shows() {
     let mut c = client();
     offered(&mut c);
     note_closed_title(&mut c);
     offered_again(&mut c, true);
-    assert_eq!(closed_saw(&mut c).as_deref(), Some("Legacy"));
     assert_eq!(heard(&mut c), "PETITION_CLOSED(nil) PETITION_SHOW(nil) ");
     assert_eq!(title(&mut c).as_deref(), Some("Second"));
+    assert_eq!(sent(&c), [format!("PetitionDecline {{ item: {CHARTER} }}")]);
 }
 
-/// With the next charter's record still to come the old one closes at once, over its own record,
-/// and the handler's `ClosePetition()` finds no item (`0x4f4020`), so the next charter is neither
-/// closed nor declined.
+/// With the next charter's record still to come the old one closes at once, and the handler's
+/// `ClosePetition()` finds no item (`0x4f4020`), so the next charter is neither closed nor
+/// declined, and its answer shows it.
 #[test]
 fn a_replaced_charter_closes_first_while_the_next_resolves() {
     let mut c = client();
     offered(&mut c);
     note_closed_title(&mut c);
     offered_again(&mut c, false);
-    assert_eq!(closed_saw(&mut c).as_deref(), Some("Legacy"));
     assert_eq!(heard(&mut c), "PETITION_CLOSED(nil) ");
     assert!(
         !sent(&c).iter().any(|s| s.contains(&SECOND.to_string())),
         "nothing sent for the next charter"
     );
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::PetitionQueryResponse(PetitionQueryResponse {
+            petition_id: 8,
+            owner: OWNER,
+            name: "Second".into(),
+            flags: 1,
+            min_signatures: 9,
+            ..Default::default()
+        })],
+    );
+    frame(&mut c);
+    assert_eq!(heard(&mut c), "PETITION_SHOW(nil) ");
+    assert_eq!(title(&mut c).as_deref(), Some("Second"));
 }

@@ -1,51 +1,51 @@
 //! The stable window's app side: [`StableOpen`] holds the `MSG_LIST_STABLED_PETS` rows, which the
-//! server sends unprompted for the gossip stable option, [`feed_stable`] pushes them, the stable
-//! verbs, the close among them, act inside their calls ([`StableSteps`]).
+//! server sends unprompted for the gossip stable option; the getters read them through the host as
+//! they run ([`live`]), the handlers and the creature callbacks signal on the stable lane
+//! ([`lane`]), and the stable verbs, the close among them, act inside their calls
+//! ([`StableSteps`]).
 //!
 //! A row's family, and with it the icon and diet, is not on the wire: it comes from the creature
-//! query, so those fill in a frame or two after the name and level, as on a reference cache miss.
+//! record, which a getter that misses it asks with the window's callback
+//! ([`StableCreatureWaits`]), whose landing signals the window to read it again.
 //! Slot 0 is read from the wire like every row, because a dismissed pet still has one; stock
 //! `PetStable.lua:123-138` prefers the live pet and falls back to it.
 
 use benilla_protocol::messages::StabledPet;
 use bevy::prelude::*;
 
-use benilla_ui::script::{
-    StableCall, StableIntent, StablePetSlot, StableState, UiScript, NUM_STABLE_SLOTS,
-};
+use benilla_ui::script::{StableCall, StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::ui_pet_stats::{PetFamilyTables, PetStatTables};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
-use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
+use crate::ui_script::{SweepApp, SweepLeg};
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 #[cfg(test)]
 mod call_tests;
+pub(crate) mod lane;
+pub(crate) mod live;
 mod net;
+pub(crate) use lane::{StableEvent, StableLane};
+pub(crate) use live::StableLive;
 
 pub(crate) struct UiStablePlugin;
 
 impl Plugin for UiStablePlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        lane::add_stable_lane(app);
         app.init_resource::<StableOpen>()
-            .init_resource::<StableErrors>()
+            .init_resource::<StableCreatureWaits>()
             .add_latched_window::<StableOpen>()
             // `0x490b2a` → `0x4caae0` → `0x4cae10`, the core.
-            .add_sweep_leg(SweepLeg::Stable, close_core)
-            .add_systems(
-                Update,
-                feed_stable
-                    .in_set(UiFeed)
-                    .in_set(crate::ui_session::NpcWindowFeed),
-            );
+            .add_sweep_leg(SweepLeg::Stable, close_core);
     }
 }
 
-/// The open stable: its master and the list's rows as the wire gave them, until a close or a
-/// disconnect.
+/// The stable's module state: its master's cell and the last list's rows as the wire gave them.
+/// A close clears only the cell (`0x4cae29`), and the world entry's reset the rest (`0x4caab0`).
 #[derive(Resource, Default)]
 pub(crate) struct StableOpen {
     pub(crate) npc: Option<u64>,
@@ -53,10 +53,8 @@ pub(crate) struct StableOpen {
     pub(crate) num_stable_slots: u8,
     /// The wire rows, each with its client slot index.
     pub(crate) pets: Vec<StabledPet>,
-    /// A list landed and `PET_STABLE_SHOW` is owed: the reference fires it after every list
-    /// (`0x4cac9b`), and `PET_STABLE_UPDATE`/`_PAPERDOLL` only from its creature-cache callbacks
-    /// (`0x4cb3bf`, `0x4cba5f`).
-    pub(crate) fresh_list: bool,
+    /// One step per list, which the VM's copy carries ([`benilla_ui::script::StableQuery`]).
+    pub(crate) list: u64,
 }
 
 impl StableOpen {
@@ -64,14 +62,19 @@ impl StableOpen {
         self.npc = Some(npc);
         self.num_stable_slots = num_stable_slots;
         self.pets = pets;
-        self.fresh_list = true;
+        self.list = self.list.wrapping_add(1);
     }
 
+    /// The world entry's reset (`0x4caab0`): no master, no slot bought, no pet.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
         self.num_stable_slots = 0;
         self.pets.clear();
-        self.fresh_list = false;
+    }
+
+    /// The close core's clear of the cell (`0x4cae29`); the rows and the count stay.
+    pub(crate) fn close_cell(&mut self) {
+        self.npc = None;
     }
 }
 
@@ -92,22 +95,28 @@ impl LatchedWindow for StableOpen {
 }
 
 /// The close core `0x4cae10`: with a stable open, the latch release (`0x4cae24`), the cell
-/// cleared, then `PET_STABLE_CLOSED` (`0x4cae3a`).
+/// cleared, then `PET_STABLE_CLOSED` (`0x4cae3a`), held behind what the lane still holds
+/// ([`lane::behind_lane`]).
 pub(crate) fn close_core(world: &mut World) {
-    let Some(npc) = world.resource::<StableOpen>().npc else {
+    if world.resource::<StableOpen>().npc.is_none() {
         return;
-    };
-    crate::ui_session::release(world, npc);
-    world.resource_mut::<StableOpen>().clear();
-    crate::ui_session::note_closed(world, NpcWindow::Stable);
-    crate::ui_session::fire(world, |script| {
-        script.set_stable(None);
-        script.fire_event("PET_STABLE_CLOSED", vec![]);
+    }
+    lane::behind_lane(world, |world| {
+        let Some(npc) = world.resource::<StableOpen>().npc else {
+            return;
+        };
+        crate::ui_session::release(world, npc);
+        world.resource_mut::<StableOpen>().close_cell();
+        crate::ui_session::note_closed(world, NpcWindow::Stable);
+        crate::ui_session::fire(world, |script| {
+            script.fire_event("PET_STABLE_CLOSED", vec![]);
+        });
     });
 }
 
 /// `MSG_LIST_STABLED_PETS`'s open, `0x4cadc0`: the open stable master's own list re-lists in place
-/// (`0x4cadd6`); any other registers on the latch (`0x4cade2`), then the cell (`0x4caded`).
+/// (`0x4cadd6`); any other registers on the latch (`0x4cade2`), then the cell (`0x4caded`), the
+/// selection's clear (`0x4cadf8`) and `PET_STABLE_SHOW` (`0x4cac9b`), on the lane, every list.
 pub(crate) fn open_stable(
     world: &mut World,
     npc: u64,
@@ -120,10 +129,14 @@ pub(crate) fn open_stable(
     world
         .resource_mut::<StableOpen>()
         .open(npc, num_stable_slots, pets);
+    if let Some(mut lane) = world.get_resource_mut::<StableLane>() {
+        lane.push(StableEvent::Show);
+    }
 }
 
-/// One wire row as a Lua slot; icon, family and diet stay `None` until the creature query answers.
-/// Read as `ask` says: `GetStablePetInfo` looks the template up with a callback (`0x4cb2ce`).
+/// One wire row as a Lua slot; icon, family and diet stay `None` until the creature record lands.
+/// Read as `ask` says: the getters read it ([`Ask::Read`]) and ask a miss with their callback
+/// inside their calls ([`StableCreatureWaits`]).
 fn resolve_pet(
     wire: &StabledPet,
     names: &NameCache,
@@ -140,6 +153,7 @@ fn resolve_pet(
     let family_row = families.and_then(|t| t.families.get(family_id));
     StablePetSlot {
         pet_number: wire.pet_number,
+        entry: wire.creature_entry,
         // The template's display, which `SetPetStablePaperdoll` shows (`0x4cba0e`).
         display_id: names
             .creature_record(wire.creature_entry)
@@ -173,6 +187,8 @@ fn resolve_pet(
     }
 }
 
+/// The stable as the getters read it, a closed one's rows and count included: the getters test
+/// no cell.
 fn snapshot(
     open: &StableOpen,
     names: &NameCache,
@@ -182,7 +198,6 @@ fn snapshot(
     has_live_pet: bool,
     ask: Ask<'_>,
 ) -> Option<StableState> {
-    open.npc?;
     let mut slots: [Option<StablePetSlot>; NUM_STABLE_SLOTS] = Default::default();
     for wire in &open.pets {
         // Seat rows by their slot, not position: a petless hunter's list has no slot-0 row.
@@ -202,121 +217,6 @@ fn snapshot(
     })
 }
 
-/// Push the stable into the VM and fire its events on a change; the close is the core's
-/// ([`close_core`]).
-fn feed_stable(
-    // The stable mutable only to take the fresh-list latch; the host's stable verbs read it too.
-    mut vm: crate::script_calls::VmWith<(
-        Res<'static, crate::ui_pet::PetBar>,
-        ResMut<'static, StableOpen>,
-    )>,
-    pet: crate::ui_pet::PetUnit,
-    families: Option<Res<PetFamilyTables>>,
-    stats: Option<Res<PetStatTables>>,
-    prices: Option<Res<StableSlotPrices>>,
-    commands: Res<NetCommands>,
-    names: Res<NameCache>,
-    mut errors: ResMut<StableErrors>,
-    mut last: crate::ui_script::WindowMemo<Option<StableState>>,
-    mut closes: CoreCloses,
-    mut sink: crate::ui_action::MessageSink,
-    ticks: bevy::ecs::system::SystemChangeTick,
-) {
-    // A refusal's line shows inside `SMSG_STABLE_RESULT`'s handler (`0x4cacb0`), so its handlers
-    // read the stable the packets before it left: one a later packet's write to the stable follows
-    // shows ahead of the frame's push, the rest after it and its events.
-    let (listed, now) = (vm.own().1.last_changed(), ticks.this_run());
-    let ahead = errors
-        .0
-        .iter()
-        .take_while(|(_, at)| listed.is_newer_than(*at, now))
-        .count();
-    let behind = errors.0.split_off(ahead);
-    if !errors.0.is_empty() {
-        vm.run(|script| show_refusals(script, &mut errors.0, &mut sink));
-    }
-    vm.feed(|script, (bar, mut open), fires| {
-        let Some(script) = script else {
-            return;
-        };
-        let last = last.get(script);
-        if closes.since_last(script, NpcWindow::Stable) {
-            *last = None;
-        }
-
-        // The next slot's price: `StableSlotPrices.dbc` row `purchased + 1`, 0 past the table.
-        let next_slot_cost = prices
-            .as_deref()
-            .and_then(|p| p.0.next_slot_price(open.num_stable_slots))
-            .unwrap_or(0);
-
-        // The reference's live-pet test, `[0xb714a0]|[0xb714a4]`; a dismissed pet fails it.
-        let has_live_pet = bar.spells.pet_guid != 0;
-        // The summoned pet's cache record while its object is held, `[unit+0xb30]` (`0x60b131`):
-        // the template's display, which `0x505a70` reads at `[rec+0x2c]`. Apart from the snapshot,
-        // so it fires nothing.
-        let live_pet_display = has_live_pet
-            .then(|| pet.store(bar.spells.pet_guid))
-            .flatten()
-            .and_then(|s| s.0.object_entry())
-            .and_then(|entry| names.creature_record(entry))
-            .map(|r| r.display_id);
-        script.set_stable_live_pet_display(live_pet_display);
-        // Every list fires `PET_STABLE_SHOW`, on which the stock window calls its getters.
-        let fresh_list = std::mem::take(&mut open.fresh_list);
-        let fresh = snapshot(
-            &open,
-            &names,
-            families.as_deref(),
-            stats.as_deref(),
-            next_slot_cost,
-            has_live_pet,
-            Ask::at(fresh_list || last.is_none(), &commands),
-        );
-        if fresh == *last && !fresh_list {
-            return;
-        }
-        // The push before the posts: the handlers run when they fire, after the turn, and read it.
-        script.set_stable(fresh.clone());
-        if fresh_list && fresh.is_some() {
-            // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only
-            // repaints.
-            fires.post("PET_STABLE_SHOW", vec![]);
-        } else if last.is_some() && fresh.is_some() {
-            // A change with no new list is a creature-query answer, the reference's callback edge.
-            // A close is the core's, which told the VM, and a disconnect's clear tells it nothing;
-            // a first snapshot always comes with the list latch.
-            fires.post("PET_STABLE_UPDATE", vec![]);
-            fires.post("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
-        }
-        *last = fresh;
-    });
-    errors.0.extend(behind);
-    if !errors.0.is_empty() {
-        vm.run(|script| show_refusals(script, &mut errors.0, &mut sink));
-    }
-}
-
-/// Show `refusals`, in a run with the host lent, each as its message row says, speech included;
-/// with no VM up they wait.
-fn show_refusals(
-    script: Option<&mut UiScript>,
-    refusals: &mut Vec<(&'static str, bevy::ecs::change_detection::Tick)>,
-    sink: &mut crate::ui_action::MessageSink,
-) {
-    let Some(script) = script else {
-        return;
-    };
-    let lines: Vec<_> = refusals
-        .drain(..)
-        .filter_map(|(key, _)| {
-            let text = script.lua().globals().get::<String>(key).ok()?;
-            (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
-        })
-        .collect();
-    crate::ui_action::show_messages(script, sink, "ui_stable", lines);
-}
-
 /// What the stable verbs read and send through: the engine half of the stable calls
 /// ([`crate::script_calls::ScriptCallHost`]).
 #[derive(bevy::ecs::system::SystemParam)]
@@ -333,12 +233,11 @@ impl StableSteps<'_, '_> {
         self.open.as_deref().and_then(|o| o.npc)
     }
 
-    /// The close core's clear of the cell (`0x4cae29`), and the VM's window with it.
-    pub(crate) fn clear_master(&mut self, script: &mut UiScript) {
+    /// The close core's clear of the cell (`0x4cae29`).
+    pub(crate) fn clear_master(&mut self) {
         if let Some(open) = self.open.as_deref_mut() {
-            open.clear();
+            open.close_cell();
         }
-        script.set_stable(None);
     }
 
     /// One stable verb inside its call, sent with the stored master's guid `[0xb72240]`.
@@ -384,12 +283,51 @@ impl StableSteps<'_, '_> {
     }
 }
 
-/// Stable refusals as message keys: only `ERR_NOT_ENOUGH_MONEY`, `DisplayError(0x25)` in the
-/// `SMSG_STABLE_RESULT` handler `0x4cacb0`, whose row also speaks (line `0x28`). Each carries the
-/// change tick of the handler call that queued it, its place on the wire: each call is its own
-/// system run, so a later packet's writes carry newer ticks.
+/// The window's creature callbacks the getters' lookups kept, one per call that missed (flag 0,
+/// `0x4cb2b5`): `0x4cb3b0`, or with `paperdoll` `0x4cba50`, by the entry they wait on. The cache
+/// runs them when the record's answer lands, a refusal too, and they outlive the window
+/// (`0x556e20`).
 #[derive(Resource, Default)]
-pub(crate) struct StableErrors(pub(crate) Vec<(&'static str, bevy::ecs::change_detection::Tick)>);
+pub(crate) struct StableCreatureWaits(Vec<(u32, bool)>);
+
+/// A stable getter's creature lookup with its callback, inside its call
+/// ([`benilla_ui::script::RecordAsk::StableCreature`]): the creature cache asks a miss, owned by
+/// the active player (`0x468550`), and keeps the callback; a held record keeps nothing.
+pub(crate) fn ask_creature(
+    names: &NameCache,
+    commands: &NetCommands,
+    waits: &mut StableCreatureWaits,
+    owner: u64,
+    entry: u32,
+    paperdoll: bool,
+) {
+    if entry == 0 || names.creature_record(entry).is_some() {
+        return;
+    }
+    let _ = names.resolve_creature(entry, owner, Ask::Event(commands));
+    waits.0.push((entry, paperdoll));
+}
+
+impl StableCreatureWaits {
+    /// The record of `entry` answered, `found` or refused: each callback waiting on it runs and
+    /// goes, in the order kept, and a found record's signals `PET_STABLE_UPDATE` (`0x4cb3bf`) or
+    /// `PET_STABLE_UPDATE_PAPERDOLL` (`0x4cba5f`), on the lane; a refusal's signal nothing.
+    fn answered(&mut self, entry: u32, found: bool, lane: &mut StableLane) {
+        self.0.retain(|&(waits_on, paperdoll)| {
+            if waits_on != entry {
+                return true;
+            }
+            if found {
+                lane.push(if paperdoll {
+                    StableEvent::Paperdoll
+                } else {
+                    StableEvent::Update
+                });
+            }
+            false
+        });
+    }
+}
 
 /// `StableSlotPrices.dbc`, the purchase row's prices; absent, the row quotes 0.
 #[derive(Resource)]
@@ -399,130 +337,13 @@ pub(crate) struct StableSlotPrices(pub(crate) benilla_formats::StableSlotPrices)
 mod tests {
     use super::*;
 
-    /// Every list fires `PET_STABLE_SHOW`, on which the stock window calls `GetStablePetInfo`,
-    /// which looks the template up with a callback (`0x4cb2ce`); the frames between read. A
-    /// refused template is asked by no frame, and again by the next list.
-    #[test]
-    fn a_refused_stabled_pet_is_asked_at_the_next_list_never_by_a_frame() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<StableOpen>()
-            .init_resource::<StableErrors>()
-            .init_resource::<crate::names::NameCache>()
-            .init_resource::<crate::ui_pet::PetBar>()
-            .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<crate::net::SelfGuid>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_systems(Update, feed_stable);
-        app.insert_non_send_resource(UiScript::new().unwrap());
-        let list = |app: &mut App| {
-            app.world_mut().resource_mut::<StableOpen>().open(
-                0xF130_0000_4500_0001,
-                1,
-                vec![StabledPet {
-                    pet_number: 3,
-                    creature_entry: 1_126,
-                    level: 10,
-                    name: "Boar".into(),
-                    loyalty: 1,
-                    slot: 1,
-                }],
-            );
-        };
-        list(&mut app);
-        app.update();
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
-        app.world_mut()
-            .resource_mut::<crate::names::NameCache>()
-            .insert_creature(1_126, None);
-        for _ in 0..600 {
-            app.update();
-        }
-        assert!(crate::query_cache::queries(&rx).is_empty());
-        list(&mut app);
-        app.update();
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
-    }
-
-    /// A stable open on its master with no slot bought, pushed, whose VM notes the slot count
-    /// at each `UI_ERROR_MESSAGE`; the stable's handlers in the table.
-    fn refusal_app() -> App {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<StableOpen>()
-            .init_resource::<StableErrors>()
-            .init_resource::<crate::names::NameCache>()
-            .init_resource::<crate::ui_pet::PetBar>()
-            .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<crate::net::SelfGuid>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_systems(Update, feed_stable);
-        net::register(&mut app);
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                "ERR_NOT_ENOUGH_MONEY = 'Poor.' SEEN = '' local f = CreateFrame('Frame') \
-                 f:RegisterEvent('UI_ERROR_MESSAGE') \
-                 f:SetScript('OnEvent', function() SEEN = SEEN .. GetNumStableSlots() end)",
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        app.world_mut()
-            .resource_mut::<StableOpen>()
-            .open(MASTER, 0, Vec::new());
-        app.update();
-        app
-    }
-
-    const MASTER: u64 = 0xF130_0000_4500_0001;
-
-    /// The refusal and a list showing two slots bought, the list first when `list_first`, as one
-    /// frame's packets; then the count the refusal's handler read and the count after the frame.
-    fn refusal_then(list_first: bool) -> (String, i64) {
-        use benilla_protocol::messages::stable_result;
-        use benilla_protocol::SessionEvent;
-        let mut app = refusal_app();
-        let refusal = SessionEvent::StableResult {
-            result: stable_result::ERR_MONEY,
-        };
-        let list = SessionEvent::ListStabledPets {
-            npc: MASTER,
-            num_stable_slots: 2,
-            pets: Vec::new(),
-        };
-        let events = if list_first {
-            vec![list, refusal]
-        } else {
-            vec![refusal, list]
-        };
-        crate::net::handlers::dispatch(app.world_mut(), events);
-        app.update();
-        let s = app.world().non_send_resource::<UiScript>();
-        (
-            s.eval::<String>("return SEEN").unwrap(),
-            s.eval::<i64>("return GetNumStableSlots()").unwrap(),
-        )
-    }
-
-    /// The refusal's line shows in `SMSG_STABLE_RESULT`'s handler (`0x4cacb0`,
-    /// `DisplayError(0x25)`), so its handlers read the stable as the packets before it left it: a
-    /// list after it is not there yet, and a list before it is.
-    #[test]
-    fn a_refusals_handlers_read_the_stable_the_packets_before_it_left() {
-        assert_eq!(refusal_then(false), ("0".into(), 2), "the list came after");
-        assert_eq!(refusal_then(true), ("2".into(), 2), "the list came first");
-    }
-
     /// The range guard cannot close it: after the drop there is no self player to measure from.
     #[test]
     fn the_session_end_closes_the_stable() {
         let mut app = App::new();
         app.init_resource::<StableOpen>()
-            .init_resource::<StableErrors>()
+            .init_resource::<StableLane>()
+            .init_resource::<StableCreatureWaits>()
             .init_resource::<crate::names::NameCache>();
         net::register(&mut app);
         {

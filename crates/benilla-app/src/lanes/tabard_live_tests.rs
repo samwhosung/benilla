@@ -1,0 +1,132 @@
+//! The designer's getters as a listener reads them, and its events at their packets. The getters
+//! read the guild record and the save latch at the call (`0x5f0800`); the open signals inside its
+//! handler (`0x4f588d`), and the save reply its line and, past a failure, `TABARD_SAVE_PENDING`
+//! (`0x5e711b`, `0x5e7172`).
+
+use benilla_protocol::SessionEvent;
+use benilla_ui::script::{TabardHost, UiScript, UnitState};
+use bevy::prelude::*;
+
+use crate::ui_tabard::{TabardEvent, TabardLane, TabardOpen};
+
+const VENDOR: u64 = 0xF130_0000_0000_0042;
+/// `PLAYER_GUILDID`, absolute.
+const GUILD_ID: u16 = 191;
+
+/// The client with our player in guild 5, whose record is cached, and a VM whose own copy says no
+/// record is: its spy notes each designer event and message line.
+fn client() -> App {
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let world = app.world_mut();
+    world.spawn((
+        crate::net::SelfPlayer,
+        crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(GUILD_ID, 5)])),
+    ));
+    {
+        let mut guild = world.resource_mut::<crate::ui_guild::GuildState>();
+        guild.join_for_test(5);
+        guild.land_for_test(5, "Probe Guild");
+    }
+    let mut script = UiScript::new().expect("a VM");
+    script.set_unit(
+        "player",
+        Some(UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
+    script.set_tabard_host(TabardHost::default());
+    script
+        .run(
+            r#"
+            Seen = {}
+            ERR_GUILDEMBLEM_NOTGUILDMASTER = "not master"
+            TM = CreateFrame("TabardModel", "TM")
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"OPEN_TABARD_FRAME", "TABARD_SAVE_PENDING", "UI_ERROR_MESSAGE",
+                    "UI_INFO_MESSAGE"}) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. tostring(arg1))
+            end)
+            "#,
+        )
+        .unwrap();
+    world.insert_non_send_resource(script);
+    app
+}
+
+/// `chunk`'s answer through the lent host when `live`, else off the VM's copy alone.
+fn eval<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, live: bool, chunk: &str) -> T {
+    if live {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").eval::<T>(chunk).expect("runs")
+        })
+    } else {
+        crate::script_calls::eval_in_vm(app.world(), chunk)
+    }
+}
+
+/// `CanSaveTabardNow` with the host lent reads the guild record and the latch as the world holds
+/// them, where the VM's copy holds neither; each write shows at the next call, with no push.
+#[test]
+fn can_save_reads_the_record_and_the_latch_through_the_host() {
+    let mut app = client();
+    let can = "return TM:CanSaveTabardNow()";
+    assert_eq!(eval::<Option<i64>>(&mut app, false, can), None, "the copy");
+    assert_eq!(eval::<Option<i64>>(&mut app, true, can), Some(1), "live");
+    app.world_mut()
+        .resource_mut::<crate::ui_guild::GuildState>()
+        .evict_own_identity();
+    assert_eq!(
+        eval::<Option<i64>>(&mut app, true, can),
+        None,
+        "the record dropped"
+    );
+}
+
+/// The activate's `OPEN_TABARD_FRAME` and the failed save reply's line and `TABARD_SAVE_PENDING`
+/// sit on the tabard lane at their handler's place, and fire there in the drain.
+#[test]
+fn the_open_and_the_reply_fire_on_the_lane_at_their_handlers() {
+    let mut app = client();
+    let handled = |app: &mut App, ev: SessionEvent| {
+        let before = crate::lanes::stamp();
+        crate::net::handlers::dispatch(app.world_mut(), vec![ev]);
+        app.world_mut().flush();
+        let after = crate::lanes::stamp();
+        let stamped = app.world().resource::<TabardLane>().stamped();
+        assert!(
+            stamped.iter().all(|(at, _)| before < *at && *at < after),
+            "stamped inside the handler"
+        );
+        let heard: Vec<String> = eval(app, false, "return Seen");
+        assert!(heard.is_empty(), "on the lane: {heard:?}");
+        crate::lanes::fire_in_order(app.world_mut());
+        let heard: Vec<String> = eval(app, false, "local s = Seen Seen = {} return s");
+        (
+            stamped.into_iter().map(|(_, e)| e).collect::<Vec<_>>(),
+            heard,
+        )
+    };
+    let (items, heard) = handled(&mut app, SessionEvent::TabardVendorActivate(VENDOR));
+    assert_eq!(items, [TabardEvent::Open]);
+    assert_eq!(heard, ["OPEN_TABARD_FRAME:nil"]);
+    assert_eq!(app.world().resource::<TabardOpen>().npc(), Some(VENDOR));
+
+    let (items, heard) = handled(&mut app, SessionEvent::SaveGuildEmblemResult(3));
+    assert_eq!(
+        items,
+        [
+            TabardEvent::Line("ERR_GUILDEMBLEM_NOTGUILDMASTER"),
+            TabardEvent::SavePending
+        ]
+    );
+    assert_eq!(
+        heard,
+        ["UI_ERROR_MESSAGE:not master", "TABARD_SAVE_PENDING:nil"]
+    );
+}

@@ -1129,4 +1129,45 @@ mod tests {
             "the census reads the capture seed among the client's systems"
         );
     }
+    /// The vendor and trainer fixtures open through the lists' own opens, so each queues its
+    /// window's `MERCHANT_SHOW` or `TRAINER_SHOW` as a list does.
+    #[test]
+    fn the_window_fixtures_queue_their_show() {
+        use bevy::ecs::system::RunSystemOnce;
+        for scenario in ["ui-merchant", "ui-trainer"] {
+            let _l = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _c = EnvGuard::set("WOW_CAPTURE", scenario);
+            let mut app = crate::game_plugins::schedule_tests::headless_client_with(|app| {
+                app.add_plugins(super::CapturePlugin);
+            });
+            let world = app.world_mut();
+            {
+                let mut progress = world.resource_mut::<super::WorldLoadProgress>();
+                progress.ready = 1;
+                progress.total = 1;
+            }
+            world.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+            world.init_resource::<crate::player::Player>();
+            world.init_resource::<crate::loading_screen::LoadingScreen>();
+            world.init_resource::<crate::ui_bank::BankOpen>();
+            world.init_resource::<crate::ui_quest::QuestGiver>();
+            world.init_resource::<crate::ui_loot::LootState>();
+            world.init_resource::<crate::net::HomeBind>();
+            world
+                .run_system_once(super::fixtures::seed_ui_fixture)
+                .unwrap();
+            world.flush();
+            let shows = world
+                .resource::<crate::ui_merchant::MerchantLane>()
+                .stamped()
+                .len()
+                + world
+                    .resource::<crate::ui_trainer::TrainerLane>()
+                    .stamped()
+                    .len();
+            assert_eq!(shows, 1, "{scenario}");
+        }
+    }
 }

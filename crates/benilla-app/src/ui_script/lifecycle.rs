@@ -634,6 +634,10 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         // `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*` events
         // (`ChatFrame.lua:1261-1273`).
         crate::ui_chat::restore_chat_looks(world, script);
+        // The trainer rows the engine holds through a reload, read with the files' strings.
+        if seat == LoadSeat::Live {
+            crate::ui_trainer::seed_reloaded_vm(world, script);
+        }
         // The UI scale lands on `UIParent` once the files, the addons and `VARIABLES_LOADED` are
         // done, after the chat reader (`0x4900d6`) and before the `PLAYER_LOGIN` arm (`0x49011d`),
         // through the display handler (`0x49010e` → `0x492e90`). So every `OnLoad` sees `UIParent`
@@ -948,9 +952,6 @@ pub(crate) fn shut_down_session(world: &mut World) {
     if let Some(mut carry) = world.get_resource_mut::<crate::ui_tradeskill::TradeSkillRepeatCarry>()
     {
         carry.0 = 0;
-    }
-    if let Some(mut petition) = world.get_resource_mut::<crate::ui_petition::PetitionState>() {
-        petition.forget_announced();
     }
 }
 

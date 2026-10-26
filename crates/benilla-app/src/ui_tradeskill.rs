@@ -1717,8 +1717,8 @@ mod tests {
     }
 
     /// The skill watches rebuild the open list, each at its place: the value watch on every run,
-    /// after its skill-list rebuild and its line past the gate (`0x5de2a7`, `0x5de417`,
-    /// `0x5de434`); the maximum's and permanent bonus's ahead of its skill-list rebuild
+    /// after its skill-list rebuild and its line past the gate (`0x5de2a7`, `0x5de417`) and its
+    /// trainer pass, as a notice of its own (`0x5de434`); the maximum's and permanent bonus's ahead of its skill-list rebuild
     /// (`0x5de457`, `0x5de45c`); the temporary bonus's not at all (`0x5de470`).
     #[test]
     fn the_skill_watches_rebuild_the_open_list_in_their_order() {
@@ -1776,17 +1776,10 @@ mod tests {
         };
         assert_eq!(
             fired(value(1, 2)),
-            [
-                "SKILL_LINES_CHANGED",
-                "CHAT_MSG_SKILL",
-                "TRADE_SKILL_UPDATE"
-            ]
+            ["SKILL_LINES_CHANGED", "CHAT_MSG_SKILL"]
         );
-        assert_eq!(
-            fired(value(7, 7)),
-            ["TRADE_SKILL_UPDATE"],
-            "the gate's skip"
-        );
+        assert!(fired(value(7, 7)).is_empty(), "the gate's skip");
+        assert_eq!(fired(FieldNotice::Professions), ["TRADE_SKILL_UPDATE"]);
         assert_eq!(
             fired(FieldNotice::SkillMax),
             ["TRADE_SKILL_UPDATE", "SKILL_LINES_CHANGED"]

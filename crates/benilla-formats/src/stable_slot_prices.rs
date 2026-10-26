@@ -16,6 +16,11 @@ const STABLE_SLOT_PRICES: &str = "DBFilesClient\\StableSlotPrices.dbc";
 pub struct StableSlotPrices(HashMap<u32, u32>);
 
 impl StableSlotPrices {
+    /// Prices by slot id, for tests and fixtures.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        Self(rows.into_iter().collect())
+    }
+
     /// The price of slot `purchased_count + 1`; `None` once both are owned, where the stock UI
     /// hides the purchase button (`PetStable.lua:196-199`).
     pub fn next_slot_price(&self, purchased_count: u8) -> Option<u32> {

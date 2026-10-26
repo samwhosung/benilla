@@ -175,25 +175,18 @@ fn get_tabard_info_closes_the_registrar_inside_its_call() {
 }
 
 /// `CloseTabardCreation()` (`0x4f5900` → `0x4f58a0`) releases the latch and signals
-/// `CLOSE_TABARD_FRAME` (`0x4f58f8`) inside its call, twice while the designer holds the latch,
-/// behind the open not yet told; the handler's own close finds the cell clear.
+/// `CLOSE_TABARD_FRAME` (`0x4f58f8`) inside its call, twice while the designer holds the latch;
+/// the handler's own close finds the cell clear.
 #[test]
 fn close_tabard_creation_signals_inside_its_call() {
     let (mut app, rx) = client();
     crate::ui_tabard::open_tabard(app.world_mut(), NPC);
-    listen(
-        &mut app,
-        &["OPEN_TABARD_FRAME", "CLOSE_TABARD_FRAME"],
-        "if event == 'CLOSE_TABARD_FRAME' then CloseTabardCreation() end",
-    );
+    listen(&mut app, &["CLOSE_TABARD_FRAME"], "CloseTabardCreation()");
     let seq: String = eval(
         &mut app,
         "CloseTabardCreation() local s = SEQ RandomRoll(1, 2) return s",
     );
-    assert_eq!(
-        seq,
-        "OPEN_TABARD_FRAME CLOSE_TABARD_FRAME CLOSE_TABARD_FRAME "
-    );
+    assert_eq!(seq, "CLOSE_TABARD_FRAME CLOSE_TABARD_FRAME ");
     assert_eq!(sent(&rx), ["roll 1-2"]);
     assert_eq!(
         app.world()

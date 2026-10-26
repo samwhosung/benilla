@@ -3,7 +3,7 @@
 
 use benilla_protocol::messages::ObjectType;
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{StablePetSlot, StableState, UiScript};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -57,25 +57,52 @@ fn client(summon: u64) -> Stable {
             slot: 1,
         }],
     );
+    // The boar's template and its family's icon, which the pickup needs (`0x4950c0`).
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_creature(
+            1_126,
+            Some(crate::names::CreatureRecord {
+                name: "Boar".into(),
+                subname: None,
+                creature_type: 1,
+                pet_family: 5,
+                rank: 0,
+                type_flags: 0,
+                pet_spell_list: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 607,
+            }),
+        );
+    world.insert_resource(crate::ui_pet_stats::PetFamilyTables {
+        families: benilla_formats::CreatureFamilies::from_rows([(
+            5,
+            benilla_formats::CreatureFamily {
+                name: "Boar".into(),
+                icon: "Interface\\Icons\\Ability_Hunter_Pet_Boar".into(),
+                pet_food_mask: 0,
+                min_scale: 1.0,
+                min_scale_level: 0,
+                max_scale: 1.0,
+                max_scale_level: 0,
+                skill_lines: [0, 0],
+            },
+        )]),
+        foods: Default::default(),
+    });
+    // The next slot's price, 500 copper, which the buy's gate reads (`0x4cb122`).
+    world.insert_resource(super::StableSlotPrices(
+        benilla_formats::StableSlotPrices::from_rows([(2, 500)]),
+    ));
     let mut script = UiScript::new().expect("a VM");
     script.set_money(10_000);
-    script.set_stable(Some(StableState {
-        num_stable_slots: 1,
-        next_slot_cost: 500,
-        slots: [
-            None,
-            Some(StablePetSlot {
-                pet_number: 3,
-                icon: Some("Interface\\Icons\\Ability_Hunter_Pet_Boar".into()),
-                name: "Boar".into(),
-                level: 10,
-                ..Default::default()
-            }),
-            None,
-        ],
-        has_live_pet: false,
-    }));
     app.world_mut().insert_non_send_resource(script);
+    // The list's signal, which leaves the VM its copy.
+    app.world_mut()
+        .resource_mut::<super::StableLane>()
+        .push(super::StableEvent::Show);
+    crate::lanes::fire_in_order(app.world_mut());
     Stable { app, rx }
 }
 

@@ -523,6 +523,9 @@ pub(crate) enum RecordCallback {
     Merchant,
     /// A buy-back row's, asked by `GetBuybackItemInfo` (`0x4fb40c` with `0x4fb570`), one per call.
     Buyback,
+    /// A trainer row's product, asked by `GetTrainerServiceIcon` and `GetTrainerServiceDescription`
+    /// (`0x4d907e` with `0x4d9140`, `0x4d9cef` with `0x4d9db0`), one per call.
+    Trainer,
 }
 
 impl Items {

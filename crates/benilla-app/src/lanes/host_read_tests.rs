@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 67;
-const FRAME_FINAL_INPUTS: usize = 351;
+const FRAME_FINAL_FEEDS: usize = 63;
+const FRAME_FINAL_INPUTS: usize = 325;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -52,6 +52,9 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "clears the name cache's in-flight asks on world entry, so each is asked again"),
     ("::query_cache::release_on_enter<benilla_app::ui_guild::GuildState>", &["ui_guild::GuildState"],
         "clears the guild cache's in-flight asks on world entry, so each is asked again"),
+    ("::query_cache::release_on_enter<benilla_app::ui_petition::PetitionRecords>",
+        &["ui_petition::PetitionRecords"],
+        "clears the petition cache's in-flight asks on world entry, so each is asked again"),
     ("::spell::group_relation::publish_group_roster", &["spell::group_relation::GroupRoster"],
         "copies the group's roster, which the relation reads take, once the packets are in"),
     ("::spell::mods::track_class_family", &["spell::mods::SpellModifiers"],

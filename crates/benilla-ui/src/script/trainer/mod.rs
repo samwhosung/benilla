@@ -7,7 +7,9 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
+use super::live::{ask, LiveQuery};
 use super::Model;
+use super::TooltipText;
 
 /// A service's state byte `[+0x30]` (the wire's `TrainerSpellState`): green learnable, red gated,
 /// gray known, and the state the re-evaluator writes at a mount trainer for a rank the player has
@@ -206,6 +208,32 @@ pub struct TrainerState {
     pub trainer_type: u32,
     /// Built by [`UiScript::set_trainer`], not pushed by the app.
     pub groups: Vec<TrainerGroup>,
+    /// Which `SMSG_TRAINER_LIST` the rows came from: a live read answers only for the same list.
+    pub list: u64,
+}
+
+/// What a service's getters read at the call, for the service at `service` in
+/// [`TrainerState::services`] of list `list`: the icon's and the description's product lookups
+/// (`0x4d9096`, `0x4d9d07`), the description's tokens against the caster now, and each required
+/// ability against the book now (`0x4d97c8` → `0x60c740`).
+pub struct TrainerServiceQuery {
+    pub list: u64,
+    pub service: usize,
+}
+
+impl LiveQuery for TrainerServiceQuery {
+    type Answer = TrainerServiceLive;
+}
+
+/// The host's answer to a [`TrainerServiceQuery`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TrainerServiceLive {
+    pub texture: Option<String>,
+    pub icon_wait: Option<ProductWait>,
+    /// Each template it names read from the VM's strings at the getter.
+    pub description: Option<TooltipText>,
+    pub description_wait: Option<ProductWait>,
+    pub ability_reqs: Vec<TrainerAbilityReq>,
 }
 
 impl super::UiScript {
@@ -634,6 +662,30 @@ pub(super) fn service(model: &Model, index: usize) -> Option<&TrainerService> {
     }
 }
 
+/// The per-call reads of the service at a 1-based row index through the lent host; without one,
+/// or for another list than the rows', the snapshot's.
+fn live(lua: &Lua, model: &Model, index: usize) -> Option<TrainerServiceLive> {
+    let n = index.checked_sub(1)?;
+    let Row::Service(si) = *rows(model).0.get(n)? else {
+        return None;
+    };
+    let t = model.trainer.as_ref()?;
+    let query = TrainerServiceQuery {
+        list: t.list,
+        service: si,
+    };
+    ask(lua, &query).or_else(|| {
+        let s = t.services.get(si)?;
+        Some(TrainerServiceLive {
+            texture: s.texture.clone(),
+            icon_wait: s.icon_wait,
+            description: s.description.clone().map(TooltipText::from),
+            description_wait: s.description_wait,
+            ability_reqs: s.ability_reqs.clone(),
+        })
+    })
+}
+
 /// `GetNumTrainerServices` (`0x4d8d90`): the visible count `ds:0xb73a18`, not the array's length.
 fn num_services(model: &Model) -> usize {
     rows(model).1
@@ -796,8 +848,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceIcon(index)")?;
             let (texture, wait) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                service(&model, index)
-                    .map(|s| (s.texture.clone(), s.icon_wait))
+                live(lua, &model, index)
+                    .map(|s| (s.texture, s.icon_wait))
                     .unwrap_or_default()
             };
             // The miss asks and keeps its callback inside the call (`0x4d907e`), and pushes nil
@@ -818,10 +870,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceDescription(index)")?;
             let (description, wait) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                service(&model, index)
-                    .map(|s| (s.description.clone(), s.description_wait))
+                live(lua, &model, index)
+                    .map(|s| (s.description, s.description_wait))
                     .unwrap_or_default()
             };
+            let description = description.map(|t| t.text(&|key| crate::strings::global(lua, key)));
             // The miss asks and keeps its callback inside the call (`0x4d9cef`).
             if let Some(wait) = wait {
                 ask_item(lua, wait)?;
@@ -903,9 +956,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let i = binding_abi::index_arg(lua, i, "Usage: GetTrainerServiceAbilityReq(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             // The slot `i - 1` read in place, bounded by the three (`0x4d979c`), not by the count.
-            let Some(req) = service(&model, index)
-                .and_then(|s| i.checked_sub(1).and_then(|n| s.ability_reqs.get(n)))
-            else {
+            let Some(req) = live(lua, &model, index).and_then(|s| {
+                i.checked_sub(1)
+                    .and_then(|n| s.ability_reqs.into_iter().nth(n))
+            }) else {
                 // `0x4d98b5`: nil, 1.
                 return Ok(binding_abi::tuple(&[None, Some(1)]));
             };

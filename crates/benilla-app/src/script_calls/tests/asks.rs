@@ -429,7 +429,7 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
 /// The trainer's icon and description getters look the product's record up with the callbacks
 /// `0x4d9140` and `0x4d9db0` and no dedupe (`0x4d9079`-`0x4d9096`, `0x4d9cea`-`0x4d9d07`): a miss
 /// sends the item query inside the call, once while it is in flight, and each call leaves its
-/// callback on the window.
+/// callback on the item cache.
 #[test]
 fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
     use benilla_ui::script::{ProductWait, TrainerService, TrainerServiceCategory, TrainerState};
@@ -470,13 +470,14 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
             format!("item 2590 {owner:#x}")
         ]
     );
+    let mut items = app.world_mut().resource_mut::<crate::items::Items>();
+    let trainer = [crate::items::RecordCallback::Trainer];
     assert_eq!(
-        app.world()
-            .resource::<crate::ui_trainer::TrainerOpen>()
-            .item_waits,
-        [2589, 2590, 2589],
+        items.take_callbacks(2589),
+        [trainer; 2].concat(),
         "a callback per call"
     );
+    assert_eq!(items.take_callbacks(2590), trainer);
 }
 
 /// `GetQuestItemInfo` looks a template in flight up with the callback `0x5018c0` and no dedupe

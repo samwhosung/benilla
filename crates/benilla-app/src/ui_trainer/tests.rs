@@ -1,6 +1,7 @@
-//! The trainer feed's tests: the laws, service resolution, the snapshot and the re-evaluator.
+//! The trainer window's tests: the laws, service resolution, the snapshot, the re-evaluator and the lane.
 
 use super::*;
+use crate::names::NameCache;
 use benilla_formats::{
     ItemDisplay, ItemDisplayCatalog, SpellDisplay, SPELL_ATTR_IS_TRADESKILL,
     SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_LEARN_PET_SPELL, SPELL_EFFECT_LEARN_SPELL,
@@ -1063,8 +1064,10 @@ fn service_description_on_real_data_reaches_for_the_recipes_product() {
     assert_eq!(describe(&landed), Some("Needed by Enchanters.".into()));
 }
 
+/// No list, no snapshot; a close zeroes only the cell (`0x4d747c`), the records staying until the
+/// next list, and the session's end takes them.
 #[test]
-fn snapshot_is_none_when_closed_and_lists_services_when_open() {
+fn snapshot_is_none_before_a_list_and_keeps_the_records_through_a_close() {
     let spells = empty_catalog();
     let mut open = TrainerOpen::default();
     assert!(snap(&open, &spells).is_none());
@@ -1088,9 +1091,12 @@ fn snapshot_is_none_when_closed_and_lists_services_when_open() {
     assert_eq!(state.services[1].category, TrainerServiceCategory::Used);
 
     open.clear();
-    assert!(snap(&open, &spells).is_none());
     assert_eq!(open.trainer, None);
+    assert_eq!(snap(&open, &spells).map(|s| s.services.len()), Some(2));
+    open.clear_session();
+    assert!(snap(&open, &spells).is_none());
 }
+
 /// A wrapper spell whose slot `slot` carries `effect` and triggers `trigger`.
 fn wrapper(effect: u32, slot: usize, trigger: u32) -> SpellDisplay {
     let mut d = SpellDisplay {
@@ -1237,38 +1243,28 @@ fn tooltip_falls_back_to_the_wire_spell() {
     );
 }
 
-/// The builder resets per list packet (`0x4d75d9`), and an open window repaints through the
-/// re-evaluator (`0x4d7d40`), never a second list, so every list opens and resets.
+/// Every list steps the window's list, which the VM's rows carry so a live read answers only for
+/// its own; a pass is owed only with a window open (`0x4d7d46`'s early-out).
 #[test]
 fn every_list_packet_begins_a_window_session() {
     const TRAINER: u64 = 0xabc;
     let list = || vec![wire(1, trainer_spell_state::GREEN, 10, 1, 0)];
     let mut open = TrainerOpen::default();
+    let mut lane = TrainerLane::default();
 
     open.open(TRAINER, 0, list(), "Greetings".into());
-    assert!(open.fresh_list, "a first list opens the window: reset");
-    open.fresh_list = false; // the feed consumes it
-
+    let first = open.list;
     open.open(TRAINER, 0, list(), "Greetings".into());
-    assert!(
-        open.fresh_list,
-        "the same trainer's list again is a session start again"
+    assert_ne!(
+        open.list, first,
+        "the same trainer's list again is a list again"
     );
 
-    // A pending re-derivation never survives a list: the packet carries the server's own states.
-    open.fresh_list = false;
-    open.trigger_re_derive();
-    assert!(open.re_derive_owed());
-    open.open(TRAINER, 0, list(), "Greetings".into());
-    assert!(
-        !open.re_derive_owed(),
-        "a fresh list is the server's states — nothing pending against it"
-    );
-
-    // A trigger with no window open does nothing (`0x4d7d46`'s early-out).
+    pass_owed(Some(&open), Some(&mut lane));
+    assert_eq!(lane.stamped().len(), 1);
     open.clear();
-    open.trigger_re_derive();
-    assert!(!open.re_derive_owed());
+    pass_owed(Some(&open), Some(&mut lane));
+    assert_eq!(lane.stamped().len(), 1, "no window, no pass");
 }
 
 mod re_derive {
@@ -1651,12 +1647,7 @@ mod re_derive {
             .resource_mut::<PlayerActions>()
             .spells
             .insert(RANK2);
-        app.world_mut().resource_mut::<TrainerOpen>().open(
-            0x10,
-            1,
-            vec![service(RANK1_WRAPPER)],
-            String::new(),
-        );
+        super::list(&mut app, 0x10, 1, vec![service(RANK1_WRAPPER)]);
         assert_eq!(super::tick(&mut app), ["TRAINER_SHOW"]);
         let every_filter = "SetTrainerServiceTypeFilter('available', 1) \
                             SetTrainerServiceTypeFilter('unavailable', 1) \
@@ -1667,9 +1658,7 @@ mod re_derive {
             2,
             "the server's red row and its header"
         );
-        app.world_mut()
-            .resource_mut::<TrainerOpen>()
-            .trigger_re_derive();
+        super::trigger(&mut app);
         assert_eq!(super::tick(&mut app), ["TRAINER_UPDATE"]);
         assert_eq!(super::lua_count(&mut app, every_filter), 0);
         let kinds = app
@@ -1695,11 +1684,7 @@ mod re_derive {
             .unwrap();
         let mut known = service(RANK1_WRAPPER);
         known.state = trainer_spell_state::GRAY;
-        let list = |app: &mut App, row: TrainerSpell| {
-            app.world_mut()
-                .resource_mut::<TrainerOpen>()
-                .open(0x10, 1, vec![row], String::new());
-        };
+        let list = |app: &mut App, row: TrainerSpell| super::list(app, 0x10, 1, vec![row]);
         let header = |app: &mut App| -> String {
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
@@ -1713,9 +1698,7 @@ mod re_derive {
         assert_eq!(super::tick(&mut app), ["TRAINER_SHOW"]);
         assert_eq!(header(&mut app), "My Talents");
         // RANK1 is not in the book: the pass reads it learnable, and the key stays -1.
-        app.world_mut()
-            .resource_mut::<TrainerOpen>()
-            .trigger_re_derive();
+        super::trigger(&mut app);
         assert_eq!(super::tick(&mut app), ["TRAINER_UPDATE"]);
         assert_eq!(header(&mut app), "My Talents");
         // The next list files it by its state again.
@@ -1752,33 +1735,17 @@ fn the_group_header_keys_resolve_in_the_real_global_strings() {
 #[test]
 fn the_list_asks_no_product() {
     let (tx, rx) = crossbeam_channel::unbounded();
-    let mut app = App::new();
-    app.add_message::<crate::net::FieldChanged>()
-        .insert_resource(NetCommands(tx))
-        .init_resource::<TrainerOpen>()
-        .init_resource::<TrainerErrors>()
-        .init_resource::<TrainerTooltipSubjects>()
-        .init_resource::<PlayerActions>()
-        .init_resource::<Items>()
-        .init_resource::<NameCache>()
-        .init_resource::<GuidIndex>()
-        .init_resource::<crate::ui_pet::PetBar>()
-        .init_resource::<crate::spell::SpellModifiers>()
-        .insert_resource(Spells {
-            catalog: icon_catalog(),
-            ..Spells::empty_for_tests()
-        })
-        .insert_resource(SkillLines {
-            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
-        })
-        .add_systems(Update, feed_trainer);
-    app.insert_non_send_resource(UiScript::new().unwrap());
+    let mut app = feed_app(
+        icon_catalog(),
+        benilla_formats::SkillLineCatalog::from_spell_lines([]),
+    );
+    app.insert_resource(NetCommands(tx));
     let list = |app: &mut App| {
-        app.world_mut().resource_mut::<TrainerOpen>().open(
+        list(
+            app,
             0xF130_0000_4500_0001,
             TRAINER_TYPE_TRADESKILL,
             vec![wire(100, trainer_spell_state::GREEN, 10, 1, 0)],
-            String::new(),
         );
     };
     let product_asks = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
@@ -1789,12 +1756,13 @@ fn the_list_asks_no_product() {
     };
     list(&mut app);
     for _ in 0..3 {
-        app.update();
+        tick(&mut app);
     }
-    assert_eq!(product_asks(&rx), 0, "the list and its frames");
+    assert_eq!(product_asks(&rx), 0, "the list and its drains");
     list(&mut app);
-    app.update();
-    assert_eq!(product_asks(&rx), 0, "the next list");
+    trigger(&mut app);
+    tick(&mut app);
+    assert_eq!(product_asks(&rx), 0, "the next list and a pass");
 }
 
 /// [`resolve_service`] with the pet's book beside the player's, as `GetTrainerServiceAbilityReq`
@@ -1923,66 +1891,38 @@ fn ability_req_asks_the_pets_book_for_a_pet_spell_and_none_without_a_record() {
 #[test]
 fn the_trainer_rows_sort_only_at_a_list_and_a_re_derive() {
     const TRAINER: u64 = 0x10;
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    let mut app = App::new();
-    app.add_message::<crate::net::FieldChanged>()
-        .insert_resource(NetCommands(tx))
-        .init_resource::<TrainerOpen>()
-        .init_resource::<TrainerErrors>()
-        .init_resource::<TrainerTooltipSubjects>()
-        .init_resource::<PlayerActions>()
-        .init_resource::<Items>()
-        .init_resource::<NameCache>()
-        .init_resource::<GuidIndex>()
-        .init_resource::<crate::ui_pet::PetBar>()
-        .init_resource::<crate::spell::SpellModifiers>()
-        .insert_resource(Spells {
-            catalog: icon_catalog(),
-            ..Spells::empty_for_tests()
-        })
-        .insert_resource(SkillLines {
-            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
-        })
-        .add_systems(Update, feed_trainer);
-    app.insert_non_send_resource(UiScript::new().unwrap());
+    let mut app = feed_app(
+        icon_catalog(),
+        benilla_formats::SkillLineCatalog::from_spell_lines([]),
+    );
     let list = |app: &mut App| {
-        app.world_mut().resource_mut::<TrainerOpen>().open(
+        list(
+            app,
             TRAINER,
             TRAINER_TYPE_TRADESKILL,
             (1..=4)
                 .map(|cost| wire(300 + cost, trainer_spell_state::GREEN, cost, 1, 0))
                 .collect(),
-            String::new(),
         );
     };
-    // Each row by its cost, a header as 0.
-    let rows = |app: &mut App| -> Vec<i64> {
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<Vec<i64>>(
-                "local out = {} for i = 1, 5 do out[i] = (GetTrainerServiceCost(i)) end return out",
-            )
-            .unwrap()
-    };
+    let rows = |app: &mut App| costs(app, 5);
     list(&mut app);
-    app.update();
+    tick(&mut app);
     let first = rows(&mut app);
     app.world_mut()
         .resource_mut::<NameCache>()
         .insert_player(TRAINER, "Trainer".into(), None);
-    app.update();
+    tick(&mut app);
     assert_eq!(rows(&mut app), first, "a landed name re-sorts nothing");
     list(&mut app);
-    app.update();
+    tick(&mut app);
     assert_eq!(
         rows(&mut app),
         first,
         "an identical re-list lays the rows out anew"
     );
-    app.world_mut()
-        .resource_mut::<TrainerOpen>()
-        .trigger_re_derive();
-    app.update();
+    trigger(&mut app);
+    tick(&mut app);
     let carried = rows(&mut app);
     assert_ne!(
         carried, first,
@@ -1990,15 +1930,13 @@ fn the_trainer_rows_sort_only_at_a_list_and_a_re_derive() {
     );
 }
 
-/// The real [`feed_trainer`] over a VM that records `TRAINER_SHOW` and `TRAINER_UPDATE` in
-/// `SEEN`, with `spells` and `lines` loaded.
+/// The trainer lane over a VM that records `TRAINER_SHOW` and `TRAINER_UPDATE` in `SEEN`, with
+/// `spells` and `lines` loaded.
 fn feed_app(spells: SpellCatalog, lines: SkillLineCatalog) -> App {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
-    app.add_message::<crate::net::FieldChanged>()
-        .insert_resource(NetCommands(tx))
+    app.insert_resource(NetCommands(tx))
         .init_resource::<TrainerOpen>()
-        .init_resource::<TrainerErrors>()
         .init_resource::<TrainerTooltipSubjects>()
         .init_resource::<PlayerActions>()
         .init_resource::<Items>()
@@ -2010,8 +1948,8 @@ fn feed_app(spells: SpellCatalog, lines: SkillLineCatalog) -> App {
             catalog: spells,
             ..Spells::empty_for_tests()
         })
-        .insert_resource(SkillLines { catalog: lines })
-        .add_systems(Update, feed_trainer);
+        .insert_resource(SkillLines { catalog: lines });
+    lane::add_trainer_lane(&mut app);
     let mut script = UiScript::new().unwrap();
     script.keep_calls();
     script
@@ -2025,9 +1963,27 @@ fn feed_app(spells: SpellCatalog, lines: SkillLineCatalog) -> App {
     app
 }
 
-/// One frame, then the trainer events the VM saw.
+/// A list's handler on `trainer`: the window filled and its `TRAINER_SHOW` on the lane, as
+/// [`open_trainer`] leaves them, the latch left out.
+pub(super) fn list(app: &mut App, trainer: u64, trainer_type: u32, services: Vec<TrainerSpell>) {
+    let world = app.world_mut();
+    world
+        .resource_mut::<TrainerOpen>()
+        .open(trainer, trainer_type, services, String::new());
+    world.resource_mut::<TrainerLane>().push(TrainerEvent::Show);
+}
+
+/// One of the state pass's callers ([`pass_owed`]).
+pub(super) fn trigger(app: &mut App) {
+    let world = app.world_mut();
+    world.resource_scope(|world, mut lane: Mut<TrainerLane>| {
+        pass_owed(world.get_resource::<TrainerOpen>(), Some(&mut lane));
+    });
+}
+
+/// The lanes' drain, then the trainer events the VM saw.
 fn tick(app: &mut App) -> Vec<String> {
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     let s = app.world_mut().non_send_resource_mut::<UiScript>();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
@@ -2043,18 +1999,33 @@ fn run_getters(app: &mut App, chunk: &str) {
         s.run(chunk).unwrap();
         s.take_item_asks(benilla_ui::script::ItemCallback::Trainer)
     };
-    let world = app.world_mut();
-    world.resource_scope(|world, mut open: Mut<TrainerOpen>| {
-        for entry in entries {
-            super::ask_item_record(
-                world.resource::<Items>(),
-                world.resource::<NetCommands>(),
-                &mut open,
-                entry,
-                0,
-            );
+    let world = app.world();
+    for entry in entries {
+        super::ask_item_record(
+            world.resource::<Items>(),
+            world.resource::<NetCommands>(),
+            entry,
+            0,
+        );
+    }
+}
+
+/// `entry`'s record lands, and each trainer callback its lookups left runs the state pass, as the
+/// answer's handler runs them (`crate::net::objects`).
+fn land(app: &mut App, entry: u32) {
+    let callbacks = {
+        let mut items = app.world_mut().resource_mut::<Items>();
+        items.insert_template(
+            entry,
+            Some(crate::items::test_template("Copper Shortsword")),
+        );
+        items.take_callbacks(entry)
+    };
+    for callback in callbacks {
+        if callback == crate::items::RecordCallback::Trainer {
+            trigger(app);
         }
-    });
+    }
 }
 
 /// `chunk`'s number.
@@ -2093,11 +2064,11 @@ fn the_product_lookups_pass_the_taught_spell_as_their_owner() {
         SpellCatalog::from_displays(HashMap::from([(100, wire_spell), (200, taught)])),
         benilla_formats::SkillLineCatalog::from_spell_lines([]),
     );
-    app.world_mut().resource_mut::<TrainerOpen>().open(
+    list(
+        &mut app,
         0x10,
         TRAINER_TYPE_TRADESKILL,
         vec![wire(100, trainer_spell_state::GREEN, 1, 1, 0)],
-        String::new(),
     );
     tick(&mut app);
     let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
@@ -2123,11 +2094,11 @@ fn the_trainer_events_fire_only_from_their_producers() {
         benilla_formats::SkillLineCatalog::from_spell_lines([]),
     );
     let list = |app: &mut App| {
-        app.world_mut().resource_mut::<TrainerOpen>().open(
+        list(
+            app,
             TRAINER,
             TRAINER_TYPE_TRADESKILL,
             vec![wire(301, trainer_spell_state::GREEN, 1, 1, 0)],
-            String::new(),
         );
     };
     list(&mut app);
@@ -2138,9 +2109,7 @@ fn the_trainer_events_fire_only_from_their_producers() {
     assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
     list(&mut app);
     assert_eq!(tick(&mut app), ["TRAINER_SHOW"], "every list shows");
-    app.world_mut()
-        .resource_mut::<TrainerOpen>()
-        .trigger_re_derive();
+    trigger(&mut app);
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE"]);
     assert!(tick(&mut app).is_empty());
 }
@@ -2169,17 +2138,7 @@ fn an_item_record_a_getter_missed_runs_the_state_pass() {
         let mut services = vec![wire(100, trainer_spell_state::GREEN, 5, 1, 0)];
         services
             .extend((1..=4).map(|cost| wire(300 + cost, trainer_spell_state::GREEN, cost, 1, 0)));
-        app.world_mut().resource_mut::<TrainerOpen>().open(
-            TRAINER,
-            TRAINER_TYPE_TRADESKILL,
-            services,
-            String::new(),
-        );
-    };
-    let land = |app: &mut App| {
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(777, Some(crate::items::test_template("Copper Shortsword")));
+        list(app, TRAINER, TRAINER_TYPE_TRADESKILL, services);
     };
 
     // No getter asked: the landing is silent and moves nothing.
@@ -2190,7 +2149,7 @@ fn an_item_record_a_getter_missed_runs_the_state_pass() {
     open(&mut app);
     assert_eq!(tick(&mut app), ["TRAINER_SHOW"]);
     let listed = costs(&mut app, 6);
-    land(&mut app);
+    land(&mut app, 777);
     assert!(tick(&mut app).is_empty(), "no callback, no pass");
     assert_eq!(costs(&mut app, 6), listed);
 
@@ -2204,7 +2163,7 @@ fn an_item_record_a_getter_missed_runs_the_state_pass() {
     assert_eq!(costs(&mut app, 6), listed);
     run_getters(&mut app, "for i = 1, 6 do GetTrainerServiceIcon(i) end");
     assert!(tick(&mut app).is_empty(), "the record is still out");
-    land(&mut app);
+    land(&mut app, 777);
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE"]);
     assert_ne!(
         costs(&mut app, 6),
@@ -2223,18 +2182,15 @@ fn the_state_pass_runs_once_per_trigger_and_per_callback() {
         icon_catalog(),
         benilla_formats::SkillLineCatalog::from_spell_lines([]),
     );
-    app.world_mut().resource_mut::<TrainerOpen>().open(
+    list(
+        &mut app,
         0x10,
         TRAINER_TYPE_TRADESKILL,
         vec![wire(100, trainer_spell_state::GREEN, 5, 1, 0)],
-        String::new(),
     );
     assert_eq!(tick(&mut app), ["TRAINER_SHOW"]);
-    {
-        let mut open = app.world_mut().resource_mut::<TrainerOpen>();
-        open.trigger_re_derive();
-        open.trigger_re_derive();
-    }
+    trigger(&mut app);
+    trigger(&mut app);
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
     assert!(tick(&mut app).is_empty());
 
@@ -2243,9 +2199,7 @@ fn the_state_pass_runs_once_per_trigger_and_per_callback() {
         "for i = 1, 2 do GetTrainerServiceIcon(i) end GetTrainerServiceIcon(2)",
     );
     assert!(tick(&mut app).is_empty(), "the record is still out");
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(777, Some(crate::items::test_template("Copper Shortsword")));
+    land(&mut app, 777);
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
     assert!(tick(&mut app).is_empty(), "the callbacks are spent");
 }

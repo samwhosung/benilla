@@ -60,11 +60,12 @@ pub(crate) struct RecordAsks<'w> {
     battlefield: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
     ammo_hits: Option<ResMut<'w, crate::ui_char::AmmoRecordHits>>,
     cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
-    trainer: Option<ResMut<'w, crate::ui_trainer::TrainerOpen>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
     craft: Option<ResMut<'w, crate::ui_craft::CraftItemWaits>>,
     trade_skill: Option<ResMut<'w, crate::ui_tradeskill::TradeSkillItemWaits>>,
     merchant: Option<ResMut<'w, crate::ui_merchant::MerchantOpen>>,
+    stable: Option<ResMut<'w, crate::ui_stable::StableCreatureWaits>>,
+    me: Option<Res<'w, crate::net::SelfGuid>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
@@ -119,11 +120,7 @@ impl RecordAsks<'_> {
                 };
                 match callback {
                     ItemCallback::Trainer => {
-                        if let Some(trainer) = self.trainer.as_deref_mut() {
-                            crate::ui_trainer::ask_item_record(
-                                items, &self.net, trainer, entry, owner,
-                            );
-                        }
+                        crate::ui_trainer::ask_item_record(items, &self.net, entry, owner);
                     }
                     ItemCallback::Quest => {
                         if let Some(quest) = self.quest.as_deref_mut() {
@@ -173,6 +170,16 @@ impl RecordAsks<'_> {
             RecordAsk::QuestCreature(entry) => {
                 if let Some(names) = self.names.as_deref() {
                     crate::ui_quest_log::ask_quest_creature(names, &self.net, script, entry);
+                }
+            }
+            RecordAsk::StableCreature { entry, paperdoll } => {
+                if let (Some(names), Some(waits)) =
+                    (self.names.as_deref(), self.stable.as_deref_mut())
+                {
+                    let owner = self.me.as_deref().and_then(|g| g.0).unwrap_or(0);
+                    crate::ui_stable::ask_creature(
+                        names, &self.net, waits, owner, entry, paperdoll,
+                    );
                 }
             }
             // A zero guid is no key and asks nothing (`0x55f080`).

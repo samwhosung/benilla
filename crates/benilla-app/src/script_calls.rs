@@ -525,22 +525,19 @@ impl ScriptCallHost<'_, '_> {
     /// The designer's close core `0x4f58a0` inside `CloseTabardCreation`'s call: with a vendor
     /// stored, the latch release (`0x4f58da`), which re-enters the core while the designer holds
     /// the latch, then the cell cleared (`0x4f58df`) and `CLOSE_TABARD_FRAME` (`0x4f58f8`), once
-    /// per run of the core, as the call's tail; an open not yet told goes first, as the reference
-    /// fired it at the open.
+    /// per run of the core, as the call's tail, after the preview's undo (`0x4f58ce`).
     fn close_tabard(&mut self) -> Option<CallTail> {
         use crate::ui_session::NpcWindow;
         let vendor = self.appliers.tabard().vendor()?;
         let reenters = self.appliers.latch().release(vendor);
-        let opened = self.appliers.tabard().clear_vendor();
+        self.appliers.tabard().clear_vendor();
         let runs = 1 + usize::from(reenters);
         let latch = self.appliers.latch();
         for _ in 0..runs {
             latch.note_closed(NpcWindow::Tabard);
         }
         Some(Box::new(move |script: &mut UiScript| {
-            if opened {
-                script.fire_event("OPEN_TABARD_FRAME", vec![]);
-            }
+            script.end_tabard_preview();
             for _ in 0..runs {
                 script.fire_event("CLOSE_TABARD_FRAME", vec![]);
             }
@@ -778,6 +775,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Merchant(call) => appliers.merchant().apply(script, call),
             ScriptCall::Guild(call) => appliers.guild().apply(script, call),
             ScriptCall::Petition(PetitionCall::CloseRegistrar) => tail = self.close_registrar(),
+            ScriptCall::Petition(PetitionCall::Close) => self.close_petition(script, &mut at.mark),
             // The designer's opener, then the registrar's close core (`0x4f5355` → `0x4f5010`).
             ScriptCall::Petition(PetitionCall::TabardInfo) => {
                 appliers.petition().apply(script, PetitionCall::TabardInfo);

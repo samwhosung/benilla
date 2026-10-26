@@ -199,10 +199,10 @@ fn binder_probe(
     time: ProbeClock,
     mut probe: ResMut<BinderProbe>,
     binder: Res<BinderState>,
-    mut home: ResMut<HomeBind>,
     areas: Option<Res<AreaTableRes>>,
-    // The gossip slots, read outside the VM: the gossip verbs write them in the host.
-    mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
+    // The gossip slots, read outside the VM: the gossip verbs write them in the host; and the bind
+    // point, which the trainer's description getters read through it.
+    mut vm: crate::script_calls::VmWith<(Res<'static, GossipState>, ResMut<'static, HomeBind>)>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
@@ -210,7 +210,11 @@ fn binder_probe(
     mut exit: MessageWriter<AppExit>,
 ) {
     // The step's Lua runs with the host lent, so the calls it makes apply inside their verbs.
-    let gossip = Menu::of(&vm.own());
+    let (gossip, mut home) = {
+        let (gossip, home) = vm.own();
+        (Menu::of(&gossip), home.0)
+    };
+    let was = home;
     vm.run(|script| {
         if self_player.is_empty() {
             return; // not in-world yet
@@ -364,8 +368,8 @@ fn binder_probe(
                 if !sent {
                     // Clear the bind before answering: a rebind to the same area re-sends an
                     // identical `SMSG_BINDPOINTUPDATE`, so only None → Some proves a fresh packet.
-                    probe.baseline_area = home.0;
-                    home.0 = None;
+                    probe.baseline_area = home;
+                    home = None;
                     if let Err(e) = script.run("ConfirmBinder()") {
                         warn!(
                             "PROBE_BINDER: SKIP (6 bind) — ConfirmBinder() would not run in the \
@@ -386,7 +390,6 @@ fn binder_probe(
                     return;
                 }
                 let name = home
-                    .0
                     .and_then(|id| areas.as_deref()?.0.name(id))
                     .unwrap_or_default()
                     .to_string();
@@ -395,7 +398,7 @@ fn binder_probe(
                     info!(
                         "PROBE_BINDER: PASS (6 bind) — HomeBind repopulated to area {:?} = \
                          {name:?} (was {:?}), and the VM's GetBindLocation() agrees: {vm:?}",
-                        home.0, probe.baseline_area
+                        home, probe.baseline_area
                     );
                     probe.passes += 1;
                     probe.bound_name = name;
@@ -405,7 +408,7 @@ fn binder_probe(
                         "PROBE_BINDER: FAIL (6 bind) — the hearthstone did not take within \
                          {BIND_TIMEOUT_SECS}s of ConfirmBinder(): HomeBind={:?} AreaTable \
                          name={name:?} GetBindLocation()={vm:?} (was area {:?} before the clear)",
-                        home.0, probe.baseline_area
+                        home, probe.baseline_area
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -448,7 +451,10 @@ fn binder_probe(
                 });
             }
         }
-    })
+    });
+    if home != was {
+        vm.own().1 .0 = home;
+    }
 }
 
 /// Steps 3 and 4: the bind row's icon, then the click. Sets `probe.phase` on every path.

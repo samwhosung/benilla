@@ -19,7 +19,6 @@ use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
 use crate::ui_script::UiFeed;
-use crate::ui_trainer::TrainerFeed;
 use crate::ui_unit::{
     enrich_unit, player_reaction, snapshot, unit_reaction, SnapshotTables, UnitFeed,
 };
@@ -27,6 +26,7 @@ use crate::ui_unit::{
 mod spell_deps;
 mod spell_feed;
 use spell_feed::feed_spell_tooltips;
+pub(crate) use spell_feed::tooltip_text;
 
 pub struct UiTooltipPlugin;
 
@@ -43,12 +43,10 @@ impl Plugin for UiTooltipPlugin {
                 drive_mouseover_tooltip
                     .in_set(UnitFeed)
                     .in_set(MouseoverPublish),
-                // After the trainer and quest feeds, so a list that lands this frame is hoverable
-                // in its tick; outside `UnitFeed`, which the trainer feed follows, so it takes that
-                // set's gate.
+                // After the quest feed, so a list that lands this frame is hoverable in its tick;
+                // outside `UnitFeed`, so it takes that set's gate.
                 feed_spell_tooltips
                     .in_set(UiFeed)
-                    .after(TrainerFeed)
                     .after(crate::ui_quest::feed_quest)
                     .run_if(crate::ui_script::ingame_ui_up),
             ),

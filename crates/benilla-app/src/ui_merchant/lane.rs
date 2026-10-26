@@ -25,6 +25,9 @@ pub(crate) enum MerchantEvent {
     Update,
     /// A refusal's message line, by its `GlobalStrings` key.
     Line(&'static str),
+    /// What a close core run outside a call signalled while this lane held items, parked in the
+    /// VM of the session under the key ([`crate::script_calls::park_since`]).
+    Parked { session: u64, key: u64 },
 }
 
 /// The merchant lane's queue.
@@ -119,7 +122,25 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: MerchantEvent) {
                 crate::ui_action::show_now(script, sink, "ui_merchant", line);
             }
         }
+        MerchantEvent::Parked { session, key } => {
+            if script.session() == session {
+                script.run_parked(key);
+            }
+        }
     }
+}
+
+/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
+/// of the open it closes.
+pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
+    let head = world
+        .get_resource::<MerchantLane>()
+        .and_then(MerchantLane::head);
+    crate::lanes::behind(world, head, core, |world, session, key| {
+        world
+            .resource_mut::<MerchantLane>()
+            .push(MerchantEvent::Parked { session, key });
+    });
 }
 
 /// The item records' callbacks a vendor row's or a buy-back row's answer runs, a record or a

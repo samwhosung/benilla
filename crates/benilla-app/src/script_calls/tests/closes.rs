@@ -152,6 +152,8 @@ fn a_stock_on_hide_close_inside_the_fire_runs_as_the_reference() {
                 &format!("if SHOWN then SHOWN = false {verb}() end"),
             );
             open(&mut app, window, NPC);
+            // The open's signals fire first: a close parks behind what the lanes still hold.
+            crate::lanes::fire_in_order(app.world_mut());
             if walk_away {
                 crate::ui_session::dispatch(app.world_mut());
             } else {
@@ -361,6 +363,8 @@ fn the_merchant_close_ends_repair_mode_after_its_signal() {
     );
     for world_close in [false, true] {
         open(&mut app, W::Merchant, NPC);
+        // The list's `MERCHANT_SHOW` first: a close parks behind what the lanes still hold.
+        crate::lanes::fire_in_order(app.world_mut());
         {
             let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
             vm.set_merchant(Some(benilla_ui::script::MerchantState {

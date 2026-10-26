@@ -1414,18 +1414,6 @@ fn the_locked_line_greens_when_the_lock_can_be_opened() {
     assert_eq!(locked_line_tint(None, None), TooltipTint::LockOpen);
 }
 
-/// A trainer list that lands this frame is hoverable in this frame's tick: the trainer feed derives
-/// the subjects the spell feed pushes.
-#[test]
-fn the_spell_feed_runs_after_the_trainer_feed() {
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
-    assert!(crate::test_support::runs_before(
-        &mut app,
-        crate::ui_trainer::feed_trainer,
-        feed_spell_tooltips
-    ));
-}
-
 pub(super) const ME: u64 = 0x77;
 pub(super) const WOLF: u64 = 0xF130_0000_4500_0001;
 pub(super) const BOAR: u64 = 0xF130_0000_4600_0002;

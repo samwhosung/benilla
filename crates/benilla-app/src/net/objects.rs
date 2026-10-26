@@ -125,6 +125,8 @@ pub(crate) struct Scene<'w, 's> {
     loot: Option<ResMut<'w, crate::ui_loot::LootState>>,
     // The vendor window's row and buy-back callbacks.
     merchant: crate::ui_merchant::MerchantRecordAnswers<'w>,
+    // The state pass the trainer's watches and item callbacks run (`0x4d7d40`).
+    trainer: crate::ui_trainer::TrainerPasses<'w>,
     pass: ResMut<'w, update::UpdatePass>,
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,
@@ -173,8 +175,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // (`0x55ba30`, the dedupe flag 0): each item's set-up (`0x5d8390`) and entry change's
             // (`0x5d96b0`), the loot window's rows (`0x4c2ac0`) and pushes (`0x491ee0`), the trade
             // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), the parked swaps'
-            // (`0x5e1020`) and auto-equips' (`0x5e17a0`), and the vendor rows' (`0x4fada0`,
-            // `0x4fb570`).
+            // (`0x5e1020`) and auto-equips' (`0x5e17a0`), the vendor rows' (`0x4fada0`,
+            // `0x4fb570`) and the trainer rows' (`0x4d9140`, `0x4d9db0`).
             let callbacks = sc.items.take_callbacks(entry);
             // An answer an item of ours waited on changes what the bag view shows of it.
             if answered
@@ -242,6 +244,10 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                     // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
                     Cb::Merchant => sc.merchant.row_answered(),
                     Cb::Buyback => sc.merchant.buyback_answered(),
+                    // The trainer getters' run the state pass for a ready record only (`0x4d9146`,
+                    // `0x4d9db6`).
+                    Cb::Trainer if answered => sc.trainer.owed(),
+                    Cb::Trainer => {}
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one

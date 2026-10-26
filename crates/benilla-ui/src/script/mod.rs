@@ -334,8 +334,8 @@ pub use movieframe::{
     MovieReader,
 };
 pub use petition::{
-    validate_guild_name, PetitionCall, PetitionRecordView, PetitionState, PETITION_TYPE_CHARTER,
-    PETITION_TYPE_PETITION,
+    validate_guild_name, PetitionCall, PetitionQuery, PetitionRecordView, PetitionState,
+    PETITION_TYPE_CHARTER, PETITION_TYPE_PETITION,
 };
 pub use protected::InputEvents;
 pub use roster_read::{
@@ -344,7 +344,7 @@ pub use roster_read::{
 };
 pub use stat_read::{CombatRead, NoPlayer, SelfRead, UnitCombatStats};
 pub use tabard::{
-    emblem_mask_path, TabardCall, TabardHost, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
+    emblem_mask_path, TabardCall, TabardHost, TabardHostQuery, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
     TABARD_CREATION_COST,
 };
 pub use video_pairs::VIDEO_PAIR_CVARS;
@@ -425,7 +425,9 @@ pub use spellbook::{
     resolve_spell_in_books, BookNow, BookSlot, BookSpell, BookTabs, NamedSpell, PetBookState,
     SpellBookState, SpellSlotView, SpellTabName, SpellTabView,
 };
-pub use stable::{StableCall, StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
+pub use stable::{
+    StableCall, StableIntent, StablePetSlot, StableQuery, StableState, StableView, NUM_STABLE_SLOTS,
+};
 pub use summon::{SummonCall, SummonConfirmUiState};
 pub use talent::{
     CharacterPoints, TalentAt, TalentCall, TalentCount, TalentMasterPending, TalentPrereqView,
@@ -443,7 +445,8 @@ pub use tradeskill::{
 };
 pub use trainer::{
     ProductWait, TrainerAbilityReq, TrainerCall, TrainerGroup, TrainerService,
-    TrainerServiceCategory, TrainerSkillReq, TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,
+    TrainerServiceCategory, TrainerServiceLive, TrainerServiceQuery, TrainerSkillReq, TrainerState,
+    TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
 pub use tutorial::TutorialCall;
 pub(crate) use types::{monochrome_flag, FontMask, MeasuredText, RegionData};

@@ -152,6 +152,7 @@ fn dismissing_the_pet_empties_the_closed_stable_without_raising() {
 fn row(pet_number: u32, name: &str, display_id: u32) -> StablePetSlot {
     StablePetSlot {
         pet_number,
+        entry: 1_126,
         icon: Some(r"Interface\Icons\Ability_Hunter_Pet_Boar".into()),
         name: name.into(),
         level: 58,

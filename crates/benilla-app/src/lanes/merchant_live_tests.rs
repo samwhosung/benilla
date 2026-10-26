@@ -437,3 +437,24 @@ fn a_buyback_rows_name_carries_its_suffix() {
     sold(&mut c, UNCACHED, 584, true);
     assert_eq!(c.eval::<String>(true, name), "Bandit Cloak", "wrapped");
 }
+
+/// A trainer's list in the vendor's frame takes the latch, whose release closes the vendor
+/// (`0x4930d0` → `0x4fae10`): the close's `MERCHANT_CLOSED` fires at that packet, after the
+/// vendor list's `MERCHANT_SHOW`, so the stock frame shows and then hides.
+#[test]
+fn a_close_in_the_lists_frame_fires_after_its_show() {
+    const TRAINER: u64 = 0xF130_0000_0000_0044;
+    let mut c = client();
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_trainer::TrainerOpen>()
+        .asked = TRAINER;
+    let trainer = SessionEvent::TrainerList {
+        trainer: TRAINER,
+        trainer_type: 0,
+        services: Vec::new(),
+        greeting: String::new(),
+    };
+    c.frame(vec![vec![list(vec![row(1, 25)])], vec![trainer]]);
+    assert_eq!(c.seen(), ["MERCHANT_SHOW:nil", "MERCHANT_CLOSED:nil"]);
+}

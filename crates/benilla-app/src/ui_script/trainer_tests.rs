@@ -157,6 +157,7 @@ fn service(
 ///   4 H:Fury · 5 Rend(used,30c) · 6 Thunder Clap(avail,500c)
 pub(super) fn menu() -> TrainerState {
     TrainerState {
+        list: 0,
         guid: 0,
         greeting: "Well met. Let me show you the way of the warrior.".into(),
         trainer_type: 0,
@@ -442,6 +443,7 @@ fn filter_rows_toggle_through_the_dropdown_kit() {
 /// One skill line of 15 services, a 16-row tree over 11 visible rows, so the list scrolls.
 fn long_menu() -> TrainerState {
     TrainerState {
+        list: 0,
         guid: 0,
         greeting: "Much to learn.".into(),
         trainer_type: 0,
@@ -819,6 +821,7 @@ fn recipe_menu() -> TrainerState {
     );
     short.subtext = Some("Rank 1".into());
     TrainerState {
+        list: 0,
         guid: 0,
         greeting: "Can I teach you how to turn beast hides into armor?".into(),
         trainer_type: 2,
@@ -940,11 +943,10 @@ fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
     );
     s.set_money(5000);
 
-    // `ui_trainer::feed_trainer`, reduced to its reset-then-fire.
+    // The trainer lane's firing, reduced to its reset-then-fire: a list's resets.
     fn feed(s: &mut UiScript, open: &mut TrainerOpen, state: TrainerState, event: &str) {
-        if open.fresh_list {
+        if event == "TRAINER_SHOW" {
             s.reset_trainer_list_state(open.trainer_type);
-            open.fresh_list = false;
         }
         s.set_trainer(Some(state));
         s.fire_event(event, vec![ScriptValue::Str("Dazalar".into())]);
@@ -1050,11 +1052,10 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
     );
     s.set_money(5000);
 
-    // `ui_trainer::feed_trainer`, reduced to its reset-then-fire.
+    // The trainer lane's firing, reduced to its reset-then-fire: a list's resets.
     fn feed(s: &mut UiScript, open: &mut TrainerOpen, state: TrainerState, event: &str) {
-        if open.fresh_list {
+        if event == "TRAINER_SHOW" {
             s.reset_trainer_list_state(open.trainer_type);
-            open.fresh_list = false;
         }
         s.set_trainer(Some(state));
         s.fire_event(event, vec![ScriptValue::Str("Dazalar".into())]);

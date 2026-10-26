@@ -4,13 +4,13 @@
 //! not unify them.
 
 use benilla_formats::{
-    substitute, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_ATTR_IS_TRADESKILL,
-    SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_LEARN_PET_SPELL, SPELL_EFFECT_LEARN_SPELL,
-    SPELL_EFFECT_SKILL_STEP,
+    substitute_parts, ExpandAt, SkillLineCatalog, SpellCatalog, TokenContext,
+    SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_LEARN_PET_SPELL,
+    SPELL_EFFECT_LEARN_SPELL, SPELL_EFFECT_SKILL_STEP,
 };
 use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
 use benilla_ui::script::{
-    ProductWait, TrainerServiceCategory, TrainerTooltip, TRAINER_GROUP_KNOWN,
+    ProductWait, TooltipText, TrainerServiceCategory, TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
 
 use crate::entities::ItemDisplays;
@@ -152,6 +152,7 @@ pub(super) fn service_description(
     text: &ServiceText,
 ) -> Option<String> {
     service_description_waiting(wire, trainer_type, spells, items, ask, text, &mut None)
+        .map(|t| t.text(text.player.global))
 }
 
 /// [`service_description`], with `wait` set to the recipe's product whose record the lookup
@@ -165,7 +166,15 @@ pub(super) fn service_description_waiting(
     ask: Ask<'_>,
     text: &ServiceText,
     wait: &mut Option<ProductWait>,
-) -> Option<String> {
+) -> Option<TooltipText> {
+    // The expander's text, each template it names left to the getter's read of the VM's strings.
+    fn substitute(
+        text: &str,
+        d: &benilla_formats::SpellDisplay,
+        ctx: &TokenContext,
+    ) -> TooltipText {
+        crate::ui_tooltip::tooltip_text(substitute_parts(text, d, ctx, ExpandAt::default()))
+    }
     let d = spells.get(wire.spell)?;
     let learn = (0..3).find(|&i| {
         matches!(
@@ -199,7 +208,7 @@ pub(super) fn service_description_waiting(
                 let product = taught.effect_item_type[0];
                 match items.template(product, 0, ask) {
                     Some(item) if !item.description.is_empty() => {
-                        return Some(item.description.clone());
+                        return Some(TooltipText::from(item.description.clone()));
                     }
                     Some(_) => {}
                     None if product != 0 => {

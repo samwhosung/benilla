@@ -108,6 +108,14 @@ live_reads! {
         taxi: crate::ui_taxi::TaxiLive<'static, 'static>,
         /// The dialogs' latches, clocks, meeting stone, summon and instance terms.
         dialogs: crate::ui_dialog_verbs::DialogLive<'static>,
+        /// The trainer rows' icons, descriptions and ability tests.
+        trainer: crate::ui_trainer::TrainerLive<'static, 'static>,
+        /// The tabard designer's guild record and save latch.
+        tabard: crate::ui_tabard::TabardLive<'static, 'static>,
+        /// The stable's records, counts and the summoned pet's display.
+        stable: crate::ui_stable::StableLive<'static, 'static>,
+        /// The charter's signers, record, registrar cost and sign test.
+        petition: crate::ui_petition::PetitionLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

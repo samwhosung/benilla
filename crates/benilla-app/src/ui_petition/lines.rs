@@ -12,6 +12,15 @@ use crate::ui_action::UiError;
 /// because the sink reads the row's sound too.
 pub(super) type Line = UiError;
 
+/// A composed line resolved against the VM's strings.
+pub(super) fn shown(
+    script: &benilla_ui::script::UiScript,
+    e: &Line,
+) -> Option<crate::ui_action::Shown> {
+    crate::ui_action::ui_error_text(e, &|key| script.lua().globals().get::<String>(key).ok())
+        .map(|text| crate::ui_action::Shown::keyed(e.key, text))
+}
+
 /// The line `SMSG_PETITION_SIGN_RESULTS` prints when we signed (the switch at `0x5eeff5`); the
 /// owner's copy never reads the result ([`signed_by_other`]).
 pub(super) fn my_sign_line(result: u32) -> Option<Line> {

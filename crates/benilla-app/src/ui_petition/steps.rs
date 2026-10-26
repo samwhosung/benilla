@@ -6,7 +6,7 @@ use benilla_ui::script::{CallTail, PetitionCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use super::{feed, lines, GuildRegistrarState, PetitionRecords, PetitionState};
+use super::{lines, GuildRegistrarState, PetitionRecords, PetitionState};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfGuid, SelfPlayer};
 use crate::query_cache::Ask;
@@ -46,8 +46,26 @@ impl PetitionSteps<'_, '_> {
         }
     }
 
-    /// Apply `call` inside its verb; `ClosePetition`'s record drop is the tail, after the held
-    /// `PETITION_CLOSED` handlers.
+    /// `ClosePetition`'s `0x4f3f60(0, 0)` up to its signal ([`PetitionState::close_open`]):
+    /// whether a petition was open, for the host's `PETITION_CLOSED`.
+    pub(crate) fn close_petition(&mut self) -> bool {
+        let me = self.self_guid.as_ref().and_then(|g| g.0).unwrap_or(0);
+        let (Some(petition), Some(records)) =
+            (self.petition.as_deref_mut(), self.records.as_deref())
+        else {
+            return false;
+        };
+        petition.close_open(records, me, &self.net)
+    }
+
+    /// `0x4f3f60`'s tail after the signal (`0x4f4078`): the record and the sign latch dropped.
+    pub(crate) fn drop_petition_record(&mut self) {
+        if let Some(petition) = self.petition.as_deref_mut() {
+            petition.drop_record();
+        }
+    }
+
+    /// Apply `call` inside its verb; `ClosePetition` is the host's, around its signal.
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: PetitionCall) -> Option<CallTail> {
         if self.petition.is_none() || self.records.is_none() || self.registrar.is_none() {
             debug!("ui_petition: no charter state in this world; {call:?} dropped");
@@ -122,21 +140,8 @@ impl PetitionSteps<'_, '_> {
             // The registrar's close core needs the latch: the host runs it
             // ([`crate::script_calls::ScriptCallHost`]).
             PetitionCall::CloseRegistrar => {}
-            PetitionCall::Close => {
-                let petition = self.petition.as_deref_mut().expect("checked above");
-                petition.open_item()?; // `0x4f3f7c`: nothing open, no event
-                let records = self.records.as_deref().expect("checked above");
-                petition.decline_on_close(records, me, &self.net);
-                petition.close();
-                petition.fed.closed();
-                // `0x4f3ef0` frees the signers, then `PETITION_CLOSED` (`0x4f402c`), whose
-                // handlers still read the record, which goes after them (`0x4f4078`).
-                script.free_petition_signers();
-                script.fire_event("PETITION_CLOSED", vec![]);
-                return Some(Box::new(|script: &mut UiScript| {
-                    script.drop_petition_record()
-                }));
-            }
+            // The host runs the close around its signal.
+            PetitionCall::Close => {}
         }
         None
     }
@@ -171,7 +176,7 @@ impl PetitionSteps<'_, '_> {
     /// Show `line` inside the call, as `0x496720` does; a key the VM's `GlobalStrings.lua` lacks
     /// shows nothing.
     fn show(&mut self, script: &mut UiScript, line: lines::Line) {
-        if let Some(shown) = feed::shown(script, &line) {
+        if let Some(shown) = lines::shown(script, &line) {
             crate::ui_action::show_now(script, &mut self.sink, "ui_petition", shown);
         }
     }

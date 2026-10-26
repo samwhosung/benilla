@@ -1095,6 +1095,9 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     }
                 }
             }
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::TrainerPass) => {
+                sc.trainer.owed()
+            }
             crate::field_watch::Step::Notice(n) => sc.field_notices.write(n),
             crate::field_watch::Step::Item(run) => sc.item_lane.push(run),
         }

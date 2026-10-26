@@ -59,6 +59,7 @@ fn trainer() -> TrainerState {
         "Fury",
     );
     TrainerState {
+        list: 0,
         guid: 0x42,
         greeting: "What would you like to learn?".into(),
         trainer_type: 0,
@@ -459,6 +460,7 @@ fn tradeskill_and_talent_flags() {
     );
     recipe.is_trade_skill = true;
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: String::new(),
         trainer_type: 2,
@@ -473,6 +475,7 @@ fn tradeskill_and_talent_flags() {
         .unwrap());
 
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: String::new(),
         trainer_type: 1,
@@ -527,6 +530,7 @@ fn row_names_compare_byte_for_byte_and_headers_ignore_case() {
     ];
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: String::new(),
         trainer_type: 0,
@@ -707,6 +711,7 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
 
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: "Care to learn how to turn the ore that you find into weapons?".into(),
         trainer_type: 2,
@@ -782,6 +787,7 @@ fn mount_trainer_folds_known_services_into_my_talents() {
     // The header reads its text by name (`0x4d8b11`), not off a service.
     s.run("KNOWN_TALENTS_HEADER = 'My Talents'").unwrap();
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: "Ready to ride?".into(),
         trainer_type: 1,
@@ -821,6 +827,7 @@ fn talent_order_sorts_on_state_within_a_group() {
     ];
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: String::new(),
         trainer_type: 1,
@@ -832,6 +839,7 @@ fn talent_order_sorts_on_state_within_a_group() {
 
     // At a class trainer the same three sort by name: equal levels, no skill gates.
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: String::new(),
         trainer_type: 0,
@@ -1140,6 +1148,7 @@ fn every_finalize_sorts_the_whole_array_from_its_last_order() {
         let mut s = UiScript::new().unwrap();
         s.reset_trainer_list_state(trainer_type);
         s.set_trainer(Some(TrainerState {
+            list: 0,
             guid: 0,
             greeting: String::new(),
             trainer_type,
@@ -1339,6 +1348,7 @@ fn a_mount_trainer_always_builds_the_known_group_first() {
     let mut s = UiScript::new().unwrap();
     s.run("KNOWN_TALENTS_HEADER = 'My Talents'").unwrap();
     s.set_trainer(Some(TrainerState {
+        list: 0,
         guid: 0,
         greeting: String::new(),
         trainer_type: 1,
@@ -1460,6 +1470,7 @@ fn a_pass_keeps_the_lists_header_array() {
             "Ram Riding",
         );
         TrainerState {
+            list: 0,
             guid: 0x42,
             greeting: String::new(),
             trainer_type: 1,

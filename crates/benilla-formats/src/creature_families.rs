@@ -109,6 +109,11 @@ impl CreatureFamilies {
         )
     }
 
+    /// Families from whole rows, for tests and fixtures.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, CreatureFamily)>) -> Self {
+        Self(rows.into_iter().collect())
+    }
+
     /// The row for a family id; the wire's 0 (no family) is `None`, `UnitCreatureFamily`'s nil.
     pub fn get(&self, id: u32) -> Option<&CreatureFamily> {
         self.0.get(&id)

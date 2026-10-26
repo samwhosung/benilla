@@ -1,7 +1,7 @@
-//! The stable-master bindings: the app pushes a snapshot of the hunter's stable
-//! ([`UiScript::set_stable`], every wire row resolved to strings), and each request goes out inside
-//! its call through the host ([`StableCall`]); the close, which needs the interaction latch, is the
-//! one the app drains.
+//! The stable-master bindings: the getters read the hunter's stable through the lent host at the
+//! call ([`StableQuery`], every wire row resolved to strings), a row whose creature record the
+//! cache lacks asks it with the window's callback ([`super::RecordAsk::StableCreature`]), and each
+//! request goes out inside its call through the host ([`StableCall`]).
 //!
 //! The window shows slots 0..=2: 0 is the current pet, 1 and 2 the stable slots a hunter buys
 //! (`NUM_PET_STABLE_SLOTS` 2, two `StableSlotPrices.dbc` rows, vmangos `MAX_PET_STABLES` 2). The
@@ -17,6 +17,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
+use super::live::{ask, LiveQuery};
 use super::Model;
 
 /// The current pet plus the `NUM_PET_STABLE_SLOTS` (2) stable slots (`PetStable.lua:1`).
@@ -28,6 +29,8 @@ pub const NUM_STABLE_SLOTS: usize = 3;
 pub struct StablePetSlot {
     /// The pet's id, which the unstable and swap verbs name; never its slot.
     pub pet_number: u32,
+    /// The record's creature entry (`+0x8`), which the getters look the template up by.
+    pub entry: u32,
     /// The family icon path, `None` while the creature query is in flight; the stock window passes
     /// it to `SetItemButtonTexture`, which draws the empty-slot art for nil.
     pub icon: Option<String>,
@@ -45,7 +48,7 @@ pub struct StablePetSlot {
     pub display_id: Option<u32>,
 }
 
-/// The open stable's snapshot, pushed whole; `None` when no stable is open.
+/// The open stable as the getters read it; `None` when no stable is open.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StableState {
     /// Stable slots bought, 0..=2 (the wire's `numStableSlots`), not occupied: it enables buttons
@@ -99,6 +102,53 @@ pub enum StableCall {
     Close,
 }
 
+/// The stable as the getters read it at the call: the window and the summoned pet's live display.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StableView {
+    pub state: Option<StableState>,
+    /// The summoned pet's creature-cache display while the client holds its unit
+    /// ([`StableModel::live_pet_display`]).
+    pub live_pet_display: Option<u32>,
+}
+
+/// The question: [`StableView`] now, the module's records and cells (`0xb72058`, `0xb720c8`,
+/// `0xb72240`-`0xb7224c`) as the handlers left them, if they hold the list the VM's copy came from:
+/// a later list has not signalled yet, and its listeners' moment reads the copy.
+pub struct StableQuery {
+    pub list: u64,
+}
+
+impl LiveQuery for StableQuery {
+    type Answer = StableView;
+}
+
+/// The stable now: the host's, else the VM's copy, the last signalled list's.
+fn view(lua: &Lua, model: &Model) -> StableView {
+    let query = StableQuery {
+        list: model.stable.list,
+    };
+    ask(lua, &query).unwrap_or_else(|| StableView {
+        state: model.stable.state.clone(),
+        live_pet_display: model.stable.live_pet_display,
+    })
+}
+
+/// A getter's creature lookup of `pet`'s entry with the window's callback (`0x4cb2ce`,
+/// `0x4cbb05` with `0x4cb3b0`; `0x4cba13` with `0x4cba50` for the paperdoll), made only on a miss:
+/// a held record touches nothing.
+fn ask_creature(lua: &Lua, pet: &StablePetSlot, paperdoll: bool) -> mlua::Result<()> {
+    if pet.display_id.is_some() {
+        return Ok(());
+    }
+    super::calls::ask(
+        lua,
+        super::RecordAsk::StableCreature {
+            entry: pet.entry,
+            paperdoll,
+        },
+    )
+}
+
 /// The window's own state beside the snapshot: the selection.
 #[derive(Clone, Debug)]
 pub(crate) struct StableModel {
@@ -110,6 +160,8 @@ pub(crate) struct StableModel {
     /// is the unit's cache record (`0x60b131`), whose display `0x505a70` reads at `[rec+0x2c]`
     /// (`0x505a83`). Apart from the snapshot, whose changes fire the window's events.
     pub(crate) live_pet_display: Option<u32>,
+    /// The list the copy came from ([`StableQuery`]).
+    pub(crate) list: u64,
 }
 
 /// Nothing selected, the client's reset (`0x4caad3`); Lua reads it as -1 through
@@ -120,14 +172,25 @@ impl Default for StableModel {
             state: None,
             selected: 0,
             live_pet_display: None,
+            list: 0,
         }
     }
 }
 
 impl super::UiScript {
-    /// Push the open stable's snapshot, or clear it with `None`. Every push clears the selection,
-    /// as each list does in the client (`0x4cadf8`); the stock window then re-picks the current pet
+    /// A list's clear of the selection (`0x4cadf8`), ahead of its `PET_STABLE_SHOW`, and the VM's
+    /// copy of the stable as list `list` left it; the stock window then re-picks the current pet
     /// or the first occupied slot (`PetStable.lua:49-62`).
+    pub fn stable_listed(&mut self, list: u64, view: StableView) {
+        let mut model = self.model_mut();
+        model.stable.selected = 0;
+        model.stable.state = view.state;
+        model.stable.live_pet_display = view.live_pet_display;
+        model.stable.list = list;
+    }
+
+    /// Set the VM's copy of the open stable, or clear it with `None`, which the getters read with
+    /// no host to ask; it clears the selection as a list does ([`Self::stable_listed`]).
     pub fn set_stable(&mut self, state: Option<StableState>) {
         let mut model = self.model_mut();
         model.stable.selected = 0;
@@ -136,9 +199,8 @@ impl super::UiScript {
         model.stable.state = state;
     }
 
-    /// Push the summoned pet's creature-cache display, `None` while the client holds no pet unit
-    /// or its record has not answered ([`StableModel::live_pet_display`]). Fires nothing: the
-    /// reference's paperdoll event comes only from the cache callbacks (`0x4cba50`, `0x4cb3b0`).
+    /// Set the VM's copy of the summoned pet's creature-cache display, `None` while the client
+    /// holds no pet unit or its record has not answered ([`StableModel::live_pet_display`]).
     pub fn set_stable_live_pet_display(&mut self, display: Option<u32>) {
         self.model_mut().stable.live_pet_display = display;
     }
@@ -163,22 +225,20 @@ impl super::UiScript {
         })
     }
 
-    /// `GetSelectedStablePet()`'s answer, translated from the held pet number: 0 the summoned
-    /// pet, 1..=2 a stable slot, -1 nothing.
+    /// `GetSelectedStablePet()`'s answer off the VM's copy, translated from the held pet number: 0
+    /// the summoned pet, 1..=2 a stable slot, -1 nothing.
     pub fn stable_selection(&mut self) -> i32 {
         let model = self.model_mut();
-        selected_slot(&model.stable)
+        selected_slot(model.stable.selected, model.stable.state.as_ref())
     }
 }
 
 /// The pet number to slot translation behind `GetSelectedStablePet` (`0x4cb810`).
-fn selected_slot(m: &StableModel) -> i32 {
-    match m.selected {
+fn selected_slot(selected: i32, state: Option<&StableState>) -> i32 {
+    match selected {
         -1 => 0,
         0 => -1,
-        pet_number => m
-            .state
-            .as_ref()
+        pet_number => state
             .and_then(|s| {
                 s.slots
                     .iter()
@@ -195,11 +255,19 @@ fn selected_slot(m: &StableModel) -> i32 {
     }
 }
 
-/// The creature display `SetPetStablePaperdoll` puts on its pane for the selection: the
-/// summoned pet's live one, else its row's; a stabled pet's row's; `None` for nothing selected, a
-/// pet the list no longer holds, or a display the creature cache has not answered.
-fn paperdoll_display(m: &StableModel) -> Option<u32> {
-    let state = m.state.as_ref()?;
+/// What `SetPetStablePaperdoll` shows for the selection: the summoned pet's live display, else the
+/// row whose record it reads; a stabled pet's row; nothing for nothing selected or a pet the list
+/// no longer holds.
+enum Paperdoll<'a> {
+    Live(u32),
+    Row(&'a StablePetSlot),
+    Nothing,
+}
+
+fn paperdoll<'a>(selected: i32, view: &'a StableView) -> Paperdoll<'a> {
+    let Some(state) = view.state.as_ref() else {
+        return Paperdoll::Nothing;
+    };
     let row = |pet_number: i64| {
         state
             .slots
@@ -207,14 +275,15 @@ fn paperdoll_display(m: &StableModel) -> Option<u32> {
             .flatten()
             .find(|p| i64::from(p.pet_number) == pet_number)
     };
-    match m.selected {
+    let shown = match selected {
         0 => None,
-        -1 => m
-            .live_pet_display
-            .or_else(|| state.slots[0].as_ref().and_then(|p| p.display_id)),
-        pet_number => row(i64::from(pet_number)).and_then(|p| p.display_id),
-    }
-    .filter(|&d| d != 0)
+        -1 => match view.live_pet_display {
+            Some(display) => return Paperdoll::Live(display),
+            None => state.slots[0].as_ref(),
+        },
+        pet_number => row(i64::from(pet_number)),
+    };
+    shown.map_or(Paperdoll::Nothing, Paperdoll::Row)
 }
 
 /// A slot argument as an index into [`StableState::slots`], `None` out of range.
@@ -257,8 +326,9 @@ enum Click {
     Dropped(Option<StableIntent>),
 }
 
-/// `ClickStablePet(i)`'s choice ([`Click`]); a plain click's selection is made here.
-fn click_stable_pet(model: &mut Model, i: i64) -> Click {
+/// `ClickStablePet(i)`'s choice ([`Click`]) over the stable `state` as of the call; a plain
+/// click's selection is made here.
+fn click_stable_pet(model: &mut Model, state: Option<&StableState>, i: i64) -> Click {
     let held = match &model.cursor {
         Some(super::cursor::CursorPayload::StablePet(held)) => Some(held.slot),
         _ => None,
@@ -275,19 +345,12 @@ fn click_stable_pet(model: &mut Model, i: i64) -> Click {
 
     // A drop.
     if let Some(from) = held {
-        let intent = model
-            .stable
-            .state
-            .as_ref()
-            .and_then(|state| drag_verb(from, to, state));
+        let intent = state.and_then(|state| drag_verb(from, to, state));
         return Click::Dropped(intent);
     }
 
     // A plain click: select only.
-    let pet_number = model
-        .stable
-        .state
-        .as_ref()
+    let pet_number = state
         .and_then(|s| s.slots[usize::from(to)].as_ref())
         .map(|p| p.pet_number);
     model.stable.selected = match (to, pet_number) {
@@ -317,8 +380,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             let pet = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                slot_index(i).and_then(|i| model.stable.state.as_ref()?.slots[i].clone())
+                let mut view = view(lua, &model);
+                slot_index(i).and_then(|i| view.state.as_mut()?.slots[i].take())
             };
+            if let Some(pet) = &pet {
+                ask_creature(lua, pet, false)?;
+            }
             let Some(pet) = pet else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
@@ -358,14 +425,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 i,
                 "Usage: GetStablePetInfo(index)",
             )?);
-            let diet = {
+            let pet = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                slot_index(i)
-                    .and_then(|i| {
-                        Some(model.stable.state.as_ref()?.slots[i].as_ref()?.diet.clone())
-                    })
-                    .unwrap_or_default()
+                let mut view = view(lua, &model);
+                slot_index(i).and_then(|i| view.state.as_mut()?.slots[i].take())
             };
+            if let Some(pet) = &pet {
+                ask_creature(lua, pet, false)?;
+            }
+            let diet = pet.map(|p| p.diet).unwrap_or_default();
             let mut out = Vec::with_capacity(diet.len());
             for d in &diet {
                 out.push(Value::String(lua.create_string(d)?));
@@ -380,8 +448,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(
-                model
-                    .stable
+                view(lua, &model)
                     .state
                     .as_ref()
                     .map_or(0, |s| s.num_stable_slots),
@@ -395,7 +462,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(
-                model.stable.state.as_ref().map_or(0, StableState::num_pets),
+                view(lua, &model)
+                    .state
+                    .as_ref()
+                    .map_or(0, StableState::num_pets),
             ))
         })?,
     )?;
@@ -407,7 +477,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(
-                model.stable.state.as_ref().map_or(0, |s| s.next_slot_cost),
+                view(lua, &model)
+                    .state
+                    .as_ref()
+                    .map_or(0, |s| s.next_slot_cost),
             ))
         })?,
     )?;
@@ -418,7 +491,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetSelectedStablePet",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(selected_slot(&model.stable)))
+            let view = view(lua, &model);
+            Ok(i64::from(selected_slot(
+                model.stable.selected,
+                view.state.as_ref(),
+            )))
         })?,
     )?;
 
@@ -432,7 +509,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 i,
                 "Usage: ClickStablePet(index)",
             )?);
-            match super::tick::verb(lua, |model| click_stable_pet(model, i)) {
+            let state = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                view(lua, &model).state
+            };
+            match super::tick::verb(lua, |model| click_stable_pet(model, state.as_ref(), i)) {
                 Click::Selected => Ok(Value::Number(1.0)),
                 Click::Dropped(intent) => {
                     if let Some(intent) = intent {
@@ -461,17 +542,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 i,
                 "Usage: PickupStablePet(index)",
             )?);
-            let occupied = {
+            let pet = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                slot_index(i)
-                    .and_then(|i| model.stable.state.as_ref()?.slots[i].as_ref())
-                    .is_some()
+                let mut view = view(lua, &model);
+                slot_index(i).and_then(|i| view.state.as_mut()?.slots[i].take())
             };
-            if occupied {
-                super::cursor::set_cursor(lua, true, |model| {
-                    let texture = slot_index(i)
-                        .and_then(|i| model.stable.state.as_ref()?.slots[i].as_ref())
-                        .and_then(|p| p.icon.clone())?;
+            if let Some(pet) = pet {
+                super::cursor::set_cursor(lua, true, |_| {
+                    let texture = pet.icon?;
                     Some(super::cursor::CursorPayload::StablePet(
                         super::cursor::CursorStablePet {
                             slot: i as u8,
@@ -510,8 +588,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             let pet_number = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .stable
+                view(lua, &model)
                     .state
                     .as_ref()
                     .and_then(|s| {
@@ -550,18 +627,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     "SetPetStablePaperdoll(): Couldn't find 'this' in frame object",
                 )
             })?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // The object type check (`0x4cb904`): a character pane, else the error at `0x848fd8`.
-            let character = matches!(
-                model.arena.frame(h).map(|f| &f.kind_state),
-                Some(crate::widget::KindState::Model(m)) if m.character.is_some()
-            );
-            if !character {
-                return Err(mlua::Error::runtime(
-                    "SetPetStablePaperdoll(): Wrong object type, expected frame",
-                ));
-            }
-            if let Some(display) = paperdoll_display(&model.stable) {
+            let (selected, view) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                // The object type check (`0x4cb904`): a character pane, else the error at
+                // `0x848fd8`.
+                let character = matches!(
+                    model.arena.frame(h).map(|f| &f.kind_state),
+                    Some(crate::widget::KindState::Model(m)) if m.character.is_some()
+                );
+                if !character {
+                    return Err(mlua::Error::runtime(
+                        "SetPetStablePaperdoll(): Wrong object type, expected frame",
+                    ));
+                }
+                (model.stable.selected, view(lua, &model))
+            };
+            let display = match paperdoll(selected, &view) {
+                Paperdoll::Live(display) => Some(display),
+                Paperdoll::Row(pet) => {
+                    ask_creature(lua, pet, true)?;
+                    pet.display_id
+                }
+                Paperdoll::Nothing => None,
+            };
+            if let Some(display) = display.filter(|&d| d != 0) {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.set_pane_display(h, display);
             }
             Ok(())
@@ -577,7 +667,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 // Affordability reads `model.money`, the purse `GetMoney()` answers.
                 let money = model.money;
-                model.stable.state.as_ref().is_some_and(|s| {
+                view(lua, &model).state.as_ref().is_some_and(|s| {
                     s.num_stable_slots as usize != NUM_STABLE_SLOTS - 1
                         && s.next_slot_cost != 0
                         && u64::from(s.next_slot_cost) <= money
@@ -613,6 +703,7 @@ mod tests {
     fn pet(number: u32, name: &str, level: u32) -> StablePetSlot {
         StablePetSlot {
             pet_number: number,
+            entry: 100 + number,
             icon: Some("Interface\\Icons\\Ability_Hunter_Pet_Wolf".into()),
             name: name.into(),
             level,

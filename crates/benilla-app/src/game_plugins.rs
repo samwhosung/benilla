@@ -1867,10 +1867,6 @@ pub(crate) mod schedule_tests {
             "::ui_gossip::feed_gossip",
             "::ui_quest::feed_quest",
             "::ui_bank::feed_bank",
-            "::ui_stable::feed_stable",
-            "::ui_tabard::feed_tabard",
-            "::ui_petition::feed::feed_petition",
-            "::ui_trainer::feed_trainer",
             "::ui_auction::feed_auction",
             "::ui_trade::feed_trade",
         ]
@@ -2100,8 +2096,6 @@ pub(crate) mod schedule_tests {
          "the window queues are mailbox-click replies; the one server push (`SMSG_RECEIVED_MAIL`) is re-asked by `send_query_next_mail_time_on_enter`, whose reply sets `notify` unconditionally"),
         ("ui_panes.rs", "feed_character_panes", Because::FilledByVm,
          "the answers answer the VM's own build requests and arms on panes it listed; a frameless VM lists none, and an answer for another VM's rows is dropped"),
-        ("ui_petition/feed.rs", "feed_petition", Because::PlayerRoundTrip,
-         "every line answers a charter action of ours; the window edges ride the `fed` memo"),
         ("ui_quest_share.rs", "feed_quest_share", Because::PlayerRoundTrip,
          "a verdict answers our own push and a confirm follows a party member's escort accept, both held until the name resolves (the confirm is another player's act: coincidence-only residual)"),
         ("ui_script/glue_mgr.rs", "drive_glue_mgr", Because::Deliberate,
@@ -2112,14 +2106,8 @@ pub(crate) mod schedule_tests {
          "its takes are the sound side's stream reports, sent again every frame and keyed by a movie number only the VM that started the movie holds, and the VM's own audio starts, which only `StartMovie` leaves"),
         ("ui_script/movie.rs", "upload_movie_pictures", Because::Deliberate,
          "per-frame upload scratch, not a queue: it reads each playing movie's picture as it stands"),
-        ("ui_stable/mod.rs", "feed_stable", Because::PlayerRoundTrip,
-         "both packets follow a stable master's gossip and a click in its window"),
-        ("ui_tabard.rs", "feed_tabard", Because::PlayerRoundTrip,
-         "every latch follows a tabard-vendor click, and `reset_on_world_enter` zeroes the resource on entry"),
         ("ui_tradeskill.rs", "fire_list_rebuilds", Because::Deliberate,
          "a lane's firing, run only by the drain: `drop_list_rebuilds`, gated on the interface being down, empties the lane the frame its items land, so none fires into a later VM"),
-        ("ui_trainer/mod.rs", "feed_trainer", Because::PlayerRoundTrip,
-         "a refusal answers a Train click and a list answers a trainer gossip click; the edges ride `VmMemo`s"),
     ];
 
     /// `ui_chat/feed.rs` → `ui_chat::feed`; `target/mod.rs` → `target`; `lib.rs` → ``.

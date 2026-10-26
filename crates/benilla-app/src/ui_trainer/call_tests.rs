@@ -43,7 +43,6 @@ fn client() -> (App, Receiver<ClientCommand>) {
         }],
         String::new(),
     );
-    world.resource_mut::<TrainerOpen>().fresh_list = false;
     let mut script = UiScript::new().expect("a VM");
     script.set_trainer(Some(TrainerState {
         guid: TRAINER,
@@ -58,6 +57,7 @@ fn client() -> (App, Receiver<ClientCommand>) {
         greeting: String::new(),
         trainer_type: 0,
         groups: Vec::new(),
+        list: 1,
     }));
     world.insert_non_send_resource(script);
     (app, rx)

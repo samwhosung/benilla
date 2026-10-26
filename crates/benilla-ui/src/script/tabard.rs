@@ -1,11 +1,13 @@
 //! The guild tabard designer: the `TabardModel` method table (`0x84ee40`) and the window's two
 //! globals. Its state is five ints on the frame, which the constructor leaves unwritten until
-//! `InitializeTabardColors()` seeds them; the app pushes the guild record and save latch, and the
-//! host runs the save's fourteen checks inside the call (`0x5e03f0`).
+//! `InitializeTabardColors()` seeds them; the guild record and the save latch are read through the
+//! lent host at the call ([`TabardHostQuery`]), and the host runs the save's fourteen checks inside
+//! the call (`0x5e03f0`).
 
 use mlua::{Lua, Value};
 
 use super::binding_abi::number_arg;
+use super::live::{ask, LiveQuery};
 use super::object::{decode_id, frame_handle_of};
 use super::region::region_handle_of;
 use super::Model;
@@ -30,13 +32,27 @@ pub fn emblem_mask_path(texture: &str) -> Option<&str> {
     texture.strip_prefix(EMBLEM_MASK_TOKEN)
 }
 
-/// The designer's two host-side facts, pushed by the app.
+/// The designer's two host-side facts, read at the call ([`TabardHostQuery`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct TabardHost {
     /// The cached guild record's emblem fields, `-1` each when undesigned; `None` until cached.
     pub guild_record: Option<[i32; 5]>,
     /// The save-in-flight latch (`0xc4d780`): set when the save is sent, cleared by the reply.
     pub save_pending: bool,
+}
+
+/// The question: [`TabardHost`] now, the record by the player's `PLAYER_GUILDID` (`0x560e30` on
+/// `0xc0e1ec`) and the latch `0xc4d780` (`0x5f0800`).
+pub struct TabardHostQuery;
+
+impl LiveQuery for TabardHostQuery {
+    type Answer = TabardHost;
+}
+
+/// The two facts now: the host's, else the VM's copy, which only a test sets (every production
+/// entry that runs Lua lends the host).
+fn host(lua: &Lua, model: &Model) -> TabardHost {
+    ask(lua, &TabardHostQuery).unwrap_or(model.tabard_host)
 }
 
 /// The designer's verbs the host applies inside their calls ([`super::ScriptCall::Tabard`]).
@@ -50,14 +66,22 @@ pub enum TabardCall {
 }
 
 impl super::UiScript {
-    /// Push the guild record and the save latch.
+    /// Set the VM's copy of the guild record and the save latch, which the getters read with no
+    /// host to ask.
     pub fn set_tabard_host(&mut self, host: TabardHost) {
         self.model_mut().tabard_host = host;
     }
 
-    /// The design the app previews on the player's body, `None` before the seed.
+    /// The design the app previews on the player's body, `None` before the seed and after the
+    /// close.
     pub fn tabard_design(&self) -> Option<[i32; 5]> {
         self.model_ref().tabard_preview
+    }
+
+    /// The close core's undo of the preview (`0x4f58ce` → `0x5e0830`): the body wears its own
+    /// tabard again until a method repaints it.
+    pub fn end_tabard_preview(&mut self) {
+        self.model_mut().tabard_preview = None;
     }
 
     /// The designer's calls a harness VM kept ([`Self::keep_calls`]), in call order.
@@ -218,7 +242,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !crate::script::unit::view(lua, &model, "player").is_some_and(|u| u.exists) {
                     return Ok(());
                 }
-                model.tabard_host
+                host(lua, &model)
             };
             store(lua, h, seed(host));
             Ok(())
@@ -314,9 +338,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CanSaveTabardNow",
         lua.create_function(|lua, _: mlua::MultiValue| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let host = host(lua, &model);
             let can = crate::script::unit::view(lua, &model, "player").is_some_and(|u| u.exists)
-                && model.tabard_host.guild_record.is_some()
-                && !model.tabard_host.save_pending;
+                && host.guild_record.is_some()
+                && !host.save_pending;
             Ok(if can { Value::Integer(1) } else { Value::Nil })
         })?,
     )?;

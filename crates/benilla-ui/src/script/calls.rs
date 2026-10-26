@@ -318,6 +318,13 @@ pub enum RecordAsk {
     /// The quest log's leaderboard on a creature objective whose name the mirror lacks: the
     /// creature cache, with the callback `0x4e07d0`, whose wait the VM keeps (`0x4e044c`).
     QuestCreature(u32),
+    /// `GetStablePetInfo` or `GetStablePetFoodTypes` (`0x4cb2ce`, `0x4cbb05`), or with `paperdoll`
+    /// `SetPetStablePaperdoll` (`0x4cba13`), on a stable record whose creature the cache lacks: the
+    /// creature cache by the record's entry, owned by the active player (`0x468550`), with the
+    /// callback `0x4cb3b0` or `0x4cba50`, kept once per call (flag 0), which signals
+    /// `PET_STABLE_UPDATE` or `PET_STABLE_UPDATE_PAPERDOLL` when the record lands (`0x4cb3bf`,
+    /// `0x4cba5f`).
+    StableCreature { entry: u32, paperdoll: bool },
     /// `GetSummonConfirmSummoner` with no name: the player-name cache by the latched summoner
     /// (`0xb4e358`), with the callback `0x48b710`, which does nothing (`0x48b6bf`-`0x48b6e1`).
     Summoner,

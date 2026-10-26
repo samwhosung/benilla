@@ -91,7 +91,6 @@ const TRAINER_BLACKSMITH: TrainerSeed = TrainerSeed {
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn seed_ui_fixture(
     mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, crate::ui_merchant::MerchantOpen>,
         ResMut<'static, crate::ui_loot::LootState>,
         ResMut<'static, crate::names::NameCache>,
         ResMut<'static, crate::target::Selection>,
@@ -108,7 +107,6 @@ pub(super) fn seed_ui_fixture(
             ResMut<'static, crate::loading_screen::LoadingScreen>,
             ResMut<'static, crate::ui_gossip::GossipState>,
             ResMut<'static, crate::ui_quest::QuestGiver>,
-            ResMut<'static, crate::ui_trainer::TrainerOpen>,
         ),
     )>,
     mut ctx: ResMut<CaptureCtx>,
@@ -122,9 +120,8 @@ pub(super) fn seed_ui_fixture(
     // with the host lent: what it fires runs in place, and what it calls applies inside the verb.
     let mut lua: Option<Box<dyn FnOnce(&mut UiScript) + '_>> = None;
     vm.turn(|script, parts| {
-        let (mut merchant, mut loot, mut names, mut selection, mut player, store, rest) = parts;
-        let (mut actions, mut bank, mut exit, mut loading, mut gossip, mut quest, mut trainer) =
-            rest;
+        let (mut loot, mut names, mut selection, mut player, store, rest) = parts;
+        let (mut actions, mut bank, mut exit, mut loading, mut gossip, mut quest) = rest;
         let (mut items, mut index, mut home_bind) = store;
         // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
         let Some(scenario) = ctx.scenario else {
@@ -271,7 +268,10 @@ pub(super) fn seed_ui_fixture(
                         }
                     })
                     .collect();
-                merchant.open(NPC_GUID, rows);
+                // Through the list's own open, which queues its `MERCHANT_SHOW`.
+                commands.queue(move |world: &mut World| {
+                    crate::ui_merchant::open_merchant(world, NPC_GUID, rows)
+                });
                 // The usable gate's player half, by hand: with no SelfPlayer in capture,
                 // `feed_player_req` never runs to overwrite it. A level-12 human warrior.
                 lua = Some(Box::new(move |s: &mut UiScript| {
@@ -323,7 +323,17 @@ pub(super) fn seed_ui_fixture(
                         req_spells: [0; 3],
                     })
                     .collect();
-                trainer.open(NPC_GUID, seed.trainer_type, services, seed.greeting.into());
+                // Through the list's own open, which queues its `TRAINER_SHOW`.
+                let (trainer_type, greeting) = (seed.trainer_type, seed.greeting.to_string());
+                commands.queue(move |world: &mut World| {
+                    crate::ui_trainer::open_trainer(
+                        world,
+                        NPC_GUID,
+                        trainer_type,
+                        services,
+                        greeting,
+                    )
+                });
                 lua = Some(Box::new(move |script: &mut UiScript| {
                     // The window's title and portrait read `UnitName("npc")`; no session seats it
                     // here.
