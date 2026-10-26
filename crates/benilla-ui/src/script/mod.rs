@@ -451,6 +451,7 @@ pub use taxi::{
     TaxiCall, TaxiMapHead, TaxiMapQuery, TaxiNodeQuery, TaxiNodeType, TaxiUiNode, TaxiUiState,
 };
 pub use tooltip_aura::{AuraKey, AuraTooltipView};
+pub use tooltip_item::SpellCastUiQuery;
 pub use tooltip_spell::{ReputationRequirement, SpellTooltipView};
 pub use tooltip_text::{KeyedArg, TextPart, TooltipText};
 pub use trade::{TradeCall, TradeOpenItem, TradeSideState, TradeSlotItem, TradeState, TRADE_SLOTS};

@@ -19,8 +19,12 @@ use super::names::*;
 #[derive(Clone, Default)]
 pub(in crate::script) struct ItemInstance {
     /// The name with its random suffix joined, which the reference composes in the builder
-    /// (`0x52b7bf`, `0x5d8b00` through `ITEM_SUFFIX_TEMPLATE`); `None` takes the template's.
+    /// (`0x52b7bf`, `0x5d8b00` through `ITEM_SUFFIX_TEMPLATE`); `None` takes the template's,
+    /// joined to [`Self::roll`]'s suffix.
     pub name: Option<String>,
+    /// The block's random property (`+0x424`), whose suffix the builder joins to the template's
+    /// name (`0x52b7bf`, `0x5d8b00`) when no [`Self::name`] is given; 0 for none.
+    pub roll: i32,
     /// Live `(current, max)`; `None` for an indestructible item or one not yet streamed.
     pub durability: Option<(u32, u32)>,
     /// The resolved `ITEM_FIELD_CREATOR` name (the reference's `0x55f080`); `None` while it is
@@ -297,9 +301,10 @@ pub(super) fn render_view_flagged(
     if flags.currently_equipped {
         keyed("CURRENTLY_EQUIPPED", &[], GRAY, false)?;
     }
-    let name = inst
-        .and_then(|i| i.name.clone())
-        .unwrap_or_else(|| v.name.clone());
+    let name = match inst {
+        Some(ItemInstance { name: Some(n), .. }) => n.clone(),
+        _ => crate::script::item_stats::suffixed_name(lua, &v.name, inst.map_or(0, |i| i.roll)),
+    };
     // `nameOnly` paints the name white (`0x52b8b3`), else the quality arm colours it (`0x52b8ca`);
     // nothing else recolors it, not even for an unusable item.
     let name_color = if flags.name_only {

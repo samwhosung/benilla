@@ -72,26 +72,29 @@ fn fire_add_money(lua: &Lua, h: crate::widget::FrameHandle, copper: i64) {
     }
 }
 
-fn hyperlink_enchant_spell(link: &str) -> Option<u32> {
-    let at = link.find("enchant:")? + 8;
-    let tail = &link[at..];
-    let end = tail
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(tail.len());
-    tail[..end].parse().ok().filter(|&id: &u32| id != 0)
+/// `SStrCmpI(link, prefix, len)` (`0x64a4c0`) answering 0: the link starts with `prefix`, ASCII
+/// case aside; the rest of the link.
+fn link_tail<'a>(link: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = link.as_bytes().get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix.as_bytes())
+        .then(|| &link[prefix.len()..])
 }
 
-/// A link's `item:<id>:<enchant>:<random property>` fields, each read by `atoi` (`0x64ac60`), so
-/// the enchant keeps its sign.
-fn hyperlink_item_fields(link: &str) -> Option<(u32, i32, u32)> {
-    let at = link.find("item:")? + 5;
-    let tail = &link[at..];
-    let end = tail.find("|h").unwrap_or(tail.len());
-    let mut fields = tail[..end].split(':').map(str::trim);
-    let item_id: u32 = fields.next()?.parse().unwrap_or(0);
-    let enchant_id: i32 = fields.next().and_then(|f| f.parse().ok()).unwrap_or(0);
-    let random_property_id = fields.next().and_then(|f| f.parse().ok()).unwrap_or(0);
-    (item_id != 0).then_some((item_id, enchant_id, random_property_id))
+/// An `item:` link's id and its `<enchant>:<random property>` fields, each `SStrToInt`
+/// (`0x64ac60`) after the next `:` (`0x5320fa`..`0x53214d`), a missing one 0; signed, as the
+/// reference keeps them.
+fn hyperlink_item_fields(tail: &str) -> (i32, i32, i32) {
+    let mut fields = tail.split(':').map(binding_abi::s_str_to_int);
+    let mut next = || fields.next().unwrap_or(0);
+    (next(), next(), next())
+}
+
+/// The spell record's `castUI` (column 3, `+0xc`) through the lent host, which an `enchant:` link
+/// tests against 3 (`0x532243`): `Some(None)` for an id with no record, `None` with no host to ask.
+pub struct SpellCastUiQuery(pub u32);
+
+impl super::live::LiveQuery for SpellCastUiQuery {
+    type Answer = Option<u32>;
 }
 
 /// A block's bare enchant id in `slot` as its line (`0x52c9f2`..`0x52ca46`): `abs(id)` names the
@@ -113,6 +116,7 @@ fn block_enchant(lua: &Lua, slot: u8, id: i32) -> Option<crate::script::EnchantV
 fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> render::ItemInstance {
     render::ItemInstance {
         name: s.link.as_deref().and_then(link_name).map(str::to_string),
+        roll: 0,
         durability: s.durability,
         creator: s.creator.clone(),
         gift_creator: s.gift_creator.clone(),
@@ -382,69 +386,78 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GameTooltip:SetHyperlink(link): the chat-link tooltip (`ItemRef.lua:60`). Takes an item
-    // link, escaped or a bare "item:<id>", or an enchant link; any other link does nothing.
+    // GameTooltip:SetHyperlink(link): the chat-link tooltip (`ItemRef.lua:60`), handed the link
+    // part alone, "item:<id>:..." or "enchant:<spellId>" (`0x531fd0`).
     m.set(
         "SetHyperlink",
-        lua.create_function(|lua, (this, link): (Table, String)| {
-            // The only other link it takes, the craft window's `|Henchant:<spellId>|h[name]|h`
-            // (`GetCraftItemLink`): the spell's own tooltip, behind its producer's castUI gate
-            // (`0x532243`).
-            if let Some(spell) = hyperlink_enchant_spell(&link) {
-                return super::tooltip_spell::set_spell_by_id(
+        lua.create_function(|lua, (this, link): (Table, Value)| {
+            let h = frame_handle_of(lua, &this)?;
+            // `is-number-or-string` else `Usage: SetHyperlink(link)` (`0x53208b`, `0x8551c4`).
+            let link = binding_abi::string_arg(lua, link, "Usage: SetHyperlink(link)")?;
+            // Each prefix is compared at the link's start (`0x5320b1`, `0x532218`); a miss, an
+            // item id at 0 or below (`0x532178`) and an enchant naming no spell of `castUI` 3
+            // (`0x53222a`..`0x532247`) raise `Unknown link type` (`0x8551e0`, `0x532269`).
+            let unknown = || mlua::Error::runtime("Unknown link type");
+            if let Some(tail) = link_tail(&link, "item:") {
+                let (id, enchant_id, roll) = hyperlink_item_fields(tail);
+                // The item the shown tooltip holds hides it instead (`0x5320c7`..`0x5320e9`): the
+                // shown bit (`+0xd0`) and the kept entry (`+0x398`, 0 with no item kept), tested
+                // before the id is, so the same link clicked twice closes the plate.
+                let holds = {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    let shown = model.arena.frame(h).is_some_and(|f| f.shown);
+                    let kept = model.item_builds.get(&h).map_or(0, |b| b.item_id);
+                    shown && kept == id as u32
+                };
+                if holds {
+                    super::visibility::set_shown(lua, h, false);
+                    return Ok(());
+                }
+                if id <= 0 {
+                    return Err(unknown());
+                }
+                // The fields fill a block (p6=1, `0x532181`): the enchant id to slot 0 (`+0x3d0`,
+                // `0x5321d3`), the roll to `+0x424` (its lines expanded into slots 2..6 and its
+                // suffix joined to the name by the builder, `0x52b7bf`), the unique id to `+0x420`,
+                // unread. So a link shows its enchant and its roll's lines, never the placeholder
+                // (`0x52cc33`). The creator and giver are zeroed (`0x5321ad`, `0x5321b3`), so a
+                // link never shows a maker line.
+                let mut enchants: Vec<_> = block_enchant(lua, 0, enchant_id).into_iter().collect();
+                enchants.extend(roll_enchants(lua, roll as u32));
+                let inst = render::ItemInstance {
+                    enchants,
+                    roll,
+                    ..Default::default()
+                };
+                build_item(
                     lua,
                     &this,
-                    spell,
-                    link_name(&link).map(str::to_string),
-                    Default::default(),
-                );
-            }
-            let Some((id, enchant_id, roll)) = hyperlink_item_fields(&link) else {
-                return Ok(());
-            };
-            let h = frame_handle_of(lua, &this)?;
-            // The item the shown tooltip holds hides it instead (`0x5320c7`..`0x5320e9`): the
-            // shown bit (`+0xd0`) and the kept entry (`+0x398`), so the same link clicked twice
-            // closes the plate, whatever its other fields.
-            let holds = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let shown = model.arena.frame(h).is_some_and(|f| f.shown);
-                shown && model.item_builds.get(&h).is_some_and(|b| b.item_id == id)
-            };
-            if holds {
-                super::visibility::set_shown(lua, h, false);
+                    h,
+                    ItemBuild {
+                        inst: Some(inst),
+                        ..ItemBuild::new(id as u32)
+                    },
+                )?;
                 return Ok(());
             }
-            // The reference's format is `"%s|Hitem:%d:%d:%d:%d|h[%s]|h%s"` (`0x8549c8`), and
-            // `SetHyperlink` (`0x532181`) parses it into a block (p6=1): the enchant id to slot 0
-            // (`+0x3d0`, `0x5321d3`), the roll to `+0x424` (expanded into slots 2..6 by
-            // `0x52b7bf`), the unique id to `+0x420`, unread; a missing field is 0. So a link
-            // shows its enchant and its roll's lines, never the placeholder (`0x52cc33`). The name
-            // is the link's own, built with the suffix joined (`0x5d8b00`). The block's creator and
-            // giver are zeroed (`0x5321ad`, `0x5321b3`), so a link never shows a maker line.
-            let name = link_name(&link).map(str::to_string);
-            let mut enchants: Vec<_> = block_enchant(lua, 0, enchant_id).into_iter().collect();
-            enchants.extend(roll_enchants(lua, roll));
-            let inst = render::ItemInstance {
-                name: name.clone(),
-                enchants,
-                ..Default::default()
-            };
-            let in_flight = match name {
-                Some(name) => InFlight::Name(name, quality_color(1)),
-                None => InFlight::Nothing,
-            };
-            build_item(
+            let tail = link_tail(&link, "enchant:").ok_or_else(unknown)?;
+            // The craft window's `enchant:<spellId>` (`GetCraftItemLink`): a positive id whose
+            // record's `castUI` is 3 (`0x532225`..`0x532247`), to the spell builder (`0x532259`).
+            // With no host to read the record, the id alone decides.
+            let spell = binding_abi::s_str_to_int(tail);
+            let craft = spell > 0
+                && super::live::ask(lua, &SpellCastUiQuery(spell as u32))
+                    .is_none_or(|cast_ui| cast_ui == Some(3));
+            if !craft {
+                return Err(unknown());
+            }
+            super::tooltip_spell::set_spell_by_id(
                 lua,
                 &this,
-                h,
-                ItemBuild {
-                    inst: Some(inst),
-                    in_flight,
-                    ..ItemBuild::new(id)
-                },
-            )?;
-            Ok(())
+                spell as u32,
+                None,
+                Default::default(),
+            )
         })?,
     )?;
 

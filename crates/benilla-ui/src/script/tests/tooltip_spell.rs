@@ -1834,17 +1834,14 @@ fn a_hidden_miss_shows_and_an_enchant_link_fills_when_answered() {
         TT:SetOwner(CI, "ANCHOR_RIGHT")
         TT:SetCraftSpell(1)
         REF:SetOwner(CI, "ANCHOR_PRESERVE")
-        REF:SetHyperlink("|cffffd000|Henchant:20034|h[Enchant Weapon - Crusader]|h|r")
+        REF:SetHyperlink("enchant:20034")
     "#,
     )
     .unwrap();
     assert_eq!(s.eval::<i64>("return TT:NumLines()").unwrap(), 0);
     assert!(!s.eval::<bool>("return TT:IsShown() == 1").unwrap());
-    assert_eq!(
-        s.eval::<String>("return REFTextLeft1:GetText()").unwrap(),
-        "Enchant Weapon - Crusader"
-    );
-    assert_eq!(s.eval::<i64>("return REF:NumLines()").unwrap(), 1);
+    // The link names no spell the app pushed, and carries no name to stand in.
+    assert_eq!(s.eval::<i64>("return REF:NumLines()").unwrap(), 0);
 
     s.set_spell_tooltip(
         17253,
@@ -1962,6 +1959,68 @@ fn a_line_rewritten_in_place_ends_the_wait() {
     assert!(s.take_errors().is_empty());
 }
 
+/// The records an `enchant:` link reads through the host: 20034 a craft (`castUI` 3), 133 a plain
+/// spell, anything else no record.
+struct CastUiHost;
+
+impl crate::script::CallHost for CastUiHost {
+    fn apply(
+        &mut self,
+        _: &mut UiScript,
+        _: crate::script::ScriptCall,
+    ) -> Option<crate::script::CallTail> {
+        None
+    }
+
+    fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|q: &SpellCastUiQuery| {
+            Some(match q.0 {
+                20034 => Some(3),
+                133 => Some(0),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// An `enchant:` link takes a spell whose record's `castUI` is 3 (`0x53222e`..`0x532247`); a
+/// plain spell or an id with no record raises `Unknown link type` (`0x532269`).
+#[test]
+fn an_enchant_link_takes_only_a_craft_spell() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_spell_tooltip(
+        20034,
+        SpellTooltipView {
+            name: "Enchant Weapon - Crusader".into(),
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "EL"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        CreateFrame("GameTooltip", "REF", nil, "TestTooltipTemplate")
+        REF:SetOwner(EL, "ANCHOR_RIGHT")
+    "#,
+    )
+    .unwrap();
+    let mut host = CastUiHost;
+    let (craft, plain, none) = s.hosted(&mut host, |s| {
+        let craft = s
+            .eval::<String>(r#"REF:SetHyperlink("enchant:20034") return REFTextLeft1:GetText()"#)
+            .unwrap();
+        let err = |s: &mut UiScript, call| s.run(call).unwrap_err().to_string();
+        (
+            craft,
+            err(s, r#"REF:SetHyperlink("enchant:133")"#),
+            err(s, r#"REF:SetHyperlink("Enchant:99999")"#),
+        )
+    });
+    assert_eq!(craft, "Enchant Weapon - Crusader");
+    assert!(plain.contains("Unknown link type"), "{plain}");
+    assert!(none.contains("Unknown link type"), "{none}");
+}
+
 /// A re-render's `OnShow` can move another waiting tooltip onto a new spell.
 #[test]
 fn a_wait_replaced_by_an_earlier_re_render_is_not_replayed() {
@@ -1986,17 +2045,14 @@ fn a_wait_replaced_by_an_earlier_re_render_is_not_replayed() {
         B:SetCraftSpell(1)
         A:SetScript("OnShow", function()
             B:SetOwner(PB1, "ANCHOR_RIGHT")
-            B:SetHyperlink("|cffffd000|Henchant:20034|h[Enchant Weapon - Crusader]|h|r")
+            B:SetHyperlink("enchant:20034")
         end)
     "#,
     )
     .unwrap();
     s.set_spell_tooltip(3110, firebolt());
-    assert_eq!(
-        s.eval::<(i64, String)>("return B:NumLines(), BTextLeft1:GetText()")
-            .unwrap(),
-        (1, "Enchant Weapon - Crusader".to_string())
-    );
+    // B waits on the link's spell, not on the Firebolt it was moved off.
+    assert_eq!(s.eval::<i64>("return B:NumLines()").unwrap(), 0);
     assert_eq!(
         s.eval::<String>("return ATextLeft1:GetText()").unwrap(),
         "Firebolt"

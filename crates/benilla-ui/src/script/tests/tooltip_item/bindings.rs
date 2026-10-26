@@ -391,8 +391,9 @@ fn set_inventory_item_renders_full_outside_compare() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `SetHyperlink` (`0x531fd0`) takes the link part `ItemRef.lua` hands it, never a chat link.
 #[test]
-fn set_hyperlink_renders_items_and_ignores_other_links() {
+fn set_hyperlink_takes_a_link_by_its_prefix_and_raises_on_any_other() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.set_item_template(
@@ -409,16 +410,33 @@ fn set_hyperlink_renders_items_and_ignores_other_links() {
         local a = CreateFrame("Button", "Slot10"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
-        tt:SetHyperlink("|cff1eff00|Hitem:7002:0:0:0|h[New Loop]|h|r")
-        assert(TTTextLeft1:GetText() == "New Loop", "escaped link renders")
-        tt:SetHyperlink("player:Bob")
-        assert(TTTextLeft1:GetText() == "New Loop", "non-item link leaves the content alone")
-        tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetHyperlink("item:7002")
         assert(TTTextLeft1:GetText() == "New Loop", "bare item: form renders")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetHyperlink("ITEM:7002:0:0:0")
+        assert(TTTextLeft1:GetText() == "New Loop", "the prefix compares without case")
     "#,
     )
     .unwrap();
+    // `SStrCmpI` at the link's start (`0x5320b1`, `0x532218`), an id above 0 (`0x532178`), else
+    // `Unknown link type` (`0x8551e0`); a non-string `Usage: SetHyperlink(link)` (`0x8551c4`).
+    for (call, line) in [
+        (
+            r#"TT:SetHyperlink("|cff1eff00|Hitem:7002:0:0:0|h[New Loop]|h|r")"#,
+            "Unknown link type",
+        ),
+        (r#"TT:SetHyperlink("player:Bob")"#, "Unknown link type"),
+        (r#"TT:SetHyperlink("item:0")"#, "Unknown link type"),
+        (r#"TT:SetHyperlink("item:-3")"#, "Unknown link type"),
+        (r#"TT:SetHyperlink("enchant:0")"#, "Unknown link type"),
+        ("TT:SetHyperlink(7002)", "Unknown link type"),
+        ("TT:SetHyperlink(nil)", "Usage: SetHyperlink(link)"),
+        ("TT:SetHyperlink({})", "Usage: SetHyperlink(link)"),
+    ] {
+        s.run("TT:Hide()").unwrap();
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
     assert!(s.take_errors().is_empty());
 }
 

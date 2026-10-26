@@ -10,7 +10,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::live::LiveAsk;
-use benilla_ui::script::{BookNow, BookSlot, BookSpell, BookTabs, SpellBookState, SpellSlotView};
+use benilla_ui::script::{
+    BookNow, BookSlot, BookSpell, BookTabs, SpellBookState, SpellCastUiQuery, SpellSlotView,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -119,6 +121,13 @@ impl BookLive<'_, '_> {
 impl crate::script_calls::live::LiveFamily for BookLive<'_, '_> {
     fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
         if ask.answer(|_: &BookTabs| self.order().map(|o| o.tabs.clone())) {
+            return true;
+        }
+        // An `enchant:` link's record test (`0x53222e`..`0x532243`): the row's `castUI`.
+        if ask.answer(|q: &SpellCastUiQuery| {
+            let spells = self.spells.as_deref()?;
+            Some(spells.catalog.get(q.0).map(|d| d.cast_ui))
+        }) {
             return true;
         }
         if ask.answer(|q: &BookSlot| {
