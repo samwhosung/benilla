@@ -8,8 +8,8 @@
 //! (`GMTicketHandler.cpp:91,106-113`), and a third `CMSG_GMTICKET_UPDATETEXT` in one world tick
 //! trips its anti-flood kick (`WorldSession.cpp:1316-1342`).
 //!
-//! `GMSURVEY_DISPLAY` is not fired: vmangos never sends its trigger, `SMSG_GM_TICKET_STATUS_UPDATE`
-//! status 3, and the survey window (`Blizzard_GMSurveyUI`) is not built.
+//! `SMSG_GM_TICKET_STATUS_UPDATE` is cmangos's; vmangos never sends it. Its status 2 fires the
+//! no-ticket `UPDATE_TICKET` and status 3 `GMSURVEY_DISPLAY`, which `Blizzard_GMSurveyUI` hears.
 
 use benilla_ui::script::{GmTicketIntent, GmTicketWrite, ScriptValue, UnservedSend};
 use bevy::prelude::*;
@@ -377,9 +377,13 @@ pub(crate) mod net {
     }
 
     /// `SMSG_GM_TICKET_STATUS_UPDATE`, which vmangos never sends; cmangos does, so it is parsed.
-    fn on_status_update(In(ev): In<SessionEvent>, mut ticket: ResMut<GmTicketState>) {
+    fn on_status_update(
+        In(ev): In<SessionEvent>,
+        mut ticket: ResMut<GmTicketState>,
+        mut lane: ResMut<DialogLane>,
+    ) {
         if let SessionEvent::GmTicketStatusUpdate { status } = ev {
-            status_update(status, &mut ticket);
+            status_update(status, &mut ticket, &mut lane);
         }
     }
 
@@ -438,18 +442,21 @@ pub(crate) mod net {
         }
     }
 
-    /// `SMSG_GM_TICKET_STATUS_UPDATE`: 1 (updated) re-asks, the reference's `0x5e7932`; 2 (closed)
-    /// shows on the next poll; 3 (survey offered) is logged, as the survey window is not built.
-    pub(crate) fn status_update(status: u32, ticket: &mut super::GmTicketState) {
+    /// `SMSG_GM_TICKET_STATUS_UPDATE` (`0x5e78f0`): 1 (updated) re-asks, `0x5e7932`; 2 (closed)
+    /// fires the no-ticket `UPDATE_TICKET` at once, `0x5e7945`-`0x5e7960`; 3 (survey offered)
+    /// fires `GMSURVEY_DISPLAY`, event 0x21a with no arguments (`0x5e7976`); others do nothing.
+    pub(crate) fn status_update(
+        status: u32,
+        ticket: &mut super::GmTicketState,
+        lane: &mut DialogLane,
+    ) {
         match status {
             1 => {
                 debug!("gm ticket: a GM updated the ticket — re-asking");
                 ticket.note_write_landed();
             }
-            2 => debug!("gm ticket: a GM closed the ticket"),
-            3 => {
-                debug!("gm ticket: a GM survey was offered — the survey window is deferred")
-            }
+            2 => lane.event("UPDATE_TICKET", super::update_ticket_args(None)),
+            3 => lane.event("GMSURVEY_DISPLAY", Vec::new()),
             other => debug!("gm ticket: unknown status update {other}"),
         }
     }
@@ -785,6 +792,35 @@ mod tests {
                 vec![ScriptValue::Int(0), ScriptValue::Str(String::new())]
             )]
         );
+    }
+
+    /// `0x5e78f0`: status 2 fires the no-ticket `UPDATE_TICKET` and 3 `GMSURVEY_DISPLAY`; 1
+    /// re-asks and fires nothing; anything outside 1 to 3 is ignored.
+    #[test]
+    fn a_closed_ticket_and_an_offered_survey_fire_their_events() {
+        let mut state = GmTicketState::default();
+        let mut lane = DialogLane::default();
+        for status in [0, 4, 1] {
+            net::status_update(status, &mut state, &mut lane);
+        }
+        assert!(lane.take().is_empty(), "1 re-asks and the rest do nothing");
+        assert_eq!(state.take_reasks(), 1);
+
+        net::status_update(2, &mut state, &mut lane);
+        net::status_update(3, &mut state, &mut lane);
+        let signals = lane.take();
+        let [closed, survey] = signals.as_slice() else {
+            panic!("{signals:?}");
+        };
+        assert!(matches!(
+            closed,
+            DialogSignal::Event(name, args) if name == "UPDATE_TICKET" && args.len() == 7
+        ));
+        assert_eq!(
+            survey,
+            &DialogSignal::Event("GMSURVEY_DISPLAY".into(), Vec::new())
+        );
+        assert_eq!(state.take_reasks(), 0);
     }
 
     #[test]
