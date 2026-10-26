@@ -29,6 +29,7 @@ fn app() -> (App, Receiver<ClientCommand>) {
         .init_resource::<crate::ui_mail::MailPending>()
         .init_resource::<crate::ui_mail::MailOpen>()
         .init_resource::<crate::ui_battlefield::Battlefield>()
+        .init_resource::<crate::ui_battlefield::BattlefieldLeash>()
         .init_resource::<crate::ui_dialog_verbs::MeetingStone>()
         .add_message::<EnteredWorldMessage>()
         .add_message::<WorldEnterCascadeMessage>()

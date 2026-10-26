@@ -257,21 +257,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_battlefield::Battlefield",
-        "the battleground list, which `feed_battlefield` fires from; the join, acting in its call, reads it in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_battlefield_positions::BattlefieldPositions",
-        "the teammate positions, which `feed_battlefield_positions` fires from; the positions request, acting in its call, holds them in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_battlefield_score::BattlefieldScoreboard",
-        "the scoreboard, which `feed_battlefield_score` fires from; the score request, acting in its call, holds its stamp in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_binder::BinderState",
         "the bind question, which `feed_binder` fires from; `ConfirmBinder`, acting in its call, reads it in the host",
     ),
@@ -279,11 +264,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         Row::HostHeld,
         "::ui_craft::CraftOpen",
         "the craft window's line, which `feed_craft` fires from; `CloseCraft`, acting in its call, holds it in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_dialog_verbs::BattlefieldQueue",
-        "the battleground queue slots, which `feed_dialog_verbs` and `feed_battlefield_score` fire from; the port, leave and positions verbs, acting in their calls, read them in the host",
     ),
     (
         Row::HostHeld,
@@ -368,6 +348,12 @@ const HOST_HELD_UNREAD: &[&str] = &[
     // Read, and quiet: the buff timers read the stamps through the host and no feed fires off
     // them; the aura fields' watcher raises `PLAYER_AURAS_CHANGED`.
     "::ui_aura::AuraDurations",
+    // Read through the host by the battleground getters, and quiet: their events fire on the
+    // battleground lane at their handlers.
+    "::ui_battlefield::Battlefield",
+    "::ui_battlefield_positions::BattlefieldPositions",
+    "::ui_battlefield_score::BattlefieldScoreboard",
+    "::ui_dialog_verbs::BattlefieldQueue",
     // Read, and quiet: `feed_dialog_verbs` pushes the deadline the time packet stores and fires
     // nothing off it, as the packet's `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
     "::ui_dialog_verbs::AreaSpiritHealer",
@@ -438,18 +424,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_duel::feed_duel", &["names::NameCache", "ui_duel::DuelState"]),
     ("::ui_binder::feed_binder", &["ui_binder::BinderState"]),
     ("::ui_dialog_verbs::feed_dialog_verbs", &["ui_dialog_verbs::AreaSpiritHealer",
-        "ui_dialog_verbs::BattlefieldQueue", "ui_dialog_verbs::InstanceBoot",
-        "ui_dialog_verbs::PetUnlearnState"]),
+        "ui_dialog_verbs::InstanceBoot", "ui_dialog_verbs::PetUnlearnState"]),
     ("::ui_dialog_verbs::feed_meeting_stone", &["names::NameCache",
         "ui_dialog_verbs::MeetingStone"]),
-    ("::ui_battlefield_score::feed_battlefield_score", &["names::NameCache",
-        "ui_battlefield_score::BattlefieldScoreboard", "ui_dialog_verbs::BattlefieldQueue"]),
-    ("::ui_battlefield::reset_on_world_enter", &["ui_battlefield::Battlefield"]),
-    ("::ui_battlefield::feed_battlefield", &["names::NameCache", "ui_battlefield::Battlefield",
-        "ui_dialog_verbs::BattlefieldQueue"]),
-    ("::ui_battlefield_positions::feed_battlefield_positions", &["names::NameCache",
-        "net::GuidIndex", "net::SelfGuid", "ui_battlefield_positions::BattlefieldPositions",
-        "ui_dialog_verbs::BattlefieldQueue", "ui_party::GroupState"]),
     ("::tutorial::feed_tutorials", &["items::Items", "net::ObjectStore"]),
     ("::ui_summon::feed_summon", &["names::NameCache", "ui_summon::SummonState"]),
     ("::ui_gm_ticket::feed_gm_ticket", &["ui_gm_ticket::GmTicketState"]),
@@ -640,6 +617,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::AreaTableRes",
     // The server clock the quest log getters read in the host.
     "::ServerWallClock",
+    // The world map's projections the battleground position getters read in the host, and the
+    // stat columns' table the status handler reads (`0x4aa9c3`).
+    "::WorldMapUiData",
+    "::WorldStateUiRes",
     "::DamageTextGates",
     "::EnvDamageTable",
     "::SpellVisuals",
@@ -745,7 +726,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 21] {
+fn lane_types() -> [TypeId; 22] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -782,12 +763,14 @@ fn lane_types() -> [TypeId; 21] {
         // The guild lane: the roster, event and invitation packets' signals, each with the
         // version of the guild state its packet left.
         TypeId::of::<crate::ui_guild::GuildState>(),
+        // The battleground lane: the list, status, log and name-answer packets' signals.
+        TypeId::of::<crate::ui_battlefield::BattlefieldLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 21] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 22] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -825,6 +808,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 21] {
         ),
         ("cast views", TypeId::of::<crate::ui_cast::CastViews>()),
         ("guild", TypeId::of::<crate::ui_guild::GuildState>()),
+        (
+            "battlefield",
+            TypeId::of::<crate::ui_battlefield::BattlefieldLane>(),
+        ),
     ]
 }
 
@@ -978,6 +965,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
         [
             "auction house",
             "bag view",
+            "battlefield",
             "cast reports",
             "cast views",
             "chat",

@@ -494,6 +494,8 @@ pub(crate) mod net {
         chat: Option<Res<crate::ui_chat::ChatLog>>,
         // The auction lists whose getters missed a name (`0x4cf167`, `0x4cf1c8`).
         house: Option<ResMut<crate::ui_auction::HouseLane>>,
+        // The battleground's callbacks, which run for a refusal too.
+        mut battlefield: crate::ui_battlefield::BattlefieldNameAnswers,
     ) {
         if let SessionEvent::PlayerName {
             guid,
@@ -504,8 +506,12 @@ pub(crate) mod net {
         } = ev
         {
             // A guid already cached has no lookup waiting, so no callback runs.
-            let found = !name.is_empty() && names.players.get(guid).is_none();
+            let waited = names.players.get(guid).is_none();
+            let found = !name.is_empty() && waited;
             player_name(guid, name, race, class, gender, &mut names);
+            if waited {
+                battlefield.answered(guid, &names);
+            }
             if found {
                 if let Some(chat) = &chat {
                     chat.answer_landed(crate::ui_chat::Answer::Player(guid));

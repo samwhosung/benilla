@@ -2,9 +2,11 @@
 //! minimap's queue icon need from the wire, the clock and Map.dbc. The queue slots live in
 //! [`BattlefieldQueue`]; the scoreboard is [`crate::ui_battlefield_score`]'s.
 //!
-//! A list (`SMSG_BATTLEFIELD_LIST`, `0x4aa6c0`) fires `BATTLEFIELDS_SHOW` and anchors the leash
-//! (`0x4aa090`), which fires `BATTLEFIELDS_CLOSED`, the window's only engine-side close, once the
-//! player is more than 5.5556 yd from the anchor.
+//! The getters read the list, the slots, the board and the positions through the lent host at the
+//! call ([`BattlefieldLive`]), and the handlers' events fire on the battleground lane at their
+//! packets' places ([`BattlefieldLane`]). A list (`SMSG_BATTLEFIELD_LIST`, `0x4aa6c0`) fires
+//! `BATTLEFIELDS_SHOW` and anchors the leash (`0x4aa090`), which fires `BATTLEFIELDS_CLOSED`, the
+//! window's only engine-side close, once the player is more than 5.5556 yd from the anchor.
 
 use std::time::Instant;
 
@@ -17,13 +19,17 @@ use benilla_ui::script::{
     BattlefieldCall, BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot, UiScript,
 };
 
-use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, WorldEnterCascadeMessage};
 use crate::player::Player;
-use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
 use crate::ui_script::UiFeed;
+
+mod lane;
+mod live;
+
+pub(crate) use lane::{BattlefieldEvent, BattlefieldLane, BattlefieldNameAnswers};
+pub(crate) use live::BattlefieldLive;
 
 /// The leash radius, the `.rdata` f32 at `0x806574`, which the reference squares at startup.
 const LEASH_RADIUS_YD: f32 = 5.555_555_3;
@@ -34,48 +40,23 @@ const DEGENERATE_ANCHOR: f32 = 2.384_185_8e-7;
 /// `SMSG_GROUP_JOINED_BATTLEGROUND`'s deserters sentinel (`cmp eax,-2` in `0x4aacc0`).
 const GROUP_JOIN_DESERTERS: u32 = 0xFFFF_FFFE;
 
-/// The list window's state: the last list, the leash anchor, and what the handlers still owe
-/// the next feed.
+/// The list window's state: the last list, and the joined and left notices waiting on a name.
 #[derive(Resource, Default)]
 pub(crate) struct Battlefield {
     list: Option<BattlefieldList>,
-    show: bool,
-    dirty: bool,
-    /// Where the list was opened (`[0xb6e870..78]`); `None` once the leash fired.
-    anchor: Option<Vec3>,
-    verdicts: Vec<u32>,
-    /// Joined (`true`) or left guids awaiting a name.
+    /// Joined (`true`) or left guids whose notice waits for the name's answer, each the callback
+    /// its packet's lookup left (`0x4aae2f`, `0x4aae36`).
     players: Vec<(u64, bool)>,
-    /// How many of `players`, from the front, a feed has looked up: the rest arrived since, each
-    /// in a packet whose handler looks the name up with a callback (`0x4aae50`).
-    players_asked: usize,
 }
 
 impl Battlefield {
     pub(crate) fn apply_list(&mut self, list: BattlefieldList) {
         self.list = Some(list);
-        self.show = true;
-        self.dirty = true;
-    }
-
-    /// `SMSG_GROUP_JOINED_BATTLEGROUND` (`0x4aacc0`): one line, no state.
-    pub(crate) fn apply_verdict(&mut self, result: u32) {
-        self.verdicts.push(result);
-    }
-
-    /// `SMSG_BATTLEGROUND_PLAYER_JOINED`/`_LEFT` (`0x4aae10`): one line once the name resolves.
-    pub(crate) fn apply_player(&mut self, guid: u64, joined: bool) {
-        self.players.push((guid, joined));
     }
 
     fn clear_session(&mut self) {
         self.list = None;
-        self.show = false;
-        self.dirty = true;
-        self.anchor = None;
-        self.verdicts.clear();
         self.players.clear();
-        self.players_asked = 0;
     }
 
     /// The last list's battlemaster. A character under the bracket floor gets no list at all
@@ -88,14 +69,28 @@ impl Battlefield {
     fn map_id(&self) -> u32 {
         self.list.as_ref().map_or(0, |l| l.map_id)
     }
+
+    /// The notices waiting on `guid`'s name, spent.
+    fn take_waits(&mut self, guid: u64) -> Vec<bool> {
+        let mut joined = Vec::new();
+        self.players.retain(|&(g, j)| {
+            if g == guid {
+                joined.push(j);
+            }
+            g != guid
+        });
+        joined
+    }
 }
 
-/// The VM's view of the list, every value off `[0xb6eba4]`'s map row, whatever that id is.
-fn list_view(
-    state: &Battlefield,
-    catalog: Option<&MapCatalog>,
-    faction: Option<&str>,
-) -> BattlefieldListView {
+/// Where the list was opened (`[0xb6e870..78]`), stored after its `BATTLEFIELDS_SHOW`
+/// (`0x4aa7ff`); `None` once the leash fired.
+#[derive(Resource, Default)]
+pub(crate) struct BattlefieldLeash(Option<Vec3>);
+
+/// The VM's view of the list, every value off `[0xb6eba4]`'s map row, whatever that id is, the
+/// description by the player's faction group (`0x5efe00`: 0 Horde, 1 Alliance, -1 neither).
+fn list_view(state: &Battlefield, catalog: Option<&MapCatalog>, side: i8) -> BattlefieldListView {
     let map_id = state.map_id();
     let row = catalog.and_then(|c| c.battleground(map_id));
     let (bracket_min, bracket_max) = state
@@ -108,11 +103,10 @@ fn list_view(
         .zip(row)
         .map(|(name, r)| BattlefieldMapInfo {
             name: name.to_string(),
-            // The faction-group index (`0x5efe00`): 0 Horde, 1 Alliance; both columns ship
-            // the same text.
-            description: match faction {
-                Some("Horde") => Some(r.descriptions[0].clone()),
-                Some("Alliance") => Some(r.descriptions[1].clone()),
+            // Both columns ship the same text.
+            description: match side {
+                0 => Some(r.descriptions[0].clone()),
+                1 => Some(r.descriptions[1].clone()),
                 _ => None,
             },
             min_level: r.min_level,
@@ -185,90 +179,27 @@ fn group_fits(catalog: Option<&MapCatalog>, map_id: u32, group: Option<&GroupSta
     max >= party && max >= raid
 }
 
-/// Runs before the dialog and score feeds fire `UPDATE_BATTLEFIELD_STATUS` and
-/// `UPDATE_BATTLEFIELD_SCORE`, so their handlers read this frame's list and slots.
-fn feed_battlefield(
-    // The list, which the join reads inside its call: an engine turn, its events signalled after.
-    mut vm: crate::script_calls::VmWith<ResMut<'static, Battlefield>>,
-    queue: Res<BattlefieldQueue>,
-    maps: Option<Res<MapCatalogRes>>,
+/// The leash (`0x4aa090`), polled once a frame from the world tick (`0x4818d5`): strictly beyond
+/// the radius of the stored anchor, the anchor clears, then `BATTLEFIELDS_CLOSED`.
+fn drive_battlefield_leash(
+    mut vm: crate::script_calls::HostedVm,
+    mut leash: ResMut<BattlefieldLeash>,
     player: Res<Player>,
-    names: Res<NameCache>,
-    commands: Res<NetCommands>,
-    mut sink: crate::ui_action::MessageSink,
 ) {
-    vm.turn(|script, mut state| {
-        let Some(script) = script else {
-            return;
-        };
-        let catalog = maps.as_deref().map(|m| &m.0);
-        let now = Instant::now();
-
-        if std::mem::take(&mut state.dirty) {
-            // The description's side: the player's faction group (`0x5efe00`).
-            let faction = script
-                .eval::<Option<String>>(r#"return (UnitFactionGroup("player"))"#)
-                .ok()
-                .flatten();
-            let view = list_view(&state, catalog, faction.as_deref());
-            script.set_battlefield_list(view);
+    let Some(anchor) = leash.0 else {
+        return;
+    };
+    if anchor.length_squared() <= DEGENERATE_ANCHOR
+        || player.pos.distance_squared(anchor) <= LEASH_RADIUS_YD * LEASH_RADIUS_YD
+    {
+        return;
+    }
+    leash.0 = None;
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.fire_event("BATTLEFIELDS_CLOSED", vec![]);
         }
-
-        let slots = queue
-            .slots()
-            .each_ref()
-            .map(|s| slot_view(s.as_ref(), catalog, now));
-        script.set_battlefield_queue(slots, queue.instance_expiration_ms(now));
-
-        if std::mem::take(&mut state.show) {
-            script.fire_event("BATTLEFIELDS_SHOW", vec![]);
-            // The anchor is written after the event, from the live position (`0x4aa6c0`).
-            state.anchor = Some(player.pos);
-        }
-
-        // The leash (`0x4aa090`): strictly beyond the radius, the anchor clears, then the event.
-        if let Some(anchor) = state.anchor {
-            if anchor.length_squared() > DEGENERATE_ANCHOR
-                && player.pos.distance_squared(anchor) > LEASH_RADIUS_YD * LEASH_RADIUS_YD
-            {
-                state.anchor = None;
-                script.fire_event("BATTLEFIELDS_CLOSED", vec![]);
-            }
-        }
-
-        let mut lines = Vec::new();
-        for result in std::mem::take(&mut state.verdicts) {
-            let line = if result == GROUP_JOIN_DESERTERS {
-                crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS")
-            } else if let Some(name) = catalog.and_then(|c| c.name(result)) {
-                crate::ui_action::keyed_line_s(script, "ERR_GROUP_JOIN_BATTLEGROUND_S", &[name])
-            } else {
-                crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_FAIL")
-            };
-            lines.extend(line);
-        }
-        let pending = std::mem::take(&mut state.players);
-        let asked = std::mem::take(&mut state.players_asked);
-        for (i, (guid, joined)) in pending.into_iter().enumerate() {
-            let Some(name) = names
-                .resolve_player(guid, Ask::at(i >= asked, &commands))
-                .map(str::to_string)
-            else {
-                state.players.push((guid, joined));
-                continue;
-            };
-            let line = if joined {
-                crate::ui_action::keyed_line_s(script, "ERR_BG_PLAYER_JOINED_SS", &[&name, &name])
-            } else {
-                crate::ui_action::keyed_line_s(script, "ERR_BG_PLAYER_LEFT_S", &[&name])
-            };
-            lines.extend(line);
-        }
-        state.players_asked = state.players.len();
-        if !lines.is_empty() {
-            crate::ui_action::show_messages(script, &mut sink, "ui_battlefield", lines);
-        }
-    })
+    });
 }
 
 /// The battleground verbs inside their calls ([`BattlefieldCall`]): the list window's, the queue
@@ -282,13 +213,19 @@ pub(crate) struct BattlefieldSteps<'w> {
     positions: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
     maps: Option<Res<'w, MapCatalogRes>>,
     group: Option<Res<'w, GroupState>>,
+    /// The names and race tables the board's rebuild reads.
+    reads: crate::ui_battlefield_score::BoardReads<'w>,
     net: Res<'w, NetCommands>,
     sink: crate::ui_action::MessageSink<'w>,
 }
 
 impl BattlefieldSteps<'_> {
-    /// `call` inside its verb.
-    pub(crate) fn apply(&mut self, script: &mut UiScript, call: BattlefieldCall) {
+    /// `call` inside its verb, with what the call signals as it returns.
+    pub(crate) fn apply(
+        &mut self,
+        script: &mut UiScript,
+        call: BattlefieldCall,
+    ) -> Option<benilla_ui::script::CallTail> {
         match call {
             BattlefieldCall::Join {
                 instance_id,
@@ -314,6 +251,18 @@ impl BattlefieldSteps<'_> {
                     let _ = self.net.0.send(ClientCommand::RequestBattlefieldScoreData);
                 }
             }
+            // The rebuild's `UPDATE_BATTLEFIELD_SCORE` signals inside the call (`0x4aa308`).
+            BattlefieldCall::ScoreFaction(filter) => {
+                let rebuilt = self
+                    .board
+                    .as_deref_mut()
+                    .is_some_and(|b| b.set_filter(filter, &self.reads));
+                if rebuilt {
+                    return Some(Box::new(|script: &mut UiScript| {
+                        script.fire_event("UPDATE_BATTLEFIELD_SCORE", vec![]);
+                    }));
+                }
+            }
             // A negative slot sends map 0 (`0x4abe72`).
             BattlefieldCall::Leave => {
                 let map_id = self
@@ -324,9 +273,7 @@ impl BattlefieldSteps<'_> {
                 let _ = self.net.0.send(ClientCommand::LeaveBattlefield { map_id });
             }
             BattlefieldCall::Positions => {
-                let Some(positions) = self.positions.as_deref_mut() else {
-                    return;
-                };
+                let positions = self.positions.as_deref_mut()?;
                 if self
                     .queue
                     .as_deref()
@@ -334,12 +281,12 @@ impl BattlefieldSteps<'_> {
                     .is_none()
                 {
                     positions.clear_teammates();
-                    script.clear_battlefield_positions();
                 } else if positions.request_due(Instant::now()) {
                     let _ = self.net.0.send(ClientCommand::RequestBattlefieldPositions);
                 }
             }
         }
+        None
     }
 
     /// `0x4a9f60`: the as-group refusal (`0x4a9fa8`), then `CMSG_BATTLEMASTER_JOIN` with a stored
@@ -384,49 +331,136 @@ impl BattlefieldSteps<'_> {
 }
 
 /// The world-enter cascade's battlefield init (`0x4909fb` → `0x4a9db0`), after the mail query: the
-/// list, the selection and the anchor clear, the queue slots stay, and the bodyless
-/// `CMSG_BATTLEFIELD_STATUS` goes out, answered slot by slot.
+/// list, the notices waiting on names and the anchor clear, the queue slots stay, and the bodyless
+/// `CMSG_BATTLEFIELD_STATUS` goes out, answered slot by slot. The VM's selection clears with them
+/// ([`reset_selection_on_world_enter`]).
 pub(crate) fn reset_on_world_enter(
     mut cascades: MessageReader<WorldEnterCascadeMessage>,
-    mut vm: crate::script_calls::VmWith<ResMut<'static, Battlefield>>,
+    mut state: ResMut<Battlefield>,
+    mut leash: ResMut<BattlefieldLeash>,
     commands: Res<NetCommands>,
 ) {
     if cascades.read().next().is_none() {
         return;
     }
-    vm.own().clear_session();
+    state.clear_session();
+    leash.0 = None;
+    let _ = commands.0.send(ClientCommand::BattlefieldStatusRequest);
+}
+
+/// The cascade's clear of the selected instance id (`[0xb6eba0]`, `0x4a9db0`), which the VM holds.
+fn reset_selection_on_world_enter(
+    mut cascades: MessageReader<WorldEnterCascadeMessage>,
+    mut vm: crate::script_calls::HostedVm,
+) {
+    if cascades.read().next().is_none() {
+        return;
+    }
     vm.run(|script| {
         if let Some(script) = script {
             script.reset_battlefield_selection();
         }
-        let _ = commands.0.send(ClientCommand::BattlefieldStatusRequest);
-    })
+    });
 }
 
-/// The battlemaster window's packet handlers.
+/// The battlemaster window's and the queue's packet handlers.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
-    use super::Battlefield;
-    use crate::net::NetHandlerApp;
+    use super::{Battlefield, BattlefieldEvent, BattlefieldLane};
+    use crate::names::NameCache;
+    use crate::net::{NetCommands, NetHandlerApp};
+    use crate::query_cache::Ask;
+    use crate::ui_battlefield_score::BattlefieldScoreboard;
+    use crate::ui_dialog_verbs::BattlefieldQueue;
 
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
-        app.net_handler(K::BattlefieldList, on_packet)
-            .net_handler(K::GroupJoinedBattleground, on_packet)
-            .net_handler(K::BattlegroundPlayer, on_packet);
+        app.net_handler(K::BattlefieldList, on_list)
+            .net_handler(K::GroupJoinedBattleground, on_verdict)
+            .net_handler(K::BattlegroundPlayer, on_player)
+            .net_handler(K::BattlefieldStatus, on_status);
     }
 
-    fn on_packet(In(ev): In<SessionEvent>, mut battlefield: ResMut<Battlefield>) {
-        match ev {
-            SessionEvent::BattlefieldList(list) => battlefield.apply_list(list),
-            SessionEvent::GroupJoinedBattleground { result } => battlefield.apply_verdict(result),
-            SessionEvent::BattlegroundPlayer { guid, joined } => {
-                battlefield.apply_player(guid, joined)
-            }
-            _ => {}
+    /// `0x4aa6c0`: the ids stored, then `BATTLEFIELDS_SHOW` (`0x4aa7d1`), after which the lane
+    /// stores the anchor.
+    fn on_list(
+        In(ev): In<SessionEvent>,
+        mut battlefield: ResMut<Battlefield>,
+        mut lane: ResMut<BattlefieldLane>,
+    ) {
+        if let SessionEvent::BattlefieldList(list) = ev {
+            battlefield.apply_list(list);
+            lane.push(BattlefieldEvent::Show);
         }
+    }
+
+    /// `0x4aacc0`: one line, no state.
+    fn on_verdict(In(ev): In<SessionEvent>, mut lane: ResMut<BattlefieldLane>) {
+        if let SessionEvent::GroupJoinedBattleground { result } = ev {
+            lane.push(BattlefieldEvent::Verdict(result));
+        }
+    }
+
+    /// `0x4aae10`: the player's name looked up with the callback `0x4aaef0` (joined) or `0x4aafe0`
+    /// (left), which shows its notice at once for a held name and at the answer for a miss
+    /// ([`super::BattlefieldNameAnswers`]).
+    fn on_player(
+        In(ev): In<SessionEvent>,
+        mut battlefield: ResMut<Battlefield>,
+        mut lane: ResMut<BattlefieldLane>,
+        names: Res<NameCache>,
+        commands: Res<NetCommands>,
+    ) {
+        if let SessionEvent::BattlegroundPlayer { guid, joined } = ev {
+            match names.resolve_player(guid, Ask::Event(&commands)) {
+                Some(name) => lane.push(BattlefieldEvent::Player {
+                    name: name.to_string(),
+                    joined,
+                }),
+                None => battlefield.players.push((guid, joined)),
+            }
+        }
+    }
+
+    /// `SMSG_BATTLEFIELD_STATUS` (`0x4aa850`): the slot written and its tutorial armed
+    /// (`0x4b5390`); a status 3 builds the stat columns and runs `0x4aa5a0(-1)`, whose rebuild
+    /// signals `UPDATE_BATTLEFIELD_SCORE` (`0x4aaa5a`), and a zero map clears them with the
+    /// teammates; then `UPDATE_BATTLEFIELD_STATUS` (`0x4aab05`), on every path but the abort.
+    fn on_status(
+        In(ev): In<SessionEvent>,
+        mut queue: ResMut<BattlefieldQueue>,
+        mut board: ResMut<BattlefieldScoreboard>,
+        mut lane: ResMut<BattlefieldLane>,
+        mut positions: ResMut<crate::ui_battlefield_positions::BattlefieldPositions>,
+        reads: crate::ui_battlefield_score::BoardReads,
+        catalog: Option<Res<crate::world_state_ui::WorldStateUiRes>>,
+        tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
+    ) {
+        let SessionEvent::BattlefieldStatus(status) = ev else {
+            return;
+        };
+        let Some(applied) = queue.apply(status) else {
+            return;
+        };
+        if let (Some(id), Some(mut tutorials)) = (applied.tutorial, tutorials) {
+            tutorials.write(crate::tutorial::TutorialEvent::trigger(id));
+        }
+        match applied.active_map {
+            Some(map) => {
+                if board.status_three(map, catalog.as_deref(), &reads) {
+                    lane.push(BattlefieldEvent::Score);
+                }
+            }
+            // A zero map clears the stat count and the teammate count (`0x4aaae6`).
+            None if applied.cleared => {
+                board.clear_columns();
+                positions.clear_teammates();
+            }
+            None => {}
+        }
+        lane.push(BattlefieldEvent::Status);
     }
 }
 
@@ -435,62 +469,118 @@ pub(crate) struct BattlefieldPlugin;
 impl Plugin for BattlefieldPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<Battlefield>().add_systems(
-            Update,
-            (
-                reset_on_world_enter
-                    .in_set(crate::ui_script::UiFeed)
-                    .after(crate::ui_mail::send_query_next_mail_time_on_enter)
-                    .before(feed_battlefield),
-                feed_battlefield
-                    .before(crate::ui_battlefield_score::feed_battlefield_score)
-                    .before(crate::ui_dialog_verbs::feed_dialog_verbs)
-                    .in_set(UiFeed),
-            ),
-        );
+        lane::add_battlefield_lane(app);
+        app.init_resource::<Battlefield>()
+            .init_resource::<BattlefieldLeash>()
+            .add_systems(
+                Update,
+                (
+                    reset_on_world_enter
+                        .in_set(UiFeed)
+                        .after(crate::ui_mail::send_query_next_mail_time_on_enter),
+                    reset_selection_on_world_enter.in_set(UiFeed),
+                    // The anchor is the lane's, which fires only into the in-game interface.
+                    drive_battlefield_leash
+                        .in_set(UiFeed)
+                        .run_if(crate::ui_script::ingame_ui_up),
+                ),
+            );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use benilla_ui::script::UiScript;
 
-    /// A joined or left packet looks its player's name up with a callback (`0x4aae50`); the
-    /// frames its line waits through read. A refused name is asked by no frame after it, only by
-    /// the next packet that names its player.
-    #[test]
-    fn a_refused_joiner_is_asked_by_the_next_packet_never_by_a_frame() {
+    /// The joined and left packets' handlers and the name answer's, in a world of their own.
+    fn notices() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
             .init_resource::<Battlefield>()
-            .init_resource::<BattlefieldQueue>()
-            .init_resource::<Player>()
-            .init_resource::<NameCache>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_systems(Update, feed_battlefield);
-        app.insert_non_send_resource(UiScript::new().unwrap());
-        let joined = |app: &mut App| {
-            app.world_mut()
-                .resource_mut::<Battlefield>()
-                .apply_player(0x9, true);
-            app.update();
-        };
-        joined(&mut app);
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
-        app.world_mut()
-            .resource_mut::<NameCache>()
-            .insert_player(0x9, String::new(), None);
-        for _ in 0..600 {
-            app.update();
+            .init_resource::<BattlefieldLane>()
+            .init_resource::<crate::names::NameCache>();
+        net::register(&mut app);
+        crate::names::net::register(&mut app);
+        (app, rx)
+    }
+
+    fn packet(app: &mut App, ev: benilla_protocol::SessionEvent) -> Vec<BattlefieldEvent> {
+        crate::net::handlers::dispatch(app.world_mut(), vec![ev]);
+        app.world_mut().resource_mut::<BattlefieldLane>().take()
+    }
+
+    fn named(guid: u64, name: &str) -> benilla_protocol::SessionEvent {
+        benilla_protocol::SessionEvent::PlayerName {
+            guid,
+            name: name.into(),
+            race: 1,
+            gender: 0,
+            class: 1,
         }
-        assert!(
-            crate::query_cache::queries(&rx).is_empty(),
-            "no frame asks a refusal"
+    }
+
+    /// A joined or left packet looks its player's name up with a callback (`0x4aae2f`): a held
+    /// name's notice is its packet's, a missed one's the answer's, and a refusal spends the
+    /// callback with no line (`0x4aaf2f`); the next packet that names the player asks again.
+    #[test]
+    fn a_notice_shows_at_its_packet_or_at_its_names_answer() {
+        let (mut app, rx) = notices();
+        let joined =
+            |joined| benilla_protocol::SessionEvent::BattlegroundPlayer { guid: 0x9, joined };
+        assert_eq!(packet(&mut app, joined(true)), []);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        assert_eq!(packet(&mut app, joined(false)), [], "a second callback");
+        assert_eq!(
+            packet(&mut app, named(0x9, "Rik")),
+            [
+                BattlefieldEvent::Player {
+                    name: "Rik".into(),
+                    joined: true
+                },
+                BattlefieldEvent::Player {
+                    name: "Rik".into(),
+                    joined: false
+                },
+            ],
+            "both at the answer, in their packets' order"
         );
-        joined(&mut app);
+        assert_eq!(
+            packet(&mut app, joined(true)),
+            [BattlefieldEvent::Player {
+                name: "Rik".into(),
+                joined: true
+            }],
+            "a held name's at its packet"
+        );
+        assert!(crate::query_cache::queries(&rx).is_empty());
+
+        assert_eq!(
+            packet(
+                &mut app,
+                benilla_protocol::SessionEvent::BattlegroundPlayer {
+                    guid: 0xA,
+                    joined: true
+                }
+            ),
+            []
+        );
+        assert_eq!(
+            packet(&mut app, named(0xA, "")),
+            [],
+            "a refusal shows nothing"
+        );
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        assert_eq!(
+            packet(
+                &mut app,
+                benilla_protocol::SessionEvent::BattlegroundPlayer {
+                    guid: 0xA,
+                    joined: true
+                }
+            ),
+            []
+        );
         assert_eq!(
             crate::query_cache::queries(&rx).len(),
             1,
@@ -610,7 +700,7 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let catalog = benilla_formats::load_map_catalog(&mut chain).expect("Map.dbc");
         let mut state = Battlefield::default();
-        let v = list_view(&state, Some(&catalog), Some("Horde"));
+        let v = list_view(&state, Some(&catalog), 0);
         assert!(v.instances.is_empty());
         assert_eq!(
             v.info.as_ref().map(|i| i.name.as_str()),
@@ -623,7 +713,7 @@ mod tests {
             bracket: 2,
             instances: vec![4, 9],
         });
-        let v = list_view(&state, Some(&catalog), Some("Alliance"));
+        let v = list_view(&state, Some(&catalog), 1);
         assert_eq!(v.instances, vec![4, 9]);
         assert_eq!((v.bracket_min, v.bracket_max), (40, 49));
         let info = v.info.expect("Arathi Basin's row");
@@ -637,7 +727,7 @@ mod tests {
             (20, 60, -1)
         );
         assert!(v.group_queue);
-        let v = list_view(&state, Some(&catalog), None);
+        let v = list_view(&state, Some(&catalog), -1);
         assert!(
             v.info.is_some_and(|i| i.description.is_none()),
             "the -1 faction leg: no description"

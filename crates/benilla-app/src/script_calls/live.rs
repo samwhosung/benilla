@@ -92,6 +92,8 @@ live_reads! {
         skills: crate::ui_char::SkillLive<'static, 'static>,
         /// The spell book's order off the known spells, and each slot's record and icon.
         book: crate::ui_spellbook::BookLive<'static, 'static>,
+        /// The battleground queue slots, list, board and positions.
+        battlefield: crate::ui_battlefield::BattlefieldLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

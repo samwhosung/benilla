@@ -428,6 +428,7 @@ mod aura_view_tests;
 #[cfg(test)]
 mod bag_tests;
 #[cfg(test)]
+mod battlefield_live_tests;
 mod book_live_tests;
 #[cfg(test)]
 mod cast_live_tests;

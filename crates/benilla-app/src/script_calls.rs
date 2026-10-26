@@ -804,7 +804,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 crate::ui_craft::do_craft(&mut appliers.cast(), spell_id);
             }
             ScriptCall::Craft(CraftCall::Close) => appliers.craft().close(),
-            ScriptCall::Battlefield(call) => appliers.battlefield().apply(script, call),
+            ScriptCall::Battlefield(call) => tail = appliers.battlefield().apply(script, call),
             ScriptCall::Death(DeathAction::AcceptAreaSpiritHeal) => {
                 self.accept_area_spirit_heal(script, &mut at.mark);
             }

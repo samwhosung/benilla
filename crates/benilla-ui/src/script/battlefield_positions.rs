@@ -1,10 +1,12 @@
 //! The battleground position verbs `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` poll
 //! to place teammates and the flag carrier (opcode `0x2E9`, handler `0x4aad40`). The reference
 //! drops itself, its party and its raid, prefers a live object's position and projects onto the
-//! active slot's map; the app does all that and pushes the finished list here.
+//! active slot's map, all at the call (`0x4abf90`): the host does that as the getter asks
+//! ([`super::battlefield_live`]), and with no host the VM's copy answers.
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::battlefield_live as live;
 use super::binding_abi::number_arg;
 use super::Model;
 
@@ -26,7 +28,8 @@ pub struct BattlefieldFlagView {
 }
 
 impl super::UiScript {
-    /// Push the positions, the carrier and the active map's icon scale.
+    /// Set the VM's copy of the positions, the carrier and the active map's icon scale, which the
+    /// getters read with no host to ask.
     pub fn set_battlefield_positions(
         &mut self,
         players: Vec<BattlefieldPositionView>,
@@ -64,7 +67,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumBattlefieldPositions",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.battlefield_positions.len() as i64)
+            Ok(live::position_count(lua, &model) as i64)
         })?,
     )?;
 
@@ -75,11 +78,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = number_arg(lua, index, "Usage: GetBattlefieldPosition(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                usize::try_from(index)
-                    .ok()
-                    .and_then(|i| i.checked_sub(1))
-                    .and_then(|i| model.battlefield_positions.get(i))
-                    .cloned()
+                live::position(lua, &model, index)
             };
             match row {
                 Some(r) => {
@@ -99,7 +98,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumBattlefieldFlagPositions",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(model.battlefield_flag.is_some()))
+            Ok(i64::from(live::flag(lua, &model).is_some()))
         })?,
     )?;
 
@@ -108,7 +107,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: GetBattlefieldFlagPosition(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            match model.battlefield_flag.as_ref().filter(|_| index == 1) {
+            match live::flag(lua, &model).as_ref().filter(|_| index == 1) {
                 Some(f) => three(lua, f.uv, f.token.as_deref()),
                 None => three(lua, (0.0, 0.0), None),
             }
@@ -120,7 +119,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetBattlefieldMapIconScale",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(f64::from(model.battlefield_icon_scale))
+            Ok(f64::from(live::icon_scale(lua, &model)))
         })?,
     )?;
 

@@ -4,10 +4,7 @@
 
 use benilla_protocol::messages::{BattlefieldList, BattlefieldStatus, LootStartRoll};
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{
-    BattlefieldListView, BattlefieldPositionView, BattlefieldQueueSlot, BattlefieldScores,
-    LootRollEntry, LootRollsState, UiScript, UnitGuids,
-};
+use benilla_ui::script::{LootRollEntry, LootRollsState, UiScript, UnitGuids};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -143,21 +140,17 @@ fn the_battleground_verbs_send_inside_their_calls() {
     let mut queue = world.resource_mut::<crate::ui_dialog_verbs::BattlefieldQueue>();
     queue.apply(status(0, WSG, 3));
     queue.apply(status(1, AV, 1));
-    let mut script = vm(&mut app);
-    script.set_battlefield_list(BattlefieldListView {
-        instances: vec![7],
-        ..Default::default()
-    });
-    let slot = |map_id, status| BattlefieldQueueSlot {
-        map_id,
-        status,
-        ..Default::default()
-    };
-    script.set_battlefield_queue([slot(WSG, 3), slot(AV, 1), slot(0, 0)], 0);
-    script.set_battlefield_scores(BattlefieldScores {
-        ended: true,
-        ..Default::default()
-    });
+    // An ended board, which the leave's gate reads (`0x4abe66`).
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![benilla_protocol::SessionEvent::PvpLogData(
+            benilla_protocol::messages::PvpLogData {
+                ended: true,
+                winner: Some(0),
+                rows: Vec::new(),
+            },
+        )],
+    );
     eval::<()>(
         &mut app,
         "JoinBattlefield(1) RandomRoll(1, 2) ShowBattlefieldList(2) AcceptBattlefieldPort(2, 1) \
@@ -237,18 +230,6 @@ fn request_battlefield_positions_without_a_battleground_clears_inside_its_call()
             players: vec![at(0x9)],
             carrier: Some(at(0xA)),
         });
-    vm(&mut app).set_battlefield_positions(
-        vec![BattlefieldPositionView {
-            uv: (0.5, 0.5),
-            name: Some("Bob".into()),
-            ..Default::default()
-        }],
-        Some(benilla_ui::script::BattlefieldFlagView {
-            uv: (0.25, 0.25),
-            token: None,
-        }),
-        1.0,
-    );
     let n: (i64, i64) = eval(
         &mut app,
         "RequestBattlefieldPositions() \

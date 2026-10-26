@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 85;
-const FRAME_FINAL_INPUTS: usize = 415;
+const FRAME_FINAL_FEEDS: usize = 81;
+const FRAME_FINAL_INPUTS: usize = 401;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -69,6 +69,15 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_aura::feed_auras", &["ui_aura::AuraFeedMemory"],
         "rebuilds the raid filter's books and the world entry's player the aura walk reads, and \
          keeps the clock pair the buff timers map the duration stamps through"),
+    ("::ui_battlefield::reset_on_world_enter", &["ui_battlefield::Battlefield"],
+        "clears the list and the notices waiting on names at the world-enter cascade \
+         (`0x4a9db0`), which the reference runs inside our own player's create (`0x4908c0`)"),
+    ("::ui_battlefield_positions::reset_on_world_enter",
+        &["ui_battlefield_positions::BattlefieldPositions"],
+        "clears the last positions packet on world entry, ahead of any packet of the new world"),
+    ("::ui_battlefield_score::reset_on_world_enter", &["ui_battlefield_score::BattlefieldScoreboard"],
+        "zeroes the board at the world-enter cascade (`0x4a9db0`), which the reference runs \
+         inside our own player's create (`0x4908c0`)"),
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_honor::feed_honor", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_inspect::feed_inspect", &["UiScript"], "a field event's listeners read its push"),

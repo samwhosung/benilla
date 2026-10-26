@@ -20,6 +20,7 @@ mod auction;
 mod aura;
 mod backdrop;
 mod bank;
+mod battlefield_live;
 mod battlefield_positions;
 mod battlefield_queue;
 mod battlefield_score;
@@ -238,6 +239,12 @@ pub use aura::{
 };
 pub use backdrop::{Backdrop, Insets};
 pub use bank::{BankCall, BankState};
+pub use battlefield_live::{
+    BattlefieldFlagQuery, BattlefieldIconScaleQuery, BattlefieldListQuery,
+    BattlefieldPositionCountQuery, BattlefieldPositionQuery, BattlefieldScoreRead,
+    BattlefieldScoreRowQuery, BattlefieldScoreSummary, BattlefieldScoreSummaryQuery,
+    BattlefieldSlotQuery, BattlefieldStatColumnQuery, BattlefieldTimes, BattlefieldTimesQuery,
+};
 pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
 pub use battlefield_queue::{
     BattlefieldCall, BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot,

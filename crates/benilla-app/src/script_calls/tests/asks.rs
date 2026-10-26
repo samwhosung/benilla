@@ -290,15 +290,16 @@ fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
 #[test]
 fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
     let (mut app, rx) = client();
-    vm(&mut app).set_battlefield_positions(
-        vec![benilla_ui::script::BattlefieldPositionView {
-            uv: (0.5, 0.5),
-            name: None,
-            guid: 0x31,
-        }],
-        None,
-        1.0,
-    );
+    app.world_mut()
+        .resource_mut::<crate::ui_battlefield_positions::BattlefieldPositions>()
+        .apply(benilla_protocol::messages::BattlefieldPositions {
+            players: vec![benilla_protocol::messages::BattlefieldPosition {
+                guid: 0x31,
+                x: 0.0,
+                y: 0.0,
+            }],
+            carrier: None,
+        });
     eval::<()>(
         &mut app,
         "GetBattlefieldPosition(1) RandomRoll(1, 2) GetBattlefieldPosition(1)",
@@ -684,44 +685,4 @@ fn the_quest_log_getters_ask_a_missed_record_inside_their_calls() {
             "item 2589 0x0"
         ]
     );
-}
-
-/// Each `GetBattlefieldPosition` call that misses a name leaves its callback `0x4ac190`, with no
-/// dedupe (`0x4ac104`), which signals `WORLD_MAP_NAME_UPDATE` with no status test
-/// (`0x4ac190`-`0x4ac195`): three calls are three updates when the name lands, a refusal signals
-/// too, and a nameless row no call read signals nothing.
-#[test]
-fn each_battlefield_name_callback_signals_once_when_its_name_answers() {
-    use bevy::ecs::system::RunSystemOnce;
-    let (mut app, _rx) = client();
-    let row = |guid: u64| benilla_ui::script::BattlefieldPositionView {
-        uv: (0.5, 0.5),
-        name: None,
-        guid,
-    };
-    vm(&mut app).set_battlefield_positions(vec![row(0x31), row(0x32), row(0x33)], None, 1.0);
-    eval::<()>(
-        &mut app,
-        "UPDATES = 0 local f = CreateFrame('Frame') f:RegisterEvent('WORLD_MAP_NAME_UPDATE') \
-         f:SetScript('OnEvent', function() UPDATES = UPDATES + 1 end) \
-         for _ = 1, 3 do GetBattlefieldPosition(1) end GetBattlefieldPosition(3)",
-    );
-    let updates = |app: &mut App| -> i64 {
-        app.world_mut()
-            .run_system_once(crate::ui_battlefield_positions::feed_battlefield_positions)
-            .unwrap();
-        eval::<i64>(app, "local n = UPDATES UPDATES = 0 return n")
-    };
-    {
-        let mut names = app.world_mut().resource_mut::<crate::names::NameCache>();
-        names.insert_player(0x31, "Alliedguy".into(), None);
-        names.insert_player(0x32, "Unasked".into(), None);
-    }
-    assert_eq!(updates(&mut app), 3, "one per call");
-    assert_eq!(updates(&mut app), 0, "spent");
-    // A refusal runs the callback with status 0, which signals all the same.
-    app.world_mut()
-        .resource_mut::<crate::names::NameCache>()
-        .insert_player(0x33, String::new(), None);
-    assert_eq!(updates(&mut app), 1, "the refusal");
 }
