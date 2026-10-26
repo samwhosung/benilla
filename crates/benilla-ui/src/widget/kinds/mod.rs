@@ -295,8 +295,9 @@ pub struct TooltipState {
     pub left_lines: Vec<RegionHandle>,
     /// The right-column pool (the `AddDoubleLine`/`TextRightN` half), parallel to `left_lines`.
     pub right_lines: Vec<RegionHandle>,
-    /// `SetOwner`'s frame, dropped on hide.
-    pub owner: Option<FrameHandle>,
+    /// `SetOwner`'s object by its id, a frame or a region: the reference keeps its layout
+    /// (`+0x314`, the object's `+0x24`, `0x5313c9`) with no type test. Dropped on hide.
+    pub owner: Option<crate::layout::Handle>,
     /// `SetOwner`'s x and y offsets (`+0x3c4`, `+0x3c8`, stored by the core at `0x53001c`), which
     /// every anchor apply reads.
     pub owner_offset: (f32, f32),

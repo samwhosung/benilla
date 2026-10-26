@@ -15,15 +15,15 @@ use super::event;
 use super::object::frame_handle_of;
 use super::visibility;
 use super::Model;
-use crate::layout::{Anchor, Anchors, Point};
+use crate::layout::{Anchor, Anchors, Handle, Point};
 use crate::widget::{FrameHandle, KindState, TooltipAnchor, TooltipState, TOOLTIP_FADE_SECS};
 
 /// Registry key of the GameTooltip method table, a named registry root (the MAXCSTACK discipline).
 pub(super) const REG_TOOLTIP_METHODS: &str = "__benilla_tooltip_methods";
 
 impl super::UiScript {
-    /// The name of the frame that owns the GameTooltip named `tooltip`; `None` for no such
-    /// tooltip, no owner or an unnamed one. 1.12 answers only `IsOwned(frame)`, so the host's
+    /// The name of the frame or region that owns the GameTooltip named `tooltip`; `None` for no
+    /// such tooltip, no owner or an unnamed one. 1.12 answers only `IsOwned(frame)`, so the host's
     /// recorders read the owner here.
     pub fn tooltip_owner_name(&self, tooltip: &str) -> Option<String> {
         let model = self.model_ref();
@@ -32,7 +32,14 @@ impl super::UiScript {
             KindState::Tooltip(t) => t.owner?,
             _ => return None,
         };
-        model.arena.frame(owner)?.name.clone()
+        match model.id_to_frame.get(&owner) {
+            Some(&f) => model.arena.frame(f)?.name.clone(),
+            None => model
+                .arena
+                .region(*model.id_to_region.get(&owner)?)?
+                .name
+                .clone(),
+        }
     }
 }
 
@@ -321,7 +328,7 @@ pub(in crate::script) fn hide_override(lua: &Lua, h: FrameHandle) {
 pub(in crate::script) fn set_owner_core(
     lua: &Lua,
     h: FrameHandle,
-    owner: Option<FrameHandle>,
+    owner: Option<Handle>,
     anchor: TooltipAnchor,
     x: f32,
     y: f32,
@@ -350,7 +357,7 @@ pub(in crate::script) fn set_owner_core(
 fn apply_anchor(
     model: &mut Model,
     h: FrameHandle,
-    owner: FrameHandle,
+    owner: Handle,
     anchor: TooltipAnchor,
     x: f32,
     y: f32,
@@ -375,8 +382,7 @@ fn apply_anchor(
         }
     }
     if let Some((own, rel)) = pts {
-        let owner_id = model.frame_id(owner);
-        let new = Anchors::from([Anchor::new(own, owner_id, rel, x, y)]);
+        let new = Anchors::from([Anchor::new(own, owner, rel, x, y)]);
         let input = model.layout_inputs.entry(h).or_default();
         // No-op when unchanged, so the bag hover's per-frame SetOwner does not dirty the layout;
         // a real one is `SetPoint` with the invalidate flag (`0x52ff12`..`0x52ffb2`).

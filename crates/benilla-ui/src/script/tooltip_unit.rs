@@ -546,7 +546,7 @@ impl super::UiScript {
             let Some(root) = model.arena.lookup("UIParent") else {
                 return false;
             };
-            (h, model.frame_id(h), root)
+            (h, model.frame_id(h), model.frame_id(root))
         };
         if cursor {
             set_owner_core(&self.lua, h, Some(root), TooltipAnchor::Cursor, 0.0, 0.0);
@@ -586,7 +586,7 @@ impl super::UiScript {
             let Some(root) = model.arena.lookup("Minimap") else {
                 return false;
             };
-            (h, model.frame_id(h), root)
+            (h, model.frame_id(h), model.frame_id(root))
         };
         let wrapper = match super::object::frame_wrapper(&self.lua, id) {
             Ok(w) => w,

@@ -12,6 +12,22 @@ use super::{
     text_of, with_tip, wrap_arg, REG_TOOLTIP_METHODS,
 };
 
+/// An owner argument's `[0]` as the reference reads it: `lua_gettable` of key 0 (`0x53119b`,
+/// `0x531077`), so a non-table raises the VM's index error, then `lua_touserdata`, `None` for
+/// anything but a non-NULL light userdata. The pointer is the object's id.
+fn owner_id(v: &Value) -> mlua::Result<Option<crate::layout::Handle>> {
+    let Value::Table(t) = v else {
+        return Err(mlua::Error::runtime(format!(
+            "attempt to index a {} value",
+            v.type_name()
+        )));
+    };
+    Ok(match t.get::<Value>(0)? {
+        Value::LightUserData(l) if !l.0.is_null() => Some(l.0 as usize as u32),
+        _ => None,
+    })
+}
+
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -30,9 +46,22 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 let h = frame_handle_of(lua, &this)?;
                 set_shown(lua, h, false);
                 // The owner is read after the hide (`0x531189`), so a bad one raises on a
-                // hidden tooltip.
-                let owner: Table = lua.unpack(owner)?;
-                let owner_h = frame_handle_of(lua, &owner)?;
+                // hidden tooltip: its `[0]` with no type test, so a texture or a font string
+                // owns it too; a NULL raises `%s:SetOwner(): Couldn't find 'this' in owner
+                // object`, naming the tooltip (`0x5311bb`, `0x855150`). Deviation: the reference
+                // anchors a Font object through its +0x24 with no type test (`0x5313c9`),
+                // undefined; benilla raises the owner line.
+                let owner_h = owner_id(&owner)?
+                    .filter(|id| {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        model.id_to_frame.contains_key(id) || model.id_to_region.contains_key(id)
+                    })
+                    .ok_or_else(|| {
+                        mlua::Error::runtime(format!(
+                            "{}:SetOwner(): Couldn't find 'this' in owner object",
+                            binding_abi::name_of(lua, &this)
+                        ))
+                    })?;
                 // The gate is `lua_isstring` (`0x6f3510`): a string or number is read, and any
                 // other type counts as absent rather than raising.
                 let anchor = optional_string(lua, &anchor);
@@ -83,13 +112,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // IsOwned(frame) (`0x530fe0`): 1 (`0x5310ad`) or nil (`0x5310c0`), the hover loop's OnUpdate
     // gate (`ContainerFrame.lua:657`); the owner drops on hide, so a stale OnUpdate never brings a
-    // hidden tooltip back.
+    // hidden tooltip back. It compares the argument's `[0]` with the owner (`0x531065`..`0x5310ab`)
+    // and tests no type, so a table without one matches an unowned tooltip.
     m.set(
         "IsOwned",
-        lua.create_function(|lua, (this, frame): (Table, Table)| {
+        lua.create_function(|lua, (this, frame): (Table, Value)| {
             let owner = with_tip(lua, &this, |t| t.owner)?;
-            let fh = frame_handle_of(lua, &frame)?;
-            Ok(crate::script::binding_abi::flag(owner == Some(fh)))
+            Ok(crate::script::binding_abi::flag(owner == owner_id(&frame)?))
         })?,
     )?;
 
