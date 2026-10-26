@@ -366,8 +366,9 @@ impl TargetScan<'_, '_> {
                     }
                 }
             }
-            // Deviation: no scene-attach gate (the reference's `0x6704c0`), because the draw
-            // election hides every body outside the frustum, which would empty the off-screen tier.
+            // Deviation: no drawn gate (the reference's IsEntityDrawn, `0x6704c0`), because the
+            // draw election hides every body outside the frustum, which would empty the off-screen
+            // tier.
             let dist = (tf.translation - self_tf.translation).length();
             if dist > TAB_RANGE {
                 trace_unit(guid_c.0, tf, "REJECT range (41 yd)");

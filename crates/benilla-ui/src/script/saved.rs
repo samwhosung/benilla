@@ -24,8 +24,9 @@ const MAX_DEPTH: usize = 32;
 
 impl super::UiScript {
     /// Hold a saved-variables file that failed to load, so the shutdown write leaves it alone.
-    /// Deviation: the reference rewrites it from the live defaults (`0x51f865`–`0x51f970`), which
-    /// would cost the player the whole file for one typo in a hand edit.
+    /// Deviation: the reference rewrites it from the live defaults (`0x51f865`–`0x51f970`) after
+    /// renaming the old file to `.bak` (`0x51f794`, `0x51f8eb`, `.bak` at `0x8431e4`), so a hand
+    /// edit with one typo survives only until the next logout.
     pub fn hold_saved_file(&self, path: &std::path::Path) {
         let mut model = self.model_mut();
         if !model.held_saved_files.iter().any(|p| p == path) {

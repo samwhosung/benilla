@@ -4,9 +4,9 @@
 //!
 //! Deviation: `gxWindow "0"` is borderless fullscreen, not 1.12's exclusive mode-set at
 //! `gxResolution`, because Wayland has no client mode-setting (winit ignores
-//! `Fullscreen::Exclusive` there), X11's XRandR changes the desktop's mode and a crash leaves it
-//! changed, and macOS has no exclusive mode. Bevy's `WindowMode::Fullscreen` also panics on a live
-//! change that cannot resolve a monitor (`bevy_winit::winit_windows:91`, `system.rs:333`).
+//! `Fullscreen::Exclusive` there), and X11's XRandR changes the desktop's mode and a crash leaves
+//! it changed. Bevy's `WindowMode::Fullscreen` also panics on a live change that cannot resolve a
+//! monitor (`bevy_winit::winit_windows:91`, `system.rs:333`).
 //!
 //! The `gx*` rows are latched until `RestartGx()`, as in 1.12; a restart re-asserts them against
 //! the window rather than re-creating the device, since wgpu reconfigures the surface live.

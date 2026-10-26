@@ -81,7 +81,8 @@ pub struct MultisampleFormat {
 /// One screen resolution the Video options dropdown offers, in physical pixels. Deviation: the
 /// list is the window sizes this client can present, not the device's display modes, because
 /// benilla makes no exclusive mode-set. `"WxH"` is a contract: `OptionsFrame.lua:281-284` splits
-/// on the `x` and `CT_Viewport.lua:107` matches `"(%d+)x(%d+)"`, both failing silently.
+/// on the `x`, raising on a string without one, and `CT_Viewport.lua:107` matches
+/// `"(%d+)x(%d+)"`, failing silently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScreenResolution {
     pub width: u32,

@@ -49,8 +49,9 @@ pub(crate) fn on_app_exit(app: &mut App, systems: ScheduleConfigs<ScheduleSystem
 ///
 /// Deviation: the reference leaves it to the OS. Its key arm (`0x42d261`-`0x42d276`) hands Alt+F4
 /// to `DefWindowProc`, whose `SC_CLOSE` becomes the kind-5 event (`0x42d287`, as `WM_CLOSE` posts at
-/// `0x42d292`) and runs the quit at once (`0x423a21` -> `0x423ca0` -> `0x41f5d0` -> `0x422030`),
-/// with no logout timer, at the login screen and in game alike. A tiling window manager (i3,
+/// `0x42d292`) and closes at once: the running client's callback `0x63c9a0` (installed from
+/// `0x402840`, asked at `0x423a21`) answers 0 and tears the context down (`0x41f9b0`), with no
+/// logout timer, at the login screen and in game alike. A tiling window manager (i3,
 /// sway, Hyprland) binds nothing to it, so benilla reads the chord itself and asks for the same
 /// close, which the shutdown tail above already serves. Not on macOS: `Cmd+Q` is
 /// [`benilla_world::mac_quit`].

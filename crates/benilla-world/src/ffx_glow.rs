@@ -174,8 +174,8 @@ impl GlueFfx {
 
     /// `LightParams.glow` (`0xce9c70`) on a glue screen; the death combine packs it into its alpha
     /// byte (`0x6cb9ec`: 0.15 → 38, 0.40 → 102). Deviation: kept a float where every reference
-    /// pack (`0x6cb0e2`/`0x6cb557`/`0x6cb9e1`) quantizes it to a byte, because the two differ by
-    /// under a thousandth (38/255 against 0.15).
+    /// pack (`0x6cb0e2`/`0x6cb557`/`0x6cb9e1`) floors it to a byte (`x·255 + 512`, bits >> 14;
+    /// `0x7ffe58`, `0x8029cc`), because the two differ by at most 0.002 (0.30 packs to 76, 0.2980).
     fn glow(self) -> f32 {
         match self {
             // `*0x8380b4`, the widget's OnShow pin.

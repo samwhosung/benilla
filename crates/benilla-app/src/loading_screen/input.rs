@@ -11,9 +11,9 @@
 //!   released on world enter (`0x4908c0 → 0x49093c → 0x5144c0`).
 //! - Deviation: the wheel is swallowed, where the reference still zooms the hidden camera, because
 //!   nothing should act through the screen.
-//! - Deviation: the world pick is cleared, where the reference's `0x481790` keeps picking at the
-//!   frozen point, because ours is quieter and looks the same: the reference's pointer cannot
-//!   move, so its pick changes nothing visible.
+//! - Deviation: the world pick is cleared, where the reference's freezes: the screen's layer
+//!   blocks the frame pass (bit 0 clear, `0x406808` → `0x4083c0`), so `0x481790` does not run,
+//!   except after a transport arrival (`0x5debb6`), when it picks at the frozen point.
 //!
 //! Taken: the button planes ([`swallow`]), the raw message queues and the window's event stream
 //! (no reader but the input records'), the mouse accumulators, and the window's cursor position,

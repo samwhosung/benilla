@@ -64,9 +64,10 @@ fn mount_order(dir_names: &[String]) -> Vec<String> {
 impl Chain {
     /// Open a `Data` directory's archives in [`mount_order`], or a single `.MPQ` file.
     ///
-    /// Deviation: an archive that fails to open is an error, where the reference logs
-    /// `"Failed to open archive"` and goes on, because a skipped corrupt archive surfaces only as
-    /// missing files far downstream.
+    /// Deviation: an archive that fails to open is an error. In 1.12.1 a failed base archive is
+    /// fatal (Error #134: `0x4038ea` → `0x64d0e0` → `0x64cfa0` → `0x64cc80`, `ExitProcess`) and
+    /// only a failing patch archive is skipped, silently; benilla fails on that too, because a
+    /// skipped corrupt archive surfaces only as missing files far downstream.
     pub fn open(path: &Path) -> Result<Self> {
         let mut archives = Vec::new();
         if path.is_dir() {

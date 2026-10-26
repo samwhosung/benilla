@@ -29,7 +29,7 @@
 //! the file omits keeps its boot init ([`ChatWindowLook::stock`]), and a file older than
 //! `ADDEDVERSION 2` gets the groups added since. `LOCKED` is an `i32` (`CHATWINDOW+0x8c`) written
 //! through `setne`, so only 0 and 1 round-trip. Deviation: `set_chat_window_looks` drops an
-//! out-of-range window, where the reference's `WINDOW` bound is off by one (`0x498d1c`, `ja` where
+//! out-of-range window, where the reference's `WINDOW` bound is off by one (`0x498d17`, `ja` where
 //! the array needs `jae`), because that write would land past the array.
 //!
 //! Ours is `benilla-config/chat/<realm>-<character>.txt`

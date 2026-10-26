@@ -18,9 +18,10 @@ use crate::script::{Model, PetActionView};
 use super::{clear_cursor, set_cursor, CursorPayload, CursorPetAction, Setter};
 
 /// Pet bar slots (`NUM_PET_ACTION_SLOTS`, vmangos `MAX_UNIT_ACTION_BAR_INDEX`). Deviation: slot
-/// 11 is refused, because the reference's gate (`cmp esi,0xa; jbe`) admits it and neither
-/// `0x4bce00` nor `0x4bc9a0` bounds-checks again, so it writes one dword past the array, and the
-/// autocast toggle (`0x4bcbb0`) reads that word (`[0xb71438+0x28]`) with no bounds check.
+/// 11 is refused, because the reference's gate (`cmp esi,0xa; jbe`) admits it; `0x4bce00` checks
+/// its bound (`0x4bce14`) but `0x4bc9a0` does not, so it writes one dword past the array
+/// (`0x4bcad9`), and the autocast toggle (`0x4bcbb0`) reads that word (`[0xb71438+0x28]`) with
+/// no bounds check.
 const PET_SLOTS: u32 = 10;
 
 /// The slot type as the client masks it.

@@ -737,7 +737,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(info.stackable)),
                 Value::String(lua.create_string(equip_loc_token(inventory_type))?),
                 // Deviation: nil for a display row with no icon, where the reference answers the
-                // unloadable `Interface\Icons\`, because `SetTexture` shows no icon for either.
+                // unloadable `Interface\Icons\`, on which `SetTexture` keeps the previous image
+                // (`0x7702ac`), so a reused button would show its old icon.
                 match &icon {
                     Some(icon) => Value::String(lua.create_string(icon)?),
                     None => Value::Nil,

@@ -62,7 +62,9 @@ impl super::UiScript {
         let want = cmd.to_ascii_uppercase();
         for pair in list.pairs::<String, Value>() {
             let Ok((index, Value::Function(handler))) = pair else {
-                continue; // Deviation: skipped because it is no command; the reference raises
+                // Deviation: skipped as no command. The stock walk calls an entry only when one of
+                // its aliases matches (`ChatFrame.lua:2164-2178`), so only a matched one raises.
+                continue;
             };
             for n in 1.. {
                 let alias: Option<String> = globals.get(format!("SLASH_{index}{n}")).ok().flatten();

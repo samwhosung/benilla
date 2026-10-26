@@ -16,8 +16,9 @@
 //! [`frame`]. The bake is a fresh instance frozen at Stand (`0x707400`, `0x7121a0`).
 //!
 //! Deviation: the round portraits bake at 256², not 64², because the 64² still is a resolution
-//! limit, not a look; and under a fixed studio light, not the ambient state, because that neutral
-//! light is the chosen portrait look (`light::BoothLight`).
+//! limit, not a look; and under benilla's studio light (`light::BoothLight`), the chosen portrait
+//! look, in place of the reference's own fixed rig (`0x525b10`, pushed at `0x52562e`: a 0.45 grey
+//! ambient and a white directional).
 //!
 //! The frozen Stand phase is t=0; the reference's sampling clock is untraced.
 //!

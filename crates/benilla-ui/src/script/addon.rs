@@ -782,8 +782,10 @@ fn load_saved_variables(lua: &Lua, i: usize) {
                 }
             }
             Err(e) => {
-                // Deviation: the reference fails silently; we report it, as a player needs to
-                // know, and hold the file so the shutdown write keeps it.
+                // The reference runs the file under the Lua error handler (`0x704ae0`,
+                // `[0x8722c8]`, `0x704b68`), which stock sets to show the error
+                // (`BasicControls.xml:16`). Deviation: holding the file, so the shutdown write
+                // keeps it.
                 log_error(
                     lua,
                     &format!("{}: {e}", path.display()),

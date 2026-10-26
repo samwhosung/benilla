@@ -426,9 +426,9 @@ pub(crate) struct RegionData {
     /// regions.
     ///
     /// Deviation: kept apart from [`Self::vertex_color`], which the reference's `Texture:SetAlpha`
-    /// (`0x79b580`) rewrites, because the drawn product differs only on a region that sets both,
-    /// or a gradient and an alpha, which no stock code does, and a FontString's `SetAlpha` then
-    /// keeps its font colour.
+    /// (`0x79b580`) rewrites, because where stock sets both on one region (`PlayerFrame.lua:25-26`,
+    /// `TargetFrame.lua:408` with `420-426`) the drawn product differs for about one frame, and a
+    /// FontString's `SetAlpha` then keeps its font colour.
     pub(crate) alpha: Option<u8>,
     /// The texture slot (`+0xcc`): a path (`SetTexture("Interface\\...")`) or a solid fill
     /// (`SetTexture(r, g, b, a)`, an XML `<Color>` with no `file=`), each clearing the other. The
