@@ -535,3 +535,19 @@ fn string_dump_dumps_its_last_argument() {
         "false,bad argument #1 to `?' (function expected, got number)"
     );
 }
+
+/// `string.sub` and `string.find` read their positions through `__ftol` and keep its low dword
+/// (`0x7fbd55`, `0x7fbd79`, `0x7fc3f7`); `posrelat` adds in 32 bits (`0x7fbde6`) and the clamps are
+/// signed 32-bit compares (`0x7fbd88`-`0x7fbd9f`, `0x7fc406`-`0x7fc413`).
+#[test]
+fn string_positions_are_32_bit() {
+    assert_eq!(run("return string.sub('hello', 2^32 + 2)"), "ello");
+    assert_eq!(run("return string.sub('hello', 1, 2^31)"), "");
+    assert_eq!(run("return string.sub('hello', 2, 2^32 + 3)"), "el");
+    assert_eq!(run("return string.sub('hello', -2^32 - 2)"), "lo");
+    assert_eq!(run("return string.find('abc', 'c', 2^32 + 1)"), "3,3");
+    assert_eq!(run("return string.find('abc', 'c', -2^32 - 1)"), "3,3");
+    // Out of the quadword's range the low dword is 0: `sub` starts at 1, `find` at 1.
+    assert_eq!(run("return string.sub('hello', 2^70)"), "hello");
+    assert_eq!(run("return string.find('abc', 'a', 2^70)"), "1,1");
+}

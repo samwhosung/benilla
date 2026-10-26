@@ -32,14 +32,14 @@ pub fn open(vm: &mut Vm) {
     vm.set_global("string", Value::Table(t));
 }
 
-/// 5.1's `posrelat`: a negative position counts back from the end, and one before the start is 0.
-fn posrelat(pos: i64, len: usize) -> i64 {
-    let pos = if pos < 0 {
-        pos.saturating_add(len as i64 + 1)
+/// The client's `posrelat` (`0x7fbde0`): a negative position counts back from the end, added in
+/// 32 bits (`0x7fbde6`), and one that is still negative stays so; the callers clamp it.
+fn posrelat(pos: i32, len: usize) -> i32 {
+    if pos < 0 {
+        pos.wrapping_add(len as i32).wrapping_add(1)
     } else {
         pos
-    };
-    pos.max(0)
+    }
 }
 
 fn len(vm: &mut Vm, nargs: usize) -> R<usize> {
@@ -51,15 +51,17 @@ fn len(vm: &mut Vm, nargs: usize) -> R<usize> {
 fn sub(vm: &mut Vm, nargs: usize) -> R<usize> {
     let s = vm.check_str(nargs, 1)?;
     let l = vm.heap.str(s).len();
-    let start = vm.check_integer(nargs, 2)?;
-    let end = vm.opt_integer(nargs, 3, -1)?;
+    // `str_sub` reads both positions through `__ftol`'s low dword (`0x7fbd55`, `0x7fbd79`) and
+    // clamps them as signed 32-bit values (`0x7fbd88`-`0x7fbd9f`).
+    let start = vm.check_int(nargs, 2)?;
+    let end = vm.opt_int(nargs, 3, -1)?;
     let mut start = posrelat(start, l);
     let mut end = posrelat(end, l);
     if start < 1 {
         start = 1;
     }
-    if end > l as i64 {
-        end = l as i64;
+    if end > l as i32 {
+        end = l as i32;
     }
     if start <= end {
         let (a, e) = (start as usize - 1, end as usize);
@@ -811,13 +813,10 @@ fn find_in(vm: &mut Vm, nargs: usize, [src, pat, cpat]: &mut [Vec<u8>; 3]) -> R<
     let s = vm.check_str(nargs, 1)?;
     let p = vm.check_str(nargs, 2)?;
     let l1 = vm.heap.str(s).len();
-    let mut init = posrelat(vm.opt_integer(nargs, 3, 1)?, l1) - 1;
-    if init < 0 {
-        init = 0;
-    } else if init as usize > l1 {
-        init = l1 as i64;
-    }
-    let init = init as usize;
+    // `str_find` reads init through `__ftol`'s low dword (`0x7fc3f7`), then `posrelat` and the
+    // clamp (`0x7fc401`-`0x7fc413`) in 32 bits.
+    let init = posrelat(vm.opt_int(nargs, 3, 1)?, l1).wrapping_sub(1);
+    let init = if init < 0 { 0 } else { (init as usize).min(l1) };
     let plain = vm.arg(nargs, 3).truthy();
     src.extend_from_slice(vm.heap.str(s));
     pat.extend_from_slice(vm.heap.str(p));
