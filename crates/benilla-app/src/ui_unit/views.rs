@@ -610,7 +610,16 @@ pub(super) fn token_views<'a>(
         .and_then(|(store, _)| store.0.unit_target())
         .filter(|guid| *guid != 0)
         .and_then(|guid| Some(held.state((stores.by_guid)(guid)?, guid)));
-    let npc = stores.npc.map(|(store, guid)| held.state(store, guid));
+    // Not a game object's or an item's: those exist for nobody (`0x515fee`), and are named live.
+    let npc = stores
+        .npc
+        .filter(|(store, _)| {
+            store
+                .0
+                .object_type_mask()
+                .is_none_or(|mask| mask & 0x8 != 0 || mask & 0x22 == 0)
+        })
+        .map(|(store, guid)| held.state(store, guid));
     [player, target, tot, npc]
 }
 

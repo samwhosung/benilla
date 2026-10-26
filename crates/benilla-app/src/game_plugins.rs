@@ -963,8 +963,6 @@ pub(crate) mod schedule_tests {
     /// - the fx attaches and `entities::update_display_models`/`attach_entity_visuals` against
     ///   the mat-anim tick over `MatAnimTable`/`UvAnimMaterials`: attach writes the rows a tick
     ///   would, off the same clock;
-    /// - `ui_session::feed_interact_npc` against `query_cache::release_on_enter::<MailOpen>`: the
-    ///   feed reads the mailbox's guid, and the release clears only the pending queries;
     /// - Click to Move's steer (`player::approach::steer_approach`) against what `steer_follow`
     ///   already pairs with: the steer is chained after follow's and writes the same `Player`
     ///   fields;

@@ -2118,6 +2118,12 @@ pub(crate) fn signal_ui_shutdown_deselect(
 /// the selection is stamped as the last target (`0x493622`) and cleared (`0x4939d3`), and
 /// `0x4939df` returns before the swing stop, the send and the event.
 pub(crate) fn clear_selection_on_world_teardown(mut selection: ResMut<Selection>) {
+    clear_with_no_world(&mut selection);
+}
+
+/// `SetSelection(0, 0)` with no object manager: stamped as the last target (`0x493622`) and
+/// cleared (`0x4939d3`), returning before the swing stop, the send and the event (`0x4939df`).
+pub(crate) fn clear_with_no_world(selection: &mut Selection) {
     if selection.guid.is_some() {
         selection.last = selection.guid;
     }

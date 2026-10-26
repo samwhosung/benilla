@@ -27,6 +27,8 @@ mod front_tests;
 mod gate_tests;
 mod highlight;
 pub(crate) mod hover;
+mod live;
+pub(crate) use live::SelectionLive;
 mod hover_probe;
 
 /// The hover probe's aim for a cursorless window, as this frame's pick published it.
@@ -47,7 +49,12 @@ pub(crate) mod ring;
 mod scan;
 mod script;
 pub(crate) use script::ScriptSelect;
-mod track;
+mod release;
+#[cfg(test)]
+pub(crate) use release::Releases;
+pub(crate) use release::{
+    drop_parked_releases, member as raid_member_or_pet, object_held, unit_released, OwedReleases,
+};
 #[cfg(test)]
 mod unheld_tests;
 
@@ -92,16 +99,16 @@ pub(crate) use ring::{selection_variant, Factions, RingVariant};
 
 pub use click::Interact;
 pub(crate) use click::{
-    clear_selection_on_world_teardown, deselect_on_ui_shutdown, signal_ui_shutdown_deselect,
-    DeselectGuid,
+    clear_selection_on_world_teardown, clear_with_no_world, deselect_on_ui_shutdown,
+    signal_ui_shutdown_deselect, DeselectGuid,
 };
 
 /// Our target, set the instant we click, as the 1.12 client does without waiting for the server.
 /// The selection is the guid `[0xb4e2d8]`: `SetSelection 0x493540` stores it whether or not the
 /// object manager holds its object (`0x4935bf` → `0x493605`), and the client reads the object by
 /// that guid where it needs one. `CMSG_SET_SELECTION` carries the guid, which the server records in
-/// our `UNIT_FIELD_TARGET`. [`track::follow_selection_object`] keeps [`Self::target`] on the guid's
-/// object and ends the selection where the client's teardowns do.
+/// our `UNIT_FIELD_TARGET`. The handlers that hold and release objects keep [`Self::target`] on the
+/// guid's object and end the selection where the client's teardowns do ([`release`]).
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Selection {
     /// The object [`Self::guid`] names while the object manager holds it.
@@ -316,6 +323,7 @@ impl Plugin for TargetPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar);
         died::register(app);
+        release::register(app);
         app.init_resource::<Selection>()
             .init_resource::<ClickConfig>()
             .init_resource::<AssistAttack>()
@@ -453,16 +461,6 @@ impl Plugin for TargetPlugin {
                     .chain()
                     .in_set(TargetUpdate)
                     .after(WorldStage::Input),
-            )
-            // The selection's object, as the objects that streamed in and out applied and the
-            // active player is tagged, before any reader of the frame. Its teardown signals with
-            // the host lent, as a feed of the frame's packets.
-            .add_systems(
-                Update,
-                track::follow_selection_object
-                    .in_set(crate::ui_script::UiFeed)
-                    .after(WorldStage::Net)
-                    .before(WorldStage::Input),
             )
             // PostUpdate: the brighten sets MeshTag bit 31 after every Update writer that
             // overwrites the whole tag.

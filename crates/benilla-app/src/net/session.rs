@@ -237,9 +237,15 @@ fn on_disconnected(
     mut b: Bridge,
     mut released: ResMut<super::objects::Released>,
     view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
+    selection: Option<ResMut<crate::target::Selection>>,
 ) {
     if let SessionEvent::Disconnected { reason, end } = ev {
         log_teardown(view_log, &b);
+        // Every object goes with no release, kept link or not; the reference has no reconnect,
+        // so the selection ends as at the world's teardown, with nothing sent or signalled.
+        if let Some(mut selection) = selection.filter(|s| s.guid.is_some()) {
+            crate::target::clear_with_no_world(&mut selection);
+        }
         // The same teardown as `on_logged_out`'s.
         b.reputations.tear_down();
         // Leaving the world frees the released objects with the live ones (`0x467700`).
@@ -307,6 +313,8 @@ fn on_worldport(
     mut released: ResMut<super::objects::Released>,
     view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
     player: Option<Res<crate::player::Player>>,
+    selection: Option<ResMut<crate::target::Selection>>,
+    owed_releases: Option<ResMut<crate::target::OwedReleases>>,
 ) {
     if let SessionEvent::Worldport {
         map_id,
@@ -331,6 +339,28 @@ fn on_worldport(
             log.records(&before, &group.stats);
         }
         log_teardown(view_log, &b);
+        // The transfer frees every object with no release (`0x467700` → `0x467800`), and the
+        // reference's own clear is the arrival's `SetSelection(0, 0)` (`0x490927`), which benilla
+        // does not run: the selected unit's object is torn down here as its release would.
+        let mut selection = selection;
+        if let Some(guid) = selection.as_ref().and_then(|s| s.guid) {
+            if b.index.0.contains_key(&guid) {
+                let held = |g: u64| {
+                    b.index
+                        .0
+                        .get(&g)
+                        .and_then(|e| b.stores.get(*e).ok())
+                        .map(|s| &s.0)
+                };
+                let me = b.self_guid.0;
+                crate::target::unit_released(
+                    selection.as_mut(),
+                    owed_releases.map(|o| o.into_inner()),
+                    guid,
+                    || crate::target::raid_member_or_pet(&group, guid, me, &held),
+                );
+            }
+        }
         worldport(
             map_id,
             position,

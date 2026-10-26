@@ -506,13 +506,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState"]),
-    // The engine's selection writers signal in place (`0x493540`), reading the selection, the
-    // attack and loot state and the stores as the frame left them.
-    ("::target::track::follow_selection_object", &["creature_anim::AttackStopInFlight",
-        "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "spell::inflight::AutoRepeatActive",
-        "spell::inflight::PendingCast", "spell::inflight::QueuedMeleeSpell",
-        "spell::targeting::SpellTargeting", "target::Selection", "ui_loot::LootLatch",
-        "ui_loot::LootState", "ui_party::GroupState", "ui_pet::PetAttackLatch"]),
     // Each unit's list reads its store and record as of the drain's place (`ui_unit::views`), and
     // the buff cache is rebuilt at each packet's watcher; the resolver's inputs, the unit gate's
     // relations and the world entry's rebuild read as the frame left them.
@@ -784,6 +777,8 @@ fn lane_types() -> [TypeId; 20] {
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         // The deaths lane: the signals each death's legs parked, stamped under its health edge.
         TypeId::of::<crate::target::Deaths>(),
+        // The release lane: the signals each selection teardown parked, stamped under its release.
+        TypeId::of::<crate::target::Releases>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         // The cooldown lanes: the player's list and the pet's, which log their writes and flushes
@@ -828,6 +823,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 20] {
             TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         ),
         ("deaths", TypeId::of::<crate::target::Deaths>()),
+        ("releases", TypeId::of::<crate::target::Releases>()),
         (
             "item text",
             TypeId::of::<crate::ui_item_text::ItemTextLane>(),
@@ -1010,6 +1006,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "party",
             "pet cooldowns",
             "quest events",
+            "releases",
             "reputation",
             "unit views"
         ]

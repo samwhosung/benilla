@@ -406,9 +406,9 @@ fn a_write_the_log_missed_fails_the_rewind() {
     );
 }
 
-/// A worldport drops every streamed object without an update block (`SMSG_NEW_WORLD`): logged as
-/// the stores it takes, the rewind of the target the frame creates again lands on the store the
-/// frame started from.
+/// A worldport drops every streamed object without an update block (`SMSG_NEW_WORLD`), logged as
+/// the stores it takes: the transfer ends the selection, so no seat reads the dropped target's
+/// store, and the target the frame creates again is read live.
 #[test]
 fn a_worldport_is_logged_as_the_stores_it_takes() {
     let mut app = client();
@@ -430,10 +430,7 @@ fn a_worldport_is_logged_as_the_stores_it_takes() {
     );
     let views = app.world().resource::<crate::ui_unit::views::UnitViews>();
     #[cfg(debug_assertions)]
-    assert_eq!(
-        views.starts_checked, 1,
-        "the target, checked against the snapshot"
-    );
+    assert_eq!(views.starts_checked, 0, "no seat reads a dropped store");
     assert!(!views.holds(WOLF), "and read live again");
 }
 

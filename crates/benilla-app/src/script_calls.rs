@@ -2279,9 +2279,9 @@ mod tests {
 
     /// The commit's `IsSelectable` (`0x4935ee`) refuses a `UNIT_FLAG_NOT_SELECTABLE` unit: the
     /// nearer namesake is the ranked pick and it is refused, so the commit keeps its selection,
-    /// not the farther namesake, and the chunk keeps the old target's view.
+    /// not the farther namesake, and the chunk reads the old target.
     #[test]
-    fn target_by_name_shows_nothing_when_the_commit_refuses_its_pick() {
+    fn target_by_name_keeps_the_old_target_when_the_commit_refuses_its_pick() {
         /// `UNIT_FLAG_NOT_SELECTABLE`, `UNIT_FIELD_FLAGS` bit 25.
         const NOT_SELECTABLE: u32 = 1 << 25;
         /// A selectable namesake of `MOB` farther off, told apart by its health.
@@ -2301,6 +2301,13 @@ mod tests {
             ))
             .id();
         world.resource_mut::<GuidIndex>().0.insert(TWIN, twin);
+        // The old target told apart from the mob by its health.
+        let old = world.resource::<GuidIndex>().0[&OLD];
+        world
+            .get_mut::<ObjectStore>(old)
+            .expect("the old target's store")
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[(HEALTH, 70)]));
         let mut names = world.resource_mut::<crate::names::NameCache>();
         names.insert_player(MOB, "Red Affinity".into(), None);
         names.insert_player(TWIN, "Red Affinity".into(), None);
@@ -2312,8 +2319,8 @@ mod tests {
             "TargetByName('Red Affinity') return UnitHealth('target')",
         );
         assert_eq!(
-            shown, 0,
-            "the old target's view, not the twin's 40 or the mob's 100"
+            shown, 70,
+            "the old target's health, not the twin's 40 or the mob's 100"
         );
         assert_eq!(selected(&f), Some(OLD), "the commit refuses the same pick");
     }

@@ -67,13 +67,14 @@ impl super::UiScript {
     }
 
     /// The unit tokens that name a unit now ([`super::unit::bound_tokens_in`]): the set a field's
-    /// change is fanned out to (`0x515e50`). The objects are read through the lent host as of the
-    /// place this runs, the client's globals as the VM holds them; with no host to ask, the
-    /// snapshot's ([`super::UnitGuids::bound_tokens`]).
+    /// change is fanned out to (`0x515e50`). The objects, the target and the interaction globals
+    /// are read through the lent host as of the place this runs, the other globals as the VM holds
+    /// them; with no host to ask, the snapshot's ([`super::UnitGuids::bound_tokens`]).
     pub fn bound_unit_tokens(&self) -> Vec<String> {
         let model = self.model_ref();
         let guids = &model.unit_guids;
-        super::unit::with_live_objects(self.lua(), |o| super::unit::bound_tokens_in(guids, o))
+        let globals = super::unit::LiveGlobals::asked(self.lua(), guids);
+        super::unit::with_live_objects(self.lua(), |o| super::unit::bound_tokens_in(&globals, o))
             .unwrap_or_else(|| guids.bound_tokens())
     }
 
@@ -82,7 +83,8 @@ impl super::UiScript {
     pub fn unit_tokens_of(&self, guid: u64) -> Vec<String> {
         let model = self.model_ref();
         let guids = &model.unit_guids;
-        super::unit::with_live_objects(self.lua(), |o| super::unit::tokens_in(guids, o, guid))
+        let globals = super::unit::LiveGlobals::asked(self.lua(), guids);
+        super::unit::with_live_objects(self.lua(), |o| super::unit::tokens_in(&globals, o, guid))
             .unwrap_or_else(|| guids.tokens_of(guid))
     }
 
@@ -91,8 +93,9 @@ impl super::UiScript {
     pub fn unit_has_field_watchers(&self, guid: u64) -> bool {
         let model = self.model_ref();
         let guids = &model.unit_guids;
+        let globals = super::unit::LiveGlobals::asked(self.lua(), guids);
         super::unit::with_live_objects(self.lua(), |o| {
-            super::unit::field_watchers_in(guids, o, guid)
+            super::unit::field_watchers_in(&globals, o, guid)
         })
         .unwrap_or_else(|| guids.has_field_watchers(guid))
     }

@@ -84,6 +84,8 @@ live_reads! {
         /// The quest slots, the held counts, the standings, the coinage and the clock the quest
         /// log getters read.
         quest_log: crate::ui_quest_log::QuestLogLive<'static, 'static>,
+        /// The target and the interaction globals.
+        selection: crate::target::SelectionLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

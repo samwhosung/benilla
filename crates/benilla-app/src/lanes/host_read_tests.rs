@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 90;
-const FRAME_FINAL_INPUTS: usize = 439;
+const FRAME_FINAL_FEEDS: usize = 89;
+const FRAME_FINAL_INPUTS: usize = 426;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -39,6 +39,10 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::net::apply::tag_self_player", &["Commands net::SelfPlayer"],
         "tags our created entity as the player, which the token resolver finds it by; the \
          reference makes it the active player inside its create (`0x5dea50`)"),
+    ("::query_cache::release_on_enter<benilla_app::go_templates::GameObjectTemplates>",
+        &["go_templates::GameObjectTemplates"],
+        "clears the object cache's in-flight asks on world entry, so each is asked again; the \
+         npc's object name reads the cache (`0x5f8100`)"),
     ("::query_cache::release_on_enter<benilla_app::items::Items>", &["items::Items"],
         "clears the item cache's in-flight asks on world entry, so each is asked again"),
     ("::query_cache::release_on_enter<benilla_app::names::NameCache>", &["names::NameCache"],

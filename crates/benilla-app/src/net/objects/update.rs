@@ -664,6 +664,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             }
             let e = entity.id();
             sc.index.0.insert(guid, e);
+            crate::target::object_held(sc.selection.as_mut(), guid, e);
         }
     }
     sc.pass.reactivated.push(guid);
@@ -818,6 +819,21 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     // The record the snapshot wrote, for the views a listener reads.
     if sc.group.stats.get(&guid) != before.as_ref() {
         sc.view_log.record(guid, before);
+    }
+    // `CGUnit_C::Release` (`0x5fbb60`, after the player's roster legs, `0x5e9b61`): the
+    // selection's teardown (`0x5fbbe5`), unless a group row holds the guid (`0x5fbbcd`). Its run
+    // waits for the packet's end, so in one out-of-range list its sends follow a later member's
+    // `0x27f`.
+    {
+        let held = |g: u64| held(g).map(|s| &s.0);
+        let me = sc.self_guid.0;
+        let group = &sc.group;
+        crate::target::unit_released(
+            sc.selection.as_mut(),
+            sc.owed_releases.as_deref_mut(),
+            guid,
+            || crate::target::raid_member_or_pet(group, guid, me, &held),
+        );
     }
     // The release's `PARTY_MEMBER_DISABLE` for a party slot's player (`0x5e9b78`).
     if held(guid).is_some_and(|s| s.0.created_as() == Some(ObjectType::Player)) {

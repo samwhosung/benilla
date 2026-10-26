@@ -8,7 +8,7 @@ use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
-use super::{click, track, Hovered, PressPick, Selection};
+use super::{click, Hovered, PressPick, Selection};
 use crate::net::{ClientCommand, GuidIndex, SelfGuid};
 use crate::test_support::runs_before;
 use benilla_world::interact::WorldClick;
@@ -44,10 +44,9 @@ fn created(guid: u64, kind: EntityKind, as_type: ObjectType, mask: u32) -> Sessi
 enum Step {
     /// The world click's select.
     Click,
-    /// The net drain, which applies the frame's packets.
+    /// The net drain, which applies the frame's packets, a unit's release tearing its selection
+    /// down inside it.
     Net,
-    /// The selection's follow of its object, whose deactivation tears it down.
-    Follow,
 }
 
 /// Binds `$s` to the client's system for `$step` and evaluates `$body` with it.
@@ -62,17 +61,13 @@ macro_rules! with_system {
                 let $s = crate::net::apply_net_updates;
                 $body
             }
-            Step::Follow => {
-                let $s = track::follow_selection_object;
-                $body
-            }
         }
     };
 }
 
 /// The steps in the order `Update` declares them; panics on a pair it leaves unordered.
 fn in_frame_order(app: &mut App) -> Vec<Step> {
-    let mut steps = vec![Step::Click, Step::Net, Step::Follow];
+    let mut steps = vec![Step::Click, Step::Net];
     let mut before = Vec::new();
     for (i, a) in steps.iter().enumerate() {
         for b in &steps[i + 1..] {
@@ -99,14 +94,14 @@ fn in_frame_order(app: &mut App) -> Vec<Step> {
 
 /// A left click released over a unit in the frame whose packets remove it, the frame's steps in
 /// the schedule's order: the click selects it (`CMSG_SET_SELECTION` with its guid), and the
-/// removal's deactivation then tears the selection down with its own send (`0x5fbbe5`). With the
-/// packets and the follow first, the click would select a guid whose object has gone, with no
-/// deactivation left to end it.
+/// removal's release then tears the selection down with its own send (`0x5fbbe5`). With the
+/// packets first, the click would select a guid whose object has gone, with no release left to
+/// end it.
 #[test]
 fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let order = in_frame_order(&mut app);
-    assert_eq!(order, [Step::Click, Step::Net, Step::Follow]);
+    assert_eq!(order, [Step::Click, Step::Net]);
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
     ));
@@ -150,9 +145,6 @@ fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
                 .run_system_once(click::select_on_click)
                 .expect("the click runs"),
             Step::Net => crate::net::apply_net_updates(world),
-            Step::Follow => world
-                .run_system_once(track::follow_selection_object)
-                .expect("the follow runs"),
         }
     }
 

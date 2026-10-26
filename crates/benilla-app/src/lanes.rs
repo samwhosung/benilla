@@ -456,6 +456,8 @@ mod quiet_tests;
 #[cfg(test)]
 mod reputation_live_tests;
 #[cfg(test)]
+mod selection_live_tests;
+#[cfg(test)]
 mod stat_live_tests;
 #[cfg(test)]
 mod storm_tests;

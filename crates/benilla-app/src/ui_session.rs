@@ -136,22 +136,16 @@ pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
 #[derive(Resource, Default, PartialEq, Eq, Debug)]
 pub(crate) struct InteractNpc(pub(crate) Option<Entity>, pub(crate) Option<u64>);
 
-/// Publish the latch as [`InteractNpc`]. The reference's `"npc"` is the latch itself (`0x515c00`),
-/// a trade's partner included, but a quest panel opened from a bag item, the mailbox and the text
-/// reader publish none here, as before the latch: there is no unit bake for an item or a game
-/// object window. `Option<Res<_>>` lets a test mount it without every window.
+/// Publish the latch as [`InteractNpc`]. The reference's `"npc"` is the latch itself, untested
+/// (`0x515c00`): a trade's partner, and the mailbox (`0x4acd1c`), the text reader's object or item
+/// (`0x4e349a`) and a quest panel's giver (`0x500d74`), each set through `0x4930d0`. A getter's own
+/// lookup tells a unit from the rest. `Option<Res<_>>` lets a test mount it without the latch.
 pub(crate) fn feed_interact_npc(
     latch: Option<Res<InteractLatch>>,
-    mail: Option<Res<crate::ui_mail::MailOpen>>,
-    reader: Option<Res<crate::ui_item_text::ItemTextOpen>>,
     index: Option<Res<GuidIndex>>,
     mut out: ResMut<InteractNpc>,
 ) {
-    let guid = latch.and_then(|l| l.guid()).filter(|&g| {
-        !benilla_protocol::guid::is_item(g)
-            && mail.as_ref().is_none_or(|m| m.mailbox != Some(g))
-            && reader.as_ref().is_none_or(|r| r.object() != Some(g))
-    });
+    let guid = latch.and_then(|l| l.guid());
     // Field 0 is the entity the booth bakes and the facing chain steers by; field 1 is the guid
     // `crate::ui_unit` names the token by, which holds even when the entity is not streamed.
     // Written only on a change: the unit feed's dirty gate reads `is_changed()` on it.
@@ -336,31 +330,25 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<InteractNpc>().0, None);
 
-        // A quest-starter item holds the latch: no unit to name.
+        // A quest-starter item and the mailbox hold the latch, each its guid untested
+        // (`0x515c00`).
         const ITEM: u64 = 0x4000_0000_0000_0BAD;
-        app.world_mut()
-            .resource_mut::<InteractLatch>()
-            .latch_for_test(ITEM);
-        app.update();
-        assert_eq!(
-            *app.world().resource::<InteractNpc>(),
-            InteractNpc(None, None)
-        );
-
-        // The mailbox holds the latch: no unit to name.
         const MAILBOX: u64 = 0xF110_0000_0000_0B0C;
-        app.init_resource::<crate::ui_mail::MailOpen>();
+        let mailbox = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .resource_mut::<crate::ui_mail::MailOpen>()
-            .click(MAILBOX);
-        app.world_mut()
-            .resource_mut::<InteractLatch>()
-            .latch_for_test(MAILBOX);
-        app.update();
-        assert_eq!(
-            *app.world().resource::<InteractNpc>(),
-            InteractNpc(None, None)
-        );
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(MAILBOX, mailbox);
+        for (guid, entity) in [(ITEM, None), (MAILBOX, Some(mailbox))] {
+            app.world_mut()
+                .resource_mut::<InteractLatch>()
+                .latch_for_test(guid);
+            app.update();
+            assert_eq!(
+                *app.world().resource::<InteractNpc>(),
+                InteractNpc(entity, Some(guid))
+            );
+        }
 
         // A trade's partner holds the latch: the partner's own portrait.
         const PARTNER: u64 = 0x0000_0000_0000_0008;

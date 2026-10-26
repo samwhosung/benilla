@@ -141,8 +141,26 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 return Ok((name, Value::Nil));
             }
-            // A held unit is named off its object as the call runs ([`read_identity`]).
             check_unit_token(&token)?;
+            // An object held that is no unit: a game object's or an item's name (`0x517146`).
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                token
+                    .as_deref()
+                    .map(|t| super::guid_of(lua, &model, t))
+                    .transpose()?
+                    .flatten()
+            };
+            if let Some(name) =
+                guid.and_then(|g| crate::script::live::ask(lua, &super::ObjectNameQuery(g)))
+            {
+                let name = match name {
+                    Some(n) => lua.create_string(&n)?,
+                    None => unknownobject(lua)?,
+                };
+                return Ok((Value::String(name), Value::Nil));
+            }
+            // A held unit is named off its object as the call runs ([`read_identity`]).
             let name = token
                 .as_deref()
                 .and_then(|t| read_identity(lua, t, |u, id| (id.name(), u.has_object, u.guid)));
@@ -405,6 +423,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // Both go through the resolver, so either one unrecognised raises.
             check_unit_token(&a)?;
             check_unit_token(&b)?;
+            // Each token's guid as the resolver names it at the call (`0x5160e8`, `0x5160f4`),
+            // an object that is no unit's included: nonzero and equal.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let guid = |t: &Option<String>| {
                 t.as_deref()

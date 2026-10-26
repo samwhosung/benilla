@@ -274,6 +274,9 @@ fn the_reaction_after_a_toggle_reads_the_bit_the_toggle_wrote() {
         me: Some(ME),
         roster: Default::default(),
     };
+    app.world_mut()
+        .resource_mut::<crate::target::Selection>()
+        .guid = Some(GUARD);
     {
         let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
         script.set_unit_relations(Some(std::rc::Rc::new(snapshot)));

@@ -55,6 +55,10 @@ fn spell_owner(spell_id: u32) -> u64 {
 #[test]
 fn unit_name_asks_a_missed_name_inside_its_call() {
     let (mut app, rx) = client();
+    // The target the resolver reads (`0x515a86`), and its view.
+    app.world_mut()
+        .resource_mut::<crate::target::Selection>()
+        .guid = Some(0x77);
     vm(&mut app).set_unit(
         "target",
         Some(UnitState {
@@ -232,6 +236,11 @@ fn get_guild_info_asks_a_missed_guild_inside_its_call() {
         .resource_mut::<crate::net::GuidIndex>()
         .0
         .insert(0x77, target);
+    *app.world_mut().resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(target),
+        guid: Some(0x77),
+        ..Default::default()
+    };
     vm(&mut app).set_unit(
         "target",
         Some(UnitState {

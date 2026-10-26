@@ -127,6 +127,11 @@ fn invite_to_party_flags_the_grouping_tutorial_before_its_invite() {
     world
         .resource_mut::<crate::names::NameCache>()
         .insert_player(BOB, "Bob".into(), None);
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(bob),
+        guid: Some(BOB),
+        ..Default::default()
+    };
     world
         .non_send_resource_mut::<UiScript>()
         .set_unit_guids(&benilla_ui::script::UnitGuids {

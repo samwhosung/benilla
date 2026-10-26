@@ -45,15 +45,14 @@ impl super::super::UiScript {
     }
 
     /// The drunk watcher's test on the active player (`0x5e2afb`-`0x5e2b2a`): the target global
-    /// `[0xb4e2d8]` names a unit the host holds (`0x468460`, typemask 8) and
-    /// `CanAttack 0x606980(player, target)` holds.
+    /// `[0xb4e2d8]`, read through the lent host as of here, names a unit the host holds
+    /// (`0x468460`, typemask 8) and `CanAttack 0x606980(player, target)` holds.
     pub fn player_can_attack_target(&self) -> bool {
         let model = self.model_ref();
         let guids = &model.unit_guids;
+        let target = super::UnitTokenGlobals::target(&super::LiveGlobals::asked(self.lua(), guids));
         model.unit_relations.as_deref().is_some_and(|rel| {
-            guids.target != 0
-                && rel.holds(guids.target)
-                && rel.can_attack(guids.player, guids.target) == Some(true)
+            target != 0 && rel.holds(target) && rel.can_attack(guids.player, target) == Some(true)
         })
     }
 }

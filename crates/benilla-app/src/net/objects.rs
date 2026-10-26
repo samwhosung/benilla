@@ -110,8 +110,11 @@ pub(crate) struct Scene<'w, 's> {
     death_net: ResMut<'w, crate::death::DeathNet>,
     group: ResMut<'w, crate::ui_party::GroupState>,
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
-    /// The selection, whose aura state the usable refresh watches (`0x6048a6`).
-    selection: Option<Res<'w, crate::target::Selection>>,
+    /// The selection, whose aura state the usable refresh watches (`0x6048a6`), and which a
+    /// unit's release ends and a create or a reactivation holds again ([`crate::target`]).
+    selection: Option<ResMut<'w, crate::target::Selection>>,
+    /// The selection teardowns the packet's releases owe.
+    owed_releases: Option<ResMut<'w, crate::target::OwedReleases>>,
     guilds: Option<ResMut<'w, crate::ui_guild::GuildState>>,
     // The own offer the coinage watcher trims (`0x5ddf30`).
     trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,
@@ -686,6 +689,7 @@ fn object_create(
             }
             let e = entity.id();
             sc.index.0.insert(guid, e);
+            crate::target::object_held(sc.selection.as_mut(), guid, e);
             e
         }
     }

@@ -735,6 +735,10 @@ mod tests {
     /// reads the name caches through it.
     fn hosted_world(guids: benilla_ui::script::UnitGuids) -> App {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        // The selection the getters read through the host.
+        app.world_mut()
+            .resource_mut::<crate::target::Selection>()
+            .guid = (guids.target != 0).then_some(guids.target);
         spy(&mut app, guids);
         app
     }
@@ -1086,6 +1090,9 @@ mod tests {
             ]
         );
         // A target the player cannot attack: the lines alone.
+        app.world_mut()
+            .resource_mut::<crate::target::Selection>()
+            .guid = Some(seated().target);
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .set_unit_guids(&seated());

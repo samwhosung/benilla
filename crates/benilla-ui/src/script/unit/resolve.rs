@@ -6,7 +6,8 @@
 //! What it reads splits in two, and [`resolve_unit_in`] is the one derivation over both. The
 //! client's own state ([`UnitTokenGlobals`]): the target, mouseover and interaction globals and
 //! the group tables, which the VM holds as the app pushes them ([`UnitGuids`]) and moves itself
-//! where a call does. The objects ([`UnitTokenObjects`]): the active player's, our pet off our
+//! where a call does, and which a getter reads through the lent host where it answers: the target
+//! and the interaction globals ([`super::selection_read`]) and the group rows. The objects ([`UnitTokenObjects`]): the active player's, our pet off our
 //! descriptor, a member's pet off its, the mouseover's, and each hop's `UNIT_FIELD_TARGET`, which
 //! a getter reads through the lent host as of the place it runs ([`resolve_token`]), and off the
 //! snapshot with no host to ask.
@@ -16,6 +17,7 @@ use std::collections::HashMap;
 use mlua::Lua;
 
 use super::super::roster_read::{GroupRow, RowQuery};
+use super::selection_read::{live_selection, SelectionGlobals};
 
 /// What `0x515970` reads of the client's own state, no object's field: the reference keeps each in
 /// a global or a table of its own, and no object's update writes them.
@@ -278,10 +280,10 @@ fn reads_objects(base: UnitBase, hops: usize) -> bool {
         )
 }
 
-/// The guid a parsed token names as `0x515970` resolves it at the call: the client's globals as
-/// `guids` holds them, the group rows through the lent host and the objects likewise, as of the
-/// place the call runs; with no host free to ask (a glue VM, or a call's apply under way), or one
-/// that reads none, the snapshot's.
+/// The guid a parsed token names as `0x515970` resolves it at the call: the selection's and the
+/// interaction's globals, the group rows and the objects through the lent host, as of the place
+/// the call runs, the rest of the client's globals as `guids` holds them; with no host free to ask
+/// (a glue VM, or a call's apply under way), or one that reads none, the snapshot's.
 pub(crate) fn resolve_parsed(
     lua: &Lua,
     guids: &UnitGuids,
@@ -291,71 +293,92 @@ pub(crate) fn resolve_parsed(
     live_parsed(lua, guids, base, hops).unwrap_or_else(|| guids.resolve_unit(base, hops))
 }
 
-/// [`resolve_parsed`]'s live answer, `None` where it reads no object or group row or no host reads
-/// them for it, and the snapshot's answer stands.
+/// [`resolve_parsed`]'s live answer, `None` where it reads no object, group row or selection
+/// global, or no host reads them for it, and the snapshot's answer stands.
 pub(crate) fn live_parsed(
     lua: &Lua,
     guids: &UnitGuids,
     base: UnitBase,
     hops: usize,
 ) -> Option<Option<u64>> {
-    // The group rows first: the host is not free to ask again inside the objects' read.
+    // The group rows and the globals first: the host is not free to ask again inside the
+    // objects' read.
     let row = match base {
         UnitBase::Party(_) | UnitBase::PartyPet(_) | UnitBase::Raid(_) | UnitBase::RaidPet(_) => {
-            crate::script::live::ask(lua, &RowQuery(base))
+            crate::script::live::ask(lua, &RowQuery(base)).map(|row| (base, row))
         }
         _ => None,
     };
-    let globals = LiveRow { guids, base, row };
+    let selection = live_selection(lua);
+    let globals = LiveGlobals {
+        guids,
+        row,
+        selection,
+    };
     if reads_objects(base, hops) {
         with_live_objects(lua, |objects| {
             resolve_unit_in(&globals, objects, base, hops)
         })
+    } else if matches!(base, UnitBase::Target | UnitBase::Npc) {
+        // A hop-less `target` or `npc` is its global alone (`0x515a86`, `0x515c00`).
+        selection.map(|_| resolve_unit_in(&globals, &NoObjects, base, hops))
     } else {
         // A group row alone reads no object, and a hop-less `partyN` or `raidN` asks for none.
         row.map(|_| resolve_unit_in(&globals, &NoObjects, base, hops))
     }
 }
 
-/// The client's globals with one group row read live: the row `base` names, as the lent host reads
-/// it ([`RowQuery`]); every other global as `guids` holds it.
-struct LiveRow<'a> {
+/// The client's globals, each read live where the lent host answered for it: the selection's and
+/// the interaction's ([`super::SelectionQuery`]) and one group row, the row its base names
+/// ([`RowQuery`]); every other global as `guids` holds it.
+pub(crate) struct LiveGlobals<'a> {
     guids: &'a UnitGuids,
-    base: UnitBase,
-    row: Option<GroupRow>,
+    row: Option<(UnitBase, GroupRow)>,
+    selection: Option<SelectionGlobals>,
 }
 
-impl UnitTokenGlobals for LiveRow<'_> {
+impl<'a> LiveGlobals<'a> {
+    /// `guids` with the selection's and the interaction's globals asked of the lent host.
+    pub(crate) fn asked(lua: &Lua, guids: &'a UnitGuids) -> Self {
+        Self {
+            guids,
+            row: None,
+            selection: live_selection(lua),
+        }
+    }
+}
+
+impl UnitTokenGlobals for LiveGlobals<'_> {
     fn target(&self) -> u64 {
-        self.guids.target
+        self.selection.map_or(self.guids.target, |s| s.target)
     }
     fn mouseover(&self) -> u64 {
         self.guids.mouseover
     }
     fn npc(&self) -> u64 {
-        self.guids.npc
+        self.selection.map_or(self.guids.npc, |s| s.npc)
     }
     fn party(&self, row: u32) -> u64 {
-        match (self.base, self.row) {
-            (UnitBase::Party(r) | UnitBase::PartyPet(r), Some(live)) if r == row => live.member,
+        match self.row {
+            Some((UnitBase::Party(r) | UnitBase::PartyPet(r), live)) if r == row => live.member,
             _ => self.guids.party(row),
         }
     }
     fn raid(&self, row: u32) -> u64 {
-        match (self.base, self.row) {
-            (UnitBase::Raid(r) | UnitBase::RaidPet(r), Some(live)) if r == row => live.member,
+        match self.row {
+            Some((UnitBase::Raid(r) | UnitBase::RaidPet(r), live)) if r == row => live.member,
             _ => self.guids.raid(row),
         }
     }
     fn party_pet_record(&self, row: u32) -> u64 {
-        match (self.base, self.row) {
-            (UnitBase::PartyPet(r), Some(live)) if r == row => live.pet_record,
+        match self.row {
+            Some((UnitBase::PartyPet(r), live)) if r == row => live.pet_record,
             _ => self.guids.party_pet_record(row),
         }
     }
     fn raid_pet_record(&self, row: u32) -> u64 {
-        match (self.base, self.row) {
-            (UnitBase::RaidPet(r), Some(live)) if r == row => live.pet_record,
+        match self.row {
+            Some((UnitBase::RaidPet(r), live)) if r == row => live.pet_record,
             _ => self.guids.raid_pet_record(row),
         }
     }

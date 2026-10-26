@@ -612,9 +612,12 @@ pub(crate) fn view<'m>(lua: &Lua, model: &'m Model, token: &str) -> Option<Cow<'
         (Some(pushed), guid) if pushed.guid == guid.unwrap_or(0) => Some(Cow::Borrowed(pushed)),
         (_, None) => None,
         (_, Some(guid)) => {
-            // The object lookup each getter makes after the resolver (`0x468460`).
+            // The object lookup each getter makes after the resolver (`0x468460`), held as a unit:
+            // `UnitExists`' slot 22 answers 0 for a game object or an item (`0x515fee`), the
+            // objects named apart ([`ObjectNameQuery`]).
             let held = super::host::read_host(lua, |h| h.read_unit_object(guid, &mut |_| {}))
-                == Some(true);
+                == Some(true)
+                && super::live::ask(lua, &ObjectNameQuery(guid)).is_none();
             Some(model.unit_of_guid(guid, held))
         }
     }
@@ -782,6 +785,7 @@ mod object;
 mod record;
 mod relations;
 mod resolve;
+mod selection_read;
 #[cfg(test)]
 mod selection_tests;
 #[cfg(test)]
@@ -795,6 +799,7 @@ pub use resolve::{
     bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,
     UnitGuids, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
-pub(crate) use resolve::{token_guid, with_live_objects};
+pub(crate) use resolve::{token_guid, with_live_objects, LiveGlobals};
+pub use selection_read::{ObjectNameQuery, SelectionGlobals, SelectionQuery};
 
 pub(super) use bindings::install;
