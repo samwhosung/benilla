@@ -944,7 +944,7 @@ fn a_numeric_string_is_read_as_the_clients_strtod_reads_it() {
             ),
             (
                 format!(r#"StrtodModel:SetLight("{bad}")"#),
-                "Usage: Model:SetLight(enabled",
+                "Usage: StrtodModel:SetLight(enabled", // the name fills `%s` (`0x76e79f`)
             ),
             (
                 format!(r#"StrtodTT:SetMerchantCompareItem("{bad}")"#),
