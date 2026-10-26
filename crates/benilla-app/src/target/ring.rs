@@ -300,9 +300,8 @@ pub(super) fn update_ring(
                     .zip(me)
                     .map_or(Reaction::Neutral as u8, |(u, me)| rel.reaction(&u, &me));
                 let is_player = net.is_some_and(|n| n.kind == EntityKind::Player);
-                let in_party = selection
-                    .guid
-                    .is_some_and(|g| targets.2.members.iter().any(|m| m.guid == g));
+                // `0x4e7f70`: us or one of the four party slots, never the raid roster.
+                let in_party = selection.guid.is_some_and(|g| rel.in_party(g));
                 let is_dead = store.is_some_and(|s| s.0.unit_is_dead());
                 if selection.guid != *logged_guid {
                     *logged_guid = selection.guid;

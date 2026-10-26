@@ -589,7 +589,8 @@ pub(crate) fn drive_nameplates(
                 me.as_ref(),
                 net.kind == EntityKind::Player,
                 store.is_some_and(|s| s.0.unit_is_dead()),
-                group.members.iter().any(|m| m.guid == guid.0),
+                // `0x4e7f70`: us or one of the four party slots, never the raid roster.
+                rel.in_party(guid.0),
             ))
         };
 
