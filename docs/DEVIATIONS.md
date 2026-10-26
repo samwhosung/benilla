@@ -168,7 +168,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - `AlphaMode::Blend` writes no depth where the reference does, because overlapping names resolving by sort order look the same. ([`src/nameplates.rs:4`](../crates/benilla-app/src/nameplates.rs#L4))
 - A mounted plate keeps only this fraction of its seat's oscillation about a slow mean, because the raw seat, which the reference also rides, read more intense than the reference side by side. `1.0` is the raw seat; on-foot plates are untouched. ([`src/nameplates.rs:289`](../crates/benilla-app/src/nameplates.rs#L289))
 - Larger than the reference's 32 px `UNIT_NAME_FONT` raster, which it magnifies (`0x6c749b`), because a larger source is crisper up close. ([`src/nameplates.rs:298`](../crates/benilla-app/src/nameplates.rs#L298))
-- `ShouldShowName`'s first leg is `IsSelectable` (`0x60be60`), which passes our own unit; what hides the own name in first person in 1.12.1 is untraced, so the avatar's fade stands in. ([`src/nameplates.rs:532`](../crates/benilla-app/src/nameplates.rs#L532))
+- `ShouldShowName`'s first leg is `IsSelectable` (`0x60be60`), which passes our own unit; what hides the own name in first person in 1.12.1 is untraced, so the avatar's fade stands in. ([`src/nameplates.rs:530`](../crates/benilla-app/src/nameplates.rs#L530))
 
 #### names
 
