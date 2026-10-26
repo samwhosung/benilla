@@ -234,18 +234,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_smf(lua, &this, |smf| smf.lines_shown as f64))?,
     )?;
     // SetScrollFromBottom(n) (`0x793070`) tests `lua_isnumber(2)` before the receiver check and
-    // returns silently without one (`0x79307f`); the number is `_ftol`ed (`0x793113`).
+    // returns silently without one (`0x79307f`); then the member prologue runs late, its type
+    // test against the ScrollingMessageFrame (`0x7930f0`, "Wrong object type for member
+    // function" `0x847e98`), and the number is `_ftol`ed (`0x793113`).
     m.set(
         "SetScrollFromBottom",
         lua.create_function(|lua, (this, n): (Value, Value)| {
             let Some(n) = is_number(lua, &n) else {
                 return Ok(());
             };
-            let Value::Table(this) = this else {
-                return Err(mlua::Error::runtime(
-                    "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
-                ));
-            };
+            let this =
+                crate::script::object::receiver_in(lua, &this, REG_SCROLLINGMESSAGEFRAME_METHODS)?;
             let n = crate::script::binding_abi::ftol(n);
             scroll(lua, &this, |smf, viewport| {
                 smf.set_scroll_from_bottom(n, viewport)

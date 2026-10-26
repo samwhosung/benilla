@@ -736,6 +736,40 @@ fn set_parent_raises_the_reference_lines_for_a_bad_table() {
     .unwrap();
 }
 
+/// `SetScrollFromBottom` (`0x793070`) runs the member prologue after its number gate: another
+/// frame type fails the type test (`0x7930f0`) with "Wrong object type for member function"
+/// (`0x847e98`), and a non-number returns before any receiver check (`0x79307f`).
+#[test]
+fn set_scroll_from_bottom_checks_its_receiver_late() {
+    let s = script();
+    s.run(
+        r#"
+        FromBottom = CreateFrame("ScrollingMessageFrame").SetScrollFromBottom
+        FromBottom(CreateFrame("Frame"), nil)
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "FromBottom(CreateFrame('Frame'), 1)",
+            "Wrong object type for member function",
+        ),
+        (
+            "FromBottom({}, 1)",
+            "Attempt to find 'this' in non-framescript object",
+        ),
+        (
+            "FromBottom(5, 1)",
+            "Attempt to find 'this' in non-table object",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run("CreateFrame('ScrollingMessageFrame'):SetScrollFromBottom(1)")
+        .unwrap();
+}
+
 /// `SortGuildRoster` tests argument 1 with `lua_isstring` (`0x4d1cb8`), so a number is its
 /// string, and anything else raises `Usgae: SortGuildRoster("type")` (`0x849bf0`, `0x4d1cc7`),
 /// the binary's spelling, with no call made.
