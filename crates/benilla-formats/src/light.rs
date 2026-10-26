@@ -195,7 +195,8 @@ fn light_schema() -> Schema {
     s
 }
 
-/// `LightParams.dbc`: 9 fields, 36-byte records, types per the client's reader `0x589030`.
+/// `LightParams.dbc`: 9 fields, 36-byte records, read as nine untyped dwords (`0x589030`), so
+/// int versus float is the consumers'.
 /// `cloudTypeID` (+0x0C) is 0 in every 5875 record; the glow is +0x10.
 fn light_params_schema() -> Schema {
     let mut s = Schema::new("LightParams");

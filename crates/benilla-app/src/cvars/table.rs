@@ -697,8 +697,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("texLodBias", "0.0").checked(benilla_ui::script::check_tex_lod_bias),
     // `baseMip` (`0x6887aa`, "0", flags 1, callback `0x689090`, record `[0xc7f2f0]`), behind
     // `Get/SetBaseMip` as `1 − level`: the callback refuses outside [0, 1] ("BaseMip must be 0 or
-    // 1") and sets the device's first uploaded mip level (`0x589bf0`, read at `0x59f6ce`). benilla
-    // uploads every level; the write is kept and has no effect. `hwDetect` leaves it at 0.
+    // 1") and sets the device's first uploaded mip level (`0x589bf0`, read at `0x59f6d1`, on
+    // Direct3D `0x5a08fc`). benilla uploads every level; the write is kept and has no effect.
+    // `hwDetect` leaves it at 0.
     same("baseMip", "0").checked(benilla_ui::script::check_base_mip),
     // `spellEffectLevel` (`0x688900`: name `0x869324`, default `0x843068` "2", flags 1, callback
     // `0x689510`, record `[0xc7f2a4]`), the Spell Detail slider (`OptionsFrame.lua:32`). The

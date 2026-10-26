@@ -213,8 +213,8 @@ fn a_status_bar_takes_a_texture_object_and_a_nil() {
     .unwrap();
 }
 
-/// `0x789860`: the thumb links on OVERLAY (the layer argument is constant 3), its anchors are
-/// cleared (`0x767ed0`) since the slider places it, and the old thumb is deleted.
+/// `0x789860`: the thumb links on OVERLAY, the layer `SetThumbTexture` passes (`0x790434`), its
+/// anchors are cleared (`0x767ed0`) since the slider places it, and the old thumb is deleted.
 #[test]
 fn a_slider_thumb_object_links_on_overlay_with_its_anchors_cleared() {
     let s = script();

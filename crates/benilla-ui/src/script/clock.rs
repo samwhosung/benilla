@@ -58,7 +58,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set("GetTime", lua.create_function(|lua, ()| Ok(now(lua)))?)?;
     // GetGameTime() (`0x515ee0`): two numbers, the hour `[0xce853c]` then the minute `[0xce8538]`,
     // the clock the server's time messages set; minute resolution, no seconds. Read unguarded, so
-    // before the server sets the clock it answers the -1 its constructor stores in every field
+    // before the server sets the clock it answers the -1 its constructor stores in both fields
     // (`0x642300`, called at `0x643308`).
     g.set(
         "GetGameTime",

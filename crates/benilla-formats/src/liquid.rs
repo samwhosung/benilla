@@ -2,7 +2,7 @@
 //!
 //! An MCNK carries one 804-byte MCLQ block per set liquid header bit, each a 9×9 absolute-height
 //! grid and an 8×8 cell-flag grid. Each wet cell is two triangles; a dry cell (nibble `0xf`,
-//! corners at the FLT_MAX sentinel) is skipped. The cell nibble is the liquid type (`0x6ba970`,
+//! corners at the FLT_MAX sentinel) is skipped. The cell nibble is the liquid type (`0x68b21f`,
 //! `0x68d9b0`); the header bits only count the blocks.
 
 use benilla_adt::MclqChunk;

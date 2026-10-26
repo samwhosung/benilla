@@ -189,7 +189,7 @@ fn play_item_gesture_sounds(
 /// - An item plays its display's sound alone (`SetCursorItem`, `ClearCursor`'s item arm).
 /// - A preview (modes 5, 7, 9) grabs with its display's pickup alone (`0x495154`), and clears with
 ///   its put-down, then `INTERFACESOUND_CURSORDROPOBJECT` (`0x49526a`, `0x495291`).
-/// - A spell, macro (`0x494f60`), pet action (`0x494e20`) or stabled pet (`0x495010`) plays the
+/// - A spell, macro (`0x494f80`), pet action (`0x494e20`) or stabled pet (`0x495010`) plays the
 ///   generic grab or drop.
 /// - Coins play `LOOTWINDOWCOINSOUND` both ways, never the generic drop (`0x494cfe`, `0x49523a`).
 fn gesture_plan(payload: &CursorPayload, gesture: CursorGesture) -> (Option<u32>, Option<u32>) {

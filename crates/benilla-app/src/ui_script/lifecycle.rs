@@ -199,7 +199,7 @@ fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
 }
 
 /// Start the new VM's `GetGameTime()` at the game clock as it stands: the reference's clock is one
-/// object (`0xce8538`) built at start-up with every field -1 (`0x643300`, `0x642300`) and reset
+/// object (`0xce8538`) built at start-up with its time at -1 (`0x643300`, `0x642300`) and reset
 /// by no logout or `ReloadUI`, so a VM answers -1, -1 before any server time and the last known
 /// time after it, from the first line its addons run.
 fn seed_game_time(world: &World, script: &mut UiScript) {
@@ -1498,7 +1498,7 @@ mod tests {
         }
     }
 
-    /// The game clock is one object built at start-up with every field -1 (`0x643300`, `0x642300`)
+    /// The game clock is one object built at start-up with its time at -1 (`0x643300`, `0x642300`)
     /// that no logout or `ReloadUI` resets, and `GetGameTime` reads it unguarded (`0x515ee0`), so a
     /// VM answers -1, -1 before any server time and the last known time after it, from the first
     /// line its addons run.

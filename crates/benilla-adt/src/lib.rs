@@ -115,7 +115,7 @@ impl LiquidVertex {
 
 /// One MCLQ liquid block: a 9×9 absolute-height grid and an 8×8 cell-flag grid. An MCNK carries
 /// one per set liquid header bit, back to back (`0x6af7a3`–`0x6af7cb`): two at the 28 shipped river
-/// mouths. The liquid type is each cell's flag nibble (`0x6ba970`, `0x68d9b0`), not a header bit.
+/// mouths. The liquid type is each cell's flag nibble (`0x68b21f`, `0x68d9b0`), not a header bit.
 #[derive(Debug, Clone)]
 pub struct MclqChunk {
     pub min_height: f32,

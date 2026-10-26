@@ -243,7 +243,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // `0x78fc20` reads r, g, b by a bare `lua_tonumber`, so nil, a table or a non-numeric string
-    // is 0.0 and the call never raises (a numeric string also reads 0.0 here). Stock hands colour
+    // is 0.0 and the call never raises (a numeric string reads as its number). Stock hands colour
     // setters nils: `QuestLogFrame.lua:337` passes three to `SetVertexColor`.
     m.set(
         "SetStatusBarColor",

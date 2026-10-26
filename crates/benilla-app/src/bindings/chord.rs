@@ -119,8 +119,8 @@ pub(crate) fn key_token(k: KeyCode, layout: &LayoutNames) -> Option<KeyName> {
 /// codes the table cannot name, `0x210` and `0x211` (ScrollLock and Pause, and F14 and F15 on a
 /// Mac). Every other key without a name never reaches the walk: the Windows key table drops it
 /// where `MapVirtualKeyA` answers 0 (`0x42da39`: the Windows and Menu keys, media keys, a key the
-/// layout drops), the Mac table `0x5bf320` has -1 for Command and fn. Unlike [`key_token`], which
-/// is a binding's, a modifier still gets a down and an up.
+/// layout drops), the Mac client's table `0x5bf320` has -1 for Command and fn. Unlike
+/// [`key_token`], which is a binding's, a modifier still gets a down and an up.
 pub(crate) fn walk_name(k: KeyCode, layout: &LayoutNames) -> Option<String> {
     if let Some(name) = key_token(k, layout) {
         return Some(name.to_string());
@@ -157,8 +157,8 @@ fn fixed_name(k: KeyCode) -> Option<KeyName> {
         F10 => Word("F10"),
         F11 => Word("F11"),
         F12 => Word("F12"),
-        // On a Mac F13 is print-screen: the Mac key table `0x5bf320` maps keycode `0x69` to
-        // `0x212`, `PRINTSCREEN`, and macOS has no PrintScreen keycode.
+        // On a Mac F13 is print-screen: the Mac client's key table `0x5bf320` maps keycode
+        // `0x69` to `0x212`, `PRINTSCREEN`, and macOS has no PrintScreen keycode.
         #[cfg(target_os = "macos")]
         F13 => Word("PRINTSCREEN"),
         // `IsValidBindingKeyString` accepts `F` + any digits (`0x846c04`) and the Mac table maps

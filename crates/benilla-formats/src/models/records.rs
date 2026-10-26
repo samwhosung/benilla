@@ -349,7 +349,7 @@ mod tests {
 
 /// One camera table record by raw index, what `Model:SetCamera(n)` selects on a `<Model>` widget:
 /// `0x76cec0` reads the count off `MD20+0x124` and the record at `[model+0x3c4] + idx·0x84 + 0x80`
-/// without consulting `cameraLookup` (only `0x713500`/`0x713540` do, for the portrait bake), so
+/// without consulting `cameraLookup` (only `0x713540` does, for the portrait bake), so
 /// the index decides and [`Self::camera_type`] never does. Every shipped character, creature and
 /// interface camera is its [`Self::still`] rig, each track one key of zero; [`Self::at`] samples
 /// the `Cameras\*.m2` fly-bys.

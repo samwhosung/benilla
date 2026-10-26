@@ -31,7 +31,8 @@ pub(crate) use wind::{wow_azimuth_to_bevy, WeatherWind};
 // ===== The reference's constants =====
 
 /// The weather leg: the reference runs the shader leg unless `useWeatherShaders` (default 1,
-/// `0x67b81d`) is 0 or its ARB programs fail to validate (`0x58b360`); this always runs it.
+/// `0x67b81d`) is 0 or a shader's loaded flag is clear (`0x58b360`): the file read sets it
+/// (`0x595216`), and only OpenGL resets it from the compile (`0x59e544`). This always runs it.
 const SHADER_LEG: bool = true;
 /// Per-packet record capacity, 6144 (`0x80ffc8` as a float, which the open stamp divides by the
 /// rate). Not a population cap: packets form a growing list, so demand bounds the population.

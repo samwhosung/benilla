@@ -34,7 +34,7 @@ impl Position {
 
 /// The keys a layout names: the letters, the digits, the punctuation, the ISO and JIS extras and
 /// the keypad comma. Windows sends `VK_OEM_102`, `VK_ABNT_C2` and `VK_SEPARATOR` to the layout arm
-/// like any `VK_OEM_*` key, and the Mac table leaves the ISO key `0x0A` and the keypad comma
+/// like any `VK_OEM_*` key, and the Mac client's table leaves the ISO key `0x0A` and keypad comma
 /// `0x5F` to `KeyTranslate` (`-1` at `0x5bf320`). winit 0.30 cannot deliver those on a Mac, as on
 /// main: it reports `0x0A` as `Backquote` (whose scancode it gives back as `0x32`) and leaves
 /// `0x5E` and `0x5F` unidentified, so the `IntlBackslash`, `IntlRo` and `NumpadComma` arms never

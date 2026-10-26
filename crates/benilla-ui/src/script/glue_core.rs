@@ -453,7 +453,8 @@ pub fn launch_url_allowed(url: &str) -> bool {
 /// What the browser is given for an add-on's URL, or `None` for one benilla will not open. The
 /// reference hands the server's string to `0x429ff0` with no whitelist (`0x46d5e0`): a C string of
 /// fewer than 0x400 bytes, each `%XY` replaced by the byte it spells (table `0x801490`: a
-/// non-hex digit reads 0; a `%` with fewer than two bytes after it ends the string), then
+/// non-hex ASCII digit reads 0, and one from 0x80 up, sign-extended at `0x42a059`, reads the 128
+/// bytes before the table; a `%` with fewer than two bytes after it ends the string), then
 /// `ShellExecute "open"`.
 ///
 /// Deviation: benilla keeps that decode and then encodes it again, every byte outside the URL
@@ -467,6 +468,7 @@ pub fn launch_addon_url(url: &str) -> Option<String> {
     if url.is_empty() || url.len() >= 0x400 {
         return None;
     }
+    // Any non-hex byte reads 0: the reference's read below its table from 0x80 up is not copied.
     let hex = |b: u8| -> u8 {
         match b {
             b'1'..=b'9' => b - b'0',
@@ -1683,9 +1685,9 @@ mod tests {
         assert!(s.take_errors().is_empty());
     }
 
-    /// `0x429ff0`'s copy: `%XY` is the byte it spells, a non-hex digit reads 0, a `%` with fewer
-    /// than two bytes after it ends the string, a decoded NUL ends it too; then the web-address
-    /// rule on the result.
+    /// `0x429ff0`'s copy: `%XY` is the byte it spells, a non-hex ASCII digit reads 0 (one from
+    /// 0x80 up reads before the table, `0x42a059`; benilla reads 0), a `%` with fewer than two
+    /// bytes after it ends the string, a decoded NUL ends it too; then the web-address rule.
     #[test]
     fn the_addon_url_is_decoded_as_the_launcher_decodes_it_and_must_be_a_web_address() {
         for (url, want) in [

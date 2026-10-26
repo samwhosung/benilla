@@ -147,7 +147,7 @@ fn get_channel_list_is_a_flat_slot_name_vararg_in_join_order() {
 }
 
 /// `GetGuildRecruitmentMode` (`0x4a0040`) always pushes its int global as a number; it boots at 1
-/// from a `.data` initialiser (`raw 0x443608`), the value `UIOptionsFrame_SetDefaults` sets.
+/// from a `.data` initialiser (`0x843608`), the value `UIOptionsFrame_SetDefaults` sets.
 #[test]
 fn the_guild_recruitment_mode_boots_auto_and_answers_a_number() {
     let s = script();

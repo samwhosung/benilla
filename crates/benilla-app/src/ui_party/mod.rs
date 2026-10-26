@@ -241,7 +241,7 @@ pub(crate) enum GroupSignal {
     /// One member's answer, relayed to the leader (`0x4ba3f9`, `0x4ba405`).
     ReadyCheckAnswer { guid: u64, ready: bool },
     /// `UPDATE_INSTANCE_INFO`, once per `SMSG_RAID_INSTANCE_INFO` (`0x49e1a7`, straight from
-    /// `0x49e0d8` when empty), with the list: `RaidFrame.lua:43` ignores the first, so the Raid
+    /// `0x49e08e` when empty), with the list: `RaidFrame.lua:43` ignores the first, so the Raid
     /// Info button is decided on the second.
     InstanceInfo(Vec<benilla_protocol::messages::RaidInstanceEntry>),
 }

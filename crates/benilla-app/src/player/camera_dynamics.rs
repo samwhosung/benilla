@@ -158,8 +158,8 @@ use crate::creature_anim::move_flags as mf;
 /// seated from the unbiased pitch (`0x50ee32`-`0x50ee58`); the body's aim is the sum (`0x5103e0`).
 ///
 /// The release's `0x511010` holds the bias while the Track latch is up and tracking is Never, or
-/// a move-type-0 click-to-move order is in flight (`[0xc4d888]`); benilla has no click-to-move,
-/// so only the first is built.
+/// the auto-move mode (`[0xc4d888]`) is 0, keep facing the target; benilla has no mode 0, so
+/// only the first is built.
 pub(super) struct SmartPivot {
     /// The bias channel `[cam+0x104]`; its armed bit is the reference's `[cam+0x90] & 0x8000000`.
     bias: SmoothChannel,

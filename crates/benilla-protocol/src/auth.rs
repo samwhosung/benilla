@@ -375,7 +375,7 @@ pub fn read_proof_reply(r: &mut impl Read) -> Result<Option<[u8; 20]>> {
     let server_proof = read_array::<20>(r)?;
     // Deviation: the survey id is read and dropped, and no survey runs, where the reference keeps
     // it on the link (`0x5bad53`) for the `Survey.dll` it downloads and calls (`GetSurveyId
-    // 0x5ab620`, passed at `0x47404f`). benilla runs no code a server sends
+    // 0x5ab620`, called at `0x474064`). benilla runs no code a server sends
     // ([`AuthReject::reply`] gives the rule).
     let _hardware_survey_id = read_u32_le(r)?;
     Ok(Some(server_proof))
