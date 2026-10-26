@@ -104,6 +104,38 @@ impl DiagnosticLog {
 }
 
 impl super::UiScript {
+    /// The last row number handed out, 0 for an empty log.
+    pub fn diagnostics_seq(&self) -> u64 {
+        self.model_ref().diagnostics.seq
+    }
+
+    /// Call the global function `record` with the message of each retained `Error` and `Load` row
+    /// numbered up to `upto`, once per occurrence, oldest first, protected and under no error
+    /// function: a host's hand-off of what was logged before `record` existed. Nothing when the
+    /// global is not a function.
+    pub fn replay_diagnostics(&self, upto: u64, record: &str) {
+        let Ok(mlua::Value::Function(f)) = self.lua.globals().get::<mlua::Value>(record) else {
+            return;
+        };
+        let rows: Vec<Diagnostic> = self
+            .model_ref()
+            .diagnostics
+            .rows()
+            .filter(|r| r.seq <= upto && r.kind != DiagnosticKind::Warning)
+            .cloned()
+            .collect();
+        super::host::unheld(&self.lua, || {
+            for row in rows {
+                for _ in 0..row.count {
+                    if let Err(e) = f.call::<()>(row.message.as_str()) {
+                        self.model_mut().record_lua_error(&e);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
     /// Every retained row, oldest first, cloned out of the model.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         self.model_ref().diagnostics.rows().cloned().collect()

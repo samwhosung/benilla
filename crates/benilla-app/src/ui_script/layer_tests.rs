@@ -384,8 +384,8 @@ fn the_dev_commands_are_host_rows_in_a_dev_build_alone() {
 
 /// The `/errors` log collects off the Lua error handler, ahead of the stock `_ERRORMESSAGE`
 /// (`BasicControls.xml:16`), which still shows the `ScriptErrors` dialog: an addon's runtime error,
-/// and an error in one of the layer's own handlers. Each is heard at its raise, so one raised
-/// before any handler was set reaches neither.
+/// an error in one of the layer's own handlers, and one raised before any handler was set, which
+/// the host hands the log once the layer loads and the dialog never shows.
 #[test]
 fn the_error_log_collects_off_the_error_handler() {
     benilla_formats::wow_data_or_skip!();
@@ -425,25 +425,22 @@ fn the_error_log_collects_off_the_error_handler() {
              return out",
         )
         .unwrap();
-    for want in ["an addon boom", "a layer boom"] {
+    for want in ["before the layer", "an addon boom", "a layer boom"] {
         assert!(
             rows.iter().any(|r| r.contains(want)),
             "{want:?} is in the log: {rows:#?}"
         );
     }
-    // Raised before any handler was set: the error function found the slot at -1 (`0x703b45`)
-    // and the runner popped the message (`0x704e82`), so no handler ever hears it.
-    assert!(
-        !rows.iter().any(|r| r.contains("before the layer")),
-        "{rows:#?}"
-    );
     assert!(
         s.eval::<bool>("return ScriptErrors:IsVisible()").unwrap(),
         "the stock handler still runs after the log"
     );
     let shown: String = s.eval("return ScriptErrors_Message:GetText()").unwrap();
+    // Raised before any handler was set: the error function found the slot at -1 (`0x703b45`)
+    // and the runner popped the message (`0x704e82`), so the dialog never heard it; the log has it
+    // from the host's hand-off.
     assert!(
-        shown.contains("an addon boom"),
+        shown.contains("an addon boom") && !shown.contains("before the layer"),
         "the first error heard shows: {shown}"
     );
     // A repeat is one row with a count.

@@ -261,9 +261,16 @@ pub(crate) fn load_stock_bindings(script: &mut UiScript) {
 
 /// Every [`LAYER_MANIFEST`] entry, in order, after the whole core: the layer loads as more of the
 /// stock load, with no `ADDON_LOADED` and no registry row, as FrameXML does (`0x48ffed`).
+///
+/// The layer's `/errors` log hooks the error handler as it loads (`ScriptLogFrame.xml`), after the
+/// core: what the core's load recorded before is handed to the log's recorder directly, not run
+/// through the handler chain again, so the stock dialog shows nothing twice.
 fn load_layer(script: &UiScript) -> Vec<String> {
+    let before = script.diagnostics_seq();
     let layer = Addon::layer();
-    layer.load_files(script, &layer.toc.files)
+    let failures = layer.load_files(script, &layer.toc.files);
+    script.replay_diagnostics(before, "BenillaScriptLog_Record");
+    failures
 }
 
 /// The in-game UI, the core, then the layer unless [`layer_enabled`] says no, then every
