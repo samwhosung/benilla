@@ -95,6 +95,7 @@ mod tests {
             spells: spells.iter().copied().collect(),
             profession_order: spells.to_vec(),
             craft_order: spells.to_vec(),
+            effect_slots: Default::default(),
             openers: Vec::new(),
             stuck_spell: None,
             superseded: Vec::new(),

@@ -271,6 +271,13 @@ fn feed_craft(
             return;
         };
         let memo = memo.get(script);
+        // `GetCraftName` reads the player's effect slot of the open type, 0 when closed (`0x4f6c32`).
+        let slot_names = self_store
+            .single()
+            .ok()
+            .and_then(|_| Some(effect_slot_names(&actions, spells.as_deref()?)))
+            .unwrap_or_default();
+        script.set_craft_slot_names(slot_names);
         // The list only reads the item cache: the build asks nothing (`0x4f60c0`), and a reagent
         // or a totem is asked by its getter's call, inside it (`0x4f75f2`, `0x4f7a0a`).
         let fresh = (|| -> Option<CraftState> {
@@ -509,6 +516,16 @@ fn feed_craft(
             }
         }
         memo.state = fresh;
+    })
+}
+
+/// The names of the spells in the player's four effect slots (`CGPlayer_C+0x1d10`, `0x5ea360`),
+/// which `GetCraftName` reads at the open craft type (`0x4f6c32`); a learn writes them
+/// ([`PlayerActions::effect_slots`]), an unlearn leaves them.
+fn effect_slot_names(actions: &PlayerActions, spells: &Spells) -> [Option<String>; 4] {
+    actions.effect_slots.map(|slot| {
+        slot.and_then(|id| spells.catalog.get(id))
+            .map(|d| d.name.clone())
     })
 }
 

@@ -98,6 +98,9 @@ pub(crate) struct PlayerActions {
     /// The order the craft types' lists hold theirs (`+0x1cd0`): a learn appends a spell the list
     /// lacks (`0x5e9db3`, `0x5e9e0f`), an unlearn takes out its first copy (`0x5ea1b8`).
     pub craft_order: Vec<u32>,
+    /// `CGPlayer_C+0x1d10`, the spell each effect slot holds (`0x5ea360`): written by a learn
+    /// (`list_learn`), never cleared by an unlearn, emptied with the book.
+    pub effect_slots: [Option<u32>; 4],
     /// `[0xb700b0]`: the known spells whose `Effect[0]` is `SPELL_EFFECT_OPEN_LOCK`, in learn
     /// order. The login list enters in wire order (`0x5dea8b`-`0x5deab9`), each learn appends at
     /// the tail with no duplicate check (`0x4b2665`-`0x4b2689`), and an unlearn removes the last

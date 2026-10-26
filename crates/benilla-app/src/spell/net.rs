@@ -693,9 +693,10 @@ fn spell_book(
     actions.spells.clear();
     actions.profession_order.clear();
     actions.craft_order.clear();
+    actions.effect_slots = Default::default();
     for spell_id in spell_ids {
         actions.spells.insert(spell_id);
-        list_learn(spell_id, actions);
+        list_learn(spell_id, actions, spells);
     }
     actions.dirty = true;
     let now = Instant::now();
@@ -731,17 +732,31 @@ fn learned_spell(
     if actions.spells.insert(spell_id) {
         actions.dirty = true;
     }
-    list_learn(spell_id, actions);
+    list_learn(spell_id, actions, spells);
     register_in_book(spell_id, spells, actions);
     announce_learn(spell_id, spells, errors);
 }
 
 /// `LearnSpell 0x5e9c20`'s list legs: the profession lists append with no duplicate check
-/// (`0x5e9d72`), the craft lists only a spell they lack (`0x5e9db3`, `0x5e9e0f`).
-fn list_learn(spell_id: u32, actions: &mut PlayerActions) {
+/// (`0x5e9d72`), the craft lists only a spell they lack (`0x5e9db3`, `0x5e9e0f`); and a spell with
+/// no `Attributes & 0x20`, no cast UI and `SPELL_EFFECT_TRADE_SKILL` first takes the player's
+/// effect slot its misc value names (`0x5e9c8e`, `0x5e9d88`, `0x5e9e1c`-`0x5e9e36`), the one write
+/// of `CGPlayer_C+0x1d10`; its reader indexes below 4 (`0x5ea360`).
+fn list_learn(spell_id: u32, actions: &mut PlayerActions, spells: Option<&Spells>) {
     actions.profession_order.push(spell_id);
     if !actions.craft_order.contains(&spell_id) {
         actions.craft_order.push(spell_id);
+    }
+    let slot = spells.and_then(|s| s.catalog.get(spell_id)).and_then(|d| {
+        let opens_window = d.attributes & benilla_formats::SPELL_ATTR_IS_TRADESKILL == 0
+            && (d.cast_ui as i32) <= 0
+            && d.effects[0] == benilla_formats::SPELL_EFFECT_TRADE_SKILL;
+        usize::try_from(d.effect_misc_value[0])
+            .ok()
+            .filter(|&misc| opens_window && misc < 4)
+    });
+    if let Some(slot) = slot {
+        actions.effect_slots[slot] = Some(spell_id);
     }
 }
 
@@ -881,7 +896,7 @@ fn superceded_spell(
     actions.spells.remove(&old_spell_id);
     list_unlearn(old_spell_id, actions);
     actions.spells.insert(new_spell_id);
-    list_learn(new_spell_id, actions);
+    list_learn(new_spell_id, actions, spells);
     actions.superseded.push((old_spell_id, new_spell_id));
     actions.dirty = true;
     // `0x4b2f50` unlists the old rank and registers the new one at the tail; the player's own

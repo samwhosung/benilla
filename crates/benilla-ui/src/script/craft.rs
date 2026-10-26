@@ -140,7 +140,8 @@ pub struct CraftRecipe {
 /// The open craft window, pushed whole by the app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftState {
-    /// The title `GetCraftName` answers.
+    /// The window's identity for the app's open detection; `GetCraftName` reads the effect slot
+    /// of [`Self::craft_type`] instead ([`UiScript::set_craft_slot_names`]).
     pub name: String,
     /// `GetCraftDisplaySkillLine`'s name, with [`Self::rank`] and [`Self::max_rank`] its rank
     /// and maximum, each with the permanent bonus; `None` answers nil, 0, 0.
@@ -385,6 +386,16 @@ impl super::UiScript {
         }
     }
 
+    /// Push the names of the spells in the player's four effect slots (`CGPlayer_C+0x1d10`),
+    /// which a learn writes by the spell's misc value (`0x5e9e1c`-`0x5e9e36`); `GetCraftName`
+    /// answers the one at the open craft type, slot 0 while none is open.
+    pub fn set_craft_slot_names(&mut self, names: [Option<String>; 4]) {
+        let mut model = self.model_mut();
+        if model.craft_slot_names != names {
+            model.craft_slot_names = names;
+        }
+    }
+
     /// The open's resets (`0x4f601c`-`0x4f602c`): the selection cleared and every group expanded,
     /// then the build (`0x4f6036`).
     pub fn craft_opened(&mut self) {
@@ -496,17 +507,19 @@ fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetCraftName() → the title, or "UNKNOWN" when closed (the reference's closed answer is
-    // untraced); the stock window sets its title unconditionally (`Blizzard_CraftUI.lua:101`).
+    // GetCraftName() (`0x4f6c10`) → the name of the player's effect-slot spell for the open craft
+    // type (`GetEffectSlotSpell 0x5ea360`, the marker `[0xbdcfb8]`, set at `0x4f601c`), type 0 with
+    // no window open; nil with no player, no such slot or no such spell (`0x4f6c74`).
     g.set(
         "GetCraftName",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let name = model
-                .craft
-                .as_ref()
-                .map_or_else(|| "UNKNOWN".to_string(), |c| c.name.clone());
-            Ok(Value::String(lua.create_string(&name)?))
+            let marker = model.open_professions().craft.unwrap_or(0);
+            let name = usize::try_from(marker)
+                .ok()
+                .and_then(|m| model.craft_slot_names.get(m))
+                .and_then(|n| n.as_deref());
+            opt_str(lua, name.map(str::to_string).as_ref())
         })?,
     )?;
 
@@ -1072,6 +1085,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_craft(Some(state()));
+        s.set_craft_slot_names([None, None, None, Some("Enchanting".into())]);
 
         assert_eq!(
             s.eval::<String>("return GetCraftName()").unwrap(),
@@ -1441,14 +1455,45 @@ mod tests {
         assert!(s.take_craft_dos().is_empty());
     }
 
+    /// `GetCraftName` reads the effect-slot spell of the open type (`0x4f601c`), type 0 with the
+    /// window closed (`0x4f6c32`-`0x4f6c74`): nil with no such spell, the slot's name once the
+    /// player holds one, and slot 0 again after a `CloseCraft` of an open window.
     #[test]
-    fn no_snapshot_shapes_unknown_name_and_nil_info() {
+    fn the_name_follows_the_open_marker_and_its_effect_slot() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
+        assert!(s.eval::<bool>("return GetCraftName() == nil").unwrap());
+        s.set_craft_slot_names([
+            Some("Alchemy".into()),
+            None,
+            None,
+            Some("Enchanting".into()),
+        ]);
         assert_eq!(
             s.eval::<String>("return GetCraftName()").unwrap(),
-            "UNKNOWN"
+            "Alchemy"
         );
+        s.set_craft(Some(state()));
+        assert_eq!(
+            s.eval::<String>("return GetCraftName()").unwrap(),
+            "Enchanting",
+            "open at type 3: slot 3"
+        );
+        s.run("CloseCraft()").unwrap();
+        assert_eq!(
+            s.eval::<String>("return GetCraftName()").unwrap(),
+            "Alchemy",
+            "the marker is 0 again"
+        );
+        s.set_craft_slot_names(Default::default());
+        assert!(s.eval::<bool>("return GetCraftName() == nil").unwrap());
+    }
+
+    #[test]
+    fn no_snapshot_shapes_nil_name_and_nil_info() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        assert!(s.eval::<bool>("return GetCraftName() == nil").unwrap());
         assert!(s
             .eval::<bool>("return GetCraftDisplaySkillLine() == nil")
             .unwrap());

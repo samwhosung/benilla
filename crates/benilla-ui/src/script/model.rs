@@ -861,6 +861,10 @@ pub(crate) struct Model {
     pub(crate) craft: Option<craft::CraftState>,
     /// The window is open (`[0xbdcfb8]`), which a close alone zeroes (`0x4f5fe0`).
     pub(crate) craft_open: bool,
+    /// The names of the spells in the player's four effect slots (`CGPlayer_C+0x1d10`,
+    /// `0x5ea360`), which `GetCraftName` reads at the open marker (`[0xbdcfb8]`, 0 closed); `None`
+    /// is nil.
+    pub(crate) craft_slot_names: [Option<String>; 4],
     /// The selected spell id (`0xbdcfbc`), 0 for none, which a header or an index past the rows
     /// stores (`0x4f6050`); the index answers by finding its row (`0x4f6080`).
     pub(crate) craft_selection: u32,
@@ -1637,6 +1641,7 @@ impl Model {
             trade_skill_repeat_count: 0,
             craft: None,
             craft_open: false,
+            craft_slot_names: Default::default(),
             craft_selection: 0,
             craft_rows: Vec::new(),
             craft_visible: 0,
