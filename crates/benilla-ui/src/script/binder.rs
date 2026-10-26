@@ -23,7 +23,7 @@ impl super::UiScript {
         self.take_calls_like(&super::ScriptCall::Binder(BinderCall::Confirm)) as u32
     }
 
-    /// Push whether a bind question is pending with the innkeeper still in range.
+    /// Set what `CheckBinderDist()` answers with no host lent.
     pub fn set_binder_pending(&mut self, pending: bool) {
         let mut model = self.model_mut();
         if model.binder_pending != pending {

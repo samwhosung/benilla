@@ -24,17 +24,17 @@ impl super::UiScript {
         self.take_calls_like(&super::ScriptCall::ConfirmPetUnlearn) as u32
     }
 
-    /// What `CheckPetUntrainerDist()` answers: a pending question whose trainer is in reach.
+    /// Set what `CheckPetUntrainerDist()` answers with no host lent.
     pub fn set_pet_untrainer_pending(&mut self, pending: bool) {
         self.model_mut().pet_untrainer_pending = pending;
     }
 
-    /// `GetInstanceBootTimeRemaining()`'s answer, whole seconds (0 idle).
+    /// Set `GetInstanceBootTimeRemaining()`'s answer with no host lent, whole seconds (0 idle).
     pub fn set_instance_boot_secs(&mut self, secs: u32) {
         self.model_mut().instance_boot_secs = secs;
     }
 
-    /// The seconds to the area spirit healer's next wave (`[0xb4e338]`).
+    /// Set the seconds to the area spirit healer's next wave (`[0xb4e338]`) read with no host lent.
     pub fn set_area_spirit_healer_secs(&mut self, secs: u32) {
         self.model_mut().area_spirit_secs = secs;
     }
@@ -54,8 +54,8 @@ impl super::UiScript {
         self.take_calls_like(&super::ScriptCall::MeetingStone(MeetingStoneCall::Cancel)) as u32
     }
 
-    /// The meeting stone's two globals: the queued area id (`0xb72038`, 0 for none) and the
-    /// cached status text (`0xb7203c`, `None` outside the world), which the app rebuilds.
+    /// Set the meeting stone's two globals read with no host lent: the queued area id
+    /// (`0xb72038`, 0 for none) and the status text (`0xb7203c`, `None` outside the world).
     pub fn set_meeting_stone(&mut self, area: u32, status_text: Option<String>) {
         let mut model = self.model_mut();
         model.meeting_stone_area = area;

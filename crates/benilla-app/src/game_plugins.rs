@@ -1348,6 +1348,12 @@ pub(crate) mod schedule_tests {
              handlers made, ahead of the tick, whose `OnUpdate` calls wait for the next latch",
         ),
         (
+            "::ui_billing::poll_play_time",
+            "the play-time poll, in the tick's frame time (category 5 at `0x420d63`): after the \
+             lanes' drain, which fires the tick's packets' signals (`0x420d55`), and ahead of the \
+             `OnUpdate` walk (`0x420d6a`)",
+        ),
+        (
             "::ui_unit::views::mark_frame_start",
             "a debug snapshot of what the frame starts from, ahead of the net stage by design: it \
              reads the units the resolver's last inputs name and pushes nothing",
@@ -2068,22 +2074,14 @@ pub(crate) mod schedule_tests {
          "no system: the item lane's firing calls it per run (`item_lane::fire_run`), inside the lanes' drain, which runs only with the interface up (`ingame_ui_up`)"),
         ("ui_bank/mod.rs", "feed_bank", Because::PlayerRoundTrip,
          "`BankErrors` answers a `BuyBankSlot` click; the OPENED edge rides `VmMemo`s"),
-        ("ui_binder.rs", "feed_binder", Because::PlayerRoundTrip,
-         "`SMSG_BINDER_CONFIRM` only answers the innkeeper's gossip line"),
         ("ui_char.rs", "feed_char", Because::FilledByVm,
          "its take is the ammo getters' hits, which only a getter's call leaves, and a frameless VM \
           calls none; the doll's own pushes ride `VmMemo`s"),
         ("ui_chat/feed.rs", "played_time_bridge", Because::FilledByVm,
          "the answer it takes follows `RequestTimePlayed()`, Lua's own ask, which a frameless VM \
           never makes"),
-        ("ui_dialog_verbs.rs", "feed_meeting_stone", Because::SelfHealing,
-         "the query waits for the world-enter cascade (`meeting_stone_enter_world`), our own create a server round trip past the login edge, and every `/reload` re-asks onto its new VM"),
-        ("ui_duel.rs", "feed_duel", Because::PlayerRoundTrip,
-         "a duel exists only after someone's Duel cast, and the server ends any duel at logout; FINISHED/bounds ride `VmMemo<FedDuel>` (another player's act: coincidence-only residual)"),
         ("ui_follow.rs", "feed_follow", Because::MemoLatched,
          "`feed.vm: VmMemo<FollowFeedMemo>`; a fresh VM re-fires BEGIN for a follow in progress"),
-        ("ui_gm_ticket.rs", "feed_gm_ticket", Because::MemoLatched,
-         "`feed.vm: VmMemo<FedTicket>` counters restart per VM while `state.answers` keeps counting, so the latest answer is re-fired"),
         ("ui_guild/lane.rs", "fire_guild", Because::Deliberate,
          "a lane's firing, run only by the drain, which runs only with the interface up (`ingame_ui_up`): the lane holds what the packets queue until a drain fires it, so the login's message of the day, which lands ahead of the interface, fires into the VM that comes up"),
         ("ui_item_text.rs", "feed_item_text", Because::MemoLatched,
@@ -2116,8 +2114,6 @@ pub(crate) mod schedule_tests {
          "per-frame upload scratch, not a queue: it reads each playing movie's picture as it stands"),
         ("ui_stable/mod.rs", "feed_stable", Because::PlayerRoundTrip,
          "both packets follow a stable master's gossip and a click in its window"),
-        ("ui_summon.rs", "feed_summon", Because::PlayerRoundTrip,
-         "only another player's Ritual of Summoning latches the ask (the duel's shape; coincidence-only residual)"),
         ("ui_tabard.rs", "feed_tabard", Because::PlayerRoundTrip,
          "every latch follows a tabard-vendor click, and `reset_on_world_enter` zeroes the resource on entry"),
         ("ui_tradeskill.rs", "fire_list_rebuilds", Because::Deliberate,

@@ -392,10 +392,10 @@ impl Plugin for UiDuelPlugin {
             .add_sweep_leg(SweepLeg::Duel, clear_duel_on_leave_world)
             .add_systems(
                 Update,
-                // Ahead of the drain, so each "Duel starting: N" fires its frame; before the pass:
-                // the duel answers' calls read the session.
+                // A due timer runs first in its tick (`0x428510` at `0x420d0c`), ahead of the
+                // packets (`0x420d55`); before the pass: the duel answers' calls read the session.
                 tick_countdown
-                    .before(crate::lanes::UiLanes)
+                    .before(benilla_world::schedule::WorldStage::Net)
                     .before(crate::vm_pass::VmPass::Start),
             );
     }

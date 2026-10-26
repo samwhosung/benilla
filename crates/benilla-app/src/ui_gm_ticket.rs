@@ -18,7 +18,7 @@ use benilla_assets::coords::bevy_to_wow;
 
 use crate::net::{ClientCommand, NetCommands};
 use crate::player::Player;
-use crate::ui_dialog_verbs::{DialogLane, DialogSignal};
+use crate::ui_dialog_verbs::DialogLane;
 use crate::ui_script::{UiFeed, VmMemo};
 
 /// The engine's re-asks a landed write owes. The client holds no ticket: each answer signals at
@@ -426,6 +426,7 @@ impl Plugin for UiGmTicketPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_dialog_verbs::DialogSignal;
     use benilla_ui::script::UiScript;
     /// Each lottery and survey verb reaches the wire exactly once, with the command the bytes
     /// call for, and a refused call reaches it not at all.

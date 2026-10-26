@@ -136,7 +136,7 @@ pub(crate) mod net {
         In(ev): In<SessionEvent>,
         mut binder: ResMut<BinderState>,
         mut lane: ResMut<crate::ui_dialog_verbs::DialogLane>,
-        area: Option<Res<benilla_world::terrain_stream::CurrentArea>>,
+        area: benilla_world::world_point::AreaUnderfoot,
         index: Res<crate::net::GuidIndex>,
         me: Query<&Transform, With<crate::net::SelfPlayer>>,
         units: Query<&Transform>,
@@ -154,9 +154,7 @@ pub(crate) mod net {
                 return;
             }
             binder.ask(npc);
-            lane.push(crate::ui_dialog_verbs::DialogSignal::ConfirmBinder {
-                leaf: area.and_then(|a| a.0),
-            });
+            lane.push(crate::ui_dialog_verbs::DialogSignal::ConfirmBinder { leaf: area.area() });
         }
     }
 

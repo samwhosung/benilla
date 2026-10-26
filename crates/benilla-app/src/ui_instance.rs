@@ -256,8 +256,10 @@ pub(crate) mod net {
     /// three globals stay, as the reference keeps them (`0x495d00` runs only on
     /// `SMSG_INSTANCE_RESET`): its bind term is re-sent at the next world entry, where ours has no
     /// server to correct it.
-    fn on_logged_out(In(_): In<SessionEvent>, mut state: ResMut<InstanceState>) {
-        state.forget_witness();
+    fn on_logged_out(In(ev): In<SessionEvent>, mut state: ResMut<InstanceState>) {
+        if let SessionEvent::LoggedOut = ev {
+            state.forget_witness();
+        }
     }
 
     /// Each packet's line, its `%s` named off `Map.dbc` at the packet (`0x49e228`), onto the

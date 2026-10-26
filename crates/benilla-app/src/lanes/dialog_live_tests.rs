@@ -319,10 +319,9 @@ fn a_held_challenge_fires_at_its_names_answer() {
             arbiter: 0xA1,
             challenger: SUMMONER,
         }],
-        vec![SessionEvent::SummonRequest {
-            summoner: SUMMONER,
-            zone: STORMWIND,
-            delay_ms: 120_000,
+        vec![SessionEvent::TalentWipeConfirm {
+            trainer: NPC,
+            cost: 100,
         }],
         vec![SessionEvent::PlayerName {
             guid: SUMMONER,
@@ -332,5 +331,8 @@ fn a_held_challenge_fires_at_its_names_answer() {
             class: 1,
         }],
     ]);
-    assert_eq!(c.seen(), ["CONFIRM_SUMMON:nil", "DUEL_REQUESTED:Rival"]);
+    assert_eq!(
+        c.seen(),
+        ["CONFIRM_TALENT_WIPE:100", "DUEL_REQUESTED:Rival"]
+    );
 }

@@ -20,9 +20,9 @@ pub fn instance_type_name(instance_type: u32) -> &'static str {
 }
 
 impl super::UiScript {
-    /// Push the current map's `Map.dbc` `InstanceType`, `None` for a map with no row. Deviation:
-    /// `IsInInstance()` then answers `nil, "none"`, because the reference returns two results
-    /// without pushing either (`0x48a7a9`), a stack bug.
+    /// Set the current map's `Map.dbc` `InstanceType` read with no host lent, `None` for a map with
+    /// no row. Deviation: `IsInInstance()` then answers `nil, "none"`, because the reference
+    /// returns two results without pushing either (`0x48a7a9`), a stack bug.
     pub fn set_instance_type(&mut self, instance_type: Option<u32>) {
         let mut model = self.model_mut();
         if model.instance_type != instance_type {
@@ -30,8 +30,8 @@ impl super::UiScript {
         }
     }
 
-    /// Push `CanShowResetInstances()`'s answer; the app owns its terms (the ownership latch, the
-    /// last dungeon, its age and the current map).
+    /// Set `CanShowResetInstances()`'s answer with no host lent; the app owns its terms (the
+    /// ownership latch, the last dungeon, its age and the current map).
     pub fn set_can_reset_instances(&mut self, can: bool) {
         let mut model = self.model_mut();
         if model.can_reset_instances != can {

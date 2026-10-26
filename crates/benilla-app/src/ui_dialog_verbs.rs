@@ -1639,7 +1639,7 @@ mod tests {
     }
 
     fn stone_text(app: &App) -> StoneText {
-        app.world().resource::<MeetingStone>().text.clone()
+        app.world().resource::<MeetingStone>().text
     }
 
     fn stone_port(needs_ack: bool) -> crate::net::WorldportMessage {
