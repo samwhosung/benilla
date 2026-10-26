@@ -457,11 +457,19 @@ impl WidgetArena {
 
     // ── Frame flags ──────────────────────────────────────────────────────────────────────────────
 
-    /// `EnableMouse`.
+    /// `EnableMouse` (`0x76af00(2)`, `0x76af50(2)`): a bit newly set on a visible frame enters
+    /// the mouse list now (`0x764aa0`), behind the equal levels there (`0x764b2d`).
     pub fn set_mouse_enabled(&mut self, h: FrameHandle, enabled: bool) {
+        let stamp = self.next_kb_stamp;
+        let mut joined = false;
         if let Some(f) = self.frame_mut(h) {
+            joined = enabled && !f.mouse_enabled && f.effective_visible;
             f.mouse_enabled = enabled;
+            if joined {
+                f.mouse_stamp = stamp;
+            }
         }
+        self.next_kb_stamp += u64::from(joined);
     }
 
     /// `EnableKeyboard` (`0x776ec0`): the char and key bits the key walks filter on, both.

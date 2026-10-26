@@ -211,6 +211,9 @@ pub struct Frame {
     /// The same for the wheel bucket (kind 3): at the link or, on a linked frame, at the bit's
     /// own enable (`0x76af00`).
     pub wheel_stamp: u64,
+    /// The same for the mouse bucket (kind 2), the hover sweep's list (`0x7661f2`): at the link
+    /// or, on a linked frame, at the bit's own enable (`0x76af00`).
+    pub mouse_stamp: u64,
     /// `SetClampedToScreen`, geometry flags `0x10`: `0x767a20` shifts the rect back on screen.
     /// Every GameTooltip is born with it here; the stock tooltips get it from their template,
     /// `GameTooltipTemplate.xml:3`.
@@ -312,7 +315,8 @@ pub struct WidgetArena {
     regions: Arena<Region>,
     names: HashMap<String, FrameHandle>,
     next_insertion: u32,
-    /// The next [`Frame::char_stamp`] / [`Frame::key_stamp`] / [`Frame::wheel_stamp`].
+    /// The next [`Frame::char_stamp`] / [`Frame::key_stamp`] / [`Frame::wheel_stamp`] /
+    /// [`Frame::mouse_stamp`].
     next_kb_stamp: u64,
     /// Each stratum's level bound, the reference's `bucket+0x8`: one above the highest level a
     /// visible frame has linked at since the last compaction set it. It starts at 0 and only a
@@ -475,6 +479,7 @@ impl WidgetArena {
             f.char_stamp = stamp;
             f.key_stamp = stamp;
             f.wheel_stamp = stamp;
+            f.mouse_stamp = stamp;
             linked = Some((f.strata, f.level));
             self.next_insertion += 1;
             if let Some(log) = &mut self.link_log {
@@ -584,6 +589,7 @@ impl WidgetArena {
             char_stamp: kb_stamp,
             key_stamp: kb_stamp,
             wheel_stamp: kb_stamp,
+            mouse_stamp: kb_stamp,
             clamped_to_screen: matches!(kind, FrameKind::GameTooltip),
             hit_rect_insets: [crate::layout::Len::Script(0.0); 4],
             movable: false,

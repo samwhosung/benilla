@@ -301,7 +301,7 @@ impl UiScript {
     /// next below (`0x76554a` → `0x765532`).
     fn layout_drag_target(&self, x: f32, y: f32) -> Option<FrameHandle> {
         let model = self.model_ref();
-        let sorted = order::pick_order(&model.arena);
+        let sorted = order::link_order(&model.arena);
         let mut below = order::Strata::Tooltip;
         loop {
             let hit = order::hit_test(&sorted, |fh| {

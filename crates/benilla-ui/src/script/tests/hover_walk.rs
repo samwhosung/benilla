@@ -291,3 +291,41 @@ fn a_drag_cut_short_by_the_pointer_leaving_keeps_the_last_real_position() {
     crate::assert_near!((here.x, here.y), (Some(130), Some(-558)));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// `EnableMouse` on a visible frame whose bit was clear re-enters it in the mouse list behind the
+/// frames of its level already there (`0x76af00` → `0x764aa0`, `ja` at `0x764b2d`), and the sweep
+/// reads that list from index 0 (`0x7661f2`): the re-enabled frame loses the tie it won before.
+#[test]
+fn a_frame_mouse_enabled_again_loses_the_tie_to_its_same_level_sibling() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local function frame(name)
+            local f = CreateFrame("Frame", name)
+            f:SetPoint("BOTTOMLEFT", 100, 100); f:SetWidth(100); f:SetHeight(100)
+            f:EnableMouse(true)
+            return f
+        end
+        First = frame("First")
+        Second = frame("Second")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(150.0, 150.0);
+    assert_eq!(focus(&s), "First", "the earlier entry wins an equal level");
+    s.run("First:EnableMouse(false); First:EnableMouse(true)")
+        .unwrap();
+    s.mouse_move(160.0, 150.0);
+    assert_eq!(
+        focus(&s),
+        "Second",
+        "the re-entered frame is behind its sibling"
+    );
+    // A show relinks every input kind (`0x76afa0`): hidden and shown again, First is last again.
+    s.run("Second:Hide(); Second:Show()").unwrap();
+    s.mouse_move(150.0, 150.0);
+    assert_eq!(focus(&s), "First");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
