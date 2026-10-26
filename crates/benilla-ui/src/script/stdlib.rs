@@ -42,15 +42,37 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "debugstack",
         lua.create_function(|lua, args: Variadic<Value>| {
-            let num = |v: Option<&Value>, default: usize| match v {
-                Some(Value::Integer(i)) => usize::try_from(*i).unwrap_or(0),
-                Some(Value::Number(n)) if *n >= 0.0 => *n as usize,
-                _ => default,
+            let mut rest = args.iter().peekable();
+            // Each level is taken off the front while `is-number` passes there (`0x703782`),
+            // truncated (`0x40a2b0`) and removed (`0x7037a2`), so `"2"` is a level.
+            let mut level = |default: i32| {
+                let n = rest
+                    .peek()
+                    .and_then(|v| super::binding_abi::is_number(lua, (*v).clone()));
+                match n {
+                    Some(n) => {
+                        rest.next();
+                        super::binding_abi::ftol(n)
+                    }
+                    None => default,
+                }
             };
-            let start = num(args.first(), 1);
-            let count1 = num(args.get(1), 12);
-            let count2 = num(args.get(2), 10);
-            Ok(traceback_frames(lua, start, count1, count2))
+            let (start, count1, count2) = (level(1), level(12), level(10));
+            let mut stack: Vec<Value> = rest.cloned().collect();
+            // A first remainder that is no string or number returns the stack's top (`0x70382d`).
+            if let Some(first) = stack.first() {
+                if !concatenable(first) {
+                    return Ok(stack.pop().unwrap_or(Value::Nil));
+                }
+            }
+            // The remainder stays on the stack and each line is concatenated with all of it
+            // (`0x7039b0`), so it is joined in front of the frames; an empty stack is `""`
+            // (`0x703814`).
+            let frames = traceback_frames(lua, start, count1, count2);
+            if !frames.is_empty() {
+                stack.push(Value::String(lua.create_string(&frames)?));
+            }
+            concat_stack(lua, stack)
         })?,
     )?;
 
@@ -704,35 +726,93 @@ fn traceback_frame(d: &mlua::Debug) -> String {
     line
 }
 
-/// `debugstack`'s walk (`0x703760`): Lua 5.0's `db_errorfb` without its header, each frame
-/// followed by `"\n"` (`0x703971`) rather than preceded by `"\n\t"`, so line 1 is a frame.
-/// Frames print while the level is `<= start + count1` (`0x703857`, `jbe`); then a failed
-/// `getstack(level + count2)` probe prints that level as an ordinary frame, else `"...\n"` and
-/// the last `count2` follow. So `count1 = 1` gives two frames on a two-deep stack, not one.
-fn traceback_frames(lua: &Lua, start: usize, count1: usize, count2: usize) -> String {
-    let mut out = String::new();
-    let mut level = start;
-    let mut first_part = true;
-    while lua.inspect_stack(level, |_| ()).is_some() {
-        level += 1;
-        if level > start + count1 && first_part {
-            first_part = false;
-            if lua.inspect_stack(level + count2, |_| ()).is_none() {
-                level -= 1; // nothing to elide: print this level after all
-            } else {
-                out.push_str("...\n");
-                while lua.inspect_stack(level + count2, |_| ()).is_some() {
-                    level += 1;
-                }
-            }
-            continue;
-        }
-        if let Some(f) = lua.inspect_stack(level - 1, traceback_frame) {
-            out.push_str(&f);
-            out.push('\n');
+/// A value `lua_concat` joins without a metamethod: a string or a number.
+fn concatenable(v: &Value) -> bool {
+    matches!(v, Value::String(_) | Value::Integer(_) | Value::Number(_))
+}
+
+/// `lua_concat` over the whole stack (`0x6f44e0`): `luaV_concat` works down from the top, so the
+/// raise names the first non-string it meets from there, the lower of a failing pair unless that
+/// one is a string or number. One value is left as it is, none is `""`.
+fn concat_stack(lua: &Lua, mut stack: Vec<Value>) -> mlua::Result<Value> {
+    let Some(top) = stack.last() else {
+        return Ok(Value::String(lua.create_string("")?));
+    };
+    if stack.len() == 1 {
+        return Ok(stack.pop().unwrap_or(Value::Nil));
+    }
+    let below = &stack[stack.len() - 2];
+    let bad = if !concatenable(below) {
+        Some(below)
+    } else if !concatenable(top) {
+        Some(top)
+    } else {
+        stack.iter().rev().find(|v| !concatenable(v))
+    };
+    if let Some(bad) = bad {
+        let kind = match bad {
+            Value::LightUserData(_) => "userdata",
+            other => other.type_name(),
+        };
+        return Err(mlua::Error::runtime(format!(
+            "attempt to concatenate a {kind} value"
+        )));
+    }
+    let mut out = Vec::new();
+    for v in stack {
+        if let Some(s) = lua.coerce_string(v)? {
+            out.extend_from_slice(&s.as_bytes());
         }
     }
-    out
+    Ok(Value::String(lua.create_string(&out)?))
+}
+
+/// `debugstack`'s walk (`0x703760`): Lua 5.0's `db_errorfb` without its header, each frame
+/// followed by `"\n"` (`0x703971`) rather than preceded by `"\n\t"`, so line 1 is a frame.
+/// The levels are 32-bit and wrap: a level prints while the next one is at most `start + count1`
+/// compared unsigned (`0x70384c`, `0x703857`, `jbe`), so a negative limit prints every level. Past
+/// it a failed `getstack(level + 1 + count2)` probe prints that level as an ordinary frame, else
+/// `"...\n"` and the last `count2` follow. So `count1 = 1` gives two frames on a two-deep stack.
+/// A level below 0 is `lua_getstack`'s tail-call pseudo-frame (`0x6fbad4`-`0x6fbade`), which
+/// `0x6fbd20` fills as `(tail call)` with no line, so it prints `(tail call): ?`.
+fn traceback_frames(lua: &Lua, start: i32, count1: i32, count2: i32) -> String {
+    let exists = |level: i32| level < 0 || lua.inspect_stack(level as usize, |_| ()).is_some();
+    let mut out = String::new();
+    if !exists(start) {
+        return out;
+    }
+    let limit = count1.wrapping_add(start) as u32;
+    // `ebx` is the level after the one in hand (`0x70383c`).
+    let (mut level, mut next, mut first_part) = (start, start.wrapping_add(1), true);
+    loop {
+        if next as u32 <= limit || !first_part {
+            if level < 0 {
+                out.push_str("(tail call): ?");
+            } else if let Some(f) = lua.inspect_stack(level as usize, traceback_frame) {
+                out.push_str(&f);
+            }
+            out.push('\n');
+        } else {
+            first_part = false;
+            if !exists(next.wrapping_add(count2)) {
+                next = next.wrapping_sub(1); // nothing to elide: print this level after all
+            } else {
+                out.push_str("...\n");
+                loop {
+                    next = next.wrapping_add(1);
+                    if !exists(next.wrapping_add(count2)) {
+                        break;
+                    }
+                }
+            }
+        }
+        // `0x70398f`: the next level in hand, or the end.
+        level = next;
+        next = next.wrapping_add(1);
+        if !exists(level) {
+            return out;
+        }
+    }
 }
 
 #[cfg(test)]

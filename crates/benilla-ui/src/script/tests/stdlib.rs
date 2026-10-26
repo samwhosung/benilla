@@ -208,6 +208,103 @@ fn debugstack_frames_end_in_newline_and_count1_does_not_clamp() {
     assert_eq!(lines[1], "...", "the marker is its own complete line");
 }
 
+/// `debugstack` takes each level off the front while `is-number` passes (`0x703782`), so a
+/// numeric string is a level, and joins what is left in front of the frames (`0x7039b0`); a first
+/// remainder that is no string or number returns the last argument (`0x70382d` → `0x7039b6`).
+#[test]
+fn debugstack_coerces_its_levels_and_joins_the_rest() {
+    let s = script();
+    let f = |src: &str| s.eval::<String>(src).unwrap();
+    assert_eq!(
+        f(r#"return debugstack("99")"#),
+        "",
+        "\"99\" is a level past the stack"
+    );
+    assert_eq!(f(r#"return debugstack(99, "msg")"#), "msg");
+    let late = f(r#"return debugstack("msg", 99)"#);
+    assert!(
+        late.starts_with("msg99") && late.ends_with('\n'),
+        "a level only in front: {late:?}"
+    );
+    assert_eq!(f(r#"return debugstack(99, 1, 1, "a", 2)"#), "a2");
+    let msg = f(r#"return debugstack("msg: ")"#);
+    assert!(msg.starts_with("msg: ") && msg.ends_with('\n'), "{msg:?}");
+    assert_eq!(f(r#"return debugstack({}, "last")"#), "last");
+    assert!(s
+        .eval::<bool>("local t = {} return debugstack(1, t) == t")
+        .unwrap());
+    let err = s
+        .eval::<String>(r#"return debugstack("a", {})"#)
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("attempt to concatenate a table value"),
+        "{err}"
+    );
+}
+
+/// The levels are 32-bit: a level below 0 is `lua_getstack`'s tail-call pseudo-frame
+/// (`0x6fbad4`-`0x6fbade`, filled by `0x6fbd20`), and the window adds with wrap and compares
+/// unsigned (`0x70384c`, `0x703857`), so a negative `start + count1` prints every level.
+#[test]
+fn debugstack_levels_wrap_as_32_bit_and_a_negative_one_is_a_tail_call() {
+    let s = script();
+    s.run(
+        "function DSDeep(n) \
+           if n == 0 then local r = debugstack(unpack(DSArgs)) return r end \
+           local r = DSDeep(n - 1) return r \
+         end",
+    )
+    .unwrap();
+    let at = |args: &str| -> Vec<String> {
+        s.run(&format!("DSArgs = {{{args}}}")).unwrap();
+        let out = s.eval::<String>("local r = DSDeep(30) return r").unwrap();
+        assert!(out.ends_with('\n'), "{args}: {out:?}");
+        out.lines().map(str::to_owned).collect()
+    };
+    let whole = at("0, 99, 0");
+    let deep = whole.len();
+    assert!(deep > 30, "{whole:?}");
+    assert!(whole.iter().all(|l| l != "..." && l != "(tail call): ?"));
+
+    // -1: the pseudo-frame, then levels 0..=10, then the marker and the last 10.
+    let minus_one = at("-1");
+    assert_eq!(minus_one[0], "(tail call): ?");
+    assert_eq!(minus_one[1..12], whole[..11]);
+    assert_eq!(minus_one[12], "...");
+    assert_eq!(minus_one[13..], whole[deep - 10..]);
+
+    // -12: the window's limit is 0, below the first `next` compared unsigned, and the probe lands
+    // on a pseudo-frame: the marker and the last `count2` levels alone.
+    assert_eq!(
+        at("-12, 12, 3"),
+        [&["...".to_string()][..], &whole[deep - 3..]].concat()
+    );
+
+    // A negative `start + count1` is a huge unsigned limit: every level, no marker.
+    assert_eq!(at("1, -3"), whole[1..]);
+    assert_eq!(
+        at("1, 2147483648"),
+        whole[1..],
+        "2^31 truncates to i32::MIN"
+    );
+}
+
+/// `luaV_concat` works down from the top, so with frames on top of two bad remainders the raise
+/// names the upper one; with no frame the top pair fails on its lower value.
+#[test]
+fn debugstack_raises_for_the_bad_remainder_nearest_the_top() {
+    let s = script();
+    let err = |src: &str| s.eval::<String>(src).unwrap_err().to_string();
+    let e = err(r#"return debugstack("a", {}, function() end)"#);
+    assert!(e.contains("attempt to concatenate a function value"), "{e}");
+    let e = err(r#"return debugstack(99, 1, 1, "a", {}, true)"#);
+    assert!(e.contains("attempt to concatenate a table value"), "{e}");
+    let e = err(r#"return debugstack(99, 1, 1, "a", "b", true)"#);
+    assert!(e.contains("attempt to concatenate a boolean value"), "{e}");
+    assert_eq!(s.eval::<i64>("return debugstack(99, 1, 1, 5)").unwrap(), 5);
+}
+
 /// An addon chunk is named as the reference names it, `@Interface\AddOns\<folder>\<file>`:
 /// `FuBarPlugin-2.0.lua:752` finds its folder with a greedy `"\\AddOns\\(.*)\\"`, which captures
 /// up to the last backslash, so the file must be in the name. The test bounds the capture at the
