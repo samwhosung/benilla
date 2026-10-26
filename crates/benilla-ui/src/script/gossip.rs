@@ -128,11 +128,13 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
+    // The static buffer `0xbbb678` (`0x4e28c0`): "" before any gossip (.bss), never nil, and what
+    // the last window drew after it closes.
     g.set(
         "GetGossipText",
-        lua.create_function(|lua, ()| match read(lua, |m| m.greeting.clone()) {
-            Some(t) => Ok(Value::String(lua.create_string(&t)?)),
-            None => Ok(Value::Nil),
+        lua.create_function(|lua, ()| {
+            let text = read(lua, |m| m.greeting.clone()).unwrap_or_default();
+            lua.create_string(&text)
         })?,
     )?;
 
@@ -274,7 +276,11 @@ mod tests {
     fn gossip_snapshot_reads_and_selects_queue() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        assert!(s.eval::<bool>("return GetGossipText() == nil").unwrap());
+        assert_eq!(
+            s.eval::<String>("return GetGossipText()").unwrap(),
+            "",
+            "the buffer is empty before any gossip, never nil (`0x4e28c0`)"
+        );
         assert_eq!(s.arity("GetGossipOptions()").unwrap(), 0);
 
         s.set_gossip(Some(menu()));
@@ -399,7 +405,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_gossip(Some(menu()));
         s.set_gossip(None);
-        assert!(s.eval::<bool>("return GetGossipText() == nil").unwrap());
+        assert_eq!(s.eval::<String>("return GetGossipText()").unwrap(), "");
         assert_eq!(s.arity("GetGossipOptions()").unwrap(), 0);
     }
 }

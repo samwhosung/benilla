@@ -162,7 +162,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `nil` for an unknown id or while the item template is in flight.
+    // No values at all for an unknown id or while the item template is in flight: both exits are
+    // `xor eax,eax` (`0x4c3255`, `0x4c3277` → `0x4c322c`).
     g.set(
         "GetLootRollItemLink",
         lua.create_function(|lua, roll_id: Value| {
@@ -173,8 +174,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 find(&model, roll_id).and_then(|r| r.link.clone())
             };
             match link {
-                Some(link) => Ok(mlua::Value::String(lua.create_string(&link)?)),
-                None => Ok(mlua::Value::Nil),
+                Some(link) => Ok(mlua::MultiValue::from_vec(vec![mlua::Value::String(
+                    lua.create_string(&link)?,
+                )])),
+                None => Ok(mlua::MultiValue::new()),
             }
         })?,
     )?;
@@ -302,9 +305,11 @@ mod tests {
             s.eval::<String>("return GetLootRollItemLink(7)").unwrap(),
             "|cffa335ee|Hitem:17182:0:0:0|h[Staff of Jordan]|h|r"
         );
-        assert!(s
-            .eval::<bool>("return GetLootRollItemLink(8) == nil")
-            .unwrap());
+        assert_eq!(
+            s.arity("GetLootRollItemLink(8)").unwrap(),
+            0,
+            "an uncached item returns no values (`0x4c3277`)"
+        );
 
         // An unknown id: the reference's miss tail (`0x4c31a3`).
         assert!(s
@@ -319,9 +324,11 @@ mod tests {
             5,
             "the reference's five returns (`0x4c31a3`)"
         );
-        assert!(s
-            .eval::<bool>("return GetLootRollItemLink(99) == nil")
-            .unwrap());
+        assert_eq!(
+            s.arity("GetLootRollItemLink(99)").unwrap(),
+            0,
+            "an unknown roll returns no values (`0x4c3255`)"
+        );
         assert_eq!(s.eval::<i64>("return GetLootRollTimeLeft(99)").unwrap(), 0);
     }
 

@@ -176,8 +176,9 @@ fn the_gossip_getters_read_the_world_at_the_call() {
         "Hello,Browse,2,A Threat Within"
     );
     assert_eq!(
-        c.eval::<Option<String>>(false, "return GetGossipText()"),
-        None
+        c.eval::<String>(false, "return GetGossipText()"),
+        "",
+        "with no host to ask, the empty buffer, never nil"
     );
     // The next message's slots read at once; its text, still out, leaves the last.
     c.handle(vec![menu(8, "Fly")]);
