@@ -88,6 +88,7 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("boot::tuned_default_plugins", "record"),
     ("build_id::BuildId", "record"),
     ("build_id::banner", "record"),
+    ("collision::BodyHit", "record"),
     ("collision::ColliderEpoch", "record"),
     ("collision::MoverTraceExclusions", "record"),
     ("collision::WorldCollision", "record"),
