@@ -13,6 +13,9 @@ const RANK_BUFFER: usize = 0x200;
 /// the player's cast refuses (`0x6e4bb2`) and the pet's order does not test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NamedSpell {
+    /// The 1-based slot in its book, as `CastSpell` takes it: `0x4b3950` answers the index
+    /// `0x4b4ab0` hands `0x4b3300`.
+    pub slot: u32,
     pub spell_id: u32,
     /// The pet's book, not the player's (`0x4b3b51` writes 1, `0x4b3b3d` writes 0).
     pub pet: bool,
@@ -36,8 +39,9 @@ pub(super) fn resolve_named(
     text: &[u8],
 ) -> Option<NamedSpell> {
     let (name, rank) = split_name_rank(text);
-    let (slot, pet) = find_in_books(&player.slots, &pet.slots, name, rank)?;
+    let (index, slot, pet) = find_in_books(&player.slots, &pet.slots, name, rank)?;
     Some(NamedSpell {
+        slot: index as u32 + 1,
         spell_id: slot.spell_id,
         pet,
         passive: slot.passive,
@@ -109,7 +113,7 @@ fn find_in_books<'a>(
     pet: &'a [SpellSlotView],
     name: &[u8],
     rank: &[u8],
-) -> Option<(&'a SpellSlotView, bool)> {
+) -> Option<(usize, &'a SpellSlotView, bool)> {
     if name.is_empty() {
         return None;
     }
@@ -122,12 +126,10 @@ fn find_in_books<'a>(
                     .as_bytes()
                     .eq_ignore_ascii_case(rank))
     };
-    player
-        .iter()
-        .rev()
-        .find(named)
-        .map(|s| (s, false))
-        .or_else(|| pet.iter().rev().find(named).map(|s| (s, true)))
+    let last = |slots: &'a [SpellSlotView]| slots.iter().enumerate().rev().find(|(_, s)| named(s));
+    last(player)
+        .map(|(i, s)| (i, s, false))
+        .or_else(|| last(pet).map(|(i, s)| (i, s, true)))
 }
 
 #[cfg(test)]

@@ -383,6 +383,25 @@ fn pickup_spell(lua: &Lua, id: u32, book_type: &str) -> bool {
     payload.is_some_and(|payload| set_cursor(lua, true, Setter::of(&payload), |_| Some(payload)))
 }
 
+/// The head of the cast dispatcher `0x4b3300`, which `CastSpell` and `CastSpellByName` both run
+/// (`0x4b4356`, `0x4b4b24`), before anything else is read: with a spell on the cursor (`0x4b3310`
+/// → `0x494e10` above 0) the slot goes through the pickup (`0x4b331f` → `0x4b3260`) and nothing
+/// is cast; otherwise `ClearCursor(1,1)` (`0x4b3354`) sends any held payload home, whatever the
+/// slot then does. A pet action on the cursor is not a spell there (`0x494e20` writes `0xb4e2f8`,
+/// not `0xb4e2f4`). Returns whether the verb is over.
+fn cast_head(lua: &Lua, id: u32, book_type: &str) -> bool {
+    let spell_held = matches!(
+        lua.app_data_ref::<Model>().expect("model app_data").cursor,
+        Some(CursorPayload::Spell(_))
+    );
+    if spell_held {
+        pickup_spell(lua, id, book_type);
+    } else {
+        verb(lua, clear_cursor);
+    }
+    spell_held
+}
+
 /// Register the spellbook globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -576,6 +595,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             |lua, (id, book_type, on_self): (Value, Value, Option<Value>)| {
                 let (id, book_type) = spell_slot_args(lua, id, book_type, "CastSpell")?;
                 let on_self = bool_or_default(on_self.as_ref(), false);
+                if cast_head(lua, id, &book_type) {
+                    return Ok(());
+                }
                 // The player book's cast is `TryCastSpell`, behind the gate's tag 2 (`0x6e4bc1`),
                 // after the cancels of an active aura or form (`0x4b3466`, `0x4b35da`), so the call
                 // is queued whatever the gate said and carries the answer to the cast alone; the
@@ -724,6 +746,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     &name.as_bytes(),
                 )
             };
+            if let Some(found) = found {
+                let book = if found.pet {
+                    BOOKTYPE_PET
+                } else {
+                    BOOKTYPE_SPELL
+                };
+                if cast_head(lua, found.slot, book) {
+                    return Ok(());
+                }
+            }
             let call = match found {
                 Some(found) if found.pet => ScriptCall::CastPetSpell {
                     spell_id: found.spell_id,
@@ -1208,6 +1240,59 @@ mod tests {
         assert!(pickup_spell(&s.lua, 1, "spell"));
         crate::script::tick::heard::take(&s);
         assert!(!pickup_spell(&s.lua, 2, "spell"));
+        assert!(s.cursor_payload().is_none());
+    }
+
+    /// `0x4b3300`: a held spell sends the slot through the pickup and casts nothing, for the
+    /// plain click and the named cast alike; any other payload is cleared first, then the cast
+    /// goes on (`0x4b3310`, `0x4b331f`, `0x4b3354`).
+    #[test]
+    fn a_cast_clears_the_cursor_and_with_a_spell_held_casts_nothing() {
+        let held_action = || {
+            CursorPayload::Action(CursorAction {
+                src_slot: 1,
+                kind: 0,
+                action: 111,
+                texture: None,
+                count: 0,
+                consumable: false,
+                state: None,
+            })
+        };
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_spellbook(book());
+
+        for cast in [
+            "CastSpell(3, BOOKTYPE_SPELL)",
+            "CastSpellByName('Frost Armor')",
+            // The held spell's own slot: put down, not cast.
+            "CastSpell(1, BOOKTYPE_SPELL)",
+            "CastSpellByName('Fireball')",
+        ] {
+            assert!(pickup_spell(&s.lua, 1, "spell"), "{cast}");
+            s.run(cast).unwrap();
+            assert!(
+                s.take_spell_casts().is_empty(),
+                "{cast} cast with a spell held"
+            );
+            assert!(s.cursor_payload().is_none(), "{cast} left the spell held");
+        }
+
+        for cast in [
+            "CastSpell(1, BOOKTYPE_SPELL)",
+            "CastSpellByName('Fireball')",
+        ] {
+            s.set_cursor_for_test(held_action());
+            s.run(cast).unwrap();
+            assert_eq!(s.take_spell_casts(), vec![(133, false)], "{cast}");
+            assert!(s.cursor_payload().is_none(), "{cast} left the payload held");
+        }
+
+        // The clear is ahead of the slot test: a slot with no spell still drops the payload.
+        s.set_cursor_for_test(held_action());
+        s.run("CastSpell(3, BOOKTYPE_PET)").unwrap();
+        assert!(s.take_spell_casts().is_empty());
         assert!(s.cursor_payload().is_none());
     }
 
