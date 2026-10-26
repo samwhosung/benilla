@@ -1384,6 +1384,49 @@ fn set_portrait_texture_folds_the_token_to_lowercase() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// `SetPortraitTexture` blanks the texture (`0x519fd3`), then resolves the token through
+/// `0x515970`, which raises `Unknown unit name: %s` for one it does not know (`0x515c14`); `""`
+/// passes (`0x515997`).
+#[test]
+fn set_portrait_texture_raises_for_an_unknown_token_after_the_blank() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local f = CreateFrame("Frame", "UFrame")
+        f:SetPoint("TOPLEFT", 0, 0)
+        f:SetWidth(100); f:SetHeight(100)
+        local p = f:CreateTexture("UFramePortrait", "BACKGROUND")
+        p:SetWidth(64); p:SetHeight(64)
+        p:SetPoint("TOPLEFT", 0, 0)
+        SetPortraitTexture(p, "player")
+    "#,
+    )
+    .unwrap();
+    let e = s
+        .run(r#"SetPortraitTexture(UFramePortrait, "bogus")"#)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("Unknown unit name: bogus"), "{e}");
+    let e = s
+        .run("SetPortraitTexture(UFramePortrait, 5)")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("Unknown unit name: 5"), "{e}");
+    s.resolve();
+    assert!(
+        !s.extract().iter().any(|q| matches!(
+            &q.content,
+            QuadContent::Texture {
+                portrait_unit: Some(_),
+                ..
+            }
+        )),
+        "the blank before the raise drops the binding"
+    );
+    s.run(r#"SetPortraitTexture(UFramePortrait, "")"#).unwrap();
+}
+
 /// `FontString:GetText` (`0x79d690`) pushes nil for an empty string by a first-byte test
 /// (`0x79d73b`), though `SetText 0x771d80` keeps an empty buffer; `Button:GetText 0x780e10` does
 /// the same (`0x780ec5`), and `EditBox:GetText 0x7985c0` returns `""`.

@@ -445,14 +445,19 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
                 r#"Usage: SetPortraitTexture(texture, "unit")"#,
             )?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
+            // Blanked first (`0x519fd3`), then the resolver raises `Unknown unit name` for a token
+            // it does not know (`0x519fe6` → `0x515970`), so a bad token leaves the texture blank.
             model.set_texel(rh, super::texel::TexSet::Own(None));
+            let data = model.region_data.entry(rh).or_default();
+            data.portrait_unit = None;
+            model.note_art(rh);
+            crate::script::unit::check_unit_token(&Some(unit.clone()))?;
             let data = model.region_data.entry(rh).or_default();
             // Lowercased: the reference resolves the token case-insensitively (`0x519ef0` →
             // `0x515970`), stock `MerchantFrame.lua:68` passes `"NPC"`, and the app's bakes are
             // keyed lowercase.
             data.portrait_unit = Some(unit.to_ascii_lowercase());
             data.circular = true;
-            model.note_art(rh);
             Ok(())
         })?,
     )?;
