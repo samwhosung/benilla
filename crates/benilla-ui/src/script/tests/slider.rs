@@ -208,6 +208,22 @@ fn slider_value_clamps_and_does_not_swap_minmax() {
     .unwrap();
 }
 
+/// `GetMinMaxValues` (`0x7906e0`) answers the min and the double `f32(max - min) + min`
+/// (`0x790778`-`0x79078c`), not the max as given (benilla-re `ui::minmax_max_value`).
+#[test]
+fn slider_get_min_max_values_derives_the_max_from_the_span() {
+    let s = script();
+    let (min, max) = s
+        .eval::<(f64, f64)>(
+            r#"local sl = CreateFrame("Slider")
+            sl:SetMinMaxValues(0.1, 1)
+            return sl:GetMinMaxValues()"#,
+        )
+        .unwrap();
+    assert_eq!(min, f64::from(0.1f32));
+    assert_eq!(max, 0.9999999776482582);
+}
+
 #[test]
 fn slider_setvalue_fires_onvaluechanged_only_on_change() {
     let s = script();

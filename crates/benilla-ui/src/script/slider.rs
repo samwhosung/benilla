@@ -127,7 +127,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "GetMinMaxValues",
-        lua.create_function(|lua, this: Table| with_slider(lua, &this, |s| (s.min, s.max)))?,
+        lua.create_function(|lua, this: Table| with_slider(lua, &this, |s| s.min_max_values()))?,
     )?;
     m.set(
         "SetValue",

@@ -1574,6 +1574,18 @@ pub fn slider_set_value(v: f32, min: f32, span: f32, step: f32) -> f32 {
 }
 
 impl SliderState {
+    /// The span `SetMinMaxValues` stores beside the min, `f32(max - min)` (`0x7898ff`-`0x78990d`).
+    pub fn span(&self) -> f32 {
+        (f64::from(self.max) - f64::from(self.min)) as f32
+    }
+
+    /// `GetMinMaxValues` (`0x7906e0`): the min, then the double `span + min`, never the max as
+    /// given (`0x790778`-`0x79078c`), so `(0.1, 1)` reads back 0.9999999776482582.
+    pub fn min_max_values(&self) -> (f64, f64) {
+        let min = f64::from(self.min);
+        (min, f64::from(self.span()) + min)
+    }
+
     /// The value fraction in `[0, 1]`; `0.0` when `max <= min`, the thumb at the track's start.
     pub fn fraction(&self) -> f32 {
         if self.max > self.min {
@@ -1590,8 +1602,7 @@ impl SliderState {
         if !self.range_valid {
             return None;
         }
-        let span = (f64::from(self.max) - f64::from(self.min)) as f32;
-        let settled = slider_set_value(v, self.min, span, self.step);
+        let settled = slider_set_value(v, self.min, self.span(), self.step);
         let first = !self.has_value;
         self.has_value = true;
         (first || settled != self.value).then(|| {
@@ -1608,8 +1619,7 @@ impl SliderState {
         if !self.range_valid {
             return None;
         }
-        let span = (f64::from(self.max) - f64::from(self.min)) as f32;
-        let max = (f64::from(span) + f64::from(self.min)) as f32;
+        let max = (f64::from(self.span()) + f64::from(self.min)) as f32;
         self.set_min_max(self.min, max)
     }
 
