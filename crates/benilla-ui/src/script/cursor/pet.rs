@@ -316,6 +316,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, slot: Value| {
             // `is-number` else `Usage: PickupPetAction(index)` (`0x84793c`, `0x4be196`).
             let slot = binding_abi::index_arg32(lua, slot, "Usage: PickupPetAction(index)")?;
+            // `slot - 1` above 10 unsigned raises before the pet lookup (`0x4be1c0`, `0x84791c`).
+            if slot.wrapping_sub(1) > 10 {
+                return Err(mlua::Error::runtime("Invalid slot in PickupPetAction"));
+            }
             pickup_pet_action(lua, slot)?;
             Ok(())
         })?,
@@ -427,6 +431,22 @@ mod tests {
         s.keep_calls();
         s.set_pet_actions(true, true, true, hunter_bar());
         s
+    }
+
+    /// `slot - 1` is compared unsigned with 10 (`0x4be1bf`-`0x4be1c3`): 0, a negative or 12 and up
+    /// raise `Invalid slot in PickupPetAction` (`0x84791c`) before the pet lookup, and 11 passes.
+    #[test]
+    fn a_slot_outside_one_to_eleven_raises_invalid_slot() {
+        let s = bar_script();
+        for i in ["0", "-1", "12", "'-2.5'"] {
+            let e = s
+                .run(&format!("PickupPetAction({i})"))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("Invalid slot in PickupPetAction"), "{i}: {e}");
+        }
+        assert!(s.cursor_payload().is_none());
+        s.run("PickupPetAction(11)").unwrap();
     }
 
     /// The pet-action setter needs control (`0x494e26`): without it the binding's own clear
