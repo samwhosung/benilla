@@ -196,10 +196,17 @@ fn parse_header(bytes: &[u8]) -> Result<Header<'_>> {
         return Err(Error::DimensionsTooLarge { width, height });
     }
 
-    // A 256-entry BGRA palette always follows the header; only Raw1 reads it.
-    let palette = bytes
-        .get(HEADER_SIZE..HEADER_SIZE + PALETTE_SIZE)
-        .ok_or(Error::BadColorMap)?;
+    // Only a paletted BLP (compression 1) reads the 256-entry BGRA palette. 1.12.1's parse copies
+    // the 1172-byte header with no length check (`0x5a83b0`, `0x5a83da`) and fails only on the
+    // magic and type, so a DXT or raw file shorter than the palette window (a 16x16 DXT5 icon is
+    // 516 bytes) opens.
+    let palette = if compression == 1 {
+        bytes
+            .get(HEADER_SIZE..HEADER_SIZE + PALETTE_SIZE)
+            .ok_or(Error::BadColorMap)?
+    } else {
+        &[]
+    };
 
     let chain = mip_chain_count(width, height, has_mipmaps);
     Ok(Header {
@@ -712,5 +719,27 @@ mod tests {
                 150, 140, 130, 160,
             ]
         );
+    }
+
+    /// A small DXTC BLP with **no palette**: its first mip sits at `HEADER_SIZE`, as the real
+    /// addon icons do (e.g. Tmog's 16x16 `ui-searchbox-icon.blp`, 516 bytes). The decoder must not
+    /// demand the 1024-byte palette window for a non-paletted file.
+    #[test]
+    fn dxt_without_a_palette_decodes() {
+        let payload = vec![0u8; 16]; // one 4x4 DXT5 block
+        let mut offsets = [0u32; 16];
+        let mut sizes = [0u32; 16];
+        offsets[0] = HEADER_SIZE as u32;
+        sizes[0] = payload.len() as u32;
+        let mut b = header(2, 8, 7, 0, 4, 4, offsets, sizes);
+        b.extend_from_slice(&payload); // no palette gap
+        assert!(
+            b.len() < HEADER_SIZE + PALETTE_SIZE,
+            "the file is shorter than the palette window"
+        );
+        let decoded = decode(&b).expect("a 4x4 DXT5 with no palette must decode");
+        assert_eq!((decoded.width, decoded.height), (4, 4));
+        assert_eq!(decoded.mips.len(), 1);
+        assert_eq!(decoded.mips[0].rgba.len(), 4 * 4 * 4);
     }
 }
