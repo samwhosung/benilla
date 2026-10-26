@@ -390,11 +390,6 @@ impl ObjectFields {
     pub fn player_rest_state_experience(&self) -> Option<u32> {
         self.get_u32(FIELD_PLAYER_REST_STATE_EXPERIENCE)
     }
-    /// `PLAYER_BYTES_3` byte 0: the player's gender, 1 female, which `CGPlayer_C::GetGender`
-    /// (`0x5ed5b0`) reads for the active player in place of `UNIT_FIELD_BYTES_0` byte 2.
-    pub fn player_gender(&self) -> Option<u8> {
-        self.get_u32(FIELD_PLAYER_BYTES_3).map(|v| v as u8)
-    }
     /// `PLAYER_BYTES_3` byte 1: drunkenness, the high byte of `drunk & 0xFFFE` in the low half
     /// (`SetDrunkValue`); the reference clamps it to 100 and scales by 0.01 (`0x5e2a90`).
     pub fn player_drunk_byte(&self) -> Option<u8> {
@@ -573,7 +568,11 @@ impl ObjectFields {
     pub fn unit_class(&self) -> Option<u8> {
         self.unit_bytes_0().map(|b| ((b >> 8) & 0xff) as u8)
     }
-    /// `UNIT_FIELD_BYTES_0` byte 2: gender.
+    /// `UNIT_FIELD_BYTES_0` byte 2: gender, 1 female.
+    ///
+    /// Deviation: the active player's gender is this byte too, where `CGPlayer_C::GetGender`
+    /// (`0x5ed5b0`) reads `PLAYER_BYTES_3` byte 0 whole, because that byte also carries the drunk
+    /// bits (`gender | drunk & 0xFFFE` on vmangos), so a drunk female reads as male.
     pub fn unit_gender(&self) -> Option<u8> {
         self.unit_bytes_0().map(|b| ((b >> 16) & 0xff) as u8)
     }

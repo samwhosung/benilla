@@ -503,8 +503,7 @@ struct SelfFacts {
 
 /// The local player's race, class and gender, `None` before the self object streams in; the
 /// reference's `0x62c670` prints nothing without it (`0x62c6bf`). The gender is the real one
-/// (`UNIT_FIELD_BYTES_0` byte 2), where `0x5ed5b0` reads `PLAYER_BYTES_3` byte 0 whole and so
-/// takes a drunk female on vmangos for a male: that byte carries the drunk bits.
+/// (the Deviation on `unit_gender`).
 fn self_facts(b: &Bridge) -> Option<SelfFacts> {
     let entity = *b.index.0.get(&b.self_guid.0?)?;
     let store = b.stores.get(entity).ok()?;

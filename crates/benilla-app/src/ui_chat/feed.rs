@@ -1744,8 +1744,8 @@ fn fire_one(
             } => {
                 // `victim == 0` is the award form: no name, no rank title. A victim's name
                 // never waits (`GetUnitName`, `0x625387`), and its title genders against the
-                // active player (`0x612bf0`, `0x625374`), whose gender `0x5ed5b0` reads from
-                // `PLAYER_BYTES_3` byte 0; a dishonorable kill's template names no rank.
+                // active player (`0x612bf0`, `0x625374`), its real gender (the Deviation on
+                // `unit_gender`); a dishonorable kill's template names no rank.
                 let name = (victim != 0).then(|| {
                     super::combat::unit_name(
                         victim,
@@ -1759,7 +1759,7 @@ fn fire_one(
                     .0
                     .and_then(|g| guids.0.get(&g))
                     .and_then(|e| stores.get(*e).ok())
-                    .and_then(|me| me.0.player_gender())
+                    .and_then(|me| me.0.unit_gender())
                     == Some(1);
                 let title =
                     (victim != 0 && honor > 0).then(|| script.pvp_rank_title(rank, side, female));

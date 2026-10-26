@@ -3953,10 +3953,11 @@ fn unit_combat_fires_for_every_token_naming_the_unit() {
     assert_eq!(order, ["pet WOUND", "target WOUND"]);
 }
 
-/// The honor line's rank title genders off the active player's own descriptor, `PLAYER_BYTES_3`
-/// byte 0 (`0x612bf0` on the active player calls `0x5ed5b0`), not the name cache.
+/// The honor line's rank title genders off the active player's own descriptor, its real gender
+/// (`UNIT_FIELD_BYTES_0` byte 2), not the name cache, and not `PLAYER_BYTES_3` byte 0, which a
+/// drunk female's drunk bits fill (the Deviation on `unit_gender`).
 #[test]
-fn the_honor_title_genders_off_the_active_players_bytes() {
+fn the_honor_title_genders_off_the_active_players_real_gender() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut feed = super::notice_tests::Feed::new();
     feed.script()
@@ -3976,7 +3977,8 @@ fn the_honor_title_genders_off_the_active_players_bytes() {
     let me = feed
         .world
         .spawn(crate::net::ObjectStore(
-            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19), (195, 1)]),
+            // Female in `UNIT_FIELD_BYTES_0` byte 2; byte 0 of `PLAYER_BYTES_3` full of drunk bits.
+            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19), (36, 1 << 16), (195, 0xFFFF)]),
         ))
         .id();
     let victim = feed
