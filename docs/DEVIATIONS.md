@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 247
+- [benilla-app](#benilla-app): 245
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
@@ -128,9 +128,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### death
 
-- A `/reload` dead keeps the release window and signals `PLAYER_DEAD` again, where the reference zeroes the timer at every UI start (`0x490131`) and its cascade never calls `0x495850` (`0x490168`), because without both a player who reloads dead has no Release. ([`src/death/mod.rs:127`](../crates/benilla-app/src/death/mod.rs#L127))
-- With no death this session to arm it (dead at login or after a `/reload`), the window runs from the first sight of the body dead, while the bit is set. ([`src/death/mod.rs:206`](../crates/benilla-app/src/death/mod.rs#L206))
-- The minutes come from the server's table, not from spell 15007's `Spell.dbc` duration, because the aura the server applies is what the dialog must warn about. ([`src/death/mod.rs:536`](../crates/benilla-app/src/death/mod.rs#L536))
+- The minutes come from the server's table, not from spell 15007's `Spell.dbc` duration, because the aura the server applies is what the dialog must warn about. ([`src/death/mod.rs:573`](../crates/benilla-app/src/death/mod.rs#L573))
 
 #### entities
 
