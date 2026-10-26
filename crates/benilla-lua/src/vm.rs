@@ -48,9 +48,18 @@ const CI_BYTES: usize = 24;
 /// (`0x6f6e0b`): the 0x68-byte `lua_State` (`0x6f6b8d`) and the 0xc0-byte `global_State`
 /// (`0x6f6d88`).
 const STATE_BYTES: usize = 0x128;
-/// 5.1.5's `MAXTAGLOOP`: the steps `luaV_gettable` and `luaV_settable` take along a chain of
-/// `__index` or `__newindex` tables before `loop in gettable`.
-const MAXTAGLOOP: u32 = 100;
+/// The tables `luaV_gettable` (`0x6f7cf0`) reads along an `__index` chain entered from the API
+/// (`lua_gettable`, `0x6f3ab3`): the loop count starts at 0 and the chain raises `loop in
+/// gettable` once it passes 100 (`0x6f7cf7`), so the 101 tables at counts 0 to 100.
+const GETTABLE_TABLES_API: u32 = 101;
+/// The same chain entered from an instruction: the VM reads the first table itself and hands the
+/// `__index` step a count of 0 (`0x6f8940`, `0x6f8a0a`, `0x6f8bf3`, `0x6f8c0d`), so the chain
+/// reaches one table more.
+const GETTABLE_TABLES_OP: u32 = 102;
+/// The tables `luaV_settable` (`0x6f7f40`) writes along an `__newindex` chain: its count starts at
+/// 0 and raises `loop in settable` once the table it just left makes it pass 100 (`0x6f7ffa`),
+/// so the 101 tables, whichever way it is entered.
+const SETTABLE_TABLES: u32 = 101;
 
 #[derive(Clone, Copy)]
 struct Frame {
@@ -1104,13 +1113,31 @@ impl Vm {
         None
     }
 
-    /// `luaV_gettable`. `reg` names the indexed value for an error.
+    /// `luaV_gettable` as the API enters it (`lua_gettable`), for the host and the natives. `reg`
+    /// names the indexed value for an error.
     #[cold]
     #[inline(never)]
     pub fn index(&mut self, t: Value, key: Value, reg: Option<usize>) -> Result<Value, LuaError> {
+        self.index_chain(t, key, reg, GETTABLE_TABLES_API)
+    }
+
+    /// `luaV_gettable` as an instruction enters it: `GETGLOBAL`, `GETTABLE` and `SELF`.
+    #[cold]
+    #[inline(never)]
+    fn index_op(&mut self, t: Value, key: Value, reg: Option<usize>) -> Result<Value, LuaError> {
+        self.index_chain(t, key, reg, GETTABLE_TABLES_OP)
+    }
+
+    fn index_chain(
+        &mut self,
+        t: Value,
+        key: Value,
+        reg: Option<usize>,
+        tables: u32,
+    ) -> Result<Value, LuaError> {
         let mut t = t;
         let mut reg = reg;
-        for _ in 0..MAXTAGLOOP {
+        for _ in 0..tables {
             let tm = match t.unpack() {
                 V::Table(tr) => {
                     let tab = self.heap.table(tr);
@@ -1156,7 +1183,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let mut t = t;
         let mut reg = reg;
-        for _ in 0..MAXTAGLOOP {
+        for _ in 0..SETTABLE_TABLES {
             let tm = match t.unpack() {
                 V::Table(tr) => {
                     let slot = match self.heap.table_mut(tr).slot_for(key) {
@@ -2815,7 +2842,7 @@ impl Vm {
                         if !v.is_nil() || tab.meta.is_none() {
                             r!(a) = v;
                         } else {
-                            let v = slow!(self.index(Value::Table(env), key, None))?;
+                            let v = slow!(self.index_op(Value::Table(env), key, None))?;
                             r!(a) = v;
                         }
                     }
@@ -2843,7 +2870,7 @@ impl Vm {
                             }
                         }
                         let (t, key) = (r!(b), rk!(c));
-                        let v = slow!(self.index(t, key, Some(b as usize)))?;
+                        let v = slow!(self.index_op(t, key, Some(b as usize)))?;
                         r!(a) = v;
                     }
                     Op::GetField(a, b, kx) => {
@@ -2861,7 +2888,7 @@ impl Vm {
                             }
                         }
                         let t = r!(b);
-                        let v = slow!(self.index(t, key, Some(b as usize)))?;
+                        let v = slow!(self.index_op(t, key, Some(b as usize)))?;
                         r!(a) = v;
                     }
                     Op::SelfField(a, b, kx) => {
@@ -2880,7 +2907,7 @@ impl Vm {
                                 continue;
                             }
                         }
-                        let v = slow!(self.index(obj, key, Some(b as usize)))?;
+                        let v = slow!(self.index_op(obj, key, Some(b as usize)))?;
                         r!(a) = v;
                     }
                     Op::SetField(a, kx, c) => {
@@ -2952,7 +2979,7 @@ impl Vm {
                             }
                         }
                         let key = rk!(c);
-                        let v = slow!(self.index(obj, key, Some(b as usize)))?;
+                        let v = slow!(self.index_op(obj, key, Some(b as usize)))?;
                         r!(a) = v;
                     }
                     Op::Add(a, b, c) => arith!(a, b, c, +, Arith::Add),

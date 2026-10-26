@@ -655,14 +655,16 @@ b]])"#),
           R(P .. 'local function two(a, b) local x, y = "X", "Y" end ' .. I .. 'two(1, 2, 3, 4, 5, 6, 7) end return n end' .. B),
           R(P .. 'local function w() local a, b, c, d, e, f, g, h = "a", "b", "c", "d", "e", "f", "g", "h" end '
             .. 'local function t2(a) end local function t1() return t2(1) end ' .. I .. 'w() t1() end return n end' .. B))"#),
-    // `__index` and `__newindex` chains: 5.1.5's `luaV_gettable` and `luaV_settable` take 100 steps.
+    // `__index` and `__newindex` chains: an instruction's `__index` chain reaches 102 tables
+    // (`luaV_gettable`, `0x6f7cf0`, entered with count 0 at `0x6f8940`), `__newindex` 101
+    // (`luaV_settable`, `0x6f7ffa`).
     ("fix-vm tag_loop", r#"local function chain(n, field)
           local last = {x = "found"}
           for i = 1, n do last = setmetatable({}, {[field] = last}) end
           return last
         end
         local o = {}
-        for _, n in {98, 99, 100, 101} do
+        for _, n in {99, 100, 101, 102} do
           table.insert(o, E(function() return chain(n, "__index").x end))
           table.insert(o, E(function() local t = chain(n, "__newindex") t.y = 1 return "set" end))
         end

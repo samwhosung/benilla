@@ -573,8 +573,10 @@ fn an_escaped_high_byte_matches_nothing() {
     assert_eq!(run("return string.find('\\195\\169', '\\195\\169')"), "1,2");
     // A name escaped with `(%W)` never matches itself when it has a high byte.
     assert_eq!(
-        run("local n = '\\195\\169x' local p = string.gsub(n, '(%W)', '%%%1') \
-             return p == '%\\195%\\169x', string.find(n, p)"),
+        run(
+            "local n = '\\195\\169x' local p = string.gsub(n, '(%W)', '%%%1') \
+             return p == '%\\195%\\169x', string.find(n, p)"
+        ),
         "true,nil"
     );
 }
@@ -609,5 +611,56 @@ fn unm_gets_the_operand_and_nil() {
     assert_eq!(
         run("return pcall(function() return -{} end)"),
         "false,t:1: attempt to perform arithmetic on a table value"
+    );
+}
+
+/// `luaV_gettable` (`0x6f7cf0`) raises `loop in gettable` once its count passes 100 (`0x6f7cf7`).
+/// An instruction reads the first table itself and hands the `__index` step a count of 0
+/// (`0x6f8940`, `0x6f8bf3`), so it reaches 102 tables; `lua_gettable` (`0x6f3ab3`) starts at 0 on
+/// the first table, so `getglobal` reaches 101. `luaV_settable` (`0x6f7f40`) counts to 100
+/// (`0x6f7ffa`): 101 tables, entered either way.
+#[test]
+fn tag_method_chains_reach_the_clients_depth() {
+    let get = |n: usize, read: &str| {
+        run(&format!(
+            "local t = {{x = 1}} for i = 2, {n} do t = setmetatable({{}}, {{__index = t}}) end \
+             return {read}"
+        ))
+    };
+    assert_eq!(get(102, "t.x"), "1");
+    assert_eq!(get(103, "t.x"), "<raised> t:1: loop in gettable");
+    assert_eq!(
+        get(102, "t:x()"),
+        "<raised> t:1: attempt to call method `x' (a number value)"
+    );
+    assert_eq!(get(103, "t:x()"), "<raised> t:1: loop in gettable");
+    // The globals table is the first table; its chain is `getglobal`'s and `GETGLOBAL`'s.
+    let global = |n: usize, read: &str| {
+        run(&format!(
+            "local t = {{x = 1}} for i = 3, {n} do t = setmetatable({{}}, {{__index = t}}) end \
+             setmetatable(getfenv(0), {{__index = t}}) return {read}"
+        ))
+    };
+    assert_eq!(global(102, "x"), "1");
+    assert_eq!(global(103, "x"), "<raised> t:1: loop in gettable");
+    assert_eq!(global(101, "getglobal('x')"), "1");
+    assert_eq!(global(102, "getglobal('x')"), "<raised> loop in gettable");
+
+    let set = |n: usize| {
+        run(&format!(
+            "local last = {{}} local t = last for i = 2, {n} do t = setmetatable({{}}, {{__newindex = t}}) end \
+             t.x = 1 return rawget(last, 'x')"
+        ))
+    };
+    assert_eq!(set(101), "1");
+    assert_eq!(set(102), "<raised> t:1: loop in settable");
+    assert_eq!(
+        run(
+            "local last = {} setmetatable(getfenv(0), {__newindex = last}) \
+             local t = last for i = 3, 101 do t = setmetatable({}, {__newindex = t}) end \
+             setmetatable(last, nil) setmetatable(getfenv(0), {__newindex = t}) \
+             setglobal('y', 5) return rawget(last, 'y')"
+        ),
+        "5"
     );
 }
