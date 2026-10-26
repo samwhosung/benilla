@@ -509,9 +509,9 @@ pub(super) const MERCHANT_UI: &[&str] = &[
     "ScrollTemplates.xml",
 ];
 
-/// Stock `GossipFrame.xml`'s dependencies in the production order, shared with `ui_gossip`'s feed
-/// tests. The greeting pane inherits `UIPanelScrollFrameTemplate`, and a missing template only
-/// warns, losing the scrollbar silently. Needs client data.
+/// Stock `GossipFrame.xml`'s dependencies in the production order, for the gossip lane's tests.
+/// The greeting pane inherits `UIPanelScrollFrameTemplate`, and a missing template only warns,
+/// losing the scrollbar silently. Needs client data.
 pub(crate) const GOSSIP_UI: &[&str] = &[
     r"Interface\FrameXML\GlobalStrings.lua",
     r"Interface\FrameXML\Fonts.xml",

@@ -318,10 +318,9 @@ pub(in crate::script) fn build_item(
         // An item object's charges and repair cost (`0x52e426` tests the object).
         let object = build.inst.as_ref().filter(|i| i.object);
         let charges = object.map(|i| i.object_charges[0]);
-        let cost = object
-            .and_then(|i| model.repair_costs.own.get(&i.guid))
-            .copied()
-            .unwrap_or(0);
+        let cost = object.map_or(0, |i| {
+            crate::script::merchant::item_repair_cost(lua, &model, i.guid)
+        });
         let amount = sell_amount(v.sell_price, v.spell_charges_0, charges, cost, count);
         (v.sell_price, amount)
     });

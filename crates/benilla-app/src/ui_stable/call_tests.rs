@@ -29,6 +29,8 @@ fn client(summon: u64) -> Stable {
     let world = app.world_mut();
     let me = ObjectFields::from_pairs(&[
         (2, 0x19),
+        // The purse the buy's gate reads (`0x4cb122`).
+        (benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE, 10_000),
         (SUMMON, summon as u32),
         (SUMMON + 1, (summon >> 32) as u32),
     ])
@@ -95,8 +97,7 @@ fn client(summon: u64) -> Stable {
     world.insert_resource(super::StableSlotPrices(
         benilla_formats::StableSlotPrices::from_rows([(2, 500)]),
     ));
-    let mut script = UiScript::new().expect("a VM");
-    script.set_money(10_000);
+    let script = UiScript::new().expect("a VM");
     app.world_mut().insert_non_send_resource(script);
     // The list's signal, which leaves the VM its copy.
     app.world_mut()

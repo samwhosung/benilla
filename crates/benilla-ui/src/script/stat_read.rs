@@ -348,3 +348,12 @@ pub(crate) fn read_self<T>(lua: &Lua, f: impl FnOnce(&dyn SelfRead) -> T) -> T {
         }
     }
 }
+
+/// The purse now, `PLAYER_FIELD_COINAGE` (`+0xf70`), as `GetMoney` reads it (`0x518160`): the
+/// active player's through the lent host, 0 while it holds none (`0x5181db`), else `model`'s
+/// copy. For a caller that holds the model already.
+pub(crate) fn purse(lua: &Lua, model: &Model) -> u64 {
+    let mut out = None;
+    super::host::read_host(lua, |h| h.read_self(&mut |own| out = Some(own.money())));
+    out.unwrap_or(model.money)
+}

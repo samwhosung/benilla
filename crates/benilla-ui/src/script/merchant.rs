@@ -72,7 +72,8 @@ pub struct ItemStatsHead {
     pub sell_price: u32,
 }
 
-/// Each damaged item's repair cost in copper after the vendor's discount (`0x4faf30`).
+/// Each damaged item's repair cost in copper after the vendor's discount (`0x4faf30`): the VM's
+/// copy the tooltips read with no host to ask ([`RepairCostQuery`]), which only a test sets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RepairCosts {
     /// Equipped items by live inventory id.
@@ -138,6 +139,45 @@ impl LiveQuery for RepairAllCostQuery {
     type Answer = Option<(u32, bool)>;
 }
 
+/// The repair cost the item tooltips return for the item a slot holds, read at the call
+/// (`0x534948`, `0x5332e1`): `0x4faf30`, the object's own cost after the open vendor's discount,
+/// 0 for no object. `bag` is the Lua container id, or [`super::EQUIPMENT_BAG`] with a doll live id.
+pub struct RepairCostQuery {
+    pub bag: i64,
+    pub slot: u32,
+}
+
+impl LiveQuery for RepairCostQuery {
+    type Answer = u32;
+}
+
+/// An item object's own repair cost before any discount (`0x5da330`), which the merchant price
+/// takes off (`0x52e44a`); 0 for no such object.
+pub struct ItemRepairCostQuery(pub u64);
+
+impl LiveQuery for ItemRepairCostQuery {
+    type Answer = u32;
+}
+
+/// The repair cost of the item at `bag`'s 1-based `slot` now, as [`RepairCostQuery`] reads it:
+/// the host's, else the VM's copy, which only a test sets.
+pub(crate) fn repair_cost_at(lua: &Lua, model: &Model, bag: i64, slot: u32) -> u32 {
+    ask(lua, &RepairCostQuery { bag, slot }).unwrap_or_else(|| {
+        let costs = &model.repair_costs;
+        let cost = match bag {
+            super::EQUIPMENT_BAG => costs.equipped.get(&slot),
+            _ => costs.bags.get(&(bag, slot)),
+        };
+        cost.copied().unwrap_or(0)
+    })
+}
+
+/// The item object `guid`'s own repair cost now, as [`ItemRepairCostQuery`] reads it.
+pub(crate) fn item_repair_cost(lua: &Lua, model: &Model, guid: u64) -> u32 {
+    ask(lua, &ItemRepairCostQuery(guid))
+        .unwrap_or_else(|| model.repair_costs.own.get(&guid).copied().unwrap_or(0))
+}
+
 /// The window's head now: the host's, else the VM's copy, which only a test sets (every
 /// production entry that runs Lua lends the host).
 pub(crate) fn head(lua: &Lua, model: &Model) -> MerchantHead {
@@ -198,7 +238,7 @@ impl super::UiScript {
         self.model_mut().merchant = state;
     }
 
-    /// Push the repair costs the item tooltip bindings return.
+    /// Set the repair costs the item tooltip bindings return with no host to ask, for a test.
     pub fn set_repair_costs(&mut self, costs: RepairCosts) {
         self.model_mut().repair_costs = costs;
     }

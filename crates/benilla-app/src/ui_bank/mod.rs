@@ -1,7 +1,8 @@
-//! The bank window's app side: the open banker, the purchase row, the bank events and the bank
-//! verbs' engine half ([`BankSteps`]). The vault itself is descriptor fields that
-//! [`crate::ui_items`] feeds as containers `-1` and `5..=10`, and moves items in and out of on a
-//! right-click.
+//! The bank window's app side: the open banker, whose cell the handlers and the close write into
+//! the VM as they write it here, the purchase row the getters read through the host ([`live`]), the
+//! bank lane the handlers signal on ([`lane`]) and the bank verbs' engine half ([`BankSteps`]).
+//! The vault itself is descriptor fields that [`crate::ui_items`] feeds as containers `-1` and
+//! `5..=10`, and moves items in and out of on a right-click.
 
 use benilla_protocol::messages::bank_slot_result;
 use bevy::ecs::system::SystemParam;
@@ -10,8 +11,7 @@ use bevy::prelude::*;
 use benilla_ui::script::{BankState, UiScript};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
-use crate::ui_script::UiFeed;
-use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// `BankBagSlotPrices.dbc`, the client's own slot prices; absent, the purchase row shows 0 and
 /// the server still charges its own price.
@@ -60,50 +60,54 @@ impl LatchedWindow for BankOpen {
 
 /// The close core, `0x4f84d0` with a zero guid, as `0x493310` enters it: `BANKFRAME_CLOSED` first
 /// and with no test of the cell (`0x4f84df`); then the latch release on the cell as it stands
-/// after the fire (`0x4f84eb`), and the cell cleared (`0x4f84f2`). The fire comes before the
-/// clear, so `OnHide`'s `CloseBankFrame()` re-enters with the cell set.
+/// after the fire (`0x4f84eb`), and the cell cleared (`0x4f84f2`), in the VM too. The fire comes
+/// before the clear, so `OnHide`'s `CloseBankFrame()` re-enters with the cell set. It runs behind
+/// the bank lane, so it never fires ahead of an open still queued there.
 pub(crate) fn close_core(world: &mut World) {
-    crate::ui_session::fire(world, |script| {
-        script.fire_event("BANKFRAME_CLOSED", vec![]);
+    lane::behind_lane(world, |world| {
+        crate::ui_session::fire(world, |script| {
+            script.fire_event("BANKFRAME_CLOSED", vec![]);
+        });
+        if let Some(banker) = world.resource::<BankOpen>().banker {
+            crate::ui_session::release(world, banker);
+        }
+        if world.resource::<BankOpen>().is_open() {
+            world.resource_mut::<BankOpen>().clear();
+            crate::ui_session::note_closed(world, NpcWindow::Bank);
+            crate::ui_session::with_script(world, |script| script.set_bank(None));
+        }
     });
-    if let Some(banker) = world.resource::<BankOpen>().banker {
-        crate::ui_session::release(world, banker);
-    }
-    if world.resource::<BankOpen>().is_open() {
-        world.resource_mut::<BankOpen>().clear();
-        crate::ui_session::note_closed(world, NpcWindow::Bank);
-        crate::ui_session::with_script(world, |script| script.set_bank(None));
-    }
 }
 
 /// `SMSG_SHOW_BANK` (`0x5e3f78` → `0x4f84d0(banker)`): the latch first, with no test of the cell
-/// (`0x4f8507`), then the cell (`0x4f850e`); the feed fires `BANKFRAME_OPENED` (`0x4f8522`).
+/// (`0x4f8507`), then the cell (`0x4f850e`), in the VM too, then `BANKFRAME_OPENED` (`0x4f8522`)
+/// on the bank lane at the packet's place.
 pub(crate) fn open_bank(world: &mut World, banker: u64) {
     crate::ui_session::register(world, banker);
     world.resource_mut::<BankOpen>().open(banker);
+    crate::ui_session::with_script(world, |script| {
+        script.set_bank(Some(BankState::default()));
+    });
+    if let Some(mut lane) = world.get_resource_mut::<BankLane>() {
+        lane.push(BankEvent::Opened);
+    }
 }
 
-/// `SMSG_BUY_BANK_SLOT_RESULT` codes waiting for the error line; vmangos sends one only on failure.
-#[derive(Resource, Default)]
-pub(crate) struct BankErrors(pub Vec<u32>);
-
+pub(crate) mod lane;
+pub(crate) mod live;
 mod net;
+pub(crate) use lane::{BankEvent, BankLane};
+pub(crate) use live::BankLive;
 
 pub(crate) struct UiBankPlugin;
 
 impl Plugin for UiBankPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        lane::add_bank_lane(app);
         app.init_resource::<BankOpen>()
-            .init_resource::<BankErrors>()
             // No leg of the sweep closes the bank: its interaction close (`0x490b5f`) does.
-            .add_latched_window::<BankOpen>()
-            .add_systems(
-                Update,
-                (feed_bank
-                    .in_set(UiFeed)
-                    .in_set(crate::ui_session::NpcWindowFeed),),
-            );
+            .add_latched_window::<BankOpen>();
     }
 }
 
@@ -116,60 +120,6 @@ fn bank_slot_error_key(result: u32) -> Option<&'static str> {
         bank_slot_result::INSUFFICIENT_FUNDS => "ERR_BANKSLOT_INSUFFICIENT_FUNDS", // 0x101
         bank_slot_result::NOTBANKER => "ERR_BANKSLOT_NOTBANKER",             // 0x102
         _ => return None,
-    })
-}
-
-/// Push the purchase row and fire the bank events but the close, the core's ([`close_core`]).
-/// `BANKFRAME_OPENED` has no arguments: the reference fires it bare (`0x4f8522`), and stock
-/// `BankFrame.lua:127` titles with `UnitName("npc")`.
-fn feed_bank(
-    mut vm: crate::script_calls::VmWith<Res<'static, BankOpen>>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    prices: Option<Res<BankPrices>>,
-    mut errors: ResMut<BankErrors>,
-    mut last: crate::ui_script::WindowMemo<Option<BankState>>,
-    mut closes: CoreCloses,
-    mut sink: crate::ui_action::MessageSink,
-) {
-    let banker = vm.own().banker;
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let last = last.get(script);
-        if closes.since_last(script, NpcWindow::Bank) {
-            *last = None;
-        }
-        // Refusals show, and speak, as their message rows say: insufficient funds is speech `0x16`.
-        let lines: Vec<_> = errors
-            .0
-            .drain(..)
-            .filter_map(|result| crate::ui_action::keyed_line(script, bank_slot_error_key(result)?))
-            .collect();
-        crate::ui_action::show_messages(script, &mut sink, "ui_bank", lines);
-        let store = self_q.iter().next();
-        let purchased = store
-            .and_then(|s| s.0.player_bank_bag_slots_purchased())
-            .unwrap_or(0);
-        let fresh = banker.map(|_| BankState {
-            num_purchased: u32::from(purchased),
-            next_cost: prices
-                .as_ref()
-                .and_then(|p| p.0.next_slot_price(purchased))
-                .unwrap_or(0),
-        });
-        if fresh == *last {
-            return;
-        }
-        script.set_bank(fresh.clone());
-        match (&*last, &fresh) {
-            (None, Some(_)) => script.fire_event("BANKFRAME_OPENED", vec![]),
-            // The bought count moved: a bought slot has no reply packet, so this confirms it.
-            (Some(_), Some(_)) => script.fire_event("PLAYERBANKBAGSLOTS_CHANGED", vec![]),
-            // The core told the VM; a disconnect's clear tells it nothing.
-            (Some(_), None) | (None, None) => {}
-        }
-        *last = fresh;
     })
 }
 

@@ -102,7 +102,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::player::net::SkinnedFeed",
         "the skinned state",
     ),
-    (Row::Queue, "::ui_bank::BankErrors", "the bank errors"),
     (
         Row::Queue,
         "::player::view_subject::FarSight",
@@ -156,12 +155,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_gossip::GossipState",
-        "the gossip message's slots, which `feed_gossip` fires from; the gossip verbs, acting in \
-         their calls, hold it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_quest::QuestGiver",
         "the quest giver's packets, which `feed_quest` fires from; the quest verbs, acting in \
          their calls, hold it in the host",
@@ -184,11 +177,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         Row::HostHeld,
         "::death::DeathNet",
         "the death stores, which `feed_death` fires the offers and the corpse range from; the death verbs, acting in their calls, hold them in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_bank::BankOpen",
-        "the banker's cell, which `feed_bank` fires from; `PurchaseSlot` and `CloseBankFrame`, acting in their calls, hold it in the host",
     ),
     (
         Row::HostHeld,
@@ -267,6 +255,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::target::Selection",
     "::ui_action::PlayerActions",
     "::ui_auction::AuctionOpen",
+    // Read through the host by the bank getters, and quiet: its events fire on the bank lane at
+    // their handlers, and `PurchaseSlot` and `CloseBankFrame` hold it in their calls.
+    "::ui_bank::BankOpen",
     // Read, and quiet: the buff timers read the stamps through the host and no feed fires off
     // them; the aura fields' watcher raises `PLAYER_AURAS_CHANGED`.
     "::ui_aura::AuraDurations",
@@ -293,6 +284,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     // through the host, and no feed fires off it, as the reply's `INSPECT_HONOR_UPDATE` goes on
     // the notice lane at its handler and a re-target's fires in its call.
     "::ui_honor::InspectHonor",
+    // Read through the host by the gossip getters, and quiet: the draw's `GOSSIP_SHOW` fires on the
+    // gossip lane at its handler, and the gossip verbs hold it in their calls.
+    "::ui_gossip::GossipState",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
     // Read through the host by the merchant getters, and quiet: its events fire on the merchant
@@ -440,17 +434,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_petition::PetitionRecords"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    ("::ui_gossip::feed_gossip", &["items::Countdowns", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "ui_gossip::GossipState", "world_state::WorldStates"]),
-    // The purse the trade and mail verbs read off the VM; `GetMoney` reads it through the host.
-    ("::ui_merchant::feed_purse", &["net::ObjectStore"]),
-    ("::ui_merchant::feed_repair_costs", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
-        "ui_merchant::MerchantOpen"]),
     ("::ui_auction::feed_auction", &["items::Items", "names::NameCache",
         "ui_auction::AuctionOpen"]),
     ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"]),
-    ("::ui_bank::feed_bank", &["net::ObjectStore", "ui_bank::BankErrors", "ui_bank::BankOpen"]),
     ("::ui_mail::feed_mail", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_mail::MailOpen", "ui_mail::pending::MailPending", "world_state::WorldStates"]),
@@ -647,7 +633,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 31] {
+fn lane_types() -> [TypeId; 33] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -705,12 +691,16 @@ fn lane_types() -> [TypeId; 31] {
         TypeId::of::<crate::ui_petition::PetitionLane>(),
         // The trainer lane: the list's and the state passes' pushes and signals.
         TypeId::of::<crate::ui_trainer::TrainerLane>(),
+        // The bank lane: the open's signal and the refusals' lines.
+        TypeId::of::<crate::ui_bank::BankLane>(),
+        // The gossip lane: the greeting's draw.
+        TypeId::of::<crate::ui_gossip::GossipLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 31] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 33] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -764,6 +754,8 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 31] {
         ("stable", TypeId::of::<crate::ui_stable::StableLane>()),
         ("charter", TypeId::of::<crate::ui_petition::PetitionLane>()),
         ("trainer", TypeId::of::<crate::ui_trainer::TrainerLane>()),
+        ("bank", TypeId::of::<crate::ui_bank::BankLane>()),
+        ("gossip", TypeId::of::<crate::ui_gossip::GossipLane>()),
     ]
 }
 
@@ -917,6 +909,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
         [
             "auction house",
             "bag view",
+            "bank",
             "battlefield",
             "cast reports",
             "cast views",
@@ -928,6 +921,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "dialogs",
             "equip errors",
             "field notices",
+            "gossip",
             "guild",
             "item text",
             "item watchers",

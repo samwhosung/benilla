@@ -241,7 +241,7 @@ pub use aura::{
     AuraCall, AuraListRead, AuraRead, AuraState, PlayerBuffExpiry, TrackingState, UnitAuraList,
 };
 pub use backdrop::{Backdrop, Insets};
-pub use bank::{BankCall, BankState};
+pub use bank::{BankCall, BankSlotsQuery, BankState};
 pub use battlefield_live::{
     BattlefieldFlagQuery, BattlefieldIconScaleQuery, BattlefieldListQuery,
     BattlefieldPositionCountQuery, BattlefieldPositionQuery, BattlefieldScoreRead,
@@ -317,7 +317,7 @@ pub use duel::DuelRequest;
 pub use follow::FollowRequest;
 pub use gm_survey::{GmSurveyTables, SurveyAnswerSend};
 pub use gm_ticket::{GmTicketCall, GmTicketIntent, GmTicketWrite};
-pub use gossip::{GossipCall, GossipMenu, GossipOptionView, GossipQuestRow};
+pub use gossip::{GossipCall, GossipMenu, GossipOptionView, GossipQuery, GossipQuestRow};
 pub use guild::{
     GuildCall, GuildCells, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline,
     UnitGuild, MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
@@ -376,8 +376,9 @@ pub use mail::{
 };
 pub use measure::TextMeasure;
 pub use merchant::{
-    BuybackRowQuery, ItemStatsHead, MerchantCall, MerchantHead, MerchantHeadQuery, MerchantItem,
-    MerchantRowQuery, MerchantState, RepairAllCostQuery, RepairCosts,
+    BuybackRowQuery, ItemRepairCostQuery, ItemStatsHead, MerchantCall, MerchantHead,
+    MerchantHeadQuery, MerchantItem, MerchantRowQuery, MerchantState, RepairAllCostQuery,
+    RepairCostQuery, RepairCosts,
 };
 pub(crate) use minimap::apply_model_attrs as apply_minimap_model_attrs;
 pub use minimap::{

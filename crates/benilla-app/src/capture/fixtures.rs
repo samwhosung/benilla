@@ -102,7 +102,6 @@ pub(super) fn seed_ui_fixture(
         ),
         (
             ResMut<'static, crate::ui_action::PlayerActions>,
-            ResMut<'static, crate::ui_bank::BankOpen>,
             MessageWriter<'static, AppExit>,
             ResMut<'static, crate::loading_screen::LoadingScreen>,
             ResMut<'static, crate::ui_gossip::GossipState>,
@@ -127,7 +126,7 @@ pub(super) fn seed_ui_fixture(
     vm.turn(|script, parts| {
         let (mut loot, mut names, mut selection, mut player, store, rest, set_parts) = parts;
         let (mut item_sets, mut item_names) = set_parts;
-        let (mut actions, mut bank, mut exit, mut loading, mut gossip, mut quest) = rest;
+        let (mut actions, mut exit, mut loading, mut gossip, mut quest) = rest;
         let (mut items, mut index, mut home_bind) = store;
         // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
         let Some(scenario) = ctx.scenario else {
@@ -392,17 +391,21 @@ pub(super) fn seed_ui_fixture(
                         display_id: 0,
                     }),
                 );
-                gossip.npc = Some(NPC_GUID);
-                gossip.text_id = 1;
                 // A greeting long enough that the wrapped options below run past the parchment.
-                gossip.greeting = Some(
-                    "A man has been caught stealing corn from the fields of a noble, a lord known \
-                     for his harsh taxes throughout the land.$B$BMake your choice!"
-                        .into(),
+                let greeting = "A man has been caught stealing corn from the fields of a noble, \
+                                a lord known for his harsh taxes throughout the land.$B$BMake \
+                                your choice!";
+                gossip.remember_record(
+                    1,
+                    vec![benilla_protocol::messages::NpcTextBlock {
+                        probability: 1.0,
+                        male: greeting.into(),
+                        female: greeting.into(),
+                    }],
                 );
                 // An available quest row above the options, for the quest-row icon and text
                 // seating.
-                gossip.quests = vec![(783, 0, 5, "Eagan Peltskinner".into())];
+                let quests = vec![(783, 0, 5, "Eagan Peltskinner".into())];
                 // One short option and four that wrap, taller than the parchment, so the capture
                 // covers the stock `GossipResize` per-row height, the scroll frame and its
                 // scrollbar.
@@ -416,26 +419,28 @@ pub(super) fn seed_ui_fixture(
                     "I allow the man to take enough corn to feed his family for a couple of days, \
                      encouraging him to leave the land.",
                 ];
-                gossip.options = vec![benilla_protocol::messages::GossipOption {
+                let mut options = vec![benilla_protocol::messages::GossipOption {
                     index: 0,
                     icon: 1,
                     coded: false,
                     message: "Let me browse your goods.".into(),
                 }];
-                gossip
-                    .options
-                    .extend(judgement.iter().enumerate().map(|(i, message)| {
-                        benilla_protocol::messages::GossipOption {
-                            index: i as u32 + 1,
-                            icon: 0,
-                            coded: false,
-                            message: (*message).into(),
-                        }
-                    }));
+                options.extend(judgement.iter().enumerate().map(|(i, message)| {
+                    benilla_protocol::messages::GossipOption {
+                        index: i as u32 + 1,
+                        icon: 0,
+                        coded: false,
+                        message: (*message).into(),
+                    }
+                }));
+                // The message's own handler, which queues `GOSSIP_SHOW` as a live one does.
+                commands.queue(move |world: &mut World| {
+                    crate::ui_gossip::net::gossip_menu(world, NPC_GUID, 1, options, quests)
+                });
             }
             UiFixture::Bank => {
                 // A pure banker and the vault, fed through the descriptor and caches that
-                // `feed_bank` and `ui_items` push into the VM as live wire data would.
+                // `ui_items` pushes into the VM as live wire data would.
                 use benilla_protocol::messages::ObjectFields;
                 names.insert_creature(
                     NPC_ENTRY,
@@ -519,8 +524,8 @@ pub(super) fn seed_ui_fixture(
                     crate::net::SelfPlayer,
                     crate::net::Guid(PLAYER_GUID),
                 ));
-                // `feed_bank` then fires BANKFRAME_OPENED as a live SMSG_SHOW_BANK would.
-                bank.open(NPC_GUID);
+                // The open's own core, which queues BANKFRAME_OPENED as a live SMSG_SHOW_BANK does.
+                commands.queue(|world: &mut World| crate::ui_bank::open_bank(world, NPC_GUID));
                 // Opens bank bag 1 once its container feed lands (`GetContainerNumSlots(5) > 0`);
                 // `BankFrameBag1`'s `GetID()` is 5, the container id its handler passes to
                 // `ToggleBag`.

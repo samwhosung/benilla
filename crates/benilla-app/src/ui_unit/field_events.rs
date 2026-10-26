@@ -679,6 +679,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::AREA_SPIRIT_HEALER_IN_RANGE => "AREA_SPIRIT_HEALER_IN_RANGE",
         id::AREA_SPIRIT_HEALER_OUT_OF_RANGE => "AREA_SPIRIT_HEALER_OUT_OF_RANGE",
         id::INSPECT_HONOR_UPDATE => "INSPECT_HONOR_UPDATE",
+        id::PLAYERBANKBAGSLOTS_CHANGED => "PLAYERBANKBAGSLOTS_CHANGED",
         _ => return None,
     })
 }

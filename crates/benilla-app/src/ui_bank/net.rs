@@ -1,9 +1,10 @@
-//! The bank's packet handlers: they fill [`BankOpen`] and [`BankErrors`] for the bank feed.
+//! The bank's packet handlers: the open writes [`BankOpen`], and each signals on the bank lane
+//! at its packet ([`super::lane`]).
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{BankErrors, BankOpen};
+use super::{BankEvent, BankLane, BankOpen};
 use crate::net::NetHandlerApp;
 
 /// Register the bank handlers and the session-end listener.
@@ -23,19 +24,18 @@ fn on_show_bank(In(ev): In<SessionEvent>, mut commands: Commands) {
     }
 }
 
-fn on_buy_slot_result(In(ev): In<SessionEvent>, mut errors: ResMut<BankErrors>) {
+/// `SMSG_BUY_BANK_SLOT_RESULT` (`0x5e3f8d`), a refusal: vmangos sends it only on failure. Its
+/// line shows inside the handler, on the bank lane.
+fn on_buy_slot_result(In(ev): In<SessionEvent>, mut lane: ResMut<BankLane>) {
     if let SessionEvent::BuyBankSlotResult { result } = ev {
-        bank_buy_slot_result(result, &mut errors);
+        debug!("net: bank slot purchase refused (code {result})");
+        if let Some(key) = super::bank_slot_error_key(result) {
+            lane.push(BankEvent::Line(key));
+        }
     }
 }
 
 /// The bank window closes with the connection.
 fn on_session_end(In(_): In<SessionEvent>, mut bank: ResMut<BankOpen>) {
     bank.clear_session();
-}
-
-/// `SMSG_BUY_BANK_SLOT_RESULT`, a refusal: vmangos sends it only on failure.
-fn bank_buy_slot_result(result: u32, errors: &mut BankErrors) {
-    debug!("net: bank slot purchase refused (code {result})");
-    errors.0.push(result);
 }

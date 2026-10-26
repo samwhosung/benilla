@@ -9,7 +9,7 @@ use benilla_ui::script::{ContainerSlot, ContainerState, MerchantState};
 use crossbeam_channel::Receiver;
 
 use super::*;
-use crate::net::{ClientCommand, Guid, NetCommands};
+use crate::net::{ClientCommand, Guid, NetCommands, SelfPlayer};
 use crate::script_calls::with_hosted_vm;
 
 const ME: u64 = 0x10;

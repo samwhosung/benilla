@@ -816,7 +816,10 @@ mod tests {
     #[test]
     fn our_own_death_clears_the_cursor_after_player_dead() {
         let mut c = dying_client();
-        crate::script_calls::with_hosted_vm(c.world(), |s| s.expect("a VM").set_money(500));
+        c.values(
+            ME,
+            &[(benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE, 500)],
+        );
         c.lua(
             r#"SEEN = {} local f = CreateFrame("Frame")
             f:RegisterEvent("PLAYER_DEAD") f:RegisterEvent("CURSOR_UPDATE")

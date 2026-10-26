@@ -458,3 +458,17 @@ fn a_close_in_the_lists_frame_fires_after_its_show() {
     c.frame(vec![vec![list(vec![row(1, 25)])], vec![trainer]]);
     assert_eq!(c.seen(), ["MERCHANT_SHOW:nil", "MERCHANT_CLOSED:nil"]);
 }
+
+/// The verbs that test the purse read the coinage at the call, as `GetMoney` does (`0x518160`,
+/// `+0xf70`): `PickupPlayerMoney`'s gate (`0x494cc0`) passes on a coinage its packet wrote, with no
+/// push between, and refuses once a later packet lowers it.
+#[test]
+fn the_purse_tests_read_the_coinage_at_the_call() {
+    use benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE;
+    let mut c = client();
+    let pickup = "ClearCursor() PickupPlayerMoney(400) return GetCursorMoney()";
+    c.handle(vec![values(ME, &[(FIELD_PLAYER_FIELD_COINAGE, 500)])]);
+    assert_eq!(c.eval::<i64>(true, pickup), 400);
+    c.handle(vec![values(ME, &[(FIELD_PLAYER_FIELD_COINAGE, 300)])]);
+    assert_eq!(c.eval::<i64>(true, pickup), 0, "the purse falls short");
+}

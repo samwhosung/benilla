@@ -219,6 +219,7 @@ pub(crate) mod id {
     pub(crate) const UNIT_INVENTORY_CHANGED: u16 = 186;
     pub(crate) const PLAYER_MONEY: u16 = 200;
     pub(crate) const PLAYERBANKSLOTS_CHANGED: u16 = 347;
+    pub(crate) const PLAYERBANKBAGSLOTS_CHANGED: u16 = 350;
     pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
     pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
     pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
@@ -380,6 +381,11 @@ const COINAGE: (u16, u16) = (0xf70, 4);
 
 /// `0x5de4e0`'s range, `PLAYER_BYTES_2` byte 3 (`0x5ddb0b`).
 const REST_STATE: u16 = 0x1b;
+
+/// The active player's bank-slot watch `0x4f8490`, `PLAYER_BYTES_2` byte 2, the bought bank bag
+/// slots, registered at world entry (`0x4f8460`, from `0x4909ba`), behind `0x5de4e0` on the same
+/// dword.
+const BANK_BAG_SLOTS: (u16, u16) = (0x1a, 1);
 
 /// The skill block: entry `k` at `0x848 + 12k` of the player section, 128 entries (`0x5dda54` to
 /// `0x5ddaf0`). Each entry's four watches cover two bytes each: the value at `+4`, the maximum at
@@ -954,6 +960,11 @@ pub(crate) fn placed_values(
                 );
             }
         }
+        // `0x4f8490`: `PLAYERBANKBAGSLOTS_CHANGED` bare (`0x4f8495`), a banker open or not.
+        if let Some(at) = at(PLAYER_SECTION, BANK_BAG_SLOTS, List::Object) {
+            let id = id::PLAYERBANKBAGSLOTS_CHANGED;
+            pass.push(at, FieldNotice::Global { id });
+        }
         for (offset, len, id) in PLAYER_EVENT_WATCHES {
             if let Some(at) = at(PLAYER_SECTION, (offset, len), List::Object) {
                 pass.push(at, FieldNotice::Player { id });
@@ -1224,8 +1235,9 @@ mod tests {
         );
     }
 
-    /// The rank bar watch is one byte of `PLAYER_FIELD_BYTES2`, the rest-state watch one byte of
-    /// `PLAYER_BYTES_2`: the other bytes of their dwords run neither.
+    /// The rank bar watch is one byte of `PLAYER_FIELD_BYTES2`, the rest-state watch and the
+    /// bank-slot watch one byte each of `PLAYER_BYTES_2`: the other bytes of their dwords run
+    /// neither, and on one dword the rest state's runs first (`0x5ddb0b`, then `0x4f8460`).
     #[test]
     fn a_byte_watch_reads_its_own_byte_only() {
         let mut me = player();
@@ -1236,10 +1248,14 @@ mod tests {
             [FieldNotice::Player { id: 524 }]
         );
         let rest = pf(0x1b);
-        assert!(block(&mut me, Some(ME), ME, &[(rest, 0x00ff_ffff)]).is_empty());
+        assert!(block(&mut me, Some(ME), ME, &[(rest, 0x0000_ffff)]).is_empty());
+        let bank = FieldNotice::Global {
+            id: id::PLAYERBANKBAGSLOTS_CHANGED,
+        };
+        assert_eq!(block(&mut me, Some(ME), ME, &[(rest, 0x0002_ffff)]), [bank]);
         assert_eq!(
-            block(&mut me, Some(ME), ME, &[(rest, 0x02ff_ffff)]),
-            [FieldNotice::RestState { old: 0, new: 2 }]
+            block(&mut me, Some(ME), ME, &[(rest, 0x0203_ffff)]),
+            [FieldNotice::RestState { old: 0, new: 2 }, bank]
         );
         // The whole `PLAYER_BYTES_3` is the rank watch: its gender byte runs it.
         assert_eq!(

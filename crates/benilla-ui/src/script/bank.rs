@@ -1,5 +1,7 @@
-//! The bank bindings: the app pushes the open bank's snapshot ([`UiScript::set_bank`]), and
-//! `PurchaseSlot` and `CloseBankFrame` hand the host their calls ([`BankCall`]).
+//! The bank bindings: the purchase row reads the active player through the host at the call
+//! ([`BankSlotsQuery`]), the app writes the banker's cell into the VM at the open and the close
+//! ([`UiScript::set_bank`]), and `PurchaseSlot` and `CloseBankFrame` hand the host their calls
+//! ([`BankCall`]).
 //!
 //! The vault is container `-1` (24 slots) and containers 5..=10 (the six bags), the reference's
 //! own ids (`BankFrame.lua:1-4`), so the container verbs work on it unchanged. The bag items
@@ -8,9 +10,11 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::live::{ask, LiveQuery};
 use super::Model;
 
-/// The open bank's purchase row, pushed whole by the app.
+/// The bank's purchase row: `Some` in the VM while a banker's cell is set, which the container
+/// getters' bank gate reads; its two numbers are the getters' answer with no host to ask.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BankState {
     /// Purchased bag slots, 0..=6: `PLAYER_BYTES_2` byte 2.
@@ -20,8 +24,27 @@ pub struct BankState {
     pub next_cost: u32,
 }
 
+/// The question `GetNumBankSlots` (`0x4f85b0`) and `GetBankSlotCost` (`0x4f8630`) ask at the
+/// call: the active player's `PLAYER_BYTES_2` byte 2 (`+0x1a`, `0x4f85dd`) and the price of the
+/// row after it (`0x4f8663` → `0x4f8690`), both 0 with no player (`0x4f85e3`, `0x4f866a`). Neither
+/// tests the banker.
+pub struct BankSlotsQuery;
+
+impl LiveQuery for BankSlotsQuery {
+    type Answer = BankState;
+}
+
+/// The purchase row now: the host's, else the VM's copy, which only a test sets.
+fn slots(lua: &Lua) -> BankState {
+    ask(lua, &BankSlotsQuery).unwrap_or_else(|| {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        model.bank.clone().unwrap_or_default()
+    })
+}
+
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open bank's snapshot.
+    /// Write (or clear, with `None`) the banker's cell `[0xbdd038]` into the VM, at the open's
+    /// signal and the close's clear.
     pub fn set_bank(&mut self, state: Option<BankState>) {
         self.model_mut().bank = state;
     }
@@ -54,10 +77,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetNumBankSlots",
         lua.create_function(|lua, ()| {
-            let n = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.bank.as_ref().map_or(0, |b| b.num_purchased)
-            };
+            let n = slots(lua).num_purchased;
             let full = if n >= 6 {
                 Value::Integer(1)
             } else {
@@ -70,14 +90,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetBankSlotCost(numSlots): the argument is unread; the pushed state names the next slot.
+    // GetBankSlotCost(numSlots): the argument is unread; the next slot's price.
     g.set(
         "GetBankSlotCost",
         // Reads no argument at all (`0x4f8630`): any call shape answers.
-        lua.create_function(|lua, _args: mlua::MultiValue| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(model.bank.as_ref().map_or(0, |b| b.next_cost)))
-        })?,
+        lua.create_function(|lua, _args: mlua::MultiValue| Ok(i64::from(slots(lua).next_cost)))?,
     )?;
 
     // PurchaseSlot(): the `CONFIRM_BUY_BANK_SLOT` popup's accept (`StaticPopup.lua:52`).

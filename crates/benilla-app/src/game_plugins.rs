@@ -1862,9 +1862,7 @@ pub(crate) mod schedule_tests {
         );
         let seated = after(units);
         let stale: Vec<&str> = [
-            "::ui_gossip::feed_gossip",
             "::ui_quest::feed_quest",
-            "::ui_bank::feed_bank",
             "::ui_auction::feed_auction",
             "::ui_trade::feed_trade",
         ]
@@ -2066,8 +2064,6 @@ pub(crate) mod schedule_tests {
          "filled only by a world right-click on a GameObject or a body; the drain sends casts to the wire"),
         ("ui_action/recount.rs", "recount", Because::Deliberate,
          "no system: the item lane's firing calls it per run (`item_lane::fire_run`), inside the lanes' drain, which runs only with the interface up (`ingame_ui_up`)"),
-        ("ui_bank/mod.rs", "feed_bank", Because::PlayerRoundTrip,
-         "`BankErrors` answers a `BuyBankSlot` click; the OPENED edge rides `VmMemo`s"),
         ("ui_char.rs", "feed_char", Because::FilledByVm,
          "its take is the ammo getters' hits, which only a getter's call leaves, and a frameless VM \
           calls none; the doll's own pushes ride `VmMemo`s"),

@@ -382,7 +382,12 @@ pub enum MailRowVerb {
 
 impl MailRowVerb {
     /// `Ok` when the reference sends for `row`, else the refusal's message key, if it shows one.
-    fn sends(self, model: &Model, row: &MailInboxRow) -> Result<(), Option<&'static str>> {
+    fn sends(
+        self,
+        lua: &Lua,
+        model: &Model,
+        row: &MailInboxRow,
+    ) -> Result<(), Option<&'static str>> {
         // An item (`[rec+0x120]`, `0x4af96d`), then the player's object (`0x4af992`) and the purse
         // to pay its COD (`[rec+0x144]` against the coinage, `0x4af9c5`); either miss shows
         // `ERR_NOT_ENOUGH_MONEY` (`0x4afa4c`, `push 0x25`).
@@ -391,7 +396,7 @@ impl MailRowVerb {
                 return Err(None);
             }
             let player = model.units_by_lower.contains_key("player");
-            if !player || model.money < u64::from(row.cod) {
+            if !player || super::stat_read::purse(lua, model) < u64::from(row.cod) {
                 return Err(Some("ERR_NOT_ENOUGH_MONEY"));
             }
             return Ok(());
@@ -679,7 +684,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // the lock or the mailbox.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let can = row_at(&model, index)
-                .is_some_and(|r| MailRowVerb::Delete.sends(&model, &r).is_ok());
+                .is_some_and(|r| MailRowVerb::Delete.sends(lua, &model, &r).is_ok());
             Ok(flag(can))
         })?,
     )?;
@@ -764,7 +769,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let Some(row) = row_at(&model, index as usize) else {
                         return Ok(());
                     };
-                    if let Err(refusal) = verb.sends(&model, &row) {
+                    if let Err(refusal) = verb.sends(lua, &model, &row) {
                         drop(model);
                         return match refusal {
                             Some(key) => super::calls::display_error(lua, key),
@@ -874,7 +879,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 copper,
                 "Usage: SetSendMailMoney(amount)",
             )? as u32;
-            let money = lua.app_data_ref::<Model>().expect("model app_data").money;
+            let money = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                super::stat_read::purse(lua, &model)
+            };
             if u64::from(n) > money {
                 super::calls::display_error(lua, "ERR_NOT_ENOUGH_MONEY")?;
                 return Ok(Value::Nil);

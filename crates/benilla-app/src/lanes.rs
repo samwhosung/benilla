@@ -482,6 +482,8 @@ mod aura_view_tests;
 #[cfg(test)]
 mod bag_tests;
 #[cfg(test)]
+mod bank_live_tests;
+#[cfg(test)]
 mod battlefield_live_tests;
 #[cfg(test)]
 mod book_live_tests;
@@ -493,6 +495,8 @@ mod cooldown_live_tests;
 mod dialog_live_tests;
 #[cfg(test)]
 mod duration_live_tests;
+#[cfg(test)]
+mod gossip_live_tests;
 #[cfg(test)]
 mod group_view_tests;
 #[cfg(test)]

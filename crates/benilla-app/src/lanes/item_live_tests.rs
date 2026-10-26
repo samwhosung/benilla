@@ -431,6 +431,11 @@ fn client(window: Window) -> Client {
     world
         .resource_mut::<crate::ui_bank::BankOpen>()
         .open(BANKER);
+    // The banker's cell in the VM, which the open writes beside it (`0x4f850e`), for the vault.
+    crate::script_calls::with_hosted_vm(world, |s| {
+        s.expect("a VM")
+            .set_bank(Some(benilla_ui::script::BankState::default()))
+    });
     match window {
         Window::Trade => {
             world

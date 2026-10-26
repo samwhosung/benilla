@@ -1,12 +1,15 @@
-//! The gossip window's packet handlers: they fill [`GossipState`], on the latch, and touch the VM
-//! only through the close core.
+//! The gossip window's packet handlers: they fill [`GossipState`], on the latch, signal the drawn
+//! greeting on the gossip lane ([`super::lane`]), and touch the VM only through the close core.
 
 use benilla_protocol::messages::{GossipOption, NpcTextBlock};
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::GossipState;
-use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore};
+use super::{GossipEvent, GossipLane, GossipState};
+use crate::names::NameCache;
+use crate::net::{
+    ClientCommand, Guid, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfPlayer,
+};
 
 /// Register the gossip handlers and the session-end listener.
 pub(super) fn register(app: &mut App) {
@@ -91,6 +94,7 @@ pub(crate) fn gossip_menu(
                 .send(ClientCommand::NpcTextQuery { text_id, guid: npc });
         }
     }
+    show_drawn(world);
     close_on_missing_text(world);
 }
 
@@ -104,7 +108,42 @@ fn npc_greeting(world: &mut World, text_id: u32, blocks: Vec<NpcTextBlock>) {
     world
         .resource_mut::<GossipState>()
         .text_arrived(text_id, blocks, gender);
+    show_drawn(world);
     close_on_missing_text(world);
+}
+
+/// The draw's tail in `0x4e2010`: the greeting expanded for the player (`0x4e2274`), written to
+/// the text buffer (`0x4e229a`), then `GOSSIP_SHOW` (`0x4e22b5`) on the gossip lane. The draw tests
+/// no cell, so a text landing after a close still shows.
+fn show_drawn(world: &mut World) {
+    let Some(raw) = world.resource_mut::<GossipState>().take_drawn() else {
+        return;
+    };
+    let text = world
+        .run_system_cached_with(expand_greeting, raw.clone())
+        .unwrap_or(raw);
+    world.resource_mut::<GossipState>().text = text;
+    if let Some(mut lane) = world.get_resource_mut::<GossipLane>() {
+        lane.push(GossipEvent::Show);
+    }
+}
+
+/// The greeting's `$N`/`$B`/`$G`/`$<n>w` macros for the active player (`0x506f70`).
+fn expand_greeting(
+    In(raw): In<String>,
+    self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
+    names: Res<NameCache>,
+    unit_names: crate::ui_unit::NameTables,
+    states: Res<crate::world_state::WorldStates>,
+) -> String {
+    let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
+    crate::npc_text::substitute(
+        &raw,
+        &crate::npc_text::MacroContext {
+            subject: player.as_ref(),
+            states: &states,
+        },
+    )
 }
 
 /// The missing-text path's close (`0x4e2197` → `0x4e1fa0(0)`).

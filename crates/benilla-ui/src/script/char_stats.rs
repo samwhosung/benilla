@@ -600,22 +600,20 @@ impl Model {
         self.containers.get(&bag)?.slots.get(&n)
     }
 
-    /// The player's repair cost at live id `slot`, the vault and keyring bands by their container
-    /// slots.
-    pub(super) fn inv_repair_cost(&self, slot: usize) -> u32 {
-        let costs = &self.repair_costs;
-        let cost = if BANK_INV_SLOTS.contains(&slot) {
-            let n = (slot - BANK_INV_SLOTS.start() + 1) as u32;
-            costs.bags.get(&(BANK_CONTAINER, n))
+    /// The player's repair cost at live id `slot` now (`0x5332e1`), the vault and keyring bands by
+    /// their container slots.
+    pub(super) fn inv_repair_cost(&self, lua: &mlua::Lua, slot: usize) -> u32 {
+        let (bag, n) = if BANK_INV_SLOTS.contains(&slot) {
+            (BANK_CONTAINER, slot - BANK_INV_SLOTS.start() + 1)
         } else if KEYRING_INV_SLOTS.contains(&slot) {
-            let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
-            costs.bags.get(&(KEYRING_CONTAINER, n))
+            (KEYRING_CONTAINER, slot - KEYRING_INV_SLOTS.start() + 1)
         } else {
-            u32::try_from(slot)
-                .ok()
-                .and_then(|s| costs.equipped.get(&s))
+            (super::EQUIPMENT_BAG, slot)
         };
-        cost.copied().unwrap_or(0)
+        let Ok(n) = u32::try_from(n) else {
+            return 0;
+        };
+        super::merchant::repair_cost_at(lua, self, bag, n)
     }
 
     /// The use cooldown `(start, duration, enabled)` in `GetTime` seconds of the player's item at

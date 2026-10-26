@@ -233,13 +233,13 @@ impl super::UiScript {
     }
 
     /// `SetTradePartner`'s open leg for a trade we started by dropping coins (`0x4bf5fe`-
-    /// `0x4bf61c`): the offer becomes offer plus the held coins through `0x5d4500` when the purse
-    /// covers it. The new offer, for the app's send, the coins still held for
+    /// `0x4bf61c`): the offer becomes offer plus the held coins through `0x5d4500` when `purse`,
+    /// the coinage the app reads at the handler, covers it. The new offer, for the app's send, the coins still held for
     /// [`Self::trade_open_money_clear`]; `None` with no coins held or a purse short of the total,
     /// which leaves the cursor as it is.
-    pub fn trade_open_money(&mut self) -> Option<u32> {
+    pub fn trade_open_money(&mut self, purse: u64) -> Option<u32> {
         super::tick::verb(&self.lua, |model| {
-            let total = cursor::money::trade_money_total(model)?;
+            let total = cursor::money::trade_money_total(model, purse)?;
             cursor::money::set_own_offer(model, total);
             Some(total)
         })
@@ -1129,7 +1129,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 copper,
                 "Usage: SetTradeMoney(amount)",
             )? as u32;
-            if u64::from(n) > lua.app_data_ref::<Model>().expect("model app_data").money {
+            let money = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                crate::script::stat_read::purse(lua, &model)
+            };
+            if u64::from(n) > money {
                 return Ok(());
             }
             submit(lua, TradeCall::Gold(n))?;

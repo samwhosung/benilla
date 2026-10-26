@@ -2,20 +2,21 @@
 //! [`benilla_ui::script::MerchantHeadQuery`] and its kin: the window's cell and rows
 //! (`0xbddfa0`, `0xbdd118`), the player's buy-back fields, items and the open vendor's unit as of
 //! the drain's place, each row resolved off the item cache as the reference's getter reads it at
-//! the call (`0x4fb150`, `0x4fb310`, `0x4fadb0`, `0x4fbd60`).
+//! the call (`0x4fb150`, `0x4fb310`, `0x4fadb0`, `0x4fbd60`), and each item's repair cost the
+//! tooltips read at theirs (`0x4faf30`, `0x5da330`).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
-    BuybackRowQuery, MerchantHead, MerchantHeadQuery, MerchantItem, MerchantRowQuery,
-    RepairAllCostQuery,
+    BuybackRowQuery, ItemRepairCostQuery, MerchantHead, MerchantHeadQuery, MerchantItem,
+    MerchantRowQuery, RepairAllCostQuery, RepairCostQuery,
 };
 
 use super::{
-    buyback_order, open_vendor_discount, repair_all, resolve_buyback, resolve_item, vendor_repairs,
-    MerchantOpen, RepairTables,
+    buyback_order, item_repair_cost, open_vendor_discount, repair_all, resolve_buyback,
+    resolve_item, vendor_repairs, MerchantOpen, RepairTables,
 };
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -115,6 +116,41 @@ impl MerchantLive<'_, '_> {
             discount,
         )))
     }
+
+    /// The item at the player's `bag` slot `slot` (1-based; the doll's live id with
+    /// [`benilla_ui::script::EQUIPMENT_BAG`]) priced as `0x4faf30` prices it at the call: the
+    /// object's own cost (`0x5da330`) after the open vendor's discount, the full price with none
+    /// open (`0x4faf8a`); 0 for no object, no player or no tables.
+    pub(super) fn repair_cost(&self, bag: i64, slot: u32) -> Option<u32> {
+        let items = self.items.as_deref()?;
+        let Some(player) = self.player() else {
+            return Some(0);
+        };
+        let (Some(slot0), Some(tables)) = (
+            slot.checked_sub(1).and_then(|s| u8::try_from(s).ok()),
+            self.tables.as_deref(),
+        ) else {
+            return Some(0);
+        };
+        let objects = self.stores.item_objects(&self.objects);
+        let Some(guid) = crate::ui_items::slot_guid(&player.0, bag, slot0, &objects) else {
+            return Some(0);
+        };
+        let discount = self.open.as_deref().map_or(0.0, |open| {
+            open_vendor_discount(self.vendor(open), &self.relations, player)
+        });
+        Some(item_repair_cost(guid, &objects, items, tables, discount))
+    }
+
+    /// The item object `guid`'s own cost before any discount (`0x5da330`), as of the drain's
+    /// place.
+    pub(super) fn own_repair_cost(&self, guid: u64) -> Option<u32> {
+        let items = self.items.as_deref()?;
+        let objects = self.stores.item_objects(&self.objects);
+        Some(self.tables.as_deref().map_or(0, |tables| {
+            item_repair_cost(guid, &objects, items, tables, 0.0)
+        }))
+    }
 }
 
 impl crate::script_calls::live::LiveFamily for MerchantLive<'_, '_> {
@@ -123,5 +159,7 @@ impl crate::script_calls::live::LiveFamily for MerchantLive<'_, '_> {
             || ask.answer(|q: &MerchantRowQuery| self.row(q.0))
             || ask.answer(|q: &BuybackRowQuery| self.buyback(q.0))
             || ask.answer(|_: &RepairAllCostQuery| self.repair_all())
+            || ask.answer(|q: &RepairCostQuery| self.repair_cost(q.bag, q.slot))
+            || ask.answer(|q: &ItemRepairCostQuery| self.own_repair_cost(q.0))
     }
 }

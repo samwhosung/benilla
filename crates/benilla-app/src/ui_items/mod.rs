@@ -120,7 +120,7 @@ pub(crate) fn slot_guid(
     store: &ObjectFields,
     bag: i64,
     slot0: u8,
-    objects: &Objects,
+    objects: &(impl ItemObjects + ?Sized),
 ) -> Option<u64> {
     match bag {
         0 => store.player_pack_slot(slot0).filter(|g| *g != 0),

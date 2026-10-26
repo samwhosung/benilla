@@ -40,6 +40,8 @@ fn me_fields(extra: &[(u16, u32)]) -> ObjectFields {
         (22, 100),
         (35, fixture::HUMAN),
         (46, fixture::PC),
+        // The purse the money verbs test against (`PLAYER_FIELD_COINAGE`).
+        (benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE, 10_000),
         (532, CLOTH as u32),
         (533, (CLOTH >> 32) as u32),
         (534, JERKY as u32),
@@ -87,7 +89,6 @@ fn client() -> Trade {
         .insert_player(BOB, "Bob".to_string(), None);
     world.resource_mut::<crate::target::Selection>().guid = Some(BOB);
     let mut script = UiScript::new().expect("a VM");
-    script.set_money(10_000);
     script.set_unit_guids(&UnitGuids {
         player: ME,
         target: BOB,

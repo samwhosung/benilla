@@ -121,7 +121,12 @@ fn open_everything(world: &mut World) {
         .open(STABLE_MASTER, 0, Vec::new());
     // The bank last, so it holds the latch: every leg above releases its own, and the interaction
     // close finds the banker.
-    crate::ui_bank::open_bank(world, BANKER);
+    // The open's latch and cell, its `BANKFRAME_OPENED` long fired (`0x4f8507`, `0x4f850e`), so
+    // the sweep's close finds no open still queued on the bank lane ahead of it.
+    crate::ui_session::register(world, BANKER);
+    world
+        .resource_mut::<crate::ui_bank::BankOpen>()
+        .open(BANKER);
     world.insert_resource(crate::cinematic::Cinematic::playing_for_test());
 }
 

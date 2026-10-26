@@ -1,11 +1,9 @@
 //! The gossip verbs inside their calls, through the whole client's call host: each packet goes
 //! out before the verb returns, so a chunk's packets leave in call order.
 
-use benilla_protocol::messages::{GossipOption, NpcTextBlock};
-use bevy::prelude::*;
-
 use super::GossipState;
 use crate::ui_quest::verb_tests::Client;
+use benilla_protocol::messages::{GossipOption, NpcTextBlock};
 
 const NPC: u64 = 0xF130_0000_0000_0007;
 const ROLL: &str = "RandomRoll { min: 1, max: 100 }";
@@ -13,33 +11,25 @@ const ROLL: &str = "RandomRoll { min: 1, max: 100 }";
 /// `NPC`'s menu, its greeting drawn: option 1 is wire index 3, then active quest 5 (icon 3) and
 /// available quest 6 (icon 5).
 fn menu(c: &mut Client) {
-    let world = c.app.world_mut();
-    {
-        let mut state = world.resource_mut::<GossipState>();
-        state.remember_record(
-            7,
-            vec![NpcTextBlock {
-                probability: 1.0,
-                male: "Hello".into(),
-                female: "Hello".into(),
-            }],
-        );
-        state.open_menu(
-            NPC,
-            7,
-            vec![GossipOption {
-                index: 3,
-                icon: 1,
-                coded: false,
-                message: "Browse".into(),
-            }],
-            vec![(5, 3, 1, "Active".into()), (6, 5, 1, "Available".into())],
-            0,
-        );
-    }
-    world
-        .run_system_cached(super::feed_gossip)
-        .expect("the feed runs");
+    menu_of(
+        c,
+        vec![GossipOption {
+            index: 3,
+            icon: 1,
+            coded: false,
+            message: "Browse".into(),
+        }],
+        true,
+    );
+}
+
+/// `lua`'s string value, read with the host lent, as the getters read the store at the call.
+fn live_eval(c: &mut Client, lua: &str) -> String {
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM")
+            .eval::<String>(lua)
+            .expect("the chunk runs")
+    })
 }
 
 /// `SelectGossipOption` (`0x4e2a30` → `0x4e2320`, the send at `0x4e23ef`) and the two quest-row
@@ -74,32 +64,28 @@ const RECORDER: &str = "SEEN = {} local f = CreateFrame('Frame') \
     f:RegisterEvent('GOSSIP_SHOW') f:RegisterEvent('GOSSIP_ENTER_CODE') \
     f:SetScript('OnEvent', function() table.insert(SEEN, event .. ':' .. tostring(arg1)) end)";
 
-/// `NPC`'s menu with `options` and the two quest rows, its text cached when `drawn`.
+/// `NPC`'s menu with `options` and the two quest rows through the message's handler, its text
+/// cached when `drawn`, and the lanes drained, so its `GOSSIP_SHOW` has fired.
 fn menu_of(c: &mut Client, options: Vec<GossipOption>, drawn: bool) {
     let world = c.app.world_mut();
-    {
-        let mut state = world.resource_mut::<GossipState>();
-        if drawn {
-            state.remember_record(
-                7,
-                vec![NpcTextBlock {
-                    probability: 1.0,
-                    male: "Hello".into(),
-                    female: "Hello".into(),
-                }],
-            );
-        }
-        state.open_menu(
-            NPC,
+    if drawn {
+        world.resource_mut::<GossipState>().remember_record(
             7,
-            options,
-            vec![(5, 3, 1, "Active".into()), (6, 5, 1, "Available".into())],
-            0,
+            vec![NpcTextBlock {
+                probability: 1.0,
+                male: "Hello".into(),
+                female: "Hello".into(),
+            }],
         );
     }
-    world
-        .run_system_cached(super::feed_gossip)
-        .expect("the feed runs");
+    super::net::gossip_menu(
+        world,
+        NPC,
+        7,
+        options,
+        vec![(5, 3, 1, "Active".into()), (6, 5, 1, "Available".into())],
+    );
+    crate::lanes::fire_in_order(world);
 }
 
 fn option(index: u32, coded: bool) -> GossipOption {
@@ -129,17 +115,15 @@ fn an_option_select_resets_the_menus_slots() {
         )]
     );
     assert_eq!(
-        c.eval(
+        live_eval(
+            &mut c,
             "local function n(...) return arg.n end \
              return n(GetGossipOptions()) .. ',' .. n(GetGossipAvailableQuests()) .. ',' .. \
              n(GetGossipActiveQuests()) .. ',' .. GetGossipText()"
         ),
         "0,0,0,Hello"
     );
-    c.app
-        .world_mut()
-        .run_system_cached(super::feed_gossip)
-        .expect("the feed runs");
+    crate::lanes::fire_in_order(c.app.world_mut());
     assert_eq!(c.eval("return table.concat(SEEN, ',')"), "");
 }
 
@@ -243,7 +227,8 @@ fn a_code_keeps_its_bytes_up_to_its_nul() {
 
 /// `CloseGossip` (`0x4e2b20` → `0x4e1fa0`) zeroes the cell inside its call (`0x4e1fcc`) and
 /// leaves the slots: a select on the chunk's next line sends for guid 0, and so does one after
-/// the drain's `GOSSIP_CLOSED`, whose getters still read the slots.
+/// the close's `GOSSIP_CLOSED`, whose getters still read the slots. The close's latch release
+/// re-enters it with the cell still set (`0x4e1fc5` → `0x493310`), so it signals twice.
 #[test]
 fn close_gossip_zeroes_the_cell_and_keeps_the_slots() {
     let mut c = Client::new(0);
@@ -264,13 +249,10 @@ fn close_gossip_zeroes_the_cell_and_keeps_the_slots() {
     .unwrap();
     c.sent();
     c.run("CloseGossip()").unwrap();
-    c.app
-        .world_mut()
-        .run_system_cached(super::feed_gossip)
-        .expect("the feed runs");
+    crate::lanes::fire_in_order(c.app.world_mut());
     assert_eq!(
-        c.eval("local function n(...) return arg.n end return n(GetGossipOptions()) .. ',' .. table.concat(SEEN, ',')"),
-        "2,GOSSIP_CLOSED"
+        live_eval(&mut c, "local function n(...) return arg.n end return n(GetGossipOptions()) .. ',' .. table.concat(SEEN, ',')"),
+        "2,GOSSIP_CLOSED,GOSSIP_CLOSED"
     );
     c.run("SelectGossipOption(1)").unwrap();
     assert_eq!(

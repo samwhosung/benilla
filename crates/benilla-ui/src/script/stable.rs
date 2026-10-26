@@ -665,8 +665,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let allowed = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                // Affordability reads `model.money`, the purse `GetMoney()` answers.
-                let money = model.money;
+                // Affordability reads the purse `GetMoney()` answers (`0x4cb122`).
+                let money = super::stat_read::purse(lua, &model);
                 view(lua, &model).state.as_ref().is_some_and(|s| {
                     s.num_stable_slots as usize != NUM_STABLE_SLOTS - 1
                         && s.next_slot_cost != 0
