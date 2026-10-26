@@ -145,15 +145,14 @@ impl super::UiScript {
     }
 
     /// The spells whose player view a hover reads from the VM's own state rather than the
-    /// player's book: the open quest's and each log entry's reward spell and the open craft's
-    /// spell subjects. The app pushes their views ahead of a hover; the auras' views are
-    /// [`Self::aura_tooltip_subjects`].
+    /// player's book: the questgiver panel's reward spell, read through the lent host
+    /// ([`super::quest::state`]), each log entry's and the open craft's spell subjects. The app
+    /// pushes their views ahead of a hover; the auras' views are [`Self::aura_tooltip_subjects`].
     pub fn spell_tooltip_subjects(&self) -> Vec<u32> {
+        let panel = super::quest::state(self.lua()).and_then(|q| q.reward_spell);
         let model = self.model_ref();
-        let rewards = model
-            .quest
+        let rewards = panel
             .iter()
-            .filter_map(|q| q.reward_spell.as_ref())
             .chain(
                 model
                     .quest_log
@@ -842,14 +841,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetQuestRewardSpell",
         lua.create_function(|lua, this: Table| {
-            let id = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .quest
-                    .as_ref()
-                    .and_then(|q| q.reward_spell.as_ref())
-                    .map(|s| (s.spell_id, s.name.clone()))
-            };
+            // The panel's spell cell as the host holds it at the call (`0xbe0830`).
+            let id = crate::script::quest::state(lua)
+                .and_then(|q| q.reward_spell)
+                .map(|s| (s.spell_id, s.name));
             set_reward_spell(lua, &this, id)
         })?,
     )?;

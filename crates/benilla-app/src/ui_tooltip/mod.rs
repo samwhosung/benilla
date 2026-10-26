@@ -43,11 +43,9 @@ impl Plugin for UiTooltipPlugin {
                 drive_mouseover_tooltip
                     .in_set(UnitFeed)
                     .in_set(MouseoverPublish),
-                // After the quest feed, so a list that lands this frame is hoverable in its tick;
-                // outside `UnitFeed`, so it takes that set's gate.
+                // Outside `UnitFeed`, so it takes that set's gate.
                 feed_spell_tooltips
                     .in_set(UiFeed)
-                    .after(crate::ui_quest::feed_quest)
                     .run_if(crate::ui_script::ingame_ui_up),
             ),
         );

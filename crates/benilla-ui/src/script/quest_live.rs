@@ -64,6 +64,20 @@ impl LiveQuery for QuestClock {
     type Answer = QuestClockRead;
 }
 
+/// A GameObject template's name as the object cache holds it (`0x558560` on `0xc0e318`), keyed by
+/// the objective's id less its top bit; declined while the template is not cached.
+#[derive(Clone, Copy, Debug)]
+pub struct QuestObjectName(pub u32);
+
+impl LiveQuery for QuestObjectName {
+    type Answer = String;
+}
+
+/// `entry`'s object name now, `None` with no host or none cached: the VM keeps no copy.
+pub(super) fn object_name(lua: &Lua, entry: u32) -> Option<String> {
+    ask(lua, &QuestObjectName(entry))
+}
+
 /// The quest slots now: the host's, else the VM's copy.
 pub(super) fn slots(lua: &Lua, model: &Model) -> [QuestSlotView; QUEST_LOG_SLOTS] {
     ask(lua, &QuestSlots).unwrap_or(model.quest_store.slots)
@@ -121,16 +135,25 @@ mod tests {
         standings: HashMap<u32, i32>,
         coinage: Option<u64>,
         clock: Option<QuestClockRead>,
+        objects: HashMap<u32, String>,
         asked: Cell<usize>,
+        /// The object templates the leaderboard asked for inside its calls.
+        object_asks: Vec<u32>,
     }
 
     impl CallHost for World {
-        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+        fn apply(&mut self, _: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            if let ScriptCall::RecordAsk(crate::script::RecordAsk::QuestObject(entry)) = call {
+                self.object_asks.push(entry);
+            }
             None
         }
 
         fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
             self.asked.set(self.asked.get() + 1);
+            if ask.answer(|q: &QuestObjectName| self.objects.get(&q.0).cloned()) {
+                return true;
+            }
             ask.answer(|_: &QuestSlots| self.slots)
                 || ask.answer(|q: &QuestHeld| Some(self.held.get(&q.0).copied().unwrap_or(0)))
                 || ask.answer(|q: &QuestStanding| {
@@ -320,5 +343,27 @@ mod tests {
             s.quest_log_changed();
         });
         assert_eq!(count(&s), 2, "the quest the world holds got its row");
+    }
+
+    /// A GameObject objective with no text names its template off the object cache the host holds
+    /// at the call, by the id less its top bit (`0x4e0378`-`0x4e03bb`); a miss wears the
+    /// placeholder and asks for the template inside the call, with its callback (`0x4e039c`).
+    #[test]
+    fn a_gameobject_objective_names_the_template_the_host_holds() {
+        let mut find = record("Find", 1, 12, "Elwynn Forest");
+        find.objectives[0] = kill(0x8000_0000 | 300, 1);
+        let mut s = UiScript::new().unwrap();
+        s.run("QUEST_OBJECTS_FOUND = '%s: %d/%d'").unwrap();
+        seat(&mut s, &[(50, find, slot(50, 0, 0))]);
+        let line = |s: &UiScript| {
+            s.eval::<String>("return (GetQuestLogLeaderBoard(1, 2))")
+                .unwrap()
+        };
+        let mut host = World::default();
+        s.hosted(&mut host, |s| assert_eq!(line(s), "...: 0/1", "not cached"));
+        assert_eq!(host.object_asks, [300], "asked by the id less its top bit");
+        host.objects.insert(300, "Wanted Poster".into());
+        s.hosted(&mut host, |s| assert_eq!(line(s), "Wanted Poster: 0/1"));
+        assert_eq!(host.object_asks, [300], "a cached template asks nothing");
     }
 }

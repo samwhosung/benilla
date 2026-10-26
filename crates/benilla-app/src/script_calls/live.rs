@@ -126,6 +126,8 @@ live_reads! {
         requirements: crate::ui_items::RequirementsLive<'static, 'static>,
         /// The item set blocks: the set table, the member names and the bonuses.
         item_sets: crate::ui_items::ItemSetLive<'static, 'static>,
+        /// The questgiver panel's cells, its rows' records and the turn-in's held counts.
+        quest_giver: crate::ui_quest::QuestGiverLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

@@ -180,6 +180,9 @@ pub(crate) enum QuestEvent {
     RankMoved,
     /// The time response set the clock offset, then signalled `QUEST_LOG_UPDATE` (`0x4def1b`).
     ClockSynced,
+    /// A GameObject template the leaderboard waited on landed: its callback's `QUEST_LOG_UPDATE`
+    /// (`0x4e081a`).
+    ObjectNamed,
 }
 
 /// What `0x5dd060` makes of one log quest for an added item.
@@ -560,6 +563,7 @@ impl Plugin for UiQuestLogPlugin {
         net::register(app);
         crate::query_cache::register::<QuestLog>(app);
         app.init_resource::<QuestLog>()
+            .init_resource::<crate::ui_quest::LatchRefreshes>()
             .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_lane(
@@ -815,11 +819,9 @@ pub(crate) fn ask_quest_creature(
 /// ([`fire_quest_log`]). The item-change trigger (`0x4df7b0`) runs in its item watcher's run on
 /// the item lane ([`crate::item_lane`]). An idle frame does none of it.
 pub(crate) fn feed_quest_log(
-    // The questgiver window is the host's too: the latch's refresh is bumped after the VM's run.
-    mut vm: crate::script_calls::disjoint::Pair<
-        crate::script_calls::HostedVm<'static, 'static>,
-        ResMut<'static, crate::ui_quest::QuestGiver>,
-    >,
+    // The latch's giver refreshes, bumped after the VM's run.
+    mut vm: crate::script_calls::HostedVm,
+    latch_refreshes: Option<ResMut<crate::ui_quest::LatchRefreshes>>,
     reads: QuestLogReads,
     quest_log: Res<QuestLog>,
     // The accept line's queue.
@@ -828,7 +830,7 @@ pub(crate) fn feed_quest_log(
     field_notices: Res<crate::field_watch::NoticeLane>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemo>>,
 ) {
-    let refreshes = vm.p0().run(|script| {
+    let refreshes = vm.run(|script| {
         let Some(script) = script else {
             return 0;
         };
@@ -953,8 +955,8 @@ pub(crate) fn feed_quest_log(
         script.flush_quest_log_refires();
         refreshes
     });
-    if refreshes > 0 {
-        vm.p1().bump_reask();
+    if let (true, Some(mut latch)) = (refreshes > 0, latch_refreshes) {
+        latch.0 = latch.0.wrapping_add(1);
     }
 }
 
@@ -1015,6 +1017,7 @@ fn fire(
         QuestEvent::Toast(toast) => show_toast(toast, script, sink),
         QuestEvent::RankMoved => script.quest_log_faction_rank_changed(),
         QuestEvent::ClockSynced => script.quest_log_clock_synced(),
+        QuestEvent::ObjectNamed => script.fire_event("QUEST_LOG_UPDATE", vec![]),
     }
 }
 
@@ -1123,6 +1126,59 @@ mod tests {
 
     use super::*;
     use crate::items::Items;
+
+    /// The leaderboard's object lookup waits with the callback `0x4e0800`, which the template's
+    /// answer runs inside its handler: a landed record readies `QUEST_LOG_UPDATE` on the quest log
+    /// lane at that packet's place (`0x4e081a`), once; a refusal readies nothing (`0x4e080a`).
+    #[test]
+    fn an_awaited_object_template_signals_the_log_at_its_packet() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let world = app.world_mut();
+        let ask = |world: &mut World, entry| {
+            let commands = NetCommands(world.resource::<NetCommands>().0.clone());
+            world
+                .resource::<crate::go_templates::GameObjectTemplates>()
+                .ask_for_quest(entry, &commands);
+        };
+        let info = |entry| SessionEvent::GameObjectInfo {
+            entry,
+            type_id: 2,
+            display_id: 0,
+            name: "Wanted Poster".into(),
+            data: [0; 24],
+        };
+        let readied = |world: &mut World| {
+            let events = &mut world.resource_mut::<QuestLog>().events;
+            let named = events
+                .iter()
+                .filter(|(_, e)| matches!(e, QuestEvent::ObjectNamed))
+                .map(|(s, _)| *s)
+                .collect::<Vec<_>>();
+            events.clear();
+            named
+        };
+        ask(world, 300);
+        ask(world, 300);
+        assert!(rx
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::GameObjectQuery { entry: 300, .. })));
+        let before = crate::lanes::stamp();
+        crate::net::handlers::dispatch(world, vec![info(300)]);
+        let after = crate::lanes::stamp();
+        let named = readied(world);
+        assert!(
+            matches!(named.as_slice(), [at] if before < *at && *at < after),
+            "one, inside the answer's handler: {named:?}"
+        );
+        crate::net::handlers::dispatch(world, vec![info(300)]);
+        assert!(readied(world).is_empty(), "the wait is spent");
+        ask(world, 301);
+        crate::net::handlers::dispatch(world, vec![SessionEvent::GameObjectUnknown { entry: 301 }]);
+        crate::net::handlers::dispatch(world, vec![info(301)]);
+        assert!(readied(world).is_empty(), "a refusal spends the wait");
+    }
 
     fn obj(
         creature_or_go: u32,
@@ -1328,6 +1384,7 @@ mod tests {
                 .init_resource::<crate::sound::MessageSounds>()
                 .init_resource::<crate::ui_quest::QuestLines>()
                 .init_resource::<crate::ui_quest::QuestGiver>()
+                .init_resource::<crate::ui_quest::LatchRefreshes>()
                 .init_resource::<QuestLog>()
                 .init_resource::<crate::item_lane::ItemLane>()
                 .init_resource::<crate::field_watch::NoticeLane>();
@@ -2129,8 +2186,8 @@ mod tests {
         let epoch = rig
             .app
             .world()
-            .resource::<crate::ui_quest::QuestGiver>()
-            .reask_epoch();
+            .resource::<crate::ui_quest::LatchRefreshes>()
+            .0;
         let failed_sounds = |rig: &Rig| {
             let sounds = rig.app.world().resource::<crate::sound::MessageSounds>();
             sounds
@@ -2142,11 +2199,16 @@ mod tests {
         assert_eq!(failed_sounds(&rig), 0);
         rig.frame();
         assert_eq!(failed_sounds(&rig), 1, "the catalog row's sound");
+        let refreshes = rig
+            .app
+            .world()
+            .resource::<crate::ui_quest::LatchRefreshes>()
+            .0;
+        assert_eq!(refreshes, epoch.wrapping_add(1));
         let mut giver = rig
             .app
             .world_mut()
             .resource_mut::<crate::ui_quest::QuestGiver>();
-        assert_eq!(giver.reask_epoch(), epoch.wrapping_add(1));
         assert!(giver.take_messages().is_empty(), "shown once, in the call");
         rig.packet(SessionEvent::QuestObjectiveKill {
             quest_id: 7,

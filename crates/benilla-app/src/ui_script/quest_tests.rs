@@ -35,7 +35,7 @@ fn questgiver_show_hide_plays_open_and_close_kits() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
         title: "A Threat Within".into(),
-        body: "Speak with the captain.".into(),
+        quest_text: "Speak with the captain.".into(),
         objectives: "Report to the captain.".into(),
         ..QuestState::default()
     }));
@@ -189,7 +189,7 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
         title: "A Threat Within".into(),
-        body: "Kill the kobolds infesting the mine.".into(),
+        quest_text: "Kill the kobolds infesting the mine.".into(),
         objectives: "Slay 10 Kobold Vermin.".into(),
         choices: vec![choice("Worn Sword", 1), choice("Worn Mace", 1)],
         rewards: vec![choice("Militia Hammer", 1)],
@@ -284,7 +284,7 @@ fn reward_panel_choice_click_selects_and_completes_with_zero_based_index() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Reward,
         title: "A Threat Within".into(),
-        body: "Well done.".into(),
+        reward_text: "Well done.".into(),
         choices: vec![choice("Worn Sword"), choice("Worn Mace")],
         ..QuestState::default()
     }));
@@ -397,7 +397,7 @@ fn detail_panel_action_buttons_resolve_to_real_onscreen_rects() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
         title: "A Threat Within".into(),
-        body: "Kill kobolds.".into(),
+        quest_text: "Kill kobolds.".into(),
         ..QuestState::default()
     }));
     s.set_unit(
@@ -520,7 +520,7 @@ fn write_on_still_fades_when_instant_text_is_off() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
         title: "A Threat Within".into(),
-        body: "Kill kobolds.".into(),
+        quest_text: "Kill kobolds.".into(),
         ..QuestState::default()
     }));
     s.set_unit(
@@ -594,7 +594,7 @@ fn npc_name_reaches_the_title_bar_on_open_and_on_refresh() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
         title: "A Threat Within".into(),
-        body: "Kill things.".into(),
+        quest_text: "Kill things.".into(),
         ..QuestState::default()
     }));
     s.set_unit(
@@ -778,7 +778,7 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Reward,
         title: "A Threat Within".into(),
-        body: "Well done.".into(),
+        reward_text: "Well done.".into(),
         choices: vec![
             item(2299, "Worn Sword", SWORD),
             item(2300, "Worn Mace", MACE),

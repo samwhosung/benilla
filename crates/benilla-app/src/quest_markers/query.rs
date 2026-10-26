@@ -71,6 +71,7 @@ pub(super) fn query_statuses(
     index: Res<GuidIndex>,
     relations: crate::target::RelationWorld,
     mut quest: ResMut<QuestGiver>,
+    refreshes: Option<Res<crate::ui_quest::LatchRefreshes>>,
     commands: Res<NetCommands>,
     mut ecs: Commands,
     mut state: Local<QueryState>,
@@ -95,7 +96,10 @@ pub(super) fn query_statuses(
         // The descriptor walk runs only when our store changed; the epoch is a plain counter.
         state.fields = self_generation(&store.0);
     }
-    let generation = state.fields ^ (u64::from(quest.reask_epoch()) << 32);
+    let reasks = quest
+        .reask_epoch()
+        .wrapping_add(refreshes.map_or(0, |r| r.0));
+    let generation = state.fields ^ (u64::from(reasks) << 32);
     // The full sweep's triggers (`0x5eb3c0`): your revive, the `≤0 → >0` crossing (`0x6046f0`),
     // and your own reaction inputs moving (`0x606e20`). Edges, since death's light sweep is the
     // death handler's ([`sweep_statuses`]).

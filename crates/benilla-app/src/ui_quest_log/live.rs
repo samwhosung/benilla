@@ -9,7 +9,8 @@ use bevy::prelude::*;
 
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
-    QuestClock, QuestClockRead, QuestCoinage, QuestHeld, QuestSlots, QuestStanding, SelfRead,
+    QuestClock, QuestClockRead, QuestCoinage, QuestHeld, QuestObjectName, QuestSlots,
+    QuestStanding, SelfRead,
 };
 
 use crate::net::{Reputations, ServerWallClock};
@@ -24,6 +25,7 @@ pub(crate) struct QuestLogLive<'w, 's> {
     reputations: Option<Res<'w, Reputations>>,
     factions: Option<Res<'w, Factions>>,
     clock: Option<Res<'w, ServerWallClock>>,
+    go_templates: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
 }
 
 impl QuestLogLive<'_, '_> {
@@ -75,5 +77,8 @@ impl crate::script_calls::live::LiveFamily for QuestLogLive<'_, '_> {
                     .map(|s| crate::ui_unit::StoreObject(s).money())
             })
             || ask.answer(|_: &QuestClock| self.clock())
+            || ask.answer(|q: &QuestObjectName| {
+                Some(self.go_templates.as_deref()?.name(q.0)?.to_string())
+            })
     }
 }

@@ -933,11 +933,8 @@ pub(crate) struct Model {
     /// table, which the next open clears).
     pub(crate) trade_offered: [Option<cursor::CursorItem>; super::trade::TRADE_SLOTS],
 
-    /// The open questgiver panel, and whether `CloseQuest` ran.
+    /// The questgiver panel's cells a harness set, which the getters read with no host lent.
     pub(crate) quest: Option<quest::QuestState>,
-    /// The levels of the last greeting's two pools (`0xbde690`, `0xbdfe60`), which outlive the
-    /// panel until the next list fills them.
-    pub(crate) quest_pool_levels: quest::PoolLevels,
 
     /// Death countdowns and offers.
     pub(crate) death: death::DeathUiState,
@@ -1661,7 +1658,6 @@ impl Model {
             trade_place_seq: 0,
             trade_offered: Default::default(),
             quest: None,
-            quest_pool_levels: Default::default(),
             death: death::DeathUiState::default(),
             quest_log: quest_log::QuestLogState::default(),
             quest_log_selection: 0,

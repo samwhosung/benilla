@@ -357,14 +357,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             const LINE: &str = r#"Invalid quest item in SetQuestItem("type", index)"#;
             let kind = binding_abi::string_arg(lua, kind, LINE)?;
             let index = binding_abi::index_arg(lua, index, LINE)?;
-            let item = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.quest.as_ref().and_then(|q| {
-                    crate::script::quest::item_vec(q, &kind)
-                        .and_then(|v| index.checked_sub(1).and_then(|n| v.get(n)))
-                        .cloned()
-                })
-            };
+            // The panel's rows as the host holds them at the call.
+            let item = crate::script::quest::state(lua).and_then(|q| {
+                crate::script::quest::item_vec(&q, &kind)
+                    .and_then(|v| index.checked_sub(1).and_then(|n| v.get(n)))
+                    .cloned()
+            });
             set_quest_item_view(lua, &this, item)
         })?,
     )?;

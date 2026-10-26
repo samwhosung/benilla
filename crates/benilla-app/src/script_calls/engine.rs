@@ -66,6 +66,7 @@ pub(crate) struct RecordAsks<'w, 's> {
     trade_skill: Option<ResMut<'w, crate::ui_tradeskill::TradeSkillItemWaits>>,
     merchant: Option<ResMut<'w, crate::ui_merchant::MerchantOpen>>,
     stable: Option<ResMut<'w, crate::ui_stable::StableCreatureWaits>>,
+    go_templates: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
     /// The charter records and the item objects whose enchantment slot 0 names one (`0x5ef337`).
     petitions: Option<Res<'w, crate::ui_petition::PetitionRecords>>,
     objects: crate::net::Objects<'w, 's>,
@@ -147,7 +148,7 @@ impl RecordAsks<'_, '_> {
                         crate::ui_trainer::ask_item_record(items, &self.net, entry, owner);
                     }
                     ItemCallback::Quest => {
-                        if let Some(quest) = self.quest.as_deref_mut() {
+                        if let Some(quest) = self.quest.as_deref() {
                             quest.ask_item_record(items, &self.net, entry);
                         }
                     }
@@ -194,6 +195,11 @@ impl RecordAsks<'_, '_> {
             RecordAsk::QuestCreature(entry) => {
                 if let Some(names) = self.names.as_deref() {
                     crate::ui_quest_log::ask_quest_creature(names, &self.net, script, entry);
+                }
+            }
+            RecordAsk::QuestObject(entry) => {
+                if let Some(go) = self.go_templates.as_deref() {
+                    go.ask_for_quest(entry, &self.net);
                 }
             }
             RecordAsk::StableCreature { entry, paperdoll } => {

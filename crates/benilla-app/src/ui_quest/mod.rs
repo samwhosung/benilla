@@ -1,6 +1,7 @@
-//! The questgiver window's app side: the handlers fill [`QuestGiver`], [`feed_quest`] pushes it
-//! into the VM and fires the panel's event, and the verbs apply in their calls ([`QuestVerbs`]),
-//! the teardowns among them.
+//! The questgiver window's app side: the handlers fill [`QuestGiver`] and its cells, which the
+//! getters read through the host at the call ([`live`]), and queue each panel's event and line on
+//! the questgiver lane at their packets ([`lane`]); the verbs apply in their calls
+//! ([`QuestVerbs`]), the teardowns among them.
 
 use std::collections::HashMap;
 
@@ -17,9 +18,9 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, Spells, UiError};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
-use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
+use crate::ui_action::{Spells, UiError};
+use crate::ui_script::{SweepApp, SweepLeg};
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// The wire packet that opened the current panel.
 pub(crate) enum QuestView {
@@ -57,23 +58,152 @@ pub(crate) struct QuestGiver {
     pub(crate) confirm: u32,
     /// Per-guid dialog status from `SMSG_QUESTGIVER_STATUS`, the `!`/`?` marker's value.
     statuses: HashMap<u64, u32>,
-    /// Messages queued for [`feed_quest`], each a GlobalStrings key and its fills.
+    /// The lines a handler raised, each a GlobalStrings key and its fills, which the handler moves
+    /// onto the lane ([`lane::QuestGiverLane::push_lines`]).
     messages: Vec<UiError>,
     reask: u32,
     /// The dialog statuses dropped at the reference's typemask-8 lookup (GameObject answers, which
     /// vmangos sends), per guid, so a live probe can tell a drop from a query never sent.
     refused: HashMap<u64, u32>,
     refused_count: u32,
-    /// Panel publishes so far, and the last one [`feed_quest`] asked for: a publish fires the
-    /// panel's event, on which the stock frame calls `GetQuestItemInfo`, which looks the item up
-    /// with a callback (`0x5017de`).
-    panels: u64,
-    panels_asked: u64,
-    /// The item records `GetQuestItemInfo`'s calls missed, one per call: the item cache's
-    /// callbacks `0x5018c0`, which outlive the panel and fire `QUEST_ITEM_UPDATE` when their
-    /// record lands (`0x5018fe`-`0x501903`), whatever the window shows then.
-    item_waits: Vec<u32>,
+    /// The cells the getters read ([`live`]).
+    pub(crate) cells: QuestCells,
 }
+
+/// The panel's cells the getters read, each written by its panel's setters and kept past a close
+/// until another writes it: the texts by `0x500bd0` (a greeting clearing all six first,
+/// `0x500c88`-`0x500ca6`) and `0x500dc0`, the pools by the greeting's appends (`0x500e40`,
+/// `0x500e90`), the rows, title, money and spell by `0x500ef0` (an offer or a reward) and the
+/// required rows, title, flag and wanted money by `0x501070` (a progress). The world entry zeroes
+/// all but the reward money and the spell (`0x500af0`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct QuestCells {
+    /// The texts, the pools' titles and levels, the money and the flag; the rows are below.
+    pub(crate) state: QuestState,
+    pub(crate) choices: Vec<QuestRewardItem>,
+    pub(crate) rewards: Vec<QuestRewardItem>,
+    pub(crate) required: Vec<QuestRewardItem>,
+    /// `0xbe0830`, the reward spell's id.
+    pub(crate) reward_spell: u32,
+}
+
+impl QuestCells {
+    /// `view`'s setters, each text through `expand` (`0x506f70`).
+    fn write(&mut self, view: &QuestView, expand: &dyn Fn(&str) -> String) {
+        // `0x500bd0`: the expansion, an empty one stored as `" "` (`0x500cd8`).
+        let text = |src: &str| match expand(src) {
+            t if t.is_empty() => " ".to_string(),
+            t => t,
+        };
+        // `0x500ef0` and `0x501070` store the title as sent, an empty one as `" "` (`0x501008`).
+        let title = |t: &str| if t.is_empty() { " " } else { t }.to_string();
+        let st = &mut self.state;
+        match view {
+            QuestView::Greeting(l) => {
+                *st = QuestState {
+                    panel: QuestPanel::Greeting,
+                    greeting: text(&l.greeting),
+                    ..QuestState {
+                        reward_money: st.reward_money,
+                        required_money: st.required_money,
+                        completable: st.completable,
+                        ..QuestState::default()
+                    }
+                };
+                for q in &l.quests {
+                    let (titles, levels) = if row_is_active(q.icon) {
+                        (&mut st.active_titles, &mut st.active_levels)
+                    } else {
+                        (&mut st.available_titles, &mut st.available_levels)
+                    };
+                    titles.push(q.title.clone());
+                    levels.push(q.level);
+                }
+            }
+            QuestView::Detail(d) => {
+                st.panel = QuestPanel::Detail;
+                st.quest_text = text(&d.details);
+                // `0x500dc0`: an empty objective stays empty (`0x500e2d`).
+                st.objectives = if d.objectives.is_empty() {
+                    String::new()
+                } else {
+                    expand(&d.objectives)
+                };
+                self.offer(
+                    &d.title,
+                    &d.choices,
+                    &d.rewards,
+                    d.money,
+                    d.reward_spell,
+                    &title,
+                );
+            }
+            QuestView::Progress(p) => {
+                st.panel = QuestPanel::Progress;
+                st.progress_text = text(&p.request_text);
+                // `0x501070`: the required rows alone, the title, the flag and the wanted money.
+                st.title = title(&p.title);
+                st.completable = p.is_complete;
+                st.required_money = p.required_money;
+                self.required = p.required_items.clone();
+            }
+            QuestView::Reward(o) => {
+                st.panel = QuestPanel::Reward;
+                st.reward_text = text(&o.offer_text);
+                self.offer(
+                    &o.title,
+                    &o.choices,
+                    &o.rewards,
+                    o.money,
+                    o.reward_spell,
+                    &title,
+                );
+            }
+        }
+    }
+
+    /// `0x500ef0`: every row cleared (`0x500f04`), the choices and rewards, the title, the money
+    /// split by its sign (`0x501022`-`0x50103b`) and the spell (`0x50104a`).
+    fn offer(
+        &mut self,
+        t: &str,
+        choices: &[QuestRewardItem],
+        rewards: &[QuestRewardItem],
+        money: i32,
+        spell: u32,
+        title: &dyn Fn(&str) -> String,
+    ) {
+        self.state.title = title(t);
+        self.choices = choices.to_vec();
+        self.rewards = rewards.to_vec();
+        self.required.clear();
+        (self.state.reward_money, self.state.required_money) = if money < 0 {
+            (0, money.unsigned_abs())
+        } else {
+            (money as u32, 0)
+        };
+        self.reward_spell = spell;
+    }
+
+    /// `0x500af0`'s zeroes.
+    fn world_enter(&mut self) {
+        *self = Self {
+            state: QuestState {
+                panel: QuestPanel::Greeting,
+                reward_money: self.state.reward_money,
+                ..QuestState::default()
+            },
+            reward_spell: self.reward_spell,
+            ..Self::default()
+        };
+    }
+}
+
+/// The quest-giver refreshes the quest log's expiry latch owes (`0x4df531`), counted apart from
+/// the window so the log's feed writes nothing the questgiver getters read; the markers fold it
+/// into their re-ask epoch.
+#[derive(Resource, Default)]
+pub(crate) struct LatchRefreshes(pub(crate) u32);
 
 /// The greeting's pools, the available quests (`0xbdfe60`, its count `0xbe0834`) with each row's
 /// one-click flag, and the active ones (`0xbde690`, `0xbe0838`): 32 rows each, cleared whole and
@@ -105,14 +235,19 @@ impl QuestPools {
 }
 
 impl QuestGiver {
-    /// Open (or replace) the window with a fresh wire view for `npc`.
+    /// Open (or replace) the window with a fresh wire view for `npc`, its texts unexpanded.
     pub(crate) fn open(&mut self, npc: u64, view: QuestView) {
+        self.open_expanded(npc, view, &|t| t.to_string());
+    }
+
+    /// Open (or replace) the window with a fresh wire view for `npc`, its texts through `expand`.
+    fn open_expanded(&mut self, npc: u64, view: QuestView, expand: &dyn Fn(&str) -> String) {
         if let QuestView::Greeting(list) = &view {
             self.pools = QuestPools::of(list);
         }
+        self.cells.write(&view, expand);
         self.npc = Some(npc);
         self.view = Some(view);
-        self.panels = self.panels.wrapping_add(1);
         // `0x500bd0` clears the already-acted latch (`0x500d91`) and the chosen reward
         // (`0x500d8c`) on every panel publish.
         self.acted = false;
@@ -188,7 +323,8 @@ impl QuestGiver {
         self.statuses.get(&npc).copied()
     }
 
-    /// Queue a message for [`feed_quest`]; its key's catalog row picks the surface.
+    /// Raise a line on the window, which the handler moves onto the lane; its key's catalog row
+    /// picks the surface.
     pub(crate) fn push_message(&mut self, msg: UiError) {
         self.messages.push(msg);
     }
@@ -206,34 +342,27 @@ impl QuestGiver {
         self.chosen_reward = 0;
         self.view = None;
         self.pools = QuestPools::default();
-        self.item_waits.clear();
+        self.cells.world_enter();
+    }
+
+    /// The world-enter reset `0x500af0`'s cells.
+    pub(crate) fn world_enter(&mut self) {
+        self.cells.world_enter();
     }
 
     /// `GetQuestItemInfo`'s lookup of a template in flight, inside its call
     /// ([`benilla_ui::script::ItemCallback::Quest`]): the item cache asks a miss, a refused entry
     /// again, with the panel's source as the owner id (`[0xbe0810]` at `0x5017d3`, which the panel
-    /// setter writes, `0x500d86`), and the window keeps one callback `0x5018c0` per call
-    /// (`0x5017ce`).
-    pub(crate) fn ask_item_record(&mut self, items: &Items, commands: &NetCommands, entry: u32) {
-        let _ = items.template(entry, self.npc.unwrap_or(0), Ask::Event(commands));
-        self.item_waits.push(entry);
-    }
-
-    /// Spend the waits whose item record answered: how many brought a record, each its own
-    /// `QUEST_ITEM_UPDATE`; a refusal runs its callback with status 0, which fires nothing
-    /// (`0x5018d6`-`0x5018e0`).
-    fn item_answers(&mut self, items: &Items) -> usize {
-        let mut landed = 0;
-        self.item_waits.retain(|&entry| {
-            if !items.template_answered(entry) {
-                return true;
-            }
-            if items.template(entry, 0, Ask::Read).is_some() {
-                landed += 1;
-            }
-            false
-        });
-        landed
+    /// setter writes, `0x500d86`), and a miss keeps one callback `0x5018c0` per call (`0x5017ce`),
+    /// which outlives the panel and signals at the record's answer
+    /// ([`crate::items::RecordCallback::Quest`]).
+    pub(crate) fn ask_item_record(&self, items: &Items, commands: &NetCommands, entry: u32) {
+        if items
+            .template(entry, self.npc.unwrap_or(0), Ask::Event(commands))
+            .is_none()
+        {
+            items.wait(entry, crate::items::RecordCallback::Quest);
+        }
     }
 }
 
@@ -262,15 +391,19 @@ pub(crate) fn questgiver_failed_key(reason: u32) -> &'static str {
     }
 }
 
+mod lane;
 mod lines;
+mod live;
 mod net;
 #[cfg(test)]
 pub(crate) mod verb_tests;
 mod verbs;
 
+pub(crate) use lane::{QuestGiverEvent, QuestGiverLane};
 #[cfg(test)]
 pub(crate) use lines::test_template;
 pub(crate) use lines::{QuestLine, QuestLines};
+pub(crate) use live::QuestGiverLive;
 pub(crate) use verbs::QuestVerbs;
 
 pub(crate) struct UiQuestPlugin;
@@ -279,15 +412,19 @@ impl Plugin for UiQuestPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         lines::register(app);
+        lane::add_quest_giver_lane(app);
         app.init_resource::<QuestGiver>()
+            .init_resource::<LatchRefreshes>()
             .add_latched_window::<QuestGiver>()
-            .add_sweep_leg(SweepLeg::Quest, close_quest_on_leave_world)
-            .add_systems(
-                Update,
-                feed_quest
-                    .in_set(UiFeed)
-                    .in_set(crate::ui_session::NpcWindowFeed),
-            );
+            .add_sweep_leg(SweepLeg::Quest, close_quest_on_leave_world);
+    }
+}
+
+/// The world-enter cascade's reset `0x500af0` (`0x49099c`), which a `/reload` runs; a login's and
+/// a worldport's run it from their packets.
+pub(crate) fn world_enter_cascade(world: &mut World) {
+    if let Some(mut giver) = world.get_resource_mut::<QuestGiver>() {
+        net::world_enter_reset(&mut giver);
     }
 }
 
@@ -318,7 +455,9 @@ impl LatchedWindow for QuestGiver {
 /// DECLINE (`0x501159`-`0x5011e0`), as the reference's player lookup there resolves only a
 /// player; then the cell is zeroed (`0x501201`) before the latch release (`0x50120d`), so the core
 /// never re-enters, and `QUEST_FINISHED` fires once (`0x501217`). The panel kind `[0xbe0818]`
-/// stays. The verbs run it inside their calls ([`crate::script_calls::ScriptCallHost`]).
+/// stays, and so do the cells. The verbs run it inside their calls
+/// ([`crate::script_calls::ScriptCallHost`]); outside one it runs behind the lane, so its
+/// `QUEST_FINISHED` never fires ahead of a panel's event queued before it.
 pub(crate) fn close_core(world: &mut World, report: bool) {
     let Some(giver) = world.resource::<QuestGiver>().npc else {
         return;
@@ -332,21 +471,69 @@ pub(crate) fn close_core(world: &mut World, report: bool) {
             });
         }
     }
-    world.resource_mut::<QuestGiver>().clear();
-    crate::ui_session::note_closed(world, NpcWindow::Quest);
-    crate::ui_session::with_script(world, |script| script.set_quest(None));
-    crate::ui_session::release(world, giver);
-    crate::ui_session::fire(world, |script| {
-        script.fire_event("QUEST_FINISHED", vec![]);
+    lane::behind_lane(world, |world| {
+        world.resource_mut::<QuestGiver>().clear();
+        crate::ui_session::note_closed(world, NpcWindow::Quest);
+        crate::ui_session::release(world, giver);
+        crate::ui_session::fire(world, |script| {
+            script.fire_event("QUEST_FINISHED", vec![]);
+        });
     });
+}
+
+/// What the panel setters expand a text against (`0x506f70` with the active player, `0x500cc9`):
+/// the player's name, race, class and gender, and the world states; and the giver's name the
+/// stock frame reads at the panel's event.
+#[derive(bevy::ecs::system::SystemParam)]
+struct PanelMacros<'w, 's> {
+    self_q: Query<'w, 's, (&'static ObjectStore, &'static Guid), With<SelfPlayer>>,
+    names: Option<Res<'w, NameCache>>,
+    commands: Option<Res<'w, NetCommands>>,
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    stores: Query<'w, 's, &'static ObjectStore>,
+    states: Option<Res<'w, crate::world_state::WorldStates>>,
+    unit_names: crate::ui_unit::NameTables<'w>,
 }
 
 /// A panel's open (`0x500bd0`, every panel packet's): the latch first, with no test of the cell
 /// (`0x500d74`), so a panel replacing the giver's own closes it, `QUEST_FINISHED` ahead of the new
-/// panel's event; then the cell (`0x500d86`).
+/// panel's event; then the cells, each text expanded against the player as the packet finds them,
+/// and the cell (`0x500d86`); then the panel's event at the setter's end (`0x500ee5`,
+/// `0x50105d`, `0x501120`), on the lane at this packet.
 pub(crate) fn open_panel(world: &mut World, npc: u64, view: QuestView) {
     crate::ui_session::register(world, npc);
-    world.resource_mut::<QuestGiver>().open(npc, view);
+    let panel = match &view {
+        QuestView::Greeting(_) => QuestPanel::Greeting,
+        QuestView::Detail(_) => QuestPanel::Detail,
+        QuestView::Progress(_) => QuestPanel::Progress,
+        QuestView::Reward(_) => QuestPanel::Reward,
+    };
+    let mut macros = bevy::ecs::system::SystemState::<PanelMacros>::new(world);
+    world.resource_scope(|world, mut giver: Mut<QuestGiver>| {
+        let m = macros.get(world);
+        let subject = m.names.as_deref().and_then(|names| {
+            crate::npc_text::player_identity(&m.self_q, names, m.unit_names.get())
+        });
+        let none = crate::world_state::WorldStates::default();
+        let ctx = crate::npc_text::MacroContext {
+            subject: subject.as_ref(),
+            states: m.states.as_deref().unwrap_or(&none),
+        };
+        giver.open_expanded(npc, view, &|t| crate::npc_text::substitute(t, &ctx));
+        // The frame reads `UnitName("npc")` at the panel's event (`QuestFrame.lua:63`), which
+        // looks the giver up with a callback (`0x5171b8`); its landing fires nothing.
+        if let (Some(names), Some(commands)) = (m.names.as_deref(), m.commands.as_deref()) {
+            let store = m
+                .index
+                .as_deref()
+                .and_then(|i| i.0.get(&npc))
+                .and_then(|&e| m.stores.get(e).ok());
+            let _ = names.resolve_unit(npc, store, Ask::Event(commands));
+        }
+    });
+    if let Some(mut lane) = world.get_resource_mut::<QuestGiverLane>() {
+        lane.push(QuestGiverEvent::Panel(panel, npc));
+    }
 }
 
 /// A greeting row is active when its wire icon is 3 or 4 and available otherwise, never by the
@@ -399,7 +586,7 @@ fn resolve_item(
     }
 }
 
-fn resolve_items(
+pub(super) fn resolve_items(
     src: &[QuestRewardItem],
     items: &Items,
     icons: Option<&ItemDisplays>,
@@ -429,76 +616,7 @@ pub(crate) fn reward_spell_view(
     })
 }
 
-fn snapshot(
-    giver: &QuestGiver,
-    items: &Items,
-    icons: Option<&ItemDisplays>,
-    ask: Ask<'_>,
-    macros: &crate::npc_text::MacroContext,
-    spells: Option<&Spells>,
-) -> Option<QuestState> {
-    // The wire sends quest text unexpanded; the client substitutes `$N`, `$B` and `$G`.
-    let sub = |t: &str| crate::npc_text::substitute(t, macros);
-    // The cell zero is a closed window, whatever panel its kind still names.
-    giver.npc?;
-    Some(match giver.view.as_ref()? {
-        QuestView::Greeting(l) => {
-            let mut active_titles = Vec::new();
-            let mut available_titles = Vec::new();
-            let mut active_levels = Vec::new();
-            let mut available_levels = Vec::new();
-            for q in &l.quests {
-                if row_is_active(q.icon) {
-                    active_titles.push(q.title.clone());
-                    active_levels.push(q.level);
-                } else {
-                    available_titles.push(q.title.clone());
-                    available_levels.push(q.level);
-                }
-            }
-            QuestState {
-                panel: QuestPanel::Greeting,
-                greeting: sub(&l.greeting),
-                active_titles,
-                available_titles,
-                active_levels,
-                available_levels,
-                ..Default::default()
-            }
-        }
-        QuestView::Detail(d) => QuestState {
-            panel: QuestPanel::Detail,
-            title: sub(&d.title),
-            body: sub(&d.details),
-            objectives: sub(&d.objectives),
-            choices: resolve_items(&d.choices, items, icons, ask),
-            rewards: resolve_items(&d.rewards, items, icons, ask),
-            reward_money: d.money.max(0) as u32,
-            reward_spell: reward_spell_view(d.reward_spell, spells),
-            ..Default::default()
-        },
-        QuestView::Progress(p) => QuestState {
-            panel: QuestPanel::Progress,
-            title: sub(&p.title),
-            body: sub(&p.request_text),
-            required: resolve_items(&p.required_items, items, icons, ask),
-            required_money: p.required_money,
-            completable: p.is_complete,
-            ..Default::default()
-        },
-        QuestView::Reward(o) => QuestState {
-            panel: QuestPanel::Reward,
-            title: sub(&o.title),
-            body: sub(&o.offer_text),
-            choices: resolve_items(&o.choices, items, icons, ask),
-            rewards: resolve_items(&o.rewards, items, icons, ask),
-            reward_money: o.money.max(0) as u32,
-            reward_spell: reward_spell_view(o.reward_spell, spells),
-            ..Default::default()
-        },
-    })
-}
-
+/// A panel's event, which its setter fires at its end (`0x500ee0`, `0x50105d`, `0x501120`).
 fn panel_event(panel: QuestPanel) -> &'static str {
     match panel {
         QuestPanel::Greeting => "QUEST_GREETING",
@@ -506,107 +624,6 @@ fn panel_event(panel: QuestPanel) -> &'static str {
         QuestPanel::Progress => "QUEST_PROGRESS",
         QuestPanel::Reward => "QUEST_COMPLETE",
     }
-}
-
-/// Push the quest view into the VM and fire its events: a panel's event on each publish,
-/// `QUEST_ITEM_UPDATE` on each item record a `GetQuestItemInfo` call missed. The close is the
-/// core's ([`close_core`]).
-pub(crate) fn feed_quest(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, QuestGiver>>,
-    objects: crate::net::Objects,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    commands: Res<NetCommands>,
-    names: Res<NameCache>,
-    states: Res<crate::world_state::WorldStates>,
-    self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
-    (spells, unit_names): (Option<Res<Spells>>, crate::ui_unit::NameTables),
-    go_templates: Res<crate::go_templates::GameObjectTemplates>,
-    materials: Option<Res<crate::ui_item_text::PageMaterials>>,
-    mut sink: MessageSink,
-    mut last: crate::ui_script::WindowMemo<Option<QuestState>>,
-    mut closes: CoreCloses,
-) {
-    // The window is the host's too, so the feed reads and pushes it as an engine turn; the panel
-    // events fire after it, with the host lent.
-    vm.feed(|script, mut giver, fires| {
-        let Some(script) = script else {
-            return;
-        };
-        let last = last.get(script);
-        if closes.since_last(script, NpcWindow::Quest) {
-            *last = None;
-        }
-        if giver.take_completed_fanfare() {
-            script.queue_sound_kit("QUESTCOMPLETED");
-        }
-        // Before the snapshot's early-out, so a refusal that closes the panel still prints.
-        let lines: Vec<Shown> = giver
-            .take_messages()
-            .into_iter()
-            .filter_map(|msg| {
-                let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                ui_error_text(&msg, &get).map(|text| Shown::keyed(msg.key, text))
-            })
-            .collect();
-        show_messages(script, &mut sink, "ui_quest", lines);
-        let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
-        // A panel's publish, or a window this VM has not shown, is the stock frame's name read.
-        let published = giver.panels != giver.panels_asked;
-        let ask = Ask::at(last.is_none() || published, &commands);
-        giver.panels_asked = giver.panels;
-        // The getter's callbacks, kept inside its calls ([`QuestGiver::ask_item_record`]).
-        let item_updates = giver.item_answers(&items);
-        // A reward is asked by `GetQuestItemInfo`'s call alone, inside it (`0x5017de`): the panel
-        // setters look no item up.
-        let fresh = snapshot(
-            &giver,
-            &items,
-            icons.as_deref(),
-            Ask::Read,
-            &crate::npc_text::MacroContext {
-                subject: player.as_ref(),
-                states: &states,
-            },
-            spells.as_deref(),
-        );
-        // The background is the source object's material, never a creature's and never on the wire
-        // (`GetQuestBackgroundMaterial`, `0x502230`); the reader window's binding shares its body.
-        let fresh = fresh.map(|mut st| {
-            st.background_material = giver.npc.and_then(|source| {
-                crate::ui_item_text::object_material(
-                    source,
-                    &objects,
-                    &items,
-                    &go_templates,
-                    materials.as_deref(),
-                )
-            });
-            st
-        });
-        // The frame reads `UnitName("npc")` (`QuestFrame.lua:63`), which looks the name up with a
-        // callback (`0x5171b8`) at the panel's event; its landing fires nothing.
-        if let Some(g) = giver.npc {
-            let _ = names.resolve(&objects, g, ask);
-        }
-        // Each panel setter fires its event at its end, every publish (`0x500ee5`, `0x50105d`,
-        // `0x501120`); a window this VM has not shown takes it too. No event carries an argument.
-        // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
-        let shows = fresh
-            .as_ref()
-            .filter(|_| published || last.is_none())
-            .map(|f| f.panel);
-        if fresh != *last {
-            script.set_quest(fresh.clone());
-            *last = fresh;
-        }
-        if let Some(panel) = shows {
-            fires.post(panel_event(panel), vec![]);
-        }
-        for _ in 0..item_updates {
-            fires.post("QUEST_ITEM_UPDATE", vec![]);
-        }
-    })
 }
 
 /// The leg of `DeclineQuest()`'s core `0x5013f0` a source takes.
@@ -662,6 +679,7 @@ fn decline_leg(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_action::ui_error_text;
     use benilla_protocol::messages::dialog_status;
     use benilla_ui::script::UiScript;
 
@@ -707,102 +725,55 @@ mod tests {
         }
     }
 
-    /// A panel asks no reward: the panel setters look no item up, and a reward is asked by
-    /// `GetQuestItemInfo`'s call alone (`0x5017de`), inside it. No panel and no frame asks.
-    #[test]
-    fn a_panel_asks_no_reward() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<QuestGiver>()
-            .init_resource::<Items>()
-            .init_resource::<NameCache>()
-            .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<crate::world_state::WorldStates>()
-            .init_resource::<crate::go_templates::GameObjectTemplates>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_systems(Update, feed_quest);
-        app.insert_non_send_resource(UiScript::new().unwrap());
-        // A player source, so the giver's name is no creature read: its own query is the name's.
-        const SOURCE: u64 = 0x42;
-        let publish = |app: &mut App| {
-            app.world_mut().resource_mut::<QuestGiver>().open(
-                SOURCE,
-                QuestView::Detail(QuestDetails {
-                    npc: SOURCE,
-                    quest_id: 100,
-                    title: "A Threat Within".into(),
-                    details: String::new(),
-                    objectives: String::new(),
-                    auto_finish: 1,
-                    choices: vec![],
-                    rewards: vec![triple(3000)],
-                    money: 0,
-                    reward_spell: 0,
-                }),
-            );
-        };
-        let reward_asks = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
-            crate::query_cache::queries(rx)
-                .iter()
-                .filter(|c| matches!(c, ClientCommand::ItemQuery { entry: 3000, .. }))
-                .count()
-        };
-        publish(&mut app);
-        for _ in 0..3 {
-            app.update();
-        }
-        assert_eq!(reward_asks(&rx), 0, "the panel and its frames");
-        publish(&mut app);
-        app.update();
-        assert_eq!(reward_asks(&rx), 0, "the next panel");
+    fn detail(quest_id: u32, details: &str, choices: Vec<QuestRewardItem>) -> QuestView {
+        QuestView::Detail(QuestDetails {
+            npc: 0x42,
+            quest_id,
+            title: "A Threat Within".into(),
+            details: details.into(),
+            objectives: "Slay 10.".into(),
+            auto_finish: 1,
+            choices,
+            rewards: vec![triple(3000)],
+            money: 1234,
+            reward_spell: 0,
+        })
     }
 
+    fn progress(text: &str, required: Vec<QuestRewardItem>, complete: bool) -> QuestView {
+        QuestView::Progress(QuestRequestItems {
+            npc: 0x42,
+            quest_id: 100,
+            title: "A Threat Within".into(),
+            request_text: text.into(),
+            emote: 0,
+            close_on_cancel: 1,
+            required_money: 500,
+            required_items: required,
+            is_complete: complete,
+        })
+    }
+
+    /// The cells as the getters read them over `items`, with no player.
+    fn cells(giver: &QuestGiver, items: &Items) -> QuestState {
+        live::state(&giver.cells, items, None, None, None, None)
+    }
+
+    /// `0x500bd0` expands the text (`0x500cc9`) and `0x500ef0` copies the rows, the title and the
+    /// money; a row's record is read without a callback, so building the cells asks nothing: a
+    /// reward is asked by `GetQuestItemInfo`'s call alone (`0x5017de`).
     #[test]
-    fn detail_snapshot_carries_text_and_rows() {
+    fn detail_cells_carry_text_and_rows() {
         let mut giver = QuestGiver::default();
-        giver.open(
+        giver.open_expanded(
             0x42,
-            QuestView::Detail(QuestDetails {
-                npc: 0x42,
-                quest_id: 100,
-                title: "A Threat Within".into(),
-                details: "Kill kobolds, $N.".into(),
-                objectives: "Slay 10.".into(),
-                auto_finish: 1,
-                choices: vec![triple(2000)],
-                rewards: vec![triple(3000)],
-                money: 1234,
-                reward_spell: 0,
-            }),
+            detail(100, "Kill kobolds, $N.", vec![triple(2000)]),
+            &|t| t.replace("$N", "Tri"),
         );
         assert!(giver.is_open());
-        let items = Items::default();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
-        let player = crate::npc_text::Subject {
-            name: "Tri".into(),
-            race: "Human".into(),
-            class: "Warrior".into(),
-            gender: 0,
-            player: true,
-        };
-        let snap = snapshot(
-            &giver,
-            &items,
-            None,
-            Ask::New(&commands),
-            &crate::npc_text::MacroContext {
-                subject: Some(&player),
-                states: &crate::world_state::WorldStates::default(),
-            },
-            None,
-        )
-        .expect("open");
-        assert_eq!(snap.panel, QuestPanel::Detail);
+        let snap = cells(&giver, &Items::default());
         assert_eq!(snap.title, "A Threat Within");
-        assert_eq!(snap.body, "Kill kobolds, Tri.");
+        assert_eq!(snap.quest_text, "Kill kobolds, Tri.");
         assert_eq!(snap.objectives, "Slay 10.");
         assert_eq!(snap.choices.len(), 1);
         assert_eq!(snap.rewards.len(), 1);
@@ -823,121 +794,128 @@ mod tests {
         items.insert_template(3000, Some(crate::items::test_template("Ale")));
         items.insert_template(3001, Some(boots));
         let mut giver = QuestGiver::default();
-        giver.open(
-            0x42,
-            QuestView::Detail(QuestDetails {
-                npc: 0x42,
-                quest_id: 100,
-                title: "A Threat Within".into(),
-                details: String::new(),
-                objectives: String::new(),
-                auto_finish: 1,
-                choices: Vec::new(),
-                rewards: vec![triple(3000), triple(3001), triple(3002)],
-                money: 0,
-                reward_spell: 0,
-            }),
-        );
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
-        let snap = snapshot(
-            &giver,
-            &items,
-            None,
-            Ask::New(&commands),
-            &crate::npc_text::MacroContext {
-                subject: None,
-                states: &crate::world_state::WorldStates::default(),
-            },
-            None,
-        )
-        .expect("open");
-        let qualities: Vec<i64> = snap.rewards.iter().map(|r| r.quality as i64).collect();
+        let view = QuestView::Detail(QuestDetails {
+            npc: 0x42,
+            quest_id: 100,
+            title: "A Threat Within".into(),
+            details: String::new(),
+            objectives: String::new(),
+            auto_finish: 1,
+            choices: Vec::new(),
+            rewards: vec![triple(3000), triple(3001), triple(3002)],
+            money: 0,
+            reward_spell: 0,
+        });
+        giver.open(0x42, view);
+        let qualities: Vec<i64> = cells(&giver, &items)
+            .rewards
+            .iter()
+            .map(|r| r.quality as i64)
+            .collect();
         assert_eq!(qualities, [-1, 2, 0]);
     }
 
+    /// The three texts are three buffers, each written by its own panel and kept by the others
+    /// (`0x500cf6`'s jump table); only a greeting clears all six (`0x500c3b`, `0x500c88`-`0x500ca6`).
+    /// An empty text is stored as `" "` (`0x500cd8`); an empty objective stays empty (`0x500e2d`).
     #[test]
-    fn progress_snapshot_carries_completability() {
+    fn each_panel_writes_its_own_text_and_a_greeting_clears_them() {
         let mut giver = QuestGiver::default();
-        giver.open(
-            0x42,
-            QuestView::Progress(QuestRequestItems {
-                npc: 0x42,
-                quest_id: 100,
-                title: "A Threat Within".into(),
-                request_text: "Bring me the tusks.".into(),
-                emote: 0,
-                close_on_cancel: 1,
-                required_money: 500,
-                required_items: vec![triple(2001)],
-                is_complete: true,
-            }),
+        giver.open(0x42, detail(100, "Quest text.", Vec::new()));
+        giver.open(0x42, progress("", Vec::new(), true));
+        let snap = cells(&giver, &Items::default());
+        assert_eq!(
+            snap.quest_text, "Quest text.",
+            "the detail's, kept by the progress"
         );
-        let items = Items::default();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
-        let snap = snapshot(
-            &giver,
-            &items,
-            None,
-            Ask::New(&commands),
-            &crate::npc_text::MacroContext {
-                subject: None,
-                states: &crate::world_state::WorldStates::default(),
-            },
-            None,
-        )
-        .unwrap();
-        assert_eq!(snap.panel, QuestPanel::Progress);
-        assert_eq!(snap.required.len(), 1);
-        assert_eq!(snap.required_money, 500);
-        assert!(snap.completable);
+        assert_eq!(snap.progress_text, " ", "an empty text is a space");
+        assert_eq!(snap.reward_text, "");
+        assert_eq!(snap.objectives, "Slay 10.");
+        giver.open(0x42, greeting(&[]));
+        let snap = cells(&giver, &Items::default());
+        for (text, what) in [
+            (&snap.quest_text, "quest"),
+            (&snap.progress_text, "progress"),
+            (&snap.objectives, "objectives"),
+            (&snap.title, "title"),
+        ] {
+            assert!(text.is_empty(), "{what}: {text:?}");
+        }
+        assert_eq!(snap.greeting, "Hi");
     }
 
-    /// The greeting snapshot keeps each quest's level beside its title, split into the two pools
-    /// by the icon (`0x5dbb10` stores the wire level at row `+0x04`), for `GetActiveLevel` and
-    /// `GetAvailableLevel`.
+    /// `0x501070` writes the required rows alone, so the offer's rewards stay; `0x500ef0` clears
+    /// every row (`0x500f04`). The turn-in flag reads the packet's and the player's held counts at
+    /// the call (`0x501230`): no player, or a row held short, is nil.
     #[test]
-    fn the_greeting_snapshot_keeps_each_quests_level_beside_its_title() {
-        let row = |quest_id, icon, level, title: &str| benilla_protocol::messages::QuestListEntry {
-            quest_id,
-            icon,
-            level,
-            title: title.into(),
+    fn a_progress_keeps_the_offers_rows_and_completes_on_the_held_counts() {
+        let mut giver = QuestGiver::default();
+        giver.open(0x42, detail(100, "", vec![triple(2000)]));
+        giver.open(0x42, progress("Tusks?", vec![triple(2001)], true));
+        let items = Items::default();
+        let held = |n: u32| move |_: u32| n;
+        let state = |held: Option<&dyn Fn(u32) -> u32>| {
+            live::state(&giver.cells, &items, None, None, None, held)
         };
+        let snap = state(None);
+        assert_eq!((snap.choices.len(), snap.rewards.len()), (1, 1));
+        assert_eq!(snap.required.len(), 1);
+        assert_eq!(snap.required_money, 500);
+        assert!(!snap.completable, "no player");
+        assert!(!state(Some(&held(0))).completable, "none held");
+        assert!(state(Some(&held(1))).completable);
+        giver.open(0x42, detail(100, "", Vec::new()));
+        assert!(cells(&giver, &Items::default()).required.is_empty());
+    }
+
+    fn greeting(rows: &[(u32, u32, u32, &str)]) -> QuestView {
+        QuestView::Greeting(QuestGiverList {
+            npc: 0x42,
+            greeting: "Hi".into(),
+            emote_delay: 0,
+            emote: 0,
+            quests: rows
+                .iter()
+                .map(
+                    |&(quest_id, icon, level, title)| benilla_protocol::messages::QuestListEntry {
+                        quest_id,
+                        icon,
+                        level,
+                        title: title.into(),
+                    },
+                )
+                .collect(),
+        })
+    }
+
+    /// The greeting keeps each quest's level beside its title, split into the two pools by the
+    /// icon (`0x5dbb10` stores the wire level at row `+0x04`, the title at `+0x08`), and the pools
+    /// outlive the panel and the window until the next greeting (`0x500c41`).
+    #[test]
+    fn the_greeting_pools_keep_each_quests_title_and_level_past_the_panel() {
         let mut giver = QuestGiver::default();
         giver.open(
             0x42,
-            QuestView::Greeting(QuestGiverList {
-                npc: 0x42,
-                greeting: "Hi".into(),
-                emote_delay: 0,
-                emote: 0,
-                quests: vec![
-                    row(1, 4, 12, "Active A"),
-                    row(2, 2, 3, "Available A"),
-                    row(3, 3, 9, "Active B"),
-                    row(4, 2, 5, "Available B"),
-                ],
-            }),
+            greeting(&[
+                (1, 4, 12, "Active A"),
+                (2, 2, 3, "Available A"),
+                (3, 3, 9, "Active B"),
+                (4, 2, 5, "Available B"),
+            ]),
         );
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let snap = snapshot(
-            &giver,
-            &Items::default(),
-            None,
-            Ask::New(&NetCommands(tx)),
-            &crate::npc_text::MacroContext {
-                subject: None,
-                states: &crate::world_state::WorldStates::default(),
-            },
-            None,
-        )
-        .unwrap();
+        giver.open(0x42, detail(1, "", Vec::new()));
+        giver.clear();
+        let snap = cells(&giver, &Items::default());
         assert_eq!(snap.active_titles, ["Active A", "Active B"]);
         assert_eq!(snap.active_levels, [12, 9]);
         assert_eq!(snap.available_titles, ["Available A", "Available B"]);
         assert_eq!(snap.available_levels, [3, 5]);
+        world_enter_cells(&mut giver);
+        assert!(cells(&giver, &Items::default()).active_titles.is_empty());
+    }
+
+    fn world_enter_cells(giver: &mut QuestGiver) {
+        giver.world_enter();
     }
 
     #[test]
@@ -1033,143 +1011,56 @@ mod tests {
         );
     }
 
-    /// `QUEST_ITEM_UPDATE` fires only in the item-cache callback `0x5018c0` (`0x501903`), and the
-    /// panel's event once per panel: the giver's name landing fires nothing.
-    #[test]
-    fn the_givers_name_landing_fires_no_quest_event() {
-        const GIVER: u64 = 0x10;
-        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                "SEEN = {} local f = CreateFrame('Frame') \
-                 for _, e in ipairs({'QUEST_GREETING', 'QUEST_ITEM_UPDATE'}) do \
-                 f:RegisterEvent(e) end \
-                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        open_panel(
-            app.world_mut(),
-            GIVER,
-            QuestView::Greeting(benilla_protocol::messages::QuestGiverList {
-                npc: GIVER,
-                greeting: "Greetings.".into(),
-                emote_delay: 0,
-                emote: 0,
-                quests: Vec::new(),
-            }),
-        );
-        // Registered once, so its memo lasts from run to run.
-        let feed = app.world_mut().register_system(feed_quest);
-        let tick = |app: &mut App| -> Vec<String> {
-            app.world_mut().run_system(feed).unwrap();
-            let s = app.world_mut().non_send_resource_mut::<UiScript>();
-            let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
-            s.run("SEEN = {}").unwrap();
-            seen
-        };
-        assert_eq!(tick(&mut app), ["QUEST_GREETING"]);
-        app.world_mut()
-            .resource_mut::<NameCache>()
-            .insert_player(GIVER, "Giver".into(), None);
-        assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
-    }
-
-    /// The feed over a headless client's world, registered once so its memo lasts from run to
-    /// run, and a VM that records the panel events in `SEEN`.
-    fn quest_app() -> (App, bevy::ecs::system::SystemId) {
-        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                "SEEN = {} local f = CreateFrame('Frame') \
-                 for _, e in ipairs({'QUEST_GREETING', 'QUEST_DETAIL', 'QUEST_PROGRESS', \
-                 'QUEST_COMPLETE', 'QUEST_ITEM_UPDATE'}) do f:RegisterEvent(e) end \
-                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        let feed = app.world_mut().register_system(feed_quest);
-        (app, feed)
-    }
-
-    fn quest_tick(app: &mut App, feed: bevy::ecs::system::SystemId) -> Vec<String> {
-        app.world_mut().run_system(feed).unwrap();
-        let s = app.world_mut().non_send_resource_mut::<UiScript>();
-        let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
-        s.run("SEEN = {}").unwrap();
-        seen
-    }
-
-    fn offer(quest_id: u32, title: &str, choice: u32) -> QuestView {
-        QuestView::Detail(benilla_protocol::messages::QuestDetails {
-            npc: 0x10,
-            quest_id,
-            title: title.into(),
-            details: String::new(),
-            objectives: String::new(),
-            auto_finish: 0,
-            choices: vec![triple(choice)],
-            rewards: Vec::new(),
-            money: 0,
-            reward_spell: 0,
-        })
+    /// The questgiver lane's items, taking them.
+    fn lane(app: &mut App) -> Vec<QuestGiverEvent> {
+        app.world_mut().resource_mut::<QuestGiverLane>().take()
     }
 
     /// Each panel setter fires its event at its end, every time (`0x500ee5`, `0x50105d`,
-    /// `0x501120`): a second offer fires `QUEST_DETAIL` again, an identical one too.
-    /// `QUEST_ITEM_UPDATE` fires only from the callback `GetQuestItemInfo`'s lookup keeps
-    /// (`0x5017ce`), once per call, when the record lands (`0x5018fe`-`0x501903`); a record no
-    /// call asked for fires nothing.
+    /// `0x501120`), at its packet's place: a second offer queues `QUEST_DETAIL` again, an
+    /// identical one too. `QUEST_ITEM_UPDATE` is queued only by the callback `GetQuestItemInfo`'s
+    /// lookup keeps (`0x5017ce`), once per call, at the record's answer (`0x5018fe`-`0x501903`); a
+    /// record no call asked for queues nothing.
     #[test]
-    fn panel_events_fire_per_publish_and_item_updates_per_callback() {
-        let (mut app, feed) = quest_app();
-        let publish = |app: &mut App, view| open_panel(app.world_mut(), 0x10, view);
-        publish(&mut app, offer(100, "A Threat Within", 901));
-        assert_eq!(quest_tick(&mut app, feed), ["QUEST_DETAIL"]);
-        publish(&mut app, offer(101, "Kobold Camp Cleanup", 902));
-        assert_eq!(
-            quest_tick(&mut app, feed),
-            ["QUEST_DETAIL"],
-            "a second offer"
-        );
-        publish(&mut app, offer(101, "Kobold Camp Cleanup", 902));
-        assert_eq!(
-            quest_tick(&mut app, feed),
-            ["QUEST_DETAIL"],
-            "an identical one"
-        );
-
-        let land = |app: &mut App, entry| {
-            app.world_mut()
-                .resource_mut::<Items>()
-                .insert_template(entry, Some(crate::items::test_template("Sword")));
+    fn panel_events_queue_per_publish_and_item_updates_per_callback() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let detail = |app: &mut App, choice| {
+            open_panel(app.world_mut(), 0x42, detail(100, "", vec![triple(choice)]))
         };
-        // No call asked for 902: its landing repaints in place and fires nothing.
-        land(&mut app, 902);
-        assert!(quest_tick(&mut app, feed).is_empty());
-
-        publish(&mut app, offer(102, "Westbrook Garrison", 903));
-        assert_eq!(quest_tick(&mut app, feed), ["QUEST_DETAIL"]);
+        detail(&mut app, 901);
+        detail(&mut app, 901);
+        assert_eq!(
+            lane(&mut app),
+            [
+                QuestGiverEvent::Panel(QuestPanel::Detail, 0x42),
+                QuestGiverEvent::Panel(QuestPanel::Detail, 0x42)
+            ]
+        );
+        let land = |app: &mut App, entry| {
+            let info = Some(Box::new(crate::items::test_template("Sword")));
+            crate::net::handlers::dispatch(
+                app.world_mut(),
+                vec![benilla_protocol::SessionEvent::ItemTemplate { entry, info }],
+            );
+        };
+        land(&mut app, 901);
+        assert!(lane(&mut app).is_empty(), "no call asked for 901");
+        detail(&mut app, 903);
+        lane(&mut app);
         crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
             vm.expect("a VM")
                 .run("GetQuestItemInfo('choice', 1) GetQuestItemInfo('choice', 1)")
         })
         .unwrap();
-        assert!(
-            quest_tick(&mut app, feed).is_empty(),
-            "the record is still out"
-        );
+        assert!(lane(&mut app).is_empty(), "the record is still out");
         land(&mut app, 903);
         assert_eq!(
-            quest_tick(&mut app, feed),
-            ["QUEST_ITEM_UPDATE", "QUEST_ITEM_UPDATE"],
+            lane(&mut app),
+            [QuestGiverEvent::ItemUpdate, QuestGiverEvent::ItemUpdate],
             "one per call"
         );
-        assert!(
-            quest_tick(&mut app, feed).is_empty(),
-            "the callbacks are spent"
-        );
+        land(&mut app, 903);
+        assert!(lane(&mut app).is_empty(), "the callbacks are spent");
     }
 }

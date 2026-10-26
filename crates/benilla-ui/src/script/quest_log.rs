@@ -3,10 +3,11 @@
 //! (`0x4de510`) makes of them, and the verbs the stock `QuestLogFrame.lua` calls. A verb reads
 //! what it needs at the call, as the reference's do: a row's title off its quest's record, its
 //! state and counters off its slot, an objective's name off the creature or item cache and its
-//! count off the bags. A record a verb misses is asked for with a callback that fires
-//! `QUEST_LOG_UPDATE` when it lands (`0x4e07d0`, `0x4e0830`); the reference holds one per call that
-//! missed (`0x4e05c9`, `0x4e0b9c`; `0x55bbb3`), benilla one per record
-//! ([`super::UiScript::flush_quest_log_refires`]).
+//! count off the bags, a GameObject's off the object cache. A record a verb misses is asked for
+//! with a callback that fires `QUEST_LOG_UPDATE` when it lands (`0x4e07d0`, `0x4e0830`, and
+//! `0x4e0800` for an object); the reference holds one per call that missed (`0x4e05c9`,
+//! `0x4e0b9c`; `0x55bbb3`), benilla one per record
+//! ([`super::UiScript::flush_quest_log_refires`], and the object cache's waits for an object).
 //!
 //! `QUEST_LOG_UPDATE` fires where the reference fires it: at the rebuild's tail (`0x4de811`), which
 //! the quest log's field watcher (`0x4de4d0`), the world entry (`0x4de430`) and the landing of the
@@ -28,8 +29,6 @@
 //! so a re-index before the popup's Yes cannot retarget them.
 //!
 //! `IsUnitOnQuest` reads a unit's quest-log window off its snapshot ([`super::UnitState`]).
-//!
-//! Not built: a GameObject objective's name, which wears the placeholder.
 
 use std::collections::{HashMap, HashSet};
 
@@ -181,6 +180,8 @@ pub(crate) struct QuestLogStore {
     /// once its read of the model ends ([`ask_lookups`]).
     item_asks: Vec<u32>,
     creature_asks: Vec<u32>,
+    /// The GameObject templates the leaderboard missed, asked inside its call.
+    object_asks: Vec<u32>,
     /// The creature cache (`0xc0e354`) as far as the leaderboard asked it.
     creature_names: HashMap<u32, String>,
     /// The held count of each item a log quest needs (`0x622130(inventory, item, 8)`).
@@ -620,12 +621,13 @@ impl Model {
 /// `0x4e0830` (`0x4e05d1`, `0x4e0b9e`), each creature with `0x4e07d0` (`0x4e044c`), whose waits
 /// the VM keeps.
 fn ask_lookups(lua: &Lua) -> mlua::Result<()> {
-    let (items, creatures) = {
+    let (items, creatures, objects) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let store = &mut model.quest_store;
         (
             std::mem::take(&mut store.item_asks),
             std::mem::take(&mut store.creature_asks),
+            std::mem::take(&mut store.object_asks),
         )
     };
     for entry in items {
@@ -641,6 +643,9 @@ fn ask_lookups(lua: &Lua) -> mlua::Result<()> {
     }
     for entry in creatures {
         super::calls::ask(lua, super::RecordAsk::QuestCreature(entry))?;
+    }
+    for entry in objects {
+        super::calls::ask(lua, super::RecordAsk::QuestObject(entry))?;
     }
     Ok(())
 }
@@ -815,9 +820,16 @@ fn line_parts(lua: &Lua, model: &mut Model, index: usize, line: usize) -> Option
             ));
         }
         if is_go {
+            // The object cache by the id less its top bit, looked up with a callback
+            // (`0x4e0390`-`0x4e039c`); a miss wears the placeholder until it lands.
+            let entry = o.creature_or_go & !GO_OBJECTIVE_BIT;
+            let name = quest_live::object_name(lua, entry).unwrap_or_else(|| {
+                model.quest_store.object_asks.push(entry);
+                NAME_PLACEHOLDER.into()
+            });
             return Some(LineParts::count(
                 "QUEST_OBJECTS_FOUND",
-                NAME_PLACEHOLDER.into(),
+                name,
                 cur,
                 req,
                 kind,
@@ -857,10 +869,13 @@ pub(crate) fn selected_quest_item(
     index: usize,
 ) -> Option<QuestItemView> {
     let record = model.selected_quest_record()?;
-    let list = match kind {
-        "choice" => &record.choices,
-        "reward" => &record.rewards,
-        _ => return None,
+    // Matched in any case (`SStrCmpI`, `0x4e0f9b`, `0x4e0fc0`).
+    let list = if kind.eq_ignore_ascii_case("choice") {
+        &record.choices
+    } else if kind.eq_ignore_ascii_case("reward") {
+        &record.rewards
+    } else {
+        return None;
     };
     let &(item_id, count) = list.get(index.checked_sub(1)?)?;
     let template = model.item_templates.get(&item_id);
@@ -2549,6 +2564,12 @@ mod tests {
 
         assert_eq!(
             s.eval::<String>("return GetQuestLogItemLink(\"reward\", 1)")
+                .unwrap(),
+            "|cffffffff|Hitem:2024:0:0:0|h[Militia Hammer]|h|r"
+        );
+        // The type in any case (`SStrCmpI`, `0x4e0fc0`).
+        assert_eq!(
+            s.eval::<String>("return GetQuestLogItemLink(\"REWARD\", 1)")
                 .unwrap(),
             "|cffffffff|Hitem:2024:0:0:0|h[Militia Hammer]|h|r"
         );

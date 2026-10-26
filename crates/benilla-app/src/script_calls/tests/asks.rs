@@ -484,23 +484,31 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
 /// (`0x5017ca`-`0x5017de`): the item query goes out inside the call, once while it is in flight.
 #[test]
 fn get_quest_item_info_asks_a_missed_record_inside_its_call() {
-    use benilla_ui::script::{QuestItemView, QuestPanel, QuestState};
+    use benilla_protocol::messages::{QuestOfferReward, QuestRewardItem};
     let (mut app, rx) = client();
-    let pending = |item_id: u32| QuestItemView {
+    let pending = |item_id: u32| QuestRewardItem {
         item_id,
         count: 1,
-        ..Default::default()
+        display_id: 0,
     };
-    vm(&mut app).set_quest(Some(QuestState {
-        panel: QuestPanel::Reward,
-        rewards: vec![pending(2589)],
-        choices: vec![pending(2590)],
-        ..Default::default()
-    }));
     // The panel's source, `[0xbe0810]`, which the panel setter writes (`0x500d86`).
     app.world_mut()
         .resource_mut::<crate::ui_quest::QuestGiver>()
-        .npc = Some(NPC);
+        .open(
+            NPC,
+            crate::ui_quest::QuestView::Reward(QuestOfferReward {
+                npc: NPC,
+                quest_id: 1,
+                title: String::new(),
+                offer_text: String::new(),
+                auto_finish: 0,
+                choices: vec![pending(2590)],
+                rewards: vec![pending(2589)],
+                money: 0,
+                quest_flags: 0,
+                reward_spell: 0,
+            }),
+        );
     eval::<()>(
         &mut app,
         r#"GetQuestItemInfo("reward", 1) RandomRoll(1, 2) GetQuestItemInfo("choice", 1)

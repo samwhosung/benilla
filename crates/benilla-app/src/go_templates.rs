@@ -2,6 +2,7 @@
 //! streams in. The template's lockId decides a right-click: a locked object is opened by an
 //! `OPEN_LOCK` cast, an unlocked one by `CMSG_GAMEOBJ_USE`.
 
+use benilla_assets::LockRecover;
 use benilla_formats::{LockCatalog, LockTypeCatalog};
 use benilla_protocol::messages::{ObjectFields, ObjectType};
 use bevy::prelude::*;
@@ -145,6 +146,10 @@ pub(crate) struct MoTransport {
 #[derive(Resource, Default)]
 pub(crate) struct GameObjectTemplates {
     templates: QueryCache<u32, GoTemplate>,
+    /// The entries the quest log's leaderboard missed, each waiting with the callback `0x4e0800`
+    /// (`0x4e0387`). Deviation: one per entry, where the reference keeps one per call, as the
+    /// creature arm's waits are kept (`benilla_ui::script::quest_log`).
+    quest_waits: std::sync::Mutex<Vec<u32>>,
 }
 
 impl crate::query_cache::AskOnce for GameObjectTemplates {
@@ -241,6 +246,32 @@ impl GameObjectTemplates {
                 data: *data,
             },
         );
+    }
+
+    /// The leaderboard's lookup of `entry` inside its call: a miss asks, a refused entry again, and
+    /// waits with the callback `0x4e0800` (`0x4e0387`-`0x4e039c`).
+    pub(crate) fn ask_for_quest(&self, entry: u32, commands: &NetCommands) {
+        if self
+            .resolve_name(entry, crate::query_cache::Ask::Event(commands))
+            .is_none()
+        {
+            let mut waits = self.quest_waits.lock_recover();
+            if !waits.contains(&entry) {
+                waits.push(entry);
+            }
+        }
+    }
+
+    /// The answer for `entry` landed, or was refused: whether the leaderboard waited on it, the
+    /// wait spent either way.
+    pub(crate) fn take_quest_wait(&mut self, entry: u32) -> bool {
+        let waits = self
+            .quest_waits
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = waits.len();
+        waits.retain(|&e| e != entry);
+        waits.len() != before
     }
 
     /// A template's name by entry, read without a callback (the cache `0xc0e318`).

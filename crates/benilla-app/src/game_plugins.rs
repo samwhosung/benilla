@@ -1861,14 +1861,10 @@ pub(crate) mod schedule_tests {
             "feed_units runs after feed_interact_npc, which publishes the latch it names \"npc\" by"
         );
         let seated = after(units);
-        let stale: Vec<&str> = [
-            "::ui_quest::feed_quest",
-            "::ui_auction::feed_auction",
-            "::ui_trade::feed_trade",
-        ]
-        .into_iter()
-        .filter(|feed| !seated.contains(&one(feed)))
-        .collect();
+        let stale: Vec<&str> = ["::ui_auction::feed_auction", "::ui_trade::feed_trade"]
+            .into_iter()
+            .filter(|feed| !seated.contains(&one(feed)))
+            .collect();
         assert!(
             stale.is_empty(),
             "these windows' shows can read \"npc\" before feed_units seats it: {stale:?}"

@@ -776,6 +776,8 @@ pub(super) fn feed_spell_tooltips(
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
+    // Read with the host lent, so the questgiver panel's reward spell is the cells' as they stand.
+    let subjects = vm.run(|script| script.map(|s| s.spell_tooltip_subjects()));
     vm.turn(|script, (mut items, reputations, pet_bar)| {
         let (sub_classes, spell_mods, skill_lines, factions) = &lookups;
         let SpellTooltipSources {
@@ -793,9 +795,9 @@ pub(super) fn feed_spell_tooltips(
         let mut wanted: Vec<u32> = script.take_spell_tooltip_asks();
         // What the VM holds for a hover: quest rewards and craft subjects.
         wanted.extend(
-            script
-                .spell_tooltip_subjects()
+            subjects
                 .into_iter()
+                .flatten()
                 .filter(|s| !memory.pushed.contains_key(s)),
         );
         if let Some(actions) = actions.as_deref() {

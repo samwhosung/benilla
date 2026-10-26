@@ -74,21 +74,25 @@ impl Client {
         world.resource_mut::<GuidIndex>().0.insert(guid, e);
     }
 
-    /// Open `view` on `NPC` and run the feed, which pushes it to the VM and fires its event.
+    /// Open `view` on `NPC` and fire its event off the lane.
     pub(crate) fn open(&mut self, view: QuestView) {
         self.open_on(NPC, view);
     }
 
     /// [`Self::open`] on `source`.
     pub(crate) fn open_on(&mut self, source: u64, view: QuestView) {
-        self.app
-            .world_mut()
-            .resource_mut::<QuestGiver>()
-            .open(source, view);
-        self.app
-            .world_mut()
-            .run_system_cached(super::feed_quest)
-            .expect("the feed runs");
+        let world = self.app.world_mut();
+        let panel = match &view {
+            QuestView::Greeting(_) => benilla_ui::script::QuestPanel::Greeting,
+            QuestView::Detail(_) => benilla_ui::script::QuestPanel::Detail,
+            QuestView::Progress(_) => benilla_ui::script::QuestPanel::Progress,
+            QuestView::Reward(_) => benilla_ui::script::QuestPanel::Reward,
+        };
+        world.resource_mut::<QuestGiver>().open(source, view);
+        world
+            .resource_mut::<super::QuestGiverLane>()
+            .push(super::QuestGiverEvent::Panel(panel, source));
+        crate::lanes::fire_in_order(world);
         self.sent();
     }
 

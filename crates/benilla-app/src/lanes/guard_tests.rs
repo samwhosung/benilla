@@ -155,12 +155,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_quest::QuestGiver",
-        "the quest giver's packets, which `feed_quest` fires from; the quest verbs, acting in \
-         their calls, hold it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_pet::PetAttackLatch",
         "the pet's attack latch, which a new pet's `SMSG_PET_SPELLS` lowers (`0x4bc8ce`) inside \
          `SetPet`, whose own `PET_BAR_UPDATE` (`0x4bc90c`) fires on the notice lane; the \
@@ -297,6 +291,10 @@ const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the charter getters, and quiet: its events fire on the charter lane
     // at their handlers and the record and name callbacks.
     "::ui_petition::PetitionState",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the questgiver getters read its
+    // cells through the host, and no feed fires off it, as its panels' events, lines and item
+    // callbacks go on the questgiver lane at their handlers.
+    "::ui_quest::QuestGiver",
     "::ui_session::latch::InteractLatch",
     // Read through the host by the taxi getters, and quiet: its events fire on the taxi lane at
     // their handlers.
@@ -466,12 +464,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_loot_roll::LootRolls"]),
     ("::ui_quest::lines::feed_quest_lines", &["items::Items", "ui_quest::lines::QuestLines",
         "ui_quest_log::QuestLog"]),
-    ("::ui_quest::feed_quest", &["go_templates::GameObjectTemplates", "items::Countdowns",
-        "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "ui_quest::QuestGiver", "world_state::WorldStates"]),
     ("::ui_quest_log::feed_quest_log", &["names::NameCache", "net::ObjectStore",
-        "ui_quest::QuestGiver", "ui_quest::lines::QuestLines", "ui_quest_log::QuestLog",
-        "world_state::WorldStates"]),
+        "ui_quest::lines::QuestLines", "ui_quest_log::QuestLog", "world_state::WorldStates"]),
     ("::ui_quest_share::feed_quest_share", &["names::NameCache", "ui_quest_share::QuestShare"]),
     ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
@@ -517,6 +511,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::AreaTableRes",
     // The server clock the quest log getters read in the host.
     "::ServerWallClock",
+    // The page materials the questgiver background getter reads in the host (`0x502230`).
+    "::PageMaterials",
     // The world map's projections the battleground position getters read in the host, and the
     // stat columns' table the status handler reads (`0x4aa9c3`).
     "::WorldMapUiData",
@@ -633,7 +629,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 33] {
+fn lane_types() -> [TypeId; 34] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -695,12 +691,14 @@ fn lane_types() -> [TypeId; 33] {
         TypeId::of::<crate::ui_bank::BankLane>(),
         // The gossip lane: the greeting's draw.
         TypeId::of::<crate::ui_gossip::GossipLane>(),
+        // The questgiver lane: the panels' events, the lines and the item callbacks' signals.
+        TypeId::of::<crate::ui_quest::QuestGiverLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 33] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 34] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -756,6 +754,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 33] {
         ("trainer", TypeId::of::<crate::ui_trainer::TrainerLane>()),
         ("bank", TypeId::of::<crate::ui_bank::BankLane>()),
         ("gossip", TypeId::of::<crate::ui_gossip::GossipLane>()),
+        (
+            "quest giver",
+            TypeId::of::<crate::ui_quest::QuestGiverLane>(),
+        ),
     ]
 }
 
@@ -931,6 +933,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "party",
             "pet cooldowns",
             "quest events",
+            "quest giver",
             "releases",
             "reputation",
             "social",

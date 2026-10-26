@@ -159,7 +159,6 @@ impl ScriptCallHost<'_, '_> {
         giver: u64,
     ) {
         self.appliers.latch().note_closed(NpcWindow::Quest);
-        script.set_quest(None);
         let _ = self.appliers.latch().release(giver);
         script.fire_event("QUEST_FINISHED", vec![]);
         self.signalled(script, mark);
