@@ -428,6 +428,63 @@ fn an_action_items_late_maker_name_adds_its_line() {
     assert!(s.take_errors().is_empty());
 }
 
+/// With the host lent, the slot is read off the object as the build runs and the maker's name off
+/// the name cache (`0x55f080`): the name landing in the cache rebuilds the tooltip with the line
+/// (`0x52e530`), no view pushed.
+#[test]
+fn a_hosted_inspected_slots_maker_name_reads_the_name_cache() {
+    use crate::script::live::LiveAsk;
+    const MATE: u64 = 0x20;
+    struct Host {
+        name: Option<String>,
+    }
+    impl CallHost for Host {
+        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+            None
+        }
+        fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
+            ask.answer(|q: &VisibleSlotQuery| {
+                Some((q.slot == 5).then(|| InvSlotView {
+                    item_id: BAR,
+                    count: 1,
+                    quality: 1,
+                    name: Some("Copper Bar".into()),
+                    link: Some(format!("|cffffffff|Hitem:{BAR}:0:0:0|h[Copper Bar]|h|r")),
+                    creator_guid: SMITH,
+                    ..Default::default()
+                }))
+            }) || ask.answer(|q: &PlayerNameQuery| Some(self.name.clone().filter(|_| q.0 == SMITH)))
+        }
+    }
+    let mut s = fixture();
+    s.set_unit_guids(&UnitGuids {
+        target: MATE,
+        held: HashMap::from([(MATE, 0)]),
+        ..Default::default()
+    });
+    s.set_unit_reach(HashMap::from([(
+        MATE,
+        UnitReach {
+            dist_sq: 16.0,
+            inspectable: true,
+        },
+    )]));
+    let mut host = Host { name: None };
+    s.hosted(&mut host, |s| {
+        s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetInventoryItem('target', 5)")
+            .unwrap();
+    });
+    assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
+    assert_eq!(s.take_item_name_asks(), vec![SMITH], "the build asks");
+    host.name = Some("Smith".into());
+    s.hosted(&mut host, |s| s.tick(0.1));
+    assert_eq!(
+        lines(&mut s, "TT"),
+        ["Copper Bar", "|cff00ff00[CREATED_BY Smith]|r"]
+    );
+    assert!(s.take_errors().is_empty());
+}
+
 /// An inspected slot's maker is its visible-item block's creator, which `SetInventoryItem` copies
 /// to the tooltip's `+0x410` (`0x5333cd`-`0x5333d5`) and the maker line reads (`0x52e1d5`): the
 /// build asks the name, and the inspected view carrying it once the app re-pushes it rebuilds the

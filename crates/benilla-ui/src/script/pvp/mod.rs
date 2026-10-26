@@ -1,10 +1,12 @@
 //! `TogglePVP` and the thirteen honor bindings: the character and inspect windows' Honor tabs and
 //! the rank any unit frame can read off another player.
 //!
-//! The local player's counters are private descriptor fields the app pushes as a [`HonorState`];
-//! another player's arrive as a `MSG_INSPECT_HONOR_STATS` reply ([`InspectHonorData`]), whose
-//! presence is `HasInspectHonorData`. With nothing held every getter answers zeros at full width,
-//! as the reference reads zero-initialised slots ungated. A foreign player's current rank is
+//! The local player's counters are private descriptor fields, read off the active player's block
+//! at the call ([`HonorNow`]); another player's arrive as a `MSG_INSPECT_HONOR_STATS` reply held in
+//! the client's one inspect slot ([`InspectHonorNow`]), whose has-data flag is
+//! `HasInspectHonorData`. With nothing held every getter answers zeros at full width, as the
+//! reference reads zero-initialised slots ungated. With no host free to ask, the getters read the
+//! snapshots ([`super::UiScript::set_honor`], [`super::UiScript::set_inspect_honor`]). A foreign player's current rank is
 //! public (`PLAYER_BYTES_3` byte 3) and rides [`UnitState::pvp_rank`](super::UnitState::pvp_rank).
 //!
 //! The internal rank (0 none, 1..=4 dishonorable, 5..=18 Scout or Private to High Warlord or
@@ -84,6 +86,33 @@ pub struct InspectHonorData {
     pub rank_bar: u8,
 }
 
+/// The self getters' question, through the lent host ([`super::live::ask`]): the active player's
+/// honor block as of the call (`0x51a4b0`-`0x51aa90` read `[+0xe68]`), zeros with no active player
+/// (`0x51a524`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HonorNow;
+
+impl super::live::LiveQuery for HonorNow {
+    type Answer = HonorState;
+}
+
+/// The client's one inspect-honor slot as of the call: its has-data (`0xb71fc8`) and pending
+/// (`0xb71fcc`) flags and the figures, which a new target leaves in place (`0x4c6f70`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InspectHonorSlot {
+    pub has_data: bool,
+    pub pending: bool,
+    pub figures: InspectHonorData,
+}
+
+/// The inspect getters' question, through the lent host ([`super::live::ask`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InspectHonorNow;
+
+impl super::live::LiveQuery for InspectHonorNow {
+    type Answer = InspectHonorSlot;
+}
+
 /// The PvP flag's verb the host applies inside its call ([`super::ScriptCall::Pvp`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PvpCall {
@@ -106,16 +135,16 @@ impl super::UiScript {
         }
     }
 
-    /// Push or clear the local player's honor snapshot, the self getters' only source. It fires
-    /// no event: the app fires `PLAYER_PVP_KILLS_CHANGED`/`PLAYER_PVP_RANK_CHANGED` alongside.
+    /// Push or clear the local player's honor snapshot, which the self getters read with no host
+    /// free to ask ([`HonorNow`]). It fires no event.
     pub fn set_honor(&mut self, honor: Option<HonorState>) {
         self.model_mut().honor = honor;
     }
 
-    /// Push or clear the last `MSG_INSPECT_HONOR_STATS` reply, paired with the pane's
-    /// `INSPECT_HONOR_UPDATE`. Its presence is `HasInspectHonorData`, so the app clears it on
-    /// `ClearInspectPlayer` and the pane's `OnShow` asks again for the next player. Either way
-    /// the in-flight latch clears, as the engine's reply (`0x4c6f4c`) and re-key (`0x4c6f9d`) do.
+    /// Push or clear the snapshot of the last `MSG_INSPECT_HONOR_STATS` reply, which the inspect
+    /// getters read with no host free to ask ([`InspectHonorNow`]); its presence is
+    /// `HasInspectHonorData`. Either way the in-flight latch clears, as the engine's reply
+    /// (`0x4c6f4c`) and re-key (`0x4c6f9d`) do.
     pub fn set_inspect_honor(&mut self, data: Option<InspectHonorData>) {
         let mut model = self.model_mut();
         model.inspect_honor = data;
@@ -129,8 +158,8 @@ impl super::UiScript {
         self.take_calls_like(&super::ScriptCall::Inspect(super::InspectCall::Honor)) as u32
     }
 
-    /// The inspect honor query is in flight (`[0xb71fcc] = 1`, `0x4c811b`): set by the host after
-    /// its send, cleared by [`Self::set_inspect_honor`].
+    /// The snapshot's inspect honor query is in flight (`[0xb71fcc] = 1`, `0x4c811b`), cleared by
+    /// [`Self::set_inspect_honor`]; a lent host keeps its own.
     pub fn latch_inspect_honor_ask(&mut self) {
         self.model_mut().inspect_honor_pending = true;
     }
@@ -179,14 +208,26 @@ fn rank_progress(bar: u8) -> f64 {
     f64::from(bar) * RANK_BAR_SCALE
 }
 
-fn honor(lua: &Lua) -> Option<HonorState> {
-    lua.app_data_ref::<Model>().expect("model app_data").honor
+/// The active player's honor block as of the call, the snapshot's with no host free to ask.
+fn honor(lua: &Lua) -> HonorState {
+    super::live::ask(lua, &HonorNow).unwrap_or_else(|| {
+        lua.app_data_ref::<Model>()
+            .expect("model app_data")
+            .honor
+            .unwrap_or_default()
+    })
 }
 
-fn inspect_honor(lua: &Lua) -> Option<InspectHonorData> {
-    lua.app_data_ref::<Model>()
-        .expect("model app_data")
-        .inspect_honor
+/// The inspect-honor slot as of the call, the snapshot's with no host free to ask.
+fn inspect_honor(lua: &Lua) -> InspectHonorSlot {
+    super::live::ask(lua, &InspectHonorNow).unwrap_or_else(|| {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        InspectHonorSlot {
+            has_data: model.inspect_honor.is_some(),
+            pending: model.inspect_honor_pending,
+            figures: model.inspect_honor.unwrap_or_default(),
+        }
+    })
 }
 
 /// A GlobalString off the VM's globals, `None` when absent or empty, as `GetPVPRankInfo` tests
@@ -390,7 +431,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPVPSessionStats",
         lua.create_function(|lua, ()| {
-            let h = honor(lua).unwrap_or_default();
+            let h = honor(lua);
             Ok((i64::from(h.session_hk), i64::from(h.session_dk)))
         })?,
     )?;
@@ -399,7 +440,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPVPYesterdayStats",
         lua.create_function(|lua, ()| {
-            let h = honor(lua).unwrap_or_default();
+            let h = honor(lua);
             Ok((
                 i64::from(h.yesterday_hk),
                 i64::from(h.yesterday_dk),
@@ -412,7 +453,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPVPThisWeekStats",
         lua.create_function(|lua, ()| {
-            let h = honor(lua).unwrap_or_default();
+            let h = honor(lua);
             Ok((i64::from(h.this_week_hk), i64::from(h.this_week_honor)))
         })?,
     )?;
@@ -422,7 +463,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPVPLastWeekStats",
         lua.create_function(|lua, ()| {
-            let h = honor(lua).unwrap_or_default();
+            let h = honor(lua);
             Ok((
                 i64::from(h.last_week_hk),
                 i64::from(h.last_week_dk),
@@ -438,7 +479,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetPVPLifetimeStats",
         lua.create_function(|lua, ()| {
-            let h = honor(lua).unwrap_or_default();
+            let h = honor(lua);
             let highest = if h.highest_rank >= 5 {
                 h.highest_rank
             } else {
@@ -455,7 +496,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetPVPRankProgress() → the bar fraction (`rank_progress`), 0.0 before the first push.
     g.set(
         "GetPVPRankProgress",
-        lua.create_function(|lua, ()| Ok(rank_progress(honor(lua).unwrap_or_default().rank_bar)))?,
+        lua.create_function(|lua, ()| Ok(rank_progress(honor(lua).rank_bar)))?,
     )?;
 
     // GetPVPRankInfo(rank [, unit]) → rankName, rankNumber: the title and the visual rank for an
@@ -570,17 +611,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // target, inside the call. Zero return values (`0x4c9610`).
     //
     // `0x4c80a0` bails silently if data is held (`0x4c80a6`), if a query is in flight (`pending`,
-    // `0x4c80b6`, `[0xb71fcc]`) or if the target guid is 0 (`0x4c80c2`). The first two are here;
-    // the guid is the host's, which sends and then latches `pending` (`0x4c811b`), so a request
-    // with no target leaves it clear.
+    // `0x4c80b6`, `[0xb71fcc]`) or if the target guid is 0 (`0x4c80c2`). The first two are here,
+    // read as of the call; the guid is the host's, which sends and then latches `pending`
+    // (`0x4c811b`), so a request with no target leaves it clear.
     g.set(
         "RequestInspectHonorData",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if model.inspect_honor.is_some() || model.inspect_honor_pending {
+            let slot = inspect_honor(lua);
+            if slot.has_data || slot.pending {
                 return Ok(());
             }
-            drop(model);
             super::calls::submit(lua, super::ScriptCall::Inspect(super::InspectCall::Honor))
         })?,
     )?;
@@ -589,7 +629,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "HasInspectHonorData",
         lua.create_function(|lua, ()| {
-            Ok(if inspect_honor(lua).is_some() {
+            Ok(if inspect_honor(lua).has_data {
                 Value::Integer(1)
             } else {
                 Value::Nil
@@ -600,13 +640,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetInspectHonorData() → the reference's twelve, in its order:
     //   sessionHK, sessionDK, yesterdayHK, yesterdayHonor, thisweekHK, thisweekHonor,
     //   lastweekHK, lastweekHonor, lastweekStanding, lifetimeHK, lifetimeDK, lifetimeRank
-    // Twelve on every path: `0x4c9620` never checks for data and reads zero-initialised slots.
-    // Clearing drops the data here, while the reference's re-key zeroes only the flags and can
-    // still answer the previous target's numbers; matching that needs a latch apart from the data.
+    // Twelve on every path: `0x4c9620` never checks the flag and reads the cells, zeros before
+    // any reply and the previous target's after a re-key, which zeroes only the flags (`0x4c6f70`).
     g.set(
         "GetInspectHonorData",
         lua.create_function(|lua, ()| {
-            let d = inspect_honor(lua).unwrap_or_default();
+            let d = inspect_honor(lua).figures;
             let out = vec![
                 Value::Integer(i64::from(d.session_hk)),
                 Value::Integer(i64::from(d.session_dk)),
@@ -630,11 +669,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // kernel at `0x51ab04` is byte-identical to `0x51aace`, so it too reads 0.0 when empty.
     g.set(
         "GetInspectPVPRankProgress",
-        lua.create_function(|lua, ()| {
-            Ok(rank_progress(
-                inspect_honor(lua).unwrap_or_default().rank_bar,
-            ))
-        })?,
+        lua.create_function(|lua, ()| Ok(rank_progress(inspect_honor(lua).figures.rank_bar)))?,
     )?;
 
     Ok(())

@@ -346,7 +346,7 @@ pub use worldmap_arrow::ARROW_MODEL;
 
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
 pub(crate) use font_block::{face_loads, own_font_lua, SAME_FONT_HEIGHT};
-pub use inspect::{InspectCall, UnitReach};
+pub use inspect::{InspectCall, UnitReach, VisibleSlotQuery};
 pub use instance::InstanceCall;
 pub use item_stats::{
     item_usable, ItemRecipe, ItemSetView, ItemSpellLine, ItemTemplateView, PlayerReqState,
@@ -383,7 +383,8 @@ pub use party::{
 };
 pub use pet::{PetActionView, PetCall, PetStats, PET_DISMISS_WORD};
 pub use pvp::{
-    decorated_name, pvp_name_global_keys, HonorState, InspectHonorData, PvpCall, RankTitle,
+    decorated_name, pvp_name_global_keys, HonorNow, HonorState, InspectHonorData, InspectHonorNow,
+    InspectHonorSlot, PvpCall, RankTitle,
 };
 pub use quest::{QuestCall, QuestItemView, QuestPanel, QuestRewardSpell, QuestSelect, QuestState};
 pub use quest_live::{

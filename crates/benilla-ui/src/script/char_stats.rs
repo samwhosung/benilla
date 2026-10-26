@@ -436,7 +436,7 @@ fn player_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSl
     let idx = usize::try_from(slot).ok()?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     let reader = inventory_reader(lua, &model, token);
-    model.inv_slot_as(reader?, idx)
+    model.inv_slot_as(lua, reader?, idx)
 }
 
 /// [`player_inv_slot`] for the getters that read the unit's item table (`0x6228a0`), which only
@@ -530,7 +530,7 @@ impl Model {
 
     /// The active player's item at live-API id `slot` ([`Self::inv_slot_as`] of our own).
     pub(super) fn own_inv_view(&self, slot: usize) -> Option<InvSlotView> {
-        self.inv_slot_as(InvReader::Own, slot)
+        self.own_inv_slot(slot)
     }
 
     /// The item `reader`'s unit exposes at live-API id `slot`, the one routing the
@@ -538,13 +538,18 @@ impl Model {
     /// through this API (`BankFrame.lua:35`) and hovers a key through it
     /// (`ContainerFrame.lua:616-619`), so the bank and keyring bands are answered from the
     /// container snapshots. Another player answers its visible items alone, slots 1-19
-    /// (`0x5f0d60`).
-    pub(super) fn inv_slot_as(&self, reader: InvReader, slot: usize) -> Option<InvSlotView> {
+    /// (`0x5f0d60`), read through the lent host ([`super::inspect::visible_slot`]).
+    pub(super) fn inv_slot_as(
+        &self,
+        lua: &Lua,
+        reader: InvReader,
+        slot: usize,
+    ) -> Option<InvSlotView> {
         match reader {
             InvReader::Own => self.own_inv_slot(slot),
             InvReader::Visible(guid) => (1..=19)
                 .contains(&slot)
-                .then(|| self.visible_equipment.get(&guid)?.get(slot)?.clone())
+                .then(|| super::inspect::visible_slot(lua, self, guid, slot))
                 .flatten(),
         }
     }

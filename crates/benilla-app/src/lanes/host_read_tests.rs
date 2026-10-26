@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 78;
-const FRAME_FINAL_INPUTS: usize = 387;
+const FRAME_FINAL_FEEDS: usize = 76;
+const FRAME_FINAL_INPUTS: usize = 377;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -85,8 +85,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "zeroes the board at the world-enter cascade (`0x4a9db0`), which the reference runs \
          inside our own player's create (`0x4908c0`)"),
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_honor::feed_honor", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_inspect::feed_inspect", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_items::feed::feed_item_stats", &["items::Items"],
         "takes the item cache's fresh and dropped records as it pushes them"),
     ("::ui_items::feed::feed_random_properties", &["items::RandomProperties"],

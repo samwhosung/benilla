@@ -1,7 +1,6 @@
 //! The inspect bindings: `NotifyInspect` and `ClearInspectPlayer` act inside their calls through
-//! the host ([`InspectCall`]), the app pushes
-//! each held player's visible items by guid ([`UiScript::set_visible_equipment`]) for the
-//! `GetInventoryItem*` verbs, and `CanInspect` and `CheckInteractDistance` read a per-guid
+//! the host ([`InspectCall`]), the `GetInventoryItem*` verbs read another player's visible items
+//! through the lent host ([`VisibleSlotQuery`]), and `CanInspect` and `CheckInteractDistance` read a per-guid
 //! distance map ([`UiScript::set_unit_reach`]) through the token resolver ([`super::UnitGuids`]).
 //!
 //! Worn gear is public descriptor state (`PLAYER_VISIBLE_ITEM_<n>_0`), so the window paints from
@@ -102,8 +101,8 @@ impl super::UiScript {
 
     /// Push, or clear with `None`, the visible items of the player `guid` by slot id 1..=19:
     /// what the slot getters read through a token naming another player they may read
-    /// (`0x4944a0`). It fires nothing: a change of them is the visible-item bridge's
-    /// `UNIT_INVENTORY_CHANGED` (`0x51bd70`).
+    /// (`0x4944a0`) when no host is free to ask ([`VisibleSlotQuery`]). It fires nothing: a change
+    /// of them is the visible-item bridge's `UNIT_INVENTORY_CHANGED` (`0x51bd70`).
     pub fn set_visible_equipment(&mut self, guid: u64, slots: Option<InventorySlots>) {
         let mut model = self.model_mut();
         match slots {
@@ -123,6 +122,38 @@ impl super::UiScript {
     /// Whether a harness's VM kept a `ClearInspectPlayer` ([`Self::keep_calls`]).
     pub fn take_inspect_clear(&mut self) -> bool {
         self.take_calls_like(&super::ScriptCall::Inspect(InspectCall::Clear)) > 0
+    }
+}
+
+/// A slot getter's question of another player's visible items, through the lent host
+/// ([`super::live::ask`]): the slot, id 1..=19, as the object's `PLAYER_VISIBLE_ITEM_<slot>` block
+/// holds it at the call (`0x4c8328` → `0x5f0d60`). The answer is `None` for an empty slot or a
+/// player no longer held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisibleSlotQuery {
+    pub guid: u64,
+    pub slot: u8,
+}
+
+impl super::live::LiveQuery for VisibleSlotQuery {
+    type Answer = Option<super::InvSlotView>;
+}
+
+/// The visible item of the player `guid` at slot id `slot`, read through the lent host as of the
+/// call; with no host free to ask, the snapshot ([`super::UiScript::set_visible_equipment`]).
+pub(super) fn visible_slot(
+    lua: &Lua,
+    model: &Model,
+    guid: u64,
+    slot: usize,
+) -> Option<super::InvSlotView> {
+    let query = VisibleSlotQuery {
+        guid,
+        slot: u8::try_from(slot).ok()?,
+    };
+    match super::live::ask(lua, &query) {
+        Some(answer) => answer,
+        None => model.visible_equipment.get(&guid)?.get(slot)?.clone(),
     }
 }
 

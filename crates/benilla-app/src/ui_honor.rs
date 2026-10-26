@@ -1,40 +1,95 @@
-//! The honor feed: our own honor descriptor fields become the snapshot the Honor tabs read, and
-//! the inspect-honor reply is matched to the inspected player. The honor block streams only to
-//! its owner, so another player's numbers come only from `MSG_INSPECT_HONOR_STATS`, which vmangos
-//! refuses by not answering (`MiscHandler.cpp:962-972`); the stock pane re-asks from its `OnShow`
-//! while it holds nothing, the only retry.
+//! The honor state the Honor tabs read: our own honor descriptor fields, which the self getters
+//! read off the active player's block at the call ([`crate::ui_inspect::InspectLive`]), and the
+//! client's one inspect-honor slot ([`InspectHonor`]), which `MSG_INSPECT_HONOR_STATS` fills for
+//! the inspect target. The honor block streams only to its owner, so another player's numbers
+//! come only from that reply, which vmangos refuses by not answering (`MiscHandler.cpp:962-972`);
+//! the stock pane re-asks from its `OnShow` while it holds nothing, the only retry.
 //!
 //! The pane's events are three field watches (`0x467e70`, callback `0x5de4b0`):
 //! `PLAYER_FIELD_SESSION_KILLS` fires `PLAYER_PVP_KILLS_CHANGED`, and the whole `PLAYER_BYTES_3`
 //! dword and `PLAYER_FIELD_BYTES2` byte 0 fire `PLAYER_PVP_RANK_CHANGED`, from
-//! [`crate::field_watch`]; this feed pushes what their handlers read, ahead of them and of the
-//! world-enter events. Nothing watches the weekly, lifetime or highest-rank fields, which
+//! [`crate::field_watch`]. Nothing watches the weekly, lifetime or highest-rank fields, which
 //! `HonorFrame.lua:10-11` repaints only on `PLAYER_ENTERING_WORLD`.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{HonorState, InspectHonorData, ScriptValue, UiScript};
+use benilla_ui::script::{HonorState, InspectHonorData, InspectHonorSlot, UiScript};
 
-use crate::net::{ObjectStore, SelfPlayer};
-use crate::ui_script::{UiFeed, VmMemo};
+use crate::net::ObjectStore;
 
-/// The inspect-honor reply held: one slot, like the reference's `HasInspectHonorData` latch.
+/// The client's inspect-honor slot (`ui/honorinspect`): the inspect target's guid (`0xb71fc0`),
+/// the has-data (`0xb71fc8`) and pending (`0xb71fcc`) flags, and the figures of the last reply
+/// for it, which a new target leaves in place.
 #[derive(Resource, Default)]
-pub(crate) struct InspectHonor(pub(crate) Option<benilla_protocol::messages::InspectHonorStats>);
-
-/// What the last push told this VM, keyed on the VM so a `/reload`'s fresh VM is told again.
-#[derive(Resource, Default)]
-pub(crate) struct HonorFeedState {
-    vm: VmMemo<HonorFeedMemo>,
+pub(crate) struct InspectHonor {
+    target: u64,
+    has_data: bool,
+    pending: bool,
+    figures: InspectHonorData,
 }
 
-/// The per-VM change bases: the last snapshot and the held reply's guid.
-#[derive(Default)]
-struct HonorFeedMemo {
-    last: Option<HonorState>,
-    last_inspect: Option<u64>,
+impl InspectHonor {
+    /// `SetInspectTarget` (`0x4c6f70`): nothing for the guid held (`0x4c6f89`); another stores it
+    /// and clears both flags (`0x4c6f98`, `0x4c6f9d`), the figures kept. `ClearInspectPlayer`
+    /// passes 0 (`0x4c9784`).
+    pub(crate) fn set_target(&mut self, guid: u64) {
+        if guid == self.target {
+            return;
+        }
+        self.target = guid;
+        self.has_data = false;
+        self.pending = false;
+    }
+
+    /// The inspect target's guid, 0 for none.
+    pub(crate) fn target(&self) -> u64 {
+        self.target
+    }
+
+    /// The request sent: pending is set after the send (`0x4c811b`).
+    pub(crate) fn asked(&mut self) {
+        self.pending = true;
+    }
+
+    /// The slot as the getters read it.
+    pub(crate) fn slot(&self) -> InspectHonorSlot {
+        InspectHonorSlot {
+            has_data: self.has_data,
+            pending: self.pending,
+            figures: self.figures,
+        }
+    }
+
+    /// The reply (`0x4c6e40`): one for another guid than the target's is dropped whole
+    /// (`0x4c6e58`-`0x4c6e6b`); a match stores every value, sets has-data, clears pending
+    /// (`0x4c6f42`, `0x4c6f4c`); whether it was stored.
+    fn store(&mut self, r: &benilla_protocol::messages::InspectHonorStats) -> bool {
+        if r.player_guid != self.target {
+            return false;
+        }
+        let (session_hk, session_dk) = r.session_kills();
+        self.figures = InspectHonorData {
+            guid: r.player_guid,
+            session_hk,
+            session_dk,
+            yesterday_hk: r.yesterday_hk,
+            yesterday_honor: r.yesterday_honor,
+            this_week_hk: r.this_week_hk,
+            this_week_honor: r.this_week_honor,
+            last_week_hk: r.last_week_hk,
+            last_week_honor: r.last_week_honor,
+            last_week_standing: r.last_week_rank,
+            lifetime_hk: r.lifetime_hk,
+            lifetime_dk: r.lifetime_dhk,
+            highest_rank: r.highest_rank,
+            rank_bar: r.rank_bar,
+        };
+        self.has_data = true;
+        self.pending = false;
+        true
+    }
 }
 
 /// The inspect-honor reply's handler; the honor award, `SMSG_PVP_CREDIT`, is the chat family's.
@@ -43,16 +98,31 @@ mod net {
     use bevy::prelude::*;
 
     use super::InspectHonor;
+    use crate::field_watch::{id, FieldNotice, NoticeLane};
     use crate::net::NetHandlerApp;
 
     pub(super) fn register(app: &mut App) {
         app.net_handler(SessionEventKind::InspectHonorStats, on_inspect_stats);
     }
 
-    /// A reply replaces whatever is held, whoever it is for: the reference's latch is one slot.
-    fn on_inspect_stats(In(ev): In<SessionEvent>, mut inspect: ResMut<InspectHonor>) {
+    /// `0x4c6e40`: a reply for the target stored, then `INSPECT_HONOR_UPDATE` signalled at its
+    /// packet (`0x4c6f3d`, `0x4c6f56`), the event's only fire site.
+    fn on_inspect_stats(
+        In(ev): In<SessionEvent>,
+        mut slot: ResMut<InspectHonor>,
+        mut lane: ResMut<NoticeLane>,
+    ) {
         if let SessionEvent::InspectHonorStats(stats) = ev {
-            inspect.0 = Some(stats);
+            if slot.store(&stats) {
+                lane.write(FieldNotice::Global {
+                    id: id::INSPECT_HONOR_UPDATE,
+                });
+            } else {
+                debug!(
+                    "honor: inspect-honor reply for {:#x}, not the target — dropped",
+                    stats.player_guid
+                );
+            }
         }
     }
 }
@@ -63,18 +133,7 @@ impl Plugin for UiHonorPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.init_resource::<InspectHonor>()
-            .init_resource::<HonorFeedState>()
             .init_resource::<crate::nameplates::NameLineStrings>()
-            // Ahead of the unit feed: the reference writes the block with the create whose hook
-            // runs the world-enter cascade, so `PLAYER_ENTERING_WORLD`'s repaint reads it, and
-            // the field events' handlers read it too.
-            .add_systems(
-                Update,
-                feed_honor
-                    .in_set(UiFeed)
-                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
-                    .before(crate::ui_unit::UnitFeed),
-            )
             // A VM holder, so after the tick; before the driver, so a new VM's strings reach the
             // lines the frame it arrives.
             .add_systems(
@@ -122,18 +181,15 @@ fn name_line_strings(script: &UiScript) -> HashMap<String, String> {
         .collect()
 }
 
-/// Read the honor block off our own descriptor, `None` until it streams. That decides only when
-/// the first push and its events happen: the reference reads a field it was never sent as 0
-/// (`0x51a4b0`-`0x51a7c0`), and so do our bindings.
-fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
+/// The honor block off our own descriptor as the self getters read it (`0x51a4b0`-`0x51a7c0`,
+/// `0x51aa90`): a field never sent reads as 0.
+pub(crate) fn honor_of(store: &ObjectStore) -> HonorState {
     let f = &store.0;
     let session = f.player_session_kills();
     let yesterday = f.player_yesterday_kills();
     let last_week = f.player_last_week_kills();
     let this_week = f.player_this_week_kills();
-    // Presence is tested on a private field: the public rank byte streams with the unit block.
-    session?;
-    Some(HonorState {
+    HonorState {
         session_hk: session.map_or(0, |(hk, _)| hk),
         session_dk: session.map_or(0, |(_, dk)| dk),
         yesterday_hk: yesterday.map_or(0, |(hk, _)| hk),
@@ -153,146 +209,67 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
         // until the player ranks down, so a swap would pass unnoticed.
         rank: f.player_pvp_rank().unwrap_or(0),
         rank_bar: f.player_honor_rank_bar().unwrap_or(0),
-    })
-}
-
-/// Push the self snapshot and the inspect reply.
-pub(crate) fn feed_honor(
-    // The selection and the inspect target, read before the VM runs with the host lent, which a
-    // call may move.
-    mut hosted: crate::script_calls::disjoint::Pair<
-        (
-            Res<'static, crate::target::Selection>,
-            Res<'static, crate::ui_inspect::InspectTarget>,
-        ),
-        crate::script_calls::HostedVm<'static, 'static>,
-    >,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    group: Res<crate::ui_party::GroupState>,
-    mut inspect_honor: ResMut<InspectHonor>,
-    mut state: ResMut<HonorFeedState>,
-) {
-    let inspected = {
-        let (selection, inspect_target) = hosted.p0();
-        inspect_target
-            .token
-            .as_deref()
-            .and_then(|t| crate::ui_unit::player_token_guid(t, &selection, &group))
-    };
-    hosted.p1().run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let memo = state.vm.get(script);
-
-        // --- the self snapshot -------------------------------------------------------------------
-        if let Ok(store) = self_store.single() {
-            if let Some(fresh) = honor_snapshot(store) {
-                if memo.last.as_ref() != Some(&fresh) {
-                    script.set_honor(Some(fresh));
-                    memo.last = Some(fresh);
-                }
-            }
-        }
-
-        // --- the inspect reply -------------------------------------------------------------------
-        // The reference's latch clears only at `0x4c6f70`, from a `NotifyInspect` naming another
-        // player, and on `ClearInspectPlayer`. Deviation: we clear it whenever the inspected
-        // token's guid moves, because our window re-resolves its token each frame and both tabs
-        // read it, so the reference's rule would let the two tabs show different players.
-        // `ClearInspectPlayer` drops the token, which clears the slot here too.
-        if inspect_honor
-            .0
-            .as_ref()
-            .is_some_and(|reply| Some(reply.player_guid) != inspected)
-        {
-            // Dropped from the resource, so `HasInspectHonorData` and this store agree.
-            inspect_honor.0 = None;
-        }
-        let held = inspect_honor.0.as_ref().map(|r| r.player_guid);
-        if memo.last_inspect != held {
-            script.set_inspect_honor(inspect_honor.0.as_ref().map(|r| {
-                let (session_hk, session_dk) = r.session_kills();
-                InspectHonorData {
-                    guid: r.player_guid,
-                    session_hk,
-                    session_dk,
-                    yesterday_hk: r.yesterday_hk,
-                    yesterday_honor: r.yesterday_honor,
-                    this_week_hk: r.this_week_hk,
-                    this_week_honor: r.this_week_honor,
-                    last_week_hk: r.last_week_hk,
-                    last_week_honor: r.last_week_honor,
-                    last_week_standing: r.last_week_rank,
-                    lifetime_hk: r.lifetime_hk,
-                    lifetime_dk: r.lifetime_dhk,
-                    highest_rank: r.highest_rank,
-                    rank_bar: r.rank_bar,
-                }
-            }));
-            memo.last_inspect = held;
-            // Fired on a clear too, so the pane stops showing the previous player's numbers.
-            script.fire_event("INSPECT_HONOR_UPDATE", Vec::<ScriptValue>::new());
-        }
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::NetCommands;
 
-    /// The block is pushed on first sight and on change, and the push fires nothing: the PvP
-    /// events are the field watches' (`0x5ddc35`, `0x5ddc5c`, `0x5ddc83`), which a create and a
-    /// `/reload` never run.
+    /// A reply for `guid` with `session` honorable kills.
+    fn reply(guid: u64, session: u32) -> benilla_protocol::messages::InspectHonorStats {
+        benilla_protocol::messages::InspectHonorStats {
+            player_guid: guid,
+            highest_rank: 0,
+            session_kills: session,
+            yesterday_hk: 0,
+            unknown_old1: 0,
+            last_week_hk: 0,
+            unknown_old2: 0,
+            this_week_hk: 0,
+            unknown_old3: 0,
+            lifetime_hk: 0,
+            lifetime_dhk: 0,
+            yesterday_honor: 0,
+            last_week_honor: 0,
+            this_week_honor: 0,
+            last_week_rank: 0,
+            rank_bar: 0,
+        }
+    }
+
+    /// The slot holds one target (`0x4c6e58`): a reply for anyone else is dropped, one for the
+    /// target sets has-data and clears pending (`0x4c6f42`, `0x4c6f4c`), and a new target clears
+    /// both flags and keeps the figures (`0x4c6f70`), the same target nothing.
     #[test]
-    fn the_feed_pushes_the_block_and_fires_nothing() {
-        use bevy::ecs::system::RunSystemOnce;
-        const FIELD_SESSION_KILLS: u16 = 1250;
-        let mut app = App::new();
-        app.init_resource::<HonorFeedState>()
-            .init_resource::<InspectHonor>()
-            .init_resource::<crate::ui_inspect::InspectTarget>()
-            .init_resource::<crate::target::Selection>()
-            .init_resource::<crate::ui_party::GroupState>();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        app.insert_resource(NetCommands(tx));
-        let script = vm(r#"SEEN = {}
-            local f = CreateFrame("Frame")
-            f:RegisterEvent("PLAYER_PVP_RANK_CHANGED")
-            f:RegisterEvent("PLAYER_PVP_KILLS_CHANGED")
-            f:SetScript("OnEvent", function()
-                table.insert(SEEN, event .. " " .. tostring(arg1))
-            end)"#);
-        app.insert_non_send_resource(script);
-        let me = app
-            .world_mut()
-            .spawn((
-                SelfPlayer,
-                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
-                    FIELD_SESSION_KILLS,
-                    3,
-                )])),
-            ))
-            .id();
-        // The session's honorable kills as the pane reads them, and what the VM heard.
-        let step = |app: &mut App| {
-            app.world_mut().run_system_once(feed_honor).unwrap();
-            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-            s.resolve();
-            let kills = s.eval::<i64>("return (GetPVPSessionStats())").unwrap();
-            let heard = s.eval::<Vec<String>>("return SEEN").unwrap();
-            s.run("SEEN = {}").unwrap();
-            (kills, heard)
-        };
-        assert_eq!(step(&mut app), (3, vec![]), "the first push is silent");
-        *app.world_mut().get_mut::<ObjectStore>(me).unwrap() = ObjectStore(
-            benilla_protocol::ObjectFields::from_pairs(&[(FIELD_SESSION_KILLS, 4)]),
-        );
+    fn the_slot_keys_on_its_target_and_a_new_one_keeps_the_figures() {
+        let mut slot = InspectHonor::default();
+        assert!(!slot.store(&reply(0x77, 3)), "no target");
+        slot.set_target(0x77);
+        slot.asked();
+        assert!(!slot.store(&reply(0x88, 4)), "another player");
         assert_eq!(
-            step(&mut app),
-            (4, vec![]),
-            "a change is the watch's to fire"
+            slot.slot(),
+            InspectHonorSlot {
+                pending: true,
+                ..Default::default()
+            }
+        );
+        assert!(slot.store(&reply(0x77, 5)));
+        let held = slot.slot();
+        assert!(held.has_data && !held.pending);
+        assert_eq!(held.figures.session_hk, 5);
+        slot.set_target(0x77);
+        assert_eq!(slot.slot(), held, "the same target");
+        slot.set_target(0);
+        assert_eq!(
+            slot.slot(),
+            InspectHonorSlot {
+                has_data: false,
+                pending: false,
+                figures: held.figures
+            },
+            "the figures stay"
         );
     }
 

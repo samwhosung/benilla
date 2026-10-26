@@ -655,27 +655,6 @@ impl<'a> UnitNames<'a> {
     }
 }
 
-/// Resolve a UnitPopup token to the other player's guid it names: `"target"` when it is a player,
-/// `"partyN"` through the roster; `"player"` and anything unresolved answer `None`.
-pub(crate) fn player_token_guid(
-    token: &str,
-    selection: &Selection,
-    group: &crate::ui_party::GroupState,
-) -> Option<u64> {
-    match token {
-        "target" => selection
-            .guid
-            .filter(|g| benilla_protocol::guid::is_player(*g)),
-        "player" => None,
-        tok => tok
-            .strip_prefix("party")
-            .and_then(|n| n.parse::<usize>().ok())
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|n| group.party_slots().nth(n))
-            .map(|m| m.guid),
-    }
-}
-
 /// The guid `"pet"` names, off the active player's descriptor `me`: `UNIT_FIELD_CHARM`, else
 /// `UNIT_FIELD_SUMMON` (`0x515a5e`-`0x515a6e`), 0 for neither or no player (`0x515a58`). The pet
 /// bar's guid is not read: a charm with no bar is the pet, and a bar outliving its unit names none.

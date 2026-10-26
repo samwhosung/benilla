@@ -511,7 +511,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         Err(_) => false,
                     };
                     let view = reader
-                        .and_then(|r| model.inv_slot_as(r, slot))
+                        .and_then(|r| model.inv_slot_as(lua, r, slot))
                         .filter(|s| s.item_id != 0)
                         .map(|s| {
                             (s.item_id, s.name.clone(), s.quality, s.count.max(1), {

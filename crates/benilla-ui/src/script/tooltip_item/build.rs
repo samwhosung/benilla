@@ -10,8 +10,9 @@
 //! nothing, since every clear zeroes the entry (`0x5300dd`), stays as it is (`0x52e556`).
 //!
 //! benilla's caches answer by push: a template through [`UiScript::set_item_template`], a set and
-//! its members' names through [`UiScript::set_item_set`], and a name or a petition inside the
-//! views that carry its guid, which the app re-pushes once it resolves. [`answer_item_caches`]
+//! its members' names through [`UiScript::set_item_set`], a name through the lent host's name cache
+//! or else inside the views that carry its guid, and a petition inside those views, which the app
+//! re-pushes once it resolves. [`answer_item_caches`]
 //! settles the waits once a tick, one rebuild per answered ask.
 //!
 //! [`UiScript::set_item_template`]: crate::script::UiScript::set_item_template
@@ -84,7 +85,7 @@ pub(crate) enum CacheWait {
 }
 
 impl CacheWait {
-    fn answered(&self, model: &Model) -> bool {
+    fn answered(&self, lua: &Lua, model: &Model) -> bool {
         match *self {
             CacheWait::Template(id) => model.item_templates.contains_key(&id),
             CacheWait::Set(id) => model.item_sets.contains_key(&id),
@@ -93,7 +94,7 @@ impl CacheWait {
                     .iter()
                     .any(|(id, name)| *id == item && name.is_some())
             }),
-            CacheWait::Name(guid) => name_of(model, guid).is_some(),
+            CacheWait::Name(guid) => name_of(lua, model, guid).is_some(),
             CacheWait::Petition(guid) => {
                 container_object(model, guid).is_some_and(|s| s.petition.is_some())
             }
@@ -104,9 +105,13 @@ impl CacheWait {
     }
 }
 
-/// A name the app resolved for `guid`, read off any view that carries it as a creator or a giver.
-/// benilla's name cache lives in the app, which re-pushes those views once a name answers.
-fn name_of(model: &Model, guid: u64) -> Option<String> {
+/// The name cache's record for `guid`, read through the lent host (`0x55f080`); with no host free
+/// to ask, off any view that carries it as a creator or a giver, which the app re-pushes once a
+/// name answers.
+fn name_of(lua: &Lua, model: &Model, guid: u64) -> Option<String> {
+    if let Some(live) = crate::script::live::ask(lua, &crate::script::PlayerNameQuery(guid)) {
+        return live;
+    }
     let of = |g: u64, name: &Option<String>| (g == guid).then(|| name.clone()).flatten();
     let bags = model.containers.values().flat_map(|c| c.slots.values());
     let held = bags.filter_map(|s| {
@@ -189,7 +194,7 @@ impl ItemBuild {
     /// reference's lookup finds no object and builds from the record and the block alone;
     /// benilla's views carry no object to read once it is gone, and the kept instance is what the
     /// plate showed.
-    fn refreshed(mut self, model: &Model) -> Self {
+    fn refreshed(mut self, lua: &Lua, model: &Model) -> Self {
         let Some(kept) = self.inst.take() else {
             return self;
         };
@@ -212,10 +217,10 @@ impl ItemBuild {
             None => kept,
         };
         if inst.creator.is_none() && inst.creator_guid != 0 {
-            inst.creator = name_of(model, inst.creator_guid);
+            inst.creator = name_of(lua, model, inst.creator_guid);
         }
         if inst.gift_creator.is_none() && inst.gift_creator_guid != 0 {
-            inst.gift_creator = name_of(model, inst.gift_creator_guid);
+            inst.gift_creator = name_of(lua, model, inst.gift_creator_guid);
         }
         self.inst = Some(inst);
         self
@@ -377,7 +382,7 @@ pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
                 continue;
             };
             let before = waits.len();
-            waits.retain(|w| !w.answered(model));
+            waits.retain(|w| !w.answered(lua, model));
             let answers = before - waits.len();
             if !waits.is_empty() {
                 model.item_cache_waits.insert(h, waits);
@@ -397,7 +402,7 @@ pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
                     .item_builds
                     .get(&h)
                     .cloned()
-                    .map(|b| b.refreshed(&model))
+                    .map(|b| b.refreshed(lua, &model))
             };
             // Nothing kept (`0x52e556`): a clear in between, or a rebuild's own hide.
             let Some(build) = build else { break };

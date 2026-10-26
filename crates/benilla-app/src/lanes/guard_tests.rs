@@ -145,11 +145,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "::ui_honor::InspectHonor",
-        "the inspected honor",
-    ),
-    (
-        Row::Queue,
         "::ui_instance::InstanceState",
         "the instance state",
     ),
@@ -352,6 +347,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     // Read, and quiet: `feed_dialog_verbs` pushes the deadline the time packet stores and fires
     // nothing off it, as the packet's `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
     "::ui_dialog_verbs::AreaSpiritHealer",
+    // Read through the host by the inspect-honor getters, and quiet: the reply's
+    // `INSPECT_HONOR_UPDATE` goes on the notice lane at its handler.
+    "::ui_honor::InspectHonor",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
     "::ui_merchant::MerchantOpen",
@@ -444,10 +442,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    ("::ui_inspect::feed_inspect", &["items::Items", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid"]),
-    ("::ui_honor::feed_honor", &["net::ObjectStore", "target::Selection", "ui_honor::InspectHonor",
-        "ui_inspect::InspectTarget", "ui_party::GroupState"]),
     ("::ui_action::recount::recount_item_actions", &["items::Countdowns", "items::Items",
         "net::GuidIndex", "net::ObjectStore"]),
     ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",

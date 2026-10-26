@@ -1557,25 +1557,21 @@ fn the_mouseover_answers_get_guild_info_from_the_cache() {
 
 /// A player hovered for the first time answers inside its own `UPDATE_MOUSEOVER_UNIT`: the
 /// publisher writes the mouseover pair (`0x492890`) before it signals (`0x4929b3`), and
-/// `CanInspect` (`0x48a1b0`), `CheckInteractDistance` (`0x48ba00`) and the slot getters
-/// (`0x4c8328`) read the object it names at once. The hover twin of the target's case.
+/// `CanInspect` (`0x48a1b0`) and `CheckInteractDistance` (`0x48ba00`) read the object it names at
+/// once. The hover twin of the target's case; the slot getters read the object through the lent
+/// host (`lanes::inspect_live_tests`).
 #[test]
-fn a_fresh_hovers_reach_and_slots_answer_inside_its_mouseover_event() {
+fn a_fresh_hovers_reach_answers_inside_its_mouseover_event() {
     use crate::net::{Guid, GuidIndex};
     use crate::target::relations::fixture::{factions, HUMAN};
-    use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
     use benilla_protocol::ObjectFields;
     const OTHER: u64 = 0x1002;
-    const HELM: u32 = 7366;
     /// `OBJECT_FIELD_TYPE` and `UNIT_FIELD_FACTIONTEMPLATE`.
     const OBJECT_TYPE: u16 = 2;
     const TEMPLATE: u16 = 35;
     let (mut app, _, _) = mouseover_app();
     app.insert_resource(factions())
         .insert_resource(crate::net::SelfGuid(Some(ME)));
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(HELM, Some(crate::items::test_template("Helm")));
     let me = app
         .world_mut()
         .query_filtered::<Entity, With<SelfPlayer>>()
@@ -1589,7 +1585,7 @@ fn a_fresh_hovers_reach_and_slots_answer_inside_its_mouseover_event() {
         ])),
         Transform::default(),
     ));
-    // A Human 3 yards off wearing the helm, whom no token names.
+    // A Human 3 yards off, whom no token names.
     let other = app
         .world_mut()
         .spawn((
@@ -1597,7 +1593,6 @@ fn a_fresh_hovers_reach_and_slots_answer_inside_its_mouseover_event() {
             ObjectStore(ObjectFields::from_pairs(&[
                 (OBJECT_TYPE, 0x19),
                 (TEMPLATE, HUMAN),
-                (FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2, HELM),
             ])),
             Transform::from_xyz(3.0, 0.0, 0.0),
         ))
@@ -1628,8 +1623,7 @@ fn a_fresh_hovers_reach_and_slots_answer_inside_its_mouseover_event() {
                 f:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
                 f:SetScript("OnEvent", function()
                     table.insert(SEEN, tostring(CanInspect("mouseover")) .. " "
-                        .. tostring(CheckInteractDistance("mouseover", 1)) .. " "
-                        .. tostring(GetInventoryItemLink("mouseover", 1)))
+                        .. tostring(CheckInteractDistance("mouseover", 1)))
                 end)
             "#,
             )
@@ -1640,10 +1634,7 @@ fn a_fresh_hovers_reach_and_slots_answer_inside_its_mouseover_event() {
     let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
     s.resolve();
     let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
-    assert!(
-        matches!(seen.as_slice(), [one] if one.starts_with("1 1 ") && one.contains("[Helm]")),
-        "{seen:?}"
-    );
+    assert_eq!(seen, ["1 1"]);
 }
 
 /// `UnitCreatureType("mouseover")` goes through the resolver `0x605570` for a hovered player as

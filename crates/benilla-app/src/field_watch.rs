@@ -213,6 +213,7 @@ pub(crate) mod id {
     pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
     pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
     pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
+    pub(crate) const INSPECT_HONOR_UPDATE: u16 = 525;
     pub(crate) const PLAYER_REGEN_DISABLED: u16 = 190;
     pub(crate) const PLAYER_REGEN_ENABLED: u16 = 191;
     pub(crate) const PET_ATTACK_START: u16 = 334;

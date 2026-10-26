@@ -661,6 +661,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PET_BAR_UPDATE => "PET_BAR_UPDATE",
         id::AREA_SPIRIT_HEALER_IN_RANGE => "AREA_SPIRIT_HEALER_IN_RANGE",
         id::AREA_SPIRIT_HEALER_OUT_OF_RANGE => "AREA_SPIRIT_HEALER_OUT_OF_RANGE",
+        id::INSPECT_HONOR_UPDATE => "INSPECT_HONOR_UPDATE",
         _ => return None,
     })
 }
@@ -1270,7 +1271,7 @@ mod tests {
         assert!(heard(&mut app, FieldNotice::Player { id: 406 }).is_empty());
     }
 
-    /// A self player seated in a world that runs `feed_units` and the honor feed, its VM
+    /// A self player seated in a world that runs `feed_units`, its VM
     /// recording what `lua` registers.
     fn feed_world(pairs: &[(u16, u32)], lua: &str) -> (App, Entity) {
         use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
@@ -1284,10 +1285,7 @@ mod tests {
             .init_resource::<crate::ui_party::GroupState>()
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>()
-            .init_resource::<crate::ui_guild::GuildState>()
-            .init_resource::<crate::ui_honor::HonorFeedState>()
-            .init_resource::<crate::ui_honor::InspectHonor>()
-            .init_resource::<crate::ui_inspect::InspectTarget>();
+            .init_resource::<crate::ui_guild::GuildState>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let mut script = UiScript::new().unwrap();
@@ -1319,70 +1317,26 @@ mod tests {
         out
     }
 
-    /// `PLAYER_TARGET_CHANGED` re-shows the inspect window on the new target
-    /// (`Blizzard_InspectUI.lua:29-31`), whose doll reads its slots inside the call
-    /// (`InspectPaperDollFrame.lua:57-79`): the aura feed seats the new target's guid, the inspect
-    /// feed pushes its slots, then the event fires. Both edges are declared, not left to
-    /// registration order.
-    #[test]
-    fn a_new_targets_slots_are_pushed_before_its_target_event() {
-        use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
-
-        let mut app = headless_client();
-        let c = census(&mut app, Update, SyncPoints::Declared);
-        if !c.systems.values().any(|s| s.name.contains("benilla_app::")) {
-            eprintln!("skipped: this build carries no type names");
-            return;
-        }
-        let one = |suffix: &str| {
-            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
-            match (hits.next(), hits.next()) {
-                (Some((k, _)), None) => *k,
-                _ => panic!("exactly one system named `…{suffix}` in Update"),
-            }
-        };
-        // The aura feed is private to its module, so its side is read by name off the graph.
-        let (aura, inspect, fire) = (
-            one("::ui_aura::feed_auras"),
-            one("::ui_inspect::feed_inspect"),
-            one("::ui_unit::fire_unit_events"),
-        );
-        assert_eq!(
-            [
-                c.dependencies.contains(&(aura, inspect)),
-                c.dependencies.contains(&(inspect, fire)),
-            ],
-            [true; 2],
-            "aura seat, inspect push"
-        );
-    }
-
     /// A target held for the first time answers inside its own `PLAYER_TARGET_CHANGED`, whose
     /// inspect handler re-shows the window (`Blizzard_InspectUI.lua:29-31`): `CanInspect` reads
-    /// the new target's object (`0x48a1b0` → `0x4944a0`) and so do the slot getters (`0x4c8328`),
-    /// so its reach and its slots are in the VM before the event. The frame runs its feeds in the
-    /// order the client schedules them.
+    /// the new target's object (`0x48a1b0` → `0x4944a0`), so its reach is in the VM before the
+    /// event; the slot getters read the object through the lent host
+    /// (`lanes::inspect_live_tests`). The frame runs its feeds in the order the client schedules
+    /// them.
     #[test]
-    fn a_new_targets_reach_and_slots_answer_inside_its_target_event() {
+    fn a_new_targets_reach_answers_inside_its_target_event() {
         use crate::game_plugins::schedule_tests::headless_client;
         use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
         use crate::target::relations::fixture::{factions, HUMAN};
         use crate::target::Selection;
         use crate::test_support::runs_before;
-        use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
         use benilla_protocol::messages::ObjectFields;
         const OTHER: u64 = 0x1002;
-        const HELM: u32 = 7366;
         /// `OBJECT_FIELD_TYPE` and `UNIT_FIELD_FACTIONTEMPLATE`.
         const OBJECT_TYPE: u16 = 2;
         const TEMPLATE: u16 = 35;
 
         let mut client = headless_client();
-        let inspect_first = runs_before(
-            &mut client,
-            crate::ui_inspect::feed_inspect,
-            super::super::fire_unit_events,
-        );
         let reach_first = runs_before(
             &mut client,
             super::super::feed_unit_reach,
@@ -1400,17 +1354,12 @@ mod tests {
             .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::ui_party::GroupState>()
             .init_resource::<super::super::UnitFeedState>()
-            .init_resource::<crate::ui_inspect::InspectTarget>()
-            .init_resource::<crate::ui_inspect::InspectFeedState>()
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::names::NameCache>()
             .insert_resource(crate::net::SelfGuid(Some(ME)))
             .insert_resource(factions())
             .insert_resource(NetCommands(tx))
             .add_plugins(crate::ui_aura::UiAuraPlugin);
-        app.world_mut()
-            .resource_mut::<crate::items::Items>()
-            .insert_template(HELM, Some(crate::items::test_template("Helm")));
         let script = UiScript::new().unwrap();
         script
             .run(
@@ -1419,15 +1368,14 @@ mod tests {
                 local f = CreateFrame("Frame")
                 f:RegisterEvent("PLAYER_TARGET_CHANGED")
                 f:SetScript("OnEvent", function()
-                    table.insert(SEEN, tostring(CanInspect("target")) .. " "
-                        .. tostring(GetInventoryItemLink("target", 1)))
+                    table.insert(SEEN, tostring(CanInspect("target")))
                 end)
             "#,
             )
             .unwrap();
         app.insert_non_send_resource(script);
 
-        // We at the origin; a Human 3 yards off wearing the helm, whom no token names yet.
+        // We at the origin; a Human 3 yards off, whom no token names yet.
         let mut spawn = |guid: u64, pairs: &[(u16, u32)], yards: f32| {
             let e = app
                 .world_mut()
@@ -1444,15 +1392,7 @@ mod tests {
             e
         };
         let me = spawn(ME, &[(OBJECT_TYPE, 0x19), (TEMPLATE, HUMAN)], 0.0);
-        let other = spawn(
-            OTHER,
-            &[
-                (OBJECT_TYPE, 0x19),
-                (TEMPLATE, HUMAN),
-                (FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2, HELM),
-            ],
-            3.0,
-        );
+        let other = spawn(OTHER, &[(OBJECT_TYPE, 0x19), (TEMPLATE, HUMAN)], 3.0);
         app.world_mut().entity_mut(me).insert(SelfPlayer);
 
         // One frame of the feeds after the aura feed's seat, in the client's order.
@@ -1467,11 +1407,6 @@ mod tests {
                 );
             }
             let world = app.world_mut();
-            if inspect_first {
-                world
-                    .run_system_once(crate::ui_inspect::feed_inspect)
-                    .unwrap();
-            }
             if reach_first {
                 world
                     .run_system_once(super::super::feed_unit_reach)
@@ -1480,11 +1415,6 @@ mod tests {
             world
                 .run_system_once(super::super::fire_unit_events)
                 .unwrap();
-            if !inspect_first {
-                world
-                    .run_system_once(crate::ui_inspect::feed_inspect)
-                    .unwrap();
-            }
             if !reach_first {
                 world
                     .run_system_once(super::super::feed_unit_reach)
@@ -1502,10 +1432,7 @@ mod tests {
         let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
         s.resolve();
         let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
-        assert!(
-            matches!(seen.as_slice(), [one] if one.starts_with("1 ") && one.contains("[Helm]")),
-            "{seen:?}"
-        );
+        assert_eq!(seen, ["1"]);
     }
 
     /// A values block with new XP: `PLAYER_XP_UPDATE`'s handler reads the new `UnitXP`, because
@@ -1527,11 +1454,6 @@ mod tests {
             ),
             crate::test_support::runs_before(
                 &mut headless,
-                crate::ui_honor::feed_honor,
-                crate::lanes::fire_in_order,
-            ),
-            crate::test_support::runs_before(
-                &mut headless,
                 crate::ui_party::feed_party,
                 crate::lanes::fire_in_order,
             ),
@@ -1545,17 +1467,8 @@ mod tests {
                 crate::ui_pet_stats::feed_pet_stats,
                 crate::lanes::fire_in_order,
             ),
-            // The inspected unit's slots, which the bridge's `UNIT_INVENTORY_CHANGED` repaints.
-            crate::test_support::runs_before(
-                &mut headless,
-                crate::ui_inspect::feed_inspect,
-                crate::lanes::fire_in_order,
-            ),
         ];
-        assert_eq!(
-            ahead, [true; 7],
-            "feed_units, char, honor, party, pet, pet stats, inspect"
-        );
+        assert_eq!(ahead, [true; 5], "feed_units, char, party, pet, pet stats");
 
         // In that order: the block lands, the push, the firing.
         let (mut app, me) = feed_world(
@@ -1686,38 +1599,6 @@ mod tests {
             app.update();
             assert_eq!(seen(&mut app), heard, "form {form}: the reload");
         }
-    }
-
-    /// `PLAYER_ENTERING_WORLD`'s handler reads the honor block, since the schedule pushes it ahead
-    /// of the unit feed that fires the cascade: `HonorFrame_Update(1)` reads the weekly values
-    /// only then (`HonorFrame.lua:10-11`).
-    #[test]
-    fn the_honor_block_is_pushed_before_the_world_enter_events() {
-        const SESSION_KILLS: u16 = 1250;
-        let mut headless = crate::game_plugins::schedule_tests::headless_client();
-        assert!(crate::test_support::runs_before(
-            &mut headless,
-            crate::ui_honor::feed_honor,
-            super::super::feed_units
-        ));
-
-        // In that order: the push, then the cascade.
-        let (mut app, _) = feed_world(
-            &[(SESSION_KILLS, 3)],
-            r#"SEEN = {}
-               local f = CreateFrame("Frame")
-               f:RegisterEvent("PLAYER_ENTERING_WORLD")
-               f:SetScript("OnEvent", function()
-                   table.insert(SEEN, event .. " " .. GetPVPSessionStats())
-               end)"#,
-        );
-        app.world_mut()
-            .run_system_once(crate::ui_honor::feed_honor)
-            .unwrap();
-        app.world_mut()
-            .run_system_once(super::super::feed_units)
-            .unwrap();
-        assert_eq!(seen(&mut app), ["PLAYER_ENTERING_WORLD 3"]);
     }
 
     /// The login in the server's order: the faction list lands before the player's create (vmangos
