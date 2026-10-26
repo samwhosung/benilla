@@ -1617,8 +1617,17 @@ mod tests {
         assert_eq!(joins(&rx), vec![STONE], "the clicked stone's own guid");
 
         // In a party led by someone else: the same click sends nothing.
-        app.world_mut().resource_mut::<GroupState>().in_group = true;
-        app.world_mut().resource_mut::<GroupState>().leader = MATE;
+        {
+            let mut group = app.world_mut().resource_mut::<GroupState>();
+            group.in_group = true;
+            group.leader = MATE;
+            group.members = vec![benilla_protocol::messages::GroupMemberEntry {
+                name: "Mate".into(),
+                guid: MATE,
+                status: 1,
+                flags: 0,
+            }];
+        }
         app.world_mut()
             .write_message(MeetingStoneUse { go_guid: STONE });
         app.update();
