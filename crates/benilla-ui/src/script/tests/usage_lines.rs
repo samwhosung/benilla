@@ -581,6 +581,51 @@ fn set_shadow_offset_raises_its_usage_line_on_a_font_and_a_simplehtml() {
     .unwrap();
 }
 
+/// FontString's own `SetShadowOffset` (`0x79e070`, gates `0x79e102`, `0x79e117`) and the EditBox
+/// and message-frame shims into `0x79f9c0` raise `Usage: %s:SetShadowOffset(x, y)` (`0x87c6e8`)
+/// for a coordinate `lua_isnumber` refuses, naming the receiver.
+#[test]
+fn set_shadow_offset_raises_its_usage_line_on_font_blocks() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame", "ShadowOwner")
+        ShadowFS = f:CreateFontString("ShadowFS")
+        ShadowAnonFS = f:CreateFontString()
+        ShadowBox = CreateFrame("EditBox", "ShadowBox")
+        ShadowMF = CreateFrame("MessageFrame", "ShadowMF")
+        ShadowSMF = CreateFrame("ScrollingMessageFrame", "ShadowSMF")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "ShadowFS:SetShadowOffset(nil, 1)",
+            "Usage: ShadowFS:SetShadowOffset(x, y)",
+        ),
+        (
+            "ShadowAnonFS:SetShadowOffset(1)",
+            "Usage: <unnamed>:SetShadowOffset(x, y)",
+        ),
+        (
+            "ShadowBox:SetShadowOffset(1, true)",
+            "Usage: ShadowBox:SetShadowOffset(x, y)",
+        ),
+        (
+            "ShadowMF:SetShadowOffset({}, 1)",
+            "Usage: ShadowMF:SetShadowOffset(x, y)",
+        ),
+        (
+            "ShadowSMF:SetShadowOffset('x', 1)",
+            "Usage: ShadowSMF:SetShadowOffset(x, y)",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(r#"ShadowFS:SetShadowOffset("2", -1)"#).unwrap();
+}
+
 /// `SortGuildRoster` tests argument 1 with `lua_isstring` (`0x4d1cb8`), so a number is its
 /// string, and anything else raises `Usgae: SortGuildRoster("type")` (`0x849bf0`, `0x4d1cc7`),
 /// the binary's spelling, with no call made.

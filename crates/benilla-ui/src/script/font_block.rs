@@ -458,11 +458,16 @@ pub(super) fn install(
             Ok(super::object::colour_values(c))
         })?,
     )?;
-    // SetShadowOffset(x, y): both required, else `Usage: %s:SetShadowOffset(x, y)` (`0x87c6e8`).
+    // SetShadowOffset(x, y): both must pass `lua_isnumber` (FontString `0x79e102`, `0x79e117`;
+    // the shared `0x79f9d7`, `0x79f9eb` of the EditBox and message frames), else
+    // `Usage: %s:SetShadowOffset(x, y)` (`0x87c6e8`) naming the object.
     m.set(
         "SetShadowOffset",
-        lua.create_function(move |lua, (this, x, y): (Table, f32, f32)| {
+        lua.create_function(move |lua, (this, x, y): (Table, Value, Value)| {
             let rh = resolve(lua, &this)?;
+            let line = "SetShadowOffset(x, y)";
+            let x = binding_abi::method_number(lua, &this, x, line)? as f32;
+            let y = binding_abi::method_number(lua, &this, y, line)? as f32;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
             let color = d.font_shadow.map_or(kind.unset_shadow(), |s| s.color);
