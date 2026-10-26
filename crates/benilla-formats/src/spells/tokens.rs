@@ -50,8 +50,8 @@ pub struct TokenContext<'a> {
     /// branch on. Asked only where a branch expands.
     pub gender: &'a dyn Fn() -> u8,
     /// The `$z` token: the home-bind area's name, from `SMSG_BINDPOINTUPDATE`'s area id through
-    /// `AreaTable.dbc`; `None` leaves the token raw. Asked only where a `$z` expands, so a caller
-    /// can tell which texts read the bind point.
+    /// `AreaTable.dbc`; `None` is the `HOME_INN` text (`507f3a`). Asked only where a `$z` expands,
+    /// so a caller can tell which texts read the bind point.
     pub home_area: &'a dyn Fn() -> Option<&'a str>,
     /// `GetText 0x703bf0`: a `GlobalStrings` template by key. `None` leaves the token raw.
     pub global: &'a dyn Fn(&str) -> Option<String>,
@@ -466,9 +466,12 @@ fn token_value(
             text(v.to_string(), f64::from(v))
         }
         'z' => {
-            // Player state, not spell data: the home-bind area name.
-            let name = (ctx.home_area)()?;
-            text(name.to_string(), 0.0)
+            // Player state, not spell data: the home-bind area name; a bind zone out of range or
+            // without an AreaTable row reads `HOME_INN` through GetText (`507f07`-`507f45`).
+            match (ctx.home_area)() {
+                Some(name) => text(name.to_string(), 0.0),
+                None => Some((keyed("HOME_INN", Vec::new()), 0.0)),
+            }
         }
         'c' | 'p' => {
             // `507dde`/`507ded`: the cost or the per-second cost of the token's record, through
@@ -741,6 +744,7 @@ mod tests {
                 "SPELL_DURATION_MIN" => "<%.2fmin>",
                 "INT_SPELL_POINTS_SPREAD_TEMPLATE" => "<%d..%d>",
                 "SPELL_POINTS_SPREAD_TEMPLATE" => "<%.1f to %.1f>",
+                "HOME_INN" => "<inn>",
                 _ => return None,
             }
             .into(),
@@ -1631,10 +1635,11 @@ mod tests {
             substitute("Returns you to $z.", &d, &c),
             "Returns you to Goldshire."
         );
+        // No bind area resolves: the `HOME_INN` text, never the raw token (`507f3a`).
         let unbound = ctx(&durations, &radii, &lookup);
         assert_eq!(
             substitute("Returns you to $z.", &d, &unbound),
-            "Returns you to $z."
+            "Returns you to <inn>."
         );
     }
 

@@ -246,6 +246,12 @@ impl super::UiScript {
         self.take_calls_like(&super::ScriptCall::OpeningCinematic) as u32
     }
 
+    /// The bind location's name as `GetBindLocation` has it pushed: `None` while the bind zone has
+    /// no AreaTable row, which the `$z` token reads as the `HOME_INN` text.
+    pub fn bind_location(&self) -> Option<String> {
+        self.model_ref().bind_location.clone()
+    }
+
     /// Push the bind location's name, resolved from `SMSG_BINDPOINTUPDATE`'s AreaTable id through
     /// the catalog the hearthstone's `$z` uses, so the two agree; empty until the packet lands.
     pub fn set_bind_location(&mut self, area_name: &str) {

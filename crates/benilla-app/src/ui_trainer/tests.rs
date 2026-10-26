@@ -26,6 +26,7 @@ fn probe_strings(key: &str) -> Option<String> {
         "TRADESKILL_SERVICE_LEARN" => Some("<LEARN>".into()),
         "KNOWN_TALENTS_HEADER" => Some("<KNOWN>".into()),
         "INCREASE_POTENTIAL" => Some("Increases potential in %s by %d".into()),
+        "HOME_INN" => Some("<INN>".into()),
         _ => None,
     }
 }
@@ -878,8 +879,8 @@ fn service_description_expands_against_the_pet_for_a_learn_pet_row() {
     });
 }
 
-/// The `$z` token: the bind point's area name (`AreaTable.dbc`), and raw where no bind point has
-/// arrived, as the item and tooltip feeds' `$z` behaves.
+/// The `$z` token: the bind point's area name (`AreaTable.dbc`), and the `HOME_INN` text where no
+/// bind point has arrived (`0x507f3a`), as the item and tooltip feeds' `$z` behaves.
 #[test]
 fn service_description_expands_z_to_the_bind_area() {
     let d = SpellDisplay {
@@ -890,7 +891,7 @@ fn service_description_expands_z_to_the_bind_area() {
     let deps = Deps::new();
     for (home, want) in [
         (Some("Razor Hill"), "Returns you to Razor Hill."),
-        (None, "Returns you to $z."),
+        (None, "Returns you to <INN>."),
     ] {
         with_text(&spells, 0, 0, home, |text| {
             assert_eq!(

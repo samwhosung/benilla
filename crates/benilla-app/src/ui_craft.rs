@@ -285,6 +285,10 @@ fn feed_craft(
                 .map(|l| l.name.clone())
                 .unwrap_or_else(|| format!("Skill {line}"));
             let global = |key: &str| benilla_ui::strings::global(script.lua(), key);
+            // The `$z` token: the bind area the items feed pushed for `GetBindLocation`, so the
+            // two agree (`0x507f07`-`0x507f45`, `0x48dae0`).
+            let bind = script.bind_location();
+            let home_area: Option<&str> = bind.as_deref();
             // The player's level for a spell and its cost (`0x6e3130`, `0x6e31b0`, `0x6e3300`).
             let skills = crate::spell::PlayerSkills {
                 lines: Some(&skill_lines.catalog),
@@ -323,7 +327,7 @@ fn feed_craft(
                 },
                 unmodified_points: false,
                 gender: &|| store.0.unit_gender().unwrap_or(0),
-                home_area: &|| None,
+                home_area: &|| home_area,
                 global: &global,
                 printf: &crate::ui_script::token_printf,
             };
@@ -765,6 +769,77 @@ mod tests {
         assert_eq!(read(17, 18), (2, true), "worn copies");
         assert_eq!(read(81, 82), (2, true), "the keyring");
         assert_eq!(read(39, 40), (0, false), "the bank is outside mask 0");
+    }
+
+    /// A craft description's `$z` reads the bind area like every spell text (`0x507f07`-
+    /// `0x507f45`): the area's name once the bind point resolves, the `HOME_INN` text before.
+    #[test]
+    fn a_craft_description_names_the_bind_area_or_the_inn() {
+        const SPELL: u32 = 7_001;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.insert(SPELL);
+        actions.profession_order.push(SPELL);
+        actions.craft_order.push(SPELL);
+        app.init_resource::<CraftOpen>()
+            .init_resource::<CraftItemWaits>()
+            .insert_resource(actions)
+            .init_resource::<crate::spell::SpellModifiers>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(
+                        SPELL,
+                        SpellDisplay {
+                            name: "Enchant".into(),
+                            cast_ui: 3,
+                            description: Some("Returns you to $z.".into()),
+                            ..Default::default()
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities([(
+                    SPELL,
+                    benilla_formats::SlaInfo {
+                        skill_id: 333,
+                        req_skill_value: 1,
+                        forward_spell_id: 0,
+                        trivial_low: 1,
+                        trivial_high: 2,
+                    },
+                )]),
+            });
+        app.world_mut()
+            .spawn((SelfPlayer, ObjectStore(Default::default())));
+        let script = UiScript::new().unwrap();
+        script.run("HOME_INN = 'your inn'").unwrap();
+        app.insert_non_send_resource(script);
+        app.add_systems(Update, feed_craft);
+        {
+            let mut open = app.world_mut().resource_mut::<CraftOpen>();
+            open.line = Some(333);
+            open.craft_type = 3;
+        }
+        let described = |app: &mut App| {
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<String>("return GetCraftDescription(1)")
+                .unwrap()
+        };
+        assert_eq!(described(&mut app), "Returns you to your inn.");
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_bind_location(Some("Elwynn Forest"));
+        assert_eq!(described(&mut app), "Returns you to Elwynn Forest.");
     }
 
     #[test]
