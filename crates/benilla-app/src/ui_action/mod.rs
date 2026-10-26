@@ -342,6 +342,22 @@ const SPELL_EFFECT_SKIN_PLAYER_CORPSE: u32 = 0x74;
 /// The effect latched into `[0xcecad8]` at learn time (`0x5e9e42`); only Feed Pet 6991 has it.
 const SPELL_EFFECT_FEED_PET: u32 = 0x65;
 
+/// The latch `0x4b25e0` holds for `effect`: the last known spell in id order whose `Effect[0]` is
+/// it, as each learned rank overwrites the latch and a rank chain ascends by id (Skinning 8613,
+/// 8617, 8618, 10768).
+pub(crate) fn latched_ability(
+    actions: &PlayerActions,
+    spells: &Spells,
+    effect: u32,
+) -> Option<u32> {
+    actions.spells.iter().copied().rfind(|&id| {
+        spells
+            .catalog
+            .get(id)
+            .is_some_and(|d| d.effects[0] == effect)
+    })
+}
+
 /// Re-derives [`LearnedAbilities`] whenever the book changes, standing in for learn-time writes.
 pub(crate) fn track_learned_abilities(
     actions: Res<PlayerActions>,
@@ -352,16 +368,7 @@ pub(crate) fn track_learned_abilities(
     if !actions.is_changed() && !spells.is_changed() {
         return;
     }
-    // The last match in id order: each learned rank overwrites the reference's latch, and a rank
-    // chain ascends by id (Skinning 8613, 8617, 8618, 10768).
-    let last_with = |effect: u32| {
-        actions.spells.iter().copied().rfind(|&id| {
-            spells
-                .catalog
-                .get(id)
-                .is_some_and(|d| d.effects[0] == effect)
-        })
-    };
+    let last_with = |effect: u32| latched_ability(&actions, &spells, effect);
     let (skinning, skin_player_corpse, feed_pet) = (
         last_with(benilla_formats::SPELL_EFFECT_SKINNING),
         last_with(SPELL_EFFECT_SKIN_PLAYER_CORPSE),

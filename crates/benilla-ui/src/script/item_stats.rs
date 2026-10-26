@@ -222,26 +222,36 @@ pub(super) fn gated_quality(quality: Option<u32>, inventory_type: u32) -> i64 {
 
 /// [`item_usable`] by item entry: entry 0 and a template not yet answered are usable, as the
 /// merchant getter skips an uncached record (`0x4fb298`).
-pub(super) fn item_usable_by_id(model: &super::Model, item_id: u32) -> bool {
-    item_refusal_by_id(model, item_id).is_none()
+pub(super) fn item_usable_by_id(lua: &Lua, model: &super::Model, item_id: u32) -> bool {
+    item_refusal_by_id(lua, model, item_id).is_none()
 }
 
-/// [`item_refusal`] by item entry, with the same fail-open for entry 0 and an unanswered template.
-pub(super) fn item_refusal_by_id(model: &super::Model, item_id: u32) -> Option<&'static str> {
+/// [`item_refusal`] by item entry, with the same fail-open for entry 0 and an unanswered template,
+/// against the player as the call runs.
+pub(super) fn item_refusal_by_id(
+    lua: &Lua,
+    model: &super::Model,
+    item_id: u32,
+) -> Option<&'static str> {
     if item_id == 0 {
         return None;
     }
-    model
-        .item_templates
-        .get(&item_id)
-        .and_then(|v| item_refusal(v, &model.player_req, |id| model.known_spells.contains(&id)))
+    let v = model.item_templates.get(&item_id)?;
+    let req = super::requirements::player_req(lua, model);
+    // With no active player every predicate caller reads the item usable (`0x4fb293`).
+    if matches!(req, super::requirements::ReqNow::NoPlayer) {
+        return None;
+    }
+    item_refusal(v, &req, |id| {
+        super::requirements::knows_spell(lua, model, id)
+    })
 }
 
 /// The client's item-usable predicate `0x5ea930`, whose answer the merchant getters push as
 /// `isUsable` (`0x4fb2a3`, `0x4fb4f7`).
 pub fn item_usable(
     v: &ItemTemplateView,
-    req: &PlayerReqState,
+    req: &dyn super::ReqRead,
     knows_spell: impl Fn(u32) -> bool,
 ) -> bool {
     item_refusal(v, req, knows_spell).is_none()
@@ -257,31 +267,32 @@ pub fn item_usable(
 /// unpushed state (level 0) declines to judge, answering usable.
 pub fn item_refusal(
     v: &ItemTemplateView,
-    req: &PlayerReqState,
+    req: &dyn super::ReqRead,
     knows_spell: impl Fn(u32) -> bool,
 ) -> Option<&'static str> {
     const CANT_USE: Option<&str> = Some("ERR_CANT_USE_ITEM");
-    if req.level == 0 {
+    let head = req.head();
+    if head.level == 0 {
         return None;
     }
-    if v.required_level > req.level {
+    if v.required_level > head.level {
         return CANT_USE;
     }
-    if req.class_id == 0 || v.allowable_class as u32 & (1 << (req.class_id - 1)) == 0 {
+    if head.class_id == 0 || v.allowable_class as u32 & (1 << (head.class_id - 1)) == 0 {
         return CANT_USE;
     }
-    if req.race_id == 0 || v.allowable_race as u32 & (1 << (req.race_id - 1)) == 0 {
+    if head.race_id == 0 || v.allowable_race as u32 & (1 << (head.race_id - 1)) == 0 {
         return CANT_USE;
     }
-    if let Some(&mask) = req.proficiency.get(&v.class) {
+    if let Some(mask) = req.proficiency(v.class) {
         if mask & (1 << v.subclass) == 0 {
             return Some("ERR_PROFICIENCY_NEEDED");
         }
     }
     if v.required_skill != 0 {
-        match req.skills.get(&v.required_skill) {
+        match req.skill(v.required_skill) {
             None => return CANT_USE,
-            Some(&val) => {
+            Some(val) => {
                 if val < v.required_skill_rank {
                     return CANT_USE;
                 }
@@ -291,21 +302,16 @@ pub fn item_refusal(
     if v.required_spell != 0 && !v.knows_required_spell(knows_spell) {
         return CANT_USE;
     }
-    if v.required_honor_rank != 0 && u32::from(req.honor_rank) < v.required_honor_rank {
+    if v.required_honor_rank != 0 && u32::from(head.honor_rank) < v.required_honor_rank {
         return CANT_USE;
     }
-    if v.required_city_rank != 0 && req.pvp_medals & medal_bit(v.required_city_rank) == 0 {
+    if v.required_city_rank != 0 && head.pvp_medals & medal_bit(v.required_city_rank) == 0 {
         return CANT_USE;
     }
-    if v.required_rep_faction != 0 {
-        let rank = req
-            .rep_ranks
-            .get(&v.required_rep_faction)
-            .copied()
-            .unwrap_or(0);
-        if u32::from(rank) < v.required_rep_rank {
-            return CANT_USE;
-        }
+    if v.required_rep_faction != 0
+        && u32::from(req.rep_rank(v.required_rep_faction)) < v.required_rep_rank
+    {
+        return CANT_USE;
     }
     None
 }
@@ -330,6 +336,46 @@ pub struct ItemSetView {
     pub required_skill: u32,
     pub required_skill_rank: u32,
     pub required_skill_name: Option<String>,
+}
+
+/// The question: set `0`'s block as the call runs, built off `ItemSet.dbc`, the item-name cache
+/// (`0x52df5a` on `0xc0e2dc`, only read) and the bonuses' descriptions against the active player;
+/// `None` for a set with no row.
+pub struct ItemSetQuery(pub u32);
+
+/// A set's block as the host builds it: its view, whose bonuses are left empty, and the bonuses'
+/// texts, each template read from the VM's strings where the block shows (`0x5075f0`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiveItemSet {
+    pub view: ItemSetView,
+    pub bonuses: Vec<(u32, super::TooltipText)>,
+}
+
+impl super::live::LiveQuery for ItemSetQuery {
+    type Answer = Option<LiveItemSet>;
+}
+
+/// Set `id`'s block now: the host's, its bonuses read from the VM's strings, a description that
+/// comes out empty dropping its line (`0x52da29`), `Some(None)` for no row; `None` with no host
+/// lent or no active player held, where the VM's copy answers, which a harness or a capture
+/// seats.
+pub(crate) fn live_item_set(lua: &Lua, id: u32) -> Option<Option<ItemSetView>> {
+    let live = super::live::ask(lua, &ItemSetQuery(id))?;
+    Some(live.map(|set| {
+        ItemSetView {
+            bonuses: set
+                .bonuses
+                .iter()
+                .filter_map(|(n, text)| Some((*n, text.line(lua)?)))
+                .collect(),
+            ..set.view
+        }
+    }))
+}
+
+/// Set `id`'s block now ([`live_item_set`]), else the VM's copy.
+pub(crate) fn item_set(lua: &Lua, model: &Model, id: u32) -> Option<ItemSetView> {
+    live_item_set(lua, id).unwrap_or_else(|| model.item_sets.get(&id).cloned())
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -409,14 +455,24 @@ impl super::UiScript {
         self.model_mut().item_stat_asks.drain().collect()
     }
 
-    /// Drains the guids an item build missed in the name cache: a creator or a giver.
+    /// The guids of the creators and givers the item builds a harness's VM kept the calls of
+    /// ([`Self::keep_calls`]) missed in the name cache, in ask order.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn take_item_name_asks(&mut self) -> Vec<u64> {
-        self.model_mut().item_name_asks.drain().collect()
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::ItemBuildName(guid)) => Some(*guid),
+            _ => None,
+        })
     }
 
-    /// Drains the charter item guids an item build missed the petition record or owner of.
+    /// The charter item guids whose petition record or owner the item builds a harness's VM kept
+    /// the calls of missed, in ask order.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn take_petition_asks(&mut self) -> Vec<u64> {
-        self.model_mut().petition_asks.drain().collect()
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::Petition(item)) => Some(*item),
+            _ => None,
+        })
     }
 
     /// Drains the ids `GetItemInfo` read that the store did not hold, which the app serves from
@@ -425,16 +481,20 @@ impl super::UiScript {
         self.model_mut().item_stat_reads.drain().collect()
     }
 
-    /// Stores or replaces a set's view, re-pushed as member names resolve.
+    /// Seats a set's view, which the set block reads with no host lent; a test's stand-in for the
+    /// live read ([`ItemSetQuery`]).
     pub fn set_item_set(&mut self, set_id: u32, view: ItemSetView) {
-        let mut model = self.model_mut();
-        model.item_set_asks.remove(&set_id);
-        model.item_sets.insert(set_id, view);
+        self.model_mut().item_sets.insert(set_id, view);
     }
 
-    /// Drains the set ids the renderer asked for that the store did not hold.
-    pub fn take_item_set_asks(&mut self) -> Vec<u32> {
-        self.model_mut().item_set_asks.drain().collect()
+    /// The member entries the set blocks a harness's VM kept the calls of
+    /// ([`Self::keep_calls`]) asked the item-name cache for, in ask order.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn take_item_name_record_asks(&mut self) -> Vec<u32> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::RecordAsk(super::RecordAsk::ItemName(entry)) => Some(*entry),
+            _ => None,
+        })
     }
 
     /// Pushes the whole `ItemRandomProperties` table once, at load: a clicked tooltip cannot
@@ -452,13 +512,14 @@ impl super::UiScript {
         self.model_mut().enchant_names = names;
     }
 
-    /// Pushes every spell the player knows (`SMSG_INITIAL_SPELLS` and its updates), the set the
-    /// known-recipe line asks (`0x60c740`'s bits at `0xb710fc`), passives and recipes included.
+    /// Seats every spell the player knows, the set the known-recipe line asks (`0x60c740`'s bits
+    /// at `0xb710fc`), passives and recipes included: what the reads with no host lent find.
     pub fn set_known_spells(&mut self, spells: HashSet<u32>) {
         self.model_mut().known_spells = spells;
     }
 
-    /// Pushes the player state the red lines compare against.
+    /// Seats the player state the red lines and the usable gate compare against: what the reads
+    /// with no host lent find, the app's own inside a call's apply among them.
     pub fn set_player_req_state(&mut self, state: PlayerReqState) {
         self.model_mut().player_req = state;
     }

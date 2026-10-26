@@ -583,7 +583,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .as_ref()
                         .and_then(|t| crate::script::unit::view(lua, &model, t))
                         .map(std::borrow::Cow::into_owned),
-                    model.player_req.level,
+                    crate::script::requirements::player_head(lua, &model).map_or(0, |h| h.level),
                 )
             };
             let Some(mut u) = unit.filter(|u| u.has_object) else {

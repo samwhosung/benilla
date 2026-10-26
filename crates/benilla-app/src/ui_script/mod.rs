@@ -833,13 +833,9 @@ pub(crate) fn demo_unit_feed(
                 ..Default::default()
             }),
         );
-        // The combo dots need a rogue and banked points, seeded only for `ui-combopoints`.
+        // The combo dots need banked points, seeded only for `ui-combopoints`, whose fixture holds
+        // a rogue player.
         if std::env::var("WOW_CAPTURE").as_deref() == Ok("ui-combopoints") {
-            script.set_player_req_state(benilla_ui::script::PlayerReqState {
-                level: 12,
-                class_id: 4, // rogue
-                ..Default::default()
-            });
             script.set_combo_points(4, DEMO_TARGET_GUID);
             script.fire_event("PLAYER_COMBO_POINTS", vec![]);
         }

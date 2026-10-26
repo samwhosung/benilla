@@ -956,14 +956,6 @@ pub(crate) struct Model {
     pub(crate) item_stat_reads: HashSet<u32>,
     /// Set id to its tooltip set block (`0x854b1c`), and the misses asked for.
     pub(crate) item_sets: HashMap<u32, super::ItemSetView>,
-    pub(crate) item_set_asks: HashSet<u32>,
-    /// Guids an item build looked up in the name cache and missed, for the app to ask: the
-    /// creator's and the giver's lookups pass a callback (`0x52e204`, `0x52e29d`) at every build,
-    /// and a hovered bag or paper-doll slot's `OnUpdate` builds again each frame.
-    pub(crate) item_name_asks: HashSet<u64>,
-    /// Charter item guids whose build missed the petition record or its owner's name, for the
-    /// app to ask: both lookups pass a callback (`0x52b93b`, `0x52b9d2`) at every build.
-    pub(crate) petition_asks: HashSet<u64>,
     /// `ItemRandomProperties` id to its view, pushed whole at startup: a clicked tooltip cannot
     /// repaint on a late answer. The reference reads its loaded store `0xc0dbd4` (`0x52c991`).
     pub(crate) random_properties: HashMap<u32, super::RandomPropertyView>,
@@ -1676,9 +1668,6 @@ impl Model {
             quest_log_abandon_mark: 0,
             item_templates: HashMap::new(),
             item_sets: HashMap::new(),
-            item_set_asks: HashSet::new(),
-            item_name_asks: HashSet::new(),
-            petition_asks: HashSet::new(),
             random_properties: HashMap::new(),
             enchant_names: HashMap::new(),
             known_spells: HashSet::new(),

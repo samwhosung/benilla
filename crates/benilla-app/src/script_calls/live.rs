@@ -118,6 +118,10 @@ live_reads! {
         petition: crate::ui_petition::PetitionLive<'static, 'static>,
         /// The pet bar, the pet it names, its stat block, its menu and its book.
         pet: crate::ui_pet::PetLive<'static, 'static>,
+        /// The requirement state, the known-spell list and the lock openers an item is judged by.
+        requirements: crate::ui_items::RequirementsLive<'static, 'static>,
+        /// The item set blocks: the set table, the member names and the bonuses.
+        item_sets: crate::ui_items::ItemSetLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

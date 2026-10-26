@@ -1585,7 +1585,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                             .is_some_and(|t| t.inventory_type != 0);
                         let quality = if worn { quality as i32 } else { -1 };
                         // `isUsable` through the item-usable predicate (`0x4e0c83`, `0x4e0e73`).
-                        let usable = super::item_stats::item_usable_by_id(&model, id);
+                        let usable = super::item_stats::item_usable_by_id(lua, &model, id);
                         Some((name, quality, icon, count, usable))
                     })
                 };

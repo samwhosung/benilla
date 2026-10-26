@@ -392,7 +392,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let item = index.checked_sub(1).and_then(|n| row(lua, &model, n));
                 let usable = item
                     .as_ref()
-                    .is_none_or(|it| super::item_stats::item_usable_by_id(&model, it.item_id));
+                    .is_none_or(|it| super::item_stats::item_usable_by_id(lua, &model, it.item_id));
                 (item, usable)
             };
             let Some(it) = item else {
@@ -576,7 +576,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .and_then(|n| buyback_row(lua, &model, n));
                 let usable = item
                     .as_ref()
-                    .is_none_or(|it| super::item_stats::item_usable_by_id(&model, it.item_id));
+                    .is_none_or(|it| super::item_stats::item_usable_by_id(lua, &model, it.item_id));
                 (item, usable)
             };
             let Some(it) = item else {

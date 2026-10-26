@@ -8,7 +8,7 @@
 use mlua::{Lua, Table};
 
 use crate::script::tooltip::{append_line, duration_text, plural_template};
-use crate::script::{ItemTemplateView, Model};
+use crate::script::{ItemTemplateView, Model, ReqRead};
 use crate::strings::{fill, Arg};
 
 use super::build::{note_miss, CacheWait};
@@ -220,14 +220,15 @@ pub(super) fn render_view_flagged(
     let (req, known_spell, taught_known, set_view, equipped, rank_title) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let pet_slots = &pet_book.as_ref().unwrap_or(&model.pet_book).slots;
-        let known =
-            v.required_spell != 0 && v.knows_required_spell(|id| model.known_spells.contains(&id));
+        // The known-spell list as the call runs (`0x60c740`).
+        let knows = |id| crate::script::requirements::knows_spell(lua, &model, id);
+        let known = v.required_spell != 0 && v.knows_required_spell(knows);
         // The first slot's taught spell, or a higher rank of it, known to the player, or to the
         // pet for a pet-target teach (`0x52d54f`..`0x52d5bb`): the always-red ITEM_SPELL_KNOWN.
         let taught = v.teaches.as_ref().is_some_and(|t| {
             t.ranks.iter().any(|id| match t.pet {
                 true => pet_slots.iter().any(|s| s.spell_id == *id),
-                false => model.known_spells.contains(id),
+                false => knows(*id),
             })
         });
         // The required rank's title for the player's side and gender (`0x5efe60` on the active
@@ -237,17 +238,23 @@ pub(super) fn render_view_flagged(
                 .map_or((0, false), |u| (u.pvp_team, u.sex == 3));
             (format!("PVP_RANK_{}_{side}", v.required_honor_rank), female)
         });
-        // The set view and the equipped ids the set block counts. A miss records the ask, and a
-        // member still unnamed skips its line (`0x52df5a`); either waits for its answer.
+        // The set view, read as the call runs, and the equipped ids the set block counts. A member
+        // still unnamed skips its line (`0x52df5a`) and waits for its answer; with no host lent, a
+        // set the VM's copy lacks waits for its push.
         let set_view = (v.item_set != 0)
             .then(|| {
-                let view = model.item_sets.get(&v.item_set).cloned();
-                match &view {
+                let view = match crate::script::item_stats::live_item_set(lua, v.item_set) {
+                    Some(view) => view,
                     None => {
-                        model.item_set_asks.insert(v.item_set);
-                        note_miss(&mut model, CacheWait::Set(v.item_set));
+                        let view = model.item_sets.get(&v.item_set).cloned();
+                        if view.is_none() {
+                            note_miss(&mut model, CacheWait::Set(v.item_set));
+                        }
+                        view
                     }
-                    // One item-name ask per member still unnamed (`0x52df4b`).
+                };
+                match &view {
+                    None => {}
                     Some(view) => {
                         for &(item, _) in view.members.iter().filter(|(_, n)| n.is_none()) {
                             let set = v.item_set;
@@ -265,7 +272,7 @@ pub(super) fn render_view_flagged(
             .map(|s| s.item_id)
             .collect();
         (
-            model.player_req.clone(),
+            crate::script::requirements::player_req(lua, &model),
             known,
             taught,
             set_view,
@@ -320,9 +327,12 @@ pub(super) fn render_view_flagged(
         };
         if let Some(wait) = wait {
             let ends = matches!(wait, CacheWait::Petition(_));
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.petition_asks.insert(i.guid);
-            note_miss(&mut model, wait);
+            note_miss(
+                &mut lua.app_data_mut::<Model>().expect("model app_data"),
+                wait,
+            );
+            // Asked inside the build, as both lookups pass the callback (`0x52b93b`, `0x52b9d2`).
+            crate::script::calls::ask(lua, crate::script::RecordAsk::Petition(i.guid))?;
             if ends {
                 return Ok(None);
             }
@@ -433,7 +443,7 @@ pub(super) fn render_view_flagged(
         };
         let mut left_red = false;
         let mut right_red = false;
-        if let Some(&mask) = req.proficiency.get(&v.class) {
+        if let Some(mask) = req.proficiency(v.class) {
             if mask & (1 << v.subclass) == 0 {
                 let alt_ok =
                     v.class == 2 && v.proficiency_alt.is_some_and(|a| mask & (1 << a) != 0);
@@ -444,7 +454,7 @@ pub(super) fn render_view_flagged(
                 }
             }
         }
-        if v.inventory_type == 22 && !req.can_dual_wield {
+        if v.inventory_type == 22 && !req.can_dual_wield() {
             left_red = true;
         }
         match (slot, ty) {
@@ -683,7 +693,8 @@ pub(super) fn render_view_flagged(
             .map(|&(_, n)| n)
             .collect();
         if !list.is_empty() {
-            let ok = req.class_id > 0 && v.allowable_class & (1 << (req.class_id - 1)) != 0;
+            let class = req.head().class_id;
+            let ok = class > 0 && v.allowable_class & (1 << (class - 1)) != 0;
             keyed(
                 "ITEM_CLASSES_ALLOWED",
                 &[Arg::S(&list.join(", "))],
@@ -700,7 +711,8 @@ pub(super) fn render_view_flagged(
             .map(|&(_, n)| n)
             .collect();
         if !list.is_empty() {
-            let ok = req.race_id > 0 && v.allowable_race & (1 << (req.race_id - 1)) != 0;
+            let race = req.head().race_id;
+            let ok = race > 0 && v.allowable_race & (1 << (race - 1)) != 0;
             keyed(
                 "ITEM_RACES_ALLOWED",
                 &[Arg::S(&list.join(", "))],
@@ -714,14 +726,14 @@ pub(super) fn render_view_flagged(
         keyed(
             "ITEM_MIN_LEVEL",
             &[Arg::D(v.required_level.into())],
-            req_color(req.level >= v.required_level),
+            req_color(req.head().level >= v.required_level),
             false,
         )?;
     }
     // ITEM_MIN_SKILL with a rank, ITEM_REQ_SKILL without (`0x52d34e`, `0x52d355`); the required
     // spell takes ITEM_REQ_SKILL too (`0x52d650`).
     if let Some(skill) = &v.required_skill_name {
-        let have = req.skills.get(&v.required_skill).copied().unwrap_or(0);
+        let have = req.skill(v.required_skill).unwrap_or(0);
         let color = req_color(have >= v.required_skill_rank.max(1));
         if v.required_skill_rank > 0 {
             let args = [Arg::S(skill), Arg::D(v.required_skill_rank.into())];
@@ -753,21 +765,18 @@ pub(super) fn render_view_flagged(
             .flatten()
             .filter(|t| !t.is_empty());
         let title = gendered.or_else(|| get(key)).unwrap_or_default();
-        let ok = u32::from(req.honor_rank) >= v.required_honor_rank;
+        let ok = u32::from(req.head().honor_rank) >= v.required_honor_rank;
         keyed("ITEM_REQ_SKILL", &[Arg::S(&title)], req_color(ok), false)?;
     }
     if v.required_city_rank != 0 {
         let medal = get(&format!("PVP_MEDAL{}", v.required_city_rank)).unwrap_or_default();
-        let ok = req.pvp_medals & crate::script::item_stats::medal_bit(v.required_city_rank) != 0;
+        let medals = req.head().pvp_medals;
+        let ok = medals & crate::script::item_stats::medal_bit(v.required_city_rank) != 0;
         keyed("ITEM_REQ_SKILL", &[Arg::S(&medal)], req_color(ok), false)?;
     }
     if let Some(rep) = &v.required_rep_line {
         // Red (`0xc0d390`) below the required rank (`[+0x58]`); an unfed faction reads as unmet.
-        let rank = req
-            .rep_ranks
-            .get(&v.required_rep_faction)
-            .copied()
-            .unwrap_or(0);
+        let rank = req.rep_rank(v.required_rep_faction);
         add((
             rep.clone(),
             req_color(u32::from(rank) >= v.required_rep_rank),
@@ -829,7 +838,7 @@ pub(super) fn render_view_flagged(
             false,
         )?;
         let skill_met = set.required_skill == 0 || {
-            let have = req.skills.get(&set.required_skill).copied().unwrap_or(0);
+            let have = req.skill(set.required_skill).unwrap_or(0);
             have >= set.required_skill_rank
         };
         if let Some(skill) = &set.required_skill_name {
@@ -843,7 +852,12 @@ pub(super) fn render_view_flagged(
         }
         // The two-space indent is the literal `"  %s"` (`0x854b14`), not a key.
         for (id, name) in &set.members {
-            let Some(name) = name else { continue };
+            // A member still unnamed is asked where its line would go, inside the build
+            // (`0x52df4b`), and skipped (`0x52df5a`).
+            let Some(name) = name else {
+                crate::script::calls::ask(lua, crate::script::RecordAsk::ItemName(*id))?;
+                continue;
+            };
             let color = if equipped.contains(id) { CREAM } else { GRAY };
             add((format!("  {name}"), color))?;
         }
@@ -895,9 +909,12 @@ pub(super) fn render_view_flagged(
         false => (&inst.creator, inst.creator_guid),
     };
     if asked.is_none() && guid != 0 {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        model.item_name_asks.insert(guid);
-        note_miss(&mut model, CacheWait::Name(guid));
+        note_miss(
+            &mut lua.app_data_mut::<Model>().expect("model app_data"),
+            CacheWait::Name(guid),
+        );
+        // Asked inside the build, with the callback (`0x52e204`, `0x52e29d`).
+        crate::script::calls::ask(lua, crate::script::RecordAsk::ItemBuildName(guid))?;
     }
     if inst.wrapped() {
         if let Some(name) = &inst.gift_creator {
@@ -975,7 +992,8 @@ fn lock_lines(lua: &Lua, v: &ItemTemplateView, inst: Option<&ItemInstance>) -> O
         return None;
     }
     let slots = &model.lock_rows[&row];
-    let openers = model.lock_openers.as_ref();
+    let openers = crate::script::lock_check::lock_openers(lua, model);
+    let openers = openers.as_deref();
     let color = match check_lock(slots, v.item_level, openers) {
         LockCheck::Closed => RED,
         LockCheck::Open => LOCK_GREEN,

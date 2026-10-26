@@ -239,10 +239,15 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
 const HOST_HELD_UNREAD: &[&str] = &[
     "::creature_anim::AttackStopInFlight",
     "::creature_anim::PlaySeq",
+    // Read through the host by the set block, and quiet: a member's answer rebuilds the tooltip
+    // waiting on it through the build's own wait, read as the tick runs.
+    "::item_names::ItemNames",
     "::items::Items",
     "::net::GuidIndex",
     // Read by the trainer's description getters through the host, and quiet.
     "::net::HomeBind",
+    // Read through the host by the item requirement getters, and quiet: no feed fires off them.
+    "::net::Proficiencies",
     "::net::SelfGuid",
     // Read by the quest log getters through the host (`QuestClock`), and quiet: the time
     // response's `QUEST_LOG_UPDATE` fires on the quest log lane.
@@ -435,15 +440,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_petition::PetitionRecords"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    ("::ui_items::feed::feed_item_sets", &["item_names::ItemNames", "items::Items",
-        "net::ObjectStore", "spell::mods::SpellModifiers"]),
-    ("::ui_items::feed::ask_item_build_lookups", &["items::Countdowns", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "ui_petition::PetitionRecords"]),
-    ("::ui_items::feed::feed_player_req", &["net::ObjectStore", "net::Proficiencies",
-        "net::reputations::Reputations", "ui_action::LearnedAbilities",
-        "ui_action::PlayerActions"]),
-    ("::ui_items::lock_openers::feed_lock_openers", &["items::Countdowns", "net::GuidIndex",
-        "net::ObjectStore", "ui_action::PlayerActions"]),
     ("::ui_gossip::feed_gossip", &["items::Countdowns", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_gossip::GossipState", "world_state::WorldStates"]),
     // The purse the trade and mail verbs read off the VM; `GetMoney` reads it through the host.
@@ -643,6 +639,11 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The host's two sinks that raise no event.
     "::sound::message::MessageSounds",
     "::creature_anim::edits::UnitEdits",
+    // The proficiency masks the call host's requirement getters read (`0x5ea930`).
+    "::net::Proficiencies",
+    // `ItemSet.dbc` and the item-name cache the call host's set block reads (`0x52df5a`).
+    "::ItemSets",
+    "::ItemNames",
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.

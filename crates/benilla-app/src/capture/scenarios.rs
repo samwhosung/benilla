@@ -747,8 +747,8 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::Bare),
     },
-    // `demo_unit_feed` seeds a rogue with four points on the wolf for this scenario only; the demo
-    // player is otherwise a warrior, which lights no dot.
+    // The fixture holds a rogue player and `demo_unit_feed` banks four points on the wolf, for this
+    // scenario only; the demo player is otherwise a warrior, which lights no dot.
     Scenario {
         name: "ui-combopoints",
         map: Some(MAP_AZEROTH),

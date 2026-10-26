@@ -2,9 +2,10 @@
 //! an item's lock, and by what. It colours the `LOCKED` line (`0x52be0c`..`0x52be3d`) and decides
 //! the `LOCKED_WITH_SPELL_KNOWN` line under it (`0x52be98`).
 //!
-//! The engine reads no DBCs, so the app pushes the `Lock.dbc` rows ([`LockSlotView`]) once, the
-//! `LockType.dbc` names once and the player's means of opening ([`LockOpeners`]) on change; the
-//! walk is here.
+//! The engine reads no DBCs, so the app pushes the `Lock.dbc` rows ([`LockSlotView`]) once and the
+//! `LockType.dbc` names once; the player's means of opening ([`LockOpeners`]) are read through the
+//! lent host at the call ([`LockOpenersQuery`]), as the walk reads the opener list and the
+//! inventory as it runs. The walk is here.
 
 use std::collections::HashSet;
 
@@ -42,6 +43,26 @@ pub struct LockOpeners {
     /// The entries of the items the player carries, equipment, bags and keyring (`0x622270` at
     /// mode 0, as the walk asks it at `0x5da734`).
     pub held: HashSet<u32>,
+}
+
+/// The question: the active player's [`LockOpeners`] as the call runs, the opener list `0xb700b8`
+/// and the items the walk finds (`0x622270`); answered `None` with no active player held, where the
+/// walk opens everything (`0x5da60b`), and declined in a harness without the opener list.
+pub struct LockOpenersQuery;
+
+impl super::live::LiveQuery for LockOpenersQuery {
+    type Answer = Option<LockOpeners>;
+}
+
+/// The player's means of opening now: the host's, else the VM's copy, which only a test sets.
+pub(in crate::script) fn lock_openers<'a>(
+    lua: &mlua::Lua,
+    model: &'a super::Model,
+) -> Option<std::borrow::Cow<'a, LockOpeners>> {
+    match super::live::ask(lua, &LockOpenersQuery) {
+        Some(live) => live.map(std::borrow::Cow::Owned),
+        None => model.lock_openers.as_ref().map(std::borrow::Cow::Borrowed),
+    }
 }
 
 /// The walk's answer: how the colour of `LOCKED` is picked.
@@ -166,8 +187,9 @@ impl UiScript {
         self.model_mut().lock_type_names = names;
     }
 
-    /// Pushes what the active player opens locks with, on change. Never pushed, there is no active
-    /// player and every lock reads as open.
+    /// Seats what the active player opens locks with, which a getter reads with no host lent; a
+    /// test's stand-in for the live read. Never seated, there is no active player and every lock
+    /// reads as open.
     pub fn set_lock_openers(&mut self, openers: LockOpeners) {
         self.model_mut().lock_openers = Some(openers);
     }

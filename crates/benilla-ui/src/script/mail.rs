@@ -625,7 +625,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let row = row_at(&model, index);
                 let usable = row
                     .as_ref()
-                    .is_none_or(|r| super::item_stats::item_usable_by_id(&model, r.item_id));
+                    .is_none_or(|r| super::item_stats::item_usable_by_id(lua, &model, r.item_id));
                 (row, usable)
             };
             // Five values on every path; with no item, `nil, nil, 0, 0, nil` (`0x4af5d0`).

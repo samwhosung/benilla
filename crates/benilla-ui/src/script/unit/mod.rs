@@ -300,14 +300,16 @@ pub fn level_reads_unknown(u: &UnitState, player_level: u32) -> bool {
 /// `UnitReaction` <= 2 here) at least 10 levels above the player, players among them, since
 /// neither path tests the unit's type; and world-boss rank 3 (`0x51807d`-`0x518087`, `0x52a373`).
 pub fn level_is_hidden(u: &UnitState, player_level: u32) -> bool {
-    level_is_hidden_at(u, u.level, u.rank, player_level)
+    level_is_hidden_at(u, u.level, u.rank, Some(player_level))
 }
 
 /// [`level_is_hidden`] at `level`, the one read off the unit's object, and `rank`, the one read
-/// off its creature record.
-fn level_is_hidden_at(u: &UnitState, level: u32, rank: u32, player_level: u32) -> bool {
-    let much_higher_hostile =
-        u.reaction != 0 && u.reaction <= 2 && level >= player_level.saturating_add(10);
+/// off its creature record; with no active player, `None`, the hostile leg is skipped
+/// (`0x518055`) and only the rank hides.
+fn level_is_hidden_at(u: &UnitState, level: u32, rank: u32, player_level: Option<u32>) -> bool {
+    let much_higher_hostile = player_level.is_some_and(|player_level| {
+        u.reaction != 0 && u.reaction <= 2 && level >= player_level.saturating_add(10)
+    });
     rank == 3 || much_higher_hostile
 }
 

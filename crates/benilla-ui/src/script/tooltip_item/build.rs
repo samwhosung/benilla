@@ -9,8 +9,9 @@
 //! `OnTooltipCleared`, the lines, the show), and sizes it (`0x52e5ac`); a tooltip that keeps
 //! nothing, since every clear zeroes the entry (`0x5300dd`), stays as it is (`0x52e556`).
 //!
-//! benilla's caches answer by push: a template through [`UiScript::set_item_template`], a set and
-//! its members' names through [`UiScript::set_item_set`], a name through the lent host's name cache
+//! benilla's caches answer by push or through the lent host: a template through
+//! [`UiScript::set_item_template`], a set and its members' names through the host's set read (the
+//! VM's copy, [`UiScript::set_item_set`], with none lent), a name through the lent host's name cache
 //! or else inside the views that carry its guid, and a petition inside those views, which the app
 //! re-pushes once it resolves. [`answer_item_caches`]
 //! settles the waits once a tick, one rebuild per answered ask.
@@ -72,7 +73,7 @@ pub(in crate::script) enum InFlight {
 pub(crate) enum CacheWait {
     /// The item record cache (`0xc0e2a0`): the item itself, a lock's key, a compare's offer.
     Template(u32),
-    /// A set's view, which benilla's app pushes on ask.
+    /// A set's view the VM's copy lacks with no host lent; with one, the set reads as it runs.
     Set(u32),
     /// The item-name cache (`0xc0e2dc`): one set member still unnamed.
     MemberName { set: u32, item: u32 },
@@ -84,12 +85,20 @@ pub(crate) enum CacheWait {
     PetitionOwner(u64),
 }
 
+/// The set blocks a tick's waits read, each set read once a tick.
+type SetsRead = std::collections::HashMap<u32, Option<crate::script::ItemSetView>>;
+
 impl CacheWait {
-    fn answered(&self, lua: &Lua, model: &Model) -> bool {
+    fn answered(&self, lua: &Lua, model: &Model, sets: &mut SetsRead) -> bool {
+        let mut set = |id: u32| {
+            sets.entry(id)
+                .or_insert_with(|| crate::script::item_stats::item_set(lua, model, id))
+                .clone()
+        };
         match *self {
             CacheWait::Template(id) => model.item_templates.contains_key(&id),
-            CacheWait::Set(id) => model.item_sets.contains_key(&id),
-            CacheWait::MemberName { set, item } => model.item_sets.get(&set).is_some_and(|v| {
+            CacheWait::Set(id) => set(id).is_some(),
+            CacheWait::MemberName { set: id, item } => set(id).is_some_and(|v| {
                 v.members
                     .iter()
                     .any(|(id, name)| *id == item && name.is_some())
@@ -264,6 +273,12 @@ pub(in crate::script) fn build_item(
         .expect("model app_data")
         .item_cache_misses
         .clear();
+    // With no active player the build hides and returns, keeping nothing (`0x52b699` →
+    // `0x52b6af`, `0x52b6b5`).
+    if crate::script::requirements::no_player(lua) {
+        show_or_hide_empty(lua, h);
+        return Ok(false);
+    }
     let view = view_of(lua, build.item_id);
     let live = match &view {
         Some(v) => {
@@ -380,12 +395,13 @@ pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
         }
         let tips: Vec<FrameHandle> = model.item_cache_waits.keys().copied().collect();
         let mut due = Vec::new();
+        let mut sets = SetsRead::new();
         for h in tips {
             let Some(mut waits) = model.item_cache_waits.remove(&h) else {
                 continue;
             };
             let before = waits.len();
-            waits.retain(|w| !w.answered(lua, model));
+            waits.retain(|w| !w.answered(lua, model, &mut sets));
             let answers = before - waits.len();
             if !waits.is_empty() {
                 model.item_cache_waits.insert(h, waits);

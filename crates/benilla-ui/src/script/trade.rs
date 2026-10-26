@@ -991,7 +991,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let slot = slot_at(&model, id, |t| &t.target);
                 let usable = slot
                     .as_ref()
-                    .is_none_or(|s| super::item_stats::item_usable_by_id(&model, s.item_id));
+                    .is_none_or(|s| super::item_stats::item_usable_by_id(lua, &model, s.item_id));
                 (slot, usable)
             };
             // The record off the item cache as the call runs (`0x4c017f`); a miss asks for it.

@@ -3,6 +3,8 @@
 //! the bind-on-equip question, or parks the move on an uncached record, before it sends, and only
 //! the send clears the cursor (`0x5e0fe7`): a question or a wait leaves the item held.
 
+use mlua::Lua;
+
 use crate::script::container::ContainerMove;
 use crate::script::tick::verb;
 use crate::script::{ItemCall, Model};
@@ -90,11 +92,11 @@ fn other_end(model: &Model, mv: &ContainerMove) -> OtherEnd {
 
 /// `SwapItem(mv, confirm)` (`0x5e0c40`): the question on the item the move would equip, unless
 /// `confirm` (the accept's re-issue, `0x5e1c46`) skips it; else the send and its clear.
-pub(crate) fn swap_items(model: &mut Model, mv: ContainerMove, confirm: bool) -> Swap {
+pub(crate) fn swap_items(lua: &Lua, model: &mut Model, mv: ContainerMove, confirm: bool) -> Swap {
     let question = match other_end(model, &mv) {
         OtherEnd::NoBag => return Swap::NoBag(mv),
         OtherEnd::Unasked => Question::Send,
-        OtherEnd::Item(item) => equip_question(model, item, confirm),
+        OtherEnd::Item(item) => equip_question(lua, model, item, confirm),
     };
     match question {
         Question::Ask => Swap::Asked(mv),
@@ -109,8 +111,8 @@ pub(crate) fn swap_items(model: &mut Model, mv: ContainerMove, confirm: bool) ->
 /// [`swap_items`] with the question asked, filing what it did for the host: the send
 /// ([`ItemCall::Move`]), the question ([`ItemCall::SwapAsk`]) or the wait
 /// ([`ItemCall::SwapWait`]).
-pub(crate) fn swap_and_file(model: &mut Model, mv: ContainerMove) {
-    let call = match swap_items(model, mv, false) {
+pub(crate) fn swap_and_file(lua: &Lua, model: &mut Model, mv: ContainerMove) {
+    let call = match swap_items(lua, model, mv, false) {
         Swap::Sent(mv) => ItemCall::Move(mv),
         Swap::Asked(mv) => ItemCall::SwapAsk(mv),
         Swap::Waits { mv, entry } => ItemCall::SwapWait { mv, entry },
@@ -124,14 +126,14 @@ impl crate::script::UiScript {
     /// set (`0x5e1c46`), so it sends and clears whatever the cursor holds then. The host sends
     /// what comes back.
     pub fn swap_items(&mut self, mv: ContainerMove, confirm: bool) -> Swap {
-        verb(&self.lua, |model| swap_items(model, mv, confirm))
+        verb(&self.lua, |model| swap_items(&self.lua, model, mv, confirm))
     }
 
     /// The callback `0x5e1020` for a move parked on its record: with the record found
     /// (`0x5e1099`-`0x5e10a0`) `SwapItem` runs again unconfirmed (`0x5e10c2`), its send, question
     /// or wait applied through the host. The host frees the parked entry after.
     pub fn replay_swap(&mut self, mv: ContainerMove) -> mlua::Result<()> {
-        verb(&self.lua, |model| swap_and_file(model, mv));
+        verb(&self.lua, |model| swap_and_file(&self.lua, model, mv));
         crate::script::item_calls::submit_item_calls(&self.lua)
     }
 }

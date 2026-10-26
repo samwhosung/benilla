@@ -760,7 +760,10 @@ fn row_at(model: &Model, kind: &str, index: usize) -> Option<AuctionItemRow> {
 
 /// The sell slot's `(name, texture, count, quality, canUse, stackValue)`, `stackValue` being the
 /// vendor price times the stack: the base of the suggested opening price and the deposit.
-fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bool, u32)> {
+fn sell_item_info(
+    lua: &Lua,
+    model: &Model,
+) -> Option<(String, Option<String>, u32, i64, bool, u32)> {
     let it = model.auction_sell_item.as_ref()?;
     // The real stack size, not the split-carry field: the deposit is per stack.
     let count = cursor::held_count(model, it);
@@ -768,7 +771,7 @@ fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bo
     let name = cursor::item_link_name(it.link.as_deref());
     let quality = it.quality.map_or(-1, i64::from);
     let sell_price = template.map_or(0, |v| v.sell_price);
-    let can_use = super::item_stats::item_usable_by_id(model, it.item_id);
+    let can_use = super::item_stats::item_usable_by_id(lua, model, it.item_id);
     // The price is a 32-bit `imul` in both readers (`0x4ce295`, `0x4ce703`).
     Some((
         name,
@@ -854,7 +857,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `canUse` is per call, not pushed: it follows the player's level, class and spellbook.
             let can_use = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                super::item_stats::item_usable_by_id(&model, r.item_id)
+                super::item_stats::item_usable_by_id(lua, &model, r.item_id)
             };
             // The names off the name cache as the call runs, the bidder's on an owned row first
             // (`0x4cf167`), then the seller's (`0x4cf1c8`); the push's only with no host lent. A
@@ -1416,7 +1419,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 binding_abi::index_arg32(lua, minutes, "Usage: CalculateAuctionDeposit(runTime)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let rate = model.auction.as_ref().map_or(0, |a| a.deposit_percent);
-            let stack_value = sell_item_info(&model).map_or(0, |(_, _, _, _, _, v)| v);
+            let stack_value = sell_item_info(lua, &model).map_or(0, |(_, _, _, _, _, v)| v);
             Ok(i64::from(deposit_for(rate, stack_value, minutes)))
         })?,
     )?;
@@ -1428,7 +1431,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let info = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                sell_item_info(&model)
+                sell_item_info(lua, &model)
             };
             let Some((name, texture, count, quality, can_use, price)) = info else {
                 return Ok(MultiValue::from_vec(vec![

@@ -26,7 +26,7 @@ impl super::UiScript {
     /// item the player cannot equip is never asked about. Entry `0` and an unanswered template
     /// read usable.
     pub fn item_usable(&self, item_id: u32) -> bool {
-        super::item_stats::item_usable_by_id(&self.model_ref(), item_id)
+        super::item_stats::item_usable_by_id(&self.lua, &self.model_ref(), item_id)
     }
 }
 

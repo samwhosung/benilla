@@ -81,7 +81,12 @@ pub(super) enum Question {
 /// `+0x194` is 2 (`0x5e163b`, `0x5e0e54`) and the player can use the item (`0x5ea930`) to ask.
 /// No quality leg. The cache is the VM's copy of the app's item records (`Model::item_templates`,
 /// seated whole for a new VM and topped up as each record lands), not a bag view's fields.
-pub(super) fn equip_question(model: &Model, item: EquipFacts, suppress: bool) -> Question {
+pub(super) fn equip_question(
+    lua: &Lua,
+    model: &Model,
+    item: EquipFacts,
+    suppress: bool,
+) -> Question {
     if item.bound || suppress {
         return Question::Send;
     }
@@ -89,7 +94,7 @@ pub(super) fn equip_question(model: &Model, item: EquipFacts, suppress: bool) ->
         return Question::Wait(item.item_id);
     };
     if record.bonding == BIND_WHEN_EQUIPPED
-        && crate::script::item_stats::item_usable_by_id(model, item.item_id)
+        && crate::script::item_stats::item_usable_by_id(lua, model, item.item_id)
     {
         Question::Ask
     } else {
@@ -136,7 +141,7 @@ fn held_facts(model: &Model, item: &CursorItem) -> Option<EquipFacts> {
 /// projectile loads by entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets
 /// `ebx = 1` (`0x5e1704`, `0x5e1711`) and the item unlocks; every other arm keeps the lock for
 /// the server's answer (`0x5e1577`). Neither locks anything new.
-pub(crate) fn auto_equip_held(model: &mut Model, suppress: bool) -> AutoEquip {
+pub(crate) fn auto_equip_held(lua: &Lua, model: &mut Model, suppress: bool) -> AutoEquip {
     let item = match &model.cursor {
         Some(CursorPayload::Item(item)) => item.clone(),
         _ => return AutoEquip::None,
@@ -149,7 +154,7 @@ pub(crate) fn auto_equip_held(model: &mut Model, suppress: bool) -> AutoEquip {
         return AutoEquip::None;
     };
     let (bag, slot, guid) = (item.bag, item.slot, item.guid);
-    match equip_question(model, facts, suppress) {
+    match equip_question(lua, model, facts, suppress) {
         Question::Ask => return AutoEquip::Asked { bag, slot, guid },
         Question::Wait(entry) => return AutoEquip::Waits { entry },
         Question::Send => {}
@@ -189,8 +194,8 @@ pub(super) fn file_auto_equip(model: &mut Model, step: AutoEquip) -> bool {
 /// `AutoEquipCursorItem()` (`0x48a040` into `0x5e1480`), a click or drop on the doll's model
 /// (`PaperDollFrame.lua:31-35`), filing the send, the question or the wait for the host
 /// ([`file_auto_equip`]). Returns whether to repaint.
-pub(crate) fn auto_equip_cursor_item(model: &mut Model) -> bool {
-    let step = auto_equip_held(model, false);
+pub(crate) fn auto_equip_cursor_item(lua: &Lua, model: &mut Model) -> bool {
+    let step = auto_equip_held(lua, model, false);
     file_auto_equip(model, step)
 }
 
@@ -226,7 +231,7 @@ pub(crate) fn auto_equip_from(
     if control {
         set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
     }
-    Ok(verb(lua, |model| auto_equip_held(model, suppress)))
+    Ok(verb(lua, |model| auto_equip_held(lua, model, suppress)))
 }
 
 impl crate::script::UiScript {
@@ -241,7 +246,7 @@ impl crate::script::UiScript {
                 Some(CursorPayload::Item(item)) if item.item_id == entry
             );
             if holds {
-                auto_equip_cursor_item(model);
+                auto_equip_cursor_item(&self.lua, model);
             }
         });
         crate::script::item_calls::submit_item_calls(&self.lua)

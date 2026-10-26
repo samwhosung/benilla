@@ -27,6 +27,8 @@ pub(crate) mod live;
 mod lock_openers;
 pub(crate) mod locks;
 mod net;
+mod requirements;
+mod sets;
 #[cfg(test)]
 mod verb_tests;
 
@@ -36,10 +38,9 @@ pub(crate) use equip_error::{equip_error_key, EquipError, EquipErrors};
 // `crate::script_calls`.
 pub(crate) use calls::ItemSteps;
 pub(crate) use drain::ScriptItemUse;
-use feed::{
-    ask_item_build_lookups, feed_containers, feed_item_sets, feed_item_stats, feed_player_req,
-    feed_random_properties,
-};
+use feed::{feed_containers, feed_item_stats, feed_random_properties};
+pub(crate) use requirements::RequirementsLive;
+pub(crate) use sets::ItemSetLive;
 
 /// The backpack's capacity (`PLAYER_FIELD_PACK_SLOT_1..`).
 pub(super) const PACK_SLOTS: u8 = 16;
@@ -1035,21 +1036,15 @@ impl Plugin for UiItemsPlugin {
                         .in_set(UnitFeed)
                         .in_set(crate::ui_unit::WorldEnterSeats)
                         .before(crate::ui_cast::feed_cast_reports),
-                    feed_item_sets.in_set(UnitFeed),
                     // The equip callbacks an item record's answer ran, drained with the Lua's
                     // asks, after the bag feed (and the doll's, ahead of it) has pushed what the
                     // answer changed.
                     crate::ui_bind_confirm::replay_equip_records.in_set(crate::ui_script::UiDrain),
-                    ask_item_build_lookups.in_set(UnitFeed),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),
-                    // After the latches, so a skinning spell learnt this frame colours the line now.
-                    feed_player_req
-                        .in_set(UnitFeed)
-                        .after(crate::ui_action::track_learned_abilities),
-                    // The item tooltip's lock check: `Lock.dbc` once, the player's openers on change.
+                    // The item tooltip's lock check: `Lock.dbc` once; the getters read the player's
+                    // openers through the host ([`RequirementsLive`]).
                     lock_openers::feed_lock_rows.in_set(UnitFeed),
-                    lock_openers::feed_lock_openers.in_set(UnitFeed),
                 ),
             );
     }

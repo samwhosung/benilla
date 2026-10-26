@@ -133,6 +133,7 @@ mod keyboard;
 mod layer_batch;
 mod lock_check;
 mod protected;
+mod requirements;
 mod stat_read;
 pub(crate) mod taint;
 pub(crate) mod texel;
@@ -355,12 +356,14 @@ pub(crate) use font_block::{face_loads, own_font_lua, SAME_FONT_HEIGHT};
 pub use inspect::{InspectCall, UnitReach, VisibleSlotQuery};
 pub use instance::InstanceCall;
 pub use item_stats::{
-    item_usable, ItemRecipe, ItemSetView, ItemSpellLine, ItemTemplateView, PlayerReqState,
-    TaughtSpell,
+    item_usable, ItemRecipe, ItemSetQuery, ItemSetView, ItemSpellLine, ItemTemplateView,
+    LiveItemSet, PlayerReqState, TaughtSpell,
 };
 pub use item_text::{ItemTextCall, ItemTextState};
 pub use layout_cache::{AnchorLayout, FrameLayout, LayoutPoint};
-pub use lock_check::{check_lock, LockCheck, LockOpener, LockOpeners, LockSlotView};
+pub use lock_check::{
+    check_lock, LockCheck, LockOpener, LockOpeners, LockOpenersQuery, LockSlotView,
+};
 pub use loot::{LootCall, LootRow, LootState, LOOT_PORTRAIT_UNIT};
 pub use loot_roll::{LootRollCall, LootRollEntry, LootRollsState};
 pub use macros::{
@@ -413,6 +416,10 @@ pub(crate) use region::{
 pub use reputation::{
     Book, FactionEntry, FactionQuery, FactionRead, ReputationBook, ReputationCall,
     ReputationListOp, ReputationState,
+};
+pub use requirements::{
+    DualWieldQuery, KnowsSpellQuery, ProficiencyQuery, RepRankQuery, ReqHead, ReqHeadQuery,
+    ReqRead, ReqSkillQuery, SkinningQuery,
 };
 pub use session::SessionRequest;
 pub use shapeshift::{ShapeshiftForm, ShapeshiftFormView, ShapeshiftList};

@@ -768,7 +768,7 @@ fn resolve_slot(
     // Nil until the template answers: the link embeds the name and the quality colour.
     let link = live.link();
     // Only a wrapped gift names its giver (`0x52e288`, `0x52e29d`). Only read: the slot tooltip's
-    // build asks it (`crate::ui_items::feed::ask_item_build_lookups`).
+    // build asks it in its call ([`benilla_ui::script::RecordAsk::ItemBuildName`]).
     let gift_creator = (item.wrapped && item.gift_creator != 0)
         .then(|| names.resolve_player(item.gift_creator, Ask::Read))
         .flatten()

@@ -237,7 +237,7 @@ fn buyback_order(store: &benilla_protocol::ObjectFields) -> Vec<u8> {
 fn resolve_buyback(
     idx: u8,
     store: &benilla_protocol::ObjectFields,
-    objects: &Objects,
+    objects: &(impl crate::ui_items::ItemObjects + ?Sized),
     items: &Items,
     (icons, rolls): (Option<&ItemDisplays>, crate::items::RollCatalogs<'_>),
     ask: Ask<'_>,
@@ -290,7 +290,7 @@ fn resolve_buyback(
 /// is only read (`0x5da368`); a wrapped item costs 0 (`ITEM_FIELD_FLAGS & 0x8`, `0x5da387`).
 fn item_repair_cost(
     guid: u64,
-    objects: &Objects,
+    objects: &(impl crate::ui_items::ItemObjects + ?Sized),
     items: &Items,
     tables: &RepairTables,
     discount: f64,
@@ -395,7 +395,7 @@ fn repair_costs(
 /// `0x4faf30`'s costs, and the flag is any counted item below its maximum (`0x4fbe32`).
 fn repair_all(
     store: &benilla_protocol::ObjectFields,
-    objects: &Objects,
+    objects: &(impl crate::ui_items::ItemObjects + ?Sized),
     items: &Items,
     tables: Option<&RepairTables>,
     discount: f64,

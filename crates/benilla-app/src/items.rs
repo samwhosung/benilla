@@ -239,7 +239,7 @@ pub(crate) fn enchant_lines(
 /// takes the gift arm (`0x52b789`, `0x52e1b9`), which reads `ITEM_FIELD_GIFTCREATOR` (`0x52e32a`)
 /// and asks the name cache (`0x52e29d`). A zero guid, an unwrapped item or a name not yet
 /// answered gives `None`. Only reads: the lookup is the tooltip build's, which asks it
-/// (`crate::ui_items::feed::ask_item_build_lookups`).
+/// in its call ([`benilla_ui::script::RecordAsk::ItemBuildName`]).
 pub(crate) fn gift_creator_name(
     fields: &ObjectFields,
     names: &crate::names::NameCache,

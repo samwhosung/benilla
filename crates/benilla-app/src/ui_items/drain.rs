@@ -61,6 +61,8 @@ pub(crate) struct ScriptItemUse<'w, 's> {
     ladder: crate::spell::CastLadder<'w, 's>,
     ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
+    /// What the use's requirement gate judges the item by, seated for it with the host out.
+    requirements: super::RequirementsLive<'w, 's>,
 }
 
 impl ScriptItemUse<'_, '_> {
@@ -69,6 +71,8 @@ impl ScriptItemUse<'_, '_> {
     /// (`0x4c7af0`): a worn quest-starter offers its quest. `on_self` binds the player in place of
     /// the selection (`0x4c8e48`). The call refused a locked item. Ids outside 1..=19 are refused.
     pub(crate) fn use_inventory_item(&mut self, script: &mut UiScript, id: u32, on_self: bool) {
+        // The use's requirement gate (`0x5d8e0e`) reads the player as the apply finds it.
+        self.requirements.seat(script);
         let Self {
             self_q,
             targeting,
@@ -130,6 +134,8 @@ impl ScriptItemUse<'_, '_> {
         script: &mut UiScript,
         call: ContainerUse,
     ) -> Option<crate::ui_loot::OpenItem> {
+        // The use's requirement gate (`0x5d8e0e`) reads the player as the apply finds it.
+        self.requirements.seat(script);
         let Self {
             self_q,
             merchant,
@@ -372,6 +378,8 @@ impl ScriptItemUse<'_, '_> {
     /// whatever the protected-action gate said (`0x5d92c6`-`0x5d92cc`), so a doubled accept does
     /// nothing; the cast inside it asks tag 2 (`0x6e4bc1`).
     pub(crate) fn confirm_bind_on_use(&mut self, script: &mut UiScript, may_cast: bool) {
+        // The use's requirement gate (`0x5d8e0e`) reads the player as the apply finds it.
+        self.requirements.seat(script);
         let Self {
             targeting,
             ladder,

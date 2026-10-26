@@ -29,6 +29,13 @@ pub struct ItemSetCatalog {
 }
 
 impl ItemSetCatalog {
+    /// A catalog of `rows` by id, as a harness builds one without the install.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, ItemSetInfo)>) -> Self {
+        Self {
+            sets: rows.into_iter().collect(),
+        }
+    }
+
     /// The set for an item template's `itemset` id.
     pub fn set(&self, id: u32) -> Option<&ItemSetInfo> {
         self.sets.get(&id)

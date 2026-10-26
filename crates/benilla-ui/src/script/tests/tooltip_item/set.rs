@@ -163,7 +163,11 @@ fn item_set_block_counts_and_colors() {
     );
     s.run(r#"TT:SetOwner(Slot10, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, 9999)"#)
         .unwrap();
-    assert_eq!(s.take_item_set_asks(), vec![1], "the set ask recorded");
+    assert_eq!(
+        s.eval::<i64>("return TT:NumLines()").unwrap(),
+        1,
+        "a set the copy lacks prints no block"
+    );
     assert!(s.take_errors().is_empty());
 }
 

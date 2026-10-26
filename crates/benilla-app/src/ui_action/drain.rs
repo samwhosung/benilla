@@ -172,6 +172,7 @@ pub(crate) fn drain_arrival_casts(
         cast_target::CastTargeting<'static, 'static>,
         CastLadder<'static, 'static>,
         crate::ui_bind_confirm::BindGate<'static>,
+        crate::ui_items::RequirementsLive<'static, 'static>,
     )>,
     queue: ResMut<crate::ui_action::ClickCasts>,
     ui_errors: Res<UiErrorKeys>,
@@ -190,62 +191,67 @@ pub(crate) fn drain_click_casts(
         cast_target::CastTargeting<'static, 'static>,
         CastLadder<'static, 'static>,
         crate::ui_bind_confirm::BindGate<'static>,
+        crate::ui_items::RequirementsLive<'static, 'static>,
     )>,
     mut queue: ResMut<crate::ui_action::ClickCasts>,
     // Not a `CastLadder` field: Bevy panics on a resource reachable twice from one system.
     ui_errors: Res<UiErrorKeys>,
 ) {
-    vm.turn(|script, (targeting, mut ladder, mut gate)| {
-        if queue.0.is_empty() {
-            return;
-        }
-        let ctx = targeting.context();
-        let mut script = script;
-        for cast in std::mem::take(&mut queue.0) {
-            match cast {
-                super::ClickCast::AtObject { spell_id, go_guid } => {
-                    debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
-                    ladder.send_at_object(spell_id, &ctx, go_guid);
-                }
-                super::ClickCast::AtUnit {
-                    spell_id,
-                    entity,
-                    guid,
-                    auto_loot,
-                } => {
-                    debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
-                    ladder.send(
+    vm.turn(
+        |script, (targeting, mut ladder, mut gate, mut requirements)| {
+            if queue.0.is_empty() {
+                return;
+            }
+            let ctx = targeting.context();
+            let mut script = script;
+            for cast in std::mem::take(&mut queue.0) {
+                match cast {
+                    super::ClickCast::AtObject { spell_id, go_guid } => {
+                        debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
+                        ladder.send_at_object(spell_id, &ctx, go_guid);
+                    }
+                    super::ClickCast::AtUnit {
                         spell_id,
-                        &targeting.context_at(entity, guid),
-                        crate::spell::CastCommit::Spell,
-                    );
-                    // Then the store, whatever the attempt answered (`0x5f06e1`-`0x5f06ef`).
-                    if let (Some(byte), Some(script)) = (auto_loot, script.as_deref_mut()) {
-                        script.set_auto_loot(byte);
+                        entity,
+                        guid,
+                        auto_loot,
+                    } => {
+                        debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
+                        ladder.send(
+                            spell_id,
+                            &targeting.context_at(entity, guid),
+                            crate::spell::CastCommit::Spell,
+                        );
+                        // Then the store, whatever the attempt answered (`0x5f06e1`-`0x5f06ef`).
+                        if let (Some(byte), Some(script)) = (auto_loot, script.as_deref_mut()) {
+                            script.set_auto_loot(byte);
+                        }
+                    }
+                    // The key goes through the shared `CGItem::Use` fork, as a bag click does.
+                    super::ClickCast::Key(it) => {
+                        let Some(script) = script.as_deref_mut() else {
+                            continue;
+                        };
+                        // The use's requirement gate (`0x5d8e0e`) reads the player as of here.
+                        requirements.seat(script);
+                        debug!(
+                            "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
+                            it.bag_index, it.slot, it.on_object
+                        );
+                        crate::ui_items::send_item_use(
+                            it,
+                            &ctx,
+                            &mut ladder,
+                            script,
+                            &mut gate,
+                            false,
+                            &ui_errors,
+                        );
                     }
                 }
-                // The key goes through the shared `CGItem::Use` fork, as a bag click does.
-                super::ClickCast::Key(it) => {
-                    let Some(script) = script.as_deref_mut() else {
-                        continue;
-                    };
-                    debug!(
-                        "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
-                        it.bag_index, it.slot, it.on_object
-                    );
-                    crate::ui_items::send_item_use(
-                        it,
-                        &ctx,
-                        &mut ladder,
-                        script,
-                        &mut gate,
-                        false,
-                        &ui_errors,
-                    );
-                }
             }
-        }
-    })
+        },
+    )
 }
 
 /// What a `UseAction` press reads and writes.
@@ -260,6 +266,8 @@ pub(crate) struct ActionPress<'w, 's> {
     ladder: CastLadder<'w, 's>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
     equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,
+    /// What the item's requirement gate and equip question read, seated with the host out.
+    requirements: crate::ui_items::RequirementsLive<'w, 's>,
 }
 
 /// What a `UseAction` press leaves to another applier.
@@ -289,6 +297,7 @@ pub(crate) fn use_action(
         ladder,
         gate,
         equip_sound,
+        requirements,
     } = p;
     let selection = &targeting.selection;
     let action = press.action;
@@ -395,6 +404,7 @@ pub(crate) fn use_action(
                 // dropping and unlocking a held item, and goes out through `AutoEquipCursorItem`,
                 // which asks first for a bind-on-equip item and keeps it held. Nothing locks it,
                 // and a projectile's clear unlocks (`0x5e1763`).
+                requirements.seat(script);
                 match script.auto_equip_guid(guid, false) {
                     // The item sent is the cursor's: the bar's own, or with no control (the set
                     // refused) whatever was held (`0x5e18c9`).
@@ -444,6 +454,7 @@ pub(crate) fn use_action(
                 debug!(
                     "ui_action: item action {action} use (wire {bag_index}/{slot0}, spell #{spell_index})"
                 );
+                requirements.seat(script);
                 crate::ui_items::send_item_use(
                     crate::ui_items::ItemUse {
                         guid: Some(guid),

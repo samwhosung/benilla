@@ -108,6 +108,11 @@ pub(super) fn seed_ui_fixture(
             ResMut<'static, crate::ui_gossip::GossipState>,
             ResMut<'static, crate::ui_quest::QuestGiver>,
         ),
+        // The tooltip fixture's set row and its members' names, read by the set block's host.
+        (
+            Option<ResMut<'static, crate::ui_items::ItemSets>>,
+            ResMut<'static, crate::item_names::ItemNames>,
+        ),
     )>,
     mut ctx: ResMut<CaptureCtx>,
     mut commands: Commands,
@@ -120,7 +125,8 @@ pub(super) fn seed_ui_fixture(
     // with the host lent: what it fires runs in place, and what it calls applies inside the verb.
     let mut lua: Option<Box<dyn FnOnce(&mut UiScript) + '_>> = None;
     vm.turn(|script, parts| {
-        let (mut loot, mut names, mut selection, mut player, store, rest) = parts;
+        let (mut loot, mut names, mut selection, mut player, store, rest, set_parts) = parts;
+        let (mut item_sets, mut item_names) = set_parts;
         let (mut actions, mut bank, mut exit, mut loading, mut gossip, mut quest) = rest;
         let (mut items, mut index, mut home_bind) = store;
         // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
@@ -215,8 +221,27 @@ pub(super) fn seed_ui_fixture(
 
         match fixture {
             // Nothing to open: the loaded UI and `demo_unit_feed`'s player and target are the
-            // fixture.
-            UiFixture::Bare => {}
+            // fixture. The combo dots read the active player's class (`0x51a1cc`), so
+            // `ui-combopoints` holds one: a level-12 rogue on the demo's health, at 45 energy.
+            UiFixture::Bare => {
+                if scenario.name == "ui-combopoints" {
+                    const PLAYER_GUID: u64 = 0x51;
+                    names.insert_player(PLAYER_GUID, "Benilla".into(), None);
+                    commands.spawn((
+                        crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                            (22, 72),  // UNIT_FIELD_HEALTH
+                            (26, 45),  // UNIT_FIELD_POWER4, energy
+                            (28, 100), // UNIT_FIELD_MAXHEALTH
+                            (32, 100), // UNIT_FIELD_MAXPOWER4
+                            (34, 12),  // UNIT_FIELD_LEVEL
+                            // UNIT_FIELD_BYTES_0: night elf, rogue, male, energy
+                            (36, 4 | (4 << 8) | (3 << 24)),
+                        ])),
+                        crate::net::SelfPlayer,
+                        crate::net::Guid(PLAYER_GUID),
+                    ));
+                }
+            }
             // Holds the world-entry loading screen, tip and all, over the settled scene.
             UiFixture::LoadingTip => loading.hold_for_capture(scenario.map),
             UiFixture::Merchant => {
@@ -272,16 +297,17 @@ pub(super) fn seed_ui_fixture(
                 commands.queue(move |world: &mut World| {
                     crate::ui_merchant::open_merchant(world, NPC_GUID, rows)
                 });
-                // The usable gate's player half, by hand: with no SelfPlayer in capture,
-                // `feed_player_req` never runs to overwrite it. A level-12 human warrior.
-                lua = Some(Box::new(move |s: &mut UiScript| {
-                    s.set_player_req_state(benilla_ui::script::PlayerReqState {
-                        level: 12,
-                        class_id: 1,
-                        race_id: 1,
-                        ..Default::default()
-                    });
-                }));
+                // The usable gate reads the active player, a level-12 human warrior; with none the
+                // getter reads every row usable (`0x4fb293`).
+                const PLAYER_GUID: u64 = 0x51;
+                commands.spawn((
+                    crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                        (34, 12),          // UNIT_FIELD_LEVEL
+                        (36, 1 | (1 << 8)), // UNIT_FIELD_BYTES_0: human, warrior
+                    ])),
+                    crate::net::SelfPlayer,
+                    crate::net::Guid(PLAYER_GUID),
+                ));
             }
             UiFixture::Trainer(list) => {
                 // The seed's rows are the wire list: its copper costs, level gates and the states
@@ -840,90 +866,128 @@ pub(super) fn seed_ui_fixture(
                 }));
             }
             UiFixture::Tooltip => {
-                lua = Some(Box::new(move |script: &mut UiScript| {
-                    seed_bag_window(script, icons);
-                    // The hovered shield's full template and a player under its level requirement:
-                    // quality name, bind, slot and type, armor and block, stats, durability, a red
-                    // requirement, a long green Use: line that wraps, a charges line after it, and
-                    // the flavor text.
-                    script.set_player_req_state(benilla_ui::script::PlayerReqState {
-                        level: 12,
-                        class_id: 1,
-                        race_id: 1,
-                        skills: Default::default(),
-                        ..Default::default()
-                    });
-                    script.set_item_template(
-                        2362,
-                        benilla_ui::script::ItemTemplateView {
-                            name: "Small Shield".into(),
-                            quality: 2,
-                            class: 4,
-                            subclass: 6,
-                            inventory_type: 14,
-                            bonding: 2,
-                            stats: vec![(7, 3)],
-                            armor: 85,
-                            block: 4,
-                            max_durability: 45,
-                            required_level: 20,
-                            spell_lines: vec![benilla_ui::script::ItemSpellLine {
-                                trigger: 0,
-                                spell_id: 72,
-                                text: "Restores 243 health over 21 sec.  Must remain seated while \
-                                       eating."
-                                    .into(),
-                                charges: 1,
-                                block: 0,
-                                recipe: None,
-                            }],
-                            description: "A stout little shield of Northshire pine.".into(),
-                            sell_price: 152,
-                            item_set: 161,
-                            ..Default::default()
-                        },
+                // The hovered shield in a level-12 human warrior's backpack, both as the wire
+                // leaves them: the item build reads the active player, and hides with none
+                // (`0x52b699`). The shield shows quality name, bind, slot and type, armor and
+                // block, stats, durability, a red level requirement, a green Use: line that
+                // wraps, a charges line after it, the set block and the flavor text.
+                use benilla_protocol::messages::ObjectFields;
+                const PLAYER_GUID: u64 = 0x51;
+                const SHIELD: u32 = 2362;
+                const SET_ID: u32 = 161;
+                // Backpack game slot, guid, entry, stack, name, display, quality.
+                let pack: [(u16, u64, u32, u32, &str, u32, u32); 5] = [
+                    (1, 0x3001, SHIELD, 1, "Small Shield", DISP_SHIELD, 2),
+                    (3, 0x3002, 117, 5, "Tough Jerky", DISP_FOOD, 1),
+                    (6, 0x3003, 25, 1, "Worn Shortsword", DISP_SWORD, 1),
+                    (11, 0x3004, 6948, 1, "Hearthstone", DISP_STONE, 1),
+                    (16, 0x3005, 159, 20, "Refreshing Spring Water", DISP_FOOD, 1),
+                ];
+                // One of the five set members worn, in the chest slot: the gold "(1/5)" header.
+                const WORN: (u64, u32) = (0x3006, 6303);
+                let members = [
+                    (6303, "Defias Mark"),
+                    (6304, "Defias Belt"),
+                    (6305, "Defias Gloves"),
+                    (6306, "Defias Trousers"),
+                    (6307, "Defias Boots"),
+                ];
+                let mut fields = vec![
+                    (34, 12),           // UNIT_FIELD_LEVEL, under the shield's 20
+                    (36, 1 | (1 << 8)), // UNIT_FIELD_BYTES_0: human, warrior
+                    (1176, 12_345),     // PLAYER_FIELD_COINAGE: the purse's three coins
+                    (486 + 2 * 4, WORN.0 as u32), // PLAYER_FIELD_INV_SLOT_HEAD, chest
+                ];
+                for &(slot, guid, entry, stack, name, disp, quality) in &pack {
+                    // PLAYER_FIELD_PACK_SLOT_1
+                    fields.push((532 + 2 * (slot - 1), guid as u32));
+                    crate::items::spawn_item(
+                        &mut commands,
+                        &mut index,
+                        guid,
+                        ObjectFields::from_pairs(&[(3, entry), (14, stack)]),
+                        false,
                     );
-                    // The item-set block (`0x52b650`), Defias Leather with one of 5 equipped: the
-                    // gold "(1/5)" header, the member ladder, a green (2) bonus and a gray (4) one.
-                    let mut inv: benilla_ui::script::InventorySlots = Default::default();
-                    inv[4] = Some(benilla_ui::script::InvSlotView {
-                        durability: None,
-                        item_id: 6303,
-                        ..Default::default()
-                    });
-                    script.set_inventory_slots(inv);
-                    script.set_item_set(
-                        161,
-                        benilla_ui::script::ItemSetView {
+                    let mut t = template(name, quality);
+                    t.display_info_id = disp;
+                    if entry == SHIELD {
+                        t.subclass = 6;
+                        t.inventory_type = 14;
+                        t.bonding = 2;
+                        t.stats = vec![(7, 3)];
+                        t.armor = 85;
+                        t.block = 4;
+                        t.max_durability = 45;
+                        t.required_level = 20;
+                        // Food's line (433), "Restores $o1 health over $d.", one charge.
+                        t.spells = vec![benilla_protocol::messages::ItemSpellEntry {
+                            index: 0,
+                            spell_id: 433,
+                            trigger: 0,
+                            charges: 1,
+                            cooldown_ms: -1,
+                            category: 0,
+                            category_cooldown_ms: -1,
+                        }];
+                        t.description = "A stout little shield of Northshire pine.".into();
+                        t.sell_price = 152;
+                        t.item_set = SET_ID;
+                    }
+                    items.insert_template(entry, Some(t));
+                }
+                crate::items::spawn_item(
+                    &mut commands,
+                    &mut index,
+                    WORN.0,
+                    ObjectFields::from_pairs(&[(3, WORN.1), (14, 1)]),
+                    false,
+                );
+                let mut worn = template(members[0].1, 2);
+                worn.inventory_type = 5;
+                worn.item_set = SET_ID;
+                items.insert_template(WORN.1, Some(worn));
+                // The set row the block reads (`0x52b650`): a green (2) bonus and a gray (4) one,
+                // each a spell's `$`-expanded description, and the members' names in the cache.
+                if let Some(sets) = item_sets.as_deref_mut() {
+                    sets.0 = benilla_formats::ItemSetCatalog::from_rows([(
+                        SET_ID,
+                        benilla_formats::ItemSetInfo {
                             name: "Defias Leather".into(),
-                            members: vec![
-                                (6303, Some("Defias Mark".into())),
-                                (6304, Some("Defias Belt".into())),
-                                (6305, Some("Defias Gloves".into())),
-                                (6306, Some("Defias Trousers".into())),
-                                (6307, Some("Defias Boots".into())),
-                            ],
-                            bonuses: vec![
-                                (2, "Increases movement speed slightly.".into()),
-                                (
-                                    4,
-                                    "Immune to Defias Pillager and Defias Looter spells.".into(),
-                                ),
-                            ],
-                            ..Default::default()
+                            items: members.iter().map(|&(id, _)| id).collect(),
+                            bonuses: vec![(2, 433), (4, 72)],
+                            required_skill: 0,
+                            required_skill_rank: 0,
                         },
-                    );
-                    // Opens the tooltip over the top-left button (`Item16`, game slot 1, the Small
-                    // Shield) through the hover's OnEnter path. `IsBagOpen` names the backpack's
-                    // window, as the twelve `ContainerFrame`s are recycled across containers.
-                    if let Err(e) = script.run(
-                        "local i = IsBagOpen(0)\n\
+                    )]);
+                }
+                for (id, name) in members {
+                    item_names.file(id, Some(name.into()));
+                }
+                names.insert_player(PLAYER_GUID, "Benilla".into(), None);
+                commands.spawn((
+                    crate::net::ObjectStore(ObjectFields::from_pairs(&fields)),
+                    crate::net::SelfPlayer,
+                    crate::net::Guid(PLAYER_GUID),
+                ));
+                // The bag feed fills the backpack from the player a frame on; then the window
+                // opens and the tooltip opens over the top-left button (`Item16`, game slot 1)
+                // through the hover's OnEnter path. `ContainerFrame_GenerateFrame` numbers
+                // backwards from `Item1` at the bottom right (`ContainerFrame.lua:426-442`), and
+                // `IsBagOpen` names the backpack's window.
+                let hover = "local f = CreateFrame(\"Frame\")\n\
+                     f:SetScript(\"OnUpdate\", function()\n\
+                         if benillaTooltipDone or not GetContainerItemInfo(0, 1) then return end\n\
+                         benillaTooltipDone = 1\n\
+                         OpenBag(0)\n\
+                         local i = IsBagOpen(0)\n\
                          if i then\n\
-                             local button = getglobal(\"ContainerFrame\"..i..\"Item16\")\n\
-                             ContainerFrameItemButton_OnEnter(button)\n\
-                         end",
-                    ) {
-                        warn!("capture: ui-tooltip seed failed to open the tooltip: {e}");
+                             ContainerFrameItemButton_OnEnter(getglobal(\"ContainerFrame\"..i..\"Item16\"))\n\
+                         end\n\
+                     end)";
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    seed_chat_lines(script);
+                    if let Err(e) = script.run(hover) {
+                        warn!("capture: ui-tooltip seed failed to arm the hover: {e}");
                     }
                 }));
             }
@@ -1705,8 +1769,8 @@ fn seed_cooldown_filmstrip(
     }
 }
 
-/// Seeds and opens the backpack with a fixed item set, for the `Bag` and `Tooltip` fixtures. With
-/// no `SelfPlayer` in capture the `ui_items` feed leaves bag 0 alone.
+/// Seeds and opens the backpack with a fixed item set, for the `Bag` fixture. With no `SelfPlayer`
+/// in capture the `ui_items` feed leaves bag 0 alone.
 fn seed_bag_window(
     script: &mut benilla_ui::script::UiScript,
     icons: Option<&crate::entities::ItemDisplays>,
@@ -1783,10 +1847,14 @@ fn seed_bag_window(
     if let Err(e) = script.run("OpenBag(0)") {
         warn!("capture: bag window seed failed: {e}");
     }
+    seed_chat_lines(script);
+}
 
-    // Chat lines in ChatFrame1 for the line shadow and `ChatFontNormal`: SYSTEM yellow, SAY white,
-    // LOOT green. In the loot lines the item's quality escape wins for its bracketed name, and the
-    // `x2` after `|r` falls back to the line's green.
+/// Chat lines in ChatFrame1 for the line shadow and `ChatFontNormal`, under the bag and tooltip
+/// fixtures.
+fn seed_chat_lines(script: &mut benilla_ui::script::UiScript) {
+    // SYSTEM yellow, SAY white, LOOT green. In the loot lines the item's quality escape wins for
+    // its bracketed name, and the `x2` after `|r` falls back to the line's green.
     for (text, r, g, b) in [
         ("Welcome to Northshire Valley.", 1.0, 1.0, 0.0),
         ("[Marshal McBride] says: Well met, citizen.", 1.0, 1.0, 1.0),

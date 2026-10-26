@@ -415,7 +415,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     // the row red by it (`QuestFrame.lua:393`).
                     let usable = it.name.is_none() || {
                         let model = lua.app_data_ref::<Model>().expect("model app_data");
-                        super::item_stats::item_usable_by_id(&model, it.item_id)
+                        super::item_stats::item_usable_by_id(lua, &model, it.item_id)
                     };
                     (
                         it.name.unwrap_or_default(),

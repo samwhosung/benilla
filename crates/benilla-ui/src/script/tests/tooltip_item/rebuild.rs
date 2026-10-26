@@ -30,6 +30,8 @@ fn lines(s: &mut UiScript, tt: &str) -> Vec<String> {
 /// backpack's slot 1 holds a copper bar.
 fn fixture() -> UiScript {
     let mut s = item_script();
+    // The build's lookups are calls, kept for the asserts.
+    s.keep_calls();
     s.set_screen_size(800.0, 600.0);
     s.run(
         r#"LOCKED_WITH_ITEM = "[LOCKED_WITH_ITEM %s]"
@@ -437,9 +439,13 @@ fn a_hosted_inspected_slots_maker_name_reads_the_name_cache() {
     const MATE: u64 = 0x20;
     struct Host {
         name: Option<String>,
+        asked: Vec<u64>,
     }
     impl CallHost for Host {
-        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+        fn apply(&mut self, _: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            if let ScriptCall::RecordAsk(crate::script::RecordAsk::ItemBuildName(guid)) = call {
+                self.asked.push(guid);
+            }
             None
         }
         fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
@@ -469,13 +475,20 @@ fn a_hosted_inspected_slots_maker_name_reads_the_name_cache() {
             inspectable: true,
         },
     )]));
-    let mut host = Host { name: None };
+    let mut host = Host {
+        name: None,
+        asked: Vec::new(),
+    };
     s.hosted(&mut host, |s| {
         s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetInventoryItem('target', 5)")
             .unwrap();
     });
     assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
-    assert_eq!(s.take_item_name_asks(), vec![SMITH], "the build asks");
+    assert_eq!(
+        std::mem::take(&mut host.asked),
+        vec![SMITH],
+        "the build asks in its call"
+    );
     host.name = Some("Smith".into());
     s.hosted(&mut host, |s| s.tick(0.1));
     assert_eq!(

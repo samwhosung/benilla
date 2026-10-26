@@ -510,7 +510,8 @@ fn slot_view(
         crate::items::record_flags(items, entry, guid),
         rolls.enchants,
     );
-    // Only read: the tooltip build asks the creator (`crate::ui_items::feed::ask_item_build_lookups`).
+    // Only read: the tooltip build asks the creator in its call
+    // ([`benilla_ui::script::RecordAsk::ItemBuildName`]).
     let creator = obj
         .item_creator()
         .filter(|&g| g != 0)

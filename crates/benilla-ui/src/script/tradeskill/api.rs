@@ -190,7 +190,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 return Ok(MultiValue::new());
             };
-            let req = model.player_req.clone();
+            let req = crate::script::requirements::player_req(lua, &model);
             let player =
                 crate::script::unit::view(lua, &model, "player").map(|u| (u.pvp_team, u.sex == 3));
             let knows = view.required_spell != 0
@@ -198,7 +198,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             drop(model);
             let facts = super::itemstats::PlayerFacts {
                 // A player whose level is unpushed declines to judge, as `item_refusal` does.
-                present: req.level != 0 || player.is_some(),
+                present: crate::script::ReqRead::head(&req).level != 0 || player.is_some(),
                 pvp_team: player.map_or(0, |p| p.0),
                 female: player.is_some_and(|p| p.1),
                 knows_required_spell: knows,

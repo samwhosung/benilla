@@ -1,7 +1,7 @@
 //! The merchant getters' reads at the call, the call host's half of
 //! [`benilla_ui::script::MerchantHeadQuery`] and its kin: the window's cell and rows
-//! (`0xbddfa0`, `0xbdd118`), the player's buy-back fields and the open vendor's unit as the
-//! handlers left them, each row resolved off the item cache as the reference's getter reads it at
+//! (`0xbddfa0`, `0xbdd118`), the player's buy-back fields, items and the open vendor's unit as of
+//! the drain's place, each row resolved off the item cache as the reference's getter reads it at
 //! the call (`0x4fb150`, `0x4fb310`, `0x4fadb0`, `0x4fbd60`).
 
 use bevy::ecs::system::SystemParam;
@@ -15,11 +15,11 @@ use benilla_ui::script::{
 
 use super::{
     buyback_order, open_vendor_discount, repair_all, resolve_buyback, resolve_item, vendor_repairs,
-    vendor_unit, MerchantOpen, RepairTables,
+    MerchantOpen, RepairTables,
 };
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::Objects;
+use crate::net::{ObjectStore, Objects};
 use crate::query_cache::Ask;
 
 /// What the merchant getters read as they run; the window, the item cache and the tables each
@@ -32,10 +32,24 @@ pub(crate) struct MerchantLive<'w, 's> {
     tables: Option<Res<'w, RepairTables>>,
     rolls: crate::items::Rolls<'w>,
     objects: Objects<'w, 's>,
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
     relations: crate::target::RelationWorld<'w, 's>,
 }
 
 impl MerchantLive<'_, '_> {
+    /// The active player's store as of the drain's place.
+    fn player(&self) -> Option<&ObjectStore> {
+        self.objects.player().and_then(|e| self.stores.get(e).ok())
+    }
+
+    /// The open vendor's unit as of the drain's place.
+    fn vendor(&self, open: &MerchantOpen) -> Option<(u64, &ObjectStore)> {
+        let guid = open.vendor?;
+        self.stores
+            .by_guid(guid, self.objects.store(guid))
+            .map(|store| (guid, store))
+    }
+
     /// The cell, the row count the close zeroes (`0x4fae22`), the buy-back count with a vendor
     /// (`0x4fc166`) and the repair flag (`0x4fadb0`).
     fn head(&self) -> Option<MerchantHead> {
@@ -43,15 +57,12 @@ impl MerchantLive<'_, '_> {
         if open.vendor.is_none() {
             return Some(MerchantHead::default());
         }
-        let buyback = self
-            .objects
-            .player_fields()
-            .map_or(0, |p| buyback_order(p).len());
+        let buyback = self.player().map_or(0, |p| buyback_order(&p.0).len());
         Some(MerchantHead {
             open: true,
             items: open.items.len(),
             buyback,
-            can_repair: vendor_repairs(vendor_unit(open, &self.objects)),
+            can_repair: vendor_repairs(self.vendor(open)),
         })
     }
 
@@ -70,14 +81,15 @@ impl MerchantLive<'_, '_> {
     /// read (`0x4fb310`-`0x4fb3d7`).
     fn buyback(&self, index: usize) -> Option<Option<MerchantItem>> {
         let items = self.items.as_deref()?;
-        let Some(player) = self.objects.player_fields() else {
+        let Some(player) = self.player() else {
             return Some(None);
         };
-        Some(buyback_order(player).get(index).map(|&slot| {
+        let objects = self.stores.item_objects(&self.objects);
+        Some(buyback_order(&player.0).get(index).map(|&slot| {
             resolve_buyback(
                 slot,
-                player,
-                &self.objects,
+                &player.0,
+                &objects,
                 items,
                 (self.icons.as_deref(), self.rolls.get()),
                 Ask::Read,
@@ -89,15 +101,15 @@ impl MerchantLive<'_, '_> {
     /// open vendor's discount (`0x4faf8a`).
     pub(super) fn repair_all(&self) -> Option<Option<(u32, bool)>> {
         let (open, items) = (self.open.as_deref()?, self.items.as_deref()?);
-        let vendor = vendor_unit(open, &self.objects);
-        let player = self.objects.player().and_then(|e| self.objects.store_of(e));
+        let vendor = self.vendor(open);
+        let player = self.player();
         let (true, Some(player)) = (vendor_repairs(vendor), player) else {
             return Some(None);
         };
         let discount = open_vendor_discount(vendor, &self.relations, player);
         Some(Some(repair_all(
             &player.0,
-            &self.objects,
+            &self.stores.item_objects(&self.objects),
             items,
             self.tables.as_deref(),
             discount,

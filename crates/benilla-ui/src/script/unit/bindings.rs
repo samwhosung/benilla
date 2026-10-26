@@ -217,11 +217,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 r#"Usage: UnitLevel("unit")"#,
             )?);
             check_unit_token(&token)?;
-            let player_level = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .player_req
-                .level;
+            // Our level as the call runs; with no active player the hostile leg is skipped
+            // (`0x518055`).
+            let player_level = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                crate::script::requirements::player_head(lua, &model).map(|h| h.level)
+            };
             // The rank is the creature record's, read off the name cache as the call runs.
             let rank = token
                 .as_deref()
@@ -286,11 +287,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitIsTrivial("unit")"#,
             )?);
-            let player_level = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .player_req
-                .level;
+            // With no active player nothing is grey (`0x5f0720`), so level 0 stands for it.
+            let player_level = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                crate::script::requirements::player_head(lua, &model).map_or(0, |h| h.level)
+            };
             object_predicate(lua, &token, |u, o| {
                 u.has_object && !u.is_player && unit_is_grey(player_level, o.level())
             })
@@ -298,13 +299,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetQuestGreenRange (`0x4e17d0`): the green-to-grey boundary `QuestLogFrame.lua:593` buckets
-    // by, from the table at `0x8076c0`. The reference answers 0 with no player object (`0x4e17f8`);
-    // here a level of 0 reads the table's first entry, 4.
+    // by, from the table at `0x8076c0`. With no player object it answers 0 (`0x4e17f8`).
     g.set(
         "GetQuestGreenRange",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(grey_band(model.player_req.level)))
+            Ok(crate::script::requirements::player_head(lua, &model)
+                .map_or(0, |h| i64::from(grey_band(h.level))))
         })?,
     )?;
 
@@ -356,11 +357,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 unit,
                 r#"Usage: UnitIsCivilian("unit")"#,
             )?);
-            let player_level = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .player_req
-                .level;
+            // With no active player nothing is grey (`0x5f0720`), so level 0 stands for it.
+            let player_level = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                crate::script::requirements::player_head(lua, &model).map_or(0, |h| h.level)
+            };
             // The record's civilian flag is read off the name cache as the call runs.
             Ok(flag(unit.is_some_and(|t| {
                 let civilian = read_record(lua, &t, |_, r| r.civilian).unwrap_or(false);
@@ -901,7 +902,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetComboPoints",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let class = model.player_req.class_id;
+            // No active player answers 0 (`0x51a1bd` → `0x51a261`), as class 0 does.
+            let class =
+                crate::script::requirements::player_head(lua, &model).map_or(0, |h| h.class_id);
             if class != CLASS_ROGUE && class != CLASS_DRUID {
                 return Ok(0_i64);
             }

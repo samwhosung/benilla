@@ -79,30 +79,50 @@ fn spell_desc_text(
     // The VM's strings for the keyed `$d`/`$s` tokens.
     global: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
+    let parts = spell_desc_parts(spells, id, caster, home_area, gender, mods)?;
+    Some(benilla_formats::resolve_parts(
+        &parts,
+        global,
+        &crate::ui_script::token_printf,
+    ))
+    .filter(|t| !t.is_empty())
+}
+
+/// [`spell_desc_text`]'s expansion with each template a token names left to be read where the
+/// line shows; `None` for no description.
+fn spell_desc_parts(
+    spells: Option<&crate::ui_action::Spells>,
+    id: u32,
+    caster: TokenCaster,
+    home_area: Option<&str>,
+    gender: &dyn Fn() -> u8,
+    mods: Option<&crate::spell::SpellModifiers>,
+) -> Option<Vec<benilla_formats::TokenPart>> {
     let sp = spells?;
     let d = sp.catalog.get(id)?;
-    match d.description.as_deref().filter(|t| !t.is_empty()) {
-        // The builder tests the expanded text, which can be empty from a non-empty template.
-        Some(desc) => {
-            let ctx = benilla_formats::TokenContext {
-                durations: &sp.durations,
-                radii: &sp.radii,
-                ranges: Some(&sp.ranges),
-                level: caster.level,
-                lookup: &|i| sp.catalog.get(i),
-                mods: mods.map(|m| m as &dyn benilla_formats::SpellMods),
-                power_cost: caster.power_cost,
-                power_per_second: caster.power_per_second,
-                unmodified_points: false,
-                gender,
-                home_area: &|| home_area,
-                global,
-                printf: &crate::ui_script::token_printf,
-            };
-            Some(benilla_formats::substitute(desc, d, &ctx)).filter(|t| !t.is_empty())
-        }
-        None => None,
-    }
+    let desc = d.description.as_deref().filter(|t| !t.is_empty())?;
+    let ctx = benilla_formats::TokenContext {
+        durations: &sp.durations,
+        radii: &sp.radii,
+        ranges: Some(&sp.ranges),
+        level: caster.level,
+        lookup: &|i| sp.catalog.get(i),
+        mods: mods.map(|m| m as &dyn benilla_formats::SpellMods),
+        power_cost: caster.power_cost,
+        power_per_second: caster.power_per_second,
+        unmodified_points: false,
+        gender,
+        home_area: &|| home_area,
+        // Never read: the parts leave each template to the read where the line shows.
+        global: &|_| None,
+        printf: &crate::ui_script::token_printf,
+    };
+    Some(benilla_formats::substitute_parts(
+        desc,
+        d,
+        &ctx,
+        benilla_formats::ExpandAt::default(),
+    ))
 }
 
 /// What the `$`-tokens read of the player beside the modifiers: the skills the per-level terms
@@ -126,15 +146,6 @@ fn item_has_mod_tokens(t: &ItemInfo, spells: Option<&crate::ui_action::Spells>) 
     t.spells
         .iter()
         .any(|slot| slot.spell_id != 0 && spell_has_mod_tokens(spells, slot.spell_id))
-}
-
-fn bonuses_have_mod_tokens(
-    bonuses: &[(u32, u32)],
-    spells: Option<&crate::ui_action::Spells>,
-) -> bool {
-    bonuses
-        .iter()
-        .any(|&(_, spell)| spell_has_mod_tokens(spells, spell))
 }
 
 /// The static tables a template view names its ids through, all loaded at startup.
@@ -363,147 +374,70 @@ fn taught_spell(
     })
 }
 
-/// Answers the engine's set-id asks from `ItemSet.dbc`: member names from the item-name store, each
-/// miss queried as the reference queries set members, and bonus text from the `$`-engine. A set
-/// stays pending, re-pushing, until every member resolves.
-pub(super) fn feed_item_sets(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    sets: Option<Res<super::ItemSets>>,
-    items: Res<Items>,
-    item_names: Res<crate::item_names::ItemNames>,
-    commands: Res<NetCommands>,
-    spells: Option<Res<crate::ui_action::Spells>>,
-    spell_mods: Res<crate::spell::SpellModifiers>,
-    skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    mut pending: Local<
-        crate::ui_script::VmMemo<std::collections::HashMap<u32, benilla_ui::script::ItemSetView>>,
-    >,
-    mut mod_sensitive: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
-    mut last_reads: Local<crate::ui_script::VmMemo<Option<TokenReads>>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let pending = pending.get(script);
-        let mod_sensitive = mod_sensitive.get(script);
-        let me = self_q.single().ok();
-        // The build's asks are its lookups with a callback (`0x52bf60`): their members are asked,
-        // a refused one again; a set carried since only reads.
-        let asked: HashSet<u32> = script.take_item_set_asks().into_iter().collect();
-        for &id in &asked {
-            pending.entry(id).or_default();
+/// Set `set_id`'s block as the set block reads it at the call (`0x52d8a0..0x52e0f5`): the
+/// `ItemSet.dbc` row, the members named off the item-name cache, only read (the build asks each
+/// one still unnamed in its call, `0x52df4b`), the skill line and the bonuses' descriptions
+/// expanded against the active player, `me`; `None` for no row.
+pub(super) fn item_set_live(
+    set_id: u32,
+    sets: &super::ItemSets,
+    item_names: &crate::item_names::ItemNames,
+    spells: Option<&crate::ui_action::Spells>,
+    spell_mods: Option<&crate::spell::SpellModifiers>,
+    skill_lines: Option<&crate::ui_spellbook::SkillLines>,
+    items: Option<&Items>,
+    me: Option<&ObjectStore>,
+) -> Option<benilla_ui::script::LiveItemSet> {
+    let row = sets.0.set(set_id)?;
+    let skill_catalog = skill_lines.map(|s| &s.catalog);
+    let skills = crate::spell::PlayerSkills {
+        lines: skill_catalog,
+        spells: spells.map(|s| &s.catalog),
+        items,
+    };
+    let level = |d: &benilla_formats::SpellDisplay| {
+        crate::spell::player_spell_level(me, skills, d, &mut crate::spell::Unrecorded)
+    };
+    let power_cost = |d: &benilla_formats::SpellDisplay| match (me, spell_mods) {
+        (Some(s), Some(mods)) => {
+            crate::spell::usable::power_cost(d, s, skills, mods, &mut crate::spell::Unrecorded)
         }
-        // The `$`-tokens follow the player's skills and gender.
-        let reads = token_reads(me);
-        let gender = reads.1;
-        let reads_changed = last_reads.get(script).as_ref() != Some(&reads);
-        *last_reads.get(script) = Some(reads);
-        if spell_mods.is_changed() || reads_changed {
-            for &id in mod_sensitive.iter() {
-                pending.entry(id).or_default();
-            }
-        }
-        if pending.is_empty() {
-            return;
-        }
-        let Some(sets) = sets.as_deref() else {
-            return; // no catalog without client data: the asks stay parked
-        };
-        let spell_res = spells.as_deref();
-        let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
-        let skills = crate::spell::PlayerSkills {
-            lines: skill_catalog,
-            spells: spell_res.map(|s| &s.catalog),
-            items: Some(&items),
-        };
-        let level = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::player_spell_level(me, skills, d, &mut crate::spell::Unrecorded)
-        };
-        let power_cost = |d: &benilla_formats::SpellDisplay| {
-            me.map_or(-1, |s| {
-                crate::spell::usable::power_cost(
-                    d,
-                    s,
-                    skills,
-                    &spell_mods,
-                    &mut crate::spell::Unrecorded,
-                )
+        _ => -1,
+    };
+    let power_per_second = |d: &benilla_formats::SpellDisplay| {
+        let level = crate::spell::SpellLevel::Player { me, skills };
+        crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+    };
+    let caster = TokenCaster {
+        level: &level,
+        power_cost: &power_cost,
+        power_per_second: &power_per_second,
+    };
+    // The `$g`/`$G` branch reads our gender (`0x508214`).
+    let gender = token_reads(me).1;
+    Some(benilla_ui::script::LiveItemSet {
+        view: benilla_ui::script::ItemSetView {
+            name: row.name.clone(),
+            members: set_members(&row.items, item_names, Ask::Read),
+            bonuses: Vec::new(),
+            required_skill: row.required_skill,
+            required_skill_rank: row.required_skill_rank,
+            required_skill_name: (row.required_skill != 0)
+                .then(|| {
+                    skill_catalog
+                        .and_then(|sl| sl.line(row.required_skill))
+                        .map(|l| l.name.clone())
+                })
+                .flatten(),
+        },
+        bonuses: row
+            .bonuses
+            .iter()
+            .filter_map(|&(n, spell)| {
+                let parts = spell_desc_parts(spells, spell, caster, None, &|| gender, spell_mods)?;
+                Some((n, crate::ui_tooltip::tooltip_text(parts)))
             })
-        };
-        let power_per_second = |d: &benilla_formats::SpellDisplay| {
-            let level = crate::spell::SpellLevel::Player { me, skills };
-            crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
-        };
-        let caster = TokenCaster {
-            level: &level,
-            power_cost: &power_cost,
-            power_per_second: &power_per_second,
-        };
-        let mut done: Vec<u32> = Vec::new();
-        let mut push: Vec<(u32, benilla_ui::script::ItemSetView)> = Vec::new();
-        // Its borrow of the VM ends before the push, which needs the VM mutably.
-        let global = |key: &str| benilla_ui::strings::global(script.lua(), key);
-        for (&set_id, last) in pending.iter_mut() {
-            let Some(row) = sets.0.set(set_id) else {
-                done.push(set_id); // no such row: drop the ask
-                continue;
-            };
-            if bonuses_have_mod_tokens(&row.bonuses, spell_res) {
-                mod_sensitive.insert(set_id);
-            } else {
-                mod_sensitive.remove(&set_id);
-            }
-            let ask = if asked.contains(&set_id) {
-                Ask::Event(&commands)
-            } else {
-                Ask::Read
-            };
-            let members = set_members(&row.items, &item_names, ask);
-            let view = benilla_ui::script::ItemSetView {
-                name: row.name.clone(),
-                bonuses: row
-                    .bonuses
-                    .iter()
-                    .filter_map(|&(n, spell)| {
-                        spell_desc_text(
-                            spell_res,
-                            spell,
-                            caster,
-                            None,
-                            &|| gender,
-                            Some(&spell_mods),
-                            &global,
-                        )
-                        .map(|desc| (n, desc))
-                    })
-                    .collect(),
-                required_skill: row.required_skill,
-                required_skill_rank: row.required_skill_rank,
-                required_skill_name: (row.required_skill != 0)
-                    .then(|| {
-                        skill_catalog
-                            .and_then(|sl| sl.line(row.required_skill))
-                            .map(|l| l.name.clone())
-                    })
-                    .flatten(),
-                members,
-            };
-            if view.members.iter().all(|(_, n)| n.is_some()) {
-                done.push(set_id);
-            }
-            if *last != view {
-                *last = view.clone();
-                push.push((set_id, view));
-            }
-        }
-        for (id, view) in push {
-            script.set_item_set(id, view);
-        }
-        for id in done {
-            pending.remove(&id);
-        }
+            .collect(),
     })
 }
 
@@ -750,140 +684,6 @@ type CasterReads<'w, 's> = (
     Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
 );
 
-/// The player state the tooltip's red requirement lines check: level, class, race, skills,
-/// proficiencies (`SMSG_SET_PROFICIENCY`), reputation ranks (the DBC base plus the
-/// `SMSG_INITIALIZE_FACTIONS` standing), honor rank and medals, the known spells, and the
-/// skinning value the unit tooltip colours by, pushed on change.
-pub(super) fn feed_player_req(
-    // The reputation slots, which a call can write: an engine turn.
-    mut vm: crate::script_calls::VmWith<Res<'static, crate::net::Reputations>>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    changed_self: Query<(), (With<SelfPlayer>, Changed<ObjectStore>)>,
-    proficiencies: Res<crate::net::Proficiencies>,
-    factions: Option<Res<crate::target::Factions>>,
-    actions: Res<crate::ui_action::PlayerActions>,
-    spells: Option<Res<crate::ui_action::Spells>>,
-    // The skinning latch `[0xb700e4]` and the line its value scales by.
-    skinning: (
-        Res<crate::ui_action::LearnedAbilities>,
-        Option<Res<crate::ui_spellbook::SkillLines>>,
-    ),
-    mut last: Local<crate::ui_script::VmMemo<Option<benilla_ui::script::PlayerReqState>>>,
-) {
-    vm.turn(|script, reputations| {
-        let (learned, skill_lines) = skinning;
-        let Some(script) = script else {
-            return;
-        };
-        let (last, vm_reset) = last.get_reset(script);
-        // The state is a function of these inputs alone.
-        let self_changed = !changed_self.is_empty();
-        let prof_changed = proficiencies.is_changed();
-        let reps_changed = reputations.is_changed();
-        let factions_changed = factions.as_ref().is_some_and(|r| r.is_changed());
-        let actions_changed = actions.is_changed();
-        let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
-        let learned_changed = learned.is_changed();
-        let lines_changed = skill_lines.as_ref().is_some_and(|r| r.is_changed());
-        gate::trace(
-            "feed_player_req",
-            &[
-                ("vm_reset", vm_reset),
-                ("self", self_changed),
-                ("proficiencies", prof_changed),
-                ("reputations", reps_changed),
-                ("factions", factions_changed),
-                ("actions", actions_changed),
-                ("spells", spells_changed),
-                ("learned", learned_changed),
-                ("skill_lines", lines_changed),
-            ],
-        );
-        let gate = gate::Gate::new(
-            vm_reset
-                || self_changed
-                || prof_changed
-                || reps_changed
-                || factions_changed
-                || actions_changed
-                || spells_changed
-                || learned_changed
-                || lines_changed,
-        );
-        if gate.skip() {
-            return;
-        }
-        // The known-spell set the item tooltip's known-recipe line tests (`0x60c740`), the whole
-        // book: a recipe's taught craft is a spell the spellbook does not list.
-        if vm_reset || actions_changed {
-            script.set_known_spells(actions.spells.iter().copied().collect());
-        }
-        let Some(store) = self_q.iter().next() else {
-            return;
-        };
-        let mut skills = std::collections::HashMap::new();
-        for slot in 0..benilla_protocol::messages::PLAYER_SKILL_SLOTS {
-            let Some(s) = store.0.player_skill(slot) else {
-                continue;
-            };
-            if s.skill_id != 0 {
-                // The requirement checks (`0x5eaae0`, `0x5ea930`) read the value plus the permanent
-                // bonus, never the temporary one; the bonus is never negative in live data.
-                skills.insert(
-                    u32::from(s.skill_id),
-                    u32::from(s.value).saturating_add_signed(i32::from(s.perm_bonus)),
-                );
-            }
-        }
-        let race = store.0.unit_race().unwrap_or(0);
-        let class = store.0.unit_class().unwrap_or(0);
-        let mut rep_ranks = std::collections::HashMap::new();
-        if let Some(cat) = factions.as_deref().map(|f| f.catalog()) {
-            for (id, info) in cat.reputation_factions() {
-                let standing =
-                    usize::try_from(info.rep_index).map_or(0, |i| reputations.standing(i));
-                rep_ranks.insert(
-                    id,
-                    benilla_formats::reputation_rank(info.base_for(race, class) + standing),
-                );
-            }
-        }
-        let can_dual_wield = actions.knows_dual_wield(spells.as_deref());
-        // The skinnable line's value (`0x529f06`-`0x529f58`): the latched spell's first `SKINNING`
-        // effect, its points at the player's skill in the spell's line, kept only above 0.
-        let skinning = learned
-            .skinning
-            .and_then(|id| {
-                let d = spells.as_deref()?.catalog.get(id)?;
-                let e = d
-                    .effects
-                    .iter()
-                    .position(|&e| e == benilla_formats::SPELL_EFFECT_SKINNING)?;
-                let catalog = skill_lines.as_deref().map(|s| &s.catalog);
-                let skill = crate::spell::spell_skill_value(Some(store), catalog, id);
-                Some(d.effect_points_int(e, skill))
-            })
-            .filter(|&v| v > 0);
-        let state = benilla_ui::script::PlayerReqState {
-            level: store.0.unit_level().unwrap_or(0),
-            class_id: u32::from(class),
-            race_id: u32::from(race),
-            skills,
-            proficiency: proficiencies.0.clone(),
-            rep_ranks,
-            can_dual_wield,
-            honor_rank: store.0.player_honor_rank().unwrap_or(0),
-            pvp_medals: store.0.player_pvp_medals().unwrap_or(0),
-            skinning,
-        };
-        if last.as_ref() != Some(&state) {
-            gate.audit("feed_player_req", "the player-requirement state");
-            *last = Some(state.clone());
-            script.set_player_req_state(state);
-        }
-    })
-}
-
 /// One bag slot from its item guid: instance, template, icon and use-spell cooldown. `None` is an
 /// empty slot or one whose item object has not streamed; an occupied one whose template is not yet
 /// resolved is `Some` with empty fields.
@@ -924,7 +724,8 @@ fn resolve_slot(
         // `GetContainerItemInfo`'s readable flag (`0x4f97ba`).
         live.readable(),
         // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
-        // name query answers. The tooltip build asks it ([`ask_item_build_lookups`]).
+        // name query answers. The tooltip build asks it in its call
+        // ([`benilla_ui::script::RecordAsk::ItemBuildName`]).
         fields
             .item_creator()
             .filter(|&g| g != 0)
@@ -1134,51 +935,6 @@ pub(crate) fn object_cooldown(
         now,
         ui_now,
     ))
-}
-
-/// The item build's own lookups, asked as it asks them. The creator's and the giver's names
-/// (`0x52e204`, `0x52e29d`) and a charter's record and owner (`0x52b93b`, `0x52b9d2`) pass a
-/// callback at every build, and a hovered bag or paper-doll slot builds again each frame
-/// (`ContainerFrameItemButton_OnUpdate`, `PaperDollItemSlotButton_OnUpdate` run their `OnEnter`
-/// while the tooltip is theirs), so a refused key is asked again about once per answer. The slot
-/// feeds only read what lands.
-pub(super) fn ask_item_build_lookups(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    names: Res<crate::names::NameCache>,
-    petitions: Res<crate::ui_petition::PetitionRecords>,
-    objects: Objects,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        // The petition id rides enchantment slot 0 (`0x5ef337`).
-        let petition_id = |item| {
-            objects
-                .object(item)
-                .and_then(|f| f.item_enchant(0))
-                .unwrap_or(0) as u32
-        };
-        let asks = (script.take_item_name_asks(), script.take_petition_asks());
-        ask_build_lookups(asks, petition_id, &names, &petitions, &commands);
-    })
-}
-
-/// One run's asks: the build's missed names, then its charters' records and owners.
-fn ask_build_lookups(
-    (name_asks, petition_asks): (Vec<u64>, Vec<u64>),
-    petition_id: impl Fn(u64) -> u32,
-    names: &crate::names::NameCache,
-    petitions: &crate::ui_petition::PetitionRecords,
-    commands: &NetCommands,
-) {
-    for guid in name_asks {
-        names.resolve_player(guid, Ask::Event(commands));
-    }
-    for item in petition_asks {
-        petitions.tooltip_view(petition_id(item), item, names, Ask::Event(commands));
-    }
 }
 
 #[allow(clippy::type_complexity)] // the param list is the input set
@@ -1774,7 +1530,7 @@ fn push_changed(
 
 #[cfg(test)]
 mod tests {
-    use super::{ask_build_lookups, push_containers, resolve_slot, ContainerSlot, FeedMemory};
+    use super::{push_containers, resolve_slot, ContainerSlot, FeedMemory};
 
     /// A set's member names come from the item-name store (`0x52df5a` looks up `0xc0e2dc` with a
     /// callback and a zero owner), asked with `CMSG_ITEM_NAME_QUERY`, never the template store.
@@ -2067,30 +1823,6 @@ mod tests {
         };
         assert_eq!(line(0).as_deref(), Some("Requires UNKNOWN - Honored"));
         assert_eq!(line(1).as_deref(), Some("Requires UNKNOWN - Honored (f)"));
-    }
-
-    /// The build's lookups pass a callback (`0x52e204`, `0x52b93b`): a run asks a name still in
-    /// flight no second time, and asks a refused one again at once.
-    #[test]
-    fn each_build_asks_its_missed_name_and_charter_again_once_answered() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let commands = crate::net::NetCommands(tx);
-        let mut names = crate::names::NameCache::default();
-        let petitions = crate::ui_petition::PetitionRecords::default();
-        let run = |names: &crate::names::NameCache| {
-            ask_build_lookups((vec![0x5], vec![0x99]), |_| 7, names, &petitions, &commands);
-            crate::query_cache::queries(&rx).len()
-        };
-        assert_eq!(
-            run(&names),
-            2,
-            "the first build asks the name and the record"
-        );
-        for _ in 0..600 {
-            assert_eq!(run(&names), 0, "in flight: no build asks again");
-        }
-        names.insert_player(0x5, String::new(), None);
-        assert_eq!(run(&names), 1, "a refused name is asked at the next build");
     }
 
     /// A bag slot carries the template's quality and InventoryType, which `GetContainerItemInfo`
@@ -2604,7 +2336,7 @@ mod tests {
     }
 
     #[test]
-    fn modifier_refresh_tracks_only_item_and_set_descriptions_with_tokens() {
+    fn modifier_refresh_tracks_only_item_descriptions_with_tokens() {
         let displays = std::collections::HashMap::from([
             (
                 1,
@@ -2634,11 +2366,6 @@ mod tests {
         assert!(!super::item_has_mod_tokens(&item, Some(&spells)));
         item.spells.push(slot(2, 0));
         assert!(super::item_has_mod_tokens(&item, Some(&spells)));
-        assert!(!super::bonuses_have_mod_tokens(&[(2, 1)], Some(&spells)));
-        assert!(super::bonuses_have_mod_tokens(
-            &[(2, 1), (4, 2)],
-            Some(&spells)
-        ));
     }
 
     /// On the real Spell.dbc, an undescribed spell such as a key's `Opening` builds no trigger
@@ -2923,73 +2650,5 @@ mod ask_tests {
             .unwrap();
         app.update();
         assert_eq!(name(&app), "", "a missing key formats the empty string");
-    }
-
-    /// The requirement state carries `PLAYER_FIELD_PVP_MEDALS` and the whole known-spell book: a
-    /// held medal whites its line (`0x52d70a`), and a recipe whose craft the book holds, which the
-    /// spellbook never lists, reads already known (`0x52d54f`).
-    #[test]
-    fn the_requirement_feed_pushes_the_medals_and_the_known_spells() {
-        let mut app = App::new();
-        app.init_resource::<crate::net::Proficiencies>()
-            .init_resource::<crate::net::Reputations>()
-            .init_resource::<crate::ui_action::PlayerActions>()
-            .init_resource::<crate::ui_action::LearnedAbilities>()
-            .add_systems(Update, super::feed_player_req);
-        app.world_mut()
-            .resource_mut::<crate::ui_action::PlayerActions>()
-            .spells
-            .insert(2335);
-        // UNIT_FIELD_LEVEL 34 and PLAYER_FIELD_PVP_MEDALS 1225, medal 1 held.
-        app.world_mut().spawn((
-            crate::net::SelfPlayer,
-            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                (34, 60),
-                (1225, 0x1),
-            ])),
-        ));
-        let mut script = benilla_ui::script::UiScript::new().unwrap();
-        crate::ui_script::test_ui::load_tooltip_template(&script);
-        script.set_item_template(
-            9504,
-            benilla_ui::script::ItemTemplateView {
-                name: "Recipe: Medal".into(),
-                quality: 1,
-                required_city_rank: 1,
-                teaches: Some(benilla_ui::script::TaughtSpell {
-                    ranks: vec![2335],
-                    pet: false,
-                }),
-                ..Default::default()
-            },
-        );
-        app.insert_non_send_resource(script);
-        app.update();
-        let (known, medal, r, g, b): (String, String, f32, f32, f32) = app
-            .world_mut()
-            .non_send_resource_mut::<benilla_ui::script::UiScript>()
-            .eval(
-                r#"
-                ITEM_SPELL_KNOWN = "Already known"
-                ITEM_REQ_SKILL = "Requires %s"
-                PVP_MEDAL1 = "Medal"
-                local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
-                tt:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
-                tt:SetHyperlink("item:9504:0:0:0")
-                local r, g, b = TTTextLeft3:GetTextColor()
-                return TTTextLeft2:GetText(), TTTextLeft3:GetText(), r, g, b
-                "#,
-            )
-            .unwrap();
-        assert_eq!(
-            (known.as_str(), medal.as_str()),
-            ("Already known", "Requires Medal")
-        );
-        // White, not the unmet red's `32/255` green and blue.
-        assert!(
-            [r, g, b].iter().all(|c| (c - 1.0).abs() < 1e-4),
-            "the medal is held: {:?}",
-            (r, g, b)
-        );
     }
 }

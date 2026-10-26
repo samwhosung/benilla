@@ -593,6 +593,8 @@ pub(crate) struct DeathSteps<'w, 's> {
     >,
     gate: crate::ui_bind_confirm::BindGate<'w>,
     ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
+    /// What the soulstone use's requirement gate reads, seated with the host out.
+    requirements: crate::ui_items::RequirementsLive<'w, 's>,
     guids: Option<Res<'w, crate::net::GuidIndex>>,
     transforms: Query<'w, 's, &'static Transform>,
     me: Query<'w, 's, Entity, With<SelfPlayer>>,
@@ -751,6 +753,7 @@ impl DeathSteps<'_, '_> {
             on_object: None,
             is_charter: false,
         };
+        self.requirements.seat(script);
         crate::ui_items::send_item_use(
             it,
             &ctx,

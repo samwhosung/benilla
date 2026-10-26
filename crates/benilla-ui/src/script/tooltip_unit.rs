@@ -225,7 +225,7 @@ fn level_line(
 fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
-    let (unit, viewer, player_level, skinning, me) = {
+    let (unit, viewer, req, me) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
         let unit = crate::script::unit::view(lua, &model, token)
             .map(std::borrow::Cow::into_owned)
@@ -240,15 +240,10 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             u
         });
         let viewer = unit.as_ref().and_then(|u| viewer(&model, u));
-        let req = &model.player_req;
-        (
-            unit,
-            viewer,
-            req.level,
-            req.skinning,
-            model.unit_guids.player,
-        )
+        let req = crate::script::requirements::player_req(lua, &model);
+        (unit, viewer, req, model.unit_guids.player)
     };
+    let player_level = crate::script::ReqRead::head(&req).level;
     clear(lua, h);
     let Some(u) = unit else {
         super::visibility::set_shown(lua, h, false);
@@ -327,7 +322,8 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
         // `UNIT_SKINNABLE` (`0x529ed0`): unit flags bit 26 off a creature (`0x52a914`,
         // `0x52a924`), red but for a player with the skinning spell (`0x529eed`-`0x529f86`).
         if u.skinnable && !u.is_player {
-            let color = skinning.map_or(RED, |value| {
+            // The latched spell's points, read only for a skinnable unit (`0x529f06`).
+            let color = crate::script::ReqRead::skinning(&req).map_or(RED, |value| {
                 super::tooltip_item::names::skill_color(skinning_required(u.level), value)
             });
             keyed_line(lua, this, "UNIT_SKINNABLE", color)?;

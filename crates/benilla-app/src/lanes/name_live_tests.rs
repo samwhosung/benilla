@@ -237,13 +237,22 @@ fn the_civilian_flag_is_read_off_the_record_as_the_call_runs() {
             (benilla_protocol::field::FIELD_UNIT_FLAGS, 0x1000),
             (benilla_protocol::field::FIELD_UNIT_LEVEL, 1),
         ]));
+    // Our own level, which the grey test reads off our descriptor as the call runs.
+    let me = world
+        .query_filtered::<Entity, With<crate::net::SelfPlayer>>()
+        .single(world)
+        .expect("our player");
+    world
+        .get_mut::<crate::net::ObjectStore>(me)
+        .expect("our store")
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+            benilla_protocol::field::FIELD_UNIT_LEVEL,
+            60,
+        )]));
     {
         let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
         script.run(r#"PVP_RANK_CIVILIAN = "Civilian""#).unwrap();
-        script.set_player_req_state(benilla_ui::script::PlayerReqState {
-            level: 60,
-            ..Default::default()
-        });
         // The push, as a record-less unit hostile to us holds it.
         script.set_unit(
             "target",

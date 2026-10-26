@@ -51,10 +51,11 @@ impl ScriptCallHost<'_, '_> {
 /// The getters' lookups with a callback inside their calls ([`RecordAsk`]): each cache sends the
 /// query on a miss, once while it is in flight (`0x556aa0`), and keeps the getter's callback.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct RecordAsks<'w> {
+pub(crate) struct RecordAsks<'w, 's> {
     /// Each absent in a harness without it, which asks nothing.
     names: Option<Res<'w, crate::names::NameCache>>,
     items: Option<Res<'w, crate::items::Items>>,
+    item_names: Option<Res<'w, crate::item_names::ItemNames>>,
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     summon: Option<Res<'w, crate::ui_summon::SummonState>>,
     battlefield: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
@@ -65,18 +66,41 @@ pub(crate) struct RecordAsks<'w> {
     trade_skill: Option<ResMut<'w, crate::ui_tradeskill::TradeSkillItemWaits>>,
     merchant: Option<ResMut<'w, crate::ui_merchant::MerchantOpen>>,
     stable: Option<ResMut<'w, crate::ui_stable::StableCreatureWaits>>,
+    /// The charter records and the item objects whose enchantment slot 0 names one (`0x5ef337`).
+    petitions: Option<Res<'w, crate::ui_petition::PetitionRecords>>,
+    objects: crate::net::Objects<'w, 's>,
     me: Option<Res<'w, crate::net::SelfGuid>>,
     net: Res<'w, crate::net::NetCommands>,
 }
 
-impl RecordAsks<'_> {
+impl RecordAsks<'_, '_> {
     /// `ask` inside its getter, whose VM a hit the mirror lacked is told.
     pub(crate) fn apply(&mut self, script: &mut UiScript, ask: RecordAsk) {
         use crate::query_cache::Ask;
         match ask {
-            RecordAsk::PlayerName(guid) => {
+            RecordAsk::PlayerName(guid) | RecordAsk::ItemBuildName(guid) => {
                 if let Some(names) = self.names.as_deref() {
                     let _ = names.resolve_player(guid, Ask::Event(&self.net));
+                }
+            }
+            // A set member's name, `CMSG_ITEM_NAME_QUERY` with no owner (`0x52df5a`).
+            RecordAsk::ItemName(entry) => {
+                if let Some(item_names) = self.item_names.as_deref() {
+                    let _ = item_names.name(entry, Ask::Event(&self.net));
+                }
+            }
+            // The record by the petition id the object carries, then its owner's name, each
+            // asked on its miss (`0x52b93b`, `0x52b9d2`).
+            RecordAsk::Petition(item) => {
+                if let (Some(names), Some(petitions)) =
+                    (self.names.as_deref(), self.petitions.as_deref())
+                {
+                    let id = self
+                        .objects
+                        .object(item)
+                        .and_then(|f| f.item_enchant(0))
+                        .unwrap_or(0) as u32;
+                    petitions.tooltip_view(id, item, names, Ask::Event(&self.net));
                 }
             }
             RecordAsk::BattlefieldName(guid) => {

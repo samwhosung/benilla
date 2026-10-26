@@ -4,7 +4,9 @@
 //! (`|cffff2020`, `0x84e4e0`; `|r`, `0x844538`) instead of coloured. The vocabulary tables are
 //! the tooltip's ([`crate::script::tooltip_item::names`]).
 
-use crate::script::item_stats::{ItemTemplateView, PlayerReqState};
+use crate::script::item_stats::ItemTemplateView;
+#[cfg(test)]
+use crate::script::item_stats::PlayerReqState;
 use crate::script::tooltip_item::names::{
     ceil_max, floor_min, full_mask, invtype_key, school_key, stat_key, CLASS_NAMES, RACE_NAMES,
 };
@@ -44,7 +46,7 @@ fn sign(v: i32) -> String {
 /// `""` for a missing key (`FrameScript_GetText`, `0x703bf0`).
 pub(super) fn item_stat_lines(
     v: &ItemTemplateView,
-    req: &PlayerReqState,
+    req: &dyn crate::script::ReqRead,
     me: PlayerFacts,
     get: &dyn Fn(&str) -> String,
 ) -> Vec<String> {
@@ -90,7 +92,7 @@ pub(super) fn item_stat_lines(
     // subclass line too when the player lacks that one as well (`0x4fe23b`..`0x4fe288`).
     let mut slot_ok = true;
     let mut sub_ok = true;
-    if let Some(&mask) = req.proficiency.get(&v.class).filter(|&&m| m != 0) {
+    if let Some(mask) = req.proficiency(v.class).filter(|&m| m != 0) {
         if mask & 1u32.wrapping_shl(v.subclass) == 0 {
             match v.proficiency_prereq {
                 Some(alt) if v.class == 2 => {
@@ -238,14 +240,14 @@ pub(super) fn item_stat_lines(
             .find(|&&(id, _)| races & (1i32.wrapping_shl(id - 1)) != 0)
         {
             names = format!("{name} ");
-            ok &= req.race_id == id;
+            ok &= req.head().race_id == id;
         }
         if let Some(&(id, name)) = CLASS_NAMES
             .iter()
             .find(|&&(id, _)| classes & (1i32.wrapping_shl(id - 1)) != 0)
         {
             names.push_str(name);
-            ok &= req.class_id == id;
+            ok &= req.head().class_id == id;
         }
         if !names.is_empty() {
             out.push(red_unless(
@@ -268,7 +270,7 @@ pub(super) fn item_stat_lines(
             (!text.is_empty()).then(|| (text, allowed.iter().any(|&(id, _)| id == player)))
         };
         if races & full_mask(&RACE_NAMES) != full_mask(&RACE_NAMES) {
-            if let Some((text, ok)) = list(&RACE_NAMES, races, req.race_id) {
+            if let Some((text, ok)) = list(&RACE_NAMES, races, req.head().race_id) {
                 out.push(red_unless(
                     ok,
                     &fill(&get("ITEM_RACES_ALLOWED"), &[Arg::S(&text)]),
@@ -276,7 +278,7 @@ pub(super) fn item_stat_lines(
             }
         }
         if classes & full_mask(&CLASS_NAMES) != full_mask(&CLASS_NAMES) {
-            if let Some((text, ok)) = list(&CLASS_NAMES, classes, req.class_id) {
+            if let Some((text, ok)) = list(&CLASS_NAMES, classes, req.head().class_id) {
                 out.push(red_unless(
                     ok,
                     &fill(&get("ITEM_CLASSES_ALLOWED"), &[Arg::S(&text)]),
@@ -291,7 +293,7 @@ pub(super) fn item_stat_lines(
         out.push(fill(&get("ITEM_LEVEL"), &[Arg::D(v.item_level.into())]));
         if v.required_level > 1 {
             out.push(red_unless(
-                req.level >= v.required_level,
+                req.head().level >= v.required_level,
                 &fill(&get("ITEM_MIN_LEVEL"), &[Arg::D(v.required_level.into())]),
             ));
         }
@@ -310,7 +312,7 @@ pub(super) fn item_stat_lines(
         } else {
             fill(&get("ITEM_REQ_SKILL"), &[Arg::S(name)])
         };
-        let total = req.skills.get(&v.required_skill).copied().unwrap_or(0);
+        let total = req.skill(v.required_skill).unwrap_or(0);
         out.push(red_unless(v.required_skill_rank > total, &line));
     }
 
@@ -338,7 +340,7 @@ pub(super) fn item_stat_lines(
         }
         .unwrap_or_else(|| get(&key));
         out.push(red_unless(
-            u32::from(req.honor_rank) >= rank,
+            u32::from(req.head().honor_rank) >= rank,
             &fill(&get("ITEM_REQ_SKILL"), &[Arg::S(&title)]),
         ));
     }

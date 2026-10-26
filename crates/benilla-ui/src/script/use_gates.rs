@@ -19,6 +19,7 @@ use super::Model;
 /// `0x5d8ee7`). `known` is whether the template is cached; the reference returns silently without
 /// it.
 pub(crate) fn item_use_refusal(
+    lua: &mlua::Lua,
     model: &Model,
     fork: UseFork,
     item_id: u32,
@@ -34,7 +35,7 @@ pub(crate) fn item_use_refusal(
     ) {
         return None;
     }
-    if let Some(key) = super::item_stats::item_refusal_by_id(model, item_id) {
+    if let Some(key) = super::item_stats::item_refusal_by_id(lua, model, item_id) {
         return Some(key);
     }
     if matches!(fork, UseFork::Read | UseFork::Letter) {
@@ -50,7 +51,14 @@ impl super::UiScript {
     /// of which call `0x5d8d00` past its quest-starter arm: the plain fork with a cached template.
     /// `item_id` 0 passes.
     pub fn item_use_refusal(&self, item_id: u32, use_spell: u32) -> Option<&'static str> {
-        item_use_refusal(&self.model_ref(), UseFork::Plain, item_id, use_spell, true)
+        item_use_refusal(
+            &self.lua,
+            &self.model_ref(),
+            UseFork::Plain,
+            item_id,
+            use_spell,
+            true,
+        )
     }
 
     /// The on-use spells that pass the control gate right now (`0x5d8ec0`-`0x5d8f6a`), computed by

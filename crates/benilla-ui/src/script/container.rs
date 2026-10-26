@@ -535,6 +535,7 @@ fn custom_cursor(model: &mut super::Model, name: &str) -> bool {
 /// the cursor ([`use_equip_arm`]). The host sends each arm, from the call left in `call`, and the
 /// repair from the model's [`ItemCall::Repair`].
 fn use_cleared(
+    lua: &Lua,
     model: &mut super::Model,
     bag: i64,
     slot: u32,
@@ -577,7 +578,7 @@ fn use_cleared(
             .and_then(|c| c.slots.get(&slot))
             .is_some_and(|s| s.item_class.is_some());
         if let Some(key) =
-            super::use_gates::item_use_refusal(model, fork, item_id, use_spell, known)
+            super::use_gates::item_use_refusal(lua, model, fork, item_id, use_spell, known)
         {
             // Shown inside the verb, as the gate's `DisplayError` (`0x496720`) is.
             *call = Some(super::ScriptCall::DisplayError(key));
@@ -674,6 +675,7 @@ fn arm_gift_wrap(model: &mut super::Model, bag: i64, slot: u32) {
 /// ([`cursor::pick_up_item`]), so the setter's inner clear signals on its own, or the armed
 /// spell's pick, which applies through the host inside the verb.
 fn pickup_container_item(
+    lua: &Lua,
     model: &mut super::Model,
     bag: i64,
     slot: u32,
@@ -792,6 +794,7 @@ fn pickup_container_item(
                 (None, dest) => {
                     cursor::lock_item(model, dest.map_or(0, |d| d.guid));
                     cursor::swap::swap_and_file(
+                        lua,
                         model,
                         ContainerMove {
                             src_bag: held.bag,
@@ -1178,7 +1181,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut call = None;
             let vendor = super::merchant::at_call(lua);
             let equip = super::tick::verb(lua, |model| {
-                use_cleared(model, bag, slot, on_self, may_cast, vendor, &mut call)
+                use_cleared(lua, model, bag, slot, on_self, may_cast, vendor, &mut call)
             });
             super::item_calls::submit_item_calls(lua)?;
             if let Some(call) = call {
@@ -1218,7 +1221,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let vendor = super::merchant::at_call(lua);
             let click = super::tick::verb(lua, |model| {
-                pickup_container_item(model, bag, slot, may_cast, vendor)
+                pickup_container_item(lua, model, bag, slot, may_cast, vendor)
             });
             super::item_calls::submit_item_calls(lua)?;
             match click {
