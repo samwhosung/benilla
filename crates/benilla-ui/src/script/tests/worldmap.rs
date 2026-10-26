@@ -327,6 +327,32 @@ fn worldmap_navigation_and_map_info() {
     );
 }
 
+/// `GetMapInfo`'s second value is `ftol(H * 1002 / W)` (`0x4a6d50`), the span the
+/// `WorldMapContinent` tile counts at continent level and the loc rect at zone level; the third
+/// rounds its low byte up to a power of two (`0x4a7e69`). The world sheet answers 0, 0.
+#[test]
+fn get_map_info_answers_the_texture_height_and_its_power_of_two_round() {
+    let mut s = script();
+    push_catalog(&mut s);
+    let info = |s: &UiScript| {
+        s.eval::<(i64, i64)>("local _, h, p = GetMapInfo() return h, p")
+            .unwrap()
+    };
+    assert_eq!(info(&s), (0, 0), "the world sheet");
+    // Kalimdor's tiles are 26 wide and 44 high: 1695, low byte 159 rounds to 256.
+    s.run("SetMapZoom(1)").unwrap();
+    assert_eq!(info(&s), (1695, 1792));
+    // Eastern Kingdoms: 25 by 47 tiles, 1883, low byte 91 rounds to 128.
+    s.run("SetMapZoom(2)").unwrap();
+    assert_eq!(info(&s), (1883, 1920));
+    // Durotar: a 5000 by 4700 rect, 941, low byte 173 rounds to 256.
+    s.run("SetMapZoom(1, 1)").unwrap();
+    assert_eq!(info(&s), (941, 1024));
+    // The Barrens: 10000 by 11500, 1152, whose low byte 128 is a power of two already.
+    s.run("SetMapZoom(1, 2)").unwrap();
+    assert_eq!(info(&s), (1152, 1152));
+}
+
 /// `SetMapToCurrentZone` lands on the app-fed player zone, and the feed surfaces through
 /// `GetPlayerMapPosition` for the player, `party1..4` and the raid rows, by the token's guid
 /// (`0x4a8658` → `0x515970`): any case, a `target` that names a member, and "Unknown unit name"

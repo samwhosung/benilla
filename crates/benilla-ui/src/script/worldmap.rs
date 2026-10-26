@@ -211,6 +211,56 @@ fn grid_area(state: &WorldMapState, u: f32, v: f32) -> Option<u16> {
     }
 }
 
+/// `GetMapInfo`'s second value (`0x4a6d50`): `ftol(H * 1002 / W)` of the displayed map's span, the
+/// `WorldMapContinent` tile counts for a continent, the loc rect for a zone; 0 for a span of zero
+/// width or height (`0x4a6e2e`-`0x4a6e3e`), the world sheet and an instance map, whose map id no
+/// `WorldMapContinent` row carries (`0x4a6dc2`-`0x4a6df2`).
+fn texture_height(wm: &WorldMapState) -> u32 {
+    let (c, z) = wm.selection;
+    let Some(cont) = wm
+        .direct_area
+        .is_none()
+        .then_some(c)
+        .and_then(|c| wm.continents.get(usize::try_from(c).ok()?.checked_sub(1)?))
+    else {
+        return 0;
+    };
+    let (w, h) = match z.checked_sub(1).and_then(|n| cont.zones.get(n as usize)) {
+        Some(zone) => {
+            let (left, right, top, bottom) = zone.loc_rect;
+            (
+                f64::from(left) - f64::from(right),
+                f64::from(top) - f64::from(bottom),
+            )
+        }
+        None => {
+            let Some(sheet) = cont.sheet else {
+                return 0;
+            };
+            let (left, right, top, bottom) = sheet.tiles;
+            let tiles =
+                |lo: u32, hi: u32| f64::from((hi as i32).wrapping_sub(lo as i32).wrapping_add(1));
+            (tiles(left, right), tiles(top, bottom))
+        }
+    };
+    if w == 0.0 || h == 0.0 {
+        return 0;
+    }
+    binding_abi::ftol(h * 1002.0 / w) as u32
+}
+
+/// `GetMapInfo`'s third value (`0x4a7e69`-`0x4a7e9a`): the height with its low byte rounded up
+/// to a power of two, the bytes above kept; a low byte of 0 or a power of two stays.
+fn pot_height(height: u32) -> u32 {
+    let low = height & 0xff;
+    let rounded = if low.is_power_of_two() || low == 0 {
+        low
+    } else {
+        low.next_power_of_two()
+    };
+    height - low + rounded
+}
+
 /// The client's power-of-two round-up (`0x4a833c`).
 fn next_pow2(n: i64) -> i64 {
     let mut p = 1i64;
@@ -790,8 +840,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetMapInfo() → mapFileName and two texture dimensions (`0x4a7e30`, `mov eax,3`): nil, 0, 0
-    // at world level. The name is the unlocalized art folder (`0x4a6cf0` reads `[row+0xc]`).
+    // GetMapInfo() → mapFileName, textureHeight and its power-of-two round (`0x4a7e30`, `mov
+    // eax,3`): nil, 0, 0 at world level. The name is the unlocalized art folder (`0x4a6cf0` reads
+    // `[row+0xc]`).
     g.set(
         "GetMapInfo",
         lua.create_function(|lua, ()| {
@@ -811,13 +862,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .unwrap_or_else(|| cont.map_file.clone()),
                 }),
             };
-            // No caller reads the dimensions, 0 here on every map; the reference computes them
-            // from `WorldMapContinent.dbc` (`0x4a6d50`), which lacks an instance map's mapID.
             let file = match file {
                 Some(f) => Value::String(lua.create_string(&f)?),
                 None => Value::Nil,
             };
-            Ok((file, 0i64, 0i64))
+            let height = texture_height(wm);
+            Ok((file, i64::from(height), i64::from(pot_height(height))))
         })?,
     )?;
 
