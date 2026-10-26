@@ -801,7 +801,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetNumAuctionItems(type) → numBatchAuctions (at most 50), totalAuctions (before the cap).
     g.set(
         "GetNumAuctionItems",
-        lua.create_function(|lua, kind: String| {
+        lua.create_function(|lua, kind: Value| {
+            // `is-number-or-string` else `Usage: GetNumAuctionItems("type")` (`0x849424`,
+            // `0x4ced37`).
+            let kind = binding_abi::string_arg(lua, kind, r#"Usage: GetNumAuctionItems("type")"#)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some((batch, total)) = list_index(&kind).and_then(|i| {
                 model

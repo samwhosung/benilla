@@ -159,3 +159,37 @@ fn channel_admin_verbs_raise_their_usage_line_and_send_strings_as_given() {
         ]
     );
 }
+
+/// `GetGuildInfo` raises `Usage: GetGuildInfo("unit")` (`0x848ca0`, `0x4c935b`),
+/// `GetNumAuctionItems` `Usage: GetNumAuctionItems("type")` (`0x849424`, `0x4ced37`), and
+/// `GetInventorySlotInfo` takes its unknown name's raise (`0x848894`, `0x4c81ca` → `0x4c822c`).
+#[test]
+fn guild_slot_and_auction_count_verbs_raise_their_own_text() {
+    let s = script();
+    const GUILD: &str = r#"Usage: GetGuildInfo("unit")"#;
+    const SLOT: &str = "Invalid inventory slot in GetInventorySlotInfo";
+    const COUNT: &str = r#"Usage: GetNumAuctionItems("type")"#;
+    assert_raises(
+        &s,
+        &[
+            ("GetGuildInfo()", GUILD),
+            ("GetGuildInfo(nil)", GUILD),
+            ("GetGuildInfo({})", GUILD),
+            ("GetInventorySlotInfo()", SLOT),
+            ("GetInventorySlotInfo(true)", SLOT),
+            ("GetInventorySlotInfo('NoSlot')", SLOT),
+            ("GetNumAuctionItems()", COUNT),
+            ("GetNumAuctionItems({})", COUNT),
+        ],
+    );
+    s.run(
+        r#"
+        local name, rank, index = GetGuildInfo("player")
+        assert(name == nil and rank == nil and index == 0)
+        assert(GetInventorySlotInfo("headslot") == 1)
+        local batch, total = GetNumAuctionItems(5)
+        assert(batch == 0 and total == 0)
+    "#,
+    )
+    .unwrap();
+}

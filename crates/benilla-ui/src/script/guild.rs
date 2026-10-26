@@ -441,7 +441,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ([`super::RecordAsk::Guild`]); the zero key never is (`0x560e3d`).
     g.set(
         "GetGuildInfo",
-        lua.create_function(|lua, unit: Option<String>| {
+        lua.create_function(|lua, unit: Value| {
+            // `is-number-or-string` else `Usage: GetGuildInfo("unit")` (`0x848ca0`, `0x4c935b`).
+            let unit = Some(binding_abi::string_arg(
+                lua,
+                unit,
+                r#"Usage: GetGuildInfo("unit")"#,
+            )?);
             crate::script::unit::check_unit_token(&unit)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(state) = unit
