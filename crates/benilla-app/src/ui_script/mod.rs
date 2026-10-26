@@ -317,17 +317,71 @@ pub(crate) fn seam_scale(window_h: f32) -> f32 {
     }
 }
 
+/// The interface's own screen on the window. Its cells take the aspect `0x4901e0` (in glue
+/// `0x46ab40`) answers, the window's while `widescreen` is on and 4/3 when it is 0, through
+/// `0x41ad10` (`0x48fe1e`, `0x46a81c`), and the layout always spans the whole window. So with
+/// `widescreen` 0 the interface lays out 4:3, `4/3` of the window's height across, and is drawn
+/// stretched across the window, as 1.12.1 does on any other shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct UiScreen {
+    /// The interface's screen in its own px: the window's height, and its width or `4/3` of it.
+    pub(crate) size: Vec2,
+    /// Window px per interface px across; 1 unless stretched.
+    pub(crate) stretch: f32,
+}
+
+impl UiScreen {
+    /// The screen for a window of `window` logical px.
+    pub(crate) fn of(window: Vec2, widescreen: bool) -> Self {
+        if widescreen || window.x <= 0.0 || window.y <= 0.0 {
+            return Self {
+                size: window,
+                stretch: 1.0,
+            };
+        }
+        let size = Vec2::new(window.y * (4.0 / 3.0), window.y);
+        Self {
+            size,
+            stretch: window.x / size.x,
+        }
+    }
+
+    /// The screen for `window` under the `widescreen` the CVar holds (on when absent).
+    pub(crate) fn of_window(
+        window: &bevy::window::Window,
+        widescreen: Option<&crate::video::Widescreen>,
+    ) -> Self {
+        Self::of(
+            Vec2::new(window.width(), window.height()),
+            widescreen.is_none_or(|w| w.0),
+        )
+    }
+
+    /// A window point (logical px) in the interface's px.
+    pub(crate) fn point(self, window_px: Vec2) -> Vec2 {
+        Vec2::new(window_px.x / self.stretch, window_px.y)
+    }
+
+    /// [`Self::point`]'s inverse: an interface point in window px.
+    pub(crate) fn window_point(self, ui_px: Vec2) -> Vec2 {
+        Vec2::new(ui_px.x * self.stretch, ui_px.y)
+    }
+}
+
 /// [`window_to_ui`]'s inverse: a point in the VM's root units as a window cursor.
-pub(crate) fn ui_to_window(window_h: f32, at: Vec2) -> Vec2 {
-    let s = seam_scale(window_h);
-    Vec2::new(at.x * s, window_h - at.y * s)
+pub(crate) fn ui_to_window(screen: UiScreen, at: Vec2) -> Vec2 {
+    let h = screen.size.y;
+    let s = seam_scale(h);
+    screen.window_point(Vec2::new(at.x * s, h - at.y * s))
 }
 
 /// A window cursor (logical px, y-down from the top left) in the VM's root units, y up: what the
 /// pointer feed hands the engine and `GetCursorPosition` answers (`0x48b820`, no scale divided out).
-pub(crate) fn window_to_ui(window_h: f32, cursor: Vec2) -> Vec2 {
-    let s = seam_scale(window_h);
-    Vec2::new(cursor.x / s, (window_h - cursor.y) / s)
+pub(crate) fn window_to_ui(screen: UiScreen, cursor: Vec2) -> Vec2 {
+    let h = screen.size.y;
+    let s = seam_scale(h);
+    let p = screen.point(cursor);
+    Vec2::new(p.x / s, (h - p.y) / s)
 }
 
 /// The Lua UI host (a `NonSend` resource: an mlua VM is `!Send`) and its per-frame passes.
@@ -1287,7 +1341,7 @@ mod world_map_tests;
 
 #[cfg(test)]
 mod seam_scale_tests {
-    use super::{seam_scale, window_to_ui};
+    use super::{seam_scale, ui_to_window, window_to_ui, UiScreen};
     use bevy::math::Vec2;
 
     #[test]
@@ -1303,10 +1357,34 @@ mod seam_scale_tests {
     /// is 0 and its top 768, its middle column `768·a/2`.
     #[test]
     fn the_cursor_reaches_the_vm_in_root_units() {
-        let at = window_to_ui(1080.0, Vec2::new(960.0, 108.0));
+        let screen = UiScreen::of(Vec2::new(1920.0, 1080.0), true);
+        let at = window_to_ui(screen, Vec2::new(960.0, 108.0));
         assert!((at.x - 960.0 * 768.0 / 1080.0).abs() < 1e-3, "{at}");
         assert!((at.y - 972.0 * 768.0 / 1080.0).abs() < 1e-3, "{at}");
-        assert_eq!(window_to_ui(1080.0, Vec2::new(0.0, 1080.0)), Vec2::ZERO);
+        assert_eq!(window_to_ui(screen, Vec2::new(0.0, 1080.0)), Vec2::ZERO);
+        // With `widescreen` 0 the 4:3 root spans the window: its middle column is 512, its right
+        // edge 1024.
+        let stretched = UiScreen::of(Vec2::new(1920.0, 1080.0), false);
+        let mid = window_to_ui(stretched, Vec2::new(960.0, 540.0));
+        assert!((mid - Vec2::new(512.0, 384.0)).length() < 1e-3, "{mid}");
+        let edge = window_to_ui(stretched, Vec2::new(1920.0, 0.0));
+        assert!((edge - Vec2::new(1024.0, 768.0)).length() < 1e-3, "{edge}");
+    }
+
+    /// [`ui_to_window`] undoes [`window_to_ui`], stretched or not.
+    #[test]
+    fn a_root_point_goes_to_the_window_and_back() {
+        for widescreen in [true, false] {
+            let screen = UiScreen::of(Vec2::new(1920.0, 1080.0), widescreen);
+            for p in [
+                Vec2::ZERO,
+                Vec2::new(512.0, 384.0),
+                Vec2::new(1000.0, 700.0),
+            ] {
+                let back = window_to_ui(screen, ui_to_window(screen, p));
+                assert!((back - p).length() < 1e-3, "{widescreen}: {p} -> {back}");
+            }
+        }
     }
 }
 

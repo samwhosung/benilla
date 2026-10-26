@@ -36,6 +36,8 @@ pub(super) struct PointerFeed<'w> {
     /// The dev overlay holds the pointer: a press then is no frame's and not the world's.
     egui_pointer: Option<Res<'w, super::EguiPointerOver>>,
     presses: ResMut<'w, super::WorldPresses>,
+    /// `widescreen`, which shapes the interface's screen on the window ([`super::UiScreen`]).
+    widescreen: Option<Res<'w, crate::video::Widescreen>>,
 }
 
 impl PointerFeed<'_> {
@@ -124,9 +126,10 @@ pub(super) fn feed_ui_wheel(
     (mut notches, mut world_wheel): (ResMut<WheelNotches>, ResMut<WorldWheel>),
     dispatch: Option<Res<crate::bindings::BindingDispatch>>,
     egui: Option<Res<super::EguiPointerOver>>,
-    (synthetic, capture_pinned): (
+    (synthetic, capture_pinned, widescreen): (
         Res<super::SyntheticPointer>,
         Res<super::CapturePointerPinned>,
+        Option<Res<crate::video::Widescreen>>,
     ),
 ) {
     hosted_vm.run(|script| {
@@ -137,7 +140,9 @@ pub(super) fn feed_ui_wheel(
             w.cursor_position()
                 .or_else(crate::target::hover_probe_point)
                 .filter(|_| !(synthetic.0 || capture_pinned.0))
-                .map(|c| super::window_to_ui(w.height(), c))
+                .map(|c| {
+                    super::window_to_ui(super::UiScreen::of_window(w, widescreen.as_deref()), c)
+                })
         });
         let travel = (
             scroll.unit,
@@ -253,14 +258,16 @@ pub(super) fn feed_ui_input(
         }
     };
     let wl_display = textinput::wayland_display(raw_handle);
-    let height = window.height();
+    // The interface's screen on the window, 4:3 and stretched with `widescreen` 0
+    // ([`super::UiScreen`]).
+    let screen = super::UiScreen::of_window(window, pointer.widescreen.as_deref());
     // The window cursor in the root's y-up 768-high units, `GetCursorPosition`'s answer. The
     // headless hover probe's aim stands in for a missing cursor, so `PointerOverUi` rises and falls
     // over a panel in an automated run as for a person; a real pointer wins.
     let ui_point = |at: Option<Vec2>| {
         at.or_else(crate::target::hover_probe_point)
             .filter(|_| !synthetic)
-            .map(|c| super::window_to_ui(height, c))
+            .map(|c| super::window_to_ui(screen, c))
     };
     let plane = keymap::Mods {
         shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),

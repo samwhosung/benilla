@@ -982,10 +982,11 @@ impl UiScript {
         self.set_root(Rect::new(0.0, 0.0, height, width), None)
     }
 
-    /// Set the screen root for a window of `width` by `height` pixels: the screen-scale cells from
-    /// its aspect `a = RN24(width / height)`, as `0x41ad10` takes it, and the root `768·a` by 768
-    /// script units, whose layout extent is exactly the cells' `K1` by `K2` (`0x764284`). A window
-    /// with no area reads as 4/3. Returns whether anything moved, as [`Self::set_screen_size`].
+    /// Set the screen root for an interface screen of `width` by `height` pixels: the
+    /// screen-scale cells from its aspect `a = RN24(width / height)`, as `0x41ad10` takes it, and
+    /// the root `768·a` by 768 script units, whose layout extent is exactly the cells' `K1` by
+    /// `K2` (`0x764284`). A window with no area reads as 4/3. Returns whether anything moved, as
+    /// [`Self::set_screen_size`].
     ///
     /// Deviation: the reference sets the cells only when glue or the interface is built, `0x41ad10`
     /// from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only
@@ -994,8 +995,8 @@ impl UiScript {
     /// interface (`0x491380`) past 0.001 (`0x492f26`, `0x492f31`). The gate and the rebuild both
     /// take the aspect from `gxResolution` (`0x46ab40`, `0x4901e0`; 4/3 while `widescreen` is
     /// off), never the live window. Here every resize sets the cells from the window, because the
-    /// UI is kept live across a resize, and `widescreen` off keeps the window's aspect, as a 4:3
-    /// root over a wider window would take a seam stretched on one axis. A dragged frame with no
+    /// UI is kept live across a resize; with `widescreen` off the host passes a 4:3 screen, which
+    /// it draws stretched across the window, as the reference does. A dragged frame with no
     /// layout-cache row (unnamed, or `SetUserPlaced(false)`) keeps its drag pin in layout units,
     /// where the rebuild would put it back where its script places it.
     pub fn set_window_size(&mut self, width: f32, height: f32) -> bool {

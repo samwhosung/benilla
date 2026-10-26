@@ -14,7 +14,13 @@ use benilla_ui::script::UiScript;
 /// The whole client in the world with a VM that binds `1` to a body logging `key;`, and a button
 /// over the screen's left half logging its `OnClick` as `click;`. The cursor starts over it.
 fn client() -> App {
+    client_with(UVec2::new(1024, 768), true)
+}
+
+/// [`client`] on a `size` window, `widescreen` as given.
+fn client_with(size: UVec2, widescreen: bool) -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
+    app.insert_resource(crate::video::Widescreen(widescreen));
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
     ));
@@ -59,7 +65,7 @@ fn client() -> App {
     app.insert_non_send_resource(script);
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     let mut window = Window {
-        resolution: UVec2::new(1024, 768).into(),
+        resolution: size.into(),
         ..default()
     };
     window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
@@ -258,4 +264,37 @@ fn a_press_and_its_binding_agree_when_the_cursor_crosses_a_frame_in_the_frame() 
     app.update();
     assert_eq!(log(&app), "");
     assert!(!held(&app), "the press was the button's");
+}
+
+/// With `widescreen` 0 the interface is 4:3 (`0x4901e0` answers 4/3) and drawn stretched across a
+/// 16:9 window: a point in root units taken out to the window and clicked there reaches the frame
+/// under it, and `GetCursorPosition` (`0x48b820`) answers the same point back.
+#[test]
+fn widescreen_off_takes_a_click_through_the_stretch_and_back() {
+    use super::{ui_to_window, UiScreen};
+    let mut app = client_with(UVec2::new(1920, 1080), false);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"local b = CreateFrame("Button", "StretchProbe")
+            b:SetPoint("BOTTOMLEFT", 900, 0) b:SetWidth(124) b:SetHeight(768)
+            b:EnableMouse(true)
+            b:SetScript("OnClick", function()
+                local x, y = GetCursorPosition()
+                LOG = LOG .. format("%.0f %.0f %.0f;", x, y, GetScreenWidth())
+            end)"#,
+        )
+        .expect("the probe builds");
+    app.update();
+    let at = ui_to_window(
+        UiScreen::of(Vec2::new(1920.0, 1080.0), false),
+        Vec2::new(962.0, 384.0),
+    );
+    // The 1024-wide root spans the 1920 window: 962 units in is 1803.75 px.
+    assert!((at - Vec2::new(1803.75, 540.0)).length() < 1e-3, "{at}");
+    move_to(&mut app, at);
+    button(&mut app, ButtonState::Pressed);
+    button(&mut app, ButtonState::Released);
+    app.update();
+    assert_eq!(log(&app), "962 384 1024;");
 }

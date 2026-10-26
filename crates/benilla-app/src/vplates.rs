@@ -339,6 +339,8 @@ struct PlateWorld<'w, 's> {
     hovered: Res<'w, Hovered>,
     camera: Query<'w, 's, (&'static Camera, &'static Transform), With<WorldCamera>>,
     window: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
+    /// `widescreen`, which shapes the interface's screen the plates seat on.
+    widescreen: Option<Res<'w, crate::video::Widescreen>>,
     // The pending ground-target cast, for the plate's hit-test veto (`0x7cba30`).
     targeting: Res<'w, crate::spell::SpellTargeting>,
     /// The script bits, which a plate's `OnShow` may move inside its call.
@@ -405,9 +407,17 @@ fn drive_vplates(
             return PlateStep::Retire;
         };
         let cam_tf = GlobalTransform::from(*cam_pose);
-        let Some(viewport) = cam.logical_viewport_size() else {
+        let Some(cam_viewport) = cam.logical_viewport_size() else {
             return PlateStep::Retire;
         };
+        // The plates seat on the interface's screen, which `widescreen` 0 lays out 4:3 and the
+        // frame stretches across the window ([`crate::ui_script::UiScreen`]): a projected point is
+        // taken there, and the gx unit is that screen's diagonal.
+        let ui_screen = crate::ui_script::UiScreen::of(
+            cam_viewport,
+            world.widescreen.as_deref().is_none_or(|w| w.0),
+        );
+        let viewport = ui_screen.size;
         let basis = plate_basis(viewport);
         let gx = |v: f32| gx_px(v, basis);
         let window = world.window.single().ok();
@@ -531,8 +541,9 @@ fn drive_vplates(
                 cam,
                 &cam_tf,
                 anchor + Vec3::Y * PLATE_LIFT,
-                viewport,
-            ) else {
+                cam_viewport,
+            )
+            .map(|p| ui_screen.point(p)) else {
                 continue;
             };
             cands.push((

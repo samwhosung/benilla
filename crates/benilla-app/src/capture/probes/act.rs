@@ -832,6 +832,8 @@ fn fire_probe_click(
         MessageWriter<bevy::input::mouse::MouseButtonInput>,
         MessageWriter<bevy::window::WindowEvent>,
     ),
+    // `widescreen`, which shapes the interface's screen the frame sits on.
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     probe.armed |= !self_player.is_empty();
     let (Some(script), Ok((entity, window))) = (script, window.single()) else {
@@ -850,7 +852,10 @@ fn fire_probe_click(
             );
             continue;
         };
-        let position = crate::ui_script::ui_to_window(window.height(), Vec2::new(x, y));
+        let position = crate::ui_script::ui_to_window(
+            crate::ui_script::UiScreen::of_window(window, widescreen.as_deref()),
+            Vec2::new(x, y),
+        );
         info!(
             "probe-click: {} {:?} at ui ({x:.0},{y:.0}) window ({:.0},{:.0}) ({now:.1}s)",
             step.frame, step.button, position.x, position.y

@@ -801,6 +801,7 @@ fn rebuild_ui_mesh(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut mesh_cost: ResMut<UiMeshCost>,
     cost_wanted: Res<crate::ui_script::UiCostWanted>,
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     // Forget the materials of removed images first, before any early return, since a missed read
     // leaks: a cached material holds a strong image handle and, prepared, its GPU texture.
@@ -902,10 +903,12 @@ fn rebuild_ui_mesh(
         return;
     }
 
-    // Screen px (y-down, top-left origin) to the camera's world space (y-up, centred): the default
-    // `OrthographicProjection`, one unit per logical px.
+    // Interface px (y-down, top-left origin) to the camera's world space (y-up, centred): the
+    // default `OrthographicProjection`, one unit per logical px, after the stretch across the
+    // window a 4:3 interface takes with `widescreen` 0 ([`crate::ui_script::UiScreen`]).
+    let stretch = crate::ui_script::UiScreen::of_window(window, widescreen.as_deref()).stretch;
     let (half_w, half_h) = (window.width() * 0.5, window.height() * 0.5);
-    let to_world = move |p: Vec2| Vec2::new(p.x - half_w, half_h - p.y);
+    let to_world = move |p: Vec2| Vec2::new(p.x * stretch - half_w, half_h - p.y);
 
     // Stable, so equal keys keep producer order, the base lane before the append lane.
     let mut sorted: Vec<&UiQuad> = q.quads.iter().chain(q.overlays.iter()).collect();
@@ -1012,11 +1015,12 @@ fn rebuild_ui_mesh(
         let z = -450.0 + (i as f32 / run_count) * 900.0;
         let scale = window.scale_factor();
         let (mask_rect, mask) = match &run.mask {
+            // The mask is tested in the target's device px, where the stretch has landed.
             Some(m) => (
                 Vec4::new(
-                    m.rect.min.x * scale,
+                    m.rect.min.x * scale * stretch,
                     m.rect.min.y * scale,
-                    m.rect.max.x * scale,
+                    m.rect.max.x * scale * stretch,
                     m.rect.max.y * scale,
                 ),
                 Some(m.texture.clone()),
@@ -1815,6 +1819,42 @@ mod tests {
             panic!("the run's vertex colours are Float32x4");
         };
         assert_eq!(colors, &vec![top, top, bottom, bottom]);
+    }
+
+    /// With `widescreen` 0 the interface is laid out 4:3 and drawn across the whole window: on the
+    /// default 1280×720 window the interface is 960 px across, so a quad 64 px from the left
+    /// edge spans 64·(1280/960) window px.
+    #[test]
+    fn widescreen_off_stretches_the_interface_across_the_window() {
+        let mut app = rebuild_app();
+        app.insert_resource(crate::video::Widescreen(false));
+        app.update();
+        let batch = app
+            .world_mut()
+            .query_filtered::<&Mesh2d, With<UiQuadBatch>>()
+            .single(app.world())
+            .expect("one batch")
+            .0
+            .clone();
+        let mesh = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .get(&batch)
+            .expect("the pooled mesh");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(pos)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the run's positions are Float32x3");
+        };
+        let xs: Vec<f32> = pos.iter().map(|p| p[0]).collect();
+        let (lo, hi) = xs
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!((lo + 640.0).abs() < 1e-3, "left edge at {lo}");
+        assert!(
+            (hi - (-640.0 + 64.0 * 1280.0 / 960.0)).abs() < 1e-3,
+            "right edge at {hi}"
+        );
     }
 
     /// A scissor cut through a gradient keeps its ramp: the clipped corners take the colour at
