@@ -61,11 +61,11 @@ pub fn open(vm: &mut Vm, host: crate::heap::NativeFn) {
     }
 }
 
-/// `luaB_error`: a string message gets the position `level` up (default 1).
-/// 5.1's `error`: no value raises nil.
+/// `luaB_error` (`0x702970`): a string message gets the position `level` up (default 1). No
+/// value is a bad argument: `luaL_checkany` (`0x702993`) runs after the level is read.
 fn error(vm: &mut Vm, nargs: usize) -> R<usize> {
     let level = vm.opt_int(nargs, 2, 1)?;
-    let msg = vm.arg(nargs, 0);
+    let msg = vm.check_any(nargs, 1)?;
     if vm.is_string(msg) && level > 0 {
         let mut out = vm.where_(level as usize);
         let s = vm.tostr(msg).unwrap();

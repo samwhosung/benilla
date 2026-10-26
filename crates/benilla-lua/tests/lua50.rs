@@ -578,3 +578,19 @@ fn an_escaped_high_byte_matches_nothing() {
         "true,nil"
     );
 }
+
+/// `error` (`0x702970`) calls `luaL_checkany(1)` (`0x702993`) before it reads the message, so no
+/// value is a bad argument; a nil is a value.
+#[test]
+fn error_with_no_value_is_a_bad_argument() {
+    assert_eq!(
+        run("return pcall(error)"),
+        "false,bad argument #1 to `error' (value expected)"
+    );
+    assert_eq!(
+        run("return pcall(function() error() end)"),
+        "false,t:1: bad argument #1 to `error' (value expected)"
+    );
+    assert_eq!(run("return pcall(error, nil)"), "false,nil");
+    assert_eq!(run("return pcall(error, 'x', 0)"), "false,x");
+}
