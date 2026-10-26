@@ -209,9 +209,10 @@ pub enum ServerPacket {
         map: u32,
         area: u32,
     },
-    /// `SMSG_GMTICKET_GETTICKET`: our open ticket, `None` for "no ticket". Also pushed unasked
-    /// when a GM views, escalates or completes it (`GMTicketMgr.cpp:153-159`).
+    /// `SMSG_GMTICKET_GETTICKET`: the status and our open ticket, `None` for "no ticket". Also
+    /// pushed unasked when a GM views, escalates or completes it (`GMTicketMgr.cpp:153-159`).
     GmTicketAnswer {
+        status: u32,
         ticket: Option<Box<GmTicket>>,
     },
     /// `SMSG_GMTICKET_CREATE`: 2 created, 3 refused, 1 already have one; vmangos never sends 1

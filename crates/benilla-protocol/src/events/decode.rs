@@ -759,7 +759,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             vec![SessionEvent::ServerUnixTime { unix_time }]
         }
         ServerPacket::BindPoint { area, .. } => vec![SessionEvent::BindPoint { area }],
-        ServerPacket::GmTicketAnswer { ticket } => vec![SessionEvent::GmTicket { ticket }],
+        ServerPacket::GmTicketAnswer { status, ticket } => {
+            vec![SessionEvent::GmTicket { status, ticket }]
+        }
         ServerPacket::GmTicketCreated { response } => {
             vec![SessionEvent::GmTicketCreated { response }]
         }

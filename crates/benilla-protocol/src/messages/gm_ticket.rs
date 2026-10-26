@@ -85,21 +85,26 @@ pub(super) fn read_gm_ticket_system_status(r: &mut &[u8]) -> io::Result<i32> {
     Ok(read_u32_le(r)? as i32)
 }
 
-/// Read `SMSG_GMTICKET_GETTICKET`: a status, then the ticket only for
-/// [`GMTICKET_STATUS_HASTEXT`]; any other status is no ticket, not an error.
-pub(super) fn read_gm_ticket(r: &mut &[u8]) -> io::Result<Option<GmTicket>> {
-    if read_u32_le(r)? != GMTICKET_STATUS_HASTEXT {
-        return Ok(None);
+/// Read `SMSG_GMTICKET_GETTICKET`: the status, then the ticket only for
+/// [`GMTICKET_STATUS_HASTEXT`]; any other status is no ticket, and the status stays because 0
+/// shows `ERR_TICKET_DB_ERROR` (`0x5e44fb`) where the rest do not.
+pub(super) fn read_gm_ticket(r: &mut &[u8]) -> io::Result<(u32, Option<GmTicket>)> {
+    let status = read_u32_le(r)?;
+    if status != GMTICKET_STATUS_HASTEXT {
+        return Ok((status, None));
     }
-    Ok(Some(GmTicket {
-        text: read_cstring(r)?,
-        category: read_u8(r)?,
-        ticket_age: read_f32_le(r)?,
-        oldest_ticket_age: read_f32_le(r)?,
-        update_time: read_f32_le(r)?,
-        assigned_to_gm: read_u8(r)?,
-        opened_by_gm: read_u8(r)?,
-    }))
+    Ok((
+        status,
+        Some(GmTicket {
+            text: read_cstring(r)?,
+            category: read_u8(r)?,
+            ticket_age: read_f32_le(r)?,
+            oldest_ticket_age: read_f32_le(r)?,
+            update_time: read_f32_le(r)?,
+            assigned_to_gm: read_u8(r)?,
+            opened_by_gm: read_u8(r)?,
+        }),
+    ))
 }
 
 #[cfg(test)]
@@ -148,15 +153,18 @@ mod tests {
 
         assert_eq!(
             read_gm_ticket(&mut &bytes[..]).unwrap(),
-            Some(GmTicket {
-                text: "Stuck in a rock.".to_string(),
-                category: 1,
-                ticket_age: 0.25,
-                oldest_ticket_age: 2.5,
-                update_time: 0.01,
-                assigned_to_gm: 2,
-                opened_by_gm: 1,
-            })
+            (
+                GMTICKET_STATUS_HASTEXT,
+                Some(GmTicket {
+                    text: "Stuck in a rock.".to_string(),
+                    category: 1,
+                    ticket_age: 0.25,
+                    oldest_ticket_age: 2.5,
+                    update_time: 0.01,
+                    assigned_to_gm: 2,
+                    opened_by_gm: 1,
+                })
+            )
         );
     }
 
@@ -177,9 +185,12 @@ mod tests {
     #[test]
     fn the_no_ticket_answer_is_four_bytes_and_is_not_an_error() {
         let bytes = GMTICKET_STATUS_DEFAULT.to_le_bytes();
-        assert_eq!(read_gm_ticket(&mut &bytes[..]).unwrap(), None);
-        // Any other status is also no ticket.
+        assert_eq!(
+            read_gm_ticket(&mut &bytes[..]).unwrap(),
+            (GMTICKET_STATUS_DEFAULT, None)
+        );
+        // Any other status is also no ticket, and keeps its number: 0 is the DB error.
         let bytes = 0u32.to_le_bytes();
-        assert_eq!(read_gm_ticket(&mut &bytes[..]).unwrap(), None);
+        assert_eq!(read_gm_ticket(&mut &bytes[..]).unwrap(), (0, None));
     }
 }

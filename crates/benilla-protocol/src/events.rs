@@ -409,9 +409,13 @@ pub enum SessionEvent {
     ServerUnixTime { unix_time: u32 },
     /// The hearthstone bind (`SMSG_BINDPOINTUPDATE`): the AreaTable id the `$z` token names.
     BindPoint { area: u32 },
-    /// `SMSG_GMTICKET_GETTICKET`, `None` for no ticket. The Help window re-polls every 10 minutes
-    /// and fires `UPDATE_TICKET` on each answer, changed or not: count these, never diff them.
-    GmTicket { ticket: Option<Box<GmTicket>> },
+    /// `SMSG_GMTICKET_GETTICKET`: the wire status, and the ticket (`None` for no ticket). The Help
+    /// window re-polls every 10 minutes and fires `UPDATE_TICKET` on each answer, changed or not:
+    /// count these, never diff them.
+    GmTicket {
+        status: u32,
+        ticket: Option<Box<GmTicket>>,
+    },
     /// `SMSG_GMTICKET_CREATE`: 2 created, 3 refused, 1 already exists (vmangos never sends 1, and
     /// sometimes sends nothing at all).
     GmTicketCreated { response: u32 },
