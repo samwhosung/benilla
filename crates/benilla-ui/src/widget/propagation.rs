@@ -223,36 +223,55 @@ impl WidgetArena {
 
     // ── Scale ────────────────────────────────────────────────────────────────────────────────────
 
-    /// Set `h`'s own scale and recompute `effective_scale = parent's * own` down the subtree
-    /// (`0x76ac90`), stopping at a frame whose value moves less than [`SCALE_EPS`].
-    pub fn set_scale(&mut self, h: FrameHandle, scale: f32) {
-        if let Some(f) = self.frame_mut(h) {
-            f.scale = scale;
-        } else {
-            return;
-        }
-        let parent_scale = self.parent_effective_scale(h);
-        self.propagate_scale(h, parent_scale);
+    /// `0x76ac10` past its own gate: store `h`'s own scale (`+0xb8`) and recompute its layout
+    /// scale ([`Self::apply_scale`]). Whether any frame's layout scale was stored.
+    pub fn set_scale(&mut self, h: FrameHandle, scale: f32, force: bool) -> bool {
+        let Some(f) = self.frame_mut(h) else {
+            return false;
+        };
+        f.scale = scale;
+        self.apply_scale(h, force)
     }
 
-    fn propagate_scale(&mut self, h: FrameHandle, parent_scale: f32) {
-        let (own, ignore, old_eff, children) = {
-            let f = self.frame(h).expect("live node in propagation");
-            (
-                f.scale,
-                f.ignore_parent_scale,
-                f.effective_scale,
-                f.children.clone(),
-            )
+    /// `0x76ac50`: store the parent scale (`+0xbc`) the child walk passes, unless it moved less
+    /// than [`SCALE_EPS`] and is not forced, and recompute the layout scale.
+    fn set_parent_scale(&mut self, h: FrameHandle, parent_scale: f32, force: bool) -> bool {
+        let Some(f) = self.frame_mut(h) else {
+            return false;
         };
-        let new_eff = if ignore { own } else { parent_scale * own };
-        if (f64::from(new_eff) - f64::from(old_eff)).abs() < SCALE_EPS {
-            return;
+        if !force && (f64::from(parent_scale) - f64::from(f.parent_scale)).abs() < SCALE_EPS {
+            return false;
         }
-        self.frame_mut(h).unwrap().effective_scale = new_eff;
+        f.parent_scale = parent_scale;
+        self.apply_scale(h, force)
+    }
+
+    /// `0x76ac90`: the layout scale `parent · own`, stopped by a move below [`SCALE_EPS`] unless
+    /// forced, then passed to each child as its parent scale (`0x76ad31`). An effective scale of 0
+    /// is refused before the store (`0x768360`, error 0x57 at `0x768366`), so the frame keeps its
+    /// layout scale and rect, but the walk goes on and the children are refused alike.
+    fn apply_scale(&mut self, h: FrameHandle, force: bool) -> bool {
+        let (eff, old, children) = {
+            let f = self.frame(h).expect("live node in propagation");
+            let eff = if f.ignore_parent_scale {
+                f.scale
+            } else {
+                f.parent_scale * f.scale
+            };
+            (eff, f.effective_scale, f.children.clone())
+        };
+        if !force && (f64::from(eff) - f64::from(old)).abs() < SCALE_EPS {
+            return false;
+        }
+        let stored = eff != 0.0;
+        if stored {
+            self.frame_mut(h).unwrap().effective_scale = eff;
+        }
+        let mut moved = stored;
         for c in children {
-            self.propagate_scale(c, new_eff);
+            moved |= self.set_parent_scale(c, eff, force);
         }
+        moved
     }
 
     // ── Alpha ────────────────────────────────────────────────────────────────────────────────────
@@ -337,8 +356,9 @@ impl WidgetArena {
         };
         self.set_frame_strata(h, pstrata);
         self.set_frame_level(h, plevel, false);
+        // The parent's layout scale, or 1.0 for none, unforced (`0x76ab7c`, `0x76abb9`).
         let ps = self.parent_effective_scale(h);
-        self.propagate_scale(h, ps);
+        self.set_parent_scale(h, ps, false);
         // The subtree takes the new parent's scroll membership, none for no parent; the scroll
         // child mark stays (`0x76ab8c`–`0x76abcb`: `0x76a400(parent & 0x2000, -1)`).
         let member = new_parent.is_some_and(|np| self.frame(np).is_some_and(|f| f.scroll_member));

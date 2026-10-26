@@ -285,17 +285,10 @@ pub(crate) fn layout_scale(model: &Model, h: FrameHandle) -> f32 {
         .unwrap_or(1.0)
 }
 
+/// `GetEffectiveScale` (`0x77505f`): the layout scale `[+0x7c]` as stored, never 0
+/// (`0x768366`).
 pub(crate) fn eff_scale(model: &Model, h: FrameHandle) -> f32 {
-    let s = model
-        .arena
-        .frame(h)
-        .map(|f| f.effective_scale)
-        .unwrap_or(1.0);
-    if s.abs() < 1e-6 {
-        1.0
-    } else {
-        s
-    }
+    layout_scale(model, h)
 }
 
 /// `GetWidth`/`GetHeight` (`0x7a1e00`, `0x7a2030`): the size the frame was given as it is stored

@@ -248,7 +248,11 @@ pub struct Frame {
     pub scroll_root: bool,
     /// This frame's own scale (`ownScale +0xb8`, default 1.0).
     pub scale: f32,
-    /// `layoutScale` = `parentEffective * ownScale`, ε-gated (`0x76ac90`).
+    /// The parent scale (`+0xbc`, default 1.0): the parent's layout scale as the child walk last
+    /// passed it (`0x76ac50`), kept even when this frame refused it.
+    pub parent_scale: f32,
+    /// The layout scale (`+0x7c`), `parent_scale * scale` as `0x76ac90` last stored it; never 0,
+    /// which the layout refuses (`0x768366`).
     pub effective_scale: f32,
     /// A later client's `ignoreParentScale`, not 1.12: nothing sets it.
     pub ignore_parent_scale: bool,
@@ -607,6 +611,7 @@ impl WidgetArena {
             scroll_member,
             scroll_root: false,
             scale,
+            parent_scale,
             effective_scale: parent_scale * scale,
             ignore_parent_scale: false,
             wow_id: 0,

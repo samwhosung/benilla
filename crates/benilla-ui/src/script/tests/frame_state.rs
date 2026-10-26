@@ -99,6 +99,50 @@ fn set_scale_gates_its_argument_as_the_client_does() {
     let _ = s.extract();
 }
 
+/// `SetScale(0)` stores 0 (`0x76ac3b`), but the effective scale 0 is refused before the layout
+/// stores it (`0x768360`, error 0x57 at `0x768366`): the frame and its child keep their layout
+/// scale and rect. The walk still passes 0 to the child as its parent scale (`0x76ad31` →
+/// `0x76ac50`), so the child's own `SetScale` is refused too until the parent's scale moves.
+#[test]
+fn a_zero_scale_is_refused_and_the_layout_stands() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        P = CreateFrame("Frame", "ZeroParent")
+        P:SetPoint("BOTTOMLEFT", 100, 100); P:SetWidth(200); P:SetHeight(100)
+        C = CreateFrame("Frame", "ZeroChild", P)
+        C:SetPoint("BOTTOMLEFT", P, "BOTTOMLEFT", 10, 10); C:SetWidth(50); C:SetHeight(50)
+        P:SetScale(2)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let read = |s: &UiScript, code: &str| s.eval::<f64>(&format!("return {code}")).unwrap();
+    let before = (read(&s, "P:GetLeft()"), read(&s, "C:GetLeft()"));
+    s.run("P:SetScale(0)").unwrap();
+    s.resolve();
+    assert_eq!(read(&s, "P:GetScale()"), 0.0, "the own scale is stored");
+    assert_eq!(read(&s, "P:GetEffectiveScale()"), 2.0);
+    assert_eq!(read(&s, "C:GetEffectiveScale()"), 2.0);
+    assert_eq!((read(&s, "P:GetLeft()"), read(&s, "C:GetLeft()")), before);
+    // The child's parent scale is now 0: its own scale stores, its layout scale cannot.
+    s.run("C:SetScale(3)").unwrap();
+    s.resolve();
+    assert_eq!(read(&s, "C:GetScale()"), 3.0);
+    assert_eq!(read(&s, "C:GetEffectiveScale()"), 2.0);
+    assert_eq!(read(&s, "C:GetLeft()"), before.1);
+    // A real scale reaches both again: 1 for the parent, 1 · 3 for the child.
+    s.run("P:SetScale(1)").unwrap();
+    s.resolve();
+    assert_eq!(read(&s, "P:GetEffectiveScale()"), 1.0);
+    assert_eq!(read(&s, "C:GetEffectiveScale()"), 3.0);
+    // A tiny scale that is not 0 is stored and read back as it is (`0x77505f`).
+    s.run("P:SetScale(1e-7)").unwrap();
+    assert_eq!(read(&s, "P:GetEffectiveScale()"), f64::from(1e-7f32));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// `Frame:SetAlpha` (`0x774e90`) stores `trunc(clamp(a) * 255)`, NaN as 1, and `GetAlpha`
 /// (`0x774dc0`) reads the byte times the `f64` 1/255; a non-number raises the usage line
 /// (`0x774f76`). The byte reaches the draw.

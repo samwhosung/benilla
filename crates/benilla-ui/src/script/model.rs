@@ -1845,9 +1845,7 @@ impl Model {
         {
             return;
         }
-        let changed = self.arena.frame(h).is_some_and(|f| f.scale != scale);
-        self.arena.set_scale(h, scale);
-        if changed {
+        if self.arena.set_scale(h, scale, force) {
             // The effective scale cascades down the subtree, an input of each frame's node.
             self.touch_layout_subtree(h);
             self.touch_measure_all();
