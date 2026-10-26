@@ -448,16 +448,17 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
         "and not with the frame it is merely anchored to"
     );
 
-    for bad in ["Spark:SetParent(Spark)", "Spark:SetParent(5)"] {
-        let e = s
-            .run(bad)
-            .expect_err("a non-frame parent must raise")
-            .to_string();
-        assert!(
-            e.contains("expected frame"),
-            "wanted the reference's 'expected frame' rejection, got: {e}"
-        );
-    }
+    let e = s
+        .run("Spark:SetParent(Spark)")
+        .expect_err("a non-frame parent must raise")
+        .to_string();
+    assert!(
+        e.contains("expected frame"),
+        "wanted the reference's 'expected frame' rejection, got: {e}"
+    );
+    // A number passes `lua_isstring` (`0x7a1601`) and is looked up as a name.
+    let e = s.run("Spark:SetParent(5)").unwrap_err().to_string();
+    assert!(e.contains("Couldn't find region named '5'"), "{e}");
     // A missing argument is `TNONE`, which never reaches the nil branch.
     assert!(s.run("Spark:SetParent()").is_err(), "no argument raises");
 

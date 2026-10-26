@@ -159,9 +159,15 @@ fn edit_box_text_setters_gate_their_argument() {
         ("TextBox:SetText(nil)", r#"Usage: TextBox:SetText("text")"#),
         ("TextBox:SetText()", r#"Usage: TextBox:SetText("text")"#),
         ("TextBox:SetText(true)", r#"Usage: TextBox:SetText("text")"#),
-        ("TextAnon:SetText({})", r#"Usage: <unnamed>:SetText("text")"#),
+        (
+            "TextAnon:SetText({})",
+            r#"Usage: <unnamed>:SetText("text")"#,
+        ),
         ("TextBox:SetNumber(nil)", "Usage: TextBox:SetNumber(number)"),
-        ("TextAnon:SetNumber(false)", "Usage: <unnamed>:SetNumber(number)"),
+        (
+            "TextAnon:SetNumber(false)",
+            "Usage: <unnamed>:SetNumber(number)",
+        ),
         (
             "TextBox:AddHistoryLine()",
             r#"Usage: TextBox:AddHistoryLine("text")"#,
@@ -624,6 +630,110 @@ fn set_shadow_offset_raises_its_usage_line_on_font_blocks() {
         assert!(e.contains(line), "`{call}` -> {e}");
     }
     s.run(r#"ShadowFS:SetShadowOffset("2", -1)"#).unwrap();
+}
+
+/// `SetButtonState` raises `Usage: %s:SetButtonState("state", lock)` (`0x87a0d8`) for a non-string
+/// or an unknown token; `SetWidth`/`SetHeight` (`0x7a1fb0`, `0x7a21e0`) raise their lines
+/// (`0x87cbec`, `0x87cc08`) on frames and regions; `SetLight` names the pane and closes its
+/// brackets (`0x878c00`).
+#[test]
+fn button_size_and_light_setters_raise_the_reference_lines() {
+    let s = script();
+    s.run(
+        r#"
+        StateBtn = CreateFrame("Button", "StateBtn")
+        SizeFrame = CreateFrame("Frame", "SizeFrame")
+        SizeTex = SizeFrame:CreateTexture("SizeTex")
+        SizeFS = SizeFrame:CreateFontString()
+        LightM = CreateFrame("Model", "LightM")
+    "#,
+    )
+    .unwrap();
+    let light = "Usage: LightM:SetLight(enabled[, omni, dirX, dirY, dirZ, ambIntensity[, \
+                 ambR, ambG, ambB], dirIntensity[, dirR, dirG, dirB]])";
+    for (call, line) in [
+        (
+            "StateBtn:SetButtonState(nil)",
+            r#"Usage: StateBtn:SetButtonState("state", lock)"#,
+        ),
+        (
+            "StateBtn:SetButtonState('HELD')",
+            r#"Usage: StateBtn:SetButtonState("state", lock)"#,
+        ),
+        (
+            "SizeFrame:SetWidth(nil)",
+            "Usage: SizeFrame:SetWidth(width)",
+        ),
+        (
+            "SizeFrame:SetHeight({})",
+            "Usage: SizeFrame:SetHeight(height)",
+        ),
+        ("SizeTex:SetWidth('x')", "Usage: SizeTex:SetWidth(width)"),
+        ("SizeFS:SetHeight()", "Usage: <unnamed>:SetHeight(height)"),
+        ("LightM:SetLight(1, 'x')", light),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        StateBtn:SetButtonState("pushed") assert(StateBtn:GetButtonState() == "PUSHED")
+        SizeFrame:SetWidth("12") SizeTex:SetHeight("3")
+    "#,
+    )
+    .unwrap();
+}
+
+/// `SetParent` (`0x7a1550`) on a frame or a region: a table with no object raises
+/// `%s:SetParent(): Couldn't find 'this' in parent object` (`0x87cbb4`), a non-frame object
+/// `…Wrong parent object type, expected frame` (`0x87cb78`), and a number is a name (`0x7a1601`).
+#[test]
+fn set_parent_raises_the_reference_lines_for_a_bad_table() {
+    let s = script();
+    s.run(
+        r#"
+        PFrame = CreateFrame("Frame", "PFrame")
+        PTex = PFrame:CreateTexture("PTex")
+        CreateFrame("Frame", "5")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "PFrame:SetParent({})",
+            "PFrame:SetParent(): Couldn't find 'this' in parent object",
+        ),
+        (
+            "PFrame:SetParent(PTex)",
+            "PFrame:SetParent(): Wrong parent object type, expected frame",
+        ),
+        (
+            "PTex:SetParent({})",
+            "PTex:SetParent(): Couldn't find 'this' in parent object",
+        ),
+        (
+            "PTex:SetParent(PTex)",
+            "PTex:SetParent(): Wrong parent object type, expected frame",
+        ),
+        (
+            "PTex:SetParent('NoSuchFrame')",
+            "PTex:SetParent(): Couldn't find region named 'NoSuchFrame'",
+        ),
+        (
+            "PTex:SetParent()",
+            "PTex:SetParent(): Couldn't find region named '(null)'",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        PFrame:SetParent(5) assert(PFrame:GetParent() == getglobal("5"))
+        PTex:SetParent(5) assert(PTex:GetParent() == getglobal("5"))
+    "#,
+    )
+    .unwrap();
 }
 
 /// `SortGuildRoster` tests argument 1 with `lua_isstring` (`0x4d1cb8`), so a number is its

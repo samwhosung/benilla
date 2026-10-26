@@ -990,12 +990,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetButtonState(state [, lock]) (`0x780270`): DISABLED, NORMAL or PUSHED in any case
-    // (`0x780390`), else a usage error; `lock` is `GetBoolOrDefault` with default 0 (`0x78032c`),
-    // so the `1` of `MainMenuBarMicroButtons.lua:22` sets it. While locked, presses and releases
-    // leave the state alone; unlocked, the next release un-pushes a scripted push.
+    // (`0x780390`); a non-string (`0x780307`) or another token raises
+    // `Usage: %s:SetButtonState("state", lock)` (`0x87a0d8`) naming the button. `lock` is
+    // `GetBoolOrDefault` with default 0 (`0x78032c`), so the `1` of `MainMenuBarMicroButtons.lua:22`
+    // sets it. While locked, presses and releases leave the state alone; unlocked, the next release
+    // un-pushes a scripted push.
     m.set(
         "SetButtonState",
-        lua.create_function(|lua, (this, state, lock): (Table, String, MultiValue)| {
+        lua.create_function(|lua, (this, state, lock): (Table, Value, MultiValue)| {
+            with_button(lua, &this, |_| ())?;
+            let line = r#"SetButtonState("state", lock)"#;
+            let state = super::binding_abi::method_string(lua, &this, state, line)?;
             let new = if state.eq_ignore_ascii_case("PUSHED") {
                 ButtonVisualState::Pushed
             } else if state.eq_ignore_ascii_case("NORMAL") {
@@ -1003,9 +1008,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             } else if state.eq_ignore_ascii_case("DISABLED") {
                 ButtonVisualState::Disabled
             } else {
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: SetButtonState(\"state\", lock) — unknown state '{state}'"
-                )));
+                return Err(super::binding_abi::usage(lua, &this, line));
             };
             let first = lock.into_iter().next();
             let locked = super::binding_abi::bool_or_default(first.as_ref(), false);

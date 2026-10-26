@@ -26,14 +26,18 @@ pub(in crate::script) fn clear_points(model: &mut Model, rh: crate::widget::Regi
 /// Install the layout methods into `m`.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // The explicit size fills the axes the anchors do not pin, so SetAllPoints's two corners
-    // leave it unread.
+    // leave it unread. `SetWidth` (`0x7a1f20`) and `SetHeight` (`0x7a2150`) gate on `lua_isnumber`
+    // after the receiver check (`0x7a1fb0`, `0x7a21e0`), else `Usage: %s:SetWidth(width)`
+    // (`0x87cbec`) or `Usage: %s:SetHeight(height)` (`0x87cc08`) naming the object.
     set_shared(
         lua,
         m,
         Side::Region,
         "SetWidth",
-        |lua, (this, w): (Table, f32)| {
+        |lua, (this, w): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            let w =
+                crate::script::binding_abi::method_number(lua, &this, w, "SetWidth(width)")? as f32;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
             let new = Some((Len::Script(w), d.size.map_or(Len::Script(0.0), |s| s.1)));
@@ -54,8 +58,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         m,
         Side::Region,
         "SetHeight",
-        |lua, (this, h): (Table, f32)| {
+        |lua, (this, h): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            let h = crate::script::binding_abi::method_number(lua, &this, h, "SetHeight(height)")?
+                as f32;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
             let new = Some((d.size.map_or(Len::Script(0.0), |s| s.0), Len::Script(h)));

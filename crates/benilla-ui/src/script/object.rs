@@ -359,6 +359,71 @@ pub(crate) fn resolve_named_target(model: &Model, target: &NamedTarget) -> Optio
     (model.id_to_frame.contains_key(&id) || model.id_to_region.contains_key(&id)).then_some(id)
 }
 
+/// The error lines of a method that takes a frame by name or by table: `SetParent` (`0x7a1550`)
+/// and `ScrollFrame:SetScrollChild` (`0x790fa0`) fork alike and differ only in these words.
+pub(crate) struct FrameArgLines {
+    /// The method, as its lines name it: `SetParent`.
+    pub(crate) verb: &'static str,
+    /// What a name miss says it looked for: `region` (`0x87cb48`) or `frame` (`0x87b4c4`).
+    pub(crate) miss: &'static str,
+    /// The role in the `'this'` and type lines: `parent` (`0x87cbb4`, `0x87cb78`) or `child`
+    /// (`0x87b538`, `0x87b4f8`).
+    pub(crate) role: &'static str,
+}
+
+/// `SetParent`'s lines, the Frame's and the Region's alike (both are `0x7a1550`).
+pub(crate) const SET_PARENT_LINES: FrameArgLines = FrameArgLines {
+    verb: "SetParent",
+    miss: "region",
+    role: "parent",
+};
+
+/// A frame argument as `0x7a1550` and `0x790fa0` read one, with no `Model` borrow alive: nil is
+/// `Ok(None)`; a string or number (`lua_isstring`) is a name for `0x76c760`, which accepts only a
+/// frame, with no `$parent` expansion; a table's `[0]` must hold an object (else the `'this'`
+/// line) and that object must be a frame (else the type line). An absent argument (type -1) or
+/// any other type raises the miss line with the name `lua_tostring` gives it, NULL (`0x7a1761`,
+/// `0x7911ce`), which `pushstr` prints as `(null)` (`0x6f5bc8`). `who` is the receiver's name.
+pub(crate) fn frame_arg(
+    lua: &Lua,
+    who: &str,
+    lines: &FrameArgLines,
+    arg: Option<Value>,
+) -> mlua::Result<Option<FrameHandle>> {
+    let FrameArgLines { verb, miss, role } = lines;
+    let raise = |text: String| mlua::Error::runtime(format!("{who}:{verb}(): {text}"));
+    let miss_line = |name: &str| raise(format!("Couldn't find {miss} named '{name}'"));
+    match arg {
+        Some(Value::Nil) => Ok(None),
+        Some(Value::Table(t)) => {
+            let id = match t.raw_get::<Value>(0)? {
+                Value::LightUserData(l) if !l.0.is_null() => l.0 as usize as u32,
+                _ => return Err(raise(format!("Couldn't find 'this' in {role} object"))),
+            };
+            let model = lua.app_data_ref::<Model>().expect("model");
+            let h = model.id_to_frame.get(&id).copied();
+            h.map(Some)
+                .ok_or_else(|| raise(format!("Wrong {role} object type, expected frame")))
+        }
+        Some(v @ (Value::String(_) | Value::Number(_) | Value::Integer(_))) => {
+            let nt = match &v {
+                Value::String(s) => match s.to_str() {
+                    Ok(n) => prefetch_named_target(lua, n.as_ref(), None),
+                    Err(_) => NamedTarget::unreadable(),
+                },
+                _ => {
+                    prefetch_named_target(lua, &optional_string(lua, &v).unwrap_or_default(), None)
+                }
+            };
+            let model = lua.app_data_ref::<Model>().expect("model");
+            let h = resolve_named_target(&model, &nt)
+                .and_then(|id| model.id_to_frame.get(&id).copied());
+            h.map(Some).ok_or_else(|| miss_line(&nt.name))
+        }
+        _ => Err(miss_line("(null)")),
+    }
+}
+
 /// What a leading `$parent` expands to: the first non-empty name at or above `start` (`0x76c5b0`'s
 /// `+0x9c` walk), else [`crate::framexml::DEFAULT_PARENT_NAME`] (`0x76c5dd`). `start` is the
 /// anchoring widget's parent: a frame's enclosing frame, a region's owner.

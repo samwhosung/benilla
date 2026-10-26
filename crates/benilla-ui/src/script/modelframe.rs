@@ -242,10 +242,9 @@ fn number(lua: &Lua, v: &Value) -> Option<f32> {
 /// direction normalise and the paint's degenerate-rect test.
 const FLOAT_EPS: f32 = 2.384_185_8e-7;
 
-/// `Model:SetLight`'s usage error. The reference's (`0x878c00`) names the receiver through `%s`
-/// and ends in `)`; this one names `Model` and drops the `)`.
-const SET_LIGHT_USAGE: &str = "Usage: Model:SetLight(enabled[, omni, dirX, dirY, dirZ, \
-     ambIntensity[, ambR, ambG, ambB], dirIntensity[, dirR, dirG, dirB]]";
+/// `Model:SetLight`'s usage line, `Usage: %s:SetLight(…)` (`0x878c00`) naming the receiver.
+const SET_LIGHT_USAGE: &str = "SetLight(enabled[, omni, dirX, dirY, dirZ, \
+     ambIntensity[, ambR, ambG, ambB], dirIntensity[, dirR, dirG, dirB]])";
 
 /// `PlayerModel:SetUnit`'s usage error (`0x84f284`), which names no receiver.
 const SET_UNIT_USAGE: &str = "Usage: SetUnit(\"unit\")";
@@ -255,7 +254,7 @@ const SET_ROTATION_USAGE: &str = "Usage: SetRotation(rotation (in radians))";
 
 /// What [`parse_set_light`] decided.
 enum SetLight {
-    /// A non-number where one is required: `luaL_error(SET_LIGHT_USAGE)`.
+    /// A non-number where one is required: `luaL_error` of [`SET_LIGHT_USAGE`].
     Raise,
     /// `enabled == 0` returns (`0x76e2cb`) before the copy, so the call neither disables nor
     /// edits the light.
@@ -460,8 +459,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 _ => return Err(mlua::Error::runtime("expected a Model")),
             };
             let a: Vec<Value> = it.collect();
+            with_model(lua, &this, |_| ())?;
             match parse_set_light(lua, &a) {
-                SetLight::Raise => Err(mlua::Error::runtime(SET_LIGHT_USAGE)),
+                SetLight::Raise => Err(usage(lua, &this, SET_LIGHT_USAGE)),
                 SetLight::NoOp => with_model(lua, &this, |_| ()),
                 SetLight::Set(l) => with_model(lua, &this, |m| m.light = l),
             }

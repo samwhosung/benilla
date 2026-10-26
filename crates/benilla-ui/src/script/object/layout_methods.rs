@@ -130,8 +130,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         m,
         Side::Frame,
         "SetWidth",
-        |lua, (this, w): (Table, f32)| {
+        |lua, (this, w): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // `lua_isnumber` (`0x7a1fb0`), else `Usage: %s:SetWidth(width)` (`0x87cbec`).
+            let w =
+                crate::script::binding_abi::method_number(lua, &this, w, "SetWidth(width)")? as f32;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let input = model.layout_inputs.entry(h).or_default();
             let changed = input.width.bits() != crate::layout::Len::Script(w).bits();
@@ -151,8 +154,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         m,
         Side::Frame,
         "SetHeight",
-        |lua, (this, ht): (Table, f32)| {
+        |lua, (this, ht): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // `lua_isnumber` (`0x7a21e0`), else `Usage: %s:SetHeight(height)` (`0x87cc08`).
+            let ht = crate::script::binding_abi::method_number(lua, &this, ht, "SetHeight(height)")?
+                as f32;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let input = model.layout_inputs.entry(h).or_default();
             let changed = input.height.bits() != crate::layout::Len::Script(ht).bits();

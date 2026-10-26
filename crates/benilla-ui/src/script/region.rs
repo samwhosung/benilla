@@ -4,7 +4,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::object::anchor_args::{parse_set_point, resolve_rel_target, UNNAMED};
-use super::object::{decode_id, id_to_lud, NamedTarget};
+use super::object::{decode_id, id_to_lud};
 use super::region_map::{set_shared, Side};
 use super::{
     Model, REG_FONTSTRING_META, REG_FONTSTRING_METHODS, REG_REGION_META, REG_REGION_METHODS,
@@ -555,8 +555,8 @@ fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
 
     // SetParent(frame) lives in the Region table (`0x7a1550`), which Texture and FontString
     // lookups fall back to (`0x79c650`, `0x79ee50`); `FuBar_FuXPFu.lua:210` calls it on a texture.
-    // A non-frame raises (`0x7a16ea`, `0x87cb78`); no argument raises (`0x87cb48`) where nil
-    // detaches, hence the `MultiValue`. Anchors are untouched, and nothing is returned.
+    // The argument is read as the Frame's is ([`super::object::frame_arg`]): nil detaches, and no
+    // argument raises, hence the `MultiValue`. Anchors are untouched, and nothing is returned.
     set_shared(
         lua,
         &m,
@@ -568,45 +568,10 @@ fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
                 return Err(mlua::Error::runtime("SetParent: expected a region"));
             };
             let rh = region_handle_of(lua, &this)?;
-            let Some(parent) = it.next() else {
-                return Err(mlua::Error::runtime(
-                    "SetParent(): Couldn't find region named '' (no argument)",
-                ));
-            };
-            let wrong_type =
-                || mlua::Error::runtime("SetParent(): Wrong parent object type, expected frame");
-            // `_G[name]` is read before the model borrow, with no `$parent` expansion (`0x76c760`).
-            let named = match &parent {
-                Value::String(s) => Some(match s.to_str() {
-                    Ok(n) => super::object::prefetch_named_target(lua, n.as_ref(), None),
-                    Err(_) => NamedTarget::unreadable(),
-                }),
-                _ => None,
-            };
+            let who = super::binding_abi::name_of(lua, &this);
+            let new_owner =
+                super::object::frame_arg(lua, &who, &super::object::SET_PARENT_LINES, it.next())?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            let new_owner = match &parent {
-                Value::Nil => None,
-                // A region or font-object wrapper is no frame: the same "expected frame" raise.
-                Value::Table(t) => Some(
-                    decode_id(t)
-                        .ok()
-                        .and_then(|id| model.id_to_frame.get(&id).copied())
-                        .ok_or_else(wrong_type)?,
-                ),
-                // A name resolves through `_G[name]` and the Frame tag check (`[0xcf0c10]`).
-                Value::String(_) => {
-                    let nt = named.as_ref().expect("a String argument is prefetched");
-                    let hit = super::object::resolve_named_target(&model, nt)
-                        .and_then(|id| model.id_to_frame.get(&id).copied());
-                    Some(hit.ok_or_else(|| {
-                        mlua::Error::runtime(format!(
-                            "SetParent(): Couldn't find region named '{}'",
-                            nt.name
-                        ))
-                    })?)
-                }
-                _ => return Err(wrong_type()),
-            };
             let drew = model.region_draws(rh);
             let old_loading = model.region_owner_loading(rh);
             let moved = model.arena.set_region_owner(rh, new_owner);
