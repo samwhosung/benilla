@@ -242,9 +242,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
         })?,
     )?;
-    // `0x78fc20` reads r, g, b by a bare `lua_tonumber`, so nil, a table or a non-numeric string
-    // is 0.0 and the call never raises (a numeric string reads as its number). Stock hands colour
-    // setters nils: `QuestLogFrame.lua:337` passes three to `SetVertexColor`.
+    // `0x78fc20` reads r, g, b by a bare `lua_tonumber` (`0x6f3620`), so nil, a table or a
+    // non-numeric string is 0.0, a numeric string converts, and the call never raises. Stock hands
+    // colour setters nils: `QuestLogFrame.lua:337` passes three to `SetVertexColor`.
     m.set(
         "SetStatusBarColor",
         lua.create_function(
@@ -271,11 +271,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let bar = with_bar(lua, &this, |sb| sb.bar)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            // Each byte times the float at `0x81c6b4` (`0x78fab0`).
+            // Each byte times the float at `0x81c6b4` (`0x78fab0`), pushed r, g, b, a with g, b
+            // and a stored through `f32` first (`0x78fbb6`, `0x78fbc7`, `0x78fb90`).
             let c = bar
                 .and_then(|rh| model.region_data.get(&rh))
                 .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white());
-            Ok(crate::script::object::colour_values(c))
+            Ok(crate::script::object::colour_values_f32_gba(c))
         })?,
     )?;
 

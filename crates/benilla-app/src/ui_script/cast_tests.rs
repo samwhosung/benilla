@@ -2,7 +2,7 @@
 //! flash and fade, red Failed with its 1 s hold, the channel bar draining. The state tests read the
 //! Lua back, which cannot see what paints; the draw-list tests below see the flash.
 
-use benilla_ui::color::quant::read;
+use benilla_ui::color::quant::{read, read_via_f32};
 use benilla_ui::script::{ExtractedQuad, QuadContent, ScriptValue, UiScript};
 
 use super::test_ui::load_ui as load_xml;
@@ -62,7 +62,7 @@ fn cast_fills_then_completes_green_and_fades() {
     );
     let (r, g, b) = bar_color(&s);
     assert!(
-        (r, g, b) == (read(1.0), read(0.7), 0.0),
+        (r, g, b) == (read(1.0), read_via_f32(0.7), 0.0),
         "casting is orange (got {r} {g} {b})"
     );
 
@@ -78,7 +78,11 @@ fn cast_fills_then_completes_green_and_fades() {
     );
 
     s.fire_event("SPELLCAST_STOP", vec![]);
-    assert_eq!(bar_color(&s), (0.0, read(1.0), 0.0), "completed is green");
+    assert_eq!(
+        bar_color(&s),
+        (0.0, read_via_f32(1.0), 0.0),
+        "completed is green"
+    );
     for _ in 0..30 {
         s.tick(0.1);
     }
@@ -117,7 +121,7 @@ fn a_hit_pushes_the_bar_back_it_does_not_cancel() {
     );
     let (r, g, b) = bar_color(&s);
     assert!(
-        (r, g, b) == (read(1.0), read(0.7), 0.0),
+        (r, g, b) == (read(1.0), read_via_f32(0.7), 0.0),
         "still orange — not failed/red (got {r} {g} {b})"
     );
     let (_, max_after) = s.eval::<(f64, f64)>(minmax).unwrap();
@@ -189,7 +193,7 @@ fn channel_counts_down_not_up() {
     // completion flash. The Era client's green channel bar is not 1.12's.
     let (r, g, b) = bar_color(&s);
     assert!(
-        (r, g, b) == (read(1.0), read(0.7), 0.0),
+        (r, g, b) == (read(1.0), read_via_f32(0.7), 0.0),
         "a channel opens orange, exactly like a cast (got {r} {g} {b})"
     );
 
@@ -216,7 +220,7 @@ fn channel_counts_down_not_up() {
     s.fire_event("SPELLCAST_CHANNEL_STOP", vec![]);
     assert_eq!(
         bar_color(&s),
-        (0.0, read(1.0), 0.0),
+        (0.0, read_via_f32(1.0), 0.0),
         "channel end flashes green"
     );
     for _ in 0..30 {
@@ -255,7 +259,7 @@ fn a_finished_channel_fades_on_its_own_clock_and_the_late_stop_is_inert() {
     );
     let (r, g, b) = bar_color(&s);
     assert!(
-        (r, g, b) == (read(1.0), read(0.7), 0.0),
+        (r, g, b) == (read(1.0), read_via_f32(0.7), 0.0),
         "never flashes green — a finished channel fades, it does not complete (got {r} {g} {b})"
     );
 

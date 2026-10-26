@@ -431,8 +431,8 @@ fn a_dropdown_row_with_has_color_swatch_opens_the_picker_and_cancel_restores() {
         (r, g, b)
             == (
                 benilla_ui::color::quant::read(0.2),
-                benilla_ui::color::quant::read(0.4),
-                benilla_ui::color::quant::read(0.6)
+                benilla_ui::color::quant::read_via_f32(0.4),
+                benilla_ui::color::quant::read_via_f32(0.6)
             ),
         "the swatch is tinted to info.r/g/b, got {r},{g},{b}"
     );

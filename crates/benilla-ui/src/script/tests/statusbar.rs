@@ -346,10 +346,12 @@ fn statusbar_without_a_range_and_a_value_draws_its_whole_texture() {
 #[test]
 fn statusbar_get_texture_returns_the_bar_region() {
     let s = script();
-    // 255 read back times the float at `0x81c6b4`.
+    // 255 read back times the float at `0x81c6b4`: red the double, alpha through `f32`.
+    let one = crate::color::channel(255);
+    s.lua().globals().set("ONE", one).unwrap();
     s.lua()
         .globals()
-        .set("ONE", crate::color::channel(255))
+        .set("ONE32", f64::from(one as f32))
         .unwrap();
     s.run(
         r#"
@@ -360,10 +362,36 @@ fn statusbar_get_texture_returns_the_bar_region() {
         assert(t ~= nil and t == b:GetStatusBarTexture(), "stable region wrapper")
         b:SetStatusBarColor(1, 0, 0)
         local r, g, bb, a = b:GetStatusBarColor()
-        assert(r == ONE and g == 0 and bb == 0 and a == ONE)
+        assert(r == ONE and g == 0 and bb == 0 and a == ONE32)
     "#,
     )
     .unwrap();
+}
+
+/// `GetStatusBarColor` (`0x78fab0`) pushes red as the double product and green, blue and alpha
+/// stored through `f32` (`fstp dword` at `0x78fbb6`, `0x78fbc7`, `0x78fb90`).
+#[test]
+fn statusbar_color_rounds_green_blue_and_alpha_through_f32() {
+    use crate::color::channel;
+    let s = script();
+    let got = s
+        .eval::<(f64, f64, f64, f64)>(
+            r#"local b = CreateFrame("StatusBar")
+            b:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+            b:SetStatusBarColor(0.2, 0.2, 0.2, 0.2)
+            return b:GetStatusBarColor()"#,
+        )
+        .unwrap();
+    let f = |x: f64| f64::from(x as f32);
+    assert_ne!(
+        channel(51),
+        f(channel(51)),
+        "the byte's product is not an f32"
+    );
+    assert_eq!(
+        got,
+        (channel(51), f(channel(51)), f(channel(51)), f(channel(51)))
+    );
 }
 
 /// NaN through the setters as the x87 compares take it: `SetMinMaxValues` keeps a NaN low bound,

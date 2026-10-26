@@ -148,6 +148,13 @@ pub mod quant {
         channel(Rgba8::pack(x, 0.0, 0.0, 1.0).r)
     }
 
+    /// [`read`] as a getter that stores the channel through an `f32` local before it pushes it:
+    /// `GetStatusBarColor`'s green, blue and alpha (`0x78fab0`), FontString:GetTextColor's and
+    /// Texture:GetVertexColor's (`0x79aa50`).
+    pub fn read_via_f32(x: f64) -> f64 {
+        f64::from(read(x) as f32)
+    }
+
     /// [`read`] as the `f32` a test's tuple holds.
     pub fn read32(x: f64) -> f32 {
         read(x) as f32

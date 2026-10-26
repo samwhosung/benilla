@@ -123,8 +123,8 @@ fn breath_takes_the_first_bar_in_the_reference_blue() {
         (r, g, b)
             == (
                 0.0,
-                benilla_ui::color::quant::read(0.5),
-                benilla_ui::color::quant::read(1.0)
+                benilla_ui::color::quant::read_via_f32(0.5),
+                benilla_ui::color::quant::read_via_f32(1.0)
             ),
         "reference blue, got ({r}, {g}, {b})"
     );
@@ -144,7 +144,7 @@ fn fatigue_is_the_reference_yellow_under_its_own_caption() {
         (r, g, b)
             == (
                 benilla_ui::color::quant::read(1.0),
-                benilla_ui::color::quant::read(0.9),
+                benilla_ui::color::quant::read_via_f32(0.9),
                 0.0
             ),
         "reference yellow, got ({r}, {g}, {b})"

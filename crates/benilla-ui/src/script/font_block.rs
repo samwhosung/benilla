@@ -413,12 +413,10 @@ pub(super) fn install(
                 .region_data
                 .get(&rh)
                 .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white());
-            let (r, g, b, a) = c.channels();
             Ok(if kind == FontKind::FontString {
-                let f = |x: f64| f64::from(x as f32);
-                (r, f(g), f(b), f(a))
+                super::object::colour_values_f32_gba(c)
             } else {
-                (r, g, b, a)
+                c.channels()
             })
         })?,
     )?;

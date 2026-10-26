@@ -69,7 +69,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // GetVertexColor (`0x79aa50`): white when never set, and under a gradient (`0x77f8c0` answers
-    // white unless the slot holds exactly one colour).
+    // white unless the slot holds exactly one colour). Green, blue and alpha are stored through
+    // `f32` before the push (`0x79ab68`, `0x79ab79`, `0x79ab3a`), red pushed as the double.
     m.set(
         "GetVertexColor",
         lua.create_function(|lua, this: Table| {
@@ -79,7 +80,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 .region_data
                 .get(&rh)
                 .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white());
-            Ok(crate::script::object::colour_values(c))
+            Ok(crate::script::object::colour_values_f32_gba(c))
         })?,
     )?;
 

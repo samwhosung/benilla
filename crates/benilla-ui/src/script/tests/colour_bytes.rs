@@ -11,29 +11,41 @@ fn four(s: &crate::script::UiScript, code: &str) -> (f64, f64, f64, f64) {
 }
 
 /// `SetVertexColor` (`0x79abd0`) packs 0.5 to 128 (`0x79ad96`) and `GetVertexColor` (`0x79aa50`)
-/// reads it as 128 times the float scale, not 128/255; out-of-range and NaN channels clamp.
+/// reads it as 128 times the float scale, not 128/255, with green, blue and alpha stored through
+/// `f32` first (`0x79ab68`, `0x79ab79`, `0x79ab3a`); out-of-range and NaN channels clamp.
 #[test]
 fn a_texture_colour_reads_back_as_its_bytes() {
     let s = script();
+    let f = |x: f64| f64::from(x as f32);
     s.run(r#"F = CreateFrame("Frame", "F") T = F:CreateTexture("T") S = F:CreateTexture("S")"#)
         .unwrap();
     s.run("T:SetVertexColor(0.5, 0.5, 0.5)").unwrap();
     assert_eq!(
         four(&s, "T:GetVertexColor()"),
-        (channel(128), channel(128), channel(128), channel(255))
+        (
+            channel(128),
+            f(channel(128)),
+            f(channel(128)),
+            f(channel(255))
+        )
     );
     assert_eq!(channel(128), 0.5019596815109253);
     s.run("T:SetVertexColor(0/0, -1, 1.5, 2)").unwrap();
+    assert_ne!(
+        channel(255),
+        f(channel(255)),
+        "the byte's product is not an f32"
+    );
     assert_eq!(
         four(&s, "T:GetVertexColor()"),
-        (channel(255), 0.0, channel(255), channel(255))
+        (channel(255), 0.0, f(channel(255)), f(channel(255)))
     );
     // White with an alpha that rounds to 254 stores nothing on an empty slot (`0x77f766`), so it
     // reads opaque; over a colour already held it is stored.
     s.run("S:SetVertexColor(1, 1, 1, 0.997)").unwrap();
-    assert_eq!(four(&s, "S:GetVertexColor()").3, channel(255));
+    assert_eq!(four(&s, "S:GetVertexColor()").3, f(channel(255)));
     s.run("T:SetVertexColor(1, 1, 1, 0.997)").unwrap();
-    assert_eq!(four(&s, "T:GetVertexColor()").3, channel(254));
+    assert_eq!(four(&s, "T:GetVertexColor()").3, f(channel(254)));
 }
 
 /// `FontString:GetTextColor` (`0x79d840`) pushes red as the double product but rounds green, blue
@@ -136,9 +148,16 @@ fn backdrop_button_bar_and_gradient_colours_are_bytes() {
     s.run("B:SetTextColor(0.5, 2, -1)").unwrap();
     assert_eq!(four(&s, "B:GetTextColor()"), (channel(128), one, 0.0, one));
     s.run("S:SetStatusBarColor(0.25, 0.5, 0.75, 0.5)").unwrap();
+    // Green, blue and alpha come back through `f32` (`0x78fbb6`, `0x78fbc7`, `0x78fb90`).
+    let f = |x: f64| f64::from(x as f32);
     assert_eq!(
         four(&s, "S:GetStatusBarColor()"),
-        (channel(64), channel(128), channel(191), channel(128))
+        (
+            channel(64),
+            f(channel(128)),
+            f(channel(191)),
+            f(channel(128))
+        )
     );
     s.run(r#"T:SetGradientAlpha("VERTICAL", 0.5, 0, 0, 0.5, 2, 1, 1, 1)"#)
         .unwrap();

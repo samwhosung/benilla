@@ -648,6 +648,16 @@ pub(crate) fn colour_values(c: crate::color::Rgba8) -> MultiValue {
     MultiValue::from_vec([r, g, b, a].into_iter().map(Value::Number).collect())
 }
 
+/// [`colour_values`] as the getters that stage green, blue and alpha in `f32` locals push them:
+/// red the double product, the other three rounded through `fstp dword` (FontString:GetTextColor
+/// `0x79d92a`-`0x79d969`, GetStatusBarColor `0x78fb90`-`0x78fbc7`, Texture:GetVertexColor
+/// `0x79ab3a`-`0x79ab79`).
+pub(crate) fn colour_values_f32_gba(c: crate::color::Rgba8) -> (f64, f64, f64, f64) {
+    let (r, g, b, a) = c.channels();
+    let f = |x: f64| f64::from(x as f32);
+    (r, f(g), f(b), f(a))
+}
+
 /// [`tonumber_f32`] in `f64`, for `ColorSelect:SetColorRGB`, whose quantizer an `f32` detour could
 /// push across a rounding boundary.
 pub(super) fn tonumber_f64(lua: &Lua, v: &Value) -> f64 {

@@ -229,8 +229,8 @@ fn the_bar_takes_the_fraction_and_the_faction_colour() {
         (r, g, b)
             == (
                 benilla_ui::color::quant::read(0.05),
-                benilla_ui::color::quant::read(0.15),
-                benilla_ui::color::quant::read(0.36)
+                benilla_ui::color::quant::read_via_f32(0.15),
+                benilla_ui::color::quant::read_via_f32(0.36)
             ),
         "Alliance navy, got ({r}, {g}, {b})"
     );

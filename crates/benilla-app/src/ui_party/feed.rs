@@ -2447,7 +2447,7 @@ mod tests {
         frame(&mut app);
         assert_eq!(
             bar(&mut app),
-            (0.0, 0.0, benilla_ui::color::quant::read(1.0)),
+            (0.0, 0.0, benilla_ui::color::quant::read_via_f32(1.0)),
             "the mana colour"
         );
         assert_eq!(
@@ -2460,14 +2460,19 @@ mod tests {
         frame(&mut app);
         assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), None);
         let grey = benilla_ui::color::quant::read(0.5);
-        assert_eq!(bar(&mut app), (grey, grey, grey), "the disconnected grey");
+        let grey32 = benilla_ui::color::quant::read_via_f32(0.5);
+        assert_eq!(
+            bar(&mut app),
+            (grey, grey32, grey32),
+            "the disconnected grey"
+        );
         assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
 
         resend(&mut app, &[ON], ME, None);
         frame(&mut app);
         assert_eq!(
             bar(&mut app),
-            (0.0, 0.0, benilla_ui::color::quant::read(1.0)),
+            (0.0, 0.0, benilla_ui::color::quant::read_via_f32(1.0)),
             "back online"
         );
         assert_eq!(

@@ -373,8 +373,10 @@ fn the_portrait_tints_with_a_players_state_and_never_a_creatures() {
     let (r, g, b) = s
         .eval::<(f64, f64, f64)>("return TargetofTargetPortrait:GetVertexColor()")
         .unwrap();
+    // Green and blue come back through `f32` (`0x79ab68`, `0x79ab79`).
     let one = benilla_ui::color::quant::read(1.0);
-    assert_eq!((r, g, b), (one, one, one), "and white again");
+    let one32 = benilla_ui::color::quant::read_via_f32(1.0);
+    assert_eq!((r, g, b), (one, one32, one32), "and white again");
 
     // A creature at 15%: the check returns before touching the tint.
     s.set_unit("targettarget", Some(unit("Kobold", 0x500, 15)));
@@ -382,7 +384,7 @@ fn the_portrait_tints_with_a_players_state_and_never_a_creatures() {
     let (r, g, b) = s
         .eval::<(f64, f64, f64)>("return TargetofTargetPortrait:GetVertexColor()")
         .unwrap();
-    assert_eq!((r, g, b), (one, one, one), "creatures carry no reading");
+    assert_eq!((r, g, b), (one, one32, one32), "creatures carry no reading");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
