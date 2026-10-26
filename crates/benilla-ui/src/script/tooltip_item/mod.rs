@@ -482,13 +482,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     unit,
                     "Usage: SetInventoryItem(unit, slot [, nameOnly])",
                 )?;
-                let slot0 = lua
-                    .coerce_number(slot)?
-                    .map(|n| super::binding_abi::ftol(n - 1.0))
-                    .filter(|&s| super::char_stats::inventory_slot_reader_accepts(s))
-                    .ok_or_else(|| {
-                        mlua::Error::runtime("Invalid inventory slot in SetInventoryItem")
-                    })?;
+                const SLOT_LINE: &str = "Invalid inventory slot in SetInventoryItem";
+                let slot0 = super::binding_abi::less_one_arg(lua, slot, SLOT_LINE)?;
+                if !super::char_stats::inventory_slot_reader_accepts(slot0) {
+                    return Err(mlua::Error::runtime(SLOT_LINE));
+                }
                 let slot = (slot0 + 1) as usize;
                 // `nameOnly` (usage string `0x8552dc`) is set only by a number above 0
                 // (`0x533027..0x53304c`); anything else builds the ordinary tooltip, without an
@@ -712,10 +710,15 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     for (name, player_side) in [("SetTradePlayerItem", true), ("SetTradeTargetItem", false)] {
         m.set(
             name,
-            lua.create_function(move |lua, (this, slot): (Table, usize)| {
+            lua.create_function(move |lua, (this, slot): (Table, Value)| {
                 let h = frame_handle_of(lua, &this)?;
-                let cell = slot
-                    .checked_sub(1)
+                // `is-number` else `Invalid trade slot in SetTradePlayerItem` (`0x8554a0`,
+                // `0x5343ea`) or `… in SetTradeTargetItem` (`0x8554cc`, `0x5345f9`); `n - 1` out of
+                // `[0, 7)` names no slot and does nothing (`0x5342c1`, `0x5344f0`).
+                let slot0 =
+                    binding_abi::less_one_arg(lua, slot, &format!("Invalid trade slot in {name}"))?;
+                let cell = usize::try_from(slot0)
+                    .ok()
                     .filter(|&n| n < super::trade::TRADE_SLOTS);
                 let source = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -724,7 +727,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // The seventh slot alone proposes the spell cast on it (`0x534391`,
                     // `0x534598`, the block's `+0x40c`).
                     let proposed = side
-                        .filter(|_| slot == 7)
+                        .filter(|_| slot0 == 6)
                         .and_then(|s| s.slots[6].as_ref()?.enchantment.clone());
                     match player_side {
                         // The object's flags, creator and giver reach the LOCKED, wrapped and
@@ -879,10 +882,19 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     };
                     (this, index)
                 } else {
-                    <(Table, usize) as mlua::FromLuaMulti>::from_lua_args(
-                        mlua::MultiValue::from_vec(vec![this, index]),
+                    let this = <Table as mlua::FromLua>::from_lua(this, lua)?;
+                    frame_handle_of(lua, &this)?;
+                    // `is-number` else `Invalid merchant slot in SetMerchantItem` (`0x855474`,
+                    // `0x5341c4`); `n - 1` below 0 names no row (`0x534166`).
+                    let slot0 = binding_abi::less_one_arg(
                         lua,
-                    )?
+                        index,
+                        "Invalid merchant slot in SetMerchantItem",
+                    )?;
+                    let Ok(index) = usize::try_from(slot0) else {
+                        return Ok(());
+                    };
+                    (this, index + 1)
                 };
                 let h = frame_handle_of(lua, &this)?;
                 // The open vendor's row as of the call.
@@ -896,7 +908,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             .checked_sub(1)
                             .and_then(|i| crate::script::merchant::buyback_row(lua, &model, i))
                     } else {
-                        crate::script::merchant::row(lua, &model, index.saturating_sub(1))
+                        crate::script::merchant::row(lua, &model, index - 1)
                     }
                 };
                 let Some(row) = row else { return Ok(()) };

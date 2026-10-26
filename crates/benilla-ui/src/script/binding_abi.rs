@@ -66,6 +66,17 @@ pub(crate) fn index_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resul
     index_arg32(lua, v, usage).map(|n| n as usize)
 }
 
+/// A slot argument the binding decrements as a double before the truncation: `is-number`
+/// (`0x6f34d0`), `tonumber` (`0x6f3620`), `fsub 1.0` and `_ftol` ([`ftol`]), so `0.5` is slot 0
+/// and 0 is -1, which the caller's signed range test drops (`SetMerchantItem` `0x534159`,
+/// `SetTradePlayerItem` `0x5342b1`). A non-number raises the binding's own `usage`.
+pub(crate) fn less_one_arg(lua: &Lua, v: Value, usage: &str) -> mlua::Result<i32> {
+    match lua.coerce_number(v)? {
+        Some(n) => Ok(ftol(n - 1.0)),
+        None => Err(mlua::Error::RuntimeError(usage.into())),
+    }
+}
+
 /// [`index_arg`] for the parameters the bindings keep as `u32`.
 pub(crate) fn index_arg32(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<u32> {
     number_arg(lua, v, usage).map(|n| n as u32)

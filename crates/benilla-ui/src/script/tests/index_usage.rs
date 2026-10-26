@@ -682,6 +682,18 @@ fn a_non_number_index_raises_the_bindings_own_usage_line() {
             "Usage: SetGuildRosterSelection(index)",
         ),
         ("IdxTip:SetInboxItem({})", "Usage: SetInboxItem(index)"),
+        (
+            "IdxTip:SetMerchantItem({})",
+            "Invalid merchant slot in SetMerchantItem",
+        ),
+        (
+            "IdxTip:SetTradePlayerItem({})",
+            "Invalid trade slot in SetTradePlayerItem",
+        ),
+        (
+            "IdxTip:SetTradeTargetItem()",
+            "Invalid trade slot in SetTradeTargetItem",
+        ),
         ("IdxTip:SetLootRollItem({})", "Usage: SetLootRollItem(id)"),
         ("SetLootThreshold({})", "Usage: SetLooThreshold(threshold)"),
         (
@@ -1070,6 +1082,9 @@ fn a_negative_index_is_read_and_never_a_conversion_error() {
         r#"IdxTip:SetAuctionItem("list", -1)"#,
         "IdxTip:SetAuctionItem(-1, 1)",
         "IdxTip:SetInboxItem(-1)",
+        "IdxTip:SetMerchantItem(-1)",
+        "IdxTip:SetTradePlayerItem(-1)",
+        "IdxTip:SetTradeTargetItem(-1)",
         "IdxTip:SetLootRollItem(-1)",
         "IdxTip:SetPetAction(-1)",
         "IdxTip:SetPlayerBuff(-1)",

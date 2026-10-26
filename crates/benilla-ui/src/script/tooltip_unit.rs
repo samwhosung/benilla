@@ -5,7 +5,7 @@
 //! health on the `<name>StatusBar` child. The world mouseover drives it through
 //! [`super::UiScript::world_tooltip_unit`]; unit-frame hovers call `SetUnit` from Lua.
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Table, Value};
 
 use super::object::frame_handle_of;
 use super::tooltip::{append_line, clear, set_owner_core, show_or_hide_empty};
@@ -611,9 +611,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GameTooltip:SetUnit(token) → 1 or nil, which `UnitFrame_OnEnter` reads to arm its re-poll.
     m.set(
         "SetUnit",
-        lua.create_function(|lua, (this, token): (Table, String)| {
-            // The token gate every `Unit*` verb uses: an unknown token raises. Not in
-            // `render_unit`, which the app calls with canonical tokens.
+        lua.create_function(|lua, (this, token): (Table, Value)| {
+            frame_handle_of(lua, &this)?;
+            // `is-number-or-string` else `Usage: SetUnit("unit")` (`0x534a42`, `0x84f284`).
+            let token = super::binding_abi::string_arg(lua, token, r#"Usage: SetUnit("unit")"#)?;
+            // The token gate every `Unit*` verb uses (`0x515970`): an unknown token raises. Not
+            // in `render_unit`, which the app calls with canonical tokens.
             crate::script::unit::check_unit_token(&Some(token.clone()))?;
             let ok = render_unit(lua, &this, &token)?;
             Ok(if ok {

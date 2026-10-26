@@ -440,6 +440,48 @@ fn set_hyperlink_takes_a_link_by_its_prefix_and_raises_on_any_other() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `SetMerchantItem` takes row `ftol(n - 1.0)` (`0x534159`): 0.5 is the first row, and 0 or a
+/// negative names none and does nothing (`0x534166`); a non-number raises
+/// `Invalid merchant slot in SetMerchantItem` (`0x5341c4`).
+#[test]
+fn set_merchant_item_reads_its_row_as_n_less_one() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_merchant(Some(MerchantState {
+        items: vec![MerchantItem {
+            name: Some("Shiny Loop".into()),
+            item_id: 8000,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    s.set_item_template(
+        8000,
+        ItemTemplateView {
+            name: "Shiny Loop".into(),
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "MI"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        for _, n in { 0, -1, 2 } do
+            tt:SetOwner(a, "ANCHOR_RIGHT")
+            tt:SetMerchantItem(n)
+            assert(tt:NumLines() == 0, "row " .. n .. " names none")
+        end
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetMerchantItem(0.5)
+        assert(TTTextLeft1:GetText() == "Shiny Loop", "0.5 less one truncates to the first row")
+        local ok, e = pcall(tt.SetMerchantItem, tt, "x")
+        assert(not ok and string.find(e, "Invalid merchant slot in SetMerchantItem"), tostring(e))
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
 /// A recipe whose product id is `spell_id + 10_000`, so the tooltip's name shows which row it hit.
 fn ts_recipe(spell_id: u32, name: &str, group: (u32, u32, &str)) -> TradeSkillRecipe {
     TradeSkillRecipe {

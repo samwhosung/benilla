@@ -75,6 +75,13 @@ fn creature_line_law() {
         -- none of the nine prefixes reaches `luaL_error("Unknown unit name: %s")` and longjmps).
         -- This used to read `SetUnit("nosuch") == nil`, which was the refuted claim.
         assert(pcall(tt.SetUnit, tt, "nosuch") == false, "an unrecognised token raises")
+        -- A non-string raises the binding's own line (`0x534a4c`), never mlua's conversion text.
+        for _, v in { {}, true } do
+            local ok, e = pcall(tt.SetUnit, tt, v)
+            assert(not ok and string.find(e, 'Usage: SetUnit%("unit"%)'), tostring(e))
+        end
+        local ok, e = pcall(tt.SetUnit, tt)
+        assert(not ok and string.find(e, 'Usage: SetUnit%("unit"%)'), tostring(e))
     "#,
     )
     .unwrap();
