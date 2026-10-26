@@ -383,6 +383,8 @@ impl super::UiScript {
         if let Some((x, y)) = repick {
             self.mouse_move(x, y);
         }
+        // The draw pass opens with the overlap bits of the strata whose levels went dirty.
+        super::object::toplevel::refresh_overlap_bits(&mut self.model_mut());
         self.paint_model_panes();
         self.paint_movies();
         // `WOW_UI_HANDLERS=<secs>`: last, so its report covers everything this tick fired.

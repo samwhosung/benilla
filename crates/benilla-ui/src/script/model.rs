@@ -758,6 +758,9 @@ pub(crate) struct Model {
     /// apart from `drag` as in the reference: a `StartMoving` or `StartSizing` outlives the button,
     /// since mouse-up's auto-stop skips a Lua drag.
     pub(crate) moving: Option<super::object::FrameMove>,
+    /// The strata of the frames whose rect a resolve stored anew, bit per [`crate::order::Strata::index`]: each
+    /// such store runs `0x764a20` (`0x76b648`), which [`super::UiScript::resolve_layout`] applies.
+    pub(crate) rects_moved: u16,
     /// `SetLayoutMode`'s value, the root's `+0xcf8` (0 at start, `0x7642a5`): while non-zero, a
     /// press with Control or Alt held is a layout drag (`0x766301`).
     pub(crate) layout_mode: i32,
@@ -1604,6 +1607,7 @@ impl Model {
             drag_registered: HashMap::new(),
             drag: None,
             moving: None,
+            rects_moved: 0,
             layout_mode: 0,
             european_numbers: false,
             locale: 0,

@@ -883,6 +883,15 @@ impl UiScript {
         super::tooltip::size_owed(model);
         let solves = model.layout_solves;
         Self::resolve_layout_inner(model);
+        // `0x764a20` for each rect stored: the frame's stratum's levels go dirty (`0x764a36`), and
+        // a held move or size raises its frame unchecked (`0x764a4c`).
+        let moved = std::mem::take(&mut model.rects_moved);
+        if moved != 0 {
+            model.arena.mark_levels_dirty(moved);
+            if let Some(mv) = model.moving {
+                super::object::toplevel::raise_unchecked(model, mv.frame());
+            }
+        }
         // A solve may have resized a frame: its backdrop re-runs its texcoords (`0x76b580`).
         if model.layout_solves != solves {
             super::backdrop::after_resolve(model);
@@ -1058,6 +1067,7 @@ impl UiScript {
             layout_rounds,
             pending_size_changed,
             texture_size_probe,
+            rects_moved,
             layout_force,
             layout_screen,
             layout_unsettled,
@@ -1463,6 +1473,10 @@ impl UiScript {
                         if resolved.get(&h) != Some(&r) {
                             resolved.insert(h, r);
                             changed = true;
+                            // The rect store's callback runs `0x764a20` (`0x76b648`).
+                            if let Some(f) = arena.frame(h) {
+                                *rects_moved |= 1 << f.strata.index();
+                            }
                         }
                     }
                     None => {

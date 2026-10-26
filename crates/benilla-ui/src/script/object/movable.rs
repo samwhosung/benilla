@@ -35,6 +35,13 @@ pub(crate) struct FrameMove {
     pub(crate) auto_stop: bool,
 }
 
+impl FrameMove {
+    /// The frame being dragged.
+    pub(crate) fn frame(self) -> FrameHandle {
+        self.frame
+    }
+}
+
 /// Populate `m`'s movable and resizable methods.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetMovable / IsMovable (`0x776420`/`0x7764d0`): a pure flag write, so clearing it mid-drag

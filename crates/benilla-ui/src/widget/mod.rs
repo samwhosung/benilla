@@ -239,6 +239,10 @@ pub struct Frame {
     /// `resizable` `0x200`, all set by `0x76a3c0`). It raises nothing; `CSimpleTop::Raise`
     /// (`0x7650f0`) raises the nearest toplevel self-or-ancestor of a clicked or shown frame.
     pub toplevel: bool,
+    /// Flag `0x10` of `[frame+0xb4]`: a toplevel frame overlapped by a frame at its level or above
+    /// in its stratum, as a checked raise (`0x7651a3`) or the draw pass (`0x765851`) last found
+    /// it. Only the unchecked raise of a held move reads it (`0x7651ac`).
+    pub overlapped: bool,
     /// Flag `0x2000` of `[frame+0xb4]`: the frame is in a scroll child's subtree, so the flat draw
     /// pass skips it (`0x7659df`) and its ScrollFrame draws it; the hit test clips it to its first
     /// ancestor without the flag (`0x76b034`). [`WidgetArena::set_scroll_flags`] writes it.
@@ -328,6 +332,10 @@ pub struct WidgetArena {
     /// visible frame has linked at since the last compaction set it. It starts at 0 and only a
     /// visible link grows it ([`Self::link_bound`]); nothing else lowers it but the compaction.
     level_bound: [u32; Strata::ALL.len()],
+    /// Bit `n` set: stratum `n`'s levels are dirty (the record's `+0x4`), set by a link
+    /// (`0x764780`) and a frame's rect change (`0x764a36`), so the next draw pass recomputes the
+    /// overlap bit of its toplevel frames (`0x7657d0`).
+    levels_dirty: u16,
     /// The next [`Frame::created`].
     next_created: u64,
     /// How many times the link stamps were renumbered at the cap, so a reader holding stamps can
@@ -391,6 +399,7 @@ impl WidgetArena {
             next_insertion: 0,
             next_kb_stamp: 0,
             level_bound: [0; Strata::ALL.len()],
+            levels_dirty: 0,
             next_created: 0,
             renumbers: 0,
             link_log: None,
@@ -503,6 +512,18 @@ impl WidgetArena {
     fn link_bound(&mut self, strata: Strata, level: u16) {
         let bound = &mut self.level_bound[strata.index() as usize];
         *bound = (*bound).max(u32::from(level) + 1);
+        // The add marks the levels dirty (`0x764901`).
+        self.levels_dirty |= 1 << strata.index();
+    }
+
+    /// Mark the strata of `mask` (bit per [`Strata::index`]) as having dirty levels.
+    pub(crate) fn mark_levels_dirty(&mut self, mask: u16) {
+        self.levels_dirty |= mask;
+    }
+
+    /// The strata whose levels are dirty, cleared, as the draw pass clears each (`0x765872`).
+    pub(crate) fn take_levels_dirty(&mut self) -> u16 {
+        std::mem::take(&mut self.levels_dirty)
     }
 
     /// Start recording every link into a bucket, for the update walk (`0x765650`), which must see
@@ -610,6 +631,7 @@ impl WidgetArena {
             ),
             user_placed: false,
             toplevel: false,
+            overlapped: false,
             scroll_member,
             scroll_root: false,
             scale,

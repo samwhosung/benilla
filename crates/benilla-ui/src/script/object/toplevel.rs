@@ -10,10 +10,13 @@
 //!    them (`0x764eb0`), and sets its level to the bound, moving same-stratum children by the same
 //!    delta (`0x76a4f0`).
 //!
-//! The stratum never changes. The overlapped bit is recomputed per raise, never stored: only the
-//! `force = 0` trigger (`0x764a4c`) reads a stored bit, and it is not wired, so neither is the
-//! per-tick pass that keeps it (`0x7657d0`). The wired triggers are `Raise` (`0x775b0a`), Show
-//! (`0x76aeec`), drag start (`0x7652d7`) and mouse-down (`0x766392`).
+//! The stratum never changes. Step 2 stores what it found as the overlap bit `0x10` (`0x7651a3`),
+//! which the draw pass also recomputes for every shown toplevel frame of a stratum whose levels
+//! went dirty (`0x7657d0` → `0x765a90`). The unchecked raise (`force = 0`) skips step 2 and acts
+//! on the stored bit (`0x7651ac`): a frame's rect change raises the frame a move or size holds
+//! with it (`0x764a20` → `0x764a4c`), so a dragged window rises once it has been found
+//! overlapped. The checked triggers are `Raise` (`0x775b0a`), Show (`0x76aeec`), drag start
+//! (`0x7652d7`) and mouse-down (`0x766392`).
 
 use mlua::{Lua, MultiValue, Table};
 
@@ -75,16 +78,77 @@ pub(in crate::script) fn raise(model: &mut Model, frame: FrameHandle) -> bool {
     //    `OnSizeChanged` that resolve produces fires at the next `UiScript::resolve`, because a
     //    Lua handler must not run in the middle of a level compaction.
     UiScript::resolve_layout(model);
-    if !overlapped(model, t) {
-        return true;
+    let found = overlapped(model, t);
+    if let Some(f) = model.arena.frame_mut(t) {
+        f.overlapped = found;
     }
-    // 3. The raise: compact the occupied levels below the stratum's bound, then land on the bound.
+    if found {
+        lift(model, t);
+    }
+    true
+}
+
+/// `CSimpleTop::Raise(frame, force = 0)` (`0x7650f0` by `0x764a4c`): step 1, then step 3 only when
+/// the toplevel frame's stored overlap bit is set (`0x7651ac`).
+pub(in crate::script) fn raise_unchecked(model: &mut Model, frame: FrameHandle) {
+    let Some(t) = nearest_toplevel(model, frame) else {
+        return;
+    };
+    if model.arena.frame(t).is_some_and(|f| f.overlapped) {
+        lift(model, t);
+    }
+}
+
+/// Step 3: compact the occupied levels below the stratum's bound (`0x764eb0`), then land on the
+/// bound with the children following (`0x76a4f0(bound, 1)`, `0x7651d8`).
+fn lift(model: &mut Model, t: FrameHandle) {
     let Some(strata) = model.arena.frame(t).map(|f| f.strata) else {
-        return true;
+        return;
     };
     let count = model.arena.compact_levels(strata);
     model.arena.set_frame_level(t, count, true);
-    true
+}
+
+/// The draw pass's first loop (`0x7657d0`): for each stratum whose levels are dirty, every shown
+/// toplevel frame's overlap bit takes `0x765a90`'s answer on the rects as they stand
+/// (`0x765847`, `0x765851`), and the stratum's flag clears (`0x765872`).
+pub(in crate::script) fn refresh_overlap_bits(model: &mut Model) {
+    let dirty = model.arena.take_levels_dirty();
+    if dirty == 0 {
+        return;
+    }
+    let in_dirty = |f: &crate::widget::Frame| dirty & (1 << f.strata.index()) != 0;
+    let tops: Vec<FrameHandle> = model
+        .arena
+        .iter_frames()
+        .filter(|(_, f)| f.toplevel && f.effective_visible && in_dirty(f))
+        .map(|(h, _)| h)
+        .collect();
+    if tops.is_empty() {
+        return;
+    }
+    // The shown frames of the dirty strata with a rect, gathered once for every toplevel's scan.
+    let shown: Vec<(FrameHandle, crate::order::Strata, u16, Rect)> = model
+        .arena
+        .iter_frames()
+        .filter(|(_, f)| f.effective_visible && in_dirty(f))
+        .filter_map(|(h, f)| Some((h, f.strata, f.level, *model.frame_rects.get(&h)?)))
+        .collect();
+    for t in tops {
+        let found = model.frame_rects.get(&t).is_some_and(|&rect| {
+            let tf = model.arena.frame(t).expect("listed above");
+            shown.iter().any(|&(h, strata, level, r)| {
+                h != t
+                    && strata == tf.strata
+                    && level >= tf.level
+                    && rects_overlap(rect, r)
+                    && !model.arena.is_ancestor(t, h)
+            })
+        });
+        if let Some(f) = model.arena.frame_mut(t) {
+            f.overlapped = found;
+        }
+    }
 }
 
 /// The Show trigger (`0x76ae10` at `0x76aee0`): on becoming visible, raise only if the frame's own

@@ -540,6 +540,52 @@ fn starting_a_move_raises_the_dragged_window() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// A held move raises its window unchecked on every rect change (`0x764a20` → `0x764a4c`), which
+/// acts only on the stored overlap bit (`0x7651ac`); the draw pass recomputes that bit for the
+/// toplevel frames of a stratum whose levels went dirty (`0x7657d0` → `0x765a90`). So a window
+/// dragged over another rises at the first rect change after a draw pass has seen the overlap.
+#[test]
+fn a_dragged_window_rises_once_a_draw_pass_finds_it_overlapped() {
+    let mut s = board_and_dialog();
+    s.run(
+        r#"
+        Dialog:ClearAllPoints()
+        Dialog:SetPoint("BOTTOMLEFT", 450, 100)  -- clear of Board, which spans 100 to 400
+        Dialog:SetToplevel(true)
+        Dialog:SetMovable(true)
+        Dialog:Show()
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        level(&mut s, "Dialog"),
+        0,
+        "nothing overlaps it at the show"
+    );
+    s.mouse_move(600.0, 250.0);
+    s.run("Dialog:StartMoving()").unwrap();
+    assert_eq!(level(&mut s, "Dialog"), 0, "nor at the grab");
+
+    s.mouse_move(450.0, 250.0); // Dialog now spans 300 to 600, over Board
+    s.resolve();
+    assert!(
+        level(&mut s, "Dialog") < level(&mut s, "Board"),
+        "the bit is still the grab's"
+    );
+    s.tick(0.0); // the draw pass finds the overlap
+    assert!(level(&mut s, "Dialog") < level(&mut s, "Board"));
+    s.mouse_move(440.0, 250.0);
+    s.resolve();
+    assert!(
+        level(&mut s, "Dialog") > level(&mut s, "Board"),
+        "the next rect change lifts it"
+    );
+    assert_eq!(painted(&mut s), ["Board.blp", "Dialog.blp"]);
+    s.run("Dialog:StopMovingOrSizing()").unwrap();
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 // ── The mouse-down trigger ──
 
 /// The centre of `name`'s resolved rect, in the coordinate space [`UiScript::mouse_button`] takes.
