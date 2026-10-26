@@ -131,22 +131,45 @@ fn status_answer(lane: &mut DialogLane, status: i32) {
 
 /// `UPDATE_TICKET`'s arguments: category, text, the three day figures, assigned, opened. The wire
 /// has the text first and the reference's handler reorders as it fires, so the decoder keeps wire
-/// order. No ticket is a single `0`: `HelpFrameOpenTicket_OnEvent` tests `arg1 and arg1 ~= 0`
-/// (`HelpFrame.lua:403`), and its else branch resets the form (`:468-475`).
+/// order. `HelpFrameOpenTicket_OnEvent` tests `arg1 and arg1 ~= 0` (`HelpFrame.lua:403`), and its
+/// else branch resets the form (`:468-475`).
 fn update_ticket_args(ticket: Option<&benilla_protocol::messages::GmTicket>) -> Vec<ScriptValue> {
     let Some(t) = ticket else {
-        return vec![ScriptValue::Int(0)];
+        return no_ticket_args();
     };
     vec![
         ScriptValue::Int(i64::from(t.category)),
         ScriptValue::Str(t.text.clone()),
-        // Days, unclamped: a negative figure is the server's "unknown", which the window shows as
-        // `GM_TICKET_UNAVAILABLE` (`HelpFrame.lua:442`).
-        ScriptValue::Number(f64::from(t.ticket_age)),
+        // The first figure, below 0 stored as 0, NaN and -0 passing (`0x5e4568`-`0x5e4578`: a
+        // `fcomp` against 0.0, then `jp` over the store); it is `ticket_age`, which the window
+        // subtracts from the wait estimate. The other two stay signed: a negative is the server's
+        // "unknown", shown as `GM_TICKET_UNAVAILABLE` (`HelpFrame.lua:442`).
+        ScriptValue::Number(f64::from(if t.ticket_age < 0.0 {
+            0.0
+        } else {
+            t.ticket_age
+        })),
         ScriptValue::Number(f64::from(t.oldest_ticket_age)),
         ScriptValue::Number(f64::from(t.update_time)),
         ScriptValue::Int(i64::from(t.assigned_to_gm)),
         ScriptValue::Int(i64::from(t.opened_by_gm)),
+    ]
+}
+
+/// The no-ticket `UPDATE_TICKET` (`0x5e450c`, `0x5e7945`): seven dwords 0, `""`, -1, -1, -1, 0, 0
+/// under the format `%d%s%f%f%f%d%d` (`0x8603e4`), which reads ten. A `%f` takes eight bytes
+/// (`fld qword` at `0x704fe3`), so arg3 is `0xFFFFFFFFFFFFFFFF`, a NaN, and arg4
+/// `0x00000000FFFFFFFF`, a denormal. Arg5's high half and both `%d` are read from past the pushed
+/// arguments, stack the handler never wrote; we answer zero there.
+fn no_ticket_args() -> Vec<ScriptValue> {
+    vec![
+        ScriptValue::Int(0),
+        ScriptValue::Str(String::new()),
+        ScriptValue::Number(f64::NAN),
+        ScriptValue::Number(f64::from_bits(0xFFFF_FFFF)),
+        ScriptValue::Number(0.0),
+        ScriptValue::Int(0),
+        ScriptValue::Int(0),
     ]
 }
 
@@ -597,10 +620,42 @@ mod tests {
         assert_eq!(args[6], ScriptValue::Int(1), "arg7 openedByGM");
     }
 
-    /// The window's form reset hangs on `arg1 and arg1 ~= 0`.
+    /// The window's form reset hangs on `arg1 and arg1 ~= 0`; an addon reads the reference's
+    /// seven arguments, the floats as the format `%d%s%f%f%f%d%d` reads the pushed dwords.
     #[test]
-    fn the_no_ticket_answer_is_a_single_zero() {
-        assert_eq!(update_ticket_args(None), vec![ScriptValue::Int(0)]);
+    fn the_no_ticket_answer_carries_the_references_seven_arguments() {
+        let args = update_ticket_args(None);
+        assert_eq!(args.len(), 7);
+        assert_eq!(args[0], ScriptValue::Int(0));
+        assert_eq!(args[1], ScriptValue::Str(String::new()));
+        let float = |i: usize| match args[i] {
+            ScriptValue::Number(n) => n,
+            ref other => panic!("arg{} is {other:?}", i + 1),
+        };
+        assert!(float(2).is_nan(), "(-1, -1) read as one double");
+        assert_eq!(
+            float(3).to_bits(),
+            0xFFFF_FFFF,
+            "(-1, 0) read as one double"
+        );
+    }
+
+    /// `0x5e4568`: a negative first figure is stored as 0; NaN and -0 pass, the others untouched.
+    #[test]
+    fn a_negative_ticket_age_reaches_lua_as_zero() {
+        let age = |v: f32| {
+            let mut t = ticket();
+            t.ticket_age = v;
+            match update_ticket_args(Some(&t))[2] {
+                ScriptValue::Number(n) => n,
+                ref other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(age(-3.5), 0.0);
+        assert_eq!(age(-3.5).to_bits(), 0.0f64.to_bits(), "+0, not -0");
+        assert!(age(f32::NAN).is_nan());
+        assert_eq!(age(-0.0).to_bits(), (-0.0f64).to_bits());
+        assert_eq!(age(2.0), 2.0);
     }
 
     /// The window's `arg4 < 0 or arg5 < 0` test shows "unavailable".
@@ -624,15 +679,17 @@ mod tests {
             ticket_answer(&mut lane, &errors, 6, Some(&t));
         }
         ticket_answer(&mut lane, &errors, 10, None);
-        let ticket = |args| DialogSignal::Event("UPDATE_TICKET".into(), args);
-        assert_eq!(
-            lane.take(),
-            [
-                ticket(update_ticket_args(Some(&t))),
-                ticket(update_ticket_args(Some(&t))),
-                ticket(vec![ScriptValue::Int(0)]),
-            ]
-        );
+        // The no-ticket answer carries a NaN, which never equals itself: compare its shape.
+        let signals = lane.take();
+        let [first, second, none] = signals.as_slice() else {
+            panic!("{signals:?}");
+        };
+        let ticket = DialogSignal::Event("UPDATE_TICKET".into(), update_ticket_args(Some(&t)));
+        assert_eq!((first, second), (&ticket, &ticket));
+        let DialogSignal::Event(name, args) = none else {
+            panic!("{none:?}");
+        };
+        assert_eq!((name.as_str(), args.len()), ("UPDATE_TICKET", 7));
     }
 
     /// The reference's `0x5e4479` re-ask; a refusal has nothing new to fetch.
