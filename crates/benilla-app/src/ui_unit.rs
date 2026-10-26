@@ -1940,7 +1940,7 @@ fn feed_units(
     let world_enter = vm.run(|script| {
         let script = script?;
         if owed.book_sorted {
-            // One per form the stance seat listed, which runs ahead (`WorldEnterSeats`).
+            // One per form the list holds, read through the lent host off the known spells.
             for _ in 0..script.shapeshift_form_count() {
                 script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
             }

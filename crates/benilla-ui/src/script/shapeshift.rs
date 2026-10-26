@@ -1,11 +1,34 @@
 //! The stance bar's four bindings, which `BonusActionBarFrame.lua`'s `ShapeshiftBar_*` calls, over
-//! a form list the app resolves and pushes; flags answer 1/nil and the cooldown is the reference's
-//! `(start, duration, enable)`.
+//! the form list `0xb71108` (count `0xb71104`) read at the call through the lent host
+//! ([`ShapeshiftList`], [`ShapeshiftForm`]), else off the copy the app pushes; flags answer 1/nil
+//! and the cooldown is the reference's `(start, duration, enable)`.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
+use super::live::{ask, LiveQuery};
 use super::Model;
+
+/// The form list's spells as they stand, in bar order: `0xb71108`, which every binding indexes
+/// (`0x4b4590`, `0x4b45c0`, `0x4b49a0`, `0x4b4810`).
+#[derive(Clone, Copy, Debug)]
+pub struct ShapeshiftList;
+
+impl LiveQuery for ShapeshiftList {
+    type Answer = Vec<u32>;
+}
+
+/// One form-list entry, 0-based, as `GetShapeshiftFormInfo` reads it at the call (`0x4b45c0`):
+/// `None` for its four nils past the list (`0x4b4633`). A host with no active player declines, so
+/// the copy answers the list's spell: in game nothing pushes one, and its absence is the four nils
+/// of `0x4b4639`. The view's cooldown is unread: `GetShapeshiftFormCooldown` asks the spell's own
+/// ([`super::CooldownQuery`]).
+#[derive(Clone, Copy, Debug)]
+pub struct ShapeshiftForm(pub usize);
+
+impl LiveQuery for ShapeshiftForm {
+    type Answer = Option<ShapeshiftFormView>;
+}
 
 /// One stance-bar button, resolved by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -33,12 +56,15 @@ pub(crate) struct StoredShapeshiftForm {
 }
 
 impl super::UiScript {
-    /// How many forms the stance bar's seat holds, `GetNumShapeshiftForms` off the copy.
+    /// How many forms the list holds now, as `GetNumShapeshiftForms` reads it (`0x4b4590`): the
+    /// lent host's, else the copy's.
     pub fn shapeshift_form_count(&self) -> usize {
-        self.model_ref().shapeshift_forms.len()
+        ask(self.lua(), &ShapeshiftList)
+            .map_or_else(|| self.model_ref().shapeshift_forms.len(), |l| l.len())
     }
 
-    /// Replace the form list, in bar order; the app fires `UPDATE_SHAPESHIFT_FORMS` itself.
+    /// Replace the form list, in bar order, for a VM with no host to ask; the app fires
+    /// `UPDATE_SHAPESHIFT_FORMS` itself.
     pub fn set_shapeshift_forms(&mut self, forms: Vec<ShapeshiftFormView>) {
         let mut model = self.model_mut();
         model.shapeshift_forms = forms
@@ -66,11 +92,81 @@ impl super::UiScript {
     }
 }
 
-/// A 1-based button index, as the reference indexes.
+/// A 1-based button index, as the reference indexes, 0-based.
+fn slot(i: u32) -> Option<usize> {
+    usize::try_from(i.checked_sub(1)?).ok()
+}
+
+/// A 1-based button index into the copy.
 fn form_at(model: &Model, i: u32) -> Option<&StoredShapeshiftForm> {
-    usize::try_from(i.checked_sub(1)?)
-        .ok()
-        .and_then(|n| model.shapeshift_forms.get(n))
+    model.shapeshift_forms.get(slot(i)?)
+}
+
+/// The copy's entry for 1-based button `i`: the one holding the host's list's spell there, else
+/// the copy's own `i`th.
+fn copy_at<'m>(lua: &Lua, model: &'m Model, i: u32) -> Option<&'m StoredShapeshiftForm> {
+    match ask(lua, &ShapeshiftList) {
+        Some(list) => {
+            let spell = *list.get(slot(i)?)?;
+            model
+                .shapeshift_forms
+                .iter()
+                .find(|f| f.view.spell_id == spell)
+        }
+        None => form_at(model, i),
+    }
+}
+
+/// The spell on 1-based button `i` now, the host's list, else the copy's; `None` past the list.
+fn form_spell(lua: &Lua, i: u32) -> Option<u32> {
+    match ask(lua, &ShapeshiftList) {
+        Some(list) => list.get(slot(i)?).copied(),
+        None => form_at(&lua.app_data_ref::<Model>().expect("model app_data"), i)
+            .map(|f| f.view.spell_id),
+    }
+}
+
+/// A cooldown in `GetTime` seconds: `(start, duration, enabled)`.
+type Seconds = (f64, f64, bool);
+
+/// Button `i`'s spell and its cooldown in `GetTime` seconds now: the host's list with the spell's
+/// own cooldown off the player's list (`0x6e2ea0`, item 0), else the copy's entry; `None` past the
+/// list.
+fn form_cooldown(lua: &Lua, i: u32) -> Option<(u32, Option<Seconds>)> {
+    let Some(list) = ask(lua, &ShapeshiftList) else {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let form = form_at(&model, i)?;
+        return Some((form.view.spell_id, form.cooldown));
+    };
+    let spell = *list.get(slot(i)?)?;
+    let cooldown = super::cooldown_read::read_live(lua, super::CooldownQuery::Spell(spell))
+        .unwrap_or_else(|| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            model
+                .shapeshift_forms
+                .iter()
+                .find(|f| f.view.spell_id == spell)
+                .and_then(|f| f.cooldown)
+        });
+    Some((spell, cooldown))
+}
+
+/// Button `i`'s spell, its name and its cooldown now, for `GameTooltip:SetShapeshift`
+/// (`0x532920`): the list read at the call (`0x5329f9`, `0x532a21`) and the cooldown off the
+/// player's list (`0x532a26` → `0x6e2ea0`), each the host's, else the copy's; `None` past the
+/// list.
+pub(super) fn tooltip_form(lua: &Lua, i: u32) -> Option<(u32, Option<String>, Option<Seconds>)> {
+    let (spell, cooldown) = form_cooldown(lua, i)?;
+    let name = match slot(i).and_then(|n| ask(lua, &ShapeshiftForm(n))) {
+        Some(form) => form.map(|f| f.name),
+        None => copy_at(
+            lua,
+            &lua.app_data_ref::<Model>().expect("model app_data"),
+            i,
+        )
+        .map(|f| f.view.name.clone()),
+    };
+    Some((spell, name, cooldown))
 }
 
 /// The index of the two form getters: `lua_tonumber` (`0x6f3620`) compared with 0.0 (`0x4b45d8`,
@@ -90,6 +186,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetNumShapeshiftForms",
         lua.create_function(|lua, ()| {
+            // `0x4b4590`: the count `0xb71104` as it stands.
+            if let Some(list) = ask(lua, &ShapeshiftList) {
+                return Ok(list.len() as i64);
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model.shapeshift_forms.len() as i64)
         })?,
@@ -99,41 +199,49 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetShapeshiftFormInfo",
         lua.create_function(|lua, index: Option<Value>| {
             let i = form_index(lua, index, "Usage: GetShapeshiftFormInfo(index)")?;
+            // The entry as it stands, read at the call (`0x4b45c0`), else the copy's.
+            let live = slot(i).and_then(|n| ask(lua, &ShapeshiftForm(n)));
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(form) = form_at(&model, i) else {
+            let form = match &live {
+                Some(form) => form.as_ref(),
+                None => copy_at(lua, &model, i).map(|f| &f.view),
+            };
+            let Some(form) = form else {
                 // `0x4b47d9`: four nils.
                 return Ok(super::binding_abi::tuple(&[None; 4]));
             };
-            let texture = match &form.view.texture {
+            let texture = match &form.texture {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
             let flag = |b: bool| if b { Value::Integer(1) } else { Value::Nil };
             Ok(MultiValue::from_vec(vec![
                 texture,
-                Value::String(lua.create_string(&form.view.name)?),
-                flag(form.view.active),
-                flag(form.view.castable),
+                Value::String(lua.create_string(&form.name)?),
+                flag(form.active),
+                flag(form.castable),
             ]))
         })?,
     )?;
 
     // As `GetActionCooldown`: an elapsed or absent cooldown answers `(0, 0, 1)`, so a re-feed never
-    // replays the sweep.
+    // replays the sweep. The entry's spell queries the player's list inside the call (`0x4b49a0`
+    // → `0x6e2ea0`, item 0), through the lent host; one past the list answers `(0, 0, 1)`.
     g.set(
         "GetShapeshiftFormCooldown",
         lua.create_function(|lua, index: Option<Value>| {
             let i = form_index(lua, index, "Usage: GetShapeshiftFormCooldown(index)")?;
             let now = crate::script::clock::now(lua);
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match form_at(&model, i).and_then(|f| f.cooldown) {
-                Some((start, duration, enabled)) if start + duration > now || !enabled => (
-                    crate::script::clock::held_start(start, enabled, now),
-                    duration,
-                    i32::from(enabled),
-                ),
-                _ => (0.0, 0.0, 1),
-            })
+            Ok(
+                match form_cooldown(lua, i).and_then(|(_, cooldown)| cooldown) {
+                    Some((start, duration, enabled)) if start + duration > now || !enabled => (
+                        crate::script::clock::held_start(start, enabled, now),
+                        duration,
+                        i32::from(enabled),
+                    ),
+                    _ => (0.0, 0.0, 1),
+                },
+            )
         })?,
     )?;
 
@@ -152,9 +260,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // the cancels of an active form (`0x4b496b`, `0x4b497c`) run ahead of it, so the call
             // is queued whatever the gate said and carries the answer to the cast alone.
             let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
-            let spell_id = form_at(&lua.app_data_ref::<Model>().expect("model app_data"), i)
-                .map(|f| f.view.spell_id);
-            if let Some(spell_id) = spell_id {
+            // The entry's spell as it stands (`0x4b4810` reads `0xb71108`).
+            if let Some(spell_id) = form_spell(lua, i) {
                 super::calls::submit(
                     lua,
                     super::ScriptCall::CastShapeshiftForm { spell_id, may_cast },
@@ -292,6 +399,58 @@ mod tests {
                 spell_id: 71,
                 may_cast: true
             }]
+        );
+    }
+
+    /// Answers the form list and its entries off its own list, as of each ask, and keeps the
+    /// calls it applies.
+    struct Host(Vec<ShapeshiftFormView>, Vec<crate::script::ScriptCall>);
+
+    impl crate::script::CallHost for Host {
+        fn apply(
+            &mut self,
+            _: &mut UiScript,
+            call: crate::script::ScriptCall,
+        ) -> Option<crate::script::CallTail> {
+            self.1.push(call);
+            None
+        }
+
+        fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+            let forms = &self.0;
+            ask.answer(|_: &super::ShapeshiftList| Some(forms.iter().map(|f| f.spell_id).collect()))
+                || ask.answer(|q: &super::ShapeshiftForm| Some(forms.get(q.0).cloned()))
+        }
+    }
+
+    /// With a host lent, every binding reads its list, not the copy: the count, an entry's
+    /// values, a cast's spell, and four nils past it (`0x4b4590`, `0x4b45c0`, `0x4b4810`).
+    #[test]
+    fn the_bindings_read_the_lent_hosts_list() {
+        let mut s = UiScript::new().unwrap();
+        s.set_shapeshift_forms(forms());
+        let mut host = Host(vec![forms().remove(1)], Vec::new());
+        let chunk = "local _, name, active, castable = GetShapeshiftFormInfo(1) \
+                     CastShapeshiftForm(1) \
+                     return GetNumShapeshiftForms(), name, active, castable, \
+                     GetShapeshiftFormInfo(2) == nil";
+        let read = s.hosted(&mut host, |s| {
+            s.eval::<(i64, String, Option<i64>, Option<i64>, bool)>(chunk)
+                .unwrap()
+        });
+        assert_eq!(read, (1, "Defensive Stance".into(), None, Some(1), true));
+        assert!(
+            matches!(
+                host.1[..],
+                [crate::script::ScriptCall::CastShapeshiftForm { spell_id: 71, .. }]
+            ),
+            "{:?}",
+            host.1
+        );
+        assert_eq!(
+            s.eval::<i64>("return GetNumShapeshiftForms()").unwrap(),
+            2,
+            "no host, the copy"
         );
     }
 }

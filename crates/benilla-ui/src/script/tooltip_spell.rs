@@ -782,19 +782,14 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetShapeshift",
         lua.create_function(|lua, (this, index): (Table, Value)| {
             // `is-number` else `Usage: SetShapeshift(slot)` (`0x85523c`, `0x532ad6`).
-            let index = binding_abi::index_arg(lua, index, "Usage: SetShapeshift(slot)")?;
+            let index = binding_abi::index_arg32(lua, index, "Usage: SetShapeshift(slot)")?;
             let now = crate::script::clock::now(lua);
-            let (spell_id, name, remaining_ms) = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                match model.shapeshift_forms.get(index.saturating_sub(1)) {
-                    Some(f) => (
-                        f.view.spell_id,
-                        Some(f.view.name.clone()),
-                        live_remaining_ms(f.cooldown, now),
-                    ),
-                    None => return Ok(Value::Nil),
-                }
+            // `index - 1` against the count, unsigned (`0x5329fe`, `0x532a01`): 0 is past it.
+            let Some((spell_id, name, cooldown)) = super::shapeshift::tooltip_form(lua, index)
+            else {
+                return Ok(Value::Nil);
             };
+            let remaining_ms = live_remaining_ms(cooldown, now);
             // Both legs pass the rank and the `UberTooltips` compact flag (`0x532a62`-`0x532a84`,
             // `0x532aaf`-`0x532abe`).
             let opts = SpellRenderOpts {

@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 80;
-const FRAME_FINAL_INPUTS: usize = 399;
+const FRAME_FINAL_FEEDS: usize = 78;
+const FRAME_FINAL_INPUTS: usize = 387;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -39,6 +39,9 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::net::apply::tag_self_player", &["Commands net::SelfPlayer"],
         "tags our created entity as the player, which the token resolver finds it by; the \
          reference makes it the active player inside its create (`0x5dea50`)"),
+    ("::player::wire_in::regain_control_on_arrival", &["player::state::OwnControlLost"],
+        "gives control back on our own create, which the stance bar's usability walk reads \
+         (`0x6e3dc3`); the reference raises it inside the create (`0x5deb56`)"),
     ("::query_cache::release_on_enter<benilla_app::go_templates::GameObjectTemplates>",
         &["go_templates::GameObjectTemplates"],
         "clears the object cache's in-flight asks on world entry, so each is asked again; the \
@@ -51,6 +54,9 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "clears the guild cache's in-flight asks on world entry, so each is asked again"),
     ("::spell::group_relation::publish_group_roster", &["spell::group_relation::GroupRoster"],
         "copies the group's roster, which the relation reads take, once the packets are in"),
+    ("::spell::mods::track_class_family", &["spell::mods::SpellModifiers"],
+        "keeps the class family the stance bar's usability walk prices a cost through; the \
+         reference stores it inside our own create (`0x5debcc` → `0x6e6ca0`)"),
     ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::spell::cooldowns::Cooldowns>",
         &["spell::cooldowns::Cooldowns"],
         "drops the player's cooldown log with no in-game interface up; it goes with the log"),

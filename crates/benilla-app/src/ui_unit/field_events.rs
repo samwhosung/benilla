@@ -69,6 +69,10 @@ impl NoticeFiring<'_, '_> {
             script.quest_log_changed();
             return false;
         }
+        if let FieldNotice::MirrorTimer(edge) = notice {
+            crate::ui_mirror::fire_edge(script, edge, self.spells.as_deref());
+            return false;
+        }
         if let FieldNotice::Tutorial { id } = notice {
             // `0x4b5390` with no delay, inside the watcher's run.
             let published = self.tutorials.as_ref().and_then(|t| t.lock().fire_now(id));
@@ -489,9 +493,10 @@ pub(crate) fn fire(
         // states ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
         FieldNotice::UsableRefresh => {}
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
-        // table, the aura cache and the skill lines.
+        // table, the spell catalog, the aura cache and the skill lines.
         FieldNotice::QuestLog
         | FieldNotice::Tutorial { .. }
+        | FieldNotice::MirrorTimer(_)
         | FieldNotice::Drunk { .. }
         | FieldNotice::Shapeshift
         | FieldNotice::PlayerAuras

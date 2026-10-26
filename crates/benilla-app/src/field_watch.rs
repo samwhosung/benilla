@@ -125,6 +125,9 @@ pub(crate) enum FieldNotice {
     /// shown value (`0x5de417`). Either way, the profession list's rebuild (`0x5de434`). `old` is
     /// the value word's copy, `shown` the value plus the permanent bonus when the value is above 0.
     SkillValue { skill_id: u16, old: u16, shown: u32 },
+    /// The mirror-timer handler `0x5e7990`'s signal for one edge: `MIRROR_TIMER_START`,
+    /// `_PAUSE` or `_STOP` (`0x5e7a9a`, `0x5e7a11`, `0x5e79cc`).
+    MirrorTimer(crate::ui_mirror::MirrorTimerEdge),
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired

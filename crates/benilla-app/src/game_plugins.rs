@@ -73,7 +73,6 @@ use crate::ui_quest_log::UiQuestLogPlugin;
 use crate::ui_quest_share::QuestSharePlugin;
 use crate::ui_saved::UiSavedPlugin;
 use crate::ui_script::UiScriptPlugin;
-use crate::ui_shapeshift::UiShapeshiftPlugin;
 use crate::ui_social::UiSocialPlugin;
 use crate::ui_spellbook::UiSpellbookPlugin;
 use crate::ui_stable::UiStablePlugin;
@@ -207,9 +206,6 @@ impl PluginGroup for GamePlugins {
             // After UiActionPlugin, whose `Spells` catalog it shares.
             .add(UiTalentPlugin)
             .add(UiTalentWipePlugin)
-            // The form list by the reference's admission and order (`0x4b25b0`, `0x4b2bb0`); after
-            // UiActionPlugin (`Spells`) and SpellPlugin (the cast tail).
-            .add(UiShapeshiftPlugin)
             // After UiActionPlugin, whose `Spells` and cooldown clock it shares.
             .add(UiPetPlugin)
             .add(ChrClassesPlugin)
@@ -1407,7 +1403,6 @@ pub(crate) mod schedule_tests {
             "::player::controller::control",
             "::ui_unit::feed_player_control",
             "::ui_action::state::feed_action_state",
-            "::ui_shapeshift::feed_shapeshift_bar",
             "::player::camera_saved::load_camera_pose",
             "::tutorial::watch_self",
             "::ui_trade::answer_trade_request",

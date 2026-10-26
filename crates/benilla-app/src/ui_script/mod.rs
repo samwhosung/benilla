@@ -759,8 +759,15 @@ fn record_world_frame_time(
     times.0.push(step.delta.as_secs_f32());
 }
 
+/// The demo's stances, Battle, Defensive and Berserker, which a UI capture's known spells list
+/// (`crate::capture`) and [`demo_unit_feed`] seeds the entries of.
+pub(crate) const DEMO_STANCES: [u32; 3] = [2457, 71, 2458];
+
 /// Synthetic player and target snapshots for a server-less UI capture, and its first events once.
-fn demo_unit_feed(mut hosted_vm: crate::script_calls::HostedVm, mut fired: Local<VmMemo<bool>>) {
+pub(crate) fn demo_unit_feed(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut fired: Local<VmMemo<bool>>,
+) {
     hosted_vm.run(|script| {
         /// The synthetic target's guid: a creature high part; only its distinctness matters.
         const DEMO_TARGET_GUID: u64 = 0xF130_0000_0000_0001;
@@ -916,8 +923,9 @@ fn demo_unit_feed(mut hosted_vm: crate::script_calls::HostedVm, mut fired: Local
                     }),
                 );
             }
-            // The stance bar: battle active (bonus offset 1), defensive uncastable, berserker
-            // cooling.
+            // The stance bar's entries, which its getters read with no player held, for the
+            // [`DEMO_STANCES`] the known spells list: battle active (bonus offset 1), defensive
+            // uncastable, berserker cooling.
             script.set_shapeshift_forms(vec![
                 benilla_ui::script::ShapeshiftFormView {
                     spell_id: 2457,

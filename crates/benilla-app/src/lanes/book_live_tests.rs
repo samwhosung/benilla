@@ -455,9 +455,9 @@ fn a_form_spell_signals_the_form_list_ahead_of_the_book() {
         ]
     );
     assert_eq!(
-        c.eval::<i64>(false, "return GetNumShapeshiftForms()"),
+        c.eval::<i64>(true, "return GetNumShapeshiftForms()"),
         1,
-        "the stance feed seated the list"
+        "the list as the learn left it"
     );
     c.frame(vec![
         cooldown(),

@@ -165,6 +165,9 @@ fn set_shapeshift_and_set_pet_action_answer_the_same_flag() {
         ("TT:SetShapeshift(3)", "1:nil:nil"),
         ("TT:SetShapeshift(4)", "1:number:1"),
         ("TT:SetShapeshift(9)", "1:nil:nil"),
+        // `index - 1` against the count, unsigned (`0x5329fe`, `0x532a01`): 0 is past the list,
+        // not the running first entry.
+        ("TT:SetShapeshift(0)", "1:nil:nil"),
         ("TT:SetPetAction(1)", "1:number:1"),
         ("TT:SetPetAction(2)", "1:nil:nil"),
         ("TT:SetPetAction(3)", "1:nil:nil"),

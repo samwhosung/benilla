@@ -176,11 +176,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the merchant errors",
     ),
     (
-        Row::Queue,
-        "::ui_mirror::MirrorTimerFeed",
-        "the mirror timers",
-    ),
-    (
         Row::HostHeld,
         "::ui_petition::PetitionState",
         "the petition state, which `feed_petition` fires from; the charter verbs, acting in their \
@@ -483,10 +478,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_macro::rebind_macro_spells", &["ui_action::ActionSlots", "ui_action::PlayerActions",
         "ui_pet::PetBar"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
-    ("::ui_shapeshift::feed_shapeshift_bar", &["items::Countdowns", "items::Items",
-        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "net::reputations::Reputations", "spell::cooldowns::Cooldowns",
-        "spell::mods::SpellModifiers", "target::Selection", "ui_action::PlayerActions"]),
     ("::ui_pet::bar::feed_pet_bar", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
     // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); its name
@@ -502,7 +493,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
         "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",
         "ui_action::cast_lines::CastFailRedisplays"]),
-    ("::ui_mirror::feed_mirror_timers", &["ui_mirror::MirrorTimerFeed"]),
     ("::ui_items::locks::apply_item_releases", &["items::Countdowns", "net::GuidIndex",
         "net::ObjectStore", "ui_loot::LootState"]),
     ("::ui_items::feed::feed_containers", &["items::Countdowns", "items::Items", "names::NameCache",

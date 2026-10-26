@@ -96,6 +96,9 @@ live_reads! {
         battlefield: crate::ui_battlefield::BattlefieldLive<'static, 'static>,
         /// The friend list, its selections and the `/who` array.
         social: crate::ui_social::SocialLive<'static>,
+        /// The stance bar's form list and its entries; absent in a harness without the relations'
+        /// inputs.
+        stance: Option<crate::ui_shapeshift::StanceLive<'static, 'static>>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

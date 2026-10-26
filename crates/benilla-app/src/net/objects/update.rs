@@ -820,6 +820,12 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     if sc.group.stats.get(&guid) != before.as_ref() {
         sc.view_log.record(guid, before);
     }
+    // The active player's release, past its roster legs: its watchers go (`0x5e9b50`), then the
+    // three mirror timers stop (`0x5e9b55`); the leave-world sweep that follows (`0x5e9b5a`) has
+    // no producer here.
+    if sc.self_guid.0 == Some(guid) {
+        crate::ui_mirror::stop_all(&mut sc.field_notices);
+    }
     // `CGUnit_C::Release` (`0x5fbb60`, after the player's roster legs, `0x5e9b61`): the
     // selection's teardown (`0x5fbbe5`), unless a group row holds the guid (`0x5fbbcd`). Its run
     // waits for the packet's end, so in one out-of-range list its sends follow a later member's

@@ -402,7 +402,7 @@ pub use reputation::{
     ReputationListOp, ReputationState,
 };
 pub use session::SessionRequest;
-pub use shapeshift::ShapeshiftFormView;
+pub use shapeshift::{ShapeshiftForm, ShapeshiftFormView, ShapeshiftList};
 pub(crate) use simplehtml::{
     element_fonts_lua as simplehtml_element_fonts_lua,
     element_of_xml_tag as simplehtml_element_of_xml_tag,

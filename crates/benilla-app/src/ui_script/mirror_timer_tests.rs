@@ -25,7 +25,7 @@ fn harness() -> UiScript {
     s
 }
 
-/// `MIRROR_TIMER_START` as `ui_mirror::feed_mirror_timers` fires it: the timer name, ms left,
+/// `MIRROR_TIMER_START` as `ui_mirror::fire_edge` fires it: the timer name, ms left,
 /// ms total, the signed rate, the paused flag, the caption.
 fn start(
     s: &mut UiScript,
