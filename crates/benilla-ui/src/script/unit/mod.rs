@@ -114,6 +114,10 @@ pub struct UnitState {
     pub class: Option<String>,
     /// `UnitClass`'s second return, the uppercase token (`"WARRIOR"`).
     pub class_file: Option<String>,
+    /// `UnitCreatureFamily`'s word (`0x6055e0`, `0x51a372`): the localized `CreatureFamily.dbc` name of the
+    /// family word in the unit's cached creature record (`[[unit+0xb30]+0x1c]`); `None` without a
+    /// record, with family 0, or for a family the table lacks. Players have no record.
+    pub family: Option<String>,
     /// `UnitHasRelicSlot` (`0x519e50`): INVSLOT 17 is a relic slot, from `ChrClasses.dbc` field
     /// 16. Players only, true for Paladin, Shaman and Druid.
     pub has_relic_slot: bool,
@@ -754,6 +758,11 @@ impl UnitIdentityRead for LiveOr<'_> {
         self.live
             .class()
             .or_else(|| UnitIdentityRead::class(self.unit))
+    }
+    fn family(&self) -> Option<String> {
+        self.live
+            .family()
+            .or_else(|| UnitIdentityRead::family(self.unit))
     }
 }
 

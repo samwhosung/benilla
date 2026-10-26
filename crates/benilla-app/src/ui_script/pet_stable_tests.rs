@@ -58,6 +58,8 @@ fn pet(name: Option<&str>) -> UnitState {
         max_health: 1000,
         level: 58,
         guid: 0xF140_0000_0000_0001,
+        // `UnitCreatureFamily("pet")`, which `PetStable.lua:129` concatenates.
+        family: Some("Boar".into()),
         ..UnitState::default()
     }
 }
@@ -69,7 +71,6 @@ fn hunter_pet_stats() -> PetStats {
         icon: Some(r"Interface\Icons\Ability_Hunter_Pet_Boar".into()),
         hunter_pet: true,
         loyalty: Some("(Loyalty Level 6) Best Friend".into()),
-        family: Some("Boar".into()),
         ..PetStats::default()
     }
 }

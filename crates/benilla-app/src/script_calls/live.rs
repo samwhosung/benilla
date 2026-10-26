@@ -154,6 +154,7 @@ pub(crate) struct UnitLive<'w, 's> {
     names: Option<Res<'w, crate::names::NameCache>>,
     commands: Option<Res<'w, crate::net::NetCommands>>,
     tables: crate::ui_unit::NameTables<'w>,
+    families: Option<Res<'w, crate::ui_pet_stats::PetFamilyTables>>,
 }
 
 impl UnitLive<'_, '_> {
@@ -174,6 +175,7 @@ impl UnitLive<'_, '_> {
             names: self.names.as_deref(),
             commands: self.commands.as_deref(),
             tables: self.tables.get(),
+            families: self.families.as_deref(),
         });
         true
     }

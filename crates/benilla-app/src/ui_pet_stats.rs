@@ -111,7 +111,7 @@ pub(crate) fn stats_for(
     tables: Option<&PetStatTables>,
     family: (Option<String>, Option<String>, Vec<String>),
 ) -> (bool, PetStats) {
-    let (family, icon, food_types) = family;
+    let (_, icon, food_types) = family;
     let Some(fields) = pet.map(|s| &s.0) else {
         return (false, PetStats::default());
     };
@@ -124,13 +124,12 @@ pub(crate) fn stats_for(
         && self_store.map(|s| ((s.0.unit_bytes_0().unwrap_or(0) >> 8) & 0xff) as u8)
             == Some(CLASS_HUNTER);
     if !hunter {
-        // The family word passes the gate and the diet does not (module doc): a mind-controlled
-        // boar under a non-hunter (family 5, food mask 63) gets "Boar" and no diet.
+        // The icon passes the gate and the diet does not (module doc): a mind-controlled boar
+        // under a non-hunter (family 5, food mask 63) gets no diet.
         return (
             has_ui,
             PetStats {
-                family,
-                // The icon passes with the word; whether the reference gates it is untraced.
+                // Whether the reference gates the icon is untraced.
                 icon,
                 ..PetStats::default()
             },
@@ -158,7 +157,6 @@ pub(crate) fn stats_for(
             }),
             training_points: fields.unit_training_points(),
             experience: fields.unit_pet_experience(),
-            family,
             icon,
             food_types,
         },
@@ -489,7 +487,6 @@ mod tests {
             (Some("Boar".into()), None, boar_diet.clone()),
         );
         assert!(!s.hunter_pet);
-        assert_eq!(s.family.as_deref(), Some("Boar"), "the word is ungated");
         assert!(
             s.food_types.is_empty(),
             "…but the diet shares 0x6116e0 with the stats"
@@ -504,7 +501,6 @@ mod tests {
             Some(&t),
             (Some("Boar".into()), None, boar_diet.clone()),
         );
-        assert_eq!(s.family.as_deref(), Some("Boar"));
         assert_eq!(s.food_types, boar_diet);
     }
 
@@ -516,7 +512,6 @@ mod tests {
             None,
             (Some("Imp".into()), None, vec![]),
         );
-        assert_eq!(s.family, None);
         assert!(s.food_types.is_empty());
     }
 

@@ -891,3 +891,60 @@ fn a_teardowns_strike_cancel_reports_before_the_target_change() {
     run(&mut f, r#"ClearTarget() SEEN = table.concat(ORDER, ",")"#);
     assert_eq!(seen(&mut f), "SPELLCAST_STOP,PLAYER_TARGET_CHANGED");
 }
+
+/// `UnitCreatureFamily("target")` (`0x51a310`) reads the held unit's cached creature record
+/// (`0x6055e0`: `[[unit+0xb30]+0x1c]`) through `CreatureFamily.dbc` inside its call, though no
+/// snapshot carries the word; a unit whose record the cache lacks answers nil.
+#[test]
+fn a_creature_family_is_read_off_the_held_units_record() {
+    const OBJECT_FIELD_TYPE: u16 = 2;
+    const OBJECT_FIELD_ENTRY: u16 = 3;
+    const BOAR: u32 = 1_126;
+    let mut f = frame(false);
+    // A unit object (`TYPEMASK_OBJECT | TYPEMASK_UNIT`) of the boar's template.
+    spawn_mob(
+        &mut f,
+        &[(OBJECT_FIELD_TYPE, 0x9), (OBJECT_FIELD_ENTRY, BOAR)],
+    );
+    f.app.world_mut().resource_mut::<Selection>().guid = Some(MOB);
+    settle(&mut f);
+    let family =
+        |f: &mut Frame| eval::<Option<String>>(f, r#"return UnitCreatureFamily("target")"#);
+    assert_eq!(family(&mut f), None, "no record cached yet");
+
+    let world = f.app.world_mut();
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_creature(
+            BOAR,
+            Some(crate::names::CreatureRecord {
+                name: "Stonetusk Boar".into(),
+                subname: None,
+                creature_type: 1,
+                pet_family: 5,
+                rank: 0,
+                type_flags: 0,
+                pet_spell_list: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 607,
+            }),
+        );
+    world.insert_resource(crate::ui_pet_stats::PetFamilyTables {
+        families: benilla_formats::CreatureFamilies::from_rows([(
+            5,
+            benilla_formats::CreatureFamily {
+                name: "Boar".into(),
+                icon: "Interface\\Icons\\Ability_Hunter_Pet_Boar".into(),
+                pet_food_mask: 0,
+                min_scale: 1.0,
+                min_scale_level: 0,
+                max_scale: 1.0,
+                max_scale_level: 0,
+                skill_lines: [0, 0],
+            },
+        )]),
+        foods: Default::default(),
+    });
+    assert_eq!(family(&mut f).as_deref(), Some("Boar"));
+}

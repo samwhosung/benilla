@@ -103,9 +103,9 @@ pub(crate) struct StoredPetAction {
 }
 
 /// The pet stat block: the four hunter stat bindings and `HasPetUI`'s second return
-/// (`0x4be670`), plus the family word, icon and diet. The stats share one hunter-pet gate
+/// (`0x4be670`), plus the family icon and diet. The stats share one hunter-pet gate
 /// (`0x6116e0`) and fail their own ways: loyalty to nil, the pairs to `(0, 0)`, happiness to
-/// `(nil, 100.0, 0.0)`. The family word has no gate (`0x51a310`); the diet shares the stats'.
+/// `(nil, 100.0, 0.0)`. The diet shares the stats' gate.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PetStats {
     /// `HasPetUI`'s second return; false makes every gated binding answer its failure form.
@@ -122,10 +122,6 @@ pub struct PetStats {
     pub training_points: (u16, u16),
     /// `GetPetExperience`: `(currXP, nextXP)`.
     pub experience: (u32, u32),
-    /// `UnitCreatureFamily("pet")`: the localized `CreatureFamily.dbc` word off the cached creature
-    /// record (`0x51a310`). `None` is nil: no record yet, id 0, or an id with no row (10, 13, 14,
-    /// 18 and 22 have none). `PetPaperDollFrame.lua:68-70` guards its level line on it.
-    pub family: Option<String>,
     /// `GetPetIcon()`: the family row's `CreatureFamily.dbc` icon, `None` on the family word's
     /// misses. Ungated like the family word; whether the reference gates it (`0x4beb10`) is
     /// untraced, and no warlock reaches its stock callers (`PetStable.lua:51`, `161-162`).
@@ -690,16 +686,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // One return on every path, with no class gate (`0x51a310`). Answers the `"pet"` token only:
-    // the reference resolves any unit off its cached creature record (`[[unit+0xb30]+0x1c]`), so
-    // a wild boar's `"target"` answers "Boar" there and nil here. The pet page is the only stock
-    // caller.
+    // `UnitCreatureFamily("unit")` (`0x51a310`): one return on every path, with no class gate. A
+    // missing or non-string argument raises the usage line (`0x51a318`, `0x51a321`); the token goes
+    // through the resolver (`0x51a341` → `0x515940`), which raises for an unknown one, and the
+    // family word is read off the unit (`0x51a34c` → `0x6055e0`); any unit answers the word of its
+    // cached creature record (`[[unit+0xb30]+0x1c]`), so a wild boar's `"target"` is "Boar".
     g.set(
         "UnitCreatureFamily",
-        lua.create_function(move |lua, token: Option<String>| {
-            let family = token
-                .filter(|t| t.eq_ignore_ascii_case("pet"))
-                .and_then(|_| stats_now(lua).1.family);
+        lua.create_function(move |lua, token: Value| {
+            let token =
+                binding_abi::string_arg(lua, token, r#"Usage: UnitCreatureFamily("unit")"#)?;
+            super::unit::check_unit_token(&Some(token.clone()))?;
+            let family = super::unit::read_identity(lua, &token, |_, id| id.family()).flatten();
             Ok(match family.as_deref() {
                 Some(name) => Value::String(lua.create_string(name)?),
                 None => Value::Nil,
@@ -1322,7 +1320,6 @@ mod tests {
             loyalty: Some("(Loyalty Level 6) Best Friend".into()),
             training_points: (170, 130),
             experience: (4200, 8000),
-            family: Some("Boar".into()),
             food_types: vec![
                 "Meat".into(),
                 "Fish".into(),
@@ -1429,46 +1426,65 @@ mod tests {
             .unwrap());
     }
 
+    /// `UnitCreatureFamily("unit")` (`0x51a310`) answers the family word of any unit's cached
+    /// creature record, nil for a unit with none, a missing or non-string argument raises its
+    /// usage line (`0x51a318`, `0x51a321`) and an unknown token the resolver's error
+    /// (`0x51a341`).
     #[test]
-    fn unit_creature_family_is_nil_on_every_absent_path() {
+    fn unit_creature_family_reads_any_unit_and_raises_on_a_bad_token() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        // No pet pushed.
+        // No unit at all, or one with no family: nil, never "" (a truthy empty string would print
+        // a bare 'Level 58 ' on the pet page).
+        assert!(s
+            .eval::<bool>(r#"return UnitCreatureFamily("pet") == nil"#)
+            .unwrap());
+        let unit = |family: Option<&str>| {
+            Some(crate::script::UnitState {
+                exists: true,
+                family: family.map(str::to_string),
+                ..Default::default()
+            })
+        };
+        s.set_unit("pet", unit(None));
         assert!(s
             .eval::<bool>(r#"return UnitCreatureFamily("pet") == nil"#)
             .unwrap());
 
-        // Family 0 and an unanswered creature query both arrive as `None`.
-        s.set_pet_stats(
-            true,
-            PetStats {
-                family: None,
-                ..hunter_stats()
-            },
-        );
-        assert!(s
-            .eval::<bool>(r#"return UnitCreatureFamily("pet") == nil"#)
-            .unwrap());
-        assert!(
-            s.eval::<bool>(r#"return UnitCreatureFamily("pet") ~= ''"#)
-                .unwrap(),
-            "nil, never an empty string — '' is TRUTHY in Lua, so it would pass the ref's guard \
-             and print a bare 'Level 58 ' with a trailing space"
-        );
-
-        // With a family: `"pet"` answers it, any other token nil.
-        s.set_pet_stats(true, hunter_stats());
-        assert_eq!(
-            s.eval::<String>(r#"return UnitCreatureFamily("pet")"#)
-                .unwrap(),
-            "Boar"
-        );
-        for token in [r#""target""#, r#""player""#, "nil"] {
-            assert!(
-                s.eval::<bool>(&format!("return UnitCreatureFamily({token}) == nil"))
+        s.set_unit("pet", unit(Some("Imp")));
+        s.set_unit("target", unit(Some("Boar")));
+        for (token, want) in [("pet", "Imp"), ("target", "Boar"), ("TARGET", "Boar")] {
+            assert_eq!(
+                s.eval::<String>(&format!(r#"return UnitCreatureFamily("{token}")"#))
                     .unwrap(),
-                "{token} must answer nil"
+                want,
+                "{token}"
             );
+        }
+        assert!(s
+            .eval::<bool>(r#"return UnitCreatureFamily("player") == nil"#)
+            .unwrap());
+
+        for (call, want) in [
+            (
+                "UnitCreatureFamily()",
+                r#"Usage: UnitCreatureFamily("unit")"#,
+            ),
+            (
+                "UnitCreatureFamily(nil)",
+                r#"Usage: UnitCreatureFamily("unit")"#,
+            ),
+            (
+                "UnitCreatureFamily({})",
+                r#"Usage: UnitCreatureFamily("unit")"#,
+            ),
+            (
+                r#"UnitCreatureFamily("nonsense")"#,
+                "Unknown unit name: nonsense",
+            ),
+        ] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains(want), "{call}: {err}");
         }
     }
 
@@ -1503,22 +1519,16 @@ mod tests {
 
     /// The diet's hunter gate is the app's to apply, so here a non-hunter's diet is just empty.
     #[test]
-    fn the_family_word_answers_for_a_non_hunter_pet() {
+    fn a_non_hunter_pet_has_no_diet() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_pet_stats(
             true,
             PetStats {
                 hunter_pet: false,
-                family: Some("Imp".into()),
                 food_types: vec![],
                 ..PetStats::default()
             },
-        );
-        assert_eq!(
-            s.eval::<String>(r#"return UnitCreatureFamily("pet")"#)
-                .unwrap(),
-            "Imp"
         );
         assert!(s.eval::<bool>("return GetPetLoyalty() == nil").unwrap());
         assert_eq!(s.arity("GetPetFoodTypes()").unwrap(), 0);

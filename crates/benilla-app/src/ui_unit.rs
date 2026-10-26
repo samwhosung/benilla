@@ -1068,13 +1068,15 @@ pub(crate) fn unit_class_names<'a>(
 
 /// What names a held unit as the getters read it now ([`benilla_ui::script::UnitIdentityRead`]):
 /// its name off the name caches as `GetUnitName` (`0x609210`) reads them, asking a miss once while
-/// it is pending, and its race and class bytes through the tables.
+/// it is pending, its race and class bytes through the tables, and its creature family off its
+/// cached record.
 pub(crate) struct LiveIdentity<'a> {
     pub(crate) guid: u64,
     pub(crate) store: &'a ObjectStore,
     pub(crate) names: Option<&'a NameCache>,
     pub(crate) commands: Option<&'a NetCommands>,
     pub(crate) tables: UnitNames<'a>,
+    pub(crate) families: Option<&'a crate::ui_pet_stats::PetFamilyTables>,
 }
 
 impl benilla_ui::script::UnitIdentityRead for LiveIdentity<'_> {
@@ -1092,6 +1094,10 @@ impl benilla_ui::script::UnitIdentityRead for LiveIdentity<'_> {
     }
     fn class(&self) -> Option<(String, String)> {
         unit_class_names(self.store, &self.tables).map(|(n, f)| (n.to_string(), f.to_string()))
+    }
+    /// `UnitCreatureFamily` (`0x51a310`): the word of the record's family id, read only.
+    fn family(&self) -> Option<String> {
+        crate::ui_pet_stats::family_for(Some(self.store), self.names?, self.families).0
     }
 }
 
