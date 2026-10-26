@@ -61,13 +61,20 @@ pub fn open(vm: &mut Vm, host: crate::heap::NativeFn) {
     }
 }
 
-/// `luaB_error` (`0x702970`): a string message gets the position `level` up (default 1). No
-/// value is a bad argument: `luaL_checkany` (`0x702993`) runs after the level is read.
+/// `luaB_error` (`0x702970`): a string message (a number too) is concatenated with the position
+/// `level` up (default 1) unless the level is 0 (`0x7029a8`); a negative level has no source line
+/// (`lua_getstack` `0x6fbad6`, `luaL_where` `0x6f490b`), so it adds "" and still makes the
+/// message a string. No value is a bad argument: `luaL_checkany` (`0x702993`) runs after the
+/// level is read.
 fn error(vm: &mut Vm, nargs: usize) -> R<usize> {
     let level = vm.opt_int(nargs, 2, 1)?;
     let msg = vm.check_any(nargs, 1)?;
-    if vm.is_string(msg) && level > 0 {
-        let mut out = vm.where_(level as usize);
+    if vm.is_string(msg) && level != 0 {
+        let mut out = if level > 0 {
+            vm.where_(level as usize)
+        } else {
+            Vec::new()
+        };
         let s = vm.tostr(msg).unwrap();
         out.extend_from_slice(vm.heap.str(s));
         let v = vm.str(&out);

@@ -680,3 +680,23 @@ fn math_deg_multiplies_by_180_over_pi() {
     assert_eq!(run("return math.deg(math.pi)"), "180");
     assert_eq!(run("return math.deg(1) == 1 * (180 / math.pi)"), "true");
 }
+
+/// `error` (`0x702970`) concatenates the position whenever the message is a string or number and
+/// the level is not 0 (`0x7029a8`); a negative level has no line (`0x6fbad6`, `0x6f490b`), so it
+/// adds nothing but still makes the message a string.
+#[test]
+fn error_with_a_negative_level_still_makes_a_string() {
+    assert_eq!(
+        run("local ok, e = pcall(error, 5, -1) return type(e), e"),
+        "string,5"
+    );
+    assert_eq!(run("return pcall(error, 'x', -3)"), "false,x");
+    assert_eq!(
+        run("local ok, e = pcall(error, 5, 0) return type(e)"),
+        "number"
+    );
+    assert_eq!(
+        run("return pcall(function() error('x', 1) end)"),
+        "false,t:1: x"
+    );
+}
