@@ -210,3 +210,22 @@ fn a_close_fires_after_the_open() {
         .resource::<crate::ui_bank::BankOpen>()
         .is_open());
 }
+
+/// Two bought slots in one frame, each its own packet: the watch's listener reads the count its
+/// own packet left (`0x4f8490` signals inside the packet, `0x4f85dd` reads the field at the call),
+/// not the frame's last.
+#[test]
+fn the_bank_slots_read_as_of_each_packet() {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        "Slots = {} local f = CreateFrame('Frame') \
+         f:RegisterEvent('PLAYERBANKBAGSLOTS_CHANGED') \
+         f:SetScript('OnEvent', function() table.insert(Slots, (GetNumBankSlots())) end)",
+    );
+    c.frame(vec![
+        vec![values(ME, &[(PLAYER_BYTES_2, 3 << 16)])],
+        vec![values(ME, &[(PLAYER_BYTES_2, 4 << 16)])],
+    ]);
+    assert_eq!(c.eval::<Vec<i64>>(false, "return Slots"), [3, 4]);
+}

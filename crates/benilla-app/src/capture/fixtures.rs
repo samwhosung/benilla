@@ -433,6 +433,23 @@ pub(super) fn seed_ui_fixture(
                         message: (*message).into(),
                     }
                 }));
+                // The draw needs the active player and the NPC's object (`0x4e20b3`, `0x4e20bb`).
+                let npc = commands
+                    .spawn((
+                        crate::net::Guid(NPC_GUID),
+                        crate::net::ObjectStore(
+                            benilla_protocol::messages::ObjectFields::from_pairs(&[(2, 9)]),
+                        ),
+                    ))
+                    .id();
+                index.0.insert(NPC_GUID, npc);
+                commands.spawn((
+                    crate::net::ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(
+                        &[(2, 0x19)],
+                    )),
+                    crate::net::SelfPlayer,
+                    crate::net::Guid(0x51),
+                ));
                 // The message's own handler, which queues `GOSSIP_SHOW` as a live one does.
                 commands.queue(move |world: &mut World| {
                     crate::ui_gossip::net::gossip_menu(world, NPC_GUID, 1, options, quests)

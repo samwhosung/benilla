@@ -11,17 +11,20 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
-use super::unit_view_tests::{created, wire_packets};
+use super::unit_view_tests::{created, values, wire_packets};
 use crate::net::ClientCommand;
 
 const ME: u64 = 0x7;
 const NPC: u64 = 0xF130_0000_0000_0043;
+/// `OBJECT_FIELD_ENTRY`, absolute, and the NPC's creature record.
+const OBJECT_ENTRY: u16 = 3;
+const NPC_ENTRY: u32 = 0x45;
 
 /// The whole client, headless, in the world.
 struct Client {
     app: App,
     inbound: Sender<SessionEvent>,
-    _sent: Receiver<ClientCommand>,
+    sent: Receiver<ClientCommand>,
 }
 
 impl Client {
@@ -47,6 +50,17 @@ impl Client {
     /// What the spy heard since the last call.
     fn seen(&mut self) -> Vec<String> {
         self.eval(false, "local s = Seen Seen = {} return s")
+    }
+
+    /// The pet-name queries sent since the last call, by pet number.
+    fn pet_name_queries(&mut self) -> Vec<u32> {
+        crate::query_cache::queries(&self.sent)
+            .into_iter()
+            .filter_map(|c| match c {
+                ClientCommand::PetNameQuery { pet_number, .. } => Some(pet_number),
+                _ => None,
+            })
+            .collect()
     }
 
     /// `packets` run through their handlers with no frame: the world as the handlers leave it.
@@ -87,15 +101,11 @@ fn client_with(prepare: impl FnOnce(&mut UiScript)) -> Client {
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    let mut c = Client {
-        app,
-        inbound,
-        _sent: sent,
-    };
+    let mut c = Client { app, inbound, sent };
     c.frame(vec![vec![
         // Alive, so a panel opens (`ShowUIPanel`'s `UnitIsDead` test, `UIParent.lua`).
         created(ME, EntityKind::Player, &[(FIELD_UNIT_HEALTH, 100)]),
-        created(NPC, EntityKind::Unit, &[]),
+        created(NPC, EntityKind::Unit, &[(OBJECT_ENTRY, NPC_ENTRY)]),
     ]]);
     c.frame(vec![]);
     c.seen();
@@ -236,12 +246,13 @@ fn the_show_fires_at_its_packet() {
     );
 }
 
-/// A close in the show's frame fires after it, and a text landing after the close still shows:
-/// the draw tests no cell (`0x4e2010`), and the close cancels no wait (`0x4e1fa0`). The close's
-/// latch release re-enters it with the cell still set (`0x4e1fc5` → `0x493310` → `0x4e1fa0`), so
+/// A close in the show's frame fires after it. A text landing after a close draws nothing: the
+/// close cancels no wait (`0x4e1fa0`), but the draw finds no object under the zeroed cell and
+/// bails (`0x4e20bb` → `0x4e22ba`), with no text write and no signal. The close's latch release
+/// re-enters it with the cell still set (`0x4e1fc5` → `0x493310` → `0x4e1fa0`), so
 /// `GOSSIP_CLOSED` signals twice (`0x4e1fdc`).
 #[test]
-fn a_close_fires_after_the_show_and_a_late_text_still_shows() {
+fn a_close_fires_after_the_show_and_a_late_text_draws_nothing() {
     let mut c = client();
     c.handle(vec![greeting(7, "Hello"), menu(7, "Browse")]);
     crate::ui_gossip::close_core(c.app.world_mut());
@@ -253,11 +264,47 @@ fn a_close_fires_after_the_show_and_a_late_text_still_shows() {
     c.frame(vec![vec![menu(9, "Fly")]]);
     crate::ui_gossip::close_core(c.app.world_mut());
     c.frame(vec![vec![greeting(9, "Too late")]]);
-    assert_eq!(
-        c.seen(),
-        ["GOSSIP_CLOSED:nil", "GOSSIP_CLOSED:nil", "GOSSIP_SHOW:nil"]
-    );
-    assert_eq!(c.eval::<String>(true, "return GetGossipText()"), "Too late");
+    assert_eq!(c.seen(), ["GOSSIP_CLOSED:nil", "GOSSIP_CLOSED:nil"]);
+    assert_eq!(c.eval::<String>(true, "return GetGossipText()"), "Hello");
+}
+
+/// A message whose NPC is no object here draws nothing either (`0x4e20bb`).
+#[test]
+fn a_menu_of_an_npc_not_held_draws_nothing() {
+    let mut c = client();
+    c.handle(vec![greeting(7, "Hello")]);
+    c.frame(vec![vec![SessionEvent::GossipMenu {
+        npc: 0xF130_0000_0000_0099,
+        text_id: 7,
+        options: vec![option("Browse")],
+        quests: Vec::new(),
+    }]]);
+    assert!(!c.seen().iter().any(|e| e == "GOSSIP_SHOW:nil"));
+    assert_eq!(c.eval::<String>(true, "return GetGossipText()"), "");
+}
+
+/// The show asks the NPC's name as the stock window's `UnitName("npc")` does there
+/// (`GossipFrame.lua:33`, `0x5171b8`), at the draw that signals it, a first visit's text; never
+/// the round trip before it. A held creature's name is its record, which its create asked for, so
+/// the ask is seen on an NPC that names itself by its pet number (`0x609210`).
+#[test]
+fn the_show_asks_the_npcs_name() {
+    /// `UNIT_FIELD_PETNUMBER`, absolute.
+    const PET_NUMBER: u16 = 139;
+    let mut c = client();
+    c.handle(vec![
+        values(NPC, &[(PET_NUMBER, 5)]),
+        SessionEvent::ObjectUpdateEnd,
+    ]);
+    c.app
+        .world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .forget_pet(5);
+    c.pet_name_queries();
+    c.handle(vec![menu(8, "Fly")]);
+    assert!(c.pet_name_queries().is_empty(), "no show, no ask");
+    c.handle(vec![greeting(8, "Safe travels")]);
+    assert_eq!(c.pet_name_queries(), [5], "asked at the draw");
 }
 
 /// The greeting's macros expand once per message, as `0x4e2010` writes the expanded text to

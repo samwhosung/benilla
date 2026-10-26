@@ -112,10 +112,31 @@ fn npc_greeting(world: &mut World, text_id: u32, blocks: Vec<NpcTextBlock>) {
     close_on_missing_text(world);
 }
 
-/// The draw's tail in `0x4e2010`: the greeting expanded for the player (`0x4e2274`), written to
-/// the text buffer (`0x4e229a`), then `GOSSIP_SHOW` (`0x4e22b5`) on the gossip lane. The draw tests
-/// no cell, so a text landing after a close still shows.
+/// The draw's tail in `0x4e2010`, once the record is found: with no active player or no object
+/// under the cell `[0xbc3f58]` it bails (`0x4e20b3`, `0x4e20bb` → `0x4e22ba`), so a close's zeroed
+/// cell writes no text and signals nothing, nor takes the missing-text close. Else the greeting
+/// expanded for the player (`0x4e2274`), written to the text buffer (`0x4e229a`), then
+/// `GOSSIP_SHOW` (`0x4e22b5`) on the gossip lane, with the NPC's name asked as its listener's
+/// `UnitName("npc")` asks it there (`GossipFrame.lua:33`, `0x5171b8`).
 fn show_drawn(world: &mut World) {
+    let player = world
+        .query_filtered::<(), (With<SelfPlayer>, With<ObjectStore>)>()
+        .iter(world)
+        .next()
+        .is_some();
+    let npc = world.resource::<GossipState>().npc;
+    let held = |guid: u64| {
+        world
+            .get_resource::<GuidIndex>()
+            .and_then(|index| index.0.get(&guid).copied())
+            .is_some_and(|e| world.get::<ObjectStore>(e).is_some())
+    };
+    let Some(npc) = npc.filter(|&g| player && held(g)) else {
+        let mut state = world.resource_mut::<GossipState>();
+        state.take_drawn();
+        state.take_missing_text();
+        return;
+    };
     let Some(raw) = world.resource_mut::<GossipState>().take_drawn() else {
         return;
     };
@@ -126,6 +147,20 @@ fn show_drawn(world: &mut World) {
     if let Some(mut lane) = world.get_resource_mut::<GossipLane>() {
         lane.push(GossipEvent::Show);
     }
+    let _ = world.run_system_cached_with(ask_npc_name, npc);
+}
+
+/// The NPC's name looked up with a callback, as `UnitName("npc")` does at the show; its landing
+/// fires nothing.
+fn ask_npc_name(
+    In(npc): In<u64>,
+    names: Res<NameCache>,
+    commands: Res<NetCommands>,
+    index: Res<GuidIndex>,
+    stores: Query<&ObjectStore>,
+) {
+    let store = index.0.get(&npc).and_then(|&e| stores.get(e).ok());
+    let _ = names.resolve_unit(npc, store, crate::query_cache::Ask::Event(&commands));
 }
 
 /// The greeting's `$N`/`$B`/`$G`/`$<n>w` macros for the active player (`0x506f70`).
