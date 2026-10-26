@@ -13,7 +13,9 @@
 //! normals, not the reference's resolver, because pieces of that resolver grafted onto the
 //! controller left the mover in states the reference never reaches; only its face filters, the
 //! facing law and the backface band, are ported. A cast also reports the hit face's own normal,
-//! which the step-up's floor class reads as the reference reads its face record.
+//! and every class the reference takes from its face record reads it: the ground classify, the
+//! settle snap, the step trigger and the step-up's floor (`0x6334e6`, `0x636ecf`, `0x636592`),
+//! except on a shared edge ([`EDGE_TIE`]).
 //!
 //! There is no depenetration: the reference's resolver (`0x634040`) is a sweep with no push-out, so
 //! a body inside geometry, such as a player the server seats inside a chair's box, walks out
@@ -48,12 +50,12 @@ const DOT_EPSILON: f32 = 0.005;
 /// sloped floor just above the feet, and the body would fall through the world.
 const BACKFACE_BAND: f32 = 1.0 / 36.0;
 
-/// Two faces reached within this of each other (yd) touch at once, the reference's contact band
-/// (1/720, `0x63235f`/`0x632396`). Its record on such a tie is the later one in file order
-/// (`0x6327e2` takes equal), which no BVH walk keeps, so a tie between two different faces, an edge
-/// they share, is classified by the contact normal. A face the facing law drops (a riser under a
-/// down sweep) never ties, so a stair's nosing reads as its tread.
-const EDGE_TIE: f32 = 1.0 / 720.0;
+/// parry's cast reaches both faces of one edge within this (yd) of each other; 1e-4 splits them.
+/// Deviation: the reference keeps the later record in file order on an exact tie (`0x6327e2`),
+/// and its box-and-cone volume meets a lip where our capsule does not, so a capsule hit on an
+/// edge two different front faces share is classified by its contact normal. A face the facing
+/// law drops (a riser under a down sweep) never ties, so a stair's nosing reads as its tread.
+const EDGE_TIE: f32 = 1.0e-3;
 
 /// One-sided [`MoveAndSlide::cast_move`]: sweeps the axis-aligned `shape` along `movement` to
 /// `skin_width` short of the first face whose authored winding opposes the motion, with that face's

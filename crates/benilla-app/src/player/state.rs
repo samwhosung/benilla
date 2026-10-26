@@ -453,6 +453,10 @@ pub(crate) struct Player {
     /// Airborne at the end of the last mover step: the mover's own record, since
     /// [`Self::airborne_since`] is written by [`super::flags`], which runs after the mover.
     pub(super) airborne_prev: bool,
+    /// Where the last resolved step left the body standing, with its walkable floor: an idle mover,
+    /// no bit of `0x200f`, runs no resolver (`0x634100`), so until something moves the body it
+    /// stands there without a collide, a classify or a fall.
+    pub(super) rest: Option<(Vec3, Option<Entity>)>,
     /// The direction bits the current arc launched with: mid-air they are the actual motion, so the
     /// live flags read them instead of the keys; re-seeded by the air nudge, stale while grounded.
     pub(super) airborne_dirs: u32,

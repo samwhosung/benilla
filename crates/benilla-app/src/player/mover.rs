@@ -88,6 +88,34 @@ pub(super) fn step(
         TERMINAL_VELOCITY
     };
 
+    // No direction or fall bit (`0x200f`): the substep loop resolves nothing (`0x634100`), so a
+    // body standing where its last step left it neither collides, classifies nor starts a fall.
+    // `SetPitch` aimed under the water-walk floor starts that fall itself (`0x7c6f70`).
+    let dives = player.modes.water_walking
+        && !player.swimming
+        && player.mover_pitch <= WATER_WALK_PITCH_FLOOR;
+    let idle = !player.settling
+        && !moving
+        && !want_jump
+        && !wire_jump
+        && knockback.is_none()
+        && !player.airborne_prev
+        && !dives;
+    if let Some((_, ground)) = player.rest.filter(|&(at, _)| idle && at == player.pos) {
+        player.vel_y = 0.0;
+        player.horiz_vel = Vec3::ZERO;
+        return Outcome {
+            held: false,
+            grounded: true,
+            jumped: false,
+            knocked: false,
+            air_nudged: false,
+            ground,
+            gated: false,
+        };
+    }
+    player.rest = None;
+
     // The world query gate for a body falling into the frame, whose mode at the substep loop is
     // FALLING: a refused query leaves it hanging before anything could land it, its speed and fall
     // clock kept. A knockback is a command ahead of the loop, so it is flown and gated below; the
@@ -354,8 +382,9 @@ pub(super) fn step(
     // rate-limited climb below (`0x636fa1`). The one push up is ours: the body may not end the
     // frame under the surface, which the reference's swept surface never lets it reach, and only
     // a body that is not rising is caught, so a hover launch under the waterline flies clear.
-    // `SetPitch`'s standstill dive kick (`0x7c6f70`) is not built: it serves a walk resolver that
-    // skips a body at rest, and our classify runs every frame, so dropping the layers is the dive.
+    // `SetPitch`'s standstill dive kick (`0x7c6f70`) is the idle gate's `dives`: the frame
+    // resolves, and with the layers dropped the body sinks.
+    let lift_from = center.y;
     if let Some(surface) = water_floor {
         let feet = center.y - half_h.y;
         let rest = surface + hover_offset;
@@ -384,6 +413,8 @@ pub(super) fn step(
             }
         }
     }
+    // The water and hover lifts run on idle frames too, so a lifting body is not yet at rest.
+    let lifted = center.y != lift_from;
 
     player.pos = center - half_h;
     move_trace::frame(move_trace::Frame {
@@ -402,17 +433,19 @@ pub(super) fn step(
     // The mover's own airborne record: a launch frame counts though the body still stands, or the
     // next frame reads as a fresh step-off and re-seeds the arc.
     player.airborne_prev = !held && !anchored && (jumped || !grounded);
+    let ground = if grounded && !held {
+        ground_entity
+    } else {
+        None
+    };
+    player.rest = (grounded && !held && !jumped && !lifted).then_some((player.pos, ground));
     Outcome {
         held,
         grounded,
         jumped,
         knocked,
         air_nudged,
-        ground: if grounded && !held {
-            ground_entity
-        } else {
-            None
-        },
+        ground,
         gated: false,
     }
 }
@@ -1219,10 +1252,65 @@ mod tests {
     }
 
     #[test]
+    fn a_body_stopped_anywhere_on_the_auction_house_stairs_stands_there() {
+        // Stopped after every frame count of the climb, the body stands where it stopped: the
+        // substep loop runs only for a direction or fall bit (`0x634100`), so nothing re-classifies
+        // a stopped body's support or starts it falling, as a live tap at 95.24 once did.
+        let Some(mut world) = world_from_wmo("Azeroth", "stormwind.wmo", -8807.0, 652.0, 12.0)
+        else {
+            return;
+        };
+        let moved = world
+            .world_mut()
+            .run_system_once(|world: benilla_world::collision::WorldCollision| {
+                use benilla_assets::coords::wow_to_bevy;
+                let capsule = player_capsule();
+                let mut time = Time::default();
+                time.advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+                let dir = wow_to_bevy([0.0, 1.0, 0.0]);
+                let mut moved = Vec::new();
+                for walk in 1..60 {
+                    let mut player = Player {
+                        pos: wow_to_bevy([-8807.8, 648.0, 94.42]),
+                        ..Default::default()
+                    };
+                    let mut stopped = None;
+                    for i in 0..walk + 20 {
+                        let moving = i < walk;
+                        let out = step(
+                            &mut player,
+                            &time,
+                            &world,
+                            &capsule,
+                            moving,
+                            dir,
+                            7.0,
+                            false,
+                            false,
+                            None,
+                            None,
+                            AIR_NUDGE_SPEED,
+                        );
+                        if i == walk {
+                            stopped = Some(player.pos);
+                        }
+                        if i > walk && (!out.grounded || Some(player.pos) != stopped) {
+                            moved.push((walk, i, out.grounded, stopped, player.pos));
+                            break;
+                        }
+                    }
+                }
+                moved
+            })
+            .unwrap();
+        assert!(moved.is_empty(), "stopped bodies that moved: {moved:?}");
+    }
+
+    #[test]
     fn short_presses_up_the_auction_house_stairs_never_leave_the_ground() {
         // The same stairs taken in taps, the reporter's "pressing forward a bit": every stop
         // rests the body on whatever edge it reached. The kerb's lip is shared by its top and its
-        // 53° bevel, a tie in the contact band; picking one face there lifts the body off.
+        // 53° bevel, an edge tie ([`benilla_world`]'s `EDGE_TIE`); picking one face lifts it off.
         let Some(mut world) = world_from_wmo("Azeroth", "stormwind.wmo", -8807.0, 652.0, 12.0)
         else {
             return;
