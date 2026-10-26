@@ -660,37 +660,6 @@ fn a_channel_notice_fires_its_token_and_the_reference_reads_arg7_and_arg10_bare(
     assert_eq!(lines_in_window(&s), 1);
 }
 
-/// The notice switch's MODE_CHANGE arm (`0x49c24d`) calls `0x49e910` and returns before the fire.
-#[test]
-fn a_mode_change_notice_never_becomes_an_event() {
-    let _data = benilla_formats::wow_data_or_skip!();
-    use benilla_protocol::messages::{channel_notice, ChannelNoticeTail};
-
-    let log = super::feed::ChatLog::default();
-    log.push_channel_notice(
-        channel_notice::MODE_CHANGE,
-        "World".into(),
-        &ChannelNoticeTail::ModeChange {
-            guid: 42,
-            old_flags: 0,
-            new_flags: 1,
-        },
-    );
-    assert_eq!(
-        log.pending_len(),
-        0,
-        "MODE_CHANGE is dropped at the feed — the reference's 0x0C arm fires nothing"
-    );
-
-    // The control: a notice that fires is queued.
-    log.push_channel_notice(
-        channel_notice::YOU_JOINED,
-        "World".into(),
-        &ChannelNoticeTail::YouJoined { flags: 0 },
-    );
-    assert_eq!(log.pending_len(), 1);
-}
-
 /// arg4, arg7, arg8 and arg9 are one channel record in the reference, defaulted together
 /// (`0x49b12f`).
 #[test]
@@ -1125,7 +1094,7 @@ fn a_session_end_empties_the_window_and_the_boxs_memory() {
 }
 
 /// Each token names a `CHAT_<X>_NOTICE` string (`ChatFrame.lua:1416`, `:1424`); the tokenless bytes
-/// are MODE_CHANGE (`0x0C`), which fires nothing, and the member lines JOINED and LEFT.
+/// are MODE_CHANGE (`0x0C`), whose lines `0x49e8a0` names itself, and the member lines JOINED and LEFT.
 #[test]
 fn every_notice_token_resolves_and_the_tokenless_bytes_stay_silent() {
     let _data = benilla_formats::wow_data_or_skip!();

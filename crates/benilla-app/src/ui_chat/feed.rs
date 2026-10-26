@@ -61,6 +61,15 @@ enum Pending {
         b_guid: u64,
         tries: u16,
     },
+    /// A member's flags changing (`0x49e910`): up to two `CHANNEL_NOTICE_USER` lines when the
+    /// member's name is cached at the packet, nothing otherwise (the callback it registers holds
+    /// no line), so it never waits.
+    ModeChange {
+        channel: String,
+        guid: u64,
+        old_flags: u8,
+        new_flags: u8,
+    },
     /// An inbound addon line waiting on its sender's name: the reference fires `CHAT_MSG_ADDON`
     /// (event 227, `0x49a95f`) from the name-query callback (`0x49ccc0`), so `sender` is a name.
     Addon {
@@ -501,7 +510,19 @@ impl ChatLog {
             ChannelNoticeTail::Actors { target, source } => (*target, *source, None),
             ChannelNoticeTail::Name(n) => (0, 0, Some(n.clone())),
             ChannelNoticeTail::YouJoined { .. } | ChannelNoticeTail::Empty => (0, 0, None),
-            ChannelNoticeTail::ModeChange { .. } => return, // silent in the 1.12 UI (no string)
+            ChannelNoticeTail::ModeChange {
+                guid,
+                old_flags,
+                new_flags,
+            } => {
+                self.q().push(Pending::ModeChange {
+                    channel,
+                    guid: *guid,
+                    old_flags: *old_flags,
+                    new_flags: *new_flags,
+                });
+                return;
+            }
         };
         if a_guid != 0 {
             self.q().push(Pending::Notice {
@@ -676,6 +697,7 @@ impl ChatLog {
             .map(|p| match p {
                 Pending::Wire { .. } => "wire",
                 Pending::Notice { .. } => "notice",
+                Pending::ModeChange { .. } => "mode change",
                 Pending::Addon { .. } => "addon",
                 Pending::Roll { .. } => "roll",
                 Pending::XpGain { .. } => "xp",
@@ -1080,8 +1102,9 @@ pub(super) fn notice_event(
     a: Option<String>,
     b: Option<String>,
 ) -> Option<ChatEvent> {
-    // Each arm's `mov edi` in the `0x49c60c` jump table: MODE_CHANGE fires nothing, a byte past
-    // THROTTLED fires SYSTEM, the rest CHANNEL_NOTICE (0x12) or CHANNEL_NOTICE_USER (0x13).
+    // Each arm's `mov edi` in the `0x49c60c` jump table: MODE_CHANGE's arm fires its own lines
+    // (`mode_change_events`), a byte past THROTTLED fires SYSTEM, the rest CHANNEL_NOTICE (0x12)
+    // or CHANNEL_NOTICE_USER (0x13).
     use channel_notice as n;
     let kind = match notice_byte {
         n::JOINED => ChatEventKind::ChannelJoin,
@@ -1126,6 +1149,34 @@ pub(super) fn notice_event(
         notice: notice_byte.to_string(),
         ..Default::default()
     })
+}
+
+/// The lines of a member's flag change (`0x49e910`): `SET_`/`UNSET_MODERATOR` for bit 2, then
+/// `SET_`/`UNSET_VOICE` for bit 4, each a `CHANNEL_NOTICE_USER` (type 0x13) naming the member. A
+/// bit gained (old clear, new set) is the set text, a bit lost (old set, new clear) the unset
+/// text, an unchanged one nothing (`0x49e8a8`-`0x49e8e3`).
+fn mode_change_events(channel: &str, name: &str, old: u8, new: u8) -> Vec<ChatEvent> {
+    [
+        (0x02, "SET_MODERATOR", "UNSET_MODERATOR"),
+        (0x04, "SET_VOICE", "UNSET_VOICE"),
+    ]
+    .into_iter()
+    .filter_map(|(bit, set, unset)| {
+        let token = match (old & bit != 0, new & bit != 0) {
+            (false, true) => set,
+            (true, false) => unset,
+            _ => return None,
+        };
+        Some(ChatEvent {
+            kind: Some(ChatEventKind::ChannelNoticeUser),
+            sender: name.to_string(),
+            channel: channel.to_string(),
+            notice: channel_notice::MODE_CHANGE.to_string(),
+            token: Some(token),
+            ..Default::default()
+        })
+    })
+    .collect()
 }
 
 /// Deliver one built event: a `YOU_JOINED` confirms its slot before the render, and a notice that
@@ -1455,6 +1506,25 @@ fn fire_one(
             }
             None
         }
+        Pending::ModeChange {
+            channel,
+            guid,
+            old_flags,
+            new_flags,
+        } => {
+            // `0x49e934` asks the name cache once: a miss, or an answer that lands later in the
+            // frame than this packet, shows nothing (`0x49e93d`).
+            let known = (!log.answered_after(Answer::Player(guid), at))
+                .then(|| names.resolve_player(guid, Ask::at(true, commands)))
+                .flatten()
+                .map(str::to_string);
+            if let Some(name) = known {
+                for mut event in mode_change_events(&channel, &name, old_flags, new_flags) {
+                    deliver_hosted(script, set, windows, &mut event);
+                }
+            }
+            None
+        }
         item => Some(item),
     };
     let item = item?;
@@ -1473,7 +1543,10 @@ fn fire_one(
             }
             Pending::Tee { combat, line } => windows.logs.record(combat, &line),
             // Delivered above.
-            Pending::Event(_) | Pending::Notice { .. } | Pending::Release { .. } => {}
+            Pending::Event(_)
+            | Pending::Notice { .. }
+            | Pending::ModeChange { .. }
+            | Pending::Release { .. } => {}
             Pending::Wire { msg, tries } => {
                 let kind = kind_of_wire(msg.chat_type);
                 if kind.is_none() {

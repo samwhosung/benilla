@@ -208,6 +208,98 @@ fn owner_change_and_kick_notices_print() {
     assert!(f.script().errors().is_empty(), "{:?}", f.script().errors());
 }
 
+/// A member's flags changing, name cached (`0x49e934`): bit 2 gained is `SET_MODERATOR`, lost
+/// `UNSET_MODERATOR`, then bit 4 `SET_VOICE` / `UNSET_VOICE`, each a `CHANNEL_NOTICE_USER`
+/// (`0x49e8a0`) naming the member; a bit that did not change prints nothing.
+#[test]
+fn a_mode_change_prints_its_moderator_and_voice_lines() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut f = Feed::new();
+    f.name(ANN, "Ann");
+    let mode = |old_flags, new_flags| ChannelNoticeTail::ModeChange {
+        guid: ANN,
+        old_flags,
+        new_flags,
+    };
+    let before = f.lines();
+
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x00, 0x02));
+    f.drain();
+    assert_eq!(
+        f.spy(),
+        (
+            "CHAT_MSG_CHANNEL_NOTICE_USER".to_string(),
+            "SET_MODERATOR|Ann||3. Mychan|||0|3|Mychan|0".to_string()
+        )
+    );
+    assert_eq!(
+        f.last_added(),
+        "[3. Mychan] Moderation privileges given to Ann."
+    );
+
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x02, 0x00));
+    f.drain();
+    assert_eq!(f.spy().1, "UNSET_MODERATOR|Ann||3. Mychan|||0|3|Mychan|0");
+    assert_eq!(
+        f.last_added(),
+        "[3. Mychan] Moderation privileges removed from Ann."
+    );
+
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x00, 0x04));
+    f.drain();
+    assert_eq!(f.spy().1, "SET_VOICE|Ann||3. Mychan|||0|3|Mychan|0");
+    assert_eq!(f.last_added(), "[3. Mychan] Voice given to Ann.");
+
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x04, 0x00));
+    f.drain();
+    assert_eq!(f.spy().1, "UNSET_VOICE|Ann||3. Mychan|||0|3|Mychan|0");
+    assert_eq!(f.last_added(), "[3. Mychan] Ann muted.");
+    assert_eq!(f.lines(), before + 4);
+
+    // Both bits at once print the moderator line, then the voice line; the owner bit (1) and a
+    // bit that stays set print nothing.
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x01, 0x06));
+    f.drain();
+    assert_eq!(f.lines(), before + 6);
+    assert_eq!(f.spy().1, "SET_VOICE|Ann||3. Mychan|||0|3|Mychan|0");
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x03, 0x01));
+    f.drain();
+    assert_eq!(f.lines(), before + 7, "only the moderator bit was lost");
+    f.push(n::MODE_CHANGE, "Mychan", mode(0x06, 0x07));
+    f.drain();
+    assert_eq!(f.lines(), before + 7, "the owner bit alone prints nothing");
+    assert!(f.script().errors().is_empty(), "{:?}", f.script().errors());
+}
+
+/// A name the cache lacks shows nothing: `0x49e93d` returns on the miss and the callback `0x49e934`
+/// registers holds no line. The miss still asks for the name.
+#[test]
+fn a_mode_change_for_an_unknown_name_prints_nothing_and_asks() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut f = Feed::new();
+    let before = f.lines();
+    f.push(
+        n::MODE_CHANGE,
+        "Mychan",
+        ChannelNoticeTail::ModeChange {
+            guid: ANN,
+            old_flags: 0,
+            new_flags: 2,
+        },
+    );
+    f.drain();
+    assert!(
+        matches!(
+            f.sent.try_recv(),
+            Ok(crate::net::ClientCommand::NameQuery { guid: ANN })
+        ),
+        "the name was asked for"
+    );
+    f.name(ANN, "Ann");
+    f.drain();
+    assert_eq!(f.lines(), before, "and the answer shows no line");
+}
+
 /// An invite names a channel we are not in, so it stays unstamped (the miss leg `0x49aa86`,
 /// `0x49b12f`) and prints only through the stock filter's `INVITE` exemption (`ChatFrame.lua:1374`).
 #[test]

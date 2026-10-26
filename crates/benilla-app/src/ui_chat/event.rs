@@ -295,7 +295,7 @@ impl ChatEventKind {
 ///
 /// | arg | field | what `ChatFrame_OnEvent` reads |
 /// |---|---|---|
-/// | 1 | `text`, `notice` | the body, or a channel notice's `CHAT_<token>_NOTICE` token |
+/// | 1 | `text`, `notice`, `token` | the body, or a channel notice's `CHAT_<token>_NOTICE` token |
 /// | 2 | `sender` | the speaker, or a notice's affected player |
 /// | 3 | `language` | a language name; empty prints no header |
 /// | 4 | `channel` | the display form, "N. Name - Zone" when numbered |
@@ -323,6 +323,9 @@ pub(crate) struct ChatEvent {
     pub channel_number: u32,
     pub channel_base: String,
     pub notice: String,
+    /// The notice's token when its byte alone does not name it: a mode change (`0x0C`) shows up
+    /// to four, `SET_`/`UNSET_` `MODERATOR`/`VOICE`, one per bit (`0x49e8a0`).
+    pub token: Option<&'static str>,
     /// Our slot's state for this channel as the notice arrived (`None`: no slot), set before
     /// [`super::feed::deliver`] changes it: the reference's notice arms read `slot+0x9c` for the
     /// token (`0x49c0c2`) before they write it (`0x49bb20`).
@@ -344,14 +347,19 @@ impl ChatEvent {
         self.notice.parse().ok()
     }
 
+    /// The `CHAT_<token>_NOTICE` token of a channel notice: the one it was built with, else the
+    /// byte's ([`notice_token`]).
+    pub(crate) fn notice_token(&self) -> Option<&'static str> {
+        self.token
+            .or_else(|| notice_token(self.notice_byte()?, self.slot_state))
+    }
+
     /// This event's `arg1..arg10` in the reference's order and types; ten values, never nil.
     pub(crate) fn script_args(&self) -> Vec<ScriptValue> {
         // arg1 is the token for a channel notice, else the body.
         let arg1 = match (self.kind, self.notice_byte()) {
-            (Some(ChatEventKind::ChannelNotice | ChatEventKind::ChannelNoticeUser), Some(byte)) => {
-                notice_token(byte, self.slot_state)
-                    .unwrap_or_default()
-                    .to_string()
+            (Some(ChatEventKind::ChannelNotice | ChatEventKind::ChannelNoticeUser), Some(_)) => {
+                self.notice_token().unwrap_or_default().to_string()
             }
             _ => self.text.clone(),
         };
@@ -474,7 +482,7 @@ pub(crate) fn event_name(kind: ChatEventKind) -> &'static str {
 
 /// The `arg1` token for a `SMSG_CHANNEL_NOTIFY` byte, read as `CHAT_<token>_NOTICE`
 /// (`GlobalStrings.lua:494-745`), matching the client's jump table `0x49c60c`. `None`: the
-/// member-line bytes `0x00`/`0x01`, MODE_CHANGE `0x0C`, which fires no event (`0x49c24d`), and
+/// member-line bytes `0x00`/`0x01`, MODE_CHANGE `0x0C`, whose lines name their own tokens (`0x49e8a0`), and
 /// anything past `0x1F`. `0x02` answers `YOU_CHANGED` in state 2 (`0x49c087`); `0x03` answers
 /// `SUSPENDED` in state 3 (`0x49c0e0`), where `YOU_LEFT` would delete the window's channel.
 pub(crate) fn notice_token(

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use benilla_ui::strings::{fill, Arg};
 
-use super::event::{event_name, notice_token, ChatEvent, ChatEventKind};
+use super::event::{event_name, ChatEvent, ChatEventKind};
 
 /// What the app keeps beside the stock chat frames: the default language and the log files.
 #[derive(Resource, Default)]
@@ -68,7 +68,7 @@ pub(crate) fn route(
 }
 
 /// `ChatFrame_OnEvent`'s composition (`ChatFrame.lua:1369-1468`); `None` for a notice the 1.12 UI
-/// does not print (MODE_CHANGE).
+/// does not print (a MODE_CHANGE event without its token).
 pub(crate) fn compose(
     event: &ChatEvent,
     kind: ChatEventKind,
@@ -184,16 +184,16 @@ fn strip_zone(channel: &str) -> &str {
     }
 }
 
-/// A channel notice: the notice byte's token ([`notice_token`], the jump table at `0x49c60c`)
+/// A channel notice: the notice byte's token ([`super::event::notice_token`], the jump table at `0x49c60c`)
 /// names `CHAT_<TOKEN>_NOTICE` (`ChatFrame.lua:1416-1424`), filled with arg4, then for
 /// CHANNEL_NOTICE_USER arg2 and any arg5; a string such as `CHAT_INVITE_NOTICE` reorders them with
-/// `%2$s`. `None` for MODE_CHANGE and bytes past the table, which print nothing.
+/// `%2$s`. `None` for a MODE_CHANGE without a token and bytes past the table, which print nothing.
 pub(crate) fn compose_notice(
     event: &ChatEvent,
     kind: ChatEventKind,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    let token = notice_token(event.notice_byte()?, event.slot_state)?;
+    let token = event.notice_token()?;
     let template = get(&format!("CHAT_{token}_NOTICE"))?;
     let mut args = vec![Arg::S(event.channel.as_str())];
     if kind == ChatEventKind::ChannelNoticeUser {
