@@ -940,15 +940,20 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetInboxItem",
         lua.create_function(|lua, (this, index): (Table, Value)| {
-            // `is-number` else `Usage: SetInboxItem(index)` (`0x855584`, `0x53559e`).
-            let index = binding_abi::index_arg(lua, index, "Usage: SetInboxItem(index)")?;
+            // `this` first (`0x53554f`), then `is-number` else `Usage: SetInboxItem(index)`
+            // (`0x855584`, `0x53559e`).
             let h = frame_handle_of(lua, &this)?;
+            let index = binding_abi::index_arg(lua, index, "Usage: SetInboxItem(index)")?;
             let row = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(mail) = &model.mail else {
                     return Ok(Value::Nil);
                 };
-                mail.inbox.get(index.saturating_sub(1)).cloned()
+                // `ftol(n) - 1` compared unsigned (`0x5355ce`, `0x5355d1`): 0 names no row.
+                index
+                    .checked_sub(1)
+                    .and_then(|i| mail.inbox.get(i))
+                    .cloned()
             };
             let Some(row) = row.filter(|r| r.item_id != 0) else {
                 return Ok(Value::Nil);
@@ -983,13 +988,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetAuctionItem",
         lua.create_function(|lua, (this, kind, index): (Table, Value, Value)| {
-            // `is-number` on arg 3, `is-number-or-string` on arg 2 else
+            // `this` first, then `is-number` on arg 3, `is-number-or-string` on arg 2 else
             // `Usage: SetAuctionItem("type", index)` (`0x8555a0`, `0x535ab6`).
+            let h = frame_handle_of(lua, &this)?;
             let kind =
                 binding_abi::string_arg(lua, kind, r#"Usage: SetAuctionItem("type", index)"#)?;
             let index =
                 binding_abi::index_arg(lua, index, r#"Usage: SetAuctionItem("type", index)"#)?;
-            let h = frame_handle_of(lua, &this)?;
             let (item_id, roll, name, charges) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(auction) = &model.auction else {
@@ -998,7 +1003,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(list) = super::auction::list_index_of(&kind) else {
                     return Ok(Value::Nil);
                 };
-                match auction.lists[list].rows.get(index.saturating_sub(1)) {
+                // `ftol(n) - 1` compared unsigned (`0x535933`, `0x535944`): 0 names no row.
+                match index
+                    .checked_sub(1)
+                    .and_then(|i| auction.lists[list].rows.get(i))
+                {
                     Some(r) => (r.item_id, r.random_property_id, r.name.clone(), r.charges),
                     None => (0, 0, None, -1),
                 }
@@ -1094,36 +1103,37 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
     // GameTooltip:SetTradeSkillItem(skillIndex [, reagentIndex]): the reagent's item, or without
     // `reagentIndex` the recipe's product. A product id of 0 or an uncached template shows the
-    // recipe's or the reagent's name alone (`render_by_id`); a bad index does nothing.
+    // recipe's or the reagent's name alone (`render_by_id`).
     m.set(
         "SetTradeSkillItem",
         lua.create_function(
             |lua, (this, skill_index, reagent_index): (Table, Value, Value)| {
-                // `is-number` on the index else `Invalid trade skill item in
-                // SetTradeSkillItem(index [,reagent])` (`0x8553d8`, `0x533b78`); a non-number
-                // reagent is absent (`0x533be7`).
-                let skill_index = binding_abi::index_arg(
-                    lua,
-                    skill_index,
-                    "Invalid trade skill item in SetTradeSkillItem(index [,reagent])",
-                )?;
+                // `this` first (`0x533b6e`).
+                frame_handle_of(lua, &this)?;
+                // `is-number` on the index, a row below the count (`0x533b9f`) whose spell has a
+                // record (`0x533bbd`, a header's -1 has none), and a reagent number that names
+                // one of the recipe's reagents (`0x533c51`..`0x533c68`), else `Invalid trade skill
+                // item in SetTradeSkillItem(index [,reagent])` (`0x8553d8`, `0x533c6a`); a
+                // non-number reagent is absent (`0x533be7`).
+                const LINE: &str =
+                    "Invalid trade skill item in SetTradeSkillItem(index [,reagent])";
+                let skill_index = binding_abi::index_arg(lua, skill_index, LINE)?;
                 let reagent_index = binding_abi::index_or(lua, reagent_index)?.map(|i| i as usize);
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     // A visible-row index, headers included (`0x4fca20`); a header is None.
-                    let Some(recipe) = super::tradeskill::recipe_at(&model, skill_index) else {
-                        return Ok(());
-                    };
-                    match reagent_index {
-                        Some(ri) => ri
-                            .checked_sub(1)
-                            .and_then(|i| recipe.reagents.get(i))
-                            .map(|r| (r.item, r.name.clone())),
-                        None => Some((recipe.product_item, Some(recipe.name.clone()))),
-                    }
+                    super::tradeskill::recipe_at(&model, skill_index).and_then(|recipe| {
+                        match reagent_index {
+                            Some(ri) => ri
+                                .checked_sub(1)
+                                .and_then(|i| recipe.reagents.get(i))
+                                .map(|r| (r.item, r.name.clone())),
+                            None => Some((recipe.product_item, Some(recipe.name.clone()))),
+                        }
+                    })
                 };
                 let Some((item_id, fb_name)) = found else {
-                    return Ok(());
+                    return Err(mlua::Error::runtime(LINE));
                 };
                 render_by_id(lua, &this, item_id, fb_name, None)
             },
@@ -1131,29 +1141,31 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // GameTooltip:SetCraftItem(craftIndex, reagentIndex): the reagent's item
-    // (`Blizzard_CraftUI.xml:33`); a craft has no product item, so both arguments are required. A
-    // bad index does nothing.
+    // (`Blizzard_CraftUI.xml:33`); a craft has no product item, so both arguments are required.
     m.set(
         "SetCraftItem",
         lua.create_function(
             |lua, (this, craft_index, reagent_index): (Table, Value, Value)| {
-                // `is-number` on both else `Invalid craft item in SetCraftItem(index, reagent)`
-                // (`0x855418`, `0x533d88`, `0x533d9c`).
+                // `this` first (`0x533d7b`).
+                frame_handle_of(lua, &this)?;
+                // `is-number` on both (`0x533d88`, `0x533d9c`), a row below the count
+                // (`0x533dc3`) whose spell has a record (`0x533dd9`), and a reagent number naming
+                // one of its reagents (`0x533e10`..`0x533e27`), else `Invalid craft item in
+                // SetCraftItem(index, reagent)` (`0x855418`, `0x533e29`).
                 const LINE: &str = "Invalid craft item in SetCraftItem(index, reagent)";
                 let craft_index = binding_abi::index_arg(lua, craft_index, LINE)?;
                 let reagent_index = binding_abi::index_arg(lua, reagent_index, LINE)?;
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let Some(recipe) = crate::script::craft::recipe(&model, craft_index) else {
-                        return Ok(());
-                    };
-                    reagent_index
-                        .checked_sub(1)
-                        .and_then(|i| recipe.reagents.get(i))
-                        .map(|r| (r.item, r.name.clone()))
+                    crate::script::craft::recipe(&model, craft_index).and_then(|recipe| {
+                        reagent_index
+                            .checked_sub(1)
+                            .and_then(|i| recipe.reagents.get(i))
+                            .map(|r| (r.item, r.name.clone()))
+                    })
                 };
                 let Some((item_id, fb_name)) = found else {
-                    return Ok(());
+                    return Err(mlua::Error::runtime(LINE));
                 };
                 render_by_id(lua, &this, item_id, fb_name, None)
             },

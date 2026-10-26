@@ -963,6 +963,29 @@ fn a_non_number_index_raises_the_bindings_own_usage_line() {
     }
 }
 
+/// The tooltip setters test `this` before their index (`0x5338f0`, `0x533f29`, `0x533b6e`,
+/// `0x533d7b`, `0x53554f`), so a bad receiver with a bad index raises the receiver's line.
+#[test]
+fn the_tooltip_setters_test_this_before_the_index() {
+    let s = script();
+    s.run(r#"IdxTip = CreateFrame("GameTooltip", "IdxTip")"#)
+        .unwrap();
+    for call in [
+        "IdxTip.SetTrainerService({}, {})",
+        "IdxTip.SetCraftSpell({}, {})",
+        "IdxTip.SetTradeSkillItem({}, {})",
+        "IdxTip.SetCraftItem({}, {}, {})",
+        "IdxTip.SetInboxItem({}, {})",
+        "IdxTip.SetAuctionItem({}, {}, {})",
+    ] {
+        let e = s.run(call).expect_err(call).to_string();
+        assert!(
+            e.contains("Attempt to find 'this' in non-framescript object"),
+            "{call}: {e}"
+        );
+    }
+}
+
 /// A negative or zero index is a number, so it passes `is-number` and falls out of range as the
 /// 32-bit pattern `_ftol` leaves; it never raises a conversion error.
 #[test]
@@ -1150,7 +1173,4 @@ fn the_index_reads_that_branch_never_raise() {
         s.eval::<i64>("return GetNumQuestLeaderBoards()").unwrap()
     );
     s.run("GetQuestLogLeaderBoard(1, {})").unwrap();
-    // `SetTradeSkillItem`'s reagent is absent when not a number (`0x533be7`).
-    s.run(r#"CreateFrame("GameTooltip", "IdxTip2"):SetTradeSkillItem(1, {})"#)
-        .unwrap();
 }

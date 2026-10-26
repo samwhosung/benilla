@@ -469,7 +469,10 @@ fn ts_recipe(spell_id: u32, name: &str, group: (u32, u32, &str)) -> TradeSkillRe
 }
 
 /// `SetTradeSkillItem` takes a visible row index, headers included, not a position in `recipes`;
-/// the product and reagent hovers both pass one, and a header row is a no-op.
+/// the product and reagent hovers both pass one. A header row, a row past the list and a reagent
+/// number naming none raise `Invalid trade skill item in SetTradeSkillItem(index [,reagent])`
+/// (`0x533bbd`, `0x533b9f`, `0x533c51`..`0x533c6a`), leaving the previous render; a non-number
+/// reagent is absent (`0x533be7`).
 #[test]
 fn set_trade_skill_item_indexes_visible_rows_not_raw_recipes() {
     let mut s = script();
@@ -509,9 +512,25 @@ fn set_trade_skill_item_indexes_visible_rows_not_raw_recipes() {
     assert_eq!(name_at(&mut s, 2, ""), "Alpha Bolt");
 
     assert_eq!(name_at(&mut s, 5, ", 1"), "Alpha Cloak Reagent");
+    assert_eq!(name_at(&mut s, 6, ", {}"), "Beta Cloak");
 
-    // A header row is a no-op: the previous render stands.
-    assert_eq!(name_at(&mut s, 4, ""), "Alpha Cloak Reagent");
+    for call in [
+        "TT:SetTradeSkillItem(4)",
+        "TT:SetTradeSkillItem(7)",
+        "TT:SetTradeSkillItem(0)",
+        "TT:SetTradeSkillItem(5, 2)",
+        "TT:SetTradeSkillItem(5, 0)",
+    ] {
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(
+            e.contains("Invalid trade skill item in SetTradeSkillItem(index [,reagent])"),
+            "`{call}` -> {e}"
+        );
+    }
+    assert_eq!(
+        s.eval::<String>("return TTTextLeft1:GetText()").unwrap(),
+        "Beta Cloak"
+    );
 }
 
 /// `SetMerchantCompareItem(index [, offset])` returns the number 1 or nil, one value, and the stock

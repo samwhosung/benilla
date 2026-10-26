@@ -965,10 +965,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GameTooltip:SetTrainerService(index): the trainer detail icon's hover
     // (`Blizzard_TrainerUI.xml:452`); list rows have no tooltip. `0x5338b0` writes no line itself
     // and hands a shared builder the subject the app resolved (`TrainerService::tooltip`). `index`
-    // is a visible row, headers included; a header is a no-op.
+    // is a visible row, headers included.
     m.set(
         "SetTrainerService",
         lua.create_function(|lua, (this, index): (Table, Value)| {
+            // `this` first (`0x5338f0`), as every method's prologue.
+            frame_handle_of(lua, &this)?;
             // `is-number` else `Invalid trainer service in SetTrainerService(index)` (`0x8553a4`,
             // `0x533968`).
             let index = binding_abi::index_arg(
@@ -976,11 +978,17 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 index,
                 "Invalid trainer service in SetTrainerService(index)",
             )?;
+            // A row past the count (`0x533990`) or a spell with no record, a header's -1
+            // (`0x53399a`), raises the same line (`0x533a9a`).
             let subject = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 match super::trainer::service(&model, index) {
                     Some(s) => s.tooltip.clone(),
-                    None => return Ok(()),
+                    None => {
+                        return Err(mlua::Error::runtime(
+                            "Invalid trainer service in SetTrainerService(index)",
+                        ))
+                    }
                 }
             };
             match subject {
@@ -1012,15 +1020,28 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetCraftSpell",
         lua.create_function(|lua, (this, craft_index): (Table, Value)| {
-            // `is-number` else `Invalid craft in SetCraftSpell(index)` (`0x85544c`, `0x533f54`).
-            let craft_index =
-                binding_abi::index_arg(lua, craft_index, "Invalid craft in SetCraftSpell(index)")?;
+            // `this` first (`0x533f29`), then `is-number` else `Invalid craft in
+            // SetCraftSpell(index)` (`0x85544c`, `0x533f54`).
+            let h = frame_handle_of(lua, &this)?;
+            const LINE: &str = "Invalid craft in SetCraftSpell(index)";
+            let craft_index = binding_abi::index_arg(lua, craft_index, LINE)?;
             let subject = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 match super::craft::recipe(&model, craft_index) {
-                    Some(r) => r.tooltip.clone(),
-                    None => return Ok(()),
+                    Some(r) => Some(r.tooltip.clone()),
+                    // A row past the count raises (`0x533f7b`, `0x53405a`).
+                    None if !super::craft::has_row(&model, craft_index) => {
+                        return Err(mlua::Error::runtime(LINE))
+                    }
+                    None => None,
                 }
+            };
+            // A header's spell -1 goes to the spell builder (`0x533f99`, `0x533fdf`), which finds
+            // no record, clears and hides (`0x52e63a`, `0x52e6a4`).
+            let Some(subject) = subject else {
+                clear(lua, h);
+                super::visibility::set_shown(lua, h, false);
+                return Ok(());
             };
             match subject {
                 CraftTooltip::Item(item_id) => {

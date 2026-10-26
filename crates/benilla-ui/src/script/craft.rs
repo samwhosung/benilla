@@ -452,6 +452,13 @@ pub(crate) fn recipe(model: &Model, index: usize) -> Option<&CraftRecipe> {
     }
 }
 
+/// Whether a 1-based index names a row, a header included (`0xbdcfc0`).
+pub(crate) fn has_row(model: &Model, index: usize) -> bool {
+    index
+        .checked_sub(1)
+        .is_some_and(|i| i < model.craft_rows.len())
+}
+
 /// A getter's item lookup that missed: the item cache asked inside the call, with the callback
 /// `0x4f7710` (`0x4f75dd`, `0x4f79f2`), one per call, and the row's spell as the owner id.
 fn ask_item(lua: &Lua, entry: u32, spell_id: u32) -> mlua::Result<()> {

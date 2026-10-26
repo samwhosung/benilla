@@ -1239,9 +1239,14 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
         local a = CreateFrame("Button", "AB1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
 
-        -- Row 1 is the "Arms" header: a no-op, not a shifted hit onto a neighbouring service.
+        -- Row 1 is the "Arms" header, whose spell -1 has no record: it raises (`0x53399a`), not a
+        -- shifted hit onto a neighbouring service; so does a row past the list (`0x533990`).
         TT:SetOwner(a, "ANCHOR_RIGHT")
-        TT:SetTrainerService(1)
+        for _, i in { 1, 0, 99 } do
+            local ok, e = pcall(TT.SetTrainerService, TT, i)
+            assert(not ok and string.find(e, "Invalid trainer service in SetTrainerService%(index%)"),
+                "row " .. i .. " raises")
+        end
         assert(TT:NumLines() == 0, "a header row renders nothing")
 
         -- Row 2: the recipe -> the ITEM builder, full item tooltip (not the spell's name).
@@ -1878,6 +1883,99 @@ fn a_missed_view_re_renders_the_tooltip_when_the_app_answers() {
         "one setter call, one OnTooltipCleared"
     );
     assert!(s.take_errors().is_empty());
+}
+
+/// A craft row past the list raises `Invalid craft in SetCraftSpell(index)` (`0x533f7b`) and a
+/// header's spell -1 reaches the spell builder, which clears and hides (`0x533f99`, `0x52e6a4`);
+/// `SetCraftItem` raises its line for both and for a reagent number naming none (`0x533e29`).
+#[test]
+fn the_craft_setters_raise_on_a_miss_and_a_header_clears() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_spell_tooltip(
+        17253,
+        SpellTooltipView {
+            name: "Bite".into(),
+            ..Default::default()
+        },
+    );
+    let grouped = |spell_id, name, group: u32, line: &str| CraftRecipe {
+        group,
+        skill_line: Some(line.into()),
+        reagents: vec![CraftReagent {
+            item: 2589,
+            name: Some("Linen Cloth".into()),
+            icon: None,
+            need: 1,
+            have: 1,
+        }],
+        ..craft_recipe(spell_id, name, CraftTooltip::Spell(17253))
+    };
+    s.set_craft(Some(CraftState {
+        name: "Beast Training".into(),
+        display_line: Some("Beast Training".into()),
+        rank: 0,
+        max_rank: 0,
+        craft_type: 1,
+        recipes: vec![
+            grouped(24599, "Bite", 1, "Bite"),
+            grouped(24600, "Claw", 2, "Claw"),
+        ],
+    }));
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "CI"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        for i = 1, GetNumCrafts() do
+            local _, _, kind = GetCraftInfo(i)
+            if kind == "header" then HEADER = HEADER or i else RECIPE = RECIPE or i end
+        end
+        PAST = GetNumCrafts() + 1
+        TT:SetOwner(CI, "ANCHOR_RIGHT")
+        TT:SetCraftSpell(RECIPE)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(left_lines(&mut s), vec!["Bite"]);
+    s.run("TT:SetCraftSpell(HEADER)").unwrap();
+    assert_eq!(
+        s.eval::<(i64, bool)>("return TT:NumLines(), TT:IsShown() == 1")
+            .unwrap(),
+        (0, false),
+        "a header clears and hides"
+    );
+    for (call, line) in [
+        (
+            "TT:SetCraftSpell(PAST)",
+            "Invalid craft in SetCraftSpell(index)",
+        ),
+        (
+            "TT:SetCraftSpell(0)",
+            "Invalid craft in SetCraftSpell(index)",
+        ),
+        (
+            "TT:SetCraftItem(HEADER, 1)",
+            "Invalid craft item in SetCraftItem(index, reagent)",
+        ),
+        (
+            "TT:SetCraftItem(PAST, 1)",
+            "Invalid craft item in SetCraftItem(index, reagent)",
+        ),
+        (
+            "TT:SetCraftItem(RECIPE, 2)",
+            "Invalid craft item in SetCraftItem(index, reagent)",
+        ),
+        (
+            "TT:SetCraftItem(RECIPE, 0)",
+            "Invalid craft item in SetCraftItem(index, reagent)",
+        ),
+    ] {
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run("TT:SetOwner(CI, 'ANCHOR_RIGHT') TT:SetCraftItem(RECIPE, 1)")
+        .unwrap();
+    assert_eq!(left_lines(&mut s), vec!["Linen Cloth"]);
 }
 
 /// Beast Training's icon has no fallback name, so its miss is a hidden plate.
