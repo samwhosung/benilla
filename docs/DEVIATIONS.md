@@ -34,7 +34,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
 - [benilla-lua](#benilla-lua): 11
-- [benilla-protocol](#benilla-protocol): 27
+- [benilla-protocol](#benilla-protocol): 29
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 132
 - [benilla-world](#benilla-world): 49
@@ -75,7 +75,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### bindings
 
 - A press with Super (Cmd) held runs no binding, so a system chord such as Cmd+Tab or Cmd+Q never acts in game. ([`src/bindings.rs:19`](../crates/benilla-app/src/bindings.rs#L19))
-- Latches die with the VM that made them, because a latch names a command of that VM's table and releasing it against a new one would run another load's up-half. ([`src/bindings.rs:512`](../crates/benilla-app/src/bindings.rs#L512))
+- Latches die with the VM that made them, because a latch names a command of that VM's table and releasing it against a new one would run another load's up-half. ([`src/bindings.rs:586`](../crates/benilla-app/src/bindings.rs#L586))
 - The Windows key table stops at `VK_F12` and drops later F-keys; they are named here so a stored `F13`-`F24` can be pressed. ([`src/bindings/chord.rs:165`](../crates/benilla-app/src/bindings/chord.rs#L165))
 - On the Mac and Linux a key its platform reports no character for keeps its US name too, where the Mac reference drops it (`0x8a4aa`), and a Linux dead key not yet pressed bare stays bindable. ([`src/bindings/layout.rs:116`](../crates/benilla-app/src/bindings/layout.rs#L116))
 - A character above U+00FF names the key by itself. The reference's `MapVirtualKeyA` returns an ANSI code-page byte, which `0x42da4b` drops past `0xff` and the namer's UTF-8 encoder (`0x41abb0`) otherwise reads as Latin-1, so such a key is mislabelled or dropped; named by what it types, it stays bindable and readable. ([`src/bindings/layout.rs:216`](../crates/benilla-app/src/bindings/layout.rs#L216))
@@ -157,7 +157,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### local_state
 
-- The reference writes `Screenshots\\` inside the install, which benilla never writes to; the folder keeps the reference's name. ([`src/local_state.rs:392`](../crates/benilla-app/src/local_state.rs#L392))
+- The reference writes `Screenshots\\` inside the install, which benilla never writes to; the folder keeps the reference's name. ([`src/local_state.rs:433`](../crates/benilla-app/src/local_state.rs#L433))
 
 #### minimap
 
@@ -323,7 +323,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The files live in `benilla-config/Logs/`, not the install's `Logs`, because the install is read-only. ([`src/ui_chat/logging.rs:4`](../crates/benilla-app/src/ui_chat/logging.rs#L4))
 - No re-run when a remote player streams in, because the reference's re-run only repeats the join, which vmangos swallows, or the leave, whose "Not on channel" notice nothing prints. ([`src/ui_chat/recruitment.rs:7`](../crates/benilla-app/src/ui_chat/recruitment.rs#L7))
 - `set_chat_window_looks` drops an out-of-range window, where the reference's `WINDOW` bound is off by one (`0x498d1c`, `ja` where the array needs `jae`), because that write would land past the array. ([`src/ui_chat/settings.rs:31`](../crates/benilla-app/src/ui_chat/settings.rs#L31))
-- The debounce also writes Lua's changes (`dirty`) after the quiet time, where the reference writes only at teardown, so a crash loses at most a second of changes. ([`src/ui_chat/settings.rs:571`](../crates/benilla-app/src/ui_chat/settings.rs#L571))
+- The debounce also writes Lua's changes (`dirty`) after the quiet time, where the reference writes only at teardown, so a crash loses at most a second of changes. ([`src/ui_chat/settings.rs:599`](../crates/benilla-app/src/ui_chat/settings.rs#L599))
 
 #### ui_dressup
 
@@ -640,9 +640,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:754`](../crates/benilla-protocol/src/events.rs#L754))
-- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1134`](../crates/benilla-protocol/src/events/decode.rs#L1134))
-- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1151`](../crates/benilla-protocol/src/events/decode.rs#L1151))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:759`](../crates/benilla-protocol/src/events.rs#L759))
+- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1136`](../crates/benilla-protocol/src/events/decode.rs#L1136))
+- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1153`](../crates/benilla-protocol/src/events/decode.rs#L1153))
 
 #### examples
 
@@ -650,6 +650,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### messages
 
+- A stream that fails to inflate is no file, where the reference writes its buffer unchecked (`0x5afcbc`), because those bytes are whatever its stack held. ([`src/messages/account_data.rs:48`](../crates/benilla-protocol/src/messages/account_data.rs#L48))
+- The whole stream is sent, where the reference cuts it at the file's size (`0x5afb42`), because the server refuses a cut stream and the next login then downloads its old copy over the player's file. ([`src/messages/account_data.rs:85`](../crates/benilla-protocol/src/messages/account_data.rs#L85))
 - A fixed list, not read off the install, because no third-party addon sets `## Secure:`, so the two differ only where the `.pub` files were altered. ([`src/messages/addons.rs:93`](../crates/benilla-protocol/src/messages/addons.rs#L93))
 - Every row is kept, because the reference takes the count unclamped into its 80 row blocks and a larger one overruns them. ([`src/messages/battlefield.rs:98`](../crates/benilla-protocol/src/messages/battlefield.rs#L98))
 - A larger count keeps the first 40, where the reference's handler writes past the store. ([`src/messages/battlefield.rs:188`](../crates/benilla-protocol/src/messages/battlefield.rs#L188))
@@ -658,8 +660,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Zone and position are kept, not set to the viewer's zone and the object's position, because nothing in benilla reads them. ([`src/messages/group.rs:256`](../crates/benilla-protocol/src/messages/group.rs#L256))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
 - A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
-- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1044`](../crates/benilla-protocol/src/messages/opcode.rs#L1044))
-- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:637`](../crates/benilla-protocol/src/messages/packet.rs#L637))
+- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1052`](../crates/benilla-protocol/src/messages/opcode.rs#L1052))
+- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:641`](../crates/benilla-protocol/src/messages/packet.rs#L641))
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:285`](../crates/benilla-protocol/src/messages/parse.rs#L285))
 - A type outside 1-7 reads as nothing rather than the reference's default arm, which under-pushes its returns. ([`src/messages/pet.rs:71`](../crates/benilla-protocol/src/messages/pet.rs#L71))
 - Both are read, told apart exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's. ([`src/messages/pet.rs:191`](../crates/benilla-protocol/src/messages/pet.rs#L191))
@@ -757,10 +759,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Bounds-checked where the reference indexes unguarded, so none reads past it. ([`src/script/item_stats.rs:526`](../crates/benilla-ui/src/script/item_stats.rs#L526))
 - Nil for a display row with no icon, where the reference answers the unloadable `Interface\Icons\`, because `SetTexture` shows no icon for either. ([`src/script/item_stats.rs:683`](../crates/benilla-ui/src/script/item_stats.rs#L683))
 - A key rebound to the command it already has keeps a duplicate index in 1.12.1 (`0x4b7786` lowers the other keys' indices before `0x4b77ac` returns on the same name), so both getters there answer one key too few; that client fault is not reproduced. ([`src/script/keybind.rs:223`](../crates/benilla-ui/src/script/keybind.rs#L223))
-- An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:297`](../crates/benilla-ui/src/script/keybind.rs#L297))
+- An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:326`](../crates/benilla-ui/src/script/keybind.rs#L326))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
-- The reference's byte copy can end inside a character and keep the stray bytes; a `String` must stay UTF-8, so the cut stops at the character boundary. ([`src/script/macros.rs:134`](../crates/benilla-ui/src/script/macros.rs#L134))
-- A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:534`](../crates/benilla-ui/src/script/macros.rs#L534))
+- The reference's byte copy can end inside a character and keep the stray bytes; a `String` must stay UTF-8, so the cut stops at the character boundary. ([`src/script/macros.rs:135`](../crates/benilla-ui/src/script/macros.rs#L135))
+- A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:535`](../crates/benilla-ui/src/script/macros.rs#L535))
 - Each line is trimmed, because the reference sends an indented `" /say hi"` as plain chat, never as the command meant. ([`src/script/macros/bind.rs:30`](../crates/benilla-ui/src/script/macros/bind.rs#L30))
 - The `/cast` argument is trimmed, because the reference binds `/cast  Fireball` (two spaces) to a name that never resolves. ([`src/script/macros/bind.rs:50`](../crates/benilla-ui/src/script/macros/bind.rs#L50))
 - The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:935`](../crates/benilla-ui/src/script/mod.rs#L935))
