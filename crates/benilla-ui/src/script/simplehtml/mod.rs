@@ -54,8 +54,9 @@ pub(crate) struct SimpleHtmlState {
     /// The content list (`+0x340`): every region the last `SetText` built, freed by the next.
     pub(crate) blocks: Vec<RegionHandle>,
     /// The link-button rebuild flag (`+0x370`, zeroed by the ctor at `0x789eb9`): set by `SetText`
-    /// (`0x78a50d`) and by a new face or spacing on an element font (`0x78a380`), and spent by
-    /// the frame's update (`0x78a30b`-`0x78a310`).
+    /// (`0x78a50d`), by a new face or spacing on an element font (`0x78a380`) and by a width or
+    /// height change of 1e-5 or more (`0x78a369`, raised in [`crate::script::hyperlink`]), and
+    /// spent by the frame's update (`0x78a30b`-`0x78a310`).
     pub(crate) links_dirty: bool,
 }
 

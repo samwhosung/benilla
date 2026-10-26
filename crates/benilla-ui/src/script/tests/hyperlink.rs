@@ -323,22 +323,35 @@ fn a_simple_html_link_fires_on_hyperlink_click() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// Only `SetText` raises a SimpleHTML's rebuild flag (`0x78a50d`): a resize re-seats the hovered
-/// button with no leave, where a new `SetText` rebuilds and leaves it.
+/// `SetText` (`0x78a50d`) and a width or height change (`0x78a369`) raise a SimpleHTML's rebuild
+/// flag: each leaves the hovered button and takes a fresh one. A move alone re-seats it.
 #[test]
-fn a_simple_html_rebuilds_its_links_on_set_text_alone() {
+fn a_simple_html_rebuilds_its_links_on_set_text_and_on_a_resize() {
     let mut s = html();
     s.mouse_move(130.0, 127.0);
-    s.run("SH:SetWidth(400)").unwrap();
+    s.run(r#"SH:SetPoint("BOTTOMLEFT", 110, 100)"#).unwrap();
     s.resolve();
     set_html_link(&mut s);
     s.mouse_move(131.0, 127.0);
-    assert_eq!(log_of(&s), "enter:u", "a resize rebuilds nothing");
+    assert_eq!(log_of(&s), "enter:u", "a move rebuilds nothing");
+    s.run("SH:SetWidth(400)").unwrap();
+    s.resolve();
+    set_html_link(&mut s);
+    s.mouse_move(130.0, 127.0);
+    assert_eq!(log_of(&s), "enter:u leave:u enter:u", "a resize rebuilds");
+    s.run("SH:SetHeight(90)").unwrap();
+    s.resolve();
+    set_html_link(&mut s);
+    s.mouse_move(131.0, 127.0);
+    assert_eq!(log_of(&s), "enter:u leave:u enter:u leave:u enter:u");
     s.run(r#"SH:SetText('<html><body><p><a href="u">t</a></p></body></html>')"#)
         .unwrap();
     set_html_link(&mut s);
     s.mouse_move(130.0, 127.0);
-    assert_eq!(log_of(&s), "enter:u leave:u enter:u");
+    assert_eq!(
+        log_of(&s),
+        "enter:u leave:u enter:u leave:u enter:u leave:u enter:u"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
