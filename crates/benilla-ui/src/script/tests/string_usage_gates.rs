@@ -247,8 +247,8 @@ fn guild_verbs_raise_their_usage_line() {
 }
 
 /// `GuildInviteByName` (`0x48aef0`) shows ERR_COMMAND_NEEDS_TARGET for a non-string, nil or ""
-/// (`0x48af06`, `0x48af1c`, `0x48af20` → `push 0x132`) and raises nothing, as `/ginvite` with
-/// nothing targeted calls it with nil (`ChatFrame.lua:948`). The other names go on as given.
+/// (`0x48af06`, `0x48af1c`, `0x48af20` → `push 0x132`) and raises nothing, as an empty
+/// ADD_GUILDMEMBER box calls it with "" (`StaticPopup.lua:847`). The other names go on as given.
 #[test]
 fn guild_invite_without_a_name_shows_needs_target_and_names_go_as_given() {
     use crate::script::ui_errors::shown::seen_in_call;
