@@ -193,3 +193,98 @@ fn guild_slot_and_auction_count_verbs_raise_their_own_text() {
     )
     .unwrap();
 }
+
+/// The guild verbs raise their own usage line on a non-string: `GuildUninviteByName` `0x48b03b`,
+/// `GuildPromoteByName` `0x48b0db`, `GuildDemoteByName` `0x48b17b`, `GuildSetLeaderByName`
+/// `0x48b24f`, `GuildSetMOTD` `0x48b30f`, `SetGuildInfoText` `0x4d2397`, `GuildControlSaveRank`
+/// `0x4d20e8`, `GuildControlAddRank` `0x4d2228` and the two roster notes `0x4d16e3`, `0x4d1803`.
+#[test]
+fn guild_verbs_raise_their_usage_line() {
+    let s = script();
+    assert_raises(
+        &s,
+        &[
+            (
+                "GuildUninviteByName(nil)",
+                r#"Usage: GuildUninviteByName("name")"#,
+            ),
+            (
+                "GuildPromoteByName()",
+                r#"Usage: GuildPromoteByName("name")"#,
+            ),
+            (
+                "GuildDemoteByName({})",
+                r#"Usage: GuildDemoteByName("name")"#,
+            ),
+            (
+                "GuildSetLeaderByName(true)",
+                r#"Usage: GuildSetLeaderByName("name")"#,
+            ),
+            ("GuildSetMOTD()", r#"Usage: GuildSetMOTD("message")"#),
+            ("SetGuildInfoText(nil)", "Usage: SetGuildInfoText(text)"),
+            (
+                "GuildControlSaveRank()",
+                "Usage: GuildControlSaveRank(name)",
+            ),
+            (
+                "GuildControlAddRank({})",
+                "Usage: GuildControlAddRank(name)",
+            ),
+            (
+                "GuildRosterSetPublicNote(1)",
+                "Usage: GuildRosterSetPublicNote(index, note)",
+            ),
+            (
+                "GuildRosterSetPublicNote('x', 'note')",
+                "Usage: GuildRosterSetPublicNote(index, note)",
+            ),
+            (
+                "GuildRosterSetOfficerNote(nil, 'note')",
+                "Usage: GuildRosterSetOfficerNote(index, note)",
+            ),
+        ],
+    );
+}
+
+/// `GuildInviteByName` (`0x48aef0`) shows ERR_COMMAND_NEEDS_TARGET for a non-string, nil or ""
+/// (`0x48af06`, `0x48af1c`, `0x48af20` → `push 0x132`) and raises nothing, as `/ginvite` with
+/// nothing targeted calls it with nil (`ChatFrame.lua:948`). The other names go on as given.
+#[test]
+fn guild_invite_without_a_name_shows_needs_target_and_names_go_as_given() {
+    use crate::script::ui_errors::shown::seen_in_call;
+    use crate::script::{GuildCall, ScriptCall};
+    let mut s = script();
+    for call in [
+        "GuildInviteByName()",
+        "GuildInviteByName(nil)",
+        "GuildInviteByName('')",
+        "GuildInviteByName({})",
+    ] {
+        let (seen, host) = seen_in_call(&mut s, call);
+        assert_eq!(seen, "ERR_COMMAND_NEEDS_TARGET", "{call}");
+        assert!(host.calls.is_empty(), "{call} sends nothing");
+    }
+    let (seen, host) = seen_in_call(
+        &mut s,
+        "GuildInviteByName(' ') GuildUninviteByName('') GuildPromoteByName(' Bob') \
+         GuildSetLeaderByName('') GuildSetMOTD('')",
+    );
+    assert_eq!(seen, "");
+    let guild: Vec<GuildCall> = host
+        .calls
+        .into_iter()
+        .filter_map(|c| match c {
+            ScriptCall::Guild(g) => Some(g),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        guild,
+        vec![
+            GuildCall::Invite(" ".into()),
+            GuildCall::Uninvite(String::new()),
+            GuildCall::Promote(" Bob".into()),
+            GuildCall::SetMotd(String::new()),
+        ]
+    );
+}
