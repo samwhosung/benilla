@@ -462,6 +462,8 @@ mod reputation_live_tests;
 #[cfg(test)]
 mod selection_live_tests;
 #[cfg(test)]
+mod social_live_tests;
+#[cfg(test)]
 mod stat_live_tests;
 #[cfg(test)]
 mod storm_tests;

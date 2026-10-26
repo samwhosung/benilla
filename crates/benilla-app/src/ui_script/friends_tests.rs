@@ -1,5 +1,5 @@
-//! The social window (`FriendsFrame.xml`), fed as `ui_social` feeds it: a pushed [`SocialState`]
-//! snapshot, then the list event. The VM keeps the friend and ignore calls its verbs make, which
+//! The social window (`FriendsFrame.xml`) over a pushed [`SocialState`] snapshot, which the getters
+//! read with no host lent, then the list event. The VM keeps the friend and ignore calls its verbs make, which
 //! the client's host applies inside them (`ui_social::call_tests`).
 
 use benilla_ui::script::{FriendInfo, IgnoreInfo, SocialCall, SocialState, UiScript, WhoInfo};
@@ -11,22 +11,6 @@ fn setup() -> UiScript {
     s.set_screen_size(1024.0, 768.0);
     super::test_ui::load_social_ui(&mut s);
     s
-}
-
-fn who(name: &str, level: u32, class: &str, zone: &str) -> WhoInfo {
-    WhoInfo {
-        name: name.to_string(),
-        guild: String::new(),
-        level,
-        race: Some("Human".to_string()),
-        class: Some(class.to_string()),
-        zone: Some(zone.to_string()),
-    }
-}
-
-fn who_name(s: &UiScript, row: u32) -> String {
-    s.eval::<String>(&format!("return WhoFrameButton{row}Name:GetText()"))
-        .unwrap()
 }
 
 /// A listed slot; an empty class or area is one with no row.
@@ -442,49 +426,24 @@ fn the_who_dropdown_switches_the_variable_column() {
     );
 }
 
-/// The reference's seven-slot sort chain (`SortWho`, `0x5ad890`): a repeated header reverses and
-/// an earlier key breaks ties. Rows are read with no tick: `WHO_LIST_UPDATE` fires inside the call.
+/// The Who frame's headers hand their keys to `SortWho` (`0x5ad890`), whose chain and sort are the
+/// engine's, read back through the call host (`ui_social::who_tests`).
 #[test]
-fn the_who_headers_sort_and_a_repeated_click_reverses() {
+fn the_who_headers_hand_their_keys_to_sort_who() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     s.run("ShowWhoPanel()").unwrap();
-    push(
-        &mut s,
-        SocialState {
-            who: vec![
-                who("Galas", 60, "Warrior", "Elwynn Forest"),
-                who("Erdrin", 12, "Mage", "Elwynn Forest"),
-            ],
-            who_total: 2,
-            ..Default::default()
-        },
-        "WHO_LIST_UPDATE",
-    );
     let _ = s.take_social_calls();
-    assert_eq!(who_name(&s, 1), "Galas", "the server's order, unsorted");
-
-    // Header 1 is Name (`FriendsFrame.xml:1313`).
-    s.run("WhoFrameColumnHeader1:Click()").unwrap();
-    assert_eq!(who_name(&s, 1), "Erdrin", "Name, ascending");
-    assert_eq!(
-        s.take_social_calls(),
-        vec![SocialCall::SortWho("name".to_string())],
-        "and the app hears the click too"
-    );
-
-    s.run("WhoFrameColumnHeader1:Click()").unwrap();
-    assert_eq!(who_name(&s, 1), "Galas", "the same header again reverses");
-
-    // Header 3 is Level (`FriendsFrame.xml:1394`).
-    s.run("WhoFrameColumnHeader3:Click()").unwrap();
-    assert_eq!(who_name(&s, 1), "Erdrin", "Level, ascending");
-    s.run("WhoFrameColumnHeader3:Click()").unwrap();
-    assert_eq!(who_name(&s, 1), "Galas", "and Level reverses too");
-
-    // Name, promoted from behind, keeps the direction it was left in.
-    s.run("WhoFrameColumnHeader1:Click()").unwrap();
-    assert_eq!(who_name(&s, 1), "Galas", "Name, still descending");
+    // Header 1 is Name (`FriendsFrame.xml:1313`), header 3 Level (`FriendsFrame.xml:1394`).
+    for (header, key) in [(1, "name"), (1, "name"), (3, "level")] {
+        s.run(&format!("WhoFrameColumnHeader{header}:Click()"))
+            .unwrap();
+        assert_eq!(
+            s.take_social_calls(),
+            vec![SocialCall::SortWho(key.to_string())],
+            "header {header}"
+        );
+    }
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

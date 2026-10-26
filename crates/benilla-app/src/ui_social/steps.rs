@@ -31,7 +31,7 @@ pub(crate) struct SocialSteps<'w> {
 }
 
 impl SocialSteps<'_> {
-    /// Apply `call` inside its verb, then seat the selections it leaves for the verb's next line.
+    /// Apply `call` inside its verb; the getters read what it left through the host.
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: SocialCall) {
         match call {
             SocialCall::ShowFriends => self.send(ClientCommand::FriendListRequest),
@@ -58,10 +58,6 @@ impl SocialSteps<'_> {
                 self.send(ClientCommand::SetLookingForGroup { slots, comment })
             }
         }
-        script.set_social_selection(
-            self.social.selected_friend_index(),
-            self.social.selected_ignore_index(),
-        );
     }
 
     fn send(&self, command: ClientCommand) {

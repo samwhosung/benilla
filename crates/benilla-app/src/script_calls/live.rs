@@ -94,6 +94,8 @@ live_reads! {
         book: crate::ui_spellbook::BookLive<'static, 'static>,
         /// The battleground queue slots, list, board and positions.
         battlefield: crate::ui_battlefield::BattlefieldLive<'static, 'static>,
+        /// The friend list, its selections and the `/who` array.
+        social: crate::ui_social::SocialLive<'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

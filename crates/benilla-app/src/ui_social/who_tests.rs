@@ -55,12 +55,18 @@ fn client() -> Who {
         )
         .expect("the strings install");
     app.world_mut().insert_non_send_resource(script);
-    let feed = app.world_mut().register_system(super::feed::feed_social);
+    // A new VM's first feed stands for every list's signal; the lane fires what the handlers
+    // raise.
+    let seed = app.world_mut().register_system(super::feed::feed_social);
+    app.world_mut()
+        .run_system(seed)
+        .expect("the social feed runs");
+    let feed = app.world_mut().register_system(super::lane::fire_all);
     let mut w = Who { app, rx, feed };
     w.app
         .world_mut()
         .run_system(w.feed)
-        .expect("the social feed runs");
+        .expect("the social lane fires");
     w.rx.try_iter().for_each(drop);
     w
 }
@@ -152,6 +158,48 @@ fn sort_who_promotes_the_engines_chain_inside_its_call() {
     assert_eq!(social(&w).who_sort, level);
 }
 
+/// `SortWho`'s `WHO_LIST_UPDATE` fires inside the call after the sort (`0x5ad9d6`, `0x5ad9ed`), so
+/// its listener reads the array as the click left it: a repeated key reverses (`0x5ad99e`), a key
+/// promoted from behind keeps its direction (`0x5ad9ab`), and an unknown key is the name's
+/// (`0x5ad8bb`).
+#[test]
+fn sort_whos_listener_reads_the_array_its_click_sorted() {
+    let mut w = client();
+    answer(
+        &mut w,
+        2,
+        2,
+        vec![levelled("Galas", 60), levelled("Erdrin", 12)],
+    );
+    run(
+        &mut w,
+        r#"ORDER = ""
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("WHO_LIST_UPDATE")
+        f:SetScript("OnEvent", function()
+            ORDER = ""
+            for i = 1, GetNumWhoResults() do ORDER = ORDER .. GetWhoInfo(i) .. "," end
+        end)"#,
+    );
+    let click = |w: &mut Who, key: &str| -> String {
+        run(w, &format!("SortWho({key})"));
+        eval(w, "return ORDER")
+    };
+    assert_eq!(click(&mut w, r#""name""#), "Erdrin,Galas,");
+    assert_eq!(click(&mut w, r#""name""#), "Galas,Erdrin,", "reversed");
+    assert_eq!(click(&mut w, r#""level""#), "Erdrin,Galas,");
+    assert_eq!(
+        click(&mut w, r#""name""#),
+        "Galas,Erdrin,",
+        "kept descending"
+    );
+    assert_eq!(
+        click(&mut w, "5"),
+        "Erdrin,Galas,",
+        "the name key, reversed again"
+    );
+}
+
 /// `SetWhoToUI(1)` sends the next answer, three rows or fewer, to `WHO_LIST_UPDATE` and not to
 /// chat (`0x5adf9c`-`0x5adfce`); `SetWhoToUI(0)` sends it back to chat.
 #[test]
@@ -176,7 +224,7 @@ fn set_who_to_ui_routes_the_next_answer() {
         w.app
             .world_mut()
             .run_system(w.feed)
-            .expect("the social feed runs");
+            .expect("the social lane fires");
         let n: i64 = eval(w, "return UPDATES");
         run(w, "UPDATES = 0");
         n
@@ -263,7 +311,7 @@ fn get_who_info_answers_unknown_for_an_id_with_no_row() {
     w.app
         .world_mut()
         .run_system(w.feed)
-        .expect("the social feed runs");
+        .expect("the social lane fires");
     let row = |w: &mut Who, name: &str| -> (String, String, String) {
         eval(
             w,
@@ -313,7 +361,7 @@ fn answer(w: &mut Who, displayed: u32, total: u32, entries: Vec<WhoEntry>) {
     w.app
         .world_mut()
         .run_system(w.feed)
-        .expect("the social feed runs");
+        .expect("the social lane fires");
 }
 
 fn levelled(name: &str, level: u32) -> WhoEntry {
@@ -381,8 +429,11 @@ fn the_count_line_prints_the_raw_count() {
         "UNKNOWN" => Some("Unknown".to_string()),
         _ => None,
     };
-    let names = crate::ui_unit::TestNames::english();
-    let lines: Vec<String> = super::feed::printed_lines(social(&w), None, names.names(), &get)
+    let lane = w.app.world().resource::<super::SocialLane>();
+    let Some(super::Heard::Who { raw, wire }) = lane.heard().last() else {
+        panic!("the answer is on the social lane");
+    };
+    let lines: Vec<String> = super::feed::who_lines(wire, *raw, &get)
         .iter()
         .map(|s| s.text().to_string())
         .collect();
@@ -438,7 +489,7 @@ fn the_index_past_the_count_reads_the_next_slot() {
     w.app
         .world_mut()
         .run_system(w.feed)
-        .expect("the social feed runs");
+        .expect("the social lane fires");
     assert_eq!(
         eval::<(i64, i64)>(&mut w, "return GetNumWhoResults()"),
         (0, 0)

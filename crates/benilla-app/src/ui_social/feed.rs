@@ -1,19 +1,17 @@
-//! The social feed: the snapshot the FriendsFrame reads, the list events and the `/who` lines. The
-//! reference resolves races, classes and zones engine-side too, before Lua sees a row (`0x5ae160`).
+//! The social feed: the dungeon table and a new VM's list signals; and the rows the getters read
+//! and the `/who` lines, which the reference resolves engine-side too, races, classes and zones,
+//! before Lua sees a row (`0x5ae160`).
 
 use benilla_formats::AreaTableCatalog;
 use benilla_protocol::messages::WhoEntry;
-use benilla_ui::script::{FriendInfo, IgnoreInfo, SocialState as VmSocial, WhoInfo};
+use benilla_ui::script::{FriendInfo, WhoInfo};
 use bevy::prelude::*;
 
-use crate::area::AreaTableRes;
-use crate::names::NameCache;
-use crate::net::NetCommands;
-use crate::script_calls::VmWith;
-use crate::ui_action::{show_now, ui_error_text, MessageSink, Shown};
-use crate::ui_unit::{NameTables, UnitNames};
+use crate::script_calls::HostedVm;
+use crate::ui_action::Shown;
+use crate::ui_unit::UnitNames;
 
-use super::{row_of, FriendSlot, Heard, ListEvent, Lists, SocialState, Step};
+use super::{FriendSlot, SocialState};
 
 /// The chat-routed `/who` templates. FrameXML never names them: the engine prints these lines
 /// itself. None is a message-catalog row, so they go out through `Shown::unkeyed`, since
@@ -31,64 +29,25 @@ const WHO_KEYS: [&str; 4] = [
 /// raw wire count, not the 50-capped copy (`0x5adf92`).
 const WHO_CHAT_MAX: u32 = 3;
 
-/// What the feed last announced, so the list events fire on edges.
+/// What the feed has given the VM it serves.
 #[derive(Default)]
 pub(super) struct FedSocial {
-    /// Whether the VM has had a snapshot; the first push fires the list events regardless.
+    /// Whether the VM has heard the list events its first feed stands for.
     seeded: bool,
     /// Whether the VM has been given the dungeon table.
     lfg_pushed: bool,
 }
 
-/// Replay what the handlers did that Lua hears, in their order: each list event and line with the
-/// lists as it left them pushed and swapped into the engine, so its listeners read, and their verbs
-/// act on, the list as that packet or callback did (`0x5ae867`, `0x5ae92d`, `0x496720`, inside the
-/// dispatch); then push the lists as they stand, and the `/who` answer's exit.
-#[allow(clippy::too_many_arguments)] // the snapshot's sources, one per table it resolves through
+/// Give a new VM the dungeon table, and fire the list events its first feed stands for: the lists
+/// the handlers left before it was up. The getters read the lists through the call host
+/// ([`super::SocialLive`]), and what the handlers raise fires on the social lane
+/// ([`super::SocialLane`]).
 pub(super) fn feed_social(
-    mut vm: VmWith<ResMut<'static, SocialState>>,
-    names: Res<NameCache>,
-    areas: Option<Res<AreaTableRes>>,
-    unit_names: NameTables,
+    mut vm: HostedVm,
     dungeons: Option<Res<super::LfgDungeonsRes>>,
-    commands: Res<NetCommands>,
-    mut sink: MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedSocial>>,
 ) {
-    let areas = areas.as_deref().map(|a| &a.0);
-    let steps = std::mem::take(&mut vm.own().steps);
-    for Step { mut lists, heard } in steps {
-        vm.turn(|script, mut social| {
-            if let Some(script) = script {
-                script.set_social(view(&lists, &social, areas, unit_names.get()));
-            }
-            social.swap_lists(&mut lists);
-        });
-        vm.run(|script| {
-            let Some(script) = script else {
-                return;
-            };
-            match heard {
-                Heard::Event(ListEvent::Friends) => {
-                    script.fire_event("FRIENDLIST_UPDATE", Vec::new());
-                }
-                Heard::Event(ListEvent::Ignores) => {
-                    script.fire_event("IGNORELIST_UPDATE", Vec::new());
-                }
-                Heard::Line(line) => {
-                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                    let text = ui_error_text(&line, &get).unwrap_or_default();
-                    show_now(script, &mut sink, "ui_social", Shown::keyed(line.key, text));
-                }
-            }
-        });
-        vm.own().swap_lists(&mut lists);
-    }
-    let cache = super::net::CacheNames {
-        names: &names,
-        net: &commands,
-    };
-    vm.feed(|script, mut social, fires| {
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };
@@ -99,89 +58,27 @@ pub(super) fn feed_social(
                 fed.lfg_pushed = true;
             }
         }
-        script.set_social(view(
-            &social.lists(&cache),
-            &social,
-            areas,
-            unit_names.get(),
-        ));
-
-        // A new VM's first feed stands for every list's signal.
         if !fed.seeded {
             fed.seeded = true;
-            fires.post("FRIENDLIST_UPDATE", Vec::new());
-            fires.post("IGNORELIST_UPDATE", Vec::new());
-        }
-        // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]); a sort fires its own event inside `SortWho`.
-        if let Some(raw) = social.who_answer.as_ref().map(|a| a.raw) {
-            if answer_goes_to_the_frame(script.who_to_ui(), raw) {
-                fires.post("WHO_LIST_UPDATE", Vec::new());
-            } else {
-                let printed = {
-                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                    printed_lines(&social, areas, unit_names.get(), &get)
-                };
-                crate::ui_action::show_messages(script, &mut sink, "ui_social", printed);
-            }
-            social.who_answer = None;
+            script.fire_event("FRIENDLIST_UPDATE", Vec::new());
+            script.fire_event("IGNORELIST_UPDATE", Vec::new());
         }
     })
 }
 
-/// The chat lines the last `/who` answer prints when it goes to chat: in wire order, each composed
-/// inside the parse loop (`0x5ae0a1`) before the `qsort` at `0x5ae0e2` orders the array
-/// `GetWhoInfo` reads, then the count line with the raw count (`0x5ae0f1`).
-pub(super) fn printed_lines(
-    social: &SocialState,
-    areas: Option<&AreaTableCatalog>,
-    names: UnitNames<'_>,
-    get: &dyn Fn(&str) -> Option<String>,
-) -> Vec<Shown> {
-    let Some(answer) = &social.who_answer else {
-        return Vec::new();
-    };
-    let wire_order: Vec<WhoInfo> = answer
-        .wire
-        .iter()
-        .map(|e| who_row(e, areas, names))
-        .collect();
-    who_lines(&wire_order, answer.raw, get)
-}
-
-/// The VM's snapshot of `lists`, with the selections as the engine holds them now and the `/who`
-/// answer.
-fn view(
-    lists: &Lists,
-    social: &SocialState,
-    areas: Option<&AreaTableCatalog>,
-    names: UnitNames<'_>,
-) -> VmSocial {
-    VmSocial {
-        friends: friend_rows(lists, areas, names),
-        selected_friend: row_of(lists.slots.iter().map(|s| s.guid), social.selected_friend),
-        ignores: ignore_rows(lists),
-        selected_ignore: row_of(lists.ignores.iter().copied(), social.selected_ignore),
-        who: who_rows(social, areas, names),
-        // The slot `GetWhoInfo(count + 1)` reads; past the 50th there is none in the array.
-        who_next: social
-            .who_slots
-            .get(social.who_count as usize)
-            .map(|e| who_row(e, areas, names)),
-        who_total: social.who_total,
-        // The chain rides along: `SortWho` re-sorts inside the binding.
-        who_sort: social.who_sort.clone(),
-    }
-}
-
 /// Whether an `SMSG_WHO` answer of `raw` records fires `WHO_LIST_UPDATE` (true) or prints chat
 /// lines (false).
-fn answer_goes_to_the_frame(to_ui: bool, raw: u32) -> bool {
+pub(super) fn answer_goes_to_the_frame(to_ui: bool, raw: u32) -> bool {
     to_ui || raw > WHO_CHAT_MAX
 }
 
 /// The chat-routed `/who` output: one line per row in the order given, then the count line
 /// (`0x5ae0f1`).
-fn who_lines(rows: &[WhoInfo], count: u32, get: &dyn Fn(&str) -> Option<String>) -> Vec<Shown> {
+pub(super) fn who_lines(
+    rows: &[WhoInfo],
+    count: u32,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Vec<Shown> {
     use benilla_ui::strings::{fill, Arg};
 
     let chat = |text: String| {
@@ -225,66 +122,29 @@ fn who_lines(rows: &[WhoInfo], count: u32, get: &dyn Fn(&str) -> Option<String>)
     lines
 }
 
-/// The 50 slots as `GetFriendInfo` (`0x5ad060`) reads them, then the 32 bytes after them, which
-/// it reads for index 51 (`0x5ae4b0` bounds at 50 inclusive).
-fn friend_rows(
-    lists: &Lists,
-    areas: Option<&AreaTableCatalog>,
-    names: UnitNames<'_>,
-) -> Vec<FriendInfo> {
-    let mut rows: Vec<FriendInfo> = lists
-        .slots
-        .iter()
-        .map(|slot| friend_row(slot, areas, names))
-        .collect();
-    // `+0x640`: the pending count's low bytes are the online byte and the flags, the dword at
-    // `+0x644` the name, and the first ignore guid and the low half of the second the level, class
-    // and area. Nothing writes `+0x644`: the list's allocation is unzeroed (`SMemAlloc` flags 0 at
-    // `0x5adc60`) and its constructor `0x5aca10` skips it, so the reference reads whatever the heap
-    // held, and benilla holds it null.
-    let ignore = |k: usize| lists.ignores.get(k).copied().unwrap_or(0);
-    rows.push(friend_row(
-        &FriendSlot {
-            online: lists.friends_pending & 0xff != 0,
-            status: (lists.friends_pending >> 8) as u8,
-            name: None,
-            guid: 0,
-            level: ignore(0) as u32,
-            class: (ignore(0) >> 32) as u32,
-            area: ignore(1) as u32,
-        },
-        areas,
-        names,
-    ));
-    rows
-}
-
-/// The 25 ignore slots as `GetIgnoreName` (`0x5ad460`) reads them, then the eight bytes after
-/// them, which it reads for index 26 (`0x5ae583`): the pending count, then `+0x71c`, which nothing
-/// writes. The list's allocation is unzeroed (`SMemAlloc` flags 0 at `0x5adc60`) and its
-/// constructor `0x5aca10` skips it, so the reference reads whatever the heap held, and benilla
-/// holds 0.
-fn ignore_rows(lists: &Lists) -> Vec<IgnoreInfo> {
-    let mut rows: Vec<IgnoreInfo> = lists
-        .ignores
-        .iter()
-        .zip(&lists.ignore_names)
-        .map(|(&guid, name)| IgnoreInfo {
-            name: name.clone().filter(|_| guid != 0),
-            listed: guid != 0,
-        })
-        .collect();
-    rows.push(IgnoreInfo {
-        name: lists.after_ignores_name.clone(),
-        listed: lists.ignores_pending != 0,
-    });
-    rows
+/// The 32 bytes after the 50 slots as a slot, which `GetFriendInfo(51)` reads (`0x5ae4b0` bounds
+/// at 50 inclusive): `+0x640`, the pending count's low bytes, are the online byte and the flags,
+/// the dword at `+0x644` the name, and the first ignore guid and the low half of the second the
+/// level, class and area. Nothing writes `+0x644`: the list's allocation is unzeroed (`SMemAlloc`
+/// flags 0 at `0x5adc60`) and its constructor `0x5aca10` skips it, so the reference reads
+/// whatever the heap held, and benilla holds it null.
+pub(super) fn after_the_slots(social: &SocialState) -> FriendSlot {
+    let ignore = |k: usize| social.ignores.get(k).copied().unwrap_or(0);
+    FriendSlot {
+        online: social.friends_pending & 0xff != 0,
+        status: (social.friends_pending >> 8) as u8,
+        name: None,
+        guid: 0,
+        level: ignore(0) as u32,
+        class: (ignore(0) >> 32) as u32,
+        area: ignore(1) as u32,
+    }
 }
 
 /// One slot's answers: its class looked up in `ChrClasses` (`0x5ad0da`-`0x5ad100`) and its area
 /// in `AreaTable`, a row with a parent naming the parent (`0x5ad10b`-`0x5ad14f`), whatever the
 /// online byte; an id with no row has no name.
-fn friend_row(
+pub(super) fn friend_row(
     slot: &FriendSlot,
     areas: Option<&AreaTableCatalog>,
     names: UnitNames<'_>,
@@ -312,18 +172,6 @@ fn friend_row(
         flags: slot.status,
         listed: slot.guid != 0,
     }
-}
-
-/// The kept `/who` records, resolved, in the array's order, which the chain sorted.
-fn who_rows(
-    social: &SocialState,
-    areas: Option<&AreaTableCatalog>,
-    names: UnitNames<'_>,
-) -> Vec<WhoInfo> {
-    social.who_slots[..social.who_count as usize]
-        .iter()
-        .map(|e| who_row(e, areas, names))
-        .collect()
 }
 
 /// One `/who` row, ids resolved, `None` for an id with no row; the wire carries class before
@@ -355,7 +203,8 @@ pub(super) fn who_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::ClientCommand;
+    use crate::names::NameCache;
+    use crate::net::{ClientCommand, NetCommands};
     use benilla_protocol::messages::{friend_result, FriendEntry, FriendStatusUpdate, WhoResults};
     use benilla_ui::script::UiScript;
 
@@ -376,6 +225,18 @@ mod tests {
 
     fn names(rows: &[WhoInfo]) -> Vec<&str> {
         rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    /// The kept `/who` records, resolved, in the array's order, which the chain sorted.
+    fn who_rows(
+        social: &SocialState,
+        areas: Option<&AreaTableCatalog>,
+        names: UnitNames<'_>,
+    ) -> Vec<WhoInfo> {
+        social.who_slots[..social.who_count as usize]
+            .iter()
+            .map(|e| who_row(e, areas, names))
+            .collect()
     }
 
     /// The reference sorts inside the parse (`0x5ae0e2`), so a list sorted by level stays sorted
@@ -475,7 +336,11 @@ mod tests {
         let vm = benilla_ui::script::UiScript::new().expect("VM");
         vm.run(&String::from_utf8_lossy(&src)).expect("runs clean");
         let get = |key: &str| vm.lua().globals().get::<String>(key).ok();
-        let lines: Vec<String> = printed_lines(&social, None, Default::default(), &get)
+        let Some(super::super::Heard::Who { raw, wire }) = social.heard.last().map(|s| &s.heard)
+        else {
+            panic!("the answer routed: {:?}", social.heard);
+        };
+        let lines: Vec<String> = who_lines(wire, *raw, &get)
             .iter()
             .map(|s| s.text().to_string())
             .collect();

@@ -1,9 +1,9 @@
-//! The friend list through the whole client's host, read by the Lua on the line or the feed after
-//! each packet: `SMSG_FRIEND_LIST` (`0x5ae350`) names a slot only from the cache and signals only
-//! with no name pending, the sort (`0x5ae850`) puts online friends first, `SMSG_FRIEND_STATUS`
-//! (`0x5acab0`) acts through its table (`0x5ace1c`), the name callback (`0x5ace70`) finishes what
-//! a miss left, `GetFriendInfo` (`0x5ad060`) answers every index, and the friend and ignore verbs
-//! act inside their calls.
+//! The friend list through the whole client's host, read by the Lua on the line or the social
+//! lane after each packet: `SMSG_FRIEND_LIST` (`0x5ae350`) names a slot only from the cache and
+//! signals only with no name pending, the sort (`0x5ae850`) puts online friends first,
+//! `SMSG_FRIEND_STATUS` (`0x5acab0`) acts through its table (`0x5ace1c`), the name callback
+//! (`0x5ace70`) finishes what a miss left, `GetFriendInfo` (`0x5ad060`) answers every index, and
+//! the friend and ignore verbs act inside their calls.
 
 use benilla_protocol::messages::FriendStatusUpdate;
 use benilla_protocol::messages::{friend_result, friend_status, FriendEntry, FriendOnline};
@@ -89,7 +89,13 @@ fn client() -> Social {
         )
         .expect("the recorder installs");
     app.world_mut().insert_non_send_resource(script);
-    let feed = app.world_mut().register_system(super::feed::feed_social);
+    // A new VM's first feed stands for every list's signal; the lane fires what the handlers
+    // raise.
+    let seed = app.world_mut().register_system(super::feed::feed_social);
+    app.world_mut()
+        .run_system(seed)
+        .expect("the social feed runs");
+    let feed = app.world_mut().register_system(super::lane::fire_all);
     let mut s = Social { app, rx, feed };
     feed_once(&mut s);
     run(
@@ -103,11 +109,12 @@ fn packets(s: &mut Social, events: Vec<SessionEvent>) {
     crate::net::handlers::dispatch(s.app.world_mut(), events);
 }
 
+/// The social lane's items, fired.
 fn feed_once(s: &mut Social) {
     s.app
         .world_mut()
         .run_system(s.feed)
-        .expect("the social feed runs");
+        .expect("the social lane fires");
 }
 
 fn run(s: &mut Social, lua: &str) {

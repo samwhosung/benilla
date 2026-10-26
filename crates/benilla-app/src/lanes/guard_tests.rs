@@ -363,7 +363,6 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_petition::GuildRegistrarState",
     "::ui_petition::PetitionRecords",
     "::ui_session::latch::InteractLatch",
-    "::ui_social::SocialState",
     // Read, and quiet: `CheckTalentMasterDist` reads the latch through the host and the Accept
     // holds it; the question's `CONFIRM_TALENT_WIPE` fires on the notice lane.
     "::ui_talent_wipe::TalentWipeState",
@@ -435,7 +434,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
     ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
-    ("::ui_social::feed::feed_social", &["names::NameCache", "ui_social::SocialState"]),
     ("::ui_petition::feed::feed_petition", &["names::NameCache", "net::ObjectStore",
         "net::SelfGuid", "ui_petition::GuildRegistrarState", "ui_petition::PetitionRecords",
         "ui_petition::PetitionState"]),
@@ -701,7 +699,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::SummonState",
     "::UiClock",
     "::InteractNpc",
-    "::SocialState",
     "::SkillLines",
     // The talent catalog, which the host's talent getters read.
     "::ui_talent::Talents",
@@ -726,7 +723,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 22] {
+fn lane_types() -> [TypeId; 24] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -765,12 +762,16 @@ fn lane_types() -> [TypeId; 22] {
         TypeId::of::<crate::ui_guild::GuildState>(),
         // The battleground lane: the list, status, log and name-answer packets' signals.
         TypeId::of::<crate::ui_battlefield::BattlefieldLane>(),
+        // The social lane: the friend and ignore list events, their lines and the `/who`
+        // answers, at their packets, and the lists it seats around each.
+        TypeId::of::<crate::ui_social::SocialLane>(),
+        TypeId::of::<crate::ui_social::SocialState>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 22] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 24] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -812,6 +813,8 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 22] {
             "battlefield",
             TypeId::of::<crate::ui_battlefield::BattlefieldLane>(),
         ),
+        ("social", TypeId::of::<crate::ui_social::SocialLane>()),
+        ("social", TypeId::of::<crate::ui_social::SocialState>()),
     ]
 }
 
@@ -984,6 +987,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "quest events",
             "releases",
             "reputation",
+            "social",
             "unit views"
         ]
     );

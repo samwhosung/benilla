@@ -1,14 +1,16 @@
-//! The social API: friends, ignores, `/who` and the looking-for-group pair. The app pushes a
-//! display-ready [`SocialState`] (the reference's formatter `0x5ae160` also resolves names
-//! engine-side). The verbs act inside their calls through the host ([`SocialCall`]), as the
+//! The social API: friends, ignores, `/who` and the looking-for-group pair. The getters read the
+//! friend list and the `/who` array through the lent host at the call, display-ready (the
+//! reference's formatter `0x5ae160` also resolves names engine-side), as the reference's read
+//! them at the call ([`super::social_read`]); with no host free to ask they read the snapshot
+//! [`SocialState`]. The verbs act inside their calls through the host ([`SocialCall`]), as the
 //! reference's send their packets before they return. Selection is engine state in the reference
-//! (guids at FriendList `+0x648` and `+0x720`, read back by `0x5ae510` and `0x5ae630`), so the host
-//! seats the index its call leaves before the verb returns.
+//! (guids at FriendList `+0x648` and `+0x720`, read back by `0x5ae510` and `0x5ae630`), which the
+//! getters read back through the host.
 
 use mlua::{Lua, Value};
 
 use super::binding_abi::{self, bool_or_default, string_arg};
-use super::who_sort::WhoSortChain;
+use super::social_read::{read_live, SocialAnswer, SocialRead};
 use super::Model;
 
 /// One friend slot as `GetFriendInfo` (`0x5ad060`) reads it, its ids resolved; the default is an
@@ -57,7 +59,8 @@ pub struct WhoInfo {
     pub zone: Option<String>,
 }
 
-/// The social snapshot the app pushes whole; the default is a fresh login's.
+/// The social snapshot the getters read with no host free to ask; the default is a fresh
+/// login's.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SocialState {
     /// The 50 friend slots in the engine's order, then the 32 bytes after them, which
@@ -79,8 +82,6 @@ pub struct SocialState {
     pub who_next: Option<WhoInfo>,
     /// The total match count, `GetNumWhoResults`'s second return; it can exceed `who.len()`.
     pub who_total: u32,
-    /// The `/who` sort chain, pushed so `SortWho` can re-sort before its synchronous redraw.
-    pub who_sort: WhoSortChain,
 }
 
 /// A friend, ignore, `/who` or looking-for-group verb past its argument check, which the host
@@ -109,7 +110,7 @@ pub enum SocialCall {
     /// `SendWho(filter)` (`0x5ad3b0` → `0x5aebb0`): the filter's bytes, which the host builds into
     /// `CMSG_WHO` against the tables.
     Who(Vec<u8>),
-    /// `SortWho(sortType)` (`0x5ad890`): the engine's chain takes the click the binding sorted by.
+    /// `SortWho(sortType)` (`0x5ad890`): the engine's chain takes the click and sorts the array.
     SortWho(String),
     /// `LFGQuery(type, entry, class)` (`0x4e9760`) inside its counts: `MSG_LOOKING_FOR_GROUP` with
     /// the criterion word and the class (`0x4e9840`).
@@ -120,7 +121,7 @@ pub enum SocialCall {
 }
 
 impl super::UiScript {
-    /// Replace the social snapshot; firing `FRIENDLIST_UPDATE` and kin is the app's job.
+    /// Replace the social snapshot, what the getters read with no host lent to ask.
     pub fn set_social(&mut self, state: SocialState) {
         self.model_mut().social = state;
     }
@@ -128,14 +129,6 @@ impl super::UiScript {
     /// `SetWhoToUI`'s flag (`0xc2a12c`): whether the next `/who` answer goes to the Who frame.
     pub fn who_to_ui(&self) -> bool {
         self.model_ref().who_to_ui
-    }
-
-    /// Seat the selections a call left, as `GetSelectedFriend` and `GetSelectedIgnore` answer
-    /// them: 1-based, 0 for none.
-    pub fn set_social_selection(&mut self, friend: u32, ignore: u32) {
-        let mut model = self.model_mut();
-        model.social.selected_friend = friend;
-        model.social.selected_ignore = ignore;
     }
 
     /// The friend and ignore calls a harness VM kept ([`Self::keep_calls`]), in call order.
@@ -161,6 +154,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetNumFriends",
         lua.create_function(|lua, ()| {
+            if let Some(SocialAnswer::Count(n)) = read_live(lua, SocialRead::FriendCount) {
+                return Ok(n as i64);
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let slots = model.social.friends.iter().take(FRIEND_SLOTS);
             Ok(slots.take_while(|f| f.listed).count() as i64)
@@ -178,8 +174,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let text = |key: &str| super::glue_core::global_text(lua, key);
             let unknown = text("UNKNOWN");
             let string = |s: &str| lua.create_string(s).map(Value::String);
+            let live = match read_live(lua, SocialRead::Friend(index)) {
+                Some(SocialAnswer::Friend(friend)) => Some(friend.map(std::borrow::Cow::Owned)),
+                _ => None,
+            };
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(friend) = friend_at(&model.social.friends, index) else {
+            let friend = live.unwrap_or_else(|| friend_at(&model.social.friends, index));
+            let Some(friend) = friend else {
                 // `0x5ad1c8`-`0x5ad1fd`.
                 return Ok(mlua::MultiValue::from_vec(vec![
                     string(&unknown)?,
@@ -213,13 +214,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSelectedFriend",
         lua.create_function(|lua, ()| {
+            if let Some(SocialAnswer::Index(i)) = read_live(lua, SocialRead::SelectedFriend) {
+                return Ok(i64::from(i));
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(model.social.selected_friend))
         })?,
     )?;
 
-    // SetSelectedFriend(index): the host stores the slot's guid and seats the index before the
-    // verb returns, as `FriendsList_Update` reads it back on its next line.
+    // SetSelectedFriend(index): the host stores the slot's guid before the verb returns, as
+    // `FriendsList_Update` reads it back on its next line.
     g.set(
         "SetSelectedFriend",
         lua.create_function(|lua, index: Value| {
@@ -346,6 +350,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetNumIgnores",
         lua.create_function(|lua, ()| {
+            if let Some(SocialAnswer::Count(n)) = read_live(lua, SocialRead::IgnoreCount) {
+                return Ok(n as i64);
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let slots = model.social.ignores.iter().take(IGNORE_SLOTS);
             Ok(slots.take_while(|i| i.listed).count() as i64)
@@ -361,11 +368,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetIgnoreName(index)` (`0x85dac8`, `0x5ad48a`).
             let index = binding_abi::index_arg32(lua, index, "Usage: GetIgnoreName(index)")?;
             let slot = index.wrapping_sub(1) as usize;
-            let name = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                (slot <= IGNORE_SLOTS)
-                    .then(|| model.social.ignores.get(slot).and_then(|i| i.name.clone()))
-                    .flatten()
+            // The guid's name through the name cache's own read (`0x55f080`, no callback).
+            let name = match read_live(lua, SocialRead::IgnoreGuid(index)) {
+                Some(SocialAnswer::Guid(0)) => None,
+                Some(SocialAnswer::Guid(guid)) => {
+                    super::live::ask(lua, &super::PlayerNameQuery(guid)).flatten()
+                }
+                _ => {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    (slot <= IGNORE_SLOTS)
+                        .then(|| model.social.ignores.get(slot).and_then(|i| i.name.clone()))
+                        .flatten()
+                }
             };
             let name = name.unwrap_or_else(|| super::glue_core::global_text(lua, "UNKNOWN"));
             lua.create_string(&name)
@@ -376,6 +390,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSelectedIgnore",
         lua.create_function(|lua, ()| {
+            if let Some(SocialAnswer::Index(i)) = read_live(lua, SocialRead::SelectedIgnore) {
+                return Ok(i64::from(i));
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(model.social.selected_ignore))
         })?,
@@ -421,6 +438,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetNumWhoResults",
         lua.create_function(|lua, ()| {
+            if let Some(SocialAnswer::WhoCounts { kept, total }) =
+                read_live(lua, SocialRead::WhoCounts)
+            {
+                return Ok((i64::from(kept), i64::from(total)));
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok((
                 model.social.who.len() as i64,
@@ -441,18 +463,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: GetWhoInfo(index)",
             )?);
             let unknown = super::glue_core::global_text(lua, "UNKNOWN");
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            // `index - 1` against the kept count, unsigned, with `ja` (`0x5ad71a`-`0x5ad71f`): the
-            // count's own slot passes.
-            let slot = (index as u32).wrapping_sub(1) as usize;
-            let who = &model.social.who;
-            let row = match slot.cmp(&who.len()) {
-                std::cmp::Ordering::Less => who.get(slot),
-                // Deviation: after a full 50 the reference reads the 160 bytes past the array
-                // (`0xc2a0f8`, the counts at `0xc2a120` among them); benilla answers the miss.
-                std::cmp::Ordering::Equal => model.social.who_next.as_ref(),
-                std::cmp::Ordering::Greater => None,
+            let live = match read_live(lua, SocialRead::Who(index as u32)) {
+                Some(SocialAnswer::Who(row)) => Some(row.map(std::borrow::Cow::Owned)),
+                _ => None,
             };
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let row = live.unwrap_or_else(|| who_at(&model.social, index as u32));
             // `nil, nil, 0, nil, nil, nil` (`0x5ad836`-`0x5ad862`).
             let Some(row) = row else {
                 return Ok((
@@ -495,19 +511,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SortWho(sortType) (`0x5ad890`): promotes the key in the seven-slot chain, reversing it if
     // it is already in front, sorts the list, and fires `WHO_LIST_UPDATE` synchronously
-    // (`0x5ad9ed`, `SignalEvent` `0x703e50`), so the list redraws before the click's sound. The
-    // engine's chain takes the same click in the call. Returns nothing; an argument neither string
-    // nor number raises with the client's own typo (`0x85db88`, `0x5ad898`'s `0x6f3510` guard).
+    // (`0x5ad9ed`, `SignalEvent` `0x703e50`), so the list redraws before the click's sound: the
+    // host promotes and sorts in the call, and the listeners read the array through it. Returns
+    // nothing; an argument neither string nor number raises with the client's own typo
+    // (`0x85db88`, `0x5ad898`'s `0x6f3510` guard).
     g.set(
         "SortWho",
         lua.create_function(|lua, sort_type: Value| {
             let sort_type = string_arg(lua, sort_type, "Usgae: SortWho(\"type\")")?;
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let model = &mut *model;
-                model.social.who_sort.promote(&sort_type);
-                model.social.who_sort.sort(&mut model.social.who);
-            }
             submit(lua, SocialCall::SortWho(sort_type))?;
             super::tick::fire_event_into(lua, "WHO_LIST_UPDATE", Vec::new());
             Ok(())
@@ -516,8 +527,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SetWhoToUI(flag) (`0x5ad870`): the Who frame passes 0 on load and hide and 1 on show; the
     // flag goes through `GetBoolOrDefault` (`0x5ad877`) with default 0 and is stored in the call
-    // (`0x5ad87c`). Only `SMSG_WHO`'s routing reads it (`0x5adf9c`), and the feed that routes an
-    // answer reads it here.
+    // (`0x5ad87c`). Only `SMSG_WHO`'s routing reads it (`0x5adf9c`), which the social lane runs
+    // as the answer fires.
     g.set(
         "SetWhoToUI",
         lua.create_function(|lua, flag: Option<Value>| {
@@ -537,6 +548,20 @@ const FRIEND_SLOTS: usize = 50;
 /// The ignore list's slot count (`0x19`).
 const IGNORE_SLOTS: usize = 25;
 
+/// The snapshot's `/who` slot `index − 1` against the kept count, unsigned, with `ja`
+/// (`0x5ad71a`-`0x5ad71f`): the count's own slot passes.
+fn who_at(social: &SocialState, index: u32) -> Option<std::borrow::Cow<'_, WhoInfo>> {
+    let slot = index.wrapping_sub(1) as usize;
+    let who = &social.who;
+    match slot.cmp(&who.len()) {
+        std::cmp::Ordering::Less => who.get(slot),
+        // `None` after a full 50, the miss the live read answers for the bytes past the array.
+        std::cmp::Ordering::Equal => social.who_next.as_ref(),
+        std::cmp::Ordering::Greater => None,
+    }
+    .map(std::borrow::Cow::Borrowed)
+}
+
 /// `GetFriendSlot` (`0x5ae4b0`) on `index − 1`: a slot up to 50 inclusive, compared unsigned, so 0
 /// and every negative index find none; one the snapshot does not hold is an empty slot.
 fn friend_at(friends: &[FriendInfo], index: u32) -> Option<std::borrow::Cow<'_, FriendInfo>> {
@@ -549,118 +574,33 @@ fn friend_at(friends: &[FriendInfo], index: u32) -> Option<std::borrow::Cow<'_, 
 
 #[cfg(test)]
 mod tests {
-    use super::{SocialCall, SocialState, WhoInfo};
+    use super::SocialCall;
     use crate::script::UiScript;
 
-    fn who(name: &str, level: u32, zone: &str) -> WhoInfo {
-        WhoInfo {
-            name: name.to_string(),
-            guild: String::new(),
-            level,
-            race: Some("Human".to_string()),
-            class: Some("Warrior".to_string()),
-            zone: Some(zone.to_string()),
-        }
-    }
-
-    /// Two `/who` hits and a `WHO_LIST_UPDATE` handler that records the order it sees.
-    fn seated() -> UiScript {
+    /// `SortWho` hands the click to the host and fires `WHO_LIST_UPDATE` before it returns, once
+    /// per click (`0x5ad9ed`); it returns nothing (`0x5ad9f8`). A number is stringified; anything
+    /// else raises with the client's misspelt usage string (`0x85db88`) and fires nothing.
+    #[test]
+    fn sort_who_hands_its_click_to_the_host_and_fires_in_the_call() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.run(
             r#"
             fired = 0
-            order = ""
             local f = CreateFrame("Frame", "WhoWatcher")
             f:RegisterEvent("WHO_LIST_UPDATE")
-            f:SetScript("OnEvent", function()
-                fired = fired + 1
-                order = ""
-                for i = 1, GetNumWhoResults() do
-                    order = order .. GetWhoInfo(i) .. ","
-                end
-            end)
+            f:SetScript("OnEvent", function() fired = fired + 1 end)
+            SortWho("name")
             "#,
         )
         .unwrap();
-        s.set_social(SocialState {
-            who: vec![
-                who("Galas", 60, "Elwynn Forest"),
-                who("Erdrin", 12, "Elwynn Forest"),
-            ],
-            who_total: 2,
-            ..Default::default()
-        });
-        s
-    }
-
-    /// A queued event would leave `order` one click stale.
-    #[test]
-    fn sort_who_sorts_in_place_and_fires_the_event_synchronously() {
-        let mut s = seated();
-        assert_eq!(s.eval::<i64>("return fired").unwrap(), 0);
-
-        s.run(r#"SortWho("name")"#).unwrap();
-        assert_eq!(s.eval::<i64>("return fired").unwrap(), 1);
-        assert_eq!(
-            s.eval::<String>("return order").unwrap(),
-            "Erdrin,Galas,",
-            "the handler must already see the sorted list"
-        );
-        assert_eq!(
-            s.take_social_calls(),
-            vec![SocialCall::SortWho("name".into())],
-            "and the engine's chain takes the same click"
-        );
-        // Returns nothing (`0x5ad9f8`, `xor eax,eax; ret`).
+        assert_eq!(s.eval::<i64>("return fired").unwrap(), 1, "inside the call");
         assert_eq!(s.arity(r#"SortWho("name")"#).unwrap(), 0);
-        assert!(s.errors().is_empty(), "{:?}", s.errors());
-    }
-
-    #[test]
-    fn a_repeated_header_click_reverses_and_the_direction_is_remembered() {
-        let s = seated();
-        s.run(r#"SortWho("name")"#).unwrap();
-        assert_eq!(s.eval::<String>("return order").unwrap(), "Erdrin,Galas,");
-
-        s.run(r#"SortWho("name")"#).unwrap();
-        assert_eq!(
-            s.eval::<String>("return order").unwrap(),
-            "Galas,Erdrin,",
-            "the second click on the same key reverses it"
-        );
-
-        // Level ascending puts Erdrin (12) first; name is still descending behind it.
-        s.run(r#"SortWho("level")"#).unwrap();
-        assert_eq!(s.eval::<String>("return order").unwrap(), "Erdrin,Galas,");
-
-        // Back to name, promoted from slot 1: it keeps its descending direction.
-        s.run(r#"SortWho("name")"#).unwrap();
-        assert_eq!(
-            s.eval::<String>("return order").unwrap(),
-            "Galas,Erdrin,",
-            "a key promoted from behind keeps the direction it was left in"
-        );
-        assert_eq!(
-            s.eval::<i64>("return fired").unwrap(),
-            4,
-            "one fire per click"
-        );
-    }
-
-    /// A number is stringified and falls to the name key; anything else raises with the client's
-    /// misspelt usage string (`0x85db88`).
-    #[test]
-    fn sort_who_takes_the_reference_argument_abi() {
-        let mut s = seated();
         s.run("SortWho(5)").unwrap();
         assert_eq!(
-            s.eval::<String>("return order").unwrap(),
-            "Erdrin,Galas,",
-            "an unrecognised key is the name key"
+            s.take_social_calls(),
+            ["name", "name", "5"].map(|k| SocialCall::SortWho(k.into()))
         );
-        let _ = s.take_social_calls();
-
         let err = s.run("SortWho({})").unwrap_err().to_string();
         assert!(
             err.contains(r#"Usgae: SortWho("type")"#),
@@ -668,9 +608,10 @@ mod tests {
         );
         assert_eq!(
             s.eval::<i64>("return fired").unwrap(),
-            1,
-            "a raised call sorts nothing and fires nothing"
+            3,
+            "one fire per click"
         );
+        assert!(s.take_social_calls().is_empty());
     }
 
     #[test]

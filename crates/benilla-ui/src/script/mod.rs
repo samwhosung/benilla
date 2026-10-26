@@ -182,6 +182,7 @@ mod skills;
 mod slash;
 mod slider;
 mod social;
+mod social_read;
 mod sound;
 mod spellbook;
 mod stable;
@@ -408,6 +409,7 @@ pub(crate) use simplehtml::{
 };
 pub use skills::{SkillCall, SkillEntry, SkillLinesNow, SkillSlotWords, SkillWords, SkillsState};
 pub use social::{FriendInfo, IgnoreInfo, SocialCall, SocialState, WhoInfo};
+pub use social_read::{SocialAnswer, SocialRead};
 pub use sound::{MusicRequest, SoundRequest};
 pub use spellbook::{
     resolve_spell_in_books, BookNow, BookSlot, BookSpell, BookTabs, NamedSpell, PetBookState,

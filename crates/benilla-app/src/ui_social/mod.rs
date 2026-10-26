@@ -20,12 +20,16 @@ use crate::ui_script::UiFeed;
 #[cfg(test)]
 mod call_tests;
 mod feed;
+mod lane;
+mod live;
 mod query;
 mod steps;
 #[cfg(test)]
 mod who_tests;
 mod whois;
 
+pub(crate) use lane::SocialLane;
+pub(crate) use live::SocialLive;
 pub(crate) use query::parse as who_query;
 pub(crate) use steps::SocialSteps;
 
@@ -35,14 +39,6 @@ const FRIEND_SLOTS: usize = 50;
 const IGNORE_SLOTS: usize = 25;
 /// The `/who` array's slots (`0xc281b8`, stride `0xa0`; the cap at `0x5adf87`).
 const WHO_SLOTS: usize = 50;
-
-/// An `SMSG_WHO` answer the feed has not routed yet: the raw count (the first dword), which picks
-/// the exit (`0x5adfca`) and fills the count line (`0x5ae0f1`), and every record in wire order,
-/// which the chat exit prints as it reads them (`0x5ae0a1`).
-pub(super) struct WhoAnswer {
-    pub(super) raw: u32,
-    pub(super) wire: Vec<benilla_protocol::messages::WhoEntry>,
-}
 
 /// The name cache (`0xc0e228`) as the list's functions reach it, through `0x55f080`.
 pub(crate) trait Names {
@@ -66,17 +62,22 @@ impl Names for NoNames {
     }
 }
 
-/// The two lists as a signal left them, which its event's listeners read.
+/// The two lists as a step left them: the social lane seats them around the step's listeners
+/// ([`SocialState::swap_lists`]), so the getters and the index verbs read the list the step's
+/// signal left, as the reference's run inside the handler (`0x5ae867`, `0x5ae92d`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Lists {
     slots: Vec<FriendSlot>,
     friends_pending: u32,
     ignores: Vec<u64>,
-    /// Each ignore slot's name as the cache held it, read with no callback (`0x5ad4e5`).
-    ignore_names: Vec<Option<String>>,
     ignores_pending: u32,
-    /// The name of the guid `GetIgnoreName(26)` reads, the pending count (`+0x718`).
-    after_ignores_name: Option<String>,
+}
+
+/// One thing a handler did that Lua hears, with the lists as it left them.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Step {
+    pub(super) heard: Heard,
+    pub(super) lists: Lists,
 }
 
 /// Which list a signal is about: `FRIENDLIST_UPDATE` (`0x15f`, `0x5ae867`) or
@@ -87,20 +88,19 @@ pub(super) enum ListEvent {
     Ignores,
 }
 
-/// What a handler did that Lua hears, in the order it did it: a list event signalled, or a line
-/// shown (`0x496720`).
+/// What a handler did that Lua hears, in the order it did it: a list event signalled, a line
+/// shown (`0x496720`), or an `SMSG_WHO` answer routed.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Heard {
     Event(ListEvent),
     Line(UiError),
-}
-
-/// One thing a handler did that Lua hears, with the lists as it left them: the feed runs its
-/// listeners on those lists, as the reference runs them inside the handler.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct Step {
-    pub(super) lists: Lists,
-    pub(super) heard: Heard,
+    /// The raw count (the first dword), which picks the exit (`0x5adfca`) and fills the count
+    /// line (`0x5ae0f1`), and every record in wire order, resolved, which the chat exit prints as
+    /// it reads them (`0x5ae0a1`).
+    Who {
+        raw: u32,
+        wire: Vec<benilla_ui::script::WhoInfo>,
+    },
 }
 
 /// One friend slot, the 32 bytes at `+0x20·k`.
@@ -130,8 +130,8 @@ struct NameWait {
     ignore: bool,
 }
 
-/// The social session mirror: filled by the social handlers and the calls, read by the feed,
-/// cleared at the world's teardown.
+/// The social session: filled by the social handlers and the calls, read by the getters through
+/// the call host ([`SocialLive`]), cleared at the world's teardown.
 #[derive(Resource)]
 pub(crate) struct SocialState {
     slots: Vec<FriendSlot>,
@@ -153,15 +153,13 @@ pub(crate) struct SocialState {
     /// (`0xc2a124`).
     pub(super) who_count: u32,
     pub(super) who_total: u32,
-    /// The answer the feed routes next.
-    pub(super) who_answer: Option<WhoAnswer>,
-    /// The `/who` sort chain (`SortWho`'s seven `{key, dir}` slots at `0xc2817c`), pushed with the
-    /// rows so the binding can re-sort synchronously.
+    /// The `/who` sort chain (`SortWho`'s seven `{key, dir}` slots at `0xc2817c`).
     who_sort: benilla_ui::script::WhoSortChain,
     /// The lookups that missed, in the order made.
     waits: Vec<NameWait>,
-    /// The list events and lines since the last feed, in order, each with the lists it left.
-    pub(super) steps: Vec<Step>,
+    /// What the running handler raised, in order, each with the lists it left, which it stamps
+    /// onto the social lane as it returns ([`SocialLane::take`]).
+    pub(super) heard: Vec<Step>,
 }
 
 impl Default for SocialState {
@@ -176,10 +174,9 @@ impl Default for SocialState {
             who_slots: vec![Default::default(); WHO_SLOTS],
             who_count: 0,
             who_total: 0,
-            who_answer: None,
             who_sort: Default::default(),
             waits: Vec::new(),
-            steps: Vec::new(),
+            heard: Vec::new(),
         }
     }
 }
@@ -202,36 +199,30 @@ impl SocialState {
         guid != 0 && self.ignores.contains(&guid)
     }
 
-    /// The lists as they stand, the ignores' names read from the cache.
-    pub(super) fn lists(&self, names: &dyn Names) -> Lists {
-        Lists {
+    /// Signal `event` with the lists as they stand, for the lane to fire in order.
+    fn signal(&mut self, event: ListEvent) {
+        self.step(Heard::Event(event));
+    }
+
+    /// Show `line` with the lists as they stand, for the lane to show in order.
+    fn line(&mut self, line: UiError) {
+        self.step(Heard::Line(line));
+    }
+
+    fn step(&mut self, heard: Heard) {
+        let lists = Lists {
             slots: self.slots.clone(),
             friends_pending: self.friends_pending,
             ignores: self.ignores.clone(),
-            ignore_names: self.ignores.iter().map(|&g| names.read(g)).collect(),
             ignores_pending: self.ignores_pending,
-            after_ignores_name: names.read(u64::from(self.ignores_pending)),
-        }
+        };
+        self.heard.push(Step { heard, lists });
     }
 
-    /// Signal `event` with the lists as they stand, for the feed to fire in order.
-    fn signal(&mut self, event: ListEvent, names: &dyn Names) {
-        self.step(Heard::Event(event), names);
-    }
-
-    /// Show `line` with the lists as they stand, for the feed to show in order.
-    fn line(&mut self, line: UiError, names: &dyn Names) {
-        self.step(Heard::Line(line), names);
-    }
-
-    fn step(&mut self, heard: Heard, names: &dyn Names) {
-        let lists = self.lists(names);
-        self.steps.push(Step { lists, heard });
-    }
-
-    /// Trade the lists for `lists`: the feed swaps a step's lists in around its listeners, so the
-    /// verbs they call act on the list their signal left (`FriendsFrame.lua`'s `FriendsList_Update`
-    /// selects friend 1 inside the event), and swaps them back after. No verb writes the lists.
+    /// Trade the lists for `lists`: the lane swaps a step's lists in around its listeners, so the
+    /// getters read, and the verbs they call act on, the list their signal left (`FriendsFrame.lua`'s
+    /// `FriendsList_Update` selects friend 1 inside the event, `0x5ae4d0`), and swaps them back
+    /// after. No verb writes the lists.
     pub(super) fn swap_lists(&mut self, lists: &mut Lists) {
         std::mem::swap(&mut self.slots, &mut lists.slots);
         std::mem::swap(&mut self.friends_pending, &mut lists.friends_pending);
@@ -284,16 +275,16 @@ impl SocialState {
 
     /// `SortFriends` (`0x5ae850`): the CRT `qsort` of the 50 slots with `CompareFriends`
     /// (`0x5ae870`), then `FRIENDLIST_UPDATE` (`0x5ae867`).
-    fn sort_friends(&mut self, names: &dyn Names) {
+    fn sort_friends(&mut self) {
         benilla_ui::crt::qsort(&mut self.slots, compare_friends);
-        self.signal(ListEvent::Friends, names);
+        self.signal(ListEvent::Friends);
     }
 
     /// `SortIgnores` (`0x5ae910`): the CRT `qsort` of the 25 guids with `CompareIgnoredByName`
     /// (`0x5ae940`), then `IGNORELIST_UPDATE` (`0x5ae92d`).
     fn sort_ignores(&mut self, names: &dyn Names) {
         benilla_ui::crt::qsort(&mut self.ignores, |&a, &b| compare_ignores(a, b, names));
-        self.signal(ListEvent::Ignores, names);
+        self.signal(ListEvent::Ignores);
     }
 
     /// `DecrementPendingFriendNames` (`0x5aeb70`) and `DecrementPendingIgnoreNames` (`0x5aeb90`):
@@ -312,7 +303,7 @@ impl SocialState {
             if ignore {
                 self.sort_ignores(names);
             } else {
-                self.sort_friends(names);
+                self.sort_friends();
             }
         }
     }
@@ -392,7 +383,7 @@ impl SocialState {
             self.slots[k].name = name;
         }
         if self.friends_pending == 0 {
-            self.sort_friends(names);
+            self.sort_friends();
         }
     }
 
@@ -489,7 +480,7 @@ impl SocialState {
                 true
             }
             // Every other result shows its line alone.
-            _ => return self.line(UiError::key(key), names),
+            _ => return self.line(UiError::key(key)),
         };
         let Some(name) = self.look_up(guid, Some(key), ignore, names) else {
             return;
@@ -502,9 +493,9 @@ impl SocialState {
         if ignore {
             self.sort_ignores(names);
         } else {
-            self.sort_friends(names);
+            self.sort_friends();
         }
-        self.line(named_line(key, &name), names);
+        self.line(named_line(key, &name));
     }
 
     /// The name cache's answer for `guid`, `found` or refused: each lookup that missed it runs its
@@ -534,12 +525,12 @@ impl SocialState {
                     }
                     self.decrement_pending(wait.ignore, names);
                     if let Some(key) = wait.line {
-                        self.line(named_line(key, name), names);
+                        self.line(named_line(key, name));
                     }
                 }
                 None => {
                     if wait.line.is_some() {
-                        self.line(UiError::key("ERR_FRIEND_ERROR"), names);
+                        self.line(UiError::key("ERR_FRIEND_ERROR"));
                     }
                     if wait.ignore {
                         send(ClientCommand::DelIgnore { guid });
@@ -565,8 +556,8 @@ impl SocialState {
     }
 
     /// `SMSG_WHO` (`0x5adf60`): the kept count is the raw count capped at 50 (`0x5adf87`), the
-    /// first 50 records are stored over the array's first slots (`0x5ae045`), and the kept ones
-    /// are sorted by the chain (`0x5ae0e2`).
+    /// first 50 records are stored over the array's first slots (`0x5ae045`), the kept ones are
+    /// sorted by the chain (`0x5ae0e2`), and the answer is routed to its exit (`0x5adfca`).
     fn apply_who(
         &mut self,
         results: benilla_protocol::messages::WhoResults,
@@ -579,9 +570,14 @@ impl SocialState {
             *slot = entry.clone();
         }
         self.sort_who(areas, names);
-        self.who_answer = Some(WhoAnswer {
+        let wire = results
+            .entries
+            .iter()
+            .map(|e| feed::who_row(e, areas, names))
+            .collect();
+        self.step(Heard::Who {
             raw: results.displayed,
-            wire: results.entries,
+            wire,
         });
     }
 
@@ -701,8 +697,8 @@ fn name_pushes(key: &str) -> usize {
 }
 
 /// The social packet handlers: the friend and ignore lists, the result codes, the name answers
-/// the lists waited on, and the `/who` answer. The lines queue by key for the action feed, and the
-/// list events fire from the social feed.
+/// the lists waited on, and the `/who` answer. What each raises goes on the social lane as it
+/// returns ([`SocialLane`]).
 pub(crate) mod net {
     use super::*;
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -746,6 +742,7 @@ pub(crate) mod net {
     fn on_friend_list(
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
+        mut lane: ResMut<SocialLane>,
         names: Res<NameCache>,
         net: Res<NetCommands>,
     ) {
@@ -755,12 +752,14 @@ pub(crate) mod net {
                 net: &net,
             };
             friend_list(&mut social, friends, &names);
+            lane.take(&mut social);
         }
     }
 
     fn on_ignore_list(
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
+        mut lane: ResMut<SocialLane>,
         names: Res<NameCache>,
         net: Res<NetCommands>,
     ) {
@@ -770,12 +769,14 @@ pub(crate) mod net {
                 net: &net,
             };
             ignore_list(&mut social, guids, &names);
+            lane.take(&mut social);
         }
     }
 
     fn on_friend_status(
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
+        mut lane: ResMut<SocialLane>,
         names: Res<NameCache>,
         net: Res<NetCommands>,
     ) {
@@ -785,6 +786,7 @@ pub(crate) mod net {
                 net: &net,
             };
             social.apply_friend_status(update, &names);
+            lane.take(&mut social);
         }
     }
 
@@ -793,6 +795,7 @@ pub(crate) mod net {
     fn on_player_name(
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
+        mut lane: ResMut<SocialLane>,
         names: Res<NameCache>,
         net: Res<NetCommands>,
     ) {
@@ -805,17 +808,20 @@ pub(crate) mod net {
             social.apply_player_name(guid, found, &cache, &mut |c| {
                 let _ = net.0.send(c);
             });
+            lane.take(&mut social);
         }
     }
 
     fn on_who(
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
+        mut lane: ResMut<SocialLane>,
         areas: Option<Res<crate::area::AreaTableRes>>,
         unit_names: crate::ui_unit::NameTables,
     ) {
         if let SessionEvent::WhoResults(results) = ev {
             social.apply_who(results, areas.as_deref().map(|a| &a.0), unit_names.get());
+            lane.take(&mut social);
         }
     }
 
@@ -842,13 +848,14 @@ pub(crate) mod net {
     }
 }
 
-/// The social window's session: the wire mirror and the VM feed; the verbs act in their calls
-/// ([`SocialSteps`]).
+/// The social window's session: the handlers, the social lane, the getters' live reads
+/// ([`SocialLive`]) and the VM feed; the verbs act in their calls ([`SocialSteps`]).
 pub(crate) struct UiSocialPlugin;
 
 impl Plugin for UiSocialPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        lane::add_social_lane(app);
         // Category 0 (`0x5adcfd`).
         app.console_command_in_call(
             "whois",
@@ -962,7 +969,7 @@ mod tests {
         social.apply_friend_status(status(friend_result::REMOVED, 8), &Cached);
         assert_eq!(guids(&social), [7]);
         assert!(social.slots[49].name.is_none());
-        let events = std::mem::take(&mut social.steps)
+        let events = std::mem::take(&mut social.heard)
             .into_iter()
             .filter(|s| matches!(s.heard, Heard::Event(_)))
             .count();
