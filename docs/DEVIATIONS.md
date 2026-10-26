@@ -183,8 +183,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
-- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:919`](../crates/benilla-app/src/net/objects/update.rs#L919))
-- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:931`](../crates/benilla-app/src/net/objects/update.rs#L931))
+- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:925`](../crates/benilla-app/src/net/objects/update.rs#L925))
+- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:937`](../crates/benilla-app/src/net/objects/update.rs#L937))
 
 #### no_install
 
@@ -398,7 +398,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_mirror
 
-- A type with no bar is dropped, because no bar appears either way: the reference fires it as `"UNKNOWN"` (`0x5e7ae0`) and `MirrorTimer_Show` errors on its nil colour before `Show()`. vmangos's `NUM_CLIENT_TIMERS` keeps its fourth timer off the wire. ([`src/ui_mirror.rs:66`](../crates/benilla-app/src/ui_mirror.rs#L66))
+- A type with no bar is dropped, because no bar appears either way: the reference fires it as `"UNKNOWN"` (`0x5e7ae0`) and `MirrorTimer_Show` errors on its nil colour before `Show()`. vmangos's `NUM_CLIENT_TIMERS` keeps its fourth timer off the wire. ([`src/ui_mirror.rs:145`](../crates/benilla-app/src/ui_mirror.rs#L145))
 
 #### ui_models
 
