@@ -457,7 +457,33 @@ fn manifest_in(dir: &Path, name: &str) -> Option<String> {
 
 /// The AddOn API's registry row for one discovered addon.
 fn info_for(addon: &Addon) -> benilla_ui::script::AddOnInfo {
-    info_from_toc(&addon.name, &addon.toc, addon.is_chain())
+    let mut info = info_from_toc(&addon.name, &addon.toc, addon.is_chain());
+    info.url = secure_url(&addon.name, &addon.toc, |req| addon.read(req));
+    info
+}
+
+/// The `.url` file a `## Secure` addon is registered with: `Interface\AddOns\<name>\<name>.url`
+/// (`0x51d3f4` tests the flag, `0x51d4c0` formats the path at `0x853878`) is read whole, and
+/// `[rec+0x30]` (`0x51d540`) takes a copy of what follows its first `=` with the trailing CR, LF
+/// and spaces cut (`0x51d52b`-`0x51d56b`). The server's reply can replace it (`0x51db6a`). An addon
+/// that does not claim `## Secure` reads no file, and a file without `=` leaves none.
+pub(crate) fn secure_url(
+    name: &str,
+    toc: &Toc,
+    read: impl FnOnce(&str) -> Option<Vec<u8>>,
+) -> Option<String> {
+    if !toc.secure() {
+        return None;
+    }
+    let bytes = read(&format!("{ADDONS_PREFIX}{name}/{name}.url"))?;
+    // A C string: the file's text ends at its first NUL.
+    let text = bytes.split(|&b| b == 0).next().unwrap_or_default();
+    let url = &text[text.iter().position(|&b| b == b'=')? + 1..];
+    let end = url
+        .iter()
+        .rposition(|&b| !matches!(b, b'\r' | b'\n' | b' '))
+        .map_or(0, |i| i + 1);
+    Some(benilla_ui::source::decode(&url[..end]).into_owned())
 }
 
 /// What the signature check `0x6f10f0` answers for an addon, modelled: 3 (the addon is SECURE,
@@ -495,8 +521,8 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
         // From the metadata map, whose `Title` the reader seeds with the folder (`0x51cb3d`).
         title: toc.metadata_value(name, "Title", locale),
         notes: toc.metadata_value(name, "Notes", locale),
-        // The `.toc` has no URL: `0x51e180` answers `[rec+0x30]`, which only the server's
-        // `SMSG_ADDON_INFO` writes (`0x51db6a`).
+        // `0x51e180` answers `[rec+0x30]`: the `.url` file a `## Secure` addon is registered with
+        // ([`secure_url`]) or the server's `SMSG_ADDON_INFO` (`0x51db6a`), never the `.toc`.
         url: None,
         claims_secure: toc.secure(),
         signature_ok: signature_ok(chain, toc),
@@ -2097,8 +2123,8 @@ mod tests {
     /// `Toc_Parse` seeds the metadata map's `Title` with the folder (`0x51cbee`), and
     /// `GetAddOnInfo`'s title and notes (`0x51df20`, `0x51e050`) and `GetAddOnMetadata` read that
     /// map: an addon that never says `## Title` is titled by its folder. The url (`0x51e180`) is
-    /// `[rec+0x30]`, which only `SMSG_ADDON_INFO` writes (`0x51db6a`), so a `## URL` line gives
-    /// none.
+    /// `[rec+0x30]`, which the `.url` file of a `## Secure` addon and `SMSG_ADDON_INFO` write
+    /// (`0x51d540`, `0x51db6a`), so a `## URL` line gives none.
     #[test]
     fn an_addon_without_a_title_is_titled_by_its_folder_and_the_toc_gives_no_url() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -2138,6 +2164,81 @@ mod tests {
             None
         );
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// A `## Secure` addon's `<Name>.url` is read at registration (`0x51d3f4`, `0x51d4c0`): the
+    /// text after the first `=`, the trailing CR, LF and spaces cut (`0x51d500`). The glue's
+    /// `GetAddOnInfo` shows it; an addon that does not claim `## Secure` reads no file.
+    #[test]
+    fn a_secure_addons_url_file_is_its_registered_url() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("secure-url");
+        let shortcut = [("main.lua", ""), ("Signed.url", "")];
+        write_addon(
+            &home,
+            "Signed",
+            "## Interface: 11200\n## Secure: 1\nmain.lua\n",
+            &shortcut,
+        );
+        std::fs::write(
+            home.join("AddOns/Signed/Signed.url"),
+            "[InternetShortcut]\r\nURL=http://example.invalid/a?b=c \r\n",
+        )
+        .unwrap();
+        write_addon(
+            &home,
+            "Plain",
+            "## Interface: 11200\nmain.lua\n",
+            &[
+                ("main.lua", ""),
+                ("Plain.url", "URL=http://example.invalid/p\n"),
+            ],
+        );
+        // The registry row the glue's `GetAddOnInfo` and `LaunchAddOnURL` answer the url from.
+        let rows: Vec<_> = discover_in(&home.join("AddOns"))
+            .iter()
+            .map(info_for)
+            .collect();
+        let url = |name: &str| {
+            rows.iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("{name} is registered"))
+                .url
+                .clone()
+        };
+        assert_eq!(
+            url("Signed").as_deref(),
+            Some("http://example.invalid/a?b=c")
+        );
+        assert_eq!(url("Plain"), None, "no `## Secure`, no file read");
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// The parse of `0x51d500` on its own: the first `=` begins the url, a file without one gives
+    /// none, and the text ends at a NUL.
+    #[test]
+    fn the_url_file_parse_takes_what_follows_the_first_equals() {
+        let toc = Toc::parse("## Secure: 1\n");
+        let url = |file: &[u8]| {
+            secure_url("A", &toc, |req| {
+                assert_eq!(req, "Interface/AddOns/A/A.url");
+                Some(file.to_vec())
+            })
+        };
+        assert_eq!(url(b"URL=x").as_deref(), Some("x"));
+        assert_eq!(
+            url(b"[InternetShortcut]\r\nURL=http://h/\r\n").as_deref(),
+            Some("http://h/")
+        );
+        assert_eq!(url(b"a=b=c  \n\n").as_deref(), Some("b=c"));
+        assert_eq!(url(b"URL=").as_deref(), Some(""));
+        assert_eq!(url(b"no equals here"), None);
+        assert_eq!(url(b"URL=x\0=y").as_deref(), Some("x"));
+        assert_eq!(secure_url("A", &Toc::parse(""), |_| panic!("read")), None);
+        assert_eq!(secure_url("A", &toc, |_| None), None, "a missing file");
     }
 
     /// `GetAddOnMetadata` (`0x48e530` through `0x51e220`) reads the record's metadata map, which

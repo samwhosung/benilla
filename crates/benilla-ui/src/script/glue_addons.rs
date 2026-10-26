@@ -174,8 +174,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 lua_str(lua, &a.name)?,
                 opt_str(lua, &a.title)?,
                 opt_str(lua, &a.notes)?,
-                // `0x51e180`: the server's url, written only by `SMSG_ADDON_INFO` (`0x51db6a`); nil
-                // when empty or for a banned addon (`0x51e203`-`0x51e20e`).
+                // `0x51e180`: `[rec+0x30]`, the `.url` file read at registration (`0x51d540`) or
+                // `SMSG_ADDON_INFO`'s (`0x51db6a`); nil when empty or for a banned addon
+                // (`0x51e203`-`0x51e20e`).
                 a.url
                     .as_ref()
                     .filter(|u| !u.is_empty() && a.security != AddonSecurity::Banned)

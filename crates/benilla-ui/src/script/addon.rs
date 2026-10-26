@@ -324,7 +324,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // In-game `0x48e390` returns seven: `name, title, notes, enabled, loadable, reason,
     // security`, the flags the number 1 or nil (`lua_pushnumber` via `0x6f3810`). The glue's
-    // `0x46d460` returns eight, `url` fourth, from `0x51e180`: the server's, never the `.toc`'s.
+    // `0x46d460` returns eight, `url` fourth, from `0x51e180`: the `.url` file's or the server's, never the `.toc`'s.
     // In-game no verb returns it.
     g.set(
         "GetAddOnInfo",
