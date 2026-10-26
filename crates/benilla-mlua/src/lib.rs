@@ -183,7 +183,8 @@ fn raise_panic(vm: &mut Vm, payload: Box<dyn Any + Send>) -> LuaError {
         p.retain(|&t, e| e.2 != id || vm.heap.user_tag(e.3) == Some(t));
         p.insert(tag, (Some(payload), text, id, r));
     });
-    vm.throw(u)
+    // A panic is no Lua error: it runs no error function, which could swallow it, on its way out.
+    LuaError { value: u }
 }
 
 /// The metatable of panic values, made once per VM and kept in its registry.
@@ -996,9 +997,20 @@ impl Lua {
 
     /// Call `f` protected, from the host: its results, or its error.
     pub(crate) fn call_raw(&self, f: benilla_lua::Value, args: MultiValue) -> Result<MultiValue> {
+        self.call_raw_with(f, args, None)
+    }
+
+    /// [`Lua::call_raw`] with `handler` as the call's error function (`Vm::pcall_value_with`).
+    fn call_raw_with(
+        &self,
+        f: benilla_lua::Value,
+        args: MultiValue,
+        handler: Option<&Function>,
+    ) -> Result<MultiValue> {
         let argv: Vec<benilla_lua::Value> = args.iter().map(|v| self.unwrap(v)).collect();
+        let h = handler.map(|h| self.unref(&h.0));
         // The arguments' handles stay alive until the values are on the VM's stack.
-        let r = self.vm().pcall_value(f, &argv, -1);
+        let r = self.vm().pcall_value_with(f, &argv, -1, h);
         drop(args);
         match r {
             Ok(vals) => Ok(vals.into_iter().map(|v| self.wrap(v)).collect()),
@@ -1019,14 +1031,21 @@ impl Lua {
     /// Call `func`, protected and with no arguments, while each named global holds the value
     /// paired with it, each earlier value put back after: the 1.12 script handler's convention
     /// (`Vm::call_with_globals`) in one VM call, without a handle per global read or written.
-    pub fn call_with_globals(&self, func: &Function, globals: &[(&str, Value)]) -> Result<()> {
+    /// `handler` is the call's error function, run at the raise as `lua_pcall`'s `errfunc` is.
+    pub fn call_with_globals(
+        &self,
+        func: &Function,
+        globals: &[(&str, Value)],
+        handler: Option<&Function>,
+    ) -> Result<()> {
         let f = self.unref(&func.0);
+        let h = handler.map(|h| self.unref(&h.0));
         let sets: Vec<(benilla_lua::value::StrRef, benilla_lua::Value)> = globals
             .iter()
             .map(|(name, v)| (self.vm().heap.intern(name.as_bytes()), self.unwrap(v)))
             .collect();
         self.vm()
-            .call_with_globals(f, &sets)
+            .call_with_globals(f, &sets, h)
             .map_err(|e| self.error_from(e))
     }
 
@@ -1713,6 +1732,20 @@ impl Function {
         let lua = &self.0.lua();
         let a = args.into_lua_multi(lua)?;
         let r = lua.call_raw(self.0.get(), a)?;
+        R::from_lua_multi(r, lua)
+    }
+
+    /// [`Function::call`] with `handler` as its error function, as `lua_pcall` takes an
+    /// `errfunc`: it runs at the raise, before the stack unwinds, and its answer is the error.
+    /// Not mlua's API: benilla's own, for the 1.12 script runners.
+    pub fn call_under<R: FromLuaMulti>(
+        &self,
+        handler: &Function,
+        args: impl IntoLuaMulti,
+    ) -> Result<R> {
+        let lua = &self.0.lua();
+        let a = args.into_lua_multi(lua)?;
+        let r = lua.call_raw_with(self.0.get(), a, Some(handler))?;
         R::from_lua_multi(r, lua)
     }
 

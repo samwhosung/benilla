@@ -670,12 +670,24 @@ impl Vm {
         args: &[Value],
         nres: i32,
     ) -> Result<Vec<Value>, Value> {
+        self.pcall_value_with(f, args, nres, None)
+    }
+
+    /// [`Vm::pcall_value`] under an error function, `lua_pcall`'s `errfunc`: `handler` runs at
+    /// the raise, before the stack unwinds ([`Vm::throw`]), and its answer is the error.
+    pub fn pcall_value_with(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        nres: i32,
+        handler: Option<Value>,
+    ) -> Result<Vec<Value>, Value> {
         let func_idx = self.top;
         self.ensure(func_idx + args.len() + 1);
         self.stack[func_idx] = f;
         self.stack[func_idx + 1..func_idx + 1 + args.len()].copy_from_slice(args);
         self.top = func_idx + 1 + args.len();
-        match self.pcall_at(func_idx, args.len(), nres, None) {
+        match self.pcall_at(func_idx, args.len(), nres, handler) {
             Ok(()) => {
                 let out = self.stack[func_idx..self.top].to_vec();
                 self.top = func_idx;
@@ -690,13 +702,15 @@ impl Vm {
     /// `lua_getglobal` and `lua_setglobal` do; each one's earlier value is put back after the
     /// call, after an error too. The earlier values wait on the stack, where a collection inside
     /// the call keeps them. It is the 1.12 script handler's convention (`this`, `event`,
-    /// `arg1..`) in one step. Answers the call's error value, or the first one a read or write
-    /// of the globals raised. `f` and the values must be rooted by the caller, as a host's handles
-    /// root them; the names wait on the stack with the earlier values.
+    /// `arg1..`) in one step, `handler` the call's error function, which runs at the raise with
+    /// the globals still set. Answers the call's error value, or the first one a read or write
+    /// of the globals raised. `f`, `handler` and the values must be rooted by the caller, as a
+    /// host's handles root them; the names wait on the stack with the earlier values.
     pub fn call_with_globals(
         &mut self,
         f: Value,
         globals: &[(StrRef, Value)],
+        handler: Option<Value>,
     ) -> Result<(), Value> {
         let base = self.top;
         let n = globals.len();
@@ -724,7 +738,7 @@ impl Vm {
         let called = set.and_then(|()| {
             let func_idx = self.top;
             self.push(f);
-            match self.pcall_at(func_idx, 0, 0, None) {
+            match self.pcall_at(func_idx, 0, 0, handler) {
                 Ok(()) => Ok(()),
                 Err(e) => Err(e.value),
             }

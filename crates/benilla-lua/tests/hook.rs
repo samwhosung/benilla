@@ -333,7 +333,7 @@ fn an_abort_leaves_the_handler_globals_restored() {
         let f = vm.get_global("Handler");
         let this = vm.str(b"this");
         let v = vm.str(b"inner");
-        let r = vm.call_with_globals(f, &[(this.as_str().unwrap(), v)]);
+        let r = vm.call_with_globals(f, &[(this.as_str().unwrap(), v)], None);
         Ok(vm.ret1(benilla_lua::Value::Bool(r.is_ok())))
     }
     small_stack(|| {

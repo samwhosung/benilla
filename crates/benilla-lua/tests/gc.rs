@@ -184,7 +184,7 @@ fn a_call_with_globals_puts_them_back() {
         (event.as_str().unwrap(), ev),
         (arg1.as_str().unwrap(), Value::Num(7.0)),
     ];
-    let r = vm.call_with_globals(f, &sets);
+    let r = vm.call_with_globals(f, &sets, None);
     assert!(r.is_err(), "the handler's error is the answer");
     assert_eq!(run(&mut vm, "return Seen"), "frame:PLAYER_LOGIN:7");
     assert_eq!(
