@@ -380,3 +380,22 @@ fn the_arrival_signals_each_language_spell_before_entering_the_world() {
     let (_, seen) = arrived(&[PLAIN]);
     assert_eq!(seen, ["PLAYER_ENTERING_WORLD"]);
 }
+
+/// With no active player held, `GetNumLaguages` returns no value (`0x49fb5e` → `0x49fb60`), and
+/// the walk finds nothing.
+#[test]
+fn the_language_count_is_no_value_with_no_player() {
+    let mut c = client();
+    let me = c.app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    c.app
+        .world_mut()
+        .entity_mut(me)
+        .remove::<crate::net::SelfPlayer>();
+    assert_eq!(
+        c.eval::<(usize, usize)>(
+            true,
+            "return table.getn({GetNumLaguages()}), table.getn({GetLanguageByIndex(1)})"
+        ),
+        (0, 0)
+    );
+}

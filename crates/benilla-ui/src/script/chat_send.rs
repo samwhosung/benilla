@@ -57,19 +57,20 @@ impl super::live::LiveQuery for DefaultLanguageQuery {
 
 /// `GetNumLaguages` and `GetLanguageByIndex`'s question of the lent host: the names, in
 /// `Languages.dbc` row order, of the rows the active player understands as of the call, each row
-/// tested by `0x5ec720` (`0x49fb30`, `0x49fbe0`).
+/// tested by `0x5ec720` (`0x49fb30`, `0x49fbe0`); `None` with no active player held (`0x49fb50`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KnownLanguagesQuery;
 
 impl super::live::LiveQuery for KnownLanguagesQuery {
-    type Answer = Vec<String>;
+    type Answer = Option<Vec<String>>;
 }
 
-/// The known languages at the call: the lent host's, else the VM's seat.
-fn known_languages(lua: &Lua) -> Vec<String> {
+/// The known languages at the call, `None` with no active player: the lent host's, else the
+/// VM's seat.
+fn known_languages(lua: &Lua) -> Option<Vec<String>> {
     super::live::ask(lua, &KnownLanguagesQuery).unwrap_or_else(|| {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        model.known_languages.clone()
+        super::battlefield_queue::player_exists(&model).then(|| model.known_languages.clone())
     })
 }
 
@@ -203,11 +204,17 @@ impl super::UiScript {
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // GetNumLaguages(), `0x49fb30`: one number, the known languages. The misspelling is the
-    // reference's registered name (`0x843628`); the correct spelling is nowhere in the binary.
+    // GetNumLaguages(), `0x49fb30`: one number, the known languages, and no value with no active
+    // player (`0x49fb5e` → `0x49fb60`). The misspelling is the reference's registered name
+    // (`0x843628`); the correct spelling is nowhere in the binary.
     lua.globals().set(
         "GetNumLaguages",
-        lua.create_function(|lua, _ignored: MultiValue| Ok(known_languages(lua).len() as i64))?,
+        lua.create_function(|lua, _ignored: MultiValue| {
+            Ok(match known_languages(lua) {
+                Some(known) => MultiValue::from_vec(vec![Value::Integer(known.len() as i64)]),
+                None => MultiValue::new(),
+            })
+        })?,
     )?;
     // GetLanguageByIndex(i), `0x49fbe0`: the `Name_lang` of the i-th known language, positional,
     // never a row number or a language id; past the end it pushes nothing.
@@ -220,7 +227,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 index,
                 "Usage: GetLanguageByIndex(index)",
             )?;
-            let known = known_languages(lua);
+            let known = known_languages(lua).unwrap_or_default();
             let name = index.checked_sub(1).and_then(|i| known.get(i));
             Ok(match name {
                 Some(n) => MultiValue::from_vec(vec![Value::String(lua.create_string(n)?)]),
@@ -726,6 +733,18 @@ mod language_tests {
     #[test]
     fn the_language_walk_is_positional_over_the_known_rows() {
         let mut s = UiScript::new().unwrap();
+        assert_eq!(
+            s.arity("GetNumLaguages()").unwrap(),
+            0,
+            "no player: no value, not 0 (`0x49fb60`)"
+        );
+        s.set_unit(
+            "player",
+            Some(crate::script::UnitState {
+                exists: true,
+                ..Default::default()
+            }),
+        );
         assert_eq!(s.eval::<i64>("return GetNumLaguages()").unwrap(), 0);
         assert_eq!(
             s.arity("GetLanguageByIndex(1)").unwrap(),

@@ -118,6 +118,15 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
+    // The active player, whose language walk the chat's `PLAYER_ENTERING_WORLD` handler counts
+    // (`ChatFrame.lua:2395`), with no value without one (`0x49fb60`).
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
 
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.resolve();

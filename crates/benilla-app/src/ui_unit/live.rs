@@ -107,30 +107,30 @@ impl UnitFeedLive<'_, '_> {
         })
     }
 
-    /// The languages the active player understands as of here, `None` without the tables
-    /// ([`super::known_languages`]).
-    fn known_languages(&self) -> Option<Vec<String>> {
+    /// The languages the active player understands as of here ([`super::known_languages`]),
+    /// `Some(None)` with no player held (`0x49fb5e`), `None` without the tables.
+    fn known_languages(&self) -> Option<Option<Vec<String>>> {
+        let Some((_, store)) = self.player() else {
+            return Some(None);
+        };
         let (actions, spells, languages) = (
             self.actions.as_deref()?,
             self.spells.as_deref()?,
             self.languages.as_deref()?,
         );
-        let store = self.player().map(|(_, s)| s);
         let has_skill_line = |line: u32| {
-            store.is_some_and(|s| {
-                (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
-                    .filter_map(|i| s.0.player_skill(i))
-                    .any(|slot| u32::from(slot.skill_id) == line)
-            })
+            (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
+                .filter_map(|i| store.0.player_skill(i))
+                .any(|slot| u32::from(slot.skill_id) == line)
         };
-        Some(super::known_languages(
+        Some(Some(super::known_languages(
             actions.spells.iter().copied(),
             &spells.catalog,
             self.skill_lines.as_deref().map(|s| &s.catalog),
-            store.map_or((0, 0), |s| s.race_class()),
+            store.race_class(),
             has_skill_line,
             &languages.0,
-        ))
+        )))
     }
 
     /// The active player's race's base language's name as of here (`0x5ec890`, `0x49fcd0`),

@@ -30,6 +30,15 @@ fn chat_menu() -> UiScript {
         load_xml(&s, f);
     }
     s.set_text_measurer(Box::new(super::FixedWidthFont(8.0)));
+    // The active player, whose language walk the chat's `PLAYER_ENTERING_WORLD` handler counts
+    // (`ChatFrame.lua:2395`), with no value without one (`0x49fb60`).
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     let _ = s.errors();
     s
