@@ -182,6 +182,64 @@ fn the_string_setters_gate_their_argument_and_a_number_is_a_string() {
     );
 }
 
+/// The scalar setters gate on `lua_isnumber` and raise their usage line naming the pane
+/// (`SetFacing` `0x76dd6c` → `0x878b5c`, `SetModelScale` `0x76de5c` → `0x878b78`, which says
+/// `SetScale`); `SetPosition` alone is a bare `lua_tonumber` (`0x76dc92`), and `SetFogColor`'s
+/// alpha is 1.0 unless argument 5 is a number (`0x76efb0`).
+#[test]
+fn the_number_setters_gate_their_argument_and_name_the_pane() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(r#"CreateFrame("Model", "NumM", UIParent) NumAnon = CreateFrame("Model")"#)
+        .unwrap();
+    for (call, line) in [
+        ("NumM:SetFacing(nil)", "Usage: NumM:SetFacing(facing)"),
+        ("NumM:SetModelScale(nil)", "Usage: NumM:SetScale(scale)"),
+        ("NumM:SetSequence('x')", "Usage: NumM:SetSequence(sequence)"),
+        (
+            "NumM:SetSequenceTime(1)",
+            "Usage: NumM:SetSequenceTime(sequence, time)",
+        ),
+        (
+            "NumM:SetSequenceTime({}, 1)",
+            "Usage: NumM:SetSequenceTime(sequence, time)",
+        ),
+        ("NumM:SetCamera(true)", "Usage: NumM:SetCamera(index)"),
+        ("NumM:SetFogNear()", "Usage: NumM:SetFogNear(value)"),
+        ("NumAnon:SetFogFar({})", "Usage: <unnamed>:SetFogFar(value)"),
+    ] {
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    assert_eq!(
+        s.eval::<f64>("return NumM:GetModelScale()").unwrap(),
+        1.0,
+        "a raised setter leaves the pane alone"
+    );
+    // A numeric string passes the VM's coercion, and a whitespace-padded one too.
+    s.run(r#"NumM:SetFacing(" 0.5 ") NumM:SetFogNear("2")"#)
+        .unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64)>("return NumM:GetFacing(), NumM:GetFogNear()")
+            .unwrap(),
+        (0.5, 2.0)
+    );
+    // `SetPosition` reads a non-number as 0 and raises nothing.
+    s.run("NumM:SetPosition(nil, {}, '3')").unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64, f64)>("return NumM:GetPosition()")
+            .unwrap(),
+        (0.0, 0.0, 3.0)
+    );
+    // A non-number alpha is the default 1.0, not 0.
+    s.run(r#"NumM:SetFogColor(1, 1, 1, "x")"#).unwrap();
+    assert_eq!(
+        s.eval::<f64>("local _, _, _, a = NumM:GetFogColor() return a")
+            .unwrap(),
+        1.0
+    );
+}
+
 /// The reference's own method tables, entry for entry (`Model` `0x878948`, `PlayerModel`
 /// `0x84f1fc`), checked both ways: every name resolves, and a name a table lacks does not.
 #[test]
