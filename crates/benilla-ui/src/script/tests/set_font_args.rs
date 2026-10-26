@@ -223,6 +223,42 @@ fn a_fontstrings_refused_load_changes_nothing_and_a_zero_height_frees_its_font()
     );
 }
 
+/// A FontString's load hands `0x44d040` its height times its scale over `K2`, and the factory
+/// refuses a size of 0 or less, 1 or more or NaN (`0x5c1afe`, `0x5c1b0e`): `SetFont` answers nil
+/// and keeps the font for a negative, NaN or screen-tall height, where a height below the screen's
+/// 768 loads, as one at the owner's scale does.
+#[test]
+fn a_fontstring_refuses_a_negative_nan_or_screen_tall_height() {
+    let s = receivers();
+    s.run("TFS:SetFont(\"Fonts\\\\FRIZQT__.TTF\", 12)").unwrap();
+    for bad in ["-12", "-0.001", "0/0", "768", "800", "1/0"] {
+        assert!(
+            s.eval::<bool>(&format!(
+                "return TFS:SetFont(\"Fonts\\\\ARIALN.TTF\", {bad}) == nil"
+            ))
+            .unwrap(),
+            "SetFont height {bad} answered nil"
+        );
+        assert_eq!(
+            s.eval::<(Option<String>, f32, String)>("return TFS:GetFont()")
+                .unwrap(),
+            (Some("Fonts\\FRIZQT__.TTF".to_string()), 12.0, String::new()),
+            "height {bad} changed nothing"
+        );
+    }
+    assert!(s
+        .eval::<bool>("return TFS:SetFont(\"Fonts\\\\ARIALN.TTF\", 700) == 1")
+        .unwrap());
+    // The owner's scale multiplies in: 700 at scale 2 is a size past the screen.
+    s.run("THost:SetScale(2)").unwrap();
+    assert!(s
+        .eval::<bool>("return TFS:SetFont(\"Fonts\\\\FRIZQT__.TTF\", 700) == nil")
+        .unwrap());
+    assert!(s
+        .eval::<bool>("return TFS:SetFont(\"Fonts\\\\FRIZQT__.TTF\", 300) == 1")
+        .unwrap());
+}
+
 /// `0x6f1a90` ORs in every name of `0x811b10` found as a case-insensitive substring, so `THICK`
 /// alone sets nothing, and `GetFont` (`0x6f1ad0`) joins every set bit's name in table order with
 /// `", "`.

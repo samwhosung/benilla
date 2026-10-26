@@ -308,7 +308,10 @@ pub(crate) fn load_xml_font_file(
                 .is_some_and(|h| (h.script(u) - height.script(u)).abs() < super::SAME_FONT_HEIGHT)
             && (d.outline, d.monochrome) == (outline, monochrome)
     });
-    if !held && !super::face_loads(&model, path) {
+    if !held
+        && !(super::font_block::fontstring_size_loads(&model, rh, height)
+            && super::face_loads(&model, path))
+    {
         return Ok(false);
     }
     let d = model.region_data.entry(rh).or_default();

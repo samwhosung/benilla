@@ -207,6 +207,22 @@ pub(crate) fn face_loads(model: &Model, path: &str) -> bool {
     !path.is_empty() && model.font_probe.as_ref().is_none_or(|probe| probe(path))
 }
 
+/// Whether a FontString's font load takes this height: `0x7714f0` hands the height in layout units
+/// times its scale `[+0x7c]`, the owner's effective scale, to `0x44d040` (`0x77155d`-`0x77156c`),
+/// which divides by `K2` (`0x41ae50`) and calls `GxuFontCreateFont`, which refuses a size of 0 or
+/// less (`0x5c1b0e`), 1 or more or NaN (`0x5c1afe`); a refusal leaves the string without a font
+/// (`0x771575`). So a negative height never loads, nor one the size of the screen.
+pub(crate) fn fontstring_size_loads(model: &Model, rh: RegionHandle, height: Len) -> bool {
+    let units = model.layout_units();
+    let scale = model
+        .arena
+        .region(rh)
+        .and_then(|r| model.arena.frame(r.owner))
+        .map_or(1.0, |f| f.effective_scale);
+    let size = height.layout(units) * scale / units.k2();
+    size > 0.0 && size < 1.0
+}
+
 /// The tolerance both XML font legs read a held height as unchanged within, 2⁻²² (`0x8029d4`, at
 /// the FontString's `0x77152a` and the Font's `0x783e4d`).
 pub(crate) const SAME_FONT_HEIGHT: f32 = 1.0 / 4_194_304.0;
@@ -306,11 +322,14 @@ pub(super) fn install(
                     .get(&rh)
                     .map(|d| (d.font_path.clone(), d.font_height, d.outline, d.monochrome));
                 let load = match kind {
-                    // A FontString loads for any height but 0 (`0x77154d`-`0x77155b`); 0 skips the
-                    // load and frees its font (`0x7715b3`), which still answers 1. What a negative
-                    // height does inside the load (`0x44d040`) is untraced: the probe judges it.
+                    // A FontString tries any height but 0 (`0x77154d`-`0x77155b`); 0 skips the
+                    // load and frees its font (`0x7715b3`), which still answers 1. The load
+                    // refuses a size outside (0, 1) of the screen ([`fontstring_size_loads`]).
                     FontKind::FontString if height == 0.0 => Load::Freed,
-                    FontKind::FontString => Load::verdict(face_loads(&model, &path)),
+                    FontKind::FontString => Load::verdict(
+                        fontstring_size_loads(&model, rh, Len::Script(height))
+                            && face_loads(&model, &path),
+                    ),
                     // The shared path answers nil for a height of 0 or less without loading
                     // (`0x79f2f1`-`0x79f2ff`).
                     FontKind::Instance => Load::verdict(height > 0.0 && face_loads(&model, &path)),

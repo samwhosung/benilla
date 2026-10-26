@@ -585,6 +585,42 @@ fn a_font_element_reads_its_flags_only_beside_its_own_font_file() {
 
 const NOPE: &str = r"Fonts\NOPE.TTF";
 
+/// A FontString's `font=` file loads through the string's own `SetFont` (`0x771214` →
+/// `0x7714f0`), whose factory refuses a size at or past the screen's height (`0x5c1afe`): the
+/// string keeps the font it follows and the failure is logged like a missing file.
+#[test]
+fn an_xml_font_file_at_the_screens_height_does_not_load() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="TallParent" font="Fonts\FRIZQT__.TTF" virtual="true">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+            </Font>
+            <Frame name="TallHost">
+                <Layers><Layer>
+                    <FontString name="TallString" inherits="TallParent" font="Fonts\ARIALN.TTF">
+                        <FontHeight><AbsValue val="900"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    assert_eq!(
+        s.eval::<String>("local f, h = TallString:GetFont() return f .. ' ' .. h")
+            .unwrap(),
+        r"Fonts\FRIZQT__.TTF 12.000000298023"
+    );
+    assert!(
+        has_line(
+            &report,
+            r"FontString TallString: Unable to load font file Fonts\ARIALN.TTF"
+        ),
+        "{:?}",
+        report.warnings
+    );
+}
+
 /// `0x770f40`, `0x783c30`: a `font=` file that fails to load writes nothing, is logged
 /// (`0x878dc8`, `0x87a4c8`) and the node goes on to `spacing`, so a FontString or a Font keeps the
 /// font it follows, and keeps following it. The font already held skips the load, keeps its
