@@ -2,12 +2,19 @@
 //! raise them and what their buttons do, for the pet trainer's unlearn, the instance boot
 //! countdown, the area spirit healer's wave, the battleground queue and the meeting stone.
 //! A meeting stone's click runs the stone's own use slot, which refuses a join client-side or
-//! sends `CMSG_MEETINGSTONE_JOIN`, never the shared `CMSG_GAMEOBJ_USE`.
+//! sends `CMSG_MEETINGSTONE_JOIN`, never the shared `CMSG_GAMEOBJ_USE`. The handlers signal on the
+//! dialogs' lane ([`lane`]) and the getters read the state live through the host ([`live`]).
+
+mod lane;
+mod live;
+
+pub(crate) use lane::{add_dialog_lane, DialogLane, DialogSignal};
+pub(crate) use live::DialogLive;
 
 use std::time::Instant;
 
 use benilla_protocol::messages::{BattlefieldStatus, MeetingStoneNotice};
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
@@ -27,18 +34,16 @@ use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 pub(crate) struct PetUnlearnState {
     npc: Option<u64>,
     cost: u32,
-    ask: bool,
 }
 
 impl PetUnlearnState {
-    /// The inbound `SMSG_PET_UNLEARN_CONFIRM`: latch and owe the dialog.
+    /// The inbound `SMSG_PET_UNLEARN_CONFIRM`: the latch (`0x5dfc41`-`0x5dfc5a`).
     pub(crate) fn ask(&mut self, npc: u64, cost: u32) {
         self.npc = Some(npc);
         self.cost = cost;
-        self.ask = true;
     }
 
-    fn pending(&self) -> Option<u64> {
+    pub(crate) fn pending(&self) -> Option<u64> {
         self.npc
     }
 }
@@ -50,40 +55,39 @@ impl NpcSession for PetUnlearnState {
     fn close(&mut self) {
         self.npc = None;
         self.cost = 0;
-        self.ask = false;
     }
 }
 
-/// The event a boot packet owes the UI.
-#[derive(Debug, PartialEq, Clone, Copy)]
-enum BootEdge {
-    Start,
-    Stop,
-}
-
-/// The instance-boot clock (`[0xb4e34c]`), and what the last packet owes the UI.
+/// The instance-boot clock (`[0xb4e34c]`).
 #[derive(Resource, Default)]
 pub(crate) struct InstanceBoot {
     deadline: Option<Instant>,
-    events: Vec<BootEdge>,
-    errors: Vec<&'static str>,
 }
 
 impl InstanceBoot {
-    /// `SMSG_RAID_GROUP_ONLY`: a positive delay arms, zero clears; an event fires either way.
-    pub(crate) fn apply(&mut self, delay_ms: u32, reason: u32, now: Instant) {
-        if delay_ms > 0 {
+    /// `SMSG_RAID_GROUP_ONLY` (`0x5e48f1`), its signals in order onto `lane`: a delay above 0,
+    /// signed (`0x496340`, `jle`), arms and raises `INSTANCE_BOOT_START`; any other clears and
+    /// raises `INSTANCE_BOOT_STOP`, after `ERR_RAID_GROUP_ONLY` or `_FULL` for a delay of exactly 0
+    /// (`0x5e4914`-`0x5e4928`).
+    pub(crate) fn apply(
+        &mut self,
+        delay_ms: u32,
+        reason: u32,
+        now: Instant,
+        lane: &mut DialogLane,
+    ) {
+        let delay = delay_ms as i32;
+        if delay > 0 {
             self.deadline = Some(now + std::time::Duration::from_millis(u64::from(delay_ms)));
-            self.events.push(BootEdge::Start);
-        } else {
-            self.deadline = None;
-            self.events.push(BootEdge::Stop);
-            match reason {
-                1 => self.errors.push("ERR_RAID_GROUP_ONLY"),
-                2 => self.errors.push("ERR_RAID_GROUP_FULL"),
-                _ => {}
-            }
+            return lane.event("INSTANCE_BOOT_START", vec![]);
         }
+        self.deadline = None;
+        match (delay, reason) {
+            (0, 1) => lane.push(DialogSignal::Line("ERR_RAID_GROUP_ONLY")),
+            (0, 2) => lane.push(DialogSignal::Line("ERR_RAID_GROUP_FULL")),
+            _ => {}
+        }
+        lane.event("INSTANCE_BOOT_STOP", vec![]);
     }
 
     /// Whole seconds left, 0 when idle or past, as the reference divides a clamped ms remainder.
@@ -176,7 +180,7 @@ impl AreaSpiritHealer {
         self.healer
     }
 
-    fn secs(&self, now: Instant) -> u32 {
+    pub(crate) fn secs(&self, now: Instant) -> u32 {
         self.deadline
             .map(|d| d.saturating_duration_since(now).as_secs())
             .map_or(0, |s| u32::try_from(s).unwrap_or(u32::MAX))
@@ -297,61 +301,69 @@ impl BattlefieldQueue {
 }
 
 /// The status text (`[0xb7203c]`): none before world enter and after world leave, the bare
-/// `UNKNOWN` until the server's `0x295` lands, then a built line; localized at push time.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-enum StoneText {
+/// `UNKNOWN` until the server's `0x295` lands, then the rebuild over the queued area (`0x4ca070`),
+/// formatted against the VM's strings where the getter reads it
+/// ([`benilla_ui::script::meeting_stone_text`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum StoneText {
     #[default]
     None,
     Unknown,
-    Built(String),
+    Built,
 }
 
-/// `SStrPrintf`'s buffer at the rebuild: 256 bytes, so 255 of text.
-const STONE_TEXT_BYTES: usize = 255;
-
-/// The meeting-stone queue: the two globals and what the wire still owes the screen.
+/// The meeting-stone queue: the two globals and the members whose line waits on a name.
 #[derive(Resource, Default)]
 pub(crate) struct MeetingStone {
     /// `[0xb72038]`, the queued area id, 0 for none.
     pub(crate) area: u32,
-    text: StoneText,
-    /// `0x295` arrivals as `(previous area, status)`; the handler stores the new area before it
-    /// switches, so that one is already in `area`.
-    updates: Vec<(u32, u8)>,
-    notices: Vec<MeetingStoneNotice>,
-    /// `0x299` guids whose name has not resolved yet.
+    pub(crate) text: StoneText,
+    /// `0x299` guids whose name has not resolved yet, each waiting on the name cache's callback
+    /// `0x4ca510` (`0x4ca4b2`).
     pending_members: Vec<u64>,
-    /// How many of `pending_members`, from the front, a feed has looked up: the rest arrived
-    /// since, each in a packet whose handler looks the name up with the callback `0x4ca510`
-    /// (`0x4ca4b2`).
-    members_asked: usize,
-    /// The VM's copy of the two globals is stale.
-    dirty: bool,
 }
 
 impl MeetingStone {
-    /// `SMSG 0x295` (`0x4ca230`): the area is stored at once; the line and event wait for the feed.
-    pub(crate) fn apply(&mut self, area: u32, status: u8) {
-        let old = self.area;
-        self.area = area;
-        self.updates.push((old, status));
-    }
-
-    /// One of the four display-only replies.
-    pub(crate) fn apply_notice(&mut self, notice: MeetingStoneNotice) {
-        self.notices.push(notice);
+    /// `SMSG 0x295` (`0x4ca230`): the old area remembered, the new one stored (`0x4ca24a`), the text
+    /// rebuilt (`0x4ca385`); the old area, for the line.
+    pub(crate) fn apply(&mut self, area: u32) -> u32 {
+        let old = std::mem::replace(&mut self.area, area);
+        self.text = StoneText::Built;
+        old
     }
 
     /// The enter-world bring-up (`0x4c9f40`): the text becomes the bare `UNKNOWN`, the area stays.
     fn enter_world(&mut self) {
         self.text = StoneText::Unknown;
-        self.dirty = true;
     }
 
     /// The leave-world sweep (`0x4c9f80`): the text goes, the area stays.
     fn leave_world(&mut self) {
         self.text = StoneText::None;
-        self.dirty = true;
+    }
+
+    /// The status the getters read, the rebuilt text named by the area's row
+    /// (`[AreaTable row + 0x2c + 4*locale]`, `0x4ca0a2`).
+    pub(crate) fn status(
+        &self,
+        areas: Option<&AreaTableRes>,
+    ) -> benilla_ui::script::MeetingStoneStatus {
+        use benilla_ui::script::MeetingStoneText as T;
+        benilla_ui::script::MeetingStoneStatus {
+            area: self.area,
+            text: match self.text {
+                StoneText::None => T::Unset,
+                StoneText::Unknown => T::Unknown,
+                StoneText::Built => T::Built(area_name(areas, self.area).map(str::to_string)),
+            },
+        }
+    }
+
+    /// A player name answered: the members waiting on `guid`, taken.
+    fn take_member(&mut self, guid: u64) -> usize {
+        let before = self.pending_members.len();
+        self.pending_members.retain(|&g| g != guid);
+        before - self.pending_members.len()
     }
 }
 
@@ -368,23 +380,6 @@ fn global_text(script: &UiScript, key: &str) -> String {
 /// The area's localized name, or `None` where the reference's three-part AreaTable resolve fails.
 fn area_name(areas: Option<&AreaTableRes>, id: u32) -> Option<&str> {
     areas.and_then(|a| a.0.name(id))
-}
-
-/// The status-text rebuild `0x4ca070`: `MEETINGSTONE_TOOLTIP` (or `""` when missing) over the
-/// queued area's name (or `UNKNOWN`), printed into a 256-byte buffer.
-fn build_stone_text(script: &UiScript, areas: Option<&AreaTableRes>, area: u32) -> String {
-    let name = area_name(areas, area)
-        .map(str::to_string)
-        .unwrap_or_else(|| global_text(script, "UNKNOWN"));
-    let mut text = global_text(script, "MEETINGSTONE_TOOLTIP").replacen("%s", &name, 1);
-    if text.len() > STONE_TEXT_BYTES {
-        let mut cut = STONE_TEXT_BYTES;
-        while !text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        text.truncate(cut);
-    }
-    text
 }
 
 /// The `0x295` handler's five-way table (`0x4ca3a4`): status 0 names the old area and is silent
@@ -417,10 +412,10 @@ fn stone_line(
     }
 }
 
-/// The meeting-stone feed's other inputs, bundled to stay under Bevy's system-parameter limit.
+/// What the meeting stone's handlers read beside the queue: the name cache the member lines look
+/// up and status 1's visual and tutorial, bundled to stay under Bevy's system-parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct MeetingStoneInputs<'w, 's> {
-    areas: Option<Res<'w, AreaTableRes>>,
     names: Res<'w, NameCache>,
     commands: Res<'w, NetCommands>,
     visuals: Option<Res<'w, SpellVisuals>>,
@@ -429,107 +424,103 @@ pub(crate) struct MeetingStoneInputs<'w, 's> {
     tutorials: Option<MessageWriter<'w, crate::tutorial::TutorialEvent>>,
 }
 
-/// The meeting stone's feed: the `0x295` lines, the rebuild and `MEETINGSTONE_CHANGED` per
-/// arrival; the four display replies; the two globals pushed when they moved.
-fn feed_meeting_stone(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut stone: ResMut<MeetingStone>,
-    mut inputs: MeetingStoneInputs,
-    mut sink: crate::ui_action::MessageSink,
+/// `SMSG 0x295` (`0x4ca230`): the area stored, the line for the status (`0x4ca3a4`), status 1's
+/// extra block for a changed area (`0x4ca363`: `Effect_C` kind `0xc` on the local player, then
+/// the Meeting Stones tutorial), then, whatever the status, the rebuild and
+/// `MEETINGSTONE_CHANGED` (`0x4ca385`, `0x4ca38f`), all inside the handler.
+fn stone_set_queue(
+    stone: &mut MeetingStone,
+    lane: &mut DialogLane,
+    inputs: &mut MeetingStoneInputs,
+    area: u32,
+    status: u8,
 ) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let areas = inputs.areas.as_deref();
-        let mut lines = Vec::new();
-
-        for (old, status) in std::mem::take(&mut stone.updates) {
-            let new = stone.area;
-            lines.extend(stone_line(script, areas, old, new, status));
-            if status == 1 && new != old {
-                // Status 1's extra block (`0x4ca363`): `Effect_C` kind `0xc` on the local player,
-                // then the Meeting Stones tutorial.
-                if let (Some(visuals), Ok(entity)) =
-                    (inputs.visuals.as_deref(), inputs.self_q.single())
-                {
-                    if let Some(fx) = meeting_stone_join_fx(visuals, entity) {
-                        inputs.fx.write(fx);
-                    }
-                }
-                if let Some(t) = inputs.tutorials.as_mut() {
-                    t.write(crate::tutorial::TutorialEvent::trigger(
-                        crate::tutorial::id::MEETING_STONES,
-                    ));
-                }
-            }
-            // Every status, silent or out of range, rebuilds and fires. The globals reach the VM
-            // first: the stock handler's first call is `IsInMeetingStoneQueue()`
-            // (`Minimap.xml:222`).
-            let text = build_stone_text(script, areas, new);
-            stone.text = StoneText::Built(text.clone());
-            stone.dirty = false;
-            script.set_meeting_stone(new, Some(text));
-            script.fire_event("MEETINGSTONE_CHANGED", vec![]);
-        }
-
-        for notice in std::mem::take(&mut stone.notices) {
-            match notice {
-                MeetingStoneNotice::Success => {
-                    lines.extend(crate::ui_action::keyed_line(
-                        script,
-                        "ERR_MEETING_STONE_SUCCESS",
-                    ));
-                }
-                MeetingStoneNotice::InProgress => {
-                    lines.extend(crate::ui_action::keyed_line(
-                        script,
-                        "ERR_MEETING_STONE_IN_PROGRESS",
-                    ));
-                }
-                MeetingStoneNotice::MemberAdded { guid } => stone.pending_members.push(guid),
-                MeetingStoneNotice::JoinFailed { code } => {
-                    let key = match code {
-                        1 => "ERR_MEETING_STONE_MUST_BE_LEADER",
-                        2 => "ERR_MEETING_STONE_GROUP_FULL",
-                        3 => "ERR_MEETING_STONE_NO_RAID_GROUP",
-                        _ => continue,
-                    };
-                    lines.extend(crate::ui_action::keyed_line(script, key));
-                }
+    let old = stone.apply(area);
+    lane.push(DialogSignal::StoneLine {
+        old,
+        new: area,
+        status,
+    });
+    if status == 1 && area != old {
+        if let (Some(visuals), Ok(entity)) = (inputs.visuals.as_deref(), inputs.self_q.single()) {
+            if let Some(fx) = meeting_stone_join_fx(visuals, entity) {
+                inputs.fx.write(fx);
             }
         }
-        // `0x299`'s name-cache callback: the line when the name lands, nothing until then.
-        let pending = std::mem::take(&mut stone.pending_members);
-        let asked = std::mem::take(&mut stone.members_asked);
-        for (i, guid) in pending.into_iter().enumerate() {
-            match inputs
-                .names
-                .resolve_player(guid, Ask::at(i >= asked, &inputs.commands))
-                .map(str::to_string)
-            {
-                Some(name) => lines.extend(crate::ui_action::keyed_line_s(
-                    script,
+        if let Some(t) = inputs.tutorials.as_mut() {
+            t.write(crate::tutorial::TutorialEvent::trigger(
+                crate::tutorial::id::MEETING_STONES,
+            ));
+        }
+    }
+    lane.event("MEETINGSTONE_CHANGED", vec![]);
+}
+
+/// One of the four display-only replies, its line inside its handler; `0x299`'s looks the
+/// member's name up with the callback `0x4ca510` (`0x4ca4b2`), its line now on a hit, else at the
+/// name's answer ([`DialogNameAnswers`]).
+fn stone_notice(
+    stone: &mut MeetingStone,
+    lane: &mut DialogLane,
+    inputs: &MeetingStoneInputs,
+    notice: MeetingStoneNotice,
+) {
+    let line = match notice {
+        MeetingStoneNotice::Success => "ERR_MEETING_STONE_SUCCESS",
+        MeetingStoneNotice::InProgress => "ERR_MEETING_STONE_IN_PROGRESS",
+        MeetingStoneNotice::MemberAdded { guid } => {
+            let ask = Ask::at(true, &inputs.commands);
+            match inputs.names.resolve_player(guid, ask) {
+                Some(name) => lane.push(DialogSignal::LineS(
                     "ERR_MEETING_STONE_MEMBER_ADDED_S",
-                    &[&name],
+                    vec![name.to_string()],
                 )),
                 None => stone.pending_members.push(guid),
             }
+            return;
         }
-        stone.members_asked = stone.pending_members.len();
-        if !lines.is_empty() {
-            crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
-        }
+        MeetingStoneNotice::JoinFailed { code } => match code {
+            1 => "ERR_MEETING_STONE_MUST_BE_LEADER",
+            2 => "ERR_MEETING_STONE_GROUP_FULL",
+            3 => "ERR_MEETING_STONE_NO_RAID_GROUP",
+            _ => return,
+        },
+    };
+    lane.push(DialogSignal::Line(line));
+}
 
-        if std::mem::take(&mut stone.dirty) {
-            let text = match &stone.text {
-                StoneText::None => None,
-                StoneText::Unknown => Some(global_text(script, "UNKNOWN")),
-                StoneText::Built(t) => Some(t.clone()),
-            };
-            script.set_meeting_stone(stone.area, text);
+/// The dialogs' callbacks a player-name answer runs, a record or a refusal, after the cache files
+/// it (`0x55f426`): each meeting-stone member line waiting on the name (`0x4ca510`), which a
+/// refusal spends silently, and the duel's held challenge ([`crate::ui_duel`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct DialogNameAnswers<'w> {
+    /// Each absent in a harness without the dialogs.
+    lane: Option<ResMut<'w, DialogLane>>,
+    stone: Option<ResMut<'w, MeetingStone>>,
+    duel: Option<ResMut<'w, crate::ui_duel::DuelState>>,
+}
+
+impl DialogNameAnswers<'_> {
+    /// `guid`'s answer just filed in `names`.
+    pub(crate) fn answered(&mut self, guid: u64, names: &NameCache) {
+        let Some(lane) = self.lane.as_deref_mut() else {
+            return;
+        };
+        let name = names.resolve_player(guid, Ask::Read);
+        if let Some(stone) = self.stone.as_deref_mut() {
+            for _ in 0..stone.take_member(guid) {
+                if let Some(name) = name {
+                    lane.push(DialogSignal::LineS(
+                        "ERR_MEETING_STONE_MEMBER_ADDED_S",
+                        vec![name.to_string()],
+                    ));
+                }
+            }
         }
-    })
+        if let Some(duel) = self.duel.as_deref_mut() {
+            crate::ui_duel::name_answered(duel, lane, guid, name);
+        }
+    }
 }
 
 /// The world-enter cascade's meeting-stone leg (`0x490a14` → `0x4c9f40`), after the battlefield
@@ -676,59 +667,6 @@ fn meeting_stone_leave_world(mut stone: ResMut<MeetingStone>) {
 /// next session; the reference clears it only through `0x4921c0`, its world-leave path untraced.
 fn area_spirit_healer_leave_world(mut spirit: ResMut<AreaSpiritHealer>) {
     *spirit = AreaSpiritHealer::default();
-}
-
-#[allow(clippy::type_complexity)] // a Bevy system's full input set
-pub(crate) fn feed_dialog_verbs(
-    // The healer, which the death calls read: taken first.
-    mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, AreaSpiritHealer>,
-        ResMut<'static, PetUnlearnState>,
-    )>,
-    mut boot: ResMut<InstanceBoot>,
-    mut sink: crate::ui_action::MessageSink,
-) {
-    let now = Instant::now();
-    let (spirit_secs, unlearn_pending, unlearn_ask) = {
-        let (spirit, mut pet) = vm.own();
-        (
-            spirit.secs(now),
-            pet.pending().is_some(),
-            std::mem::take(&mut pet.ask).then_some(pet.cost),
-        )
-    };
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-
-        script.set_pet_untrainer_pending(unlearn_pending);
-        if let Some(cost) = unlearn_ask {
-            script.fire_event(
-                "CONFIRM_PET_UNLEARN",
-                vec![ScriptValue::Int(i64::from(cost))],
-            );
-        }
-
-        script.set_instance_boot_secs(boot.secs(now));
-        for edge in std::mem::take(&mut boot.events) {
-            match edge {
-                BootEdge::Start => script.fire_event("INSTANCE_BOOT_START", vec![]),
-                BootEdge::Stop => script.fire_event("INSTANCE_BOOT_STOP", vec![]),
-            }
-        }
-        let lines: Vec<_> = std::mem::take(&mut boot.errors)
-            .into_iter()
-            .filter_map(|key| crate::ui_action::keyed_line(script, key))
-            .collect();
-        if !lines.is_empty() {
-            crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
-        }
-
-        // The time packet's `AREA_SPIRIT_HEALER_IN_RANGE` is its handler's, on the notice lane
-        // after this push, so `GetAreaSpiritHealerTime` reads the deadline it stored.
-        script.set_area_spirit_healer_secs(spirit_secs);
-    })
 }
 
 /// `ConfirmPetUnlearn()` inside its call (`0x48dca0` → `0x5dfba0`).
@@ -951,7 +889,10 @@ mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
-    use super::{AreaSpiritHealer, BattlefieldQueue, InstanceBoot, MeetingStone, PetUnlearnState};
+    use super::{
+        AreaSpiritHealer, BattlefieldQueue, DialogLane, DialogSignal, InstanceBoot, MeetingStone,
+        PetUnlearnState,
+    };
     use crate::net::NetHandlerApp;
 
     pub(super) fn register(app: &mut App) {
@@ -970,26 +911,36 @@ mod net {
         *queue = BattlefieldQueue::default();
     }
 
-    /// The pet trainer's question; a zero guid shows `ERR_TALENT_WIPE_ERROR` instead.
+    /// The pet trainer's question, `PetUnlearnDialog(&guid, cost)` (`0x5dfba0`): the latch, then
+    /// `CONFIRM_PET_UNLEARN` with the cost inside the handler; a zero guid shows
+    /// `ERR_TALENT_WIPE_ERROR` instead (`0x5e4a26`-`0x5e4a85`).
     fn on_pet_unlearn_confirm(
         In(ev): In<SessionEvent>,
         mut unlearn: ResMut<PetUnlearnState>,
-        errors: Res<crate::ui_action::UiErrorKeys>,
+        mut lane: ResMut<DialogLane>,
     ) {
         if let SessionEvent::PetUnlearnConfirm { trainer, cost } = ev {
             if trainer == 0 {
                 debug!("net: pet unlearn refused (zero trainer) — no dialog");
-                errors.push(crate::ui_action::UiError::key("ERR_TALENT_WIPE_ERROR"));
+                lane.push(DialogSignal::Line("ERR_TALENT_WIPE_ERROR"));
             } else {
                 debug!("net: trainer {trainer:#x} asks to unlearn the pet for {cost} copper");
                 unlearn.ask(trainer, cost);
+                lane.event(
+                    "CONFIRM_PET_UNLEARN",
+                    vec![benilla_ui::script::ScriptValue::Int(i64::from(cost))],
+                );
             }
         }
     }
 
-    fn on_raid_group_only(In(ev): In<SessionEvent>, mut boot: ResMut<InstanceBoot>) {
+    fn on_raid_group_only(
+        In(ev): In<SessionEvent>,
+        mut boot: ResMut<InstanceBoot>,
+        mut lane: ResMut<DialogLane>,
+    ) {
         if let SessionEvent::RaidGroupOnly { delay_ms, reason } = ev {
-            boot.apply(delay_ms, reason, std::time::Instant::now());
+            boot.apply(delay_ms, reason, std::time::Instant::now(), &mut lane);
         }
     }
 
@@ -1025,10 +976,19 @@ mod net {
         }
     }
 
-    fn on_meeting_stone(In(ev): In<SessionEvent>, mut stone: ResMut<MeetingStone>) {
+    fn on_meeting_stone(
+        In(ev): In<SessionEvent>,
+        mut stone: ResMut<MeetingStone>,
+        mut lane: ResMut<DialogLane>,
+        mut inputs: super::MeetingStoneInputs,
+    ) {
         match ev {
-            SessionEvent::MeetingStoneSetQueue { area, status } => stone.apply(area, status),
-            SessionEvent::MeetingStoneNotice(notice) => stone.apply_notice(notice),
+            SessionEvent::MeetingStoneSetQueue { area, status } => {
+                super::stone_set_queue(&mut stone, &mut lane, &mut inputs, area, status)
+            }
+            SessionEvent::MeetingStoneNotice(notice) => {
+                super::stone_notice(&mut stone, &mut lane, &inputs, notice)
+            }
             _ => {}
         }
     }
@@ -1039,6 +999,7 @@ pub(crate) struct UiDialogVerbsPlugin;
 impl Plugin for UiDialogVerbsPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        add_dialog_lane(app);
         app.init_resource::<PetUnlearnState>()
             .init_resource::<InstanceBoot>()
             .init_resource::<AreaSpiritHealer>()
@@ -1051,17 +1012,11 @@ impl Plugin for UiDialogVerbsPlugin {
                 Update,
                 (
                     // In the frame time, after the drain that despawns the NPC and before the pass
-                    // resumes: `ConfirmPetUnlearn`'s call reads the latch.
+                    // resumes: `CheckPetUntrainerDist` and `ConfirmPetUnlearn`'s call read the
+                    // latch.
                     close_npc_session_out_of_range::<PetUnlearnState>
                         .after(benilla_world::schedule::WorldStage::Net)
-                        .before(feed_dialog_verbs)
                         .before(crate::vm_pass::VmPass::Resume),
-                    // Gated on the in-game interface: vmangos can send `SMSG_RAID_GROUP_ONLY` in
-                    // the login burst (`Player.cpp:18686`), and an `INSTANCE_BOOT_START` fired at
-                    // the glue VM would be lost; the queue waits instead.
-                    feed_dialog_verbs
-                        .in_set(UiFeed)
-                        .run_if(crate::ui_script::ingame_ui_up),
                     // After the mouse pick, the reference's order: `CGWorldFrame`'s OnUpdate picks
                     // at `0x48184a`, then polls at `0x4818ca`. Gating is safe: the poll is
                     // level-triggered and re-derives the cache every frame.
@@ -1073,9 +1028,7 @@ impl Plugin for UiDialogVerbsPlugin {
                     // `0x490a14`), so `CMSG 0x296` follows `CMSG 0x2D3` on the wire.
                     meeting_stone_enter_world
                         .in_set(UiFeed)
-                        .after(crate::ui_battlefield::reset_on_world_enter)
-                        .before(feed_meeting_stone),
-                    feed_meeting_stone.in_set(UiFeed),
+                        .after(crate::ui_battlefield::reset_on_world_enter),
                     // After the target chain, which writes `MeetingStoneUse`, so the join leaves
                     // on the click's own frame.
                     drain_meeting_stone_joins
@@ -1105,44 +1058,73 @@ fn cancel_gate_could_apply(attributes_ex: u32) -> bool {
 mod tests {
     use super::*;
 
-    /// A member-added packet looks its name up with the callback `0x4ca510` (`0x4ca4b2`); the
-    /// frames its line waits through read. A refused name is asked by no frame after it, only by
-    /// the next packet naming its member.
+    /// A member-added packet looks its name up with the callback `0x4ca510` (`0x4ca4b2`): a miss
+    /// asks once and waits, a refusal spends the wait silently, and the next packet naming the
+    /// member asks again.
     #[test]
     fn a_refused_stone_member_is_asked_by_the_next_packet_never_by_a_frame() {
+        use bevy::ecs::system::RunSystemOnce;
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
             .init_resource::<MeetingStone>()
+            .init_resource::<DialogLane>()
             .init_resource::<NameCache>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_message::<SpellKitFx>()
-            .add_systems(Update, feed_meeting_stone);
-        app.insert_non_send_resource(UiScript::new().unwrap());
+            .add_message::<SpellKitFx>();
         let added = |app: &mut App| {
             app.world_mut()
-                .resource_mut::<MeetingStone>()
-                .apply_notice(MeetingStoneNotice::MemberAdded { guid: 0x9 });
-            app.update();
+                .run_system_once(
+                    |mut stone: ResMut<MeetingStone>,
+                     mut lane: ResMut<DialogLane>,
+                     inputs: MeetingStoneInputs| {
+                        let notice = MeetingStoneNotice::MemberAdded { guid: 0x9 };
+                        stone_notice(&mut stone, &mut lane, &inputs, notice);
+                    },
+                )
+                .unwrap();
+        };
+        let answer = |app: &mut App| {
+            app.world_mut()
+                .run_system_once(|names: Res<NameCache>, mut dialogs: DialogNameAnswers| {
+                    dialogs.answered(0x9, &names)
+                })
+                .unwrap();
         };
         added(&mut app);
         assert_eq!(crate::query_cache::queries(&rx).len(), 1);
         app.world_mut()
             .resource_mut::<NameCache>()
             .insert_player(0x9, String::new(), None);
-        for _ in 0..600 {
-            app.update();
-        }
+        answer(&mut app);
         assert!(
-            crate::query_cache::queries(&rx).is_empty(),
-            "no frame asks a refusal"
+            app.world_mut()
+                .resource_mut::<DialogLane>()
+                .take()
+                .is_empty(),
+            "a refusal shows nothing"
         );
+        assert!(app
+            .world()
+            .resource::<MeetingStone>()
+            .pending_members
+            .is_empty());
         added(&mut app);
         assert_eq!(
             crate::query_cache::queries(&rx).len(),
             1,
             "the next packet asks again"
+        );
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0x9, "Ana".into(), None);
+        answer(&mut app);
+        assert_eq!(
+            app.world_mut().resource_mut::<DialogLane>().take(),
+            [DialogSignal::LineS(
+                "ERR_MEETING_STONE_MEMBER_ADDED_S",
+                vec!["Ana".into()]
+            )],
+            "the line at the name's answer"
         );
     }
 
@@ -1653,10 +1635,7 @@ mod tests {
 
     /// The server's answer has landed: queued at `area`, the line built.
     fn answered(app: &mut App, area: u32) {
-        let mut stone = app.world_mut().resource_mut::<MeetingStone>();
-        stone.area = area;
-        stone.text = StoneText::Built("Meeting Stone: Wailing Caverns".into());
-        stone.dirty = false;
+        app.world_mut().resource_mut::<MeetingStone>().apply(area);
     }
 
     fn stone_text(app: &App) -> StoneText {
@@ -1696,7 +1675,6 @@ mod tests {
                 "{entry} resets the text"
             );
             let stone = app.world().resource::<MeetingStone>();
-            assert!(stone.dirty, "{entry} owes the VM the reset");
             assert_eq!(
                 stone.area, 1519,
                 "{entry} keeps the queued area (`[0xb72038]`)"
@@ -1718,10 +1696,7 @@ mod tests {
 
         app.world_mut().write_message(stone_port(false));
         app.update();
-        assert!(
-            matches!(stone_text(&app), StoneText::Built(_)),
-            "an arrival keeps it"
-        );
+        assert_eq!(stone_text(&app), StoneText::Built, "an arrival keeps it");
 
         app.world_mut().write_message(stone_port(true));
         app.update();
@@ -1731,7 +1706,6 @@ mod tests {
             "the worldport's sweep drops it"
         );
         let stone = app.world().resource::<MeetingStone>();
-        assert!(stone.dirty, "the drop reaches the VM");
         assert_eq!(stone.area, 1519, "the queued area survives the sweep");
         assert_eq!(
             stone_queries(&rx),
@@ -1777,19 +1751,34 @@ mod tests {
         );
     }
 
+    /// `0x496340`'s signed test and the delay-0 line ahead of its stop (`0x5e4914`-`0x5e4928`).
     #[test]
     fn the_boot_clock_arms_on_a_delay_and_clears_on_zero_with_the_reason() {
+        let start = || DialogSignal::Event("INSTANCE_BOOT_START".into(), vec![]);
+        let stop = || DialogSignal::Event("INSTANCE_BOOT_STOP".into(), vec![]);
         let mut boot = InstanceBoot::default();
+        let mut lane = DialogLane::default();
         let now = Instant::now();
-        boot.apply(60_500, 0, now);
-        assert_eq!(boot.events, vec![BootEdge::Start]);
+        let mut apply = |boot: &mut InstanceBoot, delay, reason| {
+            boot.apply(delay, reason, now, &mut lane);
+            lane.take()
+        };
+        assert_eq!(apply(&mut boot, 60_500, 0), [start()]);
         assert_eq!(boot.secs(now), 60, "whole seconds, truncated");
-        boot.apply(0, 1, now);
-        assert_eq!(boot.events, vec![BootEdge::Start, BootEdge::Stop]);
-        assert_eq!(boot.errors, vec!["ERR_RAID_GROUP_ONLY"]);
+        assert_eq!(
+            apply(&mut boot, 0, 1),
+            [DialogSignal::Line("ERR_RAID_GROUP_ONLY"), stop()],
+            "the line first"
+        );
         assert_eq!(boot.secs(now), 0);
-        boot.apply(0, 7, now);
-        assert_eq!(boot.errors.len(), 1, "a reason outside 1/2 names nothing");
+        assert_eq!(apply(&mut boot, 0, 7), [stop()], "a reason outside 1/2");
+        apply(&mut boot, 60_500, 0);
+        assert_eq!(
+            apply(&mut boot, u32::MAX, 2),
+            [stop()],
+            "a negative delay stops with no line"
+        );
+        assert_eq!(boot.secs(now), 0);
     }
 
     #[test]
@@ -1916,12 +1905,10 @@ mod tests {
     #[test]
     fn the_stone_latches_the_old_area_before_storing_the_new() {
         let mut stone = MeetingStone::default();
-        stone.apply(1519, 1);
-        stone.apply(1519, 1);
-        stone.apply(0, 0);
-        stone.apply(12, 9);
+        let olds: Vec<u32> = [1519, 1519, 0, 12].map(|a| stone.apply(a)).into();
         assert_eq!(stone.area, 12);
-        assert_eq!(stone.updates, vec![(0, 1), (1519, 1), (1519, 0), (0, 9)]);
+        assert_eq!(olds, [0, 1519, 1519, 0]);
+        assert_eq!(stone.text, StoneText::Built);
         stone.enter_world();
         assert_eq!(stone.text, StoneText::Unknown);
         assert_eq!(
@@ -1981,23 +1968,22 @@ mod tests {
             None,
             "past the table: nothing"
         );
+        use benilla_ui::script::{meeting_stone_text, MeetingStoneText};
+        let mut stone = MeetingStone::default();
+        stone.apply(1519);
         assert_eq!(
-            build_stone_text(&s, a, 1519),
-            "Looking for more for Stormwind City"
+            stone.status(a).text,
+            MeetingStoneText::Built(Some("Stormwind City".into()))
         );
-        assert_eq!(build_stone_text(&s, a, 0), "Looking for more for Unknown");
-        s.run("MEETINGSTONE_TOOLTIP = string.rep('x', 300) .. '%s'")
-            .unwrap();
         assert_eq!(
-            build_stone_text(&s, a, 1519).len(),
-            STONE_TEXT_BYTES,
-            "the 256-byte buffer"
+            meeting_stone_text(s.lua(), &stone.status(a).text).as_deref(),
+            Some("Looking for more for Stormwind City")
         );
-        s.run("MEETINGSTONE_TOOLTIP = nil").unwrap();
+        stone.apply(0);
         assert_eq!(
-            build_stone_text(&s, a, 1519),
-            "",
-            "a missing template is GetText's empty string, not the unreachable %s fallback"
+            meeting_stone_text(s.lua(), &stone.status(a).text).as_deref(),
+            Some("Looking for more for Unknown"),
+            "no row names it UNKNOWN"
         );
     }
 
@@ -2006,7 +1992,6 @@ mod tests {
         let mut pet = PetUnlearnState::default();
         pet.ask(0x2b, 10_000);
         assert_eq!(pet.pending(), Some(0x2b));
-        assert!(pet.ask);
         pet.close();
         assert_eq!(pet.pending(), None);
         assert_eq!(pet.cost, 0);

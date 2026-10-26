@@ -1,9 +1,11 @@
 //! `IsInInstance`, `CanShowResetInstances` and `ResetInstances`, the whole Lua side of instance
-//! lockouts; the rest arrives as `CHAT_MSG_SYSTEM` lines. The readers answer off state the app
-//! pushes from `Map.dbc`.
+//! lockouts; the rest arrives as `CHAT_MSG_SYSTEM` lines. The readers ask the host at the call
+//! ([`super::InstanceTypeQuery`], [`super::CanResetInstancesQuery`]), the VM's copy answering
+//! with none.
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::live::ask;
 use super::Model;
 
 /// `IsInInstance()`'s type word for a `Map.dbc` `InstanceType`: the reference's table at
@@ -58,10 +60,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "IsInInstance",
         lua.create_function(|lua, ()| {
-            let ty = {
+            let ty = ask(lua, &super::InstanceTypeQuery).unwrap_or_else(|| {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.instance_type
-            };
+            });
             let name = instance_type_name(ty.unwrap_or(0));
             let inside = match ty {
                 Some(t) if t != 0 => Value::Number(1.0),
@@ -78,12 +80,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "CanShowResetInstances",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if model.can_reset_instances {
-                Value::Number(1.0)
-            } else {
-                Value::Nil
-            })
+            let can = ask(lua, &super::CanResetInstancesQuery).unwrap_or_else(|| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.can_reset_instances
+            });
+            Ok(if can { Value::Number(1.0) } else { Value::Nil })
         })?,
     )?;
 

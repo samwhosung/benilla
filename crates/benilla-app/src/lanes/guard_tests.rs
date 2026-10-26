@@ -116,22 +116,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          call, through the host's bar verbs",
     ),
     (
-        Row::Queue,
-        "::ui_dialog_verbs::InstanceBoot",
-        "the instance boot",
-    ),
-    (
-        Row::Queue,
-        "::ui_dialog_verbs::MeetingStone",
-        "the meeting stone",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_dialog_verbs::PetUnlearnState",
-        "the pet unlearn confirm, which `feed_dialog_verbs` fires; `ConfirmPetUnlearn`, acting in \
-         its call, reads it in the host",
-    ),
-    (
         Row::HostHeld,
         "::ui_mail::MailOpen",
         "the mailbox's list and results, the send result's equip refusal line among them, which \
@@ -142,11 +126,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_mail::pending::MailPending",
         "the pending-mail notices, whose `UPDATE_PENDING_MAIL` `feed_mail` fires; the mail verbs \
          hold it in the host",
-    ),
-    (
-        Row::Queue,
-        "::ui_instance::InstanceState",
-        "the instance state",
     ),
     (
         Row::HostHeld,
@@ -236,28 +215,13 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_binder::BinderState",
-        "the bind question, which `feed_binder` fires from; `ConfirmBinder`, acting in its call, reads it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_craft::CraftOpen",
         "the craft window's line, which `feed_craft` fires from; `CloseCraft`, acting in its call, holds it in the host",
     ),
     (
         Row::HostHeld,
-        "::ui_duel::DuelState",
-        "the duel session, which `feed_duel` fires from; the duel answers, acting in their calls, read it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_loot_roll::LootRolls",
         "the open rolls, which `feed_loot_rolls` fires from; the votes, acting in their calls, hold them in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_summon::SummonState",
-        "the summon latch, which `feed_summon` fires from; `ConfirmSummon`, acting in its call, reads it in the host",
     ),
     (
         Row::HostHeld,
@@ -333,9 +297,19 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_battlefield_positions::BattlefieldPositions",
     "::ui_battlefield_score::BattlefieldScoreboard",
     "::ui_dialog_verbs::BattlefieldQueue",
-    // Read, and quiet: `feed_dialog_verbs` pushes the deadline the time packet stores and fires
-    // nothing off it, as the packet's `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
+    // Read through the host by `GetAreaSpiritHealerTime`, and quiet: the time packet's
+    // `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
     "::ui_dialog_verbs::AreaSpiritHealer",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the dialogs' getters and verbs
+    // read them through the host, and no feed fires off them, as their handlers' events go on the
+    // dialogs' lane.
+    "::ui_binder::BinderState",
+    "::ui_dialog_verbs::InstanceBoot",
+    "::ui_dialog_verbs::MeetingStone",
+    "::ui_dialog_verbs::PetUnlearnState",
+    "::ui_duel::DuelState",
+    "::ui_instance::InstanceState",
+    "::ui_summon::SummonState",
     // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the inspect-honor getters read it
     // through the host, and no feed fires off it, as the reply's `INSPECT_HONOR_UPDATE` goes on
     // the notice lane at its handler and a re-target's fires in its call.
@@ -408,16 +382,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "ui_guild::GuildState",
         "ui_party::GroupState"]),
-    ("::ui_duel::feed_duel", &["names::NameCache", "ui_duel::DuelState"]),
-    ("::ui_binder::feed_binder", &["ui_binder::BinderState"]),
-    ("::ui_dialog_verbs::feed_dialog_verbs", &["ui_dialog_verbs::AreaSpiritHealer",
-        "ui_dialog_verbs::InstanceBoot", "ui_dialog_verbs::PetUnlearnState"]),
-    ("::ui_dialog_verbs::feed_meeting_stone", &["names::NameCache",
-        "ui_dialog_verbs::MeetingStone"]),
     ("::tutorial::feed_tutorials", &["items::Items", "net::ObjectStore"]),
-    ("::ui_summon::feed_summon", &["names::NameCache", "ui_summon::SummonState"]),
-    ("::ui_gm_ticket::feed_gm_ticket", &["ui_gm_ticket::GmTicketState"]),
-    ("::ui_instance::feed_instance", &["ui_instance::InstanceState"]),
     ("::ui_billing::poll_play_time", &["net::SessionBilling"]),
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
@@ -672,6 +637,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::BattlefieldQueue",
     "::DuelState",
     "::SummonState",
+    // The dialogs' state the call host's getters read (`0x48b620`, `0x4ca570`, `0x495c90`).
+    "::InstanceBoot",
+    "::MeetingStone",
+    "::InstanceState",
     "::UiClock",
     "::InteractNpc",
     "::SkillLines",
@@ -698,7 +667,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 26] {
+fn lane_types() -> [TypeId; 27] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -745,12 +714,15 @@ fn lane_types() -> [TypeId; 26] {
         TypeId::of::<crate::ui_merchant::MerchantLane>(),
         // The taxi lane: the map's open and the flight master's replies.
         TypeId::of::<crate::ui_taxi::TaxiLane>(),
+        // The dialogs' lane: the service questions, the boot, the stone, the summon, the
+        // lockouts, the duel and the ticket answers, at their packets.
+        TypeId::of::<crate::ui_dialog_verbs::DialogLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 26] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 27] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -796,6 +768,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 26] {
         ("social", TypeId::of::<crate::ui_social::SocialState>()),
         ("merchant", TypeId::of::<crate::ui_merchant::MerchantLane>()),
         ("taxi", TypeId::of::<crate::ui_taxi::TaxiLane>()),
+        (
+            "dialogs",
+            TypeId::of::<crate::ui_dialog_verbs::DialogLane>(),
+        ),
     ]
 }
 
@@ -956,6 +932,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "chat setup arrivals",
             "cooldowns",
             "deaths",
+            "dialogs",
             "equip errors",
             "field notices",
             "guild",

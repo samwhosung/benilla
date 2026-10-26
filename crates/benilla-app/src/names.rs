@@ -496,6 +496,8 @@ pub(crate) mod net {
         house: Option<ResMut<crate::ui_auction::HouseLane>>,
         // The battleground's callbacks, which run for a refusal too.
         mut battlefield: crate::ui_battlefield::BattlefieldNameAnswers,
+        // The meeting stone's member lines and the duel's held challenge, refusals too.
+        mut dialogs: crate::ui_dialog_verbs::DialogNameAnswers,
     ) {
         if let SessionEvent::PlayerName {
             guid,
@@ -511,6 +513,7 @@ pub(crate) mod net {
             player_name(guid, name, race, class, gender, &mut names);
             if waited {
                 battlefield.answered(guid, &names);
+                dialogs.answered(guid, &names);
             }
             if found {
                 if let Some(chat) = &chat {

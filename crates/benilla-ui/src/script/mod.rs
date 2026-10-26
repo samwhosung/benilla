@@ -27,6 +27,7 @@ mod battlefield_score;
 mod bind_confirm;
 mod binder;
 pub(crate) mod binding_abi;
+mod dialog_live;
 mod dialog_verbs;
 mod tutorial;
 mod worldmap_arrow;
@@ -304,6 +305,11 @@ pub use cvars::{
     WORLD_DETAIL_STOPS,
 };
 pub use death::{DeathAction, DeathUiState};
+pub use dialog_live::{
+    meeting_stone_text, AreaSpiritHealerSecsQuery, BinderPendingQuery, CanResetInstancesQuery,
+    InstanceBootSecsQuery, InstanceTypeQuery, MeetingStoneQuery, MeetingStoneStatus,
+    MeetingStoneText, PetUntrainerPendingQuery, SummonConfirmQuery,
+};
 pub use dialog_verbs::MeetingStoneCall;
 pub use dressup::DressUpIntent;
 pub use duel::DuelRequest;

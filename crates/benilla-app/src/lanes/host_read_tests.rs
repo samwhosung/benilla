@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 75;
-const FRAME_FINAL_INPUTS: usize = 364;
+const FRAME_FINAL_FEEDS: usize = 68;
+const FRAME_FINAL_INPUTS: usize = 352;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -85,6 +85,12 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "zeroes the board at the world-enter cascade (`0x4a9db0`), which the reference runs \
          inside our own player's create (`0x4908c0`)"),
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
+    ("::ui_dialog_verbs::meeting_stone_enter_world", &["ui_dialog_verbs::MeetingStone"],
+        "resets the status text to `UNKNOWN` at the world-enter cascade (`0x490a14` → \
+         `0x4c9f40`), which the reference runs inside our own player's create (`0x4908c0`)"),
+    ("::ui_instance::track_instance_state", &["ui_instance::InstanceState"],
+        "latches the dungeon just left once the map the transfer lands on is known, which the \
+         reference latches inside the map load and the packet (`0x464ff0`, `0x49e6ac`)"),
     ("::ui_items::feed::feed_item_stats", &["items::Items"],
         "takes the item cache's fresh and dropped records as it pushes them"),
     ("::ui_items::feed::feed_random_properties", &["items::RandomProperties"],
@@ -99,6 +105,14 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_pet::unit::feed_pet_unit", &["UiScript", "names::NameCache"],
         "a field event's listeners read its push; it watches the name cache's record of the pet's name"),
     ("::ui_pet_stats::feed_pet_stats", &["UiScript"], "a field event's listeners read its push"),
+    ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",
+        &["ui_binder::BinderState"],
+        "closes the bind question once the player leaves service range, which \
+         `CheckBinderDist` reports; the reference tests the range at the call (`0x5dff50`)"),
+    ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_dialog_verbs::PetUnlearnState>",
+        &["ui_dialog_verbs::PetUnlearnState"],
+        "closes the unlearn question once the player leaves service range, which \
+         `CheckPetUntrainerDist` reports; the reference tests the range at the call (`0x5dfd30`)"),
     ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_talent_wipe::TalentWipeState>",
         &["ui_talent_wipe::TalentWipeState"],
         "closes the respec question once the player leaves service range, which \

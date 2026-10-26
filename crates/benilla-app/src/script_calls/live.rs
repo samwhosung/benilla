@@ -106,6 +106,8 @@ live_reads! {
         merchant: crate::ui_merchant::MerchantLive<'static, 'static>,
         /// The taxi map's slots and fares.
         taxi: crate::ui_taxi::TaxiLive<'static, 'static>,
+        /// The dialogs' latches, clocks, meeting stone, summon and instance terms.
+        dialogs: crate::ui_dialog_verbs::DialogLive<'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

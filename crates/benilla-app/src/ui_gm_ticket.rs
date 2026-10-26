@@ -18,32 +18,18 @@ use benilla_assets::coords::bevy_to_wow;
 
 use crate::net::{ClientCommand, NetCommands};
 use crate::player::Player;
+use crate::ui_dialog_verbs::{DialogLane, DialogSignal};
 use crate::ui_script::{UiFeed, VmMemo};
 
-/// What the last `SMSG_GMTICKET_GETTICKET` said, and how many have arrived: the feed fires on the
-/// count, so the window's poll is answered even when nothing changed.
+/// The engine's re-asks a landed write owes. The client holds no ticket: each answer signals at
+/// its packet ([`ticket_answer`], [`status_answer`]).
 #[derive(Resource, Default)]
 pub(crate) struct GmTicketState {
-    /// The open ticket; `None` is the ordinary "no ticket" answer.
-    ticket: Option<Box<benilla_protocol::messages::GmTicket>>,
-    /// One per `SMSG_GMTICKET_GETTICKET`, wrapping.
-    answers: u32,
     /// Re-asks the engine owes ([`Self::note_write_landed`]), sent by [`send_gm_reasks`].
     engine_reasks: u32,
-    /// The last queue status, with its own answer count. Signed as in the reference, which copies
-    /// the wire dword verbatim (`0x418e95`), pushes it unmodified (`0x5e467b`) and loads it signed
-    /// for Lua (`0x704fa6`), so `HelpFrame`'s `arg1 == -1` arm fires on `0xFFFFFFFF`.
-    queue_status: i32,
-    queue_answers: u32,
 }
 
 impl GmTicketState {
-    /// `SMSG_GMTICKET_GETTICKET`: replace the ticket and count the answer, an empty one too.
-    pub(crate) fn answer(&mut self, ticket: Option<Box<benilla_protocol::messages::GmTicket>>) {
-        self.ticket = ticket;
-        self.answers = self.answers.wrapping_add(1);
-    }
-
     /// A write landed: re-ask for the ticket, as the reference engine does, once per push and
     /// unguarded, on create-ok (2) and update-ok (4) at `0x5e4479` and on status update 1 at
     /// `0x5e7932`. Without it a filed ticket stays unseen until the 10-minute poll.
@@ -55,19 +41,13 @@ impl GmTicketState {
         std::mem::take(&mut self.engine_reasks)
     }
 
-    /// `SMSG_GMTICKETSYSTEMSTATUS`: the queue's state, counted the same way.
-    pub(crate) fn answer_queue(&mut self, status: i32) {
-        self.queue_status = status;
-        self.queue_answers = self.queue_answers.wrapping_add(1);
-    }
-
-    /// Session end: a reconnect must not show the previous character's ticket.
+    /// Session end: a reconnect owes the previous character's ticket nothing.
     pub(crate) fn clear_session(&mut self) {
         *self = Self::default();
     }
 }
 
-/// Per VM ([`VmMemo`]): a `/reload`'s new VM is fed the categories, ticket and status afresh.
+/// Per VM ([`VmMemo`]): a `/reload`'s new VM is pushed the categories and the survey afresh.
 #[derive(Resource, Default)]
 struct GmTicketFeedState {
     vm: VmMemo<FedTicket>,
@@ -75,16 +55,14 @@ struct GmTicketFeedState {
 
 #[derive(Default)]
 struct FedTicket {
-    answers: u32,
-    queue_answers: u32,
     categories_pushed: bool,
     survey_pushed: bool,
 }
 
-/// Fire `UPDATE_TICKET` and `UPDATE_GM_STATUS` for unheard answers; push the categories once.
+/// Push the categories and the survey tables, `GMTicketCategory.dbc`'s and the survey's, once per
+/// VM.
 fn feed_gm_ticket(
     mut hosted_vm: crate::script_calls::HostedVm,
-    state: Res<GmTicketState>,
     categories: Option<Res<GmTicketCategories>>,
     survey: Option<Res<GmSurveyResource>>,
     mut feed: ResMut<GmTicketFeedState>,
@@ -108,22 +86,23 @@ fn feed_gm_ticket(
                 fed.survey_pushed = true;
             }
         }
-
-        if fed.queue_answers != state.queue_answers {
-            fed.queue_answers = state.queue_answers;
-            // `arg1` is the status as a number: `HelpFrame` tests `== 1` for up and `== -1` to show
-            // `HELP_TICKET_QUEUE_DISABLED`; vmangos sends only 0 or 1, passed through unmapped.
-            script.fire_event(
-                "UPDATE_GM_STATUS",
-                vec![ScriptValue::Int(i64::from(state.queue_status))],
-            );
-        }
-
-        if fed.answers != state.answers {
-            fed.answers = state.answers;
-            script.fire_event("UPDATE_TICKET", update_ticket_args(state.ticket.as_deref()));
-        }
     })
+}
+
+/// `SMSG_GMTICKET_GETTICKET`'s `UPDATE_TICKET` (`0x5e4527`), fired for every answer, an unchanged
+/// one too, as the window re-polls `GetGMTicket()` every 10 minutes.
+fn ticket_answer(lane: &mut DialogLane, ticket: Option<&benilla_protocol::messages::GmTicket>) {
+    lane.event("UPDATE_TICKET", update_ticket_args(ticket));
+}
+
+/// `SMSG_GMTICKETSYSTEMSTATUS`'s `UPDATE_GM_STATUS` (`0x5e4689`): `arg1` the status as a number,
+/// signed as the reference copies the wire dword (`0x418e95`) and loads it for Lua (`0x704fa6`), so
+/// `HelpFrame`'s `arg1 == -1` arm fires on `0xFFFFFFFF`; vmangos sends only 0 or 1.
+fn status_answer(lane: &mut DialogLane, status: i32) {
+    lane.event(
+        "UPDATE_GM_STATUS",
+        vec![ScriptValue::Int(i64::from(status))],
+    );
 }
 
 /// `UPDATE_TICKET`'s arguments: category, text, the three day figures, assigned, opened. The wire
@@ -322,7 +301,7 @@ pub(crate) mod net {
 
     use crate::net::NetHandlerApp;
 
-    use super::GmTicketState;
+    use super::{DialogLane, GmTicketState};
 
     /// Register the ticket's handlers, called from [`super::UiGmTicketPlugin`].
     pub(super) fn register(app: &mut App) {
@@ -338,15 +317,15 @@ pub(crate) mod net {
 
     /// Every GETTICKET answer, asked for or pushed after a GM's `.ticket` command
     /// (`GMTicketMgr.cpp:153-159`): the wire does not tell them apart.
-    fn on_ticket(In(ev): In<SessionEvent>, mut ticket: ResMut<GmTicketState>) {
-        if let SessionEvent::GmTicket { ticket: answer } = ev {
-            ticket.answer(answer);
+    fn on_ticket(In(ev): In<SessionEvent>, mut lane: ResMut<DialogLane>) {
+        if let SessionEvent::GmTicket { ticket } = ev {
+            super::ticket_answer(&mut lane, ticket.as_deref());
         }
     }
 
-    fn on_system_status(In(ev): In<SessionEvent>, mut ticket: ResMut<GmTicketState>) {
+    fn on_system_status(In(ev): In<SessionEvent>, mut lane: ResMut<DialogLane>) {
         if let SessionEvent::GmTicketSystemStatus { status } = ev {
-            ticket.answer_queue(status);
+            super::status_answer(&mut lane, status);
         }
     }
 
@@ -376,8 +355,7 @@ pub(crate) mod net {
         }
     }
 
-    /// The ticket is the character's and the next login may be another, so the answer counts
-    /// reset too and the new session's first answer fires.
+    /// The ticket is the character's and the next login may be another: no re-ask carries over.
     fn on_session_end(In(_): In<SessionEvent>, mut ticket: ResMut<GmTicketState>) {
         ticket.clear_session();
     }
@@ -428,6 +406,7 @@ pub(crate) struct UiGmTicketPlugin;
 impl Plugin for UiGmTicketPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        crate::ui_dialog_verbs::add_dialog_lane(app);
         app.init_resource::<GmTicketState>()
             .init_resource::<GmTicketFeedState>()
             .add_systems(
@@ -602,20 +581,24 @@ mod tests {
         assert_eq!(args[4], ScriptValue::Number(-1.0));
     }
 
-    /// The window's 10-minute poll must be re-fed each time.
+    /// The window's 10-minute poll is answered at each packet, the same ticket or none.
     #[test]
-    fn a_repeated_identical_answer_still_counts_as_an_answer() {
-        let mut state = GmTicketState::default();
-        state.answer(Some(ticket()));
-        let first = state.answers;
-        state.answer(Some(ticket()));
-        assert_ne!(state.answers, first, "the poll must re-fire UPDATE_TICKET");
-
-        // A repeated empty answer counts too: "still no ticket" is the common case.
-        state.answer(None);
-        let empty = state.answers;
-        state.answer(None);
-        assert_ne!(state.answers, empty);
+    fn each_answer_signals_its_update_ticket() {
+        let t = ticket();
+        let mut lane = DialogLane::default();
+        for _ in 0..2 {
+            ticket_answer(&mut lane, Some(&t));
+        }
+        ticket_answer(&mut lane, None);
+        let ticket = |args| DialogSignal::Event("UPDATE_TICKET".into(), args);
+        assert_eq!(
+            lane.take(),
+            [
+                ticket(update_ticket_args(Some(&t))),
+                ticket(update_ticket_args(Some(&t))),
+                ticket(vec![ScriptValue::Int(0)]),
+            ]
+        );
     }
 
     /// The reference's `0x5e4479` re-ask; a refusal has nothing new to fetch.
@@ -635,21 +618,23 @@ mod tests {
     /// vmangos sends only 0 or 1, so no live run reaches the window's -1 arm.
     #[test]
     fn a_minus_one_queue_status_survives_to_lua_as_minus_one() {
-        let mut state = GmTicketState::default();
-        state.answer_queue(-1);
-        assert_eq!(state.queue_status, -1);
-        assert_eq!(i64::from(state.queue_status), -1_i64);
+        let mut lane = DialogLane::default();
+        status_answer(&mut lane, -1);
+        assert_eq!(
+            lane.take(),
+            [DialogSignal::Event(
+                "UPDATE_GM_STATUS".into(),
+                vec![ScriptValue::Int(-1)]
+            )]
+        );
     }
 
     #[test]
-    fn a_dead_session_forgets_the_ticket_and_both_answer_counts() {
+    fn a_dead_session_forgets_the_owed_reasks() {
         let mut state = GmTicketState::default();
-        state.answer(Some(ticket()));
-        state.answer_queue(1);
+        state.note_write_landed();
         state.clear_session();
-        assert!(state.ticket.is_none());
-        assert_eq!(state.answers, 0);
-        assert_eq!(state.queue_answers, 0);
+        assert_eq!(state.take_reasks(), 0);
     }
 
     #[test]

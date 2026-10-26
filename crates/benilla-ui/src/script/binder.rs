@@ -1,11 +1,13 @@
 //! `ConfirmBinder` and `CheckBinderDist`, the engine globals the `CONFIRM_BINDER` dialog calls
 //! (`StaticPopup.lua:1321-1335`): Accept binds, and the dialog hides once the distance check
-//! fails. The question arrives as the event's argument, so there is nothing to read back.
+//! fails. The question arrives as the event's argument; the latch is read through the host at the
+//! call.
 
 use mlua::Lua;
 
 use super::binding_abi::flag;
-use super::Model;
+use super::live::ask;
+use super::{BinderPendingQuery, Model};
 
 /// The binder's verb the host applies inside its call ([`super::ScriptCall::Binder`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,12 +44,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CheckBinderDist()`, polled by the dialog's OnUpdate: 1 or nil (`0x48d210`).
+    // `CheckBinderDist()`, polled by the dialog's OnUpdate: 1 or nil (`0x48d210`), the latch read
+    // at the call (`0x5dff50`).
     g.set(
         "CheckBinderDist",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.binder_pending))
+            let pending = ask(lua, &BinderPendingQuery).unwrap_or_else(|| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.binder_pending
+            });
+            Ok(flag(pending))
         })?,
     )?;
 
