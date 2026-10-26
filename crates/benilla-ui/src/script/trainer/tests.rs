@@ -266,6 +266,20 @@ fn service_getters_read_the_row_at_a_visible_index() {
     assert!(s
         .eval::<bool>("return GetTrainerServiceSkillReq(1) == nil")
         .unwrap());
+
+    // An empty name answers `nil, 0` and the flag (`0x4d9589`).
+    let mut t = trainer();
+    t.services[0].skill_req = Some(TrainerSkillReq {
+        name: String::new(),
+        rank: 100,
+        met: false,
+    });
+    s.set_trainer(Some(t));
+    assert!(s
+        .eval::<bool>(
+            "local n, r, m = GetTrainerServiceSkillReq(2) return n == nil and r == 0 and m == nil"
+        )
+        .unwrap());
 }
 
 /// The reference's filter hide exempts no header (`0x4d8528`, `0x4d8535`).

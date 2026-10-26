@@ -69,8 +69,8 @@ fn filter_bit_named(name: &str) -> Option<u32> {
 /// The state mask `"all"` sets (`0x4da2a9`): the three states a filter can name.
 const TRAINER_FILTER_ALL: u32 = 7;
 
-/// A service's skill requirement (`GetTrainerServiceSkillReq`). The wire has no per-gate bit, so
-/// `met` comes from the service's `category`.
+/// A service's skill requirement (`GetTrainerServiceSkillReq`). `met` is the snapshot's answer to
+/// the player's skill; the getter reads it again at the call ([`TrainerServiceLive::skill_met`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrainerSkillReq {
     pub name: String,
@@ -234,6 +234,9 @@ pub struct TrainerServiceLive {
     pub description: Option<TooltipText>,
     pub description_wait: Option<ProductWait>,
     pub ability_reqs: Vec<TrainerAbilityReq>,
+    /// `GetTrainerServiceSkillReq`'s third value as the call finds it (`0x4d9570`): the player's
+    /// skill reaches the required value, 1 whenever nothing asks it.
+    pub skill_met: bool,
 }
 
 impl super::UiScript {
@@ -682,6 +685,7 @@ fn live(lua: &Lua, model: &Model, index: usize) -> Option<TrainerServiceLive> {
             description: s.description.clone().map(TooltipText::from),
             description_wait: s.description_wait,
             ability_reqs: s.ability_reqs.clone(),
+            skill_met: s.skill_req.as_ref().is_none_or(|r| r.met),
         })
     })
 }
@@ -938,10 +942,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(req) = service(&model, index).and_then(|s| s.skill_req.as_ref()) else {
                 return Ok(binding_abi::tuple(&[None, Some(0), Some(1)]));
             };
+            // The flag compares the player's skill at the call, not the row's colour (`0x4d9570`).
+            let met = live(lua, &model, index).map_or(req.met, |l| l.skill_met);
+            // An empty name answers `nil, 0` and the flag (`0x4d9589`-`0x4d9599`).
+            if req.name.is_empty() {
+                return Ok(binding_abi::tuple(&[None, Some(0), met.then_some(1)]));
+            }
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&req.name)?),
                 Value::Integer(i64::from(req.rank)),
-                binding_abi::flag(req.met),
+                binding_abi::flag(met),
             ]))
         })?,
     )?;

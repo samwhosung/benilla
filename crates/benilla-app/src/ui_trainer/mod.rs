@@ -15,8 +15,8 @@ use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    TrainerAbilityReq, TrainerService, TrainerServiceCategory, TrainerServiceLive, TrainerSkillReq,
-    TrainerState, TrainerTooltip, UiScript, TRAINER_GROUP_KNOWN,
+    TrainerAbilityReq, TrainerService, TrainerServiceLive, TrainerSkillReq, TrainerState,
+    TrainerTooltip, UiScript, TRAINER_GROUP_KNOWN,
 };
 
 use crate::entities::ItemDisplays;
@@ -232,6 +232,38 @@ pub(super) struct ReqBooks<'a> {
     /// The player's race and class, which index the taught spell's line (`0x60c920` →
     /// `0x6de040`).
     pub(super) race_class: (u8, u8),
+    /// The player's `PLAYER_SKILL_INFO` slots, `Some` while the player object exists: the skill
+    /// requirement scans them by line (`0x4d94d6`-`0x4d9524`), and the skill-line name needs the
+    /// player (`0x4d91fd`-`0x4d921c`).
+    pub(super) skills: Option<&'a [benilla_protocol::messages::PlayerSkillSlot]>,
+}
+
+/// `GetTrainerServiceSkillReq`'s flag (`0x4d94d6`-`0x4d9575`): 1 unless the requirement names a
+/// line with a row and the player's first slot for it, its value plus the permanent bonus (added
+/// only to a nonzero value), falls short of the required value; no player, no requirement and an
+/// unknown line keep the default 1 (`0x4d945a`, `0x4d95bc`).
+fn skill_req_met(
+    wire: &TrainerSpell,
+    skill_lines: Option<&SkillLineCatalog>,
+    books: &ReqBooks,
+) -> bool {
+    let Some(slots) = books.skills else {
+        return true;
+    };
+    if wire.req_skill == 0
+        || wire.req_skill_value == 0
+        || !skill_lines.is_none_or(|c| c.line(wire.req_skill).is_some())
+    {
+        return true;
+    }
+    let total = slots
+        .iter()
+        .find(|s| u32::from(s.skill_id) == wire.req_skill)
+        .map_or(0, |s| match s.value {
+            0 => 0,
+            v => u32::from(v) + u32::from(s.perm_bonus as u16),
+        });
+    total >= wire.req_skill_value
 }
 
 /// Resolve one wire [`TrainerSpell`] into the Lua [`TrainerService`]; `books` colour each
@@ -255,17 +287,18 @@ fn resolve_service(
     let taught = spells.learned_spell(wire.spell).unwrap_or(wire.spell);
     let display = spells.get(wire.spell);
     let cat = category(wire.state);
-    // The wire has no per-gate bit, so the skill gate follows the service's category; the 1.12
-    // client compares the player's skill value itself, which is not built here.
-    let skill_met = cat != TrainerServiceCategory::Unavailable;
-    let skill_req = (wire.req_skill != 0).then(|| TrainerSkillReq {
-        name: skill_lines
-            .and_then(|c| c.line(wire.req_skill))
-            .map(|l| l.name.clone())
-            .unwrap_or_else(|| format!("Skill {}", wire.req_skill)),
-        rank: wire.req_skill_value,
-        met: skill_met,
-    });
+    // The flag compares the player's skill value itself, whatever the row's colour (`0x4d9570`).
+    let skill_met = skill_req_met(wire, skill_lines, books);
+    // A zero line or value, a line `SkillLine.dbc` lacks and no player are all the miss
+    // `nil, 0, 1` (`0x4d9487`-`0x4d94ca` → `0x4d95bc`).
+    let skill_req = (wire.req_skill_value != 0 && books.skills.is_some())
+        .then(|| skill_lines?.line(wire.req_skill))
+        .flatten()
+        .map(|l| TrainerSkillReq {
+            name: l.name.clone(),
+            rank: wire.req_skill_value,
+            met: skill_met,
+        });
     let (is_trade_skill, learn_spell) = service_kind(wire.spell, spells);
     // The wrapper is never in `SkillLineAbility`, so the skill-line arm keys on the taught spell;
     // a service it cannot place drops, as in the client's builder, and is logged.
@@ -390,6 +423,7 @@ fn live_service(
         description,
         description_wait,
         ability_reqs,
+        skill_met: skill_req_met(wire, skill_lines, books),
     }
 }
 
@@ -684,10 +718,16 @@ impl TrainerReads<'_, '_> {
                     .collect(),
                 _ => BTreeSet::new(),
             });
+        let skill_slots: Option<Vec<_>> = store.map(|s| {
+            (0..PLAYER_SKILL_SLOTS)
+                .filter_map(|i| s.0.player_skill(i))
+                .collect()
+        });
         let books = ReqBooks {
             player: &actions.spells,
             pet: pet_book.as_ref(),
             race_class: store.map_or((0, 0), |s| s.race_class()),
+            skills: skill_slots.as_deref(),
         };
         Some(f(&Resolver {
             spells: &spells.catalog,
