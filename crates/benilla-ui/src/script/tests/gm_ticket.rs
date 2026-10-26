@@ -140,6 +140,43 @@ fn new_and_update_are_distinguishable_and_keep_their_order() {
     );
 }
 
+/// Both writes gate the type with `is-number` and the text with `is-number-or-string`
+/// (`0x48c9d8`, `0x48c9e8`) and raise their own line (`0x842acc`, `0x842aec`); the type is
+/// `_ftol`ed with no range check (`0x48c9fe`), so `-1` is sent as its 32-bit pattern and `"2.9"`
+/// as 2.
+#[test]
+fn ticket_writes_raise_their_usage_line_and_take_any_number_type() {
+    let mut s = in_world();
+    s.keep_calls();
+    for (verb, line) in [
+        ("NewGMTicket", "Usage: NewGMTicket(type, text)"),
+        ("UpdateGMTicket", "Usage: UpdateGMTicket(type, text)"),
+    ] {
+        for args in ["", "1", "nil, 'x'", "{}, 'x'", "1, true", "1, {}"] {
+            let e = s.run(&format!("{verb}({args})")).unwrap_err().to_string();
+            assert!(e.contains(line), "{verb}({args}) -> {e}");
+        }
+    }
+    assert!(s.take_gm_ticket_intents().is_empty());
+    s.run("NewGMTicket(-1, 'x') UpdateGMTicket('2.9', 5)")
+        .unwrap();
+    assert_eq!(
+        s.take_gm_ticket_intents(),
+        vec![
+            GmTicketIntent::Write(GmTicketWrite {
+                category: u32::MAX,
+                text: "x".into(),
+                is_new: true,
+            }),
+            GmTicketIntent::Write(GmTicketWrite {
+                category: 2,
+                text: "5".into(),
+                is_new: false,
+            }),
+        ]
+    );
+}
+
 /// An empty text is refused inside the call and sends nothing: a new ticket tests the copied
 /// text's first byte (`0x5ef802`-`0x5ef80a`), an update likewise (`0x5efae7`), and each raises
 /// `ERR_TICKET_NO_TEXT` through `DisplayError` (`push 0x157`, `0x5ef80c`/`0x5efaeb`).
