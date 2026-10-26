@@ -84,11 +84,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let h = frame_handle_of(lua, &this)?;
                 let pair = (it.next(), it.next());
                 // `lua_isnumber`: a number, or a string Lua 5.0's `luaV_tonumber` converts.
-                let num = |v: &Option<Value>| match v {
-                    Some(Value::Number(n)) => Some(*n as f32),
-                    Some(Value::Integer(i)) => Some(*i as f32),
-                    Some(Value::String(s)) => s.to_str().ok()?.trim().parse::<f32>().ok(),
-                    _ => None,
+                let num = |v: &Option<Value>| {
+                    crate::script::binding_abi::is_number(lua, v.clone()?).map(|n| n as f32)
                 };
                 let (Some(w), Some(hgt)) = (num(&pair.0), num(&pair.1)) else {
                     let model = lua.app_data_ref::<Model>().expect("model");

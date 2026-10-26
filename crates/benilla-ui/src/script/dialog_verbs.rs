@@ -3,7 +3,7 @@
 
 use mlua::{Lua, Value};
 
-use super::binding_abi::{bool_or_default, coerced_number, flag};
+use super::binding_abi::{bool_or_default, flag, number_arg};
 use super::live::ask;
 use super::{
     meeting_stone_text, AreaSpiritHealerSecsQuery, InstanceBootSecsQuery, MeetingStoneQuery, Model,
@@ -118,21 +118,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "AcceptBattlefieldPort",
         lua.create_function(|lua, (index, accept): (Value, Value)| {
-            let is_number = match &index {
-                Value::Integer(_) | Value::Number(_) => true,
-                Value::String(s) => s
-                    .to_str()
-                    .ok()
-                    .is_some_and(|t| t.trim().parse::<f64>().is_ok()),
-                _ => false,
-            };
-            if !is_number {
-                return Err(mlua::Error::runtime(
-                    "Usage: AcceptBattlefieldPort(index, accept)",
-                ));
-            }
-            let slot = coerced_number(lua, Some(index)).trunc();
-            if !(1.0..=3.0).contains(&slot) {
+            // `0x6f34d0`, then `_ftol` (`0x4ab3ea`) and `dec` against 3.
+            let slot = number_arg(lua, index, "Usage: AcceptBattlefieldPort(index, accept)")?;
+            if !(1..=3).contains(&slot) {
                 return Ok(());
             }
             let accept = bool_or_default(Some(&accept), false);

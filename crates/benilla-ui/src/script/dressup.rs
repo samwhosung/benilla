@@ -6,6 +6,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use super::binding_abi;
 use super::object::frame_handle_of;
 use super::Model;
 use crate::widget::FrameKind;
@@ -61,17 +62,11 @@ pub(super) fn redress_if_dressup(lua: &Lua, this: &Table) -> mlua::Result<()> {
 
 /// `trunc(tonumber(arg))`, the reference's `__ftol` (`0x40a2b0`) over `lua_tonumber`; anything
 /// else is 0.
-fn item_arg(v: &Value) -> i64 {
-    match v {
-        Value::Integer(i) => *i,
-        Value::Number(n) => n.trunc() as i64,
-        Value::String(s) => s
-            .to_str()
-            .ok()
-            .and_then(|t| t.trim().parse::<f64>().ok())
-            .map_or(0, |n| n.trunc() as i64),
-        _ => 0,
-    }
+fn item_arg(lua: &Lua, v: &Value) -> i64 {
+    i64::from(binding_abi::ftol(binding_abi::coerced_number(
+        lua,
+        Some(v.clone()),
+    )))
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -103,7 +98,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "TryOn",
         lua.create_function(|lua, (this, item): (Table, Value)| {
             frame_handle_of(lua, &this)?;
-            if let Ok(id) = u32::try_from(item_arg(&item)) {
+            if let Ok(id) = u32::try_from(item_arg(lua, &item)) {
                 if id != 0 {
                     queue(lua, DressUpIntent::TryOn(id));
                 }

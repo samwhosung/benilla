@@ -9,7 +9,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::battlefield_live as live;
-use super::binding_abi::number_arg;
+use super::binding_abi::{self, number_arg};
 use super::Model;
 
 /// One scoreboard row as the app resolved it, in wire order.
@@ -158,18 +158,9 @@ impl super::UiScript {
     }
 }
 
-/// A Lua number or numeric string to `i32`, truncated as the client's `__ftol` does.
-fn number_of(v: &Value) -> Option<i32> {
-    match v {
-        Value::Integer(i) => Some(*i as i32),
-        Value::Number(n) => Some(n.trunc() as i64 as i32),
-        Value::String(s) => s
-            .to_str()
-            .ok()
-            .and_then(|t| t.trim().parse::<f64>().ok())
-            .map(|n| n.trunc() as i64 as i32),
-        _ => None,
-    }
+/// A Lua number or numeric string (`0x6f34d0`) to `i32`, truncated as the client's `__ftol` does.
+fn number_of(lua: &Lua, v: &Value) -> Option<i32> {
+    binding_abi::is_number(lua, v.clone()).map(binding_abi::ftol)
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -244,7 +235,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SetBattlefieldScoreFaction",
         lua.create_function(|lua, faction: Option<Value>| {
-            let f = faction.as_ref().and_then(number_of).unwrap_or(-1);
+            let f = faction
+                .as_ref()
+                .and_then(|v| number_of(lua, v))
+                .unwrap_or(-1);
             if !(-1..=1).contains(&f) {
                 return Ok(());
             }

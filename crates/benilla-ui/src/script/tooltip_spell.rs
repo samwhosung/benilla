@@ -728,7 +728,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // the player's book), the index `trunc(n - 1)` in `[0, 0x400)`, else the binding
             // raises "Invalid spell slot in SetSpell" (`0x532ec8`, string `0x855290`).
             let (book_id, book_type) =
-                super::spellbook::spell_slot_args(book_id, book_type, "SetSpell")?;
+                super::spellbook::spell_slot_args(lua, book_id, book_type, "SetSpell")?;
             let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");

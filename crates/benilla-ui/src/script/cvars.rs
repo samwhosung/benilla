@@ -1045,17 +1045,7 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, value: Value| {
             // `lua_isnumber` (`0x4891fe`): a number or a numeric string; anything else raises
             // (`0x6f4940`).
-            let v = match &value {
-                Value::Integer(i) => *i as f64,
-                Value::Number(n) => *n,
-                Value::String(s) => {
-                    match s.to_str().ok().and_then(|s| s.trim().parse::<f64>().ok()) {
-                        Some(n) => n,
-                        None => return Err(mlua::Error::runtime(USAGE_SET_GAMMA)),
-                    }
-                }
-                _ => return Err(mlua::Error::runtime(USAGE_SET_GAMMA)),
-            };
+            let v = super::binding_abi::float_arg(lua, value, USAGE_SET_GAMMA)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             write_cvar(&mut model, CVAR_GAMMA, format_f(1.0 - v));
             // Zero return values, not nil (`eax = 0` at every `ret`).
@@ -1111,27 +1101,13 @@ fn install_world_detail_verbs(lua: &Lua) -> mlua::Result<()> {
         "SetWorldDetail",
         lua.create_function(|lua, value: Value| {
             // `lua_isnumber`: a number or a numeric string; anything else is the usage error.
-            let n = match &value {
-                Value::Integer(i) => *i as f64,
-                Value::Number(n) => *n,
-                Value::String(s) => {
-                    match s.to_str().ok().and_then(|s| s.trim().parse::<f64>().ok()) {
-                        Some(n) => n,
-                        None => return Err(mlua::Error::runtime(USAGE_SET_WORLD_DETAIL)),
-                    }
-                }
-                _ => return Err(mlua::Error::runtime(USAGE_SET_WORLD_DETAIL)),
+            let n = super::binding_abi::number_arg(lua, value, USAGE_SET_WORLD_DETAIL)?;
+            // `_ftol` (`0x488e0a`), then a signed `0..3` (`0x488e13`, `0x488e1c`): -0.5 is stop 0,
+            // only <= -1 raises, and NaN is stop 0, its QWORD `fistp` having a low dword of 0.
+            let stop = match usize::try_from(n) {
+                Ok(stop) if stop < 3 => stop,
+                _ => return Err(mlua::Error::runtime(RANGE_SET_WORLD_DETAIL)),
             };
-            // Truncate toward zero, then the reference's bounds: -0.5 is stop 0 and only <= -1
-            // raises. NaN raises too, as the reference's `fistp` gives the negative indefinite.
-            if n.is_nan() {
-                return Err(mlua::Error::runtime(RANGE_SET_WORLD_DETAIL));
-            }
-            let stop = n.trunc();
-            if !(0.0..3.0).contains(&stop) {
-                return Err(mlua::Error::runtime(RANGE_SET_WORLD_DETAIL));
-            }
-            let stop = stop as usize;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // The reference's two writes, `frillDensity` as "%d" (`0x488e26`) and `smallCull` as
             // "%f" of the f32 (`0x488e63`), then ours, the stop: writing it here keeps

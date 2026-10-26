@@ -346,19 +346,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         m.set(
             "SetSlot",
             lua.create_function(|lua, (this, index): (Table, Value)| {
-                let n = match &index {
-                    Value::Integer(i) => *i as f64,
-                    Value::Number(n) => *n,
-                    // `lua_isnumber` accepts a numeric string.
-                    Value::String(s) => match s.to_str().ok().and_then(|s| s.parse::<f64>().ok()) {
-                        Some(n) => n,
-                        None => return Err(mlua::Error::runtime("Usage: SetSlot(index)")),
-                    },
-                    _ => return Err(mlua::Error::runtime("Usage: SetSlot(index)")),
-                };
+                let n = super::binding_abi::number_arg(lua, index, "Usage: SetSlot(index)")?;
                 // `ftol` truncates toward zero, then `dec`; below 1 takes nothing, as the
                 // reference's bounds-checked consumer of the raw decrement does.
-                let slot = (n.trunc() >= 1.0).then(|| n.trunc() as u32 - 1);
+                let slot = (n >= 1).then(|| n as u32 - 1);
                 super::button::set_loot_slot(lua, &this, slot)?;
                 Ok(())
             })?,

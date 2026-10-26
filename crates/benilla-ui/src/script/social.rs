@@ -259,22 +259,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, args: mlua::MultiValue| {
             let args: Vec<Value> = args.into_iter().collect();
             let arg = |i: usize| args.get(i - 1).cloned().unwrap_or(Value::Nil);
-            let number = |v: &Value| match v {
-                Value::Integer(i) => Some(*i as f64),
-                Value::Number(n) => Some(*n),
-                Value::String(s) => s.to_str().ok().and_then(|s| s.trim().parse::<f64>().ok()),
-                _ => None,
-            };
+            use crate::script::binding_abi::{coerced_number, ftol, is_number};
             let mut slots = [0u32; 3];
             for (slot, i) in slots.iter_mut().zip([1usize, 3, 5]) {
-                let Some(ty) = number(&arg(i)) else { break };
-                let ty = ty.trunc();
-                if !(0.0..6.0).contains(&ty) {
+                // `is-number` then `_ftol` for the type (`0x4e96d5`, `0x4e96e7`), compared
+                // unsigned below 6; a bare `tonumber` and `_ftol` for the entry (`0x4e96fd`).
+                let Some(ty) = is_number(lua, arg(i)) else {
+                    break;
+                };
+                let ty = ftol(ty) as u32;
+                if ty >= 6 {
                     break;
                 }
-                let entry = number(&arg(i + 1)).unwrap_or(0.0).trunc();
+                let entry = ftol(coerced_number(lua, Some(arg(i + 1)))) as u32;
                 // `&`, not `|`: the reference's own pack.
-                *slot = ((ty as u32) << 24) & (entry as i64 as u32);
+                *slot = (ty << 24) & entry;
             }
             let comment = match arg(4) {
                 // `lua_tostring(7)` (`0x4e9741`): a number is its `%.14g` text.

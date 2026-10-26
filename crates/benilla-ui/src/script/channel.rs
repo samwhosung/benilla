@@ -289,20 +289,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetGuildRecruitmentMode",
         // As `0x4a0060`: `lua_isnumber` (`0x6f34d0`, so `"1"` passes), truncation toward zero
         // (`0x40a2b0`), then the 0..2 range gate (`0x4a0094`); success returns zero values.
-        lua.create_function(|lua, mode: Option<Value>| {
-            let n = match mode.as_ref() {
-                Some(Value::Integer(i)) => *i as f64,
-                Some(Value::Number(n)) => *n,
-                // `lua_isnumber` is true for a string `luaO_str2d` fully consumes.
-                Some(Value::String(s)) => s
-                    .to_str()
-                    .ok()
-                    .and_then(|s| s.trim().parse::<f64>().ok())
-                    .ok_or_else(|| mlua::Error::runtime("Usage: SetGuildRecruitmentMode(mode)"))?,
-                _ => return Err(mlua::Error::runtime("Usage: SetGuildRecruitmentMode(mode)")),
-            };
-            let n = n.trunc();
-            if !(0.0..2.0).contains(&n) {
+        lua.create_function(|lua, mode: Value| {
+            // `_ftol` at `0x4a008f`, so NaN and an infinity are mode 0.
+            let n =
+                super::binding_abi::number_arg(lua, mode, "Usage: SetGuildRecruitmentMode(mode)")?;
+            if !(0..2).contains(&n) {
                 return Err(mlua::Error::runtime(
                     "SetGuildRecruitmentMode: invalid mode",
                 ));

@@ -8,6 +8,16 @@ use super::view_of;
 use crate::script::object::frame_handle_of;
 use crate::script::{ItemTemplateView, Model};
 
+/// The candidate slots to pass over, from `offset`: `is-number`, `_ftol` and `dec` (`0x53620e`-
+/// `0x536228`, `0x535f73`-`0x535f8d`), absent 1. The countdown stops at 0 (`0x536271`), so a
+/// negative one never matches: `None`.
+fn offset_left(lua: &Lua, offset: Option<&Value>) -> Option<i32> {
+    let left = offset
+        .and_then(|v| crate::script::binding_abi::is_number(lua, v.clone()))
+        .map_or(0, |n| crate::script::binding_abi::ftol(n).wrapping_sub(1));
+    (left >= 0).then_some(left)
+}
+
 /// The body both compare bindings run (`0x536080`, `0x535d70`): walk `0x809200[InventoryType]`'s
 /// slots, skipping empty ones uncounted and ones whose worn item's class differs (`0x5d9f30`),
 /// until `left` matches have passed; then run `SetInventoryItem` there with the header latch armed,
@@ -119,38 +129,22 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(
             |lua, (this, index, offset): (Table, Value, Option<Value>)| {
                 let h = frame_handle_of(lua, &this)?;
-                let as_number = |v: &Value| -> Option<f64> {
-                    match v {
-                        Value::Integer(i) => Some(*i as f64),
-                        Value::Number(n) => Some(*n),
-                        // `lua_isnumber` accepts a numeric string, here as everywhere.
-                        Value::String(s) => s.to_str().ok().and_then(|s| s.parse::<f64>().ok()),
-                        _ => None,
-                    }
-                };
                 // The one argument whose absence raises, with the reference's usage text.
-                let Some(idx) = as_number(&index) else {
+                // `lua_isnumber` (`0x6f34d0`): a numeric string as `luaO_str2d` reads it.
+                let Some(idx) = crate::script::binding_abi::is_number(lua, index) else {
                     return Err(mlua::Error::runtime(
                         "Usage: SetMerchantCompareItem(\"slot\" [, offset])",
                     ));
                 };
-                // Re-based in f64, then truncated toward zero, as the reference does: 0.5 is row 1.
-                let row = (idx - 1.0).trunc();
-                if row.is_nan() || row < 0.0 || row > f64::from(u32::MAX) {
+                // Re-based in f64, then `_ftol` (`0x536166`, `0x53616c`) and a signed test: 0.5 is
+                // row 1, and so is NaN.
+                let Ok(row) = usize::try_from(crate::script::binding_abi::ftol(idx - 1.0)) else {
                     return Ok(Value::Nil);
-                }
-                // `offset` is truncated before it is re-based; absent, it is 1.
-                let left = match offset.as_ref().and_then(as_number) {
-                    Some(n) if n.is_nan() => return Ok(Value::Nil),
-                    Some(n) => n.trunc() - 1.0,
-                    None => 0.0,
                 };
-                if left < 0.0 {
+                let Some(left) = offset_left(lua, offset.as_ref()) else {
                     return Ok(Value::Nil);
-                }
+                };
 
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let row = row as usize;
                 let Some(item_id) = ({
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     crate::script::merchant::row(lua, &model, row).map(|it| it.item_id)
@@ -161,7 +155,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     return Ok(Value::Nil);
                 };
 
-                compare_against_worn(lua, &this, h, &offered, left)
+                compare_against_worn(lua, &this, h, &offered, f64::from(left))
             },
         )?,
     )?;
@@ -176,39 +170,24 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(
             |lua, (this, kind, index, offset): (Table, Value, Value, Option<Value>)| {
                 let h = frame_handle_of(lua, &this)?;
-                let as_number = |v: &Value| -> Option<f64> {
-                    match v {
-                        Value::Integer(i) => Some(*i as f64),
-                        Value::Number(n) => Some(*n),
-                        Value::String(s) => s.to_str().ok().and_then(|s| s.parse::<f64>().ok()),
-                        _ => None,
-                    }
-                };
                 // `lua_isstring` then `lua_tostring` (`0x535e28`, `0x535e50`).
                 let Some(kind) = crate::script::binding_abi::optional_string(lua, &kind) else {
                     return Err(mlua::Error::runtime(
                         "Usage: SetAuctionCompareItem(\"type\", index [, offset])",
                     ));
                 };
-                let Some(idx) = as_number(&index) else {
+                // `lua_isnumber` (`0x6f34d0`): a numeric string as `luaO_str2d` reads it.
+                let Some(idx) = crate::script::binding_abi::is_number(lua, index) else {
                     return Err(mlua::Error::runtime(
                         "Usage: SetAuctionCompareItem(\"type\", index [, offset])",
                     ));
                 };
-                let row = (idx - 1.0).trunc();
-                if row.is_nan() || row < 0.0 || row > f64::from(u32::MAX) {
+                // `_ftol` then `dec` (`0x535e64`, `0x535e79`), compared unsigned with the list's
+                // count: 0.5 is row 0, past every list.
+                let row = (crate::script::binding_abi::ftol(idx) as u32).wrapping_sub(1) as usize;
+                let Some(left) = offset_left(lua, offset.as_ref()) else {
                     return Ok(Value::Nil);
-                }
-                let left = match offset.as_ref().and_then(as_number) {
-                    Some(n) if n.is_nan() => return Ok(Value::Nil),
-                    Some(n) => n.trunc() - 1.0,
-                    None => 0.0,
                 };
-                if left < 0.0 {
-                    return Ok(Value::Nil);
-                }
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let row = row as usize;
                 let Some(item_id) = ({
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     let list = crate::script::auction::list_index_of(&kind);
@@ -224,7 +203,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(offered) = offered_view(lua, h, item_id) else {
                     return Ok(Value::Nil);
                 };
-                compare_against_worn(lua, &this, h, &offered, left)
+                compare_against_worn(lua, &this, h, &offered, f64::from(left))
             },
         )?,
     )?;

@@ -279,22 +279,14 @@ pub(super) fn is_pet_book(book_type: &str) -> bool {
 /// string (`0x4b3ee8`), and the index `trunc(arg1 - 1)` in `[0, 0x400)`, else the binding raises
 /// `Invalid spell slot in <Verb>`. Answers the 1-based id and the normalised book type.
 pub(super) fn spell_slot_args(
+    lua: &Lua,
     id: Value,
     book_type: Value,
     verb: &str,
 ) -> mlua::Result<(u32, String)> {
     let invalid = || mlua::Error::runtime(format!("Invalid spell slot in {verb}"));
-    // `lua_isnumber` + `lua_tonumber` (`0x6f34d0`/`0x6f3620`): a numeric string is a number.
-    let index = match id {
-        Value::Integer(i) => i as f64,
-        Value::Number(n) => n,
-        Value::String(s) => s
-            .to_str()
-            .ok()
-            .and_then(|s| s.trim().parse::<f64>().ok())
-            .ok_or_else(invalid)?,
-        _ => return Err(invalid()),
-    };
+    // `lua_isnumber` + `lua_tonumber` (`0x6f34d0`/`0x6f3620`): a string `luaO_str2d` reads.
+    let index = lua.coerce_number(id)?.ok_or_else(invalid)?;
     let book = match book_type {
         Value::String(s) => s.to_str().map(|s| s.to_string()).map_err(|_| invalid())?,
         Value::Integer(_) | Value::Number(_) => String::new(),
@@ -478,7 +470,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSpellName",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "GetSpellName")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "GetSpellName")?;
             // Out of `[0, 0x400)` already raised in `spell_slot_args`; the binding's own bound
             // check (`0x4b4018`) is never taken.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -496,7 +488,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSpellTexture",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "GetSpellTexture")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "GetSpellTexture")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let tex = book_slot(lua, &model, id, &book_type).and_then(|s| s.texture.clone());
             match tex {
@@ -511,7 +503,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "IsCurrentCast",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "IsCurrentCast")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "IsCurrentCast")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let current = book_slot(lua, &model, id, &book_type).is_some_and(|s| s.current);
             // 1 or nil, never false, as the reference's bindings answer.
@@ -530,7 +522,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSpellCooldown",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "GetSpellCooldown")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "GetSpellCooldown")?;
             let now = crate::script::clock::now(lua);
             let (query, snapshot) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -562,7 +554,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "IsSpellPassive",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "IsSpellPassive")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "IsSpellPassive")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(
                 book_slot(lua, &model, id, &book_type).is_some_and(|s| s.passive),
@@ -582,7 +574,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CastSpell",
         lua.create_function(
             |lua, (id, book_type, on_self): (Value, Value, Option<Value>)| {
-                let (id, book_type) = spell_slot_args(id, book_type, "CastSpell")?;
+                let (id, book_type) = spell_slot_args(lua, id, book_type, "CastSpell")?;
                 let on_self = bool_or_default(on_self.as_ref(), false);
                 // The player book's cast is `TryCastSpell`, behind the gate's tag 2 (`0x6e4bc1`),
                 // after the cancels of an active aura or form (`0x4b3466`, `0x4b35da`), so the call
@@ -643,7 +635,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSpellAutocast",
         lua.create_function(move |lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "GetSpellAutocast")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "GetSpellAutocast")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let (allowed, enabled) = book_slot(lua, &model, id, &book_type)
                 .filter(|_| is_pet_book(&book_type))
@@ -661,7 +653,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ToggleSpellAutocast",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "ToggleSpellAutocast")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "ToggleSpellAutocast")?;
             // `SendSpellAutocast 0x4bccb0` opens on the gate's tag 2 (`0x4bccc1`).
             if !is_pet_book(&book_type) || !protected::gate(lua, Tag::CAST) {
                 return Ok(());
@@ -753,7 +745,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PickupSpell",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
-            let (id, book_type) = spell_slot_args(id, book_type, "PickupSpell")?;
+            let (id, book_type) = spell_slot_args(lua, id, book_type, "PickupSpell")?;
             pickup_spell(lua, id, &book_type);
             Ok(())
         })?,

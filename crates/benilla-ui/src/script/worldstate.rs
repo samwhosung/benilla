@@ -63,23 +63,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetWorldStateUIInfo",
         lua.create_function(|lua, index: Value| {
-            let index = match index {
-                Value::Integer(i) => i as f64,
-                Value::Number(n) => n,
-                // A numeric string too, as `lua_isnumber` coerces.
-                Value::String(ref s) => match s.to_str().ok().and_then(|s| s.trim().parse().ok()) {
-                    Some(n) => n,
-                    None => return Err(mlua::Error::runtime("Usage: GetWorldStateUIInfo(index)")),
-                },
-                _ => return Err(mlua::Error::runtime("Usage: GetWorldStateUIInfo(index)")),
-            };
+            // `lua_isnumber` (`0x6f34d0`), so a numeric string too; `_ftol` (`0x4c5aad`), then
+            // `dec` and an unsigned compare with the row count (`0x4c5ab8`, `0x4c5abb`).
+            let index =
+                super::binding_abi::number_arg(lua, index, "Usage: GetWorldStateUIInfo(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                // Truncated toward zero by `__ftol`, then 1-based.
-                usize::try_from(index.trunc() as i64)
-                    .ok()
-                    .and_then(|i| i.checked_sub(1))
-                    .and_then(|i| model.worldstate.rows.get(i).cloned())
+                let i = (index as u32).wrapping_sub(1) as usize;
+                model.worldstate.rows.get(i).cloned()
             };
             let Some(r) = row else {
                 return Ok(MultiValue::from_vec(vec![Value::Integer(0)]));

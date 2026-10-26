@@ -592,15 +592,10 @@ fn equip_loc_token(inventory_type: u32) -> &'static str {
 /// string `lua_isnumber` (`0x6f34d0`) coerces, is the id alone; another string (`0x6f3510`) must
 /// pass `strnicmp(s, "item:", 5)` (`0x64a4c0`) for its four fields, else it is id 0, so a name or
 /// a hyperlink finds nothing; anything else raises the usage error (`0x842d24`, via `0x6f4940`).
-fn parse_item_arg(v: &Value) -> mlua::Result<(i64, i32, i32, i32)> {
-    let as_number = match v {
-        Value::Integer(i) => Some(*i as f64),
-        Value::Number(n) => Some(*n),
-        Value::String(s) => s.to_str().ok().and_then(|s| s.trim().parse::<f64>().ok()),
-        _ => None,
-    };
-    if let Some(n) = as_number {
-        return Ok((n as i64, 0, 0, 0));
+fn parse_item_arg(lua: &Lua, v: &Value) -> mlua::Result<(i64, i32, i32, i32)> {
+    if let Some(n) = binding_abi::is_number(lua, v.clone()) {
+        // Truncated by `_ftol` (`0x48e0b8`).
+        return Ok((i64::from(binding_abi::ftol(n)), 0, 0, 0));
     }
     // An `item:` string; any other string is id 0.
     let Value::String(s) = v else {
@@ -696,7 +691,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetItemInfo",
         lua.create_function(|lua, arg: Value| {
-            let (id, enchant, random_property, suffix) = parse_item_arg(&arg)?;
+            let (id, enchant, random_property, suffix) = parse_item_arg(lua, &arg)?;
             let Ok(item_id) = u32::try_from(id) else {
                 return Ok(MultiValue::new()); // no record holds a negative or past-u32 id
             };

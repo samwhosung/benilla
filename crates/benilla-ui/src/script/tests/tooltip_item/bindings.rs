@@ -678,6 +678,24 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
         call(&mut s, "ShoppingTooltip1:SetMerchantCompareItem(2.7, 1)"),
         "number"
     );
+    // `_ftol` (`0x53616c`): NaN and an infinity are 0, row 1; 2^32 + 1 keeps its low dword. The
+    // offset goes through `_ftol` too, so 2^32 + 2 is 2.
+    for expr in [
+        "ShoppingTooltip1:SetMerchantCompareItem(0/0, 1)",
+        "ShoppingTooltip1:SetMerchantCompareItem(1/0, 1)",
+        "ShoppingTooltip1:SetMerchantCompareItem(4294967298, 1)",
+        "ShoppingTooltip1:SetMerchantCompareItem(1, 4294967298)",
+    ] {
+        assert_eq!(call(&mut s, expr), "number", "{expr}");
+    }
+    assert_eq!(
+        call(
+            &mut s,
+            "ShoppingTooltip1:SetMerchantCompareItem(2, 4294967298)"
+        ),
+        "nil",
+        "offset 2 for the sword is the shield"
+    );
 
     let e = s
         .run(r#"ShoppingTooltip1:SetMerchantCompareItem({}, 1)"#)

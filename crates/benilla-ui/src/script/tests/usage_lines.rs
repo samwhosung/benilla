@@ -553,3 +553,113 @@ fn sort_guild_roster_raises_its_own_usage_line() {
     s.run("SortGuildRoster(5)").unwrap();
     assert_eq!(s.take_guild_calls(), [GuildCall::Sort("5".into())]);
 }
+
+/// `is-number` (`0x6f34d0`) reads a string through `luaO_str2d` (`0x6f5900`), whose `strtod` takes
+/// `d` as an exponent marker (`0x4112d1`) and no `inf` or `nan`: so `"1d0"` passes every gate
+/// below and `"nan"`, `"inf"` and `"infinity"` raise each binding's own line.
+#[test]
+fn a_numeric_string_is_read_as_the_clients_strtod_reads_it() {
+    let s = script();
+    s.run(
+        r#"
+        StrtodFrame = CreateFrame("Frame", "StrtodFrame")
+        StrtodModel = CreateFrame("Model", "StrtodModel")
+        StrtodTT = CreateFrame("GameTooltip", "StrtodTT", nil, "TestTooltipTemplate")
+    "#,
+    )
+    .unwrap();
+    for ok in [
+        r#"GetSpellName("1d0", "spell")"#,
+        r#"PickupSpell("2D0", "spell")"#,
+        r#"AcceptBattlefieldPort("5d0", 1)"#,
+        r#"SetGuildRecruitmentMode("0d0")"#,
+        "SetGuildRecruitmentMode(0/0)", // `_ftol` makes NaN mode 0 (`0x4a008f`)
+        r#"SetGamma("1d0")"#,
+        r#"SetWorldDetail("1d0")"#,
+        r#"GetWorldStateUIInfo("1d0")"#,
+        r#"StrtodFrame:SetMinResize("1d1", "2d1")"#,
+    ] {
+        s.run(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+    }
+    for bad in ["nan", "inf", "infinity"] {
+        for (call, line) in [
+            (
+                format!(r#"GetSpellName("{bad}", "spell")"#),
+                "Invalid spell slot in GetSpellName",
+            ),
+            (
+                format!(r#"CastSpell("{bad}", "spell")"#),
+                "Invalid spell slot in CastSpell",
+            ),
+            (
+                format!(r#"AcceptBattlefieldPort("{bad}", 1)"#),
+                "Usage: AcceptBattlefieldPort(index, accept)",
+            ),
+            (
+                format!(r#"SetGuildRecruitmentMode("{bad}")"#),
+                "Usage: SetGuildRecruitmentMode(mode)",
+            ),
+            (format!(r#"SetGamma("{bad}")"#), "Usage: SetGamma(value)"),
+            (
+                format!(r#"SetWorldDetail("{bad}")"#),
+                "Usage: SetWorldDetail",
+            ),
+            (
+                format!(r#"GetWorldStateUIInfo("{bad}")"#),
+                "Usage: GetWorldStateUIInfo(index)",
+            ),
+            (
+                format!(r#"StrtodFrame:SetMinResize("{bad}", 1)"#),
+                "Usage: StrtodFrame:SetMinResize(minWidth, minHeight)",
+            ),
+            (
+                format!(r#"StrtodModel:SetLight("{bad}")"#),
+                "Usage: Model:SetLight(enabled",
+            ),
+            (
+                format!(r#"StrtodTT:SetMerchantCompareItem("{bad}")"#),
+                "Usage: SetMerchantCompareItem(",
+            ),
+        ] {
+            let e = err(&s, &call);
+            assert!(e.contains(line), "{call}: {e}");
+        }
+    }
+}
+
+/// The number is truncated by `_ftol` (`0x40a2b0`), whose QWORD `fistp` keeps the low dword: NaN
+/// and an infinity are 0, and 2^32 + n is n (`SetWorldDetail` `0x488e0a`, `GetWorldStateUIInfo`
+/// `0x4c5aad` then `dec` and an unsigned compare).
+#[test]
+fn number_arguments_truncate_through_ftol() {
+    let mut s = script();
+    s.register_cvars([
+        (crate::script::CVAR_WORLD_DETAIL, "1"),
+        (crate::script::CVAR_FRILL_DENSITY, "32"),
+        (crate::script::CVAR_SMALL_CULL, "0.04"),
+    ]);
+    for (call, stop) in [
+        ("SetWorldDetail(0/0)", 0),
+        ("SetWorldDetail(4294967298)", 2),
+        ("SetWorldDetail(1/0)", 0),
+    ] {
+        s.run(call).unwrap_or_else(|e| panic!("{call}: {e}"));
+        assert_eq!(
+            s.eval::<i64>("return GetWorldDetail()").unwrap(),
+            stop,
+            "{call}"
+        );
+    }
+    s.set_world_state_ui(vec![WorldStateUiView {
+        text: "Row".into(),
+        ..Default::default()
+    }]);
+    let text = |s: &UiScript, i: &str| {
+        s.eval::<mlua::Value>(&format!("local _, t = GetWorldStateUIInfo({i}) return t"))
+            .unwrap()
+    };
+    assert!(matches!(text(&s, "4294967297"), mlua::Value::String(t) if t == "Row"));
+    for i in ["0/0", "0", "4294967296"] {
+        assert!(text(&s, i).is_nil(), "{i} is row 0, below the first");
+    }
+}
