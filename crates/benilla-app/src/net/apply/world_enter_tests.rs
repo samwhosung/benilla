@@ -1,8 +1,8 @@
 //! The world-enter sends wait for our own player's create, as the reference's do (`0x5dea50`):
 //! none goes out on the login edge alone, which fires before the server seats the player; the
 //! create sends `CMSG_SET_ACTIVE_MOVER`, then the cascade's `CMSG_QUERY_TIME`,
-//! `MSG_QUERY_NEXT_MAIL_TIME`, `CMSG_BATTLEFIELD_STATUS` and `CMSG 0x296`; a worldport's fresh
-//! create sends all five again.
+//! `MSG_QUERY_NEXT_MAIL_TIME`, `CMSG_BATTLEFIELD_STATUS` and `CMSG 0x296`, and for a dead body
+//! `CMSG_REPOP_REQUEST` last; a worldport's fresh create sends all five again.
 
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
@@ -42,6 +42,7 @@ fn app() -> (App, Receiver<ClientCommand>) {
                 crate::ui_mail::send_query_next_mail_time_on_enter,
                 crate::ui_battlefield::reset_on_world_enter,
                 crate::ui_dialog_verbs::meeting_stone_enter_world,
+                crate::death::repop_on_world_enter,
             )
                 .chain(),
         );
@@ -106,6 +107,43 @@ fn the_self_create_sends_the_five_in_the_reference_order() {
     assert_eq!(sent(&rx), Vec::<String>::new());
 }
 
+/// The cascade ends by releasing a dead body (`0x490a2d`-`0x490a38`, `0x490a3c` → `0x5e0ae0`):
+/// `CMSG_REPOP_REQUEST` after the cascade's other sends, which vmangos answers by making the
+/// player a ghost at the graveyard (`MiscHandler.cpp:48-67`). The same cascade runs on a `/reload`
+/// (`0x490168`); a live body sends none.
+#[test]
+fn a_dead_body_is_released_at_the_end_of_the_cascade() {
+    use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+    use benilla_protocol::messages::ObjectType;
+    use benilla_protocol::ObjectFields;
+    let body = |health| {
+        crate::net::ObjectStore(
+            ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, health), (FIELD_UNIT_MAXHEALTH, 100)])
+                .into_created(ObjectType::Player),
+        )
+    };
+    let enter = |health| {
+        let (mut client, rx) = app();
+        log_in(&mut client);
+        let me = self_create(&mut client);
+        client.world_mut().entity_mut(me).insert(body(health));
+        client.update();
+        (client, rx)
+    };
+    let (mut client, rx) = enter(0);
+    let mut released = the_five();
+    released.push("RepopRequest".into());
+    assert_eq!(sent(&rx), released);
+
+    // A `/reload` re-enters the cascade with the body still dead.
+    client.world_mut().write_message(WorldEnterCascadeMessage);
+    client.update();
+    assert_eq!(sent(&rx).last().map(String::as_str), Some("RepopRequest"));
+
+    let (_, rx) = enter(100);
+    assert_eq!(sent(&rx), the_five(), "alive: no release");
+}
+
 /// A cross-map worldport purges the streamed world and the server creates us afresh
 /// (`0x401bc0` rebuilds the object manager; the create takes the login's route).
 #[test]
@@ -155,5 +193,21 @@ fn the_client_schedules_the_sends_in_the_reference_order() {
         &mut app,
         crate::ui_battlefield::reset_on_world_enter,
         crate::ui_dialog_verbs::meeting_stone_enter_world
+    ));
+    // The release last (`0x490a3c`), after the pet ask in the unit feed (`0x4909c9`), then the
+    // arrival's death signal (`0x5deb65`).
+    assert!(runs_before(
+        &mut app,
+        crate::ui_dialog_verbs::meeting_stone_enter_world,
+        crate::death::repop_on_world_enter
+    ));
+    assert!(crate::ui_unit::feed_units_runs_before(
+        &mut app,
+        crate::death::repop_on_world_enter
+    ));
+    assert!(runs_before(
+        &mut app,
+        crate::death::repop_on_world_enter,
+        crate::death::feed_death
     ));
 }
