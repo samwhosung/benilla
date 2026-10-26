@@ -37,7 +37,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-protocol](#benilla-protocol): 30
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 131
-- [benilla-world](#benilla-world): 49
+- [benilla-world](#benilla-world): 50
 
 ### benilla-app
 
@@ -847,8 +847,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### collision
 
-- The reference's camera trace is a bare ray (`0x672170`); the sphere keeps the near plane out of a wall. ([`src/collision.rs:38`](../crates/benilla-world/src/collision.rs#L38))
+- The reference's camera trace is a bare ray (`0x672170`); the sphere keeps the near plane out of a wall. ([`src/collision.rs:56`](../crates/benilla-world/src/collision.rs#L56))
 - The slide, step and snap are avian's kinematic controller, with parry's edge-hit normals, not the reference's resolver, because pieces of that resolver grafted onto the controller left the mover in states the reference never reaches; only its face filters, the facing law and the backface band, are ported. ([`src/collision/one_sided.rs:12`](../crates/benilla-world/src/collision/one_sided.rs#L12))
+- The reference keeps the later record in file order on an exact tie (`0x6327e2`), and its box-and-cone volume meets a lip where our capsule does not, so a capsule hit on an edge two different front faces share is classified by its contact normal. ([`src/collision/one_sided.rs:54`](../crates/benilla-world/src/collision/one_sided.rs#L54))
 
 #### doodad_anim
 
