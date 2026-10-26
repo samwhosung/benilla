@@ -25,29 +25,10 @@ mod scripts;
 mod widgets;
 
 impl LoadReport {
-    /// A load fault that is no script raise: the handler hears the row's own text.
+    /// A failure the reference reports: its row in [`Self::errors`]. A script's raise reached the
+    /// Lua error handler as it ran, through the runner's error function.
     pub(super) fn fault(&mut self, text: String) {
-        self.handler_errors.push(text.clone());
         self.errors.push(text);
-    }
-
-    /// A script raise: the row is `text`, the handler hears the bare Lua message of `e`.
-    pub(super) fn raise(&mut self, text: String, e: &mlua::Error) {
-        self.handler_errors.push(crate::script::lua_message(e));
-        self.errors.push(text);
-    }
-
-    /// Each of [`Self::errors`] with what the Lua error handler is called with for it.
-    pub fn raised(&self) -> impl Iterator<Item = (&str, &str)> {
-        debug_assert_eq!(
-            self.errors.len(),
-            self.handler_errors.len(),
-            "every error row is written through `fault` or `raise`"
-        );
-        self.errors
-            .iter()
-            .map(String::as_str)
-            .zip(self.handler_errors.iter().map(String::as_str))
     }
 }
 
@@ -60,11 +41,6 @@ pub struct LoadReport {
     /// Failures the reference raises on: a handler that fails to compile, a method call that
     /// errors, a malformed included document.
     pub errors: Vec<String>,
-    /// What the Lua error handler is called with for each of [`Self::errors`], row for row
-    /// ([`Self::raised`]): the bare Lua message of a raise, as `lua_pcall` leaves it for the
-    /// reference's error function (`0x703b40`), and the row's own text for a fault that is no
-    /// script raise.
-    handler_errors: Vec<String>,
     /// `<Include file=>` and `<Script file=>` paths the provider lacks. The reference logs
     /// `"Couldn't open %s"` (`0x6edaa0`, `0x846ff4`) or `"Error loading %s"` (`0x872e50`) and goes
     /// on (`0x6ee00d`); kept apart from `warnings` so a load that resolved nothing is not clean.
@@ -366,13 +342,10 @@ impl Loader<'_> {
         self.run_named(chunk, &format!("@{}", self.status_path(path)))
     }
 
-    /// Run a chunk under a complete chunk name, for a producer whose name is not a path.
+    /// Run a chunk under a complete chunk name, for a producer whose name is not a path, as
+    /// `0x704ae0` runs it: under the error function.
     fn run_named(&self, chunk: &[u8], name: &str) -> mlua::Result<()> {
-        self.lua
-            .load(chunk)
-            .set_name(name)
-            .set_mode(mlua::ChunkMode::Text)
-            .exec()
+        crate::script::execute_buffer(self.lua, chunk, name, |_| {})
     }
 
     fn model(&self) -> mlua::AppDataRefMut<'_, crate::script::Model> {
@@ -445,8 +418,7 @@ impl Loader<'_> {
                     match (self.files)(&joined) {
                         Some(bytes) => {
                             if let Err(e) = self.run(crate::source::chunk(&bytes), &joined) {
-                                self.report
-                                    .raise(format!("<Script file=\"{path}\">: {e}"), &e);
+                                self.report.fault(format!("<Script file=\"{path}\">: {e}"));
                             }
                         }
                         None => {
@@ -470,7 +442,7 @@ impl Loader<'_> {
                     // `[string "Interface\FrameXML\Foo.xml:<Scripts>"]`, not a file path.
                     let name = format!("{}:<Scripts>", self.status_path(&self.path));
                     if let Err(e) = self.run_named(&chunk, &name) {
-                        self.report.raise(format!("inline <Script>: {e}"), &e);
+                        self.report.fault(format!("inline <Script>: {e}"));
                     }
                 }
                 TopLevel::Font(el) => self.do_font(el),
@@ -537,8 +509,7 @@ impl Loader<'_> {
         // XML. A `.toc` line goes through the same routine.
         if status::runs_as_lua(&joined) {
             if let Err(e) = self.run(crate::source::chunk(&bytes), &joined) {
-                self.report
-                    .raise(format!("<Include file=\"{path}\">: {e}"), &e);
+                self.report.fault(format!("<Include file=\"{path}\">: {e}"));
             }
             return;
         }

@@ -491,7 +491,8 @@ pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<
     let g = lua.globals();
     g.set("keystate", if down { "down" } else { "up" })?;
     // The body was compiled under its addon's context when the file loaded (`0x4b73f9`), and the
-    // runner's call of it makes that the context again (`0x704cf0`).
+    // runner's call of it makes that the context again (`0x704cf0`), under the error function
+    // (`0x704cfb`). A body that fails to compile is no reference (`0x704c9f`), heard by no handler.
     let ran = lua
         .load(body.as_str())
         .set_name(name)
@@ -501,7 +502,7 @@ pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<
             if let Some(addon) = context {
                 super::taint::tag(lua, &chunk, &super::taint::Context::Addon(addon));
             }
-            chunk.call::<()>(())
+            super::run_under_error_function(lua, &chunk)
         });
     g.set("keystate", Value::Nil)?;
     ran.map(|()| true)

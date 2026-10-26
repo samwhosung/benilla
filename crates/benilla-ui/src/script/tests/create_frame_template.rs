@@ -493,7 +493,6 @@ fn a_raising_template_onload_reaches_the_error_handler() {
          made = CreateFrame('Frame', 'Raised', UIParent, 'RaisingTemplate')",
     )
     .unwrap();
-    s.dispatch_script_errors_to_handler();
     let caught: Vec<String> = s.eval("return caught").unwrap();
     assert_eq!(caught.len(), 1, "{caught:?}");
     assert!(

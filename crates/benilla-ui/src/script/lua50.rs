@@ -943,7 +943,6 @@ mod error_quoting_tests {
         .unwrap();
         s.fire_event("PLAYER_ALIVE", vec![]);
         s.run("RunScript('return \\233 +')").unwrap();
-        s.dispatch_script_errors_to_handler();
         // `RunScript`'s chunk is named by its source's bytes (`0x48b9bb`).
         assert!(s
             .eval::<bool>(

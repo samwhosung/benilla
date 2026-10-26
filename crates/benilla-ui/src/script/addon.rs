@@ -733,7 +733,7 @@ fn load_bindings(lua: &Lua, name: &str, read: &Reader) {
         // Reported, not swallowed: otherwise a broken binding file leaves keys dead silently.
         Err(e) => {
             let msg = format!("{name}/Bindings.xml: {e}");
-            log_error(lua, &msg, &msg);
+            log_error(lua, &msg);
         }
     }
 }
@@ -765,7 +765,7 @@ fn load_saved_variables(lua: &Lua, i: usize) {
             Err(e) => {
                 // Present but unreadable is held, like a file that will not run.
                 let msg = format!("{}: {e}", path.display());
-                log_error(lua, &msg, &msg);
+                log_error(lua, &msg);
                 hold(path);
                 continue;
             }
@@ -786,11 +786,7 @@ fn load_saved_variables(lua: &Lua, i: usize) {
                 // `[0x8722c8]`, `0x704b68`), which stock sets to show the error
                 // (`BasicControls.xml:16`). Deviation: holding the file, so the shutdown write
                 // keeps it.
-                log_error(
-                    lua,
-                    &format!("{}: {e}", path.display()),
-                    &super::lua_message(&e),
-                );
+                log_error(lua, &format!("{}: {e}", path.display()));
                 hold(path);
             }
         }
@@ -834,7 +830,7 @@ fn run_files(lua: &Lua, name: &str, read: &Reader, files: &[String], toc: &mut S
         };
         if lua_file {
             if let Err(e) = run_chunk(lua, &bytes, &crate::script::addon_chunk_name(name, file)) {
-                log_error(lua, &format!("{name}/{file}: {e}"), &super::lua_message(&e));
+                log_error(lua, &format!("{name}/{file}: {e}"));
             }
             continue;
         }
@@ -855,8 +851,8 @@ fn run_files(lua: &Lua, name: &str, read: &Reader, files: &[String], toc: &mut S
         for w in &report.warnings {
             crate::script::diagnostics::record_warning(lua, &format!("{name}/{file}: {w}"));
         }
-        for (e, heard) in report.raised() {
-            log_error(lua, &format!("{name}/{file}: {e}"), heard);
+        for e in &report.errors {
+            log_error(lua, &format!("{name}/{file}: {e}"));
         }
     }
 }
@@ -892,25 +888,17 @@ fn read_under(root: &std::path::Path, rel: &str) -> Option<Vec<u8>> {
 }
 
 /// Run a chunk read off disk, BOM stripped: [`crate::script::UiScript::run_chunk`] for the
-/// demand-load path, which has no `UiScript`.
+/// demand-load path, which has no `UiScript`, under the error function as `0x704ae0` runs it.
 fn run_chunk(lua: &Lua, bytes: &[u8], name: &str) -> mlua::Result<()> {
-    lua.load(crate::source::chunk(bytes))
-        .set_name(name)
-        .set_mode(mlua::ChunkMode::Text)
-        .exec()
+    crate::script::execute_buffer(lua, crate::source::chunk(bytes), name, |_| {})
 }
 
-/// Record a demand-load error as the startup walk does ([`super::UiScript::report_script_error`]):
-/// a `Load` row, dispatched to the player's error handler and put on the host drain. `handler` is
-/// the bare Lua message of a raise; a fault that is no raise passes its own text.
-fn log_error(lua: &Lua, msg: &str, handler: &str) {
+/// Record a demand-load error as the startup walk does: a `Load` row, put on the host drain. A
+/// raise reached the Lua error handler as it ran.
+fn log_error(lua: &Lua, msg: &str) {
     let msg = format!("LoadAddOn: {msg}");
     super::diagnostics::record_load_failure(lua, &msg);
-    let mut model = lua.app_data_mut::<Model>().expect("model");
-    model
-        .pending_error_dispatch
-        .push(super::model::HandlerArg::Text(handler.to_string()));
-    model.errors.push(msg);
+    lua.app_data_mut::<Model>().expect("model").errors.push(msg);
 }
 
 /// The script-execution context an addon's load runs under: `AddOn_Load` sets `[0xceeac0]` to the

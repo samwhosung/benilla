@@ -997,8 +997,8 @@ pub(super) fn create_frame(
     if let Some(template) = template {
         let report = crate::loader::apply_template(lua, &wrapper, &kind, &template);
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        for (log, heard) in report.raised() {
-            model.record_script_error(log.to_string(), heard.to_string());
+        for log in report.errors {
+            model.record_error(log);
         }
         for w in report.warnings {
             model.record_warning(w);

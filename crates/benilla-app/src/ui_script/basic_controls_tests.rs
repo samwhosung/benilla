@@ -98,7 +98,6 @@ fn error_message_is_the_installed_handler_and_the_host_channel_stays_sighted() {
         "engine-caught errors stay on the host channel: {:?}",
         s.errors()
     );
-    s.dispatch_script_errors_to_handler();
     assert!(
         s.eval::<bool>("return ScriptErrors:IsVisible()").unwrap(),
         "and the dispatch keeps the dialog up for the player"

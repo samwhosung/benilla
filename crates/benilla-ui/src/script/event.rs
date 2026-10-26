@@ -4,7 +4,8 @@
 //! [`invoke_with_globals`], which sets only the args it is given, so a script fired with none
 //! leaves `arg1..argN` as found. `event` (`0x84b648`) is the walk's: set once before the first
 //! listener and restored after the last (`0x703ea4`, `0x703f04`), by [`super::tick::fire_event_into`].
-//! Handler errors return to the caller, which records them in [`super::Model::errors`].
+//! A handler's error reaches the Lua error handler at the raise, then returns to the caller, which
+//! records it in [`super::Model::errors`].
 
 use std::borrow::Cow;
 
@@ -125,8 +126,10 @@ fn arg_name(i: usize) -> Cow<'static, str> {
 }
 
 /// The calling convention, shared by [`fire`] and the loader's `OnLoad`: sets `this` and
-/// `arg1..argN` and calls the handler with no arguments, as `0x705199` calls `lua_pcall` with
-/// zero; the globals are restored after the call, even on error, so nested fires are safe.
+/// `arg1..argN` and calls the handler with no arguments under the error function, as `0x705199`
+/// calls `lua_pcall(0, 0, -2)` with `[0x8722c8]` pushed below it (`0x70516f`), so the Lua error
+/// handler runs at the raise with the globals still set; they are restored after the call, even
+/// on error, so nested fires are safe.
 pub(crate) fn invoke_with_globals(
     lua: &Lua,
     wrapper: Table,
@@ -140,5 +143,6 @@ pub(crate) fn invoke_with_globals(
         globals.push((name.as_ref(), v));
     }
     // A protected call; the globals are put back before its outcome returns.
-    lua.call_with_globals(func, &globals)
+    let handler = super::stdlib::error_function(lua);
+    lua.call_with_globals(func, &globals, handler.as_ref())
 }

@@ -717,8 +717,12 @@ fn file_raise(lua: &Lua, seq: u64, message: String) {
         // The reference never defers a call: its verb raises in its own body, so the lines after
         // it never run and a `pcall` around it catches the error. A call that waited for the host
         // had its verb return without an error, the script's later lines ran, and a `pcall` saw
-        // nothing; the error reaches the handler only now, after them.
-        model.record_lua_error(&mlua::Error::runtime(message));
+        // nothing; the error reaches the handler only now, after them, outside any script.
+        drop(model);
+        super::stdlib::call_error_function(lua, message.as_bytes());
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .record_lua_error(&mlua::Error::runtime(message));
     }
 }
 
@@ -1218,7 +1222,6 @@ mod tests {
         s.hosted(&mut host, |s| s.run("TargetLastEnemy()"))
             .expect("the outer verb's own call raised nothing");
         assert_eq!(host.applied, vec![LAST_ENEMY, ScriptCall::ClearTarget]);
-        s.dispatch_script_errors_to_handler();
         let heard: Vec<String> = s.eval("return HEARD").expect("the handler's record");
         assert_eq!(heard.len(), 1, "{heard:?}");
         assert!(heard[0].contains("refused in the call"), "{heard:?}");

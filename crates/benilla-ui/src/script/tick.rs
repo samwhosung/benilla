@@ -19,9 +19,10 @@ impl UiScript {
             .push((event.to_string(), args));
     }
 
-    /// Fire an event to every frame registered for it, shown or not, setting both the
-    /// `this`/`event`/`arg1..argN` globals and the `(self, event, ...)` arguments (`0x704d50`,
-    /// `0x704f10`); handler errors go to [`UiScript::errors`]. Frames fire in registration order,
+    /// Fire an event to every frame registered for it, shown or not, setting the
+    /// `this`/`event`/`arg1..argN` globals and calling each handler with no arguments, as
+    /// `lua_pcall(0, 0)` (`0x704e79`, `0x705199`) calls it; a handler's error reaches the Lua error
+    /// handler at the raise, then [`UiScript::errors`]. Frames fire in registration order,
     /// as `SignalEvent` (`0x703e50`) walks its tail-appended list (`0x7052d0`), and consumers rely
     /// on it: both ZoneText frames write `PVPInfoTextString` on one event, and the last one wins.
     ///

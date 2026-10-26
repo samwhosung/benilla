@@ -6,6 +6,7 @@
 //! - [`install`]: the 1.12 bare globals the engine adds (the `debug*` family, the
 //!   error-handler pair), `time` and `date`.
 
+use mlua::benilla_lua::vm::{LuaError, Vm};
 use mlua::{Lua, Value, Variadic};
 
 /// An mlua error's bare Lua message: what `lua_pcall` leaves for a 1.12 error function (`0x703b40`)
@@ -126,33 +127,89 @@ fn install_profile(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// The value `seterrorhandler` holds, `None` while the slot is -1 (no handler).
-pub(super) fn error_handler(lua: &Lua) -> Option<Value> {
+fn error_handler(lua: &Lua) -> Option<Value> {
     lua.named_registry_value::<Value>(super::REG_ERRORHANDLER)
         .ok()
         .filter(|v| !v.is_nil())
 }
 
-/// Calls the held handler with the message. A function runs. Any other value is called as
-/// `lua_call` calls it (`0x703b6d`), so a number raises `attempt to call a number value`. A chunk
-/// that failed to compile calls the handler directly (`0x704b42`) and that is the text. A running
-/// call's error runs it as the pcall's error function (`0x703a5c`), whose own error runs it again
-/// (`luaG_errormsg`, `0x6fc780`) until `luaD_call` throws status 5 at depth 225 (`0x6f65cf`):
-/// `error in error handling`.
-pub(super) fn call_error_handler(
+/// The error function every script runner passes `lua_pcall` (`0x703b40`, made at `0x703a5c` and
+/// held at `[0x8722c8]`), so it runs at the raise, inside the failing script: `this`, `event` and
+/// `arg1`..`argN` are still its own and its frames are on the stack. With a `seterrorhandler`
+/// value held (`0x703b45`) it calls that with the message, `lua_call(1, 1)` (`0x703b6d`),
+/// unprotected: a number raises `attempt to call a number value`, and any error there runs this
+/// again for that error (`luaG_errormsg`, `0x6fc780`) until `luaD_call` throws status 5 at depth
+/// 225 (`0x6f65cf`), `error in error handling`. It answers the message, where `0x703b40` answers
+/// the handler's result: every runner pops it unread (`0x704e82`, `0x704b93`, `0x704d2b`), and
+/// benilla's host log reads it.
+fn error_function_native(vm: &mut Vm, nargs: usize) -> Result<usize, LuaError> {
+    let msg = vm.arg(nargs, 0);
+    let key = vm.str(super::REG_ERRORHANDLER.as_bytes());
+    let held = vm.heap.table(vm.registry).get(key);
+    if !held.is_nil() {
+        vm.call_value(held, &[msg], 1)?;
+    }
+    vm.push(msg);
+    Ok(1)
+}
+
+/// The error function the runners call scripts under, `[0x8722c8]`; `None` in a state that never
+/// installed it.
+pub(crate) fn error_function(lua: &Lua) -> Option<mlua::Function> {
+    lua.named_registry_value::<Option<mlua::Function>>(REG_ERRORFUNCTION)
+        .ok()
+        .flatten()
+}
+
+/// The registry slot of [`error_function`].
+const REG_ERRORFUNCTION: &str = "__benilla_errorfunction";
+
+/// Run a script function as the runners do: under the error function (`0x704e4f`-`0x704e79`).
+pub(crate) fn run_under_error_function(lua: &Lua, f: &mlua::Function) -> mlua::Result<()> {
+    match error_function(lua) {
+        Some(h) => f.call_under::<()>(&h, ()),
+        None => f.call::<()>(()),
+    }
+}
+
+/// `FrameScriptExecuteBuffer` (`0x704ae0`): compile `src` as the chunk `name` and run it under the
+/// error function (`lua_pcall(0, 0, -2)`, `0x704b68`). A chunk that fails to compile goes to the
+/// error function directly, `lua_pcall(1, 0, 0)` (`0x704b42`): no `this` set, nothing on the
+/// stack, and what that call raises is the host log's alone. `prepare` sees the compiled function
+/// before it runs. Answers the compile or run error for the host's log.
+pub(crate) fn execute_buffer(
     lua: &Lua,
-    handler: &Value,
-    arg: Value,
-    compile: bool,
+    src: &[u8],
+    name: impl AsRef<[u8]>,
+    prepare: impl FnOnce(&mlua::Function),
 ) -> mlua::Result<()> {
-    match handler {
-        Value::Function(f) => f.call(arg),
-        _ => lua.call_value::<()>(handler, arg).map_err(|e| {
-            if compile {
-                e
-            } else {
-                mlua::Error::RuntimeError("error in error handling".into())
-            }
-        }),
+    let compiled = lua
+        .load(src)
+        .set_name(name)
+        .set_mode(mlua::ChunkMode::Text)
+        .into_function();
+    match compiled {
+        Ok(f) => {
+            prepare(&f);
+            run_under_error_function(lua, &f)
+        }
+        Err(e) => {
+            call_error_function(lua, &e.lua_bytes(lua));
+            Err(e)
+        }
+    }
+}
+
+/// The error function called directly on `message`, as [`execute_buffer`] calls it for a compile
+/// failure (`0x704b42`), outside any failing call; what it raises is logged.
+pub(crate) fn call_error_function(lua: &Lua, message: &[u8]) {
+    let Some(h) = error_function(lua) else {
+        return;
+    };
+    if let Err(he) = lua.create_string(message).and_then(|m| h.call::<()>(m)) {
+        lua.app_data_mut::<super::Model>()
+            .expect("model app_data")
+            .record_error(format!("error handler itself failed: {he}"));
     }
 }
 
@@ -163,6 +220,10 @@ pub(super) fn call_error_handler(
 /// a function (`0x702908`), then drops the old reference and takes a new one on the stack's top
 /// (`0x702930`): the last argument, whatever it is, and a nil there is -1 (`0x6f534a`), no handler.
 fn install_error_handler(lua: &Lua) -> mlua::Result<()> {
+    lua.set_named_registry_value(
+        REG_ERRORFUNCTION,
+        lua.create_native("?", error_function_native)?,
+    )?;
     let g = lua.globals();
     g.set(
         "seterrorhandler",

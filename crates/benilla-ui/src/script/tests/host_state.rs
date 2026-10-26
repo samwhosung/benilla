@@ -330,7 +330,6 @@ fn the_engine_reads_the_handler_slot_not_the_geterrorhandler_global() {
     )
     .unwrap();
     s.fire_event("PLAYER_ALIVE", vec![]);
-    s.dispatch_script_errors_to_handler();
     assert_eq!(
         s.eval::<(i64, i64)>("return table.getn(Heard), table.getn(Decoy)")
             .unwrap(),

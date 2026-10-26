@@ -109,10 +109,11 @@ impl super::UiScript {
         self.model_ref().diagnostics.rows().cloned().collect()
     }
 
-    /// Retain an addon load failure that never raised (a missing file, an unparseable document, a
-    /// missing or failed dependency, a broken `Bindings.xml`). It is not dispatched to
-    /// `geterrorhandler()`: the reference logs such a failure and shows nothing. The caller still
-    /// writes its own log line.
+    /// Retain an addon load failure: a file that raised or failed to compile, whose error the Lua
+    /// error handler heard as it ran ([`super::execute_buffer`]), or one that never raised (a
+    /// missing file, an unparseable document, a missing or failed dependency, a broken
+    /// `Bindings.xml`), which the reference logs and shows nothing for. The caller still writes
+    /// its own log line.
     pub fn report_load_failure(&self, msg: &str) {
         record_load_failure(&self.lua, msg);
     }

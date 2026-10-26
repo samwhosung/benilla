@@ -166,13 +166,9 @@ impl Addon {
                     Err(err) => {
                         let e = format!("{}/{file}: {err}", self.name);
                         error!("ui_script: {e}");
-                        // A script error: it reaches the player through the Lua error handler.
-                        let heard = benilla_ui::script::lua_message(&err);
-                        if matches!(err, benilla_ui::mlua::Error::SyntaxError { .. }) {
-                            script.report_syntax_error(&e, &heard);
-                        } else {
-                            script.report_script_error(&e, &heard);
-                        }
+                        // A script error: it reached the player through the Lua error handler
+                        // as the file ran.
+                        script.report_load_failure(&e);
                         failures.push(e);
                     }
                 }
@@ -220,11 +216,11 @@ impl Addon {
                 script.report_load_failure(&e);
                 failures.push(e);
             }
-            for (e, heard) in report.raised() {
+            for e in &report.errors {
                 error!("ui_script({}/{file}): {e}", self.name);
                 // A script error, as in the Lua arm; `_ERRORMESSAGE`'s IsVisible guard shows only
                 // a burst's first, as in the reference.
-                script.report_script_error(&format!("{}/{file}: {e}", self.name), heard);
+                script.report_load_failure(&format!("{}/{file}: {e}", self.name));
                 failures.push(format!("{}/{file}: {e}", self.name));
             }
             info!(
@@ -3641,7 +3637,6 @@ mod tests {
             .unwrap();
         let failures = addon.load(&script, &mut Status::default());
         assert_eq!(failures.len(), 4, "{failures:#?}");
-        script.dispatch_script_errors_to_handler();
         let heard: Vec<String> = script.eval("return Heard").unwrap();
         assert_eq!(heard.len(), 4, "{heard:#?}");
         for m in &heard {

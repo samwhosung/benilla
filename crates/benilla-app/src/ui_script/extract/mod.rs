@@ -632,9 +632,8 @@ pub(super) fn tick_script(
         }
         drop(measure_span);
         let us_measure = lap();
-        // Script errors reach the Lua handler (`_ERRORMESSAGE`, `BasicControls.xml:16`) before the
-        // log, so a failing handler lands in this frame's drain.
-        script.dispatch_script_errors_to_handler();
+        // Script errors reached the Lua handler (`_ERRORMESSAGE`, `BasicControls.xml:16`) as they
+        // were raised; the log drains them here.
         for err in script.take_errors() {
             warn!("ui_script: {err}");
         }

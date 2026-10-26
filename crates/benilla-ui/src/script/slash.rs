@@ -14,10 +14,16 @@ impl super::UiScript {
         };
         // The rest of the line after the alias and one space, spaces intact: the reference's
         // `strsub(text, strlen(cmdString) + 2)`.
-        let ran = super::host::unheld(&self.lua, || handler.call::<()>(args.to_string()));
+        // The stock dispatch runs inside the edit box's `OnEnterPressed`, so the handler runs under
+        // that runner's error function (`0x704e4f`).
+        let ran = super::host::unheld(&self.lua, || {
+            match super::stdlib::error_function(&self.lua) {
+                Some(h) => handler.call_under::<()>(&h, args.to_string()),
+                None => handler.call::<()>(args.to_string()),
+            }
+        });
         if let Err(e) = ran {
-            self.model_mut()
-                .record_script_error(format!("/{cmd}: {e}"), super::stdlib::lua_message(&e));
+            self.model_mut().record_error(format!("/{cmd}: {e}"));
         }
         true
     }

@@ -948,7 +948,8 @@ fn seterrorhandler_keeps_the_top_value() {
              return table.concat({tostring(r1), tostring(r2), tostring(r3), tostring(r4)}, " ")"#),
         "true true nil 5"
     );
-    // Argument 1 must be a function, whatever follows it.
+    // Argument 1 must be a function, whatever follows it. The 5 is cleared first: a raise runs it.
+    s.run("seterrorhandler(function() end, nil)").unwrap();
     for call in [
         "seterrorhandler()",
         "seterrorhandler(nil)",
@@ -973,7 +974,6 @@ fn a_cleared_error_handler_is_not_called() {
          b:Click()",
     )
     .unwrap();
-    s.dispatch_script_errors_to_handler();
     assert_eq!(s.eval::<i32>("return table.getn(caught)").unwrap(), 0);
     // A held value that is no function is called all the same, and the call raises: as the error
     // function of a running call it recurses to `error in error handling` (`0x6f65cf`), and for a
@@ -985,14 +985,13 @@ fn a_cleared_error_handler_is_not_called() {
          b:Click()",
     )
     .unwrap();
-    s.dispatch_script_errors_to_handler();
     let errors = s.take_errors().join("|");
+    assert!(errors.contains("error in error handling"), "{errors}");
     assert!(
-        errors.contains("error handler itself failed: runtime error: error in error handling"),
-        "{errors}"
+        !errors.contains("again"),
+        "the pcall answers status 5's text: {errors}"
     );
-    s.report_syntax_error("log", "bad chunk");
-    s.dispatch_script_errors_to_handler();
+    s.run("x = = 1").expect_err("a compile failure");
     let errors = s.take_errors().join("|");
     assert!(
         errors

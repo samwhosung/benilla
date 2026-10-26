@@ -108,8 +108,7 @@ impl Loader<'_> {
                 Some(f)
             }
             Err(e) => {
-                self.report
-                    .raise(format!("{dbg}: compiling <{name}>: {e}"), &e);
+                self.report.fault(format!("{dbg}: compiling <{name}>: {e}"));
                 None
             }
         }
@@ -119,7 +118,7 @@ impl Loader<'_> {
     /// (`0x704d50`); an error is recorded, never propagated.
     pub(super) fn fire_onload(&mut self, wrapper: &Table, func: &Function, dbg: &str) {
         if let Err(e) = self.invoke_handler(wrapper, func) {
-            self.report.raise(format!("{dbg}: OnLoad: {e}"), &e);
+            self.report.fault(format!("{dbg}: OnLoad: {e}"));
         }
     }
 

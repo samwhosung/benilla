@@ -417,7 +417,6 @@ fn the_error_log_collects_off_the_error_handler() {
     s.run("BenillaOptionsFrame_UpdateScale = function() error('a layer boom') end")
         .unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
-    s.dispatch_script_errors_to_handler();
 
     let rows: Vec<String> = s
         .eval(
@@ -443,7 +442,6 @@ fn the_error_log_collects_off_the_error_handler() {
     );
     // A repeat is one row with a count.
     s.run("ZZErrButton:Click() ZZErrButton:Click()").unwrap();
-    s.dispatch_script_errors_to_handler();
     assert_eq!(
         s.eval::<i64>(
             "for _, row in ipairs(BenillaScriptLog.rows) do \

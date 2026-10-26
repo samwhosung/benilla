@@ -1209,7 +1209,6 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
     let mut script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
-    script.dispatch_script_errors_to_handler();
     assert!(
         script
             .eval::<bool>("return ScriptErrors:IsVisible()")
@@ -1255,7 +1254,6 @@ fn a_looping_addon_cannot_freeze_world_entry() {
     let mut script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
-    script.dispatch_script_errors_to_handler();
     let shown: String = script
         .eval::<Option<String>>("return ScriptErrors_Message:GetText()")
         .expect("eval")

@@ -87,40 +87,6 @@ pub(crate) fn node_deferred(
     }
 }
 
-/// What the Lua error handler is called with for one caught error: the value an error carries,
-/// its bytes as Lua wrote them, or a host's own text.
-#[derive(Clone, Debug)]
-pub(crate) enum HandlerArg {
-    Text(String),
-    /// A chunk that failed to compile: the client calls the handler directly on it (`0x704b42`),
-    /// not as the error function of a running call (`0x703a5c`).
-    Syntax(String),
-    Error(mlua::Error),
-}
-
-impl HandlerArg {
-    /// Whether the error is a compile failure.
-    pub(crate) fn is_compile(&self) -> bool {
-        matches!(
-            self,
-            HandlerArg::Syntax(_) | HandlerArg::Error(mlua::Error::SyntaxError { .. })
-        )
-    }
-
-    /// The one argument, in `lua`.
-    pub(crate) fn value(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-        Ok(match self {
-            HandlerArg::Text(t) | HandlerArg::Syntax(t) => {
-                mlua::Value::String(lua.create_string(t)?)
-            }
-            HandlerArg::Error(e) => match e.lua_value(lua) {
-                Some(v) => v,
-                None => mlua::Value::String(lua.create_string(e.lua_bytes(lua))?),
-            },
-        })
-    }
-}
-
 /// The Rust-side model behind the Lua VM, in `lua.app_data`. It holds no Lua handles, each of
 /// which is a collector root.
 #[derive(Clone)]
@@ -392,9 +358,6 @@ pub(crate) struct Model {
 
     /// Script errors caught from `pcall`'d handlers, drained by the host each frame.
     pub(crate) errors: Vec<String>,
-    /// Errors owed to `geterrorhandler()`, which the reference calls on each caught error; one the
-    /// handler itself raises skips this queue, which stops the recursion.
-    pub(crate) pending_error_dispatch: Vec<HandlerArg>,
     /// The session's retained diagnostic log, deduplicated and bounded; `errors` drains each frame.
     pub(crate) diagnostics: super::diagnostics::DiagnosticLog,
     /// Non-fatal warnings for the host, such as a dropped `inherits=` template.
@@ -1244,27 +1207,19 @@ impl Model {
         self.fonts.block_of(name)
     }
 
-    /// Records a caught script error for the host, the retained log and the Lua error handler: `log`
-    /// is the decorated text the host and the retained log keep, `handler` the one value the error
-    /// handler is called with. An error raised by the handler itself goes to `errors` directly,
-    /// which stops the recursion.
-    pub(crate) fn record_script_error(&mut self, log: String, handler: String) {
-        self.record_error(log, HandlerArg::Text(handler));
-    }
-
-    /// A script error whose log row is `log` and whose handler hears `handler`.
-    pub(crate) fn record_error(&mut self, log: String, handler: HandlerArg) {
+    /// Records a caught script error for the host and the retained log. The Lua error handler has
+    /// heard it already, at the raise, through the runner's error function
+    /// ([`super::stdlib::error_function`]); an error no script raised reaches no handler.
+    pub(crate) fn record_error(&mut self, log: String) {
         self.diagnostics
             .record(super::diagnostics::DiagnosticKind::Error, &log);
-        self.pending_error_dispatch.push(handler);
         self.errors.push(log);
     }
 
-    /// [`Self::record_script_error`] for an error mlua caught: the log keeps mlua's `Display` (its
-    /// word and traceback), the handler gets the error value itself, as `lua_pcall` hands its
-    /// error function the value raised (`0x703b40`).
+    /// [`Self::record_error`] for an error mlua caught: the log keeps mlua's `Display` (its word
+    /// and traceback).
     pub(crate) fn record_lua_error(&mut self, e: &mlua::Error) {
-        self.record_error(e.to_string(), HandlerArg::Error(e.clone()));
+        self.record_error(e.to_string());
     }
 
     /// Records a non-fatal warning for the host's terminal and the retained diagnostic log.
@@ -1454,7 +1409,6 @@ impl Model {
             layout_chain: None,
             layout_screen: None,
             errors: Vec::new(),
-            pending_error_dispatch: Vec::new(),
             diagnostics: Default::default(),
             warnings: Vec::new(),
             // 1024x768 until the host calls `set_screen_size`; y-up `[bottom, left, top, right]`.
