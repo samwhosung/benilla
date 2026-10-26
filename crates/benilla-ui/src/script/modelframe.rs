@@ -250,6 +250,9 @@ const SET_LIGHT_USAGE: &str = "Usage: Model:SetLight(enabled[, omni, dirX, dirY,
 /// `PlayerModel:SetUnit`'s usage error (`0x84f284`), which names no receiver.
 const SET_UNIT_USAGE: &str = "Usage: SetUnit(\"unit\")";
 
+/// `PlayerModel:SetRotation`'s usage error (`0x84f29c`), which names no receiver.
+const SET_ROTATION_USAGE: &str = "Usage: SetRotation(rotation (in radians))";
+
 /// What [`parse_set_light`] decided.
 enum SetLight {
     /// A non-number where one is required: `luaL_error(SET_LIGHT_USAGE)`.
@@ -627,11 +630,13 @@ pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
 
     // `SetRotation(rad)` (`0x84f1fc[2]` → `0x505f00` → `0x505bb0`) turns whatever `+0x318` holds
     // toward the angle ([`crate::widget::ModelState::rotate`]) and writes the yaw `SetFacing` writes
-    // (`0x505c44`).
+    // (`0x505c44`). The angle passes `lua_isnumber` (`0x505f8c`), else
+    // `Usage: SetRotation(rotation (in radians))` (`0x84f29c`, `0x505fb6`), naming no receiver.
     m.set(
         "SetRotation",
         lua.create_function(|lua, (this, rad): (Table, Value)| {
-            let rad = num(lua, &rad);
+            with_model(lua, &this, |_| ())?;
+            let rad = binding_abi::float_arg(lua, rad, SET_ROTATION_USAGE)? as f32;
             let now_ms = lua
                 .app_data_ref::<Model>()
                 .expect("model app_data")

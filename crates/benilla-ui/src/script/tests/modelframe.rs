@@ -109,6 +109,22 @@ fn a_player_model_is_a_model_plus_three_and_the_chain_runs_one_way() {
         -0.25,
         "one slot: SetFacing overwrites what SetRotation wrote"
     );
+    // A non-number raises `Usage: SetRotation(rotation (in radians))` (`0x505f8c` → `0x84f29c`)
+    // and leaves the yaw alone; a numeric string turns it.
+    for bad in ["nil", "{}", "'x'", ""] {
+        let e = s
+            .run(&format!("PMPane:SetRotation({bad})"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("Usage: SetRotation(rotation (in radians))"),
+            "SetRotation({bad}) -> {e}"
+        );
+    }
+    assert_eq!(s.eval::<f64>("return PMPane:GetFacing()").unwrap(), -0.25);
+    s.run("PMPane:SetRotation('0.5')").unwrap();
+    assert_eq!(s.eval::<f64>("return PMPane:GetFacing()").unwrap(), 0.5);
+    s.run("PMPane:SetFacing(-0.25)").unwrap();
 
     // Stock `PaperDollFrame.xml:221` calls `RefreshUnit`, which rebuilds from the stored GUID.
     assert!(s.run("PMPane:RefreshUnit()").is_ok());
