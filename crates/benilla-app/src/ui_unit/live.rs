@@ -27,9 +27,9 @@ pub(crate) struct UnitFeedLive<'w, 's> {
     stores: super::views::ViewStores<'w, 's>,
     index: Option<Res<'w, crate::net::GuidIndex>>,
     me: Query<'w, 's, Entity, With<SelfPlayer>>,
-    /// The scene's positions as the last frame's propagation left them, which no system of this
-    /// frame's `Update` writes: the by-name walk's reading too ([`crate::target::PlayerLookup`]).
-    transforms: Query<'w, 's, &'static GlobalTransform>,
+    /// The scene's positions as of here, each composed through its parents on demand, so a unit
+    /// created or moved this frame, or riding a transport, reads where it stands.
+    transforms: bevy::transform::helper::TransformHelper<'w, 's>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     actions: Option<Res<'w, crate::ui_action::PlayerActions>>,
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
@@ -77,8 +77,8 @@ impl UnitFeedLive<'_, '_> {
     /// (`0x48a26f`), and `0x4944a0`'s player and cooperation legs.
     fn reach(&self, guid: u64) -> Option<UnitReach> {
         let (entity, store) = self.held(guid)?;
-        let at = self.transforms.get(entity?).ok()?.translation();
-        let me_at = self.transforms.get(self.player()?.0).ok()?.translation();
+        let at = self.position(entity?)?;
+        let me_at = self.position(self.player()?.0)?;
         let unit = self.relations.unit_of(guid, store);
         Some(super::held::reach_between(
             &self.rel(),
@@ -87,6 +87,12 @@ impl UnitFeedLive<'_, '_> {
             at,
             me_at,
         ))
+    }
+
+    /// `entity`'s position in the world as of here.
+    fn position(&self, entity: Entity) -> Option<Vec3> {
+        let global = self.transforms.compute_global_transform(entity).ok()?;
+        Some(global.translation())
     }
 
     /// Whether `spell` passes the lost-control gate for the active player as of here

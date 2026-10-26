@@ -239,7 +239,7 @@ fn the_slot_getters_read_the_object_inside_the_hover_and_target_events() {
     for event in ["UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED"] {
         assert!(
             seen.iter()
-                .any(|l| l.starts_with(&format!("{event}:")) && l.contains("[Helm]")),
+                .any(|l| l.starts_with(&format!("{event}:1:")) && l.contains("[Helm]")),
             "{event}: {seen:?}"
         );
     }

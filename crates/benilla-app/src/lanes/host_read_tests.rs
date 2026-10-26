@@ -25,7 +25,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
 const FRAME_FINAL_FEEDS: usize = 45;
-const FRAME_FINAL_INPUTS: usize = 252;
+const FRAME_FINAL_INPUTS: usize = 251;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -39,6 +39,18 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::net::apply::tag_self_player", &["Commands net::SelfPlayer"],
         "tags our created entity as the player, which the token resolver finds it by; the \
          reference makes it the active player inside its create (`0x5dea50`)"),
+    ("::net::motion::facing::drive_display_facing", &["Transform"],
+        "turns the units' models toward their facing each frame; the range verbs read the \
+         translation alone, which this leaves"),
+    ("::net::motion::remote::extrapolate_remote_units", &["Transform"],
+        "advances the remote units along their last movement each frame, the positions the range \
+         verbs measure, outside any packet's handler"),
+    ("::net::motion::spline::ground_clamp_creatures", &["Transform"],
+        "settles the creatures on the ground each frame, the height the range verbs measure, \
+         outside any packet's handler"),
+    ("::net::motion::spline::sample_splines", &["Transform"],
+        "moves the units along their splines each frame, the positions the range verbs measure, \
+         outside any packet's handler"),
     ("::player::wire_in::regain_control_on_arrival", &["player::state::OwnControlLost"],
         "gives control back on our own create, which the stance bar's usability walk reads \
          (`0x6e3dc3`); the reference raises it inside the create (`0x5deb56`)"),
@@ -66,6 +78,15 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::swing_refusal::apply_swing_refusals", &["ui_pet::PetAttackLatch"],
         "holds the attack seam, whose selection release lowers the pet's attack latch \
          (`0x493a18`); the server's silent stop it runs (`0x625ab8`) reaches no release"),
+    ("::transport::compose_riders", &["Transform"],
+        "places the riders on their transports each frame, the positions the range verbs \
+         measure, outside any packet's handler"),
+    ("::transport::ground_deck_riders", &["Transform"],
+        "settles the riders on their decks each frame, the positions the range verbs measure, \
+         outside any packet's handler"),
+    ("::transport::tick_transports", &["Transform"],
+        "moves the transports along their paths each frame, which carry their riders' positions \
+         the range verbs measure, outside any packet's handler"),
     ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::spell::cooldowns::Cooldowns>",
         &["spell::cooldowns::Cooldowns"],
         "drops the player's cooldown log with no in-game interface up; it goes with the log"),

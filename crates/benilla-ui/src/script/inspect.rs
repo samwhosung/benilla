@@ -51,15 +51,13 @@ impl super::UiScript {
         self.model_mut().unit_reach = reach;
     }
 
-    /// Push one unit's reach ahead of the next whole map: a unit seated between two pushes, as
-    /// the world mouseover is ([`Self::seat_world_mouseover_unit`]).
+    /// Seat one unit's reach, which the range verbs read with no host to ask ([`UnitReachQuery`]).
     pub fn set_unit_reach_of(&mut self, guid: u64, reach: UnitReach) {
         self.model_mut().unit_reach.insert(guid, reach);
     }
 
     /// The guids of the held units the resolver's inputs reach ([`Self::set_unit_guids`]): every
-    /// unit a token can name, the `target` chains included, that the object manager holds. These
-    /// are the guids [`Self::set_unit_reach`] is measured for.
+    /// unit a token can name, the `target` chains included, that the object manager holds.
     pub fn held_unit_guids(&self) -> Vec<u64> {
         self.model_ref().unit_guids.held.keys().copied().collect()
     }

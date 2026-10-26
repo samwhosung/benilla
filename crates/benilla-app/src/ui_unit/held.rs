@@ -23,23 +23,11 @@ use crate::query_cache::Ask;
 use crate::target::{Candidacy, NameSearch, RelUnit, Relations};
 use crate::ui_script::{gate, VmMemo};
 
-/// A held unit's entry in the reach map: its squared distance from the player at `me_at`, and
+/// A held unit's reach from the player: its squared distance between `at` and `me_at`, and
 /// whether it passes `0x4944a0`'s other legs, the one `CanInspect` answers by (`0x48a2a1`): a
 /// player unit (`0x4944d8`) that is the active player (`0x4944dd`) or one it can cooperate with
-/// (`0x4944e4`). Cooperation is the faction group, not attackability: an unflagged enemy-faction
-/// player is not inspectable, a same-faction duel opponent is.
-pub(crate) fn unit_reach(
-    world: &crate::target::RelationWorld,
-    guid: u64,
-    store: Option<&ObjectStore>,
-    at: Vec3,
-    me_at: Vec3,
-) -> benilla_ui::script::UnitReach {
-    let unit = store.map(|s| world.unit_of(guid, s));
-    reach_between(&world.get(), unit.as_ref(), world.me().as_ref(), at, me_at)
-}
-
-/// [`unit_reach`] of `unit` at `at`, `me` the active player at `me_at`, judged by `rel`.
+/// (`0x4944e4`), judged by `rel`. Cooperation is the faction group, not attackability: an
+/// unflagged enemy-faction player is not inspectable, a same-faction duel opponent is.
 pub(crate) fn reach_between(
     rel: &Relations,
     unit: Option<&RelUnit>,

@@ -77,16 +77,13 @@ impl Client {
             .merge(ObjectFields::from_pairs(pairs));
     }
 
-    /// `guid`'s unit placed `yards` along one axis, so d² is exactly yards², as the scene's
-    /// propagation leaves it.
+    /// `guid`'s unit placed `yards` along one axis, so d² is exactly yards².
     fn place(&mut self, guid: u64, yards: f32) {
         let world = self.app.world_mut();
         let entity = world.resource::<crate::net::GuidIndex>().0[&guid];
         world
             .entity_mut(entity)
-            .insert(GlobalTransform::from_translation(Vec3::new(
-                yards, 0.0, 0.0,
-            )));
+            .insert(Transform::from_xyz(yards, 0.0, 0.0));
     }
 }
 
@@ -119,6 +116,11 @@ fn spells() -> crate::ui_action::Spells {
 /// The client in the world as a Human knowing nothing, its skill block holding line 98, targeting
 /// an Orc-template wolf; a spy whose line for each family event carries its name.
 fn client() -> Client {
+    arrived(&[]).0
+}
+
+/// [`client`] knowing `known` as it arrives, with what the spy heard of its arrival.
+fn arrived(known: &[u32]) -> (Client, Vec<String>) {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
@@ -149,7 +151,7 @@ fn client() -> Client {
             Seen = {}
             local f = CreateFrame("Frame")
             for _, e in ipairs({"LANGUAGE_LIST_CHANGED", "PLAYER_FARSIGHT_FOCUS_CHANGED",
-                    "SPELL_UPDATE_COOLDOWN"}) do
+                    "SPELL_UPDATE_COOLDOWN", "PLAYER_ENTERING_WORLD"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function() table.insert(Seen, event) end)
@@ -160,6 +162,10 @@ fn client() -> Client {
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .spells
+        .extend(known.iter().copied());
     let mut c = Client {
         app,
         inbound,
@@ -190,8 +196,8 @@ fn client() -> Client {
     c.place(ME, 0.0);
     c.place(WOLF, 5.0);
     c.frame(vec![]);
-    c.seen();
-    c
+    let seen = c.seen();
+    (c, seen)
 }
 
 /// The relation verbs judge the units as the world holds them at the call, with no push between:
@@ -326,4 +332,51 @@ fn a_language_learn_signals_at_its_packet() {
             "LANGUAGE_LIST_CHANGED"
         ]
     );
+}
+
+/// A unit created in the frame reads its real distance before the scene's propagation has run:
+/// the host composes its position from its `Transform` at the call, so the create's own packet
+/// left it where it stands, not at the origin.
+#[test]
+fn a_unit_created_this_frame_reads_its_real_distance() {
+    const LYNX: u64 = 0xF130_0000_0046_0003;
+    let mut app = super::unit_view_tests::client();
+    let mut create = created(LYNX, EntityKind::Unit, &[(FIELD_UNIT_HEALTH, 10)]);
+    if let SessionEvent::ObjectCreate { position, .. } = &mut create {
+        *position = [12.0, 0.0, 0.0];
+    }
+    super::unit_view_tests::frame(&mut app, vec![create]);
+    let world = app.world_mut();
+    let lynx = world.resource::<crate::net::GuidIndex>().0[&LYNX];
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(lynx),
+        guid: Some(LYNX),
+        ..Default::default()
+    };
+    let reach = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM")
+            .eval::<(Option<i64>, Option<i64>)>(
+                r#"return CheckInteractDistance("target", 3), CheckInteractDistance("target", 4)"#,
+            )
+            .expect("runs")
+    });
+    assert_eq!(reach, (None, Some(1)), "12 yards: beyond 10, within 30");
+}
+
+/// The arrival's replay registers the known spells (`0x5dea96`-`0x5deab9` → `0x5e9c20` →
+/// `0x4b25b0`), each language spell's leg signalling, ahead of the world-enter cascade's
+/// `PLAYER_ENTERING_WORLD`: two language spells, two signals, a plain spell none.
+#[test]
+fn the_arrival_signals_each_language_spell_before_entering_the_world() {
+    let (_, seen) = arrived(&[COMMON, PLAIN, COMMON_TOO]);
+    assert_eq!(
+        seen,
+        [
+            "LANGUAGE_LIST_CHANGED",
+            "LANGUAGE_LIST_CHANGED",
+            "PLAYER_ENTERING_WORLD"
+        ]
+    );
+    let (_, seen) = arrived(&[PLAIN]);
+    assert_eq!(seen, ["PLAYER_ENTERING_WORLD"]);
 }

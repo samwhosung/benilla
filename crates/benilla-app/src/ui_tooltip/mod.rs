@@ -205,22 +205,18 @@ fn go_lock_lines(
 /// A fresh hover's unit, seated where it is published: the publisher writes the mouseover pair
 /// (`0x492890`) before it signals (`0x4929b3`), and `CanInspect` (`0x48a1b0`),
 /// `CheckInteractDistance` (`0x48ba00`) and the slot getters (`0x4c8328`) read the object it names
-/// at once. So the resolver holds it and the reach map measures it, ahead of the frame's token and
-/// reach feeds; a player's visible items the slot getters read off the object as they run.
+/// at once. So the resolver holds it ahead of the frame's token feed; the range verbs measure it
+/// and the slot getters read its visible items through the lent host as they run.
 fn seat_fresh_hover(
     script: &mut benilla_ui::script::UiScript,
     guid: u64,
     entity: Entity,
     stores: &Query<&ObjectStore>,
-    hover: &HoverRelations,
 ) {
     let Ok(store) = stores.get(entity) else {
         return;
     };
     script.seat_world_mouseover_unit(guid, store.0.unit_target().unwrap_or(0));
-    if let Some(reach) = hover.unit.and_then(|u| u.reach) {
-        script.set_unit_reach_of(guid, reach);
-    }
 }
 
 /// What the hover reads of the relation inputs, taken before any Lua runs, as a call its
@@ -236,8 +232,6 @@ struct HoveredRelations {
     /// `UnitReaction(unit, "player")` and the player's toward it.
     reaction: u8,
     player_reaction: u8,
-    /// Its reach map entry, with the player's pose.
-    reach: Option<benilla_ui::script::UnitReach>,
 }
 
 pub(crate) fn drive_mouseover_tooltip(
@@ -252,7 +246,7 @@ pub(crate) fn drive_mouseover_tooltip(
     stores: Query<&ObjectStore>,
     // The stored GAMEOBJECT_STATE the lock lines' Action gate reads.
     anims: Query<&crate::go_anim::GoAnim>,
-    self_q: Query<(&ObjectStore, Option<&Transform>), With<SelfPlayer>>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     // The lock chain's data, shared with the click router (`target::lock`) so hover and click
@@ -266,31 +260,21 @@ pub(crate) fn drive_mouseover_tooltip(
     tables: SnapshotTables,
     // The guild cache, the hovered player's guild leg.
     guild: Res<crate::ui_guild::GuildState>,
-    // A fresh hover's position, whose reach its event's handlers read.
-    transforms: Query<&Transform>,
     // The meeting stone's area name (`0x5f6b49`).
     areas: Option<Res<crate::area::AreaTableRes>>,
 ) {
     let hover_relations = {
         let relations = vm.own();
         let me = relations.me();
-        let self_at = self_q
-            .iter()
-            .next()
-            .and_then(|(_, tf)| tf.map(|t| t.translation));
         HoverRelations {
             factions: relations.factions().cloned(),
             unit: hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
                 let store = stores.get(entity).ok()?;
                 let rel = relations.get();
                 let subject = relations.unit_of(guid, store);
-                let reach = transforms.get(entity).ok().zip(self_at).map(|(tf, me_at)| {
-                    crate::ui_unit::unit_reach(&relations, guid, Some(store), tf.translation, me_at)
-                });
                 Some(HoveredRelations {
                     reaction: unit_reaction(&rel, &subject, me.as_ref()),
                     player_reaction: player_reaction(&rel, &subject, me.as_ref()),
-                    reach,
                 })
             }),
         }
@@ -304,7 +288,7 @@ pub(crate) fn drive_mouseover_tooltip(
         // The publisher's change check (`0x482090`) compares against the VM's last publish.
         let last = script.world_mouseover();
         let published = memo.published.get(script);
-        let self_store = self_q.iter().next().map(|(store, _)| store);
+        let self_store = self_q.iter().next();
         let chr = tables.unit_names();
         let types = tables.types(&names);
 
@@ -370,7 +354,7 @@ pub(crate) fn drive_mouseover_tooltip(
             let key = lines_view(&state);
             let changed = script.publish_world_mouseover(Some(guid));
             if let Some((entity, _)) = hovered.mouseover(&hovered_go).filter(|_| changed) {
-                seat_fresh_hover(script, guid, entity, &stores, &hover_relations);
+                seat_fresh_hover(script, guid, entity, &stores);
             }
             script.set_unit("mouseover", Some(state));
             *published = true;

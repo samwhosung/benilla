@@ -29,7 +29,7 @@ mod relations;
 pub(crate) mod tooltip_facts;
 pub(crate) mod views;
 
-pub(crate) use held::{traits_from_name_cache, unheld_state, unit_reach};
+pub(crate) use held::{traits_from_name_cache, unheld_state};
 
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game
 /// interface exists; the demo override orders itself after it.
@@ -2257,17 +2257,15 @@ mod tests {
         fn the_range_verbs_measure_a_party_pet() {
             let mut app = party(1, true, false);
             let me = app.world().resource::<GuidIndex>().0[&ME];
-            app.world_mut().entity_mut(me).insert((
-                Transform::from_xyz(0.0, 0.0, 0.0),
-                GlobalTransform::from_xyz(0.0, 0.0, 0.0),
-            ));
+            app.world_mut()
+                .entity_mut(me)
+                .insert(Transform::from_xyz(0.0, 0.0, 0.0));
             // A unit (`OBJECT_FIELD_TYPE` 0x9), as the range verbs' lookup asks (typemask 8).
             let held = stream(&mut app, pet(1), &[(2, 0x9)]);
             // Along one axis, so d² is exactly yards².
-            app.world_mut().entity_mut(held).insert((
-                Transform::from_xyz(15.0, 0.0, 0.0),
-                GlobalTransform::from_xyz(15.0, 0.0, 0.0),
-            ));
+            app.world_mut()
+                .entity_mut(held)
+                .insert(Transform::from_xyz(15.0, 0.0, 0.0));
             app.init_resource::<Reputations>();
             app.insert_resource(Selection::default());
             app.insert_non_send_resource(UiScript::new().unwrap());
@@ -2649,10 +2647,7 @@ mod tests {
                     Guid(guid),
                     ObjectStore(ObjectFields::from_pairs(&pairs)),
                     // Along one axis, so d² is exactly yards².
-                    (
-                        Transform::from_xyz(yards, 0.0, 0.0),
-                        GlobalTransform::from_xyz(yards, 0.0, 0.0),
-                    ),
+                    Transform::from_xyz(yards, 0.0, 0.0),
                 ))
                 .id();
             app.world_mut()
@@ -3192,10 +3187,7 @@ mod tests {
                     SelfPlayer,
                     Guid(me.guid),
                     store_of(&me),
-                    (
-                        Transform::from_xyz(0.0, 0.0, 0.0),
-                        GlobalTransform::from_xyz(0.0, 0.0, 0.0),
-                    ),
+                    Transform::from_xyz(0.0, 0.0, 0.0),
                 ))
                 .id();
             let target_entity = app
@@ -3204,10 +3196,7 @@ mod tests {
                     Guid(target.guid),
                     store_of(&target),
                     // Along one axis, so d² is exactly yards².
-                    (
-                        Transform::from_xyz(yards, 0.0, 0.0),
-                        GlobalTransform::from_xyz(yards, 0.0, 0.0),
-                    ),
+                    Transform::from_xyz(yards, 0.0, 0.0),
                 ))
                 .id();
             app.insert_resource(crate::net::GuidIndex(
