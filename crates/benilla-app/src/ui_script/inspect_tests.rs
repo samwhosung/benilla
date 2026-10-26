@@ -125,6 +125,14 @@ fn armed() -> UiScript {
     // `InspectFrame_LoadUI` (`UIParent.lua:170`), which `InspectUnit` calls (`UIParent.lua:223`).
     super::test_ui::seat_chain_addon(&mut s, "Blizzard_InspectUI");
     s.run("InspectFrame_LoadUI()").unwrap();
+    // `NotifyInspect` sends only with a player object (`0x48a35a`).
+    s.set_unit(
+        "player",
+        Some(UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
     s.set_unit("target", Some(target_unit()));
     s.set_unit_guids(&target_guids());
     s.set_visible_equipment(TARGET, Some(inspect_slots()));

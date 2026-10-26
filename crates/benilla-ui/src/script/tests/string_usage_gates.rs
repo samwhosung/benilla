@@ -288,3 +288,47 @@ fn guild_invite_without_a_name_shows_needs_target_and_names_go_as_given() {
         ]
     );
 }
+
+/// `NotifyInspect` (`0x48a320`) raises `Usage: NotifyInspect(unit)` for a non-string (`0x842724`,
+/// `0x48a38b`), returns with no player object (`0x48a35a`), and then hands the token to the
+/// resolver (`0x48a36a` → `0x515970`), which raises `Unknown unit name: %s` (`0x850cc4`) for one
+/// it does not know, a number as text included.
+#[test]
+fn notify_inspect_raises_its_usage_line_then_gates_on_the_player_then_the_token() {
+    let mut s = script();
+    s.keep_calls();
+    const USAGE: &str = "Usage: NotifyInspect(unit)";
+    assert_raises(
+        &s,
+        &[
+            ("NotifyInspect()", USAGE),
+            ("NotifyInspect(nil)", USAGE),
+            ("NotifyInspect({})", USAGE),
+        ],
+    );
+    // No player: even an unknown token returns quietly and sends nothing.
+    s.run(r#"NotifyInspect("bogus") NotifyInspect("target")"#)
+        .unwrap();
+    assert_eq!(s.take_calls_like(&notify("bogus")), 0);
+    assert_eq!(s.take_calls_like(&notify("target")), 0);
+    s.set_unit(
+        "player",
+        Some(crate::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
+    assert_raises(
+        &s,
+        &[
+            (r#"NotifyInspect("bogus")"#, "Unknown unit name: bogus"),
+            ("NotifyInspect(5)", "Unknown unit name: 5"),
+        ],
+    );
+    s.run(r#"NotifyInspect("target")"#).unwrap();
+    assert_eq!(s.take_calls_like(&notify("target")), 1);
+}
+
+fn notify(token: &str) -> crate::script::ScriptCall {
+    crate::script::ScriptCall::Inspect(crate::script::InspectCall::Notify(token.into()))
+}

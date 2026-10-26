@@ -247,10 +247,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // NotifyInspect(unit) (`Blizzard_InspectUI.lua:9`): fire-and-forget, as nothing waits on the
-    // reply.
+    // reply. `is-number-or-string` else `Usage: NotifyInspect(unit)` (`0x842724`, `0x48a38b`);
+    // with no player object it returns (`0x48a35a`), else the token goes through the resolver
+    // (`0x48a36a` → `0x515970`), which raises `Unknown unit name` for one it does not know.
     g.set(
         "NotifyInspect",
-        lua.create_function(|lua, unit: String| {
+        lua.create_function(|lua, unit: Value| {
+            let unit = binding_abi::string_arg(lua, unit, "Usage: NotifyInspect(unit)")?;
+            if !super::battlefield_queue::player_exists(
+                &lua.app_data_ref::<Model>().expect("model app_data"),
+            ) {
+                return Ok(());
+            }
+            super::unit::check_unit_token(&Some(unit.clone()))?;
             super::calls::submit(lua, super::ScriptCall::Inspect(InspectCall::Notify(unit)))
         })?,
     )?;
