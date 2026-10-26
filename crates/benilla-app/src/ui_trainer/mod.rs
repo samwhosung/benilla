@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use benilla_formats::{
     LearnEffect, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_EFFECT_LEARN_PET_SPELL,
-    SPELL_EFFECT_SKILL_STEP,
+    SPELL_EFFECT_LEARN_SPELL, SPELL_EFFECT_SKILL_STEP,
 };
 use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
 use bevy::prelude::*;
@@ -266,6 +266,40 @@ fn skill_req_met(
     total >= wire.req_skill_value
 }
 
+/// `GetTrainerServiceSkillLine`'s name (`0x4d91dc`-`0x4d92c5`), needing the player: the line of
+/// `FindSkillLineAbility(spell, race, class)` on the spell the first learn effect (`0x24` or
+/// `0x39`) teaches, else on the sent spell, whose miss goes on to the same lookup on the spell
+/// numbered by the sent record's third `EffectMiscValue`, the dword before the trigger array
+/// that an index of -1 reads (`0x4d9261`).
+fn skill_line_name(
+    wire_spell: u32,
+    spells: &SpellCatalog,
+    skill_lines: Option<&SkillLineCatalog>,
+    books: &ReqBooks,
+) -> Option<String> {
+    books.skills?;
+    let lines = skill_lines?;
+    let (race, class) = books.race_class;
+    let d = spells.get(wire_spell)?;
+    let named = |spell: u32| {
+        spells.get(spell)?;
+        let line = lines.spell_to_line(spell, race, class)?;
+        lines.line(line).map(|l| l.name.clone())
+    };
+    let learn = (0..3).find(|&i| {
+        matches!(
+            d.effects[i],
+            SPELL_EFFECT_LEARN_SPELL | SPELL_EFFECT_LEARN_PET_SPELL
+        )
+    });
+    match learn {
+        Some(i) => named(d.effect_trigger_spell[i]),
+        None => {
+            named(wire_spell).or_else(|| u32::try_from(d.effect_misc_value[2]).ok().and_then(named))
+        }
+    }
+}
+
 /// Resolve one wire [`TrainerSpell`] into the Lua [`TrainerService`]; `books` colour each
 /// prerequisite ability.
 fn resolve_service(
@@ -351,6 +385,7 @@ fn resolve_service(
         tooltip: service_tooltip(wire.spell, spells),
         skill_step: display.is_some_and(|d| d.effects.contains(&SPELL_EFFECT_SKILL_STEP)),
         step_increase: step_increase(wire.spell, spells, skill_lines, get),
+        skill_line: skill_line_name(wire.spell, spells, skill_lines, books),
         line_name: skill_lines
             .and_then(|c| c.line(group_key))
             .map(|l| l.name.clone()),

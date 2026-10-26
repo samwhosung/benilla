@@ -35,6 +35,7 @@ fn svc(
         skill_step: false,
         step_increase: None,
         line_name: Some(group_name.into()),
+        skill_line: None,
     }
 }
 
@@ -280,6 +281,30 @@ fn service_getters_read_the_row_at_a_visible_index() {
             "local n, r, m = GetTrainerServiceSkillReq(2) return n == nil and r == 0 and m == nil"
         )
         .unwrap());
+}
+
+/// `GetTrainerServiceSkillLine` answers the service's own skill line (`0x4d92bb`), never its
+/// group's name, and nil for a header, a service with none and a row past the list.
+#[test]
+fn the_skill_line_is_the_services_own_not_its_groups() {
+    let mut s = UiScript::new().unwrap();
+    let mut t = trainer();
+    t.services[0].skill_line = Some("Alchemy".into());
+    s.set_trainer(Some(t));
+    // Row 1 is Arms' header; rows 2 and 3 are its services.
+    assert_eq!(
+        s.eval::<String>("return GetTrainerServiceSkillLine(2)")
+            .unwrap(),
+        "Alchemy",
+        "not the group's \"Arms\""
+    );
+    for row in [1, 3, 99] {
+        assert!(
+            s.eval::<bool>(&format!("return GetTrainerServiceSkillLine({row}) == nil"))
+                .unwrap(),
+            "row {row}"
+        );
+    }
 }
 
 /// The reference's filter hide exempts no header (`0x4d8528`, `0x4d8535`).

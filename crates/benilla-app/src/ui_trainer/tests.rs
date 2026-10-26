@@ -2355,3 +2355,65 @@ fn skill_req_met_compares_the_players_skill_not_the_rows_colour() {
         Some("Alchemy".into())
     );
 }
+
+/// `GetTrainerServiceSkillLine` (`0x4d9160`) names the line of the ability row of the spell the
+/// first learn effect teaches (`0x4d91e6`), else of the sent spell, and falls on to the spell the
+/// record's third `EffectMiscValue` numbers (`0x4d9261`); nil without a player or a match. It is
+/// not the group's name, which at a tradeskill trainer is the learn header.
+#[test]
+fn skill_line_name_is_the_taught_spells_line_not_the_group() {
+    let learn = |taught: u32| SpellDisplay {
+        name: "Alchemy".into(),
+        effects: [SPELL_EFFECT_LEARN_SPELL, 0, 0],
+        effect_trigger_spell: [taught, 0, 0],
+        ..Default::default()
+    };
+    let spells = SpellCatalog::from_displays(HashMap::from([
+        (2018, learn(2259)),
+        (2019, learn(31337)),
+        (2259, taught_ability()),
+        (78, taught_ability()),
+        (
+            5000,
+            SpellDisplay {
+                effect_misc_value: [0, 0, 78],
+                ..taught_ability()
+            },
+        ),
+    ]));
+    let lines = SkillLineCatalog::from_spell_lines([(2259, 171), (78, 26)])
+        .with_line_names([(171, "Alchemy"), (26, "Arms")]);
+    let name = |spell: u32, trainer_type: u32, skills: Option<&[_]>| {
+        resolve_service_skilled(
+            &wire(spell, trainer_spell_state::GREEN, 100, 1, 0),
+            trainer_type,
+            &spells,
+            Some(&lines),
+            &BTreeSet::new(),
+            skills,
+        )
+        .skill_line
+    };
+    let player = Some(&[][..]);
+    assert_eq!(
+        name(2018, TRAINER_TYPE_TRADESKILL, player).as_deref(),
+        Some("Alchemy")
+    );
+    assert_eq!(name(2018, TRAINER_TYPE_TRADESKILL, None), None, "no player");
+    assert_eq!(
+        name(2019, 0, player),
+        None,
+        "a taught spell with no ability row"
+    );
+    assert_eq!(
+        name(78, 0, player).as_deref(),
+        Some("Arms"),
+        "the sent spell's own row"
+    );
+    assert_eq!(
+        name(5000, 0, player).as_deref(),
+        Some("Arms"),
+        "the third misc value's spell"
+    );
+    assert_eq!(name(31337, 0, player), None, "no record");
+}

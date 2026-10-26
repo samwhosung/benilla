@@ -182,6 +182,10 @@ pub struct TrainerService {
     /// `GetTrainerSkillLines` (`0x4da660`) lists per header; `None` for a key with no row, the
     /// known-talents group's -1 and a tradeskill trainer's 1 and 2 included.
     pub line_name: Option<String>,
+    /// `GetTrainerServiceSkillLine`'s name (`0x4d91dc`): the `SkillLine` of the ability row of the
+    /// spell the row teaches, else of the sent spell, which differs from the group's name at a
+    /// tradeskill trainer; `None` answers nil.
+    pub skill_line: Option<String>,
 }
 
 /// One header and its services, built by [`UiScript::set_trainer`].
@@ -834,8 +838,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTrainerServiceSkillLine(index): the group name, nil for a header. The reference's return
-    // (`0x4d9160`) is untraced; the stock `CONFIRM_PROFESSION` dialog shows it as the profession.
+    // GetTrainerServiceSkillLine(index) (`0x4d9160`): the name of the skill line of the row's
+    // ability (see [`TrainerService::skill_line`]), nil for a header; the stock `CONFIRM_PROFESSION`
+    // dialog shows it as the profession.
     g.set(
         "GetTrainerServiceSkillLine",
         lua.create_function(|lua, index: Value| {
@@ -843,19 +848,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index =
                 binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceSkillLine(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(n) = index.checked_sub(1) else {
-                return Ok(Value::Nil);
-            };
-            let Some(Row::Service(si)) = rows(&model).0.get(n).copied() else {
-                return Ok(Value::Nil);
-            };
-            let t = model
-                .trainer
-                .as_ref()
-                .expect("a resolved row ⇒ an open trainer");
-            Ok(Value::String(
-                lua.create_string(&t.services[si].group_name)?,
-            ))
+            opt_str(
+                lua,
+                service(&model, index).and_then(|s| s.skill_line.as_ref()),
+            )
         })?,
     )?;
 

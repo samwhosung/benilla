@@ -149,6 +149,7 @@ fn service(
         skill_step: false,
         step_increase: None,
         line_name: Some(line_name.into()),
+        skill_line: None,
     }
 }
 
