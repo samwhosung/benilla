@@ -34,7 +34,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
 - [benilla-lua](#benilla-lua): 11
-- [benilla-protocol](#benilla-protocol): 29
+- [benilla-protocol](#benilla-protocol): 30
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 132
 - [benilla-world](#benilla-world): 49
@@ -665,6 +665,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:285`](../crates/benilla-protocol/src/messages/parse.rs#L285))
 - A type outside 1-7 reads as nothing rather than the reference's default arm, which under-pushes its returns. ([`src/messages/pet.rs:71`](../crates/benilla-protocol/src/messages/pet.rs#L71))
 - Both are read, told apart exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's. ([`src/messages/pet.rs:191`](../crates/benilla-protocol/src/messages/pet.rs#L191))
+- The active player's gender is this byte too, where `CGPlayer_C::GetGender` (`0x5ed5b0`) reads `PLAYER_BYTES_3` byte 0 whole, because that byte also carries the drunk bits (`gender | drunk & 0xFFFE` on vmangos), so a drunk female reads as male. ([`src/messages/update_object/fields/player.rs:573`](../crates/benilla-protocol/src/messages/update_object/fields/player.rs#L573))
 
 #### world
 
