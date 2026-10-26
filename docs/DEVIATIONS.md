@@ -429,9 +429,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_script
 
-- The reference reads the install's `Interface\AddOns\`; benilla reads an install and does not live in one, so its addons live in its own state folder, and only there. ([`src/ui_script/addons.rs:264`](../crates/benilla-app/src/ui_script/addons.rs#L264))
-- That file is renamed to `<Name>.lua.bak`, where the reference deletes it, so an addon update that drops its toc line costs the player nothing they cannot get back. ([`src/ui_script/addons.rs:657`](../crates/benilla-app/src/ui_script/addons.rs#L657))
-- The reference writes none (its file opens with a blank line); ours names the file, because players open this folder. ([`src/ui_script/addons.rs:715`](../crates/benilla-app/src/ui_script/addons.rs#L715))
+- The reference reads the install's `Interface\AddOns\`; benilla reads an install and does not live in one, so its addons live in its own state folder, and only there. ([`src/ui_script/addons.rs:269`](../crates/benilla-app/src/ui_script/addons.rs#L269))
+- That file is renamed to `<Name>.lua.bak`, where the reference deletes it, so an addon update that drops its toc line costs the player nothing they cannot get back. ([`src/ui_script/addons.rs:662`](../crates/benilla-app/src/ui_script/addons.rs#L662))
+- The reference writes none (its file opens with a blank line); ours names the file, because players open this folder. ([`src/ui_script/addons.rs:720`](../crates/benilla-app/src/ui_script/addons.rs#L720))
 - The reference then re-reads the aspect (`0x492f13`), and on a change of 0.001 or more calls `0x491380`, which sets the reload trigger (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry` with it, because the window resizes freely and a reload on each resize would tear down every addon's state mid-play. ([`src/ui_script/extract/mod.rs:539`](../crates/benilla-app/src/ui_script/extract/mod.rs#L539))
 - The V-plate border is resampled sharp to the quad's physical size rather than GPU-magnified, so its 1 px bevel stays crisp; keyed by that size, so only a resize re-rasterises it. ([`src/ui_script/extract/mod.rs:1459`](../crates/benilla-app/src/ui_script/extract/mod.rs#L1459))
 - No signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/glue.rs:14`](../crates/benilla-app/src/ui_script/glue.rs#L14))
@@ -609,13 +609,13 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### lib_math
 
-- The client's one process-wide stream is shared with its engine draws; here each VM holds its own, seeded from the wall clock when it is built, so a fork or a clone draws its own sequence. ([`src/lib_math.rs:226`](../crates/benilla-lua/src/lib_math.rs#L226))
+- The client's one process-wide stream is shared with its engine draws; here each VM holds its own, seeded from the wall clock when it is built, so a fork or a clone draws its own sequence. ([`src/lib_math.rs:229`](../crates/benilla-lua/src/lib_math.rs#L229))
 
 #### lib_string
 
-- The decoder reads a NUL as no bytes (`0x7fbeda`), so the client's loop never passes one and the call never returns; here the result ends there. ([`src/lib_string.rs:96`](../crates/benilla-lua/src/lib_string.rs#L96))
-- The client writes 5.0 bytecode (`luaU_dump`, `0x6fb600`); benilla writes 5.1's header and the function's source name. ([`src/lib_string.rs:232`](../crates/benilla-lua/src/lib_string.rs#L232))
-- 5.1's `match` recurses without a bound and overflows the C stack (near 32000 levels on 8 MB); this raises 5.2's `pattern too complex` instead. ([`src/lib_string.rs:522`](../crates/benilla-lua/src/lib_string.rs#L522))
+- The decoder reads a NUL as no bytes (`0x7fbeda`), so the client's loop never passes one and the call never returns; here the result ends there. ([`src/lib_string.rs:98`](../crates/benilla-lua/src/lib_string.rs#L98))
+- The client writes 5.0 bytecode (`luaU_dump`, `0x6fb600`); benilla writes 5.1's header and the function's source name. ([`src/lib_string.rs:234`](../crates/benilla-lua/src/lib_string.rs#L234))
+- 5.1's `match` recurses without a bound and overflows the C stack (near 32000 levels on 8 MB); this raises 5.2's `pattern too complex` instead. ([`src/lib_string.rs:528`](../crates/benilla-lua/src/lib_string.rs#L528))
 
 #### lib_table
 
@@ -627,8 +627,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### vm
 
-- These are benilla's own needs, past what the client's checks (`Vm::checkstack`) reserve: a frame's registers above `c_maxstack` (`Proto::maxstack`), and the host's and natives' pushes, which ask for no margin of `EXTRA_STACK` and one more. ([`src/vm.rs:952`](../crates/benilla-lua/src/vm.rs#L952))
-- benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack; the client has none, and halves. ([`src/vm.rs:2281`](../crates/benilla-lua/src/vm.rs#L2281))
+- These are benilla's own needs, past what the client's checks (`Vm::checkstack`) reserve: a frame's registers above `c_maxstack` (`Proto::maxstack`), and the host's and natives' pushes, which ask for no margin of `EXTRA_STACK` and one more. ([`src/vm.rs:961`](../crates/benilla-lua/src/vm.rs#L961))
+- benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack; the client has none, and halves. ([`src/vm.rs:2308`](../crates/benilla-lua/src/vm.rs#L2308))
 ### benilla-protocol
 
 #### (crate root)
@@ -795,8 +795,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Skipped as no command. The stock walk calls an entry only when one of its aliases matches (`ChatFrame.lua:2164-2178`), so only a matched one raises. ([`src/script/slash.rs:65`](../crates/benilla-ui/src/script/slash.rs#L65))
 - The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:68`](../crates/benilla-ui/src/script/sound.rs#L68))
 - `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file. ([`src/script/spellbook.rs:10`](../crates/benilla-ui/src/script/spellbook.rs#L10))
-- Ours answers milliseconds, since a cycle count of unknown rate is no use to an addon timing its code. ([`src/script/stdlib.rs:99`](../crates/benilla-ui/src/script/stdlib.rs#L99))
-- A format that ends in `%` reads past its terminator in the client (`0x4135c3`), into whatever memory follows the string; here the output ends there. ([`src/script/stdlib.rs:463`](../crates/benilla-ui/src/script/stdlib.rs#L463))
+- Ours answers milliseconds, since a cycle count of unknown rate is no use to an addon timing its code. ([`src/script/stdlib.rs:100`](../crates/benilla-ui/src/script/stdlib.rs#L100))
+- A format that ends in `%` reads past its terminator in the client (`0x4135c3`), into whatever memory follows the string; here the output ends there. ([`src/script/stdlib.rs:431`](../crates/benilla-ui/src/script/stdlib.rs#L431))
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:122`](../crates/benilla-ui/src/script/tabard.rs#L122))
 - Returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API, and copying a stack-top leak would copy a bug. ([`src/script/taxi.rs:238`](../crates/benilla-ui/src/script/taxi.rs#L238))
 - A handler that unregisters the saved next ends the dispatch, because the reference then reads a freed node. ([`src/script/tick.rs:29`](../crates/benilla-ui/src/script/tick.rs#L29))
