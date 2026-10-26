@@ -164,6 +164,59 @@ fn the_other_setpoint_raises() {
     );
 }
 
+/// A target whose anchors reach the receiver through any chain is refused before anything is
+/// stored: `0x768010(relative, self)` at `0x7a27b3` raises `%s:SetPoint(): %s is dependent on
+/// this` (`0x87cc80`), and `SetAllPoints` the same at `0x7a2af9` (`0x87cd28`). Regions walk too.
+#[test]
+fn a_target_anchored_to_the_receiver_is_refused() {
+    let s = script();
+    s.run(
+        r#"
+        A = CreateFrame("Frame", "ChainA")
+        B = CreateFrame("Frame", "ChainB")
+        C = CreateFrame("Frame", "ChainC")
+        B:SetPoint("TOPLEFT", A, "BOTTOMLEFT", 0, 0)
+        C:SetPoint("TOPLEFT", B, "BOTTOMLEFT", 0, 0)
+        Root = CreateFrame("Frame", "ChainRoot")
+        A:SetPoint("CENTER", Root, "CENTER", 0, 0)
+        L = C:CreateFontString(nil, "ARTWORK")
+        L:SetPoint("CENTER", C, "CENTER", 0, 0)
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            r#"A:SetPoint("TOPLEFT", B, "BOTTOMLEFT", 0, 0)"#,
+            "ChainA:SetPoint(): ChainB is dependent on this",
+        ),
+        (
+            r#"A:SetPoint("TOPLEFT", C, "BOTTOMLEFT", 0, 0)"#,
+            "ChainA:SetPoint(): ChainC is dependent on this",
+        ),
+        (
+            "A:SetAllPoints(C)",
+            "ChainA:SetAllPoints(): ChainC is dependent on this",
+        ),
+        (
+            r#"A:SetPoint("TOPLEFT", L, "BOTTOMLEFT", 0, 0)"#,
+            "ChainA:SetPoint(): <unnamed> is dependent on this",
+        ),
+    ] {
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(e.contains(line), "{call}: {e}");
+    }
+    // Nothing was stored: A keeps its one anchor to the root.
+    assert_eq!(s.eval::<i64>("return A:GetNumPoints()").unwrap(), 1);
+    assert_eq!(
+        s.eval::<String>("local _, r = A:GetPoint(1) return r:GetName()")
+            .unwrap(),
+        "ChainRoot"
+    );
+    // A target that does not reach the receiver is taken.
+    s.run(r#"C:SetPoint("TOPLEFT", A, "BOTTOMLEFT", 0, 0)"#)
+        .unwrap();
+}
+
 /// `lua_type(L,3)` tells `LUA_TNIL` (0, the screen root) from `LUA_TNONE` (-1, Usage), so the
 /// raise ladder must see the argument count Lua saw, not a padded or trimmed tuple.
 #[test]

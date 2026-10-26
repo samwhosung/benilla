@@ -58,6 +58,51 @@ fn anchor_to_self(who: &str, verb: &str) -> mlua::Error {
     mlua::Error::runtime(format!("{who}:{verb}(): trying to anchor to itself"))
 }
 
+/// `0x87cc80` / `0x87cd28`, from the dependency walk at `0x7a27b3` / `0x7a2af9`: the receiver's
+/// name, then the target's.
+fn dependent_on_this(who: &str, verb: &str, target: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("{who}:{verb}(): {target} is dependent on this"))
+}
+
+/// `0x768010` on `target` with `me`: whether a relative frame of any of `target`'s points is `me`,
+/// or reaches `me` the same way (`0x76802f`, `0x768036`).
+fn depends_on(model: &Model, target: u32, me: u32) -> bool {
+    // The chain up from a target is short (a few frames to the screen), so a list beats a set.
+    let mut seen: Vec<u32> = Vec::new();
+    let mut stack = vec![target];
+    while let Some(id) = stack.pop() {
+        // XML anchors are stored unchecked (`0x767c70`), so a loaded cycle is walked once here.
+        if seen.contains(&id) {
+            continue;
+        }
+        seen.push(id);
+        let anchors = crate::script::layout::node_anchors(
+            &model.layout_inputs,
+            &model.region_data,
+            &model.id_to_frame,
+            &model.id_to_region,
+            id,
+        );
+        for a in anchors.iter() {
+            if a.relative_to == me {
+                return true;
+            }
+            stack.push(a.relative_to);
+        }
+    }
+    false
+}
+
+/// The name a widget's `GetName` slot gives (`vtbl+4`), `<unnamed>` for none (`0x84c7f0`).
+fn node_name(model: &Model, id: u32) -> String {
+    use crate::script::binding_abi::{frame_name, region_name};
+    match (model.id_to_frame.get(&id), model.id_to_region.get(&id)) {
+        (Some(&h), _) => frame_name(model, h),
+        (_, Some(&rh)) => region_name(model, rh),
+        _ => UNNAMED.to_string(),
+    }
+}
+
 /// `lua_isnumber` (`0x6f34d0`): a number, or a string Lua reads as one.
 fn as_number(lua: &Lua, v: &Value) -> Option<f32> {
     lua.coerce_number(v.clone())
@@ -156,8 +201,9 @@ pub(crate) fn parse_set_all_points(lua: &Lua, arg: Option<&Value>, parent_base: 
 }
 
 /// Resolve a [`RelTarget`] to the layout id to anchor to, raising the reference's errors; `me` is
-/// the receiver, for the self-anchor check. Deviation: a wrapper that decodes to no live widget
-/// takes `default_parent`, because the reference, with no `IsA` check, reads a wild pointer.
+/// the receiver, for the self-anchor check and the dependency walk, which keep an anchor cycle out
+/// (`0x7a2764`, `0x7a27b3`). Deviation: a wrapper that decodes to no live widget takes
+/// `default_parent`, because the reference, with no `IsA` check, reads a wild pointer.
 pub(crate) fn resolve_rel_target(
     model: &Model,
     target: &RelTarget,
@@ -179,6 +225,9 @@ pub(crate) fn resolve_rel_target(
     };
     if id == me {
         return Err(anchor_to_self(who, verb));
+    }
+    if depends_on(model, id, me) {
+        return Err(dependent_on_this(who, verb, &node_name(model, id)));
     }
     Ok(id)
 }
