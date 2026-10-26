@@ -334,8 +334,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetChannelName(x) (`0x4a05e0`): a number, or a string Lua reads as one (`lua_isnumber`,
     // `0x4a05ed`; `ChatFrame.lua:2113` passes the "1" of `/1`), selects a confirmed slot after
     // `__ftol` (`0x4a0602` → `0x49bf30`); any other string selects the first slot of that name in
-    // any state (`0x4a0627` → `0x49be90`), and anything else none (`0x4a0693`). Three values on
-    // every path: the number, the name or nil (`lua_pushstring(NULL)`, `0x4a0659`), the instance.
+    // any state (`0x4a0627` → `0x49be90`); anything else raises
+    // `Usage: GetChannelName([channelIndex] or [channelName])` (`0x844cf0`, `0x4a0693`). Three
+    // values on every other path: the number, the name or nil (`0x4a0659`), the instance.
     g.set(
         "GetChannelName",
         lua.create_function(|lua, key: Value| {
@@ -353,7 +354,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Some((n as i64, slot.name.clone()))
                     })
                 }
-                _ => None,
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "Usage: GetChannelName([channelIndex] or [channelName])",
+                    ))
+                }
             };
             let Some((n, name)) = found else {
                 return Ok(MultiValue::from_vec(vec![

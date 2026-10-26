@@ -35,14 +35,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "FollowUnit",
-        lua.create_function(|lua, unit: String| {
+        lua.create_function(|lua, unit: mlua::Value| {
+            // `is-number-or-string` else `Usage: FollowUnit("unit")` (`0x8426b4`, `0x489ea7`).
+            let unit = super::binding_abi::string_arg(lua, unit, r#"Usage: FollowUnit("unit")"#)?;
             super::calls::submit(lua, super::ScriptCall::Follow(FollowRequest::ByUnit(unit)))
         })?,
     )?;
 
     g.set(
         "FollowByName",
-        lua.create_function(|lua, (name, exact): (String, Option<mlua::Value>)| {
+        lua.create_function(|lua, (name, exact): (mlua::Value, Option<mlua::Value>)| {
+            // `is-number-or-string` else `Usage: FollowByName("name")` (`0x8426d0`, `0x489fd5`).
+            let name = super::binding_abi::string_arg(lua, name, r#"Usage: FollowByName("name")"#)?;
             // `GetBoolOrDefault` (`0x6f1c10`, `0x489f14`) with default false.
             let exact = super::binding_abi::bool_or_default(exact.as_ref(), false);
             super::calls::submit(

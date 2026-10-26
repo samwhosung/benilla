@@ -64,6 +64,9 @@ impl super::UiScript {
     }
 }
 
+/// `Usage: DoEmote("emote"[, "target"])`, `0x844bc0`.
+const USAGE_DO_EMOTE: &str = r#"Usage: DoEmote("emote"[, "target"])"#;
+
 /// `Usage: RandomRoll("max") or RandomRoll("min", "max")`, `0x842a94`.
 const USAGE_RANDOM_ROLL: &str = r#"Usage: RandomRoll("max") or RandomRoll("min", "max")"#;
 
@@ -75,10 +78,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "DoEmote",
-        lua.create_function(|lua, (token, target): (Option<String>, Value)| {
-            let Some(token) = token.filter(|t| !t.is_empty()) else {
+        lua.create_function(|lua, (token, target): (Value, Value)| {
+            // `is-number-or-string` else `Usage: DoEmote("emote"[, "target"])` (`0x844bc0`,
+            // `0x49fd4a` → `0x49fe24`); "" names no emote and returns (`0x49fda8`).
+            let token = super::binding_abi::string_arg(lua, token, USAGE_DO_EMOTE)?;
+            if token.is_empty() {
                 return Ok(());
-            };
+            }
             let request = EmoteRequest {
                 token: token.to_ascii_uppercase(),
                 // `lua_tostring(2)` (`0x49fdc5`): a number is its `%.14g` text.
@@ -189,7 +195,7 @@ mod tests {
     fn do_emote_queues_the_uppercased_token_and_a_non_empty_target() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.run("DoEmote('wave', 'Bob') DoEmote('DANCE', '') DoEmote('') DoEmote()")
+        s.run("DoEmote('wave', 'Bob') DoEmote('DANCE', '') DoEmote('')")
             .unwrap();
         assert_eq!(
             s.take_emote_requests(),

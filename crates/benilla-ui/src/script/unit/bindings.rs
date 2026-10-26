@@ -1078,13 +1078,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // opening a trade with a player. Only the token is queued; the app runs every gate.
     g.set(
         "DropItemOnUnit",
-        lua.create_function(|lua, token: Option<String>| {
+        lua.create_function(|lua, token: Value| {
+            // `is-number-or-string` else `Usage: DropItemOnUnit("unit")` (`0x842cd4`, `0x48d975`).
+            let token = crate::script::binding_abi::string_arg(
+                lua,
+                token,
+                r#"Usage: DropItemOnUnit("unit")"#,
+            )?;
             // The pet leg is a cast, `CastFeedPetOnItem 0x6ea1e0` → `TryCastSpell`, behind the
             // gate's tag 2 (`0x6e4bc1`); the app builds that leg alone, for the token `"pet"`.
-            if let Some(token) = token.filter(|token| {
-                token != "pet"
-                    || crate::script::protected::gate(lua, crate::script::protected::Tag::CAST)
-            }) {
+            if token != "pet"
+                || crate::script::protected::gate(lua, crate::script::protected::Tag::CAST)
+            {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.drop_item_on_unit.push(token);
             }

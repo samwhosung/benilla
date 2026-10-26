@@ -82,6 +82,7 @@ mod skill_list;
 mod slider;
 mod statusbar;
 mod stdlib;
+mod string_usage_gates;
 mod structure_queries;
 mod talent;
 mod taxi;
