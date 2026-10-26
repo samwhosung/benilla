@@ -340,7 +340,7 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
     let me = model.frame_id(h);
     let parent = default_parent_id(&mut model, h);
     let rel_to_id = resolve_rel_target(&model, &p.target, &who, "SetPoint", me, parent)?;
-    let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
+    let (point, rel_point, x, y) = (p.point, p.rel_point(&who)?, p.x, p.y);
 
     let units = model.layout_units();
     let anchor = Anchor::new(point, rel_to_id, rel_point, x, y);

@@ -217,6 +217,48 @@ fn a_target_anchored_to_the_receiver_is_refused() {
         .unwrap();
 }
 
+/// The relative point's "Unknown region point" is the ladder's last raise (`0x7a2810`,
+/// `0x7a2848`): a missing target (`0x7a274d`), an anchor to itself (`0x7a2764`) and a dependent
+/// target (`0x7a27b3`) raise first, and the receiver's own point (`0x7a2674`) before them all.
+#[test]
+fn the_relative_point_is_checked_after_the_target() {
+    let s = script();
+    s.run(
+        r#"
+        A = CreateFrame("Frame", "OrderA")
+        B = CreateFrame("Frame", "OrderB")
+        B:SetPoint("TOP", A, "BOTTOM", 0, 0)
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            r#"A:SetPoint("TOP", "NoSuchFrame", "NOWHERE")"#,
+            "OrderA:SetPoint(): Couldn't find region named 'NoSuchFrame'",
+        ),
+        (
+            r#"A:SetPoint("TOP", A, "NOWHERE")"#,
+            "OrderA:SetPoint(): trying to anchor to itself",
+        ),
+        (
+            r#"A:SetPoint("TOP", B, "NOWHERE")"#,
+            "OrderA:SetPoint(): OrderB is dependent on this",
+        ),
+        (
+            r#"A:SetPoint("NOWHERE", "NoSuchFrame", "TOP")"#,
+            "OrderA:SetPoint(): Unknown region point",
+        ),
+        (
+            r#"B:SetPoint("TOP", A, "NOWHERE")"#,
+            "OrderB:SetPoint(): Unknown region point",
+        ),
+    ] {
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(e.contains(line), "{call}: {e}");
+    }
+    assert_eq!(s.eval::<i64>("return A:GetNumPoints()").unwrap(), 0);
+}
+
 /// `lua_type(L,3)` tells `LUA_TNIL` (0, the screen root) from `LUA_TNONE` (-1, Usage), so the
 /// raise ladder must see the argument count Lua saw, not a padded or trimmed tuple.
 #[test]

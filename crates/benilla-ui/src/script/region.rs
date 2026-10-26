@@ -966,7 +966,7 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
     let me = model.region_id(rh);
     let owner = region_owner_id(&mut model, rh);
     let rel_to_id = resolve_rel_target(&model, &p.target, &who, "SetPoint", me, owner)?;
-    let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
+    let (point, rel_point, x, y) = (p.point, p.rel_point(&who)?, p.x, p.y);
 
     // The frame's store and its unchanged-anchor test (`0x767c70`), which queues no resolve.
     let units = model.layout_units();

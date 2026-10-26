@@ -28,9 +28,20 @@ pub(crate) enum RelTarget {
 pub(crate) struct PointArgs {
     pub(crate) point: Point,
     pub(crate) target: RelTarget,
-    pub(crate) rel_point: Point,
+    /// The relative point: `None` for an unknown name, raised only after the target's checks
+    /// ([`Self::rel_point`]).
+    rel_point: Option<Point>,
     pub(crate) x: f32,
     pub(crate) y: f32,
+}
+
+impl PointArgs {
+    /// The relative point, or `Unknown region point` (`0x7a2848`): the last raise of the ladder,
+    /// after the target is found and passes the self and dependency checks (`0x7a2810`), so the
+    /// caller asks for it after [`resolve_rel_target`].
+    pub(crate) fn rel_point(&self, who: &str) -> mlua::Result<Point> {
+        self.rel_point.ok_or_else(|| unknown_point(who))
+    }
 }
 
 /// The reference's `Usage:` raise (`0x87cc28`).
@@ -123,9 +134,11 @@ fn as_string(lua: &Lua, v: &Value) -> Option<String> {
     }
 }
 
-/// Parse `SetPoint` in the reference's order: both tag gates (Usage), the point-name scan,
-/// `relativePoint`, the offsets; so an unknown point with no `relativeTo` raises Usage. The caller
-/// computes `who` and `parent_base` first, since an `__index` on `_G` can call back into a binding.
+/// Parse `SetPoint` in the reference's order: both tag gates (Usage), the point-name scan
+/// (`0x7a2674`), then `relativePoint` and the offsets, whose unknown name raises only once the
+/// target has passed its checks ([`PointArgs::rel_point`]); so an unknown point with no
+/// `relativeTo` raises Usage. The caller computes `who` and `parent_base` first, since an
+/// `__index` on `_G` can call back into a binding.
 pub(crate) fn parse_set_point(
     lua: &Lua,
     args: &MultiValue,
@@ -160,10 +173,10 @@ pub(crate) fn parse_set_point(
     } else {
         2
     };
-    let mut rel_point = point;
+    let mut rel_point = Some(point);
     if let Some(Value::String(s)) = args.get(cur) {
         let name = s.to_str()?;
-        rel_point = point_from_str(name.as_ref()).ok_or_else(|| unknown_point(who))?;
+        rel_point = point_from_str(name.as_ref());
         cur += 1;
     }
 
