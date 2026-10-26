@@ -150,8 +150,8 @@ fn register_event_matches_the_table_case_insensitively_and_drops_unknown_names()
     );
 }
 
-/// Callers ask before hooking, when nothing is set yet (`Tablet-2.0.lua:2409`). Our kind table is
-/// flat where the reference's is per widget type, so a Frame also answers true for `OnClick`.
+/// Callers ask before hooking, when nothing is set yet (`Tablet-2.0.lua:2409`). The answer is the
+/// frame type's own script map (`0x774772`): a Frame has no `OnClick`.
 #[test]
 fn has_script_reports_the_kind_is_supported_not_that_one_is_set() {
     let s = script();
@@ -185,11 +185,54 @@ fn has_script_reports_the_kind_is_supported_not_that_one_is_set() {
         .unwrap();
     assert!(fired, "the guarded hook must install and run");
 
-    // The flat table: a Frame says true for a Button-only kind, where the reference says false.
     assert!(
-        s.eval::<bool>(r#"return f:HasScript("OnClick")"#).unwrap(),
-        "over-permissive by design today — see the comment at the binding"
+        !s.eval::<bool>(r#"return f:HasScript("OnClick")"#).unwrap(),
+        "a plain Frame's map has no OnClick"
     );
+}
+
+/// `SetScript`, `GetScript` and `HasScript` look the name up in the frame type's own map (slot
+/// 0xc): a plain Frame has `OnEvent` and sixteen names, a Button adds `OnClick` and
+/// `OnDoubleClick`, and a type lacking the name raises `%s doesn't have a "%s" script` from the
+/// first two (`0x879678`, `0x7749d1`, `0x774884`) and answers nil to the third (`0x774772`).
+#[test]
+fn the_script_verbs_ask_the_frame_types_own_map() {
+    let s = script();
+    s.run(
+        r#"
+        F = CreateFrame("Frame", "ScriptMapFrame")
+        B = CreateFrame("Button", "ScriptMapButton")
+        SB = CreateFrame("StatusBar", "ScriptMapBar")
+        function raised(f, a, b, c) local ok, e = pcall(f, a, b, c) return ok and "" or tostring(e) end
+    "#,
+    )
+    .unwrap();
+    let eval = |code: &str| s.eval::<String>(code).unwrap();
+
+    let want = r#"ScriptMapFrame doesn't have a "OnClick" script"#;
+    assert!(eval(r#"return raised(F.SetScript, F, "OnClick", function() end)"#).ends_with(want));
+    assert!(eval(r#"return raised(F.GetScript, F, "OnClick")"#).ends_with(want));
+    assert!(
+        eval(r#"return tostring(F:HasScript("OnClick"))"#) == "nil",
+        "HasScript answers nil"
+    );
+    // A mistyped name raises where it used to read nil, and keeps the spelling it was given.
+    assert!(eval(r#"return raised(B.GetScript, B, "OnClik")"#)
+        .ends_with(r#"ScriptMapButton doesn't have a "OnClik" script"#));
+    // The other types' additions stay with their types.
+    assert!(eval(r#"return raised(SB.GetScript, SB, "OnTextChanged")"#)
+        .ends_with(r#"ScriptMapBar doesn't have a "OnTextChanged" script"#));
+    assert!(!eval(r#"return raised(SB.GetScript, SB, "OnValueChanged")"#).contains("doesn't"));
+    assert_eq!(
+        eval(r#"return tostring(B:HasScript("ONDOUBLECLICK"))"#),
+        "1"
+    );
+    // Names are matched ignoring case and stored under the type's spelling.
+    s.run(r#"B:SetScript("onclick", function() end)"#).unwrap();
+    assert!(s
+        .eval::<bool>(r#"return B:GetScript("OnClick") ~= nil"#)
+        .unwrap());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// The walk saves the next node before the handler runs (`0x703ee8`); AceEvent-2.0's fire-once

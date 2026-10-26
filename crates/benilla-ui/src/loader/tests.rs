@@ -986,7 +986,8 @@ mod loader_tests {
         assert!(s.eval::<bool>("return FineRan == true").unwrap());
     }
 
-    /// `OnAttributeChanged` is 2.0's; no 1.12 handler resolver has a slot for it.
+    /// `OnAttributeChanged` is 2.0's; no 1.12 handler resolver has a slot for it, so the frame
+    /// reports `Frame %s: Unknown script element %s` (`0x878778`, `0x769f44`).
     #[test]
     fn unsupported_script_name_is_a_warning() {
         let s = UiScript::new().unwrap();
@@ -996,10 +997,30 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert_eq!(report.frames, 1);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
-        assert!(report
-            .warnings
-            .iter()
-            .any(|w| w.contains("OnAttributeChanged")));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w == "Frame Keyed: Unknown script element OnAttributeChanged"),
+            "{:?}",
+            report.warnings
+        );
+    }
+
+    /// The name is looked up before the body compiles (`0x7025d5`, `0x70263a`): an unknown tag
+    /// whose body is a syntax error reports the unknown element, not a compile error.
+    #[test]
+    fn an_unknown_script_tag_is_reported_before_its_body_compiles() {
+        let s = UiScript::new().unwrap();
+        let doc = parse(
+            r#"<Ui><Frame name="Early"><Scripts><OnClick>this is ((( broken</OnClick></Scripts></Frame></Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(
+            report.warnings,
+            ["Frame Early: Unknown script element OnClick"]
+        );
     }
 
     /// `Instantiate 0x6ee280` logs `"Unknown frame type: %s"` (`0x871124`) and builds nothing for

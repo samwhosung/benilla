@@ -6,7 +6,8 @@ use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use crate::script::binding_abi::{method_string, optional_string, usage};
 use crate::script::region::region_wrapper;
-use crate::script::{Model, RegionData, REG_SCRIPTS, SCRIPT_KINDS};
+use crate::script::script_map::script_name;
+use crate::script::{Model, RegionData, REG_SCRIPTS};
 use crate::widget::{FrameHandle, RegionKind};
 
 use super::{decode_id, draw_layer_from_str, frame_handle_of, publish_global};
@@ -125,16 +126,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             get_script(lua, &this, &name)
         })?,
     )?;
-    // `HasScript(name)`: 1 if the widget can carry that script kind, else nil, whether or not one
-    // is set. Answered from the flat `SCRIPT_KINDS`, so another type's kind reads 1 too, where the
-    // reference's tables are per widget type (base `0x76a0d0`; a plain Frame has no `OnClick`).
+    // `HasScript(name)` (`0x774772`): 1 if the frame's type has the name in its script map, else
+    // nil, whether or not one is set.
     m.set(
         "HasScript",
         lua.create_function(|lua, (this, name): (Table, Value)| {
-            frame_handle_of(lua, &this)?;
+            let h = frame_handle_of(lua, &this)?;
             let name = method_string(lua, &this, name, r#"HasScript("type")"#)?;
+            let model = lua.app_data_ref::<Model>().expect("model");
             Ok(crate::script::binding_abi::flag(
-                SCRIPT_KINDS.iter().any(|k| k.eq_ignore_ascii_case(&name)),
+                frame_script_name(&model, h, &name).is_some(),
             ))
         })?,
     )?;
@@ -252,17 +253,30 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `SetScript(name, func)`: stores the closure under one of [`SCRIPT_KINDS`], else raises. The
-/// movie frame's three are accepted: the stock XML sets them, and its player
-/// ([`super::super::movieframe`]) is the one thing that fires them. `OnAttributeChanged` is 2.0's,
-/// with no 1.12 slot.
+/// `name` in the script map of frame `h`'s type ([`script_name`]).
+fn frame_script_name(model: &Model, h: FrameHandle, name: &str) -> Option<&'static str> {
+    script_name(model.arena.frame(h)?.kind, name)
+}
+
+/// The script `name` of frame `h`'s type, else the reference's raise (`0x879678`, at `0x7749d1` for
+/// `SetScript` and `0x774884` for `GetScript`): `%s doesn't have a "%s" script`, naming the frame
+/// and the name as given.
+fn typed_script(lua: &Lua, this: &Table, h: FrameHandle, name: &str) -> mlua::Result<&'static str> {
+    let found = {
+        let model = lua.app_data_ref::<Model>().expect("model");
+        frame_script_name(&model, h, name)
+    };
+    found.ok_or_else(|| {
+        let owner = crate::script::binding_abi::name_of(lua, this);
+        mlua::Error::runtime(format!("{owner} doesn't have a \"{name}\" script"))
+    })
+}
+
+/// `SetScript(name, func)`: stores the closure under a name of the frame's type
+/// ([`script_name`]), else raises. `OnAttributeChanged` is 2.0's, with no 1.12 slot.
 fn set_script(lua: &Lua, this: &Table, name: &str, func: Option<Function>) -> mlua::Result<()> {
-    let kind = SCRIPT_KINDS
-        .iter()
-        .copied()
-        .find(|&k| k.eq_ignore_ascii_case(name))
-        .ok_or_else(|| mlua::Error::runtime(format!("SetScript: unsupported script '{name}'")))?;
     let h = frame_handle_of(lua, this)?;
+    let kind = typed_script(lua, this, h, name)?;
     let id = lua.app_data_mut::<Model>().expect("model").frame_id(h);
 
     // The closure lives Lua-side in `REG_SCRIPTS[id][kind]`; Rust keeps a presence mirror.
@@ -313,14 +327,7 @@ fn set_script(lua: &Lua, this: &Table, name: &str, func: Option<Function>) -> ml
 }
 
 fn get_script(lua: &Lua, this: &Table, name: &str) -> mlua::Result<Value> {
-    let kind = match SCRIPT_KINDS
-        .iter()
-        .copied()
-        .find(|&k| k.eq_ignore_ascii_case(name))
-    {
-        Some(k) => k,
-        None => return Ok(Value::Nil),
-    };
+    let kind = typed_script(lua, this, frame_handle_of(lua, this)?, name)?;
     let id = decode_id(this)?;
     let scripts: Table = lua.named_registry_value(REG_SCRIPTS)?;
     match scripts.get::<Value>(id)? {

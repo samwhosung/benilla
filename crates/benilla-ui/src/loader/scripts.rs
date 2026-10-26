@@ -20,6 +20,16 @@ impl Loader<'_> {
             let owner = crate::script::binding_abi::name_of(self.lua, wrapper);
             for handler in &scripts.children {
                 let name = handler.tag.clone();
+                // A tag the frame's type has no slot for reports `Frame %s: Unknown script
+                // element %s` (`0x878778`, `0x769f44`) and enables nothing; the name is looked up
+                // first (`0x7025d5`) and the body compiled after (`0x70263a`).
+                let known = wrapper
+                    .call_method::<mlua::Value>("HasScript", name.clone())
+                    .is_ok_and(|v| !v.is_nil());
+                if !known {
+                    self.status_warning(format!("Frame {owner}: Unknown script element {name}"));
+                    continue;
+                }
                 // An empty body clears the handler to nil, but a whitespace one is an empty
                 // function: `SetScript` (`0x7025c0`) tests only NULL and the first byte
                 // (`0x7025f8`), and nothing trims the body (`0x6f29d0`). The stock blanks
@@ -35,10 +45,8 @@ impl Loader<'_> {
                 };
                 if let Err(e) = wrapper.call_method::<()>("SetScript", (name.clone(), func.clone()))
                 {
-                    self.warn_once(
-                        &format!("script:{name}"),
-                        format!("{dbg}: SetScript(\"{name}\") unsupported in v1: {e}"),
-                    );
+                    self.report
+                        .fault(format!("{dbg}: SetScript(\"{name}\"): {e}"));
                     continue;
                 }
                 // After each `SetScript` the XML walker enables the handler's input kind

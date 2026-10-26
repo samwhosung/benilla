@@ -120,10 +120,10 @@ fn onclick_fires_on_press_release_same_frame_not_when_release_lands_elsewhere() 
     s.run(
         r#"
         clicks_a, clicks_b, click_btn = 0, 0, nil
-        local a = CreateFrame("Frame", "A")   -- left half
+        local a = CreateFrame("Button", "A")   -- left half
         a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
         a:SetScript("OnClick", function() local self, button, down = this, arg1, arg2 clicks_a = clicks_a + 1; click_btn = button end)
-        local b = CreateFrame("Frame", "B")   -- right half
+        local b = CreateFrame("Button", "B")   -- right half
         b:SetPoint("BOTTOMLEFT", 400, 0); b:SetWidth(400); b:SetHeight(600); b:EnableMouse(true)
         b:SetScript("OnClick", function() local self, button, down = this, arg1, arg2 clicks_b = clicks_b + 1 end)
     "#,
@@ -553,7 +553,7 @@ fn a_half_finished_double_click_survives_the_cursor_leaving_the_window() {
     );
 }
 
-/// A name in `SCRIPT_KINDS` must have something that fires it, so this asserts the fire.
+/// A name in a type's script map must have something that fires it, so this asserts the fire.
 #[test]
 fn set_script_on_double_click_is_accepted_because_something_fires_it() {
     let mut s = script();

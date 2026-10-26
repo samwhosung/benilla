@@ -1376,9 +1376,10 @@ fn shift_arrow_selects_the_whole_link_and_typing_replaces_it() {
         back: true,
         extend: true,
     });
+    // Copy hands the clipboard the visible text (`0x77e230`); typing over it shows the span.
     assert_eq!(
         s.editbox_copy().as_deref(),
-        Some(LINK),
+        Some("[Ironfoe]"),
         "one Shift+LEFT takes the whole unit"
     );
     s.char_input("x");

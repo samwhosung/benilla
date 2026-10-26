@@ -176,6 +176,7 @@ pub(crate) mod region;
 mod region_map;
 mod reputation;
 mod saved;
+mod script_map;
 mod scrollframe;
 mod session;
 mod shapeshift;
@@ -613,89 +614,6 @@ pub(crate) fn ping_args(token: &str, a: f64, b: f64) -> Vec<ScriptValue> {
 /// The layout handle of the screen root (the client's `CSimpleTop`, not the `UIParent` frame),
 /// which a top-level `SetPoint` without `relativeTo` anchors to; frame ids, from 1, are the rest.
 pub const SCREEN: crate::layout::Handle = 0;
-
-/// The FrameScript handler kinds `SetScript` accepts, each only with the code that fires it
-/// ([`crate::script::object::events_regions::set_script`]). The list is flat, where the reference
-/// resolves names per widget type (base map `0x76a0d0` plus the type's own; a `<Frame>` has no
-/// `OnClick`), so any widget accepts any kind here.
-///
-/// `OnValueChanged` is the StatusBar's (`+0x32c`) and the Slider's (`+0x330`) own slot; the
-/// ScrollFrame's three scroll kinds are `+0x32c`/`+0x334`/`+0x33c` (script-name map `0x786c40`).
-/// The EditBox's vtable (`0x81c910`) replaces the key and char slots: an EditBox never fires
-/// `OnKeyDown`, and fires `OnChar` only from `Insert`, with the inserted text (`0x77c13c`).
-const SCRIPT_KINDS: [&str; 46] = [
-    "OnLoad",
-    "OnEvent",
-    "OnUpdate",
-    // The model pane's two: `OnUpdateModel` from its paint in the draw pass
-    // (`paint_model_panes`), `OnAnimFinished` from its clock advance in the update walk
-    // (`advance_pane`) when the armed sequence completes.
-    "OnUpdateModel",
-    "OnAnimFinished",
-    "OnShow",
-    "OnHide",
-    "OnClick",
-    "OnEnter",
-    "OnLeave",
-    "OnMouseDown",
-    "OnMouseUp",
-    "OnMouseWheel",
-    "OnValueChanged",
-    "OnEnterPressed",
-    "OnEscapePressed",
-    "OnSpacePressed",
-    "OnTabPressed",
-    "OnTextChanged",
-    "OnTextSet",
-    // The caret leg's own (`0x77da80`), fired by the box's flush on dirty bit 2, which a caret
-    // move, an edit, a focus change and a re-seat raise: the edge `ScrollingEdit_OnCursorChanged`
-    // scrolls a multiline box by.
-    "OnCursorChanged",
-    "OnEditFocusGained",
-    "OnEditFocusLost",
-    // The EditBox's input-method slot (script map `0x77a310`, `0x77a40d`, `+0x430`), fired only
-    // when an input-method event changes the box's language (`0x77abb0`, stored at `0x77abf2`).
-    // benilla has no input method, so it is stored and never runs, as on a western layout.
-    "OnInputLanguageChanged",
-    "OnHorizontalScroll",
-    "OnVerticalScroll",
-    "OnScrollRangeChanged",
-    "OnDragStart",
-    "OnDragStop",
-    "OnReceiveDrag",
-    // A text frame's hyperlink button hands it these ([`hyperlink`]): the click as
-    // `OnHyperlinkClick(link, text, button)`, which `ChatFrameTemplate` passes to `SetItemRef`
-    // (`ChatFrame.xml:15`, `ChatFrame.lua:1534`), and the enter and leave with the link alone.
-    "OnHyperlinkClick",
-    "OnHyperlinkEnter",
-    "OnHyperlinkLeave",
-    // The ScrollingMessageFrame's own (script map `0x787d90`, `+0x3bc`), fired by a relayout that
-    // moved its anchor (`0x788a9a`).
-    "OnMessageScrollChanged",
-    // The GameTooltip's engine-fired scripts: money render, money clear and world-hover default
-    // placement, all three wired by the stock template (`GameTooltipTemplate.xml:617-625`).
-    "OnTooltipAddMoney",
-    "OnTooltipCleared",
-    "OnTooltipSetDefaultAnchor",
-    // The ColorSelect's own slot (script map `0x78b4f0`, `+0x338`), fired by its `SetColorRGB`.
-    "OnColorSelect",
-    // The Button/CheckButton double click (script map `0x778c50`, `+0x4d4`), fired by
-    // [`pointer`]'s release edge in place of the second `OnClick` within 300 ms (`0x77937b`).
-    "OnDoubleClick",
-    // The layout event (base map `0x76a0d0`, `+0x120`), fired by the resolve pass on a size change.
-    "OnSizeChanged",
-    // The movie frame's three (script map `0x78c2e0`), fired by its player ([`movieframe`]).
-    "OnMovieFinished",
-    "OnMovieShowSubtitle",
-    "OnMovieHideSubtitle",
-    // The key channels: `OnChar` and `OnKeyDown` fired by [`keyboard`]'s walks (`0x765df0`,
-    // `0x765f10`), `OnKeyUp` by the key-up dispatcher (`0x765fd0`) on the frame that took the
-    // key's down. A frame carrying only `OnKeyUp` still consumes every key-down and runs nothing
-    // on it, the reference's own asymmetry.
-    "OnChar",
-    "OnKeyDown",
-    "OnKeyUp",
-];
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // UiScript: the public host
