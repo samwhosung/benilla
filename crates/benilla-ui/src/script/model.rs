@@ -703,6 +703,9 @@ pub(crate) struct Model {
     /// `HasFullControl`, the reference's `[0xb4b3e4]`: set by `SMSG_CLIENT_CONTROL_UPDATE` for the
     /// player, boots 1, and every cast, item and cursor gate refuses at 0.
     pub(crate) player_control: bool,
+    /// `+0x1c70` bit 0 of the player: far sight is on (`CMSG_FAR_SIGHT` 1 sent), which
+    /// `HasFullControl` refuses (`0x51a142`).
+    pub(crate) far_sight_on: bool,
     /// The on-use spells that pass the item dispatcher's control gate without control of the
     /// character (`0x5d8ec0`-`0x5d8f6a`), fed by the app.
     pub(crate) control_bypass: HashSet<u32>,
@@ -1582,6 +1585,7 @@ impl Model {
             shapeshift_forms: Vec::new(),
             pet_bar: super::pet::PetBarState::default(),
             player_control: true,
+            far_sight_on: false,
             control_bypass: HashSet::new(),
             containers: HashMap::new(),
             container_cooldowns: HashMap::new(),

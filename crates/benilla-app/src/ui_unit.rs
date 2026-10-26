@@ -843,12 +843,15 @@ fn feed_player_control(
 fn feed_farsight_focus(
     mut hosted_vm: crate::script_calls::HostedVm,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    far_sight: Option<Res<crate::player::FarSight>>,
     mut focus: Local<crate::ui_script::VmMemo<Option<u64>>>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
         };
+        // `HasFullControl` refuses while the player's far-sight bit is on (`0x51a142`).
+        script.set_far_sight_on(far_sight.as_deref().is_some_and(|f| f.on()));
         let Some(store) = self_q.iter().next() else {
             return;
         };
@@ -3085,7 +3088,7 @@ mod tests {
         app.init_resource::<crate::player::Player>()
             .init_resource::<crate::player::OwnControlLost>()
             .add_systems(Update, (feed_player_control, feed_farsight_focus));
-        let script = UiScript::new().unwrap();
+        let mut script = UiScript::new().unwrap();
         script
             .run(
                 r#"
@@ -3098,6 +3101,15 @@ mod tests {
             "#,
             )
             .unwrap();
+        // The player object `HasFullControl` needs, alive.
+        script.set_unit(
+            "player",
+            Some(benilla_ui::script::UnitState {
+                exists: true,
+                health: 100,
+                ..Default::default()
+            }),
+        );
         app.insert_non_send_resource(script);
         let me = app
             .world_mut()

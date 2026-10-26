@@ -342,6 +342,11 @@ impl super::UiScript {
         self.model_mut().player_control = in_control;
     }
 
+    /// Set the player's far-sight bit (`+0x1c70` bit 0), which `HasFullControl` reads.
+    pub fn set_far_sight_on(&mut self, on: bool) {
+        self.model_mut().far_sight_on = on;
+    }
+
     /// The drag's bar writes a harness VM kept, already applied here: one `Vec` per
     /// `CMSG_PET_SET_ACTION` of one or two `(0-based position, packed word)` pairs.
     pub fn take_pet_set_actions(&mut self) -> Vec<Vec<(u32, u32)>> {
@@ -1263,14 +1268,32 @@ mod tests {
         );
     }
 
+    /// `HasFullControl` (`0x51a140`) answers 1 only with a player object, far sight off
+    /// (`+0x1c70` bit 0), health above 0 and the control flag set (`0x51a158`).
     #[test]
-    fn has_full_control_follows_the_hosts_flag() {
+    fn has_full_control_needs_the_player_alive_in_control_and_off_far_sight() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
+        let nil = |s: &UiScript| s.eval::<bool>("return HasFullControl() == nil").unwrap();
+        assert!(nil(&s), "no player object");
+        let player = |health: u32| {
+            Some(crate::script::UnitState {
+                exists: true,
+                health,
+                ..Default::default()
+            })
+        };
+        s.set_unit("player", player(100));
         assert_eq!(s.eval::<i64>("return HasFullControl()").unwrap(), 1);
         s.set_player_control(false);
-        assert!(s.eval::<bool>("return HasFullControl() == nil").unwrap());
+        assert!(nil(&s), "control lost");
         s.set_player_control(true);
+        s.set_far_sight_on(true);
+        assert!(nil(&s), "far sight or possession");
+        s.set_far_sight_on(false);
+        s.set_unit("player", player(0));
+        assert!(nil(&s), "a corpse");
+        s.set_unit("player", player(1));
         assert_eq!(s.eval::<i64>("return HasFullControl()").unwrap(), 1);
     }
 

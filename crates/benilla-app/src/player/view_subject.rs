@@ -127,7 +127,7 @@ impl FarSight {
     }
 
     /// Whether far sight is on (`+0x1c70` bit 0).
-    fn on(&self) -> bool {
+    pub(crate) fn on(&self) -> bool {
         self.state().on
     }
 }
