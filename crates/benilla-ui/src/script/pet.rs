@@ -467,23 +467,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // An elapsed or absent cooldown answers (0, 0, 1), so a re-feed never replays the sweep.
+    // All three outputs start at 0 (`0x4be006`-`0x4be00c`); only a pet's slot holding an action of
+    // type 1 to 5 (`0x4be017`-`0x4be023`) asks the list (`0x4be03c` → `0x6e2ea0`), which sets the
+    // enable output to 1. A command, a reaction, an empty or absent slot and no pet answer
+    // (0, 0, 0). An elapsed cooldown answers (0, 0, 1), so a re-feed never replays the sweep.
     g.set(
         "GetPetActionCooldown",
         lua.create_function(|lua, i: Value| {
             // `is-number` else `Usage: GetPetActionCooldown(index)` (`0x8478d8`, `0x4bdfb7`).
             let i = binding_abi::index_arg32(lua, i, "Usage: GetPetActionCooldown(index)")?;
             let now = crate::script::clock::now(lua);
-            let spell = slot_now(lua, i).and_then(|v| v.spell_id);
+            let spell = slot_now(lua, i)
+                .filter(|_| flags_now(lua).has_bar)
+                .filter(|v| matches!((v.packed >> 24) & 0x3F, 1..=5))
+                .map(|v| v.packed & 0xFFFF);
+            let Some(spell) = spell else {
+                return Ok((0.0, 0.0, 0));
+            };
             let snapshot = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 slot_at(&model, i).and_then(|s| s.cooldown)
             };
-            // A spell slot's query reads the pet's list inside the call (`0x4be03c` →
-            // `0x6e2ea0`), through the lent host; with none, the frame's snapshot answers.
-            let live = spell.and_then(|spell| {
-                super::cooldown_read::read_live(lua, super::CooldownQuery::PetSpell(spell))
-            });
+            // The query reads the pet's list inside the call, through the lent host; with none,
+            // the frame's snapshot answers.
+            let live = super::cooldown_read::read_live(lua, super::CooldownQuery::PetSpell(spell));
             Ok(match live.unwrap_or(snapshot) {
                 Some((start, duration, enabled)) if start + duration > now || !enabled => (
                     crate::script::clock::held_start(start, enabled, now),
@@ -867,6 +874,7 @@ mod tests {
                 is_token: true,
                 active: true,
                 attack_active: true,
+                packed: super::order(super::PET_ACT_COMMAND, super::PET_COMMAND_ATTACK),
                 ..Default::default()
             },
             PetActionView {
@@ -876,6 +884,7 @@ mod tests {
                 autocast_allowed: true,
                 autocast_enabled: true,
                 cooldown: Some((9400, 1500, true)),
+                packed: 0xC100_0000 | 1767,
                 ..Default::default()
             },
             PetActionView::default(),
@@ -947,12 +956,16 @@ mod tests {
         s.tick(10.0); // GetTime == 10
         s.set_pet_actions(true, true, true, slots());
 
-        assert_eq!(
-            s.eval::<(f64, f64, i32)>("return GetPetActionCooldown(1)")
-                .unwrap(),
-            (0.0, 0.0, 1),
-            "no cooldown reads cold"
-        );
+        // Only a spell action on a slot with a pet asks the list, which sets the enable output
+        // (`0x4be017`-`0x4be03c`); a command, an empty slot and one past the bar answer zeros.
+        for slot in [1, 3, 11] {
+            assert_eq!(
+                s.eval::<(f64, f64, i32)>(&format!("return GetPetActionCooldown({slot})"))
+                    .unwrap(),
+                (0.0, 0.0, 0),
+                "slot {slot} is no spell"
+            );
+        }
         let (start, duration, enable) = s
             .eval::<(f64, f64, i32)>("return GetPetActionCooldown(2)")
             .unwrap();
@@ -964,7 +977,16 @@ mod tests {
         assert_eq!(
             s.eval::<(f64, f64, i32)>("return GetPetActionCooldown(2)")
                 .unwrap(),
-            (0.0, 0.0, 1)
+            (0.0, 0.0, 1),
+            "a spell slot with no cooldown reads cold"
+        );
+
+        // No pet: the guid test comes first (`0x4bdfde`), so even a spell slot answers zeros.
+        s.set_pet_actions(false, true, true, slots());
+        assert_eq!(
+            s.eval::<(f64, f64, i32)>("return GetPetActionCooldown(2)")
+                .unwrap(),
+            (0.0, 0.0, 0)
         );
     }
 
