@@ -1463,20 +1463,28 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     s.run(r#"held:SetText("back"); held:SetText(nil)"#).unwrap();
     assert_eq!(text_of(&s, "held"), None);
 
-    // `Button:SetText(nil)` leaves the label alone.
+    // `Button:SetText` gates on `lua_isstring` (`0x780dac`): nil, a boolean or a table raises
+    // `Usage: %s:SetText("text")` (`0x87a198`) and leaves the label alone; a number is its text.
     s.run(
         r#"
         local b = CreateFrame("Button", "TextCellButton")
         b:SetText("Accept")
-        b:SetText(nil)
     "#,
     )
     .unwrap();
-    assert_eq!(
-        text_of(&s, "TextCellButton").as_deref(),
-        Some("Accept"),
-        "a nil never reaches the button's label (`0x778dcc`)"
-    );
+    for bad in ["nil", "true", "{}", ""] {
+        let e = s
+            .run(&format!("TextCellButton:SetText({bad})"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains(r#"Usage: TextCellButton:SetText("text")"#),
+            "SetText({bad}) -> {e}"
+        );
+    }
+    assert_eq!(text_of(&s, "TextCellButton").as_deref(), Some("Accept"));
+    s.run("TextCellButton:SetText(7)").unwrap();
+    assert_eq!(text_of(&s, "TextCellButton").as_deref(), Some("7"));
     s.run(r#"TextCellButton:SetText("")"#).unwrap();
     assert_eq!(text_of(&s, "TextCellButton"), None, "an empty label is nil");
 

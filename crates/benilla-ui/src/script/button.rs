@@ -664,13 +664,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     texture_pair(lua, &m, "Highlight", Slot::Highlight)?;
 
     // SetText/GetText go to the ButtonText fontstring, as the `text` attribute does (`0x778dc0`).
+    // SetText (`0x780d20`) gates on `lua_isstring` (`0x780dac`): nil, a boolean or a table raises
+    // `Usage: %s:SetText("text")` (`0x87a198`) naming the button, so the worker's own NULL guard
+    // (`0x778dcc`) is unreachable from Lua.
     m.set(
         "SetText",
-        lua.create_function(|lua, (this, text): (Table, Option<Value>)| {
-            let text = super::binding_abi::text_arg(lua, text)?;
-            // A nil returns at once (`0x778dcc`): no clear, no label created. The guard is the
-            // button's own; `FontString:SetText(nil)` clears (`0x771d80`).
-            let Some(text) = text else { return Ok(()) };
+        lua.create_function(|lua, (this, text): (Table, Value)| {
+            with_button(lua, &this, |_| ())?;
+            let text = super::binding_abi::method_string(lua, &this, text, r#"SetText("text")"#)?;
             let id = ensure_slot(lua, &this, Slot::Text)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let rh = *model.id_to_region.get(&id).expect("text region id");
