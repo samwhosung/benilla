@@ -69,6 +69,56 @@ fn get_scroll_child_roundtrips_wrapper_and_name_and_clears_on_nil() {
     .unwrap();
 }
 
+/// `SetScrollChild` (`0x790fa0`) forks on the argument's type: a name that finds no frame, a
+/// missing argument or another type raises `%s:SetScrollChild(): Couldn't find frame named '%s'`
+/// (`0x87b4c4`), a table with no object `…Couldn't find 'this' in child object` (`0x87b538`), a
+/// non-frame `…Wrong child object type, expected frame` (`0x87b4f8`); none clears the child.
+#[test]
+fn set_scroll_child_raises_on_a_bad_target_and_keeps_the_child() {
+    let s = script();
+    s.run(
+        r#"
+        BadSF = CreateFrame("ScrollFrame", "BadSF")
+        AnonSF = CreateFrame("ScrollFrame")
+        BadChild = CreateFrame("Frame", "BadChild")
+        BadTex = BadChild:CreateTexture()
+        BadSF:SetScrollChild(BadChild)
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "BadSF:SetScrollChild('TypoName')",
+            "BadSF:SetScrollChild(): Couldn't find frame named 'TypoName'",
+        ),
+        (
+            "BadSF:SetScrollChild()",
+            "BadSF:SetScrollChild(): Couldn't find frame named '(null)'",
+        ),
+        (
+            "BadSF:SetScrollChild(true)",
+            "BadSF:SetScrollChild(): Couldn't find frame named '(null)'",
+        ),
+        (
+            "BadSF:SetScrollChild({})",
+            "BadSF:SetScrollChild(): Couldn't find 'this' in child object",
+        ),
+        (
+            "BadSF:SetScrollChild(BadTex)",
+            "BadSF:SetScrollChild(): Wrong child object type, expected frame",
+        ),
+        (
+            "AnonSF:SetScrollChild(BadTex)",
+            "<unnamed>:SetScrollChild(): Wrong child object type, expected frame",
+        ),
+    ] {
+        let e = s.run(call).unwrap_err().to_string();
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(r#"assert(BadSF:GetScrollChild() == BadChild, "a raise keeps the child")"#)
+        .unwrap();
+}
+
 /// A positive offset lifts the child; offsets past the range or below zero are stored and applied
 /// as given, since `0x786db0` never reads the range.
 #[test]

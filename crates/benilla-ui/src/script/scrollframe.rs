@@ -9,7 +9,7 @@
 use mlua::{Lua, Table, Value};
 
 use super::binding_abi;
-use super::object::{decode_id, frame_handle_of, frame_wrapper};
+use super::object::{frame_handle_of, frame_wrapper};
 use super::{event, Model};
 use crate::layout::SIZE_EPS;
 use crate::widget::{FrameHandle, KindState, ScrollFrameState};
@@ -115,35 +115,32 @@ fn join_subtree(model: &Model, f: FrameHandle, content: &mut SpanBox) {
     }
 }
 
+/// `SetScrollChild`'s error lines (`0x87b4c4`, `0x87b538`, `0x87b4f8`).
+const SET_SCROLL_CHILD_LINES: super::object::FrameArgLines = super::object::FrameArgLines {
+    verb: "SetScrollChild",
+    miss: "frame",
+    role: "child",
+};
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // SetScrollChild(frame | name | nil): nil or an unresolvable target clears.
+    // SetScrollChild(frame | name | nil) (`0x790fa0`): nil clears (`0x791054`), and the rest is
+    // read as `SetParent` reads its frame ([`super::object::frame_arg`]): a miss raises
+    // "%s:SetScrollChild(): Couldn't find frame named '%s'" (`0x87b4c4`), a table with no object
+    // "…Couldn't find 'this' in child object" (`0x87b538`), a non-frame "…Wrong child object
+    // type, expected frame" (`0x87b4f8`), naming the scroll frame. An absent argument misses.
     m.set(
         "SetScrollChild",
-        lua.create_function(|lua, (this, target): (Table, Value)| {
-            // A name is `_G[name]` with no `$parent`: `0x790fa0` calls `SetParent`'s resolver
-            // `0x76c760`.
-            let named = match &target {
-                Value::String(s) => s
-                    .to_str()
-                    .ok()
-                    .map(|n| super::object::prefetch_named_target(lua, n.as_ref(), None)),
-                _ => None,
+        lua.create_function(|lua, args: mlua::MultiValue| {
+            let mut it = args.into_iter();
+            let Some(Value::Table(this)) = it.next() else {
+                return Err(mlua::Error::runtime(super::object::ERR_NON_TABLE));
             };
-            let new_child: Option<FrameHandle> = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                match &target {
-                    Value::Table(t) => decode_id(t)
-                        .ok()
-                        .and_then(|id| model.id_to_frame.get(&id).copied()),
-                    Value::String(_) => named.as_ref().and_then(|nt| {
-                        super::object::resolve_named_target(&model, nt)
-                            .and_then(|id| model.id_to_frame.get(&id).copied())
-                    }),
-                    _ => None,
-                }
-            };
+            with_scroll(lua, &this, |_| ())?;
+            let who = binding_abi::name_of(lua, &this);
+            let new_child =
+                super::object::frame_arg(lua, &who, &SET_SCROLL_CHILD_LINES, it.next())?;
             // Every call marks the range (`0x786d16`), the same child again included.
             with_scroll(lua, &this, |s| s.range_dirty = true)?;
             {
