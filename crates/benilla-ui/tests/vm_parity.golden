@@ -191,7 +191,7 @@ fix-vm depth_mixed	err C stack overflow
 fix-vm tm_callable	42,42,42,42,42,42,42,42,\"ok 42\"
 fix-vm tm_compare_callable	true,true,true,true,true
 fix-vm tm_not_callable	\"err t:32: attempt to call a number value\",\"err t:33: attempt to call a number value\",\"err t:34: attempt to call a boolean value\",\"err t:35: attempt to call a number value\",\"err t:36: attempt to call a number value\",\"err t:37: attempt to call local `q\' (a table value)\",\"err t:38: attempt to index a number value\"
-fix-vm tm_unm_args	true,true
+fix-vm tm_unm_args	false,false
 perf-fix gsub_literal_first	\"a+b++c+d.e%f(g)h\",\"a+b++c+d.e%f(g)h\",\"a+b+c+d.e%f(g)h\",\"+a++b++c++d+.+e+%+f+(+g+)+h+\",\"+a++b+++c++d+.+e+%+f+(+g+)+h+\",\"a-B-c-d.e%f(g)h\",\"a+b+-c-d.e%f(g)h\",\"a-b--c-d.e%f(g)h\",\"a-b--c-d!e%f(g)h\",\"a-b--c-d.e#f(g)h\",\"a-b--c-d.e%f[g)h\",\"a-b--c-<.>e%f(g)h\",\"a-b--c-d.e%f(g)h\",\"\",\"A-b--c-d.e%f(g)h\",\"a-b--c-d.e%f(g)h\",\"a-b--c-d.e%f(g)H\",\"a-b-[-c]-d.e%f(g)h\",\"err bad argument #3 to `gsub\' (string or function expected)\",\"err invalid capture index\"
 perf-fix gsub_literal_errors	\"err t:32: malformed pattern (ends with `%\')\",\"ok \\\"xyz\\\",0\",\"ok \\\"axc\\\",1\",\"ok \\\"xyz\\\",0\",\"err t:34: invalid capture index\",\"ok \\\"xyz\\\",0\",\"err t:35: malformed pattern (missing `]\')\",\"err t:35: invalid capture index\",\"ok \\\"xyz\\\",0\"
 r2-front_forlist_extra_values	\"ok 7\",\"ok 6\",\"ok 23\"

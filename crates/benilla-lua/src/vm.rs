@@ -2981,10 +2981,10 @@ impl Vm {
                         match self.tonumber(x) {
                             Some(n) => r!(a) = Value::Num(-n),
                             None => {
-                                // 5.1.5's `OP_UNM`: `Arith(L, ra, rb, rb, TM_UNM)`, the operand
-                                // passed twice.
+                                // The client's `OP_UNM` (`0x6f8ea1`): `call_binTM` with the operand
+                                // and a nil temporary (`0x6f8edc`), so `__unm` gets (operand, nil).
                                 let unm = self.names.unm;
-                                match slow!(self.bin_tm(x, x, unm))? {
+                                match slow!(self.bin_tm(x, Value::Nil, unm))? {
                                     Some(v) => r!(a) = v,
                                     None => {
                                         return Err(self.type_error(

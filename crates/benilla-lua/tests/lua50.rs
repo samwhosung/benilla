@@ -594,3 +594,20 @@ fn error_with_no_value_is_a_bad_argument() {
     assert_eq!(run("return pcall(error, nil)"), "false,nil");
     assert_eq!(run("return pcall(error, 'x', 0)"), "false,x");
 }
+
+/// `OP_UNM` (`0x6f8ea1`) on a value that is no number calls `call_binTM` (`0x6f8670`) with the
+/// operand and a nil temporary (`0x6f8edc`): `__unm` gets (operand, nil), not the operand twice.
+#[test]
+fn unm_gets_the_operand_and_nil() {
+    // The result is the first value only; record the arguments on the side.
+    assert_eq!(
+        run("local t t = setmetatable({}, {__unm = function(...) \
+             seen = {arg.n, arg[1] == t, arg[2]} return 7 end}) \
+             return -t, seen[1], seen[2], tostring(seen[3])"),
+        "7,2,true,nil"
+    );
+    assert_eq!(
+        run("return pcall(function() return -{} end)"),
+        "false,t:1: attempt to perform arithmetic on a table value"
+    );
+}

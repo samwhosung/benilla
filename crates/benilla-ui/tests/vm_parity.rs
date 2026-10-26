@@ -589,6 +589,7 @@ b]])"#),
         E(function() local q = setmetatable({}, {__eq = 5}) return q == setmetatable({}, getmetatable(q)) end),
         E(function() local q = setmetatable({}, {__call = {}}) return q() end),
         E(function() local q = setmetatable({}, {__index = 5}) return q.x end))"#),
+    // `OP_UNM` calls `__unm` with the operand and a nil temporary (`0x6f8ea1`, `0x6f8edc`).
     ("fix-vm tm_unm_args", r#"local u = setmetatable({}, {__unm = function(a, b) return S(a == b, rawequal(a, b)) end})
         return -u"#),
     // ── perf-fix: gsub skips to a literal first byte; every shape answers as before ──
