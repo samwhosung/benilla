@@ -103,7 +103,7 @@ impl DeathNet {
     }
 
     /// Zero the release timer, as `UI_Init` does at each login and `/reload` (`0x490131`,
-    /// `0x490137`): only a death since writes it (`0x5e9a35`).
+    /// `0x490137`): only a death since writes it (`0x5e9a35`, `0x5e9a3c`).
     pub(crate) fn zero_release(&mut self) {
         self.release = ReleaseTimer::Unset;
     }
@@ -247,7 +247,7 @@ impl DeathView<'_, '_> {
 ///
 /// Our player's arrival first signals the death state after its world-enter cascade
 /// (`0x5deb60`, `0x5deb65` → `0x495850`): a login, a reconnect or a worldport to a dead body hears
-/// `PLAYER_DEAD`, any other `PLAYER_ALIVE`. It waits for the interface, as the cascade does.
+/// `PLAYER_DEAD`, any other `PLAYER_ALIVE`. benilla holds it until the interface is up.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn feed_death(
     // The death stores, which the death calls write: an engine turn, its events signalled after.
@@ -454,7 +454,8 @@ fn send_repop_request(store: &benilla_protocol::ObjectFields, net: &NetCommands)
 
 /// The world-enter cascade's last test (`0x490a2d`-`0x490a38`): with our health 0 or less it
 /// releases the body (`0x490a3c` → `0x5e0ae0`), after its 38 calls and ahead of its tutorials. The
-/// cascade runs at every arrival and every `/reload` (`0x5deb60`, `0x490168`), so logging in or
+/// cascade runs at an arrival, a `/reload` and a reactivation (`0x5deb60`, `0x490168`,
+/// `0x5e9c08`), so logging in or
 /// reloading dead and unreleased goes to the graveyard (`MiscHandler.cpp:48-67`).
 pub(crate) fn repop_on_world_enter(
     mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
