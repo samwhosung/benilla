@@ -1206,7 +1206,7 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
     );
 
     // The app's per-frame drain runs the dispatch; the test runs the same call.
-    let mut script = world
+    let script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
     assert!(
@@ -1251,7 +1251,7 @@ fn a_looping_addon_cannot_freeze_world_entry() {
         "the addon after the spinner still loads — the budget failed one addon, not the entry"
     );
     // The budget raise reaches the handler queue, so the dialog names the loop.
-    let mut script = world
+    let script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
     let shown: String = script

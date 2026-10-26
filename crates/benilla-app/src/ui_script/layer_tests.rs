@@ -397,7 +397,7 @@ fn the_error_log_collects_off_the_error_handler() {
         pre:SetScript("OnClick", function() error("before the layer") end)
         pre:Click()
     "#;
-    let (mut s, failures) = production_load_with("errlog", false, before, |root| {
+    let (s, failures) = production_load_with("errlog", false, before, |root| {
         let dir = root.join("ZZErr");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("ZZErr.toc"), "## Interface: 11200\nerr.lua\n").unwrap();
