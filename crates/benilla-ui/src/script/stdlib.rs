@@ -135,22 +135,90 @@ fn error_handler(lua: &Lua) -> Option<Value> {
 
 /// The error function every script runner passes `lua_pcall` (`0x703b40`, made at `0x703a5c` and
 /// held at `[0x8722c8]`), so it runs at the raise, inside the failing script: `this`, `event` and
-/// `arg1`..`argN` are still its own and its frames are on the stack. With a `seterrorhandler`
-/// value held (`0x703b45`) it calls that with the message, `lua_call(1, 1)` (`0x703b6d`),
+/// `arg1`..`argN` are still its own and its frames are on the stack. With the slot at -1
+/// (`0x703b45`) it answers the message. Otherwise it pushes the held value under the message
+/// (`lua_insert(-2)`) and calls it, `lua_call(1, 1)` (`0x703b6d`), answering its result: what a
+/// status reads (`0x704b7f`) and what a failed `GetText` answers (`0x703cb2`). The call is
 /// unprotected: a number raises `attempt to call a number value`, and any error there runs this
 /// again for that error (`luaG_errormsg`, `0x6fc780`) until `luaD_call` throws status 5 at depth
-/// 225 (`0x6f65cf`), `error in error handling`. It answers the message, where `0x703b40` answers
-/// the handler's result: every runner pops it unread (`0x704e82`, `0x704b93`, `0x704d2b`), and
-/// benilla's host log reads it.
+/// 225 (`0x6f65cf`), `error in error handling`. The host's log reads the message from
+/// [`with_capture`], since the call may answer anything.
 fn error_function_native(vm: &mut Vm, nargs: usize) -> Result<usize, LuaError> {
     let msg = vm.arg(nargs, 0);
     let key = vm.str(super::REG_ERRORHANDLER.as_bytes());
     let held = vm.heap.table(vm.registry).get(key);
-    if !held.is_nil() {
-        vm.call_value(held, &[msg], 1)?;
+    if held.is_nil() {
+        vm.push(msg);
+        return Ok(1);
     }
-    vm.push(msg);
-    Ok(1)
+    let text = vm.display(msg);
+    let first = CAPTURES.with(|c| match c.borrow_mut().last_mut() {
+        Some(top) if top.original.is_none() => {
+            top.original = Some(text);
+            true
+        }
+        _ => false,
+    });
+    match vm.call_value(held, &[msg], 1) {
+        Ok(out) => {
+            vm.push(
+                out.first()
+                    .copied()
+                    .unwrap_or(mlua::benilla_lua::Value::Nil),
+            );
+            Ok(1)
+        }
+        Err(e) => {
+            if first {
+                let failed = vm.display(e.value);
+                CAPTURES.with(|c| {
+                    if let Some(top) = c.borrow_mut().last_mut() {
+                        top.failed = Some(failed);
+                    }
+                });
+            }
+            Err(e)
+        }
+    }
+}
+
+/// What the error function saw for one runner's call: the message it was called with first and
+/// what the handler raised on it. A runner's call nests inside a handler's only after it, so the
+/// innermost runner's is the top.
+#[derive(Default)]
+struct Capture {
+    original: Option<String>,
+    failed: Option<String>,
+}
+
+thread_local! {
+    static CAPTURES: std::cell::RefCell<Vec<Capture>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run one runner's call with its own [`Capture`]. An error the held handler heard comes back as
+/// the message it heard, with the handler's own failure after it, for the host's log.
+pub(crate) fn with_capture<T>(call: impl FnOnce() -> mlua::Result<T>) -> mlua::Result<T> {
+    struct Pop;
+    impl Drop for Pop {
+        fn drop(&mut self) {
+            CAPTURES.with(|c| c.borrow_mut().pop());
+        }
+    }
+    CAPTURES.with(|c| c.borrow_mut().push(Capture::default()));
+    let pop = Pop;
+    let r = call();
+    let seen = CAPTURES.with(|c| c.borrow_mut().last_mut().map(std::mem::take));
+    drop(pop);
+    r.map_err(|e| match seen {
+        Some(Capture {
+            original: Some(original),
+            failed,
+        }) => mlua::Error::RuntimeError(match failed {
+            Some(f) => format!("{original} — error handler failed: {f}"),
+            None => original,
+        }),
+        _ => e,
+    })
 }
 
 /// The error function the runners call scripts under, `[0x8722c8]`; `None` in a state that never
@@ -166,10 +234,10 @@ const REG_ERRORFUNCTION: &str = "__benilla_errorfunction";
 
 /// Run a script function as the runners do: under the error function (`0x704e4f`-`0x704e79`).
 pub(crate) fn run_under_error_function(lua: &Lua, f: &mlua::Function) -> mlua::Result<()> {
-    match error_function(lua) {
+    with_capture(|| match error_function(lua) {
         Some(h) => f.call_under::<()>(&h, ()),
         None => f.call::<()>(()),
-    }
+    })
 }
 
 /// `FrameScriptExecuteBuffer` (`0x704ae0`): compile `src` as the chunk `name` and run it under the
@@ -201,15 +269,18 @@ pub(crate) fn execute_buffer(
 }
 
 /// The error function called directly on `message`, as [`execute_buffer`] calls it for a compile
-/// failure (`0x704b42`), outside any failing call; what it raises is logged.
+/// failure (`0x704b42`), outside any failing call; a handler that fails there is logged with the
+/// message it was given ([`with_capture`]).
 pub(crate) fn call_error_function(lua: &Lua, message: &[u8]) {
     let Some(h) = error_function(lua) else {
         return;
     };
-    if let Err(he) = lua.create_string(message).and_then(|m| h.call::<()>(m)) {
+    // A capture of its own, so an enclosing runner's is not written.
+    let called = with_capture(|| lua.create_string(message).and_then(|m| h.call::<()>(m)));
+    if let Err(he) = called {
         lua.app_data_mut::<super::Model>()
             .expect("model app_data")
-            .record_error(format!("error handler itself failed: {he}"));
+            .record_lua_error(&he);
     }
 }
 

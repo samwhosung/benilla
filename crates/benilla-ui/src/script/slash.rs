@@ -17,10 +17,10 @@ impl super::UiScript {
         // The stock dispatch runs inside the edit box's `OnEnterPressed`, so the handler runs under
         // that runner's error function (`0x704e4f`).
         let ran = super::host::unheld(&self.lua, || {
-            match super::stdlib::error_function(&self.lua) {
+            super::stdlib::with_capture(|| match super::stdlib::error_function(&self.lua) {
                 Some(h) => handler.call_under::<()>(&h, args.to_string()),
                 None => handler.call::<()>(args.to_string()),
-            }
+            })
         });
         if let Err(e) = ran {
             self.model_mut().record_error(format!("/{cmd}: {e}"));

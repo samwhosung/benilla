@@ -493,7 +493,10 @@ fn an_error_handler_that_errors_runs_again_until_error_in_error_handling() {
     s.fire_event("PLAYER_ALIVE", vec![]);
     let errors = s.take_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(errors[0].contains("error in error handling"), "{errors:?}");
+    assert!(
+        errors[0].contains("original fault — error handler failed: error in error handling"),
+        "{errors:?}"
+    );
     let heard: Vec<String> = s.eval("return heard").unwrap();
     assert!(heard[0].ends_with("original fault"), "{heard:?}");
     assert!(heard.len() > 2, "{}", heard.len());

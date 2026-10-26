@@ -144,5 +144,5 @@ pub(crate) fn invoke_with_globals(
     }
     // A protected call; the globals are put back before its outcome returns.
     let handler = super::stdlib::error_function(lua);
-    lua.call_with_globals(func, &globals, handler.as_ref())
+    super::stdlib::with_capture(|| lua.call_with_globals(func, &globals, handler.as_ref()))
 }
