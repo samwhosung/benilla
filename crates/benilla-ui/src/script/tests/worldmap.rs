@@ -328,12 +328,20 @@ fn worldmap_navigation_and_map_info() {
 }
 
 /// `SetMapToCurrentZone` lands on the app-fed player zone, and the feed surfaces through
-/// `GetPlayerMapPosition` for the player and `party1..4`. A `raid` token
-/// answers the off-map sentinel; the reference reads raid positions (`WorldMapFrame.lua:379`).
+/// `GetPlayerMapPosition` for the player, `party1..4` and the raid rows, by the token's guid
+/// (`0x4a8658` → `0x515970`): any case, a `target` that names a member, and "Unknown unit name"
+/// for a token the resolver does not know. A string or number is required (`0x4a861e`).
 #[test]
 fn worldmap_current_zone_and_player_feed() {
     let mut s = script();
     push_catalog(&mut s);
+    s.set_unit_guids(&crate::script::UnitGuids {
+        player: 1,
+        target: 10,
+        party: [10, 11, 0, 0],
+        raid: vec![20, 1],
+        ..Default::default()
+    });
 
     s.set_world_map_feed(
         Some((1, 2)),
@@ -341,7 +349,7 @@ fn worldmap_current_zone_and_player_feed() {
         1.5,
         None,
         vec![Some((0.1, 0.2)), None],
-        Vec::new(),
+        vec![Some((0.3, 0.4)), Some((0.25, 0.75))],
     );
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(
@@ -349,24 +357,41 @@ fn worldmap_current_zone_and_player_feed() {
             .unwrap(),
         (1, 2)
     );
-    let (x, y) = s
-        .eval::<(f64, f64)>(r#"return GetPlayerMapPosition("player")"#)
-        .unwrap();
-    assert!((x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6);
-    let (px, py) = s
-        .eval::<(f64, f64)>(r#"return GetPlayerMapPosition("party1")"#)
-        .unwrap();
-    assert!(
-        (px - 0.1).abs() < 1e-6 && (py - 0.2).abs() < 1e-6,
-        "a party slot reads its own projection"
-    );
-    for token in ["party2", "party5", "party0", "raid1", "nonsense"] {
-        assert_eq!(
-            s.eval::<(f64, f64)>(&format!(r#"return GetPlayerMapPosition("{token}")"#))
-                .unwrap(),
-            (0.0, 0.0),
-            "{token} answers the off-map sentinel"
+    let near = |token: &str, want: (f64, f64)| {
+        let (x, y) = s
+            .eval::<(f64, f64)>(&format!(r#"return GetPlayerMapPosition("{token}")"#))
+            .unwrap();
+        assert!(
+            (x - want.0).abs() < 1e-6 && (y - want.1).abs() < 1e-6,
+            "{token}: {x},{y}"
         );
+    };
+    near("player", (0.25, 0.75));
+    near("Player", (0.25, 0.75));
+    near("party1", (0.1, 0.2));
+    near("PARTY1", (0.1, 0.2));
+    near("target", (0.1, 0.2));
+    near("raid1", (0.3, 0.4));
+    near("raid2", (0.25, 0.75));
+    for token in ["party2", "party5", "party0", "raid3", "pet", "mouseover"] {
+        near(token, (0.0, 0.0));
+    }
+    for (call, want) in [
+        (
+            r#"GetPlayerMapPosition("nonsense")"#,
+            "Unknown unit name: nonsense",
+        ),
+        (
+            "GetPlayerMapPosition()",
+            r#"Usage: GetPlayerMapPosition("player")"#,
+        ),
+        (
+            "GetPlayerMapPosition(nil)",
+            r#"Usage: GetPlayerMapPosition("player")"#,
+        ),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(want), "{call}: {err}");
     }
 
     // No feed → the world sheet (never an error).

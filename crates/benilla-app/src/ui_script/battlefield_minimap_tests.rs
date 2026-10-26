@@ -24,6 +24,8 @@ fn session() -> UiScript {
     // No engine behind it: `RaidFrame`'s `RequestRaidInfo()` at world entry is kept.
     s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(0x5E1F);
     s.set_unit(
         "player",
         Some(UnitState {
@@ -519,6 +521,11 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         }),
         1.0,
     );
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 0x5E1F,
+        party: [0x11, 0x12, 0, 0],
+        ..Default::default()
+    });
     s.set_world_map_feed(
         Some((1, 1)),
         Some((0.5, 0.25)),

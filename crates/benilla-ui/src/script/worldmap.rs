@@ -861,23 +861,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPlayerMapPosition(unit) → map UV, or (0, 0) off the map; `player`, `party1`..`party4`
-    // and `raid1`..`raid40` resolve, anything else is (0, 0).
+    // GetPlayerMapPosition(unit) → map UV, or (0, 0) off the map (`0x4a8610`): a string or number
+    // else the usage line (`0x4a861e`, `0x4a8627`), the token's guid through `GetGUIDFromName`
+    // (`0x4a8658` → `0x515970`: any case, the `target` hops, "Unknown unit name" raised), and the
+    // position by guid only for the player (`0x4a8668`), a party member (`0x4a8675`) or a raid
+    // member (`0x4a8681`); anyone else leaves (0, 0).
     g.set(
         "GetPlayerMapPosition",
-        lua.create_function(|lua, unit: String| {
+        lua.create_function(|lua, unit: Value| {
+            let token =
+                binding_abi::string_arg(lua, unit, r#"Usage: GetPlayerMapPosition("player")"#)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let slot = |prefix: &str, list: &[Option<(f32, f32)>]| {
-                unit.strip_prefix(prefix)
-                    .and_then(|n| n.parse::<usize>().ok())
-                    .filter(|n| *n >= 1)
-                    .and_then(|n| list.get(n - 1).copied().flatten())
+            let guid = crate::script::unit::guid_of(lua, &model, &token)?.unwrap_or(0);
+            let (guids, wm) = (&model.unit_guids, &model.worldmap);
+            let at = |members: &[u64], uv: &[Option<(f32, f32)>]| {
+                members
+                    .iter()
+                    .position(|g| *g == guid)
+                    .and_then(|n| uv.get(n).copied().flatten())
             };
-            let (x, y) = match unit.as_str() {
-                "player" => model.worldmap.player_uv,
-                u if u.starts_with("party") => slot("party", &model.worldmap.party_uv),
-                u if u.starts_with("raid") => slot("raid", &model.worldmap.raid_uv),
-                _ => None,
+            let (x, y) = if guid == 0 {
+                None
+            } else if guid == guids.player {
+                wm.player_uv
+            } else {
+                at(&guids.party, &wm.party_uv).or_else(|| at(&guids.raid, &wm.raid_uv))
             }
             .unwrap_or((0.0, 0.0));
             Ok((f64::from(x), f64::from(y)))

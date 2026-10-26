@@ -37,8 +37,13 @@ fn harness() -> UiScript {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     // A world position here is already map UV, so a landmark source sits where it says.
     s.set_world_loc_projector(Box::new(|_, _, x, y| Some((x, y))));
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     s
 }
+
+/// The active player's guid, which the position verb resolves `"player"` to.
+const PLAYER: u64 = 0x5E1F;
 
 /// The map arrow's file facts, as the app hands them over: `MinimapArrow.m2`, one looping 3.333 s
 /// Stand keying no bone, header box x in [-0.0127, 0.0135], y in [-0.0118, 0.0145].
@@ -255,6 +260,11 @@ fn party_blips_sit_at_their_map_positions_and_hide_when_absent() {
     }
 
     // Two members on the map and one between them off it: the app pushes None for no position.
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: PLAYER,
+        party: [0x11, 0x12, 0x13, 0],
+        ..Default::default()
+    });
     s.set_world_map_feed(
         None,
         Some((0.5, 0.5)),
@@ -313,6 +323,8 @@ fn the_player_arrow_is_the_stock_model_pane_seated_and_turned_by_the_update() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -465,6 +477,8 @@ fn the_maps_own_furniture_survives_the_hide_that_showing_it_performs() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     // A player exists before the manifest loads: the UI loads on world entry, and the macro
     // window's OnLoad formats `UnitName("player")`.
     s.set_unit(
@@ -581,6 +595,8 @@ fn the_player_arrow_draws_over_the_zones_explored_overlays() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -639,6 +655,8 @@ fn a_click_over_a_blip_still_answers_the_maps_uv() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -822,6 +840,8 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -912,6 +932,8 @@ fn the_fullscreen_quads_follow_a_resize() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     // A player exists by the time the manifest loads.
     s.set_unit(
         "player",
@@ -963,6 +985,8 @@ fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     s.set_screen_size(1600.0, 900.0);
+    // `GetPlayerMapPosition("player")` answers only for the player's own guid (`0x4a8668`).
+    s.seat_player_guid(PLAYER);
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
