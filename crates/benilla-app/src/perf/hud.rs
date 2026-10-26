@@ -152,6 +152,7 @@ pub(super) fn pill_quads(
     mut quads: ResMut<UiQuads>,
     mismatch: Option<Res<super::BlendMismatchShared>>,
     mut cache: Local<Option<PillCache>>,
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     if !hud.visible {
         return;
@@ -245,7 +246,18 @@ pub(super) fn pill_quads(
         });
     }
     let Some(c) = &*cache else { return };
-    quads.overlays.extend(c.quads.iter().cloned());
+    // Laid out in window px: undo the stretch the pass gives the interface's px
+    // ([`crate::ui_script::UiScreen`]), so the pill keeps its shape with `widescreen` 0.
+    let stretch = crate::ui_script::UiScreen::of_window(win, widescreen.as_deref()).stretch;
+    quads.overlays.extend(c.quads.iter().cloned().map(|mut q| {
+        q.rect = Rect::new(
+            q.rect.min.x / stretch,
+            q.rect.min.y,
+            q.rect.max.x / stretch,
+            q.rect.max.y,
+        );
+        q
+    }));
 }
 
 /// [`pill_quads`]' cache: the laid-out pill, valid for one snapshot tick, window width and seat.

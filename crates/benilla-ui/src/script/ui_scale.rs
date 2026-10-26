@@ -46,13 +46,13 @@ pub(crate) fn effective_ui_scale(ui_scale: f32, aspect: f32) -> f32 {
     floored_ui_scale(capped_ui_scale(ui_scale, aspect))
 }
 
-/// The automatic scale `0x492f70` computes for a `w`×`h` display: 1.0, or `768/h` above 768 tall
-/// (`0x492fbc cmp esi,0x300`), under the same narrow-aspect cap, then raised to 0.9 unless above it
-/// (`0x493005`–`0x493012`).
-pub(crate) fn auto_ui_scale(w: u32, h: u32) -> f32 {
+/// The automatic scale `0x492f70` computes for a display `h` tall at the display aspect `aspect`
+/// (`0x4901e0`, read at `0x492fb4`): 1.0, or `768/h` above 768 tall (`0x492fbc cmp esi,0x300`),
+/// under the same narrow-aspect cap, then raised to 0.9 unless above it (`0x493005`–`0x493012`).
+pub(crate) fn auto_ui_scale(h: u32, aspect: f32) -> f32 {
     let mut v = if h > 768 { 768.0 / h as f32 } else { 1.0 };
     if h > 0 {
-        v = capped_ui_scale(v, w as f32 / h as f32);
+        v = capped_ui_scale(v, aspect);
     }
     if v > 0.9 {
         v
@@ -126,7 +126,8 @@ impl UiScript {
                     return false;
                 }
                 *auto_cache = Some(display);
-                floored_ui_scale(auto_ui_scale(w, h))
+                // The aspect is the cells' (`0x4901e0`), never the display's own `w/h`.
+                floored_ui_scale(auto_ui_scale(h, aspect))
             };
             model.arena.lookup("UIParent").map(|h| (h, v))
         };
@@ -184,11 +185,13 @@ mod tests {
     /// The automatic scale (`0x492f70`): 1.0 up to 768 tall, `768/h` above it, never under 0.9.
     #[test]
     fn the_auto_scale_follows_the_height_and_stops_at_nine_tenths() {
-        assert_eq!(auto_ui_scale(1024, 768), 1.0);
-        assert_eq!(auto_ui_scale(1280, 800), 0.96);
-        assert_eq!(auto_ui_scale(1920, 1080), 0.9);
+        assert_eq!(auto_ui_scale(768, 4.0 / 3.0), 1.0);
+        assert_eq!(auto_ui_scale(800, 1.6), 0.96);
+        assert_eq!(auto_ui_scale(1080, 16.0 / 9.0), 0.9);
         // A tall narrow display: capped, then raised to 0.9.
-        assert_eq!(auto_ui_scale(600, 700), 0.9);
+        assert_eq!(auto_ui_scale(700, 600.0 / 700.0), 0.9);
+        // 4/3 itself is never capped.
+        assert_eq!(auto_ui_scale(700, 4.0 / 3.0), 1.0);
     }
 
     /// The display handler (`0x492e90`) never floors: a dial capped below 0.64 falls to the

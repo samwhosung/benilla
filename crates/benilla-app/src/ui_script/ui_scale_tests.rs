@@ -303,7 +303,7 @@ fn widescreen_off_lays_the_interface_out_four_by_three() {
     ));
 }
 
-/// The cap under 4/3 reads the same aspect (`0x492fb4`, the callbacks' `0.75·a`): a tall window
+/// The dial's cap reads the cells' aspect (`0x490770`, the callbacks' `0.75·a`): a tall window
 /// with `widescreen` 0 is 4/3 to it, so the dial stands. With it on, the callback's cap takes the
 /// dial to 0.5625, which the sink floors at 0.64 (`0x490770` → `0x494550`).
 #[test]
@@ -313,4 +313,43 @@ fn widescreen_off_never_caps_the_ui_scale() {
     let on = app_with(768, 1024, 1.0, true);
     let got = eval(&on, "return UIParent:GetScale()") as f32;
     assert!(close(got, 0.64), "{got}");
+}
+
+/// `w`×`h`, the primary window resized.
+fn resize(app: &mut App, w: u32, h: u32) {
+    app.world_mut()
+        .query_filtered::<&mut Window, With<PrimaryWindow>>()
+        .single_mut(app.world_mut())
+        .expect("the window")
+        .resolution = UVec2::new(w, h).into();
+    app.update();
+}
+
+/// The automatic scale reads the display aspect `0x4901e0` answers (`0x492fb4`), exactly 4/3 with
+/// `widescreen` 0, so a display up to 768 tall keeps 1.0 whatever its shape; and a resize runs it
+/// (`0x492e90`) though the 4:3 cells stay. A dial under the floor reaches it.
+#[test]
+fn widescreen_off_runs_the_automatic_scale_at_four_thirds() {
+    // The 4:3 widths that round down, a wide window and a narrow one.
+    for (w, h) in [(933, 700), (1021, 766), (1280, 700), (600, 766)] {
+        let mut app = app_with(1024, 768, 0.5, false);
+        resize(&mut app, w, h);
+        let got = eval(&app, "return UIParent:GetScale()") as f32;
+        assert_eq!(got, 1.0, "{w}x{h}");
+    }
+    // Above 768 it is `768/h`, floored at 0.9.
+    let mut app = app_with(1024, 768, 0.5, false);
+    resize(&mut app, 1920, 800);
+    assert_eq!(eval(&app, "return UIParent:GetScale()") as f32, 0.96);
+}
+
+/// With `widescreen` 0 the cells take exactly `RN24(4/3)` (stored at `0x48fe1e`), whatever the
+/// window's height: the root is exactly 1024 wide.
+#[test]
+fn widescreen_off_keeps_the_cells_at_exactly_four_thirds() {
+    for (w, h) in [(1920, 770), (1280, 800), (1920, 1537)] {
+        let app = app_with(w, h, 1.0, false);
+        let width = eval(&app, "return GetScreenWidth() * UIParent:GetScale()") as f32;
+        assert_eq!(width, 1024.0, "{w}x{h}");
+    }
 }

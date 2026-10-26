@@ -328,22 +328,45 @@ pub(crate) struct UiScreen {
     pub(crate) size: Vec2,
     /// Window px per interface px across; 1 unless stretched.
     pub(crate) stretch: f32,
+    /// The display aspect the cells and the automatic scale take (`0x4901e0`, stored at
+    /// `0x48fe1e`): the window's `RN24(w/h)`, or exactly `RN24(4/3)` with `widescreen` 0, never
+    /// derived from a rounded size.
+    pub(crate) aspect: f32,
+    /// The window in logical px, the display size the automatic scale is keyed on (`0x492f70`).
+    pub(crate) window: Vec2,
 }
 
 impl UiScreen {
     /// The screen for a window of `window` logical px.
     pub(crate) fn of(window: Vec2, widescreen: bool) -> Self {
-        if widescreen || window.x <= 0.0 || window.y <= 0.0 {
+        if window.x <= 0.0 || window.y <= 0.0 {
             return Self {
                 size: window,
                 stretch: 1.0,
+                aspect: 4.0 / 3.0,
+                window,
+            };
+        }
+        if widescreen {
+            return Self {
+                size: window,
+                stretch: 1.0,
+                aspect: window.x / window.y,
+                window,
             };
         }
         let size = Vec2::new(window.y * (4.0 / 3.0), window.y);
         Self {
             size,
             stretch: window.x / size.x,
+            aspect: 4.0 / 3.0,
+            window,
         }
+    }
+
+    /// The display size in whole logical px, as the automatic scale takes it (`0x492f70`).
+    pub(crate) fn display(self) -> (u32, u32) {
+        (self.window.x.round() as u32, self.window.y.round() as u32)
     }
 
     /// The screen for `window` under the `widescreen` the CVar holds (on when absent).
