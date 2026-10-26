@@ -462,8 +462,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // GameTooltip:SetInventoryItem(unit, slot [, nameOnly]) -> hasItem, hasCooldown, repairCost
-    // (`0x532ee0`), three as `PaperDollFrame.lua:741` reads them; the arity is that consumer's,
-    // not byte-read as `SetBagItem`'s two is (`0x534985`). Unit-keyed through `Model::inv_slot`:
+    // (`0x532ee0`), three as `PaperDollFrame.lua:741` reads them (`0x533300`, `0x53343e`), and
+    // two on the ammo slot (`0x533122`, `0x533140`). Unit-keyed through `Model::inv_slot`:
     // an inspected item (`InspectPaperDollFrame.xml:20`) has no durability, so that line does not
     // show, and its maker is the visible block's creator (`0x5333cd`). An armed shopping tooltip
     // renders the compare shape; the arm is consumed either way. repairCost is the item's cost
@@ -561,7 +561,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     match view {
                         Some((id, name, q, count, inst)) => (id, name, q, inst, count, cost, armed),
                         // An empty slot answers nil and still pushes the other two: callers
-                        // destructure all three first, and an addon may add up repairCost.
+                        // destructure all three first, and an addon may add up repairCost. The
+                        // ammo slot pushes two, nil and nil (`0x533130`..`0x533140`).
+                        None if slot0 == -1 => {
+                            return Ok(MultiValue::from_vec(vec![Value::Nil, Value::Nil]))
+                        }
                         None => {
                             return Ok(MultiValue::from_vec(vec![
                                 Value::Nil,
@@ -598,6 +602,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         ..ItemBuild::new(item_id)
                     },
                 )?;
+                // The ammo slot's leg drops the builder's answer and pushes 1 and nil
+                // (`0x53310e`..`0x533122`).
+                if slot0 == -1 {
+                    return Ok(MultiValue::from_vec(vec![Value::Integer(1), Value::Nil]));
+                }
                 Ok(MultiValue::from_vec(vec![
                     Value::Integer(1),
                     // hasCooldown is the builder's `[ebp-0x38]`, set by four lines: LOCKED, the

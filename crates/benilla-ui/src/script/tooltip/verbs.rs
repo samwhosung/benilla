@@ -123,7 +123,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetText(text, r, g, b, alpha, wrap) (`0x531b90`): alpha has its own number gate, default 1,
-    // and a text that is neither string nor number raises the binding's usage error. It clears,
+    // read only with a numeric r, and a text that is neither string nor number raises the binding's usage error. It clears,
     // writes line 1 and shows: the empty-slot hover calls no Show after it
     // (PaperDollFrame.lua:747).
     m.set(
@@ -139,13 +139,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 ));
             }
             let text = text_of(lua, args.first());
-            let [r, g, b, _] = parse_line_color(lua, args.get(1), args.get(2), args.get(3));
-            // The alpha is its own `lua_isnumber` gate (`0x531ddc`'s neighbour at idx 6), so a
+            let mut color = parse_line_color(lua, args.get(1), args.get(2), args.get(3));
+            // The alpha is read only past the r gate, which skips it with the colour
+            // (`0x531c58`), and has its own `lua_isnumber` gate (`0x531d23`), default 1, so a
             // numeric string counts.
-            let a = color_num(lua, args.get(4)).unwrap_or(1.0);
+            if color_num(lua, args.get(1)).is_some() {
+                color[3] = color_num(lua, args.get(4)).unwrap_or(1.0);
+            }
             let wrap = wrap_arg(args.get(5));
             clear(lua, h);
-            append_line(lua, &this, (text, [r, g, b, a]), None, wrap)?;
+            append_line(lua, &this, (text, color), None, wrap)?;
             set_shown(lua, h, true);
             Ok(())
         })?,

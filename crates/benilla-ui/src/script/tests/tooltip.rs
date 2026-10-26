@@ -411,6 +411,34 @@ fn the_host_reads_the_owner_and_lua_cannot() {
 /// `SetText` shows the tooltip and `AddLine` does not. `r, g, b` apply only when the r slot is a
 /// number, so `AddLine(text, "", r, g, b)` draws in the default gold, as the reference's zone
 /// tooltip does.
+/// `SetText` reads its alpha only past a numeric r (`0x531c58`); with none the line is the
+/// default gold, opaque, whatever the alpha says.
+#[test]
+fn settext_reads_alpha_only_with_a_numeric_r() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "AA"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        TTA = CreateFrame("GameTooltip", "TTA", nil, "TestTooltipTemplate")
+        TTA:SetOwner(a, "ANCHOR_RIGHT")
+    "#,
+    )
+    .unwrap();
+    let alpha = |s: &UiScript, call: &str| {
+        s.eval::<f32>(&format!(
+            "{call} local _, _, _, a = TTATextLeft1:GetTextColor() return a"
+        ))
+        .unwrap()
+    };
+    let half = crate::color::quant::read32(0.5);
+    let opaque = crate::color::quant::read32(1.0);
+    assert_eq!(alpha(&s, r#"TTA:SetText("x", nil, nil, nil, 0.5)"#), opaque);
+    assert_eq!(alpha(&s, r#"TTA:SetText("x", 1, 1, 1, 0.5)"#), half);
+    assert_eq!(alpha(&s, r#"TTA:SetText("x", "1", 1, 1, "0.5")"#), half);
+    assert!(s.take_errors().is_empty());
+}
+
 #[test]
 fn settext_shows_and_both_addline_shapes() {
     let mut s = script();

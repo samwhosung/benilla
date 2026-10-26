@@ -391,6 +391,49 @@ fn set_inventory_item_renders_full_outside_compare() {
     assert!(s.take_errors().is_empty());
 }
 
+/// The ammo slot's leg answers two values, 1 and nil with an item (`0x53310e`..`0x533122`), nil
+/// and nil without (`0x533130`..`0x533140`), where every other slot answers three.
+#[test]
+fn set_inventory_item_on_the_ammo_slot_answers_two() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        2512,
+        ItemTemplateView {
+            name: "Rough Arrow".into(),
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "AmmoSlot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(a, "ANCHOR_RIGHT")
+        function AmmoShow(...) return arg.n .. ":" .. tostring(arg[1]) .. ":" .. tostring(arg[2]) end
+    "#,
+    )
+    .unwrap();
+    let show = |s: &UiScript| {
+        s.eval::<String>("return AmmoShow(TT:SetInventoryItem('player', 0))")
+            .unwrap()
+    };
+    assert_eq!(show(&s), "2:nil:nil", "no ammo");
+    let mut inv: InventorySlots = Default::default();
+    inv[0] = Some(InvSlotView {
+        item_id: 2512,
+        name: Some("Rough Arrow".into()),
+        quality: 1,
+        ..Default::default()
+    });
+    s.set_inventory_slots(inv);
+    assert_eq!(show(&s), "2:1:nil", "ammo");
+    assert_eq!(
+        s.eval::<String>("return TTTextLeft1:GetText()").unwrap(),
+        "Rough Arrow"
+    );
+    assert!(s.take_errors().is_empty());
+}
+
 /// `SetHyperlink` (`0x531fd0`) takes the link part `ItemRef.lua` hands it, never a chat link.
 #[test]
 fn set_hyperlink_takes_a_link_by_its_prefix_and_raises_on_any_other() {
