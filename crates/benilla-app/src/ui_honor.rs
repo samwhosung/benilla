@@ -21,7 +21,7 @@ use crate::net::ObjectStore;
 
 /// The client's inspect-honor slot (`ui/honorinspect`): the inspect target's guid (`0xb71fc0`),
 /// the has-data (`0xb71fc8`) and pending (`0xb71fcc`) flags, and the figures of the last reply
-/// for it, which a new target leaves in place.
+/// for it.
 #[derive(Resource, Default)]
 pub(crate) struct InspectHonor {
     target: u64,
@@ -32,15 +32,23 @@ pub(crate) struct InspectHonor {
 
 impl InspectHonor {
     /// `SetInspectTarget` (`0x4c6f70`): nothing for the guid held (`0x4c6f89`); another stores it
-    /// and clears both flags (`0x4c6f98`, `0x4c6f9d`), the figures kept. `ClearInspectPlayer`
-    /// passes 0 (`0x4c9784`).
-    pub(crate) fn set_target(&mut self, guid: u64) {
+    /// and clears both flags (`0x4c6f98`, `0x4c6f9d`). `ClearInspectPlayer` passes 0
+    /// (`0x4c9784`). Whether a held reply was dropped, which signals `INSPECT_HONOR_UPDATE`.
+    ///
+    /// Deviation: a new target zeroes the figures too, and dropping a held reply signals
+    /// `INSPECT_HONOR_UPDATE`, where `0x4c6f70` keeps the figures and clears only has-data
+    /// (`0xb71fc8`) and pending (`0xb71fcc`): a server that never answers the ask, as vmangos
+    /// often does not, would leave the last player's figures shown under the new one.
+    pub(crate) fn set_target(&mut self, guid: u64) -> bool {
         if guid == self.target {
-            return;
+            return false;
         }
-        self.target = guid;
-        self.has_data = false;
-        self.pending = false;
+        let dropped = self.has_data;
+        *self = Self {
+            target: guid,
+            ..Self::default()
+        };
+        dropped
     }
 
     /// The inspect target's guid, 0 for none.
@@ -239,13 +247,14 @@ mod tests {
     }
 
     /// The slot holds one target (`0x4c6e58`): a reply for anyone else is dropped, one for the
-    /// target sets has-data and clears pending (`0x4c6f42`, `0x4c6f4c`), and a new target clears
-    /// both flags and keeps the figures (`0x4c6f70`), the same target nothing.
+    /// target sets has-data and clears pending (`0x4c6f42`, `0x4c6f4c`), the same target changes
+    /// nothing (`0x4c6f89`), and a new one clears the slot whole, reporting the held reply it
+    /// dropped (the slot's `Deviation:`).
     #[test]
-    fn the_slot_keys_on_its_target_and_a_new_one_keeps_the_figures() {
+    fn the_slot_keys_on_its_target_and_a_new_one_clears_it() {
         let mut slot = InspectHonor::default();
         assert!(!slot.store(&reply(0x77, 3)), "no target");
-        slot.set_target(0x77);
+        assert!(!slot.set_target(0x77), "nothing held");
         slot.asked();
         assert!(!slot.store(&reply(0x88, 4)), "another player");
         assert_eq!(
@@ -259,18 +268,11 @@ mod tests {
         let held = slot.slot();
         assert!(held.has_data && !held.pending);
         assert_eq!(held.figures.session_hk, 5);
-        slot.set_target(0x77);
+        assert!(!slot.set_target(0x77));
         assert_eq!(slot.slot(), held, "the same target");
-        slot.set_target(0);
-        assert_eq!(
-            slot.slot(),
-            InspectHonorSlot {
-                has_data: false,
-                pending: false,
-                figures: held.figures
-            },
-            "the figures stay"
-        );
+        assert!(slot.set_target(0x99), "a held reply dropped");
+        assert_eq!(slot.slot(), InspectHonorSlot::default(), "cleared whole");
+        assert!(!slot.set_target(0), "nothing held");
     }
 
     fn vm(src: &str) -> UiScript {

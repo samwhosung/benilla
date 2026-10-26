@@ -140,28 +140,26 @@ pub(crate) struct InspectSteps<'w, 's> {
 
 impl InspectSteps<'_, '_> {
     /// `call` inside its verb.
-    pub(crate) fn apply(&mut self, _script: &mut UiScript, call: InspectCall) {
-        match call {
+    pub(crate) fn apply(
+        &mut self,
+        _script: &mut UiScript,
+        call: InspectCall,
+    ) -> Option<benilla_ui::script::CallTail> {
+        let dropped = match call {
             // `0x48a36a`: the token through the unit resolver `0x515970`, any unit; then
             // `0x5decc0`, for a nonzero guid (`0x5deccf`), `CMSG_INSPECT` and then the inspect
             // target set to it (`0x5ded10`, `0x5ded1c`).
             InspectCall::Notify(token) => {
                 let Some(guid) = self.tokens.guid(&token, &self.selection) else {
                     debug!("inspect: {token:?} names nobody — nothing sent");
-                    return;
+                    return None;
                 };
                 debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
                 let _ = self.net.0.send(ClientCommand::Inspect { target: guid });
-                if let Some(slot) = self.slot.as_deref_mut() {
-                    slot.set_target(guid);
-                }
+                self.slot.as_deref_mut().is_some_and(|s| s.set_target(guid))
             }
             // `ClearInspectPlayer()` (`0x4c9780`): the target set to 0 (`0x4c9784`).
-            InspectCall::Clear => {
-                if let Some(slot) = self.slot.as_deref_mut() {
-                    slot.set_target(0);
-                }
-            }
+            InspectCall::Clear => self.slot.as_deref_mut().is_some_and(|s| s.set_target(0)),
             // `RequestInspectHonorData()` past its two flags: for a nonzero target guid
             // (`0x4c80c2`), `MSG_INSPECT_HONOR_STATS` with it (`0x4c8112`), then pending set
             // (`0x4c811b`). With none it returns before both, and the pane asks again from its
@@ -169,14 +167,20 @@ impl InspectSteps<'_, '_> {
             InspectCall::Honor => {
                 let Some(slot) = self.slot.as_deref_mut().filter(|s| s.target() != 0) else {
                     debug!("honor: inspect-honor request with no target — not sent");
-                    return;
+                    return None;
                 };
                 let target = slot.target();
                 debug!("honor: inspect-honor request -> {target:#x}");
                 let _ = self.net.0.send(ClientCommand::InspectHonorStats { target });
                 slot.asked();
+                false
             }
-        }
+        };
+        // The dropped reply's repaint, the slot's `Deviation:` ([`crate::ui_honor::InspectHonor`]),
+        // fired once the call returns, with the host back.
+        dropped.then(|| -> benilla_ui::script::CallTail {
+            Box::new(|script: &mut UiScript| script.fire_event("INSPECT_HONOR_UPDATE", Vec::new()))
+        })
     }
 }
 

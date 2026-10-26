@@ -36,6 +36,20 @@ fn unhosted<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, chunk: &str) -> T 
 /// [`client`] with [`MATE`] created wearing the helm and selected, its reach in the VM, and the
 /// helm's and the crown's records cached.
 fn inspecting() -> App {
+    let mut app = mate_beside();
+    let world = app.world_mut();
+    let mate = world.resource::<crate::net::GuidIndex>().0[&MATE];
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(mate),
+        guid: Some(MATE),
+        ..Default::default()
+    };
+    app
+}
+
+/// [`client`] with [`MATE`] created wearing the helm, unselected, its reach in the VM, and the
+/// helm's and the crown's records cached.
+fn mate_beside() -> App {
     let mut app = client();
     frame(
         &mut app,
@@ -45,12 +59,6 @@ fn inspecting() -> App {
     let mut items = world.resource_mut::<crate::items::Items>();
     items.insert_template(HELM, Some(crate::items::test_template("Helm")));
     items.insert_template(CROWN, Some(crate::items::test_template("Crown")));
-    let mate = world.resource::<crate::net::GuidIndex>().0[&MATE];
-    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
-        target: Some(mate),
-        guid: Some(MATE),
-        ..Default::default()
-    };
     world.non_send_resource_mut::<UiScript>().set_unit_reach_of(
         MATE,
         UnitReach {
@@ -123,10 +131,15 @@ fn hosted_getters_read_the_visible_items_and_the_honor_block_as_written() {
     assert_eq!(unhosted::<(u32, u32)>(&mut app, KILLS), (0, 0), "no host");
 }
 
+/// What the spy heard since the last take, taken.
+fn heard(app: &mut App) -> Vec<String> {
+    hosted(app, "local seen = Seen; Seen = {}; return seen")
+}
+
 /// `INSPECT_HONOR_UPDATE` fires at its reply's packet, between the two health packets around it,
 /// and only for a reply naming the target `NotifyInspect` set (`0x4c6e58`); its listener reads the
-/// slot the reply filled. `ClearInspectPlayer` clears the flags and keeps the figures
-/// (`0x4c6f70`), so `GetInspectHonorData` still answers them (`0x4c9620`).
+/// slot the reply filled. A new target drops the held reply and signals, inside the call that set
+/// it, and `ClearInspectPlayer` with nothing held signals nothing (the slot's `Deviation:`).
 #[test]
 fn the_honor_reply_fires_at_its_packet_for_the_target_alone() {
     let mut app = inspecting();
@@ -160,9 +173,103 @@ fn the_honor_reply_fires_at_its_packet_for_the_target_alone() {
     );
     const READ: &str = "return HasInspectHonorData() == 1, (GetInspectHonorData())";
     assert_eq!(hosted::<(bool, u32)>(&mut app, READ), (true, 5));
-    hosted::<()>(&mut app, "ClearInspectPlayer()");
-    assert_eq!(hosted::<(bool, u32)>(&mut app, READ), (false, 5));
-    // With no target, a reply is dropped and signals nothing.
+    // The same target again keeps the reply; another nonzero guid drops it and signals at once.
+    hosted::<()>(&mut app, r#"NotifyInspect("target")"#);
+    assert!(heard(&mut app).is_empty(), "the same target");
+    hosted::<()>(&mut app, r#"NotifyInspect("player")"#);
+    assert_eq!(
+        heard(&mut app),
+        ["INSPECT_HONOR_UPDATE:nil:0"],
+        "re-targeted"
+    );
+    assert_eq!(hosted::<(bool, u32)>(&mut app, READ), (false, 0));
+    // A reply for the old target is dropped and signals nothing; with nothing held, a clear is
+    // quiet.
     assert!(frame(&mut app, vec![reply(MATE, 6)]).is_empty());
-    assert_eq!(hosted::<(bool, u32)>(&mut app, READ), (false, 5));
+    hosted::<()>(&mut app, "ClearInspectPlayer()");
+    assert!(heard(&mut app).is_empty(), "nothing held");
+    assert_eq!(hosted::<(bool, u32)>(&mut app, READ), (false, 0));
+}
+
+/// A player hovered and then targeted for the first time: the slot getters inside its
+/// `UPDATE_MOUSEOVER_UNIT` (`0x4929b3`) and its `PLAYER_TARGET_CHANGED` (`0x493a73`) read the
+/// object each token names as they run (`0x4c8328`), with no view pushed.
+#[test]
+fn the_slot_getters_read_the_object_inside_the_hover_and_target_events() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = mate_beside();
+    {
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        crate::ui_script::test_ui::load_tooltip_template(&script);
+        script
+            .run(
+                r#"
+                UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
+                CreateFrame("GameTooltip", "GameTooltip", UIParent, "TestTooltipTemplate"):Hide()
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+                f:RegisterEvent("PLAYER_TARGET_CHANGED")
+                f:SetScript("OnEvent", function()
+                    local unit = event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover"
+                    table.insert(Seen, event .. ":" .. tostring(CanInspect(unit)) .. ":"
+                        .. tostring((GetInventoryItemLink(unit, 1))))
+                end)
+                "#,
+            )
+            .unwrap();
+    }
+    // Both Human, so the hover's reach holds MATE cooperative (`0x4944e4`).
+    use crate::target::relations::fixture::{factions, HUMAN};
+    const TEMPLATE: u16 = 35;
+    app.insert_resource(factions());
+    write(&mut app, ME, &[(TEMPLATE, HUMAN)]);
+    write(&mut app, MATE, &[(TEMPLATE, HUMAN)]);
+    let world = app.world_mut();
+    let mate = world.resource::<crate::net::GuidIndex>().0[&MATE];
+    *world.resource_mut::<crate::target::Hovered>() = crate::target::Hovered {
+        target: Some(mate),
+        guid: Some(MATE),
+        distance: 2.0,
+        ..Default::default()
+    };
+    world
+        .run_system_once(crate::ui_tooltip::drive_mouseover_tooltip)
+        .unwrap();
+    hosted::<()>(&mut app, r#"TargetUnit("mouseover")"#);
+    let seen = frame(&mut app, vec![]);
+    for event in ["UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED"] {
+        assert!(
+            seen.iter()
+                .any(|l| l.starts_with(&format!("{event}:")) && l.contains("[Helm]")),
+            "{event}: {seen:?}"
+        );
+    }
+}
+
+/// `PLAYER_ENTERING_WORLD`'s handler reads the honor block off the active player as it runs
+/// (`0x51a4b0`): `HonorFrame_Update(1)` reads the weekly values only then
+/// (`HonorFrame.lua:10-11`). A fresh VM hears the cascade over a block written with no push.
+#[test]
+fn the_world_enter_listener_reads_the_honor_block() {
+    let mut app = client();
+    write(&mut app, ME, &[(SESSION_KILLS, 3)]);
+    let script = UiScript::new().unwrap();
+    script
+        .run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_ENTERING_WORLD")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. GetPVPSessionStats())
+            end)
+            "#,
+        )
+        .unwrap();
+    app.world_mut().insert_non_send_resource(script);
+    let seen = frame(&mut app, vec![]);
+    assert!(
+        seen.iter().any(|l| l == "PLAYER_ENTERING_WORLD:3"),
+        "{seen:?}"
+    );
 }

@@ -347,8 +347,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     // Read, and quiet: `feed_dialog_verbs` pushes the deadline the time packet stores and fires
     // nothing off it, as the packet's `AREA_SPIRIT_HEALER_IN_RANGE` goes on the notice lane.
     "::ui_dialog_verbs::AreaSpiritHealer",
-    // Read through the host by the inspect-honor getters, and quiet: the reply's
-    // `INSPECT_HONOR_UPDATE` goes on the notice lane at its handler.
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the inspect-honor getters read it
+    // through the host, and no feed fires off it, as the reply's `INSPECT_HONOR_UPDATE` goes on
+    // the notice lane at its handler and a re-target's fires in its call.
     "::ui_honor::InspectHonor",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",

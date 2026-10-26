@@ -839,7 +839,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 }
             }
             ScriptCall::Unserved(send) => appliers.gm_ticket().unserved(send),
-            ScriptCall::Inspect(call) => appliers.inspect().apply(script, call),
+            ScriptCall::Inspect(call) => tail = appliers.inspect().apply(script, call),
             ScriptCall::ItemText(ItemTextCall::Turn(delta)) => {
                 appliers.item_text().turn(script, delta);
             }

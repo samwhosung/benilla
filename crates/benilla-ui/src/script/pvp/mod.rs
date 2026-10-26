@@ -641,7 +641,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //   sessionHK, sessionDK, yesterdayHK, yesterdayHonor, thisweekHK, thisweekHonor,
     //   lastweekHK, lastweekHonor, lastweekStanding, lifetimeHK, lifetimeDK, lifetimeRank
     // Twelve on every path: `0x4c9620` never checks the flag and reads the cells, zeros before
-    // any reply and the previous target's after a re-key, which zeroes only the flags (`0x4c6f70`).
+    // any reply; the app's slot zeroes them on a re-key too, its own `Deviation:`.
     g.set(
         "GetInspectHonorData",
         lua.create_function(|lua, ()| {

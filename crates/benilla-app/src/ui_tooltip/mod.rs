@@ -244,7 +244,7 @@ struct HoveredRelations {
     reach: Option<benilla_ui::script::UnitReach>,
 }
 
-fn drive_mouseover_tooltip(
+pub(crate) fn drive_mouseover_tooltip(
     mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     hovered: Res<Hovered>,
     hovered_go: Res<HoveredObject>,
