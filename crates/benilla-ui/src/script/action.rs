@@ -217,6 +217,22 @@ pub(crate) struct StoredActionState {
     pub(crate) cooldown: Option<(f64, f64, bool)>,
 }
 
+/// Whether `UseAction(slot, 1)` sends the held payload to placement (`0x4e5f14`-`0x4e5f42`): a
+/// spell (`GetCursorSpell` `0x494e10`, the cell `[0xb4e2f4]`), a mode-1 item (`GetCursorItemGuid`
+/// `0x494c60`, a nonzero guid), a macro (`[0xb4e2fc]`) or a mode-7 payload with an entry
+/// (`[0xb4d900] == 7` and `GetCursorAmmo` `0x495170`). Coins, a pet action, a vendor row, a
+/// stabled pet and ammo fall through to using the slot (`0x4e5f52`).
+fn places_held(held: &super::cursor::CursorPayload) -> bool {
+    use super::cursor::CursorPayload::{Action, Item, Macro, Spell};
+    match held {
+        Spell(s) => s.spell_id != 0,
+        Item(i) => i.guid != 0,
+        Macro(m) => m.id != 0,
+        Action(a) => a.action != 0,
+        _ => false,
+    }
+}
+
 /// One queued `UseAction` press.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionUse {
@@ -444,10 +460,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UseAction(action [, checkCursor [, onSelf]]): a nonzero `checkCursor` while the cursor holds
-    // a payload places it, as `PlaceAction` does; otherwise the press is queued with `onSelf`, the
-    // self-cast flag. FrameXML passes 1 from a click and 0 from a keybind; the binding's own test
-    // of it is untraced, and place-on-click is the reading that split implies.
+    // UseAction(action [, checkCursor [, onSelf]]) (`0x4e5ee0`): a nonzero `checkCursor` while the
+    // cursor holds a spell, a mode-1 item, a macro or a mode-7 payload places it, as `PlaceAction`
+    // does ([`places_held`]); any other payload, or none, falls through to the press, queued with
+    // `onSelf`, the self-cast flag. FrameXML passes 1 from a click and 0 from a keybind.
     g.set(
         "UseAction",
         lua.create_function(|lua, (action, rest): (Value, MultiValue)| {
@@ -463,7 +479,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let on_self = bool_or_default(rest.get(1), false);
             let may_cast = protected::gate(lua, Tag::CAST);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if check_cursor && model.cursor.is_some() {
+            if check_cursor && model.cursor.as_ref().is_some_and(places_held) {
                 drop(model);
                 super::cursor::place_action(lua, action)?;
             } else {
@@ -954,6 +970,50 @@ mod tests {
 
         s.run("UseAction(10, 1)").unwrap();
         assert_eq!(uses(&mut s), vec![(10, false)]);
+    }
+
+    /// Only a spell, a mode-1 item, a macro or a mode-7 payload goes to placement (`0x4e5f14`-
+    /// `0x4e5f42`); coins, a pet action, a vendor row, a stabled pet and ammo go on to the use
+    /// (`0x4e5f52`) and stay held.
+    #[test]
+    fn use_action_check_cursor_uses_the_slot_under_a_payload_it_does_not_place() {
+        use crate::script::cursor::{
+            CursorAmmo, CursorMerchantItem, CursorMoney, CursorPayload, CursorPetAction,
+            CursorStablePet,
+        };
+
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let held = [
+            CursorPayload::Money(CursorMoney { copper: 50 }),
+            CursorPayload::PetAction(CursorPetAction {
+                src_slot: 1,
+                packed: 0x0700_0002,
+                passive: false,
+                texture: None,
+                view: Default::default(),
+            }),
+            CursorPayload::Merchant(CursorMerchantItem {
+                item_id: 2589,
+                row: 0,
+                texture: None,
+            }),
+            CursorPayload::StablePet(CursorStablePet {
+                slot: 1,
+                texture: "Interface\\Icons\\Ability_Hunter_Pet_Boar".into(),
+            }),
+            CursorPayload::Ammo(CursorAmmo {
+                item_id: 2512,
+                texture: None,
+            }),
+        ];
+        for payload in held {
+            let name = format!("{payload:?}");
+            s.set_cursor_for_test(payload);
+            s.run("UseAction(9, 1)").unwrap();
+            assert_eq!(uses(&mut s), vec![(9, false)], "{name} uses the slot");
+            assert!(s.cursor_payload().is_some(), "{name} stays held");
+        }
     }
 
     // ── `GetActionText` (`0x4e7050`) ──
