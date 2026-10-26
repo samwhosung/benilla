@@ -467,9 +467,10 @@ fn client(window: Window) -> Client {
 }
 
 /// Wherever the frame's snapshots are current, every item getter answers the same off the cache
-/// and the objects as off the snapshot, across the bags, the bank, the worn and inspected slots,
-/// the trade and the mail: the fields the snapshots hold are the ones the live read derives
-/// ([`crate::ui_items::live::LiveItem`]).
+/// and the objects as off the snapshot, across the bags, the bank, the worn slots, the trade and
+/// the mail: the fields the snapshots hold are the ones the live read derives
+/// ([`crate::ui_items::live::LiveItem`]). The inspected slots have no snapshot pushed, and read
+/// the visible block live ([`crate::ui_inspect::InspectLive`]).
 #[test]
 fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client(Window::Trade);
@@ -487,9 +488,6 @@ fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
         "GetInventoryItemTexture player:16 Interface\\Icons\\INV_Sword_04",
         "GetInventoryItemBroken player:17 1",
         "GetInventoryItemTexture player:20 Interface\\Icons\\INV_Sword_04",
-        "GetInventoryItemTexture target:16 Interface\\Icons\\INV_Sword_04",
-        // Visible gear carries no suffix factor.
-        "GetInventoryItemLink target:16 |cff1eff00|Hitem:25:1900:862:0|h[Item 25 of the Bear]",
         "GetItemInfo 25 Item 25,item:25:0:0:0,2,5,",
         "GetItemInfo rolled Item 25 of the Bear,",
         "GetTradePlayerItemInfo 1 Item 2589,",
@@ -514,9 +512,22 @@ fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
             "{at} links the roll: {snapshot:#?}"
         );
     }
+    for want in [
+        "GetInventoryItemTexture target:16 Interface\\Icons\\INV_Sword_04",
+        // Visible gear carries no suffix factor.
+        "GetInventoryItemLink target:16 |cff1eff00|Hitem:25:1900:862:0|h[Item 25 of the Bear]",
+    ] {
+        assert!(
+            live.iter().any(|l| l.starts_with(want)),
+            "{want}: {live:#?}"
+        );
+    }
     assert_eq!(snapshot.len(), live.len());
-    let differ: Vec<(&String, &String)> =
-        snapshot.iter().zip(&live).filter(|(s, l)| s != l).collect();
+    let differ: Vec<(&String, &String)> = snapshot
+        .iter()
+        .zip(&live)
+        .filter(|(s, l)| s != l && !s.contains(" target:"))
+        .collect();
     assert!(differ.is_empty(), "snapshot vs live: {differ:#?}");
 }
 
