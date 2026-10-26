@@ -650,6 +650,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PET_ATTACK_STOP => "PET_ATTACK_STOP",
         id::PLAYER_GUILD_UPDATE => "PLAYER_GUILD_UPDATE",
         id::TABARD_CANSAVE_CHANGED => "TABARD_CANSAVE_CHANGED",
+        id::MERCHANT_UPDATE => "MERCHANT_UPDATE",
         id::UPDATE_FACTION => "UPDATE_FACTION",
         id::PLAYER_UNGHOST => "PLAYER_UNGHOST",
         id::PLAYER_UPDATE_RESTING => "PLAYER_UPDATE_RESTING",

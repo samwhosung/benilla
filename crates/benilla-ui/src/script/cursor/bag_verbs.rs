@@ -3,6 +3,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use crate::script::container::ContainerMove;
+use crate::script::merchant::VendorAtCall;
 use crate::script::tick::verb;
 use crate::script::{ItemCall, Model};
 
@@ -68,14 +69,14 @@ enum Dest {
 /// `PutItemInBag(inventorySlot)` (`0x4c7c00`): true (the reference's `1`) when the click was
 /// consumed against an occupied slot, else false (nil). An empty cursor's nil is what lets
 /// `BagSlotButton_OnClick` open the bag.
-pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
-    accepts(live) && put_item(model, Dest::Slot(live))
+pub(super) fn put_item_in_bag(model: &mut Model, live: u32, vendor: VendorAtCall) -> bool {
+    accepts(live) && put_item(model, Dest::Slot(live), vendor)
 }
 
 /// `PutItemInBackpack()`, the worker on the player's own guid (`0x4c7ed0`): the empty-slot leg is
 /// unreachable and `0x4c7d3e` skips the swap, so even a bag is stored into the backpack.
-pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
-    put_item(model, Dest::Backpack)
+pub(super) fn put_item_in_backpack(model: &mut Model, vendor: VendorAtCall) -> bool {
+    put_item(model, Dest::Backpack, vendor)
 }
 
 /// The worker `0x4c7c00`, in its order:
@@ -89,7 +90,7 @@ pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
 /// - a vendor row buys into the bag (`0x4c7e66`), then clears and answers nil;
 /// - a bag held from a bag slot, or any container, swaps (`0x4c7d44`-`0x4c7df5`), a backpack
 ///   destination excepted (`0x4c7d3e`); anything else is stored (`0x4c7e0c`-`0x4c7e55`).
-fn put_item(model: &mut Model, dest: Dest) -> bool {
+fn put_item(model: &mut Model, dest: Dest, vendor: VendorAtCall) -> bool {
     if !model.player_control {
         return false;
     }
@@ -108,7 +109,7 @@ fn put_item(model: &mut Model, dest: Dest) -> bool {
                 // nothing held finds nothing to pick up, so it owes no pickup. A held item takes
                 // the click before an armed item pick (`0x4c769a`), so no gate is reached.
                 // A swap into the empty slot has no occupant to lock.
-                let click = doll_click(model, live, true);
+                let click = doll_click(model, live, true, vendor);
                 debug_assert!(matches!(click, DollClick::Done(_) | DollClick::Swapped(0)));
                 return false;
             };
@@ -126,13 +127,8 @@ fn put_item(model: &mut Model, dest: Dest) -> bool {
         // (`0x4c7e6f`-`0x4c7eaa`), the item the row names now. Deviation: a row index the list no
         // longer holds buys nothing and drops, where this site reads through a null row
         // (`0x4c7e9a`, `0x4c7ea5`).
-        Some(CursorPayload::Merchant(row)) => {
-            let entry = model
-                .merchant
-                .as_ref()
-                .and_then(|m| m.items.get(row.row as usize))
-                .map(|it| it.item_id);
-            if let Some(entry) = entry {
+        Some(CursorPayload::Merchant(_)) => {
+            if let Some(entry) = vendor.held_entry {
                 model
                     .merchant_drops
                     .push(crate::script::MerchantCall::BuyIntoBag { bag_guid, entry });
@@ -305,7 +301,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `Invalid bag slot in PutItemInBag` (`0x848b84`) unless the slot reader passes and
             // the slot is a bag's or beyond, Lua 20 up (`0x4c8f13`, `0x4c8f1f`).
             let live = bag_slot(lua, live, "Invalid bag slot in PutItemInBag")?;
-            let answer = verb(lua, |model| put_item_in_bag(model, live));
+            let vendor = crate::script::merchant::at_call(lua);
+            let answer = verb(lua, |model| put_item_in_bag(model, live, vendor));
             crate::script::item_calls::submit_item_calls(lua)?;
             crate::script::merchant::submit_slot_buys(lua)?;
             consumed(answer)
@@ -314,7 +311,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PutItemInBackpack",
         lua.create_function(|lua, ()| {
-            let answer = verb(lua, put_item_in_backpack);
+            let vendor = crate::script::merchant::at_call(lua);
+            let answer = verb(lua, |model| put_item_in_backpack(model, vendor));
             crate::script::item_calls::submit_item_calls(lua)?;
             crate::script::merchant::submit_slot_buys(lua)?;
             consumed(answer)

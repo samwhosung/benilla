@@ -3,7 +3,7 @@
 //! the flight master's cell as it stands before the verb returns; `CloseTaxiMap` (`0x4dcce0`)
 //! runs the close core `0x4dc0f0` through the host, which lends the latch beside this.
 
-use benilla_ui::script::{TaxiCall, UiScript};
+use benilla_ui::script::TaxiCall;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -52,8 +52,8 @@ impl TaxiSteps<'_, '_> {
 
     /// The close core past its release (`0x4dc0f0`): the cell cleared (`0x4dc113`) and each
     /// slot's route freed (`0x4dc130`-`0x4dc145`). The slots stay, their fares 0 with no flight
-    /// master ([`UiScript::close_taxi`]).
-    pub(crate) fn clear_map(&mut self, script: &mut UiScript) {
+    /// master (`0x4dc423`).
+    pub(crate) fn clear_map(&mut self) {
         if let Some(state) = self.state.as_deref_mut() {
             state.clear();
         }
@@ -62,7 +62,6 @@ impl TaxiSteps<'_, '_> {
                 slot.chain.clear();
             }
         }
-        script.close_taxi();
     }
 }
 

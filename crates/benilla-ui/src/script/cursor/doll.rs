@@ -21,7 +21,8 @@ pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind the
     // gate's tag 2.
     let may_cast = protected::gate(lua, Tag::CAST);
-    let click = verb(lua, |model| doll_click(model, id, may_cast));
+    let vendor = crate::script::merchant::at_call(lua);
+    let click = verb(lua, |model| doll_click(model, id, may_cast, vendor));
     crate::script::item_calls::submit_item_calls(lua)?;
     crate::script::merchant::submit_slot_buys(lua)?;
     Ok(match click {
@@ -56,7 +57,12 @@ pub(super) enum DollClick {
 }
 
 /// [`pickup_inventory_item`]'s decision and every arm but the pickup.
-pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClick {
+pub(super) fn doll_click(
+    model: &mut Model,
+    id: u32,
+    may_cast: bool,
+    vendor: crate::script::merchant::VendorAtCall,
+) -> DollClick {
     // Head 1 to Tabard 19, the bag slots 20-23, and the bank bag slots, which only `PutItemInBag`
     // reaches (`0x4c7c00` calls `0x4c7300`). Ammo (0) is refused; its leg is not built.
     if !(1..=23).contains(&id) && !super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) {
@@ -167,20 +173,16 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
         // three drop sites only this one checks the row, the other two (`0x4f9f35`, `0x4c7ea5`)
         // dereference it. A row whose item has changed buys nothing.
         Some(CursorPayload::Merchant(held)) => {
-            let Some(row) = model
-                .merchant
-                .as_ref()
-                .and_then(|m| m.items.get(held.row as usize))
-            else {
+            let Some(entry) = vendor.held_entry else {
                 return DollClick::Done(false);
             };
-            if row.item_id == held.item_id {
+            if entry == held.item_id {
                 model
                     .merchant_drops
                     .push(crate::script::MerchantCall::BuyInSlot {
                         bag: EQUIPMENT_BAG,
                         slot: id,
-                        entry: row.item_id,
+                        entry,
                     });
             }
             clear_cursor(model);

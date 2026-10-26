@@ -540,6 +540,7 @@ fn use_cleared(
     slot: u32,
     on_self: bool,
     may_cast: bool,
+    vendor: super::merchant::VendorAtCall,
     call: &mut Option<super::ScriptCall>,
 ) -> Option<CursorItem> {
     // The slot through `GetItemInSlot` (`0x4fa1a6`): a shut vault's reads empty.
@@ -556,7 +557,7 @@ fn use_cleared(
         UseArm::Withdraw
     } else if model.bank.is_some() {
         UseArm::Deposit
-    } else if model.merchant.is_some() {
+    } else if vendor.open {
         UseArm::Sell
     } else {
         UseArm::Item(fork)
@@ -677,6 +678,7 @@ fn pickup_container_item(
     bag: i64,
     slot: u32,
     may_cast: bool,
+    vendor: super::merchant::VendorAtCall,
 ) -> ContainerClick {
     // An armed gift wrap completes here, before the cursor is read. `PickupContainerItem` is the
     // only caller of the wrap sender `0x5edfc0`, so an equipped item cannot be wrapped.
@@ -809,14 +811,9 @@ fn pickup_container_item(
         // either way, the item the row names now; with no vendor open the row stays held
         // (`0x4f9f0f`). Deviation: a row index the list no longer holds buys nothing and drops,
         // where this path reads through a null row (`0x4f9f35`).
-        Some(CursorPayload::Merchant(_)) if model.merchant.is_none() => ContainerClick::Done,
-        Some(CursorPayload::Merchant(held)) => {
-            let entry = model
-                .merchant
-                .as_ref()
-                .and_then(|m| m.items.get(held.row as usize))
-                .map(|it| it.item_id);
-            if let Some(entry) = entry {
+        Some(CursorPayload::Merchant(_)) if !vendor.open => ContainerClick::Done,
+        Some(CursorPayload::Merchant(_)) => {
+            if let Some(entry) = vendor.held_entry {
                 model
                     .merchant_drops
                     .push(super::MerchantCall::BuyInSlot { bag, slot, entry });
@@ -1179,8 +1176,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2.
             let may_cast = protected::gate(lua, Tag::CAST);
             let mut call = None;
+            let vendor = super::merchant::at_call(lua);
             let equip = super::tick::verb(lua, |model| {
-                use_cleared(model, bag, slot, on_self, may_cast, &mut call)
+                use_cleared(model, bag, slot, on_self, may_cast, vendor, &mut call)
             });
             super::item_calls::submit_item_calls(lua)?;
             if let Some(call) = call {
@@ -1218,8 +1216,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return Ok(());
                 }
             }
+            let vendor = super::merchant::at_call(lua);
             let click = super::tick::verb(lua, |model| {
-                pickup_container_item(model, bag, slot, may_cast)
+                pickup_container_item(model, bag, slot, may_cast, vendor)
             });
             super::item_calls::submit_item_calls(lua)?;
             match click {

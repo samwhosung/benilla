@@ -1,11 +1,13 @@
-//! The taxi-map bindings the stock `TaxiFrame.lua` runs on, over a node list the app resolves
-//! and pushes (types, positions, fares and routes); `TakeTaxiNode` and `CloseTaxiMap` act inside
-//! their calls through the host ([`TaxiCall`]). Positions are normalized 0..1 from the map's
-//! bottom-left, which the Lua scales by the 316x352 map.
+//! The taxi-map bindings the stock `TaxiFrame.lua` runs on, over the slots the open's builder
+//! made (types, positions, routes), read through the lent host at the call with each fare
+//! ([`TaxiNodeQuery`]); `TakeTaxiNode` and `CloseTaxiMap` act inside their calls through the host
+//! ([`TaxiCall`]). Positions are normalized 0..1 from the map's bottom-left, which the Lua scales
+//! by the 316x352 map.
 
 use mlua::{Lua, Value};
 
 use super::binding_abi;
+use super::live::{ask, LiveQuery};
 use super::Model;
 
 /// A listed node's type (`TaxiNodeGetType`, `0x4dc4e0`): the green, white or yellow icon in the
@@ -66,29 +68,48 @@ pub struct TaxiUiState {
     pub nodes: Vec<TaxiUiNode>,
 }
 
+/// The map as the getters read it at the call: its art (`0xbb4a78`) and its slot count
+/// (`0xbb4aa8`), which a close keeps (`0x4dc0f0`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TaxiMapHead {
+    pub art: Option<String>,
+    pub nodes: usize,
+}
+
+/// The question: [`TaxiMapHead`] now.
+pub struct TaxiMapQuery;
+
+impl LiveQuery for TaxiMapQuery {
+    type Answer = TaxiMapHead;
+}
+
+/// The 0-based slot, its fare taken at the call with the flight master's discount, 0 with no
+/// flight master resolved (`0x4dc3d0`, `0x4dc423`); `None` past the count.
+pub struct TaxiNodeQuery(pub usize);
+
+impl LiveQuery for TaxiNodeQuery {
+    type Answer = Option<TaxiUiNode>;
+}
+
+/// The map's head now: the host's, else the VM's copy, which only a test sets (every production
+/// entry that runs Lua lends the host).
+fn head(lua: &Lua, model: &Model) -> TaxiMapHead {
+    ask(lua, &TaxiMapQuery).unwrap_or_else(|| {
+        model
+            .taxi
+            .as_ref()
+            .map_or_else(TaxiMapHead::default, |t| TaxiMapHead {
+                art: Some(t.art.clone()),
+                nodes: t.nodes.len(),
+            })
+    })
+}
+
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open taxi map's snapshot.
+    /// Set (or clear, with `None`) the VM's copy of the open map, which the getters read with no
+    /// host to ask.
     pub fn set_taxi(&mut self, state: Option<TaxiUiState>) {
         self.model_mut().taxi = state;
-    }
-
-    /// The close (`0x4dc0f0`) clears the flight master's cell but keeps the slot count
-    /// (`0xbb4aa8`): the nodes, their types, routes and lines stay, and every fare reads 0 with no
-    /// flight master (`0x4dc423`).
-    pub fn close_taxi(&mut self) {
-        if let Some(taxi) = &mut self.model_mut().taxi {
-            for node in &mut taxi.nodes {
-                node.cost = 0;
-            }
-        }
-    }
-
-    /// An open's reset before its build: no slot (`0x4db748`) and no line (`0x4db793`-`0x4db7d6`),
-    /// the map art kept (`0xbb4a78`).
-    pub fn reset_taxi_slots(&mut self) {
-        if let Some(taxi) = &mut self.model_mut().taxi {
-            taxi.nodes.clear();
-        }
     }
 
     /// Whether the player is riding a taxi (`UNIT_FLAG_TAXI_FLIGHT`), for the equip control gate
@@ -129,14 +150,15 @@ fn submit(lua: &Lua, call: TaxiCall) -> mlua::Result<()> {
 /// What `TaxiNodePosition` and `TaxiNodeCost` raise for a slot the map lacks (`0x84b008`).
 const INVALID_SLOT: &str = "Invalid taxi node slot";
 
-/// A node by 1-based Lua index: the reference compares the index less 1, unsigned, with the count
-/// (`0x4dc380`, `0x4dcbc5`, `0x4dcc63`), so 0, a negative index and an empty list miss.
-fn node(model: &Model, i: i64) -> Option<&TaxiUiNode> {
-    let nodes = &model.taxi.as_ref()?.nodes;
-    usize::try_from(i)
-        .ok()?
-        .checked_sub(1)
-        .and_then(|i| nodes.get(i))
+/// A node by 1-based Lua index, as of the call: the reference compares the index less 1,
+/// unsigned, with the count (`0x4dc380`, `0x4dcbc5`, `0x4dcc63`), so 0, a negative index and an
+/// empty list miss.
+fn node(lua: &Lua, model: &Model, i: i64) -> Option<TaxiUiNode> {
+    let i = usize::try_from(i).ok()?.checked_sub(1)?;
+    match ask(lua, &TaxiNodeQuery(i)) {
+        Some(node) => node,
+        None => model.taxi.as_ref()?.nodes.get(i).cloned(),
+    }
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -146,7 +168,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "NumTaxiNodes",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.taxi.as_ref().map_or(0, |t| t.nodes.len()) as i64)
+            Ok(head(lua, &model).nodes as i64)
         })?,
     )?;
 
@@ -161,7 +183,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: TaxiNodeGetType(slot)",
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(node(&model, i).map_or("NONE", |n| n.node_type.era_str()))
+            Ok(node(lua, &model, i).map_or("NONE", |n| n.node_type.era_str()))
         })?,
     )?;
 
@@ -175,8 +197,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: TaxiNodeTaxiNodeLocation(slot)",
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
-            let n =
-                node(&model, i).ok_or_else(|| mlua::Error::RuntimeError(INVALID_SLOT.into()))?;
+            let n = node(lua, &model, i)
+                .ok_or_else(|| mlua::Error::RuntimeError(INVALID_SLOT.into()))?;
             Ok(n.pos)
         })?,
     )?;
@@ -192,7 +214,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
             // `INVALID` (`0x84afc8`) out of range (`0x4dc388`).
-            Ok(node(&model, i).map_or_else(|| "INVALID".to_owned(), |n| n.name.clone()))
+            Ok(node(lua, &model, i).map_or_else(|| "INVALID".to_owned(), |n| n.name))
         })?,
     )?;
 
@@ -206,8 +228,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: TaxiNodeCost(slot)",
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
-            let n =
-                node(&model, i).ok_or_else(|| mlua::Error::RuntimeError(INVALID_SLOT.into()))?;
+            let n = node(lua, &model, i)
+                .ok_or_else(|| mlua::Error::RuntimeError(INVALID_SLOT.into()))?;
             Ok(i64::from(n.cost))
         })?,
     )?;
@@ -232,7 +254,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, i: Value| {
             let i = i64::from(binding_abi::ftol(binding_abi::coerced_number(lua, Some(i))));
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(node(&model, i).map_or(0, |n| i64::from(n.num_routes)))
+            Ok(node(lua, &model, i).map_or(0, |n| i64::from(n.num_routes)))
         })?,
     )?;
 
@@ -252,9 +274,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     |v| i64::from(binding_abi::ftol(binding_abi::coerced_number(lua, Some(v))));
                 let (hop, i) = (index(hop), index(i));
                 let model = lua.app_data_ref::<Model>().expect("model");
-                let coord = node(&model, i)
+                let coord = node(lua, &model, i)
                     .zip(usize::try_from(hop).ok().and_then(|h| h.checked_sub(1)))
-                    .and_then(|(n, h)| n.routes.get(h))
+                    .and_then(|(n, h)| n.routes.get(h).copied())
                     .map_or(0.0, |seg| seg[pick]);
                 Ok(coord)
             })?,
@@ -283,7 +305,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Value| {
             let art = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                model.taxi.as_ref().map(|t| t.art.clone())
+                head(lua, &model).art
             };
             let Some(art) = art else {
                 return Ok(());

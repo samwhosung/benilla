@@ -519,6 +519,10 @@ pub(crate) enum RecordCallback {
     Swap,
     /// An auto-equip waiting on its record (`0x5e1603` with `0x5e17a0`).
     AutoEquip,
+    /// A vendor row's, asked by `GetMerchantItemInfo` (`0x4faf1a` with `0x4fada0`), one per call.
+    Merchant,
+    /// A buy-back row's, asked by `GetBuybackItemInfo` (`0x4fb40c` with `0x4fb570`), one per call.
+    Buyback,
 }
 
 impl Items {
@@ -547,6 +551,12 @@ impl Items {
             !hit
         });
         taken
+    }
+
+    /// Drop every waiting callback of `kind`, as a cancel by callback drops its registrations
+    /// (`0x55c0c0`).
+    pub(crate) fn cancel_waits(&self, kind: RecordCallback) {
+        self.callbacks.lock_recover().retain(|&(_, cb)| cb != kind);
     }
 
     /// Run `callback` for the record of `entry`, answered (`found`) or refused, with the VM.

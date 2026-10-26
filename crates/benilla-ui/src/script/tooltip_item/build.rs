@@ -320,7 +320,10 @@ pub(in crate::script) fn build_item(
     if let Some((price, amount)) = sell {
         let (merchant_open, repairing) = {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            (model.merchant.is_some(), model.repair_mode)
+            (
+                crate::script::merchant::head(lua, &model).open,
+                model.repair_mode,
+            )
         };
         if merchant_open && !repairing {
             if price > 0 {

@@ -12,7 +12,8 @@ use bevy::ecs::system::RunSystemOnce;
 use crossbeam_channel::Receiver;
 
 use super::*;
-use crate::net::ClientCommand;
+use crate::names::NameCache;
+use crate::net::{ClientCommand, GuidIndex, NetCommands};
 
 const MASTER: u64 = 0xF130_0000_0000_0099;
 /// `UNIT_FIELD_BYTES_0`'s absolute index; its low byte is the race (`[+0x110]+0x78`, `0x4dbd2d`).
@@ -76,9 +77,7 @@ fn taxi_app(
     for &id in known {
         mask.0[((id - 1) / 32) as usize] |= 1 << ((id - 1) % 32);
     }
-    app.world_mut()
-        .resource_mut::<TaxiState>()
-        .open(MASTER, current, mask);
+    seat_map(app.world_mut(), MASTER, current, mask);
     (app, rx)
 }
 
@@ -143,7 +142,7 @@ fn take(
 fn the_feed_filters_the_route_search_by_the_player_s_race() {
     let data = benilla_formats::wow_data_or_skip!();
     let (mut app, rx) = taxi_app(&data, 80, &[25, 80], 1, 0);
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     let crossroads = slot_of(&mut app, "Crossroads, The Barrens");
     assert_eq!(
         eval::<String>(&mut app, &format!("return TaxiNodeGetType({crossroads})")),
@@ -171,7 +170,7 @@ fn the_feed_filters_the_route_search_by_the_player_s_race() {
 fn take_taxi_node_refuses_a_mounted_player_then_the_current_node() {
     let data = benilla_formats::wow_data_or_skip!();
     let (mut app, rx) = taxi_app(&data, 2, &[2, 4], 1, 2402);
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     let (stormwind, sentinel) = (
         slot_of(&mut app, "Stormwind, Elwynn"),
         slot_of(&mut app, "Sentinel Hill, Westfall"),
@@ -219,7 +218,7 @@ fn take_taxi_node_refuses_a_mounted_player_then_the_current_node() {
 fn take_taxi_node_on_a_slot_with_no_route_shows_no_such_path() {
     let data = benilla_formats::wow_data_or_skip!();
     let (mut app, rx) = taxi_app(&data, 7, &[2, 7], 1, 0);
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     let stormwind = slot_of(&mut app, "Stormwind, Elwynn");
     let (sent, shown) = take(&mut app, &rx, stormwind);
     assert!(sent.is_empty(), "{sent:?}");
@@ -235,7 +234,7 @@ fn take_taxi_node_on_a_slot_with_no_route_shows_no_such_path() {
 fn the_closed_map_keeps_its_slots() {
     let data = benilla_formats::wow_data_or_skip!();
     let (mut app, rx) = taxi_app(&data, 2, &[2, 4, 6, 8], 1, 0);
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     let (sentinel, thelsamar) = (
         slot_of(&mut app, "Sentinel Hill, Westfall"),
         slot_of(&mut app, "Thelsamar, Loch Modan"),
@@ -245,7 +244,7 @@ fn the_closed_map_keeps_its_slots() {
     assert!(eval::<i64>(&mut app, &format!("return TaxiNodeCost({sentinel})")) > 0);
 
     close_core(app.world_mut());
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     assert_eq!(eval::<i64>(&mut app, "return NumTaxiNodes()"), 4);
     assert_eq!(
         eval::<String>(&mut app, &format!("return TaxiNodeName({thelsamar})")),
@@ -292,9 +291,10 @@ fn the_closed_map_keeps_its_slots() {
 fn the_leave_world_leg_frees_the_slots() {
     let data = benilla_formats::wow_data_or_skip!();
     let (mut app, rx) = taxi_app(&data, 2, &[2, 4], 1, 0);
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     let sentinel = slot_of(&mut app, "Sentinel Hill, Westfall");
     leave_world(app.world_mut());
+    mirror(app.world_mut());
     assert_eq!(eval::<i64>(&mut app, "return NumTaxiNodes()"), 0);
     let (sent, shown) = take(&mut app, &rx, sentinel);
     assert!(sent.is_empty(), "{sent:?}");
@@ -308,10 +308,10 @@ fn the_leave_world_leg_frees_the_slots() {
 fn an_open_drops_the_last_map_s_slots() {
     let data = benilla_formats::wow_data_or_skip!();
     let (mut app, rx) = taxi_app(&data, 2, &[2, 4], 1, 0);
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     let sentinel = slot_of(&mut app, "Sentinel Hill, Westfall");
     open_map(app.world_mut(), MASTER + 1, 2, TaxiMask::default());
-    app.world_mut().run_system_once(feed_taxi).unwrap();
+    mirror(app.world_mut());
     assert_eq!(eval::<i64>(&mut app, "return NumTaxiNodes()"), 0);
     let (sent, shown) = take(&mut app, &rx, sentinel);
     assert!(sent.is_empty(), "{sent:?}");

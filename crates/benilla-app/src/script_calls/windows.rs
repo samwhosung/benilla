@@ -141,7 +141,7 @@ impl ScriptCallHost<'_, '_> {
             return;
         };
         self.release_into(script, mark, vendor, Self::close_merchant);
-        self.appliers.merchant().clear_vendor(script);
+        self.appliers.merchant().clear_vendor();
         self.appliers.latch().note_closed(NpcWindow::Merchant);
         script.fire_event("MERCHANT_CLOSED", vec![]);
         self.signalled(script, mark);
@@ -221,7 +221,7 @@ impl ScriptCallHost<'_, '_> {
             return;
         };
         self.release_into(script, mark, flightmaster, Self::close_taxi);
-        self.appliers.taxi().clear_map(script);
+        self.appliers.taxi().clear_map();
         self.appliers.latch().note_closed(NpcWindow::Taxi);
         script.fire_event("TAXIMAP_CLOSED", vec![]);
         self.signalled(script, mark);

@@ -874,22 +874,19 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     )?
                 };
                 let h = frame_handle_of(lua, &this)?;
+                // The open vendor's row as of the call.
                 let row = {
-                    let model = lua.app_data_mut::<Model>().expect("model app_data");
-                    let Some(merchant) = &model.merchant else {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    if !crate::script::merchant::head(lua, &model).open {
                         return Ok(());
-                    };
-                    let list = if buyback {
-                        &merchant.buyback
+                    }
+                    if buyback {
+                        index
+                            .checked_sub(1)
+                            .and_then(|i| crate::script::merchant::buyback_row(lua, &model, i))
                     } else {
-                        &merchant.items
-                    };
-                    let row = if buyback {
-                        index.checked_sub(1)
-                    } else {
-                        Some(index.saturating_sub(1))
-                    };
-                    row.and_then(|i| list.get(i)).cloned()
+                        crate::script::merchant::row(lua, &model, index.saturating_sub(1))
+                    }
                 };
                 let Some(row) = row else { return Ok(()) };
                 // Nothing to arm: the vendor tab's row seats `ShoppingTooltip1/2` itself

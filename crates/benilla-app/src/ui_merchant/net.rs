@@ -1,9 +1,10 @@
-//! The vendor window's packet handlers: they fill [`MerchantOpen`] and [`MerchantErrors`].
+//! The vendor window's packet handlers: they fill [`MerchantOpen`] and signal on the merchant
+//! lane ([`MerchantLane`]) inside themselves.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{MerchantErrors, MerchantOpen, MerchantRefusal};
+use super::{buy_error_key, sell_error_key, MerchantEvent, MerchantLane, MerchantOpen};
 use crate::net::NetHandlerApp;
 
 /// Register the vendor handlers and the session-end listener.
@@ -23,10 +24,12 @@ fn on_inventory(In(ev): In<SessionEvent>, mut commands: Commands) {
 }
 
 /// `SMSG_BUY_ITEM` (`0x5dced0`): the stock, then the bought row's item and count through the quest
-/// log's walk ([`crate::ui_quest_log::on_item_bought`]).
+/// log's walk ([`crate::ui_quest_log::on_item_bought`]), then the window's stock update and its
+/// `MERCHANT_UPDATE` (`0x5dd042` → `0x4fae70`).
 fn on_buy_result(
     In(ev): In<SessionEvent>,
     mut merchant: ResMut<MerchantOpen>,
+    mut merchant_lane: ResMut<MerchantLane>,
     book: crate::ui_quest_log::ItemBook,
     quest_log: ResMut<crate::ui_quest_log::QuestLog>,
     script: Option<NonSend<benilla_ui::script::UiScript>>,
@@ -40,15 +43,24 @@ fn on_buy_result(
     else {
         return;
     };
-    let bought = vendor_buy_result(vendor, slot, new_count, &mut merchant)
+    // Another vendor than the list cache's returns at once (`0x5dcf26`).
+    if merchant.listed != Some(vendor) {
+        return;
+    }
+    let bought = merchant
+        .update_stock(slot, new_count)
         .map(|entry| (entry, purchase_count));
     crate::ui_quest_log::on_item_bought(In(bought), book, quest_log, script);
+    // `0x4fae70` signals for the open vendor, a row found or not (`0x4faea5`, `0x4faebd`).
+    if merchant.vendor == Some(vendor) {
+        merchant_lane.push(MerchantEvent::Update);
+    }
 }
 
 fn on_buy_failed(
     In(ev): In<SessionEvent>,
     mut merchant: ResMut<MerchantOpen>,
-    mut errors: ResMut<MerchantErrors>,
+    mut lane: ResMut<MerchantLane>,
 ) {
     if let SessionEvent::VendorBuyFailed {
         vendor,
@@ -56,20 +68,20 @@ fn on_buy_failed(
         reason,
     } = ev
     {
-        vendor_buy_failed(vendor, item_entry, reason, &mut merchant, &mut errors);
+        vendor_buy_failed(vendor, item_entry, reason, &mut merchant, &mut lane);
     }
 }
 
 fn on_sell_failed(
     In(ev): In<SessionEvent>,
-    mut errors: ResMut<MerchantErrors>,
+    mut merchant_lane: ResMut<MerchantLane>,
     mut lane: ResMut<crate::item_lane::ItemLane>,
 ) {
     if let SessionEvent::VendorSellFailed {
         item_guid, reason, ..
     } = ev
     {
-        vendor_sell_failed(reason, item_guid, &mut errors, &mut lane);
+        vendor_sell_failed(reason, item_guid, &mut merchant_lane, &mut lane);
     }
 }
 
@@ -78,25 +90,10 @@ fn on_session_end(In(_): In<SessionEvent>, mut merchant: ResMut<MerchantOpen>) {
     merchant.clear_session();
 }
 
-/// `SMSG_BUY_ITEM`'s new stock count, applied only when the vendor is the list cache's
-/// (`[0xc4d498]`, `0x5dcf20`-`0x5dcf35`), open or closed since, and to the row its slot names
-/// (`0x5dcf42`-`0x5dcf61`), whose item it answers; a slot no row holds skips the quest walk
-/// (`0x5dcf54`).
-fn vendor_buy_result(
-    vendor: u64,
-    slot: u32,
-    new_count: u32,
-    merchant: &mut MerchantOpen,
-) -> Option<u32> {
-    if merchant.listed != Some(vendor) {
-        return None;
-    }
-    merchant.update_stock(slot, new_count)
-}
-
-/// `SMSG_BUY_FAILED`: queue the message line, and for `ITEM_ALREADY_SOLD` zero the refused row of
-/// the open vendor, as the reference does (`0x5dcda7`..`0x5dcdd6`). vmangos sends that code only
-/// for a limited row short of stock (`Player.cpp:18541`).
+/// `SMSG_BUY_FAILED` (`0x5dcd60`): for `ITEM_ALREADY_SOLD` from the list cache's vendor
+/// (`0x5dcd94`), each refused row zeroed (`0x5dcdbf`) and, the vendor open, its
+/// `MERCHANT_UPDATE` (`0x5dcdc5` → `0x4fae70`); then the message line (`0x5dcdd8`). vmangos sends
+/// that code only for a limited row short of stock (`Player.cpp:18541`).
 ///
 /// Deviation: the row is matched by item entry, where the reference matches its vendor slot word
 /// (`+0x00`), because vmangos writes the entry in that field (`Player.cpp:11718`).
@@ -105,32 +102,41 @@ fn vendor_buy_failed(
     item_entry: u32,
     reason: u8,
     merchant: &mut MerchantOpen,
-    errors: &mut MerchantErrors,
+    lane: &mut MerchantLane,
 ) {
     debug!("net: buy failed (entry {item_entry}, reason {reason})");
     if reason == benilla_protocol::messages::buy_result::ITEM_ALREADY_SOLD
-        && merchant.vendor == Some(vendor)
+        && merchant.listed == Some(vendor)
     {
-        merchant.sold_out(item_entry);
+        let rows = merchant.sold_out(item_entry);
+        if merchant.vendor == Some(vendor) {
+            for _ in 0..rows {
+                lane.push(MerchantEvent::Update);
+            }
+        }
     }
-    errors.0.push(MerchantRefusal::Buy(reason));
+    if let Some(key) = buy_error_key(reason) {
+        lane.push(MerchantEvent::Line(key));
+    }
 }
 
 /// `SMSG_SELL_ITEM` (`0x5dd1f0`): a zero result is a success and returns at once (`0x5dd221`);
-/// any other queues the message line and unlocks the item the sale locked (`0x5dd26b`), a zero
-/// guid excepted (`0x5dd267`), on the item lane at the packet's place. A success's item leaves
-/// its slot, which unlocks it.
+/// any other shows its message line (`0x5dd22c`) and unlocks the item the sale locked
+/// (`0x5dd26b`), a zero guid excepted (`0x5dd267`), on the item lane at the packet's place. A
+/// success's item leaves its slot, which unlocks it.
 fn vendor_sell_failed(
     reason: u8,
     item_guid: u64,
-    errors: &mut MerchantErrors,
+    merchant_lane: &mut MerchantLane,
     lane: &mut crate::item_lane::ItemLane,
 ) {
     if reason == 0 {
         return;
     }
     debug!("net: sell failed (reason {reason}, item {item_guid:#x})");
-    errors.0.push(MerchantRefusal::Sell(reason));
+    if let Some(key) = sell_error_key(reason) {
+        merchant_lane.push(MerchantEvent::Line(key));
+    }
     lane.push(crate::item_watch::Run {
         unlocks: (item_guid != 0)
             .then_some(crate::item_watch::Unlock::Item(item_guid))
@@ -170,7 +176,7 @@ mod tests {
             .init_resource::<crate::ui_quest::QuestGiver>()
             .init_resource::<crate::ui_quest_log::QuestLog>()
             .init_resource::<MerchantOpen>()
-            .init_resource::<MerchantErrors>()
+            .init_resource::<MerchantLane>()
             .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
@@ -289,12 +295,12 @@ mod tests {
     #[test]
     fn a_refused_sale_unlocks_its_item_and_a_success_does_nothing() {
         const ITEM: u64 = 0x4000_0000_0000_0042;
-        let mut errors = MerchantErrors::default();
+        let mut lines = MerchantLane::default();
         let mut lane = crate::item_lane::ItemLane::default();
-        vendor_sell_failed(0, ITEM, &mut errors, &mut lane);
-        assert!(errors.0.is_empty() && lane.drain_stamped().is_empty());
-        vendor_sell_failed(1, ITEM, &mut errors, &mut lane);
-        assert_eq!(errors.0.len(), 1);
+        vendor_sell_failed(0, ITEM, &mut lines, &mut lane);
+        assert!(lines.take().is_empty() && lane.drain_stamped().is_empty());
+        vendor_sell_failed(1, ITEM, &mut lines, &mut lane);
+        assert_eq!(lines.take(), [MerchantEvent::Line("ERR_ITEM_NOT_FOUND")]);
         let runs: Vec<_> = lane.drain_stamped().into_iter().map(|(_, r)| r).collect();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].unlocks, [crate::item_watch::Unlock::Item(ITEM)]);

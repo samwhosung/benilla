@@ -29,12 +29,11 @@ impl MerchantSteps<'_, '_> {
         self.open.as_deref().and_then(|o| o.vendor)
     }
 
-    /// The close core's clear of the cell (`0x4fae0e`), and the VM's window with it.
-    pub(crate) fn clear_vendor(&mut self, script: &mut UiScript) {
+    /// The close core's clear of the cell (`0x4fae0e`).
+    pub(crate) fn clear_vendor(&mut self) {
         if let Some(open) = self.open.as_deref_mut() {
             open.clear();
         }
-        script.set_merchant(None);
     }
 
     /// Apply one merchant call; the close is the host's ([`MerchantCall::Close`]).

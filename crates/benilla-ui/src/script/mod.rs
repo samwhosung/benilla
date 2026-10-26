@@ -366,7 +366,10 @@ pub use mail::{
     StationeryView,
 };
 pub use measure::TextMeasure;
-pub use merchant::{ItemStatsHead, MerchantCall, MerchantItem, MerchantState, RepairCosts};
+pub use merchant::{
+    BuybackRowQuery, ItemStatsHead, MerchantCall, MerchantHead, MerchantHeadQuery, MerchantItem,
+    MerchantRowQuery, MerchantState, RepairAllCostQuery, RepairCosts,
+};
 pub(crate) use minimap::apply_model_attrs as apply_minimap_model_attrs;
 pub use minimap::{
     MinimapCall, MinimapRimArrow, CORPSE_ARROW as MINIMAP_CORPSE_ARROW,
@@ -422,7 +425,9 @@ pub use talent::{
     CharacterPoints, TalentAt, TalentCall, TalentCount, TalentMasterPending, TalentPrereqView,
     TalentReq, TalentTabView, TalentTabs, TalentUiState, TalentView,
 };
-pub use taxi::{TaxiCall, TaxiNodeType, TaxiUiNode, TaxiUiState};
+pub use taxi::{
+    TaxiCall, TaxiMapHead, TaxiMapQuery, TaxiNodeQuery, TaxiNodeType, TaxiUiNode, TaxiUiState,
+};
 pub use tooltip_aura::{AuraKey, AuraTooltipView};
 pub use tooltip_spell::{ReputationRequirement, SpellTooltipView};
 pub use tooltip_text::{KeyedArg, TextPart, TooltipText};

@@ -221,6 +221,7 @@ pub(crate) mod id {
     pub(crate) const PLAYER_GUILD_UPDATE: u16 = 345;
     pub(crate) const UPDATE_FACTION: u16 = 372;
     pub(crate) const TABARD_CANSAVE_CHANGED: u16 = 376;
+    pub(crate) const MERCHANT_UPDATE: u16 = 317;
     pub(crate) const PLAYER_UNGHOST: u16 = 401;
     pub(crate) const PLAYER_UPDATE_RESTING: u16 = 405;
     pub(crate) const PET_UI_UPDATE: u16 = 427;
@@ -334,6 +335,10 @@ const CHARACTER_POINTS: (u16, u16) = (0xe48, 8);
 /// The active player's ammunition watch `0x4c70b0`, `PLAYER_AMMO_ID` at the player section's
 /// `+0x102c`, registered at world entry (`0x4c6fea`, from `0x49097e`).
 const AMMO_ID: (u16, u16) = (0x102c, 4);
+
+/// The active player's buy-back watch `0x4faca0`, the 12 prices and 12 stamps at the player
+/// section's `+0x1038`, 0x60 bytes, registered at world entry (`0x4fac83`, from `0x4909b0`).
+const BUYBACK: (u16, u16) = (0x1038, 0x60);
 
 /// `0x5de4b0`'s registrations in `0x5dd8a0`, in registration order: the byte offset in the player
 /// section, the length, and the event id pushed as the argument.
@@ -974,6 +979,12 @@ pub(crate) fn placed_values(
         if let Some(at) = at(PLAYER_SECTION, AMMO_ID, List::Object) {
             let id = id::UNIT_INVENTORY_CHANGED;
             pass.push(at, FieldNotice::Player { id });
+        }
+        // `0x4faca0` rebuilds the buy-back list (`0x4fafd0`), which the getters derive at the
+        // call, and signals `MERCHANT_UPDATE` (`0x4facaa`), a vendor open or not.
+        if let Some(at) = at(PLAYER_SECTION, BUYBACK, List::Object) {
+            let id = id::MERCHANT_UPDATE;
+            pass.push(at, FieldNotice::Global { id });
         }
         // Each entry's watches in their registration order (`0x5dda6c`, `0x5dda8e`, `0x5ddaaf`,
         // `0x5ddad1`), the order they run in at one field.

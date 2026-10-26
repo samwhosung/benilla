@@ -1,10 +1,10 @@
 //! The taxi map's packet handlers: they fill [`TaxiState`] and the flight masters' overhead
-//! status.
+//! status, and signal on the taxi lane ([`TaxiLane`]) inside themselves.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::TaxiState;
+use super::{taxi_error_key, TaxiEvent, TaxiLane, TaxiState};
 use crate::net::{GuidIndex, NetHandlerApp};
 
 /// Register the taxi handlers and the session-end listener.
@@ -20,8 +20,8 @@ pub(super) fn register(app: &mut App) {
 
 /// `SMSG_SHOWTAXINODES` (`0x5ece60`): the mask's known nodes counted over all 256 bits
 /// (`0x5eced7`-`0x5ecf2e`); under two (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS`
-/// (`0x5ecf3f`), closes the gossip menu (`0x4e1fa0` with a zero guid, `0x5ecf55`) and opens no
-/// map; else the map opens.
+/// (`0x5ecf3f`), closes the gossip menu (`0x4e1fa0` with a zero guid, `0x5ecf55`) and returns
+/// before the builder `0x4db710` (`0x5ecf6f`), so no `TAXIMAP_OPENED`; else the map opens.
 fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::TaxiNodesShown {
         flightmaster,
@@ -36,11 +36,7 @@ fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
                 super::open_map(world, flightmaster, nearest_node, known_mask);
                 return;
             }
-            // `DisplayError` shows the line inside the handler, before the close's event.
-            let _ = crate::script_calls::run_cached(world, show_no_paths);
-            if world.contains_resource::<crate::ui_gossip::GossipState>() {
-                crate::ui_gossip::close_core(world);
-            }
+            line_then_gossip_close(world, "ERR_TAXINOPATHS");
         });
     }
 }
@@ -69,19 +65,24 @@ fn listed_nodes<'a>(
         .collect()
 }
 
-/// `0xb5`, `ERR_TAXINOPATHS`, through `DisplayError` (`0x5ecf44` → `0x496720`), which shows it now.
-fn show_no_paths(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut sink: crate::ui_action::MessageSink,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        if let Some(line) = crate::ui_action::keyed_line(script, "ERR_TAXINOPATHS") {
-            crate::ui_action::show_now(script, &mut sink, "ui_taxi", line);
-        }
-    });
+/// A handler's `DisplayError` line (`0x496720`) and then the gossip menu's close (`0x4e1fa0` with
+/// a zero guid), both on the taxi lane at the handler's place: the close's signals wait parked
+/// behind the line, at a stamp taken as it ends.
+fn line_then_gossip_close(world: &mut World, key: &'static str) {
+    world.resource_mut::<TaxiLane>().push(TaxiEvent::Line(key));
+    if !world.contains_resource::<crate::ui_gossip::GossipState>() {
+        return;
+    }
+    let deferring = crate::script_calls::defer_vm(world);
+    crate::ui_gossip::close_core(world);
+    let Some((_held, mark)) = &deferring else {
+        return;
+    };
+    if let Some((session, key)) = crate::script_calls::park_since(world, *mark) {
+        world
+            .resource_mut::<TaxiLane>()
+            .push(TaxiEvent::Parked { session, key });
+    }
 }
 
 fn on_node_status(In(ev): In<SessionEvent>, mut commands: Commands, index: Res<GuidIndex>) {
@@ -90,23 +91,34 @@ fn on_node_status(In(ev): In<SessionEvent>, mut commands: Commands, index: Res<G
     }
 }
 
+/// `SMSG_ACTIVATETAXIREPLY` (`0x5ed1e0`): `OK` closes the map through the core (`0x5ed1ed` →
+/// `0x5ed203`); 1-12 show their line (`0x496720`); 13 up do nothing.
 fn on_activate_reply(
     In(ev): In<SessionEvent>,
     mut taxi: ResMut<TaxiState>,
+    mut lane: ResMut<TaxiLane>,
     mut commands: Commands,
 ) {
     if let SessionEvent::ActivateTaxiReply { code } = ev {
-        taxi_activate_reply(code, &mut taxi);
-        // `OK` closes the map through the core (`0x5ed1ed` → `0x5ed203`).
+        debug!("net: activate taxi reply — code {code}");
+        taxi.reply = Some(code);
         if code == benilla_protocol::messages::taxi_reply::OK {
             crate::ui_session::queue(&mut commands, super::close_core);
+        } else if let Some(key) = taxi_error_key(code) {
+            lane.push(TaxiEvent::Line(key));
         }
     }
 }
 
-fn on_new_path(In(ev): In<SessionEvent>, mut taxi: ResMut<TaxiState>) {
+/// `SMSG_NEW_TAXI_PATH`, an empty body: message `0xf2`, `ERR_NEWTAXIPATH`, whose row routes it to
+/// the yellow `UI_INFO_MESSAGE` (`0x4945b0`) and plays its `TaxiNodeDiscovered` sound kit
+/// (`0x458030`), then the gossip menu's close (`0x4e1fa0` with a zero guid, `0x5e3e68`), whose
+/// `GOSSIP_CLOSED` follows the line. vmangos sends it only on a first visit, beside a `known` node
+/// status for the flight master (`SendLearnNewTaxiNode`, `TaxiHandler.cpp:117`).
+fn on_new_path(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::NewTaxiPath = ev {
-        taxi_new_path(&mut taxi);
+        debug!("net: taxi — first-visit node learned (SMSG_NEW_TAXI_PATH)");
+        commands.queue(|world: &mut World| line_then_gossip_close(world, "ERR_NEWTAXIPATH"));
     }
 }
 
@@ -126,19 +138,6 @@ fn taxi_node_status(guid: u64, known: bool, commands: &mut Commands, index: &Gui
             .entity(e)
             .insert(super::FlightMasterStatus { known });
     }
-}
-
-/// `SMSG_ACTIVATETAXIREPLY`, staged for the feed, which shows a refusal.
-fn taxi_activate_reply(code: u32, taxi: &mut TaxiState) {
-    debug!("net: activate taxi reply — code {code}");
-    taxi.reply = Some(code);
-}
-
-/// `SMSG_NEW_TAXI_PATH`, an empty body: vmangos sends it only on a first visit, beside a `known`
-/// node status for the flight master (`SendLearnNewTaxiNode`, `TaxiHandler.cpp:117`).
-fn taxi_new_path(taxi: &mut TaxiState) {
-    debug!("net: taxi — first-visit node learned (SMSG_NEW_TAXI_PATH)");
-    taxi.discovered = true;
 }
 
 #[cfg(test)]

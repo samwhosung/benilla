@@ -5,11 +5,11 @@
 
 use benilla_protocol::field::{FIELD_PLAYER_FIELD_COINAGE, FIELD_UNIT_NPC_FLAGS};
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{ContainerSlot, ContainerState};
+use benilla_ui::script::{ContainerSlot, ContainerState, MerchantState};
 use crossbeam_channel::Receiver;
 
 use super::*;
-use crate::net::ClientCommand;
+use crate::net::{ClientCommand, Guid, NetCommands};
 use crate::script_calls::with_hosted_vm;
 
 const ME: u64 = 0x10;

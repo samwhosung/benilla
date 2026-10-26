@@ -353,6 +353,14 @@ pub enum ItemCallback {
     /// The quest log's leaderboard and reward getters (`0x4e0830`), whose callback the VM keeps
     /// and signals `QUEST_LOG_UPDATE` with at its flush (`0x4e083a`): the cache only asks.
     QuestLog,
+    /// `GetMerchantItemInfo` (`0x4faed0`), whose callback `0x4fada0` counts the window's waits down
+    /// and signals `MERCHANT_UPDATE` at the last with a vendor open (`0x4fb0f0`). Its query names
+    /// the vendor's cell at the call (`0x4faef6`-`0x4faf17`), which the host holds; the ask's
+    /// owner is unread.
+    Merchant,
+    /// `GetBuybackItemInfo` (`0x4fb40c`), whose callback `0x4fb570` signals `MERCHANT_UPDATE`; its
+    /// query's guid is 0 (`0x4fb3f0`-`0x4fb3f7`).
+    Buyback,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,

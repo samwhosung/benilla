@@ -767,8 +767,6 @@ pub(crate) struct Model {
 
     /// The open vendor's stock, the `BuyMerchantItem` calls and whether `CloseMerchant` ran.
     pub(crate) merchant: Option<merchant::MerchantState>,
-    /// `GetRepairAllCost`'s total; 0 unless a repairer is open.
-    pub(crate) repair_all_cost: u32,
     /// The repair costs `SetInventoryItem` and `SetBagItem` return.
     pub(crate) repair_costs: merchant::RepairCosts,
     /// The buys a drop verb made of a held vendor row, into a slot or a bag, handed to the host as
@@ -1605,7 +1603,6 @@ impl Model {
             color_drag: None,
             gossip: None,
             merchant: None,
-            repair_all_cost: 0,
             repair_costs: Default::default(),
             merchant_drops: Vec::new(),
             repair_mode: false,

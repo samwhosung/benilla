@@ -102,6 +102,10 @@ live_reads! {
         /// Another player's visible items, the active player's honor block and the inspect-honor
         /// slot.
         inspect: crate::ui_inspect::InspectLive<'static, 'static>,
+        /// The vendor window's rows, the buy-back rows and the repair total.
+        merchant: crate::ui_merchant::MerchantLive<'static, 'static>,
+        /// The taxi map's slots and fares.
+        taxi: crate::ui_taxi::TaxiLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

@@ -6,8 +6,7 @@ use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_OBJECT_ENTRY};
 use benilla_protocol::messages::ItemInfo;
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
-    ContainerSlot, ContainerState, InvSlotView, InventorySlots, MerchantItem, MerchantState,
-    UiScript, UseFork,
+    ContainerSlot, ContainerState, InvSlotView, InventorySlots, UiScript, UseFork,
 };
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
@@ -254,24 +253,38 @@ impl Bags {
         Self { app, rx }
     }
 
-    /// Open the vendor, its one row and its repair service, in the app and the VM.
+    /// Open the vendor, its one row and its repair service, which the getters read through the
+    /// host.
     fn open_vendor(&mut self) {
-        self.app
-            .world_mut()
+        let world = self.app.world_mut();
+        world
             .resource_mut::<crate::ui_merchant::MerchantOpen>()
-            .vendor = Some(VENDOR);
-        self.script().set_merchant(Some(MerchantState {
-            items: vec![MerchantItem {
-                item_id: ROW_ENTRY,
-                name: Some("Bread".into()),
-                texture: Some("Interface\\Icons\\INV_Misc_Food_11".into()),
-                quantity: 1,
-                num_available: -1,
-                ..Default::default()
-            }],
-            buyback: Vec::new(),
-            can_repair: true,
-        }));
+            .open(
+                VENDOR,
+                vec![benilla_protocol::messages::VendorItem {
+                    slot: 1,
+                    entry: ROW_ENTRY,
+                    display_id: 0,
+                    current_count: u32::MAX,
+                    price: 0,
+                    max_durability: 0,
+                    buy_count: 1,
+                }],
+            );
+        let vendor = world
+            .spawn((
+                Guid(VENDOR),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                    benilla_protocol::field::FIELD_UNIT_NPC_FLAGS,
+                    // `UNIT_NPC_FLAG_REPAIR`.
+                    0x4000,
+                )])),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(VENDOR, vendor);
     }
 
     /// Run `lua` with the host lent, as every entry that runs Lua lends it.

@@ -236,18 +236,16 @@ fn close_merchant_drops_a_held_vendor_row_inside_its_call() {
     let (mut app, _rx) = client();
     open(&mut app, W::Merchant, NPC);
     app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .set_merchant(Some(benilla_ui::script::MerchantState {
-            items: vec![benilla_ui::script::MerchantItem {
-                name: Some("Refreshing Spring Water".into()),
-                price: 25,
-                quantity: 5,
-                num_available: -1,
-                item_id: 159,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }));
+        .resource_mut::<crate::ui_merchant::MerchantOpen>()
+        .items = vec![benilla_protocol::messages::VendorItem {
+        slot: 1,
+        entry: 159,
+        display_id: 18084,
+        current_count: 9,
+        price: 25,
+        max_durability: 0,
+        buy_count: 5,
+    }];
     let payload = |app: &App| app.world().non_send_resource::<UiScript>().cursor_payload();
     eval::<()>(&mut app, "PickupMerchantItem(1)");
     assert!(

@@ -153,11 +153,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let row = row as usize;
                 let Some(item_id) = ({
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model
-                        .merchant
-                        .as_ref()
-                        .and_then(|m| m.items.get(row))
-                        .map(|it| it.item_id)
+                    crate::script::merchant::row(lua, &model, row).map(|it| it.item_id)
                 }) else {
                     return Ok(Value::Nil);
                 };

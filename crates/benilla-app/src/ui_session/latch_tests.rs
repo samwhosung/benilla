@@ -200,7 +200,7 @@ pub(crate) fn open(app: &mut App, window: W, npc: u64) {
         W::Gossip => crate::ui_gossip::open_menu(world, npc, 0, Vec::new(), Vec::new()),
         W::Quest => crate::ui_quest::open_panel(world, npc, greeting(npc)),
         W::Trainer => crate::ui_trainer::open_trainer(world, npc, 0, Vec::new(), String::new()),
-        W::Taxi => crate::ui_taxi::open_map(world, npc, 1, Default::default()),
+        W::Taxi => crate::ui_taxi::open_unbuilt(world, npc),
         W::Stable => crate::ui_stable::open_stable(world, npc, 0, Vec::new()),
         W::Registrar => {
             use crate::target::cursor_mode::npc_flags::{PETITIONER, TABARDDESIGNER};

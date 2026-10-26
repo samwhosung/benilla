@@ -452,6 +452,8 @@ mod item_live_tests;
 #[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod merchant_live_tests;
+#[cfg(test)]
 mod name_live_tests;
 #[cfg(test)]
 mod packet_signal_tests;
@@ -471,6 +473,8 @@ mod stance_live_tests;
 mod stat_live_tests;
 #[cfg(test)]
 mod storm_tests;
+#[cfg(test)]
+mod taxi_live_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
