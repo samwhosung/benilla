@@ -1,7 +1,7 @@
 //! The inspect bindings: `NotifyInspect` and `ClearInspectPlayer` act inside their calls through
 //! the host ([`InspectCall`]), the `GetInventoryItem*` verbs read another player's visible items
-//! through the lent host ([`VisibleSlotQuery`]), and `CanInspect` and `CheckInteractDistance` read a per-guid
-//! distance map ([`UiScript::set_unit_reach`]) through the token resolver ([`super::UnitGuids`]).
+//! through the lent host ([`VisibleSlotQuery`]), and `CanInspect` and `CheckInteractDistance` read
+//! the reach of the unit the token resolver names through it too ([`UnitReachQuery`]).
 //!
 //! Worn gear is public descriptor state (`PLAYER_VISIBLE_ITEM_<n>_0`), so the window paints from
 //! what the client holds: `SMSG_INSPECT` echoes only the guid (`0x5e7d70`), `InspectFrame_Show`
@@ -42,12 +42,11 @@ pub struct UnitReach {
 }
 
 impl super::UiScript {
-    /// Push the squared distance of every live unit a token can name this frame, creature
-    /// included; both range verbs read the same d². A verb resolves its token to a guid through
+    /// Seat the squared distance of the units a token can name, which both range verbs read with
+    /// no host to ask ([`UnitReachQuery`]). A verb resolves its token to a guid through
     /// [`super::UnitGuids`], so `"party1target"` and `"PLAYER"` read the unit they name, and a
     /// guid absent from the map answers nil from both, the reference's null-object arms
-    /// (`0x48babe` for `CheckInteractDistance`, `0x48a1fa` for `CanInspect`). It changes every frame, so it stays off [`super::UnitState`], whose diffs
-    /// fire `UNIT_*` events.
+    /// (`0x48babe` for `CheckInteractDistance`, `0x48a1fa` for `CanInspect`).
     pub fn set_unit_reach(&mut self, reach: HashMap<u64, UnitReach>) {
         self.model_mut().unit_reach = reach;
     }
@@ -171,14 +170,31 @@ pub enum InspectCall {
     Honor,
 }
 
+/// The range verbs' question of the lent host ([`super::live::ask`]): the unit `guid` as the
+/// object manager holds it at the call (`0x468460`, typemask 8), its squared distance from the
+/// active player and `0x4944a0`'s other legs, read there (`0x48a26f`, `0x48ba00`); `None` for no
+/// unit held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitReachQuery(pub u64);
+
+impl super::live::LiveQuery for UnitReachQuery {
+    type Answer = Option<UnitReach>;
+}
+
+/// `guid`'s reach at the call: the lent host's, else the seat ([`super::UiScript::set_unit_reach`]).
+pub(super) fn reach_of(lua: &Lua, model: &Model, guid: u64) -> Option<UnitReach> {
+    super::live::ask(lua, &UnitReachQuery(guid))
+        .unwrap_or_else(|| model.unit_reach.get(&guid).copied())
+}
+
 /// The reach of the unit `token` names, through the resolver (`0x515970`, which both verbs call via
-/// `0x515940`): the guid it answers, then that guid's entry. A token the resolver does not
+/// `0x515940`): the guid it answers, then that guid's reach. A token the resolver does not
 /// recognise raises `Unknown unit name` (`0x515c14`).
 fn reach(lua: &Lua, token: &str) -> mlua::Result<Option<UnitReach>> {
     super::unit::check_unit_token(&Some(token.to_string()))?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     let guid = super::unit::guid_of(lua, &model, token)?;
-    Ok(guid.and_then(|guid| model.unit_reach.get(&guid).copied()))
+    Ok(guid.and_then(|guid| reach_of(lua, &model, guid)))
 }
 
 /// Whether `0x4944a0`'s distance leg passes: in range unless `100.0 < d²`, since `test ah,0x41`

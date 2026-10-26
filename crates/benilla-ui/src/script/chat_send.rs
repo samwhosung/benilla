@@ -36,12 +36,41 @@ mod text;
 pub use text::{expand_target_tokens, validate_escapes, InvalidEscape, INVALID_ESCAPE};
 
 impl super::UiScript {
-    /// Push the name `GetDefaultLanguage()` answers. `None` is the reference's no-player state,
-    /// which returns zero values, not `nil`; the app resolves it per world entry from
-    /// `ChrRaces.BaseLanguage` and `Languages.dbc`.
+    /// Seat the name `GetDefaultLanguage()` answers with no host to ask, or while the host holds no
+    /// player ([`DefaultLanguageQuery`]). `None` is the reference's no-player state, which returns
+    /// zero values, not `nil`; the app seats it at a VM's load from the roster row's race.
     pub fn set_default_language(&mut self, name: Option<String>) {
         self.model_mut().default_language = name;
     }
+}
+
+/// `GetDefaultLanguage`'s question of the lent host ([`super::live::ask`]): the `Languages.dbc`
+/// name of the active player's race's base language as of the call (`0x49fcd0` → `0x5ec890`, the
+/// race byte `[player+0x110]+0x78`), `None` for a race with no row or no name. The host declines
+/// it while it holds no player, where the seat answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DefaultLanguageQuery;
+
+impl super::live::LiveQuery for DefaultLanguageQuery {
+    type Answer = Option<String>;
+}
+
+/// `GetNumLaguages` and `GetLanguageByIndex`'s question of the lent host: the names, in
+/// `Languages.dbc` row order, of the rows the active player understands as of the call, each row
+/// tested by `0x5ec720` (`0x49fb30`, `0x49fbe0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KnownLanguagesQuery;
+
+impl super::live::LiveQuery for KnownLanguagesQuery {
+    type Answer = Vec<String>;
+}
+
+/// The known languages at the call: the lent host's, else the VM's seat.
+fn known_languages(lua: &Lua) -> Vec<String> {
+    super::live::ask(lua, &KnownLanguagesQuery).unwrap_or_else(|| {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        model.known_languages.clone()
+    })
 }
 
 /// The chat types a string `chatType` names (the table `0x49f7a0` builds, tested at `0x49f276`),
@@ -165,22 +194,11 @@ fn language_id(table: &[(u32, String)], name: &str) -> Option<u32> {
 }
 
 impl super::UiScript {
-    /// The languages this character knows, in `Languages.dbc` row order: a language counts when a
-    /// known spell with `Effect_1 == 39` teaches it (`0x4b25b0`) and its skill line is in the skill
-    /// block (`0x5ec720`). A change fires `LANGUAGE_LIST_CHANGED` (`0x49b970`, event 0x102).
+    /// Seat the languages this character knows, in `Languages.dbc` row order, which the walk reads
+    /// with no host to ask ([`KnownLanguagesQuery`]). It fires nothing: `LANGUAGE_LIST_CHANGED` is
+    /// the spell registrar's, at each language spell it adds (`0x4b2641` → `0x49b970`).
     pub fn set_known_languages(&mut self, names: Vec<String>) {
-        let changed = {
-            let mut model = self.model_mut();
-            if model.known_languages == names {
-                false
-            } else {
-                model.known_languages = names;
-                true
-            }
-        };
-        if changed {
-            self.fire_event("LANGUAGE_LIST_CHANGED", vec![]);
-        }
+        self.model_mut().known_languages = names;
     }
 }
 
@@ -189,10 +207,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // reference's registered name (`0x843628`); the correct spelling is nowhere in the binary.
     lua.globals().set(
         "GetNumLaguages",
-        lua.create_function(|lua, _ignored: MultiValue| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.known_languages.len() as i64)
-        })?,
+        lua.create_function(|lua, _ignored: MultiValue| Ok(known_languages(lua).len() as i64))?,
     )?;
     // GetLanguageByIndex(i), `0x49fbe0`: the `Name_lang` of the i-th known language, positional,
     // never a row number or a language id; past the end it pushes nothing.
@@ -205,10 +220,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 index,
                 "Usage: GetLanguageByIndex(index)",
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let name = index
-                .checked_sub(1)
-                .and_then(|i| model.known_languages.get(i));
+            let known = known_languages(lua);
+            let name = index.checked_sub(1).and_then(|i| known.get(i));
             Ok(match name {
                 Some(n) => MultiValue::from_vec(vec![Value::String(lua.create_string(n)?)]),
                 None => MultiValue::new(),
@@ -221,10 +234,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetDefaultLanguage",
         lua.create_function(|lua, _ignored: MultiValue| {
-            let name = {
+            let name = super::live::ask(lua, &DefaultLanguageQuery).unwrap_or_else(|| {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.default_language.clone()
-            };
+            });
             Ok(match name {
                 Some(n) => MultiValue::from_vec(vec![Value::String(lua.create_string(&n)?)]),
                 None => MultiValue::new(),
@@ -725,16 +738,15 @@ mod language_tests {
         )
         .unwrap();
         s.set_known_languages(vec!["Orcish".into(), "Common".into()]);
-        s.set_known_languages(vec!["Orcish".into(), "Common".into()]);
         assert_eq!(s.eval::<i64>("return GetNumLaguages()").unwrap(), 2);
         assert_eq!(
             s.eval::<String>("return GetLanguageByIndex(2)").unwrap(),
             "Common"
         );
         assert_eq!(
-            s.eval::<i64>("return FIRED").unwrap(),
-            1,
-            "the list changing fires once; the same list again is silent"
+            s.eval::<Option<i64>>("return FIRED").unwrap(),
+            None,
+            "a seat fires nothing: the event is the registrar's"
         );
     }
 }

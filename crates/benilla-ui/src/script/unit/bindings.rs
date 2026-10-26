@@ -254,10 +254,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let me = model.unit_guids.player;
             let attackable = || {
-                model
-                    .unit_relations
-                    .as_deref()
-                    .and_then(|r| r.can_attack(me, guid))
+                super::relations::with_relations(lua, &model, |r| r.can_attack(me, guid))
+                    .flatten()
                     .unwrap_or(false)
             };
             Ok(i64::from(

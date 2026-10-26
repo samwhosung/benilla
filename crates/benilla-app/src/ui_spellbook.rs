@@ -89,7 +89,9 @@ pub(crate) enum Learned {
 }
 
 impl BookSignals<'_, '_> {
-    /// `0x4b25b0`'s tail for `spell_id`, now among `known`. First the form list's edge,
+    /// `0x4b25b0`'s tail for `spell_id`, now among `known`. First its language leg's
+    /// `LANGUAGE_LIST_CHANGED` for a spell whose first effect is `SPELL_EFFECT_LANGUAGE`
+    /// (`0x4b2641`-`0x4b2659`, live or not), then the form list's edge,
     /// `UPDATE_SHAPESHIFT_FORMS` (`0x4b2904`), for a stance-bar spell it appends unless listed
     /// (`0x4b2893`), or for a rank that replaces a listed old one in place (`0x4b2878`); an
     /// unlisted old rank adds nothing (`0x4b2870`). Then the book's: the sort's `SPELLS_CHANGED`
@@ -107,6 +109,11 @@ impl BookSignals<'_, '_> {
         let (Some(spells), Ok(store)) = (spells, self.me.single()) else {
             return;
         };
+        if spells.catalog.get(spell_id).is_some_and(teaches_language) {
+            self.lane.write(FieldNotice::Global {
+                id: crate::field_watch::id::LANGUAGE_LIST_CHANGED,
+            });
+        }
         let listed = |id: u32| {
             spells
                 .catalog
@@ -172,6 +179,12 @@ impl BookSignals<'_, '_> {
             });
         }
     }
+}
+
+/// Whether a spell's first effect is `SPELL_EFFECT_LANGUAGE`, the registrar's test for its
+/// language leg (`0x4b2641`, `[rec+0xf4]`).
+pub(crate) fn teaches_language(d: &benilla_formats::SpellDisplay) -> bool {
+    d.effects[0] == benilla_formats::SPELL_EFFECT_LANGUAGE
 }
 
 /// The 1-based index of `spell_id`'s tab in `tab_lines` (`0x4b2b86 inc edi`), which

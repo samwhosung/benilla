@@ -1,6 +1,7 @@
 //! The relation functions as the Lua API asks them ([`UnitRelations`]): every unit the object
 //! manager holds, copied with the tables they are judged by, so the six relation verbs answer the
-//! model's verdict for any two of them, in the order the tokens come. `ui_unit`'s feed pushes it.
+//! model's verdict for any two of them, in the order the tokens come: the seat a test hands a VM
+//! with no host lent, where the host answers in game (`crate::ui_unit::live`).
 //! The reputation slots are the store's own, not a copy: a verb's flag write is in the answer on
 //! its call's next line (`0x4d6074`, read at `0x60640c`).
 

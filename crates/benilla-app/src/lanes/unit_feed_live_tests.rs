@@ -1,0 +1,329 @@
+//! The unit getters no unit snapshot carries, as a listener reads them, and their events at their
+//! packets. The relation verbs run the engine's functions over the units they resolve inside the
+//! call (`0x5167e0` → `0x6061e0`), the range verbs measure the unit then (`0x48ba00`,
+//! `0x48a26f`), and the language walk tests each `Languages.dbc` row then (`0x49fb30` →
+//! `0x5ec720`), `GetDefaultLanguage` the player's race (`0x49fcd0` → `0x5ec890`). The far-sight
+//! watch signals inside its values block (`0x5de0d0`), and the spell registrar's language leg
+//! inside the learn (`0x4b2641` → `0x49b970`).
+
+use std::collections::HashMap;
+
+use benilla_formats::{SpellCatalog, SpellDisplay};
+use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
+use benilla_ui::script::UiScript;
+use bevy::prelude::*;
+use crossbeam_channel::{Receiver, Sender};
+
+use super::unit_view_tests::{created, values, wire_packets};
+use crate::net::ClientCommand;
+use crate::target::relations::fixture::{factions, HUMAN, ORC};
+
+const ME: u64 = 0x7;
+const WOLF: u64 = 0xF130_0000_0044_0001;
+/// `UNIT_FIELD_FACTIONTEMPLATE`, `UNIT_FIELD_BYTES_0` (the race in byte 0), `PLAYER_FARSIGHT`
+/// and the first `PLAYER_SKILL_INFO` entry's skill id.
+const TEMPLATE: u16 = 35;
+const BYTES_0: u16 = 36;
+const FARSIGHT: u16 = 712;
+const SKILL_1: u16 = 718;
+/// Two spells that teach Common (`Effect_1` 39, misc 7), on skill line 98, and a plain one whose
+/// cooldown packet is another lane's.
+const COMMON: u32 = 90_101;
+const COMMON_TOO: u32 = 90_102;
+const PLAIN: u32 = 90_103;
+
+/// The whole client, headless, in the world with its frame run.
+struct Client {
+    app: App,
+    inbound: Sender<SessionEvent>,
+    _sent: Receiver<ClientCommand>,
+}
+
+impl Client {
+    /// One frame of the client's, with `packets` in the inbound channel, each one packet.
+    fn frame(&mut self, packets: Vec<Vec<SessionEvent>>) {
+        for ev in wire_packets(packets) {
+            self.inbound.send(ev).expect("the inbound channel");
+        }
+        self.app.update();
+    }
+
+    /// `chunk`'s answer through the lent host when `live`, else off the VM's copies alone.
+    fn eval<T: benilla_ui::mlua::FromLuaMulti>(&mut self, live: bool, chunk: &str) -> T {
+        if live {
+            crate::script_calls::with_hosted_vm(self.app.world_mut(), |s| {
+                s.expect("a VM").eval::<T>(chunk).expect("runs")
+            })
+        } else {
+            crate::script_calls::eval_in_vm(self.app.world(), chunk)
+        }
+    }
+
+    /// What the spy heard since the last call.
+    fn seen(&mut self) -> Vec<String> {
+        self.eval(false, "local s = Seen Seen = {} return s")
+    }
+
+    /// Fields written into `guid`'s store, with no packet and no frame: the world as a packet's
+    /// handler leaves it, which the VM's copies have not heard of.
+    fn write(&mut self, guid: u64, pairs: &[(u16, u32)]) {
+        let world = self.app.world_mut();
+        let entity = world.resource::<crate::net::GuidIndex>().0[&guid];
+        world
+            .get_mut::<crate::net::ObjectStore>(entity)
+            .expect("the unit's store")
+            .0
+            .merge(ObjectFields::from_pairs(pairs));
+    }
+
+    /// `guid`'s unit placed `yards` along one axis, so d² is exactly yards², as the scene's
+    /// propagation leaves it.
+    fn place(&mut self, guid: u64, yards: f32) {
+        let world = self.app.world_mut();
+        let entity = world.resource::<crate::net::GuidIndex>().0[&guid];
+        world
+            .entity_mut(entity)
+            .insert(GlobalTransform::from_translation(Vec3::new(
+                yards, 0.0, 0.0,
+            )));
+    }
+}
+
+fn spells() -> crate::ui_action::Spells {
+    let language = |id: u32| {
+        let mut d = SpellDisplay {
+            id,
+            name: format!("Language {id}"),
+            ..Default::default()
+        };
+        d.effects[0] = 39;
+        d.effect_misc_value[0] = 7;
+        (id, d)
+    };
+    let plain = SpellDisplay {
+        id: PLAIN,
+        name: "Plain".into(),
+        ..Default::default()
+    };
+    crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(
+            [language(COMMON), language(COMMON_TOO), (PLAIN, plain)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+        ),
+        ..crate::ui_action::Spells::empty_for_tests()
+    }
+}
+
+/// The client in the world as a Human knowing nothing, its skill block holding line 98, targeting
+/// an Orc-template wolf; a spy whose line for each family event carries its name.
+fn client() -> Client {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+        bevy::ecs::error::ignore,
+    ));
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let (inbound, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetEvents::for_test(rx));
+    app.update();
+    app.insert_resource(spells())
+        .insert_resource(factions())
+        .insert_resource(crate::ui_spellbook::SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([
+                (COMMON, 98),
+                (COMMON_TOO, 98),
+            ]),
+        })
+        .insert_resource(crate::ui_unit::LanguagesRes(
+            benilla_formats::Languages::from_rows(&[(1, "Orcish"), (7, "Common")]),
+        ))
+        .insert_resource(crate::ui_unit::DefaultLanguagesRes(
+            benilla_formats::DefaultLanguages::from_rows(&[(1, "Common"), (2, "Orcish")]),
+        ));
+    let script = UiScript::new().expect("a VM");
+    script
+        .run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"LANGUAGE_LIST_CHANGED", "PLAYER_FARSIGHT_FOCUS_CHANGED",
+                    "SPELL_UPDATE_COOLDOWN"}) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function() table.insert(Seen, event) end)
+            "#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+    benilla_world::world_point::init_world_point_resources(app.world_mut());
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    let mut c = Client {
+        app,
+        inbound,
+        _sent: sent,
+    };
+    let unit = [(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
+    c.frame(vec![vec![
+        created(
+            ME,
+            EntityKind::Player,
+            &[
+                unit[0],
+                unit[1],
+                (TEMPLATE, HUMAN),
+                (BYTES_0, 1),
+                (SKILL_1, 98),
+            ],
+        ),
+        created(WOLF, EntityKind::Unit, &[unit[0], unit[1], (TEMPLATE, ORC)]),
+    ]]);
+    let world = c.app.world_mut();
+    let wolf = world.resource::<crate::net::GuidIndex>().0[&WOLF];
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(wolf),
+        guid: Some(WOLF),
+        ..Default::default()
+    };
+    c.place(ME, 0.0);
+    c.place(WOLF, 5.0);
+    c.frame(vec![]);
+    c.seen();
+    c
+}
+
+/// The relation verbs judge the units as the world holds them at the call, with no push between:
+/// the wolf's template moves from Orc to Human, and its reaction toward us and our attack on it
+/// follow; with no host lent, nothing in game seats a copy, so they answer nil.
+#[test]
+fn the_relation_verbs_read_the_world_at_the_call() {
+    let mut c = client();
+    let verbs = r#"return UnitReaction("target", "player"), UnitCanAttack("player", "target"),
+                   UnitIsFriend("player", "target")"#;
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>, Option<i64>)>(true, verbs),
+        (Some(2), Some(1), None),
+        "an Orc wolf is hostile"
+    );
+    c.write(WOLF, &[(TEMPLATE, HUMAN)]);
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>, Option<i64>)>(true, verbs),
+        (Some(5), None, Some(1)),
+        "the template as the handler left it"
+    );
+    assert_eq!(
+        c.eval::<Option<i64>>(false, r#"return UnitReaction("target", "player")"#),
+        None,
+        "no host, no copy"
+    );
+}
+
+/// The range verbs measure the unit at the call: the wolf walks from 5 to 20 yards and back, and
+/// `CheckInteractDistance` and `CanInspect` follow with no push between.
+#[test]
+fn the_range_verbs_measure_the_unit_at_the_call() {
+    let mut c = client();
+    let near = r#"return CheckInteractDistance("target", 3)"#;
+    assert_eq!(c.eval::<Option<i64>>(true, near), Some(1));
+    c.place(WOLF, 20.0);
+    assert_eq!(c.eval::<Option<i64>>(true, near), None, "beyond 10 yards");
+    assert_eq!(
+        c.eval::<Option<i64>>(true, r#"return CheckInteractDistance("target", 4)"#),
+        Some(1),
+        "within 30"
+    );
+    // A creature is no inspect target at any distance (`0x4944d8`); we are.
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>)>(
+            true,
+            r#"return CanInspect("target"), CanInspect("player")"#
+        ),
+        (None, Some(1))
+    );
+}
+
+/// The language walk and the default language read the player at the call: a learn's known
+/// spells add Common, and a race byte the handler wrote names its own tongue.
+#[test]
+fn the_language_getters_read_the_player_at_the_call() {
+    let mut c = client();
+    let walk = "return GetNumLaguages(), GetLanguageByIndex(1)";
+    assert_eq!(c.eval::<(i64, Option<String>)>(true, walk), (0, None));
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .spells
+        .insert(COMMON);
+    assert_eq!(
+        c.eval::<(i64, Option<String>)>(true, walk),
+        (1, Some("Common".into())),
+        "the learn's spell, its line in the skill block"
+    );
+    c.write(ME, &[(SKILL_1, 0)]);
+    assert_eq!(
+        c.eval::<i64>(true, "return GetNumLaguages()"),
+        0,
+        "no skill line, no language (`0x5ec720`)"
+    );
+    let default = "return GetDefaultLanguage()";
+    assert_eq!(c.eval::<String>(true, default), "Common");
+    c.write(ME, &[(BYTES_0, 2)]);
+    assert_eq!(c.eval::<String>(true, default), "Orcish", "the race now");
+}
+
+/// `SMSG_SPELL_COOLDOWN` for us on [`PLAIN`], a packet of the cooldown lane's.
+fn cooldown() -> Vec<SessionEvent> {
+    vec![SessionEvent::SpellCooldowns {
+        caster: ME,
+        cooldowns: vec![(PLAIN, 8_000)],
+    }]
+}
+
+/// Far sight set, then cleared, between two cooldown packets: each values block signals inside
+/// itself, so the two signals interleave with the cooldown lane's as the packets came; a frame-end
+/// diff would find no change at all.
+#[test]
+fn the_far_sight_watch_signals_at_its_block() {
+    let mut c = client();
+    let eye = 0xF130_0000_0099_0001u64;
+    let anchor = |guid: u64| {
+        vec![values(
+            ME,
+            &[(FARSIGHT, guid as u32), (FARSIGHT + 1, (guid >> 32) as u32)],
+        )]
+    };
+    c.frame(vec![anchor(eye), cooldown(), anchor(0)]);
+    assert_eq!(
+        c.seen(),
+        [
+            "PLAYER_FARSIGHT_FOCUS_CHANGED",
+            "SPELL_UPDATE_COOLDOWN",
+            "PLAYER_FARSIGHT_FOCUS_CHANGED"
+        ]
+    );
+}
+
+/// Each learn of a language spell signals inside its handler, after the cooldown packet before it,
+/// the second too though it teaches a language already understood (`0x4b2659`); a spell of no
+/// language signals nothing.
+#[test]
+fn a_language_learn_signals_at_its_packet() {
+    let mut c = client();
+    let learn = |spell_id| vec![SessionEvent::SpellLearned { spell_id }];
+    c.frame(vec![
+        cooldown(),
+        learn(COMMON),
+        learn(PLAIN),
+        learn(COMMON_TOO),
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "SPELL_UPDATE_COOLDOWN",
+            "LANGUAGE_LIST_CHANGED",
+            "LANGUAGE_LIST_CHANGED"
+        ]
+    );
+}

@@ -1,5 +1,6 @@
-//! The relation feed: the relation functions the Lua API asks ([`RelationSnapshot`]), the held
-//! units copied and the reputation slots shared, pushed into the VM.
+//! The relation functions the six relation verbs ask, as of the call: the host's answer
+//! ([`super::live::UnitFeedLive`]) over the units the object manager holds then. These tests drive
+//! the verbs through it, and a harness with no host to lend seats a copy instead ([`seat`]).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -8,66 +9,27 @@ use bevy::prelude::*;
 
 use crate::net::{Guid, ObjectStore};
 use crate::target::relations::RelationSnapshot;
-use crate::target::RelUnit;
-use crate::ui_script::VmMemo;
 
-/// The units [`feed_unit_relations`] last pushed into a VM.
-#[derive(Default)]
-pub(super) struct RelationMemo {
-    units: HashMap<u64, RelUnit>,
-    /// The active player, whose own entity may carry no `Guid`.
-    me: Option<RelUnit>,
-}
-
-/// Push the relation functions over every held unit, ahead of the unit feeds that fire events
-/// (`PLAYER_TARGET_CHANGED`, `UNIT_FACTION`), so a handler that asks `UnitReaction` or
-/// `UnitCanAttack` judges this frame's units. A unit is read again only when its descriptor moved
-/// or a creature record arrived, and the copy is pushed only when a unit's relation facts, the set
-/// of units or a relation input moved.
-pub(super) fn feed_unit_relations(
+/// Seat a copy of the relation functions over every held unit, each frame: the stand-in, for a
+/// harness that lends no host, for the host's answers at the call.
+pub(crate) fn seat(
     mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
-    units: Query<(&Guid, Ref<ObjectStore>)>,
-    mut memo: Local<VmMemo<RelationMemo>>,
+    units: Query<(&Guid, &ObjectStore)>,
 ) {
     vm.turn(|script, world| {
         let Some(script) = script else {
             return;
         };
-        let (memo, vm_reset) = memo.get_reset(script);
-        let reread = world.records_changed();
-        let mut moved = false;
-        let mut held = 0;
-        for (guid, store) in &units {
-            if !store.is_unit() {
-                continue;
-            }
-            held += 1;
-            if !reread && !store.is_changed() && memo.units.contains_key(&guid.0) {
-                continue;
-            }
-            let unit = world.unit_of(guid.0, &store);
-            moved |= memo.units.insert(guid.0, unit) != Some(unit);
-        }
-        // A unit gone since: start over from the held ones.
-        if memo.units.len() != held {
-            memo.units = units
-                .iter()
-                .filter(|(_, s)| s.is_unit())
-                .map(|(g, s)| (g.0, world.unit_of(g.0, &s)))
-                .collect();
-            moved = true;
-        }
-        let me = world.me();
-        moved |= std::mem::replace(&mut memo.me, me) != me;
-        if !(moved || vm_reset || world.inputs_changed()) {
-            return;
-        }
-        let mut units = memo.units.clone();
-        if let Some(me) = me {
-            units.insert(me.guid, me);
+        let mut held: HashMap<u64, _> = units
+            .iter()
+            .filter(|(_, s)| s.is_unit())
+            .map(|(g, s)| (g.0, world.unit_of(g.0, s)))
+            .collect();
+        if let Some(me) = world.me() {
+            held.insert(me.guid, me);
         }
         script.set_unit_relations(Some(Rc::new(RelationSnapshot {
-            units,
+            units: held,
             factions: world.factions().cloned(),
             reputations: world.reputations().clone(),
             me: world.me_guid(),
@@ -78,14 +40,15 @@ pub(super) fn feed_unit_relations(
 
 #[cfg(test)]
 mod tests {
-    use benilla_ui::script::UnitState;
+    use bevy::prelude::*;
 
-    use super::*;
+    use benilla_ui::script::{UiScript, UnitState};
+
     use crate::names::NameCache;
-    use crate::net::{GuidIndex, Reputations, SelfGuid, SelfPlayer};
+    use crate::net::{Guid, GuidIndex, ObjectStore, Reputations, SelfGuid, SelfPlayer};
     use crate::spell::group_relation::GroupRoster;
     use crate::target::relations::fixture::*;
-    use benilla_ui::script::UiScript;
+    use crate::target::RelUnit;
 
     const ME: u64 = 0x10;
     const FOE: u64 = 0x11;
@@ -128,20 +91,12 @@ mod tests {
             );
         }
         world.insert_non_send_resource(script);
-        feed(&mut world);
         world
     }
 
-    /// One frame of the feed, its memory kept from the last.
-    fn feed(world: &mut World) {
-        world.run_system_cached(feed_unit_relations).unwrap();
-    }
-
-    fn ask(world: &World, call: &str) -> Option<i64> {
-        world
-            .non_send_resource::<UiScript>()
-            .eval::<Option<i64>>(&format!("return {call}"))
-            .unwrap()
+    /// `call`'s answer with the host lent, the units as the world holds them now.
+    fn ask(world: &mut World, call: &str) -> Option<i64> {
+        crate::ui_unit::live::eval_lent(world, &format!("return {call}"))
     }
 
     /// A duel through the Lua verbs: the opponent and his pet are hostile and attackable from
@@ -160,26 +115,34 @@ mod tests {
             ("mouseover", "player"),
         ] {
             assert_eq!(
-                ask(&world, &format!(r#"UnitReaction("{a}", "{b}")"#)),
+                ask(&mut world, &format!(r#"UnitReaction("{a}", "{b}")"#)),
                 Some(2)
             );
             assert_eq!(
-                ask(&world, &format!(r#"UnitIsEnemy("{a}", "{b}")"#)),
+                ask(&mut world, &format!(r#"UnitIsEnemy("{a}", "{b}")"#)),
                 Some(1)
             );
             assert_eq!(
-                ask(&world, &format!(r#"UnitCanAttack("{a}", "{b}")"#)),
+                ask(&mut world, &format!(r#"UnitCanAttack("{a}", "{b}")"#)),
                 Some(1)
             );
         }
         // The duel ends: the teams clear, and two humans are friends that cannot attack.
         let foe_entity = world.resource::<GuidIndex>().0[&FOE];
         *world.get_mut::<ObjectStore>(foe_entity).unwrap() = store_of(&player(FOE, HUMAN));
-        feed(&mut world);
-        assert_eq!(ask(&world, r#"UnitReaction("target", "player")"#), Some(5));
-        assert_eq!(ask(&world, r#"UnitCanAttack("player", "target")"#), None);
+        assert_eq!(
+            ask(&mut world, r#"UnitReaction("target", "player")"#),
+            Some(5)
+        );
+        assert_eq!(
+            ask(&mut world, r#"UnitCanAttack("player", "target")"#),
+            None
+        );
         // The pet's owner moved too: it answers with him.
-        assert_eq!(ask(&world, r#"UnitCanAttack("player", "mouseover")"#), None);
+        assert_eq!(
+            ask(&mut world, r#"UnitCanAttack("player", "mouseover")"#),
+            None
+        );
     }
 
     /// A contested player: a guard whose template turns on contested players is hostile to him
@@ -187,11 +150,14 @@ mod tests {
     #[test]
     fn a_contested_player_is_the_guards_enemy_one_way() {
         let me = flagged(player(ME, HUMAN), CONTESTED);
-        let world = world(me, &[creature(GUARD_NPC, GUARD)]);
-        assert_eq!(ask(&world, r#"UnitReaction("npc", "player")"#), Some(2));
-        assert_eq!(ask(&world, r#"UnitCanAttack("npc", "player")"#), Some(1));
-        assert_eq!(ask(&world, r#"UnitReaction("player", "npc")"#), Some(5));
-        assert_eq!(ask(&world, r#"UnitCanAttack("player", "npc")"#), None);
+        let mut world = world(me, &[creature(GUARD_NPC, GUARD)]);
+        assert_eq!(ask(&mut world, r#"UnitReaction("npc", "player")"#), Some(2));
+        assert_eq!(
+            ask(&mut world, r#"UnitCanAttack("npc", "player")"#),
+            Some(1)
+        );
+        assert_eq!(ask(&mut world, r#"UnitReaction("player", "npc")"#), Some(5));
+        assert_eq!(ask(&mut world, r#"UnitCanAttack("player", "npc")"#), None);
     }
 
     /// Two free-for-all players attack each other, and a charmed player of our side cooperates
@@ -199,20 +165,29 @@ mod tests {
     #[test]
     fn free_for_all_and_a_charm_reach_the_verbs() {
         let me = flagged(player(ME, HUMAN), FFA);
-        let world = world(me, &[flagged(player(FOE, HUMAN), FFA)]);
-        assert_eq!(ask(&world, r#"UnitCanAttack("target", "player")"#), Some(1));
-        assert_eq!(ask(&world, r#"UnitIsFriend("player", "target")"#), None);
+        let mut world = world(me, &[flagged(player(FOE, HUMAN), FFA)]);
         assert_eq!(
-            ask(&world, r#"UnitCanCooperate("player", "target")"#),
+            ask(&mut world, r#"UnitCanAttack("target", "player")"#),
+            Some(1)
+        );
+        assert_eq!(ask(&mut world, r#"UnitIsFriend("player", "target")"#), None);
+        assert_eq!(
+            ask(&mut world, r#"UnitCanCooperate("player", "target")"#),
             Some(1)
         );
         let charmed = RelUnit {
             charmed_by: FOE_PET,
             ..player(FOE, HUMAN)
         };
-        let world = self::world(player(ME, HUMAN), &[charmed]);
-        assert_eq!(ask(&world, r#"UnitCanCooperate("player", "target")"#), None);
-        assert_eq!(ask(&world, r#"UnitCanCooperate("target", "player")"#), None);
+        let mut world = self::world(player(ME, HUMAN), &[charmed]);
+        assert_eq!(
+            ask(&mut world, r#"UnitCanCooperate("player", "target")"#),
+            None
+        );
+        assert_eq!(
+            ask(&mut world, r#"UnitCanCooperate("target", "player")"#),
+            None
+        );
     }
 
     /// `UnitIsPVP` asks `IsPvP` of a held unit (`0x5164d1`), as the selector's PvP split does: a pet
@@ -221,36 +196,39 @@ mod tests {
     #[test]
     fn unit_is_pvp_is_the_owners_flag_on_a_pet_and_none_under_bit_8() {
         let foe = with_flags(player(FOE, HUMAN), PVP);
-        let world = self::world(player(ME, HUMAN), &[foe, pet_of(FOE_PET, &foe)]);
-        assert_eq!(ask(&world, r#"UnitIsPVP("target")"#), Some(1));
+        let mut world = self::world(player(ME, HUMAN), &[foe, pet_of(FOE_PET, &foe)]);
+        assert_eq!(ask(&mut world, r#"UnitIsPVP("target")"#), Some(1));
         assert_eq!(
-            ask(&world, r#"UnitIsPVP("mouseover")"#),
+            ask(&mut world, r#"UnitIsPVP("mouseover")"#),
             Some(1),
             "the owner's"
         );
-        assert_eq!(ask(&world, r#"UnitIsPVP("npc")"#), None, "not held");
+        assert_eq!(ask(&mut world, r#"UnitIsPVP("npc")"#), None, "not held");
         let plain = player(FOE, HUMAN);
-        let world = self::world(
+        let mut world = self::world(
             player(ME, HUMAN),
             &[plain, with_flags(pet_of(FOE_PET, &plain), PVP)],
         );
-        assert_eq!(ask(&world, r#"UnitIsPVP("mouseover")"#), None, "its own");
+        assert_eq!(
+            ask(&mut world, r#"UnitIsPVP("mouseover")"#),
+            None,
+            "its own"
+        );
         let thrall = RelUnit {
             charmed_by: FOE,
             ..with_flags(player(FOE_PET, HUMAN), PVP | IMMUNE_TO_PLAYER)
         };
-        let world = self::world(player(ME, HUMAN), &[foe, thrall]);
-        assert_eq!(ask(&world, r#"UnitIsPVP("mouseover")"#), None, "bit 8");
+        let mut world = self::world(player(ME, HUMAN), &[foe, thrall]);
+        assert_eq!(ask(&mut world, r#"UnitIsPVP("mouseover")"#), None, "bit 8");
     }
 
     /// A unit that leaves the object manager leaves the relation functions: the verbs answer nil.
     #[test]
     fn a_despawned_unit_answers_nil() {
         let mut world = world(player(ME, HUMAN), &[creature(GUARD_NPC, ORC)]);
-        assert_eq!(ask(&world, r#"UnitReaction("npc", "player")"#), Some(2));
+        assert_eq!(ask(&mut world, r#"UnitReaction("npc", "player")"#), Some(2));
         let e = world.resource::<GuidIndex>().0[&GUARD_NPC];
         world.despawn(e);
-        feed(&mut world);
-        assert_eq!(ask(&world, r#"UnitReaction("npc", "player")"#), None);
+        assert_eq!(ask(&mut world, r#"UnitReaction("npc", "player")"#), None);
     }
 }

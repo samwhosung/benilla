@@ -90,15 +90,17 @@ struct Viewer {
 
 /// The active player toward `u`, through the host's relation functions as `UnitCanAttack` and
 /// `UnitCanAssist` ask them.
-fn viewer(model: &Model, u: &UnitState) -> Option<Viewer> {
+fn viewer(lua: &Lua, model: &Model, u: &UnitState) -> Option<Viewer> {
     let me = model.unit_guids.player;
     if me == 0 {
         return None;
     }
     let player = model.snapshot_unit("player");
-    let rel = model.unit_relations.as_deref();
     let ask = |f: &dyn Fn(&dyn super::UnitRelations) -> Option<bool>| {
-        u.has_object && rel.and_then(f).unwrap_or(false)
+        u.has_object
+            && super::unit::with_relations(lua, model, f)
+                .flatten()
+                .unwrap_or(false)
     };
     Some(Viewer {
         drunk: player.map_or(0, |p| p.drunk),
@@ -239,7 +241,7 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
                 .and_then(|row| row.tooltip.party.clone());
             u
         });
-        let viewer = unit.as_ref().and_then(|u| viewer(&model, u));
+        let viewer = unit.as_ref().and_then(|u| viewer(lua, &model, u));
         let req = crate::script::requirements::player_req(lua, &model);
         (unit, viewer, req, model.unit_guids.player)
     };

@@ -188,7 +188,7 @@ impl Scene {
         self.roster.party = members.to_vec();
     }
 
-    /// The scene as the Lua API's relation functions: the copy `feed_unit_relations` pushes.
+    /// The scene as the Lua API's relation functions, a copy seated with no host lent.
     pub(crate) fn snapshot(&self) -> RelationSnapshot {
         RelationSnapshot {
             units: self.units.clone(),

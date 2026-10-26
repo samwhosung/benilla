@@ -38,6 +38,15 @@ impl DefaultLanguages {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// A hand-built table for tests: `(race, name)` rows.
+    pub fn from_rows(rows: &[(u32, &str)]) -> Self {
+        Self(
+            rows.iter()
+                .map(|(race, name)| (*race, Some((*name).to_string())))
+                .collect(),
+        )
+    }
 }
 
 fn languages_schema() -> Schema {

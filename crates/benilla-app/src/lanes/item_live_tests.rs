@@ -410,9 +410,14 @@ fn client(window: Window) -> Client {
     }
     // Bob shows the rolled sword in his main hand (`PLAYER_VISIBLE_ITEM_16_*`).
     let visible = FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 12 * 15;
+    // Both Human, so the host's reach holds Bob cooperative (`0x4944e4`), beside us.
+    use crate::target::relations::fixture::{factions, HUMAN};
+    c.app.insert_resource(factions());
+    seats.push((35, HUMAN));
     let bob = [
         // `OBJECT_FIELD_TYPE`: object, unit, player.
         (2, 0x19),
+        (35, HUMAN),
         (visible + 2, 25),
         (visible + 3, ENCHANT),
         (visible + 10, ROLL),
@@ -457,7 +462,7 @@ fn client(window: Window) -> Client {
     }
     c.frame(vec![]);
     c.frame(vec![]);
-    // Bob within inspect range, as the unit feed's reach would hold a friendly player beside us.
+    // Bob within inspect range, as the host's reach holds him, for the snapshot's side.
     c.app
         .world_mut()
         .non_send_resource_mut::<UiScript>()

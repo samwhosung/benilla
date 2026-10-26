@@ -403,7 +403,6 @@ fn each_at_war_listener_reads_the_reaction_its_own_message_left() {
         ],
     );
     units::frame(&mut app, vec![]);
-    crate::ui_unit::run_feed_unit_relations_once(app.world_mut());
     assert_eq!(
         units::frame(&mut app, vec![at_war(flag::AT_WAR), at_war(0)]),
         ["UPDATE_FACTION:2:1", "UPDATE_FACTION:5:nil"],

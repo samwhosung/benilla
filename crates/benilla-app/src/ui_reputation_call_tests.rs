@@ -223,7 +223,6 @@ fn the_requests_write_the_slots_flags() {
 /// between (`0x4d5fd0` signals nothing).
 #[test]
 fn the_reaction_after_a_toggle_reads_the_bit_the_toggle_wrote() {
-    use crate::target::relations::{RelUnit, RelationSnapshot};
     use benilla_formats::{FactionCatalog, FactionTemplate};
     use benilla_ui::script::UnitState;
     use std::collections::HashMap;
@@ -251,35 +250,28 @@ fn the_reaction_after_a_toggle_reads_the_bit_the_toggle_wrote() {
     .with_reputation(72, 19, 1, 4000)
     .with_faction_text(72, 469, "Stormwind", "");
     let factions = crate::target::Factions::from_catalog(catalog);
-    let (mut app, _rx) = client(0, flag::VISIBLE, state());
-    app.insert_resource(factions.clone());
-    let me = RelUnit {
-        guid: ME,
-        is_player: true,
-        flags: 0x8,
-        template: Some(1),
-        race: 1,
-        class: 1,
-        ..Default::default()
-    };
-    let guard = RelUnit {
-        guid: GUARD,
-        template: Some(11),
-        ..Default::default()
-    };
-    let snapshot = RelationSnapshot {
-        units: HashMap::from([(ME, me), (GUARD, guard)]),
-        factions: Some(factions),
-        reputations: app.world().resource::<Reputations>().clone(),
-        me: Some(ME),
-        roster: Default::default(),
-    };
+    // A player-controlled human of template 1, and the guard held by the object manager.
+    let (mut app, _rx) = client(0x8, flag::VISIBLE, state());
+    app.insert_resource(factions);
+    let world = app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .get_mut::<crate::net::ObjectStore>(me)
+        .unwrap()
+        .0
+        .merge(ObjectFields::from_pairs(&[(35, 1)]));
+    let guard = world
+        .spawn((
+            Guid(GUARD),
+            crate::net::ObjectStore(ObjectFields::from_pairs(&[(2, 0x9), (35, 11)])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(GUARD, guard);
     app.world_mut()
         .resource_mut::<crate::target::Selection>()
         .guid = Some(GUARD);
     {
         let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-        script.set_unit_relations(Some(std::rc::Rc::new(snapshot)));
         for (token, guid) in [("player", ME), ("target", GUARD)] {
             script.set_unit(
                 token,

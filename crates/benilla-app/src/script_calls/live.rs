@@ -128,6 +128,8 @@ live_reads! {
         item_sets: crate::ui_items::ItemSetLive<'static, 'static>,
         /// The questgiver panel's cells, its rows' records and the turn-in's held counts.
         quest_giver: crate::ui_quest::QuestGiverLive<'static, 'static>,
+        /// The relation functions, the reach, the control exemption and the languages.
+        unit_feeds: Option<crate::ui_unit::live::UnitFeedLive<'static, 'static>>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

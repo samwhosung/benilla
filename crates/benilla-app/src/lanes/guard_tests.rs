@@ -339,14 +339,12 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
     // XP pair, the rest state, the combo points, the bar toggles and the worn display read the
     // live store, and every snapshot its names, relations, selection and group; the world entry's
-    // pet reset reads the bar's guid and the attack latch as the frame left them.
+    // pet reset reads the bar's guid and the attack latch, and its replay's language legs the
+    // known spells, as the frame left them.
     ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
-        "ui_guild::GuildState", "ui_party::GroupState", "ui_pet::PetAttackLatch",
-        "ui_pet::PetBar"]),
-    ("::ui_unit::feed_unit_reach", &["Transform", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
-        "ui_party::GroupState"]),
+        "ui_action::PlayerActions", "ui_guild::GuildState", "ui_party::GroupState",
+        "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
     // The chain ends' snapshots read their stores as of the drain's place (`ui_unit::views`); their
     // names, relations, raid marks and guild read as the frame left them.
     ("::ui_unit::held::feed_chain_units", &["names::NameCache", "net::GuidIndex",
@@ -355,12 +353,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_unit::held::feed_name_candidates", &["names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
         "ui_guild::GuildState", "ui_party::GroupState"]),
-    ("::ui_unit::control_gate::feed_control_bypass", &["net::ObjectStore"]),
-    ("::ui_unit::feed_farsight_focus", &["net::ObjectStore"]),
-    ("::ui_unit::relations::feed_unit_relations", &["names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations"]),
-    ("::ui_unit::feed_default_language", &["net::ObjectStore"]),
-    ("::ui_unit::feed_known_languages", &["net::ObjectStore", "ui_action::PlayerActions"]),
     // The party and raid tokens read the members' stores, records and the roster's cells as of
     // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
     // the roster push is their no-host fallback, and every snapshot's names and relations read as
@@ -610,6 +602,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "bevy_time::time::Time<bevy_time::real::Real>",
     // The stores as of the drain's place, which the call host's token lookups read.
     "::ui_unit::views::UnitViews",
+    // `Languages.dbc` and the race's base languages, loaded once, which the language getters
+    // read through the host.
+    "::ui_unit::LanguagesRes",
+    "::ui_unit::DefaultLanguagesRes",
     // The area under the player, which the host's raid rows read for our own zone (`0xb4e314`).
     "::CurrentArea",
     // The `raidFilter` books the call host's aura walk reads (`0x4b3870`, `0x4b3920`), which

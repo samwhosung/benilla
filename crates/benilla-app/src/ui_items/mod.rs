@@ -697,7 +697,17 @@ pub(crate) fn send_item_use(
     // `0x5d8d00`'s requirement check (`0x5d8e0e`) and control gate (`0x5d8eaa`), past the
     // quest-starter arm (`0x5d8dcc`), which runs before them.
     if it.start_quest == 0 {
-        if let Some(key) = script.item_use_refusal(it.entry, it.use_spell.unwrap_or(0)) {
+        // The control gate's exemption off the caster now (`0x5d8ef9`-`0x5d8f66`).
+        let use_spell = it.use_spell.unwrap_or(0);
+        let exempt = ladder.spells.as_ref().is_some_and(|s| {
+            s.catalog
+                .get(use_spell)
+                .zip(ctx.rel.self_store)
+                .is_some_and(|(cast, store)| {
+                    crate::ui_unit::control_gate::exempts_lost_control(&s.catalog, cast, &store.0)
+                })
+        });
+        if let Some(key) = script.item_use_refusal(it.entry, use_spell, exempt) {
             debug!("ui_items: item use refused — {key}");
             ui_errors.push(crate::ui_action::UiError::key(key));
             return false;

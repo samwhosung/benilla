@@ -514,20 +514,16 @@ pub(super) fn inventory_reader(lua: &Lua, model: &Model, token: &str) -> Option<
     if token.eq_ignore_ascii_case("player") {
         return Some(InvReader::Own);
     }
-    model.inventory_reader_of(super::unit::guid_of(lua, model, token).ok().flatten()?)
+    let guid = super::unit::guid_of(lua, model, token).ok().flatten()?;
+    if guid == model.unit_guids.player {
+        return Some(InvReader::Own);
+    }
+    let reach = super::inspect::reach_of(lua, model, guid)?;
+    (reach.inspectable && super::inspect::in_inspect_range(&reach))
+        .then_some(InvReader::Visible(guid))
 }
 
 impl Model {
-    /// [`InvReader`] for the unit `guid`, `None` for one the getters may not read.
-    fn inventory_reader_of(&self, guid: u64) -> Option<InvReader> {
-        if guid == self.unit_guids.player {
-            return Some(InvReader::Own);
-        }
-        let reach = self.unit_reach.get(&guid)?;
-        (reach.inspectable && super::inspect::in_inspect_range(reach))
-            .then_some(InvReader::Visible(guid))
-    }
-
     /// The active player's item at live-API id `slot` ([`Self::inv_slot_as`] of our own).
     pub(super) fn own_inv_view(&self, slot: usize) -> Option<InvSlotView> {
         self.own_inv_slot(slot)

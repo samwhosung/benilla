@@ -680,6 +680,8 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::AREA_SPIRIT_HEALER_OUT_OF_RANGE => "AREA_SPIRIT_HEALER_OUT_OF_RANGE",
         id::INSPECT_HONOR_UPDATE => "INSPECT_HONOR_UPDATE",
         id::PLAYERBANKBAGSLOTS_CHANGED => "PLAYERBANKBAGSLOTS_CHANGED",
+        id::PLAYER_FARSIGHT_FOCUS_CHANGED => "PLAYER_FARSIGHT_FOCUS_CHANGED",
+        id::LANGUAGE_LIST_CHANGED => "LANGUAGE_LIST_CHANGED",
         _ => return None,
     })
 }
@@ -1078,27 +1080,6 @@ mod tests {
     #[test]
     fn the_drunk_watcher_signals_the_target_and_speaks() {
         const OTHER: u64 = 0x08;
-        struct Attackable;
-        impl benilla_ui::script::UnitRelations for Attackable {
-            fn holds(&self, guid: u64) -> bool {
-                guid == MOB || guid == ME
-            }
-            fn reaction(&self, _: u64, _: u64) -> Option<u8> {
-                None
-            }
-            fn can_attack(&self, a: u64, b: u64) -> Option<bool> {
-                Some(a == ME && b == MOB)
-            }
-            fn can_assist(&self, _: u64, _: u64) -> Option<bool> {
-                None
-            }
-            fn can_cooperate(&self, _: u64, _: u64) -> Option<bool> {
-                None
-            }
-            fn is_pvp(&self, _: u64) -> Option<bool> {
-                None
-            }
-        }
         let mut app = hosted_world(benilla_ui::script::UnitGuids {
             target: MOB,
             ..seated()
@@ -1106,9 +1087,28 @@ mod tests {
         app.world_mut()
             .resource_mut::<crate::names::NameCache>()
             .insert_player(OTHER, "Bob".into(), None);
+        // A Human us and an Orc mob, which the host's relation functions hold attackable.
         {
-            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-            script.set_unit_relations(Some(std::rc::Rc::new(Attackable)));
+            use crate::target::relations::fixture::{creature, factions, player, store_of};
+            use crate::target::relations::fixture::{HUMAN, ORC};
+            let world = app.world_mut();
+            world.insert_resource(factions());
+            let me = world
+                .spawn((
+                    crate::net::SelfPlayer,
+                    crate::net::Guid(ME),
+                    store_of(&player(ME, HUMAN)),
+                ))
+                .id();
+            let mob = world
+                .spawn((crate::net::Guid(MOB), store_of(&creature(MOB, ORC))))
+                .id();
+            let mut index = world.resource_mut::<crate::net::GuidIndex>();
+            index.0.insert(ME, me);
+            index.0.insert(MOB, mob);
+        }
+        {
+            let script = app.world_mut().non_send_resource_mut::<UiScript>();
             script
                 .run(
                     r#"
@@ -1333,124 +1333,6 @@ mod tests {
         let out = s.eval::<Vec<String>>("return SEEN").unwrap();
         s.run("SEEN = {}").unwrap();
         out
-    }
-
-    /// A target held for the first time answers inside its own `PLAYER_TARGET_CHANGED`, whose
-    /// inspect handler re-shows the window (`Blizzard_InspectUI.lua:29-31`): `CanInspect` reads
-    /// the new target's object (`0x48a1b0` → `0x4944a0`), so its reach is in the VM before the
-    /// event; the slot getters read the object through the lent host
-    /// (`lanes::inspect_live_tests`). The frame runs its feeds in the order the client schedules
-    /// them.
-    #[test]
-    fn a_new_targets_reach_answers_inside_its_target_event() {
-        use crate::game_plugins::schedule_tests::headless_client;
-        use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
-        use crate::target::relations::fixture::{factions, HUMAN};
-        use crate::target::Selection;
-        use crate::test_support::runs_before;
-        use benilla_protocol::messages::ObjectFields;
-        const OTHER: u64 = 0x1002;
-        /// `OBJECT_FIELD_TYPE` and `UNIT_FIELD_FACTIONTEMPLATE`.
-        const OBJECT_TYPE: u16 = 2;
-        const TEMPLATE: u16 = 35;
-
-        let mut client = headless_client();
-        let reach_first = runs_before(
-            &mut client,
-            super::super::feed_unit_reach,
-            super::super::fire_unit_events,
-        );
-        drop(client);
-
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(crate::client_state::ClientState::InWorld)
-            .init_resource::<Selection>()
-            .init_resource::<crate::ui_pet::PetBar>()
-            .init_resource::<GuidIndex>()
-            .init_resource::<crate::net::Reputations>()
-            .init_resource::<crate::ui_party::GroupState>()
-            .init_resource::<super::super::UnitFeedState>()
-            .init_resource::<crate::items::Items>()
-            .init_resource::<crate::names::NameCache>()
-            .insert_resource(crate::net::SelfGuid(Some(ME)))
-            .insert_resource(factions())
-            .insert_resource(NetCommands(tx))
-            .add_plugins(crate::ui_aura::UiAuraPlugin);
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_TARGET_CHANGED")
-                f:SetScript("OnEvent", function()
-                    table.insert(SEEN, tostring(CanInspect("target")))
-                end)
-            "#,
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-
-        // We at the origin; a Human 3 yards off, whom no token names yet.
-        let mut spawn = |guid: u64, pairs: &[(u16, u32)], yards: f32| {
-            let e = app
-                .world_mut()
-                .spawn((
-                    Guid(guid),
-                    ObjectStore(ObjectFields::from_pairs(pairs)),
-                    Transform::from_xyz(yards, 0.0, 0.0),
-                ))
-                .id();
-            app.world_mut()
-                .resource_mut::<GuidIndex>()
-                .0
-                .insert(guid, e);
-            e
-        };
-        let me = spawn(ME, &[(OBJECT_TYPE, 0x19), (TEMPLATE, HUMAN)], 0.0);
-        let other = spawn(OTHER, &[(OBJECT_TYPE, 0x19), (TEMPLATE, HUMAN)], 3.0);
-        app.world_mut().entity_mut(me).insert(SelfPlayer);
-
-        // One frame of the feeds after the aura feed's seat, in the client's order.
-        let feeds = |app: &mut App, target_changed: bool| {
-            app.update();
-            if target_changed {
-                app.world_mut().resource_scope(
-                    |world, mut feed: Mut<super::super::UnitFeedState>| {
-                        let script = world.non_send_resource::<UiScript>();
-                        feed.vm.get(script).pending.target_changed = true;
-                    },
-                );
-            }
-            let world = app.world_mut();
-            if reach_first {
-                world
-                    .run_system_once(super::super::feed_unit_reach)
-                    .unwrap();
-            }
-            world
-                .run_system_once(super::super::fire_unit_events)
-                .unwrap();
-            if !reach_first {
-                world
-                    .run_system_once(super::super::feed_unit_reach)
-                    .unwrap();
-            }
-        };
-        feeds(&mut app, false);
-        app.insert_resource(Selection {
-            target: Some(other),
-            guid: Some(OTHER),
-            ..Default::default()
-        });
-        feeds(&mut app, true);
-
-        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-        s.resolve();
-        let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
-        assert_eq!(seen, ["1"]);
     }
 
     /// A values block with new XP: `PLAYER_XP_UPDATE`'s handler reads the new `UnitXP`, because

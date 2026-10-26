@@ -7,7 +7,7 @@
 use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
 use benilla_protocol::messages::InspectHonorStats;
 use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
-use benilla_ui::script::{UiScript, UnitReach};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use super::unit_view_tests::{client, created, frame, health, values};
@@ -33,7 +33,7 @@ fn unhosted<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, chunk: &str) -> T 
     crate::script_calls::eval_in_vm(app.world(), chunk)
 }
 
-/// [`client`] with [`MATE`] created wearing the helm and selected, its reach in the VM, and the
+/// [`client`] with [`MATE`] created wearing the helm and selected, cooperative and in range, and the
 /// helm's and the crown's records cached.
 fn inspecting() -> App {
     let mut app = mate_beside();
@@ -47,7 +47,7 @@ fn inspecting() -> App {
     app
 }
 
-/// [`client`] with [`MATE`] created wearing the helm, unselected, its reach in the VM, and the
+/// [`client`] with [`MATE`] created wearing the helm, unselected, cooperative and in range, and the
 /// helm's and the crown's records cached.
 fn mate_beside() -> App {
     let mut app = client();
@@ -59,13 +59,12 @@ fn mate_beside() -> App {
     let mut items = world.resource_mut::<crate::items::Items>();
     items.insert_template(HELM, Some(crate::items::test_template("Helm")));
     items.insert_template(CROWN, Some(crate::items::test_template("Crown")));
-    world.non_send_resource_mut::<UiScript>().set_unit_reach_of(
-        MATE,
-        UnitReach {
-            dist_sq: 4.0,
-            inspectable: true,
-        },
-    );
+    // Both Human beside us, so the host's reach holds MATE cooperative (`0x4944e4`) and in range.
+    use crate::target::relations::fixture::{factions, HUMAN};
+    const TEMPLATE: u16 = 35;
+    app.insert_resource(factions());
+    write(&mut app, ME, &[(TEMPLATE, HUMAN)]);
+    write(&mut app, MATE, &[(TEMPLATE, HUMAN)]);
     app
 }
 

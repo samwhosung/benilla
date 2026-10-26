@@ -805,7 +805,8 @@ mod tests;
 pub use object::{UnitIdentityRead, UnitObject, UnitObjectRead};
 pub(crate) use record::read_record;
 pub use record::{PlayerNameQuery, UnitRecord, UnitRecordQuery};
-pub use relations::UnitRelations;
+pub(crate) use relations::with_relations;
+pub use relations::{RelationAnswer, RelationQuery, UnitRelations};
 pub use resolve::{
     bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,
     UnitGuids, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,

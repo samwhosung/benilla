@@ -552,6 +552,8 @@ mod token_live_tests;
 #[cfg(test)]
 mod trainer_live_tests;
 #[cfg(test)]
+mod unit_feed_live_tests;
+#[cfg(test)]
 mod unit_live_tests;
 #[cfg(test)]
 mod unit_view_tests;

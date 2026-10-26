@@ -265,8 +265,8 @@ pub use char_stats::{
 };
 pub use chat_misc::EmoteRequest;
 pub use chat_send::{
-    expand_target_tokens, validate_escapes, ChatGroup, ChatSend, InvalidEscape, INVALID_ESCAPE,
-    SEND_CHAT_TOKENS,
+    expand_target_tokens, validate_escapes, ChatGroup, ChatSend, DefaultLanguageQuery,
+    InvalidEscape, KnownLanguagesQuery, INVALID_ESCAPE, SEND_CHAT_TOKENS,
 };
 pub use chat_types::ChatTypeColor;
 pub use chat_window::{message_group_index, ChatWindowLook, MESSAGE_GROUPS};
@@ -353,7 +353,7 @@ pub use worldmap_arrow::ARROW_MODEL;
 
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
 pub(crate) use font_block::{face_loads, own_font_lua, SAME_FONT_HEIGHT};
-pub use inspect::{InspectCall, UnitReach, VisibleSlotQuery};
+pub use inspect::{InspectCall, UnitReach, UnitReachQuery, VisibleSlotQuery};
 pub use instance::InstanceCall;
 pub use item_stats::{
     item_usable, ItemRecipe, ItemSetQuery, ItemSetView, ItemSpellLine, ItemTemplateView,
@@ -473,11 +473,12 @@ pub use types::{
 pub use unit::by_name::{self, NameCandidate, SeatedSelection};
 pub use unit::{
     grey_band, level_reads_unknown, parse_unit_token, power_token, resolve_unit_in, unit_is_grey,
-    ObjectNameQuery, PlayerNameQuery, PlayerRecord, SelectionGlobals, SelectionQuery,
-    SelectionRequest, UnitBase, UnitGuids, UnitIdentityRead, UnitObject, UnitObjectRead,
-    UnitRecord, UnitRecordQuery, UnitRelations, UnitState, UnitTokenGlobals, UnitTokenObjects,
-    UnitTokenParse,
+    ObjectNameQuery, PlayerNameQuery, PlayerRecord, RelationAnswer, RelationQuery,
+    SelectionGlobals, SelectionQuery, SelectionRequest, UnitBase, UnitGuids, UnitIdentityRead,
+    UnitObject, UnitObjectRead, UnitRecord, UnitRecordQuery, UnitRelations, UnitState,
+    UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
+pub use use_gates::ControlBypassQuery;
 pub use weapon_enchant::WeaponEnchant;
 pub use who_sort::{WhoSortChain, WhoSortKey};
 pub use worldmap::{
