@@ -420,6 +420,10 @@ struct PatErr(&'static str);
 
 type M<T> = Result<T, PatErr>;
 
+/// `match_class` (`0x7fc930`). Both callers pass the pattern's letter sign-extended (`0x7fc8c6`,
+/// `0x7fcbc6`), `tolower` (`0x40f92b`) leaves a negative alone, so a byte of 0x80 or more misses
+/// the class switch and the default compares it with the zero-extended subject byte (`0x7fcb38`):
+/// it never matches.
 fn class_match(c: u8, cl: u8) -> bool {
     let res = match cl.to_ascii_lowercase() {
         b'a' => c.is_ascii_alphabetic(),
@@ -432,7 +436,7 @@ fn class_match(c: u8, cl: u8) -> bool {
         b'w' => c.is_ascii_alphanumeric(),
         b'x' => c.is_ascii_hexdigit(),
         b'z' => c == 0,
-        _ => return cl == c,
+        _ => return cl == c && cl < 0x80,
     };
     if cl.is_ascii_lowercase() {
         res
@@ -770,7 +774,8 @@ fn first_literal(pat: &[u8], p: usize) -> Option<u8> {
     let (c, ep) = match *pat.get(p)? {
         b'%' => {
             let c = *pat.get(p + 1)?;
-            if c == 0 || c.is_ascii_alphanumeric() {
+            // An escaped byte of 0x80 or more matches nothing, so it is no literal to look for.
+            if c == 0 || c >= 0x80 || c.is_ascii_alphanumeric() {
                 return None;
             }
             (c, p + 2)

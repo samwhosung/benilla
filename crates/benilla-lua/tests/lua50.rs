@@ -551,3 +551,30 @@ fn string_positions_are_32_bit() {
     assert_eq!(run("return string.sub('hello', 2^70)"), "hello");
     assert_eq!(run("return string.find('abc', 'a', 2^70)"), "1,1");
 }
+
+/// `match_class` takes the escaped byte sign-extended from `singlematch` (`0x7fcbc6`) and
+/// `matchbracketclass` (`0x7fc8c6`); a byte of 0x80 or more reaches its default case and compares
+/// unequal with the subject byte (`0x7fcb38`): it never matches, inside brackets or out.
+#[test]
+fn an_escaped_high_byte_matches_nothing() {
+    assert_eq!(run("return string.find('\\195\\169', '%\\195')"), "nil");
+    assert_eq!(run("return string.find('\\195\\169', '[%\\195]')"), "nil");
+    assert_eq!(run("return string.find('\\195\\169', '[^%\\195]')"), "1,1");
+    assert_eq!(
+        run("return string.gsub('Zo\\195\\171', '%\\195%\\171', 'e')"),
+        "Zo\u{eb},0"
+    );
+    // With `*`, `-` or `?` after it, it still matches the empty string.
+    assert_eq!(run("return string.find('abc', '%\\195*b')"), "2,2");
+    assert_eq!(run("return string.find('abc', '%\\195-b')"), "2,2");
+    assert_eq!(run("return string.find('abc', '%\\195?b')"), "2,2");
+    // An escaped ASCII byte is unchanged, and a literal high byte still matches itself.
+    assert_eq!(run("return string.find('a.c', '%.')"), "2,2");
+    assert_eq!(run("return string.find('\\195\\169', '\\195\\169')"), "1,2");
+    // A name escaped with `(%W)` never matches itself when it has a high byte.
+    assert_eq!(
+        run("local n = '\\195\\169x' local p = string.gsub(n, '(%W)', '%%%1') \
+             return p == '%\\195%\\169x', string.find(n, p)"),
+        "true,nil"
+    );
+}
