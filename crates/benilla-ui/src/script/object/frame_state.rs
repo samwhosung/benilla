@@ -13,6 +13,12 @@ use crate::widget::FrameKind;
 
 use super::{draw_layer_from_str, frame_handle_of, frame_wrapper, strata_from_str};
 
+/// `Usage: %s:SetBackdrop(…)` (`0x8798a8`), the line after the receiver's name.
+const SET_BACKDROP_USAGE: &str =
+    "SetBackdrop(nil or {bgFile = \"bgFile\", edgeFile = \"edgeFile\", \
+     tile = false, tileSize = 0, edgeSize = 32, insets = { left = 0, right = 0, top = 0, \
+     bottom = 0 }})";
+
 /// Populate `m`'s visibility, hierarchy, strata, backdrop and input methods.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Show / Hide / visibility. No `SetShown`: no 1.12 method table registers it.
@@ -288,8 +294,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Strata / level / scale / alpha
     m.set(
         "SetFrameStrata",
-        lua.create_function(|lua, (this, strata): (Table, String)| {
+        lua.create_function(|lua, (this, strata): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // `lua_isstring` (`0x7743f0`), else `Usage: %s:SetFrameStrata(level)` (`0x8795b8`).
+            let strata = binding_abi::method_string(lua, &this, strata, "SetFrameStrata(level)")?;
             // A name off the table raises, naming the frame or `<unnamed>` (`0x774450`), and the
             // stratum stays.
             let Some(s) = strata_from_str(&strata) else {
@@ -414,20 +422,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `SetBackdrop(table|nil)` (`0x7776e0` → `0x76a5d0`) installs or removes the tiled background
     // and 8-piece border, nine Texture regions on the frame (`script::backdrop::install`), both
     // white until tinted; the two colour setters tint the background and the border respectively
-    // (`0x77f410`/`0x77f440`).
+    // (`0x77f410`/`0x77f440`). Only an explicit nil removes (`lua_type` 0, `0x777794`); anything
+    // but a table, no argument (type -1) included, raises [`SET_BACKDROP_USAGE`] (`0x7777b6`).
     m.set(
         "SetBackdrop",
-        lua.create_function(|lua, (this, arg): (Table, Value)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
             let h = frame_handle_of(lua, &this)?;
-            let bd = match arg {
-                Value::Nil => None,
-                Value::Table(t) => Some(backdrop_from_table(&t)?),
-                other => {
-                    return Err(mlua::Error::runtime(format!(
-                        "SetBackdrop: expected a table or nil, got {}",
-                        other.type_name()
-                    )))
-                }
+            let bd = match args.into_iter().next() {
+                Some(Value::Nil) => None,
+                Some(Value::Table(t)) => Some(backdrop_from_table(&t)?),
+                _ => return Err(binding_abi::usage(lua, &this, SET_BACKDROP_USAGE)),
             };
             let mut model = lua.app_data_mut::<Model>().expect("model");
             crate::script::backdrop::install(&mut model, h, bd);

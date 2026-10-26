@@ -787,6 +787,84 @@ fn set_scroll_from_bottom_checks_its_receiver_late() {
         .unwrap();
 }
 
+/// The Frame verbs that take a string test it with `lua_isstring` after the receiver check and
+/// raise their usage line naming the frame (RegisterEvent `0x8796dc`, UnregisterEvent `0x879700`,
+/// GetScript `0x879698`, HasScript `0x87965c`, SetFrameStrata `0x8795b8`). SetScript also needs a
+/// function or nil by `lua_type`, so a missing one raises (`0x774986`, `0x8796b4`); SetBackdrop
+/// takes nil or a table, a bare call included in the raise (`0x777794`, `0x8798a8`); an inherits
+/// miss names its method and frame (`0x879544`, `0x87957c`).
+#[test]
+fn frame_string_verbs_raise_their_usage_lines() {
+    let s = script();
+    s.run(
+        r#"
+        VerbFrame = CreateFrame("Frame", "VerbFrame")
+        VerbAnon = CreateFrame("Frame")
+        VerbFrame:SetBackdrop({ bgFile = "Interface\Tooltips\UI-Tooltip-Background" })
+        VerbFrame:SetScript("OnShow", function() end)
+    "#,
+    )
+    .unwrap();
+    let backdrop = r#"Usage: VerbFrame:SetBackdrop(nil or {bgFile = "bgFile", edgeFile = "edgeFile", tile = false, tileSize = 0, edgeSize = 32, insets = { left = 0, right = 0, top = 0, bottom = 0 }})"#;
+    for (call, line) in [
+        (
+            "VerbFrame:RegisterEvent(nil)",
+            r#"Usage: VerbFrame:RegisterEvent("event")"#,
+        ),
+        (
+            "VerbAnon:UnregisterEvent({})",
+            r#"Usage: <unnamed>:UnregisterEvent("event")"#,
+        ),
+        (
+            "VerbFrame:GetScript()",
+            r#"Usage: VerbFrame:GetScript("type")"#,
+        ),
+        (
+            "VerbFrame:HasScript(true)",
+            r#"Usage: VerbFrame:HasScript("type")"#,
+        ),
+        (
+            "VerbFrame:SetFrameStrata(nil)",
+            "Usage: VerbFrame:SetFrameStrata(level)",
+        ),
+        (
+            "VerbFrame:SetScript(nil, nil)",
+            r#"Usage: VerbFrame:SetScript("type", function)"#,
+        ),
+        (
+            "VerbFrame:SetScript('OnShow')",
+            r#"Usage: VerbFrame:SetScript("type", function)"#,
+        ),
+        (
+            "VerbFrame:SetScript('OnShow', 'f')",
+            r#"Usage: VerbFrame:SetScript("type", function)"#,
+        ),
+        ("VerbFrame:SetBackdrop()", backdrop),
+        ("VerbFrame:SetBackdrop('x')", backdrop),
+        (
+            "VerbFrame:CreateTexture(nil, nil, 'NoSuchNode')",
+            r#"VerbFrame:CreateTexture(): Couldn't find inherited node "NoSuchNode""#,
+        ),
+        (
+            "VerbAnon:CreateFontString(nil, nil, 'NoSuchNode')",
+            r#"<unnamed>:CreateFontString(): Couldn't find inherited node "NoSuchNode""#,
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    // The raises left the script and the backdrop in place; an explicit nil clears each.
+    s.run(
+        r#"
+        assert(VerbFrame:GetScript("OnShow") ~= nil and VerbFrame:GetBackdrop() ~= nil)
+        VerbFrame:SetScript("OnShow", nil) VerbFrame:SetBackdrop(nil)
+        assert(VerbFrame:GetScript("OnShow") == nil and VerbFrame:GetBackdrop() == nil)
+        VerbFrame:SetFrameStrata("HIGH") VerbFrame:RegisterEvent("PLAYER_LOGIN")
+    "#,
+    )
+    .unwrap();
+}
+
 /// `SortGuildRoster` tests argument 1 with `lua_isstring` (`0x4d1cb8`), so a number is its
 /// string, and anything else raises `Usgae: SortGuildRoster("type")` (`0x849bf0`, `0x4d1cc7`),
 /// the binary's spelling, with no call made.

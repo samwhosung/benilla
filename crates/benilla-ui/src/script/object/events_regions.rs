@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 
-use crate::script::binding_abi::optional_string;
+use crate::script::binding_abi::{method_string, optional_string, usage};
 use crate::script::region::region_wrapper;
 use crate::script::{Model, RegionData, REG_SCRIPTS, SCRIPT_KINDS};
 use crate::widget::{FrameHandle, RegionKind};
@@ -34,11 +34,14 @@ fn register(model: &mut Model, h: FrameHandle, event: &'static str) {
 
 /// Populate `m`'s event, script and region-creation methods.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
-    // Events + scripts
+    // Events + scripts. Each verb tests argument 2 with `lua_isstring` after the receiver check
+    // (RegisterEvent `0x774acc`, UnregisterEvent `0x774bbc`, HasScript `0x77470c`, GetScript
+    // `0x77480c`, SetScript `0x77495c`) and raises its usage line naming the frame.
     m.set(
         "RegisterEvent",
-        lua.create_function(|lua, (this, event): (Table, String)| {
+        lua.create_function(|lua, (this, event): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            let event = method_string(lua, &this, event, r#"RegisterEvent("event")"#)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             // A name the VM's event table lacks registers nothing and raises nothing (`0x702140`).
             let Some(event) = model.vm.event_key(&event) else {
@@ -50,8 +53,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     m.set(
         "UnregisterEvent",
-        lua.create_function(|lua, (this, event): (Table, String)| {
+        lua.create_function(|lua, (this, event): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            let event = method_string(lua, &this, event, r#"UnregisterEvent("event")"#)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             // Matched as `RegisterEvent` matches (`0x702280`).
             let Some(event) = model.vm.event_key(&event).map(str::to_string) else {
@@ -95,24 +99,40 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // SetScript's argument 3 must be a function or nil by `lua_type` (`0x774975`, `0x774986`), so
+    // a missing one, type -1, raises like a wrong type: `Usage: %s:SetScript("type", function)`
+    // (`0x8796b4`).
     m.set(
         "SetScript",
-        lua.create_function(
-            |lua, (this, name, func): (Table, String, Option<Function>)| {
-                set_script(lua, &this, &name, func)
-            },
-        )?,
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            frame_handle_of(lua, &this)?;
+            let line = r#"SetScript("type", function)"#;
+            let mut args = args.into_iter();
+            let name = method_string(lua, &this, args.next().unwrap_or(Value::Nil), line)?;
+            let func = match args.next() {
+                Some(Value::Function(f)) => Some(f),
+                Some(Value::Nil) => None,
+                _ => return Err(usage(lua, &this, line)),
+            };
+            set_script(lua, &this, &name, func)
+        })?,
     )?;
     m.set(
         "GetScript",
-        lua.create_function(|lua, (this, name): (Table, String)| get_script(lua, &this, &name))?,
+        lua.create_function(|lua, (this, name): (Table, Value)| {
+            frame_handle_of(lua, &this)?;
+            let name = method_string(lua, &this, name, r#"GetScript("type")"#)?;
+            get_script(lua, &this, &name)
+        })?,
     )?;
     // `HasScript(name)`: 1 if the widget can carry that script kind, else nil, whether or not one
     // is set. Answered from the flat `SCRIPT_KINDS`, so another type's kind reads 1 too, where the
     // reference's tables are per widget type (base `0x76a0d0`; a plain Frame has no `OnClick`).
     m.set(
         "HasScript",
-        lua.create_function(|_, (_this, name): (Table, String)| {
+        lua.create_function(|lua, (this, name): (Table, Value)| {
+            frame_handle_of(lua, &this)?;
+            let name = method_string(lua, &this, name, r#"HasScript("type")"#)?;
             Ok(crate::script::binding_abi::flag(
                 SCRIPT_KINDS.iter().any(|k| k.eq_ignore_ascii_case(&name)),
             ))
@@ -147,7 +167,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let layer = optional_string(lua, &layer);
                 let wrapper = create_region(lua, &this, RegionKind::Texture, name, layer)?;
                 if let Some(from) = strict_string_arg(&inherits).filter(|s| !s.is_empty()) {
-                    apply_region_inherits(lua, &wrapper, &from)?;
+                    apply_region_inherits(lua, &this, &wrapper, &from, "CreateTexture")?;
                 }
                 Ok(wrapper)
             },
@@ -222,7 +242,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let layer = optional_string(lua, &layer);
                 let wrapper = create_region(lua, &this, RegionKind::FontString, name, layer)?;
                 if let Some(from) = strict_string_arg(&inherits).filter(|s| !s.is_empty()) {
-                    apply_region_inherits(lua, &wrapper, &from)?;
+                    apply_region_inherits(lua, &this, &wrapper, &from, "CreateFontString")?;
                 }
                 Ok(wrapper)
             },
@@ -310,9 +330,17 @@ fn get_script(lua: &Lua, this: &Table, name: &str) -> mlua::Result<Value> {
 }
 
 /// Apply the `inherits` argument: the font-object registry first (`0x773d39`), then the template
-/// registry (`0x773d47`); a name in neither raises (`0x87957c` / `0x879544`). A template that is
-/// not a font object only warns: the reference applies the template, which is not built here.
-fn apply_region_inherits(lua: &Lua, wrapper: &Table, from: &str) -> mlua::Result<()> {
+/// registry (`0x773d47`); a name in neither raises `%s:CreateTexture(): Couldn't find inherited
+/// node "%s"` (`0x879544`, `0x773b4d`) or the `CreateFontString` line (`0x87957c`), naming the
+/// frame `this`. A template that is not a font object only warns: the reference applies the
+/// template, which is not built here.
+fn apply_region_inherits(
+    lua: &Lua,
+    this: &Table,
+    wrapper: &Table,
+    from: &str,
+    verb: &str,
+) -> mlua::Result<()> {
     use mlua::ObjectLike;
     // Through `SetFontObject`, the binding the XML `inherits=` path uses.
     if wrapper.call_method::<()>("SetFontObject", from).is_ok() {
@@ -334,7 +362,8 @@ fn apply_region_inherits(lua: &Lua, wrapper: &Table, from: &str) -> mlua::Result
         return Ok(());
     }
     Err(mlua::Error::runtime(format!(
-        "Couldn't find inherited node \"{from}\""
+        "{}:{verb}(): Couldn't find inherited node \"{from}\"",
+        crate::script::binding_abi::name_of(lua, this)
     )))
 }
 
