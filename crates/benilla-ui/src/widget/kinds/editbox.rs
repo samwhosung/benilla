@@ -691,8 +691,10 @@ impl EditBoxState {
         true
     }
 
-    /// The selection for Ctrl+C (`0x77e1d0`); a password box yields the empty string, the image's
-    /// `""` at `0x882748` (`0x77e1ef`–`0x77e1fd`), never its text.
+    /// The selection for Ctrl+C (`0x77e1d0`) through `GxuStripControlCodes` with mask `0x500`
+    /// (`0x77e230`–`0x77e239`): no colour or link codes, `||` as `|`, a line break as `\n`. A
+    /// password box yields the empty string, the image's `""` at `0x882748`
+    /// (`0x77e1ef`–`0x77e1fd`), never its text.
     pub fn selected_text(&self) -> Option<String> {
         if self.sel_start == self.sel_end {
             return None;
@@ -704,7 +706,7 @@ impl EditBoxState {
         Some(if self.password {
             String::new()
         } else {
-            self.text[a..b].to_string()
+            crate::markup::strip_control_codes(&self.text[a..b], crate::markup::strip::CLIPBOARD)
         })
     }
 

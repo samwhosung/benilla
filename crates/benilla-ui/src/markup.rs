@@ -232,6 +232,41 @@ fn parse_link_open(rest: &str) -> Option<(&str, usize)> {
     Some((&rest[2..delim], span))
 }
 
+/// `GxuStripControlCodes`' mask bits (`0x85f4d8`): the classes it drops instead of keeping.
+pub mod strip {
+    /// `|c…` and `|r` (classes 0 and 1).
+    pub const COLOR: u32 = 0x100;
+    /// CR, LF and `|n` (class 2), otherwise one `\n`.
+    pub const LINE_BREAK: u32 = 0x200;
+    /// `|H…|h` and `|h` (classes 4 and 5).
+    pub const LINK: u32 = 0x400;
+    /// `||` (class 3), otherwise one `|`.
+    pub const PIPE: u32 = 0x800;
+    /// What an edit box copies (`0x77e230`): no colour and no link codes, a line break as `\n`
+    /// and `||` as `|`.
+    pub const CLIPBOARD: u32 = COLOR | LINK;
+}
+
+/// `0x5c2590`: `text` with the codes the `mask` names dropped (classes 0, 1, 4 and 5) and the
+/// others unescaped (class 2 to `\n`, class 3 to `|`), each token read with every class active
+/// (`0x5c25e3`). Everything else is copied.
+pub fn strip_control_codes(text: &str, mask: u32) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (at, token) in tokens(text) {
+        let src = &text[at..at + token.byte_len];
+        let drops = |bit| mask & bit != 0;
+        match token.class() {
+            TokenClass::Color | TokenClass::ColorReset if drops(strip::COLOR) => {}
+            TokenClass::LinkOpen | TokenClass::LinkClose if drops(strip::LINK) => {}
+            TokenClass::LineBreak if !drops(strip::LINE_BREAK) => out.push('\n'),
+            TokenClass::EscapedPipe if !drops(strip::PIPE) => out.push('|'),
+            TokenClass::LineBreak | TokenClass::EscapedPipe => {}
+            _ => out.push_str(src),
+        }
+    }
+    out
+}
+
 /// Every token of `text` with the byte offset it starts at.
 pub fn tokens(text: &str) -> Tokens<'_> {
     Tokens { text, at: 0 }
@@ -671,6 +706,27 @@ mod tests {
             token_at("|Hitem:1|hx", 0).expect("a token").kind,
             TokenKind::LinkOpen { payload: "item:1" }
         );
+    }
+
+    /// `0x5c2590` with the edit box's mask `0x500` (`0x77e230`): colour and link codes vanish, a
+    /// line break and `||` are unescaped, and nothing else changes.
+    #[test]
+    fn the_clipboard_strip_drops_colour_and_link_codes_and_unescapes_the_rest() {
+        use super::{strip, strip_control_codes};
+        let copy = |text: &str| strip_control_codes(text, strip::CLIPBOARD);
+        assert_eq!(copy(LINK), "[Chipped Claw]");
+        assert_eq!(copy("a||b"), "a|b");
+        assert_eq!(copy("a\r\nb|nc\rd\ne|Nf"), "a\nb\nc\nd\ne\nf");
+        // A lone `|h`, a malformed `|c` and a `|T` are not codes: the first is dropped as a
+        // class 5 token, the others are literal characters.
+        assert_eq!(copy("x|hy|cff|Tz"), "xy|cff|Tz");
+        assert_eq!(copy("|Hitem:1|h|h"), "|Hitem:1");
+        assert_eq!(copy("héllo ✚"), "héllo ✚");
+        assert_eq!(copy(""), "");
+        // The other mask bits: keep what the mask does not name.
+        assert_eq!(strip_control_codes("|cff00ff00x|r", 0), "|cff00ff00x|r");
+        assert_eq!(strip_control_codes("a||b|nc", strip::PIPE), "ab\nc");
+        assert_eq!(strip_control_codes("a||b|nc", strip::LINE_BREAK), "a|bc");
     }
 
     #[test]

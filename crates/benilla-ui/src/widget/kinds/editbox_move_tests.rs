@@ -259,3 +259,34 @@ fn a_non_digit_over_a_numeric_selection_deletes_it() {
     assert_eq!(eb.insert("b"), EditOutcome::default());
     assert_eq!((eb.text.as_str(), eb.dirty), ("14", 0));
 }
+
+/// Ctrl+C and Ctrl+X copy through `GxuStripControlCodes` with mask `0x500` (`0x77e230`): a linked
+/// item copies as its visible text, a typed pipe (stored `||`) as one `|`, a line break as `\n`; a
+/// password box still copies `""`.
+#[test]
+fn copying_strips_colour_and_link_codes_and_unescapes_pipes() {
+    let mut eb = at("x|cff1eff00|Hitem:1:0:0:0|h[Linen Cloth]|h|ry", 0);
+    eb.highlight_text(0, -1);
+    assert_eq!(eb.selected_text().as_deref(), Some("x[Linen Cloth]y"));
+
+    let mut eb = at("a||b|nc", 0);
+    eb.highlight_text(0, -1);
+    assert_eq!(eb.selected_text().as_deref(), Some("a|b\nc"));
+    eb.highlight_text(1, 3);
+    assert_eq!(
+        eb.selected_text().as_deref(),
+        Some("|"),
+        "the `||` pair alone"
+    );
+    assert_eq!(
+        eb.cut_selection().as_deref(),
+        Some("|"),
+        "Ctrl+X copies the same"
+    );
+    assert_eq!(eb.text, "ab|nc");
+
+    let mut eb = at("secret", 0);
+    eb.password = true;
+    eb.highlight_text(0, -1);
+    assert_eq!(eb.selected_text().as_deref(), Some(""));
+}
