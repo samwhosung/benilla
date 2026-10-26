@@ -212,13 +212,16 @@ fn parse_color(b: &[u8]) -> Option<Rgba> {
     Some(Rgba::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
-/// The payload after `|H` and the length of the whole `|H<payload>|h` prefix; `None`, a literal
-/// `|`, when no `|h` follows, when the payload is empty (`0x5c2972`) or when the visible text is
-/// empty (`0x5c2992`). The delimiter scan is a plain byte search that does not skip `||`, inferred
-/// from the emitter's own scan (`0x5ccdc8`, for the literal at `0x84453c`).
+/// The payload after `|H` and the length of the whole `|H<payload>|h` prefix. The scan runs to the
+/// first `|` (`0x5c290d`), and that one must be followed by `h` (`0x5c2969`) and by a byte after
+/// it (`0x5c2933`, `0x5c2964`); anything else, an empty payload (`0x5c2972`) or an empty visible
+/// text (`0x5c2992`) leaves the `|` a literal.
 fn parse_link_open(rest: &str) -> Option<(&str, usize)> {
     let b = rest.as_bytes();
-    let delim = (2..b.len().saturating_sub(1)).find(|&i| b[i] == b'|' && b[i + 1] == b'h')?;
+    let delim = 2 + b.get(2..)?.iter().position(|&c| c == b'|')?;
+    if b.get(delim + 1) != Some(&b'h') || b.get(delim + 2).is_none_or(|&c| c == 0) {
+        return None;
+    }
     let span = delim + 2;
     if span == 4 {
         return None;
@@ -645,6 +648,29 @@ mod tests {
         // The string's alpha reaches the vertex, never the escape's (`0x5cceb0`).
         assert_eq!(rgba.to_f32_at(1.0), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(rgba.to_f32_at(0.5), [1.0, 0.0, 0.0, 0.5]);
+    }
+
+    /// The payload scan stops at the first `|` (`0x5c290d`), which must be `|h` with a byte after
+    /// it (`0x5c2969`, `0x5c2964`): a link cut short or broken by another escape draws as text.
+    #[test]
+    fn a_link_open_needs_its_first_pipe_to_be_a_pipe_h_with_a_byte_after() {
+        for text in [
+            "|Hx|cff00ff00|h[a]|h",
+            "|Hx||h[a]|h",
+            "|Hx|r|h[a]|h",
+            "|Hitem:1|h",
+            "|Hitem:1|",
+            "|Hitem:1|x[a]",
+        ] {
+            let t = token_at(text, 0).expect("a token");
+            assert_eq!(t.kind, TokenKind::Char('|'), "{text:?}");
+            assert_eq!(t.byte_len, 1, "{text:?}");
+        }
+        // One byte after the `|h` is enough.
+        assert_eq!(
+            token_at("|Hitem:1|hx", 0).expect("a token").kind,
+            TokenKind::LinkOpen { payload: "item:1" }
+        );
     }
 
     #[test]
