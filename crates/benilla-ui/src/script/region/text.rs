@@ -9,6 +9,55 @@ use crate::script::Model;
 
 use super::region_handle_of;
 
+/// The justify word a string, or a message frame's font holder, carries: the ctor's `0x212`
+/// (CENTER and MIDDLE) until set (`0x770dd3`, `0x783a87`).
+pub(crate) fn justify_word(model: &Model, rh: crate::widget::RegionHandle) -> justify::Justify {
+    model
+        .region_data
+        .get(&rh)
+        .map(|d| d.justify)
+        .unwrap_or_default()
+}
+
+/// `SetJustifyH` and `SetJustifyV` on the string or font holder `rh` makes: the token is parsed
+/// (`0x6f1990`) and a miss raises the usage line (`0x87c77c`, `0x87c7a0`), then only the setter's
+/// axis of the word is replaced (`0x79fc57`-`0x79fc64`, `0x79fd1d`), a token of the other axis
+/// erasing it: `GetJustifyH()` then answers "UNKNOWN" while the glyphs draw centred (`0x44d420`
+/// presets 1). A successful parse overrides the font object, the erasing one too: `0x79e6b0`
+/// clears the axis of the per-bit mask (`+0x124`, `0x79e779`) and the group bit (`0x79e7a5`), so
+/// the font no longer reaches the other axis either.
+pub(crate) fn set_justify(
+    lua: &Lua,
+    this: &Table,
+    token: &Value,
+    horizontal: bool,
+    region: impl FnOnce(&mut Model) -> Option<crate::widget::RegionHandle>,
+) -> mlua::Result<()> {
+    let name = || binding_abi::name_of(lua, this);
+    let Some(bits) = binding_abi::optional_string(lua, token).and_then(|t| justify::parse_bits(&t))
+    else {
+        return Err(if horizontal {
+            justify::usage_h(&name())
+        } else {
+            justify::usage_v(&name())
+        });
+    };
+    let mask = if horizontal {
+        justify::H_MASK
+    } else {
+        justify::V_MASK
+    };
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    let Some(rh) = region(&mut model) else {
+        return Err(mlua::Error::runtime("not a text holder"));
+    };
+    let d = model.region_data.entry(rh).or_default();
+    d.justify.0 = justify::set_axis(d.justify.0, mask, bits);
+    d.justify_mask.0 &= !mask;
+    d.font_mask.clear(super::super::FontMask::JUSTIFY);
+    Ok(())
+}
+
 /// `CSimpleFontString::SetText` (`0x771d80`) past Lua's font check: the loader's `text=`
 /// (`0x77103a`) reaches it directly, so a string with no font still holds its text.
 pub(crate) fn store_text_of(lua: &Lua, this: &Table, text: Option<String>) -> mlua::Result<()> {
@@ -127,69 +176,24 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| natural_w(lua, &this))?,
     )?;
 
-    // SetJustifyH (XML `justifyH`): the parse, the raise on a miss and the cross-axis clear are
-    // `crate::justify`'s, shared with the `<Font>` object.
-    m.set(
-        "SetJustifyH",
-        lua.create_function(|lua, (this, j): (Table, Value)| {
-            let rh = region_handle_of(lua, &this)?;
-            let parsed = binding_abi::optional_string(lua, &j)
-                .map_or(justify::Set::NoMatch, |j| justify::parse_h(&j));
-            if parsed == justify::Set::NoMatch {
-                return Err(justify::usage_h(&binding_abi::name_of(lua, &this)));
-            }
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            let d = model.region_data.entry(rh).or_default();
-            match parsed {
-                justify::Set::To(jh) => d.justify.set_h(jh),
-                // A cross-axis token erases the axis: `GetJustifyH()` answers "UNKNOWN" while the
-                // glyphs draw centred (`0x44d420` presets 1).
-                justify::Set::Clears => d.justify.clear_h(),
-                justify::Set::NoMatch => unreachable!("returned above"),
-            }
-            // Every successful parse overrides the font object, the erasing one too: `0x79e6b0`
-            // clears the axis of the per-bit mask (`+0x124`, `0x79e779`) and the group bit
-            // (`0x79e7a5`), so the font no longer reaches the other axis either.
-            d.justify_mask.0 &= !crate::justify::H_MASK;
-            d.font_mask.clear(super::super::FontMask::JUSTIFY);
-            Ok(())
-        })?,
-    )?;
-
-    // SetJustifyV (XML `justifyV`), as SetJustifyH.
-    m.set(
-        "SetJustifyV",
-        lua.create_function(|lua, (this, j): (Table, Value)| {
-            let rh = region_handle_of(lua, &this)?;
-            let parsed = binding_abi::optional_string(lua, &j)
-                .map_or(justify::Set::NoMatch, |j| justify::parse_v(&j));
-            if parsed == justify::Set::NoMatch {
-                return Err(justify::usage_v(&binding_abi::name_of(lua, &this)));
-            }
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            let d = model.region_data.entry(rh).or_default();
-            match parsed {
-                justify::Set::To(jv) => d.justify.set_v(jv),
-                // Addons reach this arm with `SetJustifyV("CENTER")`, meaning middle.
-                justify::Set::Clears => d.justify.clear_v(),
-                justify::Set::NoMatch => unreachable!("returned above"),
-            }
-            d.justify_mask.0 &= !crate::justify::V_MASK;
-            d.font_mask.clear(super::super::FontMask::JUSTIFY);
-            Ok(())
-        })?,
-    )?;
+    // SetJustifyH (XML `justifyH`) and SetJustifyV: the parse, the raise on a miss and the
+    // cross-axis clear are `crate::justify`'s, shared with the `<Font>` object.
+    for (name, horizontal) in [("SetJustifyH", true), ("SetJustifyV", false)] {
+        m.set(
+            name,
+            lua.create_function(move |lua, (this, j): (Table, Value)| {
+                let rh = region_handle_of(lua, &this)?;
+                set_justify(lua, &this, &j, horizontal, |_| Some(rh))
+            })?,
+        )?;
+    }
 
     // GetJustifyH/GetJustifyV (`0x79e5f0`/`0x79e7f0`): one string; CENTER and MIDDLE when
     // untouched, the ctor's `0x212` read through each axis mask.
     fn justify_of(lua: &Lua, this: &Table) -> mlua::Result<justify::Justify> {
         let rh = region_handle_of(lua, this)?;
         let model = lua.app_data_ref::<Model>().expect("model");
-        Ok(model
-            .region_data
-            .get(&rh)
-            .map(|d| d.justify)
-            .unwrap_or_default())
+        Ok(justify_word(&model, rh))
     }
     m.set(
         "GetJustifyH",

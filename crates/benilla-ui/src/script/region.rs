@@ -501,7 +501,7 @@ pub(crate) use paint::{
     apply_texture_name, load_blend_mode, load_texture_file, load_texture_name, orientation,
     texture_name_verdict, FileLoad,
 };
-pub(crate) use text::store_text_of;
+pub(crate) use text::{justify_word, set_justify, store_text_of};
 
 fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;

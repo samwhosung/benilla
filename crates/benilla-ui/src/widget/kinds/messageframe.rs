@@ -37,12 +37,6 @@ pub struct MessageLine {
 /// returns before it places anything (`0x78878e`), keeps its last visible answers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollingMessageState {
-    /// The frame's own `SetJustifyH`/`SetJustifyV` (method table `0x87b5c0`), `None` until called
-    /// and then winning over the font's. Deviation: the reference has one field, the font's, but
-    /// ours is the holder region's (`message_frame_font`), kept apart; so the holder's own
-    /// `GetJustifyH` does not see this.
-    pub justify: Option<crate::justify::Justify>,
-
     /// The line ring, newest at the back.
     pub lines: VecDeque<MessageLine>,
     /// `maxLines`, the ring capacity (ctor 8); `SetMaxLines` clears the ring (`0x787dd0`).
@@ -95,7 +89,6 @@ impl Default for ScrollingMessageState {
     fn default() -> ScrollingMessageState {
         // The ctor's defaults (`0x787670`).
         ScrollingMessageState {
-            justify: None,
             lines: VecDeque::new(),
             max_lines: 8,
             time_visible: 10.0,
@@ -702,10 +695,6 @@ pub enum InsertMode {
 /// [`Self::trim_to_viewport`] applies the cap.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MessageFrameState {
-    /// The frame's own `SetJustifyH`/`SetJustifyV` (method table `0x87b960`), `None` until called.
-    /// Deviation: kept apart from the font's, as [`ScrollingMessageState::justify`] is.
-    pub justify: Option<crate::justify::Justify>,
-
     /// The measure sweep's skip token, as [`ScrollingMessageState::lines_gen`].
     pub lines_gen: u64,
     /// The lines, newest at the back in both insert modes: [`InsertMode`] only orders the draw.
@@ -730,7 +719,6 @@ impl Default for MessageFrameState {
     fn default() -> MessageFrameState {
         // The ctor's defaults (`0x785640`).
         MessageFrameState {
-            justify: None,
             lines: VecDeque::new(),
             insert_mode: InsertMode::default(),
             time_visible: 10.0,

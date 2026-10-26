@@ -913,7 +913,7 @@ fn the_font_block_reaches_both_message_frame_tables() {
         assert_eq!(s.arity(&format!("{obj}:GetShadowColor()")).unwrap(), 4);
     }
 
-    s.run("mf:AddMessage('flush left please')").unwrap();
+    s.run("mf:AddMessage('centred by default')").unwrap();
     s.resolve();
     let j = s
         .extract()
@@ -923,14 +923,14 @@ fn the_font_block_reaches_both_message_frame_tables() {
                 text: Some(ref t),
                 justify_h,
                 ..
-            } if t == "flush left please" => Some(justify_h),
+            } if t == "centred by default" => Some(justify_h),
             _ => None,
         })
         .expect("the message draws");
     assert_eq!(
         j,
-        JustifyH::Left,
-        "creating the style region must not re-justify the frame to the FontString default"
+        JustifyH::Center,
+        "a Lua-created frame keeps its font's constructor word, CENTER (`0x783a87`)"
     );
 }
 

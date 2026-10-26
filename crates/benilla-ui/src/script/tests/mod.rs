@@ -51,6 +51,7 @@ mod layout_mode;
 mod layout_structure;
 mod line_spacing;
 mod measure;
+mod message_justify;
 mod minimap;
 mod miss_tuples;
 mod model_clock;

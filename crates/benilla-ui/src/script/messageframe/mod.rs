@@ -184,89 +184,43 @@ pub(super) fn shown_text<'a>(
     }
 }
 
-/// Install `SetJustifyH`, `GetJustifyH`, `SetJustifyV` and `GetJustifyV`, which both classes carry,
-/// under [`crate::justify`]'s rules: an unknown token raises the usage line, and a token of the
-/// other axis clears this one, so `GetJustifyH()` then answers `"UNKNOWN"`.
+/// Install `SetJustifyH`, `GetJustifyH`, `SetJustifyV` and `GetJustifyV`, which both classes carry
+/// (`0x792600`, `0x794bd0` and their twins). They are the Font's four, run on the frame's font
+/// (`+0x35c`, `+0x344`): one justify word there, which the lines follow (`0x7888fd`), so the setters
+/// replace their own axis of it (`0x79fc57`-`0x79fc64`, `0x79fd1d`) and the getters read it
+/// (`0x79fcb0`, `0x79fd70`), under [`crate::justify`]'s rules: an unknown token raises the usage
+/// line, and a token of the other axis clears this one, so `GetJustifyH()` then answers
+/// `"UNKNOWN"`. The word starts as the font constructor's `0x212` (`0x783a87`), CENTER and
+/// MIDDLE, which neither frame's constructor changes (`0x78778f`, `0x785700`).
 pub(super) fn install_justify(lua: &mlua::Lua, m: &mlua::Table) -> mlua::Result<()> {
-    use crate::justify::{self, Justify};
-
-    fn slot(ks: &mut KindState) -> Option<&mut Option<Justify>> {
-        match ks {
-            KindState::ScrollingMessage(s) => Some(&mut s.justify),
-            KindState::Message(s) => Some(&mut s.justify),
-            _ => None,
-        }
-    }
-    fn own(ks: &KindState) -> Option<Justify> {
-        match ks {
-            KindState::ScrollingMessage(s) => s.justify,
-            KindState::Message(s) => s.justify,
-            _ => None,
-        }
-    }
-
-    for (name, mask, horizontal) in [
-        ("SetJustifyH", justify::H_MASK, true),
-        ("SetJustifyV", justify::V_MASK, false),
-    ] {
+    for (name, horizontal) in [("SetJustifyH", true), ("SetJustifyV", false)] {
         m.set(
             name,
             lua.create_function(move |lua, (this, token): (mlua::Table, mlua::Value)| {
                 let h = frame_handle_of(lua, &this)?;
-                let parsed = crate::script::binding_abi::optional_string(lua, &token)
-                    .and_then(|t| justify::parse_bits(&t))
-                    .ok_or_else(|| {
-                        let name = crate::script::binding_abi::name_of(lua, &this);
-                        if horizontal {
-                            justify::usage_h(&name)
-                        } else {
-                            justify::usage_v(&name)
-                        }
-                    })?;
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let frame = model
-                    .arena
-                    .frame_mut(h)
-                    .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-                let cur = own(&frame.kind_state).unwrap_or_default();
-                let next = Justify(justify::set_axis(cur.0, mask, parsed));
-                *slot(&mut frame.kind_state)
-                    .ok_or_else(|| mlua::Error::runtime("not a message frame"))? = Some(next);
-                Ok(())
+                super::region::set_justify(lua, &this, &token, horizontal, |model| {
+                    ensure_font_region_in(model, h)
+                })
             })?,
         )?;
     }
-
-    // On an untouched frame `GetJustifyH` answers its font's `justifyH`, what the lines draw with,
-    // and `GetJustifyV` the ctor default, as each line sits at the top of its own band.
-    m.set(
-        "GetJustifyH",
-        lua.create_function(move |lua, this: mlua::Table| {
-            let h = frame_handle_of(lua, &this)?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let bits = match model.arena.frame(h).and_then(|f| own(&f.kind_state)) {
-                Some(j) => j.0,
-                None => {
-                    let font = UiScript::message_frame_font(&model, h);
-                    justify::parse_bits(justify::name_h(font.justify_h)).unwrap_or(0)
-                }
-            };
-            Ok(justify::name_of(bits, justify::H_MASK).to_string())
-        })?,
-    )?;
-    m.set(
-        "GetJustifyV",
-        lua.create_function(move |lua, this: mlua::Table| {
-            let h = frame_handle_of(lua, &this)?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let j = model
-                .arena
-                .frame(h)
-                .and_then(|f| own(&f.kind_state))
-                .unwrap_or_default();
-            Ok(justify::name_of(j.0, justify::V_MASK).to_string())
-        })?,
-    )?;
+    for (name, horizontal) in [("GetJustifyH", true), ("GetJustifyV", false)] {
+        m.set(
+            name,
+            lua.create_function(move |lua, this: mlua::Table| {
+                let h = frame_handle_of(lua, &this)?;
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let word = font_region_of(&model, h)
+                    .map(|rh| super::region::justify_word(&model, rh))
+                    .unwrap_or_default();
+                Ok(if horizontal {
+                    word.name_h()
+                } else {
+                    word.name_v()
+                })
+            })?,
+        )?;
+    }
     Ok(())
 }
 
@@ -284,8 +238,9 @@ pub(super) struct MessageFont {
     pub(super) shadow: Option<FontShadow>,
     pub(super) outline: Outline,
     pub(super) monochrome: bool,
-    /// The child's `justifyH`, which centres `UIErrorsFrame`'s lines and keeps chat flush left;
-    /// LEFT without a declared FontString, not the FontString default of CENTER.
+    /// The font's justify word (`+0x54`), which the lines follow: the child's `justifyH` centres
+    /// `UIErrorsFrame`'s and keeps chat flush left, and a font nothing declared is the
+    /// constructor's `0x212`, CENTER.
     pub(super) justify_h: JustifyH,
     /// The font's spacing as set, a negative included (`+0x50`).
     pub(super) spacing: f32,
@@ -344,7 +299,7 @@ impl MessageFont {
 
 /// The FontString holding a message frame's font, the font verbs' receiver, made on first use:
 /// detached, so it is in no layer and not in `GetRegions`, as the reference's font is no region.
-/// It is made LEFT, not CENTER, so styling a frame never re-justifies it.
+/// Its justify word is the font constructor's `0x212` (`0x783a87`), CENTER and MIDDLE.
 pub(super) fn ensure_font_region(
     lua: &mlua::Lua,
     fh: FrameHandle,
@@ -382,9 +337,9 @@ pub(crate) fn ensure_font_region_in(
     {
         *slot = Some(rh);
     }
-    let mut data = crate::script::RegionData::default();
-    data.justify.set_h(JustifyH::Left);
-    model.region_data.insert(rh, data);
+    model
+        .region_data
+        .insert(rh, crate::script::RegionData::default());
     Some(rh)
 }
 
@@ -457,7 +412,7 @@ impl UiScript {
                 shadow: None,
                 outline: Outline::default(),
                 monochrome: false,
-                justify_h: JustifyH::Left,
+                justify_h: crate::justify::Justify::default().paint_h(),
                 spacing: 0.0,
             })
     }
@@ -697,11 +652,6 @@ impl UiScript {
             return;
         }
         let font = Self::message_frame_font(model, fh);
-        let own_justify = match &frame.kind_state {
-            KindState::ScrollingMessage(s) => s.justify,
-            KindState::Message(s) => s.justify,
-            _ => None,
-        };
         // The resolved rect is scaled and the font is frame-local, so the height and gap scale.
         let line_h = font.height_or_default() * paint.scale;
         let viewport = font.viewport(fr.top - fr.bottom, paint.scale, true);
@@ -761,11 +711,8 @@ impl UiScript {
                         f32::from(line.color[2]) / 255.0,
                         line.alpha,
                     ]),
-                    // The frame's own justify once set, else its font's.
-                    justify_h: match own_justify {
-                        Some(j) => j.paint_h(),
-                        None => font.justify_h,
-                    },
+                    // Each line string follows the frame's font, its justify included (`0x7888fd`).
+                    justify_h: font.justify_h,
                     // The band is exactly the wrapped block's height, so Top fills it.
                     justify_v: JustifyV::Top,
                     font: font.path.clone(),
