@@ -1382,6 +1382,62 @@ fn an_unrecognised_unit_token_raises_and_a_recognised_empty_one_does_not() {
     assert!(s.run(r#"UnitIsUnit("player", "party3")"#).is_ok());
 }
 
+/// The 13 ungated unit predicates (`tables/unit_gates.tsv`) read the token with `lua_tostring`
+/// (`0x6f3690`), NULL for a boolean or a table, which the resolver answers as GUID 0 (`0x515992`):
+/// quiet, and "normal" for `UnitClassification`. A number's text and an unknown token raise in the
+/// resolver (`0x515c14`), as they do through `UnitPlayerControlled` (`0x51641f`), `UnitIsCivilian`
+/// (`0x519e11`) and `UnitCreatureType` (`0x51a2b1`).
+#[test]
+fn ungated_predicates_take_any_value_and_every_resolver_raises_for_an_unknown_token() {
+    let mut s = UiScript::new().unwrap();
+    s.set_unit("player", Some(player()));
+    let ungated = [
+        "UnitExists",
+        "UnitIsVisible",
+        "UnitIsPlayer",
+        "UnitIsCorpse",
+        "UnitIsPartyLeader",
+        "UnitInParty",
+        "UnitPlayerOrPetInParty",
+        "UnitInRaid",
+        "UnitPlayerOrPetInRaid",
+        "UnitPlayerControlled",
+        "UnitIsCharmed",
+        "UnitIsPlusMob",
+        "UnitClassification",
+    ];
+    for name in ungated {
+        for arg in ["true", "false", "{}", "print"] {
+            let call = format!("return {name}({arg})");
+            let answer = s
+                .eval::<Option<String>>(&call)
+                .unwrap_or_else(|e| panic!("{call}: {e}"));
+            let quiet = if name == "UnitClassification" {
+                Some("normal")
+            } else if name == "UnitIsPartyLeader" {
+                Some("1") // GUID 0 matches the ungrouped leader's zero
+            } else {
+                None
+            };
+            assert_eq!(answer.as_deref(), quiet, "{call}");
+        }
+        for arg in ["5", r#""foo""#] {
+            let call = format!("{name}({arg})");
+            let err = s.run(&call).expect_err(&call).to_string();
+            assert!(err.contains("Unknown unit name"), "{call}: {err}");
+        }
+    }
+    for call in [
+        r#"UnitIsCivilian("foo")"#,
+        "UnitIsCivilian(5)",
+        r#"UnitCreatureType("foo")"#,
+        "UnitCreatureType(5)",
+    ] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains("Unknown unit name"), "{call}: {err}");
+    }
+}
+
 /// The resolver compares bytes with an ASCII fold, so a non-ASCII token matches no prefix and
 /// raises, where slicing it as a `str` would panic mid-character.
 #[test]
