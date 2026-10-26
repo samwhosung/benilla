@@ -3,7 +3,7 @@
 //! a missing argument, a boolean or a table raises the verb's line, never mlua's conversion text.
 
 use super::common::script;
-use crate::script::UiScript;
+use crate::script::{ChannelCommand, UiScript};
 
 fn raised(s: &UiScript, call: &str) -> String {
     s.eval::<String>(&format!(
@@ -80,4 +80,82 @@ fn chat_follow_and_auction_verbs_raise_their_usage_line() {
     let emotes = s.take_emote_requests();
     assert_eq!(emotes.len(), 1, "only DoEmote(5) queues: {emotes:?}");
     assert_eq!(emotes[0].token, "5");
+}
+
+/// The channel admin helpers `0x4a00f0` and `0x4a04b0` gate each argument (`0x4a0105`, `0x4a04c6`,
+/// `0x4a04da`) and raise `Usage: %s("channel")` (`0x844c7c`) or `Usage: %s("channel", "name")`
+/// (`0x844cd0`) with the verb's name; `SetChannelPassword` raises its own line (`0x844ca0`).
+#[test]
+fn channel_admin_verbs_raise_their_usage_line_and_send_strings_as_given() {
+    let mut s = script();
+    s.keep_calls();
+    const PASSWORD: &str = r#"Usage: SetChannelPassword("name", "password")"#;
+    assert_raises(
+        &s,
+        &[
+            (
+                "ListChannelByName()",
+                r#"Usage: ListChannelByName("channel")"#,
+            ),
+            (
+                "DisplayChannelOwner(nil)",
+                r#"Usage: DisplayChannelOwner("channel")"#,
+            ),
+            (
+                "ChannelModerate({})",
+                r#"Usage: ChannelModerate("channel")"#,
+            ),
+            (
+                "ChannelToggleAnnouncements(true)",
+                r#"Usage: ChannelToggleAnnouncements("channel")"#,
+            ),
+            (
+                "ChannelBan('General')",
+                r#"Usage: ChannelBan("channel", "name")"#,
+            ),
+            (
+                "ChannelKick(nil, 'Bob')",
+                r#"Usage: ChannelKick("channel", "name")"#,
+            ),
+            (
+                "SetChannelOwner('General', {})",
+                r#"Usage: SetChannelOwner("channel", "name")"#,
+            ),
+            (
+                "ChannelUnban()",
+                r#"Usage: ChannelUnban("channel", "name")"#,
+            ),
+            ("SetChannelPassword('General')", PASSWORD),
+            ("SetChannelPassword(true, 'pw')", PASSWORD),
+        ],
+    );
+    assert!(
+        s.take_channel_commands().is_empty(),
+        "a raise sends nothing"
+    );
+    // "" and padding go on as given; a number is its text (`ParseChannelKey` reads it later).
+    s.run(
+        r#"
+        ListChannelByName("")
+        ChannelBan(" General ", " Bob")
+        SetChannelPassword(1, "")
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.take_channel_commands(),
+        vec![
+            ChannelCommand::List {
+                name: String::new()
+            },
+            ChannelCommand::Ban {
+                name: " General ".into(),
+                player: " Bob".into()
+            },
+            ChannelCommand::SetPassword {
+                name: "1".into(),
+                password: String::new()
+            },
+        ]
+    );
 }
