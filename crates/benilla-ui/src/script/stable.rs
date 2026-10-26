@@ -373,15 +373,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetStablePetInfo",
         lua.create_function(|lua, i: Value| {
             // `is-number` else `Usage: GetStablePetInfo(index)` (`0x848f18`, `0x4cb25b`).
-            let i = i64::from(binding_abi::number_arg(
-                lua,
-                i,
-                "Usage: GetStablePetInfo(index)",
-            )?);
+            let i = binding_abi::number_arg(lua, i, "Usage: GetStablePetInfo(index)")?;
+            // The signed test on `i - 1` (`0x4cb285`-`0x4cb286`): 0 or below is the summoned pet's
+            // record, anything else the stabled array's `i - 1` (`0x4cb288`-`0x4cb298`).
+            let row = if i.wrapping_sub(1) < 0 {
+                Some(0)
+            } else {
+                slot_index(i64::from(i))
+            };
             let pet = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let mut view = view(lua, &model);
-                slot_index(i).and_then(|i| view.state.as_mut()?.slots[i].take())
+                row.and_then(|i| view.state.as_mut()?.slots[i].take())
             };
             if let Some(pet) = &pet {
                 ask_creature(lua, pet, false)?;
@@ -774,6 +777,27 @@ mod tests {
         assert!(s
             .eval::<bool>("return GetStablePetFoodTypes(2) == nil")
             .unwrap());
+    }
+
+    /// The signed test on `i - 1` (`0x4cb285`, `js 0x4cb2a0`) sends 0 and below to the summoned
+    /// pet's record; the stabled pets are `i - 1` of the array.
+    #[test]
+    fn an_index_of_zero_or_below_reads_the_summoned_pet() {
+        let mut s = UiScript::new().unwrap();
+        open(&mut s);
+        for i in ["0", "-1", "-40"] {
+            assert_eq!(
+                s.eval::<String>(&format!("local _, n = GetStablePetInfo({i}) return n"))
+                    .unwrap(),
+                "Rex",
+                "index {i}"
+            );
+        }
+        assert_eq!(
+            s.eval::<String>("local _, n = GetStablePetInfo(1) return n")
+                .unwrap(),
+            "Bruiser"
+        );
     }
 
     #[test]

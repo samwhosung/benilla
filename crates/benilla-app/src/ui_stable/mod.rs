@@ -199,13 +199,23 @@ fn snapshot(
     ask: Ask<'_>,
 ) -> Option<StableState> {
     let mut slots: [Option<StablePetSlot>; NUM_STABLE_SLOTS] = Default::default();
+    // The summoned pet (wire slot byte 1, bit 1 clear) takes row 0; the stabled ones (bit 1 set)
+    // pack behind it in list order, whatever their slot byte says, so with only the second slot
+    // occupied (the server does not renumber) the pet shows in box 1 and `UnstablePet(1)` takes it
+    // (`0x4cab10`-`0x4cac95`, the array `0xb720c8`; `0x4cb285`-`0x4cb298`, `0x4cafa5`-`0x4cafb1`).
+    let mut next = 1;
     for wire in &open.pets {
-        // Seat rows by their slot, not position: a petless hunter's list has no slot-0 row.
-        match slots.get_mut(usize::from(wire.slot)) {
+        let seat = if wire.is_summoned() {
+            0
+        } else {
+            next += 1;
+            next - 1
+        };
+        match slots.get_mut(seat) {
             Some(seat) => *seat = Some(resolve_pet(wire, names, families, stats, ask)),
             None => debug!(
-                "ui_stable: pet {} arrived in slot {} — past the {NUM_STABLE_SLOTS} the window has, dropped",
-                wire.pet_number, wire.slot
+                "ui_stable: pet {} arrived past the {NUM_STABLE_SLOTS} rows the window has, dropped",
+                wire.pet_number
             ),
         }
     }

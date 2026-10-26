@@ -20,9 +20,19 @@ pub struct StabledPet {
     pub name: String,
     /// Loyalty level 1..6 (`Pet.h:57-65`), a `PetLoyalty.dbc` row id, not a string.
     pub loyalty: u32,
-    /// The client's index: 0 is the current pet, 1..=2 the stable slots. The wire byte is one
-    /// higher (`SendStablePet` writes `character_pet.slot + 1`) and is rebased here, once.
+    /// The wire byte less one (`SendStablePet` writes `character_pet.slot + 1`, 1 for the
+    /// current pet), rebased here once. The client does not seat by it: bit 1 of the raw byte
+    /// tells the summoned pet from a stabled one ([`Self::is_summoned`]), and the stabled pets
+    /// take the array in list order (`0x4cabe3`).
     pub slot: u8,
+}
+
+impl StabledPet {
+    /// The row the client files as the summoned pet: bit 1 of the raw slot byte clear
+    /// (`test al,2` at `0x4cabe3`), so a byte of 1, 4 or 5 is summoned and 2 or 3 is stabled.
+    pub fn is_summoned(&self) -> bool {
+        self.slot.wrapping_add(1) & 2 == 0
+    }
 }
 
 /// `SMSG_STABLE_RESULT` codes, vmangos `StableResultCode` (`NPCHandler.cpp:40-47`).
@@ -78,8 +88,8 @@ pub fn stable_swap_pet(npc_guid: u64, pet_number: u32) -> Vec<u8> {
 // No `CMSG_STABLE_REVIVE_PET` (0x0274) verb: vmangos's handler is empty (`NPCHandler.cpp:731`).
 
 /// Read `MSG_LIST_STABLED_PETS` from the server (`NPCHandler.cpp:522-575`). The slot count is how
-/// many are bought (0..=2), not occupied. The current pet's row may be missing, so find rows by
-/// [`StabledPet::slot`], not position.
+/// many are bought (0..=2), not occupied. The current pet's row may be missing: the rows are the
+/// summoned pet ([`StabledPet::is_summoned`]) and the stabled ones in list order.
 pub(super) fn read_list_stabled_pets(r: &mut &[u8]) -> io::Result<(u64, u8, Vec<StabledPet>)> {
     let npc = read_u64_le(r)?;
     let num_pets = read_u8(r)?;
