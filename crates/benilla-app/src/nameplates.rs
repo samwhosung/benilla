@@ -442,8 +442,6 @@ pub(crate) fn drive_nameplates(
         Option<Res<crate::player::CameraControl>>,
         Res<crate::vplates::VPlates>,
         Res<crate::chat_bubble::BubblesActive>,
-        // The selector's party roster (`0xbc6f48`), for the pale party variants.
-        Res<crate::ui_party::GroupState>,
         // The UnitName* CVar mask.
         Res<NameConfig>,
         // The rank strings, read off the current VM ([`NameLineStrings`]).
@@ -471,7 +469,7 @@ pub(crate) fn drive_nameplates(
         Query<(), With<crate::entities::mount::MountChild>>,
     ),
 ) {
-    let (selection, flash, rig, vplates, bubbles, group, name_cfg, pvp_strings, self_guid) = gates;
+    let (selection, flash, rig, vplates, bubbles, name_cfg, pvp_strings, self_guid) = gates;
     let (Ok(cam_tf), Some(atlas)) = (camera.single(), atlas.as_mut()) else {
         return;
     };
