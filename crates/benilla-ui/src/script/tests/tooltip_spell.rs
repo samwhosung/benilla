@@ -1025,6 +1025,73 @@ fn action_hover_delegates_by_kind() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `SetAction` clears first (`0x5323ad`): a slot whose spell has the attack effect (`0x4e59b0`)
+/// is the one white `ATTACK` line, shown, and nil (`0x5323bd`..`0x532409`), never the spell's
+/// plate; an empty slot leaves the cleared tooltip (`0x532425`).
+#[test]
+fn the_attack_slot_is_one_line_and_an_empty_slot_clears() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_spell_tooltip(6603, fireball());
+    s.set_spell_tooltip(133, fireball());
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0x00,
+            action: 6603,
+            ..Default::default()
+        }),
+    );
+    s.set_action_state(
+        1,
+        Some(ActionState {
+            is_attack: true,
+            ..Default::default()
+        }),
+    );
+    s.set_action(
+        2,
+        Some(ActionSlot {
+            kind: 0x00,
+            action: 133,
+            ..Default::default()
+        }),
+    );
+    s.run(
+        r#"
+        ATTACK = "Attack"
+        local a = CreateFrame("Button", "AB1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        local function count(...) return arg.n, arg[1] end
+        ATTACK_N, ATTACK_V = count(tt:SetAction(1))
+    "#,
+    )
+    .unwrap();
+    assert_eq!(left_lines(&mut s), vec!["Attack"]);
+    assert_eq!(
+        s.eval::<(i64, bool, bool, f32, f32, f32)>(
+            "local r, g, b = TTTextLeft1:GetTextColor() \
+             return ATTACK_N, ATTACK_V == nil, TT:IsShown() == 1, r, g, b"
+        )
+        .unwrap(),
+        {
+            let w = crate::color::quant::read32(1.0);
+            (1, true, true, w, w, w)
+        }
+    );
+    s.run("TT:SetOwner(AB1, 'ANCHOR_RIGHT') TT:SetAction(2)")
+        .unwrap();
+    assert_eq!(left_lines(&mut s)[0], "Fireball");
+    s.run("TT:SetAction(3)").unwrap();
+    assert_eq!(
+        s.eval::<i64>("return TT:NumLines()").unwrap(),
+        0,
+        "the empty slot cleared"
+    );
+    assert!(s.take_errors().is_empty());
+}
+
 /// A macro slot's hover is the reference's `0x52b040`: one line, the macro's name in the normal
 /// colour (`0xc0cf60` holds `0xffffffff`, white); a slot whose macro is gone shows no plate.
 #[test]

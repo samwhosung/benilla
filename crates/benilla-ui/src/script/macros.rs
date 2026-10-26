@@ -123,7 +123,7 @@ impl Default for MacroState {
 }
 
 /// `SStrCopy`'s cut of `s` to at most `max` bytes, backed up to a character boundary.
-fn cut_bytes(s: &str, max: usize) -> &str {
+pub(super) fn cut_bytes(s: &str, max: usize) -> &str {
     let mut end = max.min(s.len());
     while !s.is_char_boundary(end) {
         end -= 1;
