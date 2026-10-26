@@ -141,6 +141,52 @@ fn edit_box_max_setters_name_the_box() {
     }
 }
 
+/// EditBox `SetText` and `SetNumber` gate with `lua_isstring` (`0x79854c`, `0x79871c`) and raise
+/// `Usage: %s:SetText("text")` (`0x87a198`) or `Usage: %s:SetNumber(number)` (`0x87beb0`) naming
+/// the box; `Insert` skips a non-string (`0x798494`); `AddHistoryLine` takes exactly one argument
+/// (`0x7989ec`) and raises `Usage: %s:AddHistoryLine("text")` (`0x87becc`).
+#[test]
+fn edit_box_text_setters_gate_their_argument() {
+    let s = script();
+    s.run(
+        r#"
+        TextBox = CreateFrame("EditBox", "TextBox")
+        TextAnon = CreateFrame("EditBox")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        ("TextBox:SetText(nil)", r#"Usage: TextBox:SetText("text")"#),
+        ("TextBox:SetText()", r#"Usage: TextBox:SetText("text")"#),
+        ("TextBox:SetText(true)", r#"Usage: TextBox:SetText("text")"#),
+        ("TextAnon:SetText({})", r#"Usage: <unnamed>:SetText("text")"#),
+        ("TextBox:SetNumber(nil)", "Usage: TextBox:SetNumber(number)"),
+        ("TextAnon:SetNumber(false)", "Usage: <unnamed>:SetNumber(number)"),
+        (
+            "TextBox:AddHistoryLine()",
+            r#"Usage: TextBox:AddHistoryLine("text")"#,
+        ),
+        (
+            "TextAnon:AddHistoryLine('a', 'b')",
+            r#"Usage: <unnamed>:AddHistoryLine("text")"#,
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        TextBox:SetText(12) assert(TextBox:GetText() == "12")
+        TextBox:SetNumber(1e20) assert(TextBox:GetText() == "1e+020")
+        TextBox:SetText("ab") TextBox:Insert(true) TextBox:Insert({}) TextBox:Insert(nil)
+        assert(TextBox:GetText() == "ab")
+        TextBox:Insert(5) assert(TextBox:GetText() == "ab5")
+        TextBox:AddHistoryLine("one")
+    "#,
+    )
+    .unwrap();
+}
+
 /// `SetVerticalScroll` (`0x791400`) and `SetHorizontalScroll` (`0x7912f0`) gate on `lua_isnumber`
 /// (`0x791490`, `0x791380`), so a numeric string scrolls, and anything else raises
 /// `Usage: %s:SetVerticalScroll(offset)` (`0x87b59c`) or the horizontal line (`0x87b574`).

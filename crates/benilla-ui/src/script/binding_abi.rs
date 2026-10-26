@@ -219,6 +219,16 @@ pub(crate) fn method_number(lua: &Lua, this: &Table, v: Value, line: &str) -> ml
     lua.coerce_number(v)?.ok_or_else(|| usage(lua, this, line))
 }
 
+/// A method's string argument: `is-number-or-string` (`0x6f3510`) then `lua_tostring`
+/// (`0x6f3690`), so a number passes as its text, else the method's [`usage`] line naming `this`.
+pub(crate) fn method_string(lua: &Lua, this: &Table, v: Value, line: &str) -> mlua::Result<String> {
+    match lua.coerce_string(v)? {
+        // Lossy: a Lua string is bytes, so invalid UTF-8 costs a glyph, never the call.
+        Some(s) => Ok(s.to_string_lossy()),
+        None => Err(usage(lua, this, line)),
+    }
+}
+
 /// `SetOrientation`'s argument on the StatusBar and the Slider (`0x78f320`, `0x790610`): a
 /// `lua_isstring` value through the token parse `0x6f1a20`, `true` for VERTICAL. A non-string
 /// raises `Usage: %s:SetOrientation("orientation")` (`0x87b108`), a miss

@@ -24,15 +24,17 @@ fn with_editbox<T>(
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
+    // SetText (`0x7984c0`) gates its text with `lua_isstring` (`0x79854c`): nil, a boolean, a
+    // table or no argument raises `Usage: %s:SetText("text")` (`0x87a198`) naming the box.
     m.set(
         "SetText",
-        lua.create_function(|lua, (this, s): (Table, Option<mlua::Value>)| {
-            let s = crate::script::binding_abi::text_arg(lua, s)?;
+        lua.create_function(|lua, (this, v): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            let s = binding_abi::method_string(lua, &this, v, r#"SetText("text")"#)?;
             // SetText keeps a history browse going: the chat parser rewrites each recalled slash
             // line, and ending the browse there would send every Up back to the newest entry.
             // Typed edits, AddHistoryLine and focus gain end it.
-            set_text(lua, h, &s.unwrap_or_default());
+            set_text(lua, h, &s);
             Ok(())
         })?,
     )?;
@@ -41,19 +43,15 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_editbox(lua, &this, |eb| eb.text.clone()))?,
     )?;
     // SetNumber is SetText: `0x798690` and `0x7984c0` are byte-identical but for the usage
-    // string. Its gate is `lua_isstring` (`0x6f3510`), so a string is set verbatim, never parsed,
-    // and nil, a boolean, a table or no argument raises the usage string. On a numeric box `-5` or
-    // `0.8` leaves it empty: the sign or point fails the digit test after the clear has run.
+    // string. Its gate is `lua_isstring` (`0x79871c`), so a string is set verbatim, never parsed,
+    // and nil, a boolean, a table or no argument raises `Usage: %s:SetNumber(number)` (`0x87beb0`)
+    // naming the box. On a numeric box `-5` or `0.8` leaves it empty: the sign or point fails the
+    // digit test after the clear has run.
     m.set(
         "SetNumber",
         lua.create_function(|lua, (this, v): (Table, Value)| {
-            let text = match &v {
-                Value::Integer(i) => crate::script::binding_abi::lua_number_text(*i as f64),
-                Value::Number(n) => crate::script::binding_abi::lua_number_text(*n),
-                Value::String(s) => s.to_str()?.to_string(),
-                _ => return Err(mlua::Error::runtime("Usage: EditBox:SetNumber(number)")),
-            };
             let h = frame_handle_of(lua, &this)?;
+            let text = binding_abi::method_string(lua, &this, v, "SetNumber(number)")?;
             set_text(lua, h, &text);
             Ok(())
         })?,
@@ -67,15 +65,14 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(crate::script::binding_abi::s_str_to_float(&text))
         })?,
     )?;
-    // Insert: a nil is a no-op, not an error, since the reference reads the argument through
-    // `lua_tostring`, which answers NULL for nil; stock `LootFrame.lua:152` inserts a coin row's
-    // nil link unguarded. A number inserts its digits.
+    // Insert (`0x798400`): anything `lua_isstring` refuses is a no-op, never an error
+    // (`0x79848c`-`0x798494`); stock `LootFrame.lua:152` inserts a coin row's nil link unguarded.
+    // A number inserts its digits.
     m.set(
         "Insert",
-        lua.create_function(|lua, (this, s): (Table, Option<mlua::Value>)| {
-            let s = crate::script::binding_abi::text_arg(lua, s)?;
+        lua.create_function(|lua, (this, v): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
-            if let Some(s) = s {
+            if let Some(s) = binding_abi::optional_string(lua, &v) {
                 insert(lua, h, &s, true);
             }
             Ok(())
@@ -184,13 +181,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // The sent-line history (`historyLines`): `ChatEdit_AddHistory` pushes each line, Up and Down
-    // recall them.
+    // recall them. AddHistoryLine (`0x798960`) checks the count, `lua_gettop` == 2 (`0x7989e7`),
+    // else raises `Usage: %s:AddHistoryLine("text")` (`0x87becc`). The argument's type is not
+    // checked: for a non-string's NULL from `lua_tostring` the copy's source check skips the copy
+    // (`0x64a5ae`), leaving the 1-byte line `SMemReAlloc` sized unwritten; benilla stores "".
     m.set(
         "AddHistoryLine",
-        lua.create_function(|lua, (this, line): (Table, Option<String>)| {
-            with_editbox(lua, &this, |eb| {
-                eb.add_history_line(line.as_deref().unwrap_or(""));
-            })
+        lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
+            with_editbox(lua, &this, |_| ())?;
+            let [line] = <[Value; 1]>::try_from(args.into_iter().collect::<Vec<_>>())
+                .map_err(|_| binding_abi::usage(lua, &this, r#"AddHistoryLine("text")"#))?;
+            let line = binding_abi::optional_string(lua, &line).unwrap_or_default();
+            with_editbox(lua, &this, |eb| eb.add_history_line(&line))
         })?,
     )?;
     // SetHistoryLines (`0x799450`), SetBlinkSpeed (`0x798250`) and SetTextInsets (`0x798a60`) gate
