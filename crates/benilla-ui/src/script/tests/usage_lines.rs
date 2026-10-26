@@ -529,6 +529,23 @@ fn create_font_raises_its_usage_line() {
     .unwrap();
 }
 
+/// The Font's `IsObjectType` (`0x79fe60`) tests `lua_isstring` (`0x79feec`) and raises
+/// `Usage: %s:IsObjectType("TYPE")` (`0x8794e4`) naming the font.
+#[test]
+fn font_is_object_type_raises_its_usage_line() {
+    let s = script();
+    s.run(r#"TypeFont = CreateFont("TypeFont")"#).unwrap();
+    for call in ["TypeFont:IsObjectType()", "TypeFont:IsObjectType(true)"] {
+        let e = err(&s, call);
+        assert!(
+            e.contains(r#"Usage: TypeFont:IsObjectType("TYPE")"#),
+            "`{call}` -> {e}"
+        );
+    }
+    s.run(r#"assert(TypeFont:IsObjectType("font") == 1 and TypeFont:IsObjectType(5) == nil)"#)
+        .unwrap();
+}
+
 /// `IsFrameType` (`0x773700`) raises IsObjectType's line for a value `lua_isstring` refuses
 /// (`0x77378c`, `Usage: %s:IsObjectType("TYPE")` `0x8794e4` pushed at `0x7737af`).
 #[test]

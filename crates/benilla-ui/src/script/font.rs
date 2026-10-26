@@ -640,10 +640,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, _this: Table| Ok("Font"))?,
     )?;
     // `1` or nil, never a boolean, like the Region's (`0x7a1290`): the Font's own `IsObjectType`
-    // (`0x79fe60`) answers a number. Its argument handling is untraced; mlua's coercion applies.
+    // (`0x79fe60`) answers a number. Its argument passes `lua_isstring` (`0x79feec`), else
+    // `Usage: %s:IsObjectType("TYPE")` (`0x8794e4`) naming the font.
     m.set(
         "IsObjectType",
-        lua.create_function(|_, (_this, ty): (Table, String)| {
+        lua.create_function(|lua, (this, ty): (Table, Value)| {
+            id_of(lua, &this)?;
+            let ty = binding_abi::method_string(lua, &this, ty, r#"IsObjectType("TYPE")"#)?;
             Ok(binding_abi::flag(ty.eq_ignore_ascii_case("font")))
         })?,
     )?;

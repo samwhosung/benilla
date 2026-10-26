@@ -1462,6 +1462,15 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     );
     s.run(r#"held:SetText("back"); held:SetText(nil)"#).unwrap();
     assert_eq!(text_of(&s, "held"), None);
+    // `lua_tostring` (`0x79d81f`) is NULL for a boolean, a table or a function, which clears
+    // like nil and never raises: `fs:SetText(cond and "text")`.
+    for clear in ["false", "{}", "print"] {
+        s.run(&format!(r#"held:SetText("back"); held:SetText({clear})"#))
+            .unwrap();
+        assert_eq!(text_of(&s, "held"), None, "SetText({clear}) clears");
+    }
+    s.run("held:SetText(12)").unwrap();
+    assert_eq!(text_of(&s, "held").as_deref(), Some("12"));
 
     // `Button:SetText` gates on `lua_isstring` (`0x780dac`): nil, a boolean or a table raises
     // `Usage: %s:SetText("text")` (`0x87a198`) and leaves the label alone; a number is its text.

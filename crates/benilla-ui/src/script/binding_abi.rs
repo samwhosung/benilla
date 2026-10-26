@@ -133,17 +133,6 @@ pub(crate) fn optional_string(lua: &Lua, v: &Value) -> Option<String> {
     }
 }
 
-/// A free-text argument for the text sinks (`SetText`, `SetFormattedText`, `EditBox:Insert`):
-/// `Option<String>`'s conversion, except that a string that is not valid UTF-8 becomes lossy text
-/// instead of raising, as the reference takes bytes.
-pub(crate) fn text_arg(lua: &Lua, v: Option<Value>) -> mlua::Result<Option<String>> {
-    match v {
-        None | Some(Value::Nil) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.to_string_lossy())),
-        Some(other) => mlua::FromLua::from_lua(other, lua).map(Some),
-    }
-}
-
 /// Lua's number-to-string as the 1.12 client compiles it: MSVC's `sprintf("%.14g")`
 /// (`luaV_tostring` `0x6f7c80`, format `0x871960`), the VM's own ([`mlua::benilla_lua::fmt_g14`]).
 /// `EditBox:SetNumber` (`0x798690`) formats through it too, being byte-identical to `SetText`

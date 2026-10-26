@@ -43,7 +43,7 @@ fn store_text(lua: &Lua, rh: crate::widget::RegionHandle, text: Option<String>) 
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetText",
-        lua.create_function(|lua, (this, text): (Table, Option<mlua::Value>)| {
+        lua.create_function(|lua, (this, text): (Table, mlua::Value)| {
             let rh = region_handle_of(lua, &this)?;
             // A string with no font raises before its argument is read and sets nothing
             // (`0x79d7e5`, `0x79d810`), naming the receiver or `<unnamed>`.
@@ -57,8 +57,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     crate::script::binding_abi::name_of(lua, &this)
                 )));
             }
-            // `text_arg`, since a Lua string is bytes and a slice of one need not be valid UTF-8.
-            let text = crate::script::binding_abi::text_arg(lua, text)?;
+            // `lua_tostring` (`0x79d81f`) answers NULL for anything but a string or a number
+            // (`0x6f36c5`), and `0x771d80(NULL, 1)` empties the text: a boolean or a table clears
+            // as nil does and never raises. Lossy, as a Lua string is bytes.
+            let text = crate::script::binding_abi::optional_string(lua, &text);
             store_text(lua, rh, text);
             Ok(())
         })?,
