@@ -2085,3 +2085,72 @@ fn set_buyback_item_reads_its_slot_before_its_receiver() {
     s.run("BbTip:SetBuybackItem('2') BbTip:SetBuybackItem(1)")
         .unwrap();
 }
+
+/// The drawn font strings' texts, in draw order.
+fn written(s: &mut UiScript) -> Vec<String> {
+    s.resolve();
+    let mut texts: Vec<(u128, String)> = s
+        .extract()
+        .iter()
+        .filter_map(|q| match &q.content {
+            QuadContent::Text { text: Some(t), .. } => Some((q.z, t.clone())),
+            _ => None,
+        })
+        .collect();
+    texts.sort_by_key(|&(z, _)| z);
+    texts.into_iter().map(|(_, t)| t).collect()
+}
+
+/// A region's place in its layer is its last registration (`0x77fcb0` → `0x76a860`, drawn from
+/// the list's head by `0x76b3a0`): `Show` after `Hide` (`0x79ce59`) and a new draw layer
+/// (`0x79a851` → `0x77fd10`) move it last, the same layer moves nothing, and the frame's show
+/// registers its regions again in list order (`0x76aeac`).
+#[test]
+fn a_region_registered_again_draws_last_in_its_layer() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        F = CreateFrame("Frame", "Places")
+        F:SetPoint("CENTER", 0, 0); F:SetWidth(200); F:SetHeight(100)
+        local function text(t)
+            local fs = F:CreateFontString(nil, "ARTWORK")
+            fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
+            fs:SetPoint("CENTER", F, "CENTER", 0, 0)
+            fs:SetText(t)
+            return fs
+        end
+        A = text("a"); B = text("b")
+    "#,
+    )
+    .unwrap();
+    assert_eq!(written(&mut s), ["a", "b"], "creation order");
+    s.run("A:Hide(); A:Show()").unwrap();
+    assert_eq!(written(&mut s), ["b", "a"], "a shown again draws last");
+    s.run("A:Show()").unwrap();
+    s.run("B:SetDrawLayer(\"ARTWORK\")").unwrap();
+    assert_eq!(
+        written(&mut s),
+        ["b", "a"],
+        "a shown region and the same layer stay"
+    );
+    s.run("B:SetDrawLayer(\"OVERLAY\"); B:SetDrawLayer(\"ARTWORK\")")
+        .unwrap();
+    assert_eq!(
+        written(&mut s),
+        ["a", "b"],
+        "a new layer relinks at the tail"
+    );
+    s.run("F:Hide(); F:Show()").unwrap();
+    assert_eq!(
+        written(&mut s),
+        ["a", "b"],
+        "the frame's show re-registers in list order"
+    );
+    s.run("B:Hide(); A:Hide(); F:Hide(); B:Show(); F:Show(); A:Show()")
+        .unwrap();
+    assert_eq!(written(&mut s), ["b", "a"]);
+    s.run("F:Hide(); F:Show()").unwrap();
+    assert_eq!(written(&mut s), ["a", "b"]);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

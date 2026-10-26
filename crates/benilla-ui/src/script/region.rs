@@ -80,10 +80,17 @@ pub(super) fn link_region(
         // the region keeps its rect until the resolve reaches it.
         model.unsettle_region(rh);
     }
-    if let Some(r) = model.arena.region_mut(rh) {
-        r.draw_layer = layer;
-    }
+    let relayered = model
+        .arena
+        .region_mut(rh)
+        .map(|r| std::mem::replace(&mut r.draw_layer, layer) != layer)
+        .unwrap_or(false);
     model.relink_region_layout(rh, drew, old_loading, moved, Some(shown));
+    // A new owner's link took the tail already; the same owner registers again on a start or on a
+    // new layer, which unregisters first (`0x77fda5`-`0x77fdbb`).
+    if !moved {
+        model.note_region_registered(rh, drew, relayered);
+    }
 }
 
 /// Apply a Button state machine's writes to the regions' shown bit, the one `Show`/`Hide` write.

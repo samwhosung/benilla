@@ -310,7 +310,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetDrawLayer(layer) (`0x79a780`) reads the layer name alone, against the five-row table at
     // `0x811a80` (`0x6f18b0`); a further argument is never read, as 1.12 has no sub-level within a
     // layer. A name off the table, or no name, raises the Usage line naming the region
-    // (`0x87c42c`), and the layer stays.
+    // (`0x87c42c`), and the layer stays. A new layer relinks a drawn region at its tail
+    // (`0x79a851` → `0x77fd10`, `0x77fda5`-`0x77fdc6`); the same layer does nothing.
     m.set(
         "SetDrawLayer",
         lua.create_function(|lua, (this, layer): (Table, Value)| {
@@ -323,9 +324,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 return Err(usage(lua, &this, "SetDrawLayer(\"layer\")"));
             };
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            if let Some(region) = model.arena.region_mut(rh) {
-                region.draw_layer = dl;
-            }
+            let drew = model.region_draws(rh);
+            let relayered = model
+                .arena
+                .region_mut(rh)
+                .map(|r| std::mem::replace(&mut r.draw_layer, dl) != dl)
+                .unwrap_or(false);
+            model.note_region_registered(rh, drew, relayered);
             Ok(())
         })?,
     )?;

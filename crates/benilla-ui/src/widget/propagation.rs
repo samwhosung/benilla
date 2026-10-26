@@ -41,6 +41,15 @@ impl WidgetArena {
         }
         f.effective_visible = true;
         self.resequence_to_tail(h);
+        // The show registers each region in list order (`0x76ae8a`-`0x76aeac` → `0x77fcb0`), which
+        // takes only the shown ones. Every attached region is re-stamped here, hidden ones too: a
+        // hidden one is re-stamped again when it shows, so the drawn ones keep the same order.
+        let regions = self.frame(h).map(|f| f.regions.clone()).unwrap_or_default();
+        for rh in regions {
+            if self.region(rh).is_some_and(|r| !r.detached) {
+                self.restamp_region(rh);
+            }
+        }
     }
 
     /// The hide transition's own step (`0x76ad50` up to its child walk): nothing unless the frame

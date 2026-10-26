@@ -477,3 +477,26 @@ fn a_region_leaving_its_parent_empties_the_kind_slot_that_held_it() {
     };
     assert_eq!((s.checked_tex, s.normal), (None, None));
 }
+
+// ── Region places ────────────────────────────────────────────────────────────────────────────
+
+/// A renumber at the key's cap keeps the registration order, not the list order: a region
+/// registered again stays behind the one it passed.
+#[test]
+fn the_decl_renumber_keeps_the_registration_order() {
+    let mut a = arena();
+    let f = a.create(FrameKind::Frame, None, None);
+    let layer = crate::order::DrawLayer::Artwork;
+    let first = a.create_region(f, RegionKind::Texture, layer, 0).unwrap();
+    let second = a.create_region(f, RegionKind::Texture, layer, 0).unwrap();
+    let third = a.create_region(f, RegionKind::Texture, layer, 0).unwrap();
+    a.restamp_region(first);
+    a.frame_mut(f).unwrap().next_decl = crate::order::DECL_CAP;
+    a.restamp_region(third);
+    let decl = |a: &WidgetArena, r| a.region(r).unwrap().decl_seq;
+    // Renumbered as second, third, first; then third registers again at the tail.
+    assert_eq!(
+        [decl(&a, second), decl(&a, first), decl(&a, third)],
+        [0, 2, 3]
+    );
+}

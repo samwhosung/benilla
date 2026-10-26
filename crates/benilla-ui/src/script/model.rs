@@ -2357,6 +2357,7 @@ impl Model {
     /// The layout step of a write to region `rh`'s shown bit that `set_region_hidden` could not
     /// wrap, given whether it drew before.
     pub(crate) fn note_region_draw(&mut self, rh: RegionHandle, drew: bool) {
+        self.note_region_registered(rh, drew, false);
         let now = self.region_draws(rh);
         if drew == now || self.region_owner_loading(rh) {
             return;
@@ -2365,6 +2366,16 @@ impl Model {
             self.undefer_region(rh);
         } else {
             self.defer_region(rh);
+        }
+    }
+
+    /// The draw place of region `rh` after a write that may register it (`0x77fcb0`), given
+    /// whether it drew before and whether the write unregistered it first (a new layer,
+    /// `0x77fdb1`): one that draws now and did not, or was relinked, takes its layer list's tail
+    /// (`0x76a860`). The load window does not gate the link, only the deferral (`0x77fcd7`).
+    pub(crate) fn note_region_registered(&mut self, rh: RegionHandle, drew: bool, relinked: bool) {
+        if self.region_draws(rh) && (!drew || relinked) {
+            self.arena.restamp_region(rh);
         }
     }
 

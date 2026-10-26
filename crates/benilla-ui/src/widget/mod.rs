@@ -285,7 +285,9 @@ pub struct Region {
     /// The engine's own order within a layer, which only the EditBox caret sets, to draw over the
     /// text; 1.12 gives Lua and XML no sub-level (`0x76a860`, `0x79a780`).
     pub sub_level: i8,
-    /// The index within the owner frame, the last within-layer draw tiebreak.
+    /// The place in its owner's layer list, the last within-layer draw tiebreak: taken at each
+    /// registration (`0x77fcb0` → `0x76a860`, a tail link the layer is drawn from the head of,
+    /// `0x76b3a0`), so the region registered last draws last in its layer.
     pub decl_seq: u32,
     /// `Region:SetParent(nil)`: unlinked and not drawn, but not destroyed (`0x77fd10` with a null
     /// parent). The owner's `regions` keeps it so `destroy` frees it; `SetParent(frame)` relinks.
@@ -773,13 +775,14 @@ impl WidgetArena {
         Some(handle)
     }
 
-    /// The next declaration seq on `owner`, the region's link position. At the draw key's cap the
-    /// frame's regions renumber from 0 in link order (`regions` ascends by seq), so a frame that
-    /// rebuilds regions for ever, a backdrop set on every show, keeps its order and never
-    /// outgrows the key.
+    /// The next declaration seq on `owner`, the region's place in its layer list. At the draw
+    /// key's cap the frame's regions renumber from 0 in their current order, so a frame that
+    /// rebuilds or re-registers regions for ever, a backdrop set on every show, keeps its order
+    /// and never outgrows the key.
     pub(crate) fn take_decl(&mut self, owner: FrameHandle) -> Option<u32> {
         if self.frame(owner)?.next_decl >= crate::order::DECL_CAP {
-            let regions = self.frame(owner)?.regions.clone();
+            let mut regions = self.frame(owner)?.regions.clone();
+            regions.sort_by_key(|&rh| self.region(rh).map_or(0, |r| r.decl_seq));
             let mut next = 0;
             for rh in regions {
                 if let Some(r) = self.region_mut(rh) {
@@ -793,6 +796,19 @@ impl WidgetArena {
         let d = f.next_decl;
         f.next_decl += 1;
         Some(d)
+    }
+
+    /// Register `rh` in its owner's layer list again (`0x77fcb0` → `0x76a860`): it takes the
+    /// list's tail and draws over the rest of its layer.
+    pub(crate) fn restamp_region(&mut self, rh: RegionHandle) {
+        let Some(owner) = self.region(rh).map(|r| r.owner) else {
+            return;
+        };
+        if let Some(d) = self.take_decl(owner) {
+            if let Some(r) = self.region_mut(rh) {
+                r.decl_seq = d;
+            }
+        }
     }
 
     /// Free one region, as `CSimpleHTML::SetText` deletes the last parse's blocks (`0x78a580`)
