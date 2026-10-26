@@ -664,3 +664,19 @@ fn tag_method_chains_reach_the_clients_depth() {
         "5"
     );
 }
+
+/// `math_deg` multiplies by the double 180/pi (`0x822d28`, `0x7fb14d`), where dividing by pi/180
+/// rounds otherwise for about one value in nine.
+#[test]
+fn math_deg_multiplies_by_180_over_pi() {
+    assert_eq!(
+        run("return math.deg(-7.312715117751976) == -418.9877130287011"),
+        "true"
+    );
+    assert_eq!(
+        run("return math.deg(-7.312715117751976) == -418.987713028701"),
+        "false"
+    );
+    assert_eq!(run("return math.deg(math.pi)"), "180");
+    assert_eq!(run("return math.deg(1) == 1 * (180 / math.pi)"), "true");
+}

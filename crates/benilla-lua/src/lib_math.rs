@@ -55,16 +55,19 @@ pub fn math_pow() -> crate::heap::NativeFn {
     |vm, n| bin(vm, n, pow)
 }
 
-/// 5.1's `RADIANS_PER_DEGREE`, `PI/180.0`.
+/// `PI/180.0`, the double at `0x822d30`, which `math_rad` multiplies by (`0x7fb17d`).
 const RADIANS_PER_DEGREE: f64 = std::f64::consts::PI / 180.0;
 
-/// `math_deg`: a division by `RADIANS_PER_DEGREE`, which rounds otherwise than Rust's
-/// `to_degrees` (a product with `180/PI`) for about one value in nine.
+/// `180.0/PI`, the double at `0x822d28` (57.29577951308232), which `math_deg` multiplies by
+/// (`0x7fb14d`); a division by `RADIANS_PER_DEGREE` rounds otherwise for about one value in nine.
+const DEGREES_PER_RADIAN: f64 = 180.0 / std::f64::consts::PI;
+
+/// `math_deg` (`0x7fb140`).
 fn deg(x: f64) -> f64 {
-    x / RADIANS_PER_DEGREE
+    x * DEGREES_PER_RADIAN
 }
 
-/// `math_rad`: a product with `RADIANS_PER_DEGREE`.
+/// `math_rad` (`0x7fb170`).
 fn rad(x: f64) -> f64 {
     x * RADIANS_PER_DEGREE
 }
