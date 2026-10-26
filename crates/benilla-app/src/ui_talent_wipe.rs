@@ -6,20 +6,21 @@
 //! The stock surface (`StaticPopup.lua:1289-1304`, `UIParent.lua:123`, `533-538`) is
 //! `CONFIRM_TALENT_WIPE`, whose one argument is the cost in copper for the dialog's money frame;
 //! `ConfirmTalentWipe()`, the Accept; and `CheckTalentMasterDist()`, polled from `OnUpdate`,
-//! which hides the dialog the frame it goes false. The reference's `0x5df980` serves both
-//! directions: a question gates on `d² <= [0xc4c28c]`, the constant behind
-//! [`crate::target::SERVICE_RANGE_SQ`], latches the guid (`0xc4d7a0`) and the cost and fires the
-//! event; the Accept calls it with a zero guid, which takes the latch and repeats the gate.
+//! which hides the dialog the frame it goes false and reads the latch through the call host
+//! ([`crate::ui_talent::TalentLive`]). The reference's `0x5df980` serves both directions: a
+//! question gates on `d² <= [0xc4c28c]`, the constant behind [`crate::target::SERVICE_RANGE_SQ`],
+//! latches the guid (`0xc4d7a0`) and the cost and fires the event inside the handler (`0x5dfa3f`),
+//! here on the notice lane at the packet's place; the Accept calls it with a zero guid, which
+//! takes the latch and repeats the gate.
 //!
 //! Deviation: vmangos answers a reset with nothing to reset by asking again with a zero guid
 //! (`SkillHandler.cpp:52`), which the 1.12 client takes as its Accept and answers, looping; this
 //! drops a zero-guid question, because it means there is nothing to ask.
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands};
-use crate::ui_script::UiFeed;
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The pending respec question; everything the dialog reads rides the event's argument.
@@ -30,22 +31,18 @@ pub(crate) struct TalentWipeState {
     npc: Option<u64>,
     /// The reset's cost in copper: the event's `arg1`, and what the Accept compares with the purse.
     cost: u32,
-    /// A dialog the feed still owes, set per packet: asking again after a decline is a second
-    /// dialog, which a state diff would swallow.
-    ask: bool,
 }
 
 impl TalentWipeState {
-    /// Inbound `MSG_TALENT_WIPE_CONFIRM`: parks guid and cost and owes the UI a dialog. The net arm
-    /// drops a zero guid before it gets here.
+    /// Inbound `MSG_TALENT_WIPE_CONFIRM`: parks guid and cost. The net arm drops a zero guid
+    /// before it gets here.
     pub(crate) fn ask(&mut self, npc: u64, cost: u32) {
         self.npc = Some(npc);
         self.cost = cost;
-        self.ask = true;
     }
 
     /// The guid to answer with, if a question is live.
-    fn pending(&self) -> Option<u64> {
+    pub(crate) fn pending(&self) -> Option<u64> {
         self.npc
     }
 
@@ -53,7 +50,6 @@ impl TalentWipeState {
     pub(crate) fn clear(&mut self) {
         self.npc = None;
         self.cost = 0;
-        self.ask = false;
     }
 }
 
@@ -68,33 +64,6 @@ impl NpcSession for TalentWipeState {
     fn close(&mut self) {
         self.clear();
     }
-}
-
-/// Publishes `CheckTalentMasterDist()` every frame and fires `CONFIRM_TALENT_WIPE(cost)` for a
-/// question still owed.
-fn feed_talent_wipe(mut vm: crate::script_calls::VmWith<ResMut<'static, TalentWipeState>>) {
-    if !vm.run(|script| script.is_some()) {
-        return;
-    }
-    let (pending, owed) = {
-        let mut wipe = vm.own();
-        let owed = std::mem::take(&mut wipe.ask).then_some(wipe.cost);
-        (wipe.pending().is_some(), owed)
-    };
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        script.set_talent_master_pending(pending);
-        // The cost in copper as a number, the reference's `"%d"` fire (`0x5dfa3f`), which the
-        // dialog's `MoneyFrame_Update` takes.
-        if let Some(cost) = owed {
-            script.fire_event(
-                "CONFIRM_TALENT_WIPE",
-                vec![ScriptValue::Int(i64::from(cost))],
-            );
-        }
-    })
 }
 
 /// `ConfirmTalentWipe()`'s answer inside its call (`0x5df980` with a zero guid): with a question
@@ -156,13 +125,31 @@ mod net {
     }
 
     /// A zero trainer guid is vmangos's refusal, nothing to reset, so nothing goes on screen.
-    fn on_confirm(In(ev): In<SessionEvent>, mut wipe: ResMut<TalentWipeState>) {
+    /// A trainer this client holds no unit for (`0x5df9be`), or one past `d² <= [0xc4c28c]` from
+    /// the player at the packet (`0x5dfa0d`), drops the question. Asking again after a decline is
+    /// a second dialog, each its packet's.
+    fn on_confirm(
+        In(ev): In<SessionEvent>,
+        mut wipe: ResMut<TalentWipeState>,
+        mut lane: ResMut<crate::field_watch::NoticeLane>,
+        index: Res<crate::net::GuidIndex>,
+        me: Query<&Transform, With<crate::net::SelfPlayer>>,
+        units: Query<&Transform>,
+    ) {
         if let SessionEvent::TalentWipeConfirm { trainer, cost } = ev {
+            let at = index.0.get(&trainer).and_then(|&e| units.get(e).ok());
+            let in_range = at.zip(me.iter().next()).is_some_and(|(at, me)| {
+                at.translation.distance_squared(me.translation) <= crate::target::SERVICE_RANGE_SQ
+            });
             if trainer == 0 {
                 debug!("net: talent wipe refused (no talents to reset) — no dialog");
+            } else if !in_range {
+                debug!("net: trainer {trainer:#x} missing or out of range — the question drops");
             } else {
                 debug!("net: trainer {trainer:#x} asks to wipe talents for {cost} copper");
+                // The latch, then the event (`0x5dfa3f`).
                 wipe.ask(trainer, cost);
+                lane.write(crate::field_watch::FieldNotice::TalentWipe { cost });
             }
         }
     }
@@ -182,7 +169,6 @@ impl Plugin for UiTalentWipePlugin {
                 close_npc_session_out_of_range::<TalentWipeState>
                     .after(benilla_world::schedule::WorldStage::Net)
                     .before(crate::vm_pass::VmPass::Resume),
-                feed_talent_wipe.in_set(UiFeed),
             ),
         );
     }
@@ -193,34 +179,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn asking_twice_owes_two_dialogs() {
+    fn asking_again_takes_the_new_cost() {
         let mut wipe = TalentWipeState::default();
         assert_eq!(wipe.pending(), None);
-
         wipe.ask(0x2a, 15_000);
-        assert!(wipe.ask);
-        wipe.ask = false; // the feed fired the first dialog
-        assert_eq!(wipe.pending(), Some(0x2a), "the guid outlives the fire");
-        assert_eq!(
-            wipe.cost, 15_000,
-            "and so does the cost the money frame reads"
-        );
-
+        assert_eq!(wipe.pending(), Some(0x2a));
         wipe.ask(0x2a, 25_000);
-        assert!(wipe.ask, "the same trainer asking again owes a dialog");
-        assert_eq!(
-            wipe.cost, 25_000,
-            "at the NEW cost — a reset climbs the price"
-        );
+        assert_eq!(wipe.cost, 25_000, "a reset climbs the price");
     }
 
     #[test]
-    fn closing_retracts_the_guid_the_cost_and_the_unfired_dialog() {
+    fn closing_retracts_the_guid_and_the_cost() {
         let mut wipe = TalentWipeState::default();
         wipe.ask(0x2a, 15_000);
         wipe.close();
         assert_eq!(wipe.pending(), None);
         assert_eq!(wipe.cost, 0);
-        assert!(!wipe.ask);
     }
 }

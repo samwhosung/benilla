@@ -110,6 +110,15 @@ pub(crate) enum FieldNotice {
     /// The maximum's and the permanent bonus's watch `0x5de450`: the profession list's rebuild
     /// (`0x5de457`), then the skill list's (`0x5de45c`).
     SkillMax,
+    /// `0x4b25b0`'s live tail for a learned spell that entered the book: `LEARNED_SPELL_IN_TAB`
+    /// (510) with its tab's 1-based place (`0x4b2b92`).
+    LearnedInTab { tab: i64 },
+    /// A class trainer's respec question, `MSG_TALENT_WIPE_CONFIRM`'s arm of `0x5df980`:
+    /// `CONFIRM_TALENT_WIPE` with the cost in copper (`0x5dfa3f`), after the latch.
+    TalentWipe { cost: u32 },
+    /// The point counters' watch `0x4c7000`: `CHARACTER_POINTS_CHANGED` (264) with the change of
+    /// the talent points and of the free professions, in that order (`0x4c7086`-`0x4c7098`).
+    CharacterPoints { talent: i32, profession: i32 },
     /// The skill value watch `0x5de180`. Past its gate (`0x5de20c`, `shown` unlike `old`): the
     /// skill list's rebuild (`0x5de2a7`), then its line for the active player:
     /// `ERR_SKILL_GAINED_S` over an old value of 0 (`0x5de378`), else `ERR_SKILL_UP_SI` with the
@@ -213,6 +222,7 @@ pub(crate) mod id {
     pub(crate) const PET_UI_UPDATE: u16 = 427;
     pub(crate) const PLAYTIME_CHANGED: u16 = 530;
     pub(crate) const SPELLS_CHANGED: u16 = 260;
+    pub(crate) const UPDATE_SHAPESHIFT_FORMS: u16 = 387;
     pub(crate) const PET_BAR_UPDATE: u16 = 353;
     pub(crate) const AREA_SPIRIT_HEALER_IN_RANGE: u16 = 527;
     pub(crate) const AREA_SPIRIT_HEALER_OUT_OF_RANGE: u16 = 528;
@@ -313,6 +323,10 @@ pub(crate) fn bridge_len(id: u16) -> u16 {
 const VISIBLE_ITEMS_WATCH: (u16, u16) = (0x118, 0x390);
 const QUEST_LOG_WATCH: (u16, u16) = (0x28, 0xf0);
 
+/// The active player's point counters' watch `0x4c7000`, `PLAYER_CHARACTER_POINTS1` and `2` at
+/// the player section's `+0xe48`, 8 bytes, registered at world entry (`0x4c6fce`, `0x4c6fd8`).
+const CHARACTER_POINTS: (u16, u16) = (0xe48, 8);
+
 /// The active player's ammunition watch `0x4c70b0`, `PLAYER_AMMO_ID` at the player section's
 /// `+0x102c`, registered at world entry (`0x4c6fea`, from `0x49097e`).
 const AMMO_ID: (u16, u16) = (0x102c, 4);
@@ -378,6 +392,10 @@ const PERSUADED: (u16, u16) = (0x30, 8);
 const PET_NUMBER: (u16, u16) = (0x214, 4);
 const DYNAMIC_FLAGS: (u16, u16) = (0x224, 4);
 const ENTRY: (u16, u16) = (0xc, 4);
+
+/// The unit type watcher `0x6045b0` on `UNIT_FIELD_LEVEL`, the unit section's `+0x70`
+/// (`0x604263`), whose level change `0x60cdd0` runs a player's `0x5edb60` (`0x60ce4b`).
+const LEVEL: (u16, u16) = (0x70, 4);
 
 /// The unit type watchers of `0x6041f0` whose callbacks run the usable refresh `0x4b31c0`: the
 /// health (`0x604294`, `0x6046f0`), the five powers as one watch (`0x6042ae`, `0x604860`), the
@@ -775,6 +793,12 @@ pub(crate) fn placed_values(
             pass.signal(at, guid, id::UNIT_FACTION);
         }
     }
+    // A level change on the active player (`0x5edb6f`): the book's `SPELLS_CHANGED` with no sort
+    // (`0x5edb7b` → `0x4b2fd0(0, 0)`, `0x4b302a`).
+    if let Some(at) = at(UNIT_SECTION, LEVEL, List::Type).filter(|_| mine) {
+        let id = id::SPELLS_CHANGED;
+        pass.push(at, FieldNotice::Global { id });
+    }
 
     // The bridge (`0x51bbb0`), the object's own watches.
     for bridge in BRIDGE_IDS {
@@ -923,6 +947,22 @@ pub(crate) fn placed_values(
                 at,
                 FieldNotice::Global {
                     id: id::PLAYER_MONEY,
+                },
+            );
+        }
+        // `0x4c7000`: each counter's change, against the copy its packet's write took
+        // (`0x4c7086`-`0x4c7098`).
+        if let Some(at) = at(PLAYER_SECTION, CHARACTER_POINTS, List::Object) {
+            let delta = |field: u16| {
+                block
+                    .edge(PLAYER_SECTION + field / 4)
+                    .map_or(0, |(old, new)| new.wrapping_sub(old) as i32)
+            };
+            pass.push(
+                at,
+                FieldNotice::CharacterPoints {
+                    talent: delta(CHARACTER_POINTS.0),
+                    profession: delta(CHARACTER_POINTS.0 + 4),
                 },
             );
         }
@@ -1997,6 +2037,27 @@ mod tests {
         assert_eq!(
             block_around(&mut me, &around, ME, &[(12, 0x55)]),
             [signal(ME, 29), signal(MOB, 29)]
+        );
+    }
+
+    /// The level's type watcher signals the book for the active player alone (`0x5edb6f`), ahead
+    /// of the bridge's `UNIT_LEVEL` on the same field.
+    #[test]
+    fn a_level_change_signals_the_book_for_the_active_player() {
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(34, 2)]),
+            [
+                FieldNotice::Global {
+                    id: id::SPELLS_CHANGED
+                },
+                bridge(ME, id::UNIT_LEVEL)
+            ]
+        );
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), 0x08, &[(34, 2)]),
+            [bridge(0x08, id::UNIT_LEVEL)]
         );
     }
 

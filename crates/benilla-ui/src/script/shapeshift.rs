@@ -33,6 +33,11 @@ pub(crate) struct StoredShapeshiftForm {
 }
 
 impl super::UiScript {
+    /// How many forms the stance bar's seat holds, `GetNumShapeshiftForms` off the copy.
+    pub fn shapeshift_form_count(&self) -> usize {
+        self.model_ref().shapeshift_forms.len()
+    }
+
     /// Replace the form list, in bar order; the app fires `UPDATE_SHAPESHIFT_FORMS` itself.
     pub fn set_shapeshift_forms(&mut self, forms: Vec<ShapeshiftFormView>) {
         let mut model = self.model_mut();

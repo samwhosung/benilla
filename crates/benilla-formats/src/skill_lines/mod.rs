@@ -285,6 +285,13 @@ impl SkillLineCatalog {
         self
     }
 
+    /// This catalog with a `SkillLineCategory.dbc` row of `(id, name, displayOrder)`, for tests
+    /// and fixtures.
+    pub fn with_category(mut self, id: u32, name: &str, order: u32) -> Self {
+        self.categories.insert(id, (name.to_string(), order));
+        self
+    }
+
     /// This catalog with a `SkillRaceClassInfo.dbc` row of `flags` for every race and class on
     /// each line, for tests and fixtures.
     pub fn with_race_class_flags(mut self, lines: impl IntoIterator<Item = (u32, u32)>) -> Self {

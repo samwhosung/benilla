@@ -454,6 +454,11 @@ pub(crate) fn fire(
                 _ => return,
             };
             script.fire_event(event, vec![super::player_token()]);
+            // The main hand and the ranged slot then signal the book (`0x5deeed`), which shows
+            // their weapons' icons; the off hand returns first (`0x5deede`).
+            if slot != 16 {
+                script.fire_event("SPELLS_CHANGED", vec![]);
+            }
         }
         FieldNotice::Global { id } => {
             if let Some(global) = global_event(id) {
@@ -462,6 +467,23 @@ pub(crate) fn fire(
         }
         // `0x5ddffa`.
         FieldNotice::ComboPoints => script.fire_event("PLAYER_COMBO_POINTS", vec![]),
+        // `SignalEvent2(0x1fe, "%d", tab + 1)` (`0x4b2b92`).
+        FieldNotice::LearnedInTab { tab } => {
+            script.fire_event("LEARNED_SPELL_IN_TAB", vec![ScriptValue::Int(tab)])
+        }
+        // `0x5dfa3f`: the cost as a number, which the dialog's `MoneyFrame_Update` takes.
+        FieldNotice::TalentWipe { cost } => script.fire_event(
+            "CONFIRM_TALENT_WIPE",
+            vec![ScriptValue::Int(i64::from(cost))],
+        ),
+        // `0x4c7098`, the two changes as numbers: `ChatFrame.lua:1326` tests `arg2 > 0`.
+        FieldNotice::CharacterPoints { talent, profession } => script.fire_event(
+            "CHARACTER_POINTS_CHANGED",
+            vec![
+                ScriptValue::Int(i64::from(talent)),
+                ScriptValue::Int(i64::from(profession)),
+            ],
+        ),
         FieldNotice::LevelUp(info) => level_up(script, &info),
         // Caught by [`fire_lane`] before it reaches here: the refresh runs on the host's action
         // states ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
@@ -630,6 +652,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PLAYTIME_CHANGED => "PLAYTIME_CHANGED",
         id::PLAYER_MONEY => "PLAYER_MONEY",
         id::SPELLS_CHANGED => "SPELLS_CHANGED",
+        id::UPDATE_SHAPESHIFT_FORMS => "UPDATE_SHAPESHIFT_FORMS",
         id::PET_BAR_UPDATE => "PET_BAR_UPDATE",
         id::AREA_SPIRIT_HEALER_IN_RANGE => "AREA_SPIRIT_HEALER_IN_RANGE",
         id::AREA_SPIRIT_HEALER_OUT_OF_RANGE => "AREA_SPIRIT_HEALER_OUT_OF_RANGE",
@@ -942,6 +965,8 @@ mod tests {
                 "UNIT_RANGED_ATTACK_POWER player",
                 "UNIT_ATTACK player",
                 "UNIT_RANGED_ATTACK_POWER player",
+                // The ranged slot's book signal (`0x5deeed`); the off hand's returns first.
+                "SPELLS_CHANGED nil",
                 "UPDATE_EXHAUSTION player",
             ]
         );

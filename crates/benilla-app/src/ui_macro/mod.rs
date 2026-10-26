@@ -48,12 +48,11 @@ impl Plugin for UiMacroPlugin {
             .add_systems(
                 Update,
                 (
-                    // After the book's feed, which a derivation reads; the action-state feed
+                    // A derivation reads the book through the call host; the action-state feed
                     // follows it ([`crate::ui_action`]).
                     rebind_macro_spells
                         .in_set(crate::ui_unit::UnitFeed)
                         .in_set(MacroBindings)
-                        .after(crate::ui_spellbook::BookFeed)
                         .after(crate::ui_pet_book::feed_pet_book),
                     // In-world only: the per-character file needs the character. Ahead of the
                     // rank pass, which rewrites the bar's words too, as the one-time move of a
@@ -270,12 +269,12 @@ struct BindingsSeen {
 /// A learned spell derives nothing, so a `/cast` of a spell not yet known stays -1 until its macro
 /// is edited, loaded again or the player arrives again. A superseded rank rewrites the cached
 /// spell of each macro on the bar that holds the old one (`0x4e5e60`'s macro arm, `0x4e5ec4`),
-/// derived from nothing. Runs after the book's feed, so a derivation reads the book as it stands,
-/// and copies the engine's records out for the action bar.
+/// derived from nothing. A derivation reads the book as it stands through the call host, and the
+/// engine's records are copied out for the action bar.
 #[allow(clippy::type_complexity)] // the bar, the records and the pet book's sorts, as one param
 fn rebind_macro_spells(
     // The bar, whose supersede queue this drains, and the records, which the call host's presses
-    // and usable refresh read, so a turn: no Lua runs here.
+    // and usable refresh read, so turns around the derivation, which runs with the host lent.
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, crate::ui_action::PlayerActions>,
         Res<'static, crate::ui_action::ActionSlots>,
@@ -287,18 +286,16 @@ fn rebind_macro_spells(
 ) {
     let (arrived, seen) = &mut *owed;
     *arrived |= !arrivals.is_empty();
-    vm.turn(|script, (mut actions, slots, mut bound, pet_bar)| {
+    let derive = vm.turn(|script, (mut actions, slots, _, pet_bar)| {
         // With no VM the supersede pairs wait for the first pass that can apply them.
-        let Some(script) = script else {
-            return;
-        };
+        let script = script?;
         let seen = seen.get(script);
         let generation = script.macros_generation();
         let book_sorts = pet_bar.map_or(0, |b| b.book_sorts);
         let table_moved = seen.macros != Some(generation);
         let pet_moved = seen.pet_book != Some(book_sorts);
         if !table_moved && !pet_moved && !*arrived && actions.superseded.is_empty() {
-            return;
+            return None;
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(book_sorts);
@@ -325,8 +322,21 @@ fn rebind_macro_spells(
             }
             script.set_macro_bindings(records);
         }
-        script.derive_macro_bindings(|_, b| every || (pet_moved && b.follows_the_pet_book()));
-
+        Some((every, pet_moved))
+    });
+    let Some((every, pet_moved)) = derive else {
+        return;
+    };
+    // With the host lent, so a derivation reads the book as it stands.
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.derive_macro_bindings(|_, b| every || (pet_moved && b.follows_the_pet_book()));
+        }
+    });
+    vm.turn(|script, (_, _, mut bound, _)| {
+        let Some(script) = script else {
+            return;
+        };
         let records = script.macro_bindings();
         let fresh: std::collections::HashMap<u32, Bound> = script
             .macros()

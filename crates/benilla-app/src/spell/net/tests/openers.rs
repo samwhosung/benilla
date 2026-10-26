@@ -104,15 +104,8 @@ fn a_learned_opener_goes_to_the_tail() {
     let spells = spells();
     let mut actions = book(&[FIREBALL], &spells);
     let errors = UiErrorKeys::default();
-    let mut tab = LearnedInTab::default();
-    learned_spell(
-        OPENING_NO_TEXT,
-        &mut actions,
-        Some(&spells),
-        &errors,
-        &mut tab,
-    );
-    learned_spell(OPENING, &mut actions, Some(&spells), &errors, &mut tab);
+    learned_spell(OPENING_NO_TEXT, &mut actions, Some(&spells), &errors);
+    learned_spell(OPENING, &mut actions, Some(&spells), &errors);
     assert_eq!(
         opens(&actions, &spells),
         LockOutcome::OpenBySpell(OPENING_NO_TEXT)
@@ -131,7 +124,6 @@ fn a_superseded_opener_moves_its_new_rank_to_the_tail() {
         &mut actions,
         Some(&spells),
         &UiErrorKeys::default(),
-        &mut LearnedInTab::default(),
     );
     assert_eq!(
         opens(&actions, &spells),
@@ -164,13 +156,7 @@ fn a_relearned_opener_is_listed_twice_and_an_unlearn_takes_the_last_copy() {
     let spells = spells();
     let mut actions = book(&[OPENING_NO_TEXT, OPENING], &spells);
     let errors = UiErrorKeys::default();
-    learned_spell(
-        OPENING_NO_TEXT,
-        &mut actions,
-        Some(&spells),
-        &errors,
-        &mut LearnedInTab::default(),
-    );
+    learned_spell(OPENING_NO_TEXT, &mut actions, Some(&spells), &errors);
     assert_eq!(actions.openers, [OPENING_NO_TEXT, OPENING, OPENING_NO_TEXT]);
     removed_spell(OPENING_NO_TEXT, &mut actions, Some(&spells), &errors);
     assert_eq!(
@@ -186,16 +172,8 @@ fn a_supersede_unlists_the_old_rank_twice() {
     let spells = spells();
     let mut actions = book(&[OPENING], &spells);
     let errors = UiErrorKeys::default();
-    let mut tab = LearnedInTab::default();
-    learned_spell(OPENING, &mut actions, Some(&spells), &errors, &mut tab);
-    superceded_spell(
-        OPENING,
-        OPENING_2,
-        &mut actions,
-        Some(&spells),
-        &errors,
-        &mut tab,
-    );
+    learned_spell(OPENING, &mut actions, Some(&spells), &errors);
+    superceded_spell(OPENING, OPENING_2, &mut actions, Some(&spells), &errors);
     assert_eq!(actions.openers, [OPENING_2]);
     assert_eq!(
         opens(&actions, &spells),
@@ -227,13 +205,7 @@ fn stuck_spell_is_the_last_registered_spell_with_the_stuck_effect() {
     let mut actions = book(&[STUCK_2, STUCK, FIREBALL], &spells);
     assert_eq!(actions.stuck_spell, Some(STUCK), "the list's last");
     let errors = UiErrorKeys::default();
-    learned_spell(
-        STUCK_2,
-        &mut actions,
-        Some(&spells),
-        &errors,
-        &mut LearnedInTab::default(),
-    );
+    learned_spell(STUCK_2, &mut actions, Some(&spells), &errors);
     assert_eq!(actions.stuck_spell, Some(STUCK_2), "a learn overwrites");
     removed_spell(STUCK_2, &mut actions, Some(&spells), &errors);
     assert_eq!(actions.stuck_spell, Some(STUCK_2), "an unlearn leaves it");

@@ -532,11 +532,12 @@ mod tests {
                 }],
             });
             script.set_skill_tiers([(5, [30; 16])]);
-            script.set_talents(benilla_ui::script::TalentUiState {
-                points: (0, 30),
-                ..Default::default()
-            });
         }
+        // `PLAYER_CHARACTER_POINTS2`, which the price is held to (`0x4d3faf`), on our player.
+        app.world_mut().spawn((
+            crate::net::SelfPlayer,
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(1103, 30)])),
+        ));
         assert!(matches!(
             one(run(&mut app, "BuySkillTier(2)")),
             ClientCommand::SkillBuyStep { skill_id: 129 }

@@ -1,7 +1,7 @@
 //! `AbandonSkill` through the whole client's host: it sends `CMSG_UNLEARN_SKILL` inside its call
 //! (`0x4d3b40`), so a chunk's packets leave in call order with every other verb's.
 
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{SkillsState, UiScript};
 use crossbeam_channel::Receiver;
 
 use super::*;

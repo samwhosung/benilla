@@ -18,7 +18,7 @@ use crate::creature_anim::{CastEvent, CastEventKind, Casting, SpellGoTargets};
 use crate::ui_action::{PlayerActions, Spells, UiError, UiErrorKeys};
 use crate::ui_aura::AuraDurations;
 use crate::ui_cast::{CastBarEdge, CastReports};
-use crate::ui_spellbook::LearnedInTab;
+use crate::ui_spellbook::{BookSignals, Learned};
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::ecs::system::SystemParam;
@@ -75,7 +75,6 @@ pub(crate) struct Lifecycle<'w> {
     spells: Option<Res<'w, Spells>>,
     net: Res<'w, NetCommands>,
     actions: ResMut<'w, PlayerActions>,
-    learned_in_tab: ResMut<'w, LearnedInTab>,
     reports: ResMut<'w, CastReports>,
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     pending: ResMut<'w, PendingCast>,
@@ -150,37 +149,70 @@ fn on_action_buttons(In(ev): In<SessionEvent>, mut slots: ResMut<crate::ui_actio
     }
 }
 
-fn on_spell_learned(In(ev): In<SessionEvent>, mut l: Lifecycle, errors: Res<UiErrorKeys>) {
+/// The learn, then the registrar's tail at the packet: the form list's edge (`0x4b2904`), then the
+/// book's (`0x4b2b5a`-`0x4b2ba1`).
+fn on_spell_learned(
+    In(ev): In<SessionEvent>,
+    mut l: Lifecycle,
+    errors: Res<UiErrorKeys>,
+    mut book: BookSignals,
+) {
     if let SessionEvent::SpellLearned { spell_id } = ev {
-        learned_spell(
+        let was_known = l.actions.spells.contains(&spell_id);
+        learned_spell(spell_id, &mut l.actions, l.spells.as_deref(), &errors);
+        book.entered(
             spell_id,
-            &mut l.actions,
+            Learned::Fresh { was_known },
+            &l.actions.spells,
             l.spells.as_deref(),
-            &errors,
-            &mut l.learned_in_tab,
         );
     }
 }
 
-fn on_spell_removed(In(ev): In<SessionEvent>, mut l: Lifecycle, errors: Res<UiErrorKeys>) {
+/// The unlearn, whose removal signals at the packet (`0x5ea24c` → `0x4b2e4e`, `0x4b2f3f`).
+fn on_spell_removed(
+    In(ev): In<SessionEvent>,
+    mut l: Lifecycle,
+    errors: Res<UiErrorKeys>,
+    mut book: BookSignals,
+) {
     if let SessionEvent::SpellRemoved { spell_id } = ev {
+        let was_known = l.actions.spells.contains(&spell_id);
         removed_spell(spell_id, &mut l.actions, l.spells.as_deref(), &errors);
+        book.left(spell_id, was_known, true, l.spells.as_deref());
     }
 }
 
-fn on_spell_superceded(In(ev): In<SessionEvent>, mut l: Lifecycle, errors: Res<UiErrorKeys>) {
+/// The rank-up, whose book pair signals at the packet: the old rank's removal (`0x4b2f5b` →
+/// `0x4b2f3f`), then the new one's live add (`0x4b2f68` → `0x4b2b5a`).
+fn on_spell_superceded(
+    In(ev): In<SessionEvent>,
+    mut l: Lifecycle,
+    errors: Res<UiErrorKeys>,
+    mut book: BookSignals,
+) {
     if let SessionEvent::SpellSuperceded {
         old_spell_id,
         new_spell_id,
     } = ev
     {
+        let was_known = l.actions.spells.contains(&old_spell_id);
         superceded_spell(
             old_spell_id,
             new_spell_id,
             &mut l.actions,
             l.spells.as_deref(),
             &errors,
-            &mut l.learned_in_tab,
+        );
+        book.left(old_spell_id, was_known, false, l.spells.as_deref());
+        book.entered(
+            new_spell_id,
+            Learned::Rank {
+                old: old_spell_id,
+                old_known: was_known,
+            },
+            &l.actions.spells,
+            l.spells.as_deref(),
         );
     }
 }
@@ -686,15 +718,14 @@ fn action_buttons(buttons: Vec<ActionButton>, slots: &mut crate::ui_action::Acti
     slots.dirty = true;
 }
 
-/// `SMSG_LEARNED_SPELL`: the spell joins the book (the spellbook feed diffs it; learning never
-/// bars a spell) and is announced in chat, the reference's own tail: `0x5e61c0` →
+/// `SMSG_LEARNED_SPELL`: the spell joins the known spells, which the book reads (learning never
+/// bars a spell), and is announced in chat, the reference's own tail: `0x5e61c0` →
 /// `AddSpell(id, slot, 1, 1)` → the registrar `0x4b25b0` with its announce flag set.
 fn learned_spell(
     spell_id: u32,
     actions: &mut PlayerActions,
     spells: Option<&Spells>,
     errors: &UiErrorKeys,
-    tab_flash: &mut LearnedInTab,
 ) {
     debug!("net: learned spell {spell_id}");
     if actions.spells.insert(spell_id) {
@@ -703,7 +734,6 @@ fn learned_spell(
     list_learn(spell_id, actions);
     register_in_book(spell_id, spells, actions);
     announce_learn(spell_id, spells, errors);
-    tab_flash.0.push(spell_id);
 }
 
 /// `LearnSpell 0x5e9c20`'s list legs: the profession lists append with no duplicate check
@@ -844,7 +874,6 @@ fn superceded_spell(
     actions: &mut PlayerActions,
     spells: Option<&Spells>,
     errors: &UiErrorKeys,
-    tab_flash: &mut LearnedInTab,
 ) {
     debug!("net: superceded spell {old_spell_id} -> {new_spell_id}");
     // The player's unlearn of the old rank, then its learn of the new one at the tail
@@ -865,8 +894,6 @@ fn superceded_spell(
     // unlearn `0x4b2c50`, which prints nothing, then the registrar `0x4b25b0` with `edx = 1`
     // (`0x4b2f61`).
     announce_learn(new_spell_id, spells, errors);
-    // The same flag flashes the tab of the new rank.
-    tab_flash.0.push(new_spell_id);
     // That unlearn (`UnlearnSpell(old, 1)`, `0x5e6392` into `0x5e9fe0`) then clears every bar slot
     // still standing for the old rank (`0x5ea253`), an item's on-use spell included; a spell with
     // no record unlearns nothing (`0x5ea02a`).
@@ -1834,14 +1861,11 @@ mod tests {
         );
         let mut actions = PlayerActions::default();
         let errors = UiErrorKeys::default();
-        let mut flash = LearnedInTab::default();
-        learned_spell(78, &mut actions, Some(&spells), &errors, &mut flash);
+        learned_spell(78, &mut actions, Some(&spells), &errors);
 
         assert_eq!(errors.len(), 1, "one line, once");
         assert_eq!(errors.snapshot()[0].key, "ERR_LEARN_ABILITY_S");
         assert_eq!(errors.snapshot()[0].arg_s(), Some("Heroic Strike (Rank 1)"));
-        // The same live-learn flag gates the tab flash.
-        assert_eq!(flash.0, vec![78], "queued for LEARNED_SPELL_IN_TAB");
     }
 
     /// A plain row is a spell; a tradeskill row is a recipe whose argText drops the rank (it
@@ -1858,13 +1882,7 @@ mod tests {
             },
         );
         let errors = UiErrorKeys::default();
-        learned_spell(
-            133,
-            &mut PlayerActions::default(),
-            Some(&spells),
-            &errors,
-            &mut LearnedInTab::default(),
-        );
+        learned_spell(133, &mut PlayerActions::default(), Some(&spells), &errors);
         assert_eq!(errors.snapshot()[0].key, "ERR_LEARN_SPELL_S");
         assert_eq!(errors.snapshot()[0].arg_s(), Some("Fireball (Rank 1)"));
 
@@ -1878,13 +1896,7 @@ mod tests {
             },
         );
         let errors = UiErrorKeys::default();
-        learned_spell(
-            2550,
-            &mut PlayerActions::default(),
-            Some(&spells),
-            &errors,
-            &mut LearnedInTab::default(),
-        );
+        learned_spell(2550, &mut PlayerActions::default(), Some(&spells), &errors);
         assert_eq!(errors.snapshot()[0].key, "ERR_LEARN_RECIPE_S");
         assert_eq!(
             errors.snapshot()[0].arg_s(),
@@ -1925,8 +1937,7 @@ mod tests {
         let mut actions = PlayerActions::default();
         actions.spells.insert(78);
         let errors = UiErrorKeys::default();
-        let mut flash = LearnedInTab::default();
-        superceded_spell(78, 284, &mut actions, Some(&spells), &errors, &mut flash);
+        superceded_spell(78, 284, &mut actions, Some(&spells), &errors);
 
         assert_eq!(
             actions.unlearned,
@@ -1935,11 +1946,6 @@ mod tests {
              (`0x5e6392` into `0x5e9fe0`, `0x5ea253`)"
         );
         assert_eq!(errors.len(), 1, "one line for a rank-up, not two");
-        assert_eq!(
-            flash.0,
-            vec![284],
-            "the NEW rank's tab flashes, not the old one's"
-        );
         assert_eq!(errors.snapshot()[0].key, "ERR_LEARN_ABILITY_S");
         assert_eq!(errors.snapshot()[0].arg_s(), Some("Heroic Strike (Rank 2)"));
     }
@@ -1956,20 +1962,8 @@ mod tests {
             },
         );
         let errors = UiErrorKeys::default();
-        learned_spell(
-            668,
-            &mut PlayerActions::default(),
-            Some(&spells),
-            &errors,
-            &mut LearnedInTab::default(),
-        );
-        learned_spell(
-            99999,
-            &mut PlayerActions::default(),
-            Some(&spells),
-            &errors,
-            &mut LearnedInTab::default(),
-        );
+        learned_spell(668, &mut PlayerActions::default(), Some(&spells), &errors);
+        learned_spell(99999, &mut PlayerActions::default(), Some(&spells), &errors);
         assert!(
             errors.is_empty(),
             "PASSIVE|DO_NOT_DISPLAY is silent, and so is an id with no record"
@@ -1980,24 +1974,12 @@ mod tests {
     fn learned_spell_adds_to_the_book_once() {
         let mut actions = PlayerActions::default();
         let errors = UiErrorKeys::default();
-        learned_spell(
-            6603,
-            &mut actions,
-            None,
-            &errors,
-            &mut LearnedInTab::default(),
-        );
+        learned_spell(6603, &mut actions, None, &errors);
         assert!(actions.spells.contains(&6603));
         assert!(actions.dirty, "a new spell dirties the feed");
 
         actions.dirty = false;
-        learned_spell(
-            6603,
-            &mut actions,
-            None,
-            &errors,
-            &mut LearnedInTab::default(),
-        );
+        learned_spell(6603, &mut actions, None, &errors);
         assert!(
             !actions.dirty,
             "re-learning a known spell is a no-op (insert returns false)"
@@ -2010,14 +1992,7 @@ mod tests {
         let mut actions = PlayerActions::default();
         actions.spells.insert(78); // Heroic Strike rank 1, known
 
-        superceded_spell(
-            78,
-            284,
-            &mut actions,
-            None,
-            &UiErrorKeys::default(),
-            &mut LearnedInTab::default(),
-        );
+        superceded_spell(78, 284, &mut actions, None, &UiErrorKeys::default());
 
         assert!(
             !actions.spells.contains(&78),
@@ -3755,13 +3730,7 @@ mod tests {
         );
 
         let errors = UiErrorKeys::default();
-        learned_spell(
-            1234,
-            &mut PlayerActions::default(),
-            Some(&spells),
-            &errors,
-            &mut LearnedInTab::default(),
-        );
+        learned_spell(1234, &mut PlayerActions::default(), Some(&spells), &errors);
         assert_eq!(errors.len(), 1, "the learn block never reads castUI");
         assert_eq!(errors.snapshot()[0].key, "ERR_LEARN_SPELL_S");
 

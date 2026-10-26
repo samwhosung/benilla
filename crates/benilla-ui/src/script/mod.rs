@@ -399,17 +399,18 @@ pub(crate) use simplehtml::{
     element_fonts_lua as simplehtml_element_fonts_lua,
     element_of_xml_tag as simplehtml_element_of_xml_tag,
 };
-pub use skills::{SkillCall, SkillEntry, SkillsState};
+pub use skills::{SkillCall, SkillEntry, SkillLinesNow, SkillSlotWords, SkillWords, SkillsState};
 pub use social::{FriendInfo, IgnoreInfo, SocialCall, SocialState, WhoInfo};
 pub use sound::{MusicRequest, SoundRequest};
 pub use spellbook::{
-    resolve_spell_in_books, NamedSpell, PetBookState, SpellBookState, SpellSlotView, SpellTabName,
-    SpellTabView,
+    resolve_spell_in_books, BookNow, BookSlot, BookSpell, BookTabs, NamedSpell, PetBookState,
+    SpellBookState, SpellSlotView, SpellTabName, SpellTabView,
 };
 pub use stable::{StableCall, StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
 pub use summon::{SummonCall, SummonConfirmUiState};
 pub use talent::{
-    TalentCall, TalentPrereqView, TalentReq, TalentTabView, TalentUiState, TalentView,
+    CharacterPoints, TalentAt, TalentCall, TalentCount, TalentMasterPending, TalentPrereqView,
+    TalentReq, TalentTabView, TalentTabs, TalentUiState, TalentView,
 };
 pub use taxi::{TaxiCall, TaxiNodeType, TaxiUiNode, TaxiUiState};
 pub use tooltip_aura::{AuraKey, AuraTooltipView};

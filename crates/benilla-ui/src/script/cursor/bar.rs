@@ -8,7 +8,7 @@ use mlua::{Lua, Value};
 use crate::script::action::{macro_slot_id, macro_slot_word, ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use crate::script::binding_abi;
 use crate::script::tick::verb;
-use crate::script::{ActionSlot, Model};
+use crate::script::{ActionSlot, Model, SpellBookState};
 
 use super::{clear_cursor, set_cursor, CursorAction, CursorMacro, CursorPayload, CursorSpell};
 
@@ -27,7 +27,7 @@ fn pack(kind: u8, action: u32) -> u32 {
 /// setter's mode 8 (`0x4e629d`, `0x4e64e2`). `None` is an empty slot; `Some(None)` an action no
 /// setter takes, a macro gone from the list (`0x4e6279`) or an unknown kind (`0x4e626e`): a
 /// pickup then sets nothing, and a place clears the cursor as for an empty slot.
-fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
+fn lift(model: &Model, id: u32, book: Option<&SpellBookState>) -> Option<Option<CursorPayload>> {
     let slot = model.actions.get(&id)?;
     if let Some(macro_id) = macro_slot_id(slot.kind, slot.action) {
         return Some(model.macros.by_id(macro_id).map(|m| {
@@ -51,8 +51,8 @@ fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
             spell_id: slot.action,
             texture: slot.texture.clone(),
             // The setter reads the spell's record; the book is where the engine has it.
-            passive: model
-                .spellbook
+            passive: book
+                .unwrap_or(&model.spellbook)
                 .slots
                 .iter()
                 .any(|s| s.spell_id == slot.action && s.passive),
@@ -70,6 +70,8 @@ fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
 /// `ClearCursor(1,1)` signals on the empty cursor, then its tail. The slot clears even when no
 /// setter takes the action (`0x4e62ba`). Returns whether to repaint.
 pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
+    // The book as it stands, through the lent host.
+    let book = crate::script::live::ask(lua, &crate::script::spellbook::BookNow);
     let picked = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         if matches!(
@@ -84,7 +86,7 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
             None
         } else {
             // An empty slot returns before any setter (`0x4e61a3`).
-            Some(lift(&model, id))
+            Some(lift(&model, id, book.as_ref()))
         }
     };
     let Some(picked) = picked else {
@@ -157,7 +159,8 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
         Some(CursorPayload::Action(a)) => a.state,
         _ => None,
     };
-    let (placed, displaced) = match verb(lua, |model| plan_place(model, id)) {
+    let book = crate::script::live::ask(lua, &crate::script::spellbook::BookNow);
+    let (placed, displaced) = match verb(lua, |model| plan_place(model, id, book.as_ref())) {
         Place::Refused => return Ok(false),
         // The passive spell's line, shown inside the verb (`0x4e63ad` → `0x496720`).
         Place::Shown(key) => {
@@ -212,7 +215,7 @@ enum Place {
 
 /// `PlaceAction`'s decision: the accept filters, then whether the held action is the slot's own,
 /// then what the slot takes from the held payload and the occupant that hops.
-fn plan_place(model: &mut Model, id: u32) -> Place {
+fn plan_place(model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Place {
     // The two accept filters (`0x4e62e0`) refuse with a bare return: nothing stored or sent, and
     // the payload stays held. An item needs an on-use spell or an equip slot (`0x4e6571`), so a
     // bag is placeable; a passive spell (`Attributes & 0x40`) also raises errorId `0x9e` through
@@ -251,8 +254,8 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
         // The face the bar paints for the spell, which the book carries; the cursor shows the
         // book's icon.
         CursorPayload::Spell(s) => {
-            let face = model
-                .spellbook
+            let face = book
+                .unwrap_or(&model.spellbook)
                 .slots
                 .iter()
                 .find(|b| b.spell_id == s.spell_id)
@@ -284,7 +287,7 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
     if same {
         return Place::Same;
     }
-    Place::Write(placed, lift(model, id))
+    Place::Write(placed, lift(model, id, book))
 }
 
 /// The spell slot `id` resolves to (`0x4e5a50`): a spell slot's own; a macro slot's bound spell

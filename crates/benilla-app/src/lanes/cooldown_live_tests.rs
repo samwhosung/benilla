@@ -265,7 +265,8 @@ fn an_item_cooldowns_listeners_read_its_packets_list() {
 }
 
 /// The getters answer the same through the lent host as off the frame's snapshots wherever the
-/// snapshots are current: every slot, both book spells and the potion, cold and running.
+/// snapshots are current: every slot and the potion, cold and running. The book itself is read
+/// through the host alone, so its spells' lines are the live read's.
 #[test]
 fn every_cooldown_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client();
@@ -283,7 +284,14 @@ fn every_cooldown_getter_answers_the_same_live_as_off_the_snapshot() {
     let agree = |c: &mut Client, why: &str| {
         let snapshot: Vec<String> = c.eval(false, chunk);
         let live: Vec<String> = c.eval(true, chunk);
-        assert_eq!(snapshot, live, "{why}");
+        let unbooked = |lines: &[String]| -> Vec<String> {
+            lines
+                .iter()
+                .filter(|l| !l.starts_with("spell "))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(unbooked(&snapshot), unbooked(&live), "{why}");
         live
     };
     let cold = agree(&mut c, "all cold");

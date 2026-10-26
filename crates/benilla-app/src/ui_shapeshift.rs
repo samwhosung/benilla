@@ -5,9 +5,10 @@
 //! `AttributesEx2 & 0x10`; the bar sorts by `StanceBarOrder`, negative last, then spell id
 //! (`0x4b2bb0`).
 //!
-//! Only a change of membership or order fires `UPDATE_SHAPESHIFT_FORMS`, the reference's
-//! learn/unlearn edge (`0x4b28ff`, `0x4b2e43`), because the stock `ShapeshiftBar_Update` rebuilds
-//! the shelf on every fire. Castability, active form, texture and cooldown push silently: the
+//! `UPDATE_SHAPESHIFT_FORMS` is the list's own learn and unlearn edge (`0x4b2904`, `0x4b2e4e`),
+//! raised by the book's handlers ([`crate::ui_spellbook::BookSignals`]) and the arrival's replay,
+//! never by this feed, which seats the list ahead of both. Castability, active form, texture and
+//! cooldown push silently: the
 //! castable flags refresh inside the usable refresh `0x4b31c0`, whose callers signal
 //! `SPELL_UPDATE_USABLE` (`crate::ui_action`), and the rest repaint on `PLAYER_AURAS_CHANGED` (a
 //! form's aura holds a slot, warrior stances included) and `SPELL_UPDATE_COOLDOWN`, so the feed
@@ -33,6 +34,13 @@ const ATTR_EX2_STANCE_BAR_EXCLUDE: u32 = 0x2;
 /// `ActiveIconID` 122, are every rank of the paladin auras (Devotion 465 and the rest) and
 /// Ironweave Battlesuit 27733.
 const ATTR_EX2_STANCE_BAR_FORCE: u32 = 0x10;
+
+/// Whether the registrar lists `d` on the stance bar (`0x4b27f4`-`0x4b2823`): not
+/// `AttributesEx2 & 0x2`, and a `MOD_SHAPESHIFT` effect or `AttributesEx2 & 0x10`.
+pub(crate) fn on_stance_bar(d: &benilla_formats::SpellDisplay) -> bool {
+    d.attributes_ex2 & ATTR_EX2_STANCE_BAR_EXCLUDE == 0
+        && (d.shapeshift_form.is_some() || d.attributes_ex2 & ATTR_EX2_STANCE_BAR_FORCE != 0)
+}
 
 /// `isActive` (`0x4b45c0`), forked on the form id (the first `MOD_SHAPESHIFT` misc value, else 0).
 /// A form spell matches the form byte (`4b46a0`). A force-admitted one with `ActiveIconID != 0`
@@ -73,13 +81,13 @@ pub(crate) struct StanceMemory {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FormsEdge {
     Unchanged,
-    /// Membership or order: `UPDATE_SHAPESHIFT_FORMS`.
+    /// Membership or order, which the book's handlers announce.
     List,
     /// Castability, active form, texture or cooldown: pushed, announced by other feeds' events.
     Silent,
 }
 
-/// Push the rebuilt list and announce its edge (module doc); callable without a Bevy world.
+/// Push the rebuilt list and name its edge (module doc); callable without a Bevy world.
 pub(crate) fn push_forms(
     script: &mut UiScript,
     memory: &mut StanceMemory,
@@ -103,10 +111,6 @@ pub(crate) fn push_forms(
     }
     memory.pushed = Some(fresh.clone());
     script.set_shapeshift_forms(fresh);
-    match edge {
-        FormsEdge::List => script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]),
-        FormsEdge::Silent | FormsEdge::Unchanged => {}
-    }
     edge
 }
 
@@ -116,10 +120,12 @@ impl Plugin for UiShapeshiftPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            // The feed precedes the two event sets whose handlers re-read this list. A click's
-            // cast is a script call (`cast_form`).
+            // The feed precedes the two event sets whose handlers re-read this list, and the
+            // arrival's replay, whose forms edges they read too. A click's cast is a script call
+            // (`cast_form`).
             feed_shapeshift_bar
                 .in_set(UnitFeed)
+                .in_set(crate::ui_unit::WorldEnterSeats)
                 .after(crate::player::ControlRestore)
                 .before(crate::ui_action::CooldownEvents)
                 .before(crate::ui_aura::AuraEvents),
@@ -174,10 +180,7 @@ fn feed_shapeshift_bar(
             .iter()
             .filter_map(|&id| {
                 let d = spells.catalog.get(id)?;
-                let admitted = d.attributes_ex2 & ATTR_EX2_STANCE_BAR_EXCLUDE == 0
-                    && (d.shapeshift_form.is_some()
-                        || d.attributes_ex2 & ATTR_EX2_STANCE_BAR_FORCE != 0);
-                admitted.then_some((id, d))
+                on_stance_bar(d).then_some((id, d))
             })
             .collect();
         rows.sort_by_key(|&(id, d)| {

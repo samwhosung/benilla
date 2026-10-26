@@ -748,15 +748,16 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
-                match super::spellbook::book_slot(&model, book_id, &book_type) {
+                match super::spellbook::book_slot(lua, &model, book_id, &book_type) {
                     Some(s) => {
-                        let cooldown = s.cooldown.map(|(start_ms, duration_ms, enabled)| {
-                            (
-                                start_ms as f64 / 1000.0,
-                                f64::from(duration_ms) / 1000.0,
-                                enabled,
-                            )
-                        });
+                        // The slot's cooldown off its book's list now (`0x6e2ea0`), else the copy.
+                        let query = if super::spellbook::is_pet_book(&book_type) {
+                            super::CooldownQuery::PetSpell(s.spell_id)
+                        } else {
+                            super::CooldownQuery::Spell(s.spell_id)
+                        };
+                        let cooldown = super::cooldown_read::read_live(lua, query)
+                            .unwrap_or_else(|| s.cooldown.map(super::cooldown_read::seconds));
                         (
                             s.spell_id,
                             Some(s.name.clone()),

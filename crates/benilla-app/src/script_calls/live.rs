@@ -86,6 +86,12 @@ live_reads! {
         quest_log: crate::ui_quest_log::QuestLogLive<'static, 'static>,
         /// The target and the interaction globals.
         selection: crate::target::SelectionLive<'static, 'static>,
+        /// The talent pages, the known spells they rank by and the two point counters.
+        talents: crate::ui_talent::TalentLive<'static, 'static>,
+        /// The active player's skill slots, which the skill list walks and reads.
+        skills: crate::ui_char::SkillLive<'static, 'static>,
+        /// The spell book's order off the known spells, and each slot's record and icon.
+        book: crate::ui_spellbook::BookLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

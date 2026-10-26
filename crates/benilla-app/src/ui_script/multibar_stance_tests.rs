@@ -1424,7 +1424,8 @@ fn the_middle_strip_clamps_as_its_xml_loaded_it() {
 /// The reference fires `UPDATE_SHAPESHIFT_FORMS` only when the form list changes (`0x4b28ff`,
 /// `0x4b2e43`): its `ShapeshiftBar_Update` re-shows the middle strip with no manage pass
 /// (BonusActionBarFrame.lua:170, 177), so a state change sent as one would draw the strip over the
-/// raised bar. Driven through [`crate::ui_shapeshift::push_forms`].
+/// raised bar. Driven through [`crate::ui_shapeshift::push_forms`], which names the edge and
+/// leaves its event to the book's handlers.
 #[test]
 fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
     benilla_formats::wow_data_or_skip!();
@@ -1485,6 +1486,9 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
         ),
         FormsEdge::List
     );
+    // The push is silent: the edge is the book handler's (`0x4b2904`), which follows it.
+    assert_eq!(log(&s), "");
+    s.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
     assert_eq!(log(&s), "UPDATE_SHAPESHIFT_FORMS");
     assert!(checked(&s, 1) && !checked(&s, 2));
     // The bottom-left bar up: the pass seats the stance bar a row higher and takes the shelf down
@@ -1606,6 +1610,9 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
         ),
         FormsEdge::List
     );
+    // The push is silent: the edge is the book handler's (`0x4b2904`), which follows it.
+    assert_eq!(log(&s), "");
+    s.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
     assert_eq!(log(&s), "UPDATE_SHAPESHIFT_FORMS");
     assert!(
         shown(&s, "ShapeshiftBarMiddle"),

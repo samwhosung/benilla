@@ -24,8 +24,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 89;
-const FRAME_FINAL_INPUTS: usize = 426;
+const FRAME_FINAL_FEEDS: usize = 85;
+const FRAME_FINAL_INPUTS: usize = 415;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -57,6 +57,11 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::ui_pet::PetBar>",
         &["ui_pet::PetBar"],
         "drops the pet's cooldown log with no in-game interface up; it goes with the log"),
+    ("::ui_action::feed::feed_actions", &["ui_action::PlayerActions"],
+        "clears the bar's re-resolve flag; the known spells the book and the talents read are \
+         the learn handlers' alone"),
+    ("::ui_action::unlearn::clear_unlearned_slots", &["ui_action::PlayerActions"],
+        "drains the unlearned spells the bar clears; the known spells are the handlers' alone"),
     ("::ui_action::state::feed_action_state", &["spell::cooldowns::Cooldowns",
         "ui_action::state::ActionStateMemory"],
         "keeps the frame's `GetTime` clock the cooldown reads map each start through, and \
@@ -65,13 +70,15 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "rebuilds the raid filter's books and the world entry's player the aura walk reads, and \
          keeps the clock pair the buff timers map the duration stamps through"),
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_char::feed_skills", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_honor::feed_honor", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_inspect::feed_inspect", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_items::feed::feed_item_stats", &["items::Items"],
         "takes the item cache's fresh and dropped records as it pushes them"),
     ("::ui_items::feed::feed_random_properties", &["items::RandomProperties"],
         "writes the random-suffix table as it pushes it, once per VM"),
+    ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions"],
+        "drains the superseded ranks the bar's macros take; the known spells are the handlers' \
+         alone"),
     ("::ui_party::feed::feed_party", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_pet::drain::arm_owed_pet_gcds", &["ui_pet::PetBar"],
         "puts the GCDs the pet's sends owe into its list, which the reference arms at the send \
@@ -79,6 +86,10 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_pet::unit::feed_pet_unit", &["UiScript", "names::NameCache"],
         "a field event's listeners read its push; it watches the name cache's record of the pet's name"),
     ("::ui_pet_stats::feed_pet_stats", &["UiScript"], "a field event's listeners read its push"),
+    ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_talent_wipe::TalentWipeState>",
+        &["ui_talent_wipe::TalentWipeState"],
+        "closes the respec question once the player leaves service range, which \
+         `CheckTalentMasterDist` reports; the reference tests the range at the call (`0x5df980`)"),
     ("::ui_reputation::drop_reputation_log", &["net::reputations::Reputations"],
         "drops the reputation log with no in-game interface up; it goes with the log"),
     ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Items"],

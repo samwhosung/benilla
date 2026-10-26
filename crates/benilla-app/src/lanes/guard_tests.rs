@@ -208,11 +208,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the quest giver's packets, which `feed_quest` fires from; the quest verbs, acting in \
          their calls, hold it in the host",
     ),
-    (
-        Row::Queue,
-        "::ui_spellbook::LearnedInTab",
-        "the spells learned",
-    ),
     (Row::Queue, "::ui_stable::StableErrors", "the stable errors"),
     (
         Row::HostHeld,
@@ -232,12 +227,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_tabard::TabardOpen",
         "the tabard vendor's packets, which `feed_tabard` fires from; the designer's save, acting \
          in its call, holds it in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_talent_wipe::TalentWipeState",
-        "the talent wipe question, which `feed_talent_wipe` fires from; `ConfirmTalentWipe`, \
-         acting in its call, holds it in the host",
     ),
     (
         Row::HostHeld,
@@ -389,6 +378,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_petition::PetitionRecords",
     "::ui_session::latch::InteractLatch",
     "::ui_social::SocialState",
+    // Read, and quiet: `CheckTalentMasterDist` reads the latch through the host and the Accept
+    // holds it; the question's `CONFIRM_TALENT_WIPE` fires on the notice lane.
+    "::ui_talent_wipe::TalentWipeState",
     "::ui_tradeskill::TradeSkillOpens",
 ];
 
@@ -482,7 +474,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    ("::ui_char::feed_skills", &["net::ObjectStore"]),
     ("::ui_inspect::feed_inspect", &["items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::SelfGuid"]),
     ("::ui_honor::feed_honor", &["net::ObjectStore", "target::Selection", "ui_honor::InspectHonor",
@@ -512,16 +503,11 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_aura::feed_auras", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
         "ui_action::PlayerActions", "ui_party::GroupState", "ui_pet::PetBar"]),
-    ("::ui_spellbook::feed_spellbook", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
-        "ui_spellbook::LearnedInTab"]),
     // The pet book's sorts, which each pet spell list counts and the derivation follows
     // (`0x4bdae0`): the frame's lists derive once, after the last.
     ("::ui_macro::rebind_macro_spells", &["ui_action::ActionSlots", "ui_action::PlayerActions",
         "ui_pet::PetBar"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
-    ("::ui_talent::feed_talents", &["net::ObjectStore", "ui_action::PlayerActions"]),
-    ("::ui_talent_wipe::feed_talent_wipe", &["ui_talent_wipe::TalentWipeState"]),
     ("::ui_shapeshift::feed_shapeshift_bar", &["items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::reputations::Reputations", "spell::cooldowns::Cooldowns",
@@ -736,6 +722,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::InteractNpc",
     "::SocialState",
     "::SkillLines",
+    // The talent catalog, which the host's talent getters read.
+    "::ui_talent::Talents",
     "::SpellFocus",
     "::FrameStep",
     "::CurrentMap",

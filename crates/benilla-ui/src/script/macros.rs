@@ -23,7 +23,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
 use super::cursor::{set_cursor, CursorMacro, CursorPayload};
-use super::Model;
+use super::{Model, SpellBookState};
 
 /// Macros per scope (`0x4f1010` refuses the 19th, `cmp edx,0x12`), and so the character tab's base.
 pub const MAX_MACROS: usize = 18;
@@ -328,6 +328,7 @@ impl super::UiScript {
     /// (`0x4f0ca0`), the pet message's followers (`0x4f0ce0`).
     pub fn derive_macro_bindings(&mut self, pick: impl Fn(u32, MacroBinding) -> bool) {
         let aliases = bind::cast_aliases(self.lua());
+        let book = super::live::ask(self.lua(), &super::spellbook::BookNow);
         let mut model = self.model_mut();
         let model = &mut *model;
         for record in &model.macros.list {
@@ -337,7 +338,7 @@ impl super::UiScript {
                 let next = bind::derive(
                     &aliases,
                     &record.view.body,
-                    &model.spellbook,
+                    book.as_ref().unwrap_or(&model.spellbook),
                     &model.pet_book,
                     was,
                 );
@@ -393,7 +394,7 @@ fn create_macro(
     texture: Option<String>,
     body: &str,
     (local_only, per_character): (bool, bool),
-    aliases: &[String],
+    (aliases, book): (&[String], Option<&SpellBookState>),
 ) -> mlua::Result<usize> {
     let state = &mut model.macros;
     if state.count(per_character) >= MAX_MACROS {
@@ -418,7 +419,7 @@ fn create_macro(
     let binding = bind::derive(
         aliases,
         &cut_body(body),
-        &model.spellbook,
+        book.unwrap_or(&model.spellbook),
         &model.pet_book,
         MacroBinding::default(),
     );
@@ -442,7 +443,7 @@ fn edit_macro(
     index: usize,
     (name, texture, body): (Option<String>, Option<String>, Option<String>),
     local_only: bool,
-    aliases: &[String],
+    (aliases, book): (&[String], Option<&SpellBookState>),
 ) -> usize {
     let id = model.macros.id_at(index);
     if let Some(record) = model
@@ -464,7 +465,8 @@ fn edit_macro(
         view.local_only = local_only;
         // The record's cast derived again in the call (`0x4f1313`), against the book as it is.
         let was = model.macro_bindings.get(&id).copied().unwrap_or_default();
-        let binding = bind::derive(aliases, &view.body, &model.spellbook, &model.pet_book, was);
+        let player = book.unwrap_or(&model.spellbook);
+        let binding = bind::derive(aliases, &view.body, player, &model.pet_book, was);
         model.macro_bindings.insert(id, binding);
         model.macros_dirty = true;
         model.macros_generation += 1;
@@ -677,10 +679,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .unwrap_or_default();
             let flags = (flag(a.get(3)), flag(a.get(4)));
             let aliases = bind::cast_aliases(lua);
+            // The book as it stands, which the derivation reads in the call (`0x4f123c`).
+            let book = super::live::ask(lua, &super::spellbook::BookNow);
             super::tick::verb(lua, |model| {
                 // `0x4f1632`, `0x4f163c`.
                 let texture = icon_at(model, icon);
-                create_macro(model, &name, texture, &body, flags, &aliases)
+                create_macro(
+                    model,
+                    &name,
+                    texture,
+                    &body,
+                    flags,
+                    (&aliases, book.as_ref()),
+                )
             })
             .map(|i| Value::Integer(i as i64))
         })?,
@@ -718,11 +729,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let body = a.get(3).and_then(|v| binding_abi::optional_string(lua, v));
             let local_only = flag(a.get(4));
             let aliases = bind::cast_aliases(lua);
+            // The book as it stands, which the derivation reads in the call (`0x4f1313`).
+            let book = super::live::ask(lua, &super::spellbook::BookNow);
             let at = super::tick::verb(lua, |model| {
                 // `0x4f1966`-`0x4f1983`: a miss leaves the pointer null, and the macro its old
                 // icon.
                 let texture = icon.and_then(|n| icon_at(model, n));
-                edit_macro(model, index, (name, texture, body), local_only, &aliases)
+                let reads = (aliases.as_slice(), book.as_ref());
+                edit_macro(model, index, (name, texture, body), local_only, reads)
             });
             Ok(Value::Integer(at as i64))
         })?,

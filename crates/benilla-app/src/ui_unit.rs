@@ -1845,6 +1845,10 @@ fn feed_units(
                 // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
                 // ghost's leg is its tutorial (`crate::tutorial`).
                 owed.unghost = arrived && store.0.player_flags() & 0x10 == 0;
+                // Ahead of both, the arrival's replay learns the list (`0x5dea8b`-`0x5deab9`),
+                // each stance-bar spell an `UPDATE_SHAPESHIFT_FORMS` (`0x4b2904`), then sorts the
+                // book and signals it (`0x5deac2`).
+                owed.book_sorted = arrived;
                 owed.world_enter = Some(WorldEnter {
                     bonus_bar_offset: crate::ui_action::bonus_bar_offset(
                         Some(store),
@@ -1935,6 +1939,13 @@ fn feed_units(
             .is_some_and(|u| std::mem::take(&mut u.0));
     let world_enter = vm.run(|script| {
         let script = script?;
+        if owed.book_sorted {
+            // One per form the stance seat listed, which runs ahead (`WorldEnterSeats`).
+            for _ in 0..script.shapeshift_form_count() {
+                script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
+            }
+            script.fire_event("SPELLS_CHANGED", vec![]);
+        }
         if owed.unghost {
             script.fire_event("PLAYER_UNGHOST", vec![]);
         }
@@ -1984,6 +1995,8 @@ fn feed_units(
 /// The events [`feed_units`]' turn owes, fired after it in its order with the host lent.
 #[derive(Default)]
 struct OwedUnitEvents {
+    /// The arrival's form-list edges and its `SPELLS_CHANGED`, ahead of its ghost state.
+    book_sorted: bool,
     /// `PLAYER_UNGHOST`, ahead of the arrival's cascade.
     unghost: bool,
     /// The world-enter cascade.

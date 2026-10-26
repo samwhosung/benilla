@@ -11,15 +11,18 @@ use benilla_protocol::messages::{ItemInfo, PLAYER_SKILL_SLOTS};
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
     weapon_subclass_skill, BankBagSlots, CombatRead, InvSlotView, InventorySlots, ItemRead,
-    SkillEntry, SkillsState, UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
+    SkillEntry, UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
 };
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects};
 use crate::query_cache::Ask;
 use crate::ui_items::find_equip_slot;
 use crate::ui_script::{gate, UiFeed};
+
+mod skills_live;
+pub(crate) use skills_live::SkillLive;
 
 /// Equipment slots, 0-based (`EQUIPMENT_SLOT_*`): main hand, off hand, ranged.
 const SLOT_MAIN_HAND: u8 = 15;
@@ -75,12 +78,7 @@ impl Plugin for UiCharPlugin {
                         .before(crate::ui_items::feed::feed_containers)
                         .in_set(UiFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                    // A seat, and ahead of the notice lane: the world-enter cascade's rebuild and
-                    // the skill watches' list what this pushed.
-                    feed_skills
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_unit::field_events::FieldEventPushes)
-                        .in_set(crate::ui_unit::WorldEnterSeats),
+                    feed_skill_tiers.in_set(UiFeed),
                 ),
             );
     }
@@ -105,59 +103,22 @@ fn load_skill_tiers(mut commands: Commands, assets: Option<Res<benilla_assets::W
     }
 }
 
-/// The skills-pane feed: every `PLAYER_SKILL_INFO` line the reference lists, as a flat
-/// [`SkillEntry`] pushed through `set_skills` on change; the engine groups, sorts and folds at its
-/// rebuilds, which the skill watches' notices run (`crate::field_watch`) and the world-enter
-/// cascade.
-fn feed_skills(
+/// `SkillTiers.dbc`, once per VM, which `BuySkillTier` prices a step by; the skill list reads the
+/// slots through the call host ([`SkillLive`]).
+fn feed_skill_tiers(
     mut hosted_vm: crate::script_calls::HostedVm,
-    self_store: Query<Ref<ObjectStore>, With<SelfPlayer>>,
-    skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     tiers: Option<Res<SkillTiersRes>>,
-    mut last: Local<crate::ui_script::VmMemo<Option<SkillsState>>>,
     mut tiers_pushed: Local<crate::ui_script::VmMemo<bool>>,
 ) {
     hosted_vm.run(|script| {
-        let Some(script) = script else {
+        let (Some(script), Some(tiers)) = (script, tiers.as_deref()) else {
             return;
         };
-        // The cost table, once per VM.
         let pushed = tiers_pushed.get(script);
         if !*pushed {
-            if let Some(tiers) = tiers.as_deref() {
-                script.set_skill_tiers(tiers.0.tiers());
-                *pushed = true;
-            }
+            script.set_skill_tiers(tiers.0.tiers());
+            *pushed = true;
         }
-        let last = last.get(script);
-        let lines_moved = skill_lines.as_ref().is_some_and(|l| l.is_changed());
-        let (Ok(store), Some(skill_lines)) = (self_store.single(), skill_lines.as_deref()) else {
-            return;
-        };
-        // A pure function of the descriptor and the catalog: with both still, nothing can differ.
-        if last.is_some() && !store.is_changed() && !lines_moved {
-            return;
-        }
-        let (race, class) = (
-            store.0.unit_race().unwrap_or(0),
-            store.0.unit_class().unwrap_or(0),
-        );
-        let level = store.0.unit_level().unwrap_or(0);
-        let mut entries = Vec::new();
-        for i in 0..PLAYER_SKILL_SLOTS {
-            let Some(slot) = store.0.player_skill(i) else {
-                continue;
-            };
-            if let Some(e) = skills_row(&slot, &skill_lines.catalog, race, class, level) {
-                entries.push(e);
-            }
-        }
-        let fresh = SkillsState { entries };
-        if last.as_ref() == Some(&fresh) {
-            return;
-        }
-        script.set_skills(fresh.clone());
-        *last = Some(fresh);
     })
 }
 
@@ -978,6 +939,7 @@ fn weapon_enchant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::SelfPlayer;
     use benilla_ui::script::UiScript;
 
     /// A worn bag's view says how many of its seats are filled, which `ClickTradeButton` reads

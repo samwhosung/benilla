@@ -90,7 +90,7 @@ pub(super) enum UiFixture {
     /// exploration overlays and the parchment both show.
     WorldMap,
     /// The spellbook over a seeded known-spell set resolved through the real chain (`Spell.dbc`,
-    /// `SkillLineAbility.dbc`, the book feed).
+    /// `SkillLineAbility.dbc`, the book's live reads).
     SpellBook,
     /// The macro window over a macro set made through the live `CreateMacro` path, second slot
     /// selected.

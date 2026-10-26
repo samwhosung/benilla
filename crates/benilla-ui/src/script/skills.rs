@@ -1,15 +1,17 @@
-//! The skills-pane bindings behind the stock `SkillFrame`. The app pushes a flat snapshot of known
-//! skill lines, resolved from `SkillLine.dbc` and `SkillLineCategory.dbc`, and the engine groups,
-//! sorts and folds it as the client's list build (`0x4d2cb0`, comparator `0x4d3070`) does: one
-//! header per category, by `category_order` (category id breaks a tie), and within a category the
-//! untrained lines (rank 0) after the trained ones, each by name. Only a rebuild re-makes the rows
-//! and opens every group ([`UiScript::rebuild_skills`]): the world-enter cascade's and the skill
-//! watches'; a push between rebuilds only refreshes the rows' values.
+//! The skills-pane bindings behind the stock `SkillFrame`. A rebuild reads the known skill lines
+//! through the lent host ([`SkillLinesNow`]), resolved from `SkillLine.dbc` and
+//! `SkillLineCategory.dbc`, and groups, sorts and folds them as the client's list build
+//! (`0x4d2cb0`, comparator `0x4d3070`) does: one header per category, by `category_order`
+//! (category id breaks a tie), and within a category the untrained lines (rank 0) after the
+//! trained ones, each by name. Only a rebuild re-makes the rows and opens every group
+//! ([`UiScript::rebuild_skills`]): the world-enter cascade's and the skill watches'. Between
+//! rebuilds a row's rank, maximum, modifier and step word are read off the slots at the call
+//! ([`SkillWords`]). With no host, a harness's push stands in ([`UiScript::set_skills`]).
 //! The rows are one array, the visible ones first (`0x4d3095`), then the lines of the folded
 //! groups; every Lua index is 1-based into the whole array, bounded by its count (`0xb731b8`),
 //! and only `GetNumSkillLines` and `GetSelectedSkill` stop at the visible rows (`0xb731c0`). The
 //! selection is a skill id (`0xb731c4`), so it survives a rebuild, and selecting a header clears it.
-//! Which lines reach the engine at all is the app's half (`feed_skills`).
+//! Which lines reach the list at all is the host's half (`skills_row`).
 //!
 //! `numTempPoints` is the points `AddSkillUp` chose on the line (`+0x10`, `0x4d345b`), which
 //! `RemoveSkillUp`, `CancelSkillUps` and every rebuild take back. Each point costs 0: the cost
@@ -24,7 +26,69 @@ use std::collections::HashMap;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
+use super::live::{ask, LiveQuery};
 use super::Model;
+
+/// The player's skill lines as the list build reads them now: `0x4d2cb0`'s walk of the active
+/// player's 128 slots, every line it keeps, unordered; declined with no player held.
+#[derive(Clone, Copy, Debug)]
+pub struct SkillLinesNow;
+
+impl LiveQuery for SkillLinesNow {
+    type Answer = SkillsState;
+}
+
+/// One line's words in the active player's slots now: `0x5ea3f0` finds its slot, whose rank,
+/// maximum, modifier and step word `GetSkillLineInfo` reads at the call (`0x4d3828`, `0x4d3874`,
+/// `0x4d392d`, `0x4d3956`); `None` for a line no slot holds.
+#[derive(Clone, Copy, Debug)]
+pub struct SkillWords(pub u32);
+
+impl LiveQuery for SkillWords {
+    type Answer = Option<SkillSlotWords>;
+}
+
+/// A [`SkillWords`] answer: the slot's words past its line id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SkillSlotWords {
+    pub value: u32,
+    pub max: u32,
+    pub temp_bonus: i32,
+    pub perm_bonus: i32,
+    pub step: u32,
+}
+
+/// A row's line with its words as the slots hold them now: the host's, else the row's copy. A
+/// line no slot holds keeps the copy, where `0x5ea3f0`'s -1 reads the words below the block; the
+/// watch that dropped it rebuilds the list at its packet.
+fn now(lua: &Lua, e: &SkillEntry) -> SkillEntry {
+    let mut e = e.clone();
+    if let Some(Some(w)) = ask(lua, &SkillWords(e.skill_id)) {
+        e.value = w.value;
+        e.max = w.max;
+        e.temp_bonus = w.temp_bonus;
+        e.perm_bonus = w.perm_bonus;
+        e.step = w.step;
+        // The step word and flag `0x20` (`0x4d3956`, `0x4d395d`).
+        e.abandonable = w.step != 0 && e.flags & 0x20 != 0;
+    }
+    e
+}
+
+/// A new VM's list, built silently off the lines as they stand, as the reference's list outlives
+/// a `/reload` (`0xb73184`); nothing once built, or with no host to ask.
+fn seat(lua: &Lua) {
+    if lua.app_data_ref::<Model>().is_some_and(|m| m.skills_built) {
+        return;
+    }
+    let Some(lines) = ask(lua, &SkillLinesNow) else {
+        return;
+    };
+    if let Some(mut model) = lua.app_data_mut::<Model>() {
+        model.skills_live = lines;
+        rebuild(&mut model);
+    }
+}
 
 /// One known skill line off the player's `PLAYER_SKILL_INFO` block, resolved by the app.
 #[derive(Clone, Debug, PartialEq)]
@@ -95,10 +159,10 @@ pub enum SkillCall {
 }
 
 impl super::UiScript {
-    /// Push the player's skill lines as the descriptor holds them now. Each row of the list reads
-    /// its line's pushed values, as `GetSkillLineInfo` reads the slot at the call (`0x4d3828`);
-    /// the rows, their order and the folds change only at a rebuild ([`Self::rebuild_skills`]).
-    /// The first push into a VM builds the list, silently.
+    /// Push the player's skill lines as the descriptor holds them now, for a VM with no host to
+    /// ask. Each row of the list reads its line's pushed values, as `GetSkillLineInfo` reads the
+    /// slot at the call (`0x4d3828`); the rows, their order and the folds change only at a rebuild
+    /// ([`Self::rebuild_skills`]). The first push into a VM builds the list, silently.
     pub fn set_skills(&mut self, state: SkillsState) {
         let mut model = self.model_mut();
         let model = &mut *model;
@@ -118,7 +182,14 @@ impl super::UiScript {
     /// (`0x4d2fec`). The world-enter cascade runs it (`0x4909f1` → `0x4d2c90`), and so do the
     /// skill watches (`0x5de2a7`, `0x5de45c`, `0x5de49a`).
     pub fn rebuild_skills(&mut self) {
-        rebuild(&mut self.model_mut());
+        // The walk reads the slots as they stand (`0x4d2d26`).
+        let lines = ask(self.lua(), &SkillLinesNow);
+        let mut model = self.model_mut();
+        if let Some(lines) = lines {
+            model.skills_live = lines;
+        }
+        rebuild(&mut model);
+        drop(model);
         self.fire_event("SKILL_LINES_CHANGED", Vec::new());
     }
 
@@ -348,6 +419,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetNumSkillLines",
         lua.create_function(|lua, ()| {
+            seat(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(num_rows(&model) as i64)
         })?,
@@ -361,6 +433,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetSkillLineInfo(index)` (`0x849eb4`, `0x4d3629`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetSkillLineInfo(index)")?;
+            seat(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(n) = index.checked_sub(1) else {
                 return out_of_range_tuple(lua);
@@ -388,7 +461,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     ]))
                 }
                 Row::Entry(ei) => {
-                    let e = &model.skills.entries[ei];
+                    let e = &now(lua, &model.skills.entries[ei]);
                     let (rank, max) = displayed_ranks(e);
                     Ok(MultiValue::from_vec(vec![
                         Value::String(lua.create_string(&e.name)?),
@@ -436,6 +509,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             lua.create_function(move |lua, id: Value| {
                 // `is-number` else the usage (`0x849ef0` at `0x4d3b81`, `0x849f14` at `0x4d3be1`).
                 let id = binding_abi::index_arg32(lua, id, usage)?;
+                seat(lua);
                 super::tick::verb(lua, |model| {
                     if set_collapsed(model, id, collapse) {
                         model.raise("SKILL_LINES_CHANGED", Vec::new());
@@ -453,6 +527,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: SetSelectedSkill(index)` (`0x849f88`, `0x4d4031`).
             let index = binding_abi::index_arg32(lua, index, "Usage: SetSelectedSkill(index)")?;
+            seat(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             set_selected(&mut model, index);
             Ok(())
@@ -461,6 +536,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetSelectedSkill",
         lua.create_function(|lua, ()| {
+            seat(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(selected_index(&model)))
         })?,
@@ -473,7 +549,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetAdjustedSkillPoints",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(model.talents.points.1 as i32))
+            Ok(i64::from(
+                super::talent::character_points(lua, &model).1 as i32,
+            ))
         })?,
     )?;
 
@@ -486,6 +564,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: AbandonSkill(index)` (`0x849ed4`, `0x4d3ac7`).
             let index = binding_abi::index_arg(lua, index, "Usage: AbandonSkill(index)")?;
+            seat(lua);
             let skill_id = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let row = index
@@ -530,8 +609,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "AddSkillUp",
         lua.create_function(|lua, index: Value| {
             let index = binding_abi::index_arg(lua, index, "Usage: AddSkillUp(index)")?;
+            seat(lua);
+            // The rank and maximum off the slot now (`0x4d33a8`, `0x4d33db`).
+            let line = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                entry_at(&model, index).map(|e| now(lua, e))
+            };
             super::tick::verb(lua, |model| {
-                let Some(e) = entry_at(model, index) else {
+                let Some(e) = line.as_ref() else {
                     return;
                 };
                 let (rank, max) = held_ranks(e);
@@ -553,6 +638,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "RemoveSkillUp",
         lua.create_function(|lua, index: Value| {
             let index = binding_abi::index_arg(lua, index, "Usage: RemoveSkillUp(index)")?;
+            seat(lua);
             super::tick::verb(lua, |model| {
                 let Some(id) = entry_at(model, index).map(|e| e.skill_id) else {
                     return;
@@ -586,9 +672,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "BuySkillTier",
         lua.create_function(|lua, index: Value| {
             let index = binding_abi::index_arg(lua, index, "Usage: BuySkillTier(index)")?;
+            seat(lua);
             let send = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                entry_at(&model, index).and_then(|e| {
+                // The step word off the slot now (`0x4d3f4f`).
+                entry_at(&model, index).map(|e| now(lua, e)).and_then(|e| {
                     let admitted = e.flags & 0x8 != 0 || (e.step == 0 && e.flags & 0x4 != 0);
                     let cost = model
                         .skill_tiers
@@ -598,7 +686,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .copied()
                         .unwrap_or(0);
                     // The cost and the points are compared as signed dwords.
-                    let points = model.talents.points.1;
+                    let points = super::talent::character_points(lua, &model).1;
                     (admitted && cost != 0 && cost as i32 <= points as i32).then_some(e.skill_id)
                 })
             };
