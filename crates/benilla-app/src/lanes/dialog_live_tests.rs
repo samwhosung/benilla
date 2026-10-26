@@ -309,6 +309,64 @@ fn the_dialog_events_fire_at_their_packets() {
     );
 }
 
+/// The pet trainer's question passes the same gate as the innkeeper's (`0x5dfbde`, `0x5dfc2d`)
+/// before it latches (`0x5dfc41`): a trainer out of range, or with no unit, latches and signals
+/// nothing.
+#[test]
+fn the_unlearn_question_drops_past_the_range_gate() {
+    let mut c = client();
+    let npc = c.app.world().resource::<crate::net::GuidIndex>().0[&NPC];
+    c.app
+        .world_mut()
+        .get_mut::<Transform>(npc)
+        .unwrap()
+        .translation
+        .x = 10.0;
+    let ask = |trainer| SessionEvent::PetUnlearnConfirm { trainer, cost: 500 };
+    c.handle(vec![ask(NPC), ask(0xF130_0000_0000_0099)]);
+    assert!(c
+        .app
+        .world_mut()
+        .resource_mut::<crate::ui_dialog_verbs::DialogLane>()
+        .take()
+        .is_empty());
+    assert_eq!(
+        c.eval::<Option<i64>>(true, "return CheckPetUntrainerDist()"),
+        None
+    );
+    c.app
+        .world_mut()
+        .get_mut::<Transform>(npc)
+        .unwrap()
+        .translation
+        .x = 5.0;
+    c.handle(vec![ask(NPC)]);
+    assert_eq!(
+        c.eval::<Option<i64>>(true, "return CheckPetUntrainerDist()"),
+        Some(1),
+        "5 yd is inside 5.56"
+    );
+}
+
+/// A world-enter cascade and a `0x295` in one frame: the reset is the create's, ahead of the
+/// frame's later packets, so the rebuild stands (`0x4908c0` inside `0x5dea50`, then `0x4ca385`).
+#[test]
+fn a_rebuild_in_the_cascades_frame_stands() {
+    let mut c = client();
+    c.app
+        .world_mut()
+        .write_message(crate::net::WorldEnterCascadeMessage);
+    c.frame(vec![vec![SessionEvent::MeetingStoneSetQueue {
+        area: STORMWIND,
+        status: 1,
+    }]]);
+    assert_eq!(
+        c.eval::<Option<String>>(true, "return GetMeetingStoneStatusText()")
+            .as_deref(),
+        Some("Looking for more for Stormwind City")
+    );
+}
+
 /// A challenge whose name the cache lacks fires its `DUEL_REQUESTED` at the name's answer, after
 /// what the packets between raised (the module's deviation from `0x4d4a72`).
 #[test]

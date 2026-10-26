@@ -87,7 +87,8 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_dialog_verbs::meeting_stone_enter_world", &["ui_dialog_verbs::MeetingStone"],
         "resets the status text to `UNKNOWN` at the world-enter cascade (`0x490a14` → \
-         `0x4c9f40`), which the reference runs inside our own player's create (`0x4908c0`)"),
+         `0x4c9f40`), which the reference runs inside our own player's create (`0x4908c0`); a \
+         `0x295` the frame's packets rebuilt keeps its text, as the create comes first"),
     ("::ui_instance::track_instance_state", &["ui_instance::InstanceState"],
         "latches the dungeon just left once the map the transfer lands on is known, which the \
          reference latches inside the map load and the packet (`0x464ff0`, `0x49e6ac`)"),

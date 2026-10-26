@@ -315,8 +315,6 @@ fn click_select(c: &mut ClickSelect) -> Option<crate::script_calls::EngineSelect
 pub(crate) struct ServiceArms<'w> {
     /// The last `SMSG_QUESTGIVER_STATUS` per guid (`[unit+0xcb8]`), read by bit 1's `0x5df490`.
     pub(crate) quest: Res<'w, crate::ui_quest::QuestGiver>,
-    /// Bit 7: `0x5dfdc0` fires `CONFIRM_BINDER`; `CMSG_BINDER_ACTIVATE` is the dialog's Accept.
-    pub(crate) binder: ResMut<'w, crate::ui_binder::BinderState>,
     pub(crate) death: ResMut<'w, crate::death::DeathNet>,
     /// Bit 6 sends through the cache the proximity poll writes, so the two agree on the healer.
     pub(crate) spirit: ResMut<'w, crate::ui_dialog_verbs::AreaSpiritHealer>,
@@ -1141,7 +1139,10 @@ impl Dispatch<'_, '_> {
             }
             ServiceAction::AskBinder => {
                 debug!("right-click interact: {guid:#x} (innkeeper — CONFIRM_BINDER, no packet)");
-                self.service.binder.ask(guid);
+                // `0x5dfdc0` with the guid, its gate, latch and signal, with the world in hand.
+                self.feedback.windows.queue(move |world: &mut World| {
+                    let _ = world.run_system_cached_with(crate::ui_binder::ask_binder, guid);
+                });
             }
             ServiceAction::AskSpiritHealer => {
                 debug!(
@@ -3205,6 +3206,77 @@ mod tests {
             .resource_mut::<Messages<WorldRightClick>>()
             .write(WorldRightClick);
         world.run_system_once(act_on_right_click).unwrap();
+    }
+
+    /// Bit 7's arm runs `0x5dfdc0` with the innkeeper's guid: past the range gate (`0x5dfe3c`) it
+    /// latches and queues `CONFIRM_BINDER` on the dialogs' lane; out of range, or with no unit
+    /// under the guid, nothing.
+    #[test]
+    fn an_innkeeper_click_asks_through_the_binders_gate() {
+        const F_NPC_FLAGS: u16 = 147;
+        const INNKEEPER: u64 = 0x1AA;
+        for (at, held, asks) in [(3.0, true, true), (10.0, true, false), (3.0, false, false)] {
+            let label = format!("at {at}, held {held}");
+            let (mut world, _boar) = right_click_world();
+            world.init_resource::<crate::ui_dialog_verbs::DialogLane>();
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .unwrap();
+            world.entity_mut(me).insert((
+                store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]),
+                Transform::default(),
+            ));
+            let inn = world
+                .spawn((
+                    Guid(INNKEEPER),
+                    store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100), (F_NPC_FLAGS, 0x80)]),
+                    Transform::from_xyz(at, 0.0, 0.0),
+                    crate::net::NetEntity {
+                        kind: benilla_protocol::EntityKind::Unit,
+                        display_id: None,
+                        scale: 1.0,
+                    },
+                ))
+                .id();
+            if held {
+                world
+                    .resource_mut::<crate::net::GuidIndex>()
+                    .0
+                    .insert(INNKEEPER, inn);
+            }
+            *world.resource_mut::<PressPick>() = PressPick {
+                hovered: Hovered {
+                    target: Some(inn),
+                    guid: Some(INNKEEPER),
+                    distance: 1.0,
+                    ..Hovered::default()
+                },
+                cursor: WorldCursor {
+                    kind: cursor_mode::CursorKind::Interact,
+                    unable: false,
+                },
+                ..PressPick::default()
+            };
+            world
+                .resource_mut::<Messages<WorldRightClick>>()
+                .write(WorldRightClick);
+            world.run_system_once(act_on_right_click).unwrap();
+            let signals = world
+                .resource_mut::<crate::ui_dialog_verbs::DialogLane>()
+                .take();
+            let expected = if asks {
+                vec![crate::ui_dialog_verbs::DialogSignal::ConfirmBinder { leaf: None }]
+            } else {
+                vec![]
+            };
+            assert_eq!(signals, expected, "{label}");
+            assert_eq!(
+                world.resource::<crate::ui_binder::BinderState>().pending(),
+                asks.then_some(INNKEEPER),
+                "{label}: the latch"
+            );
+        }
     }
 
     /// `0x5f0130`: out of reach, `CanAutoInteract` starts the walk and nothing goes out; with the

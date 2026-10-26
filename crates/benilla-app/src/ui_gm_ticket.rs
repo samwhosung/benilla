@@ -95,6 +95,17 @@ fn ticket_answer(lane: &mut DialogLane, ticket: Option<&benilla_protocol::messag
     lane.event("UPDATE_TICKET", update_ticket_args(ticket));
 }
 
+/// `SMSG_GMTICKET_DELETETICKET`'s result 9 (`0x5e4606`): `UPDATE_TICKET` with `%d%s`, 0 and `""`
+/// (`0x5e461d`).
+fn deleted(lane: &mut DialogLane, code: u32) {
+    if code == 9 {
+        lane.event(
+            "UPDATE_TICKET",
+            vec![ScriptValue::Int(0), ScriptValue::Str(String::new())],
+        );
+    }
+}
+
 /// `SMSG_GMTICKETSYSTEMSTATUS`'s `UPDATE_GM_STATUS` (`0x5e4689`): `arg1` the status as a number,
 /// signed as the reference copies the wire dword (`0x418e95`) and loads it for Lua (`0x704fa6`), so
 /// `HelpFrame`'s `arg1 == -1` arm fires on `0xFFFFFFFF`; vmangos sends only 0 or 1.
@@ -349,9 +360,12 @@ pub(crate) mod net {
         }
     }
 
-    fn on_deleted(In(ev): In<SessionEvent>) {
+    /// `SMSG_GMTICKET_DELETETICKET` (`0x5e4606`): result 9, deleted, signals `UPDATE_TICKET`
+    /// with `%d%s` over 0 and `""` (`0x5e461d`), the window's no-ticket answer.
+    fn on_deleted(In(ev): In<SessionEvent>, mut lane: ResMut<DialogLane>) {
         if let SessionEvent::GmTicketDeleted { response: code } = ev {
             response("delete", code);
+            super::deleted(&mut lane, code);
         }
     }
 
@@ -626,6 +640,22 @@ mod tests {
             [DialogSignal::Event(
                 "UPDATE_GM_STATUS".into(),
                 vec![ScriptValue::Int(-1)]
+            )]
+        );
+    }
+
+    /// `0x5e4606`: only result 9 signals, `UPDATE_TICKET` over `%d%s` with 0 and `""`
+    /// (`0x5e461d`).
+    #[test]
+    fn a_deleted_ticket_signals_the_no_ticket_answer() {
+        let mut lane = DialogLane::default();
+        deleted(&mut lane, 8);
+        deleted(&mut lane, 9);
+        assert_eq!(
+            lane.take(),
+            [DialogSignal::Event(
+                "UPDATE_TICKET".into(),
+                vec![ScriptValue::Int(0), ScriptValue::Str(String::new())]
             )]
         );
     }

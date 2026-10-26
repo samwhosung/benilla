@@ -87,6 +87,31 @@ pub(crate) fn area_name_of(
         .unwrap_or_default()
 }
 
+/// What `0x5dfdc0` with a guid reads and writes: the latch, the dialogs' lane, the area under the
+/// player and the range gate.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct BinderAsk<'w, 's> {
+    binder: ResMut<'w, BinderState>,
+    lane: ResMut<'w, crate::ui_dialog_verbs::DialogLane>,
+    area: benilla_world::world_point::AreaUnderfoot<'w>,
+    reach: crate::ui_dialog_verbs::DialogReach<'w, 's>,
+}
+
+/// `0x5dfdc0` with a guid, the packet's (`0x5e4aa2`) or the innkeeper's click's (bit 7 of the
+/// service ladder): an innkeeper past the range gate (`0x5dfe3c`,
+/// [`crate::ui_dialog_verbs::DialogReach`]) is latched, then `CONFIRM_BINDER` fires with the area
+/// under the player (`0x5dfe5e`); one out of range, or no unit, drops the question.
+pub(crate) fn ask_binder(In(npc): In<u64>, mut ask: BinderAsk) {
+    if !ask.reach.holds(npc) {
+        debug!("ui_binder: innkeeper {npc:#x} missing or out of range — the question drops");
+        return;
+    }
+    ask.binder.ask(npc);
+    let leaf = ask.area.area();
+    ask.lane
+        .push(crate::ui_dialog_verbs::DialogSignal::ConfirmBinder { leaf });
+}
+
 /// `ConfirmBinder()` inside its call ([`benilla_ui::script::BinderCall`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct BinderSteps<'w> {
@@ -128,33 +153,11 @@ pub(crate) mod net {
             .net_handler(K::PlayerBound, on_bound);
     }
 
-    /// `0x5dfdc0` with the packet's guid: an innkeeper held within `d² <= [0xc4c28c]` of the
-    /// player (`0x5dfe3c`, a NaN passing) is latched, then `CONFIRM_BINDER` fires with the area
-    /// under the player (`0x5dfe5e`); one out of range, or no unit, drops the question. Asking
-    /// again after a decline is a second dialog, each its packet's.
-    fn on_confirm(
-        In(ev): In<SessionEvent>,
-        mut binder: ResMut<BinderState>,
-        mut lane: ResMut<crate::ui_dialog_verbs::DialogLane>,
-        area: benilla_world::world_point::AreaUnderfoot,
-        index: Res<crate::net::GuidIndex>,
-        me: Query<&Transform, With<crate::net::SelfPlayer>>,
-        units: Query<&Transform>,
-    ) {
+    /// `SMSG_BINDER_CONFIRM`'s arm (`0x5e4aa2`): `0x5dfdc0` with the packet's guid
+    /// ([`super::ask_binder`]). Asking again after a decline is a second dialog, each its packet's.
+    fn on_confirm(In(ev): In<SessionEvent>, ask: super::BinderAsk) {
         if let SessionEvent::BinderConfirm { binder: npc } = ev {
-            let at = index.0.get(&npc).and_then(|&e| units.get(e).ok());
-            let in_range = at.zip(me.iter().next()).is_some_and(|(at, me)| {
-                at.translation
-                    .distance_squared(me.translation)
-                    .partial_cmp(&crate::target::SERVICE_RANGE_SQ)
-                    != Some(std::cmp::Ordering::Greater)
-            });
-            if !in_range {
-                debug!("net: innkeeper {npc:#x} missing or out of range — the question drops");
-                return;
-            }
-            binder.ask(npc);
-            lane.push(crate::ui_dialog_verbs::DialogSignal::ConfirmBinder { leaf: area.area() });
+            super::ask_binder(In(npc), ask);
         }
     }
 

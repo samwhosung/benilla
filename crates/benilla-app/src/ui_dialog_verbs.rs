@@ -11,6 +11,29 @@ mod live;
 pub(crate) use lane::{add_dialog_lane, DialogLane, DialogSignal};
 pub(crate) use live::DialogLive;
 
+/// The service dialogs' arrival gate, inline in `0x5dfdc0` and `0x5dfba0`: the NPC's unit looked up
+/// (`0x5dfdf5`, `0x5dfbde`) and held within `d² <= [0xc4c28c]` of the player (`0x5dfe3c`,
+/// `0x5dfc2d`, `je`: equality and a NaN pass); with no unit or out of range the dialog drops.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct DialogReach<'w, 's> {
+    index: Res<'w, crate::net::GuidIndex>,
+    me: Query<'w, 's, &'static Transform, With<SelfPlayer>>,
+    units: Query<'w, 's, &'static Transform>,
+}
+
+impl DialogReach<'_, '_> {
+    /// Whether `npc` passes the gate.
+    pub(crate) fn holds(&self, npc: u64) -> bool {
+        let at = self.index.0.get(&npc).and_then(|&e| self.units.get(e).ok());
+        at.zip(self.me.iter().next()).is_some_and(|(at, me)| {
+            at.translation
+                .distance_squared(me.translation)
+                .partial_cmp(&crate::target::SERVICE_RANGE_SQ)
+                != Some(std::cmp::Ordering::Greater)
+        })
+    }
+}
+
 use std::time::Instant;
 
 use benilla_protocol::messages::{BattlefieldStatus, MeetingStoneNotice};
@@ -321,6 +344,9 @@ pub(crate) struct MeetingStone {
     /// `0x299` guids whose name has not resolved yet, each waiting on the name cache's callback
     /// `0x4ca510` (`0x4ca4b2`).
     pending_members: Vec<u64>,
+    /// A `0x295` rebuilt the text in this frame's packets, which the world entry's reset, ordered
+    /// ahead of them as our own create's cascade is (`0x4908c0` inside `0x5dea50`), leaves.
+    rebuilt: bool,
 }
 
 impl MeetingStone {
@@ -329,6 +355,7 @@ impl MeetingStone {
     pub(crate) fn apply(&mut self, area: u32) -> u32 {
         let old = std::mem::replace(&mut self.area, area);
         self.text = StoneText::Built;
+        self.rebuilt = true;
         old
     }
 
@@ -533,10 +560,15 @@ pub(crate) fn meeting_stone_enter_world(
     mut stone: ResMut<MeetingStone>,
     commands: Res<NetCommands>,
 ) {
+    let rebuilt = std::mem::take(&mut stone.rebuilt);
     if cascades.read().next().is_none() {
         return;
     }
-    stone.enter_world();
+    // The reset is the create's, ahead of the frame's later packets: a `0x295` among them keeps
+    // its rebuild.
+    if !rebuilt {
+        stone.enter_world();
+    }
     let _ = commands.0.send(ClientCommand::MeetingStoneStatusQuery);
 }
 
@@ -911,18 +943,22 @@ mod net {
         *queue = BattlefieldQueue::default();
     }
 
-    /// The pet trainer's question, `PetUnlearnDialog(&guid, cost)` (`0x5dfba0`): the latch, then
-    /// `CONFIRM_PET_UNLEARN` with the cost inside the handler; a zero guid shows
-    /// `ERR_TALENT_WIPE_ERROR` instead (`0x5e4a26`-`0x5e4a85`).
+    /// The pet trainer's question, `PetUnlearnDialog(&guid, cost)` (`0x5dfba0`): past the range
+    /// gate ([`super::DialogReach`]), the latch (`0x5dfc41`), then `CONFIRM_PET_UNLEARN` with the
+    /// cost inside the handler; a zero guid shows `ERR_TALENT_WIPE_ERROR` instead
+    /// (`0x5e4a26`-`0x5e4a85`).
     fn on_pet_unlearn_confirm(
         In(ev): In<SessionEvent>,
         mut unlearn: ResMut<PetUnlearnState>,
         mut lane: ResMut<DialogLane>,
+        reach: super::DialogReach,
     ) {
         if let SessionEvent::PetUnlearnConfirm { trainer, cost } = ev {
             if trainer == 0 {
                 debug!("net: pet unlearn refused (zero trainer) — no dialog");
                 lane.push(DialogSignal::Line("ERR_TALENT_WIPE_ERROR"));
+            } else if !reach.holds(trainer) {
+                debug!("net: trainer {trainer:#x} missing or out of range — the question drops");
             } else {
                 debug!("net: trainer {trainer:#x} asks to unlearn the pet for {cost} copper");
                 unlearn.ask(trainer, cost);
@@ -1633,9 +1669,11 @@ mod tests {
             .count()
     }
 
-    /// The server's answer has landed: queued at `area`, the line built.
+    /// The server's answer has landed, in an earlier frame: queued at `area`, the line built.
     fn answered(app: &mut App, area: u32) {
-        app.world_mut().resource_mut::<MeetingStone>().apply(area);
+        let mut stone = app.world_mut().resource_mut::<MeetingStone>();
+        stone.apply(area);
+        stone.rebuilt = false;
     }
 
     fn stone_text(app: &App) -> StoneText {
