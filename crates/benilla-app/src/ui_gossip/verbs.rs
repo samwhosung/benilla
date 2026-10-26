@@ -82,8 +82,7 @@ impl GossipVerbs<'_, '_> {
                 // no getter or select reads, and every quest id to 0, which ends the row scans.
                 // No event: the menu the feed pushed is the VM's as reset.
                 let state = state.bypass_change_detection();
-                state.options.clear();
-                state.quests.clear();
+                state.reset_slots();
                 script.reset_gossip_slots();
             }
             GossipCall::Quest { active, index } => {

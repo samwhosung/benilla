@@ -72,7 +72,7 @@ pub(crate) enum SweepLeg {
     Loot,
     /// `0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`.
     ItemText,
-    /// `0x490ac1` → `0x4e1f60` → `0x4e1fa0(0)`.
+    /// `0x490ac1` → `0x4e1f60`: `0x4e1fa0(0)`, then the slots' reset `0x4e26a0`.
     Gossip,
     /// `0x490ac6` → `0x500bc0` → `0x501130(0, 1)`.
     Quest,

@@ -164,6 +164,13 @@ impl GossipState {
         self.text.clear();
     }
 
+    /// `ResetGossipOptions` (`0x4e26a0`): every option slot's index to -1 and every quest id to 0,
+    /// so no getter or select finds a row; the text, the NPC cell and the latches stay.
+    pub(crate) fn reset_slots(&mut self) {
+        self.options.clear();
+        self.quests.clear();
+    }
+
     /// The disconnect clear; NPC text is static per id, so the records stay.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
@@ -192,8 +199,8 @@ impl Plugin for UiGossipPlugin {
         lane::add_gossip_lane(app);
         app.init_resource::<GossipState>()
             .add_latched_window::<GossipState>()
-            // `0x490ac1` → `0x4e1f60` → `0x4e1fa0(0)`, the core.
-            .add_sweep_leg(SweepLeg::Gossip, close_core);
+            // `0x490ac1` → `0x4e1f60`: the core `0x4e1fa0(0)`, then the slots' reset (`0x4e1f89`).
+            .add_sweep_leg(SweepLeg::Gossip, leave_world);
     }
 }
 
@@ -211,12 +218,20 @@ impl LatchedWindow for GossipState {
     }
 }
 
+/// The leave-world leg `0x4e1f60`: the close core (`0x4e1f84`), then `ResetGossipOptions`
+/// (`0x4e1f89` → `0x4e26a0`) whether or not a menu was open, so the getters answer empty lists
+/// until the next gossip.
+fn leave_world(world: &mut World) {
+    close_core(world);
+    world.resource_mut::<GossipState>().reset_slots();
+}
+
 /// The close core, `0x4e1fa0` with a zero guid: nothing with no menu (`0x4e1fb8`, a zero guid
 /// against a zero cell), else the latch release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`), and
 /// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay, and their getters read
 /// them still. A menu still waiting on its text was latched at its open, so its close fires too.
 /// `SMSG_GOSSIP_COMPLETE` (`0x4e2824`), the missing-text path (`0x4e2197`), `0x493310` and the
-/// leave-world sweep's leg (`0x490ac1` → `0x4e1f60`) call it as it is.
+/// leave-world sweep's leg ([`leave_world`]) call it as it is.
 /// It runs behind the gossip lane, so it never fires ahead of a show still queued there.
 pub(crate) fn close_core(world: &mut World) {
     let Some(npc) = world.resource::<GossipState>().npc else {
