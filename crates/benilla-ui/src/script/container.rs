@@ -1255,6 +1255,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "ShowContainerSellCursor",
         lua.create_function(|lua, (bag, slot): (Value, Value)| {
+            // The targeting and base-mode gates run before either argument is read
+            // (`0x4fa469`-`0x4fa47a`).
+            if super::merchant::sell_cursor_shut(&lua.app_data_ref::<Model>().expect("model")) {
+                return Ok(());
+            }
             // `is-number` on args 1 and 2 else `Usage: ShowContainerSellCursor(index, slot)`
             // (`0x84d970`, `0x4fa4d9`).
             let bag = i64::from(binding_abi::number_arg(
@@ -1268,9 +1273,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let occupied = model
                 .bag_slot(bag, slot)
                 .is_some_and(|s| !cursor::item_locked(&model, s.guid));
-            // An armed spell or repair cursor suppresses it first; each is sticky, so a Buy here
-            // would stamp out the active base cursor.
-            if occupied && !model.spell_targeting && !model.repair_mode {
+            if occupied {
                 model.ui_cursor = Some(UiCursorMode::Buy);
                 model.ui_cursor_dirty = true;
             }

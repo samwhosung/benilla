@@ -772,10 +772,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ShowMerchantSellCursor(index) (`0x4fbab0`) and ShowBuybackSellCursor(index) (`0x4fbbb0`):
     // despite the names, the buy cursor, re-armed each frame an item is hovered
     // (`MerchantFrame.xml:726-733`). Every fail path returns without `CursorSetMode`; the
-    // in-flight item lock and base-mode Point gates live app-side.
+    // targeting and base-mode gates open each verb ([`sell_cursor_shut`]), and the in-flight item
+    // lock lives app-side.
     g.set(
         "ShowMerchantSellCursor",
         lua.create_function(|lua, index: Value| {
+            // The targeting and base-mode gates come first (`0x4fbab7`-`0x4fbacc`).
+            if sell_cursor_shut(&lua.app_data_ref::<Model>().expect("model app_data")) {
+                return Ok(());
+            }
             // `is-number` else `Usage: ShowMerchantSellCursor(index)` (`0x84dd14`, `0x4fbadf`).
             let index = binding_abi::index_arg(lua, index, "Usage: ShowMerchantSellCursor(index)")?;
             arm_vendor_cursor(lua, |model| {
@@ -787,6 +792,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ShowBuybackSellCursor",
         lua.create_function(|lua, index: Value| {
+            // The targeting and base-mode gates come first (`0x4fbbb9`-`0x4fbbce`).
+            if sell_cursor_shut(&lua.app_data_ref::<Model>().expect("model app_data")) {
+                return Ok(());
+            }
             // `is-number` else `Usage: ShowBuybackSellCursor(index)` (`0x84dd3c`, `0x4fbbe1`).
             let index = binding_abi::index_arg(lua, index, "Usage: ShowBuybackSellCursor(index)")?;
             arm_vendor_cursor(lua, |model| {
@@ -799,15 +808,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+/// The gates every sell-cursor verb opens with, ahead of its argument reads: `IsSpellTargeting`
+/// (`0x6e48a0`), then the base cursor mode (`0x523d10`) must be 1, which the repair cursor moves
+/// (`0x4fbce3`). Either failing returns quietly; each is sticky, so a Buy would stamp it out.
+pub(super) fn sell_cursor_shut(model: &Model) -> bool {
+    model.spell_targeting || model.repair_mode
+}
+
 /// Arm the vendor hover cursor from a row's price, read at the call: Buy(3) if the player's coinage
-/// covers it, else the greyed UnableBuy(23); no price leaves the cursor untouched.
+/// covers it, else the greyed UnableBuy(23); no price leaves the cursor untouched. The caller has
+/// passed [`sell_cursor_shut`].
 fn arm_vendor_cursor(lua: &Lua, price_of: impl FnOnce(&Model) -> Option<u32>) {
     let price = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        // The family bails on `IsTargeting` first (`0x6e48a0`): an armed spell keeps its cursor.
-        if model.spell_targeting {
-            return;
-        }
         price_of(&model)
     };
     let Some(price) = price else {
@@ -1343,6 +1356,71 @@ mod tests {
         s.run("ShowMerchantSellCursor(99)").unwrap();
         assert_eq!(s.ui_cursor(), Some(UiCursorMode::Buy));
     }
+
+    /// The sell-cursor verbs test `IsSpellTargeting` and the base mode before any argument
+    /// (`0x4fa469`-`0x4fa47a`, `0x4fbab7`-`0x4fbacc`, `0x4fbbb9`-`0x4fbbce`): under a targeting
+    /// spell or the repair cursor a bad argument is quiet and a good one arms nothing.
+    #[test]
+    fn sell_cursor_verbs_gate_on_targeting_and_repair_before_their_arguments() {
+        use crate::script::UiCursorMode;
+        let mut s = UiScript::new().unwrap();
+        let mut vendor = stock();
+        vendor.can_repair = true;
+        vendor.buyback = vec![MerchantItem {
+            price: 1,
+            ..Default::default()
+        }];
+        s.set_merchant(Some(vendor));
+        s.set_money(100);
+        let mut bag = ContainerState {
+            num_slots: 1,
+            ..Default::default()
+        };
+        bag.slots.insert(
+            1,
+            ContainerSlot {
+                item_id: 117,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        s.set_container(0, Some(bag));
+        let bad = [
+            "ShowContainerSellCursor(nil, 1)",
+            "ShowContainerSellCursor(0, {})",
+            "ShowMerchantSellCursor(nil)",
+            "ShowBuybackSellCursor('x')",
+        ];
+        let good = [
+            "ShowContainerSellCursor(0, 1)",
+            "ShowMerchantSellCursor(1)",
+            "ShowBuybackSellCursor(1)",
+        ];
+        for arm in ["targeting", "repair"] {
+            if arm == "targeting" {
+                s.set_spell_targeting(true);
+            } else {
+                s.set_spell_targeting(false);
+                s.run("ShowRepairCursor()").unwrap();
+                assert!(s.repair_mode());
+            }
+            for call in bad.iter().chain(&good) {
+                s.run(call)
+                    .unwrap_or_else(|e| panic!("{call} under {arm}: {e}"));
+                assert_eq!(s.ui_cursor(), None, "{call} under {arm}");
+            }
+        }
+        s.run("HideRepairCursor()").unwrap();
+        for call in good {
+            s.run("ResetCursor()").unwrap();
+            s.run(call).unwrap();
+            assert_eq!(s.ui_cursor(), Some(UiCursorMode::Buy), "{call}");
+        }
+        for call in bad {
+            assert!(s.run(call).is_err(), "{call} raises past the gates");
+        }
+    }
+
     #[test]
     fn pickup_merchant_item_grabs_a_row_as_mode_5() {
         let mut s = UiScript::new().unwrap();

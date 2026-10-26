@@ -43,12 +43,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ShowInventorySellCursor",
         lua.create_function(|lua, slot: Value| {
-            {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                // `[0xbe2c4c] == 1`: repair mode (`0x4fbce3`) and the targeting arm move the base.
-                if model.spell_targeting || model.repair_mode {
-                    return Ok(());
-                }
+            if super::merchant::sell_cursor_shut(
+                &lua.app_data_ref::<Model>().expect("model app_data"),
+            ) {
+                return Ok(());
             }
             let slot0 = inventory_slot_arg(
                 lua,
