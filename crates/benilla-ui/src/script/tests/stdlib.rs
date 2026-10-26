@@ -900,3 +900,34 @@ fn a_frame_no_instruction_names_takes_a_globals_name() {
         "no global holds it: {named}"
     );
 }
+
+/// The bare aliases are the client's `compat.lua` chunk (`0x8722e8`, named at `0x872cbc`): an error
+/// inside one is `[string "compat.lua"]:<line>:` with the line the alias has in the client's
+/// 53-line text (`sin` 36, `cos` 20, `tan` 38, `asin` 16), and the closures capture the chunk's own
+/// `math`, so a script that replaces the global leaves them working.
+#[test]
+fn the_bare_aliases_are_the_clients_compat_chunk() {
+    let s = script();
+    let f = |src: &str| s.eval::<String>(src).unwrap();
+    assert_eq!(
+        f(r#"local ok, e = pcall(sin, "a") return e"#),
+        r#"[string "compat.lua"]:36: bad argument #1 to `rad' (number expected, got string)"#
+    );
+    assert_eq!(
+        f(r#"local ok, e = pcall(cos, nil) return e"#),
+        r#"[string "compat.lua"]:20: bad argument #1 to `rad' (number expected, got nil)"#
+    );
+    assert_eq!(
+        f(r#"local ok, e = pcall(tan, {}) return e"#),
+        r#"[string "compat.lua"]:38: bad argument #1 to `rad' (number expected, got table)"#
+    );
+    assert_eq!(
+        f(r#"local ok, e = pcall(asin, "x") return e"#),
+        r#"[string "compat.lua"]:16: bad argument #1 to `asin' (number expected, got string)"#
+    );
+    assert_eq!(
+        f(r#"math = nil
+             return string.format("%.4f %.4f %.4f", sin(30), tan(45), atan2(1, 1))"#),
+        "0.5000 1.0000 45.0000"
+    );
+}

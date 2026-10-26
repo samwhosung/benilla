@@ -81,7 +81,7 @@ fn chunk_names_nothing_refers_to_are_collected() {
         live,
         [
             "=[host]",
-            "=[benilla-lua compat]",
+            "compat.lua",
             "@Interface\\AddOns\\Kept\\Kept.lua",
             "return 7",
         ],

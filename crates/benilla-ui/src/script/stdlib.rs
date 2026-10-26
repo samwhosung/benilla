@@ -3,7 +3,7 @@
 //! - [`sandbox`]: no filesystem, OS or native reach (`io`, `os`, `package`, `require`, `dofile`,
 //!   `loadfile`, `load`, `module`, `newproxy` and `debug` removed) and the reference's
 //!   `debugstack`.
-//! - [`install`]: the 1.12 bare globals (string, table and math aliases, the `debug*` family, the
+//! - [`install`]: the 1.12 bare globals the engine adds (the `debug*` family, the
 //!   error-handler pair), `time` and `date`.
 
 use mlua::{Lua, Value, Variadic};
@@ -79,7 +79,8 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Install the stdlib layer: the bare globals and `time`/`date`.
+/// Install the stdlib layer: the error handler, `time`/`date`, the profile verbs, the `debug*`
+/// stubs.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_error_handler(lua)?;
     install_time(lua)?;
@@ -156,73 +157,15 @@ fn install_error_handler(lua: &Lua) -> mlua::Result<()> {
 
 /// The stdlib layer in Lua, run once at construction.
 const WOW_STDLIB: &str = r#"
--- ── the bare string family ─────────────────────────────────────────────────────────────────────
--- Every name here is present in the REAL 1.12 client's global table — the in-world `_G` captured
--- from the running reference client (19,572 entries), which is the
--- authority this file answers to.
+-- ── the bare aliases are not here ──────────────────────────────────────────────────────────────
+-- The bare table, math and string names (`strlen`, `tinsert`, `sin`, `PI`, …) are the client's own
+-- start-up chunk, `compat.lua`, which `benilla_lua::new_state` runs; this file adds nothing to them.
 --
 -- `strmatch`, `strrev`, `gmatch`, `strlenutf8` and `strcmputf8i` come from Blizzard's *Era*
 -- enumeration, which a Classic Era addon may reach for. **None of them exist in
 -- 1.12** — `string.match`/`gmatch` are Lua 5.1 additions the 5.0 client never had — and Era is
 -- not our target. They stay out; adding a global the client does not have is how an addon that
 -- feature-detects gets sent down a path we cannot honour.
-strlen  = string.len
-strsub  = string.sub
-strupper = string.upper
-strlower = string.lower
-strrep  = string.rep
-strfind = string.find
-strbyte = string.byte
-strchar = string.char
-gsub    = string.gsub
-tinsert = table.insert
-tremove = table.remove
--- `getn`, `sort`, `foreach` and `foreachi` are bound by `lua50`, which owns the
--- 5.0 shapes of `table.getn`/`setn` and must not be shadowed by a second implementation here.
-
--- ── the bare math aliases (the same 1.12 global family; the reference FrameXML uses them
--- unqualified — WorldMapFrame's overlay pool calls ceil/mod, CooldownFrame floor, …). `mod` is
--- fmod under a 5.0-era name (stock 5.1 dropped math.mod).
-ceil  = math.ceil
-floor = math.floor
-abs   = math.abs
-max   = math.max
-min   = math.min
-sqrt  = math.sqrt
-mod   = math.mod        -- 5.0's name for fmod; `math.fmod` is removed by `lua50`
-random = math.random
--- `randomseed` is an ENGINE global in 1.12 exactly like `random` beside it (the captured `_G` types
--- both `function engine`), and it is the half that was missing: `IgniteStatus` calls it at file
--- scope in its OnLoad and dies on `attempt to call global 'randomseed'`. Seeding a PRNG is the one
--- thing an addon does that has no FrameXML counterpart to copy, so the bare name is all it has.
-randomseed = math.randomseed
--- `PI` is an ENGINE global in 1.12, not a FrameXML one: the reference reads it bare (UIParent.lua's
--- `elapsedTime * 2 * PI * ROTATIONS_PER_SECOND`, TabardFrame.lua l.61-68) and no shipped FrameXML
--- file ever assigns it (grepped over the whole 1.12 extraction) — so the client supplies it, here,
--- beside the rest of the bare math family.
-PI = math.pi
--- The 1.12 bare trig globals are DEGREE-based (the reference CombatText's fountain scroll calls
--- cos/sin with degree arguments); rad/deg ride along as the same family.
-function sin(d) return math.sin(math.rad(d)) end
-function cos(d) return math.cos(math.rad(d)) end
-rad = math.rad
-deg = math.deg
--- The rest of the bare math family, each verified present in the real 1.12 client's global
--- table (the captured `_G`).
--- `tan` and the inverses follow sin/cos into DEGREES — same family, same convention; that is
--- consistent-with the verified sin/cos finding rather than separately byte-verified, and it is
--- the convention every addon rotation helper assumes (`atan2` returning degrees is why
--- `atan2(dy, dx)` feeds a texture rotation directly).
-function tan(d) return math.tan(math.rad(d)) end
-function asin(x) return math.deg(math.asin(x)) end
-function acos(x) return math.deg(math.acos(x)) end
-function atan(x) return math.deg(math.atan(x)) end
-function atan2(y, x) return math.deg(math.atan2(y, x)) end
-exp = math.exp
-log = math.log
-log10 = math.log10
-frexp = math.frexp
-ldexp = math.ldexp
 
 -- ── the debug* family: six verified STUBS and two real ones ────────────────────────────────────
 --
@@ -257,9 +200,6 @@ end
 -- client too, or that define the name themselves under their own namespace.
 -- An addon reaching for one of these is reaching for a later client's API, and it should find
 -- what it would find there: nothing.
-
--- `format`, the bare `string.format`.
-format = string.format
 "#;
 
 /// `time([t])` and `date([format [, when]])`: 1.12 engine globals (`0x7035a0`, `0x7033a0`), Lua

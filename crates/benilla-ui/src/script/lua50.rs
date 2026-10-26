@@ -17,7 +17,8 @@ use mlua::Lua;
 #[cfg(test)]
 mod table_size;
 
-/// Install the dialect. Runs before the WoW stdlib layer, so its aliases bind these functions.
+/// Install the dialect: the string type without a metatable and the `__pow` global. The bare
+/// aliases are not here; the state's own `compat.lua` chunk defines them.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 

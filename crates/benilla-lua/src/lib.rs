@@ -60,8 +60,7 @@ pub fn new_state() -> Vm {
     lib_string::open(&mut vm);
     lib_table::open(&mut vm);
     lib_math::open(&mut vm);
-    vm.exec(COMPAT, b"=[benilla-lua compat]")
-        .expect("the compat chunk runs");
+    vm.exec(COMPAT, COMPAT_NAME).expect("the compat chunk runs");
     vm
 }
 
@@ -70,52 +69,69 @@ fn not_in_the_host(vm: &mut Vm, _nargs: usize) -> api::R<usize> {
     Err(vm.rt_error("not available in the script host"))
 }
 
-/// The bare globals the client's start-up chunk publishes (its `.rdata` at `0x8722e8`): aliases
+/// The chunk name the client gives its alias chunk (`0x872cbc`, `0x703b21`): no `=` or `@`, so a
+/// message shows it as `[string "compat.lua"]`.
+const COMPAT_NAME: &[u8] = b"compat.lua";
+
+/// The bare globals the client's start-up chunk publishes (its text in `.data` at `0x8722e8`): aliases
 /// of the table, math and string libraries, and the trigonometry in degrees, one global at a time
-/// in the chunk's order, which the globals' layout follows. Written here, not copied; Lua closures
-/// as in the client, so a bad argument names the inner call.
-const COMPAT: &[u8] = br#"
-local t, m, s = table, math, string
-foreach = t.foreach
-foreachi = t.foreachi
-getn = t.getn
-tinsert = t.insert
-tremove = t.remove
-sort = t.sort
-abs = m.abs
-function acos(x) return m.deg(m.acos(x)) end
-function asin(x) return m.deg(m.asin(x)) end
-function atan(x) return m.deg(m.atan(x)) end
-function atan2(y, x) return m.deg(m.atan2(y, x)) end
-ceil = m.ceil
-function cos(x) return m.cos(m.rad(x)) end
-deg = m.deg
-exp = m.exp
-floor = m.floor
-frexp = m.frexp
-ldexp = m.ldexp
-log = m.log
-log10 = m.log10
-max = m.max
-min = m.min
-mod = m.mod
-PI = m.pi
-rad = m.rad
-random = m.random
-randomseed = m.randomseed
-function sin(x) return m.sin(m.rad(x)) end
-sqrt = m.sqrt
-function tan(x) return m.tan(m.rad(x)) end
-strbyte = s.byte
-strchar = s.char
-strfind = s.find
-format = s.format
-gsub = s.gsub
-strlen = s.len
-strlower = s.lower
-strrep = s.rep
-strsub = s.sub
-strupper = s.upper
+/// in the chunk's order, which the globals' layout follows. The alias lines are the forms of Lua
+/// 5.0's `etc/compat.lua`; the comments are ours. Each alias sits on the line it has in the
+/// client's 53-line text, which an error inside a bare alias and `debugstack` show, and the
+/// closures close over the chunk's own `tab`, `math` and `str`, so a script that replaces the
+/// global `math` leaves them working. A bad argument names the inner call.
+const COMPAT: &[u8] = br#"-- bare names for the table library
+-- (line numbers here are the client's, so keep every line where it is)
+local tab = table
+foreach = tab.foreach
+foreachi = tab.foreachi
+getn = tab.getn
+tinsert = tab.insert
+tremove = tab.remove
+sort = tab.sort
+
+-- bare names for the math library, in degrees for the trigonometry
+-- the closures below capture this local, not the global
+local math = math
+abs = math.abs
+acos = function (x) return math.deg(math.acos(x)) end
+asin = function (x) return math.deg(math.asin(x)) end
+atan = function (x) return math.deg(math.atan(x)) end
+atan2 = function (x,y) return math.deg(math.atan2(x,y)) end
+ceil = math.ceil
+cos = function (x) return math.cos(math.rad(x)) end
+deg = math.deg
+exp = math.exp
+floor = math.floor
+frexp = math.frexp
+ldexp = math.ldexp
+log = math.log
+log10 = math.log10
+max = math.max
+min = math.min
+mod = math.mod
+PI = math.pi
+-- math.pow has no bare name
+rad = math.rad
+random = math.random
+randomseed = math.randomseed
+sin = function (x) return math.sin(math.rad(x)) end
+sqrt = math.sqrt
+tan = function (x) return math.tan(math.rad(x)) end
+
+-- bare names for the string library
+-- the 5.0 compat names, one library per local
+local str = string
+strbyte = str.byte
+strchar = str.char
+strfind = str.find
+format = str.format
+gsub = str.gsub
+strlen = str.len
+strlower = str.lower
+strrep = str.rep
+strsub = str.sub
+strupper = str.upper
 "#;
 
 /// The client's `luaO_chunkid` (`0x6f5c40`): a chunk name as a message shows it, in a buffer of
