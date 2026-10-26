@@ -931,3 +931,72 @@ fn the_bare_aliases_are_the_clients_compat_chunk() {
         "0.5000 1.0000 45.0000"
     );
 }
+
+/// `seterrorhandler` (`0x702900`) checks that argument 1 is a function, then `luaL_ref`s the
+/// stack's top (`0x702930`): the last argument, and a nil there is -1 (`0x6f534a`), no handler.
+/// `geterrorhandler` (`0x702950`) answers the referenced value, nil for -1.
+#[test]
+fn seterrorhandler_keeps_the_top_value() {
+    let s = script();
+    let f = |src: &str| s.eval::<String>(src).unwrap();
+    assert_eq!(
+        f(r#"local a, b = function() end, function() end
+             seterrorhandler(a) local r1 = geterrorhandler() == a
+             seterrorhandler(a, b) local r2 = geterrorhandler() == b
+             seterrorhandler(a, nil) local r3 = geterrorhandler()
+             seterrorhandler(b) seterrorhandler(a, 5) local r4 = geterrorhandler()
+             return table.concat({tostring(r1), tostring(r2), tostring(r3), tostring(r4)}, " ")"#),
+        "true true nil 5"
+    );
+    // Argument 1 must be a function, whatever follows it.
+    for call in [
+        "seterrorhandler()",
+        "seterrorhandler(nil)",
+        "seterrorhandler(nil, print)",
+    ] {
+        let e = s.run(call).expect_err(call).to_string();
+        assert!(e.contains("Usage: seterrorhandler(errfunc)"), "{call}: {e}");
+    }
+}
+
+/// With the slot cleared the catch closure calls nothing (`0x703b45`); a held value that is no
+/// function is called, and the call raises.
+#[test]
+fn a_cleared_error_handler_is_not_called() {
+    let mut s = crate::script::UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        "caught = {} h = function(m) table.insert(caught, m) end \
+         seterrorhandler(h, nil) \
+         local b = CreateFrame('Button') \
+         b:SetScript('OnClick', function() error('click boom') end) \
+         b:Click()",
+    )
+    .unwrap();
+    s.dispatch_script_errors_to_handler();
+    assert_eq!(s.eval::<i32>("return table.getn(caught)").unwrap(), 0);
+    // A held value that is no function is called all the same, and the call raises: as the error
+    // function of a running call it recurses to `error in error handling` (`0x6f65cf`), and for a
+    // chunk that failed to compile it is called directly (`0x704b42`).
+    s.run(
+        "seterrorhandler(h, 5) \
+         local b = CreateFrame('Button') \
+         b:SetScript('OnClick', function() error('again') end) \
+         b:Click()",
+    )
+    .unwrap();
+    s.dispatch_script_errors_to_handler();
+    let errors = s.take_errors().join("|");
+    assert!(
+        errors.contains("error handler itself failed: runtime error: error in error handling"),
+        "{errors}"
+    );
+    s.report_syntax_error("log", "bad chunk");
+    s.dispatch_script_errors_to_handler();
+    let errors = s.take_errors().join("|");
+    assert!(
+        errors
+            .contains("error handler itself failed: runtime error: attempt to call a number value"),
+        "{errors}"
+    );
+}

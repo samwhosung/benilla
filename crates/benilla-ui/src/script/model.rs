@@ -92,14 +92,27 @@ pub(crate) fn node_deferred(
 #[derive(Clone, Debug)]
 pub(crate) enum HandlerArg {
     Text(String),
+    /// A chunk that failed to compile: the client calls the handler directly on it (`0x704b42`),
+    /// not as the error function of a running call (`0x703a5c`).
+    Syntax(String),
     Error(mlua::Error),
 }
 
 impl HandlerArg {
+    /// Whether the error is a compile failure.
+    pub(crate) fn is_compile(&self) -> bool {
+        matches!(
+            self,
+            HandlerArg::Syntax(_) | HandlerArg::Error(mlua::Error::SyntaxError { .. })
+        )
+    }
+
     /// The one argument, in `lua`.
     pub(crate) fn value(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
         Ok(match self {
-            HandlerArg::Text(t) => mlua::Value::String(lua.create_string(t)?),
+            HandlerArg::Text(t) | HandlerArg::Syntax(t) => {
+                mlua::Value::String(lua.create_string(t)?)
+            }
             HandlerArg::Error(e) => match e.lua_value(lua) {
                 Some(v) => v,
                 None => mlua::Value::String(lua.create_string(e.lua_bytes(lua))?),

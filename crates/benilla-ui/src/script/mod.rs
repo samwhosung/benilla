@@ -1716,12 +1716,19 @@ impl UiScript {
     /// log keeps; `handler` is the one value the error handler is called with, the bare Lua
     /// message as `lua_pcall` leaves it (`0x703b40`).
     pub fn report_script_error(&self, log: &str, handler: &str) {
+        self.report_error(log, model::HandlerArg::Text(handler.to_string()));
+    }
+
+    /// [`Self::report_script_error`] for a chunk that failed to compile.
+    pub fn report_syntax_error(&self, log: &str, handler: &str) {
+        self.report_error(log, model::HandlerArg::Syntax(handler.to_string()));
+    }
+
+    fn report_error(&self, log: &str, arg: model::HandlerArg) {
         // A Load row, not an Error one: to the player a file scope that raised and a missing file
         // are the same fact, the addon is not running.
         diagnostics::record_load_failure(&self.lua, log);
-        self.model_mut()
-            .pending_error_dispatch
-            .push(model::HandlerArg::Text(handler.to_string()));
+        self.model_mut().pending_error_dispatch.push(arg);
     }
 
     /// Hand each queued script error to the Lua error handler, as the reference's catch closure
@@ -1739,8 +1746,10 @@ impl UiScript {
             return;
         };
         for arg in pending {
+            let compile = arg.is_compile();
             let ran = host::unheld(&self.lua, || {
-                arg.value(&self.lua).and_then(|v| handler.call::<()>(v))
+                arg.value(&self.lua)
+                    .and_then(|v| stdlib::call_error_handler(&self.lua, &handler, v, compile))
             });
             if let Err(e) = ran {
                 self.model_mut()

@@ -1006,6 +1006,16 @@ impl Lua {
         }
     }
 
+    /// Call any value protected, from the host, as `lua_call` on the stack does: a function runs,
+    /// a value with `__call` is called through it, and anything else raises `attempt to call a
+    /// <type> value` (`Vm::pcall_value`). Not mlua's API: benilla's own, for a callee that is
+    /// held as a value and may be none.
+    pub fn call_value<R: FromLuaMulti>(&self, f: &Value, args: impl IntoLuaMulti) -> Result<R> {
+        let a = args.into_lua_multi(self)?;
+        let r = self.call_raw(self.unwrap(f), a)?;
+        R::from_lua_multi(r, self)
+    }
+
     /// Call `func`, protected and with no arguments, while each named global holds the value
     /// paired with it, each earlier value put back after: the 1.12 script handler's convention
     /// (`Vm::call_with_globals`) in one VM call, without a handle per global read or written.

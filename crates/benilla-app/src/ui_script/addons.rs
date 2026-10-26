@@ -167,7 +167,12 @@ impl Addon {
                         let e = format!("{}/{file}: {err}", self.name);
                         error!("ui_script: {e}");
                         // A script error: it reaches the player through the Lua error handler.
-                        script.report_script_error(&e, &benilla_ui::script::lua_message(&err));
+                        let heard = benilla_ui::script::lua_message(&err);
+                        if matches!(err, benilla_ui::mlua::Error::SyntaxError { .. }) {
+                            script.report_syntax_error(&e, &heard);
+                        } else {
+                            script.report_script_error(&e, &heard);
+                        }
                         failures.push(e);
                     }
                 }

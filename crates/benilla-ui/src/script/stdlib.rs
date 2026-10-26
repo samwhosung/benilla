@@ -125,24 +125,52 @@ fn install_profile(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The handler `seterrorhandler` holds, `None` until one is given.
-pub(super) fn error_handler(lua: &Lua) -> Option<mlua::Function> {
-    lua.named_registry_value::<Option<mlua::Function>>(super::REG_ERRORHANDLER)
+/// The value `seterrorhandler` holds, `None` while the slot is -1 (no handler).
+pub(super) fn error_handler(lua: &Lua) -> Option<Value> {
+    lua.named_registry_value::<Value>(super::REG_ERRORHANDLER)
         .ok()
-        .flatten()
+        .filter(|v| !v.is_nil())
 }
 
-/// `seterrorhandler(f)` / `geterrorhandler()`, engine globals in 1.12 (`0x702900`, `0x702950`)
-/// over one registry reference, `[0x8722cc]`. It starts at -1 (`0x7039e0`), so `geterrorhandler()`
+/// Calls the held handler with the message. A function runs. Any other value is called as
+/// `lua_call` calls it (`0x703b6d`), so a number raises `attempt to call a number value`. A chunk
+/// that failed to compile calls the handler directly (`0x704b42`) and that is the text. A running
+/// call's error runs it as the pcall's error function (`0x703a5c`), whose own error runs it again
+/// (`luaG_errormsg`, `0x6fc780`) until `luaD_call` throws status 5 at depth 225 (`0x6f65cf`):
+/// `error in error handling`.
+pub(super) fn call_error_handler(
+    lua: &Lua,
+    handler: &Value,
+    arg: Value,
+    compile: bool,
+) -> mlua::Result<()> {
+    match handler {
+        Value::Function(f) => f.call(arg),
+        _ => lua.call_value::<()>(handler, arg).map_err(|e| {
+            if compile {
+                e
+            } else {
+                mlua::Error::RuntimeError("error in error handling".into())
+            }
+        }),
+    }
+}
+
+/// `seterrorhandler` / `geterrorhandler()`, engine globals in 1.12 (`0x702900`, `0x702950`) over
+/// one registry reference, `[0x8722cc]`. It starts at -1 (`0x7039e0`), so `geterrorhandler()`
 /// answers nil until something is set; in the running client FrameXML sets `_ERRORMESSAGE` first
-/// (`BasicControls.xml:16`), so every addon finds that. `seterrorhandler` takes a function alone
-/// and raises its `Usage:` on anything else, nil included, so the slot can never be cleared.
+/// (`BasicControls.xml:16`), so every addon finds that. `seterrorhandler` checks that argument 1 is
+/// a function (`0x702908`), then drops the old reference and takes a new one on the stack's top
+/// (`0x702930`): the last argument, whatever it is, and a nil there is -1 (`0x6f534a`), no handler.
 fn install_error_handler(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set(
         "seterrorhandler",
-        lua.create_function(|lua, f: Value| match f {
-            Value::Function(f) => lua.set_named_registry_value(super::REG_ERRORHANDLER, f),
+        lua.create_function(|lua, args: Variadic<Value>| match args.first() {
+            Some(Value::Function(_)) => {
+                let top = args.last().cloned().unwrap_or(Value::Nil);
+                lua.set_named_registry_value(super::REG_ERRORHANDLER, top)
+            }
             _ => Err(mlua::Error::RuntimeError(
                 "Usage: seterrorhandler(errfunc)".into(),
             )),
@@ -150,7 +178,7 @@ fn install_error_handler(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "geterrorhandler",
-        lua.create_function(|lua, ()| Ok(error_handler(lua)))?,
+        lua.create_function(|lua, ()| Ok(error_handler(lua).unwrap_or(Value::Nil)))?,
     )?;
     Ok(())
 }
