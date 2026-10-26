@@ -528,19 +528,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         Ok((id, message_group_index(&name).map(|i| MESSAGE_GROUPS[i].0)))
     }
 
-    // SetChatWindowName(id, name): `SStrCopy(record+0, name, 0x20)`, 31 bytes and the NUL. The
-    // reference stores "" for a name neither string nor number (`0x4a1436`); here a missing or nil
-    // name stores "", and a boolean or table raises.
+    // SetChatWindowName(id, name): `SStrCopy(record+0, name, 0x20)` (`0x4a1462`), 31 bytes and the
+    // NUL. The name is read only when `is-number-or-string` passes (`0x4a143b`); anything else,
+    // missing, nil, a boolean or a table, stores "" (`0x4a1436`) and never raises.
     lua.globals().set(
         "SetChatWindowName",
-        lua.create_function(|lua, (id, name): (Value, Option<String>)| {
+        lua.create_function(|lua, (id, name): (Value, Value)| {
             // `is-number` else `Usage: SetChatWindowName(index, "name")` (`0x844eac`, `0x4a1402`).
             let id = i64::from(binding_abi::number_arg(
                 lua,
                 id,
                 r#"Usage: SetChatWindowName(index, "name")"#,
             )?);
-            let mut name = name.unwrap_or_default();
+            let mut name = binding_abi::optional_string(lua, &name).unwrap_or_default();
             if name.len() > 31 {
                 let mut cut = 31;
                 while !name.is_char_boundary(cut) {
@@ -1070,6 +1070,17 @@ mod record_tests {
             (false, true, false)
         );
         assert_eq!(looks[3].name.len(), 31, "31 bytes and the NUL");
+        // A name that is not a string or a number stores "" and raises nothing (`0x4a1436`); a
+        // number is its text.
+        for arg in ["true", "{}", "nil", "print"] {
+            s.run(&format!(
+                "SetChatWindowName(3, 'Loot') SetChatWindowName(3, {arg})"
+            ))
+            .unwrap();
+            assert_eq!(s.chat_window_looks()[2].name, "", "{arg}");
+        }
+        s.run("SetChatWindowName(3, 12)").unwrap();
+        assert_eq!(s.chat_window_looks()[2].name, "12");
     }
 
     #[test]
