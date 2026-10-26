@@ -1882,6 +1882,14 @@ fn an_addon_message_survives_its_own_send_and_receive() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = benilla_ui::script::UiScript::new().unwrap();
     s.keep_calls();
+    // The send needs the player object (`0x49f94b`).
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
     s.run(r#"SendAddonMessage("oRA", "SYNC\t1\t2", "PARTY")"#)
         .unwrap();
     assert!(s.errors().is_empty(), "send raised: {:?}", s.errors());

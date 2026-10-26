@@ -499,7 +499,16 @@ fn the_cascades_join_takes_its_slot_ahead_of_a_later_join() {
 /// `SendAddonMessage` (`0x49faff`).
 #[test]
 fn the_chat_verbs_go_out_in_call_order() {
-    let mut c = Client::new(&[], UiScript::new().expect("a VM"));
+    let mut script = UiScript::new().expect("a VM");
+    // `SendAddonMessage` needs the player object (`0x49f94b`).
+    script.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            ..Default::default()
+        }),
+    );
+    let mut c = Client::new(&[], script);
     // WAVE as a chat-only text emote, which reads `Emotes.dbc` row 0.
     c.world().insert_resource(crate::sound::EmoteSounds(
         benilla_formats::EmoteSoundCatalog::default()
