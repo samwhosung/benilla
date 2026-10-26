@@ -385,8 +385,15 @@ fn resolve_row(
     let player_mail = entry.message_type == mail_message_type::NORMAL;
     let can_reply = player_mail && !is_gm;
 
-    let (item_id, item_roll, item_count, item_name, item_texture, item_quality) = match &entry.item
-    {
+    let (
+        item_id,
+        item_roll,
+        item_count,
+        item_name,
+        item_texture,
+        item_quality,
+        item_inventory_type,
+    ) = match &entry.item {
         Some(att) => {
             // The row's lookup, whose miss asks; then what `GetInboxItem` reads of the record as
             // it runs, read the same way.
@@ -404,9 +411,10 @@ fn resolve_row(
                 live.name(),
                 live.texture(),
                 live.quality(),
+                live.inventory_type(),
             )
         }
-        None => (0, 0, 0, None, None, None),
+        None => (0, 0, 0, None, None, None, 0),
     };
     // The block's charges and `(current, max)` durability (`0x53566f`, `0x535699`, `0x53568d`).
     let (item_charges, item_durability) = entry.item.as_ref().map_or((0, (0, 0)), |att| {
@@ -542,6 +550,7 @@ fn resolve_row(
         item_name,
         item_texture,
         item_quality,
+        item_inventory_type,
     }
 }
 

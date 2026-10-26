@@ -83,6 +83,8 @@ pub struct MailInboxRow {
     pub item_name: Option<String>,
     pub item_texture: Option<String>,
     pub item_quality: Option<u32>,
+    /// The record's `InventoryType`, 0 while uncached; the quality shows only for a nonzero one.
+    pub item_inventory_type: u32,
 }
 
 /// One auction invoice, `GetInboxInvoiceInfo`'s answer, parsed by the app from the mail's subject
@@ -619,7 +621,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetInboxItem(index): name, texture, count, quality, canUse (`MailFrame.lua:379`); canUse is
-    // the shared item-usable gate, true while the template is in flight.
+    // the shared item-usable gate. A template the cache lacks takes the miss exit with the five
+    // values `nil, nil, 0, 0, nil` (`0x4af674`-`0x4af679`, `0x4af792`); the count is the row's raw
+    // byte (`0x4af704`) and the quality the record's only for a nonzero inventory type, else -1
+    // (`0x4af721`-`0x4af730`).
     g.set(
         "GetInboxItem",
         lua.create_function(|lua, index: Value| {
@@ -633,15 +638,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .is_none_or(|r| super::item_stats::item_usable_by_id(lua, &model, r.item_id));
                 (row, usable)
             };
-            // Five values on every path; with no item, `nil, nil, 0, 0, nil` (`0x4af5d0`).
+            let miss = || {
+                MultiValue::from_vec(vec![
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Integer(0),
+                    Value::Integer(0),
+                    Value::Nil,
+                ])
+            };
             let Some(r) = row.filter(|r| r.item_id != 0) else {
-                return Ok(MultiValue::from_vec(vec![
-                    Value::Nil,
-                    Value::Nil,
-                    Value::Integer(0),
-                    Value::Integer(0),
-                    Value::Nil,
-                ]));
+                return Ok(miss());
             };
             // The attachment's record off the item cache as the call runs.
             let key = ItemKey::Record {
@@ -651,10 +658,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     ..Default::default()
                 },
             };
-            let (name, texture, quality) = read_live(lua, Some(key), |item| {
-                (item.name(), item.texture(), item.quality())
+            let (cached, name, texture, quality) = read_live(lua, Some(key), |item| {
+                let quality =
+                    super::item_stats::gated_quality(item.quality(), item.inventory_type());
+                (item.cached(), item.name(), item.texture(), quality)
             })
-            .unwrap_or_else(|| (r.item_name.clone(), r.item_texture.clone(), r.item_quality));
+            .unwrap_or_else(|| {
+                let quality =
+                    super::item_stats::gated_quality(r.item_quality, r.item_inventory_type);
+                (
+                    r.item_quality.is_some(),
+                    r.item_name.clone(),
+                    r.item_texture.clone(),
+                    quality,
+                )
+            });
+            if !cached {
+                return Ok(miss());
+            }
             let name = match &name {
                 Some(n) => Value::String(lua.create_string(n)?),
                 None => Value::Nil,
@@ -663,13 +684,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
-            // A number on every path, as in `GetSendMailItem`.
-            let quality = Value::Integer(i64::from(quality.unwrap_or(0)));
             Ok(MultiValue::from_vec(vec![
                 name,
                 texture,
-                Value::Integer(i64::from(r.item_count.max(1))),
-                quality,
+                Value::Integer(i64::from(r.item_count)),
+                Value::Integer(quality),
                 flag(usable),
             ]))
         })?,
@@ -1411,6 +1430,7 @@ mod tests {
             item_texture: (item_id != 0)
                 .then(|| "Interface\\Icons\\INV_Fabric_Linen_01".to_string()),
             item_quality: (item_id != 0).then_some(1),
+            item_inventory_type: 0,
             item_random_property_id: 0,
             item_charges: 0,
             item_durability: (0, 0),
@@ -1704,12 +1724,35 @@ mod tests {
     fn get_inbox_item_and_can_delete() {
         let mut s = kept();
         s.set_mail(Some(state()));
+        // Linen Cloth has no inventory type: the quality is -1 (`0x4af721`-`0x4af730`).
         let (name, _tex, count, quality, canuse): (String, String, i64, i64, i64) =
             s.eval("return GetInboxItem(1)").unwrap();
         assert_eq!(
             (name.as_str(), count, quality, canuse),
-            ("Linen Cloth", 3, 1, 1)
+            ("Linen Cloth", 3, -1, 1)
         );
+        // An equippable record shows its own quality.
+        let mut st = state();
+        st.inbox[0].item_inventory_type = 4;
+        s.set_mail(Some(st));
+        assert_eq!(
+            s.eval::<i64>("local _, _, _, q = GetInboxItem(1) return q")
+                .unwrap(),
+            1
+        );
+        // An uncached template takes the miss exit: `nil, nil, 0, 0, nil` (`0x4af674`-`0x4af679`).
+        let mut st = state();
+        st.inbox[0].item_quality = None;
+        st.inbox[0].item_name = None;
+        s.set_mail(Some(st));
+        assert_eq!(s.arity("GetInboxItem(1)").unwrap(), 5);
+        assert!(s
+            .eval::<bool>(
+                "local n, t, c, q, u = GetInboxItem(1) \
+                 return n == nil and t == nil and c == 0 and q == 0 and u == nil"
+            )
+            .unwrap());
+        s.set_mail(Some(state()));
         assert!(s.eval::<bool>("return GetInboxItem(2) == nil").unwrap());
         // A player's unreturned mail is returnable, not deletable.
         assert!(s

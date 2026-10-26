@@ -91,6 +91,7 @@ fn row(sender: &str, subject: &str, was_read: bool, item_id: u32, cod: u32) -> M
         item_name: (item_id != 0).then(|| "Linen Cloth".to_string()),
         item_texture: (item_id != 0).then(|| "Interface\\Icons\\INV_Fabric_Linen_01".to_string()),
         item_quality: (item_id != 0).then_some(1),
+        item_inventory_type: 0,
         item_random_property_id: 0,
         item_charges: 0,
         item_durability: (0, 0),
