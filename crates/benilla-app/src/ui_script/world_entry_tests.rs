@@ -1205,7 +1205,6 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
         "the addon AFTER the broken one still loads — a neighbour's error drops only itself"
     );
 
-    // The app's per-frame drain runs the dispatch; the test runs the same call.
     let script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
@@ -1214,7 +1213,7 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
             .eval::<bool>("return ScriptErrors:IsVisible()")
             .expect("ScriptErrors exists — BasicControls loaded"),
         "the ScriptErrors dialog is on screen — `seterrorhandler(_ERRORMESSAGE)` is installed \
-         and the engine dispatched the caught error to it"
+         and heard the file's error as it ran"
     );
     let shown: String = script
         .eval::<Option<String>>("return ScriptErrors_Message:GetText()")
@@ -1250,7 +1249,8 @@ fn a_looping_addon_cannot_freeze_world_entry() {
         Some("Onehunter"),
         "the addon after the spinner still loads — the budget failed one addon, not the entry"
     );
-    // The budget raise reaches the handler queue, so the dialog names the loop.
+    // The budget's abort runs no handler; disarming the budget hands it to the error function,
+    // so the dialog names the loop.
     let script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");

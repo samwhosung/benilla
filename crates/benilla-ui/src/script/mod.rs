@@ -620,6 +620,9 @@ pub const SCREEN: crate::layout::Handle = 0;
 // UiScript: the public host
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
+/// The budget aborts' messages waiting for the error function ([`UiScript::set_instruction_budget`]).
+struct BudgetAborts(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
 /// The Lua scripting host: owns the VM, whose `Model` lives in `lua.app_data`. Its `impl` blocks
 /// sit beside their concerns: [`extract`], [`tick`], [`editbox::seam`], [`layout`] and [`pointer`].
 pub struct UiScript {
@@ -900,9 +903,21 @@ impl UiScript {
     /// session's first frame. Deviation: the client's Lua has no such bound, as nothing sets a
     /// hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that
     /// never ends hangs it.
+    ///
+    /// An abort runs no error handler, so its message waits and is handed to the error function
+    /// when the budget is disarmed, as a compile failure is (`0x704b42`), once per arming: the
+    /// player's `ScriptErrors` names the runaway loop.
     pub fn set_instruction_budget(&self, budget: u64) {
         let used = self.instructions.clone();
         used.store(0, std::sync::atomic::Ordering::Relaxed);
+        let aborts = match self.lua.app_data_ref::<BudgetAborts>() {
+            Some(a) => a.0.clone(),
+            None => {
+                let a = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                self.lua.set_app_data(BudgetAborts(a.clone()));
+                a
+            }
+        };
         let _ = self.lua.set_hook(
             mlua::HookTriggers {
                 every_nth_instruction: Some(INSTRUCTION_HOOK_STEP),
@@ -914,10 +929,14 @@ impl UiScript {
                     std::sync::atomic::Ordering::Relaxed,
                 ) + u64::from(INSTRUCTION_HOOK_STEP);
                 if n > budget {
-                    return Err(mlua::Error::runtime(format!(
+                    let message = format!(
                         "benilla: instruction budget exhausted after {n} VM instructions — \
                          treating this as a non-terminating loop"
-                    )));
+                    );
+                    if n - u64::from(INSTRUCTION_HOOK_STEP) <= budget {
+                        aborts.borrow_mut().push(message.clone());
+                    }
+                    return Err(mlua::Error::runtime(message));
                 }
                 Ok(mlua::VmState::Continue)
             },
@@ -927,6 +946,16 @@ impl UiScript {
     /// Remove the instruction budget; the counter keeps its value for [`Self::instructions_used`].
     pub fn clear_instruction_budget(&self) {
         self.lua.remove_hook();
+        let waiting = self
+            .lua
+            .app_data_ref::<BudgetAborts>()
+            .map(|a| std::mem::take(&mut *a.0.borrow_mut()))
+            .unwrap_or_default();
+        for message in waiting {
+            host::unheld(&self.lua, || {
+                stdlib::call_error_function(&self.lua, message.as_bytes())
+            });
+        }
     }
 
     /// VM instructions since the last [`Self::set_instruction_budget`], to the resolution of
