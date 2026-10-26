@@ -1175,8 +1175,8 @@ pub(crate) struct Model {
     /// `"player"` pushes that carry it: corrected, never blanked. A per-login rebuild is unseen, as
     /// its verbs exist only in game (`0x850438`), not at the glue screen (`0x46abb0`).
     pub(crate) player_record: super::PlayerRecord,
-    /// `GetBindLocation()`, the bind point's area name: `""` before it lands, never nil.
-    pub(crate) bind_location: String,
+    /// `GetBindLocation()`, the bind point's area name; `None` answers the `HOME_INN` text.
+    pub(crate) bind_location: Option<String>,
     /// `GMTicketCategory.dbc` `(id, name)` rows in file order; the ids are wire values.
     pub(crate) gm_ticket_categories: Vec<(u32, String)>,
     /// `CheckBinderDist()`: the innkeeper's question is live and in range; false hides its dialog.
@@ -1717,7 +1717,7 @@ impl Model {
             screenshot_asks: 0,
             realm_name: String::new(),
             player_record: super::PlayerRecord::default(),
-            bind_location: String::new(),
+            bind_location: None,
             gm_ticket_categories: Vec::new(),
             binder_pending: false,
             summon_confirm: super::summon::SummonConfirmUiState::default(),

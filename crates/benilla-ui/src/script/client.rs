@@ -208,13 +208,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `GetBindLocation()`: the hearthstone's bind location name, which the instance-boot dialog
-    // formats into its text (`StaticPopup.lua:1742`). `""` until `SMSG_BINDPOINTUPDATE` lands, as
-    // the reference's empty buffer, never nil, since addons concatenate it.
+    // formats into its text (`StaticPopup.lua:1742`). A bind zone below 0, past the max or without
+    // an AreaTable row, which is every zone before `SMSG_BINDPOINTUPDATE` lands, answers the
+    // `HOME_INN` text (`48db19`-`48db2c`), never nil.
     g.set(
         "GetBindLocation",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            lua.create_string(&model.bind_location)
+            let named = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .bind_location
+                .clone();
+            match named {
+                Some(name) => lua.create_string(name),
+                None => lua.create_string(super::glue_core::global_text(lua, "HOME_INN")),
+            }
         })?,
     )?;
 
@@ -253,11 +261,12 @@ impl super::UiScript {
     }
 
     /// Push the bind location's name, resolved from `SMSG_BINDPOINTUPDATE`'s AreaTable id through
-    /// the catalog the hearthstone's `$z` uses, so the two agree; empty until the packet lands.
-    pub fn set_bind_location(&mut self, area_name: &str) {
+    /// the catalog the hearthstone's `$z` uses, so the two agree; `None` until the packet lands, or
+    /// for an area with no row, which `GetBindLocation` answers with the `HOME_INN` text.
+    pub fn set_bind_location(&mut self, area_name: Option<&str>) {
         let mut model = self.model_mut();
-        if model.bind_location != area_name {
-            model.bind_location = area_name.to_string();
+        if model.bind_location.as_deref() != area_name {
+            model.bind_location = area_name.map(str::to_string);
         }
     }
 

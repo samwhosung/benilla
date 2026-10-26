@@ -1133,7 +1133,7 @@ fn seat_a_session(script: &mut UiScript) {
     });
     script.set_realm_name("Harness");
     // The bind point: the server sends `SMSG_BINDPOINTUPDATE` at login, before any addon runs.
-    script.set_bind_location("Stormwind City");
+    script.set_bind_location(Some("Stormwind City"));
     script.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {

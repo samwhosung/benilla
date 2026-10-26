@@ -559,7 +559,7 @@ pub(super) fn feed_item_stats(
             .and_then(|id| area_names.as_deref()?.0.resolve(id as i32));
         // Pushed on change, per VM: a rebuilt VM is fed again the frame it appears.
         if last_home.as_deref() != home_area {
-            script.set_bind_location(home_area.unwrap_or_default());
+            script.set_bind_location(home_area);
             *last_home = home_area.map(str::to_string);
             // Re-substitute every held view, or one pushed before the bind point carries a raw
             // `$z`.

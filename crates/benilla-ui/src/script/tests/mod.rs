@@ -176,18 +176,18 @@ fn the_instruction_budget_counts_lua_a_library_function_runs() {
     assert!(err.contains("instruction budget exhausted"), "{err}");
 }
 
-/// The hearth location's name, `""` before the packet; `StaticPopup.lua:1742` formats it.
+/// The hearth location's name; before the packet, or for a bind zone with no AreaTable row, the
+/// `HOME_INN` text (`0x48db19`), never nil. `StaticPopup.lua:1742` formats it.
 #[test]
-fn get_bind_location_answers_the_pushed_name_and_never_nil() {
+fn get_bind_location_answers_the_pushed_name_and_the_inn_text_otherwise() {
     let mut s = crate::script::UiScript::new().unwrap();
-    assert_eq!(s.eval::<String>("return GetBindLocation()").unwrap(), "");
+    s.eval::<()>(r#"HOME_INN = "your inn""#).unwrap();
     assert_eq!(
-        s.eval::<String>("return type(GetBindLocation())").unwrap(),
-        "string",
-        "never nil — a consumer concatenates it"
+        s.eval::<String>("return GetBindLocation()").unwrap(),
+        "your inn"
     );
 
-    s.set_bind_location("Stormwind City");
+    s.set_bind_location(Some("Stormwind City"));
     assert_eq!(
         s.eval::<String>("return GetBindLocation()").unwrap(),
         "Stormwind City"
@@ -197,10 +197,15 @@ fn get_bind_location_answers_the_pushed_name_and_never_nil() {
             .unwrap(),
         "Bound: Stormwind City"
     );
-    s.set_bind_location("Ironforge");
+    s.set_bind_location(Some("Ironforge"));
     assert_eq!(
         s.eval::<String>("return GetBindLocation()").unwrap(),
         "Ironforge"
+    );
+    s.set_bind_location(None);
+    assert_eq!(
+        s.eval::<String>("return GetBindLocation()").unwrap(),
+        "your inn"
     );
 }
 
