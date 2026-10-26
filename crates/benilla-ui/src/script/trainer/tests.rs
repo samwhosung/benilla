@@ -866,6 +866,47 @@ fn the_filter_and_collapse_verbs_fire_trainer_update_in_place() {
     assert_eq!(seen, ["TRAINER_UPDATE 4", "TRAINER_UPDATE 3"]);
 }
 
+/// The fold verbs take `n - 1` signed (`0x4da6f4`, `0x4da774`): below 0 they fold every group, a
+/// row that is no header (`0x4d8be0` answers -1 for a service or a row past the total) raises
+/// "Bad skill line in ..." and fires no `TRAINER_UPDATE`.
+#[test]
+fn the_fold_verbs_take_a_negative_index_for_all_and_raise_on_a_bad_row() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(trainer()));
+    s.run("CollapseTrainerSkillLine(-1)").unwrap();
+    assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 2);
+    s.run("ExpandTrainerSkillLine(-5)").unwrap();
+    assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
+
+    crate::script::tick::heard::listen(&s, &["TRAINER_UPDATE"], None);
+    for (call, want) in [
+        (
+            "CollapseTrainerSkillLine(2)",
+            "Bad skill line in CollapseTrainerSkillLine",
+        ),
+        (
+            "CollapseTrainerSkillLine(6)",
+            "Bad skill line in CollapseTrainerSkillLine",
+        ),
+        (
+            "ExpandTrainerSkillLine(3)",
+            "Bad skill line in ExpandTrainerSkillLine",
+        ),
+        (
+            "ExpandTrainerSkillLine(99)",
+            "Bad skill line in ExpandTrainerSkillLine",
+        ),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(want), "{call}: {err}");
+    }
+    assert!(
+        crate::script::tick::heard::take(&s).is_empty(),
+        "a raise fires no update"
+    );
+    assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
+}
+
 /// `OpenTrainer` (`0x4d8cf0`) asks for the player's own list: it hands the host its call, which
 /// holds the player, and takes no argument.
 #[test]

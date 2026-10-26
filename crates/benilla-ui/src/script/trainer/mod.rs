@@ -719,19 +719,18 @@ fn raise_trainer_update(model: &mut Model) {
     model.raise("TRAINER_UPDATE", Vec::new());
 }
 
-fn set_collapsed(model: &mut Model, id: usize, collapse: bool) {
-    if id == 0 && !collapse {
-        model.trainer_collapsed.clear();
-        return;
-    }
-    let targets: Vec<u32> = if id == 0 {
-        model
+/// The fold verbs' write on the row `n - 1` signed (`0x4da6f4`, `0x4da774`): below 0 every group
+/// at once (`0x4da6f5`, `0x4da775`), else the row must be a header of the array (`0x4d8be0` answers
+/// -1 for a service or a row past the total) whose group's bit is set or cleared. `false` is the
+/// bad skill line, which raises with nothing touched and no `TRAINER_UPDATE` (`0x4d8cd0`).
+fn set_collapsed(model: &mut Model, n: i32, collapse: bool) -> bool {
+    let targets: Vec<u32> = match usize::try_from(n.wrapping_sub(1)) {
+        Err(_) => model
             .trainer
             .as_ref()
             .map(|t| t.groups.iter().map(|g| g.key).collect())
-            .unwrap_or_default()
-    } else {
-        match rows(model).0.get(id - 1) {
+            .unwrap_or_default(),
+        Ok(row) => match rows(model).0.get(row) {
             Some(Row::Header(gi)) => model
                 .trainer
                 .as_ref()
@@ -739,8 +738,8 @@ fn set_collapsed(model: &mut Model, id: usize, collapse: bool) {
                 .map(|g| g.key)
                 .into_iter()
                 .collect(),
-            _ => Vec::new(),
-        }
+            _ => return false,
+        },
     };
     for sl in targets {
         if collapse {
@@ -749,6 +748,21 @@ fn set_collapsed(model: &mut Model, id: usize, collapse: bool) {
             model.trainer_collapsed.remove(&sl);
         }
     }
+    true
+}
+
+/// A fold verb past its usage check: the write, then `TRAINER_UPDATE`, or the `bad` line raised.
+fn fold(lua: &Lua, n: i32, collapse: bool, bad: &'static str) -> mlua::Result<()> {
+    let folded = super::tick::verb(lua, |model| {
+        let ok = set_collapsed(model, n, collapse);
+        if ok {
+            raise_trainer_update(model);
+        }
+        ok
+    });
+    folded
+        .then_some(())
+        .ok_or_else(|| mlua::Error::RuntimeError(bad.into()))
 }
 
 fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
@@ -1247,30 +1261,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Collapse/ExpandTrainerSkillLine(id): fold the group headed by row `id`, or all at 0. `id`
-    // spans the whole row array like the getters' gate (`0x4d89b0`); their own bound is untraced.
+    // Collapse/ExpandTrainerSkillLine(n): fold the group headed by row `n`, or every group for
+    // `n - 1` below 0; a row that is no header raises (`0x4da6c0`, `0x4da740`). `n` spans the
+    // whole row array like the getters' gate (`0x4d89b0`).
     g.set(
         "CollapseTrainerSkillLine",
-        lua.create_function(|lua, id: Value| {
+        lua.create_function(|lua, n: Value| {
             // `is-number` else `Usage: CollapseTrainerSkillLine(index)` (`0x84ad24`, `0x4da6d1`).
-            let id = binding_abi::index_arg(lua, id, "Usage: CollapseTrainerSkillLine(index)")?;
-            super::tick::verb(lua, |model| {
-                set_collapsed(model, id, true);
-                raise_trainer_update(model);
-            });
-            Ok(())
+            let n = binding_abi::number_arg(lua, n, "Usage: CollapseTrainerSkillLine(index)")?;
+            fold(lua, n, true, "Bad skill line in CollapseTrainerSkillLine")
         })?,
     )?;
     g.set(
         "ExpandTrainerSkillLine",
-        lua.create_function(|lua, id: Value| {
+        lua.create_function(|lua, n: Value| {
             // `is-number` else `Usage: ExpandTrainerSkillLine(index)` (`0x84ad78`, `0x4da751`).
-            let id = binding_abi::index_arg(lua, id, "Usage: ExpandTrainerSkillLine(index)")?;
-            super::tick::verb(lua, |model| {
-                set_collapsed(model, id, false);
-                raise_trainer_update(model);
-            });
-            Ok(())
+            let n = binding_abi::number_arg(lua, n, "Usage: ExpandTrainerSkillLine(index)")?;
+            fold(lua, n, false, "Bad skill line in ExpandTrainerSkillLine")
         })?,
     )?;
 
