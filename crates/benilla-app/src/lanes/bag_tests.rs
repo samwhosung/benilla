@@ -706,6 +706,41 @@ fn the_logouts_shutdown_reads_no_inventory_but_the_name() {
     assert_eq!(at, "nil Onehunter 0");
 }
 
+/// `OffhandHasWeapon` looks the active player up first (`0x4c9578` → `0x468460`) and pushes nil
+/// when none is held (`0x4c9590`, `je 0x4c95c4`): at `PLAYER_LOGOUT`, after the object manager is
+/// gone (`0x467700`, `0x46771e`), a weapon in the off hand still reads nil.
+#[test]
+fn the_logouts_shutdown_finds_no_off_hand_weapon() {
+    const SWORD: u64 = 0x4000_0000_0000_0049;
+    let mut app = client();
+    app.world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(
+            25,
+            Some(benilla_protocol::messages::ItemInfo {
+                class: 2,
+                ..crate::items::test_template("Sword")
+            }),
+        );
+    // The VM's record copy, which the snapshot getter reads once the objects are gone.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_item_template(
+            25,
+            benilla_ui::script::ItemTemplateView {
+                class: 2,
+                ..Default::default()
+            },
+        );
+    frame(
+        &mut app,
+        vec![item(SWORD, 25, ME), values(ME, &seat(16, SWORD))],
+    );
+    let (before, at) = before_and_at_logout(&mut app, "tostring(OffhandHasWeapon())");
+    assert_eq!(before, "1");
+    assert_eq!(at, "nil");
+}
+
 /// A spy on `PLAYER_COMBO_POINTS` that records `chunk`'s answer at each firing, as text.
 fn spy_at_combo(app: &mut App, chunk: &str) {
     app.world_mut()

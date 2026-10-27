@@ -1303,10 +1303,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // OffhandHasWeapon() → 1 or nil: whether the off hand holds a weapon (item class 2).
+    // OffhandHasWeapon() → 1 or nil: whether the off hand holds a weapon (item class 2). The
+    // active player is looked up first and nil is pushed with none held (`0x4c9578` → `0x468460`,
+    // `je 0x4c95c4`), as in a `PLAYER_LOGOUT` handler.
     g.set(
         "OffhandHasWeapon",
         lua.create_function(|lua, (): ()| {
+            if !active_player_held(lua) {
+                return Ok(None);
+            }
             let (held, snapshot_class) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let held = model.inventory_slots[17].clone().filter(|v| v.item_id != 0);
