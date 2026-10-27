@@ -77,6 +77,20 @@ pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
     }
 }
 
+/// A frame's enter notify (`vtbl+0x4c`) with `script` the id whose `OnEnter` fires: the walk's
+/// motion enter and an enabled Button's `Enable()` while hovered (`0x77918e`) both come here. A
+/// hyperlink button's enter is its text frame's `OnHyperlinkEnter` (`0x7a34b0`); the base
+/// enter's plain runner (`0x76b6e5` → `0x702690`) sets no arg global. An enabled Button
+/// refreshes its label after the base enter and its `OnEnter` (`0x76b6a0`, then `0x7794ab`).
+pub(super) fn enter(lua: &Lua, h: FrameHandle, script: u32) {
+    if !super::hyperlink::hover(lua, h, true) {
+        if let Err(e) = event::fire_widget_handler(lua, script, "OnEnter", Vec::new()) {
+            model(lua).record_lua_error(&e);
+        }
+    }
+    super::button::refresh_label(&mut model(lua), h);
+}
+
 /// The publisher behind the change check: an unchanged mouseover does nothing (`0x4820b5`). A
 /// change away from a published one requests the fade on `GameTooltip` (`0x4928d5`, `0x492909` →
 /// `0x530ae0`), whoever holds it, after `"mouseover"` stops naming the old unit (the pair is zeroed

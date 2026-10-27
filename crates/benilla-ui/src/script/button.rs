@@ -330,8 +330,44 @@ fn with_button_shown(
 /// region in that layer goes dark, not only the HighlightTexture. `Enable()` here turns it back
 /// on; the reference restores it only on a hovered button, by re-running its `<OnEnter>`
 /// (`0x779183`), and never while `LockHighlight` holds (`[frame+0xf8]`).
+///
+/// On the hovered frame (`[[this+0xa0]+0x7c]`, `0x7791a3`, `0x779189`) a change runs the leave
+/// notify with 1 (`0x7791b4`) first, while the state still enables it, and the enter notify
+/// (`0x779192`) after the state is set, so the button's `OnLeave` and `OnEnter` fire for it; the
+/// hover itself does not move. A call that changes nothing returns at once (`0x779175`,
+/// `0x77919c`).
 fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
+    let hovered_change = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let frame = model
+            .arena
+            .frame(h)
+            .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+        match &frame.kind_state {
+            KindState::Button(bs) => (bs.enabled() != on && model.mouseover == Some(h))
+                .then(|| model.frame_to_id.get(&h).copied())
+                .flatten(),
+            _ => return Err(mlua::Error::runtime("not a Button")),
+        }
+    };
+    if let (Some(id), false) = (hovered_change, on) {
+        super::mouseover::leave(lua, h, Some(id));
+        // The notify's argument 1 clears the drag arm (`0x76b725`).
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if model.drag.as_ref().is_some_and(|d| d.source == h) {
+            model.drag = None;
+        }
+    }
+    apply_enabled(lua, h, on)?;
+    if let (Some(id), true) = (hovered_change, on) {
+        super::mouseover::enter(lua, h, id);
+    }
+    Ok(())
+}
+
+/// [`set_enabled`]'s state and layer write, under one borrow.
+fn apply_enabled(lua: &Lua, h: FrameHandle, on: bool) -> mlua::Result<()> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let frame = model
         .arena

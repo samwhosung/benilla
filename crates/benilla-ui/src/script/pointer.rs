@@ -261,20 +261,8 @@ impl UiScript {
         if let Some((h, script)) = leave {
             super::mouseover::leave(&self.lua, h, script);
         }
-        if let Some(nid) = enter_id {
-            // A hyperlink button's enter is its text frame's `OnHyperlinkEnter` (`0x7a34b0`); the
-            // base enter's plain runner (`0x76b6e5` → `0x702690`) sets no arg global.
-            let routed = new_handle.is_some_and(|h| super::hyperlink::hover(&self.lua, h, true));
-            if !routed {
-                if let Err(e) = event::fire_widget_handler(&self.lua, nid, "OnEnter", Vec::new()) {
-                    self.push_error(e);
-                }
-            }
-            // An enabled Button's enter refreshes its label after the base enter and its
-            // `OnEnter` (`0x76b6a0`, then `0x7794ab`).
-            if let Some(h) = new_handle {
-                button::refresh_label(&mut self.model_mut(), h);
-            }
+        if let (Some(nid), Some(h)) = (enter_id, new_handle) {
+            super::mouseover::enter(&self.lua, h, nid);
         }
         new_id
     }
