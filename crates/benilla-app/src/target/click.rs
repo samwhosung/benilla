@@ -2760,6 +2760,7 @@ mod tests {
         world.init_resource::<crate::player::Approach>();
         world.init_resource::<crate::player::FollowState>();
         world.init_resource::<crate::player::Player>();
+        world.init_resource::<crate::player::MoverLock>();
         world.init_resource::<crate::player::OwnControlLost>();
         world.init_resource::<crate::ui_script::CursorPayloadHeld>();
         world.init_resource::<Messages<Interact>>();
@@ -2874,7 +2875,8 @@ mod tests {
             let (tx, rx) = crossbeam_channel::unbounded();
             // In world: the body we drive.
             app.insert_resource(NetCommands(tx))
-                .init_resource::<crate::player::Player>();
+                .init_resource::<crate::player::Player>()
+                .init_resource::<crate::player::MoverLock>();
             let world = app.world_mut();
             let mut mine = vec![(2, 0x19), (F_HEALTH, 100), (F_MAXHEALTH, 100)];
             if mounted {
