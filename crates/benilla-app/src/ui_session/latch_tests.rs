@@ -178,7 +178,7 @@ pub(crate) fn open(app: &mut App, window: W, npc: u64) {
     match window {
         W::Trade => {
             world.resource_mut::<TradeSession>().begin(npc);
-            crate::ui_trade::open_window(world);
+            crate::ui_trade::open_window(world, None);
         }
         W::ItemText => {
             // The reader finds the template through the object's own descriptor: a book, unless
@@ -391,7 +391,7 @@ fn a_trade_and_an_npc_window_close_each_other() {
     app.world_mut()
         .resource_mut::<TradeSession>()
         .begin(PARTNER);
-    crate::ui_trade::open_window(app.world_mut());
+    crate::ui_trade::open_window(app.world_mut(), None);
     assert_eq!(latch(&app), Some(PARTNER));
     assert!(rx.try_iter().next().is_none(), "the open sends nothing");
 
@@ -408,7 +408,7 @@ fn a_trade_and_an_npc_window_close_each_other() {
     app.world_mut()
         .resource_mut::<TradeSession>()
         .begin(PARTNER);
-    crate::ui_trade::open_window(app.world_mut());
+    crate::ui_trade::open_window(app.world_mut(), None);
     assert_eq!(seen_in(&app), ["TRADE_CLOSED", "MERCHANT_CLOSED"]);
     assert!(
         rx.try_iter().next().is_none(),
@@ -449,7 +449,7 @@ fn a_book_over_a_trade_cancels_it_before_the_begin() {
     app.world_mut()
         .resource_mut::<TradeSession>()
         .begin(PARTNER);
-    crate::ui_trade::open_window(app.world_mut());
+    crate::ui_trade::open_window(app.world_mut(), None);
     read_book(app.world_mut(), NPC);
     assert_eq!(seen_in(&app), ["TRADE_CLOSED", "ITEM_TEXT_BEGIN"]);
     let sent: Vec<ClientCommand> = rx.try_iter().collect();

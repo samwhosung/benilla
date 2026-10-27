@@ -2,7 +2,8 @@
 //! misses asks the cache inside its call, so the query goes out ahead of the chunk's next verb
 //! (`RandomRoll`, `0x48c832`), as the reference's lookup sends it on the miss (`0x556aa0`).
 
-use benilla_ui::script::{TradeSideState, TradeSlotItem, TradeState, UiScript, UnitState};
+use benilla_protocol::messages::{TradeItem, TradeStatusExtended, TRADE_SLOT_COUNT};
+use benilla_ui::script::{UiScript, UnitState};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -95,27 +96,56 @@ fn unit_name_asks_a_missed_name_inside_its_call() {
     assert_eq!(sent(&rx), ["name 0x77", "roll 1"]);
 }
 
+/// A trade with the partner `0x88` open, `theirs` in his slot 1 and `ours` in our slot 2, as the
+/// session holds them: the getters read it at the call.
+fn open_trade(app: &mut App, theirs: TradeItem, ours: TradeItem) {
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ui_trade::TradeSession>()
+        .begin(0x88);
+    crate::ui_trade::open_window(world, None);
+    let mut slots = [None; TRADE_SLOT_COUNT];
+    slots[0] = Some(theirs);
+    let status = TradeStatusExtended {
+        their_window: true,
+        sequence: 0,
+        flag: 0,
+        gold: 0,
+        enchant_spell_id: 0,
+        slots,
+    };
+    let mut trade = world.resource_mut::<crate::ui_trade::TradeSession>();
+    trade.set_offer(&status, &mut crate::ui_trade::TradeLane::default());
+    trade.place_own_item(2, ours);
+}
+
+/// A trade slot's block holding `count` of `entry`.
+fn trade_item(entry: u32, count: u32) -> TradeItem {
+    TradeItem {
+        entry,
+        display_id: 0,
+        count,
+        wrapped: false,
+        gift_creator: 0,
+        perm_enchant: 0,
+        creator: 0,
+        charges: 0,
+        suffix_factor: 0,
+        random_prop_id: 0,
+        lock_id: 0,
+        max_durability: 0,
+        durability: 0,
+    }
+}
+
 /// A trade getter that finds a filled slot whose template the cache lacks asks the item cache
 /// with the callback `0x4c0340` inside its call (`0x4c017f`, `0x4c0582`), so the query goes out
 /// ahead of the chunk's next verb, and the callback waits for the record.
 #[test]
 fn a_trade_getter_asks_a_missed_template_inside_its_call() {
     let (mut app, rx) = client();
-    let mut target = TradeSideState::default();
-    target.slots[0] = Some(TradeSlotItem {
-        item_id: 4306,
-        count: 1,
-        ..Default::default()
-    });
-    let mut player = TradeSideState::default();
-    player.slots[1] = Some(TradeSlotItem {
-        item_id: 2592,
-        count: 1,
-        ..Default::default()
-    });
     // The open sets the partner cell `[0xb71728]` (`0x4bf549`), then the statuses fill the offers.
-    vm(&mut app).open_trade_window(0x88);
-    vm(&mut app).set_trade(Some(TradeState { player, target }));
+    open_trade(&mut app, trade_item(4306, 1), trade_item(2592, 1));
     seat_player(&mut app);
     eval::<()>(
         &mut app,
@@ -127,22 +157,12 @@ fn a_trade_getter_asks_a_missed_template_inside_its_call() {
 }
 
 /// A trade slot whose record the cache already holds answers in the getter's call, though the
-/// frame's push had it uncached: the getter reads the cache as it runs (`0x4c017f`, `0x4c0582`),
+/// window's open had it uncached: the getter reads the cache as it runs (`0x4c017f`, `0x4c0582`),
 /// so it asks nothing and waits on no callback, and the slot never reads empty.
 #[test]
 fn a_trade_getter_answers_a_cached_record_inside_its_call() {
     let (mut app, rx) = client();
-    let mut target = TradeSideState::default();
-    target.slots[0] = Some(TradeSlotItem {
-        item_id: 4306,
-        count: 3,
-        ..Default::default()
-    });
-    vm(&mut app).open_trade_window(0x88);
-    vm(&mut app).set_trade(Some(TradeState {
-        player: TradeSideState::default(),
-        target,
-    }));
+    open_trade(&mut app, trade_item(4306, 3), trade_item(2592, 1));
     seat_player(&mut app);
     app.world_mut()
         .resource_mut::<crate::items::Items>()

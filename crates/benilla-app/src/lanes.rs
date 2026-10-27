@@ -550,6 +550,8 @@ mod tests;
 #[cfg(test)]
 mod token_live_tests;
 #[cfg(test)]
+mod trade_live_tests;
+#[cfg(test)]
 mod trainer_live_tests;
 #[cfg(test)]
 mod unit_feed_live_tests;

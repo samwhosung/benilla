@@ -1387,7 +1387,6 @@ pub(crate) mod schedule_tests {
             "::ui_action::state::feed_action_state",
             "::player::camera_saved::load_camera_pose",
             "::tutorial::watch_self",
-            "::ui_trade::answer_trade_request",
             "::poi_marker::expire_marker",
             "::glue_session::logout_smoke::debug_logout_smoke",
         ] {
@@ -1721,7 +1720,7 @@ pub(crate) mod schedule_tests {
             "feed_units runs after feed_interact_npc, which publishes the latch it names \"npc\" by"
         );
         let seated = after(units);
-        let stale: Vec<&str> = ["::ui_auction::feed_auction", "::ui_trade::feed_trade"]
+        let stale: Vec<&str> = ["::ui_auction::feed_auction"]
             .into_iter()
             .filter(|feed| !seated.contains(&one(feed)))
             .collect();
@@ -1962,6 +1961,8 @@ pub(crate) mod schedule_tests {
          "a lane's firing, run only by the drain: `drop_world_state_signals`, gated on the interface being down, empties the lane the frame its items land, so none fires into a later VM"),
         ("ui_tradeskill.rs", "fire_list_rebuilds", Because::Deliberate,
          "a lane's firing, run only by the drain: `drop_list_rebuilds`, gated on the interface being down, empties the lane the frame its items land, so none fires into a later VM"),
+        ("ui_trade/lane.rs", "open", Because::Deliberate,
+         "no system: the trade lane's firing calls it for the open's item, inside the drain, which runs only with the interface up; `drop_trade_events`, gated on the interface being down, empties the lane the frame its items land"),
     ];
 
     /// `ui_chat/feed.rs` → `ui_chat::feed`; `target/mod.rs` → `target`; `lib.rs` → ``.

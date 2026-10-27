@@ -23,6 +23,8 @@ pub(crate) struct TradeSteps<'w, 's> {
     errors: Res<'w, UiErrorKeys>,
     objects: Objects<'w, 's>,
     items: Res<'w, Items>,
+    /// The initiate's name lookup (`0x5d4031`).
+    names: Res<'w, crate::names::NameCache>,
     /// The item watchers' trade halves still on the lane, which a close runs first.
     lane: Option<ResMut<'w, crate::item_lane::ItemLane>>,
     touch_reads: super::TouchReads<'w, 's>,
@@ -38,6 +40,7 @@ impl TradeSteps<'_, '_> {
             errors,
             objects,
             items,
+            names,
             ..
         } = self;
         let Some(trade) = trade.as_deref_mut() else {
@@ -60,8 +63,7 @@ impl TradeSteps<'_, '_> {
                     return None;
                 }
                 info!(target: "trade", "initiate {guid:#x}; sending CMSG_INITIATE_TRADE");
-                trade.initiate(guid, false);
-                let _ = net.0.send(ClientCommand::InitiateTrade { target: guid });
+                trade.initiate_send(guid, false, net, names, errors);
             }
             // `0x4bf230`: its gate's tag 5 always passes (`0x4bf233`), an unchanged flag does
             // nothing (`0x4bf247`), and a change signals both flags (`0x4bf260`) and then sends,

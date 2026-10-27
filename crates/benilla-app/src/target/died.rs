@@ -917,7 +917,7 @@ mod tests {
         world
             .resource_mut::<crate::ui_trade::TradeSession>()
             .begin(PARTNER);
-        crate::ui_trade::open_window(world);
+        crate::ui_trade::open_window(world, None);
         assert_eq!(latched(&mut c), Some(PARTNER));
         vocals(&mut c);
         c.values(PARTNER, &[(FIELD_UNIT_HEALTH, 0)]);

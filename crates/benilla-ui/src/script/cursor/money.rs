@@ -68,19 +68,21 @@ pub(crate) fn drop_cursor_money(model: &mut Model) -> bool {
     true
 }
 
-/// The new offer `0x5d4500` sends for the held coins: offer plus cursor, when `purse`, the coinage,
-/// covers it (`0x5d4570`); `None` with no coins held.
-pub(crate) fn trade_money_total(model: &Model, purse: u64) -> Option<u32> {
+/// The new offer `0x5d4500` sends for the held coins: our offer `[0xc4be70]` as it stands
+/// (`0x5d4520`) plus the cursor's, when `purse`, the coinage, covers it (`0x5d4570`); `None` with no
+/// coins held.
+pub(crate) fn trade_money_total(lua: &Lua, model: &Model, purse: u64) -> Option<u32> {
     let copper = cursor_money(model);
     if copper == 0 {
         return None;
     }
-    let offer = model.trade.as_ref().map_or(0, |t| t.player.gold);
+    let offer = crate::script::trade::money_now(lua, model).player;
     let total = u64::from(offer) + u64::from(copper);
     (total <= purse).then_some(total as u32)
 }
 
-/// Our money offer `[0xc4be70]` as a sender stores it after its send.
+/// Our money offer `[0xc4be70]` as a sender stores it after its send, in the VM's copy; the host
+/// stores its own in the send's call.
 pub(crate) fn set_own_offer(model: &mut Model, copper: u32) {
     if let Some(t) = model.trade.as_mut() {
         t.player.gold = copper;
@@ -96,7 +98,10 @@ pub(crate) fn add_trade_money(lua: &Lua) -> mlua::Result<bool> {
     let (held, total) = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         let purse = crate::script::stat_read::purse(lua, &model);
-        (cursor_money(&model) != 0, trade_money_total(&model, purse))
+        (
+            cursor_money(&model) != 0,
+            trade_money_total(lua, &model, purse),
+        )
     };
     let Some(total) = total else {
         return Ok(held);
@@ -115,7 +120,7 @@ pub(crate) fn add_trade_money(lua: &Lua) -> mlua::Result<bool> {
 pub(crate) fn pickup_trade_money(lua: &Lua, amount: i32) -> mlua::Result<bool> {
     let left = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        let offer = model.trade.as_ref().map_or(0, |t| t.player.gold) as i32;
+        let offer = crate::script::trade::money_now(lua, &model).player as i32;
         (amount > 0 && amount <= offer).then(|| (offer - amount) as u32)
     };
     let Some(left) = left else {

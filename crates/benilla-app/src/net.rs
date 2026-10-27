@@ -1824,7 +1824,7 @@ pub(crate) enum ClientCommand {
         target: u64,
     },
     /// `CMSG_BEGIN_TRADE`: accept a request; the server sends `OPEN_WINDOW` to both. Sent only by
-    /// [`crate::ui_trade::answer_trade_request`].
+    /// [`crate::ui_trade::answer_request`].
     BeginTrade,
     /// `CMSG_IGNORE_TRADE` (`0x119`): the refusal ladder's ignore leg (`0x4bf759` to `0x5d41c0`);
     /// vmangos answers the initiator `TRADE_STATUS_IGNORE_YOU`.

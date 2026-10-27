@@ -738,13 +738,15 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .filter(|&n| n < super::trade::TRADE_SLOTS);
                 let source = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let trade = model.trade.as_ref();
-                    let side = trade.map(|t| if player_side { &t.player } else { &t.target });
+                    // The slot as the getters read it at the call.
+                    let row =
+                        cell.and_then(|n| super::trade::slot_now(lua, &model, n + 1, player_side));
                     // The seventh slot alone proposes the spell cast on it (`0x534391`,
                     // `0x534598`, the block's `+0x40c`).
-                    let proposed = side
+                    let proposed = row
+                        .as_ref()
                         .filter(|_| slot0 == 6)
-                        .and_then(|s| s.slots[6].as_ref()?.enchantment.clone());
+                        .and_then(|s| s.enchantment.clone());
                     match player_side {
                         // The object's flags, creator and giver reach the LOCKED, wrapped and
                         // maker reads (`0x52bdb3`, `0x52b789`, `0x52e247`); the block's charges
@@ -763,25 +765,22 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         // The block carries the partner's lock id (`0x534563`), wrapped word
                         // (`0x534559`), gift creator (`0x534574`), creator (`0x53454f`), charges
                         // (`0x534595`) and durability (`0x5345b4`, `0x5345c0`).
-                        false => cell
-                            .and_then(|n| side?.slots[n].clone())
-                            .filter(|i| i.item_id != 0)
-                            .map(|item| {
-                                let inst = render::ItemInstance {
-                                    name: item.name.clone(),
-                                    block_lock_id: item.lock_id,
-                                    block_wrapped: item.wrapped,
-                                    gift_creator: item.gift_creator.clone(),
-                                    gift_creator_guid: item.gift_creator_guid,
-                                    creator: item.creator.clone(),
-                                    creator_guid: item.creator_guid,
-                                    proposed_enchant: proposed,
-                                    block_charges: Some(item.charges),
-                                    block_durability: item.durability,
-                                    ..Default::default()
-                                };
-                                (item.item_id, item.quality, inst)
-                            }),
+                        false => row.filter(|i| i.item_id != 0).map(|item| {
+                            let inst = render::ItemInstance {
+                                name: item.name.clone(),
+                                block_lock_id: item.lock_id,
+                                block_wrapped: item.wrapped,
+                                gift_creator: item.gift_creator.clone(),
+                                gift_creator_guid: item.gift_creator_guid,
+                                creator: item.creator.clone(),
+                                creator_guid: item.creator_guid,
+                                proposed_enchant: proposed,
+                                block_charges: Some(item.charges),
+                                block_durability: item.durability,
+                                ..Default::default()
+                            };
+                            (item.item_id, item.quality, inst)
+                        }),
                     }
                 };
                 let Some((item_id, quality, inst)) = source else {

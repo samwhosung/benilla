@@ -158,9 +158,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_trade::TradeSession",
-        "the trade session, which `feed_trade` fires from; the trade verbs, acting in their \
-         calls, hold it in the host",
     ),
     (
         Row::HostHeld,
@@ -301,6 +298,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read, and quiet: `CheckTalentMasterDist` reads the latch through the host and the Accept
     // holds it; the question's `CONFIRM_TALENT_WIPE` fires on the notice lane.
     "::ui_talent_wipe::TalentWipeState",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the trade getters read it through
+    // the host, and no feed fires off it, as its statuses' events go on the trade lane at their
+    // handlers and the initiate's name callback.
+    "::ui_trade::TradeSession",
     "::ui_tradeskill::TradeSkillOpens",
     // Read through the host by the trainer getters, and quiet: its events fire on the trainer
     // lane at the list, the state pass's callers and the item callbacks.
@@ -408,8 +409,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_mail::MailOpen", "ui_mail::pending::MailPending", "world_state::WorldStates"]),
     ("::ui_mail::send_query_next_mail_time_on_enter", &["items::Items", "ui_mail::MailOpen",
         "ui_mail::pending::MailPending"]),
-    ("::ui_trade::feed_trade", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "ui_trade::TradeSession"]),
     ("::ui_item_text::feed_item_text", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts", "ui_mail::MailOpen",
@@ -520,6 +519,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::SelfGuid",
     "::OwnControlLost",
     "::Player",
+    // The request ladder's tests, which its status reads (`0x4bf793`, `0x4bf7a5`, `0x4bf7bc`).
+    "::cinematic::Cinematic",
+    "::ui_auction::AuctionOpen",
+    "::ui_trade::BlockTrades",
     // Who we drive, which the loot response reads; our own create's arrival writes it.
     "::player::state::MoverLock",
     "::player::state::StandPending",
@@ -612,7 +615,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 35] {
+fn lane_types() -> [TypeId; 36] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -679,12 +682,14 @@ fn lane_types() -> [TypeId; 35] {
         TypeId::of::<crate::ui_gossip::GossipLane>(),
         // The questgiver lane: the panels' events, the lines and the item callbacks' signals.
         TypeId::of::<crate::ui_quest::QuestGiverLane>(),
+        // The trade lane: the statuses' signals and lines and the initiate's name callback.
+        TypeId::of::<crate::ui_trade::TradeLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 36] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -751,6 +756,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
             "quest giver",
             TypeId::of::<crate::ui_quest::QuestGiverLane>(),
         ),
+        ("trade", TypeId::of::<crate::ui_trade::TradeLane>()),
     ]
 }
 
@@ -933,6 +939,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "stable",
             "tabard",
             "taxi",
+            "trade",
             "trainer",
             "unit views",
             "world states"
@@ -1757,6 +1764,10 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("trainer", &["items::Items", "names::NameCache", "net::GuidIndex", "net::HomeBind",
         "net::ObjectStore", "spell::mods::SpellModifiers", "ui_action::PlayerActions",
         "ui_pet::PetBar", "ui_trainer::TrainerOpen"]),
+    // The open leg's placement reads the session, the objects and the records as the frame left
+    // them, past the statuses still on its lane (`0x4bf5f1`); its getters read through the host.
+    ("trade", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
+        "ui_trade::TradeSession"]),
     ("chat", &["go_templates::GameObjectTemplates", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "ui_chat::edit::ChannelState",
         "world_state::WorldStates"]),

@@ -171,6 +171,8 @@ pub(crate) struct TradeLeg<'w, 's> {
     trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,
     net: Res<'w, crate::net::NetCommands>,
     errors: Res<'w, crate::ui_action::UiErrorKeys>,
+    /// The initiate's name lookup (`0x5d4031`).
+    names: Res<'w, crate::names::NameCache>,
     /// The bags the world click's held-item tests read, lent with the host out; with no cooldown
     /// list, which a system holding this may hold to write, as those tests read none.
     bags: Option<crate::ui_items::BagReads<'w, 's>>,
@@ -214,7 +216,7 @@ impl TradeLeg<'_, '_> {
         match trade.cell() {
             Some(partner) if partner == guid => offer(script),
             Some(_) => {}
-            None => ask(trade, &self.net, guid),
+            None => ask(trade, &self.net, &self.names, &self.errors, guid),
         }
     }
 
@@ -282,7 +284,7 @@ impl TradeLeg<'_, '_> {
             Some(_) => self
                 .errors
                 .push(crate::ui_action::UiError::key("ERR_ALREADY_TRADING")),
-            None => ask(trade, &self.net, guid),
+            None => ask(trade, &self.net, &self.names, &self.errors, guid),
         }
     }
 }
@@ -295,12 +297,15 @@ fn offer(script: &mut benilla_ui::script::UiScript) {
 }
 
 /// `0x5d3fb0` with mode 1: `CMSG_INITIATE_TRADE`, the window to open with what the cursor holds.
-fn ask(trade: &mut crate::ui_trade::TradeSession, net: &crate::net::NetCommands, guid: u64) {
+fn ask(
+    trade: &mut crate::ui_trade::TradeSession,
+    net: &crate::net::NetCommands,
+    names: &crate::names::NameCache,
+    errors: &crate::ui_action::UiErrorKeys,
+    guid: u64,
+) {
     info!(target: "trade", "a drop on {guid:#x}; sending CMSG_INITIATE_TRADE");
-    trade.initiate(guid, true);
-    let _ = net
-        .0
-        .send(crate::net::ClientCommand::InitiateTrade { target: guid });
+    trade.initiate_send(guid, true, net, names, errors);
 }
 
 /// The world click's trade leg (`0x4925d0`), for a nameplate's left click (`0x7cb910` →
