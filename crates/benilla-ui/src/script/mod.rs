@@ -822,6 +822,8 @@ impl UiScript {
         let lua = install_framescript(VmKind::InGame)?;
         install_in_game(&lua)?;
         object::guard_receivers(&lua)?;
+        #[cfg(any(test, feature = "test-support"))]
+        census::survey_listener(&lua);
         Ok(Self::host(lua))
     }
 

@@ -165,7 +165,7 @@ fn a_deselect_without_a_possession_leaves_the_pets_attack() {
 /// We swing at `OLD`, the selection, as the server echoed it. `OLD`, `NEW` and `MOB` stream as
 /// units (`OBJECT_FIELD_TYPE` 0x9), which the re-swing's latch looks the outgoing selection up as
 /// (`0x49365f`).
-fn swinging_at_old(f: &mut Frame) {
+pub(super) fn swinging_at_old(f: &mut Frame) {
     let world = f.app.world_mut();
     for guid in [OLD, NEW, MOB] {
         let Some(&unit) = world.resource::<GuidIndex>().0.get(&guid) else {
@@ -858,7 +858,7 @@ fn a_unit_casters_pick_signals_its_target_change_before_the_cast_and_the_order()
 }
 
 /// A queued on-next-swing strike in the in-flight slot, Heroic Strike's.
-fn queue_strike(f: &mut Frame) {
+pub(super) fn queue_strike(f: &mut Frame) {
     let world = f.app.world_mut();
     world
         .resource_mut::<crate::spell::QueuedMeleeSpell>()

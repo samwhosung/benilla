@@ -48,7 +48,7 @@ macro_rules! emote_in_order {
 disjoint::disjoint_set! {
     /// The appliers, one per owner of the state a call touches, each lent alone: they share state
     /// with one another (the net channel, the cast ladder), never with what holds the host.
-    pub(crate) struct Appliers, AppliersState {
+    pub(crate) struct Appliers, AppliersState, watched {
         /// The selection.
         select: crate::target::ScriptSelect<'static, 'static>,
         /// The targeting cursor.
@@ -182,6 +182,12 @@ impl ScriptCallHost<'_, '_> {
         }
     }
 
+    /// End the lend the census is watching ([`disjoint::end_lend`]): the appliers are all unlent.
+    #[cfg(test)]
+    fn census_done(&mut self) {
+        self.appliers.end_lend();
+    }
+
     /// An engine writer's selection outside any call, signalled in place as an engine turn, as
     /// `SetSelection` (`0x493540`) signals inside whatever runs it: the teardown's
     /// `PET_BAR_UPDATE` (`0x4bd6b4`) before the store and the send, the change's signals before
@@ -198,6 +204,8 @@ impl ScriptCallHost<'_, '_> {
             };
             self.settle_selection(script, &mut at, select.owed);
             self.commit_views(script);
+            #[cfg(test)]
+            self.census_done();
         });
         script.hosted(self, |_| ());
     }
@@ -222,6 +230,8 @@ impl ScriptCallHost<'_, '_> {
             let owed = self.appliers.select().start_attack(guid);
             self.settle_selection(script, &mut at, owed);
             self.commit_views(script);
+            #[cfg(test)]
+            self.census_done();
         });
         script.hosted(self, |_| ());
     }
@@ -241,6 +251,8 @@ impl ScriptCallHost<'_, '_> {
             let owed = self.appliers.select().clear_target();
             self.settle_selection(script, &mut at, owed);
             self.commit_views(script);
+            #[cfg(test)]
+            self.census_done();
         });
         script.hosted(self, |_| ());
     }
@@ -296,6 +308,8 @@ impl ScriptCallHost<'_, '_> {
     fn at_point(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
         self.signal_reports(script, mark);
         self.commit_views(script);
+        #[cfg(test)]
+        self.census_done();
         script.signal_point(self);
     }
 
@@ -950,6 +964,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // confirm (`0x495d60`), all signalled below as the call returns, under its input events.
         let ready = self.appliers.reports().ready_since(script, at.mark);
         self.commit_views(script);
+        #[cfg(test)]
+        self.census_done();
         if ready.is_empty() && popup.is_none() {
             return tail;
         }
@@ -1054,7 +1070,12 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         if let Some(host) = self.set.p1().as_ref() {
             host.census_probe();
         }
-        let r = script.host_out(|script| f(Some(script), self.set.p0()));
+        let r = script.host_out(|script| {
+            let r = f(Some(script), self.set.p0());
+            #[cfg(test)]
+            self.set.end_lend();
+            r
+        });
         match self.set.p1().as_mut() {
             Some(host) => script.hosted(host, |_| ()),
             None => {

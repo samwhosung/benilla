@@ -484,6 +484,40 @@ fn the_bind_answers_act_inside_their_calls() {
     assert_eq!(h.sent(), Vec::<String>::new(), "a cancel sends nothing");
 }
 
+/// An accepted pending swap sends `CMSG_SWAP_INV_ITEM` (`0x5e0fdb`) and only then clears the
+/// cursor (`0x5e0fe7`), so the clear's handlers send after the packet. The census counts the send
+/// under `Item` as made while a handler waits, which is the reference's order: see
+/// [`SENDS_IN_ORDER`](crate::script_calls::census::SENDS_IN_ORDER).
+#[test]
+fn an_accepted_swap_sends_before_its_held_clear_signals() {
+    let mut h = Bags::new();
+    h.run("PickupContainerItem(0, 7) PickupInventoryItem(1)");
+    h.run(
+        r#"local f = CreateFrame("Frame") f:RegisterAllEvents()
+        f:SetScript("OnEvent", function()
+            if not ROLLED then ROLLED = 1 RandomRoll(1, 100) end
+        end)"#,
+    );
+    let _ = h.sent();
+    benilla_ui::script::census::take();
+    h.run("EquipPendingItem(0)");
+    assert_eq!(
+        h.sent(),
+        [
+            format!(
+                "{:?}",
+                ClientCommand::SwapInvItem {
+                    src_slot: 29,
+                    dst_slot: 0
+                }
+            ),
+            roll()
+        ],
+        "the packet, then the clear's handler"
+    );
+    crate::script_calls::census::shows_in_order("Item");
+}
+
 /// The bind question fires inside the swap's call (`0x5e0ee4`). The doll click's `SwapItem`
 /// leaves past its clear (`0x5e0eec` → `0x5e0f63`), so the event's handler reads the helm still
 /// held and no `CURSOR_UPDATE` follows; `PickupContainerItem`'s own `ClearCursor(0,1)` follows its
