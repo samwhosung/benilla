@@ -478,6 +478,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // The frame's number, which the control packet's handler tells its frame's packets apart by.
+    "::FrameCount",
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.

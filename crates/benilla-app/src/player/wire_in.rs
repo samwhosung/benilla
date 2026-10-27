@@ -67,6 +67,8 @@ fn yield_own_body(net_cmds: &NetCommands, player: &mut Player, self_guid: Option
 /// our body revoked, or our possessed creature released while feared or confused (the possession
 /// standing). `own` is only `[0xb4b3e4]` (`0x4958e0`), which `0x5fa600` writes for our own
 /// character alone (`0x5fa6d0`): a grant or a release naming another unit never touches it.
+/// The packet's handler already stored the flag and dropped the hold on its fall
+/// (`on_client_control`).
 fn track_control(player: &mut Player, own: &mut OwnControlLost, verdict: ControlVerdict) {
     match verdict {
         ControlVerdict::Revoked => {

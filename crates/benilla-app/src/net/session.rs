@@ -46,7 +46,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_disconnected)
         .net_handler(K::Teleport, on_mover_edge)
         .net_handler(K::KnockBack, on_mover_edge)
-        .net_handler(K::ClientControl, on_mover_edge)
+        .net_handler(K::ClientControl, on_client_control)
         .net_handler(K::Worldport, on_worldport)
         .net_handler(K::TransferPending, on_transfer)
         .net_handler(K::TransferAborted, on_transfer)
@@ -297,11 +297,46 @@ fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge) {
             counter,
             launch,
         } => knock_back(guid, counter, launch, &b.self_guid, &mut e.knockbacks),
-        SessionEvent::ClientControl { mover, allow_move } => {
-            e.client_control
-                .write(ClientControlMessage { mover, allow_move });
-        }
         _ => {}
+    }
+}
+
+/// `SMSG_CLIENT_CONTROL_UPDATE` (`0x5fa6b1` → `SetPlayerControl 0x4958e0`), judged by the
+/// controller later. For our own mover the fall of the flag `[0xb4b3e4]` drops the cursor's payload
+/// and the cast (`0x4958e8`-`0x495901` → `0x495920`) ahead of `PLAYER_CONTROL_LOST` (`0x49590b`); a
+/// store that changes nothing does nothing (`0x4958e6`). The controller stores the flag past the
+/// drain, so `stored` follows the packets of this frame, which it has not yet applied.
+fn on_client_control(
+    In(ev): In<SessionEvent>,
+    mut e: Edges,
+    frame: Res<bevy::diagnostic::FrameCount>,
+    mut stored: Local<Option<(u32, bool)>>,
+    // The flag and our guid are the host's too, so they sit in the set it shares with the cast.
+    mut vm: crate::script_calls::VmWith<(
+        crate::spell::SelfCancel<'static>,
+        Res<'static, SelfGuid>,
+        Res<'static, crate::player::OwnControlLost>,
+    )>,
+) {
+    let SessionEvent::ClientControl { mover, allow_move } = ev else {
+        return;
+    };
+    e.client_control
+        .write(ClientControlMessage { mover, allow_move });
+    let fell = {
+        let (_, self_guid, own) = vm.own();
+        if self_guid.0 != Some(mover) {
+            return;
+        }
+        let down = match *stored {
+            Some((at, down)) if at == frame.0 => down,
+            _ => own.0,
+        };
+        *stored = Some((frame.0, !allow_move));
+        !allow_move && !down
+    };
+    if fell {
+        crate::spell::drop_hold(&mut vm, |(mut cancel, ..)| cancel.abort_cast());
     }
 }
 

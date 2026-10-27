@@ -432,6 +432,21 @@ pub(crate) struct SelfCancel<'w> {
     ground: ResMut<'w, super::targeting::SpellTargeting>,
 }
 
+/// `0x495920`, the drop that losing control (`0x495901`) and a world port (`0x40194c`) both make:
+/// `ClearCursor(1, 1)` (`0x495927`), signalled with the host lent, then `CancelCast(1, 1, 0x1c)`
+/// (`0x49592c`-`0x495932`), which `cancel` runs on the cast state of `P`.
+pub(crate) fn drop_hold<P: bevy::ecs::system::SystemParam + 'static>(
+    vm: &mut crate::script_calls::VmWith<'_, '_, P>,
+    cancel: impl FnOnce(bevy::ecs::system::SystemParamItem<'_, '_, P>),
+) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.clear_cursor_payload();
+        }
+    });
+    cancel(vm.own());
+}
+
 impl SelfCancel<'_> {
     /// `SpellStopCasting()` (`0x6e6e80`), the ESC chain's cast rung.
     pub(crate) fn stop_casting(&mut self) {
