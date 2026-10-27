@@ -324,26 +324,49 @@ fn table(
         return None;
     }
     let mut ints: Vec<(i64, Vec<u8>)> = Vec::new();
-    let mut floats: Vec<(f64, Vec<u8>)> = Vec::new();
+    // A non-integral number key; `None` for an infinite one, which writes a comment.
+    let mut floats: Vec<(f64, Option<Vec<u8>>)> = Vec::new();
     let mut bools: Vec<(bool, Vec<u8>)> = Vec::new();
     let mut strs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // The type names of keys with no literal.
+    let mut skipped: Vec<&'static str> = Vec::new();
     for pair in t.pairs::<Value, Value>() {
         let Ok((k, v)) = pair else { continue };
-        let Some(value) = serialize(&v, depth + 1, seen, model) else {
-            // The reference writes `[k] = nil --[[ … ]],` (`0x70482f`), which sets nothing.
-            continue;
-        };
         // The key's type picks the arm (`0x704766`): a boolean or string key writes as a value
-        // (`0x7047eb`), a number as one unless it is NaN or infinite (`0x70476d`-`0x7047c4`), and
-        // any other type has no literal (`0x7048a3`). The reference writes a skipped key as a
-        // comment line (`0x872dbc`, `0x872d94`, `0x872d5c`).
+        // (`0x7047eb`), a number as one unless it is infinite (`0x7047c4`, a NaN key cannot
+        // occur), and any other type has no literal (`0x7048a3`). A skipped key writes a comment
+        // line and never reads its value (`0x7047c6`-`0x7047e6`, `0x7048b3`-`0x7048d9`).
+        let skip = match &k {
+            Value::Number(n) if n.is_infinite() => {
+                floats.push((*n, None));
+                continue;
+            }
+            Value::Table(_) => Some("table"),
+            Value::Function(_) => Some("function"),
+            Value::Thread(_) => Some("thread"),
+            // A light userdata is `userdata` to `lua_typename` (`0x6f3480`).
+            Value::LightUserData(_) => Some("userdata"),
+            _ => None,
+        };
+        if let Some(name) = skip {
+            skipped.push(name);
+            continue;
+        }
+        // A value with no literal writes the value writer's `nil` comment (`0x70482f` →
+        // `0x704480`), which sets nothing on reload. A table answers none only for a cycle or
+        // past [`MAX_DEPTH`], and drops (the module's deviations).
+        let value = match serialize(&v, depth + 1, seen, model) {
+            Some(value) => value,
+            None if matches!(v, Value::Table(_)) => continue,
+            None => no_literal(&v),
+        };
         match k {
             Value::Integer(i) => ints.push((i, value)),
             // A float key that is integral is the same slot as the integer in Lua 5.1.
             Value::Number(n) if n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0 => {
                 ints.push((n as i64, value))
             }
-            Value::Number(n) if n.is_finite() => floats.push((n, value)),
+            Value::Number(n) if n.is_finite() => floats.push((n, Some(value))),
             Value::Boolean(b) => bools.push((b, value)),
             Value::String(s) => strs.push((s.as_bytes().to_vec(), value)),
             _ => continue,
@@ -355,11 +378,12 @@ fn table(
     bools.sort_by_key(|(k, _)| *k);
     // Byte order, the same as `str` order for UTF-8 keys.
     strs.sort_by(|a, b| a.0.cmp(&b.0));
+    skipped.sort_unstable();
 
     let indent = "\t".repeat(depth);
     let close = "\t".repeat(depth.saturating_sub(1));
     let mut out = b"{\n".to_vec();
-    let mut entry = |key: &[u8], value: &[u8]| {
+    let entry = |out: &mut Vec<u8>, key: &[u8], value: &[u8]| {
         out.extend_from_slice(indent.as_bytes());
         out.push(b'[');
         out.extend_from_slice(key);
@@ -367,17 +391,30 @@ fn table(
         out.extend_from_slice(value);
         out.extend_from_slice(b",\n");
     };
+    let comment = |out: &mut Vec<u8>, what: &str| {
+        out.extend_from_slice(
+            format!("{indent}--[[ skipped entry with {what} key ]]\n").as_bytes(),
+        );
+    };
     for (k, v) in ints {
-        entry(k.to_string().as_bytes(), &v);
+        entry(&mut out, k.to_string().as_bytes(), &v);
     }
     for (k, v) in floats {
-        entry(number(k).expect("finite").as_bytes(), &v);
+        match v {
+            Some(v) => entry(&mut out, number(k).expect("finite").as_bytes(), &v),
+            // `%s--[[ skipped entry with inf key ]]` (`0x872d94`), the indent first.
+            None => comment(&mut out, "inf"),
+        }
     }
     for (k, v) in bools {
-        entry(k.to_string().as_bytes(), &v);
+        entry(&mut out, k.to_string().as_bytes(), &v);
     }
     for (k, v) in strs {
-        entry(&quote(&k), &v);
+        entry(&mut out, &quote(&k), &v);
+    }
+    // `%s--[[ skipped entry with %s key ]]` (`0x872d5c`), the indent and the key's type name.
+    for name in skipped {
+        comment(&mut out, name);
     }
     out.extend_from_slice(close.as_bytes());
     out.push(b'}');
@@ -525,9 +562,12 @@ mod tests {
 
     /// A top-level value with no literal still gets its line (`0x704422`-`0x704455`), the value
     /// writer's `nil` comment (`0x872cfc`, `0x872e40`, `0x872e30`), so a reload sets it to nil; a
-    /// boolean key and a fractional one write as `[key] = value,` (`0x7047eb`, `0x70476d`).
+    /// boolean key and a fractional one write as `[key] = value,` (`0x7047eb`, `0x70476d`). Inside
+    /// a table a value with no literal writes the same comment as `[key] = nil --[[ … ]],`
+    /// (`0x70482f`), and an infinite key or one of another type a comment line (`0x872d94`,
+    /// `0x872d5c`).
     #[test]
-    fn values_with_no_literal_write_nil_and_bool_and_fraction_keys_are_kept() {
+    fn values_and_keys_with_no_literal_write_the_references_comments() {
         let mut s = UiScript::new().unwrap();
         s.run(
             r#"
@@ -538,8 +578,10 @@ mod tests {
             CYCLE = {}
             CYCLE.self = CYCLE
             KEYS = { [true] = "yes", [false] = 0, [0.5] = "half", [-2.25] = 1, [2] = 2, x = 1 }
+            SKIPS = { f = function() end, n = 0/0, [1/0] = 1, [-1/0] = 2, [{}] = 3,
+                      [function() end] = 4 }
             for _, n in ipairs({ "A_FUNCTION", "NOT_A_NUMBER", "INFINITE", "KEPT", "CYCLE",
-                                 "KEYS" }) do
+                                 "KEYS", "SKIPS" }) do
               RegisterForSave(n)
             end
         "#,
@@ -558,6 +600,14 @@ mod tests {
                         \t[false] = 0,\n\
                         \t[true] = \"yes\",\n\
                         \t[\"x\"] = 1,\n\
+                        }\n\
+                        SKIPS = {\n\
+                        \t--[[ skipped entry with inf key ]]\n\
+                        \t--[[ skipped entry with inf key ]]\n\
+                        \t[\"f\"] = nil --[[ skipped inline function ]],\n\
+                        \t[\"n\"] = nil --[[ nan ]],\n\
+                        \t--[[ skipped entry with function key ]]\n\
+                        \t--[[ skipped entry with table key ]]\n\
                         }\n";
         assert_eq!(String::from_utf8_lossy(&text), expected);
         assert!(s.take_warnings().is_empty());
@@ -573,7 +623,7 @@ mod tests {
         assert!(fresh
             .eval::<bool>(
                 r#"return KEYS[true] == "yes" and KEYS[false] == 0 and KEYS[0.5] == "half"
-                   and KEYS[-2.25] == 1 and KEYS[2] == 2 and KEYS.x == 1"#
+                   and KEYS[-2.25] == 1 and KEYS[2] == 2 and KEYS.x == 1 and next(SKIPS) == nil"#
             )
             .unwrap());
         assert_eq!(fresh.saved_variables_bytes(), b"");
@@ -584,20 +634,22 @@ mod tests {
             "KEPT",
             "CYCLE",
             "KEYS",
+            "SKIPS",
         ] {
             fresh.run(&format!("RegisterForSave({n:?})")).unwrap();
         }
         let again = fresh.saved_variables_bytes();
         let nils = "A_FUNCTION = nil\nNOT_A_NUMBER = nil\nINFINITE = nil\n";
+        let skips = expected.find("SKIPS = {").expect("written");
         assert_eq!(
             String::from_utf8_lossy(&again),
-            expected.replacen(
+            format!("{}SKIPS = {{\n}}\n", &expected[..skips]).replacen(
                 "A_FUNCTION = nil --[[ skipped inline function ]]\n\
                  NOT_A_NUMBER = nil --[[ nan ]]\nINFINITE = nil --[[ inf ]]\n",
                 nils,
                 1
             ),
-            "the reload writes the same file, the nils bare"
+            "the reload writes the same file, the nils bare and the skipped entries gone"
         );
     }
 
