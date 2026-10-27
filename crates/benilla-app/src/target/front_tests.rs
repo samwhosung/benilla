@@ -978,3 +978,24 @@ fn an_acquired_attacker_signals_its_select_in_place() {
     assert_eq!(f.selected(), Some(MOB));
     assert_eq!(wire_order(&f.rx), ["RandomRoll"]);
 }
+
+/// The chat layer's `/target` and `/assist` asks commit through `SetSelection` (`0x493540`),
+/// which signals inside it (`0x49389c`): the listener's roll goes out behind the select's send,
+/// in the ask's own step, with no lane to wait for.
+#[test]
+fn a_chat_assist_signals_its_select_in_place() {
+    let mut f = fix(false);
+    let (mob, old) = (f.mob, f.app.world().resource::<GuidIndex>().0[&OLD]);
+    f.make_unit(mob);
+    f.make_unit_with(old, &[(16, MOB as u32), (17, 0)]);
+    rolling_listener(&mut f);
+    let world = f.app.world_mut();
+    world
+        .resource_mut::<Messages<super::by_name::AssistRequest>>()
+        .write(super::by_name::AssistRequest { name: None });
+    world
+        .run_system_once(super::by_name::assist_requests)
+        .expect("the /assist reader runs");
+    assert_eq!(f.selected(), Some(MOB));
+    assert_eq!(wire_order(&f.rx), ["SetSelection 0x31", "RandomRoll"]);
+}

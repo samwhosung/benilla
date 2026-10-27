@@ -499,33 +499,56 @@ pub(super) fn assist_named(
     commit.assist(basis, how);
 }
 
+/// What the chat layer's `/target` and `/assist` asks read and write.
+type ByNameAsk = (
+    ByNameScan<'static, 'static>,
+    SelectCommit<'static, 'static>,
+    Res<'static, crate::ui_action::UiErrorKeys>,
+);
+
+/// One by-name ask committed through the one SetSelection path, its signals in place with the
+/// host lent, as the binding's `SetSelection` signals inside the call (`0x49389c`), then what it
+/// owes past them.
+fn ask_by_name(
+    vm: &mut crate::script_calls::VmWith<ByNameAsk>,
+    step: impl FnOnce(&ByNameScan, &mut SelectCommit, &crate::ui_action::UiErrorKeys),
+) {
+    let select = {
+        let (scan_params, mut commit, errors) = vm.own();
+        let before = super::click::Standing::of(&commit.selection, &commit.seam);
+        let owed = commit.owing(|commit| step(&scan_params, commit, &errors));
+        before.owing_debt(owed)
+    };
+    vm.engine_select(select, |(_, mut commit, _), owed| commit.pay_now(owed));
+}
+
 /// Drain the chat layer's `/target <name>` asks.
 pub(super) fn target_by_name_requests(
     mut requests: MessageReader<TargetByNameRequest>,
-    scan_params: ByNameScan,
-    mut commit: SelectCommit,
-    errors: Res<crate::ui_action::UiErrorKeys>,
+    mut vm: crate::script_calls::VmWith<ByNameAsk>,
 ) {
     for request in requests.read() {
-        target_named(&scan_params, &mut commit, &errors, &request.name, false);
+        ask_by_name(&mut vm, |scan_params, commit, errors| {
+            target_named(scan_params, commit, errors, &request.name, false);
+        });
     }
 }
 
 /// Drain the chat layer's `/assist [name]` asks.
 pub(super) fn assist_requests(
     mut requests: MessageReader<AssistRequest>,
-    scan_params: ByNameScan,
-    mut commit: SelectCommit,
-    errors: Res<crate::ui_action::UiErrorKeys>,
+    mut vm: crate::script_calls::VmWith<ByNameAsk>,
 ) {
     for request in requests.read() {
-        assist_named(
-            &scan_params,
-            &mut commit,
-            &errors,
-            request.name.as_deref().unwrap_or_default(),
-            "/assist",
-        );
+        ask_by_name(&mut vm, |scan_params, commit, errors| {
+            assist_named(
+                scan_params,
+                commit,
+                errors,
+                request.name.as_deref().unwrap_or_default(),
+                "/assist",
+            );
+        });
     }
 }
 
@@ -818,7 +841,6 @@ impl SelectCommit<'_, '_> {
     }
 
     /// Pay all of `debt` now, for a writer whose signals have no listeners to run first.
-    #[cfg(test)]
     pub(crate) fn pay_now(&mut self, mut debt: SelectDebt) {
         while debt != SelectDebt::default() {
             debt = self.pay(debt);
