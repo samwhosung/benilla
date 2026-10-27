@@ -158,6 +158,8 @@ pub(super) struct FollowInput<'w, 's> {
     mover: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::Embodied>>,
     /// What the camera orbits, for the far-sight term; possibly a frame behind its publisher.
     view_subject: Res<'w, super::view_subject::ViewSubject>,
+    /// Whether we drive our own body.
+    lock: Res<'w, super::MoverLock>,
 }
 
 impl FollowInput<'_, '_> {
@@ -192,7 +194,7 @@ impl FollowInput<'_, '_> {
             self.rig.look == Some(LookButton::Right),
             // The teardown leg, or the body handed to a server spline; the ride term is not one of
             // the reference's conjuncts (`0x5144e0`), and its reference side is untraced.
-            self.input_torn_down(player.modes.rooted, player.foreign_mover.is_none())
+            self.input_torn_down(player.modes.rooted, self.lock.foreign_mover.is_none())
                 || player.server_riding(),
         )
     }

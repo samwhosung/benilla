@@ -859,9 +859,10 @@ fn the_silent_legs_refuse_without_a_word() {
 #[test]
 fn a_stuck_possessed_creature_does_not_make_us_busy() {
     let (mut app, rx) = request_app(false, false, true);
-    app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .control_lost = true;
+    app.world_mut().insert_resource(crate::player::MoverLock {
+        control_lost: true,
+        ..Default::default()
+    });
     app.world_mut().resource_mut::<TradeSession>().request(0x7);
     app.update();
     assert!(

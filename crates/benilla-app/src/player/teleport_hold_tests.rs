@@ -67,6 +67,7 @@ fn apply(
         &time,
         &mut commands,
         &mut player,
+        &mut crate::player::MoverLock::default(),
         &mut cam,
         &net,
         &mut readers.0,

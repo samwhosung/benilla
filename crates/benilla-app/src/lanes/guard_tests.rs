@@ -533,6 +533,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::SelfGuid",
     "::OwnControlLost",
     "::Player",
+    // Who we drive, which the loot response reads; our own create's arrival writes it.
+    "::player::state::MoverLock",
     "::player::state::StandPending",
     // The page cache the host's page turns read.
     "::ui_item_text::PageTexts",

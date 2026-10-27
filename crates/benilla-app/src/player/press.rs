@@ -29,6 +29,7 @@ pub(super) fn press_commands(
     binds: Res<crate::bindings::BindingsState>,
     rig: Res<CameraControl>,
     mut player: ResMut<Player>,
+    lock: Res<super::MoverLock>,
     // The active mover `0xc4da98`, as whether it is our own character.
     active: Query<Has<crate::net::SelfPlayer>, With<crate::net::ActiveMover>>,
     // The cast bar's self-cancel, which `crate::spell::LocalCancel` sends next.
@@ -38,7 +39,7 @@ pub(super) fn press_commands(
     if !player.active || player.detached {
         return;
     }
-    let both_buttons = input::look_input(&binds, &player, &rig).both_buttons;
+    let both_buttons = input::look_input(&binds, &player, &lock, &rig).both_buttons;
     // The cast bar's self-cancel, at the command press ([`input::cancels_cast`]), ahead of the
     // tick: between the press `0x5150a7` and the cancel `0x51512a` stands only the taint test
     // `0x494a50`, so it runs whoever drives the body, and `0x6e4940` sends `CMSG_CANCEL_CAST` at
@@ -78,6 +79,7 @@ pub(super) fn press_tick(
     binds: Res<crate::bindings::BindingsState>,
     rig: Res<CameraControl>,
     mut player: ResMut<Player>,
+    lock: Res<super::MoverLock>,
     net: Res<NetCommands>,
     gates: (
         ResMut<super::StandPending>,
@@ -103,8 +105,8 @@ pub(super) fn press_tick(
     // too: the settle hold streams no locomotion, and in the air only the mover's standstill nudge
     // breaks the silence, which its step decides.
     if player.server_riding
-        || player.control_lost
-        || player.reseat
+        || lock.control_lost
+        || lock.reseat
         || player.settling
         || player.move_flags & move_flags::FALLING != 0
     {
@@ -114,13 +116,13 @@ pub(super) fn press_tick(
         store.single().ok().flatten(),
         self_driven.single().unwrap_or(false),
         &pending,
-        &player,
+        &lock,
         &view_subject,
     );
     // `0x514560` and `0x5145b0` as the mover stands before this frame's packets.
     let may_translate = mover.may_translate(player.modes.rooted);
     let may_turn = mover.may_turn(stunned);
-    let both_buttons = input::look_input(&binds, &player, &rig).both_buttons;
+    let both_buttons = input::look_input(&binds, &player, &lock, &rig).both_buttons;
     let axes = input::move_axes(
         &binds,
         &mut player,
@@ -154,7 +156,7 @@ pub(super) fn press_tick(
     let ended = movement_net::stream_commands(&net.0, &mut player, bits, time.elapsed_secs());
     player.press_ended_precast |= ended;
     move_trace::press(word, prev, player.move_flags);
-    if player.foreign_mover.is_none() && loot_walk_away(prev, player.move_flags) {
+    if lock.foreign_mover.is_none() && loot_walk_away(prev, player.move_flags) {
         loot.0 = true;
     }
 }

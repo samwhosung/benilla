@@ -152,6 +152,8 @@ pub(crate) struct Scene<'w, 's> {
     place: crate::ui_party::net::SnapshotPlace<'w, 's>,
     /// The active mover, which its unit's release and destroy zero.
     mover: Option<ResMut<'w, super::MoverClaim>>,
+    /// Who we drive and whether we may, which our own arrival gives back.
+    mover_lock: Option<ResMut<'w, crate::player::MoverLock>>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).

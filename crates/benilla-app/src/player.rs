@@ -81,11 +81,11 @@ pub(crate) use view_subject::RemoteView;
 mod teleport_hold_tests;
 mod walk;
 mod wire_in;
-pub(crate) use wire_in::{regain_control_on_arrival, restore_own_control};
+pub(crate) use wire_in::regain_control_on_arrival;
 
-/// The create's control restore, its flag inside the net drain ([`restore_own_control`]) and the
-/// controller's lock after it ([`regain_control_on_arrival`]): every system that reads `Player`'s
-/// control flags runs after it in the frame, so it sees the restored flags, not the lost ones.
+/// The net drain, whose self create gives control back ([`regain_control_on_arrival`]): every
+/// system that reads the mover's lock runs after it in the frame, so it sees the restored lock,
+/// not the lost one.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ControlRestore;
 
@@ -119,7 +119,7 @@ use state::{
     WEDGE_STILL_FRAMES,
 };
 pub(crate) use state::{
-    OwnControlLost, Player, PlayerCapsule, StandPending, CAPSULE_HEIGHT, CAPSULE_RADIUS,
+    MoverLock, OwnControlLost, Player, PlayerCapsule, StandPending, CAPSULE_HEIGHT, CAPSULE_RADIUS,
     CREATURE_STEP_UP_HEIGHT, DEFAULT_COLLISION_HEIGHT, FEATHER_TERMINAL_VELOCITY, GRAVITY,
     HOVER_CLIMB_RATE, HOVER_HEIGHT, SETTLE_TIMEOUT, STEP_UP_HEIGHT, TERMINAL_VELOCITY,
 };
@@ -333,6 +333,7 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<camera_zoom::ZoomLimit>();
         app.init_resource::<camera::FollowConfig>();
         app.init_resource::<OwnControlLost>();
+        app.init_resource::<MoverLock>();
         app.init_resource::<StandPending>();
         app.init_resource::<camera_dynamics::CameraOptions>();
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a

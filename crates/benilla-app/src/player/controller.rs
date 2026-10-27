@@ -38,7 +38,7 @@ pub(super) fn body_gates(
     store: Option<&crate::net::ObjectStore>,
     self_driven: bool,
     pending: &super::StandPending,
-    player: &Player,
+    lock: &super::MoverLock,
     view_subject: &view_subject::ViewSubject,
 ) -> BodyGates {
     let (stunned, dead, stand_byte) = store
@@ -61,7 +61,7 @@ pub(super) fn body_gates(
     let mover = state::MoverInput {
         dead,
         view_is_out: state::view_is_out(
-            player.foreign_mover.is_none(),
+            lock.foreign_mover.is_none(),
             view_subject.remote.is_some(),
         ),
     };
@@ -81,6 +81,7 @@ pub(super) fn dynamics_input(
     nearclip: f32,
     follow: &camera::FollowConfig,
     player: &Player,
+    lock: &super::MoverLock,
     body: Option<(
         Option<&crate::net::ObjectStore>,
         Option<&crate::net::UnitSpeeds>,
@@ -102,7 +103,7 @@ pub(super) fn dynamics_input(
             // The driven body's descriptor: a possessed creature's taxi state, not ours.
             taxi: store.is_some_and(|s| s.0.unit_flags() & 0x0010_0000 != 0),
             track: player.server_riding,
-            fear: player.control_lost,
+            fear: lock.control_lost,
             facing,
             mounted: store.is_some_and(|s| s.0.unit_mount_display_id() > 0),
             // `GetCurrentSpeed` (`0x7c4c90`) on the mover's speeds and last frame's word.
@@ -143,6 +144,7 @@ pub(super) fn sample_look(
         Query<Has<Embodied>, With<crate::net::SelfPlayer>>,
     ),
     mut player: ResMut<Player>,
+    lock: Res<super::MoverLock>,
     mut rig: ResMut<CameraControl>,
     mut cameras: Query<&mut FlyCam, With<Camera>>,
     body: Query<
@@ -171,13 +173,14 @@ pub(super) fn sample_look(
     let input::LookInput {
         both_buttons,
         follow_command,
-    } = input::look_input(binds, &player, &rig);
+    } = input::look_input(binds, &player, &lock, &rig);
     let body = body.single().ok();
     let dynamics = dynamics_input(
         &pointer.3,
         pointer.4.nearclip,
         &pointer.2,
         &player,
+        &lock,
         body,
         follow_command,
         scoped.active(),
@@ -191,7 +194,7 @@ pub(super) fn sample_look(
         body.and_then(|(store, _)| store),
         gates.7.single().unwrap_or(false),
         &gates.6,
-        &player,
+        &lock,
         view_subject,
     );
     // `0x5145e0`: `0x5145b0` and standing; a turn key stands a seated body up instead.
@@ -233,7 +236,7 @@ pub(super) fn sample_look(
     // camera rotate (`0x514444`) still runs. The reference never writes the facing; writing and
     // restoring is the same downstream. Standing up hands the camera's yaw back at the next
     // motion sample, a snap, as `0x5103e0` commits the camera's facing rather than a delta.
-    if !mouse_turns_body || player.control_lost || player.reseat {
+    if !mouse_turns_body || lock.control_lost || lock.reseat {
         player.face_yaw = yaw_before_look;
     }
     // The hand-off runs on each motion and on the press that completes both mouse bits, motion or
@@ -241,8 +244,8 @@ pub(super) fn sample_look(
     *sample = LookSample {
         hands_off: (looked || input::both_engaged(binds, &rig, both_buttons))
             && mouse_turns_body
-            && !player.control_lost
-            && !player.reseat,
+            && !lock.control_lost
+            && !lock.reseat,
         facing: yaw_before_look,
     };
     {
@@ -345,6 +348,8 @@ pub(super) fn control(
         ),
         // The active mover global `SetActiveMover` (`0x6006e0`) compares a claim with.
         ResMut<crate::net::MoverClaim>,
+        // Who we drive and whether we may.
+        ResMut<super::MoverLock>,
     ),
 ) {
     let (world, transports, child_of) = (&world_q.0, &world_q.1, &world_q.2);
@@ -390,7 +395,7 @@ pub(super) fn control(
     let input::LookInput {
         both_buttons,
         follow_command,
-    } = input::look_input(binds, &player, &rig);
+    } = input::look_input(binds, &player, &world_q.6, &rig);
 
     // The word as `0x50fee0` read it in the frame's input, with the facing the input found.
     let dynamics = dynamics_input(
@@ -398,6 +403,7 @@ pub(super) fn control(
         pointer.5.nearclip,
         &pointer.3,
         &player,
+        &world_q.6,
         body.single()
             .ok()
             .map(|(_, _, _, _, _, store, speeds, ..)| (store, speeds)),
@@ -416,7 +422,7 @@ pub(super) fn control(
             .single()
             .is_some_and(|(.., embodied)| embodied),
         &speed_capsule.11,
-        &player,
+        &world_q.6,
         view_subject,
     );
     // `0x5145b0` now, for the key turn; its translate sibling waits for this frame's root edge.
@@ -442,8 +448,8 @@ pub(super) fn control(
     let late_hand_off = rig.world_mouse.late_rise()
         && both_buttons
         && mover.mouse_may_turn_body(stunned, stand_state)
-        && !player.control_lost
-        && !player.reseat;
+        && !world_q.6.control_lost
+        && !world_q.6.reseat;
     if late_hand_off {
         player.face_yaw = cam.yaw;
     }
@@ -475,6 +481,7 @@ pub(super) fn control(
         &time,
         &mut commands,
         &mut player,
+        &mut world_q.6,
         &mut cam,
         &net.0,
         &mut net.1,
@@ -516,7 +523,7 @@ pub(super) fn control(
         // - `reseat`: the mover guid is changing and the claimed unit has not streamed in; moves
         //   carry no guid, so driving would write one body's pose onto another.
         // Possession is none of these: it runs the ordinary path below, on the creature.
-        if player.server_riding || player.control_lost || player.reseat {
+        if player.server_riding || world_q.6.control_lost || world_q.6.reseat {
             // The latch outlives the yield: lost control and an unresolved reseat leave the tick
             // no unit (`0x51466e`), but a ride keeps the mover and fails `0x5144e0`, so the tick
             // the ride's monster move runs (`0x602053`), and each press's, clears the bit
@@ -526,7 +533,7 @@ pub(super) fn control(
             }
             // The moving body's transform is the truth; without this the camera stays behind
             // during a fear. Not while reseating, when `Player` still holds the body let go.
-            if player.control_lost && !player.reseat {
+            if world_q.6.control_lost && !world_q.6.reseat {
                 if let Ok((_, t, ..)) = body.single() {
                     let yaw = server_ride::yaw_of(t.rotation);
                     player.pos = t.translation;
@@ -988,7 +995,7 @@ pub(super) fn control(
             &dynamics,
         );
 
-        let steering_ourselves = player.foreign_mover.is_none();
+        let steering_ourselves = world_q.6.foreign_mover.is_none();
         // The loot window's walk-away, the movement-start guard `0x60e990`: forward, back, strafe,
         // keyboard turn, pitch and jump close it, mouse-look facing does not, and only for our
         // own character.
@@ -1004,7 +1011,7 @@ pub(super) fn control(
             dt,
             held: player.settling,
             gated,
-            mover: player.foreign_mover.or(self_guid),
+            mover: world_q.6.foreign_mover.or(self_guid),
         };
         let precast_ended = movement_net::stream_self_movement(
             &net.0 .0,

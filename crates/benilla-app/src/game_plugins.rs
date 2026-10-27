@@ -1339,10 +1339,9 @@ pub(crate) mod schedule_tests {
         ),
     ];
 
-    /// The controller's half of the create's control restore (`player::regain_control_on_arrival`)
-    /// is registered in the built client and ordered: after the net drain, whose create it
-    /// answers, before the controller and the readers of the flags it clears. A lost
-    /// `add_systems` line, or a lost `.after`, fails here.
+    /// The create's control restore (`player::regain_control_on_arrival`) runs inside the net
+    /// drain, our own create's packet, and the controller and the readers of the lock it clears
+    /// run after the drain. A lost `.after` fails here.
     #[test]
     fn the_control_restore_runs_after_the_create_and_before_its_readers() {
         let mut app = headless_client();
@@ -1376,12 +1375,7 @@ pub(crate) mod schedule_tests {
             }
             seen
         };
-        let restore = one("::wire_in::regain_control_on_arrival");
-        let create = one("::net::apply::apply_net_updates");
-        assert!(
-            reach(create).contains(&restore),
-            "the restore runs after the drain, whose self create it answers"
-        );
+        let restore = one("::net::apply::apply_net_updates");
         let after_restore = reach(restore);
         for reader in [
             "::player::controller::control",

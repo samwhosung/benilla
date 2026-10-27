@@ -596,7 +596,9 @@ fn a_movement_block_for_the_mover_brings_nothing_back() {
     send(world, [unit(MOB, &[(ENTRY, 299)])]);
     send(world, [out_of_range(&[MOB])]);
     world.init_resource::<crate::player::Player>();
-    world.resource_mut::<crate::player::Player>().foreign_mover = Some(MOB);
+    world
+        .resource_mut::<crate::player::MoverLock>()
+        .foreign_mover = Some(MOB);
 
     send(world, [moved(MOB)]);
     assert!(!held(world, MOB), "the mover's block is dropped");
@@ -611,7 +613,9 @@ fn a_movement_block_for_the_mover_brings_nothing_back() {
 
     // Control lost zeroes the mover (`0x5fa600`), and the block brings the unit back.
     send(world, [out_of_range(&[MOB])]);
-    world.resource_mut::<crate::player::Player>().control_lost = true;
+    world
+        .resource_mut::<crate::player::MoverLock>()
+        .control_lost = true;
     send(world, [moved(MOB)]);
     assert!(
         held(world, MOB),

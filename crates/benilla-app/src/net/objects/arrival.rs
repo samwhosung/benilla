@@ -1,10 +1,10 @@
 //! Our own player's arrival (`OnActiveArrival 0x5dea50`), the last step of its `PostInit`
 //! (`0x5debe0`, at `0x5dec7b`), which the update packet's notify pass runs as our create's hook,
 //! ahead of the later blocks' notifies: its writes are made here, inside the packet, so the next
-//! packet's handlers find our player tagged, its control flag raised and its mover claimed. The
+//! packet's handlers find our player tagged, in control and its mover claimed. The
 //! cascade's resets and signals still run off [`WorldEnterCascadeMessage`] after the dispatch, and
-//! with them the world handle's seat (`0x5deb73`), which comes after the cascade, and the
-//! controller's own lock, as a control packet's is the controller's.
+//! with them the world handle's seat (`0x5deb73`), which comes after the cascade. The restore is
+//! the arrival's alone, never the cascade's, which a `/reload` runs too.
 
 use benilla_protocol::ObjectFields;
 use bevy::ecs::system::SystemParam;
@@ -27,12 +27,15 @@ pub(super) struct Arrival<'w> {
 pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64, fields: &ObjectFields) {
     // `0x5deb49`: the manager's `+0xc8` gates the restore, the claim and the cascade; its
     // constructor (`0x4650e7`) is its only store, so it is clear at every create.
-    // The controller's lock follows off the cascade (`player::regain_control_on_arrival`).
-    if let Some(own) = arrival.own_control.as_deref_mut() {
-        crate::player::restore_own_control(own, &mut sc.field_notices);
-    }
+    crate::player::regain_control_on_arrival(
+        sc.mover_lock.as_deref_mut(),
+        arrival.own_control.as_deref_mut(),
+        &mut sc.field_notices,
+    );
     // `0x4958a0` (`0x5deb5b`) claims our own mover through `SetActiveMover` (`0x6006e0`), which
-    // sends `CMSG_SET_ACTIVE_MOVER` only when the mover changes ([`crate::net::MoverClaim`]). The
+    // sends `CMSG_SET_ACTIVE_MOVER` only when the mover changes ([`crate::net::MoverClaim`]).
+    // `0x5fa600(1)` claims it first, at `0x5fa696`, when the camera's `+0x88` already names us
+    // (`0x5fa63c`-`0x5fa65e`), ahead of its signal at `0x5fa6b1`; this claim is then a no-op. The
     // world entry and the world load that purges the streamed world for every login, reconnect
     // and cross-map worldport zero the mover first, so each of those creates sends; a same-map
     // teleport creates nothing. The server has seated the player by then, so nothing sent here is

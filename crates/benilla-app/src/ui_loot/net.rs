@@ -38,6 +38,7 @@ fn on_response(
     In(ev): In<SessionEvent>,
     mut select: crate::target::SelectCommit,
     player: Option<Res<crate::player::Player>>,
+    lock: Option<Res<crate::player::MoverLock>>,
     mut owed: OwedAhead,
     index: Res<crate::net::GuidIndex>,
     errors: Res<UiErrorKeys>,
@@ -84,10 +85,10 @@ fn on_response(
     seam.loot.open(guid, loot_type, gold, rows);
     seam.loot.note_replaced_latch(latch_before);
     seam.loot.ask_rows(&items, &seam.net);
-    if player.is_some_and(|p| {
-        p.foreign_mover.is_none()
-            && p.move_flags() & crate::creature_anim::move_flags::STEERING != 0
-    }) {
+    let steering_ourselves = lock.is_none_or(|l| l.foreign_mover.is_none());
+    if steering_ourselves
+        && player.is_some_and(|p| p.move_flags() & crate::creature_anim::move_flags::STEERING != 0)
+    {
         owed.move_start.0 = true;
     }
 }
@@ -1435,9 +1436,11 @@ mod tests {
     /// A response on the corpse with `player` seated, then one drain.
     fn open_while(
         player: crate::player::Player,
+        lock: crate::player::MoverLock,
     ) -> (World, crossbeam_channel::Receiver<ClientCommand>) {
         let (mut world, rx) = tabbed_world();
         seat_drain(&mut world, player);
+        world.insert_resource(lock);
         world.resource_mut::<LootLatch>().0 = Some(CORPSE);
         respond(&mut world, CORPSE, 1);
         world
@@ -1452,7 +1455,10 @@ mod tests {
     #[test]
     fn a_window_that_opens_while_moving_closes_as_a_movement_start_does() {
         for bit in (0..8).map(|b| 1u32 << b) {
-            let (mut world, rx) = open_while(crate::player::Player::with_move_flags(bit));
+            let (mut world, rx) = open_while(
+                crate::player::Player::with_move_flags(bit),
+                Default::default(),
+            );
             assert_eq!(world.resource::<LootState>().source(), None, "{bit:#x}");
             assert_eq!(world.resource::<LootLatch>().0, None, "{bit:#x}");
             let sent: Vec<_> = rx.try_iter().collect();
@@ -1473,17 +1479,35 @@ mod tests {
     #[test]
     fn a_window_opened_falling_swimming_or_possessing_stays_open() {
         use crate::creature_anim::move_flags as f;
-        use crate::player::Player;
-        let mut possessing = Player::with_move_flags(f::FORWARD);
-        possessing.foreign_mover = Some(KOBOLD);
-        for (what, player) in [
-            ("still", Player::with_move_flags(0)),
-            ("walk mode", Player::with_move_flags(f::WALK_MODE)),
-            ("falling", Player::with_move_flags(f::FALLING)),
-            ("swimming", Player::with_move_flags(f::SWIMMING)),
-            ("possessing", possessing),
+        use crate::player::{MoverLock, Player};
+        let possessing = MoverLock {
+            foreign_mover: Some(KOBOLD),
+            ..MoverLock::default()
+        };
+        for (what, player, lock) in [
+            ("still", Player::with_move_flags(0), MoverLock::default()),
+            (
+                "walk mode",
+                Player::with_move_flags(f::WALK_MODE),
+                MoverLock::default(),
+            ),
+            (
+                "falling",
+                Player::with_move_flags(f::FALLING),
+                MoverLock::default(),
+            ),
+            (
+                "swimming",
+                Player::with_move_flags(f::SWIMMING),
+                MoverLock::default(),
+            ),
+            (
+                "possessing",
+                Player::with_move_flags(f::FORWARD),
+                possessing,
+            ),
         ] {
-            let (mut world, rx) = open_while(player);
+            let (mut world, rx) = open_while(player, lock);
             assert_eq!(
                 world.resource::<LootState>().source(),
                 Some(CORPSE),

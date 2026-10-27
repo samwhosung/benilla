@@ -309,6 +309,26 @@ impl StandPending {
     }
 }
 
+/// Who we drive and whether we may: the mover's lock, apart from [`Player`]'s frame-time movement
+/// state, as the packets write it inside their handlers (our own create's arrival) and the
+/// controller (a control update), where the frame's movement is the controller's alone.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct MoverLock {
+    /// `SMSG_CLIENT_CONTROL_UPDATE` with `allowMove = 0` named the unit we drive: us, while someone
+    /// mind-controls us, or our possessed creature when feared or confused, the possession
+    /// standing. The reference zeroes its mover; vmangos neither roots a charmed player nor refuses
+    /// its movement, so nothing else holds the body. Unlike a root, it stops turning too.
+    pub(crate) control_lost: bool,
+    /// The unit we drive in place of our body (a mind-controlled creature, Eye of Kilrogg), `None`
+    /// for our own. Our body must then send nothing: outbound `MSG_MOVE_*` carry no guid, so the
+    /// server applies them to whatever we last claimed.
+    pub(crate) foreign_mover: Option<u64>,
+    /// The driven body changed, and we drive nothing until its streamed pose is adopted, since
+    /// `pos` and the facing still describe the last one. Set when the mover guid changes, cleared
+    /// at the take-control edge.
+    pub(crate) reseat: bool,
+}
+
 /// Our avatar: until `active` the camera free-flies, then we drive the body the server placed.
 /// `PartialEq` serves the test that the session end resets the whole of it to `Player::default()`.
 #[derive(Resource, Default, PartialEq)]
@@ -331,19 +351,6 @@ pub(crate) struct Player {
     pub(super) auto_forward: bool,
     /// Free-fly (`F`): the camera moves on its own and the avatar/server position is frozen.
     pub(crate) detached: bool,
-    /// `SMSG_CLIENT_CONTROL_UPDATE` with `allowMove = 0` named the unit we drive: us, while someone
-    /// mind-controls us, or our possessed creature when feared or confused, the possession
-    /// standing. The reference zeroes its mover; vmangos neither roots a charmed player nor refuses
-    /// its movement, so nothing else holds the body. Unlike a root, it stops turning too.
-    pub(crate) control_lost: bool,
-    /// The unit we drive in place of our body (a mind-controlled creature, Eye of Kilrogg), `None`
-    /// for our own. Our body must then send nothing: outbound `MSG_MOVE_*` carry no guid, so the
-    /// server applies them to whatever we last claimed.
-    pub(crate) foreign_mover: Option<u64>,
-    /// The driven body changed, and we drive nothing until its streamed pose is adopted, since
-    /// `pos` and the facing still describe the last one. Set when the mover guid changes, cleared
-    /// at the take-control edge.
-    pub(crate) reseat: bool,
     /// Feet position in Bevy coords, converted to WoW coords only for the wire.
     pub(crate) pos: Vec3,
     /// Vertical velocity (yd/s, Bevy +Y up), zeroed while grounded.
@@ -640,15 +647,15 @@ impl Player {
 
     /// The states on this resource that stop WASD, comma-joined, or `"none"`: an instrument for the
     /// log after a session boundary, not a gate. A stun lives on the descriptor and does not show.
-    pub(crate) fn movement_suppressors(&self) -> String {
+    pub(crate) fn movement_suppressors(&self, lock: &MoverLock) -> String {
         let named = [
             (!self.active, "inactive"),
             (self.detached, "free-fly"),
             (self.modes.rooted, "root"),
-            (self.control_lost, "control-lost"),
+            (lock.control_lost, "control-lost"),
             (self.server_riding, "server-ride"),
-            (self.foreign_mover.is_some(), "possession"),
-            (self.reseat, "reseat-pending"),
+            (lock.foreign_mover.is_some(), "possession"),
+            (lock.reseat, "reseat-pending"),
         ];
         let list: Vec<&str> = named
             .into_iter()

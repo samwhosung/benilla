@@ -583,8 +583,12 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
 /// The active-mover global (`0xc4da98`) by guid, as [`crate::player`] seats it: the claimed
 /// foreign mover, else our own, and none while control is lost (`0x5fa600` zeroes it).
 fn active_mover(sc: &Scene) -> Option<u64> {
-    let player = sc.player.as_ref().filter(|p| !p.control_lost)?;
-    player.foreign_mover.or(sc.self_guid.0)
+    sc.player.as_ref()?;
+    let lock = sc.mover_lock.as_deref().copied().unwrap_or_default();
+    if lock.control_lost {
+        return None;
+    }
+    lock.foreign_mover.or(sc.self_guid.0)
 }
 
 /// A near-objects block (`0x467230`): each listed released object but our own player comes back

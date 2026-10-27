@@ -140,10 +140,9 @@ impl Plugin for NetPlugin {
             .add_systems(
                 Update,
                 (
-                    apply_net_updates,
-                    // The create gives control back (`0x5deb56`), the flag inside its packet and
-                    // the controller's lock here, ahead of `control`'s read of the flags.
-                    crate::player::regain_control_on_arrival.in_set(crate::player::ControlRestore),
+                    // Our own create, a packet, gives control back inside it (`0x5deb56`),
+                    // ahead of `control`'s read of the flags.
+                    apply_net_updates.in_set(crate::player::ControlRestore),
                     sample_splines,
                     // Swim state from the water at the feet (the wire never carries it for
                     // creatures), before the clamp so a swimmer is exempt the same frame.

@@ -22,10 +22,14 @@ fn later_packet(
     In(_): In<SessionEvent>,
     me: Query<(), With<SelfPlayer>>,
     own: Res<crate::player::OwnControlLost>,
+    lock: Res<crate::player::MoverLock>,
     net: Res<NetCommands>,
     mut seen: ResMut<Seen>,
 ) {
-    seen.0.push((!me.is_empty(), !own.0));
+    seen.0.push((
+        !me.is_empty(),
+        !own.0 && !lock.control_lost && lock.foreign_mover.is_none(),
+    ));
     let _ = net.0.send(ClientCommand::QueryTime);
 }
 
@@ -51,6 +55,11 @@ fn client() -> (App, Receiver<ClientCommand>) {
     let world = app.world_mut();
     world.resource_mut::<SelfGuid>().0 = Some(ME);
     world.resource_mut::<crate::player::OwnControlLost>().0 = true;
+    world.insert_resource(crate::player::MoverLock {
+        control_lost: true,
+        foreign_mover: Some(0xF130_0000_0000_0099),
+        reseat: false,
+    });
     (app, rx)
 }
 
@@ -229,5 +238,52 @@ fn the_world_entry_and_a_worldport_zero_the_mover() {
         movers(&rx),
         [format!("SetActiveMover {ME:#x}")],
         "the session's first create claims"
+    );
+}
+
+/// A `/reload` re-enters the world-enter cascade alone (`0x490168` → `0x4908c0`): the restore
+/// and the claim are the arrival's (`0x4958a0` is called from `0x5deb5b` only, `0x5fa600` from
+/// `0x5deb56` and `0x603eeb`), so a reload while feared, possessing or locked by a
+/// battleground's end leaves the lock, the possession and `[0xb4b3e4]` as they were. The reload
+/// writes the cascade for its readers (`ui_script::lifecycle`), so no reader of it writes the
+/// lock or the flag; the whole frame cannot run headless, so the client's schedule is read.
+#[test]
+fn a_reload_cascade_leaves_control_as_it_was() {
+    use std::any::TypeId;
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let world = app.world_mut();
+    let id = |world: &World, t: TypeId| world.components().get_resource_id(t).expect("registered");
+    let cascade = id(
+        world,
+        TypeId::of::<Messages<crate::net::WorldEnterCascadeMessage>>(),
+    );
+    let held = [
+        id(world, TypeId::of::<crate::player::MoverLock>()),
+        id(world, TypeId::of::<crate::player::OwnControlLost>()),
+    ];
+    let (readers, writers) = world.schedule_scope(Update, |world, schedule| {
+        schedule.graph_mut().systems.initialize(world);
+        let graph = schedule.graph();
+        let mut readers = 0;
+        let mut writers = Vec::new();
+        for (k, system, _) in graph.systems.iter() {
+            let Some(with_access) = graph.systems.get(k) else {
+                continue;
+            };
+            let access = with_access.access.combined_access();
+            if !access.has_resource_read(cascade) {
+                continue;
+            }
+            readers += 1;
+            if held.iter().any(|&h| access.has_resource_write(h)) {
+                writers.push(system.name().to_string());
+            }
+        }
+        (readers, writers)
+    });
+    assert!(readers > 0, "the cascade has readers");
+    assert!(
+        writers.is_empty(),
+        "these answer a reload's cascade by writing the control state: {writers:?}"
     );
 }

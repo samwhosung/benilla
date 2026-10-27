@@ -724,7 +724,7 @@ pub(super) fn classify_cursor(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct CursorInputs<'w, 's> {
     relations: super::RelationWorld<'w, 's>,
-    player: Res<'w, crate::player::Player>,
+    lock: Res<'w, crate::player::MoverLock>,
     // The attack leg's `[0xb4b3e4]` clear.
     own_control: Res<'w, crate::player::OwnControlLost>,
     approach: Res<'w, crate::player::Approach>,
@@ -762,7 +762,7 @@ pub(super) fn classify(
 ) -> (WorldCursor, AttackFork) {
     let CursorInputs {
         relations,
-        player,
+        lock,
         own_control,
         approach,
         units,
@@ -780,7 +780,7 @@ pub(super) fn classify(
     let can_auto_interact = crate::player::can_auto_interact(
         approach.enabled,
         self_q.single().ok().map(|(_, s)| s),
-        player,
+        lock,
     );
     // A GameObject that is not highlightable clears the cursor, as the reference's handler does.
     let resolve_go = || {

@@ -16,6 +16,7 @@ use crate::ui_script::glue::StockGlueProbe;
 pub(super) fn debug_logout_smoke(
     state: Res<State<ClientState>>,
     player: Res<crate::player::Player>,
+    lock: Res<crate::player::MoverLock>,
     commands: Res<crate::net::NetCommands>,
     roster: Res<Roster>,
     streamer: Res<benilla_world::terrain_stream::TerrainStreamer>,
@@ -97,7 +98,7 @@ pub(super) fn debug_logout_smoke(
             info!(
                 "logout-smoke: re-entered — {} tiles resident, suppressors: {}, done",
                 streamer.residency().1,
-                player.movement_suppressors()
+                player.movement_suppressors(&lock)
             );
             *phase = 5;
         }

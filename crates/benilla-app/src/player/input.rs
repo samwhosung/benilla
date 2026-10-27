@@ -18,6 +18,7 @@ pub(super) struct LookInput {
 pub(super) fn look_input(
     binds: &crate::bindings::BindingsState,
     player: &Player,
+    lock: &super::MoverLock,
     rig: &CameraControl,
 ) -> LookInput {
     // Both buttons held run forward and steer with the mouse, whichever went down first.
@@ -39,7 +40,7 @@ pub(super) fn look_input(
         // The reference keeps these two in the camera's own Track and Fear bits; here one word
         // carries every edge.
         set(player.server_riding, bit::TRACK);
-        set(player.control_lost, bit::FEAR);
+        set(lock.control_lost, bit::FEAR);
         w
     };
 

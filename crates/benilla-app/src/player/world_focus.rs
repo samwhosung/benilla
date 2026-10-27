@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 
-use super::{Player, SETTLE_TIMEOUT};
+use super::{MoverLock, Player, SETTLE_TIMEOUT};
 use benilla_world::terrain_stream::{ViewFocus, WorldLoadProgress};
 use benilla_world::view::Viewer;
 
@@ -213,6 +213,7 @@ pub(crate) struct BarUnitOutdoors(pub(crate) Option<(u64, bool)>);
 pub(crate) fn publish_caster_outdoors(
     test: benilla_world::wmo_portal::EntityOutdoors,
     player: Option<Res<Player>>,
+    lock: Option<Res<MoverLock>>,
     mut outdoors: ResMut<PlayerOutdoors>,
     bar: Option<Res<crate::ui_pet::PetBar>>,
     index: Option<Res<crate::net::GuidIndex>>,
@@ -222,7 +223,14 @@ pub(crate) fn publish_caster_outdoors(
     let now = match player.as_deref() {
         // `pos` is another unit's while we drive it, and still the last mover's until the new
         // one's pose is adopted (`reseat`): our own body's answer holds.
-        Some(p) if p.active && (p.foreign_mover.is_some() || p.reseat) => None,
+        Some(p)
+            if p.active
+                && lock
+                    .as_deref()
+                    .is_some_and(|l| l.foreign_mover.is_some() || l.reseat) =>
+        {
+            None
+        }
         Some(p) if p.active => Some(test.at(p.pos)),
         // No body: a null entity reads outdoors (`0x6706fa`).
         _ => Some(true),
@@ -650,16 +658,21 @@ mod tests {
         use benilla_assets::coords::wow_to_bevy;
 
         // One frame of the system over the test room, from the answer `last`.
+        let ask_locked =
+            |flags: u32, player: Player, lock: MoverLock, viewer: Viewer, last: bool| {
+                let mut app = App::new();
+                insert_test_room(app.world_mut(), flags);
+                app.insert_resource(player)
+                    .insert_resource(lock)
+                    .insert_resource(viewer)
+                    .insert_resource(PlayerOutdoors(last))
+                    .init_resource::<BarUnitOutdoors>()
+                    .add_systems(Update, publish_caster_outdoors);
+                app.update();
+                app.world().resource::<PlayerOutdoors>().0
+            };
         let ask = |flags: u32, player: Player, viewer: Viewer, last: bool| {
-            let mut app = App::new();
-            insert_test_room(app.world_mut(), flags);
-            app.insert_resource(player)
-                .insert_resource(viewer)
-                .insert_resource(PlayerOutdoors(last))
-                .init_resource::<BarUnitOutdoors>()
-                .add_systems(Update, publish_caster_outdoors);
-            app.update();
-            app.world().resource::<PlayerOutdoors>().0
+            ask_locked(flags, player, MoverLock::default(), viewer, last)
         };
         let (inside, outside) = (
             wow_to_bevy([1.0, 2.0, 30.0]),
@@ -704,20 +717,20 @@ mod tests {
             !ask(0, body(inside), seen(outside), true),
             "the body, not the viewer"
         );
-        let driving = Player {
+        let driving = MoverLock {
             foreign_mover: Some(0xF130_0000_0000_0043),
-            ..body(outside)
+            ..MoverLock::default()
         };
         assert!(
-            !ask(0, driving, seen(outside), false),
+            !ask_locked(0, body(outside), driving, seen(outside), false),
             "driving another unit holds the answer"
         );
-        let reseating = Player {
+        let reseating = MoverLock {
             reseat: true,
-            ..body(outside)
+            ..MoverLock::default()
         };
         assert!(
-            !ask(0, reseating, seen(outside), false),
+            !ask_locked(0, body(outside), reseating, seen(outside), false),
             "so does the frame before our own body's pose is adopted"
         );
     }
