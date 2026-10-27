@@ -448,6 +448,9 @@ pub type PickList = std::sync::Arc<[(FrameHandle, PickKey)]>;
 pub struct OrderCache {
     draw: Memo<DrawEntry>,
     pick: Memo<(FrameHandle, PickKey)>,
+    /// The arena's [`WidgetArena::frame_mutations`] when `pick` was last walked: with no frame
+    /// changed since, its list stands without a walk.
+    pick_at: std::cell::Cell<Option<u64>>,
 }
 
 /// One memo: the last walk, in arena order, and the sorted list built from it.
@@ -651,8 +654,16 @@ pub fn traversal(arena: &WidgetArena) -> DrawList {
 /// frame whose mouse bit came back on (`0x76af00`) sorts after the frames already there. Only the
 /// probe treats the scroll subtree apart (`0x76b034`).
 pub fn pick_order(arena: &WidgetArena) -> PickList {
+    let cache = &arena.order_cache;
+    let at = arena.frame_mutations();
+    if cache.pick_at.get() == Some(at) {
+        if let Some((_, list)) = cache.pick.borrow().as_ref() {
+            return list.clone();
+        }
+    }
+    cache.pick_at.set(Some(at));
     memo(
-        &arena.order_cache.pick,
+        &cache.pick,
         |v| {
             for (fh, frame) in arena.iter_frames() {
                 if frame.effective_visible {
@@ -1216,6 +1227,25 @@ mod tests {
         assert_eq!(hit_test(&picks, |_| true), Some(button));
         let list = targets(&a);
         assert!(pos(&list, ZTarget::Frame(button)) < pos(&list, ZTarget::Frame(over)));
+    }
+
+    /// With no frame changed since the last pick order, the same list stands without a walk; any
+    /// frame borrowed mutably walks again, and a change that moves the order shows.
+    #[test]
+    fn the_pick_order_stands_until_a_frame_changes() {
+        let mut a = WidgetArena::new();
+        let low = a.create(FrameKind::Frame, None, None);
+        let high = a.create(FrameKind::Frame, None, None);
+        a.set_frame_level(high, 2, false);
+        let first = pick_order(&a);
+        assert!(std::sync::Arc::ptr_eq(&first, &pick_order(&a)));
+        assert_eq!(hit_test(&first, |_| true), Some(high));
+        a.set_frame_level(low, 3, false);
+        let moved = pick_order(&a);
+        assert_eq!(hit_test(&moved, |_| true), Some(low));
+        // A direct edit is seen as well.
+        a.frame_mut(high).expect("live").level = 4;
+        assert_eq!(hit_test(&pick_order(&a), |_| true), Some(high));
     }
 
     // ── Hit-testing (pure core) ─────────────────────────────────────────────────────────────────

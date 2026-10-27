@@ -55,6 +55,9 @@ struct Slot<T> {
 struct Arena<T> {
     slots: Vec<Slot<T>>,
     free: Vec<u32>,
+    /// Bumped by every access that can change a value or the set: an equal count since a read
+    /// means nothing changed in between.
+    mutations: u64,
 }
 
 impl<T> Arena<T> {
@@ -62,10 +65,12 @@ impl<T> Arena<T> {
         Arena {
             slots: Vec::new(),
             free: Vec::new(),
+            mutations: 0,
         }
     }
 
     fn insert(&mut self, value: T) -> (u32, u32) {
+        self.mutations = self.mutations.wrapping_add(1);
         if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             slot.value = Some(value);
@@ -81,6 +86,7 @@ impl<T> Arena<T> {
     }
 
     fn remove(&mut self, index: u32, generation: u32) -> Option<T> {
+        self.mutations = self.mutations.wrapping_add(1);
         let slot = self.slots.get_mut(index as usize)?;
         if slot.generation != generation {
             return None;
@@ -102,6 +108,7 @@ impl<T> Arena<T> {
     }
 
     fn get_mut(&mut self, index: u32, generation: u32) -> Option<&mut T> {
+        self.mutations = self.mutations.wrapping_add(1);
         let slot = self.slots.get_mut(index as usize)?;
         if slot.generation != generation {
             return None;
@@ -117,6 +124,7 @@ impl<T> Arena<T> {
     }
 
     fn iter_mut(&mut self) -> impl Iterator<Item = (u32, u32, &mut T)> + '_ {
+        self.mutations = self.mutations.wrapping_add(1);
         self.slots
             .iter_mut()
             .enumerate()
@@ -452,6 +460,12 @@ impl WidgetArena {
 
     pub fn region_mut(&mut self, h: RegionHandle) -> Option<&mut Region> {
         self.regions.get_mut(h.index, h.generation)
+    }
+
+    /// How many times the frames could have changed: any frame borrowed mutably, created or
+    /// destroyed. An equal count since a read means every frame is as that read saw it.
+    pub(crate) fn frame_mutations(&self) -> u64 {
+        self.frames.mutations
     }
 
     /// Every live frame, in arena order, not draw order.

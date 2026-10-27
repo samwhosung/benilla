@@ -887,3 +887,54 @@ fn structural_change_costs() {
         );
     }
 }
+
+/// A fast mouse sweep at 1000 Hz polling over the shipped UI at 60 frames a second, 17 moves a
+/// frame: what one frame's hover walks (`0x7660d0`) cost when only the frame's last position is
+/// walked, as before each move was a record of its own, and when every move is. Along the action
+/// bars and back up the screen's diagonal, one second each way; the tick and the solve run between
+/// frames, untimed.
+#[test]
+#[ignore = "bench, run explicitly"]
+fn a_fast_sweep_s_hover_walks_per_frame() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = settled_default_ui();
+    let w: f32 = s.eval("return GetScreenWidth()").unwrap();
+    let moves: Vec<(f32, f32)> = (0..2000)
+        .map(|i| {
+            let t = i as f32 / 1999.0;
+            if t < 0.5 {
+                (w * t * 2.0, 20.0)
+            } else {
+                let u = (t - 0.5) * 2.0;
+                (w * (1.0 - u), 768.0 * u)
+            }
+        })
+        .collect();
+    const PER_FRAME: usize = 17;
+    for (label, every) in [("last move only", false), ("every move", true)] {
+        let (mut walks, mut total, mut worst) = (0u32, 0.0f64, 0.0f64);
+        for chunk in moves.chunks(PER_FRAME) {
+            let t = Instant::now();
+            let walked: &[(f32, f32)] = if every {
+                chunk
+            } else {
+                &chunk[chunk.len() - 1..]
+            };
+            for &(x, y) in walked {
+                std::hint::black_box(s.mouse_move(x, y));
+                walks += 1;
+            }
+            let f = ms(t);
+            total += f;
+            worst = worst.max(f);
+            app_frame_ticked(&mut s, 1.0 / 60.0);
+        }
+        let frames = moves.len().div_ceil(PER_FRAME);
+        println!(
+            "HOVER SWEEP {label:<15} {:.3} ms/frame mean  {worst:.3} worst  {:.1} us/walk  \
+             ({walks} walks, {frames} frames)",
+            total / frames as f64,
+            total * 1000.0 / f64::from(walks),
+        );
+    }
+}
