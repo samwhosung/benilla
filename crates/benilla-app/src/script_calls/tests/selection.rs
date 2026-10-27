@@ -904,6 +904,8 @@ fn a_creature_family_is_read_off_the_held_units_record() {
         &mut f,
         &[(OBJECT_FIELD_TYPE, 0x9), (OBJECT_FIELD_ENTRY, BOAR)],
     );
+    // The world entry first, as a session has it: the target comes after.
+    settle(&mut f);
     f.app.world_mut().resource_mut::<Selection>().guid = Some(MOB);
     settle(&mut f);
     let family =

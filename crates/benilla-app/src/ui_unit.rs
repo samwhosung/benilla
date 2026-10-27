@@ -1754,7 +1754,7 @@ fn feed_units(
         && enter_usable
             .as_deref_mut()
             .is_some_and(|u| std::mem::take(&mut u.0));
-    let world_enter = vm.run(|script| {
+    vm.run(|script| {
         let script = script?;
         if owed.book_sorted {
             // The language legs, fired ahead of the form edges, which the replay interleaves with
@@ -1771,13 +1771,20 @@ fn feed_units(
         if owed.unghost {
             script.fire_event("PLAYER_UNGHOST", vec![]);
         }
-        let enter = owed.world_enter?;
-        script.fire_world_enter_head(enter.bonus_bar_offset, usable_changed);
-        Some(enter)
+        Some(())
     });
-    let Some(enter) = world_enter else {
+    let Some(enter) = owed.world_enter else {
         return;
     };
+    // The cascade's `SelectTarget(0)` (`0x490927`) comes ahead of `PLAYER_LOGIN` and
+    // `PLAYER_ENTERING_WORLD` (`0x490965`): a transfer released no target, so whatever the guid
+    // still names goes here, as an engine turn on the selection.
+    vm.engine_clear_target(crate::lanes::mark());
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.fire_world_enter_head(enter.bonus_bar_offset, usable_changed);
+        }
+    });
     // `0x4909c9` → `0x4bc6f0`: `SetPetGuid(0, 0)` as an engine turn on the bar and the VM, its
     // signals, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`), then the cascade's rest. Its trainer
     // refresh (`0x4bc872`) never runs here: the cascade zeroes the trainer cell before it

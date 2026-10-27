@@ -485,3 +485,48 @@ fn getter_cost() {
         }
     }
 }
+
+/// A transfer releases no target, so the cascade's `SelectTarget(0)` (`0x490927`) clears whatever
+/// the guid still names, with its send, ahead of `PLAYER_ENTERING_WORLD` (`0x490965`) and signalled
+/// once; the port itself sends and signals nothing.
+#[test]
+fn the_arrival_clears_the_target_before_entering_the_world() {
+    let mut c = client();
+    c.eval::<()>(
+        true,
+        "local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_TARGET_CHANGED') \
+         f:SetScript('OnEvent', function() table.insert(Seen, event) end)",
+    );
+    c.frame(vec![]);
+    let _ = c.seen();
+    let selected = |c: &Client| c.app.world().resource::<crate::target::Selection>().guid;
+    assert_eq!(selected(&c), Some(WOLF));
+    c.frame(vec![vec![SessionEvent::Worldport {
+        map_id: 1,
+        position: [0.0; 3],
+        orientation: 0.0,
+        needs_ack: true,
+    }]]);
+    assert_eq!(selected(&c), Some(WOLF), "the port releases no target");
+    assert_eq!(c.seen(), Vec::<String>::new());
+    let _ = c.sent.try_iter().count();
+    let unit = [(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
+    c.frame(vec![vec![created(
+        ME,
+        EntityKind::Player,
+        &[
+            unit[0],
+            unit[1],
+            (TEMPLATE, HUMAN),
+            (BYTES_0, 1),
+            (SKILL_1, 98),
+        ],
+    )]]);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["PLAYER_TARGET_CHANGED", "PLAYER_ENTERING_WORLD"]);
+    assert_eq!(selected(&c), None);
+    assert!(c
+        .sent
+        .try_iter()
+        .any(|s| matches!(s, ClientCommand::SetSelection { guid: 0 })));
+}

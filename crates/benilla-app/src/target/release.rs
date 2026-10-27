@@ -44,7 +44,6 @@ pub(super) fn register(app: &mut App) {
         .init_resource::<Releases>()
         .net_handler(SessionEventKind::ObjectsRemoved, on_objects_removed)
         .net_handler(SessionEventKind::ObjectDestroyed, on_object_destroyed)
-        .net_handler(SessionEventKind::Worldport, on_worldport)
         .add_exclusive_lane("releases", peek_releases, fire_releases, |_| {
             Default::default()
         });
@@ -106,13 +105,6 @@ fn on_objects_removed(In(ev): In<SessionEvent>, world: &mut World) {
 /// `SMSG_DESTROY_OBJECT`'s owed teardown ([`run_owed`]).
 fn on_object_destroyed(In(ev): In<SessionEvent>, world: &mut World) {
     if let SessionEvent::ObjectDestroyed(_) = ev {
-        run_owed(world);
-    }
-}
-
-/// The transfer's owed teardown ([`run_owed`]).
-fn on_worldport(In(ev): In<SessionEvent>, world: &mut World) {
-    if let SessionEvent::Worldport { .. } = ev {
         run_owed(world);
     }
 }

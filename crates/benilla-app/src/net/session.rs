@@ -350,7 +350,6 @@ fn on_worldport(
     view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
     player: Option<Res<crate::player::Player>>,
     selection: Option<ResMut<crate::target::Selection>>,
-    owed_releases: Option<ResMut<crate::target::OwedReleases>>,
     place: crate::ui_party::net::SnapshotPlace,
     transforms: Query<&Transform>,
 ) {
@@ -379,27 +378,12 @@ fn on_worldport(
             log.records(&before, &group.stats);
         }
         log_teardown(view_log, &b);
-        // The transfer frees every object with no release (`0x467700` → `0x467800`), and the
-        // reference's own clear is the arrival's `SetSelection(0, 0)` (`0x490927`), which benilla
-        // does not run: the selected unit's object is torn down here as its release would.
-        let mut selection = selection;
-        if let Some(guid) = selection.as_ref().and_then(|s| s.guid) {
-            if b.index.0.contains_key(&guid) {
-                let held = |g: u64| {
-                    b.index
-                        .0
-                        .get(&g)
-                        .and_then(|e| b.stores.get(*e).ok())
-                        .map(|s| &s.0)
-                };
-                let me = b.self_guid.0;
-                crate::target::unit_released(
-                    selection.as_mut(),
-                    owed_releases.map(|o| o.into_inner()),
-                    guid,
-                    || crate::target::raid_member_or_pet(&group, guid, me, &held),
-                );
-            }
+        // The transfer frees every object with no release (`0x467700` → `0x467800`): the selection
+        // keeps its guid, its object gone, until the arrival's `SelectTarget(0)` (`0x490927`)
+        // clears it (the unit feed's world-enter turn).
+        if let Some(mut selection) = selection {
+            selection.target = None;
+            selection.lit = None;
         }
         worldport(
             map_id,

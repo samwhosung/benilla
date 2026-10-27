@@ -698,3 +698,39 @@ fn a_far_spell_at_a_selection_with_no_object_sends_with_no_target() {
     assert_eq!(cast(EAGLE_EYE), (vec![None], false), "Eagle Eye");
     assert_eq!(cast(MIND_VISION_1), (vec![], true), "Mind Vision 1");
 }
+
+/// A transfer releases no target (`~CGUnit_C 0x5fb5e0` never reaches `0x493910`): a groupmate
+/// selected out of sight, with no object to deactivate, and a held unit both stay selected through
+/// the port, by guid, with nothing sent or signalled; the arrival's `SelectTarget(0)` (`0x490927`)
+/// clears them (`unit_feed_live_tests`).
+#[test]
+fn a_world_port_keeps_the_selection_by_guid() {
+    for held in [false, true] {
+        let mut f = grouped();
+        run(
+            &mut f,
+            r#"SEEN = 0 local f = CreateFrame("Frame") f:RegisterEvent("PLAYER_TARGET_CHANGED")
+            f:SetScript("OnEvent", function() SEEN = SEEN + 1 end)"#,
+        );
+        let guid = if held {
+            OLD
+        } else {
+            select_unheld(&mut f, MEMBER);
+            MEMBER
+        };
+        f.wire();
+        deliver(
+            &mut f,
+            SessionEvent::Worldport {
+                map_id: 1,
+                position: [0.0; 3],
+                orientation: 0.0,
+                needs_ack: true,
+            },
+        );
+        assert_eq!(selection(&f), (Some(guid), None), "held: {held}");
+        assert_eq!(picks(&f), Vec::<u64>::new(), "the port sends nothing");
+        let seen: u32 = crate::script_calls::eval_in_vm(f.app.world_mut(), "return SEEN");
+        assert_eq!(seen, 0);
+    }
+}

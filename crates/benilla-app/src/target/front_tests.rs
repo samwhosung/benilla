@@ -814,10 +814,7 @@ fn a_world_click_signals_its_target_change_before_the_re_swing() {
     let mob = f.mob;
     f.make_unit(old);
     f.make_unit(mob);
-    f.app
-        .world_mut()
-        .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
-    crate::ui_unit::run_feed_units_once(f.app.world_mut());
+    vm_in_the_world(&mut f);
     crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {
         s.expect("a VM").run(
             r#"HEARD = 0
@@ -921,12 +918,21 @@ fn wire_order(rx: &Receiver<ClientCommand>) -> Vec<String> {
         .collect()
 }
 
-/// A VM in `f` whose `PLAYER_TARGET_CHANGED` listener rolls, so the wire shows where it ran.
-fn rolling_listener(f: &mut Fix) {
+/// A VM in `f`, past its world entry as a session has it (`0x490927` clears a target there): the
+/// target comes after, and the feed hears it before any listener is in.
+fn vm_in_the_world(f: &mut Fix) {
     f.app
         .world_mut()
         .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+    let selected = std::mem::take(&mut *f.app.world_mut().resource_mut::<Selection>());
     crate::ui_unit::run_feed_units_once(f.app.world_mut());
+    *f.app.world_mut().resource_mut::<Selection>() = selected;
+    crate::ui_unit::run_feed_units_once(f.app.world_mut());
+}
+
+/// A VM in `f` whose `PLAYER_TARGET_CHANGED` listener rolls, so the wire shows where it ran.
+fn rolling_listener(f: &mut Fix) {
+    vm_in_the_world(f);
     crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {
         s.expect("a VM").run(
             r#"local r = CreateFrame("Frame")

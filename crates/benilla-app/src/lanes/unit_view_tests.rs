@@ -172,6 +172,9 @@ pub(super) fn client() -> App {
     // Our create tagged as ours, as the net stage's pass does (`net::apply`).
     let me = world.resource::<crate::net::GuidIndex>().0[&ME];
     world.entity_mut(me).insert(crate::net::SelfPlayer);
+    // The world entry first, as a session has it: the target comes after.
+    frame(&mut app, vec![]);
+    let world = app.world_mut();
     let wolf = world.resource::<crate::net::GuidIndex>().0[&WOLF];
     *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
         target: Some(wolf),

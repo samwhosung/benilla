@@ -227,6 +227,25 @@ impl ScriptCallHost<'_, '_> {
         script.hosted(self, |_| ());
     }
 
+    /// `SelectTarget(0)` (`0x493540`) from an engine writer outside any call, such as the
+    /// world-enter cascade's (`0x490927`): the deselect and its teardown signal in place, a
+    /// charmed player's refused (`0x493590`) and an empty selection a no-op.
+    pub(crate) fn engine_clear_target(&mut self, script: &mut UiScript, mark: crate::lanes::Mark) {
+        #[cfg(test)]
+        self.census_probe();
+        script.host_out(|script| {
+            let mut at = Signalled {
+                selected: self.appliers.select().selected(),
+                latched: self.appliers.pet().attack_latched(),
+                mark: self.appliers.reports().mark_at(mark),
+            };
+            let owed = self.appliers.select().clear_target();
+            self.settle_selection(script, &mut at, owed);
+            self.commit_views(script);
+        });
+        script.hosted(self, |_| ());
+    }
+
     /// A field watcher's usable refresh (`0x4b31c0`) outside any call, inside its packet: the bar's
     /// states and cache derived off the stores as of the drain's place and pushed, then its signals
     /// with the host lent, so their listeners' calls apply inside the verb. A harness without the
@@ -1104,6 +1123,17 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         }
     }
 
+    /// An engine writer's `SelectTarget(0)`, signalled in place with the host
+    /// ([`ScriptCallHost::engine_clear_target`]); with no VM or no host nobody listens and the
+    /// selection stands.
+    pub(crate) fn engine_clear_target(&mut self, mark: crate::lanes::Mark) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_clear_target(script, mark);
+            }
+        }
+    }
+
     /// An engine writer's StartAttack at `guid`, its select signalled in place with the host
     /// ([`ScriptCallHost::engine_start_attack`]); with no VM or no host, `start` runs it on `P`.
     pub(crate) fn engine_start_attack(
@@ -1365,13 +1395,6 @@ mod tests {
                 status: 1,
                 flags: 0,
             });
-        if selected {
-            *world.resource_mut::<Selection>() = Selection {
-                target: Some(old),
-                guid: Some(OLD),
-                ..Default::default()
-            };
-        }
         let mut script = UiScript::new().expect("a VM");
         script.set_spellbook(SpellBookState {
             tabs: vec![SpellTabView {
@@ -1386,19 +1409,32 @@ mod tests {
                 ..Default::default()
             }],
         });
-        if selected {
-            // The frame's unit snapshot, as the last feed pushed it.
-            script.set_unit(
-                "target",
-                Some(benilla_ui::script::UnitState {
-                    exists: true,
-                    ..Default::default()
-                }),
-            );
-        }
         record_reports(&script);
         world.insert_non_send_resource(script);
-        Frame { app, rx }
+        let mut f = Frame { app, rx };
+        if selected {
+            // The world entry first, as a session has it (`0x490927` clears a target there): the
+            // target comes after.
+            settle(&mut f);
+            f.rx.try_iter().for_each(drop);
+            *f.app.world_mut().resource_mut::<Selection>() = Selection {
+                target: Some(old),
+                guid: Some(OLD),
+                ..Default::default()
+            };
+            // The frame's unit snapshot, as the last feed pushed it.
+            f.app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .set_unit(
+                    "target",
+                    Some(benilla_ui::script::UnitState {
+                        exists: true,
+                        ..Default::default()
+                    }),
+                );
+        }
+        f
     }
 
     /// Every catalog line and cast-failure string defined as its own key, but the default
@@ -2706,6 +2742,11 @@ mod tests {
             }],
         });
         f.app.world_mut().insert_non_send_resource(script);
+        // This VM's world entry first, as a session has it (`0x490927` clears a target there):
+        // the selection comes after.
+        let selected = std::mem::take(&mut *f.app.world_mut().resource_mut::<Selection>());
+        settle(f);
+        *f.app.world_mut().resource_mut::<Selection>() = selected;
     }
 
     /// The unit feed, which signals the selection's change; the calls its handlers make apply

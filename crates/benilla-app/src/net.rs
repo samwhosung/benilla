@@ -2315,7 +2315,7 @@ pub(crate) struct EnteredWorldMessage {
 }
 
 /// The reference's world-enter cascade (`0x4908c0`) ran: our own player's create, at login and
-/// every cross-map worldport ([`enter_world_on_self_create`]), or a `/reload`. Its sends wait for
+/// every cross-map worldport ([`enter_world_on_self_create`]). Its sends wait for
 /// this, not [`EnteredWorldMessage`], which fires before the server has seated the player.
 #[derive(Message)]
 pub(crate) struct WorldEnterCascadeMessage;
