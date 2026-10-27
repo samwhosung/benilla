@@ -365,3 +365,18 @@ fn set_font_and_an_xml_font_refuse_a_height_of_a_screen_or_more() {
         .eval::<bool>("return (ScreenTallFont:GetFont()) == nil")
         .unwrap());
 }
+
+/// The load's size test reads the quotient as the float `0x44d040` stores (`0x44d078`, tested at
+/// `0x5c1af3`): a height of `K2` layout units, a whole screen, is refused, the float below it
+/// loads, and NaN and 0 never do.
+#[test]
+fn the_font_size_test_is_on_the_float_quotient() {
+    let units = crate::screencoord::LayoutUnits::from_aspect(4.0 / 3.0);
+    let k2 = units.k2();
+    let below = f32::from_bits(k2.to_bits() - 1);
+    assert!(!crate::script::font_size_loads(units, k2));
+    assert!(crate::script::font_size_loads(units, below));
+    assert!(crate::script::font_size_loads(units, f32::from_bits(1)));
+    assert!(!crate::script::font_size_loads(units, 0.0));
+    assert!(!crate::script::font_size_loads(units, f32::NAN));
+}

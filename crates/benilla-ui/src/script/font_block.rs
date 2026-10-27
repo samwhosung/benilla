@@ -223,10 +223,10 @@ pub(crate) fn fontstring_size_loads(model: &Model, rh: RegionHandle, height: Len
 }
 
 /// Whether `GxuFontCreateFont` takes a height of `layout` units: `0x44d040` divides it by `K2`
-/// (`0x44d073`), and the factory refuses a quotient of 0 or less (`0x5c1b0e`), 1 or more, or NaN
-/// (`0x44d07b`-`0x44d088`, `0x5c1afe`).
+/// (`0x44d073`) and stores the quotient as a float (`0x44d078`), which the factory tests
+/// (`0x5c1af3`), refusing 0 or less (`0x5c1b0e`), 1 or more, or NaN (`0x5c1afe`).
 pub(crate) fn font_size_loads(units: crate::screencoord::LayoutUnits, layout: f32) -> bool {
-    let size = f64::from(layout) / f64::from(units.k2());
+    let size = (f64::from(layout) / f64::from(units.k2())) as f32;
     size > 0.0 && size < 1.0
 }
 
