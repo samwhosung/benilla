@@ -1,6 +1,7 @@
 //! The placed-doodad animation-event scanner, the third producer of [`AnimSoundEvent`] beside
 //! [`crate::creature_anim`] and [`crate::go_anim`]: a lamp's hum or a campfire's crackle is a
-//! `$DSL`/`$DSO`/`$SND` key on the doodad's own idle sequence.
+//! `$DSL`/`$DSO`/`$SND` key on the doodad's own idle sequence, and a zeppelin's engine one on the
+//! phase its transport plays on it (`benilla_world::doodad_anim::CarrierAnimation`).
 //!
 //! The reference arms every placed doodad (`0x695100`) but scans an event track (`0x719370`) only
 //! from the per-frame M2 worklist `[CM2Scene+0x20]` (`0x7074b0`), refilled each frame through
