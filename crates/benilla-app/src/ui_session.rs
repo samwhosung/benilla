@@ -243,6 +243,7 @@ mod tests {
             let (tx, rx) = crossbeam_channel::unbounded();
             let (mut app, _) = latched_app::<QuestGiver>(giver, dist);
             app.insert_resource(NetCommands(tx));
+            crate::ui_quest::hold_for_test(app.world_mut(), giver);
             crate::ui_quest::open_panel(app.world_mut(), giver, detail(giver));
             app.update();
             (

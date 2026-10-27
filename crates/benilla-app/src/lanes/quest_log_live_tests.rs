@@ -152,6 +152,7 @@ fn client() -> Client {
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     let world = app.world_mut();
     world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    crate::ui_quest::hold_for_test(world, GIVER);
     world
         .resource_mut::<crate::names::NameCache>()
         .insert_creature(
@@ -681,6 +682,7 @@ fn the_givers_name_landing_fires_no_quest_event() {
     if let SessionEvent::QuestDetail(d) = &mut offer {
         d.npc = SHARER;
     }
+    crate::ui_quest::hold_for_test(c.app.world_mut(), SHARER);
     crate::net::handlers::dispatch(c.app.world_mut(), vec![offer]);
     crate::lanes::fire_in_order(c.app.world_mut());
     assert_eq!(c.seen(), ["QUEST_DETAIL"]);

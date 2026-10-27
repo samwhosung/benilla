@@ -2615,6 +2615,7 @@ mod tests {
         });
         let with_quest = armed(&|w| {
             w.init_resource::<crate::ui_quest::QuestGiver>();
+            crate::ui_quest::hold_for_test(w, NPC);
             crate::ui_quest::open_panel(
                 w,
                 NPC,

@@ -531,6 +531,34 @@ pub(crate) fn giver_held(world: &World, guid: u64) -> bool {
         .is_some_and(|mask| mask & GIVER_TYPES != 0)
 }
 
+/// Make `guid` a held unit for a test that opens a panel on it, keeping the object it already
+/// has (`TYPEMASK_OBJECT | _UNIT`).
+#[cfg(test)]
+pub(crate) fn hold_for_test(world: &mut World, guid: u64) {
+    let fields = benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]);
+    world.init_resource::<crate::net::GuidIndex>();
+    let held = world
+        .resource::<crate::net::GuidIndex>()
+        .0
+        .get(&guid)
+        .copied();
+    match held {
+        Some(e) => match world.get_mut::<ObjectStore>(e) {
+            // A unit, a game object or an item it already is stays as it is.
+            Some(mut store) if store.0.object_type_mask().is_none_or(|m| m & 0x2a == 0) => {
+                store.0.merge(fields)
+            }
+            Some(_) => {}
+            None => {
+                world.entity_mut(e).insert(ObjectStore(fields));
+            }
+        },
+        None => {
+            crate::items::test_spawn_object(world, guid, fields);
+        }
+    }
+}
+
 /// A panel's open (`0x500bd0`, every panel packet's): the latch first, with no test of the cell
 /// (`0x500d74`), so a panel replacing the giver's own closes it, `QUEST_FINISHED` ahead of the new
 /// panel's event; then the cells, each text expanded against the player as the packet finds them,
@@ -1074,7 +1102,7 @@ mod tests {
     fn panel_events_queue_per_publish_and_item_updates_per_callback() {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_non_send_resource(UiScript::new().unwrap());
-        hold_giver(app.world_mut(), 0x42);
+        hold_for_test(app.world_mut(), 0x42);
         let detail = |app: &mut App, choice| {
             open_panel(app.world_mut(), 0x42, detail(100, "", vec![triple(choice)]))
         };
@@ -1114,15 +1142,6 @@ mod tests {
         assert!(lane(&mut app).is_empty(), "the callbacks are spent");
     }
 
-    /// A unit under `guid` in the object store (`TYPEMASK_OBJECT | _UNIT`).
-    fn hold_giver(world: &mut World, guid: u64) {
-        crate::items::test_spawn_object(
-            world,
-            guid,
-            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]),
-        );
-    }
-
     /// The setter resolves its giver first (`0x500bf1`-`0x500c35`) and ends when none is held as
     /// a unit, a game object or an item (`0x500d96`): no panel, no cell store, no cue.
     #[test]
@@ -1130,7 +1149,7 @@ mod tests {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_non_send_resource(UiScript::new().unwrap());
         app.init_resource::<crate::sound::MessageSounds>();
-        hold_giver(app.world_mut(), 0x42);
+        hold_for_test(app.world_mut(), 0x42);
         // A corpse (type mask 0x80) is held, but is no giver.
         crate::items::test_spawn_object(
             app.world_mut(),
@@ -1184,7 +1203,7 @@ mod tests {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_non_send_resource(UiScript::new().unwrap());
         app.init_resource::<crate::sound::MessageSounds>();
-        hold_giver(app.world_mut(), 0x42);
+        hold_for_test(app.world_mut(), 0x42);
         let cues = |app: &mut App| {
             app.world()
                 .resource::<crate::sound::MessageSounds>()
