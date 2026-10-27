@@ -19,7 +19,7 @@ use super::cursor::{clear_cursor, set_cursor, CursorPayload, CursorSpell, Setter
 use super::live::{ask, LiveQuery};
 use super::protected::{self, Tag};
 use super::tick::verb;
-use super::{Model, ScriptCall};
+use super::{Model, ScriptCall, SoundRequest};
 
 mod by_name;
 pub use by_name::{resolve_spell_in_books, NamedSpell};
@@ -377,10 +377,32 @@ fn pickup_spell(lua: &Lua, id: u32, book_type: &str) -> bool {
         (payload, slot.spell_id, held)
     };
     verb(lua, clear_cursor);
-    if target == held || held != 0 {
+    if target == held {
+        // The spell already held goes back with the drop kit (`0x4b32a3` → `0x4b32e0`).
+        if target != 0 {
+            play_book_kit(lua, "igSpellBookSpellIconDrop");
+        }
         return false;
     }
-    payload.is_some_and(|payload| set_cursor(lua, true, Setter::of(&payload), |_| Some(payload)))
+    if held != 0 || target == 0 {
+        return false;
+    }
+    // The setter, then the pickup kit whether or not it took (`0x4b32c5`, `0x4b32d2` → `0x4b32f0`).
+    let put = payload
+        .is_some_and(|payload| set_cursor(lua, true, Setter::of(&payload), |_| Some(payload)));
+    play_book_kit(lua, "igSpellBookSpellIconPickup");
+    put
+}
+
+/// `PlaySoundByName` (`0x458030`) from the book's pickup, which a UI load's play drops
+/// (`0x458046`).
+fn play_book_kit(lua: &Lua, name: &str) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if model.sound_suppression == 0 {
+        model
+            .sound_queue
+            .push(SoundRequest::KitName(name.to_string()));
+    }
 }
 
 /// The head of the cast dispatcher `0x4b3300`, which `CastSpell` and `CastSpellByName` both run
@@ -1197,6 +1219,37 @@ mod tests {
         s.tick(0.01);
         assert_eq!(s.eval::<i64>("return cursorUpdates").unwrap(), 1);
         assert!(s.cursor_payload().is_none(), "{:?}", s.cursor_payload());
+    }
+
+    /// `PickupSpell` plays the book's own kits: `igSpellBookSpellIconPickup` when the spell goes on
+    /// an empty cursor (`0x4b32d2` → `0x4b32f0`), `igSpellBookSpellIconDrop` when the held spell
+    /// goes back (`0x4b32a3` → `0x4b32e0`), and nothing when another spell is held (`0x4b32aa`),
+    /// or while a UI load's plays are dropped (`0x458046`).
+    #[test]
+    fn picking_up_and_dropping_a_book_spell_plays_its_kits() {
+        let mut s = UiScript::new().unwrap();
+        s.set_spellbook(book());
+        let kit = |name: &str| vec![crate::script::SoundRequest::KitName(name.into())];
+        s.run("PickupSpell(1, BOOKTYPE_SPELL)").unwrap();
+        assert_eq!(s.take_sounds(), kit("igSpellBookSpellIconPickup"));
+        s.run("PickupSpell(3, BOOKTYPE_SPELL)").unwrap();
+        assert!(
+            s.take_sounds().is_empty(),
+            "another spell held: the clear is all"
+        );
+        s.run("PickupSpell(1, BOOKTYPE_SPELL) PickupSpell(1, BOOKTYPE_SPELL)")
+            .unwrap();
+        assert_eq!(
+            s.take_sounds(),
+            [
+                kit("igSpellBookSpellIconPickup"),
+                kit("igSpellBookSpellIconDrop")
+            ]
+            .concat()
+        );
+        s.push_sound_suppression();
+        s.run("PickupSpell(1, BOOKTYPE_SPELL)").unwrap();
+        assert!(s.take_sounds().is_empty(), "dropped during the UI load");
     }
 
     #[test]
