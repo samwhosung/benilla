@@ -2154,3 +2154,33 @@ fn frame_flags_apply_level_by_level() {
         "Frame FalseOver: Unknown frame strata: BOGUS"
     ));
 }
+
+/// Each level sets its `<Scripts>` before its typed values (`0x769d18` → `0x769ef0`, then
+/// `0x789656`, `0x7896a2`; StatusBar `0x783270`, `0x783371`), and the first SetValue always fires
+/// (`0x789a1e`-`0x789a44`): a `defaultValue` beside an OnValueChanged runs it at load, ahead of
+/// OnLoad, and a template's level runs the template's handler.
+#[test]
+fn a_default_value_fires_the_levels_on_value_changed_at_load() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Slider name="SlideTemplate" virtual="true" minValue="0" maxValue="10"
+                    defaultValue="2">
+                <Scripts><OnValueChanged>Seen = (Seen or "") .. "t" .. arg1 .. ","</OnValueChanged></Scripts>
+            </Slider>
+            <Slider name="Slide" inherits="SlideTemplate" minValue="0" maxValue="10"
+                    defaultValue="5">
+                <Scripts>
+                    <OnValueChanged>Seen = (Seen or "") .. "i" .. arg1 .. ","</OnValueChanged>
+                    <OnLoad>Seen = (Seen or "") .. "load,"</OnLoad>
+                </Scripts>
+            </Slider>
+            <StatusBar name="Bar" minValue="0" maxValue="4" defaultValue="3">
+                <Scripts><OnValueChanged>BarSeen = arg1</OnValueChanged></Scripts>
+            </StatusBar>
+        </Ui>"#,
+    );
+    assert_eq!(s.eval::<String>("return Seen").unwrap(), "t2,i5,load,");
+    assert_eq!(s.eval::<f64>("return BarSeen").unwrap(), 3.0);
+}

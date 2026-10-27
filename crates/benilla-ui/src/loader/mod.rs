@@ -908,15 +908,26 @@ impl Loader<'_> {
         self.apply_title_region(el, wrapper, self_name, dbg_name);
         // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,
         //      so a Frame wearing a <Button> template skips the Button steps.
-        self.apply_statusbar(el, levels, wrapper, self_name, dbg_name);
-        self.apply_slider(el, levels, wrapper, self_name, dbg_name);
+        self.apply_statusbar(el, wrapper, self_name, dbg_name);
+        self.apply_slider(el, wrapper, self_name, dbg_name);
         self.apply_colorselect(el, wrapper, self_name, dbg_name);
         self.apply_button(el, levels, wrapper, self_name, dbg_name);
         self.apply_editbox(el, wrapper, dbg_name);
         self.apply_messageframe(el, wrapper, dbg_name);
         self.apply_simplehtml(el, wrapper, dbg_name);
-        // 6 · <Scripts> handlers (`0x769ef0`); OnLoad is captured to fire bottom-up below.
-        let onload = self.apply_scripts(el, wrapper, dbg_name);
+        // 6 · per level, the template first (`0x76985c`): its <Scripts> (`0x769ef0`, an arm of the
+        //     base child loop, `0x769d18`), then its Slider or StatusBar values (`0x789580`,
+        //     `0x782ef0`), so the first SetValue's fire (`0x789a1e`-`0x789a44`, `0x783371`) runs
+        //     that level's handler. OnLoad is captured to fire bottom-up below.
+        let mut onload = None;
+        for level in levels {
+            self.apply_scripts(level, wrapper, dbg_name, &mut onload);
+            if el.tag.eq_ignore_ascii_case("Slider") {
+                self.slider_level(level, wrapper, dbg_name);
+            } else if el.tag.eq_ignore_ascii_case("StatusBar") {
+                self.statusbar_level(level, wrapper, dbg_name);
+            }
+        }
         // 6b · a ScrollFrame's <ScrollChild> (`0x786bc0`, after the base load `0x769820`): still
         //      inside the load window, so ahead of every <Frames> child and of our own OnLoad.
         self.apply_scrollframe(el, wrapper, self_name, dbg_name);

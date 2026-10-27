@@ -43,12 +43,10 @@ impl Loader<'_> {
     }
 
     /// `<StatusBar>` (`0x782ef0`): the `<BarTexture>`, built on `drawLayer` (ARTWORK by default),
-    /// and `<BarColor>`, then for each level ([`Loader::levels`]) its range, its value and its
-    /// orientation.
+    /// and `<BarColor>`; each level's range, value and orientation are [`Self::statusbar_level`].
     pub(super) fn apply_statusbar(
         &mut self,
         el: &Element,
-        levels: &Levels,
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
@@ -68,40 +66,72 @@ impl Loader<'_> {
         for bc in children_named(el, "BarColor") {
             self.call(wrapper, "SetStatusBarColor", color_of(bc).fractions(), dbg);
         }
-        for level in levels {
-            // Each value with `SStrToFloat`, present and non-empty: the range needs both bounds on the
-            // node, and `defaultValue` is read only after it (`0x782fb0`-`0x783021`). The setter
-            // `0x783270` clamps a min above the max down to it.
-            let value = |attr: &str| {
-                level
-                    .attr(attr)
-                    .filter(|v| !v.is_empty())
-                    .map(super::xml_float)
-            };
-            if let (Some(min), Some(max)) = (value("minValue"), value("maxValue")) {
-                self.call(wrapper, "SetMinMaxValues", (min, max), dbg);
-                if let Some(v) = value("defaultValue") {
-                    self.call(wrapper, "SetValue", v, dbg);
-                }
+    }
+
+    /// One level's StatusBar range, value and orientation, after that level's `<Scripts>`
+    /// ([`Loader::decorate`]). Each value with `SStrToFloat`, present and non-empty: the range
+    /// needs both bounds on the node, and `defaultValue` is read only after it
+    /// (`0x782fb0`-`0x783021`). The setter `0x783270` clamps a min above the max down to it.
+    pub(super) fn statusbar_level(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
+        let value = |attr: &str| {
+            level
+                .attr(attr)
+                .filter(|v| !v.is_empty())
+                .map(super::xml_float)
+        };
+        if let (Some(min), Some(max)) = (value("minValue"), value("maxValue")) {
+            self.call(wrapper, "SetMinMaxValues", (min, max), dbg);
+            if let Some(v) = value("defaultValue") {
+                self.call(wrapper, "SetValue", v, dbg);
             }
-            // `orientation` through the token parse `0x6f1a20`: empty is skipped, a miss logged
-            // (`0x87a3c4`) and never raised (`0x783064`), where the Lua setter raises.
-            if let Some(token) = level.attr("orientation").filter(|v| !v.is_empty()) {
-                match crate::script::region::orientation(token) {
-                    Some(vertical) => {
-                        let o = if vertical { "VERTICAL" } else { "HORIZONTAL" };
-                        self.call(wrapper, "SetOrientation", o, dbg);
-                    }
-                    None => {
-                        let name = self.object_name(wrapper);
-                        self.status_warning(format!(
-                            "Frame {name}: Unknown orientation {token} in element {}",
-                            level.tag
-                        ));
-                    }
+        }
+        // `orientation` through the token parse `0x6f1a20`: empty is skipped, a miss logged
+        // (`0x87a3c4`) and never raised (`0x783064`), where the Lua setter raises.
+        self.level_orientation(level, wrapper, dbg);
+    }
+
+    /// A Slider's or StatusBar's `orientation=` on one level: empty is skipped, a miss logged
+    /// (`0x87a3c4`) and never raised, where the Lua setter raises.
+    fn level_orientation(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
+        if let Some(token) = level.attr("orientation").filter(|v| !v.is_empty()) {
+            match crate::script::region::orientation(token) {
+                Some(vertical) => {
+                    let o = if vertical { "VERTICAL" } else { "HORIZONTAL" };
+                    self.call(wrapper, "SetOrientation", o, dbg);
+                }
+                None => {
+                    let name = self.object_name(wrapper);
+                    self.status_warning(format!(
+                        "Frame {name}: Unknown orientation {token} in element {}",
+                        level.tag
+                    ));
                 }
             }
         }
+    }
+
+    /// One level's Slider range, step, value and orientation, after that level's `<Scripts>`
+    /// ([`Loader::decorate`]). Each value through `SStrToFloat` (`0x64aaa0`), present and
+    /// non-empty, so `"100%"` is 100: the range needs both bounds on the node, and `valueStep` and
+    /// `defaultValue` are read only after it (`0x789605`-`0x7896a2`); the orientation miss is
+    /// `0x78970d`.
+    pub(super) fn slider_level(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
+        let value = |attr: &str| {
+            level
+                .attr(attr)
+                .filter(|v| !v.is_empty())
+                .map(|v| crate::script::binding_abi::s_str_to_float(v) as f32)
+        };
+        if let (Some(min), Some(max)) = (value("minValue"), value("maxValue")) {
+            self.call(wrapper, "SetMinMaxValues", (min, max), dbg);
+            if let Some(step) = value("valueStep") {
+                self.call(wrapper, "SetValueStep", step, dbg);
+            }
+            if let Some(v) = value("defaultValue") {
+                self.call(wrapper, "SetValue", v, dbg);
+            }
+        }
+        self.level_orientation(level, wrapper, dbg);
     }
 
     /// `<Button>`, `<CheckButton>` and `<LootButton>` (`0x7788c0`, which `0x785170` runs first):
@@ -497,58 +527,20 @@ impl Loader<'_> {
         }
     }
 
-    /// `<Slider>` (`0x789580`), VERTICAL from the ctor. Its frame load (`0x769820`) first re-enters
-    /// the virtual `LoadXML` on the `inherits` node (`0x76985c`), so for each level
-    /// ([`Loader::levels`]), the template first, the range, `valueStep` and `defaultValue` apply
-    /// only when both bounds are on that node, and a reversed pair is not swapped; `drawLayer` is
-    /// the thumb's layer, OVERLAY by default.
+    /// `<Slider>` (`0x789580`), VERTICAL from the ctor: `drawLayer` is the thumb's layer, OVERLAY
+    /// by default. Its frame load (`0x769820`) first re-enters the virtual `LoadXML` on the
+    /// `inherits` node (`0x76985c`), so each level, the template first, sets its range,
+    /// `valueStep` and `defaultValue` only when both bounds are on that node, and a reversed pair
+    /// is not swapped ([`Self::slider_level`]).
     pub(super) fn apply_slider(
         &mut self,
         el: &Element,
-        levels: &Levels,
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
     ) {
         if !el.tag.eq_ignore_ascii_case("Slider") {
             return;
-        }
-        for level in levels {
-            // Each value through `SStrToFloat` (`0x64aaa0`), present and non-empty, so `"100%"`
-            // is 100: the range needs both bounds on the node, and `valueStep` and `defaultValue`
-            // are read only after it (`0x789605`-`0x7896a2`).
-            let value = |attr: &str| {
-                level
-                    .attr(attr)
-                    .filter(|v| !v.is_empty())
-                    .map(|v| crate::script::binding_abi::s_str_to_float(v) as f32)
-            };
-            if let (Some(min), Some(max)) = (value("minValue"), value("maxValue")) {
-                self.call(wrapper, "SetMinMaxValues", (min, max), dbg);
-                if let Some(step) = value("valueStep") {
-                    self.call(wrapper, "SetValueStep", step, dbg);
-                }
-                if let Some(v) = value("defaultValue") {
-                    self.call(wrapper, "SetValue", v, dbg);
-                }
-            }
-            // `orientation` through the token parse `0x6f1a20`: empty is skipped, a miss logged
-            // (`0x87a3c4`, `0x78970d`) and never raised, where the Lua setter raises.
-            if let Some(token) = level.attr("orientation").filter(|v| !v.is_empty()) {
-                match crate::script::region::orientation(token) {
-                    Some(vertical) => {
-                        let o = if vertical { "VERTICAL" } else { "HORIZONTAL" };
-                        self.call(wrapper, "SetOrientation", o, dbg);
-                    }
-                    None => {
-                        let name = self.object_name(wrapper);
-                        self.status_warning(format!(
-                            "Frame {name}: Unknown orientation {token} in element {}",
-                            level.tag
-                        ));
-                    }
-                }
-            }
         }
         let layer = el.attr("drawLayer");
         for raw in children_named(el, "ThumbTexture") {

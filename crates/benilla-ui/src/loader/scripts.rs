@@ -5,15 +5,15 @@ use crate::framexml::Element;
 use super::{children_named, Loader};
 
 impl Loader<'_> {
-    /// `<Scripts>` (`0x769ef0`): `SetScript` for each handler. Returns the `OnLoad`, which the
-    /// caller fires bottom-up.
+    /// One level's `<Scripts>` (`0x769ef0`): `SetScript` for each handler. An `OnLoad` replaces
+    /// `onload`, which the caller fires bottom-up.
     pub(super) fn apply_scripts(
         &mut self,
         el: &Element,
         wrapper: &Table,
         dbg: &str,
-    ) -> Option<Function> {
-        let mut onload = None;
+        onload: &mut Option<Function>,
+    ) {
         // A handler's chunk name is `"<name>:<Handler>"`, the frame's own name or `<unnamed>`
         // (`0x7025fd`-`0x70263c`), never the loader's `dbg`.
         for scripts in children_named(el, "Scripts") {
@@ -69,11 +69,10 @@ impl Loader<'_> {
                 }
                 if name.eq_ignore_ascii_case("OnLoad") {
                     // A cleared `OnLoad` also unsets a template's, or the caller would fire it.
-                    onload = func;
+                    *onload = func;
                 }
             }
         }
-        onload
     }
 
     /// Compile a handler body as the chunk itself, as the reference loads it (`0x704c70`): it takes
