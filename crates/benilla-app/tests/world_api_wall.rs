@@ -217,7 +217,6 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
     ("interact::PickBox", "CLOSE/absorb"),
     ("interact::WorldClick", "CLOSE/move-game"),
     ("interact::WorldRightClick", "CLOSE/move-game"),
-    ("interact::WorldRightPress", "CLOSE/move-game"),
     ("interact::cast_pick_ray_inflated", "CLOSE/absorb"),
     ("interior::BodyBakeCenter", "CLOSE/absorb"),
     ("interior::ContainmentAttach", "CLOSE/absorb"),
