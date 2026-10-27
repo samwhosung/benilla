@@ -406,10 +406,7 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
             let (c, isdst) = if utc {
                 (crate::civil::from_unix(secs), false)
             } else {
-                match crate::civil::local(secs) {
-                    Some(local) => local,
-                    None => return Ok(mlua::Value::Nil),
-                }
+                crate::civil::local(secs)
             };
             // `*t` exactly, its NUL compared too (`0x70343c`), answers a table.
             if body == b"*t" {
@@ -610,6 +607,10 @@ impl TimeWriter<'_> {
     /// `_store_num` (`0x413a0e`) after its case copied `#` into `_no_lead_zeros` (`0xcf7288`):
     /// the number's last `digits` digits, zero-padded, or with `#` its digits alone
     /// (`0x413a7d`). Too little room ends the output.
+    ///
+    /// Deviation: with `#` and one byte of room, `_store_number` writes no digit and its reversal
+    /// swaps before it tests (`0x413ab3`), trading the last byte written for the stale byte after
+    /// it in the caller's buffer, which then ends the client's answer; here the output is kept.
     fn num(&mut self, mut n: i32, digits: usize) {
         if self.alternate {
             let start = self.out.len();

@@ -285,6 +285,8 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     // From here a panic leaves `benilla-config/Diagnostics/crash-<unix>.txt`; armed before the
     // `App` exists, so a panic while plugins build is reported too.
     crash::install(build);
+    // The zone is read once per process; reading it now spares the first `date` the wait.
+    benilla_ui::civil::warm();
 
     // Fonts, art and the stock interface all come from the install, so without one the client
     // ends here, before any window or plugin exists (`no_install`).

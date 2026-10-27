@@ -65,7 +65,7 @@ impl Default for ScreenshotState {
 
 impl ScreenshotState {
     /// `WoWScrnShot_MMDDYY_HHMMSS.png`, the reference's field order and padding, in local time
-    /// (`0x429450`, `strftime` of `localtime`); UTC where the platform refuses the time.
+    /// (`0x429450`, `strftime` of `localtime`).
     ///
     /// A second capture in the same second gets `_2`, `_3`: the reference overwrites, so a burst
     /// leaves one file, a data loss not copied.
@@ -76,8 +76,7 @@ impl ScreenshotState {
             self.last_second = now;
             self.within_second = 0;
         }
-        let c = benilla_ui::civil::local(now)
-            .map_or_else(|| benilla_ui::civil::from_unix(now), |(c, _)| c);
+        let (c, _) = benilla_ui::civil::local(now);
         let base = format!(
             "{STEM}_{:02}{:02}{:02}_{:02}{:02}{:02}",
             c.month,
