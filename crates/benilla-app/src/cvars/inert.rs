@@ -211,8 +211,8 @@ pub(super) const INERT: &[Registered] = &[
     same("DistCull", "500").checked(benilla_ui::script::check_dist_cull), // 0x688570
     same("EnableGroupSpeech", "1"),         // 0x457859
     same("ErrorFilter", "all").checked(benilla_ui::script::check_error_filter), // 0x402d2a
-    same("ErrorLevelMax", "3").checked(benilla_ui::script::check_error_level), // 0x402d07
-    same("ErrorLevelMin", "1").checked(benilla_ui::script::check_error_level), // 0x402ce4
+    same("ErrorLevelMax", "3").checked(benilla_ui::script::check_error_level_max), // 0x402d07
+    same("ErrorLevelMin", "1").checked(benilla_ui::script::check_error_level_min), // 0x402ce4
     same("Errors", "0"),                    // 0x402c9e
     same("ffxRectangle", "1").checked(benilla_ui::script::check_ffx_echo), // 0x6cd007
     same("footstepBias", "0.125").checked(benilla_ui::script::check_footstep_bias), // 0x6888b4
