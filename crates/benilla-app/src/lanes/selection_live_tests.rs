@@ -175,9 +175,10 @@ fn a_destroyed_targets_change_fires_at_the_destroy() {
 }
 
 /// A reconnectable loss keeps the client in the world but drops every object with no release:
-/// the selection ends there, as at the world's teardown, which returns before the swing stop,
-/// the send and the signals (`0x4939df`), and the target the reconnect streams in again is not
-/// selected, so nothing names it as `"target"`.
+/// the selection ends there, as at the world's teardown, which returns before the swing stop and
+/// the send (`0x4939df`), and the VM that survives it hears the change, as a release's teardown
+/// signals (`0x493a73`). The target the reconnect streams in again is not selected, so nothing
+/// names it as `"target"`.
 #[test]
 fn a_reconnect_does_not_reseat_the_lost_target() {
     let _lock = crate::local_state::test_env::ENV_LOCK
@@ -203,8 +204,8 @@ fn a_reconnect_does_not_reseat_the_lost_target() {
                 end: benilla_protocol::SessionEnd::Lost,
             }],
         ),
-        Vec::<String>::new(),
-        "no signal"
+        ["PLAYER_TARGET_CHANGED"],
+        "the surviving VM hears the change"
     );
     let s = *app.world().resource::<crate::target::Selection>();
     assert_eq!(

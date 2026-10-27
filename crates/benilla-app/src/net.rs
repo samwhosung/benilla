@@ -2385,14 +2385,18 @@ impl DisconnectedMessage {
     /// login env vars: a person's launch line sets them too, and a reconnect would take the
     /// account back from whoever displaced us.
     pub(crate) fn new(reason: String, end: benilla_protocol::SessionEnd) -> Self {
-        let session_over =
-            end == benilla_protocol::SessionEnd::Lost && !crate::run_mode::unattended();
         Self {
             reason,
             end,
-            session_over,
+            session_over: session_over(end),
         }
     }
+}
+
+/// Whether a session that ended with `end` is over, back at the account screen with nothing
+/// retried ([`DisconnectedMessage::session_over`]): a loss outside an unattended run.
+pub(crate) fn session_over(end: benilla_protocol::SessionEnd) -> bool {
+    end == benilla_protocol::SessionEnd::Lost && !crate::run_mode::unattended()
 }
 
 /// A login attempt failed before the roster; the IO thread is back at its pre-logon park.

@@ -230,6 +230,13 @@ fn on_logged_out(
     }
 }
 
+/// The selection a session's loss ends, and where its signals are owed.
+#[derive(bevy::ecs::system::SystemParam)]
+struct LostSelection<'w> {
+    selection: Option<ResMut<'w, crate::target::Selection>>,
+    owed: Option<ResMut<'w, crate::target::OwedSelects>>,
+}
+
 /// The bridge's half of the session end; each window's own listener runs after it.
 fn on_disconnected(
     In(ev): In<SessionEvent>,
@@ -237,14 +244,33 @@ fn on_disconnected(
     mut b: Bridge,
     mut released: ResMut<super::objects::Released>,
     view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
-    selection: Option<ResMut<crate::target::Selection>>,
+    lost: LostSelection,
 ) {
     if let SessionEvent::Disconnected { reason, end } = ev {
         log_teardown(view_log, &b);
         // Every object goes with no release, kept link or not; the reference has no reconnect,
         // so the selection ends as at the world's teardown, with nothing sent or signalled.
+        //
+        // Deviation: on benilla's unattended reconnect, which the reference lacks, the world's VM
+        // survives the loss, so the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh
+        // as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the
+        // surviving target frame lets the lost unit go.
+        let LostSelection { selection, owed } = lost;
         if let Some(mut selection) = selection.filter(|s| s.guid.is_some()) {
+            let before = selection.guid;
             crate::target::clear_with_no_world(&mut selection);
+            let reconnects = end == benilla_protocol::SessionEnd::Lost && !super::session_over(end);
+            if let (true, Some(owed)) = (reconnects, owed) {
+                owed.into_inner().push(crate::target::OwedSelect::Signals(
+                    crate::script_calls::EngineSelect {
+                        before,
+                        // No teardown lowers the pet's latch: no `PET_BAR_UPDATE`.
+                        latched: false,
+                        mark: crate::lanes::mark(),
+                        owed: crate::target::SelectDebt::default(),
+                    },
+                ));
+            }
         }
         // The same teardown as `on_logged_out`'s.
         b.reputations.tear_down();
