@@ -1540,12 +1540,10 @@ pub(crate) mod schedule_tests {
                 }
             }
         }
-        for select in ["::target::click::select_on_plate_click"] {
-            assert!(
-                seen.contains(&one(select)),
-                "the trade leg runs before {select}"
-            );
-        }
+        assert!(
+            seen.contains(&one("::target::click::select_on_plate_click")),
+            "the trade leg runs before the plate's select"
+        );
     }
 
     /// The `Startup` VM, the stock glue's, is built after the glyph cache:
