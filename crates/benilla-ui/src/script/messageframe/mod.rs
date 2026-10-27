@@ -398,6 +398,26 @@ pub(crate) fn set_xml_insets(
     Ok(())
 }
 
+/// XML `<FontString bytes="N">` on a MessageFrame or a ScrollingMessageFrame (`0x785b10`,
+/// `0x787d19`): `SStrToInt` of a non-empty value, the length each line's text buffer takes
+/// (`0x771680`); 0 or less is no limit.
+pub(crate) fn set_xml_bytes(lua: &mlua::Lua, frame: &mlua::Table, bytes: &str) -> mlua::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let n = crate::script::binding_abi::s_str_to_int(bytes);
+    let h = frame_handle_of(lua, frame)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if let Some(slot) = model
+        .arena
+        .frame_mut(h)
+        .and_then(|f| f.kind_state.message_line_bytes_mut())
+    {
+        *slot = usize::try_from(n).unwrap_or(0);
+    }
+    Ok(())
+}
+
 impl UiScript {
     pub(super) fn message_frame_font(model: &Model, fh: FrameHandle) -> MessageFont {
         Self::message_font_region(model, fh)

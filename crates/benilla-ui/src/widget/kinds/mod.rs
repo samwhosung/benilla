@@ -213,6 +213,15 @@ impl KindState {
         }
     }
 
+    /// The message kinds' XML `<FontString bytes>` line length, mutably.
+    pub fn message_line_bytes_mut(&mut self) -> Option<&mut usize> {
+        match self {
+            KindState::ScrollingMessage(smf) => Some(&mut smf.line_bytes),
+            KindState::Message(mf) => Some(&mut mf.line_bytes),
+            _ => None,
+        }
+    }
+
     /// The message kinds' sweep-skip generation ([`ScrollingMessageState::lines_gen`]).
     pub fn lines_gen(&self) -> Option<u64> {
         match self {

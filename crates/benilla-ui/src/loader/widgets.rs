@@ -391,7 +391,8 @@ impl Loader<'_> {
     /// loop, loaded into the frame's own font by the Font loader (`0x783c30` at `0x77a220`,
     /// `0x785af5`, `0x787cfe`), never a region: over a font that already follows another it first
     /// logs `%s: FontString element overriding font %s` (`0x879b3c`) with the frame's name and the
-    /// followed font's. An EditBox's then caps its bytes (`0x77a225`).
+    /// followed font's. An EditBox's then caps its bytes (`0x77a225`), and a message frame's sets
+    /// the length of its lines' text buffers.
     fn text_font_child(&mut self, child: &Element, editbox: bool, wrapper: &Table, dbg: &str) {
         let own = match crate::script::own_font_lua(self.lua, wrapper) {
             Ok(Some(own)) => own,
@@ -428,6 +429,11 @@ impl Loader<'_> {
                 if let Err(e) = crate::script::apply_xml_bytes(self.lua(), wrapper, bytes) {
                     self.report.fault(format!("{dbg}: FontString bytes: {e}"));
                 }
+            }
+        } else if let Some(bytes) = child.attr("bytes") {
+            // A message frame's lines (`0x785afa`, `0x787d03`).
+            if let Err(e) = crate::script::set_message_xml_bytes(self.lua(), wrapper, bytes) {
+                self.report.fault(format!("{dbg}: FontString bytes: {e}"));
             }
         }
     }

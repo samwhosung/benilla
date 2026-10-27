@@ -67,6 +67,9 @@ pub struct ScrollingMessageState {
     /// The text insets `(left, right, top, bottom)` the lines' box keeps from the frame's rect
     /// (`+0x37c`-`+0x388`); only XML `<TextInsets>` sets them (`0x787fb0`).
     pub insets: [crate::layout::Len; 4],
+    /// The XML `<FontString bytes="N">` (`+0x358`, `0x787d1e`): each display node's text buffer
+    /// length (`0x78898d` → `0x771680`), which holds N - 1 bytes; 0 is no limit.
+    pub line_bytes: usize,
     /// The detached FontString that holds the lines' font (the frame's own `+0x338`), the font
     /// verbs' receiver; never in `GetRegions`, as the reference's font is no region.
     pub font_region: Option<crate::widget::RegionHandle>,
@@ -101,6 +104,7 @@ impl Default for ScrollingMessageState {
             at_top: false,
             at_bottom: true,
             insets: [crate::layout::Len::Script(0.0); 4],
+            line_bytes: 0,
             font_region: None,
             links_dirty: false,
             laid_font: None,
@@ -109,6 +113,17 @@ impl Default for ScrollingMessageState {
         }
     }
 }
+/// `text` as a line's FontString holds it under the XML `bytes`: a fixed buffer of `bytes` + 1
+/// takes `SStrCopy(buffer, text, bytes)` (`0x771e0f`), which stops one byte short of the size
+/// (`0x64a5cf`, `0x64a5e0`), so N - 1 bytes (a cut inside a character backs up to its start); 0
+/// is the buffer that grows (`0x771e16`).
+fn clip_line(mut text: String, bytes: usize) -> String {
+    if bytes > 0 {
+        text.truncate(text.floor_char_boundary(bytes - 1));
+    }
+    text
+}
+
 /// A `0..1` colour component as a byte, rounded half up as `AddMessage` does (`0x788150`).
 pub fn quantize_u8(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5).trunc() as u8
@@ -371,7 +386,7 @@ impl ScrollingMessageState {
         }
         let overwrites_topmost = self.write_pos == topmost;
         self.lines.push_back(MessageLine {
-            text,
+            text: clip_line(text, self.line_bytes),
             id,
             color: [color.r, color.g, color.b],
             time_left: self.time_visible,
@@ -711,6 +726,9 @@ pub struct MessageFrameState {
     /// (`+0x330`-`+0x33c`, zeroed by the ctor at `0x785675`); only XML `<TextInsets>` sets them
     /// (`0x785b80`).
     pub insets: [crate::layout::Len; 4],
+    /// The XML `<FontString bytes="N">` (`+0x340`, `0x785b15`): each line's text buffer length
+    /// (`0x786176` → `0x771680`), which holds N - 1 bytes; 0 is no limit.
+    pub line_bytes: usize,
     /// The lines' font holder (`+0x320`), as [`ScrollingMessageState::font_region`].
     pub font_region: Option<crate::widget::RegionHandle>,
 }
@@ -726,6 +744,7 @@ impl Default for MessageFrameState {
             fading_enabled: true,
             lines_gen: 0,
             insets: [crate::layout::Len::Script(0.0); 4],
+            line_bytes: 0,
             font_region: None,
         }
     }
@@ -755,7 +774,7 @@ impl MessageFrameState {
     pub fn add(&mut self, text: String, r: f32, g: f32, b: f32, a: f32) {
         self.lines_gen = self.lines_gen.wrapping_add(1);
         self.lines.push_back(MessageLine {
-            text,
+            text: clip_line(text, self.line_bytes),
             id: 0,
             color: [quantize_u8(r), quantize_u8(g), quantize_u8(b)],
             time_left: self.time_visible,

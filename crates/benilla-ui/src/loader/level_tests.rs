@@ -1520,6 +1520,67 @@ fn a_message_frame_lays_its_lines_out_inside_its_text_insets() {
     assert!(has_line(&report, line), "{:?}", report.status.lines());
 }
 
+/// A MessageFrame's and a ScrollingMessageFrame's `<FontString bytes="N">` (`0x785b10`,
+/// `0x787d19`) is the length of each line's text buffer (`0x786176`, `0x78898d` → `0x771680`),
+/// which `SStrCopy` fills to N - 1 bytes (`0x771e0f`, `0x64a5cf`), backing up to a character
+/// start; 0 or less, or an empty value, leaves the lines whole.
+#[test]
+fn a_message_frames_fontstring_bytes_cuts_its_lines() {
+    let mut s = ui();
+    let frame = |tag: &str, name: &str, bytes: &str, y: u32| {
+        format!(
+            r#"<{tag} name="{name}" font="BytesFont">
+                <Size><AbsDimension x="300" y="100"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset x="0" y="{y}"/></Anchor></Anchors>
+                <FontString bytes="{bytes}"/>
+            </{tag}>"#
+        )
+    };
+    let xml = format!(
+        r#"<Ui>
+            <Font name="BytesFont" font="Fonts\FRIZQT__.TTF">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+            </Font>
+            {}{}{}{}{}</Ui>"#,
+        frame("ScrollingMessageFrame", "CutSmf", "6", 0),
+        frame("MessageFrame", "CutMf", "6", 100),
+        frame("ScrollingMessageFrame", "WholeNeg", "-2", 200),
+        frame("MessageFrame", "WholeEmpty", "", 300),
+        frame("MessageFrame", "CutMulti", "5", 400),
+    );
+    let report = load_str(&s, &xml);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    for (f, text) in [
+        ("CutSmf", "abcdefghij"),
+        ("CutMf", "klmnopqrst"),
+        ("WholeNeg", "uvwxyzuvwxyz"),
+        ("WholeEmpty", "ABCDEFGHIJ"),
+        ("CutMulti", "a\u{e9}\u{e9}\u{e9}"),
+    ] {
+        s.run(&format!("{f}:AddMessage('{text}', 1, 1, 1)"))
+            .unwrap();
+    }
+    s.resolve();
+    let reqs = s.message_lines_needing_measure();
+    let answers: Vec<(u32, u32, u16, u64)> =
+        reqs.iter().map(|r| (r.frame, r.index, 1, r.key)).collect();
+    s.set_message_line_rows(&answers);
+    let texts: Vec<String> = s
+        .extract()
+        .into_iter()
+        .filter_map(|q| match q.content {
+            crate::script::QuadContent::Text { text: Some(t), .. } => Some(t),
+            _ => None,
+        })
+        .collect();
+    for want in ["abcde", "klmno", "uvwxyzuvwxyz", "ABCDEFGHIJ", "a\u{e9}"] {
+        assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
+    }
+    for uncut in ["abcdefghij", "klmnopqrst", "a\u{e9}\u{e9}\u{e9}"] {
+        assert!(!texts.iter().any(|t| t == uncut), "{uncut}: {texts:?}");
+    }
+}
+
 /// An anchor's `<Offset>` is read only after its `relativeTo` resolves and is not the object
 /// itself (`0x767946`-`0x767992`), so a skipped anchor reads, and logs, nothing of it.
 #[test]
