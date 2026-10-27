@@ -704,7 +704,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### order
 
-- A child that left the scroll draw is drawn once, by the flat pass, where the client's callback, which reads only the child's visibility, draws it a second time, clipped, at the ScrollFrame's place. ([`src/order.rs:530`](../crates/benilla-ui/src/order.rs#L530))
+- A child that left the scroll draw is drawn once, by the flat pass, where the client's callback, which reads only the child's visibility, draws it a second time, clipped, at the ScrollFrame's place. ([`src/order.rs:541`](../crates/benilla-ui/src/order.rs#L541))
 
 #### script
 
@@ -774,8 +774,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:333`](../crates/benilla-ui/src/script/modelframe.rs#L333))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:455`](../crates/benilla-ui/src/script/nameplate.rs#L455))
 - The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:911`](../crates/benilla-ui/src/script/nameplate.rs#L911))
-- A wrapper that decodes to no live widget takes `default_parent`, because the reference, with no `IsA` check, reads a wild pointer. ([`src/script/object/anchor_args.rs:159`](../crates/benilla-ui/src/script/object/anchor_args.rs#L159))
-- An `OnSizeChanged` that resolve produces fires at the next `UiScript::resolve`, because a Lua handler must not run in the middle of a level compaction. ([`src/script/object/toplevel.rs:74`](../crates/benilla-ui/src/script/object/toplevel.rs#L74))
+- A wrapper that decodes to no live widget takes `default_parent`, because the reference, with no `IsA` check, reads a wild pointer. ([`src/script/object/anchor_args.rs:218`](../crates/benilla-ui/src/script/object/anchor_args.rs#L218))
+- An `OnSizeChanged` that resolve produces fires at the next `UiScript::resolve`, because a Lua handler must not run in the middle of a level compaction. ([`src/script/object/toplevel.rs:77`](../crates/benilla-ui/src/script/object/toplevel.rs#L77))
 - A third `%s` gets an empty string, because the reference pushes two varargs (`0x6093f2 add esp,0x14`) and would read uninitialised stack. ([`src/script/pvp/mod.rs:318`](../crates/benilla-ui/src/script/pvp/mod.rs#L318))
 - A token resolving to guid 0 answers nil too. The reference jumps from the guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer. ([`src/script/pvp/mod.rs:567`](../crates/benilla-ui/src/script/pvp/mod.rs#L567))
 - With `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers the plain name, where the reference would format an empty string, because the decoration is install data. ([`src/script/pvp/mod.rs:571`](../crates/benilla-ui/src/script/pvp/mod.rs#L571))
@@ -831,8 +831,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - An index past 5 reads the last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client fault a hand-edited CVar reaches. ([`src/widget/kinds/mod.rs:950`](../crates/benilla-ui/src/widget/kinds/mod.rs#L950))
 - `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:1052`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1052))
 - On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1510`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1510))
-- Levels pack contiguously, because the reference's resuming cursor (`0x764fd3`/`0x764fd8`) leaves a hole past a wide gap ({0, 4, 6} at bound 7 gives {0, 1, 3} at bound 4). ([`src/widget/propagation.rs:180`](../crates/benilla-ui/src/widget/propagation.rs#L180))
-- The frame is still in the old parent's child list during `OnHide`, unlike the reference (`0x76ab34` unlinks first), because a handler that itself reparents must not find the lists half-spliced. ([`src/widget/propagation.rs:284`](../crates/benilla-ui/src/widget/propagation.rs#L284))
+- Levels pack contiguously, because the reference's resuming cursor (`0x764fd3`/`0x764fd8`) leaves a hole past a wide gap ({0, 4, 6} at bound 7 gives {0, 1, 3} at bound 4). ([`src/widget/propagation.rs:189`](../crates/benilla-ui/src/widget/propagation.rs#L189))
+- The frame is still in the old parent's child list during `OnHide`, unlike the reference (`0x76ab34` unlinks first), because a handler that itself reparents must not find the lists half-spliced. ([`src/widget/propagation.rs:312`](../crates/benilla-ui/src/widget/propagation.rs#L312))
 ### benilla-world
 
 #### clouds
