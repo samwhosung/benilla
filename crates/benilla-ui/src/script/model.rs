@@ -343,6 +343,8 @@ pub(crate) struct Model {
     /// `0x7663e6` to the capture, else the hovered frame, so a chorded press keeps the capture;
     /// cleared at `0x7664bb` once no button is down. A title-region press captures nothing.
     pub(crate) mouse_capture: Option<FrameHandle>,
+    /// The last press the world input hook `0x492b50` ate, so the world frame never saw it.
+    pub(crate) press_hooked: bool,
     /// Per frame, when its last single `OnClick` fired: the client's `[CButton+0x334]`, the whole
     /// double-click state. It has no button identity (left then right makes a double), is zeroed
     /// when a double fires, and nothing else clears it, not hide, disable or the cursor leaving.
@@ -1401,6 +1403,7 @@ impl Model {
             minimap_blip: None,
             mouse_down_on: HashMap::new(),
             mouse_capture: None,
+            press_hooked: false,
             last_click: HashMap::new(),
             pending_size_changed: Vec::new(),
             content_writes: Vec::new(),

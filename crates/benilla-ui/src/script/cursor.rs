@@ -167,6 +167,14 @@ pub struct HeldCursor {
 }
 
 impl HeldCursor {
+    /// A cursor holding `payload`, nothing else.
+    pub fn holding(payload: CursorPayload) -> Self {
+        Self {
+            payload: Some(payload),
+            ..Self::default()
+        }
+    }
+
     /// The payload, if any.
     pub fn payload(&self) -> Option<&CursorPayload> {
         self.payload.as_ref()
@@ -1045,6 +1053,30 @@ impl super::UiScript {
     /// ([`world_drop_click`]) takes the click.
     pub fn world_press_consumed(&self) -> bool {
         world_drop(&self.model_ref()).1
+    }
+
+    /// Whether the world input hook `0x492b50` ate the last press: a right press with a payload on
+    /// the cursor or a gift wrap pending (`0x492b62`-`0x492ba5`), which it clears with
+    /// `ClearCursor(1, 1)` (`0x492bb5`) and consumes, so the world frame, its own hook `0x492c20`
+    /// and its binding never see it.
+    pub fn press_hooked(&self) -> bool {
+        self.model_ref().press_hooked
+    }
+
+    /// The world input hook `0x492b50` on a right press the interface had no point to walk at,
+    /// as under a look session's locked cursor: it runs ahead of any frame and in any mode, but
+    /// only with no capture held (`0x76635c`-`0x766370`). Whether it ate the press.
+    pub fn hook_right_press(&mut self) -> bool {
+        let hooked = {
+            let model = self.model_ref();
+            model.mouse_capture.is_none()
+                && (model.cursor.is_some() || model.pending_wrap.is_some())
+        };
+        self.model_mut().press_hooked = hooked;
+        if hooked {
+            super::tick::verb(&self.lua, clear_cursor);
+        }
+        hooked
     }
 
     /// [`take_cursor_item_for_sale`], for the app's interact ladder.

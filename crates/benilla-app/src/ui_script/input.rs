@@ -393,6 +393,12 @@ pub(super) fn feed_ui_input(
                             press_consumed.0 |= took;
                             over_ui |= took;
                         }
+                    } else if *button == MouseButton::Right && *state == ButtonState::Pressed {
+                        // No point to walk at: the world input hook still runs ahead of the world
+                        // frame (`0x492b50`).
+                        let took = script.hook_right_press();
+                        press_consumed.0 |= took;
+                        over_ui |= took;
                     }
                     if *state == ButtonState::Pressed {
                         presses.0.push((*button, over_ui));
@@ -452,7 +458,8 @@ pub(super) fn feed_ui_input(
                 }
             }
             // A right press the world frame may take stops here for its hook, which runs ahead of
-            // the binding (`0x483c62`, `0x483c93`).
+            // the binding (`0x483c62`, `0x483c93`). One the world input hook ate (`0x492b50`)
+            // never reaches the world frame, in a look session or not.
             let right_press = matches!(
                 r.record,
                 super::Record::Button {
@@ -460,7 +467,7 @@ pub(super) fn feed_ui_input(
                     state: ButtonState::Pressed,
                 }
             );
-            if in_world && right_press && resumed.is_none() {
+            if in_world && right_press && resumed.is_none() && !script.press_hooked() {
                 walk.next = i;
                 walk.hooked = Some((i, over_ui));
                 walk.hook_due = true;

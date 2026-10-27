@@ -443,3 +443,60 @@ fn a_drag_whose_last_motion_is_in_the_release_frame_clicks_nothing() {
     app.update();
     assert_eq!(target(&app), None, "the drag selected nothing");
 }
+
+/// An item on the cursor, picked from the backpack's first slot.
+fn hold_an_item(app: &mut App) {
+    use benilla_ui::script::{CursorItem, CursorPayload, HeldCursor};
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .seed_held_cursor(HeldCursor::holding(CursorPayload::Item(CursorItem {
+            guid: 0x4000_0000_0000_0001,
+            bag: 0,
+            slot: 1,
+            item_id: 25,
+            item_class: None,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+            bar_placeable: false,
+            consumable: false,
+        })));
+}
+
+/// A right press with an item on the cursor is the world input hook's (`0x492b50`), in a look
+/// session or not: it clears the cursor (`ClearCursor(1, 1)` at `0x492bb5`) and eats the press,
+/// so the world frame's hook (`0x492c20`) never runs and the pending target stands.
+#[test]
+fn a_right_press_that_drops_the_cursor_keeps_the_pending_target() {
+    for freelook in [false, true] {
+        let mut app = client("CAMERAORSELECTORMOVE");
+        aim(&mut app);
+        if freelook {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .run_binding("MouselookStart()")
+                .unwrap();
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<crate::player::CameraControl>()
+                    .is_looking(),
+                "the mouselook holds the cursor"
+            );
+        }
+        arm_ground_cast(&mut app);
+        hold_an_item(&mut app);
+        right_click_at(&mut app, BESIDE_MOB);
+        app.update();
+        assert!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .cursor_payload()
+                .is_none(),
+            "freelook {freelook}: the hook cleared the cursor"
+        );
+        assert!(targeting(&app), "freelook {freelook}: the target stands");
+    }
+}
