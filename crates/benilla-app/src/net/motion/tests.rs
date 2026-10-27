@@ -241,8 +241,8 @@ fn resolve_facing_angle_spot_and_target() {
             [0.0, 0.0, 0.0],
             none
         ),
-        None,
-        "a point directly above (no horizontal delta) is degenerate"
+        Some(std::f32::consts::FRAC_PI_2),
+        "a point directly above takes `0x47f220`'s fixed 0.5π"
     );
 }
 

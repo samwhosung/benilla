@@ -74,22 +74,36 @@ impl GoalSource {
 }
 
 /// A [`MonsterMoveFacing`] as a WoW orientation for a unit at `unit_pos`: `Spot` and `Target`
-/// are the horizontal `atan2(dy, dx)` bearing; `None` also for an unstreamed or coincident target.
+/// are [`heading_between`] the two; `None` for no facing and for an unstreamed target.
 pub(in crate::net) fn resolve_facing(
     facing: MonsterMoveFacing,
     unit_pos: [f32; 3],
     target_pos: impl FnOnce(u64) -> Option<[f32; 3]>,
 ) -> Option<f32> {
-    let bear = |to: [f32; 3]| {
-        let (dx, dy) = (to[0] - unit_pos[0], to[1] - unit_pos[1]);
-        (dx * dx + dy * dy > 1e-6).then(|| dy.atan2(dx))
-    };
     match facing {
         MonsterMoveFacing::None => None,
         MonsterMoveFacing::Angle(a) => Some(a),
-        MonsterMoveFacing::Spot(spot) => bear(spot),
-        MonsterMoveFacing::Target(guid) => target_pos(guid).and_then(bear),
+        MonsterMoveFacing::Spot(spot) => Some(heading_between(unit_pos, spot)),
+        MonsterMoveFacing::Target(guid) => target_pos(guid).map(|to| heading_between(unit_pos, to)),
     }
+}
+
+/// `HeadingBetweenPoints` (`0x47f220`): the x-y heading from `from` to `to`. Under 2^-22
+/// (`[0x8029d4]`) a difference takes a fixed heading: `|dx|` gives 1.5π for `dy < 0`, else 0.5π
+/// (so a point under the unit is 0.5π); then `|dy|` gives π when `to` lies behind in x, else 0;
+/// otherwise `atan2(dy, dx)`. `dx` is rounded to a float and `dy` is not (`0x47f22a`).
+pub(super) fn heading_between(from: [f32; 3], to: [f32; 3]) -> f32 {
+    use std::f32::consts::PI;
+    const TINY: f32 = 1.0 / 4_194_304.0;
+    let dx = to[0] - from[0];
+    let dy = f64::from(to[1]) - f64::from(from[1]);
+    if dx.abs() < TINY {
+        return if dy < 0.0 { 1.5 * PI } else { 0.5 * PI };
+    }
+    if dy.abs() < f64::from(TINY) {
+        return if to[0] < from[0] { PI } else { 0.0 };
+    }
+    dy.atan2(f64::from(dx)) as f32
 }
 
 /// The horizontal bearing from `from` to `to`, `None` when they coincide.
@@ -623,6 +637,19 @@ mod tests {
             0,
             "a settled unit must stop dirtying its transform"
         );
+    }
+
+    /// `0x47f220`'s fixed headings: a point under the unit faces 0.5π, never "no direction".
+    #[test]
+    fn heading_between_takes_the_references_fixed_headings() {
+        let o = [10.0, 20.0, 0.0];
+        assert_eq!(heading_between(o, [10.0, 20.0, 5.0]), 0.5 * PI, "under the unit");
+        assert_eq!(heading_between(o, [10.0, 25.0, 0.0]), 0.5 * PI);
+        assert_eq!(heading_between(o, [10.0, 15.0, 0.0]), 1.5 * PI, "dy < 0");
+        assert_eq!(heading_between(o, [5.0, 20.0, 0.0]), PI, "behind in x");
+        assert_eq!(heading_between(o, [15.0, 20.0, 0.0]), 0.0);
+        let diag = heading_between(o, [9.0, 19.0, 0.0]);
+        assert!((diag + 3.0 * std::f32::consts::FRAC_PI_4).abs() < 1.0e-6, "atan2: {diag}");
     }
 
     #[test]
