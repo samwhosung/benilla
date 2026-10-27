@@ -67,12 +67,6 @@ impl InputRecords {
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &InputRecord> {
         self.records.iter()
     }
-
-    /// Set the frame's records, for a test of a reader of them.
-    #[cfg(test)]
-    pub(crate) fn set_for_test(&mut self, records: Vec<InputRecord>) {
-        self.records = records;
-    }
 }
 
 /// The eight keys the modifier mask is made of.

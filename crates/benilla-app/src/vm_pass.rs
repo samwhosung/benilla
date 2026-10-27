@@ -18,10 +18,10 @@
 //! dispatch `0x403620` is registered, then the frame time, category 5 (`0x420d63`), and last the
 //! frame pass, category 0x11 (`0x420d6a`, `0x442350`), whose interface layer runs the `OnUpdate`
 //! walk (`0x764330` → `0x765650` → `0x76b2c0`) before the draw. benilla runs the frame's input
-//! records first, ahead of the net drain: the UI's input pass and its bindings
-//! ([`crate::ui_script::UiInput`]), the world's mouse with the look session's click tests
-//! ([`crate::player::WorldMouse`]) and the world's clicks ([`crate::target::WorldClicks`]), so a
-//! handler and the calls it makes read the world as the last frame left it. Then the drain applies
+//! records first, ahead of the net drain: the UI's input pass, its bindings and the world clicks
+//! they make, each record's before the next ([`crate::ui_script::UiInput`]), then the world's mouse
+//! with the look session ([`crate::player::WorldMouse`]), so a handler and the calls it makes read
+//! the world as the last frame left it. Then the drain applies
 //! the packets, the world systems that move what a call reads with them run before
 //! [`VmPass::Resume`], and every other link follows: the feeds, the tick, the controller's
 //! frame-time step, the target chain's picks, the drains and the paint.
@@ -256,6 +256,9 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
             &VmPass::Member,
         ]);
         let drain = members(&[&crate::ui_script::UiDrain]);
+        // An exclusive system's access is the whole world's, which no comparison reads: it joins
+        // only placed there, as the input records' dispatch is.
+        let placed = members(&[&VmPass::Member]);
         // Why each system joins: a host, a phase member that meets the host, a sink's user. A
         // link's own set is its function's, when the system alone carries it.
         #[derive(Clone, Copy, PartialEq)]
@@ -275,7 +278,11 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                     return Joins::No;
                 };
                 if system.is_exclusive() {
-                    return Joins::No;
+                    return if placed[index[&key]] {
+                        Joins::Always
+                    } else {
+                        Joins::No
+                    };
                 }
                 let combined = declared.combined_access();
                 with_host.clone_from(combined);
@@ -714,7 +721,7 @@ mod tests {
     }
 
     /// The pass runs its phases in the reference's tick order: the input records (the UI's input
-    /// pass, the world's mouse, its clicks), then the net feeds (the unit feed), then the tick,
+    /// pass and its world clicks, the world's mouse), then the net feeds (the unit feed), then the tick,
     /// then the drains of what their Lua asked, then the paint.
     #[test]
     fn the_pass_runs_the_input_then_the_feeds_then_the_tick_then_the_drains() {
@@ -723,21 +730,15 @@ mod tests {
             return;
         };
         let at = |name: &str| at(&order, name);
-        let (input, mouse, click, feed, tick) = (
-            at("::feed_ui_input"),
+        let (input, mouse, feed, tick) = (
+            at("::dispatch_input_records"),
             at("::latch_world_mouse"),
-            at("::select_on_click"),
             at("::ui_unit::feed_units"),
             at("::tick_script"),
         );
         let (drain, paint) = (at("::drain_chat_input"), at("::paint_script"));
         assert!(
-            input < mouse
-                && mouse < click
-                && click < feed
-                && feed < tick
-                && tick < drain
-                && drain < paint,
+            input < mouse && mouse < feed && feed < tick && tick < drain && drain < paint,
             "{order:?}"
         );
     }
@@ -773,7 +774,7 @@ mod tests {
             .map(|k| update.name(*k))
             .collect();
         unordered.sort();
-        assert!(ahead >= 10, "the input records' hosts run ahead: {ahead}");
+        assert!(ahead >= 5, "the input records' hosts run ahead: {ahead}");
         assert!(
             unordered.is_empty(),
             "hosts in no declared order against the net drain:\n  {}",
@@ -1060,7 +1061,7 @@ mod tests {
             early.join("\n  ")
         );
         let asks = [at(&order, "::drain_ui_sounds"), at(&order, "::lua_music")];
-        for host in ["::act_on_interact", "::cinematic::feed_ui"] {
+        for host in ["::dispatch_input_records", "::cinematic::feed_ui"] {
             let host = at(&order, host);
             assert!(asks.iter().all(|a| host < *a), "{order:?}");
         }

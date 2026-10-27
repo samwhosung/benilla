@@ -54,7 +54,7 @@ macro_rules! with_system {
     ($step:expr, |$s:ident| $body:expr) => {
         match $step {
             Step::Click => {
-                let $s = click::select_on_click;
+                let $s = crate::ui_script::dispatch_input_records;
                 $body
             }
             Step::Net => {
@@ -170,19 +170,22 @@ fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
 #[test]
 fn a_right_clicks_cast_goes_out_ahead_of_the_packets() {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
-    assert!(runs_before(
+    let legs = || crate::target::WorldClickLegs;
+    assert!(crate::test_support::runs_before_in(
         &mut app,
+        legs(),
         click::act_on_right_click,
         crate::ui_action::drain_click_casts
     ));
-    assert!(runs_before(
+    assert!(crate::test_support::runs_before_in(
         &mut app,
+        legs(),
         click::act_on_interact,
         crate::ui_action::drain_click_casts
     ));
     assert!(runs_before(
         &mut app,
-        crate::ui_action::drain_click_casts,
+        crate::ui_script::dispatch_input_records,
         crate::net::apply_net_updates
     ));
     assert!(runs_before(

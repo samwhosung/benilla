@@ -68,9 +68,9 @@ pub struct WorldClick;
 pub struct WorldRightClick;
 
 /// The right button's press in the world (off the UI, or any press while a look holds the hidden
-/// cursor), sent before the click test starts, as the reference's `CGWorldFrame::OnMouseDown`
-/// (`0x483c40`), where ground targeting's right-click cancel and the repair-mode reset hang
-/// (`0x492c20`). It consumes nothing, so the turn and the release's context click still run.
+/// cursor), sent at its input record, as the reference's `CGWorldFrame::OnMouseDown` (`0x483c40`),
+/// where ground targeting's right-click cancel and the repair-mode reset hang (`0x492c20`). It
+/// consumes nothing, so the turn and the release's context click still run.
 #[derive(Message, Clone, Copy)]
 pub struct WorldRightPress;
 

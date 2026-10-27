@@ -13,7 +13,6 @@ use super::camera_zoom::{ZoomLimit, CAM_DISTANCE_MAX_RANGE};
 use crate::creature_anim::wrap_pi;
 use crate::net::Embodied;
 use benilla_assets::materials::WowModelMaterial;
-use benilla_world::interact::{WorldClick, WorldRightClick, WorldRightPress};
 use benilla_world::model_fade::{
     self_model_fade_alpha, FadeMaterials, PendingAppearFade, RenderFade, SELF_FADE_WINDOW,
 };
@@ -32,7 +31,7 @@ const CLICK_PITCH_TRAVEL: f32 = 2.0 * std::f32::consts::PI / 180.0;
 /// An undecided primary press: the reference's world-input state (`[0xbe1148]`), press time at
 /// `+0x14`, accumulators zeroed at `0x514910`/`0x514913`; ours are radians of camera rotation.
 #[derive(Clone, Copy)]
-pub(super) struct PressGesture {
+pub(crate) struct PressGesture {
     /// Seconds on the app clock when the button went down.
     at: f32,
     /// Accumulated |Δyaw| and |Δpitch| this press has asked the camera for, radians.
@@ -41,7 +40,8 @@ pub(super) struct PressGesture {
 }
 
 impl PressGesture {
-    fn new(now: f32) -> Self {
+    /// A press at `now`, with no travel yet (`0x514910`, `0x514919`).
+    pub(crate) fn new(now: f32) -> Self {
         Self {
             at: now,
             yaw_travel: 0.0,
@@ -49,7 +49,14 @@ impl PressGesture {
         }
     }
 
-    fn is_click(&self, now: f32) -> bool {
+    /// One motion's camera travel (`0x514400`).
+    pub(crate) fn add_travel(&mut self, yaw: f32, pitch: f32) {
+        self.yaw_travel += yaw;
+        self.pitch_travel += pitch;
+    }
+
+    /// Whether a release at `now` is a click, not a drag (`0x514ae0`).
+    pub(crate) fn is_click(&self, now: f32) -> bool {
         let elapsed = now - self.at;
         elapsed < CLICK_FREE_WINDOW
             || (elapsed < CLICK_HOLD_CEILING
@@ -665,9 +672,6 @@ pub(crate) struct WorldMouse {
     /// A `MouselookStart` after the frame's look session raised it: the controller hands the
     /// body off for it ([`Self::late_rise`]).
     late_rise: bool,
-    /// A `MouselookStart`/`Stop` ran since the last look session; each disarms the pending click
-    /// (`0x514810(0)`).
-    disarmed: bool,
     /// The `ToggleMouseMove` calls since the last look session.
     toggles: u32,
     /// The fourth argument of the last mouse-bit release since the last look session, which
@@ -737,12 +741,10 @@ impl WorldMouse {
         self.late_rise
     }
 
-    /// What the calls since the last look session hand it, taken: whether one disarmed the
-    /// pending click, the `ToggleMouseMove` count and the last release's sticky argument. A call
-    /// made after a session reaches the next one.
-    fn take_session_edges(&mut self) -> (bool, u32, Option<bool>) {
+    /// What the calls since the last look session hand it, taken: the `ToggleMouseMove` count and
+    /// the last release's sticky argument. A call made after a session reaches the next one.
+    fn take_session_edges(&mut self) -> (u32, Option<bool>) {
         (
-            std::mem::take(&mut self.disarmed),
             std::mem::take(&mut self.toggles),
             self.release_sticky.take(),
         )
@@ -767,7 +769,6 @@ impl WorldMouse {
     /// `MouselookStart` (`on`) or `MouselookStop`: one bit, whoever set it, so a stop also ends
     /// a right drag in flight, whose release then clears nothing.
     fn mouselook(&mut self, on: bool) {
-        self.disarmed = true;
         if on {
             self.scripted_rise |= !self.turn();
             self.scripted = true;
@@ -892,18 +893,6 @@ pub(crate) fn apply_late_look_calls(
     })
 }
 
-/// The right button's down edge in the world, before the press is judged a click or a drag:
-/// `CGWorldFrame::OnMouseDown` (`0x483c40`) runs its hook `0x492c20` ahead of the button's binding,
-/// so ground targeting's cancel and the repair-mode reset read it before the look session.
-pub(super) fn send_world_right_press(
-    rig: Res<CameraControl>,
-    mut world_right_press: MessageWriter<WorldRightPress>,
-) {
-    if rig.world_mouse.down(LookButton::Right) {
-        world_right_press.write(WorldRightPress);
-    }
-}
-
 #[derive(Component)]
 // `pub(crate)` for the scripted camera park's query; `FlyCam::park` is its one lever.
 pub(crate) struct FlyCam {
@@ -934,9 +923,9 @@ pub(crate) struct CameraPivot {
 }
 
 /// The mouse-look session: start, stop and hand-off between the buttons, cursor grab and restore,
-/// the look rotation, and the click tests behind [`WorldClick`]/[`WorldRightClick`]. Orbit and
-/// select are independent: each primary press engages its session at once and arms a click test,
-/// and the release decides on [`PressGesture::is_click`] alone. A session lasts while its
+/// the look rotation, and the travel of the click the mouse commands armed
+/// ([`crate::target::ClickArm`]), which their release judges. Orbit and select are independent:
+/// each primary press engages its session at once. A session lasts while its
 /// [`WorldMouse::channel`] is held, so a `MouselookStart` runs the right button's session.
 /// Returns whether a mouse motion reached the body's hand-off this frame: the motion handler
 /// `0x514400` hands the camera's facing and pitch on (`0x5103e0`) for each motion while the mouse
@@ -950,18 +939,12 @@ pub(super) fn run_look_session(
     window: &mut Window,
     cursor_opts: &mut CursorOptions,
     inspect_enabled: bool,
-    // A left press the UI consumed as a cursor-payload world drop, which must not also select.
-    click_consumed: bool,
-    world_click: &mut MessageWriter<WorldClick>,
-    world_right_click: &mut MessageWriter<WorldRightClick>,
-    left_click: &mut Option<PressGesture>,
-    right_click: &mut Option<PressGesture>,
+    // The click the mouse commands armed, whose travel the motion adds to (`0x514400`).
+    arm: &mut crate::target::ClickArm,
     look_cfg: LookConfig,
     // `cameraPivot`'s routing lives here because the reference's does: `0x50fee0`, the mouse-motion
     // handler, sends each motion event to the pitch or the bias.
     dynamics: &DynamicsInput,
-    // Seconds on the app clock, for the press predicate's two time gates.
-    now: f32,
     // The primary window has the OS focus.
     focused: bool,
 ) -> bool {
@@ -972,24 +955,12 @@ pub(super) fn run_look_session(
     } else {
         Vec2::ZERO
     };
-    // A chord is a both-button run, never a select: the reference kills the pending click and arms
-    // none while another primary's binding is held (`0x514ac1`, `0x51481a`). A `MouselookStart` or
-    // `Stop` disarms it too, ahead of the channel's move (`0x514810(0)` stores mode 0 unguarded,
-    // then `0x515090`), so a stop's release, or the button's after it, selects nothing.
-    let (disarmed, toggles, release_sticky) = rig.world_mouse.take_session_edges();
-    if rig.world_mouse.both() || disarmed {
-        *left_click = None;
-        *right_click = None;
-    }
-    // Both tests accumulate the rotation the press asked for, charged before the pitch clamp: the
-    // reference accumulates raw motion, so a drag pinned at the pitch limit still spends budget.
+    let (toggles, release_sticky) = rig.world_mouse.take_session_edges();
+    // The armed click accumulates the rotation the press asked for, charged before the pitch
+    // clamp: the reference accumulates raw motion, so a drag pinned at the pitch limit still spends
+    // budget.
     let (yaw_rate, pitch_rate) = (look_cfg.yaw_rate(), look_cfg.pitch_rate());
-    let dyaw = (motion.x * yaw_rate).abs();
-    let dpitch = (motion.y * pitch_rate).abs();
-    for test in [&mut *left_click, &mut *right_click].into_iter().flatten() {
-        test.yaw_travel += dyaw;
-        test.pitch_travel += dpitch;
-    }
+    arm.add_travel((motion.x * yaw_rate).abs(), (motion.y * pitch_rate).abs());
 
     // `ToggleMouseMove` (`0x50f910`), each call against the camera's mouselook bit as it stands:
     // set, it leaves through `0x50f940(0)`, which also clears the sticky bit (`0x50f95d`); clear,
@@ -997,8 +968,7 @@ pub(super) fn run_look_session(
     // body's hand-off wants the TurnOrAction bit (`0x5145e0`).
     for _ in 0..toggles {
         if rig.look.is_some() {
-            *left_click = None;
-            *right_click = None;
+            arm.disarm();
             rig.toggled = false;
             rig.follow.sticky = false;
             disengage_look(rig, window, cursor_opts);
@@ -1008,45 +978,20 @@ pub(super) fn run_look_session(
         }
     }
 
-    // Both buttons engage their session on the down edge, with no threshold (`0x51491f`); the click
-    // test rides along to the release. Looking hides and locks the cursor until the release.
+    // Both buttons engage their session on the down edge, with no threshold (`0x51491f`). Looking
+    // hides and locks the cursor until the release.
     if let (Some(_), true) = (rig.look, rig.toggled) {
         // A toggled mouselook holds no mouse bit. A press sets one, and its release is the one
-        // that ends mouselook (`0x514b70` → `0x50f940`), so the session becomes that channel's,
-        // with the click test its down edge arms.
+        // that ends mouselook (`0x514b70` → `0x50f940`), so the session becomes that channel's.
         let held = [LookButton::Right, LookButton::Left]
             .into_iter()
             .find(|&b| rig.world_mouse.channel(b));
         if let Some(b) = held {
             rig.toggled = false;
             rig.look = Some(b);
-            if rig.world_mouse.down(LookButton::Right) {
-                *right_click = (!rig.world_mouse.held(LookButton::Left) && !disarmed)
-                    .then(|| PressGesture::new(now));
-            } else if rig.world_mouse.down(LookButton::Left) && !inspect_enabled {
-                *left_click = (!click_consumed && !rig.world_mouse.turn() && !disarmed)
-                    .then(|| PressGesture::new(now));
-            }
         }
     } else if let Some(active) = rig.look {
         if !rig.world_mouse.channel(active) {
-            // The channel went down: settle its click test (a chord already cancelled both).
-            let test = match active {
-                LookButton::Left => left_click.take(),
-                LookButton::Right => right_click.take(),
-            };
-            if let Some(test) = test {
-                if test.is_click(now) {
-                    match active {
-                        LookButton::Left => {
-                            world_click.write(WorldClick);
-                        }
-                        LookButton::Right => {
-                            world_right_click.write(WorldRightClick);
-                        }
-                    }
-                }
-            }
             // Hand off to the other channel if it is held, as the reference keeps turning; a
             // button the UI holds never fired its binding.
             let other = match active {
@@ -1065,23 +1010,17 @@ pub(super) fn run_look_session(
         }
     } else {
         // `WorldMouse` has already dropped a press over the UI, the dev overlay or outside the
-        // viewport. Right-drag turns, and arms its click test unless left is held.
+        // viewport. Right-drag turns.
         if rig.world_mouse.down(LookButton::Right) {
             engage_look(rig, LookButton::Right, focused, window, cursor_opts);
-            *right_click = (!rig.world_mouse.held(LookButton::Left) && !disarmed)
-                .then(|| PressGesture::new(now));
         } else if rig.world_mouse.turn() {
             // `MouselookStart` with no button: the channel's rise enters the same freelook
-            // (`0x514840` → `0x51491f`), and no click is armed (`0x514810(0)`).
+            // (`0x514840` → `0x51491f`).
             engage_look(rig, LookButton::Right, focused, window, cursor_opts);
         } else if rig.world_mouse.down(LookButton::Left) && !inspect_enabled {
-            // Left-drag orbits, engaged on the press like right (`0x51491f`); the select settles
-            // at the release. While the inspector is armed, left belongs to it.
+            // Left-drag orbits, engaged on the press like right (`0x51491f`), a cursor-payload
+            // world drop included. While the inspector is armed, left belongs to it.
             engage_look(rig, LookButton::Left, focused, window, cursor_opts);
-            // A cursor-payload world drop still orbits (`0x51491f`) but must not also select.
-            *right_click = None;
-            *left_click = (!click_consumed && !rig.world_mouse.turn() && !disarmed)
-                .then(|| PressGesture::new(now));
         }
     }
 
@@ -2298,67 +2237,6 @@ mod tests {
         assert!(!rig.world_mouse.both());
         assert!(!rig.world_mouse.held(LookButton::Right));
         assert!(!rig.world_mouse.held(LookButton::Left));
-    }
-
-    /// A right mouse-down in the world ends repair mode (`0x492c68`), from the latch through the
-    /// press edge to the reset; the same press on a UI frame, or one that drops a held payload
-    /// (`0x492b50`), leaves it standing.
-    #[test]
-    fn a_right_press_in_the_world_ends_repair_mode_and_one_on_the_ui_does_not() {
-        use benilla_ui::script::{MerchantState, UiScript};
-        use bevy::ecs::system::RunSystemOnce;
-        use bevy::math::DVec2;
-
-        // One right press with repair mode armed; returns whether repair mode survived it.
-        let press = |over_ui: bool, payload_held: bool| {
-            let mut world = World::new();
-            let mut buttons = ButtonInput::<MouseButton>::default();
-            buttons.press(MouseButton::Right);
-            world.insert_resource(buttons);
-            world.insert_resource(crate::ui_script::PointerOverUi(over_ui));
-            world.insert_resource(crate::ui_script::CursorPayloadHeld(payload_held));
-            world.init_resource::<CameraControl>();
-            world.init_resource::<Messages<WorldRightPress>>();
-            world.spawn((
-                Camera::default(),
-                FlyCam {
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    speed: 0.0,
-                },
-            ));
-            let mut window = Window::default();
-            window.set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
-            world.spawn((window, PrimaryWindow));
-            let mut script = UiScript::new().unwrap();
-            script.set_merchant(Some(MerchantState {
-                can_repair: true,
-                ..MerchantState::default()
-            }));
-            script.run("ShowRepairCursor()").unwrap();
-            assert!(script.repair_mode(), "the repair vendor arms repair mode");
-            world.insert_non_send_resource(script);
-
-            world.run_system_once(latch_world_mouse).unwrap();
-            world.run_system_once(send_world_right_press).unwrap();
-            world
-                .run_system_once(crate::ui_merchant::end_repair_mode_on_right_press)
-                .unwrap();
-            world.non_send_resource::<UiScript>().repair_mode()
-        };
-
-        assert!(
-            !press(false, false),
-            "a right press in the world ends repair mode"
-        );
-        assert!(
-            press(true, false),
-            "a right press on a UI frame never reaches the world's hook"
-        );
-        assert!(
-            press(false, true),
-            "a press while a payload is held skips the repair reset"
-        );
     }
 
     /// The classifier (`0x510960`) reads the camera's command word, not the character's velocity,

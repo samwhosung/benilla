@@ -8,12 +8,11 @@ use bevy::math::DVec2;
 use super::super::camera_dynamics::{CameraOptions, SubjectState};
 use super::*;
 
-/// What the session's caller keeps between frames: the facing and the two click tests.
+/// What the session's caller keeps between frames: the facing and the armed click.
 #[derive(Resource, Default)]
 struct Hand {
     face_yaw: f32,
-    left: Option<PressGesture>,
-    right: Option<PressGesture>,
+    arm: crate::target::ClickArm,
     /// The session's answer: a motion reached the body's hand-off.
     handed: bool,
 }
@@ -24,7 +23,6 @@ fn look_frame(
     mut rig: ResMut<CameraControl>,
     cam: Single<&mut FlyCam>,
     window: Single<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
-    mut clicks: (MessageWriter<WorldClick>, MessageWriter<WorldRightClick>),
     mut hand: ResMut<Hand>,
 ) {
     let (mut window, mut opts) = window.into_inner();
@@ -49,14 +47,9 @@ fn look_frame(
         &mut window,
         &mut opts,
         false,
-        false,
-        &mut clicks.0,
-        &mut clicks.1,
-        &mut hand.left,
-        &mut hand.right,
+        &mut hand.arm,
         LookConfig::default(),
         &dynamics,
-        0.0,
         focused,
     );
 }
@@ -69,8 +62,6 @@ fn world(over_ui: bool) -> World {
     world.insert_resource(crate::ui_script::PointerOverUi(over_ui));
     world.init_resource::<CameraControl>();
     world.init_resource::<Hand>();
-    world.init_resource::<Messages<WorldClick>>();
-    world.init_resource::<Messages<WorldRightClick>>();
     world.spawn((
         Camera::default(),
         FlyCam {
@@ -270,10 +261,6 @@ fn the_right_release_ends_a_mouselook_its_press_started_on_the_ui() {
     frame(&mut w, 0.0);
     assert_eq!(w.resource::<CameraControl>().look, None);
     assert!(!is_mouselooking(&w));
-    assert!(
-        w.resource::<Messages<WorldRightClick>>().is_empty(),
-        "no click was armed"
-    );
 }
 
 /// The loading cover's world enter clears the whole word (`0x5144c0`).
@@ -371,17 +358,14 @@ fn mouselook_stop_while_unfocused_ends_it_and_the_focus_takes_nothing_back() {
     assert!(!w.resource::<CameraControl>().is_looking());
 }
 
-/// One bit, whoever set it: `MouselookStop` ends a right drag in flight and disarms its click, so
-/// the release after it selects nothing (`0x514810(0)`, then `0x515090(1, 0, …)`).
+/// One bit, whoever set it: `MouselookStop` ends a right drag in flight (`0x515090(1, 0, …)`); its
+/// disarm of the click is the VM's (`0x514810(0)`).
 #[test]
-fn mouselook_stop_ends_a_right_drag_and_its_release_clicks_nothing() {
+fn mouselook_stop_ends_a_right_drag() {
     let mut w = world(false);
     press(&mut w, MouseButton::Right);
     frame(&mut w, 0.0);
-    assert!(
-        w.resource::<Hand>().right.is_some(),
-        "the press armed a click"
-    );
+    assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
 
     lua(&mut w, "MouselookStop()");
     frame(&mut w, 0.0);
@@ -389,27 +373,18 @@ fn mouselook_stop_ends_a_right_drag_and_its_release_clicks_nothing() {
     assert!(!is_mouselooking(&w));
     release(&mut w, MouseButton::Right);
     frame(&mut w, 0.0);
-    assert!(w.resource::<Messages<WorldRightClick>>().is_empty());
     assert!(!is_mouselooking(&w));
-
-    // The control: the same press and release with no stop is a click.
-    let mut w = world(false);
-    press(&mut w, MouseButton::Right);
-    frame(&mut w, 0.0);
-    release(&mut w, MouseButton::Right);
-    frame(&mut w, 0.0);
-    assert_eq!(w.resource::<Messages<WorldRightClick>>().len(), 1);
 }
 
-/// `MouselookStart` under a left drag sets the other primary channel: the both-button run, its
-/// rise, and the left click disarmed; the left release hands the session to the mouselook.
+/// `MouselookStart` under a left drag sets the other primary channel: the both-button run and its
+/// rise; the left release hands the session to the mouselook. The left click's disarm is the
+/// VM's (`0x514ac1`).
 #[test]
 fn mouselook_start_under_a_left_drag_is_the_both_button_run() {
     let mut w = world(false);
     press(&mut w, MouseButton::Left);
     frame(&mut w, 0.0);
     assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Left));
-    assert!(w.resource::<Hand>().left.is_some());
 
     lua(&mut w, "MouselookStart()");
     w.resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(40.0, 0.0);
@@ -421,10 +396,6 @@ fn mouselook_start_under_a_left_drag_is_the_both_button_run() {
     }
     w.run_system_once(look_frame).unwrap();
     w.resource_mut::<ButtonInput<MouseButton>>().clear();
-    assert!(
-        w.resource::<Hand>().left.is_none(),
-        "the left click disarmed"
-    );
     let cam_yaw = yaw(&mut w);
     assert!(cam_yaw < 0.0);
     assert_eq!(
@@ -436,7 +407,6 @@ fn mouselook_start_under_a_left_drag_is_the_both_button_run() {
     release(&mut w, MouseButton::Left);
     frame(&mut w, 0.0);
     assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
-    assert!(w.resource::<Messages<WorldClick>>().is_empty());
 }
 
 /// `ToggleMouseMove` with no button enters mouselook (`0x50f910` → `0x50f930`): the cursor locks,

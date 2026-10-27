@@ -104,7 +104,7 @@ pub(super) fn plugin(app: &mut App) {
         (
             // After the frame's input records, which run ahead of the net drain.
             stamp("Update/pre-Net")
-                .after(crate::target::WorldClicks)
+                .after(crate::player::WorldMouse)
                 .before(WorldStage::Net),
             stamp("Update/Net")
                 .after(WorldStage::Net)

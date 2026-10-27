@@ -115,15 +115,13 @@ pub(super) fn dynamics_input(
 }
 
 /// The mouse's input records: the look session ([`run_look_session`]), its turn of the camera and
-/// its hand-off to the body, and the click tests behind [`WorldClick`] and [`WorldRightClick`].
-/// The reference's mouse handlers run in the frame's window input (`0x423920` at `0x420d23`): the
-/// press `0x514810`/`0x51491f`, the motion `0x514400` and the release `0x514b70`, ahead of the
-/// packets, so this reads the body as the last frame left it and a click it settles reaches the
-/// world's click handlers before the packets apply. [`control`], the frame time's step, reads
+/// its hand-off to the body, and the travel of the armed click ([`crate::target::ClickArm`]). The
+/// reference's mouse handlers run in the frame's window input (`0x423920` at `0x420d23`): the
+/// press `0x51491f`, the motion `0x514400` and the release `0x514b70`, ahead of the packets, so
+/// this reads the body as the last frame left it. [`control`], the frame time's step, reads
 /// what it handed on ([`LookSample`]).
 #[allow(clippy::type_complexity)]
 pub(super) fn sample_look(
-    time: Res<Time>,
     pointer: (
         Res<AccumulatedMouseMotion>,
         Res<camera::LookConfig>,
@@ -134,7 +132,6 @@ pub(super) fn sample_look(
     ),
     gates: (
         Res<InspectMode>,
-        Res<crate::ui_script::PlayerUiClickConsumed>,
         Res<crate::bindings::BindingsState>,
         Res<view_subject::ViewSubject>,
         Res<scoped_view::ScopedView>,
@@ -155,21 +152,15 @@ pub(super) fn sample_look(
         (With<Embodied>, Without<FlyCam>),
     >,
     window: Single<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
-    // A press starts a look and arms a click test, which the release settles on time and travel.
-    mut world_clicks: (MessageWriter<WorldClick>, MessageWriter<WorldRightClick>),
-    mut click_test: (
-        Local<Option<camera::PressGesture>>,
-        Local<Option<camera::PressGesture>>,
-    ),
+    // The click the mouse commands armed, whose travel the look's motion adds to.
+    mut arm: ResMut<crate::target::ClickArm>,
     mut sample: ResMut<LookSample>,
 ) {
-    let (left_click, right_click) = (&mut *click_test.0, &mut *click_test.1);
     let Ok(mut cam) = cameras.single_mut() else {
         return;
     };
     let (mut window, mut cursor_opts) = window.into_inner();
-    let (inspect, click_consumed, binds, view_subject, scoped) =
-        (&gates.0, &gates.1, &gates.2, &gates.3, &gates.4);
+    let (inspect, binds, view_subject, scoped) = (&gates.0, &gates.1, &gates.2, &gates.3);
     let input::LookInput {
         both_buttons,
         follow_command,
@@ -192,8 +183,8 @@ pub(super) fn sample_look(
         mover,
     } = body_gates(
         body.and_then(|(store, _)| store),
-        gates.7.single().unwrap_or(false),
-        &gates.6,
+        gates.6.single().unwrap_or(false),
+        &gates.5,
         &lock,
         view_subject,
     );
@@ -205,11 +196,10 @@ pub(super) fn sample_look(
     let mut opts_shadow = cursor_opts.bypass_change_detection().clone();
     // The facing before the look session, restored below when the mouse may not turn the body.
     let yaw_before_look = player.face_yaw;
-    // A loading cover cancels a gesture in flight: ending the look session would settle its click
-    // test and click the world we just left, so the tests are dropped first.
-    if gates.5.covering() {
-        *left_click = None;
-        *right_click = None;
+    // A loading cover cancels a gesture in flight: its release must not click the world we just
+    // left.
+    if gates.4.covering() {
+        arm.disarm();
     }
     let focused = window.focused;
     let looked = run_look_session(
@@ -221,14 +211,9 @@ pub(super) fn sample_look(
         &mut window,
         &mut opts_shadow,
         inspect.enabled,
-        click_consumed.0,
-        &mut world_clicks.0,
-        &mut world_clicks.1,
-        left_click,
-        right_click,
+        &mut arm,
         *pointer.1,
         &dynamics,
-        time.elapsed_secs(),
         focused,
     );
     // The mouse turns the view, but the body hand-off (`0x514474`) skips a body that is stunned,

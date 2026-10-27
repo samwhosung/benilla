@@ -1826,24 +1826,28 @@ mod tests {
         world
     }
 
-    /// The press latches the pick the word leaves, so the click reaches what the cursor showed:
-    /// the unit behind, not the one in front the word refuses.
-    #[test]
-    fn the_press_latches_the_pick_the_word_left() {
-        use crate::target::{latch_press_pick, PressPick};
+    /// The press's pick at `at` ([`PointPick`]).
+    fn press_at(world: &mut World, at: Vec2) -> crate::target::PressPick {
+        world
+            .run_system_cached_with(
+                |In(at): In<Option<Vec2>>, mut pick: PointPick| pick.at(at),
+                Some(at),
+            )
+            .expect("the press picks")
+    }
 
+    /// The press picks what the word leaves, so the click reaches what the cursor showed: the unit
+    /// behind, not the one in front the word refuses.
+    #[test]
+    fn the_press_picks_what_the_word_left() {
         let mut world = press_pick_world();
         unit_at(&mut world, 10, 5.0, foe());
         let rear = unit_at(&mut world, 11, 0.0, friend());
-
         pick_under(&mut world, Some(0x0100));
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        world
-            .run_system_cached(latch_press_pick)
-            .expect("the press latches");
-        assert_eq!(world.resource::<PressPick>().hovered.target, Some(rear));
+        assert_eq!(
+            press_at(&mut world, Vec2::splat(50.0)).hovered.target,
+            Some(rear)
+        );
     }
 
     /// The press traces its own pick at the cursor it was queued at (`0x481f00` → `0x481190`), not
@@ -1851,88 +1855,30 @@ mod tests {
     /// and a press beside it picks nothing though the hover stood on it.
     #[test]
     fn the_press_picks_what_is_under_the_press_not_the_last_hover() {
-        use crate::target::{latch_press_pick, PressPick};
-        use crate::ui_script::{InputRecord, Record};
-
         let mut world = press_pick_world();
         let unit = unit_at(&mut world, 10, 0.0, friend());
-        let press_at = |world: &mut World, at: Vec2| {
+        let cursor_at = |world: &mut World, at: Vec2| {
             world
-                .resource_mut::<crate::ui_script::InputRecords>()
-                .set_for_test(vec![InputRecord {
-                    record: Record::Button {
-                        button: MouseButton::Left,
-                        state: bevy::input::ButtonState::Pressed,
-                    },
-                    mods: Default::default(),
-                    at: Some(at),
-                }]);
-            let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
-            buttons.release_all();
-            buttons.clear();
-            buttons.press(MouseButton::Left);
-            world
-                .run_system_cached(latch_press_pick)
-                .expect("the press latches");
-            world.resource::<PressPick>().hovered.target
+                .query::<&mut Window>()
+                .single_mut(world)
+                .unwrap()
+                .set_cursor_position(Some(at));
         };
         // The hover stood off the unit, in the window's corner; the press comes at its centre.
-        assert_eq!(pick_under(&mut world, None).target, Some(unit));
-        world
-            .query::<&mut Window>()
-            .single_mut(&mut world)
-            .unwrap()
-            .set_cursor_position(Some(Vec2::splat(2.0)));
+        cursor_at(&mut world, Vec2::splat(2.0));
         assert_eq!(
             pick_under(&mut world, None).target,
             None,
             "the hover is off it"
         );
-        assert_eq!(press_at(&mut world, Vec2::splat(50.0)), Some(unit));
-        // And the other way: the hover on the unit, the press in the corner.
-        world
-            .query::<&mut Window>()
-            .single_mut(&mut world)
-            .unwrap()
-            .set_cursor_position(Some(Vec2::splat(50.0)));
-        assert_eq!(pick_under(&mut world, None).target, Some(unit));
-        assert_eq!(press_at(&mut world, Vec2::splat(2.0)), None);
-    }
-
-    /// The press latches once per press: a frame with no down edge keeps it, a drag included, and a
-    /// chord's second press does not re-latch (`0x51481a` refuses to arm while the other button is
-    /// held).
-    #[test]
-    fn only_a_lone_press_latches_the_pick() {
-        use crate::target::{latch_press_pick, PressPick};
-
-        let mut world = press_pick_world();
-        let unit = unit_at(&mut world, 10, 0.0, friend());
-        pick_under(&mut world, None);
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        world.run_system_cached(latch_press_pick).unwrap();
-        assert_eq!(world.resource::<PressPick>().hovered.target, Some(unit));
-        // The drag: the cursor leaves the unit with the button held.
-        world
-            .query::<&mut Window>()
-            .single_mut(&mut world)
-            .unwrap()
-            .set_cursor_position(Some(Vec2::splat(2.0)));
-        world.resource_mut::<ButtonInput<MouseButton>>().clear();
-        world.run_system_cached(latch_press_pick).unwrap();
-        assert_eq!(world.resource::<PressPick>().hovered.target, Some(unit));
-        // Right joins while left is still held, over nothing.
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Right);
-        world.run_system_cached(latch_press_pick).unwrap();
         assert_eq!(
-            world.resource::<PressPick>().hovered.target,
-            Some(unit),
-            "the chord's second press must not steal the latch"
+            press_at(&mut world, Vec2::splat(50.0)).hovered.target,
+            Some(unit)
         );
+        // And the other way: the hover on the unit, the press in the corner.
+        cursor_at(&mut world, Vec2::splat(50.0));
+        assert_eq!(pick_under(&mut world, None).target, Some(unit));
+        assert_eq!(press_at(&mut world, Vec2::splat(2.0)).hovered.target, None);
     }
 
     /// A GameObject of `entry` at depth `z` on the cursor's ray, of type 3 (CHEST) with these

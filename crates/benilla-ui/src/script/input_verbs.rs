@@ -102,6 +102,39 @@ pub enum FiredInput {
     CameraZoomOut(f32),
 }
 
+/// The click mode a mouse command arms (`CInputControl+0x18`), which the release's dispatch reads
+/// (`0x514d68`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickMode {
+    /// 1, `CameraOrSelectOrMoveStart` (`0x5141aa`): the release dispatches world click action 1
+    /// (`0x514d8b`), the select.
+    Select,
+    /// 2, `TurnOrActionStart` (`0x51413a`): the release dispatches action 4 (`0x514d77`), the
+    /// context action.
+    Action,
+}
+
+/// A step of the world click a mouse command takes, in call order, for the app's click: the
+/// reference's `ArmClick` (`0x514810`) and the release handler's dispatch (`0x514b70` →
+/// `DispatchWorldClick 0x481f60`), which run inside the command's call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickCall {
+    /// A nonzero mode stored with no primary command held: the press picks the world under the
+    /// cursor (`0x514827` → `0x481f00`), and the press time and travel start (`0x514910`).
+    Arm(ClickMode),
+    /// Mode 0 stored: `MouselookStart`/`Stop`'s `0x514810(0)` (`0x514223`, `0x514253`), or a press
+    /// of one primary while the other is held (`0x514ac1`).
+    Disarm,
+    /// The release of the last primary held (`0x514c35`): the armed click dispatches unless the
+    /// release is a drag (`0x514ae0`, `0x514d4b`).
+    Release,
+}
+
+/// The TurnOrAction bit of the input control's word, `0x1`.
+const TURN_OR_ACTION: u8 = 0x1;
+/// The CameraOrSelectOrMove bit, `0x2`.
+const CAMERA_OR_SELECT: u8 = 0x2;
+
 /// One call for the app's binding state, in call order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BindingInput {
@@ -124,6 +157,11 @@ pub(crate) struct InputState {
     turn_or_action: bool,
     /// The look-session calls since the app last drained them.
     look: Vec<LookCall>,
+    /// The two primary bits of `[InputControl+4]` (`0x1`, `0x2`) as the mouse commands moved
+    /// them, which `ArmClick` and the release handler test (`0x51481a`, `0x514c35`).
+    primaries: u8,
+    /// The world click steps since the app last drained them.
+    clicks: Vec<ClickCall>,
 }
 
 impl UiScript {
@@ -160,6 +198,59 @@ impl UiScript {
     /// session.
     pub fn take_look_calls(&mut self) -> Vec<LookCall> {
         std::mem::take(&mut self.model_mut().input.look)
+    }
+
+    /// Take the world click steps the mouse commands made since the last call, in call order.
+    pub fn take_click_calls(&mut self) -> Vec<ClickCall> {
+        std::mem::take(&mut self.model_mut().input.clicks)
+    }
+
+    /// Whether a mouse command made a world click step not yet taken.
+    pub fn has_click_calls(&self) -> bool {
+        !self.model_ref().input.clicks.is_empty()
+    }
+
+    /// The world enter's release of every command (`0x5144c0` → `0x514b70(-1, …)`): the primary
+    /// bits clear, and the app drops the click it armed.
+    pub fn release_mouse_commands(&mut self) {
+        self.model_mut().input.primaries = 0;
+    }
+}
+
+/// A primary command's press (`0x514840`), behind the arm the command makes first (`0x514810`):
+/// `mode` is the pair's click mode, `None` for `MouselookStart`, whose arm stores 0.
+fn press_primary(lua: &Lua, bit: u8, mode: Option<ClickMode>) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let input = &mut model.input;
+    let held = input.primaries;
+    match mode {
+        // `0x51481a`: a nonzero mode stores only while neither primary is held.
+        Some(mode) if held == 0 => input.clicks.push(ClickCall::Arm(mode)),
+        Some(_) => {}
+        None => input.clicks.push(ClickCall::Disarm),
+    }
+    // `0x51484c`: a bit already held changes nothing.
+    if held & bit != 0 {
+        return;
+    }
+    // `0x514ac1`: the press leaves another primary held beside it, which kills the armed click.
+    if held != 0 && mode.is_some() {
+        input.clicks.push(ClickCall::Disarm);
+    }
+    input.primaries |= bit;
+}
+
+/// A primary command's release (`0x514b70`): a bit not held changes nothing (`0x514b83`); the last
+/// primary's release dispatches the armed click (`0x514c35`, `0x514d68`).
+fn release_primary(lua: &Lua, bit: u8) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let input = &mut model.input;
+    if input.primaries & bit == 0 {
+        return;
+    }
+    input.primaries &= !bit;
+    if input.primaries == 0 {
+        input.clicks.push(ClickCall::Release);
     }
 }
 
@@ -239,10 +330,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         ("PitchDownStart", "PitchDownStop", HeldInput::PitchDown),
     ];
     for (start, stop, input) in held {
+        // The mouse pair's bit and click mode (`0x51413a`/`0x51414a`, `0x5141aa`/`0x5141ba`).
+        let primary = match input {
+            HeldInput::TurnOrAction => Some((TURN_OR_ACTION, ClickMode::Action)),
+            HeldInput::CameraOrSelectOrMove => Some((CAMERA_OR_SELECT, ClickMode::Select)),
+            _ => None,
+        };
         g.set(
             start,
             lua.create_function(move |lua, _: MultiValue| {
                 if gate(lua) {
+                    // `ArmClick` then the press, inside the call (`0x51413e`, `0x51414c`).
+                    if let Some((bit, mode)) = primary {
+                        press_primary(lua, bit, Some(mode));
+                    }
                     push(lua, BindingInput::Start(input));
                 }
                 Ok(())
@@ -252,6 +353,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             stop,
             lua.create_function(move |lua, args: MultiValue| {
                 if gate(lua) {
+                    if let Some((bit, _)) = primary {
+                        release_primary(lua, bit);
+                    }
                     push(lua, BindingInput::Stop(input));
                     // A mouse bit's release carries its fourth argument to the camera: the sticky
                     // flag through `0x6f1c10` with default 0 (`0x5141f6`), else 0 (`0x51417b`).
@@ -305,6 +409,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, _: MultiValue| {
+                // `0x514810(0)`, then `0x515090(1, on, …)`.
+                if on {
+                    press_primary(lua, TURN_OR_ACTION, None);
+                } else {
+                    lua.app_data_mut::<Model>()
+                        .expect("model app_data")
+                        .input
+                        .clicks
+                        .push(ClickCall::Disarm);
+                    release_primary(lua, TURN_OR_ACTION);
+                }
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.input.turn_or_action = on;
                 model.input.look.push(LookCall::Mouselook(on));
@@ -544,6 +659,79 @@ mod tests {
                 BindingInput::Fire(FiredInput::ToggleSheath),
                 BindingInput::Fire(FiredInput::CameraZoomIn(1.0)),
             ]
+        );
+    }
+
+    /// The mouse pair arms its click mode before its press (`0x514810` then `0x515090`) and the
+    /// last primary's release dispatches it (`0x514b70`): a lone button arms and releases, the
+    /// second of a chord kills the arm (`0x514ac1`) and only the last release dispatches, and a
+    /// call the gate refuses does neither.
+    #[test]
+    fn the_mouse_pair_arms_the_click_and_the_last_release_dispatches_it() {
+        use ClickCall::{Arm, Disarm, Release};
+        let mut s = UiScript::new().unwrap();
+        s.run_binding("CameraOrSelectOrMoveStart()").unwrap();
+        assert_eq!(s.take_click_calls(), [Arm(ClickMode::Select)]);
+        s.run_binding("CameraOrSelectOrMoveStop()").unwrap();
+        assert_eq!(s.take_click_calls(), [Release]);
+        s.run_binding("TurnOrActionStart() TurnOrActionStop()")
+            .unwrap();
+        assert_eq!(s.take_click_calls(), [Arm(ClickMode::Action), Release]);
+
+        // MOVEANDSTEER's body: the second press finds the first held, so it kills the arm and arms
+        // nothing; the first stop leaves a primary held, the second is the last.
+        s.run_binding("CameraOrSelectOrMoveStart() TurnOrActionStart()")
+            .unwrap();
+        assert_eq!(s.take_click_calls(), [Arm(ClickMode::Select), Disarm]);
+        s.run_binding("CameraOrSelectOrMoveStop()").unwrap();
+        assert!(s.take_click_calls().is_empty(), "the right is still held");
+        s.run_binding("TurnOrActionStop()").unwrap();
+        assert_eq!(s.take_click_calls(), [Release]);
+
+        // A stop whose bit is not held, and a start whose bit is, change nothing (`0x514b83`,
+        // `0x51484f`).
+        s.run_binding("TurnOrActionStop()").unwrap();
+        assert!(s.take_click_calls().is_empty());
+        s.run_binding("TurnOrActionStart() TurnOrActionStart()")
+            .unwrap();
+        assert_eq!(s.take_click_calls(), [Arm(ClickMode::Action)]);
+        s.run_binding("TurnOrActionStop()").unwrap();
+        s.take_click_calls();
+
+        // Outside an input event the gate refuses the pair whole (`0x494a50(0)`).
+        s.run("CameraOrSelectOrMoveStart() CameraOrSelectOrMoveStop()")
+            .unwrap();
+        assert!(!s.has_click_calls());
+    }
+
+    /// `MouselookStart` and `MouselookStop` store mode 0 unguarded (`0x514223`, `0x514253`) and
+    /// move the TurnOrAction bit: a right press under a mouselook finds its bit held and arms
+    /// nothing, and a left press beside it is the chord's.
+    #[test]
+    fn mouselook_disarms_and_holds_the_turn_bit() {
+        use ClickCall::{Arm, Disarm, Release};
+        let mut s = UiScript::new().unwrap();
+        s.run("MouselookStart()").unwrap();
+        assert_eq!(s.take_click_calls(), [Disarm]);
+        s.run_binding("TurnOrActionStart()").unwrap();
+        assert!(
+            s.take_click_calls().is_empty(),
+            "the bit is the mouselook's"
+        );
+        s.run_binding("CameraOrSelectOrMoveStart()").unwrap();
+        assert_eq!(s.take_click_calls(), [Disarm], "the chord's second press");
+        s.run_binding("CameraOrSelectOrMoveStop()").unwrap();
+        s.run("MouselookStop()").unwrap();
+        assert_eq!(s.take_click_calls(), [Disarm, Release]);
+        // A left drag, then a mouselook under it: the arm dies.
+        s.run_binding("CameraOrSelectOrMoveStart()").unwrap();
+        s.run("MouselookStart()").unwrap();
+        assert_eq!(s.take_click_calls(), [Arm(ClickMode::Select), Disarm]);
+        s.release_mouse_commands();
+        s.run_binding("CameraOrSelectOrMoveStop()").unwrap();
+        assert!(
+            s.take_click_calls().is_empty(),
+            "the world enter released all"
         );
     }
 

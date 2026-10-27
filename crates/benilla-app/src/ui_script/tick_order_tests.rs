@@ -38,7 +38,7 @@ macro_rules! with_system {
     ($step:expr, |$s:ident| $body:expr) => {
         match $step {
             Step::Input => {
-                let $s = input::feed_ui_input;
+                let $s = input::dispatch_input_records;
                 $body
             }
             Step::Net => {
@@ -342,7 +342,7 @@ fn a_right_press_as_the_cursor_reaches_a_button_is_the_interfaces_alone() {
     let mut c = client("");
     assert!(runs_before(
         &mut c.app,
-        input::feed_ui_input,
+        input::dispatch_input_records,
         super::arbitrate_pointer_over_ui
     ));
     assert!(runs_before(
