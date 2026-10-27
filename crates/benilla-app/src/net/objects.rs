@@ -895,9 +895,10 @@ fn tear_down(mut ent: EntityWorldMut) {
 }
 
 /// `SMSG_MONSTER_MOVE` or `SMSG_MONSTER_MOVE_TRANSPORT`: settles transport membership, then
-/// attaches the spline, or clears it and turns the unit to the facing at once. With a `transport`, `start`, the path and an
-/// `Angle` facing are deck-local and the unit rides as a [`TransportRider`]; without one, a riding
-/// unit leaves the deck, as vmangos drops it (`MoveSplineInit.cpp:156-159`).
+/// attaches the spline, or clears it and turns the unit to the facing at once. With a
+/// `transport`, `start`, the path and an `Angle` facing are deck-local and the unit rides as a
+/// [`TransportRider`]; without one, a riding unit leaves the deck, as vmangos drops it
+/// (`MoveSplineInit.cpp:156-159`).
 fn monster_move(
     guid: u64,
     transport: Option<u64>,
@@ -963,9 +964,10 @@ fn monster_move(
                 .and_then(|&te| transforms.get(te).ok())
                 .map(|t| bevy_to_wow(t.translation))
         };
-        // Transport membership, settled before any pose is read, and above the root gate, which
-        // refuses only the path. An `Angle` facing is deck-local (`MoveSplineInit.cpp:87`); a
-        // `Spot` or `Target` is not converted server-side, so it is rebased by the deck's yaw.
+        // Transport membership, settled before any pose is read and whether or not the path was
+        // refused: the root gate refuses only the path. An `Angle` facing is deck-local
+        // (`MoveSplineInit.cpp:87`); a `Spot` or `Target` is not converted server-side, so it is
+        // rebased by the deck's yaw.
         let deck_yaw = |t: u64| {
             index
                 .0

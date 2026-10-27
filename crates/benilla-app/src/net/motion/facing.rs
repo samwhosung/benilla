@@ -71,7 +71,9 @@ pub(in crate::net) fn set_raw_facing(commands: &mut Commands, e: Entity, wire: f
 }
 
 /// Whether [`drive_display_facing`] turns this body's display facing: a unit, not the body we
-/// steer. Anything else shows its raw facing at once, as the active mover's does (`0x600d03`).
+/// steer, which shows its raw facing at once (`0x600d03`). The reference smooths players too
+/// (`0x608070`, skipped only for the unit the camera follows at `0x60805b`); benilla's smoother
+/// does not yet, so a player here shows its raw facing at once.
 pub(in crate::net) fn smoothed(kind: Option<EntityKind>, active_mover: bool) -> bool {
     kind == Some(EntityKind::Unit) && !active_mover
 }
