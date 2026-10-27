@@ -299,3 +299,102 @@ fn a_scroll_frame_builds_its_first_scroll_child_only() {
         .unwrap());
     assert!(s.eval::<bool>("return SecondChild == nil").unwrap());
 }
+
+/// A region's anchor resolves as its `<Layers>` arm is read (`0x767964`), before the frame's
+/// `<Frames>` exist (`0x76a060` runs from the post-load hook), so a FontString anchored to its
+/// frame's own child frame logs the miss as spelled (`0x878440`) and drops the anchor
+/// (`0x76797b`); the line comes before any line the child's own load writes.
+#[test]
+fn a_region_anchored_to_its_frames_own_child_frame_logs_and_drops() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="Tip">
+                <Size><AbsDimension x="100" y="100"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <Layers><Layer>
+                    <FontString name="$parentLabel">
+                        <Anchors>
+                            <Anchor point="LEFT" relativeTo="$parentInner" relativePoint="RIGHT"/>
+                        </Anchors>
+                    </FontString>
+                </Layer></Layers>
+                <Frames>
+                    <Frame name="$parentInner" frameStrata="NOWHERE"/>
+                </Frames>
+            </Frame>
+        </Ui>"#,
+    );
+    let miss = at(&report, "Couldn't find relative frame: $parentInner");
+    let child = at(&report, "Frame TipInner: Unknown frame strata: NOWHERE");
+    assert!(miss < child, "{:?}", report.status.lines());
+    // No point from the dropped anchor: only the region's implicit creation anchor.
+    assert!(s
+        .eval::<bool>("local _, to = TipLabel:GetPoint(1) return to ~= TipInner")
+        .unwrap());
+}
+
+/// A frame anchored to a later sibling, or to a region of its own level, names something not yet
+/// built when its geometry is read (`0x76987c` precedes the level's child loop), so each logs and
+/// drops.
+#[test]
+fn a_frame_anchored_to_what_is_built_after_it_logs_and_drops() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="Early">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="Late"/></Anchors>
+            </Frame>
+            <Frame name="Late"/>
+            <Frame name="OwnArt">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="OwnArtTexture"/></Anchors>
+                <Layers><Layer>
+                    <Texture name="$parentTexture">
+                        <Anchors><Anchor point="CENTER" relativeTo="Late"/></Anchors>
+                    </Texture>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    at(&report, "Couldn't find relative frame: Late");
+    at(&report, "Couldn't find relative frame: OwnArtTexture");
+    assert_eq!(s.eval::<i64>("return Early:GetNumPoints()").unwrap(), 0);
+    assert_eq!(s.eval::<i64>("return OwnArt:GetNumPoints()").unwrap(), 0);
+}
+
+/// The reverse of the label-after-highlight shape: a `<ButtonText>` read before the highlight it
+/// names finds nothing (`0x7788c0` is one document-order loop), logs the miss, and keeps only its
+/// implicit anchor.
+#[test]
+fn a_label_before_its_highlight_logs_and_keeps_its_implicit_anchor() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Button name="Reversed">
+                <Size><AbsDimension x="200" y="16"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <ButtonText name="$parentText">
+                    <Anchors>
+                        <Anchor point="LEFT" relativeTo="$parentHighlight" relativePoint="RIGHT"/>
+                    </Anchors>
+                </ButtonText>
+                <HighlightTexture name="$parentHighlight">
+                    <Size><AbsDimension x="16" y="16"/></Size>
+                    <Anchors><Anchor point="LEFT"/></Anchors>
+                </HighlightTexture>
+            </Button>
+        </Ui>"#,
+    );
+    at(&report, "Couldn't find relative frame: $parentHighlight");
+    assert_eq!(
+        s.eval::<(i64, String, bool)>(
+            "local p, to = ReversedText:GetPoint(1) \
+             return ReversedText:GetNumPoints(), p, to == Reversed"
+        )
+        .unwrap(),
+        (1, "CENTER".to_string(), true)
+    );
+}

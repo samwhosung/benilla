@@ -196,7 +196,7 @@ impl Loader<'_> {
             let rel_raw = anchor.attr("relativeTo").filter(|r| !r.is_empty());
             let rel_to = rel_raw.map(|r| framexml::resolve_name(r, parent_name));
             let args = (point.to_string(), rel_to, rel_point.to_string());
-            let d = super::DeferredAnchor {
+            let d = super::XmlAnchor {
                 wrapper: wrapper.clone(),
                 region,
                 args,
@@ -204,8 +204,7 @@ impl Loader<'_> {
                 rel_raw: rel_raw.unwrap_or_default().to_string(),
                 dbg: dbg.to_string(),
             };
-            // Deferred while the enclosing subtree has not built its target yet.
-            self.apply_anchor(d, true);
+            self.apply_anchor(d);
         }
     }
 }

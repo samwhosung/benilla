@@ -105,7 +105,6 @@ pub fn load_into_under(
         status_root,
         report: LoadReport::default(),
         warned: HashSet::new(),
-        deferred_anchors: Vec::new(),
     };
     loader.report.warnings.extend(doc.warnings.iter().cloned());
     loader.load_doc(doc);
@@ -133,7 +132,6 @@ pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &s
         status_root: "",
         report: LoadReport::default(),
         warned: HashSet::new(),
-        deferred_anchors: Vec::new(),
     };
 
     let (own_name, parent_name) = loader.frame_names(wrapper);
@@ -263,11 +261,6 @@ struct Loader<'a> {
     pub(super) report: LoadReport,
     /// Warn-once keys.
     pub(super) warned: HashSet<String>,
-    /// Anchors whose named `relativeTo` did not exist yet, applied once the enclosing frame's
-    /// subtree is built: the reference resolves anchors at layout, this loader at `SetPoint`, so a
-    /// target built later waits here (`ClassTrainerFrameTemplates.xml:67` hangs the label off the
-    /// highlight). Each `decorate` drains its own.
-    pub(super) deferred_anchors: Vec<DeferredAnchor>,
 }
 
 /// The nodes an element's `LoadXML` reads, in the order it reads them: the reference merges no
@@ -309,8 +302,8 @@ impl<'l> IntoIterator for &'l Levels<'_> {
     }
 }
 
-/// One `SetPoint` held until its target exists.
-pub(super) struct DeferredAnchor {
+/// One `<Anchor>` as read, before its target is looked up ([`Loader::apply_anchor`]).
+pub(super) struct XmlAnchor {
     pub(super) wrapper: Table,
     /// A region wrapper (`call_region`) rather than a frame's (`call`).
     pub(super) region: bool,
@@ -878,8 +871,6 @@ impl Loader<'_> {
         parent_name: &str,
         dbg_name: &str,
     ) {
-        // This frame's deferred anchors drain before its OnLoad; a nested frame drains its own.
-        let deferred_mark = self.deferred_anchors.len();
         // 1 · the pre-load hook (`0x769770`): the own node's `id`, then the frame's load window
         //      opens (`0x7697c2`): until the post-load hook, its own OnShow and OnHide fire nothing.
         self.apply_preload_id(levels.own, wrapper, dbg_name);
@@ -911,8 +902,6 @@ impl Loader<'_> {
             }
         }
 
-        // 3b · deferred anchors: every child exists now, as at the reference's layout pass.
-        self.drain_deferred_anchors(deferred_mark);
         // 4 · this frame's OnLoad, now that its subtree is complete (bottom-up).
         if let Some(func) = onload {
             self.fire_onload(wrapper, &func, dbg_name);
@@ -966,10 +955,11 @@ impl Loader<'_> {
         self.typed_level(level, kind, wrapper, self_name, dbg);
     }
 
-    /// Apply one anchor, deferring it (when `may_defer`) while its named `relativeTo` is unbuilt.
-    /// A target still missing (`0x878440`) or the object itself (`0x878420`, `0x76797d`) is logged
-    /// and the anchor skipped.
-    pub(super) fn apply_anchor(&mut self, d: DeferredAnchor, may_defer: bool) {
+    /// Apply one anchor as it is read: a named `relativeTo` is looked up now (`0x767964` →
+    /// `0x76c700`), so a target not yet built is a miss, logged as spelled (`0x878440`, at
+    /// `0x76796d`), and the anchor dropped (`0x76797b`); the object itself (`0x878420`,
+    /// `0x76797d`) is logged and skipped too. Nothing retries it.
+    pub(super) fn apply_anchor(&mut self, d: XmlAnchor) {
         let rel: Value = match d.args.1.as_deref() {
             Some(name) => {
                 match crate::script::object::anchor_args::resolve_xml_relative_to(self.lua(), name)
@@ -982,11 +972,6 @@ impl Loader<'_> {
                             return;
                         }
                         Value::Table(t)
-                    }
-                    // Not built yet: retry once the subtree is complete; a miss then is real.
-                    None if may_defer => {
-                        self.deferred_anchors.push(d);
-                        return;
                     }
                     None => {
                         let raw = &d.rel_raw;
@@ -1007,7 +992,7 @@ impl Loader<'_> {
                 None => Value::Nil,
             },
         };
-        let DeferredAnchor {
+        let XmlAnchor {
             wrapper,
             region,
             args: (point, _, rel_point),
@@ -1026,14 +1011,6 @@ impl Loader<'_> {
             self.call(&wrapper, "SetPoint", args, &dbg);
         }
         crate::script::xml_layout::offset(self.lua, &wrapper, region, &point, v);
-    }
-
-    /// Apply the anchors deferred since `mark`, in order; a target still missing now warns.
-    pub(super) fn drain_deferred_anchors(&mut self, mark: usize) {
-        let pending: Vec<DeferredAnchor> = self.deferred_anchors.drain(mark..).collect();
-        for d in pending {
-            self.apply_anchor(d, false);
-        }
     }
 
     fn frame_names(&self, wrapper: &Table) -> (Option<String>, String) {
