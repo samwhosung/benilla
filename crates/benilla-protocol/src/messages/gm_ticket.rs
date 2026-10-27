@@ -63,12 +63,18 @@ pub fn gm_ticket_create(category: u8, map: u32, pos: [f32; 3], text: &str) -> Ve
     out
 }
 
-/// `CMSG_GMTICKET_UPDATETEXT` body: the category byte (`0x5efb2d`), then the text. vmangos stores
-/// the byte, so an edit re-files the ticket under it (`GMTicketHandler.cpp:59-61`).
+/// The most text bytes either client sender keeps: `SStrCopy` into a 0x7d0-byte buffer
+/// (`0x5ef7f0`, `0x5efacd`) leaves 1999 and the terminator.
+const TICKET_TEXT_MAX: usize = 0x7d0 - 1;
+
+/// `CMSG_GMTICKET_UPDATETEXT` body: the category byte (`0x5efb2d`), then the text cut at
+/// [`TICKET_TEXT_MAX`] bytes (`0x5efacd`). vmangos stores the byte, so an edit re-files the ticket
+/// under it (`GMTicketHandler.cpp:59-61`).
 pub fn gm_ticket_updatetext(category: u8, text: &str) -> Vec<u8> {
+    let text = &text.as_bytes()[..text.len().min(TICKET_TEXT_MAX)];
     let mut out = Vec::with_capacity(1 + text.len() + 1);
     out.push(category);
-    out.extend_from_slice(text.as_bytes());
+    out.extend_from_slice(text);
     out.push(0);
     out
 }
@@ -137,6 +143,17 @@ mod tests {
             gm_ticket_updatetext(7, "Still stuck."),
             b"\x07Still stuck.\0"
         );
+    }
+
+    /// `0x5efacd` copies at most 0x7d0 bytes, terminator included.
+    #[test]
+    fn the_updatetext_is_cut_at_1999_bytes() {
+        let body = gm_ticket_updatetext(1, &"a".repeat(3000));
+        assert_eq!(body.len(), 1 + 1999 + 1);
+        assert_eq!(body[1..2000], *"a".repeat(1999).as_bytes());
+        assert_eq!(body.last(), Some(&0));
+        let exact = gm_ticket_updatetext(1, &"b".repeat(1999));
+        assert_eq!(exact.len(), 2001, "1999 bytes fit whole");
     }
 
     /// The Lua `UPDATE_TICKET` event reverses this order; the wire does not.
