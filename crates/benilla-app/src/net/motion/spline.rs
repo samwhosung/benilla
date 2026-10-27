@@ -346,8 +346,9 @@ pub(in crate::net) fn sample_splines(
     if tick {
         *trace_next = time.elapsed_secs() + SPL_TRACE_SECS;
     }
-    // The paths that ended facing a unit, resolved once every path has moved this frame.
-    let mut facing_targets: Vec<(Entity, u64, [f32; 3])> = Vec::new();
+    // The paths that ended facing a unit, resolved once every path has moved this frame; `true`
+    // for a deck path, whose rider takes the facing.
+    let mut facing_targets: Vec<(Entity, u64, [f32; 3], bool)> = Vec::new();
     for (entity, spline, mut t, swimming, guid, rider, net, mover) in &mut q {
         let (wow_pos, facing, pitch) = spline.sample(now);
         // A deck path's sample is the rider's transport-local pose, composed later this frame.
@@ -360,13 +361,19 @@ pub(in crate::net) fn sample_splines(
                 if let Some(f) = facing {
                     rider.local_orientation = f;
                 }
-                // The end's facing is deck-local: `0x61a8d3` heads from the mover's transport-space
-                // position `+0x10` to the spot as sent. A `Target` keeps the tangent: the reference
-                // heads from that local position to the target's world position (`0x61a8c1`).
+                // The end heads from the mover's transport-space position `+0x10` (`0x61a8d3`):
+                // to a spot as sent, and to a target's world position (its `GetPosition`,
+                // `0x61a8c1`), the two frames mixed as the reference mixes them.
                 let end = match spline.final_facing {
                     MonsterMoveFacing::Angle(a) => Some(a),
                     MonsterMoveFacing::Spot(spot) => Some(heading_between(wow_pos, spot)),
-                    MonsterMoveFacing::Target(_) | MonsterMoveFacing::None => None,
+                    MonsterMoveFacing::Target(g) => {
+                        if done {
+                            facing_targets.push((entity, g, wow_pos, true));
+                        }
+                        None
+                    }
+                    MonsterMoveFacing::None => None,
                 };
                 if let Some(f) = end.filter(|_| done) {
                     rider.local_orientation = f;
@@ -408,7 +415,7 @@ pub(in crate::net) fn sample_splines(
             // sent, else a `Target` as the heading to that unit's position now, else a `Spot` as
             // the heading to the point (`0x47f220`), each from where the path left the unit.
             match spline.final_facing {
-                MonsterMoveFacing::Target(g) => facing_targets.push((entity, g, wow_pos)),
+                MonsterMoveFacing::Target(g) => facing_targets.push((entity, g, wow_pos, false)),
                 other => {
                     if let Some(f) = resolve_facing(other, wow_pos, |_| None) {
                         rest_facing(
@@ -430,7 +437,7 @@ pub(in crate::net) fn sample_splines(
             commands.entity(entity).remove::<Spline>();
         }
     }
-    for (entity, guid, at) in facing_targets {
+    for (entity, guid, at, on_deck) in facing_targets {
         let target = index.0.get(&guid).and_then(|&te| {
             standing
                 .get(te)
@@ -442,7 +449,14 @@ pub(in crate::net) fn sample_splines(
         let Some(f) = resolve_facing(MonsterMoveFacing::Target(guid), at, |_| target) else {
             continue;
         };
-        if let Ok((_, _, mut t, _, _, _, net, mover)) = q.get_mut(entity) {
+        let Ok((_, _, mut t, _, _, rider, net, mover)) = q.get_mut(entity) else {
+            continue;
+        };
+        if on_deck {
+            if let Some(mut rider) = rider {
+                rider.local_orientation = f;
+            }
+        } else {
             let smooth = smoothed(net.map(|n| n.kind), mover);
             rest_facing(&mut commands, entity, &mut t, smooth, f);
         }
@@ -2304,6 +2318,47 @@ mod final_facing_tests {
         let plain = create_spline(create(MonsterMoveFacing::None)).expect("a live walk");
         let (app, e) = run_to_the_end(plain);
         assert_yaw(&app, e, 0.0);
+    }
+
+    /// A deck path ending at a `Target` heads from its deck-local end (20, 0) to the target's
+    /// world position (20, 50), whatever the deck's own pose: the frames mix as at `0x61a8c1`.
+    #[test]
+    fn a_deck_path_ending_at_a_target_heads_from_its_local_end_to_the_world_target() {
+        let mut app = app();
+        let target = app
+            .world_mut()
+            .spawn(Transform::from_translation(wow_to_bevy([20.0, 50.0, 0.0])))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(0x42, target);
+        let spline = monster_move_spline(
+            along_x(),
+            1,
+            false,
+            10_000,
+            false,
+            true,
+            MonsterMoveFacing::Target(0x42),
+            Some(9),
+        )
+        .expect("a deck walk");
+        let e = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(wow_to_bevy([1000.0, 1000.0, 0.0])),
+                ended(spline),
+                TransportRider {
+                    transport_guid: 9,
+                    local_pos: [0.0; 3],
+                    local_orientation: 0.0,
+                },
+            ))
+            .id();
+        app.update();
+        let rider = app.world().get::<TransportRider>(e).unwrap();
+        assert_eq!(rider.local_orientation, FRAC_PI_2);
     }
 
     /// A deck path rests its rider at a deck-local facing: an `Angle` as sent, a `Spot` as the
