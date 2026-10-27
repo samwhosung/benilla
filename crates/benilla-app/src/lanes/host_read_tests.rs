@@ -87,8 +87,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_instance::track_instance_state", &["ui_instance::InstanceState"],
         "latches the dungeon just left once the map the transfer lands on is known, which the \
          reference latches inside the map load and the packet (`0x464ff0`, `0x49e6ac`)"),
-    ("::ui_items::feed::feed_item_stats", &["items::Items"],
-        "takes the item cache's fresh and dropped records as it pushes them"),
     ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions"],
         "drains the superseded ranks the bar's macros take; the known spells are the handlers' \
          alone"),

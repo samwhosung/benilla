@@ -481,10 +481,12 @@ pub(crate) struct Items {
     /// [`Items::template_answered_unknown`] and asked again by the next event's lookup
     /// ([`QueryCache::refuse`]); it is never kept as a record.
     templates: QueryCache<u32, ItemInfo>,
-    /// Landed since the last [`Self::take_fresh`]; pushed to the UI unprompted.
-    fresh: Vec<u32>,
-    /// Records a refusal removed since the last [`Self::take_dropped`], which the UI's copy drops.
-    dropped: Vec<u32>,
+    /// Each entry's last record change: the change count it landed or went at, and whether it is
+    /// held now. Read, never drained, by whoever follows the records ([`Self::changed_since`]):
+    /// the item-tooltip feed pushes a landed record unprompted and drops a removed one.
+    changes: std::collections::HashMap<u32, (u64, bool)>,
+    /// How many record changes [`Self::changes`] has seen.
+    change_count: u64,
     /// The reference's `PlayerPendingItemExpiration` list (`0x5ebd40`, at `CGPlayer_C + 0x1cc8`):
     /// `(guid, slot, seconds)` enchant updates for an item not yet held. `0x5ebde0` applies them
     /// when the item is set up (`0x5d8440`), counting seconds from then; they live as long as the
@@ -667,18 +669,36 @@ impl Items {
     pub(crate) fn insert_template(&mut self, entry: u32, info: Option<ItemInfo>) {
         match info {
             Some(info) => {
-                self.fresh.push(entry);
+                self.note_change(entry, true);
                 self.templates.insert(entry, info);
             }
             // A refusal moves the generation too: "still asking" to "unknown" is a display
             // transition for the cast-fail redisplay.
             None => {
                 if self.templates.refuse(entry) == crate::query_cache::Refused::Record {
-                    self.fresh.retain(|&id| id != entry);
-                    self.dropped.push(entry);
+                    self.note_change(entry, false);
                 }
             }
         }
+    }
+
+    /// `entry`'s record landed (`held`) or went.
+    fn note_change(&mut self, entry: u32, held: bool) {
+        self.change_count += 1;
+        self.changes.insert(entry, (self.change_count, held));
+    }
+
+    /// How many record changes have been made: a reader's cursor for [`Self::changed_since`].
+    pub(crate) fn change_count(&self) -> u64 {
+        self.change_count
+    }
+
+    /// Each entry whose record landed or went after change `count`, with whether it is held now.
+    pub(crate) fn changed_since(&self, count: u64) -> impl Iterator<Item = (u32, bool)> + '_ {
+        self.changes
+            .iter()
+            .filter(move |(_, &(at, _))| at > count)
+            .map(|(&entry, &(_, held))| (entry, held))
     }
 
     /// The template store, the one [`crate::wdb`] saves.
@@ -693,9 +713,10 @@ impl Items {
     /// Drops every template, which the interface's copy drops too: another realm's file replaces
     /// them.
     pub(crate) fn forget_templates(&mut self) {
-        self.dropped
-            .extend(self.templates.iter().map(|(&entry, _)| entry));
-        self.fresh.clear();
+        let held: Vec<u32> = self.templates.iter().map(|(&entry, _)| entry).collect();
+        for entry in held {
+            self.note_change(entry, false);
+        }
         self.templates.clear();
     }
 
@@ -708,21 +729,6 @@ impl Items {
     /// Every entry with a cached template.
     pub(crate) fn cached_template_ids(&self) -> Vec<u32> {
         self.templates.iter().map(|(&id, _)| id).collect()
-    }
-
-    /// Whether a template landed, or a refusal removed a record, since the last drains.
-    pub(crate) fn any_fresh_or_dropped(&self) -> bool {
-        !self.fresh.is_empty() || !self.dropped.is_empty()
-    }
-
-    /// Drain the entries whose template landed since the last drain.
-    pub(crate) fn take_fresh(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.fresh)
-    }
-
-    /// Drain the entries whose record a refusal removed since the last drain.
-    pub(crate) fn take_dropped(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.dropped)
     }
 
     /// Disconnect: drop the in-flight asks, the callbacks waiting on them or on the VM, and the
@@ -1035,13 +1041,29 @@ mod tests {
         assert!(c.enchant_deadline_ms(6).is_some_and(|ms| ms <= 30_000));
     }
 
+    /// A reader follows the records by its cursor, never draining them: a landed record shows
+    /// once past its cursor, a refusal of an unheld entry not at all, and a refusal of a held one
+    /// as gone.
     #[test]
-    fn landed_templates_drain_as_fresh_once() {
+    fn a_record_change_shows_past_a_readers_cursor() {
         let mut items = Items::default();
         items.insert_template(117, Some(info("Tough Jerky")));
         items.insert_template(9999, None);
-        assert_eq!(items.take_fresh(), vec![117]);
-        assert!(items.take_fresh().is_empty(), "a drain empties the queue");
+        let since = |items: &Items, at| {
+            let mut v: Vec<(u32, bool)> = items.changed_since(at).collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(since(&items, 0), [(117, true)]);
+        let cursor = items.change_count();
+        assert!(since(&items, cursor).is_empty(), "nothing past the cursor");
+        items.insert_template(117, None);
+        assert_eq!(since(&items, cursor), [(117, false)]);
+        assert_eq!(
+            since(&items, 0),
+            [(117, false)],
+            "a second reader reads it too"
+        );
     }
 
     /// The tooltip's open line waits for an unlocked instance; the click is the bare template bit,

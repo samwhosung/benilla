@@ -525,7 +525,7 @@ pub(super) fn copy_suffix_template(
 /// getter's lookup with a callback, which queries it here and asks a refused one again; a miss
 /// `GetItemInfo` read is served from the cache and never queried (`0x48e172`).
 pub(super) fn feed_item_stats(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, Items>>,
+    mut vm: crate::script_calls::VmWith<Res<'static, Items>>,
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
     // The caster the `$`-tokens read: its spell modifiers and its skills.
@@ -543,18 +543,22 @@ pub(super) fn feed_item_stats(
     classes: Option<Res<super::ItemClasses>>,
     icons: Option<Res<ItemDisplays>>,
     mut pending: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
+    // The record changes this VM has taken in ([`Items::changed_since`]).
+    mut cursor: Local<crate::ui_script::VmMemo<u64>>,
     // The views built from the player beyond the template, rebuilt when what they read moves.
     mut reads_player: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
     mut last_home: Local<crate::ui_script::VmMemo<Option<String>>>,
     mut last_reads: Local<crate::ui_script::VmMemo<Option<TokenReads>>>,
 ) {
-    vm.turn(|script, mut items| {
+    vm.turn(|script, items| {
         let Some(script) = script else {
             return;
         };
         let (pending, new_vm) = pending.get_reset(script);
+        let cursor = cursor.get(script);
         if new_vm {
             pending.extend(items.cached_template_ids());
+            *cursor = items.change_count();
         }
         let reads_player = reads_player.get(script);
         let last_home = last_home.get(script);
@@ -579,14 +583,18 @@ pub(super) fn feed_item_stats(
             pending.extend(items.cached_template_ids());
         }
 
-        // A refusal on a held record removed it from the cache (`0x556f35`): the VM's copy goes.
-        // Drained only when either holds an entry, so a quiet frame leaves the cache unchanged.
-        if items.any_fresh_or_dropped() {
-            for id in items.take_dropped() {
-                pending.remove(&id);
-                script.drop_item_template(id);
+        // A landed record is pushed unprompted; a refusal on a held record removed it from the
+        // cache (`0x556f35`), and the VM's copy goes.
+        if *cursor != items.change_count() {
+            for (id, held) in items.changed_since(*cursor) {
+                if held {
+                    pending.insert(id);
+                } else {
+                    pending.remove(&id);
+                    script.drop_item_template(id);
+                }
             }
-            pending.extend(items.take_fresh());
+            *cursor = items.change_count();
         }
         for id in script.take_item_stat_asks() {
             items.template(id, 0, Ask::Event(&commands));
