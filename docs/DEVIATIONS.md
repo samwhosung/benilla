@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 246
+- [benilla-app](#benilla-app): 247
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
@@ -209,7 +209,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A settle hold is summed and sent once on release, without the push, because it stands in for the reference's blocking load (`0x694920`), not a refused substep, and lasts seconds. ([`src/player/movement_net.rs:470`](../crates/benilla-app/src/player/movement_net.rs#L470))
 - The reference's blocking load (`0x694920`) waits out its reads before the frame goes on and has no such release; without one, a model that never loads would freeze our body for good. ([`src/player/state.rs:120`](../crates/benilla-app/src/player/state.rs#L120))
 - Root is not merged, because a bare pose unrooting us while the server still roots us streams motion into `CHEAT_TYPE_ROOT_MOVE`; vmangos keeps a rooted mover's root bit (`MovementHandler.cpp:1064`), so the reference's merge of it is a no-op anyway. ([`src/player/state.rs:202`](../crates/benilla-app/src/player/state.rs#L202))
-- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:497`](../crates/benilla-app/src/player/wire_in.rs#L497))
+- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:499`](../crates/benilla-app/src/player/wire_in.rs#L499))
 
 #### portrait
 
@@ -380,9 +380,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_loot
 
 - It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:265`](../crates/benilla-app/src/ui_loot/mod.rs#L265))
-- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:679`](../crates/benilla-app/src/ui_loot/mod.rs#L679))
-- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:707`](../crates/benilla-app/src/ui_loot/mod.rs#L707))
-- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:888`](../crates/benilla-app/src/ui_loot/mod.rs#L888))
+- A row cleared meanwhile stops counting, where `ClearLootRow` (`0x4c1f00`) cancels its callback (`0x4c1f52`) and never lowers the count (its writers are `0x4c1def`, `0x4c1e94` and `0x4c2af6` alone), so in 1.12.1 a group member's take of an uncached item before the answer leaves that corpse's window shut until the next loot response resets the count (`0x4c1def`), and ours opens. ([`src/ui_loot/mod.rs:658`](../crates/benilla-app/src/ui_loot/mod.rs#L658))
+- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:695`](../crates/benilla-app/src/ui_loot/mod.rs#L695))
+- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:723`](../crates/benilla-app/src/ui_loot/mod.rs#L723))
+- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:904`](../crates/benilla-app/src/ui_loot/mod.rs#L904))
 
 #### ui_loot_roll
 
@@ -647,9 +648,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:763`](../crates/benilla-protocol/src/events.rs#L763))
-- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1138`](../crates/benilla-protocol/src/events/decode.rs#L1138))
-- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1155`](../crates/benilla-protocol/src/events/decode.rs#L1155))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:774`](../crates/benilla-protocol/src/events.rs#L774))
+- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1148`](../crates/benilla-protocol/src/events/decode.rs#L1148))
+- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1165`](../crates/benilla-protocol/src/events/decode.rs#L1165))
 
 #### examples
 
@@ -666,8 +667,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The 1.12 client appends a zlib chat transcript to a category 2 ticket (`0x5ef936`); we omit it because vmangos never reads it and logs the leftover bytes. ([`src/messages/gm_ticket.rs:48`](../crates/benilla-protocol/src/messages/gm_ticket.rs#L48))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
 - A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
-- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1052`](../crates/benilla-protocol/src/messages/opcode.rs#L1052))
-- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:642`](../crates/benilla-protocol/src/messages/packet.rs#L642))
+- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1059`](../crates/benilla-protocol/src/messages/opcode.rs#L1059))
+- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:653`](../crates/benilla-protocol/src/messages/packet.rs#L653))
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:285`](../crates/benilla-protocol/src/messages/parse.rs#L285))
 - A type outside 1-7 reads as nothing rather than the reference's default arm, which under-pushes its returns. ([`src/messages/pet.rs:71`](../crates/benilla-protocol/src/messages/pet.rs#L71))
 - Both are read, told apart exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's. ([`src/messages/pet.rs:191`](../crates/benilla-protocol/src/messages/pet.rs#L191))
@@ -784,9 +785,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A token resolving to guid 0 answers nil too. The reference jumps from the guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer. ([`src/script/pvp/mod.rs:567`](../crates/benilla-ui/src/script/pvp/mod.rs#L567))
 - With `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers the plain name, where the reference would format an empty string, because the decoration is install data. ([`src/script/pvp/mod.rs:571`](../crates/benilla-ui/src/script/pvp/mod.rs#L571))
 - An in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`), because a blank looks like a nameless objective. ([`src/script/quest_log.rs:54`](../crates/benilla-ui/src/script/quest_log.rs#L54))
-- One signal per missed record, where the reference runs every callback of every miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records. ([`src/script/quest_log.rs:1138`](../crates/benilla-ui/src/script/quest_log.rs#L1138))
-- A local clock step mid-session (an NTP correction) jumps the reference's countdown but not ours, because the step changes no time the quest has left. ([`src/script/quest_log.rs:1194`](../crates/benilla-ui/src/script/quest_log.rs#L1194))
-- Four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips the store at `0x4e0a49` and answers 0, a client bug. ([`src/script/quest_log.rs:1554`](../crates/benilla-ui/src/script/quest_log.rs#L1554))
+- One signal per missed record, where the reference runs every callback of every miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records. ([`src/script/quest_log.rs:1190`](../crates/benilla-ui/src/script/quest_log.rs#L1190))
+- A local clock step mid-session (an NTP correction) jumps the reference's countdown but not ours, because the step changes no time the quest has left. ([`src/script/quest_log.rs:1260`](../crates/benilla-ui/src/script/quest_log.rs#L1260))
+- Four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips the store at `0x4e0a49` and answers 0, a client bug. ([`src/script/quest_log.rs:1627`](../crates/benilla-ui/src/script/quest_log.rs#L1627))
 - The reference bounds the index with `jbe` against the entry count (`0xb73760`), so an index one past the last entry reads the pool entry after it, which only an earlier, longer list wrote, or uninitialised heap (`0x4d5310`, the rebuild resetting the count without clearing, `0x4d547f`); that stale read answers 0 here, as an index further on does. ([`src/script/reputation.rs:563`](../crates/benilla-ui/src/script/reputation.rs#L563))
 - The folds are keyed by header, not by the reference's mask positions, whose rebuild folds bit N-1 by registration index before the sort (`0x4d5d49`-`0x4d5d68`) and whose fold verbs search `0xb736c0` before `0x4d5c40` sorts it (`0x4d6400`), so Inactive opens at login whenever a childless header exists and inactivating a header's last child shows it expanded; that is a reference bug, and the folds follow the header the player clicked. ([`src/script/reputation.rs:631`](../crates/benilla-ui/src/script/reputation.rs#L631))
 - Nesting stops at 32 where the reference recurses uncapped (its indent saturates at `0x80`), so a hostile structure cannot exhaust the stack. ([`src/script/saved.rs:21`](../crates/benilla-ui/src/script/saved.rs#L21))
