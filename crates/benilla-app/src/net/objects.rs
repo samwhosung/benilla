@@ -18,9 +18,8 @@ use benilla_world::model_fade::DespawnFade;
 use benilla_world::vis_chain::VisChainOnly;
 
 use super::motion::{
-    create_spline, final_yaw, gameobject_rotation, monster_move_spline, pose_transform,
-    resolve_facing, trace_create_spline, trace_move_snap, wire_yaw, write_pose, SplineStopped,
-    ROOT_APPLY_WIPE,
+    create_spline, gameobject_rotation, monster_move_spline, pose_transform, resolve_facing,
+    trace_create_spline, trace_move_snap, wire_yaw, write_pose, SplineStopped, ROOT_APPLY_WIPE,
 };
 use super::{
     ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp, ObjectStore,
@@ -1016,13 +1015,6 @@ fn monster_move(
         // The spline supersedes the relay stream: a splined player (charge, taxi) would otherwise
         // keep stale flags that outrank the spline in the anim selector.
         commands.entity(e).remove::<RemoteMotion>();
-        // The yaw the path rests at. A deck path's `Angle` is already deck-local; its `Spot` is a
-        // world point against a deck-local path, so it keeps the tangent.
-        let final_facing = match (transport, facing) {
-            (Some(_), MonsterMoveFacing::Angle(a)) => Some(a),
-            (Some(_), _) => None,
-            (None, _) => final_yaw(facing, path.last().copied()),
-        };
         match monster_move_spline(
             path,
             spline_id,
@@ -1030,7 +1022,7 @@ fn monster_move(
             duration_ms,
             flying,
             run_mode,
-            final_facing,
+            facing,
             transport,
         ) {
             Some(spline) => {

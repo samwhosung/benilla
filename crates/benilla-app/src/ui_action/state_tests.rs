@@ -461,7 +461,7 @@ fn a_melee_button_reaches_the_moving_bonus_while_both_units_run() {
                 grounded: true,
                 run_mode: true,
                 deck: None,
-                final_facing: None,
+                final_facing: benilla_protocol::MonsterMoveFacing::None,
             });
         }
         app.world_mut()

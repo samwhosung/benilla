@@ -275,7 +275,7 @@ mod tests {
                 Transform::default(),
                 Spline {
                     deck: None,
-                    final_facing: None,
+                    final_facing: benilla_protocol::MonsterMoveFacing::None,
                     points: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
                     start: Instant::now(),
                     duration: Duration::from_secs(600), // far from ending during the test

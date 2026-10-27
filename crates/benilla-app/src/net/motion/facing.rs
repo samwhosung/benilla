@@ -643,13 +643,20 @@ mod tests {
     #[test]
     fn heading_between_takes_the_references_fixed_headings() {
         let o = [10.0, 20.0, 0.0];
-        assert_eq!(heading_between(o, [10.0, 20.0, 5.0]), 0.5 * PI, "under the unit");
+        assert_eq!(
+            heading_between(o, [10.0, 20.0, 5.0]),
+            0.5 * PI,
+            "under the unit"
+        );
         assert_eq!(heading_between(o, [10.0, 25.0, 0.0]), 0.5 * PI);
         assert_eq!(heading_between(o, [10.0, 15.0, 0.0]), 1.5 * PI, "dy < 0");
         assert_eq!(heading_between(o, [5.0, 20.0, 0.0]), PI, "behind in x");
         assert_eq!(heading_between(o, [15.0, 20.0, 0.0]), 0.0);
         let diag = heading_between(o, [9.0, 19.0, 0.0]);
-        assert!((diag + 3.0 * std::f32::consts::FRAC_PI_4).abs() < 1.0e-6, "atan2: {diag}");
+        assert!(
+            (diag + 3.0 * std::f32::consts::FRAC_PI_4).abs() < 1.0e-6,
+            "atan2: {diag}"
+        );
     }
 
     #[test]

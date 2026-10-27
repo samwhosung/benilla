@@ -27,7 +27,7 @@ fn on_spline(speed: f32) -> crate::net::Spline {
         grounded: true,
         run_mode: true,
         deck: None,
-        final_facing: None,
+        final_facing: benilla_protocol::MonsterMoveFacing::None,
     }
 }
 

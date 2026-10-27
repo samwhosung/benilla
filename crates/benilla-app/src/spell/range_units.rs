@@ -169,7 +169,7 @@ mod tests {
             grounded: true,
             run_mode: true,
             deck: None,
-            final_facing: None,
+            final_facing: benilla_protocol::MonsterMoveFacing::None,
         }
     }
 
