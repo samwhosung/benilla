@@ -45,7 +45,7 @@ pub fn string_to_bool(s: &str) -> bool {
 /// ([`korean_particles`] for `|1`, [`french_articles`] for `|2`), and starts over on the result
 /// until neither is left. Deviation: a pass that changes nothing (`|01`, `|02`) ends the scan, where
 /// the reference loops on it for ever. Text with no `|` is returned as it came.
-pub(crate) fn expand_grammar_escapes(text: &str) -> std::borrow::Cow<'_, str> {
+pub fn expand_grammar_escapes(text: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
     let mut cur = Cow::Borrowed(text);
     while let Some(kind) = first_grammar_escape(cur.as_bytes()) {

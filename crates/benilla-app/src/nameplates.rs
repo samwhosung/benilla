@@ -211,6 +211,17 @@ fn name_line(flags: u32, key: Option<TitleKey>, strings: &NameLineStrings, name:
     line
 }
 
+/// The name block through the grammar rewrite `0x7716f0` before it is built (`0x6c703f`): the
+/// whole text `0x608f50` made, lines and all, so a `|1` or `|2` reads what came before it across
+/// the line breaks.
+fn grammar_lines(lines: Vec<String>) -> Vec<String> {
+    let text = lines.join("\n");
+    match benilla_ui::strings::expand_grammar_escapes(&text) {
+        std::borrow::Cow::Borrowed(_) => lines,
+        std::borrow::Cow::Owned(rewritten) => rewritten.split('\n').map(str::to_owned).collect(),
+    }
+}
+
 /// A live plate: its entity and stack, and the inputs the stack was built from, so a steady frame
 /// compares fields and re-reads neither the name cache nor the install strings.
 struct LiveName {
@@ -616,6 +627,7 @@ pub(crate) fn drive_nameplates(
                 if let Some(bracketed) = bracketed {
                     lines.push(format!("<{bracketed}>"));
                 }
+                let lines = grammar_lines(lines);
                 debug!("nameplates: rebuild {entity} -> {lines:?} ({color:?})");
                 let mesh = plates
                     .meshes
@@ -1374,5 +1386,20 @@ mod tests {
         assert_eq!(plates.materials.len(), 1);
         assert_eq!(plates.live.len(), 1);
         assert!(world.get_entity(plate).is_ok());
+    }
+
+    /// The block goes through `0x7716f0` whole: a plain block is left as it is, and a `|2` rewrites
+    /// its word on its own line.
+    #[test]
+    fn the_name_block_runs_the_grammar_rewrite() {
+        let plain = vec!["Bob".to_string(), "<Guild>".to_string()];
+        assert_eq!(grammar_lines(plain.clone()), plain);
+        assert_eq!(
+            grammar_lines(vec![
+                "Garde |2Orgrimmar".to_string(),
+                "<Guilde>".to_string()
+            ]),
+            ["Garde d'Orgrimmar", "<Guilde>"]
+        );
     }
 }
