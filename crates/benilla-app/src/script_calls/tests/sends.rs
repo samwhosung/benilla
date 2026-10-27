@@ -118,14 +118,24 @@ const DISPLAY: u16 = 131;
 const NATIVE_DISPLAY: u16 = 132;
 const PLAYER_FLAGS: u16 = 190;
 
-/// Our player created off the wire with display `display` on native display 49, seated.
+/// `PLAYER_VISIBLE_ITEM_1_0`, the head slot's entry, and the helm worn there, whose record the
+/// cache holds.
+const HEAD_ENTRY: u16 = 260;
+const HELM: u32 = 900;
+
+/// Our player created off the wire with display `display` on native display 49, the helm on,
+/// seated.
 fn seat_created(app: &mut App, display: u32) -> Entity {
+    app.world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(HELM, Some(crate::items::test_template("Helm")));
     let fields = ObjectFields::from_pairs(&[
         (2, 0x19),
         (22, 100),
         (28, 100),
         (DISPLAY, display),
         (NATIVE_DISPLAY, 49),
+        (HEAD_ENTRY, HELM),
     ])
     .into_created(benilla_protocol::messages::ObjectType::Player);
     app.world_mut().resource_mut::<SelfGuid>().0 = Some(ME);
@@ -156,16 +166,30 @@ fn seat_created(app: &mut App, display: u32) -> Entity {
 
 /// The server's `PLAYER_FLAGS` for us, one update packet.
 fn flags(app: &mut App, flags: u32) {
+    values(app, &[(PLAYER_FLAGS, flags)]);
+}
+
+/// One values packet of ours.
+fn values(app: &mut App, pairs: &[(u16, u32)]) {
     crate::net::handlers::dispatch(
         app.world_mut(),
         vec![
             benilla_protocol::SessionEvent::ObjectValues {
                 guid: ME,
-                fields: ObjectFields::from_pairs(&[(PLAYER_FLAGS, flags)]),
+                fields: ObjectFields::from_pairs(pairs),
             },
             benilla_protocol::SessionEvent::ObjectUpdateEnd,
         ],
     );
+}
+
+/// Whether our model shows `(helm hidden, cloak hidden)`.
+fn worn_hidden(app: &App, me: Entity) -> (bool, bool) {
+    let w = app.world();
+    crate::entities::WornPins::hidden(
+        w.get::<crate::entities::WornPins>(me),
+        &w.get::<ObjectStore>(me).unwrap().0,
+    )
 }
 
 /// `ShowHelm(flag)` and `ShowCloak(flag)` (`0x48de20`, `0x48de70`) read the live `PLAYER_FLAGS`
@@ -207,22 +231,16 @@ fn show_helm_and_show_cloak_send_on_the_live_bit_inside_their_calls() {
 /// the flag (`0x5eea45`); on another display it leaves the model alone (`0x5ee696`).
 #[test]
 fn show_helm_redresses_the_native_model_until_the_bit_moves() {
-    let hidden = |app: &App, me| {
-        let w = app.world();
-        crate::entities::WornPins::hidden(
-            w.get::<crate::entities::WornPins>(me),
-            &w.get::<ObjectStore>(me).unwrap().0,
-        )
-    };
+    let hidden = worn_hidden;
     let (mut app, rx) = client();
     let me = seat_created(&mut app, 49);
-    eval::<()>(&mut app, "ShowHelm(0) ShowCloak(0) ShowCloak(1)");
+    eval::<()>(&mut app, "ShowHelm(0) ShowCloak(1)");
     assert_eq!(
         hidden(&app, me),
         (true, false),
-        "the helm comes off at the call"
+        "the helm comes off at the call; no cloak is worn to put on"
     );
-    assert_eq!(sent(&rx), ["helm", "cloak"]);
+    assert_eq!(sent(&rx), ["helm"]);
 
     // The answer, then a `/togglehelm` and its answer: each edge dresses by the flag.
     flags(&mut app, 0x400);
@@ -243,6 +261,48 @@ fn show_helm_redresses_the_native_model_until_the_bit_moves() {
     eval::<()>(&mut app, "ShowHelm(0)");
     assert_eq!(hidden(&app, me), (false, false));
     assert_eq!(sent(&rx), ["helm"]);
+
+    // No head item with a display: a show leaves the model alone (`0x5ee66e`, `0x5ee67b`).
+    let (mut app, _rx) = client();
+    let me = seat_created(&mut app, 49);
+    flags(&mut app, 0x400);
+    values(&mut app, &[(HEAD_ENTRY, 0)]);
+    eval::<()>(&mut app, "ShowHelm(1)");
+    assert_eq!(hidden(&app, me), (true, false));
+}
+
+/// A call's re-dress ends at the next one by the flag: a display rebuild (`0x60abe0` →
+/// `0x5fb200` → `0x5ed700`, the bit at `0x5ed802`) and a new head item (`0x5dee30` → `0x5df0de`).
+#[test]
+fn a_rebuild_or_a_new_helm_dresses_by_the_flag_again() {
+    let (mut app, _rx) = client();
+    app.world_mut()
+        .insert_resource(crate::entities::Creatures::from_catalog(
+            benilla_formats::CreatureCatalog::from_record_rows(
+                &[(49, 1, 0, 0), (50, 2, 0, 0)],
+                &[(1, 7), (2, 7)],
+                &[7],
+            ),
+        ));
+    let me = seat_created(&mut app, 49);
+    eval::<()>(&mut app, "ShowHelm(0)");
+    assert_eq!(worn_hidden(&app, me), (true, false));
+    values(&mut app, &[(DISPLAY, 50)]);
+    assert_eq!(
+        worn_hidden(&app, me),
+        (false, false),
+        "the body rebuilt for another display wears the helm the flag shows"
+    );
+
+    values(&mut app, &[(DISPLAY, 49)]);
+    eval::<()>(&mut app, "ShowHelm(0)");
+    assert_eq!(worn_hidden(&app, me), (true, false));
+    values(&mut app, &[(HEAD_ENTRY, HELM + 1)]);
+    assert_eq!(
+        worn_hidden(&app, me),
+        (false, false),
+        "a new helm, by the flag"
+    );
 }
 
 /// `SetActionBarToggles` (`0x4e76e0`) sends `CMSG_SET_ACTIONBAR_TOGGLES` inside its call

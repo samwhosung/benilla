@@ -89,20 +89,51 @@ pub(crate) struct Equipment {
 
 /// The active player's helm and cloak as a `ShowHelm` or `ShowCloak` call left its model, ahead of
 /// the server: on the native display the call attaches (`0x5ee6af`) or detaches (`0x5ee76e`) the
-/// piece, and the next edge of the piece's `PLAYER_FLAGS` bit re-dresses it by the flag
-/// (`0x5eea45`-`0x5eea8e`). Each is `Some(shown)` from the call to that edge.
+/// piece. Every later re-dress goes by the flag, ending the call's: the piece's `PLAYER_FLAGS` edge
+/// (`0x5eea45`-`0x5eea8e`), a display rebuild (`0x604990` → `0x5fb200` → `0x5ed700`, the bit at
+/// `0x5ed802`, `0x5ed81a`), its visible item's change (`0x5dee30` → `0x5df0de`) and its item
+/// record's arrival (`0x5ed880`).
 #[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub(crate) struct WornPins {
-    helm: Option<bool>,
-    cloak: Option<bool>,
+    helm: Option<WornPin>,
+    cloak: Option<WornPin>,
 }
 
+/// One piece as a call left it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct WornPin {
+    shown: bool,
+    /// The slot's item record was still asked for at the call, so its arrival re-dresses it.
+    waiting: bool,
+}
+
+/// The equipment slots of the two pieces, head and back.
+const HEAD: u8 = 0;
+const BACK: u8 = 14;
+
 impl WornPins {
-    /// A call's re-dress of `piece`.
-    pub(crate) fn pin(&mut self, piece: benilla_ui::script::WornDisplay, shown: bool) {
+    /// A call's re-dress of `piece`, made while its slot's item record was `waiting`.
+    pub(crate) fn pin(
+        &mut self,
+        piece: benilla_ui::script::WornDisplay,
+        shown: bool,
+        waiting: bool,
+    ) {
+        *self.slot(piece) = Some(WornPin { shown, waiting });
+    }
+
+    fn slot(&mut self, piece: benilla_ui::script::WornDisplay) -> &mut Option<WornPin> {
         match piece {
-            benilla_ui::script::WornDisplay::Helm => self.helm = Some(shown),
-            benilla_ui::script::WornDisplay::Cloak => self.cloak = Some(shown),
+            benilla_ui::script::WornDisplay::Helm => &mut self.helm,
+            benilla_ui::script::WornDisplay::Cloak => &mut self.cloak,
+        }
+    }
+
+    /// The equipment slot `piece` wears in.
+    pub(crate) fn equipment_slot(piece: benilla_ui::script::WornDisplay) -> u8 {
+        match piece {
+            benilla_ui::script::WornDisplay::Helm => HEAD,
+            benilla_ui::script::WornDisplay::Cloak => BACK,
         }
     }
 
@@ -117,6 +148,31 @@ impl WornPins {
         }
     }
 
+    /// The body rebuilt for a new display (`0x60abe0` deletes the model at `+0xd30`): both pieces
+    /// dressed by the flag.
+    pub(crate) fn rebuilt(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Equipment slot `slot`'s visible item changed (`0x5df0de`): its piece goes by the flag.
+    pub(crate) fn visible_moved(&mut self, slot: u8) {
+        match slot {
+            HEAD => self.helm = None,
+            BACK => self.cloak = None,
+            _ => {}
+        }
+    }
+
+    /// The item records that have landed, `landed(slot)`: a piece whose record was asked for at
+    /// the call is dressed by the flag once it lands (`0x5ed880` → `0x5ed700`).
+    pub(crate) fn records_landed(&mut self, landed: impl Fn(u8) -> bool) {
+        for (pin, slot) in [(&mut self.helm, HEAD), (&mut self.cloak, BACK)] {
+            if pin.is_some_and(|p| p.waiting) && landed(slot) {
+                *pin = None;
+            }
+        }
+    }
+
     /// `(helm hidden, cloak hidden)` as the model shows them: a call's re-dress, else the bit.
     pub(crate) fn hidden(
         pins: Option<&Self>,
@@ -124,9 +180,31 @@ impl WornPins {
     ) -> (bool, bool) {
         let pins = pins.copied().unwrap_or_default();
         (
-            pins.helm.map_or(s.player_hides_helm(), |shown| !shown),
-            pins.cloak.map_or(s.player_hides_cloak(), |shown| !shown),
+            pins.helm.map_or(s.player_hides_helm(), |p| !p.shown),
+            pins.cloak.map_or(s.player_hides_cloak(), |p| !p.shown),
         )
+    }
+}
+
+#[cfg(test)]
+mod worn_pins_tests {
+    use super::WornPins;
+    use benilla_protocol::messages::ObjectFields;
+    use benilla_ui::script::WornDisplay;
+
+    /// A hide made while the slot's record was asked for holds until the record lands, which
+    /// dresses the piece by the flag (`0x5ed880` → `0x5ed700`); one made over a cached record does
+    /// not wait on it.
+    #[test]
+    fn a_waited_record_landing_dresses_by_the_flag() {
+        let shown = ObjectFields::default();
+        let mut pins = WornPins::default();
+        pins.pin(WornDisplay::Helm, false, true);
+        pins.pin(WornDisplay::Cloak, false, false);
+        pins.records_landed(|_| false);
+        assert_eq!(WornPins::hidden(Some(&pins), &shown), (true, true));
+        pins.records_landed(|slot| slot == 0 || slot == 14);
+        assert_eq!(WornPins::hidden(Some(&pins), &shown), (false, true));
     }
 }
 

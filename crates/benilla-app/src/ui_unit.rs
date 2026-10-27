@@ -1152,6 +1152,7 @@ pub(crate) struct WornDisplaySteps<'w, 's> {
         (&'static ObjectStore, &'static mut crate::entities::WornPins),
         With<SelfPlayer>,
     >,
+    items: Res<'w, crate::items::Items>,
 }
 
 impl WornDisplaySteps<'_, '_> {
@@ -1166,9 +1167,20 @@ impl WornDisplaySteps<'_, '_> {
             WornDisplay::Helm => s.player_hides_helm(),
             WornDisplay::Cloak => s.player_hides_cloak(),
         };
-        // The piece on the model, on the native display alone (`0x5ee690`, `0x5ee75e`).
-        if s.unit_displayid().is_some() && s.unit_displayid() == s.unit_native_displayid() {
-            pins.pin(set.piece, set.show);
+        // The piece on the model, on the native display alone (`0x5ee690`, `0x5ee75e`); a show only
+        // for a worn item whose record gives a display (`0x5ee66e`, `0x5ee67b`).
+        let display = s
+            .player_visible_item_entry(crate::entities::WornPins::equipment_slot(set.piece))
+            .and_then(|entry| self.items.template(entry, 0, crate::query_cache::Ask::Read))
+            .map_or(0, |t| t.display_info_id);
+        let native =
+            s.unit_displayid().is_some() && s.unit_displayid() == s.unit_native_displayid();
+        if native && (display != 0 || !set.show) {
+            // A hide while the record is still asked for is re-dressed when it lands (`0x5ed880`).
+            let waiting = s
+                .player_visible_item_entry(crate::entities::WornPins::equipment_slot(set.piece))
+                .is_some_and(|entry| !self.items.template_known(entry));
+            pins.pin(set.piece, set.show, waiting);
         }
         // The bodiless toggle only while the bit says the opposite (`0x5ee6c4`, `0x5ee783`).
         if set.show == hidden {
