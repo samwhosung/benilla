@@ -6,7 +6,6 @@ use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
 use super::{click, scan, Hovered, PressPick, Selection};
-use crate::creature_anim::SwingMessage;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
 use crate::vplates::PlateClicks;
 use benilla_world::interact::WorldClick;
@@ -161,25 +160,19 @@ impl Fix {
         self.make_unit_with(entity, &[]);
     }
 
-    /// `SMSG_SPELL_START` by `caster` aimed at us, as the spell handler hands it on.
+    /// `SMSG_SPELL_START` by `caster` aimed at us, as the spell handler owes its select.
     pub(super) fn cast_at_us(&mut self, caster: Entity) {
-        self.app
-            .world_mut()
-            .resource_mut::<Messages<crate::spell::net::CastAtPlayer>>()
-            .write(crate::spell::net::CastAtPlayer { caster, seq: 0 });
+        scan::owe_acquire(self.app.world_mut(), caster, scan::Acquire::Caster);
     }
 
-    /// The frame's acquire over the swings and casts written since the last, which it consumes as
-    /// the frame's reader does.
+    /// A swing at us by `attacker`, as the swing's handler owes its select.
+    pub(super) fn swung_at_us(&mut self, attacker: Entity) {
+        scan::owe_acquire(self.app.world_mut(), attacker, scan::Acquire::Attacker);
+    }
+
+    /// The packet's end over the selects owed since the last.
     pub(super) fn acquire(&mut self) {
-        let world = self.app.world_mut();
-        world
-            .run_system_once(scan::auto_acquire)
-            .expect("the acquire runs");
-        world
-            .resource_mut::<Messages<crate::spell::net::CastAtPlayer>>()
-            .clear();
-        world.resource_mut::<Messages<SwingMessage>>().clear();
+        scan::run_owed_selects_now(self.app.world_mut());
     }
 
     /// The target chain's bind of what the writers parked.
@@ -318,25 +311,10 @@ fn a_charmed_player_is_refused_by_every_selector() {
             "an attacker acquired",
             false,
             |f| {
-                let (me, mob) = (f.app.world().resource::<GuidIndex>().0[&ME], f.mob);
+                let mob = f.mob;
                 *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
-                f.app
-                    .world_mut()
-                    .resource_mut::<Messages<SwingMessage>>()
-                    .write(SwingMessage {
-                        attacker: mob,
-                        victim: Some(me),
-                        hit_info: 0,
-                        victim_state: 1,
-                        damage: 1,
-                        school: 0,
-                        displayed: true,
-                        seq: 0,
-                    });
-                f.app
-                    .world_mut()
-                    .run_system_once(scan::auto_acquire)
-                    .unwrap();
+                f.swung_at_us(mob);
+                f.acquire();
             },
             Some(MOB),
             false,
@@ -349,10 +327,7 @@ fn a_charmed_player_is_refused_by_every_selector() {
                 let mob = f.mob;
                 f.make_unit(mob);
                 f.cast_at_us(mob);
-                f.app
-                    .world_mut()
-                    .run_system_once(scan::auto_acquire)
-                    .unwrap();
+                f.acquire();
             },
             Some(MOB),
             false,
@@ -405,25 +380,10 @@ fn a_charmed_player_is_refused_by_every_selector() {
 fn an_attacker_acquired_with_the_cursor_up_is_bound() {
     let mut f = fix(false);
     f.cursor_up();
-    let (me, mob) = (f.app.world().resource::<GuidIndex>().0[&ME], f.mob);
+    let mob = f.mob;
     *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
-    f.app
-        .world_mut()
-        .resource_mut::<Messages<SwingMessage>>()
-        .write(SwingMessage {
-            attacker: mob,
-            victim: Some(me),
-            hit_info: 0,
-            victim_state: 1,
-            damage: 1,
-            school: 0,
-            displayed: true,
-            seq: 0,
-        });
-    f.app
-        .world_mut()
-        .run_system_once(scan::auto_acquire)
-        .expect("the acquire runs");
+    f.swung_at_us(mob);
+    f.acquire();
     f.bind();
     assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));
     assert_eq!(f.selected(), None);
@@ -477,10 +437,7 @@ fn a_caster_acquired_with_the_cursor_up_is_bound() {
     let mob = f.mob;
     f.make_unit(mob);
     f.cast_at_us(mob);
-    f.app
-        .world_mut()
-        .run_system_once(scan::auto_acquire)
-        .expect("the acquire runs");
+    f.acquire();
     f.bind();
     assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));
     assert_eq!(f.selected(), None);
@@ -1001,28 +958,23 @@ fn an_interact_attack_signals_its_select_before_the_swing() {
 }
 
 /// The attacker's select (`0x6259fe` → `SetSelection 0x493540`) signals inside the packet's
-/// handler: its `PLAYER_TARGET_CHANGED` listeners run there (`0x49389c`).
+/// handler (`0x49389c`): its `PLAYER_TARGET_CHANGED` listeners run behind the select's send, at
+/// the packet's place on the release lane.
 #[test]
 fn an_acquired_attacker_signals_its_select_in_place() {
     let mut f = fix(false);
-    let (me, mob) = (f.app.world().resource::<GuidIndex>().0[&ME], f.mob);
+    let mob = f.mob;
     f.make_unit(mob);
     *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
     rolling_listener(&mut f);
-    f.app
-        .world_mut()
-        .resource_mut::<Messages<SwingMessage>>()
-        .write(SwingMessage {
-            attacker: mob,
-            victim: Some(me),
-            hit_info: 0,
-            victim_state: 1,
-            damage: 1,
-            school: 0,
-            displayed: true,
-            seq: 0,
-        });
+    f.swung_at_us(mob);
     f.acquire();
+    assert_eq!(
+        wire_order(&f.rx),
+        ["SetSelection 0x31"],
+        "the listener waits"
+    );
+    crate::lanes::fire_in_order(f.app.world_mut());
     assert_eq!(f.selected(), Some(MOB));
-    assert_eq!(wire_order(&f.rx), ["SetSelection 0x31", "RandomRoll"]);
+    assert_eq!(wire_order(&f.rx), ["RandomRoll"]);
 }

@@ -1201,11 +1201,6 @@ pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[
          `0x5e7dd0`), off the swing refusals",
     ),
     (
-        "::target::scan::auto_acquire",
-        "the attacked and cast-at acquires' `SelectTarget`, which the reference runs inside its \
-         packet (`0x6259fe`, `0x6e799c`), off the swings and the spell starts",
-    ),
-    (
         "::ui_tradeskill::drain_trade_skill",
         "the repeat craft's hook, which the reference runs inside the cast's go, its call to \
          `0x4fd7b0` (`0x6e81e7`), off the cast events",

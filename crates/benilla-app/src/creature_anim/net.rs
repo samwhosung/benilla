@@ -150,10 +150,13 @@ fn on_attacker_state(
     mut sinks: ImpactSinks,
     mut play_seq: ResMut<PlaySeq>,
     tutorials: Option<Res<crate::tutorial::Tutorials>>,
+    // The self-defence acquire the swing owes, absent in a harness without the target plugin.
+    acquires: Option<ResMut<crate::target::OwedSelects>>,
 ) {
     if let SessionEvent::AttackerState(s) = ev {
         attacker_state(
             tutorials.as_deref(),
+            acquires.map(|a| a.into_inner()),
             s,
             &index,
             &self_guid,
@@ -281,6 +284,7 @@ fn ai_reaction(
 /// `COMBAT_TEXT_UPDATE` word come off the same packet in [`crate::combat_log`], after this.
 fn attacker_state(
     tutorials: Option<&crate::tutorial::Tutorials>,
+    acquires: Option<&mut crate::target::OwedSelects>,
     s: AttackerState,
     index: &GuidIndex,
     self_guid: &SelfGuid,
@@ -339,6 +343,16 @@ fn attacker_state(
         };
         receive_swing(swing, pending, sinks);
         swings.write(swing);
+        // A swing at us selects its attacker when nothing is selected (`0x6259c9`-`0x6259fe`),
+        // after the victim's feedback and ahead of the packet's line (`0x625a2c`).
+        if self_guid.0 == Some(s.victim) && victim.is_some() {
+            if let Some(acquires) = acquires {
+                acquires.push(crate::target::OwedSelect::Acquire(
+                    e,
+                    crate::target::Acquire::Attacker,
+                ));
+            }
+        }
     } else if swing.victim.is_some_and(|v| {
         // The unresolved-attacker leg (`0x625823` → `0x625a3e`) calls the gated dispatcher
         // (`0x625a6d` → `0x624530`), so the lootable gate applies here too.

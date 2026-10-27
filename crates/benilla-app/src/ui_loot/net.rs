@@ -25,10 +25,11 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-/// An admitted response for an object we hold selects a looted unit (`0x5ebc35` → `0x48f3a0`)
-/// before the window opens (`0x4c1cb0`), so the outgoing target's teardown closes a window still
-/// open on it. One for an object we lack shows `ERR_LOOT_DIDNT_KILL` and returns (`0x5ebb33`,
-/// mask 1, `0x5ebb3f`) before the latch (`0x5ebb60`) and the open. One that lands while our own
+/// An admitted response for an object we hold selects a looted unit (`0x5ebc35` → `0x48f3a0`),
+/// signalling at that place, before the window opens (`0x4c1cb0`), so the outgoing target's
+/// teardown closes a window still open on it. One for an object we lack shows
+/// `ERR_LOOT_DIDNT_KILL` and returns (`0x5ebb33`, mask 1, `0x5ebb3f`) before the latch
+/// (`0x5ebb60`) and the open. One that lands while our own
 /// body moves takes the move-start close (`0x5ebc3a`-`0x5ebc51`), which the loot lane runs after
 /// the copier's end, or the drain when the window waits on an item template. A close owed ahead of
 /// it takes the window it found first ([`OwedAhead`]), on the lane ahead of this one's steps. The
@@ -41,6 +42,8 @@ fn on_response(
     index: Res<crate::net::GuidIndex>,
     errors: Res<UiErrorKeys>,
     items: Res<crate::items::Items>,
+    // Where the select's signals wait for the packet's end; absent in a harness without targets.
+    owed_selects: Option<ResMut<crate::target::OwedSelects>>,
 ) {
     let SessionEvent::LootResponse {
         guid,
@@ -74,7 +77,10 @@ fn on_response(
         "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
         rows.len()
     );
-    select.select_unit(guid);
+    match owed_selects {
+        Some(mut owed) => select.select_unit_in_packet(guid, &mut owed),
+        None => select.select_unit(guid),
+    }
     let seam = &mut select.seam;
     seam.loot.open(guid, loot_type, gold, rows);
     seam.loot.note_replaced_latch(latch_before);

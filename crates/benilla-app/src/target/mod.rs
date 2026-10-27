@@ -80,7 +80,9 @@ pub(crate) use relations::{
 // pet bar's; the melee probe's press with nothing selected.
 #[cfg(test)]
 pub(crate) use scan::LastEnemy;
-pub(crate) use scan::{AttackNearestRequest, AttackPick, CreatureTypes, Owed};
+pub(crate) use scan::{
+    Acquire, AttackNearestRequest, AttackPick, CreatureTypes, Owed, OwedSelect, OwedSelects,
+};
 // The chat layer's by-name asks (`/target`, `/assist`), and the typemask `TargetByName`'s
 // candidate feed shares.
 pub(crate) use by_name::{
@@ -451,7 +453,6 @@ impl Plugin for TargetPlugin {
                         by_name::follow_requests,
                     )
                         .chain(),
-                    scan::auto_acquire,
                     // The melee probe's press, the player's Attack; the TAB keys and ATTACKTARGET
                     // run their bodies' `TargetNearestEnemy` and `AttackTarget` as script calls.
                     crate::ui_action::attack_nearest_probe,

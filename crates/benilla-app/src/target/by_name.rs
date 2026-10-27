@@ -912,6 +912,20 @@ impl SelectCommit<'_, '_> {
         }
     }
 
+    /// [`Self::select_unit`] inside a packet's handler, which goes on after it: the store, the
+    /// send and the re-swing in place, and its signals owed at this place to the packet's end
+    /// ([`super::OwedSelect::Signals`]), whose listeners then run behind it.
+    pub(crate) fn select_unit_in_packet(&mut self, guid: u64, owed: &mut super::OwedSelects) {
+        let before = super::click::Standing::of(&self.selection, &self.seam);
+        let was = self.selection.guid;
+        self.select_unit(guid);
+        if self.selection.guid != was {
+            owed.push(super::OwedSelect::Signals(
+                before.owing_debt(SelectDebt::default()),
+            ));
+        }
+    }
+
     /// `0x48f3a0`'s select on a looted object, which tests `TYPEMASK_UNIT` first (`0x48f3af`).
     pub(crate) fn select_unit(&mut self, guid: u64) {
         if let Some(entity) = self.held_unit(guid) {
