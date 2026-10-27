@@ -1197,9 +1197,9 @@ impl super::UiScript {
     /// Fire one `QUEST_LOG_UPDATE` for each missed record that landed, after the frame's landings,
     /// so a handler that walks the log reads every one of them.
     // Deviation: one signal per missed record, where the reference runs every callback of every
-    // miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via
-    // `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler
-    // over k first-seen records.
+    // miss as its record lands (creatures in `0x556e20` at `0x556f91`, items at `0x55bea8` and
+    // `0x55bf39` in `0x55bdb0`, from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a
+    // walking handler over k first-seen records.
     pub fn flush_quest_log_refires(&mut self) {
         let due = std::mem::take(&mut self.model_mut().quest_store.due);
         for _ in 0..due {
