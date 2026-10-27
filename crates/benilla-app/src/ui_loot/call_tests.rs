@@ -123,6 +123,7 @@ pub(super) fn client() -> Loot {
             ERR_LOOT_NO_UI = "ERR_LOOT_NO_UI"
             ERR_LOOT_DIDNT_KILL = "ERR_LOOT_DIDNT_KILL"
             YOU_LOOT_MONEY = "You loot %s"
+            LOOT_MONEY_SPLIT = "Your share of the loot is %s."
             GOLD = "Gold" SILVER = "Silver" COPPER = "Copper"
             SEEN = {}
             local f = CreateFrame("Frame")

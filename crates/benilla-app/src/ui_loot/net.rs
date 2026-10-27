@@ -142,9 +142,14 @@ pub(super) fn on_removed(In(ev): In<SessionEvent>, mut window: WindowPacket) {
     }
 }
 
-fn on_money_notify(In(ev): In<SessionEvent>) {
+fn on_money_notify(
+    In(ev): In<SessionEvent>,
+    mut vm: crate::script_calls::HostedVm,
+    chat: Res<crate::ui_chat::ChatLog>,
+) {
     if let SessionEvent::LootMoneyNotify { amount } = ev {
-        loot_money_notify(amount);
+        debug!("net: loot money {amount}");
+        loot_money_notify(amount, &mut vm, &chat);
     }
 }
 
@@ -385,11 +390,22 @@ fn loot_error(
     }
 }
 
-/// `SMSG_LOOT_MONEY_NOTIFY`, our share of a group's coin: only logged, as the coin row drops on
-/// `SMSG_LOOT_CLEAR_MONEY` and the purse rides the coinage field. vmangos sends none for a solo
-/// loot (`LootHandler.cpp:331`).
-fn loot_money_notify(amount: u32) {
-    debug!("net: loot money {amount}");
+/// `SMSG_LOOT_MONEY_NOTIFY` (`0x5ebf20`), our share of a group's coin: `LOOT_MONEY_SPLIT` as a
+/// `CHAT_MSG_MONEY` line (`0x5ec011` → `AddChatLine 0x49a870`), queued behind the lines of the
+/// packets before it; the coin row drops on `SMSG_LOOT_CLEAR_MONEY` and the purse rides the
+/// coinage field. vmangos sends none for a solo loot (`LootHandler.cpp:331`).
+fn loot_money_notify(
+    amount: u32,
+    vm: &mut crate::script_calls::HostedVm,
+    chat: &crate::ui_chat::ChatLog,
+) {
+    let text = vm.run(|script| super::calls::share_line(script?, amount));
+    if let Some(text) = text {
+        chat.push_event(crate::ui_chat::ChatEvent::text_only(
+            crate::ui_chat::ChatEventKind::Money,
+            text,
+        ));
+    }
 }
 
 /// `SMSG_LOOT_RELEASE_RESPONSE` (`0x5ec090`): acted on only with a nonzero result (`0x5ec0b6`)

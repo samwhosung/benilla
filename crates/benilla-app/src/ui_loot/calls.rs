@@ -458,3 +458,30 @@ fn money_line(script: &UiScript, copper: u32) -> String {
         &[benilla_ui::strings::Arg::S(&coins)],
     )
 }
+
+/// The group share's line (`0x5ebf20`): `LOOT_MONEY_SPLIT` over the coins, gold first, each nonzero
+/// one `"%d %s"` (`0x847fdc`) with its `GOLD`, `SILVER` or `COPPER` global (`0x6c6230`) and every
+/// later one `", %d %s"` (`0x860698`). Nothing for 0 (`0x5ebf3a`); the amount splits as a signed
+/// word (`SplitCopper 0x6c6260`), so a negative one is all copper.
+pub(super) fn share_line(script: &UiScript, amount: u32) -> Option<String> {
+    let copper = amount as i32;
+    if copper == 0 {
+        return None;
+    }
+    let (g, s, c) = if copper < 0 {
+        (0, 0, copper)
+    } else {
+        (copper / 10_000, copper / 100 % 100, copper % 100)
+    };
+    let mut coins = String::new();
+    for (n, key) in [(g, "GOLD"), (s, "SILVER"), (c, "COPPER")] {
+        if n != 0 {
+            let sep = if coins.is_empty() { "" } else { ", " };
+            coins.push_str(&format!("{sep}{n} {}", script.global_text(key)));
+        }
+    }
+    Some(benilla_ui::strings::fill(
+        &script.global_text("LOOT_MONEY_SPLIT"),
+        &[benilla_ui::strings::Arg::S(&coins)],
+    ))
+}

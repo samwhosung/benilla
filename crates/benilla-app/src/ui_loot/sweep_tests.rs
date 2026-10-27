@@ -279,3 +279,35 @@ fn auto_loot_default_sweeps_a_pickpocket_and_a_disenchant_window() {
         }
     }
 }
+
+/// `SMSG_LOOT_MONEY_NOTIFY` queues `LOOT_MONEY_SPLIT` over the coins as a `CHAT_MSG_MONEY` line at
+/// its packet's place in the chat queue (`0x5ebf20` → `0x5ec011`): the first nonzero coin as `"%d %s"` and each later
+/// one as `", %d %s"` (`0x5ebf88`, `0x5ebf9f`), so a zero middle coin leaves no empty separator;
+/// an amount of 0 shows nothing (`0x5ebf3a`).
+#[test]
+fn a_group_coin_share_queues_its_line_at_its_packet() {
+    let mut l = client();
+    note_money(&mut l);
+    for amount in [10_203, 10_003, 500, 7, 0] {
+        packets(&mut l, vec![SessionEvent::LootMoneyNotify { amount }]);
+    }
+    assert_eq!(
+        seen(&mut l),
+        "",
+        "queued behind the packets before it, not shown in place"
+    );
+    crate::ui_chat::feed_chat_once(l.app.world_mut());
+    assert_eq!(
+        money_lines(&mut l),
+        [
+            "Your share of the loot is 1 Gold, 2 Silver, 3 Copper.",
+            "Your share of the loot is 1 Gold, 3 Copper.",
+            "Your share of the loot is 5 Silver.",
+            "Your share of the loot is 7 Copper.",
+        ]
+    );
+    assert_eq!(
+        seen(&mut l),
+        "CHAT_MSG_MONEY,CHAT_MSG_MONEY,CHAT_MSG_MONEY,CHAT_MSG_MONEY"
+    );
+}
