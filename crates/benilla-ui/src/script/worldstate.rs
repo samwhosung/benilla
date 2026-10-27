@@ -31,21 +31,11 @@ pub(crate) struct WorldStateUiState {
 }
 
 impl super::UiScript {
-    /// Push the readout's rows. The signal is [`Self::signal_world_states`]'s: the reference
-    /// signals on its triggers, not on a changed value.
+    /// Push the readout's rows. The reference signals `UPDATE_WORLD_STATES` on its triggers (a
+    /// packet, the defense flip: `0x48fa12`, `0x49bdd6`), not on a changed value, and the app's
+    /// world-state lane does; this signals nothing.
     pub fn set_world_state_ui(&mut self, rows: Vec<WorldStateUiView>) {
         self.model_mut().worldstate.rows = rows;
-    }
-
-    /// Queue `UPDATE_WORLD_STATES` (event `0x20e`), which the reference signals at the tail of its
-    /// world-state handler for every packet, init (`0x2c2`) and update (`0x2c3`) alike
-    /// (`0x48f9f6`-`0x48fa17`, after the map rebuild's `WORLD_MAP_UPDATE`), and after the
-    /// zone-defense channel flip (`0x49bdd6`), whether or not any row changed. Deviation: it
-    /// queues for the next tick, as the app's feeds run after it.
-    pub fn signal_world_states(&mut self) {
-        self.model_mut()
-            .pending_events
-            .push(("UPDATE_WORLD_STATES".to_string(), Vec::new()));
     }
 }
 

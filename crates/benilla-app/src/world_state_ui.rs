@@ -21,7 +21,7 @@ use benilla_ui::script::WorldStateUiView;
 
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
-use crate::world_state::WorldStates;
+use crate::world_state::{WorldStateLane, WorldStateSignal, WorldStates};
 
 /// The shared `WorldStateUI.dbc` catalog; absent, the readout is empty.
 #[derive(Resource)]
@@ -137,15 +137,17 @@ fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
     }
 }
 
-/// Pushes the readout when a world-state packet arrives or the defense-channel flag flips, the
-/// reference's two rebuild triggers (`0x49bdc7`-`0x49bdcf`), and signals `UPDATE_WORLD_STATES` on
-/// each: every packet, init and update alike (`0x48fa12`), and a flip once an init has set the
-/// scope (`0x49bdc0`-`0x49bdd6`), whether or not a row changed. A first run signals when a packet
-/// has come already, for the frames that loaded after it.
+/// Pushes the readout's rows when a world-state packet arrives or the defense-channel flag flips,
+/// the reference's two rebuild triggers (`0x49bdc7`-`0x49bdcf`), once a VM is new or the frame is
+/// over; the lane's firing builds them again ahead of its own signals. The flip
+/// signals `UPDATE_WORLD_STATES` from here once an init has set the scope (`0x49bdc0`-`0x49bdd6`),
+/// whether or not a row changed; a packet's signals are the lane's ([`fire_world_states`]). A first
+/// run signals when a packet has come already, for the frames that loaded after it.
 fn feed_world_state_ui(
     mut vm: crate::script_calls::VmWith<Res<'static, crate::ui_chat::ChannelState>>,
     catalog: Option<Res<WorldStateUiRes>>,
     states: Res<WorldStates>,
+    mut lane: ResMut<WorldStateLane>,
     mut last: Local<crate::ui_script::VmMemo<Option<(u64, bool)>>>,
 ) {
     let defense_channel = vm.own().defense_channel;
@@ -160,26 +162,82 @@ fn feed_world_state_ui(
         }
         *last.get(script) = Some(key);
         script.set_world_state_ui(build(&catalog.0, &states, defense_channel));
-        let packet = before.map_or(key.0 != 0, |(generation, _)| generation != key.0);
+        let first = before.is_none() && key.0 != 0;
         let flip =
             before.is_some_and(|(_, flag)| flag != defense_channel) && states.scope().is_some();
-        if packet || flip {
-            script.signal_world_states();
+        if first || flip {
+            lane.push(WorldStateSignal::Readout);
         }
     })
+}
+
+/// The lane's firing: a packet rebuilds the world map's landmarks and the readout's rows, as its
+/// handler does (`0x48f9f6` into `0x4a67a0`, `0x4c56e0`), then signals `WORLD_MAP_UPDATE` and
+/// `UPDATE_WORLD_STATES`; a flip rebuilds the rows and signals the second alone. It stops after an
+/// item whose firing stamped anything.
+fn fire_world_states(
+    In(until): In<crate::lanes::Until>,
+    mut vm: crate::script_calls::VmWith<Res<'static, crate::ui_chat::ChannelState>>,
+    mut lane: ResMut<WorldStateLane>,
+    catalog: Option<Res<WorldStateUiRes>>,
+    states: Res<WorldStates>,
+    landmarks: crate::ui_world_map::LandmarkReads,
+) {
+    if !vm.run(|script| script.is_some()) {
+        return;
+    }
+    while let Some(at) = lane.head().filter(|&s| until.admits(s)) {
+        let Some((_, signal)) = lane.pop() else {
+            return;
+        };
+        let defense_channel = vm.own().defense_channel;
+        let ((), moved) = crate::lanes::firing(at, || {
+            vm.run(|script| {
+                let Some(script) = script else {
+                    return;
+                };
+                if let Some(catalog) = catalog.as_deref() {
+                    script.set_world_state_ui(build(&catalog.0, &states, defense_channel));
+                }
+                if signal == WorldStateSignal::Packet {
+                    landmarks.rebuild_for_packet(script);
+                    script.fire_event("WORLD_MAP_UPDATE", Vec::new());
+                }
+                script.fire_event("UPDATE_WORLD_STATES", Vec::new());
+            })
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// A signal is for the interface that was up: with none, the lane empties.
+fn drop_world_state_signals(mut lane: ResMut<WorldStateLane>) {
+    lane.clear();
 }
 
 pub(crate) struct WorldStateUiPlugin;
 
 impl Plugin for WorldStateUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_world_state_ui.after(AssetSet::Open))
-            // After the landmark rebuild, whose `WORLD_MAP_UPDATE` the handler signals first.
+        use crate::lanes::LaneApp;
+        app.init_resource::<WorldStateLane>()
+            .add_lane(
+                "world states",
+                |world| world.get_resource::<WorldStateLane>()?.head(),
+                fire_world_states,
+                None,
+            )
+            .add_systems(Startup, load_world_state_ui.after(AssetSet::Open))
             .add_systems(
                 Update,
-                feed_world_state_ui
-                    .after(crate::ui_script::UiTick)
-                    .after(crate::ui_world_map::WorldMapFeed),
+                (
+                    feed_world_state_ui.after(crate::ui_script::UiTick),
+                    drop_world_state_signals
+                        .in_set(crate::ui_script::UiFeed)
+                        .run_if(not(crate::ui_script::ingame_ui_up)),
+                ),
             );
     }
 }
@@ -458,6 +516,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        world.init_resource::<WorldStateLane>();
         let mut states = WorldStates::default();
         states.init_scope(0, 139);
         world.insert_resource(states);
@@ -511,46 +570,73 @@ mod tests {
         assert_eq!(shown(&mut world), 0, "the free recomputes");
     }
 
-    /// `0x48f9f6`-`0x48fa17`: every world-state packet signals `UPDATE_WORLD_STATES`, an init and an
-    /// update alike, whether or not a row moved; the defense flip signals once a scope is set
-    /// (`0x49bdd6`), and a frame with nothing new signals nothing.
+    /// `0x48f9f6`-`0x48fa17`: every world-state packet signals `WORLD_MAP_UPDATE` and then
+    /// `UPDATE_WORLD_STATES` from its handler, an init and an update alike, whether or not a row
+    /// moved, so two packets in a frame signal twice, each pair in order.
     #[test]
-    fn every_packet_signals_the_readout_whether_or_not_a_row_moved() {
-        let mut world = World::new();
+    fn every_packet_signals_the_map_then_the_readout() {
+        use benilla_protocol::SessionEvent;
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let script = benilla_ui::script::UiScript::new().expect("a VM");
         script
             .run(
-                "seen = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_WORLD_STATES') \
-                 f:SetScript('OnEvent', function() seen = seen + 1 end)",
+                "heard = '' local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UPDATE_WORLD_STATES') f:RegisterEvent('WORLD_MAP_UPDATE') \
+                 f:SetScript('OnEvent', function() heard = heard .. event .. ' ' end)",
             )
             .expect("a listener");
-        world.insert_non_send_resource(script);
-        world.insert_resource(WorldStates::default());
-        world.insert_resource(WorldStateUiRes(WorldStateUiCatalog::from_rows(vec![(
-            1,
-            row(0, 139, 0),
-        )])));
-        world.insert_resource(crate::ui_chat::ChannelState::default());
-        // One registered system, so its memo of the last generation lives across the frames.
-        let feed = world.register_system(feed_world_state_ui);
-        let seen = |world: &mut World| -> i64 {
-            world.run_system(feed).expect("the feed runs");
-            let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
-            script.tick(0.0);
-            script.eval("return seen").expect("the count")
+        app.world_mut().insert_non_send_resource(script);
+        let heard = |app: &mut App| -> String {
+            app.world_mut().flush();
+            crate::lanes::fire_in_order(app.world_mut());
+            crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+                vm.expect("a VM")
+                    .eval::<String>("local h = heard heard = '' return h")
+            })
+            .expect("the read")
         };
-        assert_eq!(seen(&mut world), 0, "no packet yet");
+        let init = SessionEvent::WorldStates {
+            scope: Some((0, 139)),
+            states: vec![(2327, 3)],
+        };
+        let update = SessionEvent::WorldStates {
+            scope: None,
+            states: vec![(9999, 1)],
+        };
+        let pair = "WORLD_MAP_UPDATE UPDATE_WORLD_STATES ";
+        crate::net::handlers::dispatch(app.world_mut(), vec![init.clone()]);
+        assert_eq!(heard(&mut app), pair, "an init");
+        assert_eq!(heard(&mut app), "", "a frame with no packet");
+        crate::net::handlers::dispatch(app.world_mut(), vec![init, update]);
+        assert_eq!(
+            heard(&mut app),
+            format!("{pair}{pair}"),
+            "a re-sent init and an update in one frame signal once each"
+        );
+    }
 
-        world.resource_mut::<WorldStates>().init_scope(0, 139);
-        world.resource_mut::<WorldStates>().write(&[(2327, 3)]);
-        assert_eq!(seen(&mut world), 1, "an init");
-        assert_eq!(seen(&mut world), 1, "a frame with no packet");
-        // The same init again, and an update to a state no row shows: the rows do not move.
-        world.resource_mut::<WorldStates>().init_scope(0, 139);
-        world.resource_mut::<WorldStates>().write(&[(2327, 3)]);
-        assert_eq!(seen(&mut world), 2, "a re-sent init");
-        world.resource_mut::<WorldStates>().write(&[(9999, 1)]);
-        assert_eq!(seen(&mut world), 3, "an update no row shows");
+    /// The defense flip signals the readout alone (`0x49bdd6`).
+    #[test]
+    fn a_readout_signal_fires_without_the_map() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let script = benilla_ui::script::UiScript::new().expect("a VM");
+        script
+            .run(
+                "heard = '' local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UPDATE_WORLD_STATES') f:RegisterEvent('WORLD_MAP_UPDATE') \
+                 f:SetScript('OnEvent', function() heard = heard .. event .. ' ' end)",
+            )
+            .expect("a listener");
+        app.world_mut().insert_non_send_resource(script);
+        app.world_mut()
+            .resource_mut::<WorldStateLane>()
+            .push(WorldStateSignal::Readout);
+        crate::lanes::fire_in_order(app.world_mut());
+        let heard = crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").eval::<String>("return heard")
+        })
+        .expect("the read");
+        assert_eq!(heard, "UPDATE_WORLD_STATES ");
     }
 
     /// An init clears the table.

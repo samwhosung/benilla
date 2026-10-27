@@ -11,9 +11,10 @@
 //! returns (`0x4a6ce4`), so `WorldMapFrame`'s OnShow repaints the map before its first draw.
 //!
 //! Deviation: the engine's own pushes (the world-enter sync, the explored areas, the landmark
-//! sources, the catalog) queue `WORLD_MAP_UPDATE` for the next frame's tick, where the reference
-//! fires in place from the handler that moved the data: the app's feeds run after the frame's
-//! tick. All but the landmark sources queue only on a change.
+//! sources, the catalog) queue `WORLD_MAP_UPDATE` for the next frame's tick and fire only on a
+//! change, where the reference fires in place from the handler that moved the data: the app's
+//! feeds run after the frame's tick. A world-state packet's signal is the exception, which the
+//! world-state lane fires at the packet's place.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -570,17 +571,24 @@ impl super::UiScript {
         }
     }
 
-    /// Pushes the landmark sources and rebuilds the displayed map's list from them, queueing
-    /// `WORLD_MAP_UPDATE` whether or not the list changed: the app pushes on the rebuild's inputs
-    /// (a world-state packet, an explored-area change, the gossip marker), and the reference's
-    /// rebuild `0x4a67a0` signals at its end on every call (`0x4a6cdf`-`0x4a6ce4`).
+    /// Pushes the landmark sources and rebuilds the displayed map's list from them; a change to
+    /// the list queues `WORLD_MAP_UPDATE` to re-seat it.
     pub fn set_world_map_landmark_sources(&mut self, sources: Vec<WorldMapLandmarkSource>) {
+        let mut model = self.model_mut();
+        if model.worldmap.landmark_sources == sources {
+            return;
+        }
+        model.worldmap.landmark_sources = sources;
+        refresh_landmarks(&mut model);
+    }
+
+    /// [`Self::set_world_map_landmark_sources`] for the rebuild a world-state packet makes, which
+    /// signals `WORLD_MAP_UPDATE` itself at the packet's place (`0x48fa0d` into `0x4a6cdf`): the
+    /// list is rebuilt now and nothing is queued.
+    pub fn rebuild_world_map_landmarks(&mut self, sources: Vec<WorldMapLandmarkSource>) {
         let mut model = self.model_mut();
         model.worldmap.landmark_sources = sources;
         model.worldmap.landmarks = build_landmarks(&model);
-        model
-            .pending_events
-            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
     }
 
     /// Pushes the per-frame feed: the player's zone, the projected positions and the facing.

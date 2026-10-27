@@ -27,13 +27,22 @@ fn on_weather(In(ev): In<SessionEvent>, mut out: MessageWriter<WeatherMessage>) 
     }
 }
 
-fn on_world_states(In(ev): In<SessionEvent>, mut states: ResMut<WorldStates>) {
+fn on_world_states(
+    In(ev): In<SessionEvent>,
+    mut states: ResMut<WorldStates>,
+    lane: Option<ResMut<crate::world_state::WorldStateLane>>,
+) {
     if let SessionEvent::WorldStates {
         scope,
         states: pairs,
     } = ev
     {
         world_states(scope, pairs, &mut states);
+        // The handler's tail signals the map, then the readout (`0x48f9f6`-`0x48fa17`), for an
+        // init and an update alike.
+        if let Some(mut lane) = lane {
+            lane.push(crate::world_state::WorldStateSignal::Packet);
+        }
     }
 }
 

@@ -624,7 +624,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 34] {
+fn lane_types() -> [TypeId; 35] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -671,6 +671,8 @@ fn lane_types() -> [TypeId; 34] {
         TypeId::of::<crate::ui_merchant::MerchantLane>(),
         // The taxi lane: the map's open and the flight master's replies.
         TypeId::of::<crate::ui_taxi::TaxiLane>(),
+        // The world-state lane: each packet's map and readout signals.
+        TypeId::of::<crate::world_state::WorldStateLane>(),
         // The dialogs' lane: the service questions, the boot, the stone, the summon, the
         // lockouts, the duel and the ticket answers, at their packets.
         TypeId::of::<crate::ui_dialog_verbs::DialogLane>(),
@@ -693,7 +695,7 @@ fn lane_types() -> [TypeId; 34] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 34] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -739,6 +741,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 34] {
         ("social", TypeId::of::<crate::ui_social::SocialState>()),
         ("merchant", TypeId::of::<crate::ui_merchant::MerchantLane>()),
         ("taxi", TypeId::of::<crate::ui_taxi::TaxiLane>()),
+        (
+            "world states",
+            TypeId::of::<crate::world_state::WorldStateLane>(),
+        ),
         (
             "dialogs",
             TypeId::of::<crate::ui_dialog_verbs::DialogLane>(),
@@ -936,7 +942,8 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "tabard",
             "taxi",
             "trainer",
-            "unit views"
+            "unit views",
+            "world states"
         ]
     );
     let c = census(&mut app, Update, SyncPoints::Declared);
@@ -1738,6 +1745,10 @@ const VERSIONED_FOR_THE_DRAIN: &[&str] = &["net::reputations::Reputations"];
 /// longer matches its firing fails.
 #[rustfmt::skip]
 pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
+    // A packet's firing rebuilds the world map's landmarks and the readout's rows off the states,
+    // the gossip marker, our explored bits and the defense channel as the frame left them.
+    ("world states", &["net::ObjectStore", "poi_marker::PoiMarker", "ui_chat::edit::ChannelState",
+        "world_state::WorldStates"]),
     // The chat setup's restore reads the channel rows its shortcuts and auto-joins come from as
     // the frame left them, past the notices of the packets after the section's.
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),

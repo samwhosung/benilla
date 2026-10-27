@@ -152,8 +152,12 @@ impl Plugin for PoiMarkerPlugin {
         app.init_resource::<PoiMarker>().add_systems(
             Update,
             (
-                expire_marker.after(crate::player::ControlRestore),
-                clear_on_world_entry,
+                // Both before the lanes, whose world-state firing rebuilds the landmarks off the
+                // marker.
+                expire_marker
+                    .after(crate::player::ControlRestore)
+                    .before(crate::lanes::UiLanes),
+                clear_on_world_entry.before(crate::lanes::UiLanes),
             ),
         );
     }

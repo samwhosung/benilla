@@ -106,6 +106,7 @@ impl Plugin for NetPlugin {
             .init_resource::<crate::go_templates::GameObjectTemplates>()
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::world_state::WorldStateLane>()
             .add_message::<TeleportMessage>()
             .add_message::<FieldChanged>()
             .add_message::<AuraFieldsChanged>()

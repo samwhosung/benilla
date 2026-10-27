@@ -903,10 +903,10 @@ fn world_loc_map_position_projects_through_the_host() {
     }
 }
 
-/// `0x4a67a0` signals `WORLD_MAP_UPDATE` at its end on every call (`0x4a6cdf`-`0x4a6ce4`), so a
-/// rebuild that leaves the list as it was still signals: a world-state packet that moves no POI.
+/// A world-state packet's rebuild leaves its `WORLD_MAP_UPDATE` to the packet's own signal
+/// (`0x48fa0d` into `0x4a6cdf`): the list is rebuilt and nothing is queued.
 #[test]
-fn a_landmark_rebuild_signals_even_when_the_list_is_unchanged() {
+fn a_packet_rebuild_replaces_the_landmarks_and_queues_nothing() {
     let mut s = script();
     s.run(
         r#"
@@ -917,19 +917,14 @@ fn a_landmark_rebuild_signals_even_when_the_list_is_unchanged() {
         "#,
     )
     .unwrap();
-    let source = || WorldMapLandmarkSource {
-        name: "The Inn".into(),
+    let source = |name: &str| WorldMapLandmarkSource {
+        name: name.into(),
         description: String::new(),
         map: 0,
         pos: (0.2, 0.2),
         icons: [Some(6); 3],
     };
-    let seen = |s: &mut UiScript| {
-        s.tick(0.0);
-        s.eval::<i64>("return seen").unwrap()
-    };
-    s.set_world_map_landmark_sources(vec![source()]);
-    assert_eq!(seen(&mut s), 1);
-    s.set_world_map_landmark_sources(vec![source()]);
-    assert_eq!(seen(&mut s), 2, "the same list again");
+    s.rebuild_world_map_landmarks(vec![source("The Inn")]);
+    s.tick(0.0);
+    assert_eq!(s.eval::<i64>("return seen").unwrap(), 0);
 }
