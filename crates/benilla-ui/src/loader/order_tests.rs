@@ -632,3 +632,29 @@ fn a_model_file_is_passed_as_written() {
         report.status.lines()
     );
 }
+
+/// Each `<ButtonText>` builds a new label (`0x6f2780`) and the install destroys the one it
+/// displaces (`0x778d38`), so an instance's unnamed element replaces its template's label object.
+#[test]
+fn an_instances_unnamed_label_replaces_its_templates() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Button name="LabelTemplate" virtual="true">
+                <ButtonText name="TplLabel" text="T"/>
+            </Button>
+            <Button name="Relabeled" inherits="LabelTemplate">
+                <ButtonText text="I"/>
+            </Button>
+        </Ui>"#,
+    );
+    assert!(s
+        .eval::<bool>("return Relabeled:GetFontString() ~= TplLabel")
+        .unwrap());
+    assert_eq!(
+        s.eval::<i64>("return Relabeled:GetNumRegions()").unwrap(),
+        1
+    );
+    assert_eq!(s.eval::<String>("return Relabeled:GetText()").unwrap(), "I");
+}
