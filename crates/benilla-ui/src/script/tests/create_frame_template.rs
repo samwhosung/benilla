@@ -419,7 +419,8 @@ fn the_scroll_range_is_the_childs_whole_subtree() {
     );
 }
 
-/// The reference reports an empty `<ScrollChild>` as an error (`0x786bc0`) and keeps the frame.
+/// An empty `<ScrollChild>` logs `Frame %s: Scroll frame created without scroll child` at
+/// severity 1 (`0x87a68c`, `0x786c0c`-`0x786c30`), raises nothing, and keeps the frame.
 #[test]
 fn an_empty_scroll_child_is_reported() {
     let s = script();
@@ -428,13 +429,10 @@ fn an_empty_scroll_child_is_reported() {
     )
     .expect("valid FrameXML");
     let report = crate::loader::load(&s, &doc, &|_| None);
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|e| e.contains("<ScrollChild> is empty")),
-        "errors: {:?}",
-        report.errors
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    assert_eq!(
+        report.status.lines(),
+        ["Frame Hollow: Scroll frame created without scroll child"]
     );
     assert!(s.eval::<bool>("return Hollow ~= nil").unwrap());
 }

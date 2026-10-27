@@ -880,57 +880,28 @@ impl Loader<'_> {
     ) {
         // This frame's deferred anchors drain before its OnLoad; a nested frame drains its own.
         let deferred_mark = self.deferred_anchors.len();
-        // 1c · the pre-load hook (`0x769770`): the own node's `id`, then the frame's load window
+        // 1 · the pre-load hook (`0x769770`): the own node's `id`, then the frame's load window
         //      opens (`0x7697c2`): until the post-load hook, its own OnShow and OnHide fire nothing.
         self.apply_preload_id(levels.own, wrapper, dbg_name);
         crate::script::visibility::set_load_window(self.lua(), wrapper, true);
-        // 2 · a model pane's attributes (`0x76cac0`).
-        self.apply_attrs(el, wrapper, dbg_name);
-        // 3 · each level's base load (`0x769820`), the template first (`0x76985c`); then its
-        //     Slider or StatusBar values (`0x789580`, `0x782ef0`), so the first SetValue's fire
-        //     (`0x789a1e`-`0x789a44`, `0x783371`) runs that level's handler. OnLoad is captured to
-        //     fire bottom-up below.
+        // 2 · each level's load, the template first (`0x76985c`): its base load (`0x769820`),
+        //     then its type's part, so a Slider's or StatusBar's first SetValue fires
+        //     (`0x789a1e`-`0x789a44`, `0x783371`) with the handler that level's `<Scripts>` set.
+        //     OnLoad is captured to fire bottom-up below.
         let mut onload = None;
         for level in levels {
             self.load_level(
                 level,
+                &el.tag,
                 wrapper,
                 self_name,
                 parent_name,
                 dbg_name,
                 &mut onload,
             );
-            if el.tag.eq_ignore_ascii_case("Slider") {
-                self.slider_level(level, wrapper, dbg_name);
-            } else if el.tag.eq_ignore_ascii_case("StatusBar") {
-                self.statusbar_level(level, wrapper, dbg_name);
-            }
         }
-        // 5·b · a text frame's `font=`, then its `<FontString>` children, which load into the same
-        //       font (`0x779fcb` before `0x77a220`, `0x78592b` before `0x785af5`, `0x787b3b`
-        //       before `0x787cfe`). Any other frame's direct `<FontString>` builds nothing: the base
-        //       loop (`0x769b27`-`0x769d22`) has no arm for it, and only SimpleHTML's reads one.
-        if ["EditBox", "MessageFrame", "ScrollingMessageFrame"]
-            .iter()
-            .any(|t| el.tag.eq_ignore_ascii_case(t))
-        {
-            self.apply_frame_font(el, wrapper, dbg_name);
-            self.apply_text_font_children(el, wrapper, dbg_name);
-        }
-        // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,
-        //      so a Frame wearing a <Button> template skips the Button steps.
-        self.apply_statusbar(el, wrapper, self_name, dbg_name);
-        self.apply_slider(el, wrapper, self_name, dbg_name);
-        self.apply_colorselect(el, wrapper, self_name, dbg_name);
-        self.apply_button(el, levels, wrapper, self_name, dbg_name);
-        self.apply_editbox(el, wrapper, dbg_name);
-        self.apply_messageframe(el, wrapper, dbg_name);
-        self.apply_simplehtml(el, wrapper, dbg_name);
-        // 6b · a ScrollFrame's <ScrollChild> (`0x786bc0`, after the base load `0x769820`): still
-        //      inside the load window, so ahead of every <Frames> child and of our own OnLoad.
-        self.apply_scrollframe(el, wrapper, self_name, dbg_name);
 
-        // 7 · the post-load hook (`0x76a2f0`): close the window (`0x76a2ff`), then the nested
+        // 3 · the post-load hook (`0x76a2f0`): close the window (`0x76a2ff`), then the nested
         //     <Frames>, whose OnLoads fire before ours (`0x76a060`).
         crate::script::visibility::set_load_window(self.lua(), wrapper, false);
         crate::script::tooltip_post_load(self.lua(), wrapper);
@@ -940,15 +911,15 @@ impl Loader<'_> {
             }
         }
 
-        // 7c · deferred anchors: every child exists now, as at the reference's layout pass.
+        // 3b · deferred anchors: every child exists now, as at the reference's layout pass.
         self.drain_deferred_anchors(deferred_mark);
-        // 8 · this frame's OnLoad, now that its subtree is complete (bottom-up).
+        // 4 · this frame's OnLoad, now that its subtree is complete (bottom-up).
         if let Some(func) = onload {
             self.fire_onload(wrapper, &func, dbg_name);
         }
-        // 9 · and its OnShow, if it is visible now (`0x76a3b3`).
+        // 5 · and its OnShow, if it is visible now (`0x76a3b3`).
         crate::script::visibility::post_load_show(self.lua(), wrapper);
-        // 10 · a Minimap's models, which its post-load override sets after chaining to this one
+        // 6 · a Minimap's models, which its post-load override sets after chaining to this one
         //      (`0x4ee2b0` calls `0x76a2f0` first).
         self.apply_minimap(el, wrapper, dbg_name);
     }
@@ -958,11 +929,14 @@ impl Loader<'_> {
     /// anchors resolved now; then its flag attributes (`0x769881`-`0x769b17`); then one child loop
     /// in document order (`0x769b1c`-`0x769d22`) whose arms are `<TitleRegion>`,
     /// `<ResizeBounds>`, `<Backdrop>`, `<HitRectInsets>`, `<Layers>` and `<Scripts>`, any other
-    /// tag skipped silently. `$parent` is `parent_name` in the frame's own anchors and `self_name`
-    /// in its contents.
+    /// tag skipped silently; then the part of `kind`, the instance's type
+    /// ([`Self::typed_level`]). `$parent` is `parent_name` in the frame's own anchors and
+    /// `self_name` in its contents.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn load_level(
         &mut self,
         level: &Element,
+        kind: &str,
         wrapper: &Table,
         self_name: &str,
         parent_name: &str,
@@ -989,6 +963,7 @@ impl Loader<'_> {
                 self.apply_scripts(child, wrapper, dbg, onload);
             }
         }
+        self.typed_level(level, kind, wrapper, self_name, dbg);
     }
 
     /// Apply one anchor, deferring it (when `may_defer`) while its named `relativeTo` is unbuilt.
@@ -1216,18 +1191,6 @@ pub(super) fn children_named<'a>(
     el.children
         .iter()
         .filter(move |c| c.tag.eq_ignore_ascii_case(tag))
-}
-
-/// Iterate an element's direct children whose tag matches any of `tags` (case-insensitively), in
-/// document order. One walk, not one per tag: a Button's label and state fonts each answer to two
-/// tags (`CSimpleButton::LoadXML 0x7788c0`) and each slot is last-wins.
-pub(super) fn children_named_any<'a>(
-    el: &'a Element,
-    tags: &'a [&'a str],
-) -> impl Iterator<Item = &'a Element> {
-    el.children
-        .iter()
-        .filter(move |c| tags.iter().any(|t| c.tag.eq_ignore_ascii_case(t)))
 }
 
 /// Whether a `text=` value is shaped like a GlobalStrings key: `SCREAMING_SNAKE` with a letter, two

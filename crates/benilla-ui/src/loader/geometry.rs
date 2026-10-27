@@ -2,54 +2,12 @@ use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
 use crate::layout::Len;
-use crate::script::binding_abi::{s_str_to_float, s_str_to_int};
+use crate::script::binding_abi::s_str_to_int;
 use crate::script::object;
 
-use super::{children_named, color_of, Loader};
+use super::{children_named, Loader};
 
 impl Loader<'_> {
-    /// A model pane's own attributes (`0x76cac0`), from the merged `el`.
-    pub(super) fn apply_attrs(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
-        // A model pane's `file=` is `SetModel` (`0x76cac0`).
-        let model_kind = super::model_kind_tag(&el.tag);
-        if model_kind {
-            if let Some(file) = el.attr("file") {
-                let text = self.resolve_text(file, dbg);
-                self.call(wrapper, "SetModel", text, dbg);
-            }
-        }
-        // A model pane's non-empty `scale=` through `SStrToFloat` is the model's scale, the field
-        // `SetModelScale` writes (`0x76cb61`); a value of 0 or less is logged (`0x8788d8`), never
-        // clamped (`0x76cb92`). A plain frame's `scale=` is ignored; whether `0x769820` reads one
-        // is untraced.
-        if let Some(scale) = el.attr("scale").filter(|v| !v.is_empty()) {
-            if model_kind {
-                let s = s_str_to_float(scale) as f32;
-                if s > 0.0 {
-                    self.call(wrapper, "SetModelScale", s, dbg);
-                } else {
-                    let name = self.object_name(wrapper);
-                    self.status_warning(format!("Frame {name}: Invalid model scale: {scale}"));
-                }
-            }
-        }
-        // A model pane's fog: a non-empty `fogNear`/`fogFar` through `SStrToFloat`, clamped at 0
-        // here only (`0x76cbbb`, `0x76cbf3`), where the Lua setters store raw; each `<FogColor>`
-        // in the child loop (`0x76cc20`-`0x76cc5d`), the last winning, is read as a `<Color>`
-        // (`0x6f23d0`, `0x76cc43`) and set with `SetFogColor`, fog bit included.
-        if model_kind {
-            for (attr, verb) in [("fogNear", "SetFogNear"), ("fogFar", "SetFogFar")] {
-                if let Some(v) = el.attr(attr).filter(|v| !v.is_empty()) {
-                    let v = s_str_to_float(v) as f32;
-                    self.call(wrapper, verb, v.max(0.0), dbg);
-                }
-            }
-            for fc in children_named(el, "FogColor") {
-                self.call(wrapper, "SetFogColor", color_of(fc).fractions(), dbg);
-            }
-        }
-    }
-
     /// The pre-load hook's `id` (`0x769770`), read on the frame's own node alone: a non-empty one
     /// through `SStrToInt`, a negative one skipped (`0x7697ae`-`0x7697b7`).
     pub(super) fn apply_preload_id(&mut self, own: &Element, wrapper: &Table, dbg: &str) {

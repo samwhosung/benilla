@@ -138,3 +138,164 @@ fn a_title_region_is_read_at_its_place_in_the_child_loop() {
         report.status.lines()
     );
 }
+
+/// A Button's children load in one document-order loop (`0x7788c0`), so a label after its
+/// highlight anchors to it as it is read, before any `<Frames>` child's `OnLoad`; a retry after
+/// the children would leave the label on its implicit anchor until then.
+#[test]
+fn a_label_after_its_highlight_anchors_to_it_as_it_is_read() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Button name="Row">
+                <Size><AbsDimension x="200" y="16"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <HighlightTexture name="$parentHighlight">
+                    <Size><AbsDimension x="16" y="16"/></Size>
+                    <Anchors><Anchor point="LEFT"/></Anchors>
+                </HighlightTexture>
+                <ButtonText name="$parentText">
+                    <Anchors>
+                        <Anchor point="LEFT" relativeTo="$parentHighlight" relativePoint="RIGHT"/>
+                    </Anchors>
+                </ButtonText>
+                <Frames>
+                    <Frame name="RowChild">
+                        <Scripts><OnLoad>
+                            local _, to = RowText:GetPoint(1)
+                            seen = RowText:GetNumPoints() .. " " .. tostring(to == RowHighlight)
+                        </OnLoad></Scripts>
+                    </Frame>
+                </Frames>
+            </Button>
+        </Ui>"#,
+    );
+    assert_eq!(s.eval::<String>("return seen").unwrap(), "1 true");
+}
+
+/// The Button loop's state textures and labels link into `GetRegions` in document order, and a
+/// template's whole level, its type's part included, comes before the instance's: the template's
+/// `PushedTexture` precedes the instance's `<Layers>` texture, and the instance's `NormalTexture`
+/// replaces the template's.
+#[test]
+fn a_buttons_regions_link_in_document_order_level_by_level() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Button name="StateTemplate" virtual="true">
+                <Layers><Layer><Texture name="$parentTplArt"/></Layer></Layers>
+                <NormalTexture name="$parentTplNormal"/>
+                <PushedTexture name="$parentTplPushed"/>
+            </Button>
+            <Button name="Ordered">
+                <HighlightTexture name="$parentHighlight"/>
+                <ButtonText name="$parentText"/>
+                <NormalTexture name="$parentNormal"/>
+            </Button>
+            <Button name="Leveled" inherits="StateTemplate">
+                <Layers><Layer><Texture name="$parentArt"/></Layer></Layers>
+                <NormalTexture name="$parentNormal"/>
+            </Button>
+        </Ui>"#,
+    );
+    let names = |frame: &str| {
+        s.eval::<String>(&format!(
+            "local t = {{}} for _, r in ipairs({{{frame}:GetRegions()}}) do \
+             table.insert(t, r:GetName() or '?') end return table.concat(t, ' ')"
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        names("Ordered"),
+        "OrderedHighlight OrderedText OrderedNormal"
+    );
+    assert_eq!(
+        names("Leveled"),
+        "LeveledTplArt LeveledTplPushed LeveledArt LeveledNormal"
+    );
+}
+
+/// An EditBox's part runs per level (`0x779fb0`): a template's `<FontString>` loads the frame's
+/// own font while it follows nothing, then the instance's `font=` links it, with no override line;
+/// the reverse logs `0x879b3c`. Each flag is skipped when empty on its own node, so an instance's
+/// `autoFocus=""` leaves its template's `"false"`.
+#[test]
+fn an_edit_boxs_part_reads_level_by_level() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="LinkedFont" font="Fonts\FRIZQT__.TTF"><FontHeight val="10"/></Font>
+            <EditBox name="FontStringTemplate" virtual="true" autoFocus="false">
+                <FontString font="Fonts\FRIZQT__.TTF"><FontHeight val="12"/></FontString>
+            </EditBox>
+            <EditBox name="FontLinked" inherits="FontStringTemplate" font="LinkedFont"
+                     autoFocus=""/>
+            <EditBox name="FontNameTemplate" virtual="true" font="LinkedFont"/>
+            <EditBox name="FontOverridden" inherits="FontNameTemplate">
+                <FontString font="Fonts\FRIZQT__.TTF"><FontHeight val="12"/></FontString>
+            </EditBox>
+        </Ui>"#,
+    );
+    let lines = report.status.lines();
+    assert!(
+        !lines.iter().any(|l| l.starts_with("FontLinked:")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "FontOverridden: FontString element overriding font LinkedFont"),
+        "{lines:?}"
+    );
+    s.run("FontLinked:Hide() FontLinked:ClearFocus() FontOverridden:Hide() FontOverridden:ClearFocus()")
+        .unwrap();
+    s.run("FontLinked:Show()").unwrap();
+    assert_eq!(
+        s.focused_editbox_name(),
+        None,
+        "the template's autoFocus=\"false\" stands"
+    );
+}
+
+/// A Slider's `drawLayer` is its own level's (`0x78959b`), read for that level's `<ThumbTexture>`:
+/// an instance's `drawLayer` with no thumb of its own leaves the template's thumb where it was.
+#[test]
+fn a_sliders_thumb_takes_its_own_levels_draw_layer() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Slider name="ThumbTemplate" virtual="true" drawLayer="ARTWORK">
+                <ThumbTexture name="$parentThumb"/>
+            </Slider>
+            <Slider name="Thumbed" inherits="ThumbTemplate" drawLayer="OVERLAY"/>
+        </Ui>"#,
+    );
+    assert_eq!(
+        s.eval::<String>("return Thumbed:GetThumbTexture():GetDrawLayer()")
+            .unwrap(),
+        "ARTWORK"
+    );
+}
+
+/// A ScrollFrame reads its node's first `<ScrollChild>` alone (`0x786bd5` → `0x6f2c50`).
+#[test]
+fn a_scroll_frame_builds_its_first_scroll_child_only() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <ScrollFrame name="Scroller">
+                <ScrollChild><Frame name="FirstChild"/></ScrollChild>
+                <ScrollChild><Frame name="SecondChild"/></ScrollChild>
+            </ScrollFrame>
+        </Ui>"#,
+    );
+    assert!(s
+        .eval::<bool>("return FirstChild ~= nil and Scroller:GetScrollChild() == FirstChild")
+        .unwrap());
+    assert!(s.eval::<bool>("return SecondChild == nil").unwrap());
+}
