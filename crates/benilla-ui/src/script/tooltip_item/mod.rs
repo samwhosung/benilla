@@ -497,7 +497,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 // The player's item object answers the cooldown query, which asks a missing
                 // record with the callback `0x6e2f70` inside the call (`0x533188` → `0x5331ec`,
                 // `0x6e2efb`); the ammo slot passes an entry and queries nothing (`0x53307d`).
-                if slot0 != -1 && unit.eq_ignore_ascii_case("player") {
+                if slot0 != -1
+                    && unit.eq_ignore_ascii_case("player")
+                    && super::char_stats::active_player_held(lua)
+                {
                     let pending = {
                         let model = lua.app_data_ref::<Model>().expect("model app_data");
                         crate::script::char_stats::own_inv_view(lua, &model, slot)

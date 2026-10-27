@@ -793,9 +793,9 @@ pub(crate) fn feed_char(
         let (memo, vm_reset) = feed.vm.get_reset(script);
 
         let Some(store) = inv.self_store.iter().next() else {
-            // No self store is no data, not an empty inventory: it happens in the logout frames,
-            // where `PLAYER_LOGOUT` handlers still read equipment, so nothing is cleared (the next
-            // session starts a fresh VM).
+            // No self store is no data, not an empty inventory, so the copy stays: the getters
+            // that take a unit answer nothing while no active player is held (`0x4944c9`), and the
+            // next session starts a fresh VM.
             return;
         };
 

@@ -675,6 +675,37 @@ fn the_logouts_shutdown_reads_no_bags() {
     assert_eq!(at, "nil 0 0 nil");
 }
 
+/// The same shutdown finds no inventory: the slot getters ask `CanReadUnitInventory`
+/// (`0x4c8ca7`), which finds no active player (`0x4944af` → `0x468460`, false at `0x4944c9`), so
+/// `GetInventoryItemLink` returns nothing (`0x4c8cae` → `0x4c8c56`). `UnitName("player")` reads
+/// the selected character's name, no object (`0x51708c` → `0x5abdc0`), and `UnitHealth`
+/// finds no unit, 0.
+#[test]
+fn the_logouts_shutdown_reads_no_inventory_but_the_name() {
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_player_record(benilla_ui::script::PlayerRecord {
+            name: "Onehunter".into(),
+            ..Default::default()
+        });
+    frame(
+        &mut app,
+        vec![values(
+            ME,
+            &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 70)],
+        )],
+    );
+    let (before, at) = before_and_at_logout(
+        &mut app,
+        "tostring((GetInventoryItemLink('player', 20))) .. ' ' .. \
+         tostring((UnitName('player'))) .. ' ' .. UnitHealth('player')",
+    );
+    assert!(before.starts_with("|c"), "{before}");
+    assert!(before.ends_with(" Onehunter 70"), "{before}");
+    assert_eq!(at, "nil Onehunter 0");
+}
+
 /// A spy on `PLAYER_COMBO_POINTS` that records `chunk`'s answer at each firing, as text.
 fn spy_at_combo(app: &mut App, chunk: &str) {
     app.world_mut()

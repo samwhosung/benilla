@@ -34,8 +34,30 @@ fn vm(app: &mut App) -> Mut<'_, UiScript> {
 /// The active player's guid, which the ammo and cooldown lookups pass as their owner id.
 const ME: u64 = 0x2a;
 
-/// The VM's active player, as the unit feeds seat it.
+/// The active player: its object, which the inventory getters find held (`0x4944af`), and the
+/// VM's guid, as the unit feeds seat it.
 fn seat_player(app: &mut App) {
+    seat_player_with(app, &[]);
+}
+
+/// [`seat_player`], its object holding `pairs`.
+fn seat_player_with(app: &mut App, pairs: &[(u16, u32)]) {
+    let world = app.world_mut();
+    let me = world
+        .spawn((
+            crate::net::Guid(ME),
+            crate::net::SelfPlayer,
+            crate::net::ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(pairs)
+                    .into_created(benilla_protocol::messages::ObjectType::Player),
+            ),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(ME, me);
+    world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     vm(app).set_unit_guids(&benilla_ui::script::UnitGuids {
         player: ME,
         ..Default::default()
@@ -378,28 +400,52 @@ fn the_ammo_getters_query_body_is_byte_exact() {
 /// call, and the cooldowns await the record.
 #[test]
 fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
-    use benilla_ui::script::{ContainerSlot, ContainerState, InvSlotView, InventorySlots};
-    let (mut app, rx) = client();
-    let pending = |item_id: u32| ContainerSlot {
-        item_id,
-        count: 1,
-        ..Default::default()
+    use benilla_protocol::field::{
+        FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
     };
-    vm(&mut app).set_container(
-        0,
-        Some(ContainerState {
-            name: None,
-            num_slots: 16,
-            slots: std::collections::HashMap::from([(1, pending(6948)), (2, pending(5976))]),
-        }),
-    );
+    use benilla_ui::script::{InvSlotView, InventorySlots};
+    let (mut app, rx) = client();
+    // The backpack's first two seats, 23 and 24, hold the two items whose records are missing.
+    let held = [
+        (23, 0x4000_0000_0000_0051_u64, 6948),
+        (24, 0x4000_0000_0000_0052, 5976),
+    ];
+    let half = |lo: u16, guid: u64| [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)];
+    let seats: Vec<(u16, u32)> = held
+        .iter()
+        .flat_map(|&(n, guid, _)| half(FIELD_PLAYER_INV_SLOT_HEAD + 2 * n, guid))
+        .collect();
+    seat_player_with(&mut app, &seats);
+    // Held as objects, the record still unasked: spawned past the create handler, which asks it.
+    for &(_, guid, entry) in &held {
+        let mut pairs = vec![
+            (2, 0x3),
+            (FIELD_OBJECT_ENTRY, entry),
+            (FIELD_ITEM_STACK_COUNT, 1),
+        ];
+        pairs.extend(half(6, ME));
+        pairs.extend(half(8, ME));
+        let world = app.world_mut();
+        let item = world
+            .spawn((
+                crate::net::Guid(guid),
+                crate::net::ObjectStore(
+                    benilla_protocol::ObjectFields::from_pairs(&pairs)
+                        .into_created(benilla_protocol::messages::ObjectType::Item),
+                ),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(guid, item);
+    }
     let mut worn: InventorySlots = Default::default();
     worn[14] = Some(InvSlotView {
         item_id: 2589,
         ..Default::default()
     });
     vm(&mut app).set_inventory_slots(worn);
-    seat_player(&mut app);
     eval::<()>(
         &mut app,
         r#"local tip = CreateFrame("GameTooltip", "AskTip")

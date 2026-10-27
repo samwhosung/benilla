@@ -509,18 +509,27 @@ pub(super) enum InvReader {
 
 /// [`InvReader`] for `token`, `None` for a unit the getters may not read or no unit at all, the
 /// token resolved at the call ([`super::unit::guid_of`]). `"player"` is the active player whatever
-/// its guid reads.
+/// its guid reads, and none while no active player is held (`0x4944c9`), as in a
+/// `PLAYER_LOGOUT` handler, which runs after the objects are freed.
 pub(super) fn inventory_reader(lua: &Lua, model: &Model, token: &str) -> Option<InvReader> {
     if token.eq_ignore_ascii_case("player") {
-        return Some(InvReader::Own);
+        return active_player_held(lua).then_some(InvReader::Own);
     }
     let guid = super::unit::guid_of(lua, model, token).ok().flatten()?;
     if guid == model.unit_guids.player {
-        return Some(InvReader::Own);
+        return active_player_held(lua).then_some(InvReader::Own);
     }
     let reach = super::inspect::reach_of(lua, model, guid)?;
     (reach.inspectable && super::inspect::in_inspect_range(&reach))
         .then_some(InvReader::Visible(guid))
+}
+
+/// Whether an active player is held now (`0x4944af` → `0x468460`): through the lent host, the
+/// VM's copy standing in without one. Borrows no [`Model`], so a caller may hold it.
+pub(super) fn active_player_held(lua: &Lua) -> bool {
+    let mut held = None;
+    super::host::read_host(lua, |h| h.read_self(&mut |own| held = Some(own.held())));
+    held.unwrap_or(true)
 }
 
 impl Model {

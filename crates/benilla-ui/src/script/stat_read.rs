@@ -220,6 +220,11 @@ pub trait SelfRead {
     fn shows_helm(&self) -> bool;
     /// `PLAYER_FLAGS` bit `0x800` clear, `ShowingCloak`'s (`0x48ddeb`).
     fn shows_cloak(&self) -> bool;
+    /// Whether an active player is held (`0x468550` → `0x468460`), `CanReadUnitInventory`'s
+    /// first test (`0x4944c9`); only [`NoPlayer`] holds none.
+    fn held(&self) -> bool {
+        true
+    }
 }
 
 /// No active player held, as the reference's player getters answer one: 0, nil, three nils
@@ -259,6 +264,9 @@ impl SelfRead for NoPlayer {
         false
     }
     fn shows_cloak(&self) -> bool {
+        false
+    }
+    fn held(&self) -> bool {
         false
     }
 }
