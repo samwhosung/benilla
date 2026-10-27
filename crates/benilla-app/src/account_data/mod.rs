@@ -70,8 +70,8 @@ impl AccountData {
     }
 
     /// `0x5afe50`, a reader's registration: whether it runs now, on a settled section. A pending
-    /// one holds it (`0x5afe62`-`0x5afe6f`) until it settles ([`Self::take_owed`]). Kept either way,
-    /// so a later settling runs it again (`0x5afab6`, `0x5afd08`).
+    /// one holds it (`0x5afe62`-`0x5afe6f`) until it settles ([`Self::take_owed`]). Kept either
+    /// way, so a later settling runs it again (`0x5afab6`, `0x5afd08`).
     pub(crate) fn register(&self, section: usize) -> bool {
         let mut state = self.lock();
         state.readers[section] = true;
@@ -199,7 +199,8 @@ pub(crate) struct State {
     saved: [bool; ACCOUNT_DATA_SECTIONS],
     /// The save timer (`+0x18`): when it fires.
     timers: [Option<Instant>; ACCOUNT_DATA_SECTIONS],
-    /// A section that settled with its reader registered, owed that reader: the stamp it settled at.
+    /// A section that settled with its reader registered, owed that reader: the stamp it settled
+    /// at.
     owed: [Option<crate::lanes::Stamp>; ACCOUNT_DATA_SECTIONS],
     /// The default key bindings the binding sections are written against, read on first need.
     defaults: Option<Vec<KeyBinding>>,
