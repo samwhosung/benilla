@@ -158,34 +158,40 @@ impl MacroState {
     /// form, takes the scope's next. The name and body keep their verbs' caps.
     pub fn from_scopes(account: Vec<MacroView>, character: Vec<MacroView>) -> Self {
         let mut state = Self::default();
-        for (per_character, views) in [(false, account), (true, character)] {
-            let scope = usize::from(per_character);
-            for mut view in views {
-                if state.count(per_character) >= MAX_MACROS {
-                    break;
-                }
-                let seed = view.id == 0;
-                if seed {
-                    view.id = state.last_id[scope] + 1;
-                } else if (view.id as i32) < SCOPE_BASE[scope] as i32 {
-                    view.id = view.id.wrapping_add(SCOPE_BASE[scope]);
-                }
-                if view.id as i32 > state.last_id[scope] as i32 {
-                    state.last_id[scope] = view.id;
-                }
-                if state.by_id(view.id).is_some() || (!seed && view.name.is_empty()) {
-                    continue;
-                }
-                view.name = cut_name(&view.name);
-                view.body = cut_body(&view.body);
-                view.local_only = false;
-                state.list.push(Record {
-                    per_character,
-                    view,
-                });
-            }
-        }
+        state.merge_scope(false, account);
+        state.merge_scope(true, character);
         state
+    }
+
+    /// One scope's file read into the table as it stands (`0x4f0600`, per section): nothing is
+    /// emptied first, an id the table holds is skipped (`0x4f0789`), and the scope stops at 18
+    /// (`0x4f06ee`), its macros already there counted.
+    pub fn merge_scope(&mut self, per_character: bool, views: Vec<MacroView>) {
+        let scope = usize::from(per_character);
+        for mut view in views {
+            if self.count(per_character) >= MAX_MACROS {
+                break;
+            }
+            let seed = view.id == 0;
+            if seed {
+                view.id = self.last_id[scope] + 1;
+            } else if (view.id as i32) < SCOPE_BASE[scope] as i32 {
+                view.id = view.id.wrapping_add(SCOPE_BASE[scope]);
+            }
+            if view.id as i32 > self.last_id[scope] as i32 {
+                self.last_id[scope] = view.id;
+            }
+            if self.by_id(view.id).is_some() || (!seed && view.name.is_empty()) {
+                continue;
+            }
+            view.name = cut_name(&view.name);
+            view.body = cut_body(&view.body);
+            view.local_only = false;
+            self.list.push(Record {
+                per_character,
+                view,
+            });
+        }
     }
 
     /// A scope's macros in list order.

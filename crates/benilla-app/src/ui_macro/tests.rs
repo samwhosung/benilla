@@ -977,7 +977,7 @@ fn macro_names(app: &bevy::prelude::App) -> Vec<String> {
 }
 
 /// A macro section the server's file replaced is read again into the VM that loaded the old
-/// file, as the reference's reader runs once the section lands (`0x5afd19`).
+/// file, as the reference's reader runs once the section lands (`0x5afd19`), merged into the table.
 #[test]
 fn a_macro_section_from_the_server_is_read_again() {
     let _l = ENV_LOCK
@@ -993,21 +993,31 @@ fn a_macro_section_from_the_server_is_read_again() {
     app.update();
     assert_eq!(macro_names(&app), ["Old"]);
 
-    crate::local_state::write_atomic(&account, "MACRO 1 \"New\" Ability_Ambush\nEND\n").unwrap();
+    crate::local_state::write_atomic(
+        &account,
+        "MACRO 1 \"New\" Ability_Ambush\nEND\nMACRO 2 \"Two\" Ability_Ambush\nEND\n",
+    )
+    .unwrap();
     app.update();
     assert_eq!(macro_names(&app), ["Old"], "loaded once per VM");
     app.world()
         .resource::<crate::account_data::AccountData>()
         .owe_reader_for_test(4);
     app.update();
-    assert_eq!(macro_names(&app), ["New"], "the server's file read again");
+    assert_eq!(
+        macro_names(&app),
+        ["Old", "Two"],
+        "the server's file merged: an id the table holds is kept (`0x4f0789`)"
+    );
     std::fs::remove_dir_all(&tmp).ok();
 }
 
-/// The reader registers through `0x5afe50` (`0x4f0a7c`, `0x4f0a8d`): while its sections are
-/// pending nothing is read, and the files are read once they settle (`0x5afaca`), not before.
+/// The reader registers for each section through `0x5afe50` (`0x4f0a7c`, `0x4f0a8d`): a pending
+/// scope is not read, and nothing is saved over its file (`0x5afee0`); once its section settles
+/// (`0x5afaca`) its file merges into the table as it stands (`0x4f0600`), an id the table holds
+/// skipped (`0x4f0789`), and each scope on its own.
 #[test]
-fn the_macro_reader_waits_for_its_sections() {
+fn the_macro_reader_reads_each_scope_as_its_section_settles() {
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1016,7 +1026,10 @@ fn the_macro_reader_waits_for_its_sections() {
     let _c = EnvGuard::unset("WOW_CAPTURE");
     let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
     let account = crate::local_state::macros_account_path().unwrap();
-    crate::local_state::write_atomic(&account, "MACRO 1 \"Mine\" Ability_Ambush\nEND\n").unwrap();
+    let mine = "MACRO 1 \"Mine\" Ability_Ambush\nEND\nMACRO 2 \"Two\" Ability_Ambush\nEND\n";
+    crate::local_state::write_atomic(&account, mine).unwrap();
+    let character = crate::local_state::macros_character_path("Realm", "Probeone").unwrap();
+    crate::local_state::write_atomic(&character, "MACRO 16777217 \"Alt\" X\nEND\n").unwrap();
     let mut script = UiScript::new().unwrap();
     script.set_macro_icons(vec!["Interface\\Icons\\Ability_Ambush".into()]);
     let mut app = file_app(script);
@@ -1032,8 +1045,8 @@ fn the_macro_reader_waits_for_its_sections() {
     app.update();
     assert_eq!(
         std::fs::read_to_string(&account).unwrap(),
-        "MACRO 1 \"Mine\" Ability_Ambush\nEND\n",
-        "a held table is not saved over the file (`0x5afee0`)"
+        mine,
+        "a held scope is not saved over its file"
     );
     let settle = |app: &bevy::prelude::App, section| {
         app.world()
@@ -1044,18 +1057,16 @@ fn the_macro_reader_waits_for_its_sections() {
     app.update();
     assert_eq!(
         macro_names(&app),
-        ["Hi"],
-        "the character's scope still pending: nothing read"
+        ["Hi", "Two"],
+        "the account scope merged: \"Hi\" keeps id 1, so the file's 1 is skipped"
     );
     settle(&app, 5);
     app.update();
     assert_eq!(
         macro_names(&app),
-        ["Mine"],
-        "both settled: the files read over the held table"
+        ["Hi", "Two", "Alt"],
+        "then the character's"
     );
-    app.update();
-    assert_eq!(macro_names(&app), ["Mine"]);
     std::fs::remove_dir_all(&tmp).ok();
 }
 

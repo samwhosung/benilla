@@ -25,6 +25,8 @@ pub(crate) struct MacroFiles {
     /// The `(realm, character)` the files were loaded for, per VM: a relog meets a fresh VM with an
     /// empty macro table, even as the same character.
     identity: crate::ui_script::VmMemo<Option<(String, String)>>,
+    /// Whether this VM's account and character scopes wait for their sections (4 and 5).
+    held: crate::ui_script::VmMemo<[bool; 2]>,
 }
 
 /// Macro id to its bound spell, the reference's `[rec+0x564]` (read by `0x4e5ba0`), which an
@@ -125,34 +127,31 @@ fn load_macros(
     vm.feed(|script, mut bar, fires| {
         let Some(script) = script else { return };
         let Some(id) = identity(&roster) else { return };
-        // The reader (`0x4f0600`) registers once per VM for both sections through `0x5afe50`
-        // (`0x4f0a70`): it reads now on settled sections, else when they settle, and at every
-        // later settling.
-        let owed = data.as_deref().is_some_and(|data| {
-            crate::account_data::MACROS
-                .iter()
-                .fold(false, |any, &section| data.take_owed(section) | any)
+        // The reader (`0x4f0600`) registers once per VM for each section through `0x5afe50`
+        // (`0x4f0a7c`, `0x4f0a8d`): a scope is read now on a settled section, else when it
+        // settles, and again at every later settling.
+        let owed = data.as_deref().map_or([false; 2], |data| {
+            crate::account_data::MACROS.map(|s| data.take_owed(s))
         });
         let first = files.identity.get(script).as_ref() != Some(&id);
-        if !owed && !first {
-            return; // read into this VM, and nothing settled since
-        }
-        // Deviation: the reference reads each scope as its own section settles; the two scopes
-        // load here as one table, so a scope settled first waits for the other. Held, nothing is
-        // read and nothing written over the files ([`save_dirty_macros`]).
-        let held = data.as_deref().is_some_and(|data| {
-            crate::account_data::MACROS
-                .map(|section| data.register(section))
-                .contains(&false)
-        });
-        if held {
+        let reads = if first {
+            let (realm, character) = (&id.0, &id.1);
+            files.account = crate::local_state::macros_account_path();
+            files.character = crate::local_state::macros_character_path(realm, character);
+            *files.identity.get(script) = Some(id.clone());
+            let runs = data.as_deref().map_or([true; 2], |data| {
+                crate::account_data::MACROS.map(|s| data.register(s))
+            });
+            // A held scope is read when it settles, and nothing is saved over its file meanwhile
+            // ([`save_dirty_macros`]).
+            *files.held.get(script) = runs.map(|r| !r);
+            runs
+        } else {
+            owed
+        };
+        if !reads.contains(&true) {
             return;
         }
-        let (realm, character) = (&id.0, &id.1);
-        files.account = crate::local_state::macros_account_path();
-        files.character = crate::local_state::macros_character_path(realm, character);
-        *files.identity.get(script) = Some(id.clone());
-
         let read = |path: &Option<std::path::PathBuf>,
                     per_character: bool|
          -> Vec<benilla_ui::script::MacroView> {
@@ -167,17 +166,28 @@ fn load_macros(
                 }
             }
         };
-        let character_records = read(&files.character, true);
-        let moves = store::legacy_character_words(&character_records);
-        let state = MacroState::from_scopes(read(&files.account, false), character_records);
-        info!(
-            "ui_macro: {} account + {} character macros for {character} on {realm}",
-            state.count(false),
-            state.count(true)
-        );
-        if !moves.is_empty() {
-            migrate_character_bar(&mut bar, &state, &files, &moves);
+        // Each scope's records merged into the table as it stands (`0x4f0600` never empties one).
+        let mut state = script.macros();
+        if reads[0] {
+            state.merge_scope(false, read(&files.account, false));
+            files.held.get(script)[0] = false;
         }
+        if reads[1] {
+            let character_records = read(&files.character, true);
+            let moves = store::legacy_character_words(&character_records);
+            state.merge_scope(true, character_records);
+            files.held.get(script)[1] = false;
+            if !moves.is_empty() {
+                migrate_character_bar(&mut bar, &state, &files, &moves);
+            }
+        }
+        info!(
+            "ui_macro: {} account + {} character macros for {} on {}",
+            state.count(false),
+            state.count(true),
+            id.1,
+            id.0
+        );
         script.set_macros(state);
         // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
         fires.post("UPDATE_MACROS", vec![]);
@@ -241,12 +251,17 @@ fn save_dirty_macros(
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        // A table no file was read into (a held reader) is no copy of the player's to write.
+        // Not registered in this VM: no file of the player's was read to write over.
         if files.identity.get(script).is_none() || !script.take_macros_dirty() {
             return;
         }
+        let held = *files.held.get(script);
         let state = script.macros();
         for (path, per_character) in [(&files.account, false), (&files.character, true)] {
+            // A held scope's section is not written (`0x4f0c7f`, `0x4f0c90` → `0x5afee0`).
+            if held[usize::from(per_character)] {
+                continue;
+            }
             let Some(path) = path else { continue };
             let text = store::write(state.saved(per_character).into_iter());
             if let Err(e) = crate::local_state::write_atomic(path, &text) {

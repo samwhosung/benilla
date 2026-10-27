@@ -206,8 +206,9 @@ struct BindingFiles {
     /// The account-data sections' files, the reference's `bindings-cache.wtf` pair.
     account_cache: Option<std::path::PathBuf>,
     character_cache: Option<std::path::PathBuf>,
-    /// Whether this VM's sets wait for their sections: nothing read, so nothing saved over them.
-    held: crate::ui_script::VmMemo<bool>,
+    /// Whether this VM's set 1 and set 2 wait for their sections (2 and 3): nothing read, so
+    /// nothing saved over them (`0x4b6600`, `0x4b6611` through `0x5afed0`).
+    held: crate::ui_script::VmMemo<[bool; 2]>,
 }
 
 /// This module's systems inside [`crate::ui_script::UiInput`]: the pass's head ([`BindingHead`])
@@ -280,19 +281,19 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     let character = id
         .as_ref()
         .and_then(|(realm, name)| crate::local_state::bindings_character_path(realm, name));
-    // The reader (`0x4b6240`) registers for both sections through `0x5afe50` (`0x4b62ef`,
-    // `0x4b6300`): the sets are read now on settled sections, else held, with nothing in the live
-    // table, until they settle ([`reread_arrived_bindings`]). Deviation: the reference reads each
-    // set as its own section settles; here the two are read together once both have.
+    // The reader (`0x4b6240`) registers for each section through `0x5afe50` (`0x4b62ef`,
+    // `0x4b6300`): a set is read now on a settled section, else held until it settles
+    // ([`reread_arrived_bindings`]), the live table empty until set 2's read chooses.
     let held = world
         .get_resource::<crate::account_data::AccountData>()
-        .is_some_and(|data| {
-            crate::account_data::BINDINGS
-                .map(|section| data.register(section))
-                .contains(&false)
+        .map_or([false; 2], |data| {
+            crate::account_data::BINDINGS.map(|section| !data.register(section))
         });
-    if !held {
-        seed_sets(script, &account, &character);
+    if !held[0] {
+        read_account_set(script, &account);
+    }
+    if !held[1] {
+        read_character_set(script, &character);
     }
     if let Some(mut files) = world.get_resource_mut::<BindingFiles>() {
         *files.held.get(script) = held;
@@ -305,33 +306,34 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     }
 }
 
-/// Seed sets 1 and 2 from their files and load the one in use: the character's own set when its
-/// file exists, the reference's rule (`0x4b64b0`), else the account's.
-fn seed_sets(
-    script: &mut UiScript,
-    account: &Option<std::path::PathBuf>,
-    character: &Option<std::path::PathBuf>,
-) {
-    let defaults = script.default_bindings();
-    let overrides = read_diff(account).unwrap_or_default();
-    script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults)));
-    script.load_binding_set(1);
-    match read_diff(character) {
-        Some(overrides) => {
-            script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults)));
-            script.load_binding_set(2);
-            info!("bindings: character-specific set loaded");
-        }
-        None => {
-            script.seed_binding_set(2, None);
-            script.load_binding_set(1);
-        }
+/// Section 2's read (`0x4b6240` with set 1): set 1 replaced by the account file, emptied first
+/// (`0x4b6161`); a file that does not read leaves it as it stands (`0x4b624c`, `0x4b6259`).
+fn read_account_set(script: &mut UiScript, account: &Option<std::path::PathBuf>) {
+    if let Some(overrides) = read_diff(account) {
+        let defaults = script.default_bindings();
+        script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults)));
     }
 }
 
-/// A binding section that settled: both sets read again and the one in use loaded, as the
-/// reference's reader (`0x4b6240`) runs once its section settles (`0x5afaca`, `0x5afd19`), once
-/// neither is pending.
+/// Section 3's read (`0x4b6240` with set 2): set 2 from the character file as
+/// [`read_account_set`] reads set 1, then the set choice (`0x4b629a` → `0x4b64b0`): the
+/// character's set in use when it has keys, else set 1 as it then stands, the defaults when it is
+/// still empty (`0x4b64e2`).
+fn read_character_set(script: &mut UiScript, character: &Option<std::path::PathBuf>) {
+    if let Some(overrides) = read_diff(character) {
+        let defaults = script.default_bindings();
+        script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults)));
+        info!("bindings: character-specific set read");
+    }
+    script.load_binding_set(if script.character_bindings_exist() {
+        2
+    } else {
+        1
+    });
+}
+
+/// A binding section that settled: its set read again, as the reference's reader (`0x4b6240`)
+/// runs once its section settles (`0x5afaca`, `0x5afd19`), in the table's order.
 fn reread_arrived_bindings(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut files: ResMut<BindingFiles>,
@@ -340,15 +342,14 @@ fn reread_arrived_bindings(
     let Some(data) = data else { return };
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        let mut owed = false;
-        for section in crate::account_data::BINDINGS {
-            owed |= data.take_owed(section);
+        let [account, character] = crate::account_data::BINDINGS.map(|s| data.take_owed(s));
+        if account {
+            read_account_set(script, &files.account);
+            files.held.get(script)[0] = false;
         }
-        let pending = crate::account_data::BINDINGS.map(|section| data.pending(section));
-        if owed && !pending.contains(&true) {
-            info!("bindings: the settled sets read");
-            seed_sets(script, &files.account, &files.character);
-            *files.held.get(script) = false;
+        if character {
+            read_character_set(script, &files.character);
+            files.held.get(script)[1] = false;
         }
     })
 }
@@ -375,12 +376,8 @@ fn drain_binding_requests(
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        let held = *files.held.get(script);
+        let [account_held, character_held] = *files.held.get(script);
         for req in script.take_keybind_requests() {
-            // A held set is not saved over its files (`0x5afed0` skips a pending section).
-            if held {
-                continue;
-            }
             let KeybindRequest::Save(which) = req;
             // The set as the call stored it (`0x4b6310`), not the live table a later binding in
             // the frame moved. None: a later `SaveBindings(1)` in the frame dropped set 2, and
@@ -393,14 +390,17 @@ fn drain_binding_requests(
             // The section's file beside the diff, the whole table in the reference's form
             // (`0x4b65b0`).
             let table = store::to_cache(&store::from_diff(&text), &defaults);
-            let (path, cache) = match which {
-                1 => (&files.account, &files.account_cache),
-                2 => (&files.character, &files.character_cache),
+            let (path, cache, held) = match which {
+                1 => (&files.account, &files.account_cache, account_held),
+                2 => (&files.character, &files.character_cache, character_held),
                 _ => continue,
             };
-            write_file(path, &text);
-            write_file(cache, &table);
-            if which == 1 {
+            // A held set's section is not written over (`0x4b6600`, `0x4b6611` → `0x5afee0`).
+            if !held {
+                write_file(path, &text);
+                write_file(cache, &table);
+            }
+            if which == 1 && !character_held {
                 if let Some(chr) = &files.character {
                     match std::fs::remove_file(chr) {
                         Ok(()) => info!("bindings: character-specific set deleted"),
@@ -2574,8 +2574,9 @@ mod tests {
             .expect("eval")
     }
 
-    /// A binding section the server's file replaced is read again: both sets from their files and
-    /// the one in use loaded, the character's when its file exists (`0x4b64b0`).
+    /// A binding section that settles again is read again, its own set alone: section 2 reads set
+    /// 1 and leaves the live table, section 3 reads set 2 and runs the set choice (`0x4b629a` →
+    /// `0x4b64b0`), the character's set in use when it has keys.
     #[test]
     fn a_binding_section_from_the_server_is_read_again() {
         let tmp = std::env::temp_dir().join(format!("benilla-bind-reread-{}", std::process::id()));
@@ -2589,6 +2590,15 @@ mod tests {
         let data = || app.world().resource::<crate::account_data::AccountData>();
         data().owe_reader_for_test(2);
         app.update();
+        assert_ne!(
+            eval_str(&app, jump),
+            "G",
+            "set 1 read; the live table not chosen"
+        );
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("LoadBindings(1)")
+            .unwrap();
         assert_eq!(eval_str(&app, jump), "G", "the account set read again");
 
         crate::local_state::write_atomic(&character, "bind JUMP H\n").unwrap();
