@@ -59,7 +59,9 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::player::wire_in::regain_control_on_arrival", &["player::state::OwnControlLost"],
         "gives control back on our own create, which the stance bar's usability walk reads \
-         (`0x6e3dc3`); the reference raises it inside the create (`0x5deb56`)"),
+         (`0x6e3dc3`), and pushes its signals onto the notice lane at its own place; the \
+         reference raises it inside the create (`0x5deb56`), and the arrival it answers is a \
+         system's message, not a handler's"),
     ("::spell::group_relation::publish_group_roster", &["spell::group_relation::GroupRoster"],
         "copies the group's roster, which the relation reads take, once the packets are in"),
     ("::spell::mods::track_class_family", &["spell::mods::SpellModifiers"],
