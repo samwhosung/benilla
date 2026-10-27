@@ -73,6 +73,12 @@ impl MessageSounds {
     pub(crate) fn queued_cues(&self) -> Vec<&'static str> {
         self.q().cues.clone()
     }
+
+    /// The named cues queued, leaving none, for the producer's tests.
+    #[cfg(test)]
+    pub(crate) fn take_cues(&self) -> Vec<&'static str> {
+        std::mem::take(&mut self.q().cues)
+    }
 }
 
 /// Drain [`MessageSounds`]: a cue by name, or speech by line.

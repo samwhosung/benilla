@@ -85,6 +85,9 @@ pub(crate) struct QuestCells {
     pub(crate) required: Vec<QuestRewardItem>,
     /// `0xbe0830`, the reward spell's id.
     pub(crate) reward_spell: u32,
+    /// `0xbe081c`, the last panel's quest id (0 for a greeting), stored by every panel
+    /// (`0x500d6e`) and zeroed at world enter (`0x500b01`).
+    pub(crate) quest: u32,
 }
 
 impl QuestCells {
@@ -97,6 +100,12 @@ impl QuestCells {
         };
         // `0x500ef0` and `0x501070` store the title as sent, an empty one as `" "` (`0x501008`).
         let title = |t: &str| if t.is_empty() { " " } else { t }.to_string();
+        self.quest = match view {
+            QuestView::Greeting(_) => 0,
+            QuestView::Detail(d) => d.quest_id,
+            QuestView::Progress(p) => p.quest_id,
+            QuestView::Reward(o) => o.quest_id,
+        };
         let st = &mut self.state;
         match view {
             QuestView::Greeting(l) => {
@@ -241,7 +250,15 @@ impl QuestGiver {
     }
 
     /// Open (or replace) the window with a fresh wire view for `npc`, its texts through `expand`.
-    fn open_expanded(&mut self, npc: u64, view: QuestView, expand: &dyn Fn(&str) -> String) {
+    /// Answers whether the reward panel owes the quest-list-complete chime: the setter compares
+    /// the quest id with the last panel's before storing it (`0x500d36`-`0x500d3c`).
+    fn open_expanded(
+        &mut self,
+        npc: u64,
+        view: QuestView,
+        expand: &dyn Fn(&str) -> String,
+    ) -> bool {
+        let chime = matches!(&view, QuestView::Reward(o) if o.quest_id == self.cells.quest);
         if let QuestView::Greeting(list) = &view {
             self.pools = QuestPools::of(list);
         }
@@ -252,6 +269,7 @@ impl QuestGiver {
         // (`0x500d8c`) on every panel publish.
         self.acted = false;
         self.chosen_reward = 0;
+        chime
     }
 
     /// Whether the cell `[0xbe0810]` holds a source.
@@ -493,7 +511,12 @@ struct PanelMacros<'w, 's> {
     stores: Query<'w, 's, &'static ObjectStore>,
     states: Option<Res<'w, crate::world_state::WorldStates>>,
     unit_names: crate::ui_unit::NameTables<'w>,
+    /// The 2D cues `PlaySoundByName` plays, absent in a harness without sound.
+    sounds: Option<Res<'w, crate::sound::MessageSounds>>,
 }
+
+/// The reward panel's chime (`0x841530`, played at `0x500d43`).
+const QUEST_LIST_COMPLETE_SOUND: &str = "igQuestListComplete";
 
 /// A panel's open (`0x500bd0`, every panel packet's): the latch first, with no test of the cell
 /// (`0x500d74`), so a panel replacing the giver's own closes it, `QUEST_FINISHED` ahead of the new
@@ -519,7 +542,14 @@ pub(crate) fn open_panel(world: &mut World, npc: u64, view: QuestView) {
             subject: subject.as_ref(),
             states: m.states.as_deref().unwrap_or(&none),
         };
-        giver.open_expanded(npc, view, &|t| crate::npc_text::substitute(t, &ctx));
+        let chime = giver.open_expanded(npc, view, &|t| crate::npc_text::substitute(t, &ctx));
+        // The reward panel after its quest's progress panel plays `igQuestListComplete` at the
+        // setter (`0x500d3e`-`0x500d43`, `PlaySoundByName` `0x458030`).
+        if chime {
+            if let Some(sounds) = m.sounds.as_deref() {
+                sounds.push_cue(QUEST_LIST_COMPLETE_SOUND);
+            }
+        }
         // The frame reads `UnitName("npc")` at the panel's event (`QuestFrame.lua:63`), which
         // looks the giver up with a callback (`0x5171b8`); its landing fires nothing.
         if let (Some(names), Some(commands)) = (m.names.as_deref(), m.commands.as_deref()) {
@@ -1062,5 +1092,66 @@ mod tests {
         );
         land(&mut app, 903);
         assert!(lane(&mut app).is_empty(), "the callbacks are spent");
+    }
+
+    fn reward(quest_id: u32) -> QuestView {
+        QuestView::Reward(QuestOfferReward {
+            npc: 0x42,
+            quest_id,
+            title: "A Threat Within".into(),
+            offer_text: "Well done.".into(),
+            auto_finish: 1,
+            choices: Vec::new(),
+            rewards: Vec::new(),
+            money: 0,
+            quest_flags: 0,
+            reward_spell: 0,
+        })
+    }
+
+    /// The reward panel's setter plays `igQuestListComplete` when its quest id equals the last
+    /// panel's (`0x500d36`-`0x500d43`): the progress panel's Continue, not a reward panel on its
+    /// own, a different quest's, or one after the world-enter reset (`0x500b01`).
+    #[test]
+    fn a_reward_after_its_quests_progress_panel_plays_the_completion_chime() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.init_resource::<crate::sound::MessageSounds>();
+        let cues = |app: &mut App| {
+            app.world()
+                .resource::<crate::sound::MessageSounds>()
+                .take_cues()
+        };
+        let chime = vec![QUEST_LIST_COMPLETE_SOUND];
+        open_panel(app.world_mut(), 0x42, reward(100));
+        assert!(cues(&mut app).is_empty(), "no panel before it");
+        open_panel(
+            app.world_mut(),
+            0x42,
+            progress("Bring it.", Vec::new(), true),
+        );
+        open_panel(app.world_mut(), 0x42, reward(100));
+        assert_eq!(cues(&mut app), chime, "the reward after its progress panel");
+        open_panel(app.world_mut(), 0x42, reward(100));
+        assert_eq!(
+            cues(&mut app),
+            chime,
+            "any panel of the same quest before it"
+        );
+        open_panel(
+            app.world_mut(),
+            0x42,
+            progress("Bring it.", Vec::new(), true),
+        );
+        open_panel(app.world_mut(), 0x42, reward(101));
+        assert!(cues(&mut app).is_empty(), "another quest's reward");
+        open_panel(
+            app.world_mut(),
+            0x42,
+            progress("Bring it.", Vec::new(), true),
+        );
+        app.world_mut().resource_mut::<QuestGiver>().world_enter();
+        open_panel(app.world_mut(), 0x42, reward(100));
+        assert!(cues(&mut app).is_empty(), "the world entry zeroes the id");
     }
 }
