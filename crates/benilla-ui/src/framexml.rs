@@ -324,11 +324,8 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
                 })),
             }
         } else if tag.eq_ignore_ascii_case("Font") {
-            let el = element_from_node(child);
-            if el.name().is_none() {
-                warnings.push("<Font> without a name attribute".to_string());
-            }
-            items.push(TopLevel::Font(el));
+            // An unnamed one is kept: the loader reports it where the reference does.
+            items.push(TopLevel::Font(element_from_node(child)));
         } else {
             let el = element_from_node(child);
             if el.attr_is_true("virtual") {

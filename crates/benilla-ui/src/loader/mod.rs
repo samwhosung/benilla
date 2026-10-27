@@ -581,7 +581,12 @@ impl Loader<'_> {
     /// re-declared (`0x783870`, `0x7839ab`), loads the node ([`Self::load_font_node`]) and is
     /// published whether or not its own font was refused.
     pub(super) fn do_font(&mut self, el: &Element) {
-        let Some(name) = el.name().map(str::to_string) else {
+        // No name, or an empty one (`0x6ee143` tests its first byte): `0x87104c` at severity 1
+        // (`0x6ee162`), and no font is made.
+        let Some(name) = el.name().filter(|n| !n.is_empty()).map(str::to_string) else {
+            let line = "Unnamed font node at top level";
+            self.report.status.report(status::WARNING, line);
+            self.report.warnings.push(line.to_string());
             return;
         };
         let id = self.model().fonts.named(&name);

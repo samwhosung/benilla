@@ -247,3 +247,19 @@ fn an_unnamed_virtual_node_is_reported_into_the_load_log() {
         .close_into(&mut parent, false, "++ Loading file X".into());
     assert_eq!(parent.lines(), ["++ Loading file X", unnamed, unnamed]);
 }
+
+/// A top-level `<Font>` with no name, or an empty one (`0x6ee13e`, `0x6ee143`), logs `"Unnamed
+/// font node at top level"` (`0x87104c`) at severity 1 (`0x6ee162`) and makes no font.
+#[test]
+fn an_unnamed_top_level_font_is_reported_and_makes_no_font() {
+    let s = script();
+    let xml = r#"<Ui>
+        <Font font="Fonts\FRIZQT__.TTF"><FontHeight><AbsValue val="12"/></FontHeight></Font>
+        <Font name="" font="Fonts\FRIZQT__.TTF"><FontHeight><AbsValue val="12"/></FontHeight></Font>
+    </Ui>"#;
+    let report = load(&s, &framexml::parse(xml).unwrap(), &|_| None);
+    let unnamed = "Unnamed font node at top level";
+    assert_eq!(report.status.lines(), [unnamed, unnamed]);
+    assert_eq!(report.warnings, [unnamed, unnamed]);
+    assert!(s.eval::<bool>(r#"return getglobal("") == nil"#).unwrap());
+}
