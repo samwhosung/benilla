@@ -217,7 +217,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let r = binding_abi::float_arg(lua, r, USAGE)?;
             let g = binding_abi::float_arg(lua, g, USAGE)?;
             let b = binding_abi::float_arg(lua, b, USAGE)?;
-            let written = {
+            let rgb = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(i) = position(&model.chat_colors, &name) else {
                     return Ok(());
@@ -225,9 +225,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let rgb = [to_byte(r), to_byte(g), to_byte(b)];
                 model.chat_colors[i].rgb = rgb;
                 model.chat_colors_changed = true;
-                (model.chat_colors[i].name.clone(), rgb)
+                rgb
             };
-            let (name, rgb) = written;
+            // The event carries the caller's string, not the entry's spelling (`0x4a0850` keeps
+            // `lua_tostring(1)`, `0x4a094a` pushes it as the `%s` of `0x703f50`).
             super::tick::fire_event_into(
                 lua,
                 "UPDATE_CHAT_COLOR",
@@ -317,8 +318,8 @@ mod tests {
         assert_eq!(say.rgb, [127, 255, 254], "truncate, never round");
         assert_eq!(
             s.eval::<String>("return SEEN[1]").unwrap(),
-            "SAY",
-            "the registry's spelling, not the caller's"
+            "say",
+            "the caller's spelling, not the registry's"
         );
         let heard = s.eval::<f64>("return SEEN[2]").unwrap();
         assert!(
@@ -327,6 +328,8 @@ mod tests {
         );
         assert!(s.take_chat_color_changes());
         assert!(!s.take_chat_color_changes(), "the cue is one-shot");
+        s.run("ChangeChatColor('SaY', 0, 0, 0)").unwrap();
+        assert_eq!(s.eval::<String>("return SEEN[1]").unwrap(), "SaY");
     }
 
     #[test]
