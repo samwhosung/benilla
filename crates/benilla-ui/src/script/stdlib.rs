@@ -243,7 +243,9 @@ pub(crate) fn run_under_error_function(lua: &Lua, f: &mlua::Function) -> mlua::R
 /// Call the Lua global `name` as the engine calls `GetText` (`0x703c43`-`0x703cad`) and
 /// `GetPluralIndex` (`0x703d14`-`0x703d47`): looked up at the call, `lua_pcall` under the runners'
 /// error function, one result. `Err` is a failed call's value, what the error function answered
-/// (`0x703b40`); a global that is no function fails as `lua_pcall` does, at the call.
+/// (`0x703b40`); a global that is no function fails as `lua_pcall` does, at the call. The call
+/// has a [`Capture`] of its own, so what the error function hears is never taken for the error of
+/// the script it runs inside.
 pub(crate) fn call_global_under_error_function(
     lua: &Lua,
     name: &str,
@@ -256,7 +258,7 @@ pub(crate) fn call_global_under_error_function(
             .create_string(lua_message(&e))
             .map_or(Value::Nil, Value::String),
     };
-    match lua.globals().get::<Value>(name).unwrap_or(Value::Nil) {
+    let call = || match lua.globals().get::<Value>(name).unwrap_or(Value::Nil) {
         Value::Function(f) => match &handler {
             Some(h) => f.call_under::<Value>(h, args),
             None => f.call::<Value>(args),
@@ -264,14 +266,16 @@ pub(crate) fn call_global_under_error_function(
         .map_err(raised),
         other => {
             let message = format!("attempt to call a {} value", other.type_name());
-            Err(match handler {
+            Err(match &handler {
                 Some(h) => h.call::<Value>(message).unwrap_or_else(raised),
                 None => lua
                     .create_string(&message)
                     .map_or(Value::Nil, Value::String),
             })
         }
-    }
+    };
+    // `Ok` either way, so the call's capture is dropped unread: the engine logs nothing of it.
+    with_capture(|| Ok(call())).unwrap_or_else(|e| Err(raised(e)))
 }
 
 /// `FrameScriptExecuteBuffer` (`0x704ae0`): compile `src` as the chunk `name` and run it under the

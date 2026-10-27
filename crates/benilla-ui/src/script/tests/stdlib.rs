@@ -1018,3 +1018,26 @@ fn the_error_function_answers_the_handlers_result() {
     s.run("seterrorhandler(function(m) end)").unwrap();
     assert!(answer().is_none_or(|v| v.is_nil()));
 }
+
+/// The engine's `GetText` call is a runner's call of its own (`0x703cad`): an error the handler
+/// hears inside it is never taken for the error of the script the call runs in, whose own fault
+/// the host log keeps.
+#[test]
+fn a_failed_get_text_inside_a_script_leaves_the_scripts_own_error() {
+    let s = script();
+    s.run("function GetText() error('inner', 0) end seterrorhandler(function(m) return m end)")
+        .unwrap();
+    let outer: mlua::Function = s.eval("return function() error('outer', 0) end").unwrap();
+    let h = crate::script::stdlib::error_function(s.lua()).expect("installed");
+    let e = crate::script::stdlib::with_capture(|| {
+        let text = crate::strings::Strings::Vm(s.lua()).get_text("T", None, Some(2));
+        assert_eq!(
+            text.as_deref(),
+            Some("inner"),
+            "the handler's answer is the text"
+        );
+        outer.call_under::<()>(&h, ())
+    })
+    .expect_err("the outer script raised");
+    assert_eq!(crate::script::lua_message(&e), "outer");
+}
