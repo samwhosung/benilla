@@ -5,7 +5,7 @@
 
 use std::io;
 
-use crate::wire::{read_cstring, read_u32_le};
+use crate::wire::{read_cstring_capped, read_u32_le};
 
 /// Body of `CMSG_PAGE_TEXT_QUERY` (`0x005A`): `u32 pageId`, then the asking object's `u64 guid`,
 /// which the 1.12 client appends (`0x564730`, at `0x56485d`) and vmangos reads only if present,
@@ -20,10 +20,21 @@ pub fn page_text_query(page_id: u32, guid: u64) -> Vec<u8> {
 /// Read `SMSG_PAGE_TEXT_QUERY_RESPONSE`: `u32 pageId, cstr text, u32 nextPageId`
 /// (`PageTextQueryResponse::AppendBodyTo`). vmangos answers one query with the whole chain, one
 /// packet per page (`HandlePageTextQueryOpcode`), and an unknown page with `"Item page missing."`
-/// and `nextPageId = 0`.
+/// and `nextPageId = 0`. The record's read (`0x7cabd0`) takes the text with `GetCString` at
+/// capacity `0x400` (`0x7cabda`); a text with no NUL inside that window reads `""` and poisons the
+/// store (`0x41929e`-`0x4192be`), so the next id's read fails too (`0x418e30`) and the record
+/// keeps 0.
 pub(super) fn read_page_text_query_response(r: &mut &[u8]) -> io::Result<(u32, String, u32)> {
-    Ok((read_u32_le(r)?, read_cstring(r)?, read_u32_le(r)?))
+    let page_id = read_u32_le(r)?;
+    let Some(text) = read_cstring_capped(r, PAGE_TEXT_CAPACITY) else {
+        *r = &[];
+        return Ok((page_id, String::new(), 0));
+    };
+    Ok((page_id, text, read_u32_le(r)?))
 }
+
+/// The page record's text buffer (`0x7cabda`).
+const PAGE_TEXT_CAPACITY: usize = 0x400;
 
 #[cfg(test)]
 mod tests {
@@ -72,5 +83,27 @@ mod tests {
             }
             other => panic!("expected PageTextQueryResponse, got {}", other.name()),
         }
+    }
+
+    fn page_of(text: &str) -> (String, u32) {
+        let mut body = 9u32.to_le_bytes().to_vec();
+        body.extend_from_slice(text.as_bytes());
+        body.push(0);
+        body.extend_from_slice(&10u32.to_le_bytes());
+        match parse_server(opcode::SMSG_PAGE_TEXT_QUERY_RESPONSE, &body).unwrap() {
+            ServerPacket::PageTextQueryResponse {
+                text, next_page_id, ..
+            } => (text, next_page_id),
+            other => panic!("expected PageTextQueryResponse, got {}", other.name()),
+        }
+    }
+
+    /// `GetCString` at `0x400` (`0x7cabda`) holds a text of 1023 bytes and its NUL; one of 1024
+    /// has no NUL in the window, so the text reads empty and the poisoned store gives no next id.
+    #[test]
+    fn a_text_filling_the_buffer_reads_empty_with_no_next_page() {
+        assert_eq!(page_of(&"a".repeat(1023)), ("a".repeat(1023), 10));
+        assert_eq!(page_of(&"a".repeat(1024)), (String::new(), 0));
+        assert_eq!(page_of(&"a".repeat(3000)), (String::new(), 0));
     }
 }
