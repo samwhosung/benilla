@@ -1374,6 +1374,7 @@ mod tests {
             "::sound::interior::leave_world",
             "::sound::zone::leave_world",
             "::camera_saved::save_on_session_end",
+            "::area::clear_committed_zone",
             // The pass's end: the hosts' unit edits applied after them (`crate::vm_pass`).
             "::creature_anim::edits::flush_unit_edits",
         ];

@@ -480,6 +480,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
+    // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.
+    "::area::CommittedZone",
     "::ui_chat::edit::ChannelState",
     // The console's registry, which a `ConsoleExec` a listener makes reads.
     "::console::ConsoleCommands",

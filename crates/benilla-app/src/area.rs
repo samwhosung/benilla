@@ -69,6 +69,11 @@ fn load_area_table(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct CommittedZone(pub(crate) Option<u32>);
 
+/// The session's end, standing in for `ShutdownGame`'s zeroing of `0xb4e314` (`0x491180`).
+fn clear_committed_zone(mut zone: ResMut<CommittedZone>) {
+    zone.set_if_neq(CommittedZone(None));
+}
+
 /// The client's zone-text cache: the compare targets of `0x494780`, the minimap line's cache
 /// (`0x494970`) and the indoor dedup pair (`[0x868608]`, `[0x86860c]`). It lives per VM, so every
 /// login starts zeroed and its first resolve is a NEW_AREA.
@@ -326,9 +331,7 @@ impl Plugin for AreaPlugin {
             // The session's end stands in for `ShutdownGame` (`0x491180`), the one zeroing.
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                |mut z: ResMut<CommittedZone>| {
-                    z.set_if_neq(CommittedZone(None));
-                },
+                clear_committed_zone,
             )
             .add_systems(Startup, load_area_table.after(AssetSet::Open))
             .add_systems(
