@@ -1565,6 +1565,15 @@ mod login_ask_tests {
             "the login handler ran"
         );
         frame(&mut app, vec![requested()]);
+        // The world session's packets wait for the entry load (`net::apply::InboundHold`).
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            !app.world()
+                .contains_resource::<crate::ui_script::PendingEntryUiLoad>(),
+            "the entry load ran"
+        );
         let asked = crate::query_cache::queries(&sent)
             .into_iter()
             .filter(|c| matches!(c, crate::net::ClientCommand::NameQuery { guid: CHALLENGER }))

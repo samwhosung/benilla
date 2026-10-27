@@ -1450,10 +1450,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A chat section the server's answer settles before the interface loads (the handlers run
-    /// ahead of the deferred entry load) is read at the registration, as `0x5afe50` runs a reader
-    /// on a settled section at once (`0x5afe7b`): nothing reads it twice, and nothing writes the
-    /// stock setup over it.
+    /// A chat section already settled when the interface loads (a `/reload`'s load, after the
+    /// login's digests) is read at the registration, as `0x5afe50` runs a reader on a settled
+    /// section at once (`0x5afe7b`): nothing reads it twice, and nothing writes the stock setup
+    /// over it.
     #[test]
     fn a_chat_section_that_lands_before_the_load_is_what_it_restores() {
         let _l = crate::local_state::test_env::ENV_LOCK

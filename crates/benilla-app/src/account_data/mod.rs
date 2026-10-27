@@ -71,7 +71,7 @@ impl AccountData {
 
     /// `0x5afe50`, a reader's registration: whether it runs now, on a settled section. A pending
     /// one holds it (`0x5afe62`-`0x5afe6f`) until it settles ([`Self::take_owed`]). Kept either way,
-    /// as the reference's load always registers ahead of the digests, which here may come first.
+    /// so a later settling runs it again (`0x5afab6`, `0x5afd08`).
     pub(crate) fn register(&self, section: usize) -> bool {
         let mut state = self.lock();
         state.readers[section] = true;

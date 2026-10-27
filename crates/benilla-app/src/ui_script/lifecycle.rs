@@ -341,9 +341,10 @@ fn unpark_glue_vm(world: &mut World) {
 /// socket threads only enqueue (`0x537b7c`; `SMSG_PONG` at `0x537b56` the one bypass), and the
 /// login request waits for the UI (`0x46c272`).
 ///
-/// Two terms, because the latch trails the wire by a frame: `apply_net_updates` drains `Connected`
-/// and the login burst behind it in one pass, and the `InWorld` transition that arms the latch and
-/// parks the VM runs at the next frame's `StateTransition`; the `InWorld` term covers that frame.
+/// Two terms, because the latch trails the wire by a frame: `apply_net_updates` drains `Connected`,
+/// holding the login burst behind it until the load has run ([`crate::net::apply_net_updates`]), and the
+/// `InWorld` transition that arms the latch and parks the VM runs at the next frame's
+/// `StateTransition`; the `InWorld` term covers that frame.
 pub(crate) fn ingame_ui_up(
     pending: Option<Res<PendingEntryUiLoad>>,
     state: Option<Res<State<crate::client_state::ClientState>>>,
