@@ -646,7 +646,7 @@ pub(crate) fn kind_of_wire(chat_type: u8) -> Option<ChatEventKind> {
         m::CHAT_MSG_AFK => K::Afk,
         m::CHAT_MSG_DND => K::Dnd,
         m::CHAT_MSG_IGNORED => K::Ignored,
-        m::CHAT_MSG_MONSTER_WHISPER | m::CHAT_MSG_RAID_BOSS_WHISPER => K::MonsterWhisper,
+        m::CHAT_MSG_MONSTER_WHISPER => K::MonsterWhisper,
         m::CHAT_MSG_RAID_LEADER => K::RaidLeader,
         m::CHAT_MSG_RAID_WARNING => K::RaidWarning,
         m::CHAT_MSG_RAID_BOSS_EMOTE => K::RaidBossEmote,

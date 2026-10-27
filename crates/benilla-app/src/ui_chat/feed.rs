@@ -848,6 +848,19 @@ impl ChatLog {
             .count()
     }
 
+    /// Every wire line waiting to render, in order.
+    #[cfg(test)]
+    pub(crate) fn pending_wire(&self) -> Vec<ChatMessage> {
+        self.q()
+            .pending
+            .iter()
+            .filter_map(|q| match &q.item {
+                Pending::Wire { msg, .. } => Some(msg.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The text of every composed line waiting to render, in order.
     #[cfg(test)]
     pub(crate) fn pending_lines(&self) -> Vec<String> {

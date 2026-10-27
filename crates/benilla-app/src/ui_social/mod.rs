@@ -199,6 +199,12 @@ impl SocialState {
         guid != 0 && self.ignores.contains(&guid)
     }
 
+    /// Test-only: `guid` in an ignore slot.
+    #[cfg(test)]
+    pub(crate) fn ignore_for_test(&mut self, guid: u64) {
+        self.ignores[0] = guid;
+    }
+
     /// Signal `event` with the lists as they stand, for the lane to fire in order.
     fn signal(&mut self, event: ListEvent) {
         self.step(Heard::Event(event));
