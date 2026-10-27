@@ -30,27 +30,7 @@ pub(crate) fn apply_net_updates(world: &mut World) {
     let mut hold = world.remove_resource::<InboundHold>().unwrap_or_default();
     let mut out = hold.release(world);
     for ev in events {
-        match &ev {
-            // `SMSG_PONG` is the one packet the socket thread answers itself (`0x537b56`).
-            SessionEvent::Pong { .. } if hold.holding => out.push(ev),
-            // A session's end lets everything before it through, in order: no load is coming.
-            SessionEvent::Disconnected { .. }
-            | SessionEvent::LoggedOut
-            | SessionEvent::CharacterLoginFailed { .. }
-                if hold.holding =>
-            {
-                out.append(&mut hold.held);
-                out.push(ev);
-                hold = InboundHold::default();
-            }
-            _ if hold.holding => hold.held.push(ev),
-            // The world session starts: what follows waits for the entry load.
-            SessionEvent::Connected { .. } => {
-                out.push(ev);
-                hold.holding = true;
-            }
-            _ => out.push(ev),
-        }
+        hold.admit(ev, &mut out);
     }
     world.insert_resource(hold);
     super::handlers::dispatch(world, out);
@@ -69,6 +49,31 @@ pub(crate) struct InboundHold {
 }
 
 impl InboundHold {
+    /// One event off the wire: onto `out`, the drain's dispatch in order, or held.
+    fn admit(&mut self, ev: SessionEvent, out: &mut Vec<SessionEvent>) {
+        match &ev {
+            // `SMSG_PONG` is the one packet the socket thread answers itself (`0x537b56`).
+            SessionEvent::Pong { .. } if self.holding => out.push(ev),
+            // A session's end lets everything before it through, in order: no load is coming.
+            SessionEvent::Disconnected { .. }
+            | SessionEvent::LoggedOut
+            | SessionEvent::CharacterLoginFailed { .. }
+                if self.holding =>
+            {
+                out.append(&mut self.held);
+                out.push(ev);
+                *self = Self::default();
+            }
+            _ if self.holding => self.held.push(ev),
+            // The world session starts: what follows waits for the entry load.
+            SessionEvent::Connected { .. } => {
+                out.push(ev);
+                self.holding = true;
+            }
+            _ => out.push(ev),
+        }
+    }
+
     /// The held events once the load has run, or once none is coming: the world was not entered
     /// (no `InWorld` transition owed or made, the arm never seen).
     fn release(&mut self, world: &World) -> Vec<SessionEvent> {
@@ -138,7 +143,76 @@ pub(crate) fn enter_world_on_self_create(
 
 #[cfg(test)]
 mod hold_tests {
-    use benilla_protocol::SessionEvent;
+    use benilla_protocol::{SessionEnd, SessionEvent};
+    use bevy::prelude::*;
+
+    use super::InboundHold;
+
+    fn connected() -> SessionEvent {
+        SessionEvent::Connected {
+            self_guid: 0x2a,
+            name: "Probeseven".into(),
+            billing: Default::default(),
+            tutorial_flags: None,
+            addon_info: None,
+        }
+    }
+
+    /// What `events` leaves on the drain's dispatch, by kind.
+    fn admitted(hold: &mut InboundHold, events: Vec<SessionEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        for ev in events {
+            hold.admit(ev, &mut out);
+        }
+        out.iter()
+            .map(|ev| format!("{:?}", benilla_protocol::SessionEventKind::from(ev)))
+            .collect()
+    }
+
+    /// A `SMSG_PONG` passes the hold (`0x537b56`); a session's end lets the held events through
+    /// first, in wire order, then itself, and holds nothing after.
+    #[test]
+    fn a_pong_passes_and_an_end_releases_in_wire_order() {
+        let mut hold = InboundHold::default();
+        let time = || SessionEvent::PlayedTime { total: 1, level: 1 };
+        assert_eq!(
+            admitted(
+                &mut hold,
+                vec![connected(), time(), SessionEvent::Pong { sequence: 1 }]
+            ),
+            ["Connected", "Pong"],
+            "the world packet held, the pong through"
+        );
+        let end = SessionEvent::Disconnected {
+            reason: "gone".into(),
+            end: SessionEnd::Lost,
+        };
+        assert_eq!(
+            admitted(&mut hold, vec![time(), end, time()]),
+            ["PlayedTime", "PlayedTime", "Disconnected", "PlayedTime"]
+        );
+    }
+
+    /// No load coming (no `InWorld` transition owed, the arm never seen): the hold lets go at the
+    /// next drain; one owed waits for the arm.
+    #[test]
+    fn the_hold_lets_go_when_no_load_is_coming() {
+        let mut world = World::new();
+        let mut hold = InboundHold::default();
+        let held = vec![connected(), SessionEvent::Pong { sequence: 1 }];
+        admitted(&mut hold, held);
+        hold.held.push(SessionEvent::LoggedOut);
+        world.insert_resource(NextState::Pending(
+            crate::client_state::ClientState::InWorld,
+        ));
+        assert!(
+            hold.release(&world).is_empty(),
+            "the entry is owed: still held"
+        );
+        world.remove_resource::<NextState<crate::client_state::ClientState>>();
+        assert_eq!(hold.release(&world).len(), 1, "no load coming: released");
+        assert!(!hold.holding);
+    }
 
     use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
 
@@ -168,16 +242,7 @@ mod hold_tests {
                 .resource::<crate::account_data::AccountData>()
                 .pending(crate::account_data::CHAT)
         };
-        for ev in [
-            SessionEvent::Connected {
-                self_guid: 0x2a,
-                name: "Probeseven".into(),
-                billing: Default::default(),
-                tutorial_flags: None,
-                addon_info: None,
-            },
-            SessionEvent::AccountDataMd5([[0; 16]; 8]),
-        ] {
+        for ev in [connected(), SessionEvent::AccountDataMd5([[0; 16]; 8])] {
             inbound.send(ev).unwrap();
         }
         app.update();
