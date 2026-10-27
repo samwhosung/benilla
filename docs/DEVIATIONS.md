@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 29
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 132
+- [benilla-ui](#benilla-ui): 133
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -697,10 +697,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loader
 
-- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:421`](../crates/benilla-ui/src/loader/mod.rs#L421))
-- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:446`](../crates/benilla-ui/src/loader/mod.rs#L446))
-- A link that would close a loop is refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and the next push down such a loop would never end. ([`src/loader/mod.rs:732`](../crates/benilla-ui/src/loader/mod.rs#L732))
-- `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so neither could reach its state. ([`src/loader/widgets.rs:277`](../crates/benilla-ui/src/loader/widgets.rs#L277))
+- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:413`](../crates/benilla-ui/src/loader/mod.rs#L413))
+- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:438`](../crates/benilla-ui/src/loader/mod.rs#L438))
+- A cycle (`A` inherits `B`, `B` inherits `A`) stops at the repeated name with a warning. ([`src/loader/mod.rs:546`](../crates/benilla-ui/src/loader/mod.rs#L546))
+- A link that would close a loop is refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and the next push down such a loop would never end. ([`src/loader/mod.rs:723`](../crates/benilla-ui/src/loader/mod.rs#L723))
+- `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so neither could reach its state. ([`src/loader/widgets.rs:215`](../crates/benilla-ui/src/loader/widgets.rs#L215))
 
 #### markup
 
