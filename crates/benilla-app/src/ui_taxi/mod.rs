@@ -82,11 +82,14 @@ impl LatchedWindow for TaxiState {
 /// (`0x4dc15f`). The slots stay, their fares 0 with no flight master (`0x4dc423`). An activate's
 /// `OK` (`0x5ed203`), a map from another flight master
 /// (`0x4db73a`) and the leave-world sweep's leg ([`leave_world`]) call it as it is;
-/// `CloseTaxiMap` runs it inside its call ([`TaxiSteps`]).
+/// `CloseTaxiMap` runs it inside its call ([`TaxiSteps`]). The session closes here; the signal
+/// waits behind what the lane still holds ([`lane::close_signal`]), so it never fires ahead of the
+/// open it closes.
 pub(crate) fn close_core(world: &mut World) {
     let Some(flightmaster) = world.resource::<TaxiState>().cell() else {
         return;
     };
+    let waits = lane::close_waits(world);
     crate::ui_session::release(world, flightmaster);
     world.resource_mut::<TaxiState>().clear();
     if let Some(mut cache) = world.get_resource_mut::<TaxiRouteCache>() {
@@ -95,9 +98,7 @@ pub(crate) fn close_core(world: &mut World) {
         }
     }
     crate::ui_session::note_closed(world, NpcWindow::Taxi);
-    crate::ui_session::fire(world, |script| {
-        script.fire_event("TAXIMAP_CLOSED", vec![]);
-    });
+    lane::close_signal(world, waits);
 }
 
 /// The leave-world sweep's leg `0x4db700`: the free `0x4db630` (the map art at `0x4db6d0`, the

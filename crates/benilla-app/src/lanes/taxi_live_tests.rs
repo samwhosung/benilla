@@ -244,3 +244,68 @@ fn the_open_is_stamped_at_its_handler() {
         .open
         .is_none());
 }
+
+/// A map and its close in one frame signal in packet order: the activate's `OK` (`0x5ed203`) or a
+/// map from another flight master (`0x4db73a`) runs the close core (`0x4dc0f0`) after the
+/// `TAXIMAP_OPENED` of the map it closes, so a listener that shows the frame on the open sees it
+/// hidden by the close, and no map is left shown with no flight master.
+#[test]
+fn a_close_after_the_open_fires_after_it() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut c = client(&data);
+    c.eval::<()>(
+        false,
+        r#"
+        Shown = false
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("TAXIMAP_OPENED")
+        g:RegisterEvent("TAXIMAP_CLOSED")
+        g:SetScript("OnEvent", function() Shown = (event == "TAXIMAP_OPENED") end)
+        "#,
+    );
+    c.frame(vec![
+        vec![shown()],
+        vec![SessionEvent::ActivateTaxiReply {
+            code: benilla_protocol::messages::taxi_reply::OK,
+        }],
+    ]);
+    // The map holds the latch, so the release re-enters the core: two closes (`0x4dc105`).
+    assert_eq!(
+        c.seen(),
+        [
+            "TAXIMAP_OPENED:nil",
+            "TAXIMAP_CLOSED:nil",
+            "TAXIMAP_CLOSED:nil"
+        ]
+    );
+    assert!(!c.eval::<bool>(false, "return Shown"), "the map is hidden");
+    let state = c.app.world().resource::<crate::ui_taxi::TaxiState>();
+    assert!(state.open.is_none(), "no cell");
+
+    // Another flight master's map closes the first through the core (`0x4db73a`) and opens its
+    // own, in order; the drain runs with no frame, which would have the leash watch close a
+    // master the world does not hold.
+    c.handle(vec![
+        shown(),
+        SessionEvent::TaxiNodesShown {
+            flightmaster: MASTER + 1,
+            nearest_node: 2,
+            known_mask: KNOWN,
+        },
+    ]);
+    c.app.world_mut().flush();
+    crate::lanes::fire_in_order(c.app.world_mut());
+    assert_eq!(
+        c.seen(),
+        [
+            "TAXIMAP_OPENED:nil",
+            "TAXIMAP_CLOSED:nil",
+            "TAXIMAP_CLOSED:nil",
+            "TAXIMAP_OPENED:nil"
+        ]
+    );
+    assert!(
+        c.eval::<bool>(false, "return Shown"),
+        "the second map is up"
+    );
+}

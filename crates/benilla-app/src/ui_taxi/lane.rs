@@ -23,6 +23,9 @@ pub(crate) enum TaxiEvent {
     Opened,
     /// A message line, by its `GlobalStrings` key.
     Line(&'static str),
+    /// The close core's `TAXIMAP_CLOSED` (`0x4dc15f`), queued by a close that follows the open
+    /// still on this lane.
+    Closed,
     /// What a core the handler ran signalled, parked in the VM of the session under the key
     /// ([`crate::script_calls::park_since`]).
     Parked { session: u64, key: u64 },
@@ -127,10 +130,31 @@ fn fire(
                 crate::ui_action::show_now(script, sink, "ui_taxi", line);
             }
         }
+        TaxiEvent::Closed => script.fire_event("TAXIMAP_CLOSED", vec![]),
         TaxiEvent::Parked { session, key } => {
             if script.session() == session {
                 script.run_parked(key);
             }
         }
     }
+}
+
+/// Whether a close starting now waits behind the lane ([`crate::lanes::waits_behind`]): the open it
+/// closes, or any earlier signal, has not fired yet.
+pub(super) fn close_waits(world: &World) -> bool {
+    crate::lanes::waits_behind(world.get_resource::<TaxiLane>().and_then(TaxiLane::head))
+}
+
+/// The close core's `TAXIMAP_CLOSED`: queued on the lane when the close `waits` ([`close_waits`]),
+/// so it fires after the `TAXIMAP_OPENED` it closes; else fired now with the host lent.
+pub(super) fn close_signal(world: &mut World, waits: bool) {
+    if waits {
+        if let Some(mut lane) = world.get_resource_mut::<TaxiLane>() {
+            lane.push(TaxiEvent::Closed);
+            return;
+        }
+    }
+    crate::ui_session::fire(world, |script| {
+        script.fire_event("TAXIMAP_CLOSED", vec![]);
+    });
 }
