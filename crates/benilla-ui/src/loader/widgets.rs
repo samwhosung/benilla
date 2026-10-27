@@ -490,25 +490,23 @@ impl Loader<'_> {
         }
     }
 
-    /// `<Minimap>` (`0x4ee2b0`): the two model files for the ctor's nine `Model` children, each
-    /// the stock model when the attribute is absent, as the reference reads a default string, and
-    /// its log line for a model that does not load.
-    pub(super) fn apply_minimap(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
-        if !el.tag.eq_ignore_ascii_case("Minimap") {
-            return;
-        }
-        let arrow = el
+    /// A Minimap's post-load part (`0x4ee2b0`, after `0x76a2f0`): the two model files for the
+    /// ctor's nine `Model` children, read on the instance's own node alone (`0x4ee2c5`,
+    /// `0x4ee2f6`), the stock model taking an absent attribute's place only (`0x4ee2d3`,
+    /// `0x4ee304`), so an empty one goes to the loader as it is: the arrow model's makes the error
+    /// cube and answers 1 (`0x707350` → `0x70737f`), the player model's clears it and answers 0
+    /// (`0x76ccee`, `0x4ee286`). A 0 is logged at severity 1 (`0x84c73c`, `0x84c6fc`).
+    pub(super) fn apply_minimap(&mut self, own: &Element, wrapper: &Table, dbg: &str) {
+        let arrow = own
             .attr("minimapArrowModel")
-            .filter(|s| !s.is_empty())
             .unwrap_or(crate::widget::MINIMAP_DEFAULT_ARROW_MODEL);
-        let player = el
+        let player = own
             .attr("minimapPlayerModel")
-            .filter(|s| !s.is_empty())
             .unwrap_or(crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL);
         match crate::script::apply_minimap_model_attrs(self.lua, wrapper, arrow, player) {
             Ok(failed) => {
                 for line in failed {
-                    self.report.warnings.push(format!("{dbg}: {line}"));
+                    self.status_warning(line.to_string());
                 }
             }
             Err(e) => self.warn_once(

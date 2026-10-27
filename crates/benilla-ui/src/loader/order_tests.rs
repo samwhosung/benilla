@@ -564,3 +564,35 @@ fn a_tooltip_finds_the_lines_its_own_onload_made() {
         .unwrap();
     assert_eq!(s.eval::<i64>("return LateTip:NumLines()").unwrap(), 1);
 }
+
+/// A Minimap's model attributes come from the instance's own node alone (`0x4ee2c5`), the stock
+/// model only for an absent one (`0x4ee2d3`): a template's attribute is never read, and an empty
+/// player model clears the arrow and logs `0x84c6fc` at severity 1, where an empty arrow model
+/// loads the error cube and logs nothing (`0x707350`).
+#[test]
+fn a_minimap_reads_its_models_on_its_own_node_and_an_empty_one_is_passed_on() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Minimap name="ModelTemplate" virtual="true"
+                     minimapPlayerModel="Interface\Minimap\Template.mdx"/>
+            <Minimap name="FromTemplate" inherits="ModelTemplate"/>
+            <Minimap name="Emptied" minimapArrowModel="" minimapPlayerModel=""/>
+        </Ui>"#,
+    );
+    assert_eq!(
+        s.eval::<String>("return ({FromTemplate:GetChildren()})[9]:GetModel()")
+            .unwrap(),
+        crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL
+    );
+    assert_eq!(
+        report.status.lines(),
+        ["Invalid minimapPlayerModel in Minimap.xml"]
+    );
+    assert!(s
+        .eval::<bool>(
+            "local m = ({Emptied:GetChildren()})[9]:GetModel() return m == nil or m == ''"
+        )
+        .unwrap());
+}
