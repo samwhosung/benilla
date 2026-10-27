@@ -7,10 +7,9 @@
 //! made them, before the next record, so a UI click and a world click in one frame resolve in the
 //! order they came.
 //!
-//! Deviation: the click's legs, which are engine systems ([`WorldClickLegs`]), run as the record's
-//! walk returns, not inside the call. Lua after the command in the same binding body, or a hook
-//! around it, reads the world as the click found it, where the reference's reads it as the click
-//! left it.
+//! The click's legs, which are engine systems ([`WorldClickLegs`]), still run as the record's walk
+//! returns, not inside the call as the reference's do: Lua after the command in the same binding
+//! body, or a hook around it, reads the world as the click found it, not as it left it (#1988).
 
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
