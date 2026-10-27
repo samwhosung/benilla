@@ -880,26 +880,30 @@ impl Loader<'_> {
     ) {
         // This frame's deferred anchors drain before its OnLoad; a nested frame drains its own.
         let deferred_mark = self.deferred_anchors.len();
-        // 1c · the pre-load hook opens the frame's load window (`0x7697c2`): until the post-load
-        //      hook, its own OnShow and OnHide fire nothing.
+        // 1c · the pre-load hook (`0x769770`): the own node's `id`, then the frame's load window
+        //      opens (`0x7697c2`): until the post-load hook, its own OnShow and OnHide fire nothing.
+        self.apply_preload_id(levels.own, wrapper, dbg_name);
         crate::script::visibility::set_load_window(self.lua(), wrapper, true);
-        // 2 · LoadXML attributes (`0x769820`).
-        self.apply_attrs(el, levels, wrapper, dbg_name);
-        // 3 · <Size> and 4 · <Anchors>, each level's own (the CLayoutFrame geometry base,
-        //     `0x767800`).
+        // 2 · a model pane's attributes (`0x76cac0`).
+        self.apply_attrs(el, wrapper, dbg_name);
+        // 3 · each level's base load (`0x769820`), the template first (`0x76985c`); then its
+        //     Slider or StatusBar values (`0x789580`, `0x782ef0`), so the first SetValue's fire
+        //     (`0x789a1e`-`0x789a44`, `0x783371`) runs that level's handler. OnLoad is captured to
+        //     fire bottom-up below.
+        let mut onload = None;
         for level in levels {
-            self.apply_geometry(level, wrapper, false, parent_name, dbg_name);
-        }
-        // 5 · <Layers> regions (`0x769d70`) and the <Backdrop> plate (`0x77e6c0`), whose nine
-        //     pieces are regions too, in document order: both are arms of the one child loop
-        //     (`0x769b1c`), so the order they link into `GetRegions` is the file's. A template's
-        //     children come first, as its LoadXML runs first. `$parent` in a region name is this
-        //     frame.
-        for child in &el.children {
-            if child.tag.eq_ignore_ascii_case("Layers") {
-                self.apply_layers(child, wrapper, self_name, dbg_name);
-            } else if child.tag.eq_ignore_ascii_case("Backdrop") {
-                self.apply_backdrop(child, wrapper, dbg_name);
+            self.load_level(
+                level,
+                wrapper,
+                self_name,
+                parent_name,
+                dbg_name,
+                &mut onload,
+            );
+            if el.tag.eq_ignore_ascii_case("Slider") {
+                self.slider_level(level, wrapper, dbg_name);
+            } else if el.tag.eq_ignore_ascii_case("StatusBar") {
+                self.statusbar_level(level, wrapper, dbg_name);
             }
         }
         // 5·b · a text frame's `font=`, then its `<FontString>` children, which load into the same
@@ -913,8 +917,6 @@ impl Loader<'_> {
             self.apply_frame_font(el, wrapper, dbg_name);
             self.apply_text_font_children(el, wrapper, dbg_name);
         }
-        // 5a' · <TitleRegion>: the drag handle, through the API's own CreateTitleRegion.
-        self.apply_title_region(el, wrapper, self_name, dbg_name);
         // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,
         //      so a Frame wearing a <Button> template skips the Button steps.
         self.apply_statusbar(el, wrapper, self_name, dbg_name);
@@ -924,19 +926,6 @@ impl Loader<'_> {
         self.apply_editbox(el, wrapper, dbg_name);
         self.apply_messageframe(el, wrapper, dbg_name);
         self.apply_simplehtml(el, wrapper, dbg_name);
-        // 6 · per level, the template first (`0x76985c`): its <Scripts> (`0x769ef0`, an arm of the
-        //     base child loop, `0x769d18`), then its Slider or StatusBar values (`0x789580`,
-        //     `0x782ef0`), so the first SetValue's fire (`0x789a1e`-`0x789a44`, `0x783371`) runs
-        //     that level's handler. OnLoad is captured to fire bottom-up below.
-        let mut onload = None;
-        for level in levels {
-            self.apply_scripts(level, wrapper, dbg_name, &mut onload);
-            if el.tag.eq_ignore_ascii_case("Slider") {
-                self.slider_level(level, wrapper, dbg_name);
-            } else if el.tag.eq_ignore_ascii_case("StatusBar") {
-                self.statusbar_level(level, wrapper, dbg_name);
-            }
-        }
         // 6b · a ScrollFrame's <ScrollChild> (`0x786bc0`, after the base load `0x769820`): still
         //      inside the load window, so ahead of every <Frames> child and of our own OnLoad.
         self.apply_scrollframe(el, wrapper, self_name, dbg_name);
@@ -962,6 +951,44 @@ impl Loader<'_> {
         // 10 · a Minimap's models, which its post-load override sets after chaining to this one
         //      (`0x4ee2b0` calls `0x76a2f0` first).
         self.apply_minimap(el, wrapper, dbg_name);
+    }
+
+    /// One level of a frame's `LoadXML` (`CSimpleFrame::LoadXML 0x769820` on `level`, after the
+    /// recursion into its `inherits` level): the node's geometry (`0x76987c` → `0x767800`), its
+    /// anchors resolved now; then its flag attributes (`0x769881`-`0x769b17`); then one child loop
+    /// in document order (`0x769b1c`-`0x769d22`) whose arms are `<TitleRegion>`,
+    /// `<ResizeBounds>`, `<Backdrop>`, `<HitRectInsets>`, `<Layers>` and `<Scripts>`, any other
+    /// tag skipped silently. `$parent` is `parent_name` in the frame's own anchors and `self_name`
+    /// in its contents.
+    pub(super) fn load_level(
+        &mut self,
+        level: &Element,
+        wrapper: &Table,
+        self_name: &str,
+        parent_name: &str,
+        dbg: &str,
+        onload: &mut Option<Function>,
+    ) {
+        self.apply_geometry(level, wrapper, false, parent_name, dbg);
+        self.apply_level_flags(level, wrapper, dbg);
+        for child in &level.children {
+            let is = |t: &str| child.tag.eq_ignore_ascii_case(t);
+            if is("TitleRegion") {
+                self.apply_title_region(child, wrapper, self_name, dbg);
+            } else if is("ResizeBounds") {
+                self.apply_resize_bounds(child, wrapper, dbg);
+            } else if is("Backdrop") {
+                self.apply_backdrop(child, wrapper, dbg);
+            } else if is("HitRectInsets") {
+                self.apply_hit_rect_insets(child, wrapper, dbg);
+            } else if is("Layers") {
+                // `0x769d70`: each region created, named and loaded as it is reached, so it links
+                // into `GetRegions` in the file's order, a template's first.
+                self.apply_layers(child, wrapper, self_name, dbg);
+            } else if is("Scripts") {
+                self.apply_scripts(child, wrapper, dbg, onload);
+            }
+        }
     }
 
     /// Apply one anchor, deferring it (when `may_defer`) while its named `relativeTo` is unbuilt.
@@ -1249,6 +1276,8 @@ pub(super) fn tex_coords(tc: &Element) -> (f32, f32, f32, f32) {
 
 #[cfg(test)]
 mod level_tests;
+#[cfg(test)]
+mod order_tests;
 #[cfg(test)]
 mod template_name_tests;
 #[cfg(test)]

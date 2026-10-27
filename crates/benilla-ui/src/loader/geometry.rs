@@ -5,23 +5,11 @@ use crate::layout::Len;
 use crate::script::binding_abi::{s_str_to_float, s_str_to_int};
 use crate::script::object;
 
-use super::{children_named, color_of, Levels, Loader};
+use super::{children_named, color_of, Loader};
 
 impl Loader<'_> {
-    /// A frame element's LoadXML attributes and simple children (`0x769820`), and a model pane's
-    /// own (`0x76cac0`): the flags from each of `levels` in turn ([`Self::apply_level_flags`]),
-    /// the rest from the merged `el`.
-    pub(super) fn apply_attrs(
-        &mut self,
-        el: &Element,
-        levels: &Levels,
-        wrapper: &Table,
-        dbg: &str,
-    ) {
-        for level in levels {
-            self.apply_level_flags(level, wrapper, dbg);
-        }
-
+    /// A model pane's own attributes (`0x76cac0`), from the merged `el`.
+    pub(super) fn apply_attrs(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         // A model pane's `file=` is `SetModel` (`0x76cac0`).
         let model_kind = super::model_kind_tag(&el.tag);
         if model_kind {
@@ -60,44 +48,48 @@ impl Loader<'_> {
                 self.call(wrapper, "SetFogColor", color_of(fc).fractions(), dbg);
             }
         }
-        // A non-empty `id` through `SStrToInt`, a negative one skipped (`0x7697ae`-`0x7697b7`).
-        if let Some(id) = el.attr("id").filter(|v| !v.is_empty()) {
+    }
+
+    /// The pre-load hook's `id` (`0x769770`), read on the frame's own node alone: a non-empty one
+    /// through `SStrToInt`, a negative one skipped (`0x7697ae`-`0x7697b7`).
+    pub(super) fn apply_preload_id(&mut self, own: &Element, wrapper: &Table, dbg: &str) {
+        if let Some(id) = own.attr("id").filter(|v| !v.is_empty()) {
             let n = s_str_to_int(id);
             if n >= 0 {
                 self.call(wrapper, "SetID", n, dbg);
             }
         }
-        // `<HitRectInsets>` and `<ResizeBounds>` are arms of the frame's child loop
-        // (`0x769b27`-`0x769d22`), so each one applies in turn and the last wins; the merged
-        // element holds a template's children first, so an instance's own one wins over it.
-        // `<HitRectInsets>`: the mouse rect, inset from the frame's, when the inset read succeeds
-        // (`0x769cb5`); a side it omits is 0.
-        for ins in children_named(el, "HitRectInsets") {
-            if let Some(v) = self.inset(ins) {
-                let [l, r, t, b] = self.script_of(v);
-                self.call(wrapper, "SetHitRectInsets", (l, r, t, b), dbg);
-                crate::script::xml_layout::hit_rect_insets(self.lua, wrapper, v);
-            }
-        }
-        // `<ResizeBounds>` (`0x769baa`): its first `<minResize>` and `<maxResize>`, both pairs
-        // always written, an absent one as 0, so a lone `<minResize>` resets the max to unbounded.
-        // A `<Size>` outside them is not clamped.
-        for rb in children_named(el, "ResizeBounds") {
-            for (tag, verb) in [("minResize", "SetMinResize"), ("maxResize", "SetMaxResize")] {
-                let v = children_named(rb, tag)
-                    .next()
-                    .map_or([Len::Script(0.0); 2], |d| self.dimension(d).v);
-                let [x, y] = self.script_of(v);
-                self.call(wrapper, verb, (x, y), dbg);
-                crate::script::xml_layout::resize_bound(self.lua, wrapper, tag == "maxResize", v);
-            }
+    }
+
+    /// One `<HitRectInsets>` arm of the child loop: the mouse rect, inset from the frame's, when
+    /// the inset read succeeds (`0x769cb5`); a side it omits is 0. Each arm applies in turn, so the
+    /// last one read wins.
+    pub(super) fn apply_hit_rect_insets(&mut self, ins: &Element, wrapper: &Table, dbg: &str) {
+        if let Some(v) = self.inset(ins) {
+            let [l, r, t, b] = self.script_of(v);
+            self.call(wrapper, "SetHitRectInsets", (l, r, t, b), dbg);
+            crate::script::xml_layout::hit_rect_insets(self.lua, wrapper, v);
         }
     }
 
-    /// One level's flag attributes, as `0x769820` reads them on each node, the template first
-    /// (`0x76985c`): each is skipped when empty (a first-byte test), so an instance's `""` leaves
-    /// its template's value.
-    fn apply_level_flags(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
+    /// One `<ResizeBounds>` arm (`0x769baa`): its first `<minResize>` and `<maxResize>`, both
+    /// pairs always written, an absent one as 0 (`0x769bc8`-`0x769c28`), so a lone `<minResize>`
+    /// resets the max to unbounded. A `<Size>` outside them is not clamped.
+    pub(super) fn apply_resize_bounds(&mut self, rb: &Element, wrapper: &Table, dbg: &str) {
+        for (tag, verb) in [("minResize", "SetMinResize"), ("maxResize", "SetMaxResize")] {
+            let v = children_named(rb, tag)
+                .next()
+                .map_or([Len::Script(0.0); 2], |d| self.dimension(d).v);
+            let [x, y] = self.script_of(v);
+            self.call(wrapper, verb, (x, y), dbg);
+            crate::script::xml_layout::resize_bound(self.lua, wrapper, tag == "maxResize", v);
+        }
+    }
+
+    /// One level's flag attributes, as `0x769820` reads them on each node after its geometry
+    /// (`0x769881`-`0x769b17`), the template first (`0x76985c`): each is skipped when empty (a
+    /// first-byte test), so an instance's `""` leaves its template's value.
+    pub(super) fn apply_level_flags(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
         // `hidden` hides or shows (`0x7698a2`-`0x7698c4`).
         match level.attr_bool_opt("hidden") {
             Some(true) => self.call(wrapper, "Hide", (), dbg),
@@ -159,28 +151,26 @@ impl Loader<'_> {
         }
     }
 
-    /// `<TitleRegion>`: the drag handle, built through the idempotent `CreateTitleRegion` so the
-    /// element and a later Lua call name one object (`0x769b2a` takes `0x773910`'s path).
+    /// One `<TitleRegion>` arm of the child loop (`0x769b2f`-`0x769ba5`): the drag handle, built
+    /// through the idempotent `CreateTitleRegion` so the element and a later Lua call name one
+    /// object (`0x769b2a` takes `0x773910`'s path).
     pub(super) fn apply_title_region(
         &mut self,
-        el: &Element,
+        tr: &Element,
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
     ) {
-        // Each `<TitleRegion>` in the child loop (`0x769b2f`-`0x769ba5`) loads into the one region.
-        for tr in children_named(el, "TitleRegion") {
-            let region: Table = match wrapper.call_method("CreateTitleRegion", ()) {
-                Ok(r) => r,
-                Err(e) => {
-                    self.report.fault(format!("{dbg}: CreateTitleRegion: {e}"));
-                    return;
-                }
-            };
-            // The title region's layout load is `0x767800` itself (`0x81c528[2]`, called at
-            // `0x769b8a`), which never re-enters `inherits`: the node alone.
-            self.apply_geometry(tr, &region, true, self_name, dbg);
-        }
+        let region: Table = match wrapper.call_method("CreateTitleRegion", ()) {
+            Ok(r) => r,
+            Err(e) => {
+                self.report.fault(format!("{dbg}: CreateTitleRegion: {e}"));
+                return;
+            }
+        };
+        // The title region's layout load is `0x767800` itself (`0x81c528[2]`, called at
+        // `0x769b8a`), which never re-enters `inherits`: the node alone.
+        self.apply_geometry(tr, &region, true, self_name, dbg);
     }
 
     /// One node's geometry, the CLayoutFrame part of every frame and region `LoadXML` (`0x767800`),

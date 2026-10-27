@@ -2,75 +2,72 @@ use mlua::{Function, ObjectLike, Table};
 
 use crate::framexml::Element;
 
-use super::{children_named, Loader};
+use super::Loader;
 
 impl Loader<'_> {
-    /// One level's `<Scripts>` (`0x769ef0`): `SetScript` for each handler. An `OnLoad` replaces
-    /// `onload`, which the caller fires bottom-up.
+    /// One `<Scripts>` arm of the frame's child loop (`0x769d18` → `0x769ef0`): `SetScript` for
+    /// each handler. An `OnLoad` replaces `onload`, which the caller fires bottom-up.
     pub(super) fn apply_scripts(
         &mut self,
-        el: &Element,
+        scripts: &Element,
         wrapper: &Table,
         dbg: &str,
         onload: &mut Option<Function>,
     ) {
         // A handler's chunk name is `"<name>:<Handler>"`, the frame's own name or `<unnamed>`
         // (`0x7025fd`-`0x70263c`), never the loader's `dbg`.
-        for scripts in children_named(el, "Scripts") {
-            let owner = crate::script::binding_abi::name_of(self.lua, wrapper);
-            for handler in &scripts.children {
-                let name = handler.tag.clone();
-                // A tag the frame's type has no slot for reports `Frame %s: Unknown script
-                // element %s` (`0x878778`, `0x769f44`) and enables nothing; the name is looked up
-                // first (`0x7025d5`) and the body compiled after (`0x70263a`).
-                let known = wrapper
-                    .call_method::<mlua::Value>("HasScript", name.clone())
-                    .is_ok_and(|v| !v.is_nil());
-                if !known {
-                    self.status_warning(format!("Frame {owner}: Unknown script element {name}"));
-                    continue;
-                }
-                // An empty body clears the handler to nil, but a whitespace one is an empty
-                // function: `SetScript` (`0x7025c0`) tests only NULL and the first byte
-                // (`0x7025f8`), and nothing trims the body (`0x6f29d0`). The stock blanks
-                // (`BuffFrame.xml:101`) are whitespace, so their `GetScript` answers a function.
-                let func = if handler.body.is_empty() {
-                    None
-                } else {
-                    self.compile_handler(handler, &name, &owner, dbg)
-                };
-                if let Err(e) = wrapper.call_method::<()>("SetScript", (name.clone(), func.clone()))
-                {
-                    self.report
-                        .fault(format!("{dbg}: SetScript(\"{name}\"): {e}"));
-                    continue;
-                }
-                // After each `SetScript` the XML walker enables the handler's input kind
-                // (`0x769ef0` → `0x76af00`): these five arm the mouse (`OnDragStop` and
-                // `OnReceiveDrag` do not), `OnMouseWheel` the wheel (kind 3). The Lua `SetScript`
-                // never does (`0x7748d0`).
-                const MOUSE_KIND: [&str; 5] = [
-                    "OnEnter",
-                    "OnLeave",
-                    "OnMouseDown",
-                    "OnMouseUp",
-                    "OnDragStart",
-                ];
-                if MOUSE_KIND.iter().any(|k| name.eq_ignore_ascii_case(k)) {
-                    self.call(wrapper, "EnableMouse", true, dbg);
-                }
-                if name.eq_ignore_ascii_case("OnMouseWheel") {
-                    self.call(wrapper, "EnableMouseWheel", true, dbg);
-                }
-                // The key handlers, the same rule, one bit each: `OnChar` the char bit,
-                // `OnKeyDown` and `OnKeyUp` the key bit (`0x769f6b`, `0x769fa4`).
-                if let Err(e) = crate::script::enable_for_script(self.lua, wrapper, &name) {
-                    self.report.fault(format!("{dbg}: {name}: {e}"));
-                }
-                if name.eq_ignore_ascii_case("OnLoad") {
-                    // A cleared `OnLoad` also unsets a template's, or the caller would fire it.
-                    *onload = func;
-                }
+        let owner = crate::script::binding_abi::name_of(self.lua, wrapper);
+        for handler in &scripts.children {
+            let name = handler.tag.clone();
+            // A tag the frame's type has no slot for reports `Frame %s: Unknown script
+            // element %s` (`0x878778`, `0x769f44`) and enables nothing; the name is looked up
+            // first (`0x7025d5`) and the body compiled after (`0x70263a`).
+            let known = wrapper
+                .call_method::<mlua::Value>("HasScript", name.clone())
+                .is_ok_and(|v| !v.is_nil());
+            if !known {
+                self.status_warning(format!("Frame {owner}: Unknown script element {name}"));
+                continue;
+            }
+            // An empty body clears the handler to nil, but a whitespace one is an empty
+            // function: `SetScript` (`0x7025c0`) tests only NULL and the first byte
+            // (`0x7025f8`), and nothing trims the body (`0x6f29d0`). The stock blanks
+            // (`BuffFrame.xml:101`) are whitespace, so their `GetScript` answers a function.
+            let func = if handler.body.is_empty() {
+                None
+            } else {
+                self.compile_handler(handler, &name, &owner, dbg)
+            };
+            if let Err(e) = wrapper.call_method::<()>("SetScript", (name.clone(), func.clone())) {
+                self.report
+                    .fault(format!("{dbg}: SetScript(\"{name}\"): {e}"));
+                continue;
+            }
+            // After each `SetScript` the XML walker enables the handler's input kind
+            // (`0x769ef0` → `0x76af00`): these five arm the mouse (`OnDragStop` and
+            // `OnReceiveDrag` do not), `OnMouseWheel` the wheel (kind 3). The Lua `SetScript`
+            // never does (`0x7748d0`).
+            const MOUSE_KIND: [&str; 5] = [
+                "OnEnter",
+                "OnLeave",
+                "OnMouseDown",
+                "OnMouseUp",
+                "OnDragStart",
+            ];
+            if MOUSE_KIND.iter().any(|k| name.eq_ignore_ascii_case(k)) {
+                self.call(wrapper, "EnableMouse", true, dbg);
+            }
+            if name.eq_ignore_ascii_case("OnMouseWheel") {
+                self.call(wrapper, "EnableMouseWheel", true, dbg);
+            }
+            // The key handlers, the same rule, one bit each: `OnChar` the char bit,
+            // `OnKeyDown` and `OnKeyUp` the key bit (`0x769f6b`, `0x769fa4`).
+            if let Err(e) = crate::script::enable_for_script(self.lua, wrapper, &name) {
+                self.report.fault(format!("{dbg}: {name}: {e}"));
+            }
+            if name.eq_ignore_ascii_case("OnLoad") {
+                // A cleared `OnLoad` also unsets a template's, or the caller would fire it.
+                *onload = func;
             }
         }
     }
