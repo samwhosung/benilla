@@ -261,18 +261,53 @@ fn the_right_release_ends_a_mouselook_its_press_started_on_the_ui() {
     frame(&mut w, 0.0);
     assert_eq!(w.resource::<CameraControl>().look, None);
     assert!(!is_mouselooking(&w));
+    assert!(
+        left_click_arms(&mut w),
+        "the release freed the command's bit"
+    );
 }
 
-/// The loading cover's world enter clears the whole word (`0x5144c0`).
+/// Whether a left press's `CameraOrSelectOrMoveStart` arms a world click, which it does only with
+/// neither primary bit held (`0x51481a`).
+fn left_click_arms(w: &mut World) -> bool {
+    use benilla_ui::script::{ClickCall, ClickMode};
+    let mut script = w.non_send_resource_mut::<UiScript>();
+    script.take_click_calls();
+    script
+        .run_binding("CameraOrSelectOrMoveStart() CameraOrSelectOrMoveStop()")
+        .unwrap();
+    script.take_click_calls().first() == Some(&ClickCall::Arm(ClickMode::Select))
+}
+
+/// The loading cover's world enter clears the whole word (`0x5144c0`): the look session and the
+/// commands' bits, so a left click after it clicks.
 #[test]
 fn the_cover_ends_a_scripted_mouselook() {
     let mut w = world(false);
     lua(&mut w, "MouselookStart()");
     frame(&mut w, 0.0);
+    assert!(!left_click_arms(&mut w), "the mouselook holds the bit");
     w.insert_resource(crate::loading_screen::LoadingScreen::test_covering());
     frame(&mut w, 0.0);
     assert_eq!(w.resource::<CameraControl>().look, None);
     assert!(!is_mouselooking(&w));
+    assert!(left_click_arms(&mut w), "the cover cleared the bit");
+}
+
+/// A right button held across a zone: the cover clears its command's bit, so a left click after
+/// the zone clicks though the right release never came.
+#[test]
+fn the_cover_frees_the_clicks_of_a_right_held_across_a_zone() {
+    let mut w = world(false);
+    press(&mut w, MouseButton::Right);
+    binding(&mut w, "TurnOrActionStart()");
+    frame(&mut w, 0.0);
+    assert!(!left_click_arms(&mut w), "the right command holds its bit");
+    w.insert_resource(crate::loading_screen::LoadingScreen::test_covering());
+    frame(&mut w, 0.0);
+    w.remove_resource::<crate::loading_screen::LoadingScreen>();
+    frame(&mut w, 0.0);
+    assert!(left_click_arms(&mut w), "the cover cleared the bit");
 }
 
 /// A session across a focus loss: the look state stays as the deactivate leaves it (`0x514490`

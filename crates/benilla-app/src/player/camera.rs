@@ -852,14 +852,23 @@ pub(crate) fn latch_world_mouse(
         // The right button's release ends a scripted channel too, wherever its press went: in
         // freelook every button event goes to the `WorldFrame` (`0x492b50`), whose TURNORACTION up
         // runs `TurnOrActionStop` (`0x514160`), `0x515090(1, 0, …)`.
+        // The command's own bit goes with it: a release whose press a frame took ran no binding
+        // here, and a bit left held would kill every later click.
         if buttons.just_released(MouseButton::Right) {
             wm.scripted = false;
+            if let Some(script) = script.as_deref_mut() {
+                script.release_turn_or_action();
+            }
         }
-        // The world enter behind the cover clears the whole word (`0x5144c0` → `0x514b70(-1, …)`).
-        // A window deactivate clears none of it (`0x5144a3 and eax,0xfffff00f` keeps the low bits):
-        // the session outlives the focus, and only the OS cursor goes back ([`sync_look_focus`]).
+        // The world enter behind the cover clears the whole word (`0x5144c0` → `0x514b70(-1, …)`),
+        // the commands' primary bits with it. A window deactivate clears none of it (`0x5144a3
+        // and eax,0xfffff00f` keeps the low bits): the session outlives the focus, and only the
+        // OS cursor goes back ([`sync_look_focus`]).
         if cover.is_some_and(|c| c.covering()) {
             wm.scripted = false;
+            if let Some(script) = script.as_deref_mut() {
+                script.release_mouse_commands();
+            }
         }
         // `IsMouselooking` (`0x514270`) reads `[InputControl+4] & 1`, the TurnOrAction channel.
         if let Some(script) = script {

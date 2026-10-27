@@ -33,6 +33,11 @@ pub(super) fn install_glue_side_vm(world: &mut World, screen: &str) {
 /// Build and install a boot VM, the one a `ReloadUI()` holds between its teardown and its load:
 /// the strings the feeds resolve lines from and the emote tokens `/`-commands are built from
 /// (`ui_chat::commands`), no frames and no font objects.
+/// The mouse commands' primary bits a dying VM held, for a `/reload`'s VM: the reference keeps
+/// them in the input control, which its reload never touches.
+#[derive(Resource)]
+struct MouseCommandsCarry(u8);
+
 fn install_boot_vm(world: &mut World) {
     if let Some(script) = strings_vm(world) {
         world.insert_non_send_resource(script);
@@ -510,6 +515,10 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     crate::ui_items::locks::seed_vm_item_locks(world, &mut script, seat == LoadSeat::Live);
     crate::ui_party::seed_vm_ready_check(world, &mut script, seat == LoadSeat::Live);
     crate::ui_guild::seed_vm_guild(world, &mut script, seat == LoadSeat::Live);
+    let held = world.remove_resource::<MouseCommandsCarry>();
+    if seat == LoadSeat::Live {
+        script.seed_mouse_commands(held.map_or(0, |h| h.0));
+    }
     // The realm before the load, since addons read `GetRealmName()` at file scope; the roster
     // carries the realm-list entry this session connected to.
     let realm = world
@@ -1039,6 +1048,12 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     // tradeskill repeat, which no UI init resets.
     crate::ui_quest_log::fold_dying_vm_quest_folds(world);
     crate::ui_tradeskill::fold_dying_vm_repeat(world);
+    // And the mouse commands' bits, the input control's (`[InputControl+4]`), which only the world
+    // enter clears (`0x5144c0`).
+    let held = world
+        .get_non_send_resource::<UiScript>()
+        .map_or(0, |s| s.mouse_commands());
+    world.insert_resource(MouseCommandsCarry(held));
     world.insert_resource(AddOnIdentity(None));
 
     // Host values taken from the dying frame tree go with it (a `VmMemo` resets on its own): the
