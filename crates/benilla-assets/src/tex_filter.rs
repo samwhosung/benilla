@@ -29,8 +29,8 @@ use bevy::image::ImageFilterMode;
 use bevy::prelude::*;
 use bevy::render::render_resource::FilterMode;
 
-/// The reference's `anisotropic` range: its callback parses 1-16, then clamps to the device cap
-/// (`0x689110`).
+/// The reference's `anisotropic` range: its callback refuses a value outside 1-16, and one above
+/// the device cap, and stores neither (`0x689110`).
 pub const ANISO_RANGE: std::ops::RangeInclusive<u32> = 1..=16;
 
 /// `trilinear` and `anisotropic` resolved into the policy every sampler takes. Aniso outranks

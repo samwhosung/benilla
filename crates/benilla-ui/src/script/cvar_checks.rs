@@ -109,6 +109,43 @@ pub fn check_base_mip(value: &str, applied: &str, _rows: CvarRows<'_>) -> CvarVe
     }
 }
 
+/// `weatherDensity`'s callback (`0x67b870`): `SStrToInt` (`0x64ac60`), refused outside 0..=3 as a
+/// signed int with "Value out of range (0 - 3)" (`0x8685bc` through `0x63cd00`, the bounds
+/// pushed at `0x67b8cd`-`0x67b8d3`).
+pub fn check_weather_density(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarVerdict {
+    if (0..=3).contains(&s_str_to_int(value)) {
+        CvarVerdict::accept()
+    } else {
+        CvarVerdict::refuse("Value out of range (0 - 3)")
+    }
+}
+
+/// `anisotropic`'s callback (`0x689110`): `SStrToInt` (`0x64ac60`), refused outside 1..=16 with
+/// "Anisotropy must be between 1 and 16 inclusive" (`0x869cd0`). The first compare is unsigned
+/// (`0x689128 jb`, `0x689131 ja`), so 0 and every negative are outside. A value above the device's
+/// own cap (`[caps+0xac]`) refuses with "max anisotropy is %d, not set" (`0x869d58`); benilla's
+/// samplers take the full 16, so that leg cannot be reached.
+pub fn check_anisotropic(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarVerdict {
+    if (1..=16).contains(&s_str_to_int(value)) {
+        CvarVerdict::accept()
+    } else {
+        CvarVerdict::refuse("Anisotropy must be between 1 and 16 inclusive")
+    }
+}
+
+/// `ErrorLevelMin`'s and `ErrorLevelMax`'s callbacks (`0x402f60`, `0x4030b0`): `SStrToInt`
+/// (`0x64ac60`), refused outside 0..=3 as a signed int (`0x402f6e jl`, `0x402f73 jge 4`) with "%i
+/// is not valid, valid values are 0 - %i" (`0x82eaa0`) of the value and 3. Not built: the lines
+/// a taken value prints (`0x402fa0`).
+pub fn check_error_level(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarVerdict {
+    let level = s_str_to_int(value);
+    if (0..=3).contains(&level) {
+        CvarVerdict::accept()
+    } else {
+        CvarVerdict::refuse(format!("{level} is not valid, valid values are 0 - 3"))
+    }
+}
+
 /// What the `gx*` callbacks print when they take a value (`0x865008`): the device record changed
 /// and waits for the next `gxRestart`.
 const GX_PENDING: &str = "set pending gxRestart";
@@ -979,5 +1016,53 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// `0x67b870`, `0x689110`, `0x402f60` and `0x4030b0` refuse an out-of-range write with their
+    /// lines and answer the in-range ones silently; the parse is `SStrToInt`'s.
+    #[test]
+    fn the_weather_anisotropy_and_error_level_callbacks_refuse_out_of_range_values() {
+        let weather = |v: &str| check_weather_density(v, "2", &no_rows);
+        for ok in ["0", "3", " 2", "1.9"] {
+            assert_eq!(weather(ok), CvarVerdict::accept(), "{ok:?}");
+        }
+        for bad in ["4", "9", "-1"] {
+            assert_eq!(
+                weather(bad),
+                CvarVerdict::refuse("Value out of range (0 - 3)"),
+                "{bad:?}"
+            );
+        }
+        // No digits parses as 0, which is in range.
+        assert_eq!(weather("x"), CvarVerdict::accept());
+
+        let aniso = |v: &str| check_anisotropic(v, "1", &no_rows);
+        for ok in ["1", "16", "8"] {
+            assert_eq!(aniso(ok), CvarVerdict::accept(), "{ok:?}");
+        }
+        for bad in ["0", "17", "32", "-4", "junk"] {
+            assert_eq!(
+                aniso(bad),
+                CvarVerdict::refuse("Anisotropy must be between 1 and 16 inclusive"),
+                "{bad:?}"
+            );
+        }
+
+        let level = |v: &str| check_error_level(v, "1", &no_rows);
+        for ok in ["0", "3", "2"] {
+            assert_eq!(level(ok), CvarVerdict::accept(), "{ok:?}");
+        }
+        assert_eq!(
+            level("7"),
+            CvarVerdict::refuse("7 is not valid, valid values are 0 - 3")
+        );
+        assert_eq!(
+            level("-2"),
+            CvarVerdict::refuse("-2 is not valid, valid values are 0 - 3")
+        );
+        assert_eq!(
+            level("4"),
+            CvarVerdict::refuse("4 is not valid, valid values are 0 - 3")
+        );
     }
 }

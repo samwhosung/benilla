@@ -1735,12 +1735,21 @@ mod tests {
         // A sample count, clamped to the reference's [1, 16]; 1 is none.
         apply(&mut app, "gxMultisample", "4");
         assert_eq!(res::<MsaaSetting>(&app).samples, 4);
-        apply(&mut app, "anisotropic", "99");
+        apply(&mut app, "anisotropic", "16");
         assert_eq!(
             res::<benilla_assets::TexFilterSetting>(&app).aniso,
             *benilla_assets::ANISO_RANGE.end()
         );
-        apply(&mut app, "anisotropic", "0");
+        // Outside [1, 16] the callback refuses (`0x689110`) and nothing reaches the knob.
+        for bad in ["99", "0", "-1"] {
+            assert_eq!(apply(&mut app, "anisotropic", bad), SetOutcome::Vetoed);
+            assert_eq!(
+                res::<benilla_assets::TexFilterSetting>(&app).aniso,
+                *benilla_assets::ANISO_RANGE.end(),
+                "anisotropic {bad}"
+            );
+        }
+        apply(&mut app, "anisotropic", "1");
         assert_eq!(
             res::<benilla_assets::TexFilterSetting>(&app).aniso,
             *benilla_assets::ANISO_RANGE.start()
@@ -1905,20 +1914,21 @@ mod tests {
         assert_eq!(res::<ClutterConfig>(&app).density, 3.0);
         apply(&mut app, "WorldDetail", "1");
         assert_eq!(res::<ClutterConfig>(&app).density, 2.0);
-        for (wrote, want) in [
-            ("0", 0u8),
-            ("1", 1),
-            ("2", 2),
-            ("3", 3),
-            ("2.9", 2),
-            ("9", 3),
-            ("-4", 0),
-        ] {
+        for (wrote, want) in [("0", 0u8), ("1", 1), ("2", 2), ("3", 3), ("2.9", 2)] {
             apply(&mut app, "weatherDensity", wrote);
             assert_eq!(
                 res::<benilla_world::weather::WeatherState>(&app).weather_density,
                 want,
                 "weatherDensity {wrote}"
+            );
+        }
+        // Outside 0..=3 the callback refuses (`0x67b870`) and the level stands.
+        for bad in ["9", "-4"] {
+            assert_eq!(apply(&mut app, "weatherDensity", bad), SetOutcome::Vetoed);
+            assert_eq!(
+                res::<benilla_world::weather::WeatherState>(&app).weather_density,
+                2,
+                "weatherDensity {bad}"
             );
         }
         // `gamma` is the ramp exponent: `SetGamma` applies `1 - v` before it arrives here. The
@@ -2089,7 +2099,8 @@ mod tests {
 
     /// The video rows whose callbacks refuse (`SmallCull` `0x688b10`, `shadowLevel` `0x688c10`,
     /// `texLodBias` `0x688c90`, `baseMip` `0x689090`, `farclip` `0x688d40`, `frillDensity`
-    /// `0x688de0`): `CVar::Set` keeps the old value
+    /// `0x688de0`, `weatherDensity` `0x67b870`, `anisotropic` `0x689110`, `ErrorLevelMin`
+    /// `0x402f60`, `ErrorLevelMax` `0x4030b0`): `CVar::Set` keeps the old value
     /// (`0x63df85`), and the console shows the callback's line, on the console and on a host write.
     #[test]
     fn a_refusing_callback_keeps_the_value_on_every_write() {
@@ -2125,6 +2136,30 @@ mod tests {
                 "Frill Density must be in range 1 - 256.",
                 "frillDensity",
                 "32",
+            ),
+            (
+                "weatherDensity 9",
+                "Value out of range (0 - 3)",
+                "weatherDensity",
+                "3",
+            ),
+            (
+                "anisotropic 32",
+                "Anisotropy must be between 1 and 16 inclusive",
+                "anisotropic",
+                "1",
+            ),
+            (
+                "ErrorLevelMin 7",
+                "7 is not valid, valid values are 0 - 3",
+                "ErrorLevelMin",
+                "1",
+            ),
+            (
+                "ErrorLevelMax 4",
+                "4 is not valid, valid values are 0 - 3",
+                "ErrorLevelMax",
+                "3",
             ),
             (
                 "gxTripleBuffer 2",
