@@ -303,6 +303,16 @@ fn a_rebuild_or_a_new_helm_dresses_by_the_flag_again() {
         (false, false),
         "a new helm, by the flag"
     );
+
+    // The watch covers the slot's whole block (`0x5e2541`): an enchant's move re-dresses too.
+    eval::<()>(&mut app, "ShowHelm(0)");
+    assert_eq!(worn_hidden(&app, me), (true, false));
+    values(&mut app, &[(HEAD_ENTRY + 1, 1900)]);
+    assert_eq!(
+        worn_hidden(&app, me),
+        (false, false),
+        "an enchant moved, by the flag"
+    );
 }
 
 /// `SetActionBarToggles` (`0x4e76e0`) sends `CMSG_SET_ACTIONBAR_TOGGLES` inside its call

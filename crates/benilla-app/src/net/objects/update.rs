@@ -999,7 +999,8 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         }
     }
     // `0x5ee990`'s helm and cloak arms re-dress the piece by its moved bit (`0x5eea45`-`0x5eea8e`),
-    // and the visible-item watch a slot by the flag (`0x5dee30` → `0x5df0de`).
+    // and the visible-item watch a slot by the flag (`0x5dee30` → `0x5df0de`): the watch covers the
+    // slot's whole 0x30 bytes (`0x5e2541`), so a creator or enchant move counts as the entry's.
     if kind == ObjectType::Player {
         if let Ok(mut pins) = sc.worn_pins.get_mut(e) {
             for (index, old, new) in block.edges() {
@@ -1007,10 +1008,9 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     pins.flags_moved(old ^ new);
                 }
                 for slot in [0u8, 14] {
-                    let entry = benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR
-                        + 2
+                    let first = benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR
                         + 12 * u16::from(slot);
-                    if index == entry {
+                    if (first..first + 12).contains(&index) {
                         pins.visible_moved(slot);
                     }
                 }
