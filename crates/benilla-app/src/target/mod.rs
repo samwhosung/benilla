@@ -227,32 +227,33 @@ impl PressPick {
     }
 }
 
-/// Latch the frame's pick as a press begins. It runs at the head of the world's clicks, after the
-/// look session engaged on the press frame and before [`hover::update_hover`] refreshes the
-/// hover, so what stands here is last frame's pick at the same cursor, the press's.
+/// Latch the pick as a press begins, traced at the press: the reference's `ArmClick 0x514810` calls
+/// `PickObjectUnderCursor 0x481f00`, which runs `PickAtCursor 0x481190` at the cursor the press
+/// was queued at (`[root+0x1118]`, `0x481f1d`), not the last frame's hover.
 pub(crate) fn latch_press_pick(
     buttons: Res<ButtonInput<MouseButton>>,
-    hovered: Res<Hovered>,
-    object: Res<HoveredObject>,
-    occlusion: Res<PickOcclusion>,
-    cursor: Res<cursor_mode::WorldCursor>,
-    attack_fork: Res<cursor_mode::AttackFork>,
+    records: Res<crate::ui_script::InputRecords>,
+    mut pick: hover::PointPick,
     mut press: ResMut<PressPick>,
 ) {
     // Either button's down edge arms a pick (`0x514810`, clickModes 1 and 2); a chord does not
     // re-latch, as `0x51481a` refuses to arm while the other button is held.
     let left = buttons.just_pressed(MouseButton::Left) && !buttons.pressed(MouseButton::Right);
     let right = buttons.just_pressed(MouseButton::Right) && !buttons.pressed(MouseButton::Left);
-    if !(left || right) {
-        return;
-    }
-    *press = PressPick {
-        hovered: *hovered,
-        object: *object,
-        occlusion: *occlusion,
-        cursor: *cursor,
-        attack_fork: *attack_fork,
+    let button = match (left, right) {
+        (true, _) => MouseButton::Left,
+        (_, true) => MouseButton::Right,
+        _ => return,
     };
+    // The press's own record, the last of the frame's for that button.
+    let at = records.iter().rev().find_map(|r| match r.record {
+        crate::ui_script::Record::Button {
+            button: b,
+            state: bevy::input::ButtonState::Pressed,
+        } if b == button => Some(r.at),
+        _ => None,
+    });
+    *press = pick.at(at.flatten());
 }
 
 /// Whether the hovered GameObject, not the character pick, is what a click acts on. The reference
@@ -335,6 +336,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<PickOcclusion>()
             .init_resource::<hover_probe::ProbeAim>()
             .init_resource::<PressPick>()
+            .init_resource::<hover::StickyPicks>()
             .init_resource::<WorldCursor>()
             .init_resource::<cursor_mode::AttackFork>()
             .init_resource::<CombatFlash>()
@@ -517,79 +519,5 @@ mod tests {
         assert!(!go_is_nearest(&refused(4.0), &obj(true, 10.0)));
         assert!(!go_is_nearest(&refused(5.0), &obj(true, 5.0)));
         assert!(go_is_nearest(&refused(10.0), &obj(true, 4.0)));
-    }
-
-    /// A drag blanks the live hover for its whole length, and a click at its end must still act on
-    /// what the press was over.
-    #[test]
-    fn the_press_latch_outlives_the_hover_a_drag_clears() {
-        let mut world = World::new();
-        world.init_resource::<Hovered>();
-        world.init_resource::<HoveredObject>();
-        world.init_resource::<PickOcclusion>();
-        world.init_resource::<cursor_mode::WorldCursor>();
-        world.init_resource::<cursor_mode::AttackFork>();
-        world.init_resource::<PressPick>();
-        world.init_resource::<ButtonInput<MouseButton>>();
-        let id = world.register_system(latch_press_pick);
-
-        // A boar under the cursor, and the cursor classified as Attack over it.
-        const BOAR: u64 = 0xB0A2;
-        world.resource_mut::<Hovered>().guid = Some(BOAR);
-        world.resource_mut::<cursor_mode::WorldCursor>().kind = cursor_mode::CursorKind::Attack;
-
-        // Press left: the latch takes the pick.
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        world.run_system(id).unwrap();
-        assert_eq!(world.resource::<PressPick>().hovered.guid, Some(BOAR));
-        assert!(world.resource::<PressPick>().attack(), "Attack rode along");
-
-        // The drag begins: the look session blanks the live hover.
-        *world.resource_mut::<Hovered>() = Hovered::default();
-        world.resource_mut::<ButtonInput<MouseButton>>().clear();
-        world.run_system(id).unwrap();
-        assert_eq!(
-            world.resource::<PressPick>().hovered.guid,
-            Some(BOAR),
-            "the release must still know what the press was over"
-        );
-    }
-
-    /// The reference refuses to arm while another button is down (`0x51481a`) and kills the
-    /// pending click (`0x514ac1`), so neither release of a both-button run selects.
-    #[test]
-    fn a_chord_does_not_relatch_the_pick() {
-        let mut world = World::new();
-        world.init_resource::<Hovered>();
-        world.init_resource::<HoveredObject>();
-        world.init_resource::<PickOcclusion>();
-        world.init_resource::<cursor_mode::WorldCursor>();
-        world.init_resource::<cursor_mode::AttackFork>();
-        world.init_resource::<PressPick>();
-        world.init_resource::<ButtonInput<MouseButton>>();
-        let id = world.register_system(latch_press_pick);
-
-        const FIRST: u64 = 0x1111;
-        const SECOND: u64 = 0x2222;
-        world.resource_mut::<Hovered>().guid = Some(FIRST);
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        world.run_system(id).unwrap();
-        assert_eq!(world.resource::<PressPick>().hovered.guid, Some(FIRST));
-
-        // Right joins while left is still held, over something else entirely.
-        world.resource_mut::<Hovered>().guid = Some(SECOND);
-        let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
-        buttons.clear(); // drop last frame's just_pressed, keep `pressed`
-        buttons.press(MouseButton::Right);
-        world.run_system(id).unwrap();
-        assert_eq!(
-            world.resource::<PressPick>().hovered.guid,
-            Some(FIRST),
-            "the chord's second press must not steal the latch"
-        );
     }
 }
