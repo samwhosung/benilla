@@ -557,13 +557,15 @@ pub fn assemble_rect(edges: [f32; 4], clamp: bool, extent_x: f32, extent_y: f32)
 }
 
 /// `ApplyRect`'s `OnSizeChanged` test (`0x76b580`): width or height moved by at least `eps`,
-/// [`SIZE_EPS`] in the units the rects are in, the deltas taken in `f64` from the `f32` edges.
+/// [`SIZE_EPS`] in the units the rects are in, the deltas taken in `f64` from the `f32` edges. A
+/// NaN delta is a change: the unordered compare takes the fire (`jp` at `0x76b5f6`, `jnp` at
+/// `0x76b611`).
 pub fn size_changed(old: Rect, new: Rect, eps: f64) -> bool {
     let dw =
         (f64::from(new.right) - f64::from(new.left)) - (f64::from(old.right) - f64::from(old.left));
     let dh =
         (f64::from(new.top) - f64::from(new.bottom)) - (f64::from(old.top) - f64::from(old.bottom));
-    dw.abs() >= eps || dh.abs() >= eps
+    !(dw.abs() < eps && dh.abs() < eps)
 }
 
 /// The drain's keep test (`0x768d20`, `0x768d6e`–`0x768dc0`): every edge of `new` moved less than
@@ -1926,6 +1928,18 @@ mod tests {
         // In units of 1280 to the reference's one, 1e-4 is under the threshold.
         let jitter = Rect::new(0.0, 0.0, 40.0, 100.0001);
         assert!(!size_changed(r, jitter, SIZE_EPS * 1280.0));
+    }
+
+    /// A NaN width or height delta fires, either way round (`0x76b5f6`, `0x76b611`).
+    #[test]
+    fn size_changed_on_nan() {
+        let r = Rect::new(0.0, 0.0, 40.0, 100.0);
+        let nan_w = Rect::new(0.0, 0.0, 40.0, f32::NAN);
+        let nan_h = Rect::new(0.0, 0.0, f32::NAN, 100.0);
+        assert!(size_changed(r, nan_w, SIZE_EPS));
+        assert!(size_changed(r, nan_h, SIZE_EPS));
+        assert!(size_changed(nan_w, r, SIZE_EPS));
+        assert!(size_changed(nan_w, nan_w, SIZE_EPS));
     }
 
     /// The buffers live across rounds, so `begin` must leave nothing behind: round 2 anchors to a
