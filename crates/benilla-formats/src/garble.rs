@@ -57,7 +57,8 @@ impl Garble {
         dst_size: 0x800,
     };
 
-    /// Readable item text, letters and books (`0x4e3856`, then `ITEM_TEXT_READY`).
+    /// Readable page text, books and game objects (`0x4e3856`, then `ITEM_TEXT_READY`); a
+    /// letter's single text never reaches `0x49b560` (`0x4e3666`).
     pub const ITEM_TEXT: Self = Self {
         keep_angle: true,
         keep_punct: true,
