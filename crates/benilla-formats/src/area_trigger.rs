@@ -32,8 +32,9 @@ pub struct AreaTriggerRow {
 impl AreaTriggerRow {
     /// Whether `p` is inside, as the reference's `0x5e22d0` tests it. A sphere is a plain 3D
     /// distance check, inclusive (`radius² >= Σ(centre − p)²`); a box carries `p` into its frame
-    /// in four steps: it builds the matrix, translated by `0x7bdc40`, rotated by `-box_yaw` with
-    /// `0x7bdd60`, inverted rigidly by `0x7bd700`, and transforms `p` with `0x7bca80`; the test is
+    /// in four steps: it builds the matrix, translated by `0x7bdc40`, rotated by the row's yaw as
+    /// stored with `0x7bdd60` (`0x5e23f8`), inverted rigidly by `0x7bd700` (which makes the rotation
+    /// `-box_yaw`), and transforms `p` with `0x7bca80`; the test is
     /// strict against half of `box_size` on all six faces. The server re-tests with 5 yd
     /// of slop (`MiscHandler.cpp:643`).
     pub fn contains(&self, p: [f32; 3]) -> bool {
