@@ -94,25 +94,19 @@ pub(crate) fn open_tabard(world: &mut World, vendor: u64) {
 
 /// The close core `0x4f58a0` as `0x493310` and the leave-world sweep enter it: with a vendor
 /// stored, the preview ends (`0x4f58ce` → `0x5e0830`), the latch is released (`0x4f58da`), the cell
-/// cleared, then `CLOSE_TABARD_FRAME` (`0x4f58f8`), held behind what the lane still holds
-/// ([`lane::behind_lane`]). `CloseTabardCreation` runs it inside its call
+/// cleared, then `CLOSE_TABARD_FRAME` (`0x4f58f8`). The session closes here; the preview's end
+/// and the signal wait behind what the lane still holds ([`lane::close_step`]), so the open the
+/// close follows has started its preview first. `CloseTabardCreation` runs it inside its call
 /// ([`crate::script_calls::ScriptCallHost`]).
 pub(crate) fn close_core(world: &mut World) {
-    if world.resource::<TabardOpen>().vendor.is_none() {
+    let Some(vendor) = world.resource::<TabardOpen>().vendor else {
         return;
-    }
-    lane::behind_lane(world, |world| {
-        let Some(vendor) = world.resource::<TabardOpen>().vendor else {
-            return;
-        };
-        crate::ui_session::release(world, vendor);
-        world.resource_mut::<TabardOpen>().vendor = None;
-        crate::ui_session::note_closed(world, NpcWindow::Tabard);
-        crate::ui_session::fire(world, |script| {
-            script.end_tabard_preview();
-            script.fire_event("CLOSE_TABARD_FRAME", vec![]);
-        });
-    });
+    };
+    let waits = lane::close_waits(world);
+    crate::ui_session::release(world, vendor);
+    world.resource_mut::<TabardOpen>().vendor = None;
+    crate::ui_session::note_closed(world, NpcWindow::Tabard);
+    lane::close_step(world, waits);
 }
 
 /// The design our own body wears while the frame is open.
@@ -541,8 +535,8 @@ mod tests {
                 .into_iter()
                 .map(|(_, e)| e)
                 .collect::<Vec<_>>(),
-            [TabardEvent::Open, TabardEvent::Open],
-            "each activate signals its open"
+            [TabardEvent::Open, TabardEvent::Closed, TabardEvent::Open],
+            "each activate signals its open, the second after the close it made"
         );
     }
 }

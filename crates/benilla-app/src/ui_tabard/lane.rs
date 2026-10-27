@@ -23,9 +23,9 @@ pub(crate) enum TabardEvent {
     SavePending,
     /// A save reply's message line, by its `GlobalStrings` key.
     Line(&'static str),
-    /// What a close core run outside a call signalled while this lane held items, parked in the
-    /// VM of the session under the key ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
+    /// The close core's VM half: the preview's undo (`0x4f58ce` → `0x5e0830`), then
+    /// `CLOSE_TABARD_FRAME` (`0x4f58f8`).
+    Closed,
 }
 
 /// The tabard lane's queue.
@@ -114,23 +114,36 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: TabardEvent) {
                 crate::ui_action::show_now(script, sink, "ui_tabard", line);
             }
         }
-        TabardEvent::Parked { session, key } => {
-            if script.session() == session {
-                script.run_parked(key);
-            }
-        }
+        TabardEvent::Closed => close_vm(script),
     }
 }
 
-/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
-/// of the open it closes.
-pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    let head = world
-        .get_resource::<TabardLane>()
-        .and_then(TabardLane::head);
-    crate::lanes::behind(world, head, core, |world, session, key| {
+/// The close core's VM half: the preview ends, then the frame's close is signalled, at the
+/// handler or at its place on the lane.
+fn close_vm(script: &mut UiScript) {
+    script.end_tabard_preview();
+    script.fire_event("CLOSE_TABARD_FRAME", vec![]);
+}
+
+/// Whether a close starting now waits behind the lane ([`crate::lanes::waits_behind`]): the open it
+/// closes, or any earlier signal, has not fired yet.
+pub(super) fn close_waits(world: &World) -> bool {
+    crate::lanes::waits_behind(
         world
-            .resource_mut::<TabardLane>()
-            .push(TabardEvent::Parked { session, key });
-    });
+            .get_resource::<TabardLane>()
+            .and_then(TabardLane::head),
+    )
+}
+
+/// The close core's VM half: queued on the lane when the close `waits` ([`close_waits`]), so the
+/// preview the open starts ends after it and not before; else run now, its signal fired with the
+/// host lent.
+pub(super) fn close_step(world: &mut World, waits: bool) {
+    if waits {
+        if let Some(mut lane) = world.get_resource_mut::<TabardLane>() {
+            lane.push(TabardEvent::Closed);
+            return;
+        }
+    }
+    crate::ui_session::fire(world, close_vm);
 }

@@ -130,3 +130,46 @@ fn the_open_and_the_reply_fire_on_the_lane_at_their_handlers() {
         ["UI_ERROR_MESSAGE:not master", "TABARD_SAVE_PENDING:nil"]
     );
 }
+
+/// A close in the open's own frame runs after the open: the open's listener starts the preview
+/// (`TabardFrame.lua`, `InitializeTabardColors`) and the close core's undo (`0x4f58ce` →
+/// `0x5e0830`) comes after it, ahead of `CLOSE_TABARD_FRAME` (`0x4f58f8`), so no preview is left
+/// on the body with no designer open.
+#[test]
+fn a_close_after_the_open_ends_the_preview_the_open_started() {
+    let mut app = client();
+    eval::<()>(
+        &mut app,
+        false,
+        r#"
+        Order = {}
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("OPEN_TABARD_FRAME")
+        g:RegisterEvent("CLOSE_TABARD_FRAME")
+        g:SetScript("OnEvent", function()
+            table.insert(Order, event)
+            if event == "OPEN_TABARD_FRAME" then TM:InitializeTabardColors() end
+        end)
+        "#,
+    );
+    let preview = |app: &App| app.world().non_send_resource::<UiScript>().tabard_design();
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![SessionEvent::TabardVendorActivate(VENDOR)],
+    );
+    app.world_mut().flush();
+    // Another window's open takes the latch in the same frame, which closes the designer
+    // (`0x493310`).
+    crate::ui_session::register(app.world_mut(), 0xF130_0000_0000_0043);
+    app.world_mut().flush();
+    assert_eq!(app.world().resource::<TabardOpen>().npc(), None, "closed");
+    assert_eq!(preview(&app), None, "nothing has fired yet");
+    crate::lanes::fire_in_order(app.world_mut());
+    let order: Vec<String> = eval(&mut app, false, "return Order");
+    assert_eq!(order, ["OPEN_TABARD_FRAME", "CLOSE_TABARD_FRAME"]);
+    assert_eq!(
+        preview(&app),
+        None,
+        "the open's preview ended with the close"
+    );
+}
