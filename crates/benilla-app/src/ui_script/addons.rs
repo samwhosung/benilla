@@ -276,7 +276,7 @@ fn root_from(home: Option<PathBuf>) -> Option<PathBuf> {
 
 /// The reference's twelve `Blizzard_*` LoadOnDemand addons: on a 1.12 install each folder holds
 /// only a `.pub`, with the files in the archive. Probed against the chain.
-const BLIZZARD_ADDONS: [&str; 12] = [
+pub(super) const BLIZZARD_ADDONS: [&str; 12] = [
     "Blizzard_AuctionUI",
     "Blizzard_BattlefieldMinimap",
     "Blizzard_BindingUI",

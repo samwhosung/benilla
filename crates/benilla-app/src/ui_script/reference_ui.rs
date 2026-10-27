@@ -2117,10 +2117,13 @@ mod tests {
     /// The anchor loop (`0x767800`), the XML length readers (`0x6f1eb0`, `0x6f1d60`, `0x6f20a0`),
     /// the Backdrop's child loop (`0x77e875`), a text frame's `font=` (`0x879bc8`) and
     /// `<FontString>` child (`0x879b3c`) and a model's `scale` (`0x8788d8`) log a node they refuse.
-    /// The core and glue the default load reads, and benilla's layer, write none of these in
-    /// 1.12.1, so a line here is a read stricter than the reference's, or a layer file the
-    /// reference would refuse. (The one stock line among them, BrowseName's font override, is in
-    /// the load-on-demand Blizzard_AuctionUI, which `tests/auction_frame.rs` holds to it.)
+    /// The core and glue the default load reads, benilla's layer, and the twelve load-on-demand
+    /// Blizzard addons on top of the core write none of these in 1.12.1, so a line here is a read
+    /// stricter than the reference's, a build order other than its own (an anchor resolves as it
+    /// is read, `0x767964`, and the trainer, craft and trade-skill rows hang a label off a
+    /// highlight their template builds first, `ClassTrainerFrameTemplates.xml:38`, `:67`), or a
+    /// layer file the reference would refuse. The one stock line among them, BrowseName's font
+    /// override in Blizzard_AuctionUI, is `tests/auction_frame.rs`'s to hold.
     #[test]
     fn every_anchor_and_length_the_stock_interface_writes_reads() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -2149,6 +2152,23 @@ mod tests {
         core.set_screen_size(1024.0, 768.0);
         super::super::manifest::load_default_ui(&core);
         assert_eq!(refused(&mut core), Vec::<String>::new(), "the core");
+
+        for name in super::super::addons::BLIZZARD_ADDONS {
+            super::super::test_ui::seat_chain_addon(&mut core, name);
+            core.run(&format!("UIParentLoadAddOn(\"{name}\")")).unwrap();
+            assert!(
+                core.eval::<bool>(&format!("return IsAddOnLoaded(\"{name}\") == 1"))
+                    .unwrap(),
+                "{name}: did not load: {:?}",
+                core.errors()
+            );
+        }
+        // The capture reaches the addons' lines: BrowseName's override is among them.
+        let mut addons = refused(&mut core);
+        let browse = "BrowseName: FontString element overriding font";
+        assert!(addons.iter().any(|l| l.contains(browse)), "{addons:?}");
+        addons.retain(|l| !l.contains(browse));
+        assert_eq!(addons, Vec::<String>::new(), "the Blizzard addons");
 
         let mut glue = UiScript::new_glue().expect("VM");
         glue.set_screen_size(1024.0, 768.0);
