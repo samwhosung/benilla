@@ -154,12 +154,6 @@ impl Plugin for UiUnitPlugin {
                     .in_set(field_events::FieldEventPushes)
                     .in_set(UnitSnapshots)
                     .after(WorldEnterSeats),
-                // After the snapshots its handlers read, and ahead of the action feed's events:
-                // `SetPlayerControl` stores the flag (`0x4958ea`) and signals its event
-                // (`0x4958f7`, `0x49590b`) before the usable refresh (`0x4958fc`, `0x495910`).
-                feed_player_control
-                    .after(crate::player::ControlRestore)
-                    .before(crate::ui_action::CooldownEvents),
                 // After the action feed, whose usable refresh precedes these events.
                 fire_unit_events
                     .in_set(UnitEvents)
@@ -698,32 +692,6 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
     let dy = f64::from(q.y) - f64::from(p.y);
     let dz = f64::from(q.z) - f64::from(p.z);
     (dz * dz + dx * dx) + dy * dy
-}
-
-/// `PLAYER_CONTROL_LOST`/`GAINED` on a change of the flag `SMSG_CLIENT_CONTROL_UPDATE` writes
-/// (`0x4958e0`), for our own character only (`0x5fa6d0`); the boot value, and a fresh VM's memo, is in control (`0x48f626`).
-fn feed_player_control(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    own_control: Option<Res<crate::player::OwnControlLost>>,
-    mut lost: Local<crate::ui_script::VmMemo<bool>>,
-) {
-    hosted_vm.run(|script| {
-        let (Some(script), Some(own_control)) = (script, own_control) else {
-            return;
-        };
-        let lost = lost.get(script);
-        if *lost != own_control.0 {
-            *lost = own_control.0;
-            // `HasFullControl`'s flag rides the same edge.
-            script.set_player_control(!own_control.0);
-            let event = if own_control.0 {
-                "PLAYER_CONTROL_LOST"
-            } else {
-                "PLAYER_CONTROL_GAINED"
-            };
-            script.fire_event(event, vec![]);
-        }
-    })
 }
 
 /// Seat the far-sight bit `HasFullControl` refuses on (`0x51a142`). Its event,
@@ -1868,7 +1836,6 @@ pub(crate) fn add_unit_feed(app: &mut App) {
             (
                 relations::seat,
                 feed_units.in_set(UnitSnapshots),
-                feed_player_control.before(crate::ui_action::CooldownEvents),
                 fire_unit_events.after(crate::ui_action::CooldownEvents),
                 field_events::fire_field_notices,
             )
@@ -2893,78 +2860,6 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let teams = benilla_formats::load_race_pvp_teams(&mut chain).expect("ChrRaces walk");
         assert_eq!(teams, crate::chr_classes::RacePvpTeams::stock().0);
-    }
-
-    /// LOST going down, GAINED going up (boot is in control).
-    #[test]
-    fn the_control_edges_fire_once_each_way() {
-        use bevy::prelude::*;
-        let mut app = App::new();
-        app.init_resource::<crate::player::Player>()
-            .init_resource::<crate::player::OwnControlLost>()
-            .add_systems(Update, (feed_player_control, feed_far_sight_bit));
-        let mut script = UiScript::new().unwrap();
-        script
-            .run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_CONTROL_LOST")
-                f:RegisterEvent("PLAYER_CONTROL_GAINED")
-                f:RegisterEvent("PLAYER_FARSIGHT_FOCUS_CHANGED")
-                f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
-            "#,
-            )
-            .unwrap();
-        // The player object `HasFullControl` needs, alive.
-        script.set_unit(
-            "player",
-            Some(benilla_ui::script::UnitState {
-                exists: true,
-                health: 100,
-                ..Default::default()
-            }),
-        );
-        app.insert_non_send_resource(script);
-        app.world_mut().spawn((
-            SelfPlayer,
-            Guid(0x77),
-            ObjectStore(benilla_protocol::ObjectFields::default()),
-        ));
-        let seen = |app: &mut App| -> Vec<String> {
-            app.update();
-            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-            s.resolve();
-            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
-            s.run("SEEN = {}").unwrap();
-            out
-        };
-        assert_eq!(
-            seen(&mut app),
-            Vec::<String>::new(),
-            "in control, no far sight: quiet"
-        );
-        app.world_mut()
-            .resource_mut::<crate::player::OwnControlLost>()
-            .0 = true;
-        assert_eq!(seen(&mut app), vec!["PLAYER_CONTROL_LOST".to_string()]);
-        assert_eq!(seen(&mut app), Vec::<String>::new(), "held, not repeated");
-        app.world_mut()
-            .resource_mut::<crate::player::OwnControlLost>()
-            .0 = false;
-        assert_eq!(seen(&mut app), vec!["PLAYER_CONTROL_GAINED".to_string()]);
-
-        // A possessed creature stuck under fear or confusion is not our character losing control:
-        // `0x5fa600` writes `[0xb4b3e4]` for our own guid alone, so no event and no flag.
-        app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .control_lost = true;
-        assert_eq!(seen(&mut app), Vec::<String>::new());
-        assert!(app
-            .world()
-            .non_send_resource::<UiScript>()
-            .eval::<bool>("return HasFullControl() == 1")
-            .unwrap());
     }
 
     /// The flag events are the field watches' (`crate::field_watch`): the feed that pushes our

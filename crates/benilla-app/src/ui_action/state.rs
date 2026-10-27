@@ -41,9 +41,8 @@ use crate::spell::usable;
 #[derive(Default)]
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
-    /// The selection's guid and the control flag, whose changes call the usable refresh.
+    /// The selection's guid, whose change calls the usable refresh.
     selection: Option<u64>,
-    control_lost: bool,
     /// The VM's macro edits and the item lane's `RaiseBagUpdate` calls as last read.
     macro_edits: u64,
     bag_updates: u64,
@@ -487,16 +486,14 @@ impl ActionStates<'_, '_> {
         if trace_cd {
             memory.last_cd_trace = Some(now);
         }
-        let control_lost = self.cast_state.2.as_ref().is_some_and(|c| c.0);
         let selection = self.targeting.selection.guid;
 
-        // The frame's callers of the usable refresh `0x4b31c0` but the field watchers and the
-        // cooldown list, which refresh inside their packets; a new VM meets the state as it
-        // stands and hears none. The target's select and release (`0x493892`, `0x493a69`), where
-        // no script call made them, and `SetPlayerControl` (`0x4958fc`, `0x495910`), each on a
-        // change.
-        let mut refresh = selection != memory.selection || control_lost != memory.control_lost;
-        (memory.selection, memory.control_lost) = (selection, control_lost);
+        // The frame's callers of the usable refresh `0x4b31c0` but the field watchers, the control
+        // flag and the cooldown list, which refresh inside their packets; a new VM meets the state
+        // as it stands and hears none. The target's select and release (`0x493892`, `0x493a69`),
+        // where no script call made them, on a change.
+        let mut refresh = selection != memory.selection;
+        memory.selection = selection;
         if new_vm {
             refresh = false;
         }

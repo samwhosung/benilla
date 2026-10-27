@@ -1403,7 +1403,8 @@ pub(crate) mod schedule_tests {
         let after_restore = reach(restore);
         for reader in [
             "::player::controller::control",
-            "::ui_unit::feed_player_control",
+            // The drain, which fires the notices the restore signals.
+            "::lanes::fire_in_order",
             "::ui_action::state::feed_action_state",
             "::player::camera_saved::load_camera_pose",
             "::tutorial::watch_self",

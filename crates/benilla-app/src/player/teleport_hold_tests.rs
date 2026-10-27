@@ -46,7 +46,6 @@ fn apply(
     time: Res<Time>,
     mut commands: Commands,
     mut player: ResMut<Player>,
-    mut own: ResMut<OwnControlLost>,
     net: Res<NetCommands>,
     mut readers: (
         MessageReader<TeleportMessage>,
@@ -68,7 +67,6 @@ fn apply(
         &time,
         &mut commands,
         &mut player,
-        &mut own,
         &mut cam,
         &net,
         &mut readers.0,

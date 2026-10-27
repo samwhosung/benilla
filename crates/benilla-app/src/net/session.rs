@@ -300,42 +300,48 @@ fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge) {
     }
 }
 
-/// `SMSG_CLIENT_CONTROL_UPDATE` (`0x5fa6b1` → `SetPlayerControl 0x4958e0`), judged by the
-/// controller later. For our own mover the fall of the flag `[0xb4b3e4]` drops the cursor's payload
-/// and the cast (`0x4958e8`-`0x495901` → `0x495920`) ahead of `PLAYER_CONTROL_LOST` (`0x49590b`); a
-/// store that changes nothing does nothing (`0x4958e6`). The controller stores the flag past the
-/// drain, so `stored` follows the packets of this frame, which it has not yet applied.
+/// What [`on_client_control`] holds beside the host: the cast its fall cancels, our guid, the flag,
+/// and the notice lane its signals go on (absent in a harness without the unit feed).
+type ControlSet = (
+    crate::spell::SelfCancel<'static>,
+    Res<'static, SelfGuid>,
+    ResMut<'static, crate::player::OwnControlLost>,
+    Option<ResMut<'static, crate::field_watch::NoticeLane>>,
+);
+
+/// `SMSG_CLIENT_CONTROL_UPDATE` (`0x5fa6b1` → `SetPlayerControl 0x4958e0`), its movement judged by
+/// the controller later. For our own mover a change of the flag `[0xb4b3e4]` is stored here
+/// (`0x4958ea`); its fall drops the cursor's payload and the cast (`0x4958e8`-`0x495901` →
+/// `0x495920`), and the change signals on the notice lane at this packet's place, then runs the
+/// usable refresh (`0x4958f7`/`0x49590b`, `0x4958fc`/`0x495910`). A store that changes nothing does
+/// nothing (`0x4958e6`).
 fn on_client_control(
     In(ev): In<SessionEvent>,
     mut e: Edges,
-    frame: Res<bevy::diagnostic::FrameCount>,
-    mut stored: Local<Option<(u32, bool)>>,
     // The flag and our guid are the host's too, so they sit in the set it shares with the cast.
-    mut vm: crate::script_calls::VmWith<(
-        crate::spell::SelfCancel<'static>,
-        Res<'static, SelfGuid>,
-        Res<'static, crate::player::OwnControlLost>,
-    )>,
+    mut vm: crate::script_calls::VmWith<ControlSet>,
 ) {
     let SessionEvent::ClientControl { mover, allow_move } = ev else {
         return;
     };
     e.client_control
         .write(ClientControlMessage { mover, allow_move });
-    let fell = {
-        let (_, self_guid, own) = vm.own();
-        if self_guid.0 != Some(mover) {
+    {
+        let (_, self_guid, mut own, _) = vm.own();
+        if self_guid.0 != Some(mover) || own.0 == !allow_move {
             return;
         }
-        let down = match *stored {
-            Some((at, down)) if at == frame.0 => down,
-            _ => own.0,
-        };
-        *stored = Some((frame.0, !allow_move));
-        !allow_move && !down
-    };
-    if fell {
+        own.0 = !allow_move;
+    }
+    if !allow_move {
         crate::spell::drop_hold(&mut vm, |(mut cancel, ..)| cancel.abort_cast());
+    }
+    if let (.., Some(mut lane)) = vm.own() {
+        use crate::field_watch::FieldNotice;
+        lane.write(FieldNotice::PlayerControl {
+            in_control: allow_move,
+        });
+        lane.write(FieldNotice::UsableRefresh);
     }
 }
 

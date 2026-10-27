@@ -93,6 +93,12 @@ pub(crate) enum FieldNotice {
     /// `0x5ff51b`), `UNIT_FIELD_BYTES_1` byte 3's bit `0x2` (`0x5ff83a`), its form and its combo
     /// points (`0x5de011`, `0x5ddff0`).
     UsableRefresh,
+    /// `SetPlayerControl` (`0x4958e0`) on a change of our own `[0xb4b3e4]` (`0x4958ea`), from
+    /// `SMSG_CLIENT_CONTROL_UPDATE`'s handler through `0x5fa600` (`0x5fa6b1`): the flag
+    /// `HasFullControl` reads seated, then `PLAYER_CONTROL_GAINED` (`0x4958f7`) or
+    /// `PLAYER_CONTROL_LOST` (`0x49590b`); its usable refresh follows (`0x4958fc`, `0x495910`), its
+    /// [`Self::UsableRefresh`].
+    PlayerControl { in_control: bool },
     /// `OnShapeshiftFormChanged` (`0x5de010`) on the active player's form byte: after the usable
     /// refresh (`0x5de011`, its [`Self::UsableRefresh`]), `ACTIONBAR_UPDATE_STATE` and
     /// `CURRENT_SPELL_CAST_CHANGED` (`0x5de016` → `0x4b3250`), then the bonus bar's offset and

@@ -63,23 +63,15 @@ fn yield_own_body(net_cmds: &NetCommands, player: &mut Player, self_guid: Option
     });
 }
 
-/// The control flags a verdict sets. `control_lost` is the mover we drive being unable to move:
+/// The movement flags a verdict sets. `control_lost` is the mover we drive being unable to move:
 /// our body revoked, or our possessed creature released while feared or confused (the possession
-/// standing). `own` is only `[0xb4b3e4]` (`0x4958e0`), which `0x5fa600` writes for our own
-/// character alone (`0x5fa6d0`): a grant or a release naming another unit never touches it.
-/// The packet's handler already stored the flag and dropped the hold on its fall
-/// (`on_client_control`).
-fn track_control(player: &mut Player, own: &mut OwnControlLost, verdict: ControlVerdict) {
+/// standing). Our own `[0xb4b3e4]` (`0x4958e0`), which `0x5fa600` writes for our own character
+/// alone (`0x5fa6d0`), is the packet's handler's to store, signal and refresh inside the packet,
+/// with the hold its fall drops (`on_client_control`).
+fn track_control(player: &mut Player, verdict: ControlVerdict) {
     match verdict {
-        ControlVerdict::Revoked => {
-            player.control_lost = true;
-            own.0 = true;
-        }
-        ControlVerdict::Restored => {
-            player.control_lost = false;
-            own.0 = false;
-        }
-        ControlVerdict::Granted(_) => player.control_lost = false,
+        ControlVerdict::Revoked => player.control_lost = true,
+        ControlVerdict::Restored | ControlVerdict::Granted(_) => player.control_lost = false,
         ControlVerdict::Released(guid) => {
             if player.foreign_mover == Some(guid) {
                 player.control_lost = true;
@@ -136,7 +128,6 @@ pub(super) fn apply_server_moves(
     time: &Time,
     commands: &mut Commands,
     player: &mut Player,
-    own_control: &mut OwnControlLost,
     cam: &mut FlyCam,
     net_cmds: &NetCommands,
     teleports: &mut MessageReader<TeleportMessage>,
@@ -155,7 +146,7 @@ pub(super) fn apply_server_moves(
     // (`MovementHandler.cpp:291-293`, `Player.cpp:20257-20272`).
     for c in control_msgs.read() {
         let verdict = control_verdict(c.mover, c.allow_move, self_guid);
-        track_control(player, own_control, verdict);
+        track_control(player, verdict);
         match verdict {
             // Park, which stops the server extrapolating a run, and say nothing else: the mover has
             // not changed hands, and `CMSG_MOVE_NOT_ACTIVE_MOVER` would strand us.
@@ -600,16 +591,26 @@ fn apply_self_move(
 /// `0x5fa600(1)` (`0x5deb56`) raises `[0xb4b3e4]` through `0x4958e0` (`PLAYER_CONTROL_GAINED` if it
 /// was down) and `0x4958a0` (`0x5deb5b`) stores 1 and re-claims our own mover (the claim is sent
 /// by `enter_world_on_self_create`). vmangos sends a battleground's closing `control 0` and no
-/// restore (`BattleGround.cpp:905-908`). The event is the `ui_unit::feed_player_control` edge.
+/// restore (`BattleGround.cpp:905-908`). A flag that was down signals as the packet's handler's
+/// does, on the notice lane: the event, then the usable refresh (`0x4958f7`, `0x4958fc`), here at
+/// this system's place, behind the frame's packets, until the arrival runs in its create.
 pub(crate) fn regain_control_on_arrival(
     mut arrivals: MessageReader<crate::net::WorldEnterCascadeMessage>,
     mut player: ResMut<Player>,
     mut own_control: ResMut<OwnControlLost>,
+    // Absent in a harness without the unit feed.
+    lane: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
     if arrivals.read().next().is_none() {
         return;
     }
     if own_control.0 || player.control_lost || player.foreign_mover.is_some() {
+        if own_control.0 {
+            if let Some(mut lane) = lane {
+                lane.write(crate::field_watch::FieldNotice::PlayerControl { in_control: true });
+                lane.write(crate::field_watch::FieldNotice::UsableRefresh);
+            }
+        }
         own_control.0 = false;
         player.control_lost = false;
         // The mover is ours again, as `ControlVerdict::Restored` seats it.
@@ -868,30 +869,20 @@ mod control_tests {
         );
     }
 
-    /// A possessed creature feared or confused is released, so the mover we drive cannot move,
-    /// but `[0xb4b3e4]` is written for our own character alone (`0x5fa6d0`): the item and
-    /// cursor gates still see control.
+    /// A possessed creature feared or confused is released, so the mover we drive cannot move;
+    /// our own body's verdicts lock and free it.
     #[test]
-    fn releasing_a_possessed_creature_leaves_our_own_control_alone() {
-        let (mut player, mut own) = (Player::default(), OwnControlLost::default());
-        track_control(
-            &mut player,
-            &mut own,
-            control_verdict(CREATURE, true, Some(ME)),
-        );
+    fn releasing_a_possessed_creature_locks_the_creature_alone() {
+        let mut player = Player::default();
+        track_control(&mut player, control_verdict(CREATURE, true, Some(ME)));
         assert!(!player.control_lost);
         player.foreign_mover = Some(CREATURE);
-        track_control(
-            &mut player,
-            &mut own,
-            control_verdict(CREATURE, false, Some(ME)),
-        );
+        track_control(&mut player, control_verdict(CREATURE, false, Some(ME)));
         assert!(player.control_lost, "the creature we drive is stuck");
-        assert!(!own.0, "our own control stands");
-        track_control(&mut player, &mut own, control_verdict(ME, false, Some(ME)));
-        assert!(own.0);
-        track_control(&mut player, &mut own, control_verdict(ME, true, Some(ME)));
-        assert!(!own.0 && !player.control_lost);
+        track_control(&mut player, control_verdict(ME, false, Some(ME)));
+        assert!(player.control_lost);
+        track_control(&mut player, control_verdict(ME, true, Some(ME)));
+        assert!(!player.control_lost);
     }
 
     #[test]
@@ -992,12 +983,11 @@ mod arrival_tests {
 
     const ME: u64 = 0x45;
 
-    /// The control-0 packet naming us.
+    /// The control-0 packet naming us: its handler's flag and the controller's lock.
     fn lose_control(app: &mut App) {
-        let mut own = std::mem::take(&mut *app.world_mut().resource_mut::<OwnControlLost>());
+        app.world_mut().resource_mut::<OwnControlLost>().0 = true;
         let mut player = app.world_mut().resource_mut::<Player>();
-        track_control(&mut player, &mut own, control_verdict(ME, false, Some(ME)));
-        *app.world_mut().resource_mut::<OwnControlLost>() = own;
+        track_control(&mut player, control_verdict(ME, false, Some(ME)));
     }
 
     fn harness() -> App {
@@ -1211,7 +1201,6 @@ mod seat_tests {
                 move |time: Res<Time>,
                       mut commands: Commands,
                       mut player: ResMut<Player>,
-                      mut own: ResMut<OwnControlLost>,
                       net: Res<NetCommands>,
                       mut readers: (
                     MessageReader<TeleportMessage>,
@@ -1233,7 +1222,6 @@ mod seat_tests {
                         &time,
                         &mut commands,
                         &mut player,
-                        &mut own,
                         &mut cam,
                         &net,
                         &mut readers.0,

@@ -374,9 +374,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::UnitSpeeds", "net::game_time::ServerTime", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
-        "player::state::StandPending", "spell::cooldowns::Cooldowns", "spell::mods::SpellModifiers",
-        "target::Selection", "ui_action::ActionSlots", "ui_action::PlayerActions",
-        "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
+        "player::state::OwnControlLost", "player::state::StandPending", "spell::cooldowns::Cooldowns",
+        "spell::mods::SpellModifiers", "target::Selection", "ui_action::ActionSlots",
+        "ui_action::PlayerActions", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
     // The ranged-slot item scales a ranged spell's range, read as the frame left it (#2217).
     ("::spell::targeting::feed_targeting_to_vm", &["items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
@@ -473,8 +473,6 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
-    // The frame's number, which the control packet's handler tells its frame's packets apart by.
-    "::FrameCount",
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.

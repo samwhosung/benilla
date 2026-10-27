@@ -313,8 +313,8 @@ pub(super) fn control(
         // Tells a revoked body from a granted creature in the control handoff.
         Res<crate::net::SelfGuid>,
         Res<scoped_view::ScopedView>,
-        // Our own `[0xb4b3e4]`, which a control verdict on our character writes.
-        ResMut<super::OwnControlLost>,
+        // Our own `[0xb4b3e4]`, which the control packet's handler writes.
+        Res<super::OwnControlLost>,
         // The active player, whom the posture verbs read and act on whichever body is driven.
         SelfPosture,
         // `ChrClasses.dbc`, whose relic flag the sheath toggle's ranged candidate reads.
@@ -473,7 +473,6 @@ pub(super) fn control(
         &time,
         &mut commands,
         &mut player,
-        &mut speed_capsule.8,
         &mut cam,
         &net.0,
         &mut net.1,

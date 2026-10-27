@@ -610,6 +610,12 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     } else {
         Default::default()
     };
+    // Our own `[0xb4b3e4]`, which `HasFullControl` reads and a reload leaves as it stands; its
+    // changes signal where the control packet stores them.
+    let in_control = !world
+        .get_resource::<crate::player::OwnControlLost>()
+        .is_some_and(|c| c.0);
+    script.set_player_control(in_control);
     // No sound during the load edge, as in the reference's `UI_Init` (`0x48fbfa` → `0x49016d`).
     // Each phase runs with a call host lent, built off the world as a system's would be, so a call
     // a file or an `ADDON_LOADED` or `VARIABLES_LOADED` handler makes applies inside its verb, as

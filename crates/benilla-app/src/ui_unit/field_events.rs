@@ -502,6 +502,14 @@ pub(crate) fn fire(
             ],
         ),
         FieldNotice::LevelUp(info) => level_up(script, &info),
+        FieldNotice::PlayerControl { in_control } => {
+            script.set_player_control(in_control);
+            if in_control {
+                script.fire_event("PLAYER_CONTROL_GAINED", vec![]);
+            } else {
+                script.fire_event("PLAYER_CONTROL_LOST", vec![]);
+            }
+        }
         // Caught by [`fire_lane`] before it reaches here: the refresh runs on the host's action
         // states ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
         FieldNotice::UsableRefresh => {}

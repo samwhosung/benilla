@@ -1,7 +1,7 @@
 //! What a packet handler signals inside itself, at the packet's place among the frame's other
 //! packets (`0x5384d0`, `0x537aa0`): the pet's spell list and mode, the area spirit healer's time,
-//! a game object's page text, and the trainer list's open, each interleaved with a fall's
-//! `UNIT_COMBAT` from the chat lane.
+//! a game object's page text, the trainer list's open and our control flag, each interleaved with a
+//! fall's `UNIT_COMBAT` from the chat lane.
 
 use benilla_protocol::{EntityKind, SessionEvent};
 use benilla_ui::script::UiScript;
@@ -347,4 +347,56 @@ fn a_trainer_list_opens_only_the_trainer_asked_or_the_gossip_npc() {
         .npc = None;
     frame(&mut app, vec![list(0)]);
     assert_eq!(open(&app), Some(0), "a zero guid against no gossip");
+}
+
+/// `SMSG_CLIENT_CONTROL_UPDATE` for us (`0x5fa6b1` → `SetPlayerControl 0x4958e0`): each change of
+/// the flag signals at its packet, `PLAYER_CONTROL_LOST` (`0x49590b`) reading `HasFullControl()`
+/// as the packet left it, then the usable refresh's `SPELL_UPDATE_USABLE` (`0x495910`); a packet
+/// that changes nothing signals nothing (`0x4958e6`), nor one naming another unit, as `0x5fa600`
+/// tells the interface for the active player alone (`0x5fa6a4`).
+#[test]
+fn each_control_change_signals_at_its_packet() {
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED",
+                "SPELL_UPDATE_USABLE"}) do f:RegisterEvent(e) end
+            f:SetScript("OnEvent", function()
+                if event == "SPELL_UPDATE_USABLE" then
+                    table.insert(Seen, event)
+                else
+                    table.insert(Seen, event .. ":" .. tostring(HasFullControl()))
+                end
+            end)
+            "#,
+        )
+        .unwrap();
+    let control = |allow_move| SessionEvent::ClientControl {
+        mover: ME,
+        allow_move,
+    };
+    let seen = frame(
+        &mut app,
+        vec![
+            fall(5),
+            control(false),
+            control(false),
+            fall(5),
+            control(true),
+        ],
+    );
+    assert_eq!(
+        seen,
+        [
+            FELL,
+            "PLAYER_CONTROL_LOST:nil",
+            "SPELL_UPDATE_USABLE",
+            FELL,
+            "PLAYER_CONTROL_GAINED:1",
+            "SPELL_UPDATE_USABLE",
+        ]
+    );
 }
