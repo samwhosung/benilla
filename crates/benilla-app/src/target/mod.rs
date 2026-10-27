@@ -79,7 +79,7 @@ pub(crate) use relations::{
 // The attack validator's target half, run in the call that asks, for the player's Attack and the
 // pet bar's; the melee probe's press with nothing selected.
 #[cfg(test)]
-pub(crate) use scan::LastEnemy;
+pub(crate) use scan::{fire_owed_selects_lane, take_owed_deselects, LastEnemy};
 pub(crate) use scan::{
     Acquire, AttackNearestRequest, AttackPick, CreatureTypes, Owed, OwedSelect, OwedSelects,
 };
@@ -101,7 +101,7 @@ pub(crate) use ring::{selection_variant, Factions, RingVariant};
 pub use click::Interact;
 pub(crate) use click::{
     clear_selection_on_world_teardown, clear_with_no_world, deselect_on_ui_shutdown,
-    signal_ui_shutdown_deselect, DeselectGuid,
+    signal_ui_shutdown_deselect,
 };
 
 /// Our target, set the instant we click, as the 1.12 client does without waiting for the server.
@@ -343,7 +343,6 @@ impl Plugin for TargetPlugin {
             .add_message::<AttackNearestRequest>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
-            .add_message::<click::DeselectGuid>()
             .add_message::<click::PlateRightClick>()
             .add_message::<Interact>()
             .add_systems(
@@ -443,8 +442,6 @@ impl Plugin for TargetPlugin {
                         crate::ui_action::drain_arrival_casts,
                     )
                         .chain(),
-                    // The loot close's guid-scoped deselect.
-                    click::clear_target_requests,
                     // The chat layer's by-name asks: `/target` and `/assist` commit through
                     // `scan::commit`; `/follow` hands its subject to `crate::player`.
                     (

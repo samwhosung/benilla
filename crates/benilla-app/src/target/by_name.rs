@@ -934,6 +934,17 @@ impl SelectCommit<'_, '_> {
         }
     }
 
+    /// `0x493910(guid, 1)`: nothing unless `guid` is still the selection (`0x493949`); else the
+    /// teardown, the last-target pair left as it is.
+    pub(super) fn tear_down(&mut self, guid: u64) {
+        if self.selection.guid != Some(guid) {
+            return;
+        }
+        if let Some(send) = super::click::clear_owing(&mut self.selection, &mut self.seam) {
+            self.owe_send(send);
+        }
+    }
+
     /// [`Self::select_unit`] inside a packet's handler, which goes on after it: the store, the
     /// send and the re-swing in place, and its signals owed at this place to the packet's end
     /// ([`super::OwedSelect::Signals`]), whose listeners then run behind it.

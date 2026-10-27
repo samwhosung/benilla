@@ -40,7 +40,7 @@ pub(super) fn register(app: &mut App) {
     app.init_resource::<UpdatePass>()
         .init_resource::<Released>()
         .init_resource::<ObjectList>()
-        .add_message::<crate::target::DeselectGuid>()
+        .init_resource::<crate::target::OwedSelects>()
         .net_handler(K::ObjectCreate, on_object_create)
         .net_handler(K::ItemCreate, on_item_create)
         .net_handler(K::ObjectValues, on_object_values)
@@ -1045,8 +1045,8 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                 .get(&old)
                 .and_then(|&e| sc.stores.get(e).ok())
                 .is_some_and(|s| s.is_unit());
-            if !held {
-                sc.deselect.write(crate::target::DeselectGuid(old));
+            if let (false, Some(owed)) = (held, sc.deselect.as_deref_mut()) {
+                owed.deselect(old);
             }
         }
     }

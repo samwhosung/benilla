@@ -113,18 +113,10 @@ fn stream_out(f: &mut Fix, guid: u64) {
     );
 }
 
-/// One packet through the handler table, then the drain of the guid-scoped teardowns
+/// One packet through the handler table, whose end runs the guid-scoped teardowns
 /// (`0x493910(guid, 1)`) the packet raised.
 fn deliver(f: &mut Fix, ev: SessionEvent) {
     crate::net::handlers::dispatch(f.app.world_mut(), vec![ev]);
-    let world = f.app.world_mut();
-    world
-        .run_system_once(super::click::clear_target_requests)
-        .expect("the drain runs");
-    // A one-shot reader starts at the oldest message, as the frame's reader does not.
-    world
-        .resource_mut::<Messages<super::DeselectGuid>>()
-        .clear();
 }
 
 /// `SMSG_GROUP_LIST` naming `members` (our subgroup is 0), as the handler table delivers it.

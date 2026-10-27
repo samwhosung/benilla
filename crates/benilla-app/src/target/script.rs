@@ -27,6 +27,9 @@ pub(crate) struct ScriptSelect<'w, 's> {
     scan: scan::TargetScan<'w, 's>,
     history: ResMut<'w, scan::TabHistory>,
     time: Res<'w, Time>,
+    /// The deselects a call's own steps owe, its loot close's (`0x48f369`), run inside it; absent
+    /// in a harness without targets.
+    owed: Option<ResMut<'w, scan::OwedSelects>>,
 }
 
 impl ScriptSelect<'_, '_> {
@@ -160,6 +163,18 @@ impl ScriptSelect<'_, '_> {
     /// owing the swing past its signals ([`SelectCommit::start_attack`]).
     pub(crate) fn start_attack(&mut self, guid: u64) -> SelectDebt {
         self.commit.owing(|commit| commit.start_attack(guid))
+    }
+
+    /// Where the selects a call owes begin, for [`Self::owed_deselect`].
+    pub(crate) fn owed_mark(&self) -> usize {
+        self.owed.as_deref().map_or(0, scan::OwedSelects::mark)
+    }
+
+    /// The next deselect the call owed since `from` (`0x493910(guid, 1)`), torn down now and
+    /// owing what its signals owe, for the call to signal before it returns.
+    pub(crate) fn owed_deselect(&mut self, from: usize) -> Option<SelectDebt> {
+        let guid = self.owed.as_deref_mut()?.take_deselect(from)?;
+        Some(self.commit.owing(|commit| commit.tear_down(guid)))
     }
 
     /// `ClearTarget()` (`0x489ff0`): deselect whatever the calls before it left selected.

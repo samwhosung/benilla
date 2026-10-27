@@ -993,6 +993,13 @@ pub(crate) enum OwedSelect {
     /// The signals of a select its handler committed in place, as it went on: the loot
     /// response's (`0x48f3a0`).
     Signals(crate::script_calls::EngineSelect),
+    /// `DeselectGuid` (`0x493910(guid, 1)`), nothing unless `guid` is still the selection
+    /// (`0x493949`), which signals inside itself (`0x493a69`, `0x493a73`) and leaves the
+    /// last-target pair: a dead unit's loot close (`0x48f369`), an old pet's teardown (`0x5e26f7`),
+    /// a group list's or ending's, a release's ([`super::release`]). A handler's runs at its packet's end, a system's or a lane's on
+    /// this queue's lane at its place, a call's inside the call
+    /// ([`crate::script_calls::ScriptCallHost`]).
+    Deselect(u64),
 }
 
 /// The selects the packet's handlers owe, each at its place among what they queued.
@@ -1005,6 +1012,25 @@ impl OwedSelects {
         self.0.push((crate::lanes::stamp(), select));
     }
 
+    /// Owe the teardown of `guid`'s selection ([`OwedSelect::Deselect`]).
+    pub(crate) fn deselect(&mut self, guid: u64) {
+        self.push(OwedSelect::Deselect(guid));
+    }
+
+    /// Where a call's owed selects begin, for [`Self::take_deselect`].
+    pub(crate) fn mark(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The first deselect owed at `from` or after, taken.
+    pub(crate) fn take_deselect(&mut self, from: usize) -> Option<u64> {
+        let at = (from..self.0.len()).find(|&i| matches!(self.0[i].1, OwedSelect::Deselect(_)))?;
+        match self.0.remove(at).1 {
+            OwedSelect::Deselect(guid) => Some(guid),
+            _ => None,
+        }
+    }
+
     /// The units the owed acquires name, taken, for a test of a handler that owes them.
     #[cfg(test)]
     pub(crate) fn take_acquires(&mut self) -> Vec<Entity> {
@@ -1012,10 +1038,62 @@ impl OwedSelects {
             .into_iter()
             .filter_map(|(_, s)| match s {
                 OwedSelect::Acquire(unit, _) => Some(unit),
-                OwedSelect::Signals(_) => None,
+                _ => None,
             })
             .collect()
     }
+}
+
+/// The guids of the deselects owed and not yet run, taken, for a test of a writer that owes them.
+#[cfg(test)]
+pub(crate) fn take_owed_deselects(world: &mut World) -> Vec<u64> {
+    let mut owed = world.get_resource_or_init::<OwedSelects>();
+    std::iter::from_fn(|| owed.take_deselect(0)).collect()
+}
+
+/// The owed selects' lane's head: what a system or a lane owed, as a packet's end runs its
+/// handlers' ([`run_owed_selects`]).
+pub(super) fn peek_owed_selects(world: &World) -> Option<crate::lanes::Stamp> {
+    world
+        .get_resource::<OwedSelects>()?
+        .0
+        .first()
+        .map(|(at, _)| *at)
+}
+
+/// Each owed select `until` admits, run as the firing of its stamp with the host lent, signalling
+/// in place; the lane stops after one whose firing stamped anything, so what it pushed fires next.
+pub(super) fn fire_owed_selects(In(until): In<crate::lanes::Until>, world: &mut World) {
+    loop {
+        let Some(owed) = world.get_resource_mut::<OwedSelects>() else {
+            return;
+        };
+        if !owed.0.first().is_some_and(|(at, _)| until.admits(*at)) {
+            return;
+        }
+        let (at, select) = owed.into_inner().0.remove(0);
+        let ((), moved) = crate::lanes::firing(at, || run_owed_select(world, select));
+        if moved {
+            return;
+        }
+    }
+}
+
+/// The owed selects' lane fired whole, for a test that drives a writer without the lanes.
+#[cfg(test)]
+pub(crate) fn fire_owed_selects_lane(world: &mut World) {
+    while peek_owed_selects(world).is_some() {
+        fire_owed_selects(In(crate::lanes::Until::all()), world);
+    }
+}
+
+/// One owed select on the world, its unit edits applied as it returns.
+fn run_owed_select(world: &mut World, select: OwedSelect) {
+    if let Err(err) = world.run_system_cached_with(owed_select, select) {
+        // A harness without the selection's seams selects nothing.
+        debug!("target: an owed select did not run: {err}");
+    }
+    crate::creature_anim::apply_unit_edits(world);
 }
 
 /// The packet's owed selects, after its handlers, each run as the firing of its stamp with the
@@ -1033,7 +1111,7 @@ pub(super) fn run_owed_selects(world: &mut World, _: crate::lanes::Stamp) {
                     // A harness without the selection's seams selects nothing.
                     debug!("target: an owed select did not run: {err}");
                 }
-            })
+            });
         });
     }
 }
@@ -1054,7 +1132,7 @@ pub(super) fn run_owed_selects_now(world: &mut World) {
 
 /// One owed select: an acquire's commit and its signals, or a committed select's signals, each
 /// signalling in place ([`crate::script_calls::ScriptCallHost::engine_select`]).
-fn owed_select(
+pub(super) fn owed_select(
     In(owed): In<OwedSelect>,
     mut vm: crate::script_calls::VmWith<AcquireSelect<'static, 'static>>,
 ) {
@@ -1067,6 +1145,15 @@ fn owed_select(
             c.select(unit, why, my_guid)
         }
         OwedSelect::Signals(select) => Some(select),
+        OwedSelect::Deselect(guid) => {
+            let mut c = vm.own();
+            if c.selection.guid != Some(guid) {
+                return;
+            }
+            let before = super::click::Standing::of(&c.selection, &c.seam);
+            let send = super::click::clear_owing(&mut c.selection, &mut c.seam);
+            Some(before.owing(Owed { send, swing: None }))
+        }
     };
     if let Some(select) = select {
         vm.engine_select(select, |mut c, owed| {

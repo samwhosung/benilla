@@ -610,7 +610,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 35] {
+fn lane_types() -> [TypeId; 36] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -633,6 +633,7 @@ fn lane_types() -> [TypeId; 35] {
         TypeId::of::<crate::field_callbacks::FieldCallbacks>(),
         // The release lane: the signals each selection teardown parked, stamped under its release.
         TypeId::of::<crate::target::Releases>(),
+        TypeId::of::<crate::target::OwedSelects>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         // The cooldown lanes: the player's list and the pet's, which log their writes and flushes
@@ -682,7 +683,7 @@ fn lane_types() -> [TypeId; 35] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 36] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -710,6 +711,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
             TypeId::of::<crate::field_callbacks::FieldCallbacks>(),
         ),
         ("releases", TypeId::of::<crate::target::Releases>()),
+        ("owed selects", TypeId::of::<crate::target::OwedSelects>()),
         (
             "item text",
             TypeId::of::<crate::ui_item_text::ItemTextLane>(),
@@ -921,6 +923,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "list rebuilds",
             "loot",
             "merchant",
+            "owed selects",
             "party",
             "pet cooldowns",
             "quest events",
@@ -1552,6 +1555,7 @@ const QUEUES_NOT_VIEWS: &[&str] = &[
     "ui_items::EquipErrors",
     "ui_unit::views::ViewLog",
     "ui_items::feed::BagView",
+    "target::scan::OwedSelects",
 ];
 
 /// A type's name as [`READS_FRAME_FINAL`] spells it: the crate's own by its path in the crate, an

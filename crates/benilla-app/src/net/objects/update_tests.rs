@@ -1096,13 +1096,14 @@ fn a_groupmates_pet_leaving_its_field_tears_down_that_pets_selection() {
             None,
             Some(ME),
         );
-    let torn = |world: &mut World| -> Vec<u64> {
-        world
-            .resource_mut::<Messages<crate::target::DeselectGuid>>()
-            .drain()
-            .map(|d| d.0)
-            .collect()
+    // The selection `guid` names, by its guid alone, then whether the packet tore it down.
+    let select = |world: &mut World, guid: u64| {
+        *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+            guid: Some(guid),
+            ..Default::default()
+        };
     };
+    let torn = |world: &mut World| world.resource::<crate::target::Selection>().guid.is_none();
     send(
         world,
         [
@@ -1113,17 +1114,19 @@ fn a_groupmates_pet_leaving_its_field_tears_down_that_pets_selection() {
             unit(NEAR_PET, &[(2, 0x9)]),
         ],
     );
-    torn(world);
 
+    select(world, PET);
     send(world, [values(MATE, &guid(0, 8))]);
-    assert_eq!(torn(world), [PET], "a groupmate's summon");
+    assert!(torn(world), "a groupmate's summon");
+    select(world, PET);
     send(world, [values(STRANGER, &guid(0, 8))]);
-    assert!(torn(world).is_empty(), "a player outside the group");
+    assert!(!torn(world), "a player outside the group");
     send(world, [values(ME, &guid(PET, 6))]);
     send(world, [values(ME, &guid(NEAR_PET, 6))]);
-    assert_eq!(torn(world), [PET], "our own charm, moved off");
+    assert!(torn(world), "our own charm, moved off");
+    select(world, NEAR_PET);
     send(world, [values(ME, &guid(0, 6))]);
-    assert!(torn(world).is_empty(), "an old pet still held");
+    assert!(!torn(world), "an old pet still held");
 }
 
 /// A transport's clock is anchored at the instant its packet arrived, the time the queue node

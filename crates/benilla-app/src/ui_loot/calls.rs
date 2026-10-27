@@ -57,6 +57,8 @@ pub(super) enum Then {
     /// A close's teardown after its unlocks' signals: the window goes and `LOOT_CLOSED`
     /// (`0x4c1dac`).
     Announce,
+    /// A close's last step after its window went: a dead unit's deselect (`0x48f369`).
+    Deselect(u64),
     /// `OpenItem` past its `SetAutoLoot` (`0x5edcbb` on), once a sweep that made has run.
     OpenItem(OpenItem),
 }
@@ -262,7 +264,10 @@ impl LootSteps<'_, '_> {
             self.errors.push(UiError::key("ERR_LOOT_NO_UI"));
         }
         let closed = close_interaction(&mut self.loot, &mut self.latch, Some(&self.net));
-        self.dead.after_close(closed);
+        // The window goes (`0x48f33d` → `0x4c1cb0`) before the dead unit's deselect (`0x48f369`).
+        if let Some(source) = self.dead.dead_unit(closed) {
+            self.loot.then.push(Then::Deselect(source));
+        }
         self.loot.then.push(Then::Announce);
         self.loot.then.push(Then::Unlocks);
     }
@@ -420,6 +425,7 @@ impl LootSteps<'_, '_> {
             }
             Then::Unlocks => unlock_closed_source(script, &mut self.loot, &self.objects),
             Then::Announce => show(script, None),
+            Then::Deselect(source) => self.dead.deselect(source),
             Then::OpenItem(open) => self.send_open_item(script, open),
         }
     }

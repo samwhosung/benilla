@@ -42,8 +42,6 @@ fn on_response(
     index: Res<crate::net::GuidIndex>,
     errors: Res<UiErrorKeys>,
     items: Res<crate::items::Items>,
-    // Where the select's signals wait for the packet's end; absent in a harness without targets.
-    owed_selects: Option<ResMut<crate::target::OwedSelects>>,
 ) {
     let SessionEvent::LootResponse {
         guid,
@@ -77,8 +75,9 @@ fn on_response(
         "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
         rows.len()
     );
-    match owed_selects {
-        Some(mut owed) => select.select_unit_in_packet(guid, &mut owed),
+    // Its signals wait for the packet's end, beside the deselects; with no targets, nowhere.
+    match owed.dead.owed_selects() {
+        Some(owed) => select.select_unit_in_packet(guid, owed),
         None => select.select_unit(guid),
     }
     let seam = &mut select.seam;
@@ -775,7 +774,7 @@ mod tests {
         world.insert_resource(LootLatch(Some(LOCKBOX)));
         world.init_resource::<UiErrorKeys>();
         world.init_resource::<crate::net::GuidIndex>();
-        world.init_resource::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>();
+        world.init_resource::<crate::target::OwedSelects>();
         world
     }
 
@@ -914,12 +913,7 @@ mod tests {
         assert_eq!(world.resource::<LootState>().source(), None);
         assert_eq!(world.resource::<LootLatch>().0, None);
         assert!(rx.try_recv().is_err(), "the server's release is not echoed");
-        let asked: Vec<u64> = world
-            .resource_mut::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>()
-            .drain()
-            .map(|d| d.0)
-            .collect();
-        assert_eq!(asked, [CORPSE]);
+        assert_eq!(crate::target::take_owed_deselects(&mut world), [CORPSE]);
 
         // A second release finds nothing open and asks nothing.
         world
@@ -931,11 +925,7 @@ mod tests {
                 },
             )
             .expect("the handler runs as a one-shot system");
-        assert!(world
-            .resource_mut::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>()
-            .drain()
-            .next()
-            .is_none());
+        assert!(crate::target::take_owed_deselects(&mut world).is_empty());
     }
 
     /// Chained loot: A's window is open and `CMSG_LOOT` for B latched B, so the release vmangos
@@ -1094,7 +1084,7 @@ mod tests {
         world.init_resource::<crate::spell::SpellTargeting>();
         world.init_resource::<crate::spell::CursorPicks>();
         world.init_resource::<crate::spell::targeting::EnchantConfirmItem>();
-        world.init_resource::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>();
+        world.init_resource::<crate::target::OwedSelects>();
         world.init_resource::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::player::Player>();
         world.init_resource::<super::super::LootMoveStart>();
@@ -1439,11 +1429,7 @@ mod tests {
 
     /// The deselects asked for since the last call.
     fn deselects(world: &mut World) -> Vec<u64> {
-        world
-            .resource_mut::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>()
-            .drain()
-            .map(|d| d.0)
-            .collect()
+        crate::target::take_owed_deselects(world)
     }
 
     /// A response on the corpse with `player` seated, then one drain.
@@ -1800,7 +1786,7 @@ mod tests {
                 (
                     super::super::loot_frame,
                     super::super::drain_loot,
-                    crate::target::click::clear_target_requests,
+                    crate::target::fire_owed_selects_lane,
                 )
                     .chain(),
             );

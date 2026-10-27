@@ -97,8 +97,9 @@ pub(crate) struct Scene<'w, 's> {
     /// ([`crate::ui_unit::views`]).
     view_log: ResMut<'w, crate::ui_unit::views::ViewLog>,
     field_notices: ResMut<'w, crate::field_watch::NoticeLane>,
-    /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises.
-    deselect: MessageWriter<'w, crate::target::DeselectGuid>,
+    /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises, run at the
+    /// packet's end; absent in a harness without targets.
+    deselect: Option<ResMut<'w, crate::target::OwedSelects>>,
     speed_changes: MessageWriter<'w, SpeedChangeMessage>,
     self_moves: MessageWriter<'w, super::SelfMoveMessage>,
     hard_landings: MessageWriter<'w, crate::creature_anim::HardLanding>,

@@ -16,7 +16,6 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::query_cache::Ask;
 use crate::sound::MessageSounds;
-use crate::target::DeselectGuid;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_quest::QuestGiver;
 
@@ -40,8 +39,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ReadyCheckAnswer, on_ready_check_answer)
         .net_handler(K::RaidInstanceInfo, on_raid_instance_info)
         .net_handler(K::PlayerName, on_player_name)
-        .net_handler(K::Disconnected, on_session_end)
-        .add_message::<DeselectGuid>();
+        .net_handler(K::Disconnected, on_session_end);
 }
 
 /// The popup's signal; the feed shows its line after the event ([`GroupState::apply_invited`]).
@@ -156,13 +154,13 @@ type Found = (HashMap<u64, PartyMemberStatsInfo>, super::RosterCells);
 
 /// The selection teardowns (`0x493910(guid, 1)`) a list or an ending raised
 /// ([`GroupState::take_released`]), resolved while the objects stand as the packet found them and
-/// handed to the guid-scoped deselect ([`DeselectGuid`]). A harness with no object index holds no
-/// object, and one with no selection drops them.
+/// owed at the packet's end ([`crate::target::OwedSelect::Deselect`]). A harness with no object
+/// index holds no object.
 #[derive(bevy::ecs::system::SystemParam)]
 struct RosterTeardown<'w, 's> {
     index: Option<Res<'w, GuidIndex>>,
     stores: Query<'w, 's, &'static ObjectStore>,
-    deselect: Option<MessageWriter<'w, DeselectGuid>>,
+    deselect: Option<ResMut<'w, crate::target::OwedSelects>>,
     /// What each packet changed, for the views a listener reads ([`crate::ui_unit::views`]).
     log: Option<ResMut<'w, crate::ui_unit::views::ViewLog>>,
 }
@@ -192,8 +190,10 @@ impl RosterTeardown<'_, '_> {
             .into_iter()
             .filter_map(|release| self.released_guid(release))
             .collect();
-        if let Some(deselect) = &mut self.deselect {
-            deselect.write_batch(guids.into_iter().map(DeselectGuid));
+        if let Some(owed) = self.deselect.as_deref_mut() {
+            for guid in guids {
+                owed.deselect(guid);
+            }
         }
     }
 

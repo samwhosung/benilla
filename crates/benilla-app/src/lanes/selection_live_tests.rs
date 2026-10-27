@@ -273,9 +273,9 @@ fn boar_says() -> SessionEvent {
     })
 }
 
-/// The boar's line, then its swing at us with nothing selected: the swing's handler selects the
-/// boar (`0x6259c9`-`0x6259fe`), so the change's `PLAYER_TARGET_CHANGED` fires at the swing's
-/// place, after the line's listener, and reads the boar as the target.
+/// The boar's line, its swing at us with nothing selected, and its line again: the swing's handler
+/// selects the boar (`0x6259c9`-`0x6259fe`), so the change's `PLAYER_TARGET_CHANGED` fires at the
+/// swing's place, between the lines' listeners, and reads the boar as the target.
 #[test]
 fn an_attackers_acquire_signals_at_its_swing() {
     let mut app = client();
@@ -293,8 +293,12 @@ fn an_attackers_acquire_signals_at_its_swing() {
         school: 0,
     });
     assert_eq!(
-        frame(&mut app, vec![boar_says(), swing]),
-        ["CHAT_MSG_MONSTER_SAY", "PLAYER_TARGET_CHANGED:50"]
+        frame(&mut app, vec![boar_says(), swing, boar_says()]),
+        [
+            "CHAT_MSG_MONSTER_SAY",
+            "PLAYER_TARGET_CHANGED:50",
+            "CHAT_MSG_MONSTER_SAY"
+        ]
     );
     assert_eq!(
         app.world().resource::<crate::target::Selection>().guid,
@@ -302,9 +306,9 @@ fn an_attackers_acquire_signals_at_its_swing() {
     );
 }
 
-/// The boar's line, then its cast at us with nothing selected: the start's handler selects the
-/// caster as its last act (`0x6e7963`-`0x6e799c`), so `PLAYER_TARGET_CHANGED` fires at the
-/// start's place, after the line's listener.
+/// The boar's line, its cast at us with nothing selected, and its line again: the start's handler
+/// selects the caster as its last act (`0x6e7963`-`0x6e799c`), so `PLAYER_TARGET_CHANGED` fires at
+/// the start's place, between the lines' listeners.
 #[test]
 fn a_casters_acquire_signals_at_its_start() {
     const FROSTBOLT: u32 = 116;
@@ -326,8 +330,12 @@ fn a_casters_acquire_signals_at_its_start() {
         ammo_display_id: None,
     };
     assert_eq!(
-        frame(&mut app, vec![boar_says(), start]),
-        ["CHAT_MSG_MONSTER_SAY", "PLAYER_TARGET_CHANGED:50"]
+        frame(&mut app, vec![boar_says(), start, boar_says()]),
+        [
+            "CHAT_MSG_MONSTER_SAY",
+            "PLAYER_TARGET_CHANGED:50",
+            "CHAT_MSG_MONSTER_SAY"
+        ]
     );
 }
 
@@ -352,5 +360,63 @@ fn the_loot_responses_select_signals_at_the_response() {
             "PLAYER_TARGET_CHANGED:50",
             "LOOT_OPENED:50"
         ]
+    );
+}
+
+/// The boar dead, selected and its loot open, then its line, the server's release of the loot and
+/// its line again: the release closes the window (`0x5ec0f3` → `0x48f200`), whose last step
+/// deselects a dead unit (`0x48f369` → `0x493910`), signalling inside it (`0x493a73`), so
+/// `PLAYER_TARGET_CHANGED` fires at the release's place, between the lines' listeners.
+#[test]
+fn a_dead_units_loot_close_signals_its_deselect_at_the_packet() {
+    let mut app = client();
+    frame(&mut app, vec![values(BOAR, &health(0))]);
+    unselected_with_a_spy(&mut app);
+    select(&mut app, Some(BOAR));
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ui_loot::LootState>()
+        .open(BOAR, 1, 0, Vec::new());
+    world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(BOAR);
+    let release = SessionEvent::LootReleaseResponse {
+        guid: BOAR,
+        result: 1,
+    };
+    assert_eq!(
+        frame(&mut app, vec![boar_says(), release, boar_says()]),
+        [
+            "CHAT_MSG_MONSTER_SAY",
+            "PLAYER_TARGET_CHANGED:0",
+            "CHAT_MSG_MONSTER_SAY"
+        ]
+    );
+    assert_eq!(
+        app.world().resource::<crate::target::Selection>().guid,
+        None
+    );
+}
+
+/// `CloseLoot()` on a dead unit's window: the close's last step deselects it (`0x4c2ed6` →
+/// `0x48f200` → `0x48f369`), whose `PLAYER_TARGET_CHANGED` (`0x493a73`) runs its listeners inside
+/// the call, before the line after it.
+#[test]
+fn close_loot_on_a_dead_unit_signals_its_deselect_inside_the_call() {
+    let mut app = client();
+    frame(&mut app, vec![values(BOAR, &health(0))]);
+    unselected_with_a_spy(&mut app);
+    select(&mut app, Some(BOAR));
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ui_loot::LootState>()
+        .open(BOAR, 1, 0, Vec::new());
+    world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(BOAR);
+    let seen: Vec<String> = hosted(
+        &mut app,
+        r#"CloseLoot() table.insert(Seen, "after") return Seen"#,
+    );
+    assert_eq!(seen, ["PLAYER_TARGET_CHANGED:0", "after"]);
+    assert_eq!(
+        app.world().resource::<crate::target::Selection>().guid,
+        None
     );
 }
