@@ -169,6 +169,7 @@ mod tests {
             grounded: true,
             run_mode: true,
             deck: None,
+            final_facing: None,
         }
     }
 
