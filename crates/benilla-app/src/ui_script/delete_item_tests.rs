@@ -55,10 +55,18 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
 }
 
 /// Seat the backpack of [`one_item_backpack`] and its item's record: the world drop raises its
-/// popup only for a cached record (`0x4953a5`, `0x4953ac`).
+/// popup only for a cached record (`0x4953a5`, `0x4953ac`), and names the item and its quality
+/// from it (`0x4953ae`-`0x4953c0`).
 fn seat_backpack(s: &mut UiScript, item_id: u32, name: &str, quality: u32) {
     s.set_container(0, Some(one_item_backpack(item_id, name, quality)));
-    s.set_item_template(item_id, Default::default());
+    s.set_item_template(
+        item_id,
+        benilla_ui::script::ItemTemplateView {
+            name: name.into(),
+            quality,
+            ..Default::default()
+        },
+    );
 }
 
 /// The stock popup stack and the world frame the drop is clicked on.

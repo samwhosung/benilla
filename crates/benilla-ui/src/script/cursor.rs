@@ -669,11 +669,11 @@ fn raise_delete_item_confirm(model: &mut Model, item: &CursorItem) {
         model.push_ui_error(CANT_BE_DESTROYED);
         return;
     }
-    if !model.item_templates.contains_key(&item.item_id) {
+    // The name and quality are the record's (`+0x8`, `+0x1c`, `0x4953ae`-`0x4953c0`), read here.
+    let Some(template) = model.item_templates.get(&item.item_id) else {
         return;
-    }
-    let name = item_link_name(item.link.as_deref());
-    let quality = item.quality.unwrap_or(0);
+    };
+    let (name, quality) = (template.name.clone(), template.quality);
     model.raise(
         "DELETE_ITEM_CONFIRM",
         vec![ScriptValue::Str(name), ScriptValue::Int(i64::from(quality))],
@@ -1708,6 +1708,44 @@ mod tests {
             "object: nothing drops at all"
         );
         assert!(s.cursor_item().is_some());
+    }
+
+    /// `DELETE_ITEM_CONFIRM` carries the record's name and quality (`0x4953ae`-`0x4953c0`), not
+    /// the link and quality the pickup captured: a link naming something else, or none, changes
+    /// neither.
+    #[test]
+    fn the_delete_confirm_carries_the_records_name_and_quality() {
+        use super::{world_drop_click, WorldPick};
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.run(
+            r#"
+            seen = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("DELETE_ITEM_CONFIRM")
+            f:SetScript("OnEvent", function() table.insert(seen, arg1 .. ":" .. arg2) end)
+            "#,
+        )
+        .unwrap();
+        let mut backpack = one_item_backpack();
+        backpack.slots.get_mut(&1).unwrap().link = None;
+        s.set_container(0, Some(backpack));
+        s.set_item_template(
+            117,
+            crate::script::ItemTemplateView {
+                name: "Tough Jerky".into(),
+                quality: 2,
+                ..Default::default()
+            },
+        );
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        s.model_mut().world_pick = WorldPick::Nothing;
+        assert!(world_drop_click(&mut s.model_mut()));
+        s.tick(0.01);
+        assert_eq!(
+            s.eval::<String>("return table.concat(seen, ',')").unwrap(),
+            "Tough Jerky:2"
+        );
     }
 
     /// The record's flag `0x20` refuses both destroy paths with error `0x152`: the world drop
