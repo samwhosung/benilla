@@ -598,24 +598,41 @@ fn a_bag_updates_listener_reads_the_seat_its_packet_left() {
     assert_eq!(seen, ["empty", "held"]);
 }
 
-/// A logout's shutdown finds no bags: `SMSG_LOGOUT_COMPLETE` (`0x5aaeb0`) tears the game down
-/// through `0x401ee0`, which destroys the object manager (`0x402011` → `0x467700`, storing 0 at
-/// `0xb41414`, `0x46771e`) before the interface shutdown (`0x402039` → `0x491180` →
-/// `0x490bd0`), so `PLAYER_LOGOUT` (`0x490c2a`) runs with no active player (`0x468550`), and
-/// `GetContainerNumSlots` returns 0 for every bag (`0x4f95ab`).
-#[test]
-fn the_logouts_shutdown_reads_no_bags() {
-    let mut app = client();
-    let chunk = "local _, count = GetContainerItemInfo(0, 1) \
-                 return count, GetContainerNumSlots(0), GetContainerNumSlots(1), \
-                 GetContainerItemLink(1, 1)";
-    let held: (Option<i64>, i64, i64, Option<String>) = hosted_eval(&mut app, chunk);
-    assert!(
-        held.0.is_some() && held.1 == 16 && held.2 == 4 && held.3.is_some(),
-        "{held:?}"
-    );
+/// What the text `expr` reads before the logout, and then inside a `PLAYER_LOGOUT` handler as the
+/// logout runs it: `SMSG_LOGOUT_COMPLETE` and the disconnect through the handler table, which
+/// free the objects, then the session's end, whose shutdown signals the event with the host lent.
+fn before_and_at_logout(app: &mut App, expr: &str) -> (String, String) {
+    use bevy::ecs::system::RunSystemOnce;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    app.world_mut()
+        .run_system_once(crate::ui_char::feed_char)
+        .unwrap();
+    let before: String = hosted_eval(app, &format!("return {expr}"));
+    let seen: Rc<RefCell<Vec<String>>> = Rc::default();
+    let sink = seen.clone();
+    {
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let note = script
+            .lua()
+            .create_function(move |_, text: String| {
+                sink.borrow_mut().push(text);
+                Ok(())
+            })
+            .unwrap();
+        script.lua().globals().set("Note", note).unwrap();
+        script
+            .run(&format!(
+                "local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_LOGOUT') \
+                 f:SetScript('OnEvent', function() \
+                     local ok, v = pcall(function() return {expr} end) \
+                     Note(ok and v or ('raised ' .. tostring(v))) \
+                 end)"
+            ))
+            .unwrap();
+    }
     frame(
-        &mut app,
+        app,
         vec![
             SessionEvent::LoggedOut,
             SessionEvent::Disconnected {
@@ -634,10 +651,28 @@ fn the_logouts_shutdown_reads_no_bags() {
         world.resource::<crate::net::GuidIndex>().0.is_empty(),
         "every object is gone"
     );
-    assert_eq!(
-        hosted_eval::<(Option<i64>, i64, i64, Option<String>)>(&mut app, chunk),
-        (None, 0, 0, None)
+    crate::ui_script::end_ui_session(world);
+    let at = seen.borrow().clone();
+    assert_eq!(at.len(), 1, "one PLAYER_LOGOUT: {at:?}");
+    (before, at[0].clone())
+}
+
+/// A logout's shutdown finds no bags: `SMSG_LOGOUT_COMPLETE` (`0x5aaeb0`) tears the game down
+/// through `0x401ee0`, which destroys the object manager (`0x402011` → `0x467700`, storing 0 at
+/// `0xb41414`, `0x46771e`) before the interface shutdown (`0x402039` → `0x491180` →
+/// `0x490bd0`), so `PLAYER_LOGOUT` (`0x490c2a`) runs with no active player (`0x468550`), and
+/// `GetContainerNumSlots` returns 0 for every bag (`0x4f95ab`).
+#[test]
+fn the_logouts_shutdown_reads_no_bags() {
+    let mut app = client();
+    let (before, at) = before_and_at_logout(
+        &mut app,
+        "tostring(((function() local _, n = GetContainerItemInfo(0, 1) return n end)())) .. ' ' .. \
+         GetContainerNumSlots(0) .. ' ' .. GetContainerNumSlots(1) .. ' ' .. \
+         tostring((GetContainerItemLink(1, 1)))",
     );
+    assert!(before.starts_with("1 16 4 |c"), "{before}");
+    assert_eq!(at, "nil 0 0 nil");
 }
 
 /// A spy on `PLAYER_COMBO_POINTS` that records `chunk`'s answer at each firing, as text.
