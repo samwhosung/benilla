@@ -1193,19 +1193,11 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
 
 /// The systems outside the phase that lend the call host and take a handler queue, firing off it
 /// in system order: remaining work, which only shrinks, by a suffix of the system's name.
-pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[
-    (
-        "::swing_refusal::apply_swing_refusals",
-        "the server's swing stop `0x5ecac0`, `CancelNextSwingSpells` (`0x6e6f30`) and the \
-         tutorials 0xa and 0xb, which the reference runs inside its packet (`0x625ab8`, \
-         `0x5e7dd0`), off the swing refusals",
-    ),
-    (
-        "::ui_tradeskill::drain_trade_skill",
-        "the repeat craft's hook, which the reference runs inside the cast's go, its call to \
+pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[(
+    "::ui_tradeskill::drain_trade_skill",
+    "the repeat craft's hook, which the reference runs inside the cast's go, its call to \
          `0x4fd7b0` (`0x6e81e7`), off the cast events",
-    ),
-];
+)];
 
 /// The systems that take a placed queue ([`placed_queues`]) after the dispatch and push onto a
 /// lane, at the item's place or, from their commands, at their own, by a suffix of the system's

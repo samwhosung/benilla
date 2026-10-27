@@ -65,9 +65,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::spell::mods::track_class_family", &["spell::mods::SpellModifiers"],
         "keeps the class family the stance bar's usability walk prices a cost through; the \
          reference stores it inside our own create (`0x5debcc` → `0x6e6ca0`)"),
-    ("::swing_refusal::apply_swing_refusals", &["ui_pet::PetAttackLatch"],
-        "holds the attack seam, whose selection release lowers the pet's attack latch \
-         (`0x493a18`); the server's silent stop it runs (`0x625ab8`) reaches no release"),
     ("::transport::compose_riders", &["Transform"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::ui_action::feed::feed_actions", &["ui_action::PlayerActions"],

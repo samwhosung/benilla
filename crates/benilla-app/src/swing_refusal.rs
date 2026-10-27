@@ -28,8 +28,8 @@
 //! landed swing clears it: `SMSG_ATTACKERSTATEUPDATE`'s arm calls `0x5ea800` (at `0x6259b6`) when
 //! the attacker is the active player and the victim resolves, and its first act is `0x5ecdb0(0)`.
 //! A second refusal rewrites the deadline to now, defeating the cooldown, and the re-arm precedes
-//! the print (`0x5ec9bc`, `0x5ec9c2`), so it happens even when the string is missing. Both edges
-//! ride one message ([`SwingRefusalEdge`]) so they are consumed in packet order.
+//! the print (`0x5ec9bc`, `0x5ec9c2`), so it happens even when the string is missing. Each edge
+//! applies inside its packet's handler ([`apply`]), so they apply in packet order.
 
 use std::time::Duration;
 
@@ -43,8 +43,8 @@ use crate::ui_action::{UiError, UiErrorKeys};
 /// The reference's re-arm interval (`0x5ec9b6`).
 const REPEAT: Duration = Duration::from_millis(0xfa0);
 
-/// One edge of the swing-refusal seam, off the net drain in packet order.
-#[derive(Message, Clone, Copy, Debug)]
+/// One edge of the swing-refusal seam, which its packet's handler applies ([`apply`]).
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum SwingRefusalEdge {
     /// The server refused our swing (`0x145`/`0x146`/`0x148`/`0x149`).
     Refused(AttackSwingError),
@@ -61,7 +61,7 @@ pub(crate) enum SwingRefusalEdge {
 /// The latched refusal: the reference's `[0xc4d758]` (the code) and `[0xc4c270]` (the absolute
 /// time the next line is due). `None` is code 0, whose timestamp the tick never reads.
 #[derive(Resource, Default)]
-struct SwingRefusal(Option<(Latched, Duration)>);
+pub(crate) struct SwingRefusal(Option<(Latched, Duration)>);
 
 /// The two refusals that latch; arm 4 writes no latch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -94,32 +94,41 @@ impl SwingRefusal {
     }
 }
 
-/// Consume this frame's edges in packet order: latch a refusal, clear on a landing, and stop the
-/// attack for the silent arm.
-fn apply_swing_refusals(
-    mut edges: MessageReader<SwingRefusalEdge>,
-    time: Res<Time>,
-    mut refusal: ResMut<SwingRefusal>,
-    mut seam: AttackSeam,
+/// Apply one edge inside its packet's handler: latch a refusal, clear on a landing, and stop the
+/// attack for the silent arm, which the reference runs inside the packet (`0x625ab8`,
+/// `0x5e7dd0`); with no latch (a harness without the plugin) the stop still runs.
+pub(crate) fn apply(
+    edge: SwingRefusalEdge,
+    refusal: Option<&mut SwingRefusal>,
+    now: Duration,
+    seam: Option<&mut AttackSeam>,
 ) {
-    for edge in edges.read() {
-        match edge {
-            SwingRefusalEdge::Refused(AttackSwingError::NotInRange) => {
-                debug!("swing refused: out of range");
-                refusal.latch(Latched::NotInRange, time.elapsed());
+    match edge {
+        SwingRefusalEdge::Refused(AttackSwingError::NotInRange) => {
+            debug!("swing refused: out of range");
+            if let Some(refusal) = refusal {
+                refusal.latch(Latched::NotInRange, now);
             }
-            SwingRefusalEdge::Refused(AttackSwingError::BadFacing) => {
-                debug!("swing refused: bad facing");
-                refusal.latch(Latched::BadFacing, time.elapsed());
+        }
+        SwingRefusalEdge::Refused(AttackSwingError::BadFacing) => {
+            debug!("swing refused: bad facing");
+            if let Some(refusal) = refusal {
+                refusal.latch(Latched::BadFacing, now);
             }
-            // `0x625ab8` and `0x5e7dd0`: no latch, no message, only the stop, whose own engaged
-            // guard (`0x5ecac0`) decides whether it sends anything.
-            SwingRefusalEdge::Refused(AttackSwingError::DeadOrUnattackable)
-            | SwingRefusalEdge::CombatCancelled => {
-                debug!("swing stopped by the server — silently ({edge:?})");
+        }
+        // `0x625ab8` and `0x5e7dd0`: no latch, no message, only the stop, whose own engaged
+        // guard (`0x5ecac0`) decides whether it sends anything.
+        SwingRefusalEdge::Refused(AttackSwingError::DeadOrUnattackable)
+        | SwingRefusalEdge::CombatCancelled => {
+            debug!("swing stopped by the server — silently ({edge:?})");
+            if let Some(seam) = seam {
                 seam.stop();
             }
-            SwingRefusalEdge::Landed => refusal.clear(),
+        }
+        SwingRefusalEdge::Landed => {
+            if let Some(refusal) = refusal {
+                refusal.clear();
+            }
         }
     }
 }
@@ -160,17 +169,11 @@ pub(crate) struct SwingRefusalPlugin;
 impl Plugin for SwingRefusalPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SwingRefusal>()
-            .add_message::<SwingRefusalEdge>()
             .add_systems(
                 Update,
-                // After the drain that writes the edges and before the unit feeds, so a queued
-                // key shows the same frame; chained so a refusal is latched before the tick. The
-                // stop's cancel reaches the targeting word, which the UI feed publishes after it.
-                (
-                    apply_swing_refusals.before(crate::ui_script::UiFeed),
-                    show_swing_refusal,
-                )
-                    .chain()
+                // After the drain whose handlers latch the refusals and before the unit feeds, so
+                // a queued key shows the same frame.
+                show_swing_refusal
                     .after(benilla_world::schedule::WorldStage::Net)
                     .before(crate::ui_unit::UnitFeed),
             )
@@ -221,6 +224,51 @@ mod tests {
         r.latch(Latched::BadFacing, secs(5));
         r.clear();
         assert_eq!(r.0, None);
+    }
+
+    /// The server's silent stop (`0x625ab8`) runs StopAttack inside its packet's handler: its
+    /// `CMSG_ATTACKSTOP` goes out ahead of a later packet's handler's send in the same dispatch,
+    /// the duel request's name ask (`0x4d4a83`).
+    #[test]
+    fn the_servers_stop_goes_out_inside_its_packet() {
+        use benilla_protocol::SessionEvent;
+        const ME: u64 = 0x7;
+        const MOB: u64 = 0xF130_0000_0045_0002;
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let (tx, sent) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        let world = app.world_mut();
+        world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+        let me = world
+            .spawn((
+                crate::net::Guid(ME),
+                SelfPlayer,
+                crate::creature_anim::Engaged(MOB),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ME, me);
+        crate::net::handlers::dispatch(
+            world,
+            vec![
+                SessionEvent::AttackSwingError(AttackSwingError::DeadOrUnattackable),
+                SessionEvent::DuelRequested {
+                    arbiter: 0xF110_0000_0000_0001,
+                    challenger: 0x99,
+                },
+            ],
+        );
+        let wire: Vec<&str> = sent
+            .try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::AttackStop => Some("stop"),
+                crate::net::ClientCommand::NameQuery { .. } => Some("name"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(wire, ["stop", "name"]);
     }
 
     /// The keys are the reference's error ids, `0xd8`/`0xd7` at `0x5ec9a5`/`0x5ec9b1`.

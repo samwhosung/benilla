@@ -12,11 +12,11 @@ use bevy::prelude::*;
 
 use super::impact::{receive_swing, stop_swing, ImpactSinks};
 use super::{
-    Engaged, EnvDamageTable, KitPush, MountFlourish, PendingImpacts, PlaySeq, SheathRequest,
-    SwingImpact, SwingMessage,
+    AttackSeam, Engaged, EnvDamageTable, KitPush, MountFlourish, PendingImpacts, PlaySeq,
+    SheathRequest, SwingImpact, SwingMessage,
 };
 use crate::net::{AiReactionMessage, EmoteKind, EmoteMessage, GuidIndex, NetHandlerApp, SelfGuid};
-use crate::swing_refusal::SwingRefusalEdge;
+use crate::swing_refusal::{SwingRefusal, SwingRefusalEdge};
 use crate::ui_action::{UiError, UiErrorKeys};
 
 /// Register the layer's handlers, from [`super::CreatureAnimPlugin`].
@@ -82,12 +82,26 @@ fn on_ai_reaction(
     }
 }
 
-fn on_swing_refusal(In(ev): In<SessionEvent>, mut edges: MessageWriter<SwingRefusalEdge>) {
-    match ev {
-        SessionEvent::AttackSwingError(e) => attack_swing_error(e, &mut edges),
-        SessionEvent::CancelCombat => cancel_combat(&mut edges),
-        _ => {}
-    }
+/// The refusals' arms, applied inside their packets ([`crate::swing_refusal`]): the latch, or the
+/// server's silent stop (`0x625ab8`, `0x5e7dd0`) with what StopAttack runs.
+fn on_swing_refusal(
+    In(ev): In<SessionEvent>,
+    time: Res<Time>,
+    // Absent in a harness without the refusal plugin.
+    refusal: Option<ResMut<SwingRefusal>>,
+    mut seam: AttackSeam,
+) {
+    let edge = match ev {
+        SessionEvent::AttackSwingError(e) => attack_swing_error(e),
+        SessionEvent::CancelCombat => cancel_combat(),
+        _ => return,
+    };
+    crate::swing_refusal::apply(
+        edge,
+        refusal.map(|r| r.into_inner()),
+        time.elapsed(),
+        Some(&mut seam),
+    );
 }
 
 fn on_feign_death_resisted(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
@@ -145,7 +159,7 @@ fn on_attacker_state(
     self_guid: Res<SelfGuid>,
     mut swings: MessageWriter<SwingMessage>,
     mut sheaths: MessageWriter<SheathRequest>,
-    mut edges: MessageWriter<SwingRefusalEdge>,
+    refusal: Option<ResMut<SwingRefusal>>,
     mut pending: ResMut<PendingImpacts>,
     mut sinks: ImpactSinks,
     mut play_seq: ResMut<PlaySeq>,
@@ -162,7 +176,7 @@ fn on_attacker_state(
             &self_guid,
             &mut swings,
             &mut sheaths,
-            &mut edges,
+            refusal.map(|r| r.into_inner()),
             &mut pending,
             &mut sinks,
             play_seq.next(),
@@ -242,14 +256,14 @@ fn attack_stop(
 }
 
 /// The server refused our swing (`SMSG_ATTACKSWING_*`); [`crate::swing_refusal`] owns the rest.
-fn attack_swing_error(error: AttackSwingError, edges: &mut MessageWriter<SwingRefusalEdge>) {
-    edges.write(SwingRefusalEdge::Refused(error));
+fn attack_swing_error(error: AttackSwingError) -> SwingRefusalEdge {
+    SwingRefusalEdge::Refused(error)
 }
 
 /// `SMSG_CANCEL_COMBAT`: the server stopped our attack. The reference's handler `0x5e7dd0` is the
 /// refusal family's fourth arm verbatim.
-fn cancel_combat(edges: &mut MessageWriter<SwingRefusalEdge>) {
-    edges.write(SwingRefusalEdge::CombatCancelled);
+fn cancel_combat() -> SwingRefusalEdge {
+    SwingRefusalEdge::CombatCancelled
 }
 
 /// `SMSG_FEIGN_DEATH_RESISTED`: one red "Resisted" line and nothing else. The reference's handler
@@ -290,16 +304,21 @@ fn attacker_state(
     self_guid: &SelfGuid,
     swings: &mut MessageWriter<SwingMessage>,
     sheaths: &mut MessageWriter<SheathRequest>,
-    edges: &mut MessageWriter<SwingRefusalEdge>,
+    refusal: Option<&mut SwingRefusal>,
     pending: &mut PendingImpacts,
     sinks: &mut ImpactSinks,
     seq: u64,
 ) {
     let victim = index.0.get(&s.victim).copied();
     // Our landed swing clears the refusal latch (`0x6259b6` → `0x5ea800` → `0x5ecdb0(0)`) when we
-    // are the attacker (`0x5fa6d0`) and the victim resolves; sent from here to keep packet order.
+    // are the attacker (`0x5fa6d0`) and the victim resolves.
     if self_guid.0 == Some(s.attacker) && victim.is_some() {
-        edges.write(SwingRefusalEdge::Landed);
+        crate::swing_refusal::apply(
+            SwingRefusalEdge::Landed,
+            refusal,
+            std::time::Duration::ZERO,
+            None,
+        );
     }
     if benilla_assets::trace::enabled() {
         benilla_assets::trace::line(

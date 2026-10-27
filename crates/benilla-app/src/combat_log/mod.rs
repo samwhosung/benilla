@@ -940,7 +940,6 @@ mod tests {
         app.add_message::<crate::creature_anim::SwingMessage>()
             .add_message::<crate::creature_anim::SwingImpact>()
             .add_message::<crate::creature_anim::SheathRequest>()
-            .add_message::<crate::swing_refusal::SwingRefusalEdge>()
             .init_resource::<crate::creature_anim::PendingImpacts>()
             .init_resource::<crate::creature_anim::PlaySeq>()
             .init_resource::<crate::creature_anim::AttackStopInFlight>()
