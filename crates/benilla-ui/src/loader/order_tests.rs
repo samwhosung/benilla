@@ -521,11 +521,13 @@ fn each_title_region_element_is_a_region_of_its_own() {
         </Ui>"#,
     );
     assert_eq!(
-        s.eval::<(i64, String)>(
-            "local t = Retitled:GetTitleRegion() return t:GetNumPoints(), (t:GetPoint(1))"
+        s.eval::<(i64, String, bool)>(
+            "local t = Retitled:GetTitleRegion() local p, to = t:GetPoint(1) \
+             return t:GetNumPoints(), p, to == Retitled"
         )
         .unwrap(),
-        (1, "TOP".to_string())
+        (1, "TOP".to_string(), true),
+        "the instance's one point, on the frame itself"
     );
     assert_eq!(
         s.eval::<i64>("return Inherited:GetTitleRegion():GetNumPoints()")
