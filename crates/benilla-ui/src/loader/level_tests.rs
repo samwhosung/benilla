@@ -1,5 +1,5 @@
 //! The loader's per-level reads: what the reference reads on each `inherits` node in turn
-//! ([`Loader::levels`]) rather than on the merged element.
+//! ([`Loader::levels`]), each on its own node.
 
 use crate::framexml;
 use crate::loader::*;

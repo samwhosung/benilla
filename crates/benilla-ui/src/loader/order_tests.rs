@@ -398,3 +398,94 @@ fn a_label_before_its_highlight_logs_and_keeps_its_implicit_anchor() {
         (1, "CENTER".to_string(), true)
     );
 }
+
+/// `0x76a060` reads each level's first `<Frames>` alone (`0x6f2c50`), the template's level first,
+/// and builds each child whole before its next sibling (`0x6ee280`), so a child's `OnLoad` sees
+/// the siblings before it and none after.
+#[test]
+fn frames_build_per_level_from_each_levels_first_frames_element() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="KidsTemplate" virtual="true">
+                <Frames>
+                    <Frame name="$parentTplKid">
+                        <Scripts><OnLoad>
+                            order = (order or "") .. "tpl:" .. tostring(OwnKidsOwnKid ~= nil) .. " "
+                        </OnLoad></Scripts>
+                    </Frame>
+                </Frames>
+            </Frame>
+            <Frame name="OwnKids" inherits="KidsTemplate">
+                <Frames>
+                    <Frame name="$parentOwnKid">
+                        <Scripts><OnLoad>
+                            order = (order or "") .. "own:" .. tostring(OwnKidsTplKid ~= nil)
+                        </OnLoad></Scripts>
+                    </Frame>
+                </Frames>
+                <Frames>
+                    <Frame name="$parentSecondFrames"/>
+                </Frames>
+            </Frame>
+        </Ui>"#,
+    );
+    assert_eq!(
+        s.eval::<String>("return order").unwrap(),
+        "tpl:false own:true"
+    );
+    assert!(s.eval::<bool>("return OwnKidsSecondFrames == nil").unwrap());
+}
+
+/// `parent=` is the node's own, else the first up its `inherits` chain (`0x6ee390`-`0x6ee3c4`); a
+/// present empty one ends the walk on the default parent (`0x6ee3c7`).
+#[test]
+fn a_parent_attribute_is_found_up_the_inherits_chain() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="Home"/>
+            <Frame name="ParentedTemplate" virtual="true" parent="Home"/>
+            <Frame name="Lexical">
+                <Frames>
+                    <Frame name="Moved" inherits="ParentedTemplate"/>
+                    <Frame name="Kept" inherits="ParentedTemplate" parent=""/>
+                </Frames>
+            </Frame>
+        </Ui>"#,
+    );
+    assert!(s.eval::<bool>("return Moved:GetParent() == Home").unwrap());
+    assert!(s
+        .eval::<bool>("return Kept:GetParent() == Lexical")
+        .unwrap());
+}
+
+/// Deviation: an `inherits` cycle stops at the repeated name with a warning, where the reference's
+/// load recursion (`0x76985c`) never returns; each template in it loads once.
+#[test]
+fn an_inherits_cycle_warns_and_loads_each_template_once() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="CycleA" virtual="true" inherits="CycleB">
+                <Scripts><OnLoad>count = (count or 0) + 1</OnLoad></Scripts>
+            </Frame>
+            <Frame name="CycleB" virtual="true" inherits="CycleA" alpha="0.5"/>
+            <Frame name="Cycled" inherits="CycleA"/>
+        </Ui>"#,
+    );
+    assert!(
+        report.warnings.iter().any(
+            |w| w == "inheritance cycle detected at template 'CycleA'; skipping this reference"
+        ),
+        "{:?}",
+        report.warnings
+    );
+    assert_eq!(s.eval::<i64>("return count").unwrap(), 1);
+    assert!(s
+        .eval::<bool>("return math.abs(Cycled:GetAlpha() - 0.5) < 0.01")
+        .unwrap());
+}

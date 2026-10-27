@@ -931,7 +931,7 @@ pub(super) fn create_frame(
     // the widget dispatcher (`0x704f10`) does for every handler. Any string fourth argument is
     // looked up (`lua_type` 4, `0x7061cb`), the empty one included, which no template names.
     if let Some(t) = template.as_deref() {
-        // One name, verbatim, case-folded, as `framexml::expand` resolves it.
+        // One name, verbatim, case-folded, as the XML load resolves it (`0x6ee6f0`).
         let known = lua
             .app_data_ref::<Model>()
             .expect("model app_data")

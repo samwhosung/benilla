@@ -132,8 +132,8 @@ fn the_corpus_favourite_template_composes_parent_two_levels_deep() {
     let _ = s.take_errors();
 
     s.run(
-        // The stock template is a `<ScrollFrame>` with a `<ScrollChild>`, and `framexml::merge`
-        // takes the overriding node's tag, so a "Frame" would drop the scroll-only parts.
+        // The stock template is a `<ScrollFrame>` with a `<ScrollChild>`, and the part a level
+        // runs is the created frame's type's, so a "Frame" would drop the scroll-only parts.
         r#"Scroller = CreateFrame("ScrollFrame", "BenillaTemplateProbeScroll", UIParent, "FauxScrollFrameTemplate")"#,
     )
     .expect("the corpus's most-used template must not error");
