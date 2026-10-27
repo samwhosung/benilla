@@ -16,9 +16,9 @@ pub(crate) mod spline;
 mod tests;
 
 pub(crate) use facing::drive_display_facing;
-pub(in crate::net) use facing::resolve_facing;
 pub(in crate::net) use facing::DisplayFacing;
 pub(crate) use facing::FacingStep;
+pub(in crate::net) use facing::{resolve_facing, set_raw_facing, smoothed};
 pub(crate) use modes::UnitMoveModes;
 pub(in crate::net) use modes::ROOT_APPLY_WIPE;
 pub(crate) use relay::{PendingMove, RelayMove};

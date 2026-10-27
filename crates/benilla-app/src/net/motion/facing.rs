@@ -59,6 +59,17 @@ impl DisplayFacing {
     }
 }
 
+/// Sets the raw facing a unit's display turns to (`0x6198e0` into `CMovement+0x1c`), keeping the
+/// display and its ring: nothing on a move resets them (`0x601020` runs only at create and
+/// reactivate). A unit not yet governed starts with an empty ring.
+pub(in crate::net) fn set_raw_facing(commands: &mut Commands, e: Entity, wire: f32) {
+    commands
+        .entity(e)
+        .entry::<DisplayFacing>()
+        .and_modify(move |mut d| d.wire = wire)
+        .or_insert(DisplayFacing::seeded(wire));
+}
+
 /// Whether [`drive_display_facing`] turns this body's display facing: a unit, not the body we
 /// steer. Anything else shows its raw facing at once, as the active mover's does (`0x600d03`).
 pub(in crate::net) fn smoothed(kind: Option<EntityKind>, active_mover: bool) -> bool {
