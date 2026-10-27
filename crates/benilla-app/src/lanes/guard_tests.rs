@@ -1181,16 +1181,6 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
         "::ui_chat::channels::end_session_channels_on_disconnect",
         "a dead socket ends the channel session, and no packet follows it",
     ),
-    (
-        "::query_cache::release_on_enter<benilla_app::ui_guild::GuildState>",
-        "the world entry forgets the guild cache's in-flight asks, so each is asked again \
-         (`0x5557c0`): it queues nothing",
-    ),
-    (
-        "::query_cache::release_on_enter<benilla_app::ui_quest_log::QuestLog>",
-        "the world entry forgets the quest cache's in-flight asks, so each is asked again \
-         (`0x5557c0`): it queues nothing",
-    ),
 ];
 
 /// The systems outside the phase that lend the call host and take a handler queue, firing off it

@@ -32,7 +32,7 @@ use std::sync::Mutex;
 use benilla_assets::LockRecover;
 use bevy::prelude::*;
 
-use crate::net::{EnteredWorldMessage, NetCommands};
+use crate::net::NetCommands;
 
 /// How a read reaches the server on a miss: the reference's lookup with a callback or without, and
 /// the runs of a reader that builds its view every frame between the events that stand for the
@@ -242,7 +242,7 @@ impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
     }
 
     /// Forgets the in-flight asks, which a disconnect or a send before the writer existed may
-    /// have dropped; [`register`] runs it on every world entry.
+    /// have dropped; [`release_pending`] runs it on every world entry.
     pub(crate) fn clear_pending(&mut self) {
         self.pending
             .get_mut()
@@ -286,25 +286,34 @@ pub(crate) trait AskOnce: Resource {
     fn clear_pending(&mut self);
 }
 
-/// Registers a cache owner to clear its in-flight asks on world entry, so a key asked before the
-/// writer existed, or across a disconnect, is asked again.
+/// Every registered owner's clear, in registration order.
+#[derive(Resource, Default)]
+struct AskOnceOwners(Vec<fn(&mut World)>);
+
+/// Registers a cache owner to clear its in-flight asks on world entry ([`release_pending`]), so a
+/// key asked before the writer existed, or across a disconnect, is asked again.
 pub(crate) fn register<T: AskOnce>(app: &mut App) {
-    app.add_systems(
-        Update,
-        release_on_enter::<T>
-            .in_set(benilla_world::schedule::WorldStage::Net)
-            .after(crate::net::apply_net_updates),
-    );
+    app.world_mut()
+        .get_resource_or_init::<AskOnceOwners>()
+        .0
+        .push(|world| {
+            if let Some(mut cache) = world.get_resource_mut::<T>() {
+                cache.clear_pending();
+            }
+        });
 }
 
-fn release_on_enter<T: AskOnce>(
-    mut entered: MessageReader<EnteredWorldMessage>,
-    mut cache: ResMut<T>,
-) {
-    if entered.read().count() == 0 {
-        return;
+/// Forgets every registered cache's in-flight asks: run by the world entry's handler, where the
+/// reference clears its caches at `CGGameUI::InitializeGame` (`0x48f586` → `0x555740`), ahead
+/// of the world's first packet, so an ask a later packet of the login frame makes stands.
+pub(crate) fn release_pending(world: &mut World) {
+    let owners = world
+        .get_resource::<AskOnceOwners>()
+        .map(|o| o.0.clone())
+        .unwrap_or_default();
+    for clear in owners {
+        clear(world);
     }
-    cache.clear_pending();
 }
 
 /// The cache queries `rx` holds, drained: what a reader's runs asked.

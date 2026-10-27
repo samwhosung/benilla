@@ -69,7 +69,7 @@ pub(crate) struct NetOffline;
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        // The release-on-enter for the ask-once caches this plugin owns.
+        // The ask-once caches this plugin owns, whose in-flight asks the world entry releases.
         crate::query_cache::register::<crate::names::NameCache>(app);
         crate::query_cache::register::<crate::go_templates::GameObjectTemplates>(app);
         crate::query_cache::register::<crate::items::Items>(app);

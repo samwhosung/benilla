@@ -197,6 +197,7 @@ fn on_connected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
             name,
             tutorial_flags,
             addon_info,
+            &mut b.commands,
             &mut e.addon_reply,
             &mut b.self_guid,
             &mut b.status,
@@ -735,6 +736,7 @@ fn connected(
     name: String,
     tutorial_flags: Option<Vec<u8>>,
     addon_info: Option<Vec<benilla_protocol::messages::AddonRecord>>,
+    commands: &mut Commands,
     addon_reply: &mut crate::net::AddonInfoReply,
     self_guid: &mut SelfGuid,
     status: &mut NetStatus,
@@ -748,6 +750,9 @@ fn connected(
     // The reference clears player and pet names at every world entry (`0x555740`, arm
     // `0x5557ad`), since a guid may name a new character; creature templates survive.
     names.clear_world_session();
+    // And every ask-once cache's in-flight asks, applied with this handler's commands, before
+    // the next packet's handlers can ask.
+    commands.queue(crate::query_cache::release_pending);
     // Our own name came with the login, so "player" never queries.
     names.insert_player(guid, name, None);
     // Set before the world-entry UI load reads it, and every login, so a silent server inherits
@@ -1451,5 +1456,54 @@ mod worldport_tests {
     fn a_worldport_keeps_only_the_ship_we_ride_through_it() {
         assert_eq!(kept_across(true), (true, false));
         assert_eq!(kept_across(false), (false, false));
+    }
+}
+
+#[cfg(test)]
+mod login_ask_tests {
+    use super::*;
+    const CHALLENGER: u64 = 0x99;
+
+    /// `SMSG_DUEL_REQUESTED`, whose handler asks the challenger's name (`0x4d4a83`).
+    fn requested() -> SessionEvent {
+        SessionEvent::DuelRequested {
+            arbiter: 0xF110_0000_0000_0001,
+            challenger: CHALLENGER,
+        }
+    }
+
+    /// The world entry clears the caches' in-flight asks in its handler, ahead of the world's
+    /// first packet (`0x48f586` → `0x555740`), so a name a later packet of the login frame asks
+    /// stays pending through the frame, and the next packet's ask of it sends nothing.
+    #[test]
+    fn a_name_asked_in_the_login_frame_is_asked_once() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let (tx, sent) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let (inbound, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetEvents::for_test(rx));
+        let frame = |app: &mut App, events: Vec<SessionEvent>| {
+            for ev in events {
+                inbound.send(ev).unwrap();
+            }
+            app.update();
+        };
+        let login = SessionEvent::Connected {
+            self_guid: 0x2a,
+            name: "Probeseven".into(),
+            billing: Default::default(),
+            tutorial_flags: None,
+            addon_info: None,
+        };
+        frame(&mut app, vec![login, requested()]);
+        frame(&mut app, vec![requested()]);
+        let asked = crate::query_cache::queries(&sent)
+            .into_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::NameQuery { guid: CHALLENGER }))
+            .count();
+        assert_eq!(asked, 1, "the login frame forgot its packet's pending ask");
     }
 }
