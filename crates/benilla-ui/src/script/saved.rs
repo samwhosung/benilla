@@ -53,9 +53,9 @@ impl super::UiScript {
     }
 
     /// Serialize every registered global as `NAME = value` lines, in bytes, since a Lua string is
-    /// bytes and the reference writes them raw. A value with no literal (a function, userdata,
-    /// `inf`, `NaN`) is skipped with a warning where the reference drops it silently; `nil` is
-    /// written, as the reference records an untouched toggle.
+    /// bytes and the reference writes them raw. Every name gets its line (`0x704422`-`0x704455`):
+    /// `nil` is written, as the reference records an untouched toggle, and a value with no literal
+    /// writes the reference's `nil` comment ([`no_literal`]), so a reload sets it to nil.
     pub fn saved_variables_bytes(&self) -> Vec<u8> {
         self.saved_variables_bytes_for(&self.saved_variable_names())
     }
@@ -75,20 +75,17 @@ impl super::UiScript {
                 }
             };
             let mut seen = HashSet::new();
-            match serialize(&value, 1, &mut seen, &model) {
-                Some(text) => {
-                    out.extend_from_slice(name.as_bytes());
-                    out.extend_from_slice(b" = ");
-                    out.extend_from_slice(&text);
-                    out.push(b'\n');
-                }
-                None => unwritable.push(name.clone()),
-            }
+            let text =
+                serialize(&value, 1, &mut seen, &model).unwrap_or_else(|| no_literal(&value));
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(b" = ");
+            out.extend_from_slice(&text);
+            out.push(b'\n');
         }
         drop(model);
         if !unwritable.is_empty() {
             self.model_mut().record_warning(format!(
-                "saved variables: not serializable, skipped: {}",
+                "saved variables: unreadable, skipped: {}",
                 unwritable.join(", ")
             ));
         }
@@ -266,6 +263,21 @@ fn serialize(
     }
 }
 
+/// What the value writer `0x704480` writes for a value [`serialize`] has none for: a function
+/// (`0x704989`; its `>n` lookup names no function off the stack, `0x872cfc`), NaN (`0x7044f5`,
+/// `0x872e40`), an infinity (`0x704513`, `0x872e30`), and any other type by its name (`0x7049f0`,
+/// `0x872ce4`), a light userdata as `userdata`.
+fn no_literal(v: &Value) -> Vec<u8> {
+    let text = match v {
+        Value::Function(_) => "nil --[[ skipped inline function ]]".to_owned(),
+        Value::Number(n) if n.is_nan() => "nil --[[ nan ]]".to_owned(),
+        Value::Number(_) => "nil --[[ inf ]]".to_owned(),
+        Value::LightUserData(_) => "nil --[[ skipped userdata ]]".to_owned(),
+        other => format!("nil --[[ skipped {} ]]", other.type_name()),
+    };
+    text.into_bytes()
+}
+
 /// A Lua number literal: integral values bare, as the reference's `%.16g` prints them, others in
 /// the shortest form that round-trips; `inf` and `NaN` have none.
 fn number(n: f64) -> Option<String> {
@@ -299,8 +311,9 @@ fn quote(s: &[u8]) -> Vec<u8> {
 
 /// A table constructor, `{\n<tabs>[key] = value,\n<tabs-1>}`: every key bracketed, as the
 /// reference writes for every table shape (`[0x704607, 0x704989)`), integer keys ascending, then
-/// strings. It reloads a list as a list through the 1.12 parser: `recfield` gives a `[k] = v` field
-/// no size hint, so dense integer keys land in the array part, which `next` walks in order.
+/// other numbers ascending, `false`, `true`, then strings. It reloads a list as a list through the
+/// 1.12 parser: `recfield` gives a `[k] = v` field no size hint, so dense integer keys land in the
+/// array part, which `next` walks in order.
 fn table(
     t: &Table,
     depth: usize,
@@ -311,22 +324,35 @@ fn table(
         return None;
     }
     let mut ints: Vec<(i64, Vec<u8>)> = Vec::new();
+    let mut floats: Vec<(f64, Vec<u8>)> = Vec::new();
+    let mut bools: Vec<(bool, Vec<u8>)> = Vec::new();
     let mut strs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for pair in t.pairs::<Value, Value>() {
         let Ok((k, v)) = pair else { continue };
         let Some(value) = serialize(&v, depth + 1, seen, model) else {
-            continue; // an unserializable entry drops, like the reference's
+            // The reference writes `[k] = nil --[[ … ]],` (`0x70482f`), which sets nothing.
+            continue;
         };
+        // The key's type picks the arm (`0x704766`): a boolean or string key writes as a value
+        // (`0x7047eb`), a number as one unless it is NaN or infinite (`0x70476d`-`0x7047c4`), and
+        // any other type has no literal (`0x7048a3`). The reference writes a skipped key as a
+        // comment line (`0x872dbc`, `0x872d94`, `0x872d5c`).
         match k {
             Value::Integer(i) => ints.push((i, value)),
             // A float key that is integral is the same slot as the integer in Lua 5.1.
-            Value::Number(n) if n.fract() == 0.0 => ints.push((n as i64, value)),
+            Value::Number(n) if n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0 => {
+                ints.push((n as i64, value))
+            }
+            Value::Number(n) if n.is_finite() => floats.push((n, value)),
+            Value::Boolean(b) => bools.push((b, value)),
             Value::String(s) => strs.push((s.as_bytes().to_vec(), value)),
-            _ => continue, // a table/bool/function key cannot be written as a literal
+            _ => continue,
         }
     }
     seen.remove(&t.to_pointer());
     ints.sort_by_key(|(k, _)| *k);
+    floats.sort_by(|a, b| a.0.total_cmp(&b.0));
+    bools.sort_by_key(|(k, _)| *k);
     // Byte order, the same as `str` order for UTF-8 keys.
     strs.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -342,6 +368,12 @@ fn table(
         out.extend_from_slice(b",\n");
     };
     for (k, v) in ints {
+        entry(k.to_string().as_bytes(), &v);
+    }
+    for (k, v) in floats {
+        entry(number(k).expect("finite").as_bytes(), &v);
+    }
+    for (k, v) in bools {
         entry(k.to_string().as_bytes(), &v);
     }
     for (k, v) in strs {
@@ -491,30 +523,82 @@ mod tests {
             .unwrap());
     }
 
+    /// A top-level value with no literal still gets its line (`0x704422`-`0x704455`), the value
+    /// writer's `nil` comment (`0x872cfc`, `0x872e40`, `0x872e30`), so a reload sets it to nil; a
+    /// boolean key and a fractional one write as `[key] = value,` (`0x7047eb`, `0x70476d`).
     #[test]
-    fn unserializable_values_are_skipped_with_one_warning() {
+    fn values_with_no_literal_write_nil_and_bool_and_fraction_keys_are_kept() {
         let mut s = UiScript::new().unwrap();
         s.run(
             r#"
             A_FUNCTION = function() end
-            NOT_A_NUMBER = 1/0
+            NOT_A_NUMBER = 0/0
+            INFINITE = -1/0
             KEPT = 7
             CYCLE = {}
             CYCLE.self = CYCLE
-            RegisterForSave("A_FUNCTION")
-            RegisterForSave("NOT_A_NUMBER")
-            RegisterForSave("KEPT")
-            RegisterForSave("CYCLE")
+            KEYS = { [true] = "yes", [false] = 0, [0.5] = "half", [-2.25] = 1, [2] = 2, x = 1 }
+            for _, n in ipairs({ "A_FUNCTION", "NOT_A_NUMBER", "INFINITE", "KEPT", "CYCLE",
+                                 "KEYS" }) do
+              RegisterForSave(n)
+            end
         "#,
         )
         .unwrap();
         let text = s.saved_variables_bytes();
-        // The cycle's own entry drops; the table itself still writes (empty here).
-        assert_eq!(text, b"KEPT = 7\nCYCLE = {\n}\n");
-        let warns = s.take_warnings();
-        assert_eq!(warns.len(), 1, "one line, not one per name: {warns:?}");
-        assert!(warns[0].contains("A_FUNCTION") && warns[0].contains("NOT_A_NUMBER"));
-        UiScript::new().unwrap().run_chunk(&text).unwrap();
+        let expected = "A_FUNCTION = nil --[[ skipped inline function ]]\n\
+                        NOT_A_NUMBER = nil --[[ nan ]]\n\
+                        INFINITE = nil --[[ inf ]]\n\
+                        KEPT = 7\n\
+                        CYCLE = {\n}\n\
+                        KEYS = {\n\
+                        \t[2] = 2,\n\
+                        \t[-2.25] = 1,\n\
+                        \t[0.5] = \"half\",\n\
+                        \t[false] = 0,\n\
+                        \t[true] = \"yes\",\n\
+                        \t[\"x\"] = 1,\n\
+                        }\n";
+        assert_eq!(String::from_utf8_lossy(&text), expected);
+        assert!(s.take_warnings().is_empty());
+
+        let fresh = UiScript::new().unwrap();
+        fresh
+            .run("A_FUNCTION, NOT_A_NUMBER, INFINITE = 1, 2, 3")
+            .unwrap();
+        fresh.run_chunk(&text).unwrap();
+        assert!(fresh
+            .eval::<bool>("return A_FUNCTION == nil and NOT_A_NUMBER == nil and INFINITE == nil")
+            .unwrap());
+        assert!(fresh
+            .eval::<bool>(
+                r#"return KEYS[true] == "yes" and KEYS[false] == 0 and KEYS[0.5] == "half"
+                   and KEYS[-2.25] == 1 and KEYS[2] == 2 and KEYS.x == 1"#
+            )
+            .unwrap());
+        assert_eq!(fresh.saved_variables_bytes(), b"");
+        for n in [
+            "A_FUNCTION",
+            "NOT_A_NUMBER",
+            "INFINITE",
+            "KEPT",
+            "CYCLE",
+            "KEYS",
+        ] {
+            fresh.run(&format!("RegisterForSave({n:?})")).unwrap();
+        }
+        let again = fresh.saved_variables_bytes();
+        let nils = "A_FUNCTION = nil\nNOT_A_NUMBER = nil\nINFINITE = nil\n";
+        assert_eq!(
+            String::from_utf8_lossy(&again),
+            expected.replacen(
+                "A_FUNCTION = nil --[[ skipped inline function ]]\n\
+                 NOT_A_NUMBER = nil --[[ nan ]]\nINFINITE = nil --[[ inf ]]\n",
+                nils,
+                1
+            ),
+            "the reload writes the same file, the nils bare"
+        );
     }
 
     /// A frame kept in a saved variable (Decursive keeps `DEFAULT_CHAT_FRAME` as its output
