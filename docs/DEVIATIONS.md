@@ -32,7 +32,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-app](#benilla-app): 249
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
-- [benilla-formats](#benilla-formats): 22
+- [benilla-formats](#benilla-formats): 24
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 29
 - [benilla-srp](#benilla-srp): 2
@@ -559,6 +559,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - A zero range (row 28 only) is `None`, the lookup-miss fallback, because the reference divides by zero there into a NaN scale. ([`src/creature_families.rs:71`](../crates/benilla-formats/src/creature_families.rs#L71))
 
+#### elevators
+
+- A path that cannot drive a cycle is dropped and its GO stays at its spawn point, where the reference faults or hangs: a last frame at 0 divides by zero (`0x5f62a4`), and a first frame past 0, one frame among them, leaves a time before it in no bracket, which `0x5f62bc`-`0x5f62e7` seek forever. ([`src/elevators.rs:62`](../crates/benilla-formats/src/elevators.rs#L62))
+
 #### emote_text
 
 - A surplus `%s` stays verbatim, where the reference would print stack garbage; no shipped row has one. ([`src/emote_text.rs:113`](../crates/benilla-formats/src/emote_text.rs#L113))
@@ -603,6 +607,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Colour maps of 15, 16 and 32 bits decode at the entry width the file declares, where the reference has no defined result to copy for 15 and 16 bits and only a garble for 32. ([`src/tga.rs:9`](../crates/benilla-formats/src/tga.rs#L9))
 - A colour-mapped image whose descriptor has alpha bits decodes as its picture, where the reference has no defined result to copy. `0x5a3820` sizes each pixel as 24 plus the alpha bits (`0x5a382b`-`0x5a383d`, stored at `0x5a3973`) but copies 3-byte entries (`0x5a38f3`), then `0x5a3b80` moves `(bpp + 7) >> 3` bytes a pixel (`0x5a3c00`-`0x5a3c13`): each pixel after the first takes its bytes from its neighbours, and the last read heap that was never written. ([`src/tga.rs:16`](../crates/benilla-formats/src/tga.rs#L16))
 - A truecolour image whose depth less its alpha bits is 24, but whose depth is not 24 or 32, is refused where the reference crashes. ([`src/tga.rs:22`](../crates/benilla-formats/src/tga.rs#L22))
+
+#### transports
+
+- `None` too where the reference's build overruns its stack or reads memory it never wrote (`transports#path-faults`), so the ship stays at its spawn: more than 1024 nodes in a leg (`0x5f9530`), a leg of 3 nodes or fewer (`0x4532e3`) and a stop on a leg's last node (`0x5f91a1`). ([`src/transports/mod.rs:82`](../crates/benilla-formats/src/transports/mod.rs#L82))
 ### benilla-lua
 
 #### api
@@ -873,7 +881,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### doodad_anim
 
 - Every instance scrolls in one phase, where the reference phases a band loop per arm and a gseq loop from each instance's attach (`CM2Model+0x68`), because one uniform serves the material and a seamless scroll looks the same at any phase. ([`src/doodad_anim/mat_anim.rs:186`](../crates/benilla-world/src/doodad_anim/mat_anim.rs#L186))
-- This runs for every resident host, where the reference stops a doodad culled out of its scene list (`[CM2Scene+0x20]`) and re-arms it at once on re-link (`0x7074b0`, `0x683f80`), because gating it so would re-roll the whole field on the frame the camera turns back. ([`src/doodad_anim/mod.rs:256`](../crates/benilla-world/src/doodad_anim/mod.rs#L256))
+- This runs for every resident host, where the reference stops a doodad culled out of its scene list (`[CM2Scene+0x20]`) and re-arms it at once on re-link (`0x7074b0`, `0x683f80`), because gating it so would re-roll the whole field on the frame the camera turns back. ([`src/doodad_anim/mod.rs:339`](../crates/benilla-world/src/doodad_anim/mod.rs#L339))
 
 #### entity_shade
 
