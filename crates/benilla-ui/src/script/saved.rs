@@ -227,44 +227,10 @@ fn unescape(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `SStrToFloat` (`0x64aaa0`) rounded to `f32` (`fstp dword` at `0x491534`): an optional `-`,
-/// digits, an optional `.` and digits, then `e` or `E`, an optional `+` (`0x64ac0a`-`0x64ac1d`) and
-/// `SStrToInt`'s optional `-` and digits (`0x64ac60`); whatever follows is ignored, so `5abc` is 5
-/// and `0x10` is 0.
+/// `SStrToFloat` (`0x64aaa0`) rounded to `f32` (`fstp dword` at `0x491534`), so `5abc` is 5,
+/// `0x10` is 0 and the wrapped exponent of `1e4294967297` is 10.
 fn flat_number(value: &[u8]) -> f32 {
-    fn digits(s: &[u8]) -> (&[u8], &[u8]) {
-        s.split_at(s.iter().take_while(|b| b.is_ascii_digit()).count())
-    }
-    fn sign(s: &[u8]) -> (bool, &[u8]) {
-        s.strip_prefix(b"-").map_or((false, s), |rest| (true, rest))
-    }
-    let (neg, rest) = sign(value);
-    let (int, rest) = digits(rest);
-    let (frac, rest) = rest.strip_prefix(b".").map_or((&b""[..], rest), digits);
-    let mut exp: i64 = 0;
-    if let Some(rest) = rest.strip_prefix(b"e").or_else(|| rest.strip_prefix(b"E")) {
-        let (eneg, rest) = sign(rest.strip_prefix(b"+").unwrap_or(rest));
-        for &d in digits(rest).0 {
-            exp = (exp * 10 + i64::from(d - b'0')).min(100_000);
-        }
-        if eneg {
-            exp = -exp;
-        }
-    }
-    let text = |d: &[u8]| {
-        if d.is_empty() {
-            "0".to_owned()
-        } else {
-            String::from_utf8_lossy(d).into_owned()
-        }
-    };
-    let text = format!(
-        "{}{}.{}e{exp}",
-        if neg { "-" } else { "" },
-        text(int),
-        text(frac)
-    );
-    text.parse::<f64>().unwrap_or(0.0) as f32
+    binding_abi::s_str_to_float(&String::from_utf8_lossy(value)) as f32
 }
 
 /// One Lua value as Lua expression text, or `None` when it has none. `depth` is the indent of a
@@ -665,6 +631,20 @@ mod tests {
             s.eval::<f64>("return PARTYBACKGROUND_OPACITY").unwrap(),
             f64::from(0.1f32)
         );
+    }
+
+    /// The number is `SStrToFloat`'s (`0x64aaa0`): its exponent wraps at 32 bits and its digits
+    /// fold in its own steps, so these read as 1.12.1 reads them, not as a correct parse would.
+    #[test]
+    fn a_flat_number_is_converted_by_s_str_to_float() {
+        for (text, want) in [
+            ("1e4294967297", 10.0),
+            ("1e-4294967295", 10.0),
+            ("16777217.0000000019", 16_777_216.0),
+        ] {
+            let s = read_flat(format!("N = {text}\n").as_bytes());
+            assert_eq!(s.eval::<f64>("return N").unwrap(), want, "{text}");
+        }
     }
 
     /// The flat file is never run (`0x4913b0` has no call into the compiler): a call is not made,
