@@ -330,10 +330,32 @@ fn get_script(lua: &Lua, this: &Table, name: &str) -> mlua::Result<Value> {
     let kind = typed_script(lua, this, frame_handle_of(lua, this)?, name)?;
     let id = decode_id(this)?;
     let scripts: Table = lua.named_registry_value(REG_SCRIPTS)?;
-    match scripts.get::<Value>(id)? {
-        Value::Table(t) => t.get::<Value>(kind),
-        _ => Ok(Value::Nil),
+    let value = match scripts.get::<Value>(id)? {
+        Value::Table(t) => t.get::<Value>(kind)?,
+        _ => Value::Nil,
+    };
+    // A slot holding a failed compile's -1 pushes nil (`0x7748b9`).
+    match value {
+        Value::Function(f) if f == broken_handler(lua)? => Ok(Value::Nil),
+        v => Ok(v),
     }
+}
+
+/// The registry slot of [`broken_handler`].
+const REG_BROKEN_HANDLER: &str = "__benilla_broken_handler";
+
+/// What an XML handler that fails to compile leaves in its slot: `0x704c70` answers -1 (`0x704c9f`),
+/// which `0x7025c0` stores (`0x702642`). Firing it calls nil, an error each time, and `GetScript`
+/// answers nil ([`get_script`]). One function for every such slot.
+pub(crate) fn broken_handler(lua: &Lua) -> mlua::Result<Function> {
+    if let Some(f) = lua.named_registry_value::<Option<Function>>(REG_BROKEN_HANDLER)? {
+        return Ok(f);
+    }
+    let f = lua.create_function(|_, ()| -> mlua::Result<()> {
+        Err(mlua::Error::runtime("attempt to call a nil value"))
+    })?;
+    lua.set_named_registry_value(REG_BROKEN_HANDLER, f.clone())?;
+    Ok(f)
 }
 
 /// Apply the `inherits` argument: the font-object registry first (`0x773d39`), then the template

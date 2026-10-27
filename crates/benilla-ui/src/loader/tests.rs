@@ -1063,14 +1063,28 @@ mod loader_tests {
         );
     }
 
+    /// A handler that fails to compile reports nothing at load (`0x704c87`-`0x704c9f`) and fills
+    /// its slot with -1 (`0x702642`): it replaces the template's, `GetScript` answers nil
+    /// (`0x7748b9`), each fire calls nil, the enables still run (`0x70264c`, `0x769f6b`), and the
+    /// broken `OnLoad` errors when it fires in the template's place.
     #[test]
-    fn bad_handler_is_an_error_and_load_continues() {
+    fn a_handler_that_fails_to_compile_fills_its_slot_with_a_nil_call() {
         let s = UiScript::new().unwrap();
         let doc = parse(
             r#"<Ui>
-                <Frame name="Broken">
-                    <Scripts><OnLoad>this that syntax error(((</OnLoad></Scripts>
-                </Frame>
+                <Button name="ClickTemplate" virtual="true">
+                    <Scripts>
+                        <OnLoad>TemplateLoaded = true</OnLoad>
+                        <OnClick>TemplateClicks = (TemplateClicks or 0) + 1</OnClick>
+                    </Scripts>
+                </Button>
+                <Button name="Broken" inherits="ClickTemplate">
+                    <Scripts>
+                        <OnLoad>this that syntax error(((</OnLoad>
+                        <OnClick>if then</OnClick>
+                        <OnEnter>(((</OnEnter>
+                    </Scripts>
+                </Button>
                 <Frame name="Fine">
                     <Scripts><OnLoad>FineRan = true</OnLoad></Scripts>
                 </Frame>
@@ -1078,13 +1092,30 @@ mod loader_tests {
         );
         let report = load(&s, &doc, &no_files);
         assert_eq!(report.frames, 2, "both frames still created");
+        assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
         assert!(
-            report.errors.iter().any(|e| e.contains("compiling")),
-            "expected a compile error, got {:?}",
+            report.errors[0].ends_with("OnLoad: runtime error: attempt to call a nil value"),
+            "{:?}",
             report.errors
         );
-        assert!(s.eval::<bool>("return Broken ~= nil").unwrap());
-        assert!(s.eval::<bool>("return FineRan == true").unwrap());
+        assert!(s.warnings().is_empty(), "{:?}", s.warnings());
+        assert!(s
+            .eval::<bool>(
+                r#"return TemplateLoaded == nil and FineRan == true
+                    and Broken:GetScript("OnClick") == nil and Broken:GetScript("OnLoad") == nil
+                    and Broken:IsMouseEnabled() == 1"#
+            )
+            .unwrap());
+        s.run(
+            r#"seterrorhandler(function(m) Seen = (Seen or "") .. m .. ";" end)
+               Broken:Click() Broken:Click()"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.eval::<String>("return Seen").unwrap(),
+            "attempt to call a nil value;attempt to call a nil value;"
+        );
+        assert!(s.eval::<bool>("return TemplateClicks == nil").unwrap());
     }
 
     /// `OnAttributeChanged` is 2.0's; no 1.12 handler resolver has a slot for it, so the frame

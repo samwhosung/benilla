@@ -38,8 +38,9 @@ pub struct LoadReport {
     /// Issues that dropped nothing, and the document layer's parse warnings. An unknown frame type
     /// drops its node yet lands here: the reference logs it and goes on (`0x6ee356`).
     pub warnings: Vec<String>,
-    /// Failures the reference raises on: a handler that fails to compile, a method call that
-    /// errors, a malformed included document.
+    /// Failures the reference raises on: a handler that errors as it fires (`OnLoad`), a method
+    /// call that errors, a malformed included document. A handler that fails to compile is none:
+    /// the reference reports nothing until it fires (`0x704c87`-`0x704c9f`).
     pub errors: Vec<String>,
     /// `<Include file=>` and `<Script file=>` paths the provider lacks. The reference logs
     /// `"Couldn't open %s"` (`0x6edaa0`, `0x846ff4`) or `"Error loading %s"` (`0x872e50`) and goes
