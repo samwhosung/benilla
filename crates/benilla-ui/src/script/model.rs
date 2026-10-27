@@ -929,6 +929,8 @@ pub(crate) struct Model {
     pub(crate) quest_log: quest_log::QuestLogState,
     pub(crate) quest_log_selection: u32,
     pub(crate) quest_log_abandon_mark: u32,
+    /// The selected quest's minimap blip (static slot 0).
+    pub(crate) quest_blip: Option<quest_log::QuestBlip>,
     /// Item id to its tooltip view.
     pub(crate) item_templates: HashMap<u32, ItemTemplateView>,
     /// Item ids asked for and missing, for the app to answer: a lookup with a callback, which
@@ -1642,6 +1644,7 @@ impl Model {
             quest_log: quest_log::QuestLogState::default(),
             quest_log_selection: 0,
             quest_log_abandon_mark: 0,
+            quest_blip: None,
             item_templates: HashMap::new(),
             item_sets: HashMap::new(),
             random_properties: HashMap::new(),

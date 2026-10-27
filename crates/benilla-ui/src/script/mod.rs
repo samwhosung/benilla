@@ -415,7 +415,7 @@ pub use quest_live::{
     QuestClock, QuestClockRead, QuestCoinage, QuestHeld, QuestObjectName, QuestSlots, QuestStanding,
 };
 pub use quest_log::{
-    QuestLogCarry, QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS,
+    QuestBlip, QuestLogCarry, QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS,
 };
 pub(crate) use region::{
     apply_texture_name, apply_wrap_attrs, implicit_creation_anchor_lua, install_loaded_texture,

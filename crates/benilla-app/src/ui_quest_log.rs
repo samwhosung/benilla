@@ -676,6 +676,8 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
         description: crate::npc_text::substitute(&t.details, tables.macros),
         objectives_text: crate::npc_text::substitute(&t.objectives_text, tables.macros),
         reward_spell: crate::ui_quest::reward_spell_view(t.reward_spell, tables.spells),
+        point: (t.point_x, t.point_y),
+        point_opt: t.point_opt,
     }
 }
 

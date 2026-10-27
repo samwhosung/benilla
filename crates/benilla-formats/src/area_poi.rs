@@ -15,7 +15,7 @@ use crate::Chain;
 const AREA_POI: &str = "DBFilesClient\\AreaPOI.dbc";
 
 /// One `AreaPOI.dbc` row.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AreaPoi {
     /// Prominence tier, `{0, 2, 3, 4}` in 5875; the minimap ranks its landmark arrows by it.
     pub importance: u32,

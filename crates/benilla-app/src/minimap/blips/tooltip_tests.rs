@@ -174,6 +174,7 @@ fn stacked_landmarks_each_get_a_line_in_list_order() {
     super::emit_landmarks(
         &ctx_at_centre(),
         None,
+        None,
         Some(&marker),
         Some(&corpse),
         0,
