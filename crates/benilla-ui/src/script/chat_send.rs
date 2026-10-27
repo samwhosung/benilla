@@ -38,7 +38,7 @@ pub use text::{expand_target_tokens, validate_escapes, InvalidEscape, INVALID_ES
 impl super::UiScript {
     /// Seat the name `GetDefaultLanguage()` answers with no host to ask, or while the host holds no
     /// player ([`DefaultLanguageQuery`]). `None` is the reference's no-player state, which returns
-    /// zero values, not `nil`; the app seats it at a VM's load from the roster row's race.
+    /// zero values, not `nil`, and the one a VM starts with.
     pub fn set_default_language(&mut self, name: Option<String>) {
         self.model_mut().default_language = name;
     }

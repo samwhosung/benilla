@@ -152,7 +152,7 @@ impl UnitFeedLive<'_, '_> {
     }
 
     /// The active player's race's base language's name as of here (`0x5ec890`, `0x49fcd0`),
-    /// `None` while no player is held, where the load's seat answers.
+    /// `None` while no player is held, where the VM's seat, none, answers.
     fn default_language(&self) -> Option<Option<String>> {
         let (_, store) = self.player()?;
         Some(

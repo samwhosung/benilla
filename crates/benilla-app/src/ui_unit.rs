@@ -256,22 +256,6 @@ fn load_default_languages(
     }
 }
 
-/// Seed a new VM's default language from the roster row, which `GetDefaultLanguage` answers while
-/// the host holds no player ([`live::UnitFeedLive`]): the load burst reads it before the avatar
-/// exists.
-pub(crate) fn seed_default_language(world: &mut World, script: &mut UiScript) {
-    let (Some(langs), Some(roster)) = (
-        world.get_resource::<DefaultLanguagesRes>(),
-        world.get_resource::<crate::glue_session::roster::Roster>(),
-    ) else {
-        return;
-    };
-    let Some(row) = roster.pending_row() else {
-        return;
-    };
-    script.set_default_language(langs.0.name(u32::from(row.race)).map(str::to_string));
-}
-
 /// Seed a new VM with `Languages.dbc`, the static table `SendChatMessage` resolves its language
 /// name against (`0x49f8a0`), in the install's locale column, as `GetDefaultLanguage` reads.
 pub(crate) fn seed_language_table(world: &World, script: &mut UiScript) {
