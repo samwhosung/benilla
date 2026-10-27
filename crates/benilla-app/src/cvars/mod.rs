@@ -86,11 +86,7 @@ impl CvarChanged {
     }
 }
 
-/// A record's float as `InternalSet` stores it: `SStrToFloat` (`0x63e130`) kept as a single
-/// (`fstp dword [esi+0x24]`, `0x63e135`).
-pub(crate) fn record_float(text: &str) -> f32 {
-    benilla_ui::script::s_str_to_float(text) as f32
-}
+pub(crate) use benilla_ui::script::record_float;
 
 /// `SStrCmpI` (`0x64a4c0`), the compare `InternalSet` (`0x63e0ec`) and `SaveConfig` (`0x63da4a`)
 /// make: ASCII case-blind.

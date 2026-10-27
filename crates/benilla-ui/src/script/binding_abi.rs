@@ -324,6 +324,12 @@ pub fn s_str_to_float(s: &str) -> f64 {
     }
 }
 
+/// A CVar record's float as `CVar::InternalSet` stores it: `SStrToFloat` (`0x63e130`) kept as a
+/// single (`fstp dword [esi+0x24]`, `0x63e135`), with no parse check of the text.
+pub fn record_float(text: &str) -> f32 {
+    s_str_to_float(text) as f32
+}
+
 /// `value * pow(10, exp)` as the x87 forms it: the power keeps the extended exponent range until
 /// the product is stored as a double (see [`s_str_to_float`]).
 fn scale_by_pow10(value: f64, exp: i32) -> f64 {

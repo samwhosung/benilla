@@ -1034,11 +1034,12 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
             let gamma = model
                 .cvars
                 .get(&CVAR_GAMMA.to_ascii_lowercase())
-                .and_then(|slot| slot.value.parse::<f64>().ok())
+                // The record's float (`fld dword [eax+0x24]`, `0x4891cd`), not the text.
+                .map(|slot| super::binding_abi::record_float(&slot.value))
                 // A bare VM with no `gamma` row answers as if the default stood; the reference
                 // always finds its record (`0x63de30`).
                 .unwrap_or(1.0);
-            Ok(1.0 - gamma)
+            Ok(1.0 - f64::from(gamma))
         })?,
     )?;
     lua.globals().set(

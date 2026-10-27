@@ -9,7 +9,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::s_str_to_int;
+use super::binding_abi::{record_float, s_str_to_int};
 use super::cvars::{format_f, write_cvar};
 use super::Model;
 
@@ -138,12 +138,6 @@ fn record_value(model: &Model, name: &str, default: &str) -> String {
         .map_or_else(|| default.to_string(), |slot| slot.value.clone())
 }
 
-/// The record's `valueAsFloat` (`rec+0x24`), parsed from the value as an f32. A value that does
-/// not parse reads 0.0; the setters and the host's registry store only numbers.
-fn record_float(value: &str) -> f64 {
-    f64::from(value.parse::<f32>().unwrap_or(0.0))
-}
-
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     for pair in &PAIRS {
@@ -155,12 +149,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 Ok(match read {
                     Read::Zero => 0.0,
-                    Read::Float(name) => record_float(&record_value(&model, name, default)),
+                    // Each loads the record's float, `fld dword [eax+0x24]` (`0x488f0d`).
+                    Read::Float(name) => {
+                        f64::from(record_float(&record_value(&model, name, default)))
+                    }
                     Read::OneMinusInt(name) => {
                         1.0 - f64::from(s_str_to_int(&record_value(&model, name, default)))
                     }
                     Read::OneMinusFloat(name) => {
-                        1.0 - record_float(&record_value(&model, name, default))
+                        1.0 - f64::from(record_float(&record_value(&model, name, default)))
                     }
                 })
             })?,
@@ -290,6 +287,25 @@ mod tests {
         // `SetWaterDetail` checks its argument and writes nothing.
         s.run("SetWaterDetail(3)").unwrap();
         assert_eq!(s.eval::<f64>("return GetWaterDetail()").unwrap(), 0.0);
+    }
+
+    #[test]
+    fn the_getters_read_the_records_float_not_its_text() {
+        let s = script();
+        s.register_cvars([("gamma", "1.0")]);
+        let get = |set: &str, get: &str| {
+            s.run(set).unwrap();
+            s.eval::<f64>(&format!("return {get}()")).unwrap()
+        };
+        // `SStrToFloat` (`0x63e130`) kept as a single (`0x63e135`): `1 - f32(0.7)`.
+        assert_eq!(get("SetGamma(0.3)", "GetGamma"), 1.0 - f64::from(0.7f32));
+        // Its prefix grammar: no number reads 0, a trailing tail is dropped, `+` and `inf`
+        // are no number.
+        assert_eq!(get("SetCVar('gamma', 'abc')", "GetGamma"), 1.0);
+        assert_eq!(get("SetCVar('texLodBias', '0.5abc')", "GetTexLodBias"), 0.5);
+        assert_eq!(get("SetCVar('texLodBias', '+0.5')", "GetTexLodBias"), 0.0);
+        assert_eq!(get("SetCVar('farclip', 'inf')", "GetFarclip"), 0.0);
+        assert_eq!(get("SetCVar('baseMip', '1e')", "GetBaseMip"), 0.0);
     }
 
     #[test]
