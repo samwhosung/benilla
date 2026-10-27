@@ -222,16 +222,6 @@ impl UiScript {
     pub fn release_turn_or_action(&mut self) {
         release_primary(&self.lua, TURN_OR_ACTION);
     }
-
-    /// The two primary bits of `[InputControl+4]`, engine state a `/reload` keeps.
-    pub fn mouse_commands(&self) -> u8 {
-        self.model_ref().input.primaries
-    }
-
-    /// Seat the primary bits a dying VM held ([`Self::mouse_commands`]).
-    pub fn seed_mouse_commands(&mut self, bits: u8) {
-        self.model_mut().input.primaries = bits & (TURN_OR_ACTION | CAMERA_OR_SELECT);
-    }
 }
 
 /// A primary command's press (`0x514840`), behind the arm the command makes first (`0x514810`):

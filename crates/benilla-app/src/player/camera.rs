@@ -775,6 +775,25 @@ impl WorldMouse {
         }
     }
 
+    /// The release of every command (`0x5144c0` → `0x514b70(-1, …)`): both mouse bits, held or
+    /// scripted, so the look session ends at its next run.
+    pub(crate) fn release_all(&mut self) {
+        self.mouselook(false);
+        self.held = [false; 2];
+    }
+
+    /// Whether the TurnOrAction channel is held, by the right button or a `MouselookStart`.
+    #[cfg(test)]
+    pub(crate) fn turn_held(&self) -> bool {
+        self.turn()
+    }
+
+    /// `MouselookStart` as the VM's call lands, for a test.
+    #[cfg(test)]
+    pub(crate) fn mouselook_for_test(&mut self) {
+        self.mouselook(true);
+    }
+
     /// `MouselookStart` (`on`) or `MouselookStop`: one bit, whoever set it, so a stop also ends
     /// a right drag in flight, whose release then clears nothing.
     fn mouselook(&mut self, on: bool) {

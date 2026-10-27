@@ -2985,33 +2985,51 @@ fn a_reload_keeps_the_damage_text_font_the_login_read() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// The mouse commands' bits are the input control's (`[InputControl+4]`), which a `/reload` never
-/// touches and only the world enter clears (`0x5144c0`): a right held through a reload keeps its
-/// bit, so its release, not the next left click, is what clicks again.
+/// A `/reload` releases every command: its shutdown's leave clears the once-per-world latch
+/// (`0x490c20`, `0x490a8d`), so the re-init's world-enter cascade runs its release of every
+/// command (`0x490168` → `0x4908c0` → `0x49093c` → `0x5144c0`). A right held and a mouselook
+/// through a reload are gone after it: a left press arms its click, and no look channel stands.
 #[test]
-fn the_mouse_commands_outlive_a_reload_and_not_a_login() {
-    use benilla_ui::script::UiScript;
+fn a_reload_releases_the_mouse_commands_and_the_mouselook() {
+    use benilla_ui::script::{ClickCall, ClickMode, UiScript};
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_probe("mouse-commands");
     let mut world = booted_world();
-    let held = |world: &World| world.non_send_resource::<UiScript>().mouse_commands();
+    world.init_resource::<crate::player::CameraControl>();
+    // Whether a left press's `CameraOrSelectOrMoveStart` arms a click (`0x51481a`).
+    let left_arms = |world: &mut World| {
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        script.take_click_calls();
+        script
+            .run_binding("CameraOrSelectOrMoveStart() CameraOrSelectOrMoveStop()")
+            .unwrap();
+        script.take_click_calls().first() == Some(&ClickCall::Arm(ClickMode::Select))
+    };
 
     log_in_as(&mut world, "Onehunter", 1);
+    world.spawn(crate::net::SelfPlayer);
     world
         .non_send_resource::<UiScript>()
         .run_binding("TurnOrActionStart()")
         .unwrap();
-    assert_eq!(held(&world), 1, "the right command holds its bit");
+    world
+        .resource_mut::<crate::player::CameraControl>()
+        .world_mouse
+        .mouselook_for_test();
+    assert!(!left_arms(&mut world), "the right command holds its bit");
 
     reload(&mut world, crate::client_state::ClientState::InWorld);
-    assert_eq!(held(&world), 1, "the reloaded VM still holds it");
-
-    super::end_ui_session(&mut world);
-    log_in_as(&mut world, "Onehunter", 1);
-    assert_eq!(held(&world), 0, "a login's VM holds none");
+    assert!(left_arms(&mut world), "the reloaded VM holds no bit");
+    assert!(
+        !world
+            .resource::<crate::player::CameraControl>()
+            .world_mouse
+            .turn_held(),
+        "the reload ended the mouselook"
+    );
 
     drop(world);
     let _ = std::fs::remove_dir_all(&tmp);
