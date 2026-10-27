@@ -22,15 +22,15 @@ use crate::query_cache::Ask;
 use super::{BAGS, BAG_SLOT_FIRST, BANK_BAGS, BANK_BAG_SLOT_FIRST};
 
 /// One inventory refusal off the wire, with the fills of the only two reasons that format one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EquipError {
     /// The wire `InventoryResult`.
     pub reason: u8,
     /// Reason 1's `%d`, the packet's `requiredLevel`.
     pub required_level: Option<u32>,
-    /// Reason 16's `%s` source: the destination bag's player slot (255 names no bag), which the
-    /// firing resolves to the bag's `BagFamily` name.
-    pub bag_slot: u8,
+    /// Reason 16's `%s`: the destination bag's `BagFamily` name, read inside the handler as its
+    /// `0x5ede00` reads the bag (`0x5e3a1e`), or `None` for the generic line.
+    pub bag_family: Option<String>,
     /// The item guids a refused inventory operation unlocks after its line (`0x5e3ac0`,
     /// `0x5e3ad3`); none for a mail refusal.
     pub unlocks: [u64; 2],
@@ -59,7 +59,7 @@ impl EquipErrors {
     /// The refusals queued, in order.
     #[cfg(test)]
     pub(crate) fn queued(&self) -> Vec<EquipError> {
-        self.0.iter().map(|(_, e)| *e).collect()
+        self.0.iter().map(|(_, e)| e.clone()).collect()
     }
 
     fn peek(&self) -> Option<Stamp> {
@@ -90,7 +90,8 @@ fn drop_equip_errors(mut errors: ResMut<EquipErrors>) {
     errors.clear();
 }
 
-/// What a refusal's line reads: the player, the bag it names and that bag's family.
+/// What a refusal's handler reads for its line: the player, the bag it names and that bag's
+/// family.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct RefusalReads<'w, 's> {
     me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
@@ -100,13 +101,30 @@ pub(crate) struct RefusalReads<'w, 's> {
     bag_families: Option<Res<'w, super::ItemBagFamilies>>,
 }
 
+impl RefusalReads<'_, '_> {
+    /// Reason 16's `%s`, the bag at player slot `bag_slot` named by its family as the packet
+    /// leaves it ([`bag_family_name`]); `None` for any other reason.
+    pub(crate) fn bag_family(&self, reason: u8, bag_slot: u8) -> Option<String> {
+        (reason == 16)
+            .then(|| {
+                bag_family_name(
+                    self.me.iter().next(),
+                    bag_slot,
+                    &self.objects,
+                    &self.items,
+                    self.bag_families.as_deref().map(|c| &c.0),
+                )
+            })
+            .flatten()
+    }
+}
+
 /// The lane's `fire_until` ([`crate::lanes`]): each refusal `until` admits, its Lua run with the
 /// host lent; the lane stops after one whose firing stamped anything, so what it pushed fires next.
 fn fire_equip_errors(
     In(until): In<Until>,
     mut vm: crate::script_calls::HostedVm,
     mut errors: ResMut<EquipErrors>,
-    reads: RefusalReads,
     mut sink: crate::ui_action::MessageSink,
 ) {
     while let Some(stamp) = errors.peek().filter(|&s| until.admits(s)) {
@@ -116,7 +134,7 @@ fn fire_equip_errors(
         let ((), moved) = crate::lanes::firing(stamp, || {
             vm.run(|script| {
                 if let Some(script) = script {
-                    show_refusal(script, &mut sink, &reads, refusal);
+                    show_refusal(script, &mut sink, refusal);
                 }
             })
         });
@@ -133,21 +151,10 @@ fn fire_equip_errors(
 fn show_refusal(
     script: &mut UiScript,
     sink: &mut crate::ui_action::MessageSink,
-    reads: &RefusalReads,
     refusal: EquipError,
 ) {
-    // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
-    let subclass_fill = (refusal.reason == 16)
-        .then(|| {
-            bag_family_name(
-                reads.me.iter().next(),
-                refusal.bag_slot,
-                &reads.objects,
-                &reads.items,
-                reads.bag_families.as_deref().map(|c| &c.0),
-            )
-        })
-        .flatten();
+    // Reason 16 names the bag's family when the bag resolved, as `0x5ede00` does.
+    let subclass_fill = refusal.bag_family;
     let key = match subclass_fill {
         Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
         None => equip_error_key(refusal.reason),

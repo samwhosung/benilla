@@ -57,6 +57,7 @@ fn on_inventory_failure(
     mut equip_errors: ResMut<EquipErrors>,
     mut latch: ResMut<LootLatch>,
     mut loot: ResMut<LootState>,
+    reads: super::equip_error::RefusalReads,
 ) {
     if let SessionEvent::InventoryFailure {
         reason,
@@ -71,6 +72,7 @@ fn on_inventory_failure(
             required_level,
             items: [item_guid, item2_guid],
             bag_slot,
+            bag_family: reads.bag_family(reason, bag_slot),
         };
         inventory_failure(failure, &mut equip_errors, &mut latch);
         // The tail, after the unlocks: `LOOT_OPENED` again under an open window and a set
@@ -86,6 +88,8 @@ struct Failure {
     /// The two item guids the packet names.
     items: [u64; 2],
     bag_slot: u8,
+    /// Reason 16's bag, named by its family as the packet found it ([`EquipError::bag_family`]).
+    bag_family: Option<String>,
 }
 
 /// A refused inventory operation (reason 0 never arrives: `benilla_protocol::events` drops it):
@@ -98,6 +102,7 @@ fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &m
         required_level,
         items: [item_guid, item2_guid],
         bag_slot,
+        bag_family,
     } = failure;
     debug!(
         "net: inventory failure {reason:#04x} (items {item_guid:#x} {item2_guid:#x}, bag slot \
@@ -107,7 +112,7 @@ fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &m
     equip_errors.push(EquipError {
         reason,
         required_level,
-        bag_slot,
+        bag_family,
         unlocks: [item_guid, item2_guid],
     });
     // A failure whose first item guid is the looted item (a lockbox) ends the loot (`0x5e3a84`).
@@ -131,6 +136,7 @@ mod tests {
             required_level: None,
             items: [first, 0],
             bag_slot: 0,
+            bag_family: None,
         };
 
         // An unrelated item's failure must not end the session.
@@ -447,7 +453,7 @@ mod tests {
             .push(EquipError {
                 reason: 0x16,
                 required_level: None,
-                bag_slot: 0xff,
+                bag_family: None,
                 unlocks: [0x4000_0000_0000_00a1, 0],
             });
         app.update();
@@ -469,7 +475,7 @@ mod tests {
             .push(EquipError {
                 reason: 0x16,
                 required_level: None,
-                bag_slot: 0xff,
+                bag_family: None,
                 unlocks: [0x4000_0000_0000_0008, 0],
             });
 

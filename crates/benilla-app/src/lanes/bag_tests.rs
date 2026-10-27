@@ -401,6 +401,50 @@ fn an_inventory_refusal_shows_and_unlocks_at_its_packet() {
     );
 }
 
+/// A refusal for a specialised bag names the bag's family as its handler finds the bag
+/// (`0x5e3a1e` → `0x5ede00`), not as a later packet of the frame leaves the seat.
+#[test]
+fn a_wrong_bag_refusal_names_the_bag_its_packet_found() {
+    let mut app = client();
+    let world = app.world_mut();
+    world.insert_resource(crate::ui_items::ItemBagFamilies(
+        benilla_formats::ItemBagFamilyCatalog::from_names(std::collections::HashMap::from([(
+            1,
+            "Arrows".to_string(),
+        )])),
+    ));
+    world.resource_mut::<crate::items::Items>().insert_template(
+        BAG_ID,
+        Some(benilla_protocol::messages::ItemInfo {
+            stackable: 1,
+            bag_family: 1,
+            ..crate::items::test_template("Quiver")
+        }),
+    );
+    world
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            "ERR_WRONG_BAG_TYPE = 'Wrong bag.' \
+             ERR_WRONG_BAG_TYPE_SUBCLASS = 'Only %s can be placed in that.'",
+        )
+        .unwrap();
+    let refused = SessionEvent::InventoryFailure {
+        reason: 16,
+        required_level: None,
+        item_guid: 0,
+        item2_guid: 0,
+        bag_slot: 19,
+    };
+    let lines: Vec<String> = frame(&mut app, vec![refused, values(ME, &seat(19, 0))])
+        .into_iter()
+        .filter(|e| e.starts_with("UI_ERROR_MESSAGE"))
+        .collect();
+    assert_eq!(
+        lines,
+        ["UI_ERROR_MESSAGE:Only Arrows can be placed in that."]
+    );
+}
+
 /// A refused sale unlocks the item it names inside its handler (`0x5dd26b`).
 #[test]
 fn a_refused_sales_unlock_fires_at_its_packet() {

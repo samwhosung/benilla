@@ -470,6 +470,9 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // `ItemBagFamily.dbc`, which the inventory refusal's handler names a bag's family by
+    // (`0x5ede00`).
+    "::ui_items::ItemBagFamilies",
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.
@@ -1739,7 +1742,6 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_action::cast_lines::CastFailRedisplays"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_trade::TradeSession"]),
-    ("equip errors", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore"]),
     ("auction house", &["items::Items", "names::NameCache", "net::SelfGuid",
         "ui_auction::AuctionOpen"]),
     // The master-loot candidates placed and named off the raid roster's subgroups as the frame

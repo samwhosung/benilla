@@ -27,6 +27,11 @@ impl ItemBagFamilyCatalog {
             .flatten()
     }
 
+    /// A catalog of `names` by family id, for a harness without the install.
+    pub fn from_names(names: HashMap<u32, String>) -> Self {
+        Self { names }
+    }
+
     pub fn len(&self) -> usize {
         self.names.len()
     }
