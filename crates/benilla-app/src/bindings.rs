@@ -2614,8 +2614,9 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
-    /// The reader registers for both sections through `0x5afe50` (`0x4b62ef`, `0x4b6300`): while
-    /// they are pending the sets are not read, and once both settle (`0x5afaca`) they are.
+    /// The reader registers for each section through `0x5afe50` (`0x4b62ef`, `0x4b6300`): a
+    /// pending section's set is not read, nor saved over; section 2's settling reads set 1 alone,
+    /// and section 3's reads set 2 and chooses the set in use (`0x4b629a` → `0x4b64b0`).
     #[test]
     fn the_binding_reader_waits_for_its_sections() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -2657,11 +2658,63 @@ mod tests {
         assert_ne!(
             eval_str(&app, jump),
             "G",
-            "the character's section still pending"
+            "set 1 read; no set chosen while section 3 is pending"
         );
         settle(&app, 3);
         app.update();
-        assert_eq!(eval_str(&app, jump), "G", "both settled: the sets read");
+        assert_eq!(eval_str(&app, jump), "G", "set 2 read, set 1 chosen");
+        drop(app);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// One section settled and its pair held: a save writes the settled section's files and skips
+    /// the held one's (`0x4b6600`, `0x4b6611` → `0x5afee0`).
+    #[test]
+    fn a_save_skips_only_the_held_sections_write() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-mixed-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _h = crate::local_state::test_env::EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let account = crate::local_state::bindings_account_path().unwrap();
+        crate::local_state::write_atomic(&account, "bind JUMP G\n").unwrap();
+        let theirs =
+            crate::local_state::bindings_cache_character_path("Realm", "Probeone").unwrap();
+        crate::local_state::write_atomic(&theirs, "bind H JUMP\r\n").unwrap();
+        let mut app = App::new();
+        app.insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+            vec![crate::glue_session::roster::test_character(7, "Probeone")],
+            7,
+        ))
+        .init_resource::<BindingFiles>()
+        .init_resource::<crate::account_data::AccountData>()
+        .add_systems(
+            Update,
+            (reread_arrived_bindings, drain_binding_requests).chain(),
+        );
+        app.world()
+            .resource::<crate::account_data::AccountData>()
+            .settle_section_for_test(2);
+        let mut script = core_script();
+        seed_bindings_for_vm(app.world_mut(), &mut script);
+        app.insert_non_send_resource(script);
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run(r#"SetBinding("K", "JUMP") SaveBindings(1)"#)
+            .unwrap();
+        app.update();
+        let diff = std::fs::read_to_string(&account).unwrap();
+        assert!(
+            diff.contains("bind JUMP SPACE K"),
+            "section 2 settled: written: {diff}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&theirs).unwrap(),
+            "bind H JUMP\r\n",
+            "section 3 held: its file is not emptied"
+        );
         drop(app);
         std::fs::remove_dir_all(&tmp).ok();
     }
