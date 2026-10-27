@@ -118,7 +118,6 @@ fn frame_after(
     world
         .run_system_cached(crate::ui_pet::feed_pet_unit)
         .expect("the pet feed runs");
-    crate::ui_unit::run_feed_chain_units_once(world);
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Seen").unwrap();

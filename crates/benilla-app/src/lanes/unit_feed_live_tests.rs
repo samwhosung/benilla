@@ -37,7 +37,7 @@ const PLAIN: u32 = 90_103;
 struct Client {
     app: App,
     inbound: Sender<SessionEvent>,
-    _sent: Receiver<ClientCommand>,
+    sent: Receiver<ClientCommand>,
 }
 
 impl Client {
@@ -166,11 +166,7 @@ fn arrived(known: &[u32]) -> (Client, Vec<String>) {
         .resource_mut::<crate::ui_action::PlayerActions>()
         .spells
         .extend(known.iter().copied());
-    let mut c = Client {
-        app,
-        inbound,
-        _sent: sent,
-    };
+    let mut c = Client { app, inbound, sent };
     let unit = [(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
     c.frame(vec![vec![
         created(
@@ -398,4 +394,67 @@ fn the_language_count_is_no_value_with_no_player() {
         ),
         (0, 0)
     );
+}
+
+/// The unit a token resolves to is read at the call (`0x515970`, then `0x468460`): a raid mark
+/// set by guid after the frame's push (`0x4bb4f1`) answers for `"target"` and for a chain ending on
+/// the same unit, with no push between; with no host lent, the push answers.
+#[test]
+fn the_unit_a_token_names_is_read_at_the_call() {
+    let mut c = client();
+    // The wolf's `UNIT_FIELD_TARGET` is us, and ours the wolf, so `targettargettarget` ends on it.
+    c.write(WOLF, &[(16, ME as u32), (17, 0)]);
+    c.write(ME, &[(16, WOLF as u32), (17, (WOLF >> 32) as u32)]);
+    c.frame(vec![]);
+    let chunk = r#"return GetRaidTargetIndex("target"), GetRaidTargetIndex("targettargettarget")"#;
+    type Answer = (Option<i64>, Option<i64>);
+    assert_eq!(c.eval::<Answer>(true, chunk), (None, None));
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_party::GroupState>()
+        .raid_targets[2] = WOLF;
+    assert_eq!(
+        c.eval::<Answer>(true, chunk),
+        (Some(3), Some(3)),
+        "the mark as it stands"
+    );
+    assert_eq!(
+        c.eval::<Answer>(false, chunk),
+        (None, None),
+        "no host, the frame's push"
+    );
+}
+
+/// The by-name walk offers the units as they stand at the call (`0x493aa0`, `0x468380` with
+/// `0x493d30`): a player whose name lands after the frame is picked by `PromoteByName`, which
+/// sends `CMSG_GROUP_SET_LEADER` for it (`0x48a86a`).
+#[test]
+fn the_by_name_walk_offers_the_units_at_the_call() {
+    const ALLY: u64 = 0x9;
+    let mut c = client();
+    c.frame(vec![vec![created(
+        ALLY,
+        EntityKind::Player,
+        &[
+            (FIELD_UNIT_HEALTH, 100),
+            (FIELD_UNIT_MAXHEALTH, 100),
+            (TEMPLATE, HUMAN),
+        ],
+    )]]);
+    c.place(ALLY, 3.0);
+    c.sent.try_iter().for_each(drop);
+    c.app
+        .world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(ALLY, "Ally".into(), None);
+    c.eval::<()>(true, r#"PromoteByName("Ally")"#);
+    let leads: Vec<u64> = c
+        .sent
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            ClientCommand::GroupSetLeader { guid } => Some(guid),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(leads, [ALLY]);
 }

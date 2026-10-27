@@ -263,6 +263,38 @@ pub struct NameCandidate {
     pub assistable_alive: bool,
 }
 
+/// The question: every unit the by-name walk's object pass can offer (typemask 8, a cached name,
+/// no query sent), as of the call: the reference walks the object manager when the verb runs, each
+/// unit at its squared distance from the active player then (`0x468380` with `0x493d30`).
+pub struct HeldCandidatesQuery;
+
+/// One unit the object pass offers, as the lent host reads it at the call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveCandidate {
+    pub guid: u64,
+    /// The cached name the matcher compares.
+    pub name: String,
+    /// Squared distance from the active player, its position and the unit's composed at the call.
+    pub dist2: f32,
+    /// The guid is a player's, for [`Kinds::PlayerOnly`].
+    pub is_player: bool,
+    /// [`Filter::AssistableAlive`]'s test (`0x493eca`).
+    pub assistable_alive: bool,
+}
+
+/// The object pass's input at the call.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiveCandidates {
+    /// An object is held for the active player; without one the walk returns nothing (`0x493ae0`).
+    pub active_player: bool,
+    /// The units, none without an active player.
+    pub held: Vec<LiveCandidate>,
+}
+
+impl crate::script::live::LiveQuery for HeldCandidatesQuery {
+    type Answer = LiveCandidates;
+}
+
 impl super::super::UiScript {
     /// Push, or clear with `None`, a by-name candidate. Without an active player object the app
     /// pushes none, as the reference resolves nothing then (`0x493ae0`).
@@ -374,22 +406,52 @@ impl Model {
 
     /// The guid `0x493aa0` resolves for a player's name typed to a binding (typemask 0x10, no
     /// exact-only flag, `filter` the binding's mode): the party slots, then the raid roster, each
-    /// member offered while no object is held for it, then the pushed candidates. Our own row is
-    /// held, as the active player object always is, and is offered by the object pass at distance 0.
-    /// The roster passes read the party slots and the raid rows as they stand at the call, through
-    /// the lent host, and the pushed roster with none lent.
+    /// member offered while no object is held for it, then the held units. Our own row is held, as
+    /// the active player object always is, and is offered by the object pass at distance 0. The
+    /// roster passes read the party slots and the raid rows, and the object pass the units, as they
+    /// stand at the call, through the lent host ([`HeldCandidatesQuery`]); with none lent, the
+    /// pushed roster and candidates.
     pub(crate) fn closest_player(
         &self,
         lua: &mlua::Lua,
         name: &str,
         filter: Filter,
     ) -> Option<u64> {
+        let live = crate::script::live::ask(lua, &HeldCandidatesQuery);
         let search = Search {
             query: name,
             kinds: Kinds::PlayerOnly,
             filter,
             exact: Match::PrefixOk,
-            active_player: self.snapshot_unit("player").is_some_and(|u| u.has_object),
+            active_player: match &live {
+                Some(live) => live.active_player,
+                None => self.snapshot_unit("player").is_some_and(|u| u.has_object),
+            },
+        };
+        let held: Vec<Held<'_, ()>> = match &live {
+            Some(live) => live
+                .held
+                .iter()
+                .map(|c| Held {
+                    id: (),
+                    name: &c.name,
+                    guid: c.guid,
+                    dist2: c.dist2,
+                    is_player: c.is_player,
+                    assistable_alive: c.assistable_alive,
+                })
+                .collect(),
+            None => self
+                .held_candidates()
+                .map(|h| Held {
+                    id: (),
+                    name: h.name,
+                    guid: h.guid,
+                    dist2: h.dist2,
+                    is_player: h.is_player,
+                    assistable_alive: h.assistable_alive,
+                })
+                .collect(),
         };
         if let Some(live) = super::super::roster_read::live_roster_names(lua) {
             fn entry(m: &super::super::RosterName) -> RosterEntry<'_> {
@@ -403,12 +465,12 @@ impl Model {
                 search,
                 live.party.iter().map(entry),
                 live.raid.iter().map(entry),
-                self.held_candidates(),
+                held,
             )
             .map(|pick| pick.guid);
         }
         let party = &self.party;
-        let held = |token: String| self.snapshot_unit(&token).is_some_and(|u| u.has_object);
+        let held_token = |token: String| self.snapshot_unit(&token).is_some_and(|u| u.has_object);
         let members = party
             .members
             .iter()
@@ -417,15 +479,15 @@ impl Model {
             .map(|(i, m)| RosterEntry {
                 name: &m.name,
                 guid: m.guid,
-                held: held(format!("party{}", i + 1)),
+                held: held_token(format!("party{}", i + 1)),
             });
         let raid = party.raid.iter().enumerate().map(|(i, m)| RosterEntry {
             name: &m.name,
             guid: m.guid,
             held: (party.own_guid != 0 && m.guid == party.own_guid)
-                || held(format!("raid{}", i + 1)),
+                || held_token(format!("raid{}", i + 1)),
         });
-        resolve(search, members, raid, self.held_candidates()).map(|pick| pick.guid)
+        resolve(search, members, raid, held).map(|pick| pick.guid)
     }
 
     /// The snapshot a held unit's `"target"` view seats with ([`UiScript::seat_selection`]): its

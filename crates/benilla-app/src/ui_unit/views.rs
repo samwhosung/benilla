@@ -562,7 +562,7 @@ fn held_units<'a>(
     let world = src.world;
     super::held::HeldUnits {
         names: src.names,
-        commands: src.commands,
+        commands: Some(src.commands),
         group: src.group,
         self_store: stores.me.map(|(s, _)| s),
         unit_names: src.tables.unit_names(),
@@ -588,15 +588,18 @@ pub(super) fn token_views<'a>(
 ) -> Tokens<Option<UnitState>> {
     let world = src.world;
     let player = stores.me.map(|(store, guid)| {
+        // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only a
+        // name the cache holds nothing for, as one invalidated since.
         let mut s = super::player_snapshot(
             store,
             guid,
             src.tables,
             src.names,
-            src.commands,
+            crate::query_cache::Ask::New(src.commands),
             src.group,
             world.factions(),
-            src.guild,
+            // `GetGuildInfo`: the public guild fields (191/192) joined against the lazy cache.
+            crate::ui_guild::unit_guild(&store.0, src.guild, src.commands),
         );
         if let Some(me) = world.me() {
             s.is_pvp_ffa = super::pvp_free_for_all(&world.get(), &me);

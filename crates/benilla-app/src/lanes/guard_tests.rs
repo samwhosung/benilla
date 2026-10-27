@@ -345,14 +345,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
         "ui_action::PlayerActions", "ui_guild::GuildState", "ui_party::GroupState",
         "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
-    // The chain ends' snapshots read their stores as of the drain's place (`ui_unit::views`); their
-    // names, relations, raid marks and guild read as the frame left them.
-    ("::ui_unit::held::feed_chain_units", &["names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
-        "ui_guild::GuildState", "ui_party::GroupState"]),
-    ("::ui_unit::held::feed_name_candidates", &["names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
-        "ui_guild::GuildState", "ui_party::GroupState"]),
     // The party and raid tokens read the members' stores, records and the roster's cells as of
     // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
     // the roster push is their no-host fallback, and every snapshot's names and relations read as
@@ -495,6 +487,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_pet_stats::PetFamilyTables",
     // The personality and loyalty names and the slot prices the host's stat and stable getters read.
     "::ui_pet_stats::PetStatTables",
+    // The studied-creature block's tables, which a unit's state read through the host builds its
+    // tooltip lines from.
+    "::ui_unit::tooltip_facts::StudyTables",
     // The area names a trainer description's `$z` reads through the host.
     "::QuestHeaderNamesRes",
     "::HomeBind",

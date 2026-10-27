@@ -472,13 +472,15 @@ pub use types::{
     ExtractedQuad, FontObject, FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest,
     MeasureRequest, Outline, QuadContent, ScriptValue, TexCoords, TextShadow,
 };
-pub use unit::by_name::{self, NameCandidate, SeatedSelection};
+pub use unit::by_name::{
+    self, HeldCandidatesQuery, LiveCandidate, LiveCandidates, NameCandidate, SeatedSelection,
+};
 pub use unit::{
     grey_band, level_reads_unknown, parse_unit_token, power_token, resolve_unit_in, unit_is_grey,
     ObjectNameQuery, PlayerNameQuery, PlayerRecord, RelationAnswer, RelationQuery,
     SelectionGlobals, SelectionQuery, SelectionRequest, UnitBase, UnitGuids, UnitIdentityRead,
     UnitObject, UnitObjectRead, UnitRecord, UnitRecordQuery, UnitRelations, UnitState,
-    UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
+    UnitStateAnswer, UnitStateQuery, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
 pub use use_gates::ControlBypassQuery;
 pub use weapon_enchant::WeaponEnchant;

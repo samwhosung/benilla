@@ -164,9 +164,6 @@ impl Plugin for UiUnitPlugin {
                 fire_unit_events
                     .in_set(UnitEvents)
                     .after(crate::ui_action::CooldownEvents),
-                // After the aura feed, whose guids it covers.
-                held::feed_chain_units.after(crate::ui_aura::AuraEvents),
-                held::feed_name_candidates,
                 feed_far_sight_bit,
             )
                 .chain()
@@ -1283,23 +1280,22 @@ pub(crate) fn faction_group_localized(
 }
 
 /// `"player"`'s snapshot off our own descriptor: no reaction (the unit is ours), the raid icon,
-/// both faction-group spellings and the guild. One builder for [`feed_units`] and for the seat a
-/// `/reload`'s load runs under ([`live_player_seat`]).
-fn player_snapshot(
+/// both faction-group spellings and `guild`. One builder for [`feed_units`], for the seat a
+/// `/reload`'s load runs under ([`live_player_seat`]) and for the getters' live read
+/// ([`live::UnitFeedLive`]); its name is looked up as `ask` says.
+#[allow(clippy::too_many_arguments)] // the snapshot's inputs, as each caller holds them
+pub(crate) fn player_snapshot(
     store: &ObjectStore,
     guid: u64,
     tables: &SnapshotTables,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask,
     group: &crate::ui_party::GroupState,
     factions: Option<&Factions>,
-    guild: &crate::ui_guild::GuildState,
+    guild: Option<benilla_ui::script::UnitGuild>,
 ) -> UnitState {
-    // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
-    // a name the cache holds nothing for, as one invalidated since, and a refused one waits
-    // for the next create.
     let name = names
-        .resolve_unit(guid, Some(store), Ask::New(commands))
+        .resolve_unit(guid, Some(store), ask)
         .map(str::to_string);
     let mut s = snapshot(
         store,
@@ -1313,8 +1309,7 @@ fn player_snapshot(
     s.raid_target = group.raid_target_index(guid);
     s.faction_group = faction_group(store, factions);
     s.faction_group_localized = faction_group_localized(store, factions);
-    // `GetGuildInfo`: the public guild fields (191/192) joined against the lazy guild cache.
-    s.guild = crate::ui_guild::unit_guild(&store.0, guild, commands);
+    s.guild = guild;
     s
 }
 
@@ -1352,15 +1347,17 @@ pub(crate) fn live_player_seat(
     world: crate::target::RelationWorld,
 ) -> Option<LivePlayerSeat> {
     let (store, guid) = self_q.iter().next()?;
+    // The unit's create looked its name up with a callback (`0x5dec12`); a miss is asked here.
     let mut state = player_snapshot(
         store,
         guid.0,
         &tables,
         &names,
-        &commands,
+        Ask::New(&commands),
         &group,
         factions.as_deref(),
-        &guild,
+        // `GetGuildInfo`: the public guild fields (191/192) joined against the lazy guild cache.
+        crate::ui_guild::unit_guild(&store.0, &guild, &commands),
     );
     if let Some(me) = world.me() {
         state.is_pvp_ffa = pvp_free_for_all(&world.get(), &me);
@@ -1391,14 +1388,6 @@ pub(crate) fn feed_units_runs_before<M>(
     system: impl bevy::ecs::system::IntoSystem<(), (), M>,
 ) -> bool {
     crate::test_support::runs_before(app, feed_units, system)
-}
-
-/// [`held::feed_chain_units`] once, for a test that drives the feeds by hand.
-#[cfg(test)]
-pub(crate) fn run_feed_chain_units_once(world: &mut World) {
-    world
-        .run_system_cached(held::feed_chain_units)
-        .expect("the chain feed runs as a one-shot system");
 }
 
 /// What [`feed_units`] reads that the call host also reaches: the selection and the relation
@@ -1874,9 +1863,6 @@ fn fire_unit_events(mut hosted_vm: crate::script_calls::HostedVm, mut feed: ResM
         }
     })
 }
-
-#[cfg(test)]
-pub(crate) use held::feed_name_candidates;
 
 /// The bare unit feed, for a test driving the stock unit frames off engine state, which lends no
 /// host: the relation functions' seat, the pushes, the control edge, the unit events, then the

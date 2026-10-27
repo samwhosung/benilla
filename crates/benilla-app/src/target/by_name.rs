@@ -7,10 +7,10 @@
 //! | `AssistByName 0x489c40` | 0x10, players only | 0 | 0 |
 //! | `FollowByName 0x489ec0` | 0x10, players only | 2, `CanAssist` and alive | Lua arg 2 |
 //!
-//! The ranking is [`benilla_ui::script::by_name::resolve`], the one resolver `SetLootMethod`'s master
-//! name and `TargetByName`'s view of the pick share; this module feeds it the held units, positioned
-//! by [`GlobalTransform`] as [`crate::ui_unit`]'s candidate feed does, and breaks a full tie by
-//! guid, so the chunk shows the unit the commit picks. The reference's walk follows the object
+//! The ranking is [`benilla_ui::script::by_name::resolve`], the one resolver the VM's name verbs
+//! (`SetLootMethod`'s master name, `StartDuel`, `PromoteByName`) share; this module feeds it the
+//! held units, positioned by [`GlobalTransform`], and breaks a full tie by guid, as the VM's walk
+//! over the units the call host offers does ([`crate::ui_unit::live`]). The reference's walk follows the object
 //! list's order (a tail append, `0x4646c3`-`0x4646d4`), the deviation documented there.
 //!
 //! Every caller runs the roster passes (party `0x493b22`, raid `0x493ba7`), which offer a member
@@ -68,8 +68,8 @@ impl NameSearch {
     }
 
     /// Whether `guid_val` is a candidate of this search: the typemask, then a name already in the
-    /// cache. The one test both [`scan_units`] and the VM's candidate feed
-    /// (`ui_unit::held::feed_name_candidates`) apply, so the chunk's candidates are the commit's.
+    /// cache. The one test both [`scan_units`] and the VM's walk ([`crate::ui_unit::live`]) apply,
+    /// so the two offer the same units.
     pub(crate) fn candidacy<'a>(self, names: &'a NameCache, guid_val: u64) -> Candidacy<'a> {
         if !self.accepts(guid_val) {
             return Candidacy::Outside;
@@ -268,9 +268,8 @@ pub(crate) fn assistable_alive(
     })
 }
 
-/// One unit query's candidates, positioned by [`GlobalTransform`] as the VM's candidate feed
-/// (`ui_unit::held::feed_name_candidates`) does: nothing writes it during `Update`, so both walks
-/// read one value in a frame, and it adds no undeclared order against the systems that move units.
+/// One unit query's candidates, positioned by [`GlobalTransform`]: nothing writes it during
+/// `Update`, so it adds no undeclared order against the systems that move units.
 type UnitQuery<'w, 's> = Query<
     'w,
     's,

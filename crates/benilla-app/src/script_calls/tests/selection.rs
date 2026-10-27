@@ -539,15 +539,13 @@ fn pick_wire(f: &Frame) -> Vec<String> {
         .collect()
 }
 
-/// `MOB` is named, as the unit feed names it to the VM.
+/// `MOB` is named in the name cache, which the getters read at the call off a held unit.
 fn with_named_mob(f: &mut Frame) {
     let world = f.app.world_mut();
     world
         .resource_mut::<crate::names::NameCache>()
         .insert_player(MOB, "Red Affinity".into(), None);
-    world
-        .run_system_once(crate::ui_unit::feed_name_candidates)
-        .expect("the candidate feed runs as a one-shot system");
+    as_creature(world, MOB);
 }
 
 /// TryCast's attack pick (`0x6e4efb` → `0x612df0` → `0x493f60`) commits through `SetSelection`,

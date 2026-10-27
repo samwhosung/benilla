@@ -291,6 +291,10 @@ fn a_party_verbs_own_refusal_shows_inside_its_call() {
         );
         // The frame seats Bob in `party1`; we lead, as the gates read the world's group.
         world.resource_mut::<crate::ui_party::GroupState>().leader = ME;
+        // Our name as `GetUnitName` reads it off the name cache at the call (`0x48a473`).
+        world
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(ME, "Probe".into(), None);
     }
     assert_eq!(
         shown_in_call(&mut f, r#"InviteByName("probe")"#),

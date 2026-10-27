@@ -221,14 +221,18 @@ fn a_creature_answers_its_name_events_at_its_packets_place() {
 
 /// The civilian flag is the record's, read as the call runs: `UnitIsCivilian` and the `UnitPVPName`
 /// prefix (`0x612550`, `0x609370`) see a template that landed after the frame's push, where the
-/// snapshot holds a record-less unit. The PvP flag, the level and the reaction are held as the
-/// push has them.
+/// snapshot holds a record-less unit. The PvP flag, the level and the reaction, an Orc wolf's
+/// toward a Human, are read off the descriptors then too.
 #[test]
 fn the_civilian_flag_is_read_off_the_record_as_the_call_runs() {
     let mut app = named_client();
     let world = app.world_mut();
     let entity = world.resource::<crate::net::GuidIndex>().0[&WOLF];
-    // `UNIT_FIELD_FLAGS` PvP, and a level far below the player's.
+    use crate::target::relations::fixture::{factions, HUMAN, ORC};
+    /// `UNIT_FIELD_FACTIONTEMPLATE`.
+    const TEMPLATE: u16 = 35;
+    world.insert_resource(factions());
+    // `UNIT_FIELD_FLAGS` PvP, a level far below the player's, and an Orc's template.
     world
         .get_mut::<crate::net::ObjectStore>(entity)
         .expect("a store")
@@ -236,6 +240,7 @@ fn the_civilian_flag_is_read_off_the_record_as_the_call_runs() {
         .merge(benilla_protocol::ObjectFields::from_pairs(&[
             (benilla_protocol::field::FIELD_UNIT_FLAGS, 0x1000),
             (benilla_protocol::field::FIELD_UNIT_LEVEL, 1),
+            (TEMPLATE, ORC),
         ]));
     // Our own level, which the grey test reads off our descriptor as the call runs.
     let me = world
@@ -246,10 +251,10 @@ fn the_civilian_flag_is_read_off_the_record_as_the_call_runs() {
         .get_mut::<crate::net::ObjectStore>(me)
         .expect("our store")
         .0
-        .merge(benilla_protocol::ObjectFields::from_pairs(&[(
-            benilla_protocol::field::FIELD_UNIT_LEVEL,
-            60,
-        )]));
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (benilla_protocol::field::FIELD_UNIT_LEVEL, 60),
+            (TEMPLATE, HUMAN),
+        ]));
     {
         let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
         script.run(r#"PVP_RANK_CIVILIAN = "Civilian""#).unwrap();
@@ -271,7 +276,11 @@ fn the_civilian_flag_is_read_off_the_record_as_the_call_runs() {
     }
     const CHUNK: &str = "return UnitIsCivilian('target'), UnitPVPName('target')";
     let before: (Option<i64>, Option<String>) = hosted(&mut app, CHUNK);
-    assert_eq!(before, (None, Some("Wolf".into())), "no record yet");
+    assert_eq!(
+        before,
+        (None, Some("Unknown Being".into())),
+        "no record yet: the unknown object (`0x609324`)"
+    );
     let mut record = wolf_record();
     record.civilian = true;
     app.world_mut()
