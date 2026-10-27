@@ -1940,13 +1940,6 @@ mod tests {
                  a divergence, not a fix",
             ),
             ("DISPLAY_SIZE_CHANGED", "the four paperdoll files"),
-            (
-                "GMSURVEY_DISPLAY",
-                "HelpFrame.lua — the post-ticket survey. A real 1.12 event (fired at \
-                 `0x5e797b`, id 538) whose whole UI is the LoadOnDemand `Blizzard_GMSurveyUI`; \
-                 we have neither the producer nor the addon on the chain, and the ticket \
-                 flow works without it",
-            ),
             ("ITEM_TEXT_TRANSLATION", "ItemTextFrame.lua"),
             (
                 "SHOW_COMPARE_TOOLTIP",
