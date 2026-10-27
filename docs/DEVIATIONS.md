@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 247
+- [benilla-app](#benilla-app): 248
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
@@ -187,6 +187,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
 - A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:928`](../crates/benilla-app/src/net/objects/update.rs#L928))
 - The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:940`](../crates/benilla-app/src/net/objects/update.rs#L940))
+- On benilla's unattended reconnect, which the reference lacks, the world's VM survives the loss, so the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the surviving target frame lets the lost unit go. ([`src/net/session.rs:254`](../crates/benilla-app/src/net/session.rs#L254))
 
 #### no_install
 
@@ -209,7 +210,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A settle hold is summed and sent once on release, without the push, because it stands in for the reference's blocking load (`0x694920`), not a refused substep, and lasts seconds. ([`src/player/movement_net.rs:470`](../crates/benilla-app/src/player/movement_net.rs#L470))
 - The reference's blocking load (`0x694920`) waits out its reads before the frame goes on and has no such release; without one, a model that never loads would freeze our body for good. ([`src/player/state.rs:120`](../crates/benilla-app/src/player/state.rs#L120))
 - Root is not merged, because a bare pose unrooting us while the server still roots us streams motion into `CHEAT_TYPE_ROOT_MOVE`; vmangos keeps a rooted mover's root bit (`MovementHandler.cpp:1064`), so the reference's merge of it is a no-op anyway. ([`src/player/state.rs:202`](../crates/benilla-app/src/player/state.rs#L202))
-- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:499`](../crates/benilla-app/src/player/wire_in.rs#L499))
+- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:490`](../crates/benilla-app/src/player/wire_in.rs#L490))
 
 #### portrait
 
@@ -279,7 +280,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### spell
 
 - An out-of-range byte drops the packet, because the reference's unchecked write overruns the table (`(64, 19)` lands on the class family at `0xcecaac`). ([`src/spell/mods.rs:132`](../crates/benilla-app/src/spell/mods.rs#L132))
-- The fallback is the packet's target guid, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:1321`](../crates/benilla-app/src/spell/net.rs#L1321))
+- The fallback is the packet's target guid, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:1317`](../crates/benilla-app/src/spell/net.rs#L1317))
 - A range failure leaves targeting armed and working. The reference's report cancels the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm, which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`), so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a cancel. ([`src/spell/targeting/mod.rs:624`](../crates/benilla-app/src/spell/targeting/mod.rs#L624))
 
 #### target
@@ -290,7 +291,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - TAB uses Classic Era's screen-space priority, not 1.12's ±30° facing cone and snapshot cursor (`0x493f60`), because the cone skips a close mob in front of the camera, which sits behind the character. ([`src/target/scan.rs:3`](../crates/benilla-app/src/target/scan.rs#L3))
 - Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:194`](../crates/benilla-app/src/target/scan.rs#L194))
 - No drawn gate (the reference's IsEntityDrawn, `0x6704c0`), because the draw election hides every body outside the frustum, which would empty the off-screen tier. ([`src/target/scan.rs:369`](../crates/benilla-app/src/target/scan.rs#L369))
-- Sampled each frame, not stamped in `SetSelection`, so every selection writer is covered; a selected unit that turns hostile is remembered, where the reference's is not. ([`src/target/scan.rs:933`](../crates/benilla-app/src/target/scan.rs#L933))
+- Sampled each frame, not stamped in `SetSelection`, so every selection writer is covered; a selected unit that turns hostile is remembered, where the reference's is not. ([`src/target/scan.rs:934`](../crates/benilla-app/src/target/scan.rs#L934))
 
 #### textinput
 
