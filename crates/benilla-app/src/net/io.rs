@@ -988,7 +988,7 @@ fn world(
             // again ([`query`]).
             logon.close();
             // No `CMSG_SET_ACTIVE_MOVER` here: it waits for our own player's create, as the
-            // reference's does (`super::enter_world_on_self_create`); a server may drop it before then.
+            // reference's does (the arrival, `0x5deb5b`); a server may drop it before then.
             session.player_login(refuse_once(guid))?;
 
             let billing = session.billing();

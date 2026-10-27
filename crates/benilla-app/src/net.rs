@@ -36,8 +36,6 @@ mod world;
 pub(crate) use reputations::Reputations;
 
 pub(crate) use apply::apply_net_updates;
-pub(crate) use apply::enter_world_on_self_create;
-use apply::tag_self_player;
 #[cfg(test)]
 pub(crate) use game_time::GameTime;
 pub(crate) use game_time::{clock_tick, ServerTime};
@@ -142,10 +140,8 @@ impl Plugin for NetPlugin {
                 Update,
                 (
                     apply_net_updates,
-                    tag_self_player,
-                    enter_world_on_self_create,
-                    // The create gives control back (`0x5deb56`), in the Net stage ahead of
-                    // `control`'s read of the flags.
+                    // The create gives control back (`0x5deb56`), the flag inside its packet and
+                    // the controller's lock here, ahead of `control`'s read of the flags.
                     crate::player::regain_control_on_arrival.in_set(crate::player::ControlRestore),
                     sample_splines,
                     // Swim state from the water at the feet (the wire never carries it for
@@ -172,7 +168,7 @@ impl Plugin for NetPlugin {
                 Update,
                 send_query_time
                     .in_set(WorldStage::Net)
-                    .after(enter_world_on_self_create),
+                    .after(apply_net_updates),
             )
             .add_systems(Update, population_pulse.in_set(WorldStage::Net));
     }
@@ -2321,7 +2317,7 @@ pub(crate) struct EnteredWorldMessage {
 }
 
 /// The reference's world-enter cascade (`0x4908c0`) ran: our own player's create, at login and
-/// every cross-map worldport ([`enter_world_on_self_create`]). Its sends wait for
+/// every cross-map worldport (the arrival in [`objects`]'s update handler). Its sends wait for
 /// this, not [`EnteredWorldMessage`], which fires before the server has seated the player.
 #[derive(Message)]
 pub(crate) struct WorldEnterCascadeMessage;

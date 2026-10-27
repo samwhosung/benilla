@@ -159,6 +159,15 @@ impl ChrClasses {
         self
     }
 
+    /// Sets `class`'s spell family, for a table built by [`Self::from_rows`]; a class with no row
+    /// is left without one.
+    pub fn with_spell_family(mut self, class: u32, family: u32) -> Self {
+        if let Some(c) = self.0.get_mut(&class) {
+            c.spell_family = family;
+        }
+        self
+    }
+
     /// The class spell family, which the reference caches in `[0xcecaac]` and matches against a
     /// spell's `SpellFamilyName` before a talent modifier applies. A class with no row answers 0,
     /// the global's value from world-enter (`0x6e7150`) until the player resolves, which the

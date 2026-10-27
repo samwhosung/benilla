@@ -1231,7 +1231,7 @@ mod tests {
                     flags,
                 )])),
             ));
-            // The create's cascade (`0x5deb60`), as `enter_world_on_self_create` writes it.
+            // The create's cascade (`0x5deb60`), as our own create's arrival writes it.
             app.world_mut()
                 .write_message(crate::net::WorldEnterCascadeMessage);
             app.update();

@@ -68,6 +68,14 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
+        "Messages<benilla_app::net::WorldEnterCascadeMessage>",
+        "the world-enter cascade, which our own create's arrival writes inside its packet \
+         (`0x5deb60` → `0x4908c0`) and whose readers (the action bar's slot pass, the item \
+         recount) fire off it in system order, where the reference runs the cascade in the \
+         arrival",
+    ),
+    (
+        Row::Queue,
         "::ui_action::errors::MountErrors",
         "the mount refusals",
     ),
@@ -223,6 +231,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // response's `QUEST_LOG_UPDATE` fires on the quest log lane.
     "::net::ServerWallClock",
     "::net::game_time::ServerTime",
+    // Read, and quiet: the control packet's handler and our own create's arrival signal its
+    // changes on the notice lane in place (`0x4958e0`), and the action bar's diff of it is
+    // `fire_action_events`'s edge row.
+    "::player::state::OwnControlLost",
     "::spell::cast_send::HeldForPick",
     "::spell::cast_send::ScriptCastPermit",
     "::spell::cast_send::unit_caster::PetGcdsOwed",

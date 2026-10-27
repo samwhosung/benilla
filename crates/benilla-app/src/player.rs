@@ -81,9 +81,10 @@ pub(crate) use view_subject::RemoteView;
 mod teleport_hold_tests;
 mod walk;
 mod wire_in;
-pub(crate) use wire_in::regain_control_on_arrival;
+pub(crate) use wire_in::{regain_control_on_arrival, restore_own_control};
 
-/// The create's control restore (`regain_control_on_arrival`): every system that reads `Player`'s
+/// The create's control restore, its flag inside the net drain ([`restore_own_control`]) and the
+/// controller's lock after it ([`regain_control_on_arrival`]): every system that reads `Player`'s
 /// control flags runs after it in the frame, so it sees the restored flags, not the lost ones.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ControlRestore;

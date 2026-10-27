@@ -52,21 +52,10 @@ const FRAME_FINAL_INPUTS: usize = 238;
 /// access does not show; `exclusive` a system whose access Bevy does not report.
 #[rustfmt::skip]
 const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
-    ("::net::apply::tag_self_player", &["Commands net::SelfPlayer"],
-        "tags our created entity as the player, which the token resolver finds it by; the \
-         reference makes it the active player inside its create (`0x5dea50`)"),
     ("::net::motion::remote::extrapolate_remote_units", &["Transform"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-    ("::player::wire_in::regain_control_on_arrival", &["player::state::OwnControlLost"],
-        "gives control back on our own create, which the stance bar's usability walk reads \
-         (`0x6e3dc3`), and pushes its signals onto the notice lane at its own place; the \
-         reference raises it inside the create (`0x5deb56`), and the arrival it answers is a \
-         system's message, not a handler's"),
     ("::spell::group_relation::publish_group_roster", &["spell::group_relation::GroupRoster"],
         "copies the group's roster, which the relation reads take, once the packets are in"),
-    ("::spell::mods::track_class_family", &["spell::mods::SpellModifiers"],
-        "keeps the class family the stance bar's usability walk prices a cost through; the \
-         reference stores it inside our own create (`0x5debcc` → `0x6e6ca0`)"),
     ("::transport::compose_riders", &["Transform"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::ui_action::feed::feed_actions", &["ui_action::PlayerActions"],

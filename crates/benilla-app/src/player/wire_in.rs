@@ -586,34 +586,38 @@ fn apply_self_move(
     }
 }
 
-/// Our own player's create gives control back (`OnActiveArrival 0x5dea50`): with the manager's
-/// `+0xc8` clear (`0x5deb49`; its constructor `0x4650e7` is the only store, so every create),
-/// `0x5fa600(1)` (`0x5deb56`) raises `[0xb4b3e4]` through `0x4958e0` (`PLAYER_CONTROL_GAINED` if it
-/// was down) and `0x4958a0` (`0x5deb5b`) stores 1 and re-claims our own mover (the claim is sent
-/// by `enter_world_on_self_create`). vmangos sends a battleground's closing `control 0` and no
-/// restore (`BattleGround.cpp:905-908`). A flag that was down signals as the packet's handler's
-/// does, on the notice lane: the event, then the usable refresh (`0x4958f7`, `0x4958fc`), here at
-/// this system's place, behind the frame's packets, until the arrival runs in its create.
+/// Our own player's create gives control back (`OnActiveArrival 0x5dea50`), inside the update
+/// packet ([`crate::net::objects`]'s arrival): with the manager's `+0xc8` clear (`0x5deb49`; its
+/// constructor `0x4650e7` is the only store, so every create), `0x5fa600(1)` (`0x5deb56`) raises
+/// `[0xb4b3e4]` through `0x4958e0` (`PLAYER_CONTROL_GAINED` if it was down) and `0x4958a0`
+/// (`0x5deb5b`) stores 1 and re-claims our own mover. vmangos sends a battleground's closing
+/// `control 0` and no restore (`BattleGround.cpp:905-908`). A flag that was down signals as the
+/// control packet's handler's does, on the notice lane at the create's place: the event, then the
+/// usable refresh (`0x4958f7`, `0x4958fc`). The controller's own lock follows in
+/// [`regain_control_on_arrival`], as the control packet's does in the controller.
+pub(crate) fn restore_own_control(
+    own_control: &mut OwnControlLost,
+    lane: &mut crate::field_watch::NoticeLane,
+) {
+    if std::mem::take(&mut own_control.0) {
+        lane.write(crate::field_watch::FieldNotice::PlayerControl { in_control: true });
+        lane.write(crate::field_watch::FieldNotice::UsableRefresh);
+    }
+}
+
+/// The controller's half of the arrival's restore ([`restore_own_control`]): the movement lock a
+/// control packet left, and a possession, end, and our own mover is seated again, as
+/// `ControlVerdict::Restored` seats it. It answers the cascade the arrival writes, ahead of
+/// `control`'s read of the lock.
 pub(crate) fn regain_control_on_arrival(
     mut arrivals: MessageReader<crate::net::WorldEnterCascadeMessage>,
     mut player: ResMut<Player>,
-    mut own_control: ResMut<OwnControlLost>,
-    // Absent in a harness without the unit feed.
-    lane: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
     if arrivals.read().next().is_none() {
         return;
     }
-    if own_control.0 || player.control_lost || player.foreign_mover.is_some() {
-        if own_control.0 {
-            if let Some(mut lane) = lane {
-                lane.write(crate::field_watch::FieldNotice::PlayerControl { in_control: true });
-                lane.write(crate::field_watch::FieldNotice::UsableRefresh);
-            }
-        }
-        own_control.0 = false;
+    if player.control_lost || player.foreign_mover.is_some() {
         player.control_lost = false;
-        // The mover is ours again, as `ControlVerdict::Restored` seats it.
         player.foreign_mover = None;
         player.reseat = true;
     }
@@ -979,6 +983,7 @@ mod teleport_tests {
 #[cfg(test)]
 mod arrival_tests {
     use super::*;
+    use crate::field_watch::{FieldNotice, NoticeLane};
     use crate::net::WorldEnterCascadeMessage;
 
     const ME: u64 = 0x45;
@@ -1000,23 +1005,33 @@ mod arrival_tests {
         app
     }
 
+    /// Our own create, as its arrival runs: the flag in the packet, then the cascade the
+    /// controller answers.
+    fn arrive(app: &mut App) -> Vec<FieldNotice> {
+        let mut lane = NoticeLane::default();
+        restore_own_control(
+            &mut app.world_mut().resource_mut::<OwnControlLost>(),
+            &mut lane,
+        );
+        app.world_mut().write_message(WorldEnterCascadeMessage);
+        app.update();
+        lane.drain().collect()
+    }
+
     /// A battleground's end sends `control 0` for us and never the restore; the teleport out
     /// creates us afresh and that create gives control back, the movement lock and the bar's
-    /// `[0xb4b3e4]` flag both.
+    /// `[0xb4b3e4]` flag both, signalling the flag's rise and the usable refresh.
     #[test]
     fn a_control_loss_does_not_survive_the_next_self_create() {
         let mut app = harness();
         lose_control(&mut app);
-        assert!(app.world().resource::<Player>().control_lost);
-        assert!(app.world().resource::<OwnControlLost>().0);
         app.update();
         assert!(
-            app.world().resource::<OwnControlLost>().0,
+            app.world().resource::<OwnControlLost>().0
+                && app.world().resource::<Player>().control_lost,
             "nothing restores it without a create"
         );
-
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        let signals = arrive(&mut app);
         assert!(
             !app.world().resource::<OwnControlLost>().0,
             "the bar's flag is back"
@@ -1024,31 +1039,20 @@ mod arrival_tests {
         let player = app.world().resource::<Player>();
         assert!(!player.control_lost, "and the controller's movement lock");
         assert_eq!(player.foreign_mover, None);
+        assert!(
+            matches!(
+                signals[..],
+                [
+                    FieldNotice::PlayerControl { in_control: true },
+                    FieldNotice::UsableRefresh
+                ]
+            ),
+            "the flag's rise signals (`0x4958f7`, `0x4958fc`): {signals:?}"
+        );
     }
 
-    /// The real create system feeds it: a control-0 packet's verdict, then our own player's
-    /// create (`enter_world_on_self_create`), and the lock and the flag are gone.
-    #[test]
-    fn our_own_create_system_gives_control_back() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = harness();
-        app.insert_resource(crate::net::NetCommands(tx))
-            .add_systems(
-                Update,
-                crate::net::enter_world_on_self_create.before(regain_control_on_arrival),
-            );
-        lose_control(&mut app);
-        app.update();
-        assert!(app.world().resource::<OwnControlLost>().0);
-
-        app.world_mut()
-            .spawn((crate::net::Guid(ME), crate::net::SelfPlayer));
-        app.update();
-        let player = app.world().resource::<Player>();
-        assert!(!app.world().resource::<OwnControlLost>().0 && !player.control_lost);
-    }
-
-    /// A possession does not outlive the world either: the create claims our own mover.
+    /// A possession does not outlive the world either: the create claims our own mover, with no
+    /// signal, as the flag never fell.
     #[test]
     fn a_create_ends_a_possession_too() {
         let mut app = harness();
@@ -1057,20 +1061,19 @@ mod arrival_tests {
             player.foreign_mover = Some(0x99);
             player.control_lost = true;
         }
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        let signals = arrive(&mut app);
         let player = app.world().resource::<Player>();
         assert_eq!(player.foreign_mover, None);
         assert!(!player.control_lost && player.reseat);
+        assert!(signals.is_empty(), "{signals:?}");
     }
 
     /// A login in control touches nothing.
     #[test]
     fn a_create_in_control_changes_nothing() {
         let mut app = harness();
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
-        assert!(!app.world().resource::<Player>().reseat);
+        let signals = arrive(&mut app);
+        assert!(!app.world().resource::<Player>().reseat && signals.is_empty());
     }
 }
 

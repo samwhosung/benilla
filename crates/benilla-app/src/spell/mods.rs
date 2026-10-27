@@ -22,8 +22,7 @@ use bevy::prelude::*;
 
 use benilla_formats::{SpellDisplay, SpellRange};
 
-use crate::chr_classes::ChrClassTable;
-use crate::net::{ObjectStore, SelfPlayer};
+use crate::net::ObjectStore;
 
 /// SpellModOps per row: the index stride (`imul eax,eax,0x1d`; the reader's `add edx,0x74`).
 const OPS: usize = 29;
@@ -147,6 +146,11 @@ impl SpellModifiers {
         } else {
             self.pct[cell] = value;
         }
+    }
+
+    /// The gate's class family.
+    pub(crate) fn class_family(&self) -> u32 {
+        self.class_family
     }
 
     /// Set the gate's class family (`0x6e6ca0`).
@@ -311,25 +315,6 @@ impl benilla_formats::SpellMods for SpellModifiers {
     }
     fn apply_soft(&self, d: &SpellDisplay, op: u8, value: f32) -> f32 {
         SpellModifiers::apply_soft(self, d, op, value)
-    }
-}
-
-/// Keep the class family in step with the avatar (`0x6e6ca0`, called from `0x5debcc`: byte 1, the
-/// class, of `UNIT_FIELD_BYTES_0` into `ChrClasses` field 15). An absent avatar keeps the last
-/// value, as a cross-map worldport drops the entity mid-session; only world-enter zeroes it.
-pub(super) fn track_class_family(
-    mut mods: ResMut<SpellModifiers>,
-    classes: Option<Res<ChrClassTable>>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-) {
-    let Some(classes) = classes else { return };
-    let Some(class) = self_q.iter().next().and_then(|s| s.0.unit_class()) else {
-        return;
-    };
-    let family = classes.0.spell_family(u32::from(class));
-    // Guarded: the tooltip feed diffs the tables whenever the resource is marked changed.
-    if mods.class_family != family {
-        mods.set_class_family(family);
     }
 }
 

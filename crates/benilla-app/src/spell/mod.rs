@@ -105,9 +105,6 @@ impl Plugin for SpellPlugin {
                     inflight::local_self_cancel
                         .in_set(LocalCancel)
                         .run_if(crate::ui_script::ingame_ui_up),
-                    mods::track_class_family
-                        .in_set(crate::ui_script::UiFeed)
-                        .before(UnitFeed),
                     // The state push ahead of the input records, whose `ToggleGameMenu` reads
                     // the word and whose `SpellStopTargeting` applies inside its call.
                     targeting::feed_targeting_to_input
