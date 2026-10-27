@@ -14,14 +14,16 @@ use crate::ui_chat::ChatLog;
 /// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`): the line (`0x5e87de`), then, for a spell with a
 /// record and no `Attributes & 0x100` (`0x5e87e3`-`0x5e87f4`), `UNIT_COMBAT` `WOUND` on the target
 /// (`0x5e883f`) with the crit and partial flags, or none for split damage (`0x5e872d`-`0x5e876a`).
+///
+/// Returns the victim whose nameplate the direct hit flashes (`0x62cd80` at `0x62ce43`).
 pub(in crate::combat_log) fn spell_damage_log(
     s: SpellDamageLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
     log: &ChatLog,
-) {
-    spell_damage_line(&s, ctx, stores, poses, log);
+) -> Option<u64> {
+    let flash = spell_damage_line(&s, ctx, stores, poses, log);
     if combat::feedback_spell(ctx.spells, s.spell_id).is_some() {
         let flags = if s.hit_info & SPELL_HIT_TYPE_SPLIT != 0 {
             0
@@ -30,25 +32,24 @@ pub(in crate::combat_log) fn spell_damage_log(
         };
         feedback::wound(log, s.target, s.damage, flags, u32::from(s.school));
     }
+    flash
 }
 
 /// vmangos `SPELL_HIT_TYPE_SPLIT`, the split-damage bit of the packet's hit info.
 const SPELL_HIT_TYPE_SPLIT: u32 = 0x8;
 
 /// The spell-damage line: split damage, then a periodic hit, then a direct one, each its own
-/// formatter.
+/// formatter. Answers the victim a direct hit flashes.
 fn spell_damage_line(
     s: &SpellDamageLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
     log: &ChatLog,
-) {
+) -> Option<u64> {
     let attacker = ctx.classify(s.attacker, stores);
     let victim = ctx.classify(s.target, stores);
-    let Some(spell) = ctx.spell_name(s.spell_id) else {
-        return;
-    };
+    let spell = ctx.spell_name(s.spell_id)?;
 
     // Split damage (`hit_info & 8`, to `0x62de60`) is tested first, before the periodic split: it
     // reads "%s's %s causes %s %d damage.", has no `…SELFSELF` key and no trailers, and words the
@@ -57,10 +58,8 @@ fn spell_damage_line(
     // table (`0x626be0`, from `0x62df69` and `0x62dfc4`).
     if s.hit_info & SPELL_HIT_TYPE_SPLIT != 0 {
         let buff = attacker == UnitClass::Me && victim != UnitClass::Me;
-        let Some(kind) = combat::spell_kind(attacker, victim, buff) else {
-            return;
-        };
-        return queue_worded(
+        let kind = combat::spell_kind(attacker, victim, buff)?;
+        queue_worded(
             log,
             ctx,
             poses,
@@ -75,54 +74,61 @@ fn spell_damage_line(
             },
             to_me(victim, LineWord::with("SPLIT_DAMAGE", s.damage)),
         );
+        return None;
     }
     if s.periodic {
         // A chat-only `CombatLogPeriodicSpells` read (`0x62d9ae` in `0x62d9a0`): it skips the line
         // emit `0x628100` and nothing else, so the floats still fire.
-        if !ctx.periodic {
-            return;
+        if ctx.periodic {
+            periodic_damage(
+                log,
+                ctx,
+                poses,
+                &spell,
+                (s.attacker, attacker),
+                (s.target, victim),
+                PeriodicHit {
+                    damage: s.damage,
+                    school: s.school,
+                    absorbed: s.absorb,
+                    resisted: s.resist,
+                },
+            );
         }
-        return periodic_damage(
-            log,
-            ctx,
-            poses,
-            &spell,
-            (s.attacker, attacker),
-            (s.target, victim),
-            PeriodicHit {
-                damage: s.damage,
-                school: s.school,
-                absorbed: s.absorb,
-                resisted: s.resist,
-            },
-        );
+        return None;
     }
     direct_damage(
         log,
         ctx,
+        stores,
         poses,
         &spell,
         s.spell_id,
         (s.attacker, attacker),
         (s.target, victim),
         s,
-    );
+    )
 }
 
 /// `0x62cd80`, a direct spell hit. Nothing through is worded as the reason, tested absorbed
 /// (`0x6285b0`), blocked (the miss formatter with code 5, `0x62cec7`), then resisted
 /// (`0x628720`); nothing at all writes no line. Damage through takes `SPELLLOG` and its crit and
 /// school forms, with trailers, and [`combat::spell_hit_word`].
+///
+/// Past the range gate (`0x626630`, either endpoint) a nonzero damage flashes the target's
+/// nameplate (`0x62ce3c`-`0x62ce43`) before any word is chosen; the answer is that target, a unit
+/// the client holds.
 fn direct_damage(
     log: &ChatLog,
     ctx: &ChatCtx,
+    stores: &impl Stores,
     poses: &impl Poses,
     spell: &str,
     spell_id: u32,
     caster: (u64, UnitClass),
     target: (u64, UnitClass),
     s: &SpellDamageLog,
-) {
+) -> Option<u64> {
     let school = Some(s.school);
     if s.damage == 0 {
         if s.absorb != 0 {
@@ -134,10 +140,14 @@ fn direct_damage(
         } else if s.resist != 0 {
             resisted_line(log, ctx, poses, spell, caster, target, school, false);
         }
-        return;
+        return None;
     }
+    let flash = (ctx.in_range(caster.0, caster.1, poses)
+        || ctx.in_range(target.0, target.1, poses))
+    .then_some(target.0)
+    .filter(|&guid| ctx.holds_unit(guid, stores));
     let Some(kind) = combat::spell_kind(caster.1, target.1, false) else {
-        return;
+        return flash;
     };
     // `SPELL_HIT_TYPE_CRIT` (vmangos `SpellDefines.h:179`).
     let crit = s.hit_info & 0x2 != 0;
@@ -172,6 +182,7 @@ fn direct_damage(
         fills,
         to_me(target.1, word),
     );
+    flash
 }
 
 /// One periodic damage tick's figures, as `0x628100` takes them.

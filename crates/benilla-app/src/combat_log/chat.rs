@@ -870,17 +870,26 @@ fn spell_cast_line(
 /// takes absorb and resist trailers, and on you raises [`combat::damage_word`] (`0x62ac74`). Then,
 /// for the active player (`0x624f83`), `UNIT_COMBAT` `WOUND` in the type's school, marked `0x20`
 /// for an absorb and `0x40` for a resist (`0x624f8c`-`0x624fc4`).
+///
+/// A victim the client holds as a unit, within its class's range (the one-sided test, strictly
+/// inside), of a type below 6 (`0x62aae7`) flashes its nameplate (`0x62abac`) ahead of the line;
+/// the answer is that victim.
 pub(super) fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
     log: &ChatLog,
-) {
+) -> Option<u64> {
     if e.damage == 0 && e.absorb == 0 && e.resist == 0 {
-        return;
+        return None;
     }
     let victim = ctx.classify(e.victim, stores);
+    let flash = (e.victim != 0
+        && usize::from(e.damage_type) < ENV_DAMAGE_SCHOOLS.len()
+        && ctx.holds_unit(e.victim, stores)
+        && ctx.in_range(e.victim, victim, poses))
+    .then_some(e.victim);
     let kind = combat::combat_kind(victim, victim, false);
     if let (Some(family), Some(kind)) = (combat::env_family(e.damage_type), kind) {
         queue_worded(
@@ -910,6 +919,7 @@ pub(super) fn environmental_damage_log(
         let marks = super::feedback::hit_flags(false, e.absorb, e.resist, 0);
         super::feedback::wound(log, e.victim, e.damage, marks, school);
     }
+    flash
 }
 
 /// The school of each environmental damage type 0 to 5, the table `0x809274` that `0x624fb3`

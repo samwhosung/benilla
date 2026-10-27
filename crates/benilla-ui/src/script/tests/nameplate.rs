@@ -1193,3 +1193,72 @@ fn the_plates_fill_shrinks_with_health() {
         crate::assert_near!(fill_width(&mut s), whole * part);
     }
 }
+
+/// The name's `GetTextColor()` as a plate addon reads it: `r,g,b` rounded to bytes.
+fn name_colour(s: &mut UiScript) -> (u8, u8, u8) {
+    let [r, g, b] = ["r", "g", "b"].map(|c| {
+        s.eval::<f64>(&format!(
+            "local _, _, name = WorldFrame:GetChildren():GetRegions() \
+             local r, g, b = name:GetTextColor() return {c}"
+        ))
+        .unwrap()
+    });
+    let byte = |c: f64| (c * 255.0).round() as u8;
+    (byte(r), byte(g), byte(b))
+}
+
+/// `FlashNamePlate` (`0x6122e0` → `0x7cba70`) sets the timer `+0x514` to 5000 ms and the name to
+/// `0xffff0000`; the plate's update (`0x7cb950`) takes `ftol(elapsed * 1000)` off it and, at 0 or
+/// less, restores white, or yellow while the glow shows. Hover moves (`0x7cb850`, `0x7cb8b0`)
+/// change the colour only with the timer at 0 or less, and a bind starts it at 0 (`0x7cb80e`).
+#[test]
+fn a_flashed_plate_reads_red_for_five_seconds_then_its_resting_colour() {
+    const WHITE: (u8, u8, u8) = (255, 255, 255);
+    const RED: (u8, u8, u8) = (255, 0, 0);
+    const YELLOW: (u8, u8, u8) = (255, 255, 0);
+    let mut s = vm();
+    let wolf = plate("Wolf", 30.0, 40.0);
+    drive(&mut s, std::slice::from_ref(&wolf));
+    s.tick(0.0);
+    assert_eq!(name_colour(&mut s), WHITE);
+
+    // A unit with no plate flashes nothing.
+    s.flash_nameplate(wolf.key + 1);
+    assert_eq!(name_colour(&mut s), WHITE);
+
+    s.flash_nameplate(wolf.key);
+    assert_eq!(name_colour(&mut s), RED);
+    s.tick(2.0);
+    assert_eq!(name_colour(&mut s), RED, "3000 ms left");
+
+    // The hover does not touch the name while the timer is above 0.
+    let mut hovered = wolf.clone();
+    hovered.hovered = true;
+    drive(&mut s, &[hovered.clone()]);
+    assert_eq!(name_colour(&mut s), RED, "enter keeps the flash");
+    drive(&mut s, std::slice::from_ref(&wolf));
+    assert_eq!(name_colour(&mut s), RED, "leave keeps the flash");
+
+    // A second hit rearms the whole 5 s.
+    s.flash_nameplate(wolf.key);
+    s.tick(4.9);
+    assert_eq!(name_colour(&mut s), RED, "100 ms left");
+    s.tick(0.1);
+    assert_eq!(name_colour(&mut s), WHITE, "the timer ran out unhovered");
+
+    // Expiring under the pointer restores yellow, the glow being shown.
+    drive(&mut s, &[hovered.clone()]);
+    assert_eq!(name_colour(&mut s), YELLOW, "the hover works again at rest");
+    s.flash_nameplate(wolf.key);
+    s.tick(5.0);
+    assert_eq!(name_colour(&mut s), YELLOW);
+
+    // A bind clears a running flash: the plate returns for another unit.
+    s.flash_nameplate(wolf.key);
+    drive(&mut s, &[]);
+    drive(&mut s, &[plate("Bear", 10.0, 90.0)]);
+    s.tick(0.0);
+    assert_eq!(name_colour(&mut s), WHITE);
+    s.tick(1.0);
+    assert_eq!(name_colour(&mut s), WHITE);
+}

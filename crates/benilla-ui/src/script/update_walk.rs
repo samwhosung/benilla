@@ -49,10 +49,13 @@ impl UiScript {
             }
             // Only frames with an `OnUpdate` or a kind's own update do anything when walked.
             let mut seen = HashSet::new();
+            // The plates' own update (`0x7cb950`) runs whether or not an addon set an `OnUpdate`.
+            let plates: Vec<FrameHandle> = model.nameplates.frames().collect();
             for &h in model
                 .on_update_frames
                 .iter()
                 .chain(model.arena.walked_kinds())
+                .chain(&plates)
             {
                 if let Some(f) = model.arena.frame(h).filter(|f| f.effective_visible) {
                     let place = (f.strata as u8, f.level, 0, u64::from(f.insertion_seq));
@@ -86,6 +89,10 @@ impl UiScript {
                         .scripts
                         .get(&h)
                         .is_some_and(|s| s.contains("OnUpdate"));
+                // The plate's override runs first and tail-calls the script (`0x7cb950`).
+                if here {
+                    super::nameplate::update(&mut model, h, elapsed);
+                }
                 (on_update.then(|| model.frame_id(h)), kind_update)
             };
             if let Some(id) = on_update {

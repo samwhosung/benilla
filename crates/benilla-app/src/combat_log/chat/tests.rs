@@ -271,17 +271,17 @@ mod emitters {
 
         /// The lines and `UNIT_COMBAT`s `emit` parks, in queue order
         /// ([`ChatLog::pending_combat_order`]).
-        fn order(
+        fn order<R>(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog) -> R,
         ) -> Vec<String> {
             self.run(emit).pending_combat_order()
         }
 
         /// The `UNIT_COMBAT`s `emit` parks, as `(guid, action, descriptor, amount)`.
-        fn flashes(
+        fn flashes<R>(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog) -> R,
         ) -> Vec<(u64, &'static str, &'static str, u32)> {
             self.run(emit)
                 .pending_unit_combat()
@@ -291,26 +291,26 @@ mod emitters {
         }
 
         /// The lines `emit` parks, with their words.
-        fn lines(
+        fn lines<R>(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog) -> R,
         ) -> Vec<PendingCombat> {
             self.run(emit).pending_combat()
         }
 
         /// The log `emit` leaves.
-        fn run(
+        fn run<R>(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog) -> R,
         ) -> ChatLog {
             self.run_posed(&NoPoses, emit)
         }
 
         /// [`Self::run`] with the units at `poses`.
-        fn run_posed<P: Poses>(
+        fn run_posed<P: Poses, R>(
             &self,
             poses: &P,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &P, &ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &P, &ChatLog) -> R,
         ) -> ChatLog {
             let (self_guid, reputations, ranges) = (
                 SelfGuid(Some(ME)),
@@ -333,7 +333,7 @@ mod emitters {
                 periodic: true,
             };
             let mut log = ChatLog::default();
-            emit(&ctx, &self.stores, poses, &mut log);
+            let _ = emit(&ctx, &self.stores, poses, &mut log);
             log
         }
     }
@@ -489,6 +489,49 @@ mod emitters {
         let lines = spell_damage(periodic);
         assert_eq!(stems(&lines), ["PERIODICAURADAMAGE"]);
         assert_eq!(words(&lines), [Some(LineWord::pair("ABSORB", 300, 50))]);
+    }
+
+    /// `0x62cd80` flashes the target's nameplate (`0x62ce43`) for a direct hit with damage through
+    /// and no other: not a zero-damage one, not split damage (`0x62de60`), not a periodic tick
+    /// (`0x628100`), not a target the client does not hold as a unit.
+    #[test]
+    fn only_a_direct_hit_with_damage_flashes_the_targets_plate() {
+        let flash = |s: SpellDamageLog| {
+            let mut flash = None;
+            Bench::new().run(|ctx, st, po, log| {
+                flash = super::super::spell_damage_log(s, ctx, st, po, log);
+            });
+            flash
+        };
+        assert_eq!(flash(spell_hit(300, 0, 0, 0)), Some(ME));
+        assert_eq!(
+            flash(SpellDamageLog {
+                target: MOB,
+                attacker: ME,
+                ..spell_hit(300, 50, 20, 10)
+            }),
+            Some(MOB),
+            "the damage through is what counts, not the trailers"
+        );
+        assert_eq!(flash(spell_hit(0, 50, 0, 0)), None, "absorbed whole");
+        assert_eq!(flash(spell_hit(0, 0, 0, 0)), None);
+        for (periodic, hit_info) in [(true, 0), (false, 0x8), (true, 0x8)] {
+            let s = SpellDamageLog {
+                periodic,
+                hit_info,
+                ..spell_hit(300, 0, 0, 0)
+            };
+            assert_eq!(
+                flash(s),
+                None,
+                "periodic {periodic}, hit info {hit_info:#x}"
+            );
+        }
+        let stranger = SpellDamageLog {
+            target: 0x99,
+            ..spell_hit(300, 0, 0, 0)
+        };
+        assert_eq!(flash(stranger), None, "a target not held as a unit");
     }
 
     fn periodic(ticks: Vec<PeriodicTick>) -> Vec<PendingCombat> {

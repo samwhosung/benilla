@@ -105,6 +105,10 @@ struct Plate {
     bar: FrameHandle,
     /// `None` when the fill's file failed to load (`0x7831b4`).
     fill: Option<RegionHandle>,
+    /// The name's flash timer `+0x514`, in milliseconds: [`FLASH_MS`] when a hit arms it
+    /// (`0x7cba77`), 0 at every bind (`0x7cb80e`), counted down by the plate's update; a negative
+    /// timer is idle, and while it is above 0 the hover leaves the name red.
+    flash_ms: i32,
     /// Last frame's state, so [`Plate::drive`] writes only what moved; `None` while retired.
     last: Option<PlateState>,
     /// The geometry its anchors were written under, `None` before the first lay-out. Kept per
@@ -153,10 +157,54 @@ impl NamePlates {
         self.by_frame.contains_key(&frame)
     }
 
+    /// The plate frames, for the update walk to visit: each runs [`update`] ahead of its
+    /// `OnUpdate` (`0x7cb950` → `0x76b2c0`).
+    pub(super) fn frames(&self) -> impl Iterator<Item = FrameHandle> + '_ {
+        self.by_frame.keys().copied()
+    }
+
     /// Whether the `0x7cba30` veto refuses `frame`: only a plate, only while the veto stands.
     pub(crate) fn vetoes(&self, frame: FrameHandle) -> bool {
         self.hit_test_vetoed && self.by_frame.contains_key(&frame)
     }
+}
+
+/// The flash a hit starts, in milliseconds (`0x7cba77`, `0x1388`).
+const FLASH_MS: i32 = 5000;
+
+/// The name colour while it flashes (`0x7cba88`, `0xffff0000`), and at rest: yellow while the glow
+/// shows, white otherwise (`0x7cb89e`, `0x7cb991`, `0x7cb8ed`).
+const FLASH_RED: crate::color::Rgba8 = crate::color::Rgba8::rgba(255, 0, 0, 255);
+const NAME_YELLOW: crate::color::Rgba8 = crate::color::Rgba8::rgba(255, 255, 0, 255);
+
+/// The plate's `OnUpdate` override (`0x7cb950`), the flash half: a timer at or above 0 loses
+/// `ftol(elapsed * 1000)` (`0x7cb962`-`0x7cb976`), and once it is 0 or less the name takes its
+/// resting colour, by whether the glow shows (`0x7cb97e`-`0x7cb9ac`). A negative timer does
+/// nothing, so the bind's 0 resets the name on the first update and then idles. It runs ahead of
+/// the plate's own `OnUpdate` script, which the override tail-calls (`0x76b2c0`).
+pub(super) fn update(model: &mut Model, frame: FrameHandle, elapsed: f32) {
+    let Some(&slot) = model.nameplates.by_frame.get(&frame) else {
+        return;
+    };
+    let plate = &mut model.nameplates.plates[slot];
+    if plate.flash_ms < 0 {
+        return;
+    }
+    plate.flash_ms -= super::binding_abi::ftol(f64::from(elapsed) * 1000.0);
+    if plate.flash_ms > 0 {
+        return;
+    }
+    let colour = if plate.last.as_ref().is_some_and(|l| l.hovered) {
+        NAME_YELLOW
+    } else {
+        crate::color::Rgba8::WHITE
+    };
+    let name = plate.name;
+    model
+        .region_data
+        .entry(name)
+        .or_default()
+        .set_vertex_color(Some(colour));
 }
 
 /// A completed click on a plate. The reference's click slot (`0x7cb910`) selects the unit on the
@@ -309,6 +357,29 @@ impl UiScript {
         for (bar, value) in effects.values {
             super::statusbar::fire_engine_value_changed(lua, bar, value);
         }
+    }
+
+    /// A hit on the unit `key`: `FlashNamePlate` (`0x6122e0` → `0x7cba70`) starts the flash on the
+    /// unit's plate, if it has one (`[unit+0xe60]`, `0x6122e6`): the timer to 5000 ms and the
+    /// name red, whatever the hover. Called for a health drop (`0x6046f0`), a direct spell hit
+    /// (`0x62cd80`) and environmental damage (`0x62aac0`).
+    pub fn flash_nameplate(&mut self, key: u64) {
+        let lua = self.lua();
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let Some(&slot) = model.nameplates.assigned.get(&key) else {
+            return;
+        };
+        let plate = &mut model.nameplates.plates[slot];
+        if plate.last.is_none() {
+            return;
+        }
+        plate.flash_ms = FLASH_MS;
+        let name = plate.name;
+        model
+            .region_data
+            .entry(name)
+            .or_default()
+            .set_vertex_color(Some(FLASH_RED));
     }
 
     /// The unit whose plate is the hovered frame, the mouseover its OnEnter publishes (`0x7cb850`
@@ -586,6 +657,7 @@ impl Plate {
             raid,
             bar,
             fill,
+            flash_ms: 0,
             last: None,
             laid_out: None,
         }
@@ -766,17 +838,25 @@ impl Plate {
             // A new string clears the valid bit and invalidates (`0x771ea4`).
             model.clear_region_valid(name);
         }
+        // The bind starts the plate's flash timer at 0 (`0x7cb80e`).
+        if last.is_none() {
+            model.nameplates.plates[i].flash_ms = 0;
+        }
         if last.as_ref().is_none_or(|l| l.hovered != state.hovered) {
-            let c = if state.hovered {
-                crate::color::Rgba8::rgba(255, 255, 0, 255)
-            } else {
-                crate::color::Rgba8::WHITE
-            };
-            model
-                .region_data
-                .entry(name)
-                .or_default()
-                .set_vertex_color(Some(c));
+            // The enter and leave notifies (`0x7cb883`, `0x7cb8d9`) set the name's colour only
+            // with the timer at 0 or less; a flash outlasts the hover.
+            if model.nameplates.plates[i].flash_ms <= 0 {
+                let c = if state.hovered {
+                    NAME_YELLOW
+                } else {
+                    crate::color::Rgba8::WHITE
+                };
+                model
+                    .region_data
+                    .entry(name)
+                    .or_default()
+                    .set_vertex_color(Some(c));
+            }
             // The glow really shows, as addons read mouseover from it; it only paints nothing.
             model.set_region_hidden(glow, !state.hovered);
         }
