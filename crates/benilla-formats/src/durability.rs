@@ -1,9 +1,9 @@
 //! `DurabilityCosts.dbc` and `DurabilityQuality.dbc`, behind the repair price the reference
-//! computes itself (`0x5da330`, wrapped by `0x4faf30`): points lost × the quality row
-//! `2·Quality + 1` × the item level's weapon or armor column by subclass, rounded half away from
-//! zero to at least 1, then × `f32(1 - discount)`, stored as f32 and rounded half to even. vmangos
-//! keys the quality row `(Quality + 1)·2` (`Player.cpp:4996`), so its charge may differ from the
-//! price shown.
+//! computes itself (`0x5da330`, wrapped by `0x4faf30`): points lost × the quality row at position
+//! `2·Quality + 1` of the file (`0x5da456`; ids run from 1, so the row with id `2·Quality + 2`)
+//! × the item level's weapon or armor column by subclass, rounded half away from zero to at least
+//! 1, then × `f32(1 - discount)`, stored as f32 and rounded half to even. vmangos charges the same
+//! row, id `(Quality + 1)·2` (`Player.cpp:4996`).
 
 use std::collections::HashMap;
 
@@ -20,16 +20,17 @@ const DURABILITY_QUALITIES: &str = "DBFilesClient\\DurabilityQuality.dbc";
 pub struct DurabilityTables {
     /// Item level → the 29 per-point cost columns (21 weapon, then 8 armor).
     costs: HashMap<u32, Vec<u32>>,
-    /// Row id → the quality multiplier (the client keys this with `2·Quality + 1`).
-    qualities: HashMap<u32, f32>,
+    /// The quality multipliers in file order; the client reads position `2·Quality + 1`
+    /// (`0x5da456`-`0x5da473`), bounded by the row count (`0x5da465`).
+    qualities: Vec<f32>,
 }
 
 impl DurabilityTables {
-    /// Tables from explicit rows, for tests and tools: item level → the 29 cost columns, and
-    /// quality row id → multiplier.
+    /// Tables from explicit rows, for tests and tools: item level → the 29 cost columns, and the
+    /// quality multipliers in file order.
     pub fn from_rows(
         costs: impl IntoIterator<Item = (u32, Vec<u32>)>,
-        qualities: impl IntoIterator<Item = (u32, f32)>,
+        qualities: impl IntoIterator<Item = f32>,
     ) -> Self {
         Self {
             costs: costs.into_iter().collect(),
@@ -65,7 +66,11 @@ impl DurabilityTables {
         let Some(col) = self.column(item_level, class, subclass) else {
             return 0;
         };
-        let Some(&mult) = self.qualities.get(&(2 * quality + 1)) else {
+        // The position `2·Quality + 1`, signed and bounded by the row count (`0x5da45a`-`0x5da46b`).
+        let Some(&mult) = usize::try_from(2 * u64::from(quality) + 1)
+            .ok()
+            .and_then(|position| self.qualities.get(position))
+        else {
             return 0;
         };
         let base = f64::from(points_lost) * f64::from(mult) * f64::from(col);
@@ -113,13 +118,12 @@ pub fn load_durability_tables(chain: &mut Chain) -> Result<DurabilityTables> {
         .read_file(DURABILITY_QUALITIES)
         .with_context(|| format!("reading {DURABILITY_QUALITIES}"))?;
     let rs = parse(&bytes, qualities_schema(), "DurabilityQuality")?;
-    let mut qualities = HashMap::new();
-    for r in rs.records() {
-        let (Some(id), Some(mult)) = (u32_at(r, 0), f32_at(r, 1)) else {
-            continue;
-        };
-        qualities.insert(id, mult);
-    }
+    // File order: the client indexes the block by position, not by id.
+    let qualities = rs
+        .records()
+        .iter()
+        .map(|r| f32_at(r, 1).unwrap_or(0.0))
+        .collect::<Vec<_>>();
 
     Ok(DurabilityTables { costs, qualities })
 }
@@ -135,8 +139,8 @@ mod tests {
         row[7] = 4;
         row[21 + 3] = 2;
         costs.insert(23, row);
-        let mut qualities = HashMap::new();
-        qualities.insert(3, 0.6f32); // the client's row for quality 1 (2·1+1)
+        // Position 3 is quality 1's (`2·1 + 1`); the others are ids the client never reads here.
+        let qualities = vec![9.0, 9.0, 9.0, 0.6f32];
         DurabilityTables { costs, qualities }
     }
 
@@ -148,7 +152,7 @@ mod tests {
         assert_eq!(t.repair_cost(7, 23, 1, 4, 3, 0.0), 8);
         // A base under 1 still charges 1: 1 · 0.1 · 2 = 0.2.
         let mut t2 = tables();
-        t2.qualities.insert(3, 0.1);
+        t2.qualities[3] = 0.1;
         assert_eq!(t2.repair_cost(1, 23, 1, 4, 3, 0.0), 1, "min 1 copper");
         assert_eq!(t.repair_cost(0, 23, 1, 2, 7, 0.0), 0);
         assert_eq!(t.repair_cost(10, 23, 1, 15, 0, 0.0), 0, "not weapon/armor");
@@ -158,7 +162,7 @@ mod tests {
     #[test]
     fn discount_rounds_to_nearest_even() {
         let mut t = tables();
-        t.qualities.insert(3, 1.0);
+        t.qualities[3] = 1.0;
         let mut row = vec![0u32; 29];
         row[7] = 1; // 1 copper/point so points == the pre-discount price
         t.costs.insert(23, row);
@@ -173,7 +177,7 @@ mod tests {
     #[test]
     fn the_discounted_cost_stores_the_multiplier_and_the_product_as_f32() {
         let mut t = tables();
-        t.qualities.insert(3, 1.0);
+        t.qualities[3] = 1.0;
         let mut row = vec![0u32; 29];
         row[7] = 1; // 1 copper/point so points == the base price
         t.costs.insert(23, row);
@@ -193,5 +197,35 @@ mod tests {
         assert_eq!(cost(786_437, d10 + d05), 668_472);
         // No discount: the base itself.
         assert_eq!(cost(15, 0.0), 15);
+    }
+
+    /// `0x5da456`-`0x5da473`: quality `q` reads the file's row at position `2q + 1`, bounded by the
+    /// row count, so the multipliers are those of ids `2q + 2`, and a quality past the rows costs 0.
+    #[test]
+    fn the_quality_row_is_the_position_two_q_plus_one() {
+        // Ids 1 to 14 as shipped: 1, 0.6, 1, 0.8, 1, 1, 1, 1.25, 1, 2.5, 1, 3, 1, 1.
+        let shipped = [
+            1.0f32, 0.6, 1.0, 0.8, 1.0, 1.0, 1.0, 1.25, 1.0, 2.5, 1.0, 3.0, 1.0, 1.0,
+        ];
+        let mut row = vec![0u32; 29];
+        row[7] = 100;
+        let t = DurabilityTables::from_rows([(23, row)], shipped);
+        let cost = |quality| t.repair_cost(1, 23, quality, 2, 7, 0.0);
+        let got: Vec<u32> = (0..6).map(cost).collect();
+        assert_eq!(got, [60, 80, 100, 125, 250, 300]);
+        // Position 2·6 + 1 = 13 is the last row; 2·7 + 1 = 15 is past the 14.
+        assert_eq!(cost(6), 100);
+        assert_eq!(cost(7), 0, "past the row count");
+        assert_eq!(cost(u32::MAX), 0, "no wrap into a row");
+    }
+
+    /// The install's own file: the six multipliers the client and vmangos charge.
+    #[test]
+    fn the_shipped_quality_rows_give_the_charged_multipliers() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("chain");
+        let t = load_durability_tables(&mut chain).expect("durability");
+        let got: Vec<f32> = (0..6).map(|q| t.qualities[2 * q + 1]).collect();
+        assert_eq!(got, [0.6, 0.8, 1.0, 1.25, 2.5, 3.0]);
     }
 }

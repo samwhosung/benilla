@@ -498,7 +498,7 @@ fn a_repair_cost_reads_as_of_each_packet() {
     let mut costs = vec![0u32; 29];
     costs[7] = 1;
     c.app.insert_resource(crate::ui_merchant::RepairTables(
-        benilla_formats::DurabilityTables::from_rows([(20, costs)], [(3, 1.0)]),
+        benilla_formats::DurabilityTables::from_rows([(20, costs)], [1.0; 4]),
     ));
     let mut sword = crate::items::test_template("Sword");
     (sword.class, sword.subclass, sword.quality, sword.item_level) = (2, 7, 1, 20);

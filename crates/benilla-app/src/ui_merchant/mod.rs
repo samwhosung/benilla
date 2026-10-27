@@ -530,11 +530,11 @@ pub(crate) mod purse_fixture {
     pub(crate) const NOT_ENOUGH_MONEY: &str = "You don't have enough money.";
 
     /// One level-20 row at 1 copper a point for a sword (weapon subclass 7), and quality 1's
-    /// multiplier (row `2·1 + 1`) at 1.
+    /// multiplier (position `2·1 + 1`) at 1.
     fn tables() -> benilla_formats::DurabilityTables {
         let mut row = vec![0u32; 29];
         row[7] = 1;
-        benilla_formats::DurabilityTables::from_rows([(20, row)], [(3, 1.0)])
+        benilla_formats::DurabilityTables::from_rows([(20, row)], [1.0; 4])
     }
 
     /// The sword's repair in full, and after the two honor steps (`0x612bcf`, `0x612bd7`) an honor
