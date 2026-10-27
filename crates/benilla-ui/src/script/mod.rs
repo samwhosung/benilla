@@ -382,8 +382,9 @@ pub use macros::{
     MAX_MACRO_BODY, MAX_MACRO_NAME,
 };
 pub use mail::{
-    MailCall, MailInboxRow, MailInvoice, MailRowVerb, MailSendRequest, MailState, PackageView,
-    StationeryView,
+    MailBox, MailBoxQuery, MailCall, MailInboxRow, MailInvoice, MailLookup, MailRowQuery,
+    MailRowVerb, MailSendRequest, MailState, NewMailQuery, PackageQuery, PackageView,
+    StationeryQuery, StationeryView, MAIL_ROW_STRINGS,
 };
 pub use measure::TextMeasure;
 pub use merchant::{

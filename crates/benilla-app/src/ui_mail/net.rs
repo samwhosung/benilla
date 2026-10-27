@@ -1,13 +1,14 @@
-//! The mailbox's packet handlers: they fill [`MailOpen`] and [`MailPending`] and send the wire
-//! requests; the events fire from [`super::feed_mail`].
+//! The mailbox's packet handlers: they fill [`MailOpen`] and [`MailPending`], send the wire
+//! requests and queue their signals on the mail lane ([`MailLane`]) inside themselves, the name,
+//! creature, game object and text answers' callbacks included.
 
 use benilla_protocol::messages::{mail_action, mail_error, mail_message_type, MailListEntry};
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
 use super::{
-    mail_refusal, MailOpen, MailPending, MailResult, CHECKED_COD_PAYMENT, CHECKED_COPIED,
-    CHECKED_RETURNED, MAIL_SENT_KEY,
+    mail_refusal, MailEvent, MailLane, MailOpen, MailPending, MailResult, MailWait,
+    CHECKED_COD_PAYMENT, CHECKED_COPIED, CHECKED_RETURNED, MAIL_SENT_KEY,
 };
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::query_cache::Ask;
@@ -19,7 +20,49 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::MailItemText, on_mail_item_text)
         .net_handler(K::ReceivedMail, on_received_mail)
         .net_handler(K::NextMailTime, on_next_mail_time)
+        .net_handler(K::PlayerName, on_player_name)
+        .net_handler(K::CreatureName, on_creature_name)
+        .net_handler(K::GameObjectInfo, on_object_answer)
+        .net_handler(K::GameObjectUnknown, on_object_answer)
         .net_handler(K::Disconnected, on_session_end);
+}
+
+/// The name cache's answer runs the getters' callbacks waiting on the guid (`0x4af080`,
+/// `0x4af5b0`), a refusal with status 0, which signals nothing ([`MailOpen::answered`]).
+fn on_player_name(
+    In(ev): In<SessionEvent>,
+    mut mail: ResMut<MailOpen>,
+    mut lane: ResMut<MailLane>,
+) {
+    if let SessionEvent::PlayerName { guid, name, .. } = ev {
+        mail.answered(MailWait::Player(guid), !name.is_empty(), &mut lane);
+    }
+}
+
+/// The creature cache's answer runs the sender callbacks waiting on its entry (`0x4af080`).
+fn on_creature_name(
+    In(ev): In<SessionEvent>,
+    mut mail: ResMut<MailOpen>,
+    mut lane: ResMut<MailLane>,
+) {
+    if let SessionEvent::CreatureName { entry, name, .. } = ev {
+        mail.answered(MailWait::Creature(entry), name.is_some(), &mut lane);
+    }
+}
+
+/// The game object cache's answer, or its refusal, runs the sender callbacks waiting on its entry
+/// (`0x4af080`).
+fn on_object_answer(
+    In(ev): In<SessionEvent>,
+    mut mail: ResMut<MailOpen>,
+    mut lane: ResMut<MailLane>,
+) {
+    let (entry, found) = match ev {
+        SessionEvent::GameObjectInfo { entry, .. } => (entry, true),
+        SessionEvent::GameObjectUnknown { entry } => (entry, false),
+        _ => return,
+    };
+    mail.answered(MailWait::Object(entry), found, &mut lane);
 }
 
 /// What the list handler reads beside the session: the papers it defaults a row to, the item
@@ -45,14 +88,16 @@ struct ListReads<'w, 's> {
 fn on_mail_list(
     In(ev): In<SessionEvent>,
     mut mail: ResMut<MailOpen>,
+    mut lane: ResMut<MailLane>,
     commands: Res<NetCommands>,
     social: Res<crate::ui_social::SocialState>,
     reads: ListReads,
 ) {
     if let SessionEvent::MailList { mails } = ev {
         // The usable list's first paper (`[[0xb6ee30]]`, `0x4ad565`-`0x4ad56d`).
+        let store = reads.self_q.iter().next().map(|(s, _)| &s.0);
         let first_paper = reads.stationery.as_deref().and_then(|catalog| {
-            super::stationeries(catalog, &reads.self_q, &reads.objects, &reads.items, None)
+            super::stationeries(catalog, store, &reads.objects, &reads.items, None)
                 .first()
                 .map(|v| v.id)
         });
@@ -70,13 +115,25 @@ fn on_mail_list(
             |guid| social.is_ignored(guid),
             first_paper,
             |raw| {
-                super::auction_subject(
+                let written = super::auction_subject(
                     raw,
                     &reads.items,
                     reads.props.as_deref(),
                     Ask::Event(&commands),
                     &get_text,
-                )
+                );
+                // A notice whose item the cache misses keeps the callback `0x4ad010`, which
+                // rewrites the subject and signals when the record lands (`0x4acf06`).
+                if let Some(notice) = super::invoice::parse_subject(raw) {
+                    if notice.entry != 0
+                        && reads.items.template(notice.entry, 0, Ask::Read).is_none()
+                    {
+                        reads
+                            .items
+                            .wait(notice.entry, crate::items::RecordCallback::Mail);
+                    }
+                }
+                written
             },
             |subject| {
                 if let Some(filter) = reads.filter.as_deref() {
@@ -84,12 +141,15 @@ fn on_mail_list(
                 }
             },
         );
+        // The parse's tail: the lock and `MAIL_INBOX_UPDATE` (`0x4ad5c3`-`0x4ad5d6`).
+        lane.push(MailEvent::List);
     }
 }
 
 fn on_send_mail_result(
     In(ev): In<SessionEvent>,
     mut mail: ResMut<MailOpen>,
+    mut lane: ResMut<MailLane>,
     commands: Res<NetCommands>,
 ) {
     if let SessionEvent::SendMailResult {
@@ -100,7 +160,7 @@ fn on_send_mail_result(
         item,
     } = ev
     {
-        send_mail_result(
+        let result = send_mail_result(
             mail_id,
             action,
             error,
@@ -109,29 +169,45 @@ fn on_send_mail_result(
             &mut mail,
             &commands,
         );
+        lane.push(MailEvent::Result(result));
     }
 }
 
-fn on_mail_item_text(In(ev): In<SessionEvent>, mut mail: ResMut<MailOpen>) {
+/// The text cache's answer: the body lands, then the callbacks `GetInboxText` kept on it signal
+/// (`0x4af340`).
+fn on_mail_item_text(
+    In(ev): In<SessionEvent>,
+    mut mail: ResMut<MailOpen>,
+    mut lane: ResMut<MailLane>,
+) {
     if let SessionEvent::MailItemText { text_id, text } = ev {
         mail_item_text(text_id, text, &mut mail);
+        mail.answered(MailWait::Body(text_id), true, &mut lane);
     }
 }
 
 fn on_received_mail(
     In(ev): In<SessionEvent>,
     mut pending: ResMut<MailPending>,
+    mut lane: ResMut<MailLane>,
     mail: Res<MailOpen>,
     commands: Res<NetCommands>,
 ) {
     if let SessionEvent::ReceivedMail { seconds } = ev {
-        received_mail(seconds, &mut pending, &mail, &commands);
+        if received_mail(seconds, &mut pending, &mail, &commands) {
+            lane.push(MailEvent::Pending);
+        }
     }
 }
 
-fn on_next_mail_time(In(ev): In<SessionEvent>, mut pending: ResMut<MailPending>) {
+fn on_next_mail_time(
+    In(ev): In<SessionEvent>,
+    mut pending: ResMut<MailPending>,
+    mut lane: ResMut<MailLane>,
+) {
     if let SessionEvent::NextMailTime { seconds } = ev {
         next_mail_time(seconds, &mut pending);
+        lane.push(MailEvent::Pending);
     }
 }
 
@@ -171,10 +247,6 @@ pub(super) fn mail_list(
     mut rewrite: impl FnMut(&str) -> Option<String>,
     mut mask: impl FnMut(&mut String),
 ) {
-    // The answer clears the request lock (`0x4ad5d0`).
-    mail.resolve_request();
-    // The parse ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`).
-    mail.list_results += 1;
     let mailbox = mail.mailbox.unwrap_or(0);
     let mut auction_subjects = std::collections::HashMap::new();
     mail.mails = mails
@@ -236,9 +308,9 @@ fn take_empties(entry: &MailListEntry, action: u32) -> bool {
     }
 }
 
-/// `SMSG_SEND_MAIL_RESULT` (`0x4ad050`). A `SEND` result is queued for the feed. A successful take,
-/// return, delete or copy edits the held rows in place, as its arm does, and owes the feed that
-/// arm's own `MAIL_INBOX_UPDATE`: the money leg (`0x4ad6b0`) and the item leg (`0x4ad7b0`) clear
+/// `SMSG_SEND_MAIL_RESULT` (`0x4ad050`), its signals the returned result's. A successful take,
+/// return, delete or copy edits the held rows in place, as its arm does, and owes that arm's own
+/// `MAIL_INBOX_UPDATE`: the money leg (`0x4ad6b0`) and the item leg (`0x4ad7b0`) clear
 /// the field and purge an emptied mail with `CMSG_MAIL_DELETE` and `CLOSE_INBOX_ITEM`, keeping the
 /// row until the delete's own result; the return and delete arm (`0x4ad910`) removes the record;
 /// the copy arm (`0x4ad8c0`) sets the COPIED bit. A mail the rows do not hold ends the arm
@@ -251,12 +323,10 @@ pub(super) fn send_mail_result(
     _item: Option<(u32, u32)>,
     mail: &mut MailOpen,
     commands: &NetCommands,
-) {
+) -> MailResult {
     // ITEM_TAKEN's `(entry, count)` tail is unused; vmangos sends no `SMSG_ITEM_PUSH_RESULT` for a
-    // mail take (`MailHandler.cpp:675`). Every result lifts the request lock at the handler's
-    // common tail (`0x4ad164`), whatever its action.
-    mail.resolve_request();
-    // Every result owes the feed its tail `MAIL_FAILED`, whatever its action (`0x4ad15f`).
+    // mail take (`MailHandler.cpp:675`). Every result lifts the request lock and signals
+    // `MAIL_FAILED` at the handler's common tail (`0x4ad164`, `0x4ad15f`), whatever its action.
     let mut result = MailResult::default();
     if action == mail_action::SEND {
         result.send = Some(error == mail_error::OK);
@@ -269,8 +339,7 @@ pub(super) fn send_mail_result(
             )),
             other => Some(mail_refusal(other)),
         };
-        mail.results.push(result);
-        return;
+        return result;
     }
     // A take/return/delete/copy result.
     match error {
@@ -311,26 +380,32 @@ pub(super) fn send_mail_result(
         }
         other => result.line = Some(mail_refusal(other)),
     }
-    mail.results.push(result);
+    result
 }
 
-/// `SMSG_ITEM_TEXT_QUERY_RESPONSE`: the body lands in the cache and the feed repaints.
+/// `SMSG_ITEM_TEXT_QUERY_RESPONSE`: the body lands in the cache.
 fn mail_item_text(text_id: u32, text: String, mail: &mut MailOpen) {
     mail.bodies.insert(text_id, text);
 }
 
 /// `SMSG_RECEIVED_MAIL` (`0x4ad620`): with a mailbox open it arms the deferred refresh instead of
-/// moving the icon.
+/// moving the icon. Whether it signals `UPDATE_PENDING_MAIL` (`0x4ad66b`).
 ///
 /// Deviation: an open mailbox also re-lists at once, past `CheckInbox`'s 60 s throttle, because a
 /// mail announced while the player stands there should show; the reference waits for the close.
 /// Its list answer also releases the request lock (`0x4ad5d0`), so a take in flight when it lands
 /// loses its lock and a second request can go out before the take's result.
-fn received_mail(seconds: f32, pending: &mut MailPending, mail: &MailOpen, commands: &NetCommands) {
-    pending.apply_received_mail(seconds, mail.mailbox.is_some());
+fn received_mail(
+    seconds: f32,
+    pending: &mut MailPending,
+    mail: &MailOpen,
+    commands: &NetCommands,
+) -> bool {
+    let signals = pending.apply_received_mail(seconds, mail.mailbox.is_some());
     if let Some(mailbox) = mail.mailbox {
         let _ = commands.0.send(ClientCommand::GetMailList { mailbox });
     }
+    signals
 }
 
 /// The `MSG_QUERY_NEXT_MAIL_TIME` reply: stored as sent, and `UPDATE_PENDING_MAIL` always fires
@@ -350,6 +425,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<MailOpen>()
             .init_resource::<MailPending>()
+            .init_resource::<MailLane>()
             .insert_resource(NetCommands(tx));
         register(&mut app);
 
@@ -371,27 +447,6 @@ mod tests {
         assert_eq!(app.world().resource::<MailOpen>().mailbox, None);
     }
 
-    /// Every `SMSG_SEND_MAIL_RESULT` lifts the request lock at the handler's common tail
-    /// (`0x4ad164`): a take, a return and a delete as well as a send, refused or not.
-    #[test]
-    fn every_mail_result_lifts_the_request_lock() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
-        for (action, error) in [
-            (mail_action::SEND, mail_error::OK),
-            (mail_action::MONEY_TAKEN, mail_error::OK),
-            (mail_action::ITEM_TAKEN, mail_error::INTERNAL_ERROR),
-            (mail_action::RETURNED, mail_error::OK),
-            (mail_action::MADE_PERMANENT, mail_error::OK),
-            (mail_action::DELETED, mail_error::INTERNAL_ERROR),
-        ] {
-            let mut mail = MailOpen::default();
-            mail.click(0x20);
-            send_mail_result(7, action, error, None, None, &mut mail, &commands);
-            assert!(mail.request_resolved, "action {action} error {error}");
-        }
-    }
-
     /// `0x4ad050` ends every arm at one tail that signals `MAIL_FAILED` (`0x4ad15f`): a send, a
     /// take, a return and a delete, each success and each refusal, once per result and in arrival
     /// order, a purged row's `CLOSE_INBOX_ITEM` (`0x4ad772`) ahead of its own.
@@ -404,6 +459,7 @@ mod tests {
         let mut cod = super::super::tests::entry(7, Some(0xA), 0, 30.0);
         cod.checked = CHECKED_COD_PAYMENT;
         mail.mails.push(cod);
+        let mut results = Vec::new();
         for (action, error) in [
             (mail_action::MONEY_TAKEN, mail_error::OK),
             (mail_action::RETURNED, mail_error::INTERNAL_ERROR),
@@ -411,9 +467,10 @@ mod tests {
             (mail_action::ITEM_TAKEN, mail_error::EQUIP_ERROR),
             (mail_action::SEND, mail_error::OK),
         ] {
-            send_mail_result(7, action, error, None, None, &mut mail, &commands);
+            results.push(send_mail_result(
+                7, action, error, None, None, &mut mail, &commands,
+            ));
         }
-        assert_eq!(mail.results.len(), 5, "one per result");
 
         let mut script = benilla_ui::script::UiScript::new().unwrap();
         script
@@ -428,7 +485,7 @@ mod tests {
                 end)"#,
             )
             .unwrap();
-        super::super::announce_results(&mut script, std::mem::take(&mut mail.results), |_, _| {});
+        super::super::announce_results(&mut script, results, |_, _| {});
         assert_eq!(
             script
                 .eval::<String>("return table.concat(log, ' ')")
@@ -465,9 +522,9 @@ mod tests {
         mail: &mut MailOpen,
         id: u32,
         action: u32,
-    ) -> crossbeam_channel::Receiver<ClientCommand> {
+    ) -> (MailResult, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
-        send_mail_result(
+        let result = send_mail_result(
             id,
             action,
             mail_error::OK,
@@ -476,7 +533,7 @@ mod tests {
             mail,
             &NetCommands(tx),
         );
-        rx
+        (result, rx)
     }
 
     /// The take arms edit the held row in place and ask the server for nothing (`0x4ad6e8`,
@@ -492,20 +549,23 @@ mod tests {
         row.money = 90;
         row.item = Some(attachment());
         mail.mails.push(row);
-        for (action, id) in [
+        let results: Vec<MailResult> = [
             (mail_action::MONEY_TAKEN, 7),
             (mail_action::ITEM_TAKEN, 7),
             (mail_action::MADE_PERMANENT, 7),
-        ] {
-            send_mail_result(id, action, mail_error::OK, None, None, &mut mail, &commands);
-        }
+        ]
+        .into_iter()
+        .map(|(action, id)| {
+            send_mail_result(id, action, mail_error::OK, None, None, &mut mail, &commands)
+        })
+        .collect();
         let row = &mail.mails[0];
         assert_eq!((row.money, row.item.is_none()), (0, true));
         assert_ne!(row.checked & CHECKED_COPIED, 0, "the copy arm sets COPIED");
-        assert!(mail.results.iter().all(|r| r.inbox_update));
+        assert!(results.iter().all(|r| r.inbox_update));
         // A plain player's mail with no text id: the item leg purges it, once, and keeps the row.
         assert_eq!(sent_commands(&rx), [("delete", 7)], "no list request");
-        assert_eq!(mail.results[1].close_inbox, Some(1));
+        assert_eq!(results[1].close_inbox, Some(1));
         assert_eq!(
             mail.mails.len(),
             1,
@@ -519,14 +579,14 @@ mod tests {
                 .push(super::super::tests::entry(7, Some(0xA), 0, 30.0));
             m.mails
                 .push(super::super::tests::entry(8, Some(0xA), 0, 30.0));
-            let rx = result(&mut m, 7, action);
+            let (first, rx) = result(&mut m, 7, action);
             assert!(sent_commands(&rx).is_empty(), "and asks for nothing");
             assert_eq!(m.mails.len(), 1, "action {action} removes the record");
             assert_eq!(m.mails[0].message_id, 8);
-            assert!(m.results[0].inbox_update);
+            assert!(first.inbox_update);
             // A mail the rows do not hold ends the arm silently.
-            result(&mut m, 99, action);
-            assert!(!m.results[1].inbox_update);
+            let (missing, _) = result(&mut m, 99, action);
+            assert!(!missing.inbox_update);
         }
     }
 
@@ -550,7 +610,7 @@ mod tests {
             row.item_text_id = text;
             row.message_type = kind;
             mail.mails.push(row);
-            send_mail_result(
+            let result = send_mail_result(
                 7,
                 mail_action::ITEM_TAKEN,
                 mail_error::OK,
@@ -564,7 +624,7 @@ mod tests {
                 !purged,
                 "template {template} text {text} kind {kind}"
             );
-            assert_eq!(mail.results[0].close_inbox.is_some(), purged);
+            assert_eq!(result.close_inbox.is_some(), purged);
         }
     }
 
@@ -576,7 +636,7 @@ mod tests {
         let mut cod = super::super::tests::entry(7, Some(0xA), 0, 30.0);
         cod.checked = CHECKED_COD_PAYMENT;
         mail.mails.push(cod);
-        send_mail_result(
+        let result = send_mail_result(
             7,
             mail_action::MONEY_TAKEN,
             mail_error::OK,
@@ -586,6 +646,6 @@ mod tests {
             &NetCommands(tx),
         );
         assert_eq!(sent_commands(&rx), [("delete", 7)]);
-        assert_eq!(mail.results[0].close_inbox, Some(1));
+        assert_eq!(result.close_inbox, Some(1));
     }
 }

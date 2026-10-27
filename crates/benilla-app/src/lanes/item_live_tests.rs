@@ -481,8 +481,9 @@ fn client(window: Window) -> Client {
 /// and the objects as off the snapshot, across the bags, the bank, the worn slots, the trade and
 /// the mail: the fields the snapshots hold are the ones the live read derives
 /// ([`crate::ui_items::live::LiveItem`]). The inspected slots have no snapshot pushed, and read
-/// the visible block live ([`crate::ui_inspect::InspectLive`]); nor have the bags or the trade
-/// ([`crate::ui_trade::TradeLive`]), which read nothing off the VM alone.
+/// the visible block live ([`crate::ui_inspect::InspectLive`]); nor have the bags, the trade or
+/// the mail ([`crate::ui_trade::TradeLive`], [`crate::ui_mail::MailLive`]), which read nothing off
+/// the VM alone.
 #[test]
 fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client(Window::Trade);
@@ -492,7 +493,9 @@ fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
     live.extend(c.answers(true));
     // The fixture shows what it means to on every surface.
     let rolled = format!("Hitem:25:{ENCHANT}:{ROLL}:{SUFFIX}|h[Item 25 of the Bear]");
-    let bag = |l: &str| l.starts_with("GetContainerItem") || l.starts_with("GetTrade");
+    let bag = |l: &str| {
+        l.starts_with("GetContainerItem") || l.starts_with("GetTrade") || l.starts_with("GetInbox")
+    };
     for want in [
         "GetContainerItemInfo 0:1 Interface\\Icons\\INV_Sword_04,17,1,-1,nil",
         "GetContainerItemInfo 0:2 Interface\\Icons\\INV_Sword_04,2,1,-1,1",
@@ -526,7 +529,7 @@ fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
             "{at} links the roll: {read:#?}"
         );
     }
-    // Off the VM alone a bag or trade getter returns nothing: no view stands in for them.
+    // Off the VM alone a bag, trade or inbox getter returns nothing: no view stands in for them.
     assert!(
         snapshot
             .iter()

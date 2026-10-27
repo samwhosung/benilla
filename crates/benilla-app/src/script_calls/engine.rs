@@ -69,6 +69,8 @@ pub(crate) struct RecordAsks<'w, 's> {
     go_templates: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
     /// The charter records and the item objects whose enchantment slot 0 names one (`0x5ef337`).
     petitions: Option<Res<'w, crate::ui_petition::PetitionRecords>>,
+    /// The mail rows' keys and the name and body callbacks their lookups keep.
+    mail: crate::ui_mail::MailLookups<'w>,
     objects: crate::net::Objects<'w, 's>,
     me: Option<Res<'w, crate::net::SelfGuid>>,
     net: Res<'w, crate::net::NetCommands>,
@@ -223,6 +225,7 @@ impl RecordAsks<'_, '_> {
             RecordAsk::AuctionName { guid, list } => {
                 debug!("record ask: auction name {guid:#x} for list {list} has no house here");
             }
+            RecordAsk::Mail { mail_id, lookup } => self.mail.look_up(&self.net, mail_id, lookup),
         }
     }
 }

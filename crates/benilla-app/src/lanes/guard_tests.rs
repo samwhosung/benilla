@@ -119,18 +119,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_mail::MailOpen",
-        "the mailbox's list and results, the send result's equip refusal line among them, which \
-         `feed_mail` fires from; the mail verbs, acting in their calls, hold it in the host",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_mail::pending::MailPending",
-        "the pending-mail notices, whose `UPDATE_PENDING_MAIL` `feed_mail` fires; the mail verbs \
-         hold it in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_logout::LogoutState",
         "the logout state, which `feed_logout` fires from; the session verbs, acting in their \
          calls, hold it in the host",
@@ -260,6 +248,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_gossip::GossipState",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the mail getters read them
+    // through the host, and no feed fires off them, as the packets', the cores' and the record
+    // callbacks' events go on the mail lane at their handlers.
+    "::ui_mail::MailOpen",
+    "::ui_mail::pending::MailPending",
     // Read through the host by the merchant getters, and quiet: its events fire on the merchant
     // lane at their handlers and callbacks.
     "::ui_merchant::MerchantOpen",
@@ -300,6 +293,9 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // handlers and the initiate's name callback.
     "::ui_trade::TradeSession",
     "::ui_tradeskill::TradeSkillOpens",
+    // Read through the host by the mail getters' letter bodies, whose `$` tokens expand off it
+    // (`0x506f70`), and quiet: its packets' signals fire on the world-state lane.
+    "::world_state::WorldStates",
     // Read through the host by the trainer getters, and quiet: its events fire on the trainer
     // lane at the list, the state pass's callers and the item callbacks.
     "::ui_trainer::TrainerOpen",
@@ -401,9 +397,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_auction::feed_auction", &["items::Items", "names::NameCache",
         "ui_auction::AuctionOpen"]),
     ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"]),
-    ("::ui_mail::feed_mail", &["go_templates::GameObjectTemplates", "items::Countdowns",
-        "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "ui_mail::MailOpen", "ui_mail::pending::MailPending", "world_state::WorldStates"]),
     ("::ui_mail::send_query_next_mail_time_on_enter", &["items::Items", "ui_mail::MailOpen",
         "ui_mail::pending::MailPending"]),
     ("::ui_item_text::feed_item_text", &["go_templates::GameObjectTemplates", "items::Countdowns",
@@ -560,6 +553,12 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::LootKneel",
     "::MailOpen",
     "::Stationery",
+    // The tables and the world states the host's mail getters read a row off (`0x4aee11`,
+    // `0x4af229`, `0x4aec87`, the body's `$` expansion `0x506f70`).
+    "::AuctionHouses",
+    "::MailTemplates",
+    "::ui_mail::Packages",
+    "::world_state::WorldStates",
     // The repair discounts and the taxi graph the host's merchant and taxi verbs consult.
     "::RepairTables",
     "::TaxiCatalogs",
@@ -612,7 +611,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 36] {
+fn lane_types() -> [TypeId; 37] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -681,12 +680,15 @@ fn lane_types() -> [TypeId; 36] {
         TypeId::of::<crate::ui_quest::QuestGiverLane>(),
         // The trade lane: the statuses' signals and lines and the initiate's name callback.
         TypeId::of::<crate::ui_trade::TradeLane>(),
+        // The mail lane: the list's and the results' signals and lines, the cores' halves, the
+        // record callbacks' and the pending-mail time's.
+        TypeId::of::<crate::ui_mail::MailLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 36] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 37] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -754,6 +756,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 36] {
             TypeId::of::<crate::ui_quest::QuestGiverLane>(),
         ),
         ("trade", TypeId::of::<crate::ui_trade::TradeLane>()),
+        ("mail", TypeId::of::<crate::ui_mail::MailLane>()),
     ]
 }
 
@@ -924,6 +927,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "item watchers",
             "list rebuilds",
             "loot",
+            "mail",
             "merchant",
             "owed selects",
             "party",
@@ -1765,6 +1769,9 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // them, past the statuses still on its lane (`0x4bf5f1`); its getters read through the host.
     ("trade", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_trade::TradeSession"]),
+    // A close's tail parked behind the lane reads the deferred refresh at its place (`0x4acda8`),
+    // past an arrival's arm by a later packet of the frame (`0x4ad642`).
+    ("mail", &["ui_mail::pending::MailPending"]),
     ("chat", &["go_templates::GameObjectTemplates", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "ui_chat::edit::ChannelState",
         "world_state::WorldStates"]),

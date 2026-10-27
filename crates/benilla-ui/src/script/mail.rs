@@ -1,12 +1,19 @@
-//! The mail bindings. The app pushes the open mailbox's inbox, already resolved from the wire
-//! (`UiScript::set_mail`), and each verb past its guards hands the host its call ([`MailCall`]),
-//! which sends inside it. Indices are 1-based, as `MailFrame.lua` uses them.
+//! The mail bindings. The getters read the mailbox cell, the inbox rows, the pending-mail time,
+//! the usable stationery and the packages through the lent host at the call ([`MailBoxQuery`],
+//! [`MailRowQuery`], [`NewMailQuery`], [`StationeryQuery`], [`PackageQuery`]), as the reference's
+//! read the session's records as they run (`0x4aeb90`, `0x4aebc0`, `0x4afea0`, `0x4ae1f0`,
+//! `0x4ae430`); the VM's own copy ([`super::UiScript::set_mail`] and its siblings) answers only
+//! with no host, which only a test sets. A getter's lookup that misses asks inside its call, with
+//! the callback that signals `MAIL_INBOX_UPDATE` when the record lands ([`MailLookup`]). Each verb
+//! past its guards hands the host its call ([`MailCall`]), which sends inside it. Indices are
+//! 1-based, as `MailFrame.lua` uses them.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag};
 use super::cursor;
 use super::item_read::read_live;
+use super::live::{ask, LiveQuery};
 use super::{ItemKey, Model};
 
 /// The GM stationery, `Stationery.dbc` row 61 (`0x4af2cb cmp [rec+0x11c],0x3d`).
@@ -106,9 +113,9 @@ pub struct MailInvoice {
     pub consignment: u32,
 }
 
-/// The inbox as the client holds it, pushed whole by the app. The rows outlive a close, as the
-/// reference's do (`0x4acd71` clears only the mailbox guid); `open` is that guid's presence
-/// (`[0xb6ef88]`), which every mail verb tests.
+/// The inbox as the VM's copy holds it, which the getters read only with no host to ask. The rows
+/// outlive a close, as the reference's do (`0x4acd71` clears only the mailbox guid); `open` is that
+/// guid's presence (`[0xb6ef88]`), which every mail verb tests.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailState {
     pub inbox: Vec<MailInboxRow>,
@@ -173,12 +180,14 @@ pub enum MailCall {
         mail_id: u32,
         unread: bool,
     },
-    /// `GetInboxText`'s body, after the mark: asked by the text id (`0x4af1bf`) and masked
-    /// (`0x4af203`), the answer [`super::UiScript::answer_inbox_body`] leaves for the call.
+    /// `GetInboxText`'s body, after the mark: asked by the text id with the callback `0x4af340`
+    /// (`0x4af1bf`), and `body`, the row's expanded text as the call reads it, masked (`0x4af203`),
+    /// the answer [`super::UiScript::answer_inbox_body`] leaves for the call.
     ReadBody {
         index: u32,
         mail_id: u32,
         text_id: u32,
+        body: Option<String>,
     },
     /// A row verb past its refusals: its packet for `mail_id`, `TakeInboxTextItem`'s with the
     /// template id (`0x4afb4a`).
@@ -191,6 +200,124 @@ pub enum MailCall {
     Send(MailSendRequest),
     /// `CloseMail()` (`0x4aded0`): the close core's ordinary arm, `0x4acd50` with `cl = 0`.
     Close,
+}
+
+/// The mailbox cell `[0xb6ef88]` and the record count `[0xb6efc0]`, as the verbs' guards and
+/// `GetInboxNumItems` read them at the call (`0x4aeb90`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MailBox {
+    /// A mailbox is open.
+    pub open: bool,
+    /// The rows the session holds, open or not.
+    pub count: usize,
+}
+
+/// The question: [`MailBox`] now.
+pub struct MailBoxQuery;
+
+impl LiveQuery for MailBoxQuery {
+    type Answer = MailBox;
+}
+
+/// The GlobalStrings a row's read takes from the asking VM, by key: the GM sender's name
+/// (`0x4aedc6`) and the auction notices' subjects (`0x4acf94`).
+pub const MAIL_ROW_STRINGS: [&str; 6] = [
+    "GM_EMAIL_NAME",
+    "AUCTION_OUTBID_MAIL_SUBJECT",
+    "AUCTION_WON_MAIL_SUBJECT",
+    "AUCTION_SOLD_MAIL_SUBJECT",
+    "AUCTION_EXPIRED_MAIL_SUBJECT",
+    "AUCTION_REMOVED_MAIL_SUBJECT",
+];
+
+/// One inbox row, 0-based `index`, as the getters read the session's record and its caches at the
+/// call, every cache only read: a getter's own lookup is its call's ask ([`MailLookup`]).
+/// `strings` are [`MAIL_ROW_STRINGS`] as the VM holds them, a missing one absent.
+pub struct MailRowQuery {
+    pub index: usize,
+    pub strings: Vec<(&'static str, String)>,
+}
+
+impl LiveQuery for MailRowQuery {
+    type Answer = Option<MailInboxRow>;
+}
+
+/// `HasNewMail()`'s read of the pending-mail time `0x845eac` at the call (`0x4afea0`).
+pub struct NewMailQuery;
+
+impl LiveQuery for NewMailQuery {
+    type Answer = bool;
+}
+
+/// The usable stationery list (`0x4ad970`), in the picker's order, as of the call.
+pub struct StationeryQuery;
+
+impl LiveQuery for StationeryQuery {
+    type Answer = Vec<StationeryView>;
+}
+
+/// `Package.dbc`'s rows, in file order (`0x4ae430`, `0x4ae450`).
+pub struct PackageQuery;
+
+impl LiveQuery for PackageQuery {
+    type Answer = Vec<PackageView>;
+}
+
+/// A getter's lookups with a callback on the row of `mail_id` ([`super::RecordAsk::Mail`]), each
+/// signalling `MAIL_INBOX_UPDATE` when its record lands found, one callback per call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailLookup {
+    /// `GetInboxHeaderInfo`'s: the item for the package icon when no package row names it
+    /// (`0x4aecc7`), the paper's item (`0x4aed63`) and the sender by type, a player's name
+    /// (`0x4aedf6`), a creature's (`0x4aee64`) or a game object's (`0x4aee78`), all with
+    /// `0x4af0a0` or `0x4af080`.
+    Header,
+    /// `GetInboxItem`'s item (`0x4af66f`, callback `0x4af0a0`).
+    Item,
+    /// `GetInboxInvoiceInfo`'s counterparty (`0x4af4b7`, callback `0x4af5b0`).
+    InvoiceName,
+}
+
+/// The mailbox cell and the count now: the host's answer, else the VM's copy.
+fn mailbox_now(lua: &Lua, model: &Model) -> MailBox {
+    ask(lua, &MailBoxQuery).unwrap_or_else(|| MailBox {
+        open: model.mail.as_ref().is_some_and(|m| m.open),
+        count: model.mail.as_ref().map_or(0, |m| m.inbox.len()),
+    })
+}
+
+/// The row at a 1-based `index` now: the host's answer, else the VM's copy. Index 0 is none.
+pub(super) fn row_now(lua: &Lua, model: &Model, index: usize) -> Option<MailInboxRow> {
+    let slot = index.checked_sub(1)?;
+    let strings = MAIL_ROW_STRINGS
+        .iter()
+        .filter_map(|&key| Some((key, lua.globals().get::<Option<String>>(key).ok()??)))
+        .collect();
+    match ask(
+        lua,
+        &MailRowQuery {
+            index: slot,
+            strings,
+        },
+    ) {
+        Some(row) => row,
+        None => row_at(model, index),
+    }
+}
+
+/// The usable stationery now: the host's answer, else the VM's copy.
+fn stationeries_now(lua: &Lua, model: &Model) -> Vec<StationeryView> {
+    ask(lua, &StationeryQuery).unwrap_or_else(|| model.mail_stationeries.clone())
+}
+
+/// The packages: the host's answer, else the VM's copy.
+fn packages_now(lua: &Lua, model: &Model) -> Vec<PackageView> {
+    ask(lua, &PackageQuery).unwrap_or_else(|| model.mail_packages.clone())
+}
+
+/// Make `lookup` on the row of `mail_id` inside the getter's call ([`super::calls::ask`]).
+fn look_up(lua: &Lua, mail_id: u32, lookup: MailLookup) -> mlua::Result<()> {
+    super::calls::ask(lua, super::RecordAsk::Mail { mail_id, lookup })
 }
 
 /// `0x4acdc0`'s clears: the attachment, whose lock it lifts (`0x495420`, firing an argless
@@ -208,13 +335,14 @@ fn clear_compose(model: &mut Model) -> Option<u64> {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open mailbox's inbox snapshot.
+    /// Set (or clear, with `None`) the VM's copy of the inbox, which the getters read with no host
+    /// to ask.
     pub fn set_mail(&mut self, state: Option<MailState>) {
         self.model_mut().mail = state;
     }
 
-    /// The close core zeroed the mailbox (`0x4acd8f`): the verbs find none from here, ahead of
-    /// the snapshot the next feed pushes.
+    /// The close core zeroed the mailbox (`0x4acd8f`), in the VM's copy: with no host the verbs
+    /// find none from here.
     pub fn mail_closed(&mut self) {
         if let Some(mail) = self.model_mut().mail.as_mut() {
             mail.open = false;
@@ -248,41 +376,29 @@ impl super::UiScript {
         })
     }
 
-    /// The read mark's VM half (`0x4adcd0`), applied by the host after its packet: the row's read
-    /// bit (`0x4add62`), its days left above 3 lowered to 3 when it carries no COD
-    /// (`0x4add72`-`0x4add8e`), and `MAIL_INBOX_UPDATE` (`0x4add9d`).
+    /// The read mark's VM half (`0x4adcd0`), applied by the host after its packet and its record
+    /// write: in the VM's copy, if it holds the row, the read bit (`0x4add62`) and its days left
+    /// above 3 lowered to 3 when it carries no COD (`0x4add72`-`0x4add8e`); then
+    /// `MAIL_INBOX_UPDATE` (`0x4add9d`).
     pub fn mark_mail_read(&mut self, index: u32) {
         super::tick::verb(&self.lua, |model| {
-            let Some(row) = model.mail.as_mut().and_then(|m| {
+            if let Some(row) = model.mail.as_mut().and_then(|m| {
                 index
                     .checked_sub(1)
                     .and_then(|i| m.inbox.get_mut(i as usize))
-            }) else {
-                return;
-            };
-            row.was_read = true;
-            if row.cod == 0 && row.days_left > 3.0 {
-                row.days_left = 3.0;
+            }) {
+                row.was_read = true;
+                if row.cod == 0 && row.days_left > 3.0 {
+                    row.days_left = 3.0;
+                }
             }
             model.raise("MAIL_INBOX_UPDATE", Vec::new());
         });
     }
 
-    /// The body row `index` holds, for the host's mask of a read letter.
-    pub fn inbox_body(&self, index: u32) -> Option<String> {
-        let model = self.model_ref();
-        row_at(&model, index as usize).and_then(|r| r.body)
-    }
-
     /// The body the applying `GetInboxText` call answers, masked by the host (`0x4af203`).
     pub fn answer_inbox_body(&mut self, body: String) {
         self.model_mut().mail_body_answer = Some(body);
-    }
-
-    /// Whether the VM holds `state` as its inbox: a snapshot equal to what the calls already left
-    /// there is no change for the scripts.
-    pub fn holds_mail(&self, state: &Option<MailState>) -> bool {
-        self.model_ref().mail == *state
     }
 
     /// The reference's compose-tab reset (`0x4acdc0(1)`), run on mailbox open and a sent mail:
@@ -312,18 +428,20 @@ impl super::UiScript {
         }
     }
 
-    /// Push the usable stationery list, in the picker's order.
+    /// Set the VM's copy of the usable stationery list, in the picker's order, which the getters
+    /// read with no host to ask.
     pub fn set_mail_stationeries(&mut self, list: Vec<StationeryView>) {
         self.model_mut().mail_stationeries = list;
     }
 
-    /// Push `Package.dbc`'s rows, in file order.
+    /// Set the VM's copy of `Package.dbc`'s rows, in file order, which the getters read with no
+    /// host to ask.
     pub fn set_mail_packages(&mut self, packages: Vec<PackageView>) {
         self.model_mut().mail_packages = packages;
     }
 
-    /// Push `HasNewMail()`'s answer, independent of any open mailbox. The app sets it before each
-    /// `UPDATE_PENDING_MAIL`, on which the minimap icon re-reads it (`Minimap.xml:278-289`).
+    /// Set the VM's copy of `HasNewMail()`'s answer, independent of any open mailbox, which the
+    /// getter reads with no host to ask.
     pub fn set_has_new_mail(&mut self, has: bool) {
         self.model_mut().has_new_mail = has;
     }
@@ -332,20 +450,19 @@ impl super::UiScript {
 /// The guards every mail request opens with: no request in flight (`[0xb6efc8]`, `0x4aeab6`,
 /// `0x4ae830`, `0x4af800`, `0x4af90c`, `0x4afa8e`, `0x4afbce`, `0x4afcfe`) and an open mailbox
 /// (`[0xb6ef88]`).
-fn mail_ready(model: &Model) -> bool {
-    !model.mail_busy && model.mail.as_ref().is_some_and(|m| m.open)
+fn mail_ready(lua: &Lua, model: &Model) -> bool {
+    !model.mail_busy && mailbox_now(lua, model).open
 }
 
 /// `GetSendMailPrice()` (`0x4ae730`): 30 copper (`0x4ae756`); plus, for the selected paper in the
 /// usable list (`0x4ae765`-`0x4ae774`) when the player carries none (`0x4ae77d`), its item's buy
 /// price (`0x4ae7a0`); plus the selected package's cost (`0x4ae7b1`-`0x4ae7c6`); plus the money
 /// enclosed (`0x4ae7c9`-`0x4ae7d2`), summed in 32 bits and answered unsigned (`0x4ae7d7`).
-fn send_price(model: &Model) -> u32 {
+fn send_price(lua: &Lua, model: &Model) -> u32 {
     let paper = (model.mail_stationery != 0)
         .then(|| {
-            model
-                .mail_stationeries
-                .iter()
+            stationeries_now(lua, model)
+                .into_iter()
                 .find(|r| r.id == model.mail_stationery)
         })
         .flatten()
@@ -353,9 +470,8 @@ fn send_price(model: &Model) -> u32 {
         .unwrap_or(0);
     let package = (model.mail_package != 0)
         .then(|| {
-            model
-                .mail_packages
-                .iter()
+            packages_now(lua, model)
+                .into_iter()
                 .find(|p| p.id == model.mail_package)
         })
         .flatten()
@@ -432,7 +548,7 @@ impl MailRowVerb {
     }
 }
 
-/// A clone of the inbox row at a 1-based index.
+/// A clone of the VM's copy's inbox row at a 1-based index.
 fn row_at(model: &Model, index: usize) -> Option<MailInboxRow> {
     model
         .mail
@@ -449,7 +565,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetInboxNumItems",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.mail.as_ref().map_or(0, |m| m.inbox.len()) as i64)
+            Ok(mailbox_now(lua, &model).count as i64)
         })?,
     )?;
 
@@ -463,8 +579,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: GetInboxHeaderInfo(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                row_at(&model, index)
+                row_now(lua, &model, index)
             };
+            // The lookups that missed ask inside the call, each keeping its callback: the item or
+            // the paper's item (`0x4aecc7`, `0x4aed63`), the sender (`0x4aedf6`, `0x4aee64`,
+            // `0x4aee78`).
+            if let Some(r) = row.as_ref().filter(|r| {
+                r.sender.is_none()
+                    || r.stationery_icon.is_none()
+                    || (r.item_id != 0 && r.item_name.is_none())
+            }) {
+                look_up(lua, r.mail_id, MailLookup::Header)?;
+            }
             let Some(r) = row else {
                 let mut miss = vec![Value::Nil; 4];
                 miss.extend(vec![Value::Integer(0); 3]);
@@ -516,7 +642,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: GetInboxText(index)")?;
             let read = |lua: &Lua| {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                row_at(&model, index)
+                row_now(lua, &model, index)
             };
             // A miss pushes four nils (`0x4af311`..`0x4af334`).
             let Some(r) = read(lua) else {
@@ -545,12 +671,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 // An answer a call that waited for the host left is no answer to this one.
                 answer(lua);
+                // The body as the mark's handlers left the row.
+                let body = read(lua).and_then(|r| r.body);
                 submit(
                     lua,
                     MailCall::ReadBody {
                         index,
                         mail_id: r.mail_id,
                         text_id: r.item_text_id,
+                        body,
                     },
                 )?;
                 answer(lua)
@@ -592,8 +721,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: GetInboxInvoiceInfo(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                row_at(&model, index)
+                row_now(lua, &model, index)
             };
+            // An invoice whose counterparty the name cache misses asks it inside the call
+            // (`0x4af4b7`); the host finds the guid in the cached text, and one not cached yet
+            // reaches no lookup (`0x4af40c`).
+            if let Some(r) = row.as_ref().filter(|r| r.is_invoice && r.invoice.is_none()) {
+                look_up(lua, r.mail_id, MailLookup::InvoiceName)?;
+            }
             let miss = || {
                 MultiValue::from_vec(vec![
                     Value::Nil,
@@ -632,7 +767,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: GetInboxItem(index)")?;
             let (row, usable) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let row = row_at(&model, index);
+                let row = row_now(lua, &model, index);
                 let usable = row
                     .as_ref()
                     .is_none_or(|r| super::item_stats::item_usable_by_id(lua, &model, r.item_id));
@@ -650,6 +785,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(r) = row.filter(|r| r.item_id != 0) else {
                 return Ok(miss());
             };
+            // The record's lookup asks a miss inside the call (`0x4af66f`).
+            if r.item_name.is_none() {
+                look_up(lua, r.mail_id, MailLookup::Item)?;
+            }
             // The attachment's record off the item cache as the call runs.
             let key = ItemKey::Record {
                 entry: r.item_id,
@@ -702,7 +841,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `DeleteInboxItem`'s own rule (`0x4afe4c`-`0x4afe66`), with none of its guards on
             // the lock or the mailbox.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let can = row_at(&model, index)
+            let can = row_now(lua, &model, index)
                 .is_some_and(|r| MailRowVerb::Delete.sends(lua, &model, &r).is_ok());
             Ok(flag(can))
         })?,
@@ -712,7 +851,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "HasNewMail",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.has_new_mail))
+            Ok(flag(ask(lua, &NewMailQuery).unwrap_or(model.has_new_mail)))
         })?,
     )?;
 
@@ -724,7 +863,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CheckInbox",
         lua.create_function(|lua, ()| {
             let query = super::tick::verb(lua, |model| {
-                if !mail_ready(model) {
+                if !mail_ready(lua, model) {
                     return false;
                 }
                 if model.mail_list_stamp.is_some_and(|t| model.now < t) {
@@ -779,13 +918,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let n = super::binding_abi::number_arg(lua, index, usage)?;
                 let call = {
                     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    if !mail_ready(&model) {
+                    if !mail_ready(lua, &model) {
                         return Ok(());
                     }
                     let Some(index) = u32::try_from(n).ok().filter(|&i| i >= 1) else {
                         return Ok(());
                     };
-                    let Some(row) = row_at(&model, index as usize) else {
+                    let Some(row) = row_now(lua, &model, index as usize) else {
                         return Ok(());
                     };
                     if let Err(refusal) = verb.sends(lua, &model, &row) {
@@ -831,7 +970,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // in flight or no mailbox (`0x4ae839`, `0x4ae852`), a send awaiting its result
                 // (`0x4ae85e`), an empty recipient or subject (`0x4ae875`, `0x4ae8a9`), no
                 // stationery (`0x4ae8dd`).
-                if !mail_ready(model)
+                if !mail_ready(lua, model)
                     || model.mail_send_pending
                     || target.is_empty()
                     || subject.is_empty()
@@ -1031,7 +1170,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetSendMailPrice",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(send_price(&model)))
+            Ok(i64::from(send_price(lua, &model)))
         })?,
     )?;
 
@@ -1041,14 +1180,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The stationery family ──
-    // The reference rebuilds the list (`0x4ad970`) in `GetNumStationeries` (`0x4ae1f0`), on world
-    // entry and on the last item-query answer; the app recomputes it every frame.
+    // The reference rebuilds the list (`0x4ad970`) in `GetNumStationeries` (`0x4ae1f0`) while no
+    // paper's record is awaited, and at the last one's answer (`0x4acbf8`); each getter here reads
+    // it as of its call.
 
     g.set(
         "GetNumStationeries",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.mail_stationeries.len() as i64)
+            Ok(stationeries_now(lua, &model).len() as i64)
         })?,
     )?;
 
@@ -1062,11 +1202,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 index,
                 "Usage: GetStationeryInfo(index)",
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let list = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                stationeries_now(lua, &model)
+            };
             let row = usize::try_from(index)
                 .ok()
                 .and_then(|i| i.checked_sub(1))
-                .and_then(|i| model.mail_stationeries.get(i));
+                .and_then(|i| list.get(i));
             let Some(row) = row else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
@@ -1092,11 +1235,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 index,
                 "Usage: SelectStationery(index)",
             )?;
+            let list = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                stationeries_now(lua, &model)
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.mail_stationery = usize::try_from(index)
                 .ok()
                 .and_then(|i| i.checked_sub(1))
-                .and_then(|i| model.mail_stationeries.get(i))
+                .and_then(|i| list.get(i))
                 .map_or(0, |row| row.id);
             Ok(())
         })?,
@@ -1109,7 +1256,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let id = model.mail_stationery;
             let tex = (id != 0)
-                .then(|| model.mail_stationeries.iter().find(|r| r.id == id))
+                .then(|| {
+                    stationeries_now(lua, &model)
+                        .into_iter()
+                        .find(|r| r.id == id)
+                })
                 .flatten();
             Ok(match tex {
                 Some(row) => Value::String(lua.create_string(&row.texture)?),
@@ -1141,7 +1292,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumPackages",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.mail_packages.len() as i64)
+            Ok(packages_now(lua, &model).len() as i64)
         })?,
     )?;
 
@@ -1152,10 +1303,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             let index =
                 crate::script::binding_abi::number_arg(lua, index, "Usage: GetPackageInfo(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let packages = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                packages_now(lua, &model)
+            };
             let row = usize::try_from(index.wrapping_sub(1))
                 .ok()
-                .and_then(|i| model.mail_packages.get(i));
+                .and_then(|i| packages.get(i));
             Ok(match row {
                 Some(row) => MultiValue::from_vec(vec![
                     Value::String(lua.create_string(&row.name)?),
@@ -1174,10 +1328,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             let index =
                 crate::script::binding_abi::number_arg(lua, index, "Usage: SelectPackage(index)")?;
+            let packages = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                packages_now(lua, &model)
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.mail_package = usize::try_from(index.wrapping_sub(1))
                 .ok()
-                .and_then(|i| model.mail_packages.get(i))
+                .and_then(|i| packages.get(i))
                 .map_or(0, |row| row.id);
             Ok(MultiValue::new())
         })?,

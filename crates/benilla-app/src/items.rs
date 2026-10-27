@@ -531,6 +531,10 @@ pub(crate) enum RecordCallback {
     Trainer,
     /// A questgiver row's, asked by `GetQuestItemInfo` (`0x5017de` with `0x5018c0`), one per call.
     Quest,
+    /// A mail row's, asked by `GetInboxHeaderInfo` and `GetInboxItem` (`0x4aecc7`, `0x4aed63`,
+    /// `0x4af66f` with `0x4af0a0`), one per call, or an auction notice's at the list parse
+    /// (`0x4acf38` with `0x4ad010`), one per notice.
+    Mail,
 }
 
 impl Items {

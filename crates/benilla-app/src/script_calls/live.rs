@@ -135,6 +135,8 @@ live_reads! {
         quest_giver: crate::ui_quest::QuestGiverLive<'static, 'static>,
         /// The trade window's offers, its partner cell and the money offers.
         trade: crate::ui_trade::TradeLive<'static>,
+        /// The mailbox cell, its rows, the pending-mail time, the stationery and the packages.
+        mail: crate::ui_mail::MailLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

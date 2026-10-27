@@ -131,6 +131,8 @@ pub(crate) struct Scene<'w, 's> {
     quest_giver: Option<ResMut<'w, crate::ui_quest::QuestGiverLane>>,
     // The quest log's leaderboard's object waits' `QUEST_LOG_UPDATE`.
     quest_log: Option<ResMut<'w, crate::ui_quest_log::QuestLog>>,
+    // The mail rows' and notices' callbacks' `MAIL_INBOX_UPDATE`.
+    mail: Option<ResMut<'w, crate::ui_mail::MailLane>>,
     pass: ResMut<'w, update::UpdatePass>,
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,
@@ -189,8 +191,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // (`0x5d96b0`), the loot window's rows (`0x4c2ac0`) and pushes (`0x491ee0`), the trade
             // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), the parked swaps'
             // (`0x5e1020`) and auto-equips' (`0x5e17a0`), the vendor rows' (`0x4fada0`,
-            // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`) and the questgiver rows'
-            // (`0x5018c0`).
+            // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`), the questgiver rows'
+            // (`0x5018c0`) and the mail rows' and notices' (`0x4af0a0`, `0x4ad010`).
             let callbacks = sc.items.take_callbacks(entry);
             for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
@@ -258,6 +260,14 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         }
                     }
                     Cb::Quest => {}
+                    // `MAIL_INBOX_UPDATE` for a ready record only (`0x4af0a6`, `0x4ad016`); the
+                    // notice's subject reads the record as its row resolves.
+                    Cb::Mail if answered => {
+                        if let Some(lane) = sc.mail.as_mut() {
+                            lane.push(crate::ui_mail::MailEvent::InboxUpdate);
+                        }
+                    }
+                    Cb::Mail => {}
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one

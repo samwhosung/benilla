@@ -971,16 +971,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // (`0x855584`, `0x53559e`).
             let h = frame_handle_of(lua, &this)?;
             let index = binding_abi::index_arg(lua, index, "Usage: SetInboxItem(index)")?;
+            // `ftol(n) - 1` compared unsigned (`0x5355ce`, `0x5355d1`): 0 names no row. The row
+            // as the session holds it at the call.
             let row = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                let Some(mail) = &model.mail else {
-                    return Ok(Value::Nil);
-                };
-                // `ftol(n) - 1` compared unsigned (`0x5355ce`, `0x5355d1`): 0 names no row.
-                index
-                    .checked_sub(1)
-                    .and_then(|i| mail.inbox.get(i))
-                    .cloned()
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                super::mail::row_now(lua, &model, index)
             };
             let Some(row) = row.filter(|r| r.item_id != 0) else {
                 return Ok(Value::Nil);

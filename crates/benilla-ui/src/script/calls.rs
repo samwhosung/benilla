@@ -347,6 +347,13 @@ pub enum RecordAsk {
     /// cache misses: the player-name cache by guid, with the list's callback (`0x4cf290`,
     /// `0x4cf2b0`, `0x4cf2d0`), kept once per name and list (`0x55f080`'s dedupe flag 1).
     AuctionName { guid: u64, list: usize },
+    /// A mail getter's lookups on the row of `mail_id` that the mirror lacks a record for, each
+    /// with the callback that signals `MAIL_INBOX_UPDATE` for a found record, kept once per call
+    /// (dedupe flag 0): the session holds the keys ([`super::MailLookup`]).
+    Mail {
+        mail_id: u32,
+        lookup: super::MailLookup,
+    },
 }
 
 /// The owner id a profession or trainer getter's item lookup passes: `0xb0000000` over a spell id

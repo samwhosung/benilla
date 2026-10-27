@@ -4,7 +4,7 @@
 
 use benilla_protocol::messages::{mail_message_type, MailAttachment, MailListEntry};
 use benilla_protocol::SessionEvent;
-use benilla_ui::script::{MailInboxRow, MailState, StationeryView, UiScript, UnitState};
+use benilla_ui::script::{StationeryView, UiScript, UnitState};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -54,28 +54,8 @@ fn linen() -> MailAttachment {
     }
 }
 
-/// The VM's row for `e`, as the feed resolves it.
-fn row_of(e: &MailListEntry) -> MailInboxRow {
-    MailInboxRow {
-        mail_id: e.message_id,
-        item_text_id: e.item_text_id,
-        stationery: e.stationery,
-        message_type: e.message_type,
-        mail_template_id: e.mail_template_id,
-        money: e.money,
-        cod: e.cod,
-        days_left: e.expire_days,
-        item_id: e.item.as_ref().map_or(0, |i| i.entry),
-        item_count: e.item.as_ref().map_or(0, |i| u32::from(i.count)),
-        was_read: e.checked & CHECKED_READ != 0,
-        can_reply: true,
-        subject: e.subject.clone(),
-        ..Default::default()
-    }
-}
-
-/// The whole client, headless, with a mailbox open on `mails` and the VM holding their rows,
-/// recording every mail event its handlers hear.
+/// The whole client, headless, with a mailbox open on `mails`, which the getters read through the
+/// host, recording every mail event its handlers hear.
 struct Mailbox {
     app: App,
     rx: Receiver<ClientCommand>,
@@ -87,7 +67,6 @@ impl Mailbox {
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();
-        let rows = mails.iter().map(row_of).collect();
         {
             let mut mail = world.resource_mut::<MailOpen>();
             mail.click(MAILBOX);
@@ -104,10 +83,6 @@ impl Mailbox {
             .expect("the recorder installs");
         script.set_unit("player", Some(UnitState::default()));
         script.set_money(1_000);
-        script.set_mail(Some(MailState {
-            inbox: rows,
-            open: true,
-        }));
         world.insert_non_send_resource(script);
         Self { app, rx }
     }
@@ -121,14 +96,6 @@ impl Mailbox {
     fn eval<T: benilla_ui::mlua::FromLuaMulti>(&mut self, lua: &str) -> T {
         with_hosted_vm(self.app.world_mut(), |s| s.expect("a VM").eval::<T>(lua))
             .expect("the chunk runs")
-    }
-
-    /// One frame's mail feed, its memos kept from the last.
-    fn feed(&mut self) {
-        self.app
-            .world_mut()
-            .run_system_cached(super::feed_mail)
-            .expect("the feed runs");
     }
 
     fn script(&mut self) -> Mut<'_, UiScript> {
@@ -211,12 +178,11 @@ fn a_template_letter_is_copied_with_its_template_id() {
 /// `GetInboxText` marks an unread mail inside its call (`0x4af18e` → `0x4adcd0`): the packet
 /// (`0x4adcfe`), the read bit (`0x4add62`), days left above 3 lowered to 3 on a mail with no COD
 /// (`0x4add72`-`0x4add8e`), `MAIL_INBOX_UPDATE` (`0x4add9d`) and the deferred refresh
-/// (`0x4adda6`), then the body's ask (`0x4af1bf`). The script's next line reads all of it, and
-/// the feed after it, finding the VM's rows as its own, signals nothing more.
+/// (`0x4adda6`), then the body's ask (`0x4af1bf`). The script's next line reads all of it off the
+/// session.
 #[test]
 fn opening_an_unread_mail_marks_it_inside_the_call() {
     let mut h = Mailbox::new(vec![entry(1, 9)]);
-    h.feed();
     let _ = h.sent();
     let (read, days, heard): (bool, f64, i64) = h.eval(
         "GetInboxText(1) local _, _, _, _, _, _, days, _, read = GetInboxHeaderInfo(1) \
@@ -240,8 +206,6 @@ fn opening_an_unread_mail_marks_it_inside_the_call() {
     let held = &world.resource::<MailOpen>().mails[0];
     assert_eq!((held.checked & CHECKED_READ, held.expire_days), (1, 3.0));
     assert!(world.resource_mut::<MailPending>().take_refresh());
-    h.feed();
-    assert_eq!(h.eval::<i64>("return table.getn(HEARD)"), 1);
 }
 
 /// A mail already read is not marked again (`0x4adcee`): no packet, no event and no refresh. Its
@@ -418,25 +382,17 @@ fn get_inbox_text_masks_a_letter_but_not_a_template() {
     letter.checked = CHECKED_READ;
     let mut template = entry(2, 0);
     template.mail_template_id = 87;
+    template.checked = CHECKED_READ;
     let mut h = Mailbox::new(vec![letter, template]);
-    h.app.world_mut().insert_resource(darn_filter());
-    {
-        let mut script = h.script();
-        let mut state = MailState {
-            inbox: Vec::new(),
-            open: true,
-        };
-        for (id, body) in [(1, "darn mail"), (2, "darn template")] {
-            let mut e = entry(id, if id == 1 { 9 } else { 0 });
-            e.checked = CHECKED_READ;
-            e.mail_template_id = if id == 2 { 87 } else { 0 };
-            state.inbox.push(MailInboxRow {
-                body: Some(body.into()),
-                ..row_of(&e)
-            });
-        }
-        script.set_mail(Some(state));
-    }
+    let world = h.app.world_mut();
+    world.insert_resource(darn_filter());
+    world.insert_resource(super::MailTemplates(
+        [(87, "darn template".to_string())].into(),
+    ));
+    world
+        .resource_mut::<MailOpen>()
+        .bodies
+        .insert(9, "darn mail".into());
     let bodies: (String, String, String) = h.eval(
         "local a = GetInboxText(1) local b = GetInboxText(1) local c = GetInboxText(2) \
          return a, b, c",
@@ -478,7 +434,6 @@ fn an_auction_subject_is_masked_by_the_list_parse_alone() {
             mails: vec![notice(1, 2589), notice(2, 2590)],
         }],
     );
-    h.feed();
     // An item not held at the parse leaves the cell empty (`0x4acf3d`) until it lands.
     let waiting: String = h.eval("local _, _, _, b = GetInboxHeaderInfo(2) return b");
     assert_eq!(waiting, "");
@@ -486,7 +441,6 @@ fn an_auction_subject_is_masked_by_the_list_parse_alone() {
         .world_mut()
         .resource_mut::<crate::items::Items>()
         .insert_template(2590, Some(crate::items::test_template("darn wool")));
-    h.feed();
     let subjects: (String, String) = h.eval(
         "local _, _, _, a = GetInboxHeaderInfo(1) local _, _, _, b = GetInboxHeaderInfo(2) \
          return a, b",
@@ -506,16 +460,14 @@ fn an_auction_subject_is_masked_by_the_list_parse_alone() {
 #[test]
 fn a_nested_get_inbox_text_leaves_the_outer_body_masked() {
     let mut h = Mailbox::new(vec![entry(1, 9)]);
-    h.app.world_mut().insert_resource(darn_filter());
+    let world = h.app.world_mut();
+    world.insert_resource(darn_filter());
+    world
+        .resource_mut::<MailOpen>()
+        .bodies
+        .insert(9, "darn mail".into());
     {
-        let mut script = h.script();
-        script.set_mail(Some(MailState {
-            inbox: vec![MailInboxRow {
-                body: Some("darn mail".into()),
-                ..row_of(&entry(1, 9))
-            }],
-            open: true,
-        }));
+        let script = h.script();
         script
             .run(
                 r#"local f = CreateFrame("Frame")

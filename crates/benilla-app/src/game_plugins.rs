@@ -1943,8 +1943,6 @@ pub(crate) mod schedule_tests {
          "a roll exists only after a group member loots under group loot; leftovers are cleared at socket teardown (another player's act: coincidence-only residual)"),
         ("ui_macro/mod.rs", "load_macros", Because::MemoLatched,
          "`MacroFiles.identity` is a `VmMemo`, so a new session re-reads the files and re-fires UPDATE_MACROS; also `InWorldGated`"),
-        ("ui_mail/mod.rs", "feed_mail", Because::SelfHealing,
-         "the window queues are mailbox-click replies; the one server push (`SMSG_RECEIVED_MAIL`) is re-asked by `send_query_next_mail_time_on_enter`, whose reply sets `notify` unconditionally"),
         ("ui_panes.rs", "feed_character_panes", Because::FilledByVm,
          "the answers answer the VM's own build requests and arms on panes it listed; a frameless VM lists none, and an answer for another VM's rows is dropped"),
         ("ui_quest_share.rs", "feed_quest_share", Because::PlayerRoundTrip,

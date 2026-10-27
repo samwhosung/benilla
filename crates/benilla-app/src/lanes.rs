@@ -517,6 +517,8 @@ mod item_live_tests;
 #[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod mail_live_tests;
+#[cfg(test)]
 mod merchant_live_tests;
 #[cfg(test)]
 mod name_live_tests;

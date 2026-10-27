@@ -21,9 +21,6 @@ pub(crate) struct MailPending {
     /// by an arrival while the mailbox is open (`0x4ad642`), read only by the close core
     /// (`0x4acda8`).
     refresh_pending: bool,
-    /// A queued `UPDATE_PENDING_MAIL`, which fires at three sites only: the reply (`0x4ad605`), a
-    /// near-zero arrival (`0x4ad66b`) and the step crossing under ε (`0x4adeba`).
-    notify: bool,
 }
 
 impl Default for MailPending {
@@ -32,7 +29,6 @@ impl Default for MailPending {
         Self {
             countdown: MAIL_TIME_NO_MAIL,
             refresh_pending: false,
-            notify: false,
         }
     }
 }
@@ -45,23 +41,21 @@ impl MailPending {
     }
 
     /// The per-frame step (`0x4ade60`): a non-positive countdown stays put; a positive one steps
-    /// down to a floor of `0.0`, in f64 as the x87 chain runs it (PC_53), and signals on the step
-    /// that lands inside ε.
-    pub(super) fn step(&mut self, delta_secs: f32) {
+    /// down to a floor of `0.0`, in f64 as the x87 chain runs it (PC_53). Whether it signals
+    /// `UPDATE_PENDING_MAIL`: on the step that lands inside ε (`0x4adeba`), once.
+    pub(super) fn step(&mut self, delta_secs: f32) -> bool {
         if self.countdown > 0.0 {
             let diff = f64::from(self.countdown) - f64::from(delta_secs); // fsub, then fcom vs 0.0
             self.countdown = if diff > 0.0 { diff as f32 } else { 0.0 };
-            if self.has_new_mail() {
-                self.notify = true; // 0x4adeba: the crossing edge, fired once
-            }
+            return self.has_new_mail();
         }
+        false
     }
 
-    /// The `MSG_QUERY_NEXT_MAIL_TIME` reply (`0x4ad5f0`): stored as sent, and it signals whether
-    /// or not `HasNewMail()` changed.
+    /// The `MSG_QUERY_NEXT_MAIL_TIME` reply (`0x4ad5f0`): stored as sent; its handler signals
+    /// whether or not `HasNewMail()` changed (`0x4ad605`).
     pub(crate) fn apply_query_reply(&mut self, seconds: f32) {
         self.countdown = seconds;
-        self.notify = true; // 0x4ad605, unconditional
     }
 
     /// Sending the query stamps "no mail" (`0x4ade25`) with no signal, so the icon keeps its face
@@ -71,18 +65,21 @@ impl MailPending {
     }
 
     /// `SMSG_RECEIVED_MAIL` (`0x4ad620`); `mailbox_open` is its busy test on the open mailbox's
-    /// guid (`[0xb6ef88]|[0xb6ef8c]`).
-    pub(crate) fn apply_received_mail(&mut self, seconds: f32, mailbox_open: bool) {
+    /// guid (`[0xb6ef88]|[0xb6ef8c]`). Whether it signals `UPDATE_PENDING_MAIL`: a near-zero
+    /// arrival with no mailbox open (`0x4ad66b`).
+    pub(crate) fn apply_received_mail(&mut self, seconds: f32, mailbox_open: bool) -> bool {
         if mailbox_open {
             self.refresh_pending = true; // 0x4ad642
-            return;
+            return false;
         }
         if f64::from(seconds).abs() < f64::from(MAIL_TIME_EPSILON) {
             self.countdown = seconds;
-            self.notify = true; // 0x4ad66b
-        } else if self.countdown < 0.0 || seconds < self.countdown {
+            return true;
+        }
+        if self.countdown < 0.0 || seconds < self.countdown {
             self.countdown = seconds;
         }
+        false
     }
 
     /// The mark-as-read sender's unconditional arm (`0x4adda6`).
@@ -93,10 +90,6 @@ impl MailPending {
     /// The close core's read of the flag (`0x4acda8`), its only reader.
     pub(super) fn take_refresh(&mut self) -> bool {
         std::mem::take(&mut self.refresh_pending)
-    }
-
-    pub(super) fn take_notify(&mut self) -> bool {
-        std::mem::take(&mut self.notify)
     }
 }
 
@@ -133,71 +126,62 @@ mod tests {
     fn step_leaves_non_positive_alone_and_floors_at_zero() {
         // The "no mail" stamp never drifts toward zero, however long the session runs.
         let mut none_waiting = pending_at(-86400.0);
+        let mut signals = 0;
         for _ in 0..100 {
-            none_waiting.step(1.0 / 60.0);
+            signals += u32::from(none_waiting.step(1.0 / 60.0));
         }
         assert_eq!(none_waiting.countdown, -86400.0);
         assert!(!none_waiting.has_new_mail());
-        assert!(
-            !none_waiting.take_notify(),
-            "a dormant countdown never signals"
-        );
+        assert_eq!(signals, 0, "a dormant countdown never signals");
 
         // A reached-zero countdown stays at zero and does not re-signal.
         let mut expired = pending_at(0.0);
-        expired.step(1.0 / 60.0);
+        assert!(!expired.step(1.0 / 60.0));
         assert_eq!(expired.countdown, 0.0);
         assert!(expired.has_new_mail());
-        assert!(!expired.take_notify());
 
         // A positive countdown steps down, floors at 0 and signals on the step that lands it.
         let mut counting = pending_at(0.5);
-        counting.step(0.125); // exact in binary, so the step's value is pinned
+        assert!(!counting.step(0.125)); // exact in binary, so the step's value is pinned
         assert_eq!(counting.countdown, 0.375);
         assert!(!counting.has_new_mail());
-        assert!(!counting.take_notify());
-        counting.step(10.0);
-        assert_eq!(counting.countdown, 0.0);
-        assert!(counting.has_new_mail());
         assert!(
-            counting.take_notify(),
+            counting.step(10.0),
             "the crossing fires UPDATE_PENDING_MAIL"
         );
+        assert_eq!(counting.countdown, 0.0);
+        assert!(counting.has_new_mail());
     }
 
     #[test]
-    fn query_reply_stores_and_always_signals() {
+    fn query_reply_stores_as_sent() {
         let mut p = MailPending::default();
         p.apply_query_reply(-86400.0);
         assert_eq!(p.countdown, -86400.0);
         assert!(!p.has_new_mail());
-        assert!(p.take_notify(), "false -> false still signals");
 
         p.apply_query_reply(0.0);
         assert!(p.has_new_mail());
-        assert!(p.take_notify());
     }
 
     #[test]
-    fn sending_the_query_stamps_without_signalling() {
+    fn sending_the_query_stamps_no_mail() {
         let mut p = pending_at(0.0);
         assert!(p.has_new_mail());
         p.on_query_sent();
         assert_eq!(p.countdown, MAIL_TIME_NO_MAIL);
         assert!(!p.has_new_mail());
-        assert!(!p.take_notify());
     }
 
     #[test]
     fn received_mail_ladder() {
         // Busy (a mailbox window is open): arm the deferred refresh, leave the countdown alone.
         let mut busy = pending_at(-86400.0);
-        busy.apply_received_mail(0.0, true);
+        assert!(!busy.apply_received_mail(0.0, true));
         assert_eq!(
             busy.countdown, -86400.0,
             "the icon does not move under the player"
         );
-        assert!(!busy.take_notify());
         assert!(busy.take_refresh(), "the close will re-ask the server");
         assert!(
             !busy.take_refresh(),
@@ -206,24 +190,21 @@ mod tests {
 
         // Not busy, |delay| < ε: store and signal, vmangos's only case.
         let mut now = pending_at(-86400.0);
-        now.apply_received_mail(0.0, false);
+        assert!(now.apply_received_mail(0.0, false));
         assert_eq!(now.countdown, 0.0);
         assert!(now.has_new_mail());
-        assert!(now.take_notify());
 
         // Not busy, a real delay, current countdown negative: store it, no signal.
         let mut seeded = pending_at(-1.0);
-        seeded.apply_received_mail(120.0, false);
+        assert!(!seeded.apply_received_mail(120.0, false));
         assert_eq!(seeded.countdown, 120.0);
-        assert!(!seeded.take_notify());
 
         // Not busy, a real delay, current countdown positive: keep the smaller, silently.
         let mut tighten = pending_at(120.0);
-        tighten.apply_received_mail(60.0, false);
+        assert!(!tighten.apply_received_mail(60.0, false));
         assert_eq!(tighten.countdown, 60.0);
-        tighten.apply_received_mail(300.0, false);
+        assert!(!tighten.apply_received_mail(300.0, false));
         assert_eq!(tighten.countdown, 60.0, "a later estimate never loosens it");
-        assert!(!tighten.take_notify());
     }
 
     #[test]

@@ -86,20 +86,23 @@ impl MailVerbs<'_> {
                 return;
             }
             MailCall::ReadBody {
-                index,
+                index: _,
                 mail_id,
                 text_id,
+                body,
             } => {
-                mail.bodies.lookup(text_id, || {
+                // A miss asks and keeps the callback `0x4af340`, one per call (`0x4af1bf`).
+                let held = mail.bodies.lookup(text_id, || {
                     let _ = commands
                         .0
                         .send(ClientCommand::ItemTextQuery { text_id, mail_id });
                 });
+                if held.is_none() {
+                    mail.wait(super::MailWait::Body(text_id));
+                }
                 // The cached text, expanded, is masked on every read (`0x4af1f6`, `0x4af203` with
                 // `dl` 0), so each read moves the mask's phase; a template's body is not.
-                if let (Some(mut body), Some(filter)) =
-                    (script.inbox_body(index), filter.as_deref())
-                {
+                if let (Some(mut body), Some(filter)) = (body, filter.as_deref()) {
                     let enabled = switches.as_deref().is_some_and(|s| s.profanity);
                     filter.mask(enabled, &mut body);
                     script.answer_inbox_body(body);
