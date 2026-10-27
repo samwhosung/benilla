@@ -335,12 +335,21 @@ impl Loader<'_> {
     }
 
     /// Run a file chunk (bytes, as on disk) in the one global state, named after its path. The
-    /// name matters: unnamed, mlua's `#[track_caller]` `load` names it after this Rust line.
-    fn run(&self, chunk: &[u8], path: &str) -> mlua::Result<()> {
+    /// name matters: unnamed, mlua's `#[track_caller]` `load` names it after this Rust line. A file
+    /// runs with the document's status (`0x704bc0`), so a compile or run failure is also a
+    /// severity-2 line of it, the message alone (`0x704b31`, `0x704b8d`); an inline body has none.
+    fn run(&mut self, chunk: &[u8], path: &str) -> mlua::Result<()> {
         // The reference's file chunk name, `"@%s"` (`0x8716e0`, `0x704bc0`; a file name to
         // `luaO_chunkid 0x6f5c40`), with `\` separators as in `crate::script::addon_chunk_name`,
         // over the install path: an addon's files sit under `Interface\AddOns\`.
-        self.run_named(chunk, &format!("@{}", self.status_path(path)))
+        let name = format!("@{}", self.status_path(path));
+        crate::script::execute_buffer_reported(self.lua, chunk, name, |_| {}).map_err(
+            |(e, line)| {
+                let line = String::from_utf8_lossy(&line).into_owned();
+                self.report.status.report(status::FAILURE, line);
+                e
+            },
+        )
     }
 
     /// Run a chunk under a complete chunk name, for a producer whose name is not a path, as

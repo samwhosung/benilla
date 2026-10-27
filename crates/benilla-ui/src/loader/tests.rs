@@ -629,6 +629,35 @@ mod loader_tests {
         assert_eq!(s.eval::<String>("return Order").unwrap(), "file,body");
     }
 
+    /// A `<Script file>` runs with the document's status (`0x704bc0`): a compile failure logs the
+    /// compiler's message (`0x704b31`) and a run failure what the error function answered
+    /// (`0x704b8d`), each alone at severity 2; an inline body's failure logs nothing.
+    #[test]
+    fn a_script_file_failure_is_a_load_status_line() {
+        let s = UiScript::new().unwrap();
+        s.run(r#"seterrorhandler(function(m) Heard = (Heard or "") .. m .. "|" return "ret:" .. m end)"#)
+            .unwrap();
+        let provider = |path: &str| -> Option<Vec<u8>> {
+            match path {
+                "Bad.lua" => Some(b"this is not lua".to_vec()),
+                "Boom.lua" => Some(b"error(\"boom\")".to_vec()),
+                _ => None,
+            }
+        };
+        let doc = parse(
+            r#"<Ui><Script file="Bad.lua"/><Script file="Boom.lua"/><Script>error("inline")</Script></Ui>"#,
+        );
+        let report = load(&s, &doc, &provider);
+        let heard = s.eval::<String>("return Heard").unwrap();
+        let heard: Vec<&str> = heard.split('|').collect();
+        assert_eq!(heard.len(), 4, "{heard:?}");
+        assert_eq!(
+            report.status.lines(),
+            [heard[0].to_string(), format!("ret:{}", heard[1])]
+        );
+        assert!(heard[1].ends_with("boom"), "{heard:?}");
+    }
+
     /// An inline `<Script>` body runs with no status (`0x704cd1` passes 0), so its compile or run
     /// error reaches only the Lua error handler, never the load status FrameXML.log prints.
     #[test]

@@ -289,6 +289,18 @@ pub(crate) fn execute_buffer(
     name: impl AsRef<[u8]>,
     prepare: impl FnOnce(&mlua::Function),
 ) -> mlua::Result<()> {
+    execute_buffer_reported(lua, src, name, prepare).map_err(|(e, _)| e)
+}
+
+/// [`execute_buffer`], its error paired with the text `0x704ae0` reports into a load status as
+/// `%s` at severity 2: the compiler's message (`0x704b31`), or what the error function left on
+/// the stack after the failed run (`0x704b8d`), read with `lua_tostring` (`0x6f3690`).
+pub(crate) fn execute_buffer_reported(
+    lua: &Lua,
+    src: &[u8],
+    name: impl AsRef<[u8]>,
+    prepare: impl FnOnce(&mlua::Function),
+) -> Result<(), (mlua::Error, Vec<u8>)> {
     let compiled = lua
         .load(src)
         .set_name(name)
@@ -297,12 +309,39 @@ pub(crate) fn execute_buffer(
     match compiled {
         Ok(f) => {
             prepare(&f);
-            run_under_error_function(lua, &f)
+            let mut top = None;
+            let ran = with_capture(|| {
+                let r = match error_function(lua) {
+                    Some(h) => f.call_under::<()>(&h, ()),
+                    None => f.call::<()>(()),
+                };
+                if let Err(e) = &r {
+                    top = Some(stack_text(lua, e));
+                }
+                r
+            });
+            ran.map_err(|e| (e, top.unwrap_or_default()))
         }
         Err(e) => {
-            call_error_function(lua, &e.lua_bytes(lua));
-            Err(e)
+            let message = e.lua_bytes(lua);
+            call_error_function(lua, &message);
+            Err((e, message))
         }
+    }
+}
+
+/// `lua_tostring` of the value a failed protected call leaves: a string's bytes, a number as
+/// text, and `(null)` for any other, which answers NULL to the `%s` (`0x82e280`).
+fn stack_text(lua: &Lua, e: &mlua::Error) -> Vec<u8> {
+    match e.lua_value(lua) {
+        Some(v @ (mlua::Value::String(_) | mlua::Value::Integer(_) | mlua::Value::Number(_))) => {
+            match lua.coerce_string(v) {
+                Ok(Some(s)) => s.as_bytes().to_vec(),
+                _ => b"(null)".to_vec(),
+            }
+        }
+        Some(_) => b"(null)".to_vec(),
+        None => e.lua_bytes(lua),
     }
 }
 
