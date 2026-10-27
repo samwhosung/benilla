@@ -1939,7 +1939,6 @@ mod tests {
                  has no caller or stored address, so, like TRADE_REQUEST, producing it would be \
                  a divergence, not a fix",
             ),
-            ("DISPLAY_SIZE_CHANGED", "the four paperdoll files"),
             (
                 "SHOW_COMPARE_TOOLTIP",
                 "PaperDollFrame.lua — the second `TRADE_REQUEST`: event 377 is \
