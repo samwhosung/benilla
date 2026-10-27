@@ -993,3 +993,61 @@ fn number_arguments_truncate_through_ftol() {
         assert!(text(&s, i).is_nil(), "{i} is row 0, below the first");
     }
 }
+
+/// Every widget-specific method checks its receiver's type first and raises "Wrong object type for
+/// member function" (`0x847e98`) for a widget of another type, as an addon that copies methods
+/// between frames meets it; the same text the frame, region and font methods raise.
+#[test]
+fn a_widget_method_on_another_widget_raises_the_one_wrong_type_line() {
+    let s = script();
+    for (kind, method, args) in [
+        ("Button", "SetText", "'x'"),
+        ("Button", "GetText", ""),
+        ("Button", "Enable", ""),
+        ("Button", "SetNormalTexture", "'x'"),
+        ("Button", "GetFontString", ""),
+        ("Button", "SetTextFontObject", "nil"),
+        ("CheckButton", "GetChecked", ""),
+        ("ColorSelect", "SetColorRGB", "1, 1, 1"),
+        ("ColorSelect", "GetColorRGB", ""),
+        ("ColorSelect", "SetColorWheelTexture", "nil"),
+        ("MessageFrame", "AddMessage", "'x'"),
+        ("MessageFrame", "SetFadeDuration", "1"),
+        ("ScrollingMessageFrame", "ScrollUp", ""),
+        ("ScrollingMessageFrame", "AddMessage", "'x'"),
+        ("Model", "SetModel", "'x'"),
+        ("ScrollFrame", "SetVerticalScroll", "1"),
+        ("ScrollFrame", "GetVerticalScroll", ""),
+        ("SimpleHTML", "SetText", "'x'"),
+        ("Slider", "SetValue", "1"),
+        ("Slider", "GetValue", ""),
+        ("Slider", "SetThumbTexture", "nil"),
+        ("StatusBar", "SetValue", "1"),
+        ("StatusBar", "GetValue", ""),
+        ("StatusBar", "SetStatusBarTexture", "nil"),
+        ("GameTooltip", "AddLine", "'x'"),
+        ("GameTooltip", "ClearLines", ""),
+        ("GameTooltip", "SetOwner", "UIParent"),
+    ] {
+        let sep = if args.is_empty() { "" } else { ", " };
+        let call = format!("CreateFrame('{kind}').{method}(CreateFrame('Frame'){sep}{args})");
+        let e = err(&s, &call);
+        assert!(
+            e.contains("Wrong object type for member function"),
+            "{kind}.{method} on a Frame -> {e}"
+        );
+    }
+}
+
+/// The widget helpers a method reaches past the prologue raise the same line for a frame of
+/// another kind (`0x847e98`), not a wording of their own.
+#[test]
+fn a_widget_helper_on_another_kind_raises_the_one_wrong_type_line() {
+    use crate::script::object::ERR_WRONG_TYPE;
+    let s = script();
+    let frame: mlua::Table = s.eval("return CreateFrame('Frame')").unwrap();
+    let e = crate::script::button::with_button(s.lua(), &frame, |_| ()).unwrap_err();
+    assert!(e.to_string().contains(ERR_WRONG_TYPE), "{e}");
+    let e = crate::script::slider::with_slider(s.lua(), &frame, |_| ()).unwrap_err();
+    assert!(e.to_string().contains(ERR_WRONG_TYPE), "{e}");
+}

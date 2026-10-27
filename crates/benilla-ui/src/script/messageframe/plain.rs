@@ -30,7 +30,7 @@ fn with_mf<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::Message(mf) => Ok(f(mf)),
-        _ => Err(mlua::Error::runtime("not a MessageFrame")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 
@@ -177,7 +177,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         |lua, this| {
             let h = frame_handle_of(lua, this)?;
             super::ensure_font_region(lua, h)
-                .ok_or_else(|| mlua::Error::runtime("not a MessageFrame"))
+                .ok_or_else(|| mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE))
         },
         crate::script::font_block::FontKind::Instance,
         None,

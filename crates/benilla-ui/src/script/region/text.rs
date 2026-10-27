@@ -49,7 +49,7 @@ pub(crate) fn set_justify(
     };
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let Some(rh) = region(&mut model) else {
-        return Err(mlua::Error::runtime("not a text holder"));
+        return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE));
     };
     let d = model.region_data.entry(rh).or_default();
     d.justify.0 = justify::set_axis(d.justify.0, mask, bits);

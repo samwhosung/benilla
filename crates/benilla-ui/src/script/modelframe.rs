@@ -208,7 +208,7 @@ pub(super) fn with_model<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::Model(m) => Ok(f(m)),
-        _ => Err(mlua::Error::runtime("not a Model")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 

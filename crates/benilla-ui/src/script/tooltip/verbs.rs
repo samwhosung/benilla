@@ -170,7 +170,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let lh = match model.arena.frame(h).map(|f| &f.kind_state) {
                 Some(KindState::Tooltip(t)) if t.num_lines > 0 => t.left_lines[0],
                 Some(KindState::Tooltip(_)) => return Ok(()),
-                _ => return Err(mlua::Error::runtime("not a GameTooltip")),
+                _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
             };
             let current = model
                 .region_data

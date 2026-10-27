@@ -32,7 +32,7 @@ fn with_scroll<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::Scroll(s) => Ok(f(s)),
-        _ => Err(mlua::Error::runtime("not a ScrollFrame")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 

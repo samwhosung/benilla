@@ -23,7 +23,7 @@ pub(super) const REG_SLIDER_METHODS: &str = "__benilla_slider_methods";
 
 /// Run `f` over a frame's Slider state under one short write borrow; errors unless `this` is a live
 /// Slider, since a caller can lift the method table onto another frame.
-fn with_slider<T>(
+pub(super) fn with_slider<T>(
     lua: &Lua,
     this: &Table,
     f: impl FnOnce(&mut SliderState) -> T,
@@ -36,7 +36,7 @@ fn with_slider<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::Slider(s) => Ok(f(s)),
-        _ => Err(mlua::Error::runtime("not a Slider")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 
@@ -53,7 +53,7 @@ fn install_thumb_model(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::Slider(_))
     ) {
-        return Err(mlua::Error::runtime("not a Slider"));
+        return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE));
     }
     install_into_slot(
         model,
@@ -99,7 +99,7 @@ fn set_thumb_path(lua: &Lua, this: &Table, path: &str) -> mlua::Result<()> {
         .kind_state
     {
         KindState::Slider(s) => s.thumb,
-        _ => return Err(mlua::Error::runtime("not a Slider")),
+        _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     };
     if let Some(rh) = load_path_leg(&mut model, h, existing, DrawLayer::Overlay, path)? {
         install_thumb_model(&mut model, h, Some(rh), DrawLayer::Overlay)?;

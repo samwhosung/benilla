@@ -30,7 +30,7 @@ fn with_smf<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::ScrollingMessage(smf) => Ok(f(smf)),
-        _ => Err(mlua::Error::runtime("not a ScrollingMessageFrame")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 
@@ -51,7 +51,7 @@ fn with_viewport<T>(
             .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
         match &mut frame.kind_state {
             KindState::ScrollingMessage(smf) => f(smf, viewport_rows),
-            _ => return Err(mlua::Error::runtime("not a ScrollingMessageFrame")),
+            _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
         }
     };
     super::fire_scroll_changes(lua, h);
@@ -339,7 +339,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         |lua, this| {
             let h = frame_handle_of(lua, this)?;
             super::ensure_font_region(lua, h)
-                .ok_or_else(|| mlua::Error::runtime("not a ScrollingMessageFrame"))
+                .ok_or_else(|| mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE))
         },
         crate::script::font_block::FontKind::Instance,
         None,

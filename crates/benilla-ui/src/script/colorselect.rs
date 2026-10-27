@@ -34,7 +34,7 @@ fn with_colorselect<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::ColorSelect(s) => Ok(f(s)),
-        _ => Err(mlua::Error::runtime("not a ColorSelect")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 
@@ -109,7 +109,7 @@ fn install_slot_model(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::ColorSelect(_))
     ) {
-        return Err(mlua::Error::runtime("not a ColorSelect"));
+        return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE));
     }
     let thumb = matches!(slot, Slot::WheelThumb | Slot::ValueThumb);
     let changed = install_into_slot(
@@ -162,7 +162,7 @@ fn set_marker_path(lua: &Lua, this: &Table, slot: Slot, path: &str) -> mlua::Res
         .kind_state
     {
         KindState::ColorSelect(s) => slot.get(s),
-        _ => return Err(mlua::Error::runtime("not a ColorSelect")),
+        _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     };
     if let Some(rh) = load_path_leg(&mut model, h, existing, slot.layer(), path)? {
         install_slot_model(&mut model, h, slot, Some(rh))?;

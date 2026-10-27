@@ -31,7 +31,7 @@ fn with_bar<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::StatusBar(sb) => Ok(f(sb)),
-        _ => Err(mlua::Error::runtime("not a StatusBar")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 
@@ -48,7 +48,7 @@ fn install_bar_model(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::StatusBar(_))
     ) {
-        return Err(mlua::Error::runtime("not a StatusBar"));
+        return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE));
     }
     let changed = install_into_slot(
         model,
@@ -123,7 +123,7 @@ pub(super) fn set_bar_path_model(
         .kind_state
     {
         KindState::StatusBar(sb) => sb.bar,
-        _ => return Err(mlua::Error::runtime("not a StatusBar")),
+        _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     };
     if let Some(rh) = load_path_leg(model, h, existing, layer, path)? {
         // `SetAllPoints` onto the bar (`0x7831bf`).

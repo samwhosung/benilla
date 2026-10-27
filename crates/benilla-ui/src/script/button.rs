@@ -134,7 +134,8 @@ pub(super) fn fonts(model: &mut Model, h: FrameHandle) -> Option<ButtonFonts> {
 fn fonts_of(lua: &Lua, this: &Table) -> mlua::Result<(FrameHandle, ButtonFonts)> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let f = fonts(&mut model, h).ok_or_else(|| mlua::Error::runtime("not a Button"))?;
+    let f = fonts(&mut model, h)
+        .ok_or_else(|| mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE))?;
     Ok((h, f))
 }
 
@@ -293,7 +294,7 @@ fn state_color(lua: &Lua, this: &Table, which: LabelFont) -> mlua::Result<mlua::
 
 /// Run `f` over a frame's Button state under one short write borrow. It moves no state, only an
 /// edge does: re-registering a held button's clicks does not un-press it, as in the reference.
-fn with_button<T>(
+pub(super) fn with_button<T>(
     lua: &Lua,
     this: &Table,
     f: impl FnOnce(&mut ButtonState) -> T,
@@ -306,7 +307,7 @@ fn with_button<T>(
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
         KindState::Button(bs) => Ok(f(bs)),
-        _ => Err(mlua::Error::runtime("not a Button")),
+        _ => Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     }
 }
 
@@ -348,7 +349,7 @@ fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
             KindState::Button(bs) => (bs.enabled() != on && model.mouseover == Some(h))
                 .then(|| model.frame_to_id.get(&h).copied())
                 .flatten(),
-            _ => return Err(mlua::Error::runtime("not a Button")),
+            _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
         }
     };
     if let (Some(id), false) = (hovered_change, on) {
@@ -375,7 +376,7 @@ fn apply_enabled(lua: &Lua, h: FrameHandle, on: bool) -> mlua::Result<()> {
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     let writes = match &mut frame.kind_state {
         KindState::Button(bs) => bs.set_enabled(on),
-        _ => return Err(mlua::Error::runtime("not a Button")),
+        _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     };
     let bit = 1u8 << DrawLayer::Highlight.index();
     if on {
@@ -455,7 +456,7 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot) -> mlua::Result<u32> {
         .kind_state
     {
         KindState::Button(bs) => slot.get(bs),
-        _ => return Err(mlua::Error::runtime("not a Button")),
+        _ => return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE)),
     };
     let rh = match existing {
         Some(rh) => rh,
@@ -542,7 +543,7 @@ fn install_slot_model(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::Button(_))
     ) {
-        return Err(mlua::Error::runtime("not a Button"));
+        return Err(mlua::Error::runtime(crate::script::object::ERR_WRONG_TYPE));
     }
     let writes = std::cell::RefCell::new(crate::widget::ShownWrites::default());
     let changed = super::region::install_into_slot(
