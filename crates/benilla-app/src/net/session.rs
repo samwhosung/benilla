@@ -1499,6 +1499,11 @@ mod login_ask_tests {
             addon_info: None,
         };
         frame(&mut app, vec![login, requested()]);
+        assert_eq!(
+            app.world().resource::<SelfGuid>().0,
+            Some(0x2a),
+            "the login handler ran"
+        );
         frame(&mut app, vec![requested()]);
         let asked = crate::query_cache::queries(&sent)
             .into_iter()
