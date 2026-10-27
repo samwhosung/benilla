@@ -249,3 +249,106 @@ fn path_241_follows_the_reference_bit_for_bit() {
         );
     }
 }
+
+/// A point's nearest place on the segments `near` of a polyline: the distance to it, how far
+/// along the line it lies and the segment it lies on.
+fn onto_polyline(
+    p: [f32; 2],
+    line: &[[f32; 2]],
+    near: std::ops::Range<usize>,
+) -> (f32, f32, usize) {
+    let (mut best, mut along, mut seg, mut walked) = (f32::INFINITY, 0.0, 0, 0.0);
+    for (i, w) in line.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let len2 = d[0] * d[0] + d[1] * d[1];
+        let len = len2.sqrt();
+        let u = if len2 > 0.0 {
+            (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let off = (p[0] - a[0] - u * d[0]).hypot(p[1] - a[1] - u * d[1]);
+        if near.contains(&i) && off < best {
+            (best, along, seg) = (off, walked + u * len, i);
+        }
+        walked += len;
+    }
+    (best, along, seg)
+}
+
+/// Path 241 (Ratchet to Booty Bay) sampled every 50 ms over its whole period, as `0x5f4cc0`
+/// builds it from every node (`0x5f4dda`-`0x5f4de9`) and `0x5f50a0` places it: on each leg the
+/// ship only ever moves the way it faces, never back along the line its nodes draw, never more
+/// than a curve's bow off that line and never off its map.
+#[test]
+fn path_241_runs_forward_along_its_route_over_the_whole_period() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_taxi_path_nodes(&mut chain).expect("load TaxiPathNode");
+    let nodes = cat.path(241).expect("path 241");
+    let tt = TransportTimetable::build(nodes, 30, 1).expect("it builds");
+    // The legs as the builder opens them: at a map change and after a flag 0x1 node.
+    let mut legs: Vec<(u32, Vec<[f32; 2]>)> = Vec::new();
+    let mut after_flag1 = false;
+    for n in nodes {
+        if legs.last().is_none_or(|l| l.0 != n.map_id) || after_flag1 {
+            legs.push((n.map_id, Vec::new()));
+        }
+        legs.last_mut().unwrap().1.push([n.pos[0], n.pos[1]]);
+        after_flag1 = n.flags & 1 != 0;
+    }
+    assert_eq!(legs.len(), 2, "one leg per continent");
+    // A map's edge: 64 tiles of 533⅓ yd about its centre.
+    const EDGE: f32 = 32.0 * 1600.0 / 3.0;
+    const STEP_MS: u32 = 50;
+    let (mut worst_off, mut worst_back, mut worst_turn) = (0.0f32, 0.0f32, 1.0f32);
+    let mut prev: Option<(TransportSample, f32, usize)> = None;
+    let mut t = 0;
+    while t < tt.period_ms {
+        let s = tt.sample(t);
+        assert!(
+            s.pos[0].abs() < EDGE && s.pos[1].abs() < EDGE,
+            "at {t} ms the ship is off its map at {:?}",
+            s.pos
+        );
+        let (_, line) = legs
+            .iter()
+            .find(|l| l.0 == s.map)
+            .expect("a leg on its map");
+        // Tracked from the segment it was last on, so a route that passes near itself does not
+        // hand the ship to its other pass.
+        let same = prev.filter(|(p, ..)| p.map == s.map);
+        let near = same.map_or(0..line.len(), |(.., seg)| seg.saturating_sub(2)..seg + 3);
+        let (off, along, seg) = onto_polyline([s.pos[0], s.pos[1]], line, near);
+        worst_off = worst_off.max(off);
+        if let Some((p, p_along, _)) = same {
+            worst_back = worst_back.max(p_along - along);
+            let d = [s.pos[0] - p.pos[0], s.pos[1] - p.pos[1]];
+            let moved = d[0].hypot(d[1]);
+            if moved > 1e-3 {
+                // The ship faces against its tangent, so it travels towards its heading + π.
+                let h = p.heading + std::f32::consts::PI;
+                worst_turn = worst_turn.min((d[0] * h.cos() + d[1] * h.sin()) / moved);
+            }
+        }
+        prev = Some((s, along, seg));
+        t += STEP_MS;
+    }
+    eprintln!(
+        "off the route {worst_off} yd, back along it {worst_back} yd, travel·facing {worst_turn}"
+    );
+    // The curve bows off its chords through a bend, up to 18 yd on this path.
+    assert!(
+        worst_off < 25.0,
+        "the ship strays {worst_off} yd off its route"
+    );
+    assert!(
+        worst_back < 0.1,
+        "the ship goes {worst_back} yd back along its route"
+    );
+    assert!(
+        worst_turn > 0.9,
+        "the ship moves against its facing: cos {worst_turn}"
+    );
+}

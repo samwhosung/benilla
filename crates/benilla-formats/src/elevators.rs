@@ -59,9 +59,10 @@ fn schema() -> Schema {
     s
 }
 
-/// Read `TransportAnimation.dbc` off the patch chain, silently dropping, as the reference does, a
-/// path that cannot drive a cycle (under 2 frames, a zero period, a first frame past 0); its GO
-/// stays at its spawn point.
+/// Read `TransportAnimation.dbc` off the patch chain. Deviation: a path that cannot drive a cycle
+/// is dropped and its GO stays at its spawn point, where the reference faults or hangs: a last
+/// frame at 0 divides by zero (`0x5f62a4`), and a first frame past 0, one frame among them, leaves
+/// a time before it in no bracket, which `0x5f62bc`-`0x5f62e7` seek forever.
 pub fn load_elevator_paths(chain: &mut Chain) -> Result<ElevatorPaths> {
     let bytes = chain
         .read_file(TRANSPORT_ANIMATION)

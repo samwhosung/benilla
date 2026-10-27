@@ -76,10 +76,13 @@ pub struct TransportTimetable {
 
 impl TransportTimetable {
     /// `0x5f4cc0` over one path's nodes in store order and the template's `moveSpeed` and
-    /// `accelRate`, each made a float through `fild` of the zero-extended value. `None` where the
-    /// client's own build reads memory it never wrote, which no shipped path reaches
-    /// (`transports#path-faults`): a leg of 3 nodes or fewer, a stop on a leg's last node and more
-    /// than 1024 nodes in a leg; and for no node or a period of 0.
+    /// `accelRate`, each made a float through `fild` of the zero-extended value. `None` for no
+    /// node or a period of 0, which the reference ticks with a modulus of 1 (`0x5f50d5`) and no
+    /// leg ending after 0, so it never moves the ship (`0x5f511c`), as a ship with no timetable.
+    /// Deviation: `None` too where the reference's build overruns its stack or reads memory it
+    /// never wrote (`transports#path-faults`), so the ship stays at its spawn: more than 1024
+    /// nodes in a leg (`0x5f9530`), a leg of 3 nodes or fewer (`0x4532e3`) and a stop on a leg's
+    /// last node (`0x5f91a1`). No shipped path reaches one.
     pub fn build(nodes: &[TaxiPathNode], move_speed: u32, accel_rate: u32) -> Option<Self> {
         let speed = f64::from(move_speed) as f32;
         let accel = f64::from(accel_rate) as f32;
@@ -109,6 +112,7 @@ impl TransportTimetable {
                 stops.push((points.len(), node.delay.wrapping_mul(1000)));
             }
             points.push(node.pos);
+            // 0x5f9530: the appends check no bound, so a 1025th node overruns the stack array.
             if points.len() > MAX_NODES {
                 return None;
             }
@@ -217,8 +221,8 @@ fn time_leg(
     a: f32,
 ) -> Option<Leg> {
     let n = points.len();
-    // 0x4532e3: 3 nodes or fewer write no length; 0x5f91a1: a stop on the last node leaves the
-    // table's last entry unwritten.
+    // 0x4532e3: 3 nodes or fewer write no segment length, and 0x5f9427-0x5f9450 never write the
+    // leg's +8; 0x5f91a1: a stop on the last node leaves the table's last entry unwritten.
     if n <= 3 || stops.iter().any(|&(k, _)| k + 1 >= n) {
         return None;
     }
