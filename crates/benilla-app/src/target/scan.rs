@@ -501,7 +501,8 @@ pub(crate) struct Owed {
 }
 
 impl Owed {
-    /// Pay both now, for a writer whose signals have no listeners to run first.
+    /// Pay both now, for a test whose signals have no listeners to run first.
+    #[cfg(test)]
     pub(crate) fn pay(
         self,
         selection: &mut Selection,

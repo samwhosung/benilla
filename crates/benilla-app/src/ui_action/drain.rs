@@ -54,14 +54,39 @@ pub(super) fn item_action_route(
     }
 }
 
-/// The melee probe's press with nothing selected, the player's Attack
-/// ([`AttackPress::attack_target`]), as the ATTACKTARGET binding's `AttackTarget()` is.
+/// The melee probe's press with nothing selected, the player's Attack, as the ATTACKTARGET
+/// binding's `AttackTarget()` is: the validator's pick commits its select, which signals in place
+/// ([`crate::script_calls::ScriptCallHost::engine_select`]), then the toggle at what it settled.
 pub(crate) fn attack_nearest_probe(
     mut probe: MessageReader<crate::target::AttackNearestRequest>,
-    mut press: AttackPress,
+    mut vm: crate::script_calls::VmWith<AttackPress<'static, 'static>>,
 ) {
-    if probe.read().last().is_some() && press.selection.guid.is_none() {
-        press.attack_target(true);
+    if probe.read().last().is_none() {
+        return;
+    }
+    let select = {
+        let mut press = vm.own();
+        if press.selection.guid.is_some() {
+            return;
+        }
+        let latched = press.seam.pet_latch.as_deref().is_some_and(|l| l.up());
+        let mark = crate::lanes::mark();
+        let Some(owed) = press.begin_validate(None, true) else {
+            return;
+        };
+        crate::script_calls::EngineSelect {
+            before: None,
+            latched,
+            mark,
+            owed: owed.into(),
+        }
+    };
+    vm.engine_select(select, |mut press, debt| {
+        debt.pay(&mut press.selection, &mut press.seam)
+    });
+    let mut press = vm.own();
+    if let Some(guid) = press.settle_attack() {
+        press.start_attack(guid);
     }
 }
 
@@ -76,18 +101,10 @@ pub(crate) struct AttackPress<'w, 's> {
 }
 
 impl AttackPress<'_, '_> {
-    /// `0x6131a0`: the attack validator `0x612df0` (`0x6131aa`) runs first, its actor checks then
-    /// its target pick, which may move the selection; a refusal ends the press. Then the toggle:
-    /// attacking (`0x60ecb0`) stops (`0x5ecac0`), else it starts at the validator's target
+    /// `0x6131a0`'s second half, past the attack validator `0x612df0` (`0x6131aa`): the toggle at
+    /// the validated target. Attacking (`0x60ecb0`) stops (`0x5ecac0`), else it starts there
     /// (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so stopping melee leaves
     /// Auto Shot running.
-    pub(crate) fn attack_target(&mut self, may_pick: bool) {
-        if let Some(guid) = self.validate(None, may_pick) {
-            self.start_attack(guid);
-        }
-    }
-
-    /// [`Self::attack_target`]'s second half, the toggle at the validated target.
     pub(crate) fn start_attack(&mut self, guid: u64) {
         let seam = &mut self.seam;
         if seam.me.single().is_err() {
@@ -136,13 +153,6 @@ impl AttackPress<'_, '_> {
     /// it, through the final gate.
     pub(crate) fn settle_attack(&mut self) -> Option<u64> {
         self.pick.settle(&self.selection, &self.ui_errors)
-    }
-
-    /// The attack validator `0x612df0`: its actor checks, then its target pick.
-    fn validate(&mut self, passed: Option<u64>, may_pick: bool) -> Option<u64> {
-        let owed = self.begin_validate(passed, may_pick)?;
-        owed.pay(&mut self.selection, &mut self.seam);
-        self.settle_attack()
     }
 
     /// The validator up to its selection's re-read: the actor checks (phase A), then the pick.
