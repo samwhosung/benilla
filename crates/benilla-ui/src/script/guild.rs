@@ -399,14 +399,13 @@ fn name_or_nil(lua: &Lua, name: &str) -> mlua::Result<Value> {
 }
 
 /// The rank-name gate `GuildControlSaveRank` (`0x4d20d0`) and `GuildControlAddRank` (`0x4d2210`)
-/// run before any packet: the name up to the first NUL must be 1 to 16 UTF-16 code units
-/// (`0x65b250`), untrimmed, and is sent as measured. vmangos kicks a name over 15 code points; the
+/// run before any packet: the name up to the first NUL must be 1 to 16 code points (`0x65b250`
+/// folds each byte sign-extended, so a multi-byte sequence counts one, a four-byte form included
+/// where UTF-16 would count two; `dec eax` at `0x4d212c`), untrimmed, and is sent as measured. vmangos kicks a name over 15 code points; the
 /// app caps that at the send (`ui_guild::feed::capped_rank_name`).
 fn gated_rank_name(name: &str) -> Option<&str> {
     let c_name = name.split('\0').next().unwrap_or_default();
-    (1..=16)
-        .contains(&c_name.encode_utf16().count())
-        .then_some(c_name)
+    (1..=16).contains(&c_name.chars().count()).then_some(c_name)
 }
 
 /// Register the guild globals.
@@ -1150,7 +1149,7 @@ mod tests {
         s
     }
 
-    /// `0x4d20d0` refuses silently: a name outside 1 to 16 UTF-16 units (`0x65b250` counts them
+    /// `0x4d20d0` refuses silently: a name outside 1 to 16 code points (`0x65b250` counts them
     /// plus the NUL), no rank loaded, or a rank past the count.
     #[test]
     fn saving_a_rank_refuses_what_the_reference_refuses() {
@@ -1166,17 +1165,28 @@ mod tests {
             .unwrap();
         assert_eq!(saves(&mut s), 0, "an empty name is a silent no-op");
 
-        // Sixteen UTF-16 units is the ceiling; seventeen is refused.
+        // Sixteen code points is the ceiling; seventeen is refused.
         s.run(r#"GuildControlSetRank(2); GuildControlSaveRank(string.rep("a", 16))"#)
             .unwrap();
         assert_eq!(saves(&mut s), 1);
         s.run(r#"GuildControlSetRank(2); GuildControlSaveRank(string.rep("a", 17))"#)
             .unwrap();
-        assert_eq!(saves(&mut s), 0, "seventeen units");
+        assert_eq!(saves(&mut s), 0, "seventeen code points");
         // Units, not bytes: sixteen two-byte letters are sixteen units.
         s.run(r#"GuildControlSetRank(2); GuildControlSaveRank(string.rep("é", 16))"#)
             .unwrap();
-        assert_eq!(saves(&mut s), 1, "32 bytes, 16 units");
+        assert_eq!(saves(&mut s), 1, "32 bytes, 16 code points");
+        // A code point above U+FFFF counts one (`0x65b2f8`), though UTF-16 holds it in two units.
+        s.run(r#"GuildControlSetRank(2); GuildControlSaveRank(string.rep("a", 15) .. "\240\159\152\128")"#)
+            .unwrap();
+        assert_eq!(
+            saves(&mut s),
+            1,
+            "15 letters and one astral are 16 code points"
+        );
+        s.run(r#"GuildControlSetRank(2); GuildControlSaveRank(string.rep("a", 16) .. "\240\159\152\128")"#)
+            .unwrap();
+        assert_eq!(saves(&mut s), 0, "seventeen code points");
         // Whitespace is not empty to the reference.
         s.run(r#"GuildControlSetRank(2); GuildControlSaveRank(" ")"#)
             .unwrap();

@@ -70,7 +70,7 @@ pub(super) fn row(
 
 /// The rank name, or `None` past vmangos's cap of 15, where it kicks the session
 /// (`Handlers/GuildHandler.cpp:580-584`, `:600-604`); the stock edit box stops at 15. Deviation: a
-/// script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`,
+/// script's 16-letter name, which the reference's bindings pass (1 to 16 code points, `0x4d20d0`,
 /// `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session.
 pub(super) fn capped_rank_name(name: String) -> Option<String> {
     if name.chars().count() > GUILD_RANK_MAX_LENGTH {
