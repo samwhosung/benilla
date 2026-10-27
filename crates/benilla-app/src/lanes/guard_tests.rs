@@ -192,17 +192,10 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Edge,
-        "::ui_unit::feed_units",
-        "the selection's change, `PLAYER_TARGET_CHANGED`",
-    ),
-    (
-        Row::Edge,
         "::ui_action::state::fire_action_events",
-        "the usable refresh `0x4b31c0` (`ACTIONBAR_UPDATE_USABLE`, `SPELL_ACTIVE`, \
-         `SPELL_UPDATE_USABLE`) of the callers outside the field watchers and the cooldown list, \
-         which refresh on their lanes: the selection's select and release where no call made \
-         them (`0x493892`, `0x493a69`) and the control flag (`0x4958fc`, `0x495910`), one pass \
-         a frame over the bar's 120 slots and the reactive list, diffed against the usable \
+        "the usable cache's refresh `0x4e5c00` (`ACTIONBAR_UPDATE_USABLE`) of `EditMacro` \
+         (`0x4f132e`) and `RaiseBagUpdate` (`0x4f9374`), which the reference runs in the call and \
+         in the item watcher's run, one pass a frame over the bar's 120 slots diffed against the \
          cache",
     ),
 ];

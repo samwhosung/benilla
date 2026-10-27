@@ -203,9 +203,8 @@ fn a_reload_keeps_the_reactive_list_and_an_arrival_empties_it() {
     assert!(crate::ui_script::run_leave_world_sweep(app.world_mut()));
     app.insert_non_send_resource(listener());
     assert!(step(&mut app, 0x1).is_empty(), "the new VM's first frame");
-    select(&mut app, 0x20);
     assert_eq!(
-        step(&mut app, 0x1),
+        select_step(&mut app, 0x20, 0x1),
         ["SPELL_UPDATE_USABLE"],
         "a refresh: the list kept its answer, no second word"
     );
@@ -262,9 +261,8 @@ fn relearning_a_lower_rank_keeps_the_entrys_answer() {
     book(&mut app).spells.retain(|id| *id == FIREBALL);
     assert!(step(&mut app, 0x1).is_empty(), "both ranks unlearned");
     book(&mut app).spells.insert(REVENGE);
-    select(&mut app, 0x20);
     assert_eq!(
-        step(&mut app, 0x1),
+        select_step(&mut app, 0x20, 0x1),
         ["SPELL_UPDATE_USABLE"],
         "rank 1 relearned: a refresh, the entry kept its answer, no second word"
     );
@@ -275,14 +273,24 @@ fn book(app: &mut App) -> Mut<'_, PlayerActions> {
     app.world_mut().resource_mut::<PlayerActions>()
 }
 
-/// Select `guid`, a caller of the usable refresh (`0x493892`).
-fn select(app: &mut App, guid: u64) {
+/// Select `guid` in the frame [`step`] runs at `aura_state`: its usable refresh runs inside the
+/// select (`0x493892`), after the frame's feed.
+fn select_step(app: &mut App, guid: u64, aura_state: u32) -> Vec<String> {
     app.insert_resource(crate::target::Selection {
         target: None,
         guid: Some(guid),
         last: None,
         lit: None,
     });
+    let mut heard = step(app, aura_state);
+    super::run_watcher_refresh_once(app.world_mut());
+    let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+    s.resolve();
+    heard.extend(
+        s.eval::<Vec<String>>("local h = HEARD; HEARD = {}; return h")
+            .unwrap(),
+    );
+    heard
 }
 
 /// The re-check is `0x4b31c0`'s own loop (`0x4b31d7`-`0x4b323d`), so it runs inside each of the
@@ -298,9 +306,8 @@ fn the_reactive_re_check_runs_inside_each_usable_refresh_alone() {
     q.single_mut(app.world_mut()).unwrap().0 =
         ObjectFields::from_pairs(&[(22, 100), (23, 500), (AURA_STATE, 0x1)]);
     assert!(step(&mut app, 0x1).is_empty(), "no caller: no re-check");
-    select(&mut app, 0x20);
     assert_eq!(
-        step(&mut app, 0x1),
+        select_step(&mut app, 0x20, 0x1),
         ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
         "the select's refresh re-checks the list"
     );

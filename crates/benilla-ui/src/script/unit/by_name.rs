@@ -357,20 +357,6 @@ impl super::super::UiScript {
     }
 }
 
-impl super::super::UiScript {
-    /// The call that moved the selection to `guid` has signalled `PLAYER_TARGET_CHANGED` inside
-    /// itself, as `SetSelection` does (`0x49389c`, `0x493a73`): the unit feed takes the change as
-    /// heard ([`Self::take_announced_selection`]) and signals only a change no call made.
-    pub fn announce_selection(&mut self, guid: Option<u64>) {
-        self.model_mut().announced_selection = Some(guid);
-    }
-
-    /// The selection the last call announced since the last asking, spent by the asking.
-    pub fn take_announced_selection(&mut self) -> Option<Option<u64>> {
-        self.model_mut().announced_selection.take()
-    }
-}
-
 /// The selection a script call committed, as the call host seats it
 /// ([`super::super::UiScript::seat_selection`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

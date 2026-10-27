@@ -1,13 +1,14 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
 //! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM ahead of the world-enter
 //! events ([`feed_action_state`]), and the events their producers raise, signalled after the unit
-//! snapshots their handlers read ([`fire_action_events`]), each once a frame in the reference's
-//! order: `ACTIONBAR_UPDATE_USABLE` when a refresh of the usable cache (`0x4e5c00`) finds a pair
-//! changed, each reactive spell's `SPELL_ACTIVE` ([`super::reactive`]) and `SPELL_UPDATE_USABLE`
-//! from the usable refresh `0x4b31c0`'s callers outside the field watchers and the cooldown list,
-//! whose refreshes run inside their packets on the notice lane
-//! ([`crate::field_watch::FieldNotice::UsableRefresh`]) and the cooldown lane
-//! ([`super::cooldown_lane`]). The cooldown list's flushes (`0x4b31b0`, `0x4f93d0`) fire on the
+//! snapshots their handlers read ([`fire_action_events`]): `ACTIONBAR_UPDATE_USABLE` when a
+//! refresh of the usable cache (`0x4e5c00`) by a caller outside the usable refresh finds a pair
+//! changed, once a frame. The usable refresh `0x4b31c0`, with each reactive spell's `SPELL_ACTIVE`
+//! ([`super::reactive`]) and `SPELL_UPDATE_USABLE`, runs where its callers make it: a selection's
+//! inside `SetSelection` ([`ActionStates::usable_refresh`]), the field watchers' and the control
+//! flag's inside their packets on the notice lane
+//! ([`crate::field_watch::FieldNotice::UsableRefresh`]), and the cooldown list's on the cooldown
+//! lane ([`super::cooldown_lane`]). The cooldown list's flushes (`0x4b31b0`, `0x4f93d0`) fire on the
 //! cooldown lane, as the spell charges watcher's `BAG_UPDATE_COOLDOWN` fires on the item lane
 //! ([`crate::item_lane`]). Combat enter and leave are signalled in their attack packets
 //! (`crate::creature_anim`).
@@ -41,8 +42,6 @@ use crate::spell::usable;
 #[derive(Default)]
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
-    /// The selection's guid, whose change calls the usable refresh.
-    selection: Option<u64>,
     /// The VM's macro edits and the item lane's `RaiseBagUpdate` calls as last read.
     macro_edits: u64,
     bag_updates: u64,
@@ -293,15 +292,11 @@ fn range_answers(
 #[derive(Resource, Default)]
 pub(crate) struct EnterUsable(pub(crate) bool);
 
-/// The events one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
+/// The event one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
 #[derive(Resource, Default)]
 pub(crate) struct ActionEvents {
     /// `ACTIONBAR_UPDATE_USABLE`.
     usable_changed: bool,
-    /// `SPELL_UPDATE_USABLE`.
-    refresh: bool,
-    /// Each reactive spell that turned usable in the refresh, by name, a `SPELL_ACTIVE`.
-    activated: Vec<String>,
 }
 
 /// What the action slots' states are computed from, and the memory the feed and the selection's
@@ -412,15 +407,12 @@ impl ActionStates<'_, '_> {
     /// The usable refresh `0x4b31c0` a selection change runs inside `SetSelection`, after the
     /// target is stored (`0x4936e2`, `0x4939d3`) and before `PLAYER_TARGET_CHANGED` (`0x493892`
     /// ahead of `0x49389c`, `0x493a69` ahead of `0x493a73`): every slot's state recomputed against
-    /// the new selection and pushed, the bar's cache refreshed, the reactive list re-checked. The
-    /// feed hears the change as made, so it refreshes no second time for it.
+    /// the new selection and pushed, the bar's cache refreshed, the reactive list re-checked; and
+    /// the same for its other callers outside the feed, each in its place.
     pub(crate) fn usable_refresh(
         &mut self,
         script: &mut benilla_ui::script::UiScript,
     ) -> UsableSignals {
-        let selection = self.targeting.selection.guid;
-        // Ahead of the feed's first pass on a new VM, that pass still meets the VM as new.
-        self.memory.vm.get_leaving_reset(script).selection = selection;
         let now = Instant::now();
         let clock = self.memory.clock.unwrap_or((now, script.now()));
         let pass = Pass {
@@ -456,9 +448,9 @@ impl ActionStates<'_, '_> {
         self.pass(script, pass);
     }
 
-    /// The feed's frame: the cooldowns' upkeep, the refreshes this frame's callers owe, then the
-    /// pass, owing its events to [`fire_action_events`]. The cooldown list's own callers of the
-    /// refresh signal it on the cooldown lane ([`super::cooldown_lane`]).
+    /// The feed's frame: the cooldowns' upkeep, the cache refreshes this frame's callers owe, then
+    /// the pass, owing its event to [`fire_action_events`]. Every caller of the usable refresh runs
+    /// it in its own place ([`Self::usable_refresh`]).
     fn feed(
         &mut self,
         script: &mut benilla_ui::script::UiScript,
@@ -486,23 +478,13 @@ impl ActionStates<'_, '_> {
         if trace_cd {
             memory.last_cd_trace = Some(now);
         }
-        let selection = self.targeting.selection.guid;
 
-        // The frame's callers of the usable refresh `0x4b31c0` but the field watchers, the control
-        // flag and the cooldown list, which refresh inside their packets; a new VM meets the state
-        // as it stands and hears none. The target's select and release (`0x493892`, `0x493a69`),
-        // where no script call made them, on a change.
-        let mut refresh = selection != memory.selection;
-        memory.selection = selection;
-        if new_vm {
-            refresh = false;
-        }
-        // The usable cache's other refreshes (`0x4e5c00`): world entry (`0x4e4f90`, from the enter
-        // cascade at our player's arrival or a reload's), `EditMacro` (`0x4f132e`) and each
-        // `RaiseBagUpdate` a watcher's run calls (`0x4f9374`).
+        // The usable cache's refreshes outside the usable refresh (`0x4e5c00`): world entry
+        // (`0x4e4f90`, from the enter cascade at our player's arrival or a reload's), `EditMacro`
+        // (`0x4f132e`) and each `RaiseBagUpdate` a watcher's run calls (`0x4f9374`); a new VM meets
+        // the cache as it stands.
         let macro_edits = script.macro_edits();
-        let refresh_cache = refresh
-            || entered
+        let refresh_cache = entered
             || new_vm
             || macro_edits != memory.macro_edits
             || bag_updates != memory.bag_updates;
@@ -528,11 +510,11 @@ impl ActionStates<'_, '_> {
             now,
             clock,
             trace_cd,
-            refresh,
+            refresh: false,
             refresh_cache,
             arrived,
         };
-        let (usable_changed, activated) = self.pass(script, pass);
+        let (usable_changed, _) = self.pass(script, pass);
         // A pass that ran the world entry's refresh owes its pair change to the enter cascade,
         // which signals it inside itself (`0x490979` → `0x4e4f90` → `0x4e5c00`).
         if entered || new_vm {
@@ -540,8 +522,6 @@ impl ActionStates<'_, '_> {
         } else {
             owed.usable_changed |= usable_changed;
         }
-        owed.refresh |= refresh;
-        owed.activated.extend(activated);
     }
 
     /// Compute every occupied slot's state and diff-push it, store the pairs in the bar's usable
@@ -919,30 +899,20 @@ pub(super) fn feed_action_state(
     })
 }
 
-/// Signals what [`feed_action_state`] owes, after the unit snapshots: `SelectTarget` stores the
-/// target (`0x4936e2`) before its refresh (`0x493892`), so a handler reads the units the refresh
-/// followed. `ACTIONBAR_UPDATE_USABLE` comes from the cache's refresh alone, `SPELL_UPDATE_USABLE`
-/// from `0x4b31c0` alone (`0x4b3246`), so the cache's other callers signal the first without the
-/// second.
+/// Signals what [`feed_action_state`] owes, after the unit snapshots: `ACTIONBAR_UPDATE_USABLE`
+/// for a cache refresh that found a pair changed (`0x4e5c53`), `EditMacro`'s (`0x4f132e`) and a
+/// `RaiseBagUpdate`'s (`0x4f9374`), which signal it alone.
 pub(super) fn fire_action_events(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut owed: ResMut<ActionEvents>,
 ) {
     let owed = std::mem::take(&mut *owed);
+    if !owed.usable_changed {
+        return;
+    }
     hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        // `0x4b31c0`: the bar's event on a slot change (`0x4e5c53`), each reactive spell's word as
-        // it turns usable (`0x4b3226`), then the spells' event (`0x4b3246`).
-        if owed.usable_changed {
+        if let Some(script) = script {
             script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
-        }
-        for name in owed.activated {
-            crate::ui_unit::fire_combat_text(script, "SPELL_ACTIVE", Some(name), None);
-        }
-        if owed.refresh {
-            script.fire_event("SPELL_UPDATE_USABLE", vec![]);
         }
     })
 }

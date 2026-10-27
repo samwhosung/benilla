@@ -1204,6 +1204,9 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
             ..Default::default()
         });
         app.update();
+        // The select's own signal (`0x49389c`), which no host carries in this harness, once the
+        // frame's pushes seat the target.
+        script(app).fire_event("PLAYER_TARGET_CHANGED", vec![]);
     };
 
     select(&mut app, wolf, WOLF, &[(ME, 0), (WOLF, BOAR), (BOAR, ME)]);

@@ -1244,6 +1244,9 @@ pub(super) fn seed_ui_fixture(
                 lua = Some(Box::new(|script: &mut UiScript| {
                     set_enemy_plates(Some(script), true)
                 }));
+                // The select's `PLAYER_TARGET_CHANGED` (`0x49389c`), which shows the target frame,
+                // once the wolf it names is spawned.
+                commands.queue(signal_fixture_target);
                 // The wolf is the target, so its plate draws lit with the target ring: indexed
                 // under its guid, the object the selection's tracker keeps, and lit as
                 // `SetSelection` lights its object (`0x493701`).
@@ -2022,6 +2025,16 @@ fn seed_equipped_bags(
 
 /// Turn enemy plates on or off as the V binding does, the verb and FrameXML's global together,
 /// so FrameXML's own replay agrees.
+/// The fixture's select signalled, as `SetSelection` signals it (`0x49389c`), once its commands
+/// spawned what it names.
+fn signal_fixture_target(world: &mut World) {
+    crate::script_calls::with_hosted_vm(world, |script| {
+        if let Some(script) = script {
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        }
+    })
+}
+
 fn set_enemy_plates(script: Option<&benilla_ui::script::UiScript>, on: bool) {
     let lua = if on {
         "NAMEPLATES_ON = 1; ShowNameplates()"

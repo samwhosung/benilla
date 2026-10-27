@@ -415,9 +415,6 @@ pub(crate) struct Model {
     pub(crate) call_raises: super::calls::CallRaises,
     /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,
-    /// The selection a script call last moved to and signalled `PLAYER_TARGET_CHANGED` for inside
-    /// itself, for the unit feed to take as heard ([`super::UiScript::announce_selection`]).
-    pub(crate) announced_selection: Option<Option<u64>>,
     /// The protected-action gate's input events ([`super::protected`]).
     pub(crate) protected: super::protected::Flags,
     /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
@@ -1444,7 +1441,6 @@ impl Model {
             call_raises: Default::default(),
             input: Default::default(),
             protected: Default::default(),
-            announced_selection: None,
             drop_item_on_unit: Vec::new(),
             joined_channels: Vec::new(),
             party: party::PartyState::default(),

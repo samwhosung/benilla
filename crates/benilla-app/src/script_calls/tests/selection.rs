@@ -87,7 +87,7 @@ fn with_pet_attacking(f: &mut Frame, possessed: bool) {
 
 /// `SetSelection` refreshes the usable states (`0x493892`) and signals `PLAYER_TARGET_CHANGED`
 /// (`0x49389c`) before it returns, and so does its release (`0x493a69`, `0x493a73`): the chunk's
-/// next line has heard both, in that order, and the feeds signal the change no second time.
+/// next line has heard both, in that order, and the feeds signal no change of their own.
 #[test]
 fn a_selection_call_signals_its_target_change_inside_the_call() {
     let mut f = frame(true);
@@ -110,12 +110,10 @@ fn a_selection_call_signals_its_target_change_inside_the_call() {
     assert_eq!(seen(&mut f), "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED");
     feeds(&mut f);
     assert_eq!(events(&mut f).len(), 2, "the release's, once");
-    // A change no call made is the feeds' to signal, each once.
+    // The feeds signal no change: every writer of the selection signals its own.
     f.app.world_mut().resource_mut::<Selection>().guid = Some(NEW);
     feeds(&mut f);
-    let mut heard = events(&mut f);
-    heard.sort();
-    assert_eq!(heard, ["PLAYER_TARGET_CHANGED", "SPELL_UPDATE_USABLE"]);
+    assert_eq!(events(&mut f), Vec::<String>::new());
 }
 
 /// The release `0x493910` calls a possessed unit off (`0x4bd650` at `0x493a18`) behind

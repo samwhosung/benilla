@@ -48,11 +48,6 @@ pub(crate) struct WorldEnterSeats;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitSnapshots;
 
-/// [`fire_unit_events`]' signal, `PLAYER_TARGET_CHANGED`: a feed whose state its handlers read
-/// runs `.before(UnitEvents)`.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct UnitEvents;
-
 /// One `UNIT_COMBAT` over a unit, the portrait hit indicator's feed. The emitter `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per token naming the unit, with no
 /// self-suppression and no CVar gate; `type` is the school on the melee and spell-damage paths, 0
@@ -93,7 +88,6 @@ struct UnitFeedMemo {
     entered_world: bool,
     /// Per token, the last snapshot pushed.
     last: HashMap<String, UnitState>,
-    target_guid: Option<u64>,
     last_xp: Option<(u32, u32)>,
     /// `(rest state, pool, PLAYER_FLAGS)`, pushed as one so no binding reads it half-updated.
     last_rest: Option<(u8, u32, u32)>,
@@ -106,14 +100,6 @@ struct UnitFeedMemo {
     worn_hidden: Option<(bool, bool)>,
     /// `PLAYER_FIELD_BYTES` byte 2 (`GetActionBarToggles`, `0x4e7660`); no field watch, no event.
     action_bar_toggles: Option<u8>,
-    /// The events the pushes owe, which [`fire_unit_events`] signals after the action feed.
-    pending: PendingUnitEvents,
-}
-
-/// What [`feed_units`] pushed this frame that owes an event after the usable refresh.
-#[derive(Default)]
-struct PendingUnitEvents {
-    target_changed: bool,
 }
 
 /// Adds the per-frame unit feed; the `Unit*` bindings live in `benilla-ui`.
@@ -154,10 +140,6 @@ impl Plugin for UiUnitPlugin {
                     .in_set(field_events::FieldEventPushes)
                     .in_set(UnitSnapshots)
                     .after(WorldEnterSeats),
-                // After the action feed, whose usable refresh precedes these events.
-                fire_unit_events
-                    .in_set(UnitEvents)
-                    .after(crate::ui_action::CooldownEvents),
                 feed_far_sight_bit,
             )
                 .chain()
@@ -1320,17 +1302,13 @@ pub(crate) fn live_player_seat(
     })
 }
 
-/// One pass of the unit feed and its events, for a test that follows a selection change to its
-/// event.
+/// One pass of the unit feed, for a test that follows a frame's pushes.
 #[cfg(test)]
 pub(crate) fn run_feed_units_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
     world
         .run_system_once(feed_units)
         .expect("the unit feed runs as a one-shot system");
-    world
-        .run_system_once(fire_unit_events)
-        .expect("the unit events run as a one-shot system");
 }
 
 /// Whether the unit feed runs before `system` in `app`'s `Update`, for a reader of its pushes.
@@ -1657,8 +1635,8 @@ fn feed_units(
 
         // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its
         // own changes' (`crate::field_watch`), and a token that comes to name another unit is
-        // announced by `PLAYER_TARGET_CHANGED` below alone (`0x493540` signals only that,
-        // `0x49389c`).
+        // announced by the selection's `PLAYER_TARGET_CHANGED` alone (`0x493540` signals only
+        // that, `0x49389c`), where each writer makes it.
         for (token, snap) in [
             ("player", &player),
             ("target", &target),
@@ -1674,20 +1652,6 @@ fn feed_units(
                     memo.last.remove(token);
                 }
             }
-        }
-
-        // `PLAYER_TARGET_CHANGED`, argless, when the selection changes, owed to
-        // [`fire_unit_events`]; a script call signalled its own change inside itself, as
-        // `SetSelection` does (`0x49389c`, `0x493a73`), so the feed hears only a change no call
-        // made. A `/reload`'s fresh memo finds none: the shutdown dropped the target and told the
-        // dying VM (`0x490bdf`).
-        if let Some(announced) = script.take_announced_selection() {
-            memo.target_guid = announced;
-        }
-        if selection.guid != memo.target_guid {
-            gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
-            memo.target_guid = selection.guid;
-            memo.pending.target_changed = true;
         }
 
         // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips
@@ -1806,27 +1770,9 @@ struct WorldEnter {
     ask_pet: bool,
 }
 
-/// The event [`feed_units`]' pushes owe for a selection change no script call made (a world
-/// click, the server's), signalled after the action feed's usable refresh as the reference orders
-/// them: `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`) before
-/// `PLAYER_TARGET_CHANGED` (`0x49389c`), and so does a release (`0x4939d3`, `0x493a69`,
-/// `0x493a73`). A usable handler reads the new target, and hears this after it.
-fn fire_unit_events(mut hosted_vm: crate::script_calls::HostedVm, mut feed: ResMut<UnitFeedState>) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let pending = std::mem::take(&mut feed.vm.get(script).pending);
-        if pending.target_changed {
-            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-        }
-    })
-}
-
 /// The bare unit feed, for a test driving the stock unit frames off engine state, which lends no
-/// host: the relation functions' seat, the pushes, the control edge, the unit events, then the
-/// field notices' events, under the plugin's sets so a test's action feed takes its place around
-/// them.
+/// host: the relation functions' seat, the pushes, then the field notices' events, under the
+/// plugin's sets so a test's action feed takes its place around them.
 #[cfg(test)]
 pub(crate) fn add_unit_feed(app: &mut App) {
     app.init_resource::<UnitFeedState>()
@@ -1836,7 +1782,6 @@ pub(crate) fn add_unit_feed(app: &mut App) {
             (
                 relations::seat,
                 feed_units.in_set(UnitSnapshots),
-                fire_unit_events.after(crate::ui_action::CooldownEvents),
                 field_events::fire_field_notices,
             )
                 .chain(),

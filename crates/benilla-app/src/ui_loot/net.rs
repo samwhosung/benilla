@@ -1412,12 +1412,22 @@ mod tests {
         let mut app = stock_app(&[TARGET_UI]);
 
         app.update();
+        target_changed(&mut app);
         assert_eq!(target_frame_name(&app), "Kobold Vermin", "the Tab target");
 
         app.world_mut().resource_mut::<LootLatch>().0 = Some(CORPSE);
         respond(app.world_mut(), CORPSE, 1);
         app.update();
+        target_changed(&mut app);
         assert_eq!(target_frame_name(&app), "Kobold Worker", "the looted body");
+    }
+
+    /// The select's own `PLAYER_TARGET_CHANGED` (`0x49389c`), which no host carries in this
+    /// harness, once the frame's pushes seat the target.
+    fn target_changed(app: &mut App) {
+        app.world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .fire_event("PLAYER_TARGET_CHANGED", vec![]);
     }
 
     /// What [`super::super::drain_loot`] reads beside [`seat_tabbed`]'s, with our body's movement
@@ -1816,6 +1826,7 @@ mod tests {
             for _ in 0..2 {
                 app.update();
             }
+            target_changed(&mut app);
             let releases = rx
                 .try_iter()
                 .filter(|c| matches!(c, ClientCommand::LootRelease { guid } if *guid == CORPSE))
