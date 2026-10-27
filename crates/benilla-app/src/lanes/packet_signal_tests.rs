@@ -374,18 +374,16 @@ fn each_control_change_signals_at_its_packet() {
             "#,
         )
         .unwrap();
-    let control = |allow_move| SessionEvent::ClientControl {
-        mover: ME,
-        allow_move,
-    };
+    let control = |mover, allow_move| SessionEvent::ClientControl { mover, allow_move };
     let seen = frame(
         &mut app,
         vec![
             fall(5),
-            control(false),
-            control(false),
+            control(ME, false),
+            control(ME, false),
+            control(STRANGER, true),
             fall(5),
-            control(true),
+            control(ME, true),
         ],
     );
     assert_eq!(
