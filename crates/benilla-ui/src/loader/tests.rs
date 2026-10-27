@@ -710,6 +710,46 @@ mod loader_tests {
         );
     }
 
+    /// `0x6f2630` rewrites a stop on every matching child (`0x6f2690`-`0x6f26d8`): the last
+    /// `MinColor` and the last `MaxColor` win.
+    #[test]
+    fn an_xml_gradient_takes_its_last_min_and_max_color() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                 <Frame name="Fades">
+                   <Size><AbsDimension x="100" y="100"/></Size>
+                   <Anchors><Anchor point="CENTER"/></Anchors>
+                   <Layers><Layer level="ARTWORK">
+                     <Texture name="Twice" setAllPoints="true">
+                       <Color r="1" g="1" b="1"/>
+                       <Gradient>
+                         <MinColor r="1" g="0" b="0"/>
+                         <MaxColor r="0" g="1" b="0"/>
+                         <MinColor r="0" g="0" b="1"/>
+                         <MaxColor r="1" g="1" b="0"/>
+                       </Gradient>
+                     </Texture>
+                   </Layer></Layers>
+                 </Frame>
+               </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        s.resolve();
+        let gradient = s
+            .extract()
+            .iter()
+            .find_map(|q| match &q.content {
+                QuadContent::Texture { gradient, .. } => *gradient,
+                _ => None,
+            })
+            .expect("the gradient extracts");
+        let (blue, yellow) = ([0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0]);
+        assert_eq!(gradient, [blue, yellow, yellow, blue]);
+    }
+
     /// `CSimpleFrame::LoadXML 0x769820`: a strata `0x6f17d0` does not know logs at severity 1
     /// (`0x7699a4`) and skips `SetFrameStrata 0x76a470`.
     #[test]

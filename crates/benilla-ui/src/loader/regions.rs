@@ -353,11 +353,12 @@ impl Loader<'_> {
     /// A texture's `<Gradient>`: it writes the vertex colours (`+0xb8`, `0x7700f2` → `0x77f910`),
     /// which `file=` leaves alone, so unlike `<Color>` it tints the art. `0x6f2630` stages both
     /// stops as 0 (`0x7700d8`), so a missing one is transparent black, and reads a missing
-    /// orientation as HORIZONTAL; an unknown one stays HORIZONTAL and is reported.
+    /// orientation as HORIZONTAL; an unknown one stays HORIZONTAL and is reported. It walks every
+    /// child and rewrites a stop on each match (`0x6f2690`-`0x6f26d8`), so the last one wins.
     fn apply_gradient(&mut self, g: &Element, wrapper: &Table, dbg: &str) {
         let stop = |tag: &str| {
             children_named(g, tag)
-                .next()
+                .last()
                 .map_or(crate::color::Rgba8::default(), color_of)
         };
         let (min, max) = (stop("MinColor").fractions(), stop("MaxColor").fractions());
