@@ -398,3 +398,62 @@ fn each_control_change_signals_at_its_packet() {
         ]
     );
 }
+
+/// `UNIT_FIELD_SUMMON` and `UNIT_FIELD_POWER5`, the happiness.
+const SUMMON: u16 = 8;
+const HAPPINESS: u16 = 27;
+
+/// The pet's happiness watch (the bridge's id 21, signalled through `0x515e7a`) runs inside its
+/// update packet, so `UNIT_HAPPINESS` fires at that packet's place among the frame's other
+/// packets, once per token naming the pet; under its `Deviation:` only a change of the bucket
+/// (or its figures) signals, so a move within one bucket is silent.
+#[test]
+fn the_pets_happiness_signals_at_its_packet() {
+    use benilla_formats::{PetLoyaltyNames, PetPersonalities, PetPersonality};
+    let mut app = client();
+    let row = PetPersonality {
+        thresholds: [0, 333_000, 666_000],
+        damage: [0.75, 1.0, 1.25],
+        loyalty_rate: [-1.0, 0.0, 1.0],
+    };
+    app.world_mut()
+        .insert_resource(crate::ui_pet_stats::PetStatTables {
+            personalities: PetPersonalities::from_rows([(1, row)].into()),
+            loyalty: PetLoyaltyNames::from_names(Default::default()),
+        });
+    frame(
+        &mut app,
+        vec![
+            created(PET, EntityKind::Unit, &[(HAPPINESS, 500_000)]),
+            values(
+                ME,
+                &[(SUMMON, PET as u32), (SUMMON + 1, (PET >> 32) as u32)],
+            ),
+        ],
+    );
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_HAPPINESS")
+            f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. arg1) end)
+            "#,
+        )
+        .unwrap();
+    let happy = |raw: u32| values(PET, &[(HAPPINESS, raw)]);
+    let seen = frame(
+        &mut app,
+        vec![
+            fall(5),
+            happy(900_000),
+            happy(950_000),
+            fall(5),
+            happy(100_000),
+        ],
+    );
+    assert_eq!(
+        seen,
+        [FELL, "UNIT_HAPPINESS:pet", FELL, "UNIT_HAPPINESS:pet"]
+    );
+}

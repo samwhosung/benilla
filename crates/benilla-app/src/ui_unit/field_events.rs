@@ -15,10 +15,10 @@ use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
 
 /// The feeds that push what a field event's handlers read: the unit tokens' snapshots with the XP
-/// and rest values (`feed_units`), the group's and the pet's tokens, the pet's stats, the player's
-/// combat stats and inventory, the inspected unit's slots, the honor block and the watched
-/// faction. The lanes' drain runs after all of them, as the update handler writes every block of
-/// its packet before its notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
+/// and rest values (`feed_units`), the group's and the pet's tokens, the player's combat stats and
+/// inventory, the inspected unit's slots, the honor block and the watched faction. The lanes'
+/// drain runs after all of them, as the update handler writes every block of its packet before its
+/// notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
 
@@ -45,6 +45,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     stores: Query<'w, 's, &'static crate::net::ObjectStore>,
     // A callback's mark of the portrait list (`0x524e10`).
     marks: Option<ResMut<'w, crate::portrait::PortraitMarks>>,
+    // The happiness watch's tables, which its run reads the bucket through.
+    pet_stats: Option<Res<'w, crate::ui_pet_stats::PetStatTables>>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -78,6 +80,15 @@ impl NoticeFiring<'_, '_> {
             let published = self.tutorials.as_ref().and_then(|t| t.lock().fire_now(id));
             if let Some(published) = published {
                 crate::tutorial::fire_published(script, &self.sink.sounds, published);
+            }
+            return false;
+        }
+        // A bridge watch, so only a unit with token flags carries it (`0x60c4a0`).
+        if let FieldNotice::Happiness { guid, old, new } = notice {
+            if script.unit_has_field_watchers(guid)
+                && crate::ui_pet_stats::happiness_moved(self.pet_stats.as_deref(), old, new)
+            {
+                signal_unit(script, guid, crate::field_watch::HAPPINESS_BRIDGE);
             }
             return false;
         }
@@ -514,11 +525,12 @@ pub(crate) fn fire(
         // states ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
         FieldNotice::UsableRefresh => {}
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
-        // table, the spell catalog, the aura cache and the skill lines.
+        // table, the spell catalog, the aura cache, the skill lines and the pet's stat tables.
         FieldNotice::QuestLog
         | FieldNotice::Tutorial { .. }
         | FieldNotice::MirrorTimer(_)
         | FieldNotice::Drunk { .. }
+        | FieldNotice::Happiness { .. }
         | FieldNotice::Shapeshift
         | FieldNotice::PlayerAuras
         | FieldNotice::SkillLines
@@ -766,13 +778,11 @@ mod tests {
     }
 
     /// The bridge watches every field below `0xb6` (`0x51bbb0`'s bound, `0x51bc1d`) whose row in
-    /// the table is set, but `UNIT_HAPPINESS`'s, which the pet stats feed fires.
+    /// the table is set.
     #[test]
     fn the_bridge_ids_are_every_named_field_of_the_table() {
-        let want: std::collections::BTreeSet<u16> = event_table()
-            .into_keys()
-            .filter(|&id| id < 0xb6 && id != 21)
-            .collect();
+        let want: std::collections::BTreeSet<u16> =
+            event_table().into_keys().filter(|&id| id < 0xb6).collect();
         let have: std::collections::BTreeSet<u16> =
             crate::field_watch::BRIDGE_IDS.into_iter().collect();
         assert_eq!(have, want);
@@ -1371,13 +1381,8 @@ mod tests {
                 crate::ui_pet::feed_pet_unit,
                 crate::lanes::fire_in_order,
             ),
-            crate::test_support::runs_before(
-                &mut headless,
-                crate::ui_pet_stats::feed_pet_stats,
-                crate::lanes::fire_in_order,
-            ),
         ];
-        assert_eq!(ahead, [true; 5], "feed_units, char, party, pet, pet stats");
+        assert_eq!(ahead, [true; 4], "feed_units, char, party, pet");
 
         // In that order: the block lands, the push, the firing.
         let (mut app, me) = feed_world(
@@ -1693,7 +1698,7 @@ mod tests {
     /// `UNIT_PET` (`0x4bc84f`), and `HasPetUI` resolves the pet from that guid (`0x4be67e`-
     /// `0x4be690`): a `/reload` with a pet out hears `UNIT_PET` with `HasPetUI()` nil. The pet's
     /// happiness field moves at neither the VM's first push nor the bar's return, so neither signals
-    /// `UNIT_HAPPINESS`. The stats feed runs ahead of the unit feed, as the schedule orders them.
+    /// `UNIT_HAPPINESS`, which only its field's watch raises.
     #[test]
     fn the_world_entry_pet_reset_signals_unit_pet_with_no_pet_ui() {
         /// `UNIT_FIELD_BYTES_0` (class in byte 1) and `UNIT_FIELD_PETNUMBER`.
@@ -1731,14 +1736,7 @@ mod tests {
             .resource_mut::<crate::ui_pet::PetBar>()
             .spells
             .pet_guid = PET;
-        app.add_systems(
-            Update,
-            (
-                crate::ui_pet_stats::feed_pet_stats,
-                super::super::feed_units,
-            )
-                .chain(),
-        );
+        app.add_systems(Update, super::super::feed_units);
         app.update();
         assert_eq!(seen(&mut app), ["UNIT_PET nil nil"], "the reload's entry");
         // `SMSG_PET_SPELLS` brings the same pet back.

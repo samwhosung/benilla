@@ -72,6 +72,10 @@ pub(crate) enum FieldNotice {
     /// The drunk watcher `0x5e2a90` on any player's `PLAYER_BYTES_3` byte 1: the byte's copy and
     /// its value now, from which the run signals and speaks (`crate::ui_unit::field_events`).
     Drunk { guid: u64, old: u8, new: u8 },
+    /// The bridge's watch on `UNIT_FIELD_POWER5` (id 21, `UNIT_HAPPINESS`): the field's copy and
+    /// its value now, from which the run signals through `0x515e50` when the happiness the pet
+    /// stats read moved ([`crate::ui_pet_stats::happiness_moved`]).
+    Happiness { guid: u64, old: u32, new: u32 },
     /// `FireTutorial(id, 0)` (`0x4b5390`) from a watcher on the active player, or the level-up
     /// message's arm (`0x5e4092`-`0x5e410e`): the number's fire-once bit tested and set, then its
     /// `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once, in the caller's order.
@@ -332,13 +336,15 @@ const UNIT_SECTION: u16 = 6;
 const PLAYER_SECTION: u16 = 188;
 
 /// The bridge ids: every unit field below `0xb6` (`0x51bc1d`) whose name in the event table
-/// `0xbe1198` is set (`0x51bbc3`), each one watch of [`bridge_len`] bytes. `UNIT_HAPPINESS` (21)
-/// is left out: the pet stats feed fires it under its own `Deviation:`.
-pub(crate) const BRIDGE_IDS: [u16; 53] = [
-    0, 2, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 107, 120, 121, 122, 128,
-    129, 130, 131, 132, 135, 136, 137, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
-    155, 159, 160, 161, 162, 163, 164, 165, 166, 167, 174,
+/// `0xbe1198` is set (`0x51bbc3`), each one watch of [`bridge_len`] bytes.
+pub(crate) const BRIDGE_IDS: [u16; 54] = [
+    0, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 107, 120, 121, 122,
+    128, 129, 130, 131, 132, 135, 136, 137, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153,
+    154, 155, 159, 160, 161, 162, 163, 164, 165, 166, 167, 174,
 ];
+
+/// The bridge id of `UNIT_FIELD_POWER5`, the happiness, whose event is `UNIT_HAPPINESS`.
+pub(crate) const HAPPINESS_BRIDGE: u16 = 21;
 
 /// A bridge watch's length: the selector byte at `0x51bc98 + id`, through the jump table
 /// `0x51bc84`, picks 8 (`0x51bbdd`), 0xd8 (`0x51bbe4`), 0x30 (`0x51bbeb`) or 0x1c (`0x51bbf2`);
@@ -852,10 +858,17 @@ pub(crate) fn placed_values(
         pass.push(at, FieldNotice::TrainerPass);
     }
 
-    // The bridge (`0x51bbb0`), the object's own watches.
+    // The bridge (`0x51bbb0`), the object's own watches. The happiness watch carries its field's
+    // copy and value, which its run compares.
     for bridge in BRIDGE_IDS {
         if let Some(at) = at(UNIT_SECTION, (4 * bridge, bridge_len(bridge)), List::Object) {
-            pass.push(at, FieldNotice::Unit { guid, id: bridge });
+            let notice = if bridge == HAPPINESS_BRIDGE {
+                let (old, new) = block.edge(at.0).unwrap_or_default();
+                FieldNotice::Happiness { guid, old, new }
+            } else {
+                FieldNotice::Unit { guid, id: bridge }
+            };
+            pass.push(at, notice);
         }
     }
 
@@ -1214,10 +1227,18 @@ mod tests {
                 FieldNotice::Unit { guid: MOB, id: 164 }
             ]
         );
-        // `UNIT_FIELD_HEALTH` is id 16, `UNIT_HAPPINESS`'s `POWER5` (id 21) no watch of the bridge.
+        // `UNIT_FIELD_HEALTH` is id 16, and `UNIT_HAPPINESS`'s `POWER5` (id 21) carries its copy
+        // and its value.
         assert_eq!(
             block(&mut mob, Some(ME), MOB, &[(22, 90), (27, 50)]),
-            [FieldNotice::Unit { guid: MOB, id: 16 }]
+            [
+                FieldNotice::Unit { guid: MOB, id: 16 },
+                FieldNotice::Happiness {
+                    guid: MOB,
+                    old: 0,
+                    new: 50
+                }
+            ]
         );
     }
 

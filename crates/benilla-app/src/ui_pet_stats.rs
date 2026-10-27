@@ -10,12 +10,10 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{PetStats, ScriptValue};
+use benilla_ui::script::PetStats;
 
 use crate::names::NameCache;
 use crate::net::ObjectStore;
-use crate::ui_pet::{PetBar, PetUnit};
-use crate::ui_unit::UnitFeed;
 
 /// `UNIT_FIELD_BYTES_0` byte 1, Hunter: the class the stat gate tests (`0x611752`). The enum is
 /// pinned by `GetComboPoints` (`0x51a190`), which tests 4 and 0xB, Rogue and Druid, on that byte.
@@ -44,29 +42,29 @@ pub(crate) struct PetFamilyTables {
 /// The bucket and its two tooltip figures, the `UNIT_HAPPINESS` key.
 type Happiness = (Option<u32>, u32, u32);
 
-/// The streamed pet's guid and its [`Happiness`] when [`feed_pet_stats`] last saw it, per VM; a
-/// frame with no pet keeps it.
-#[derive(Default)]
-pub(crate) struct StatsMemory {
-    happiness: Option<(u64, Happiness)>,
+/// The happiness the stat block reads off the raw power `raw`: `GetPetHappiness`'s bucket and its
+/// damage and loyalty figures, the binding's gate-failure numbers and a nil bucket with no DBC.
+fn happiness_of(tables: Option<&PetStatTables>, raw: u32) -> (Option<u32>, f32, f32) {
+    tables
+        .and_then(|t| t.personalities.for_pet(None))
+        .map(|p| {
+            let h = p.happiness(raw);
+            (Some(h.bucket), h.damage_percentage, h.loyalty_rate)
+        })
+        .unwrap_or((None, 100.0, 0.0))
 }
 
-fn happiness(s: &PetStats) -> Happiness {
-    (
-        s.happiness,
-        s.damage_percentage.to_bits(),
-        s.loyalty_rate.to_bits(),
-    )
-}
-
-pub(crate) struct UiPetStatsPlugin;
-
-impl Plugin for UiPetStatsPlugin {
-    fn build(&self, app: &mut App) {
-        // The getters read the stat block at the call (`crate::ui_pet::PetLive`); this feed
-        // fires the happiness repaint alone.
-        app.add_systems(Update, feed_pet_stats.in_set(UnitFeed));
-    }
+/// Whether the happiness watch's run signals `UNIT_HAPPINESS` (`0x515e7a`) for a change of the
+/// happiness field from `old` to `new`. Deviation: only when the bucket or its two tooltip figures
+/// change, not on every change of the field as in the reference, because no stock consumer reads
+/// the raw value.
+pub(crate) fn happiness_moved(tables: Option<&PetStatTables>, old: u32, new: u32) -> bool {
+    let key = |raw| {
+        let (bucket, damage, loyalty) = happiness_of(tables, raw);
+        (bucket, damage.to_bits(), loyalty.to_bits())
+    };
+    let (was, is): (Happiness, Happiness) = (key(old), key(new));
+    was != is
 }
 
 /// The pet's family word, icon and diet, from its cached creature template. The template entry is
@@ -135,14 +133,8 @@ pub(crate) fn stats_for(
             },
         );
     }
-    let (happiness, damage_percentage, loyalty_rate) = tables
-        .and_then(|t| t.personalities.for_pet(None))
-        .map(|p| {
-            let h = p.happiness(fields.unit_power(POWER_HAPPINESS).unwrap_or(0));
-            (Some(h.bucket), h.damage_percentage, h.loyalty_rate)
-        })
-        // No DBC: the binding's gate-failure numbers and a nil bucket.
-        .unwrap_or((None, 100.0, 0.0));
+    let (happiness, damage_percentage, loyalty_rate) =
+        happiness_of(tables, fields.unit_power(POWER_HAPPINESS).unwrap_or(0));
     (
         has_ui,
         PetStats {
@@ -161,48 +153,6 @@ pub(crate) fn stats_for(
             food_types,
         },
     )
-}
-
-/// `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`), the pet's happiness field's
-/// watch: it fires for a change on the pet the feed last saw, never for a VM's first frame, a pet's
-/// arrival or the bar's return. Deviation: fired when the bucket or its two tooltip figures change,
-/// not on every change of the happiness field as in the reference, because no stock consumer reads
-/// the raw value.
-pub(crate) fn feed_pet_stats(
-    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
-    pet: PetUnit,
-    tables: Option<Res<PetStatTables>>,
-    mut last: Local<crate::ui_script::VmMemo<StatsMemory>>,
-) {
-    vm.feed(|script, bar, fires| {
-        let Some(script) = script else {
-            return;
-        };
-        let memory = last.get(script);
-        let store = pet.store(bar.spells.pet_guid);
-        let (_, stats) = stats_for(
-            store,
-            pet.player_store(),
-            tables.as_deref(),
-            (None, None, Vec::new()),
-        );
-        let now = store.map(|_| (bar.spells.pet_guid, happiness(&stats)));
-        let moved = matches!(
-            (memory.happiness, now),
-            (Some((was_pet, was)), Some((pet, is))) if was_pet == pet && was != is
-        );
-        if now.is_some() {
-            memory.happiness = now;
-        }
-        if moved {
-            debug!(
-                "ui_pet_stats: happiness {:?} ({}% damage), loyalty {:?}",
-                stats.happiness, stats.damage_percentage, stats.loyalty
-            );
-            // `arg1` is the unit token, as on every 1.12 `UNIT_*` event; its handlers gate on it.
-            fires.post("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);
-        }
-    })
 }
 
 #[cfg(test)]
@@ -513,18 +463,5 @@ mod tests {
             (Some("Imp".into()), None, vec![]),
         );
         assert!(s.food_types.is_empty());
-    }
-
-    /// `UNIT_PET` must reach Lua with `HasPetUI()` already answering, as `PetTab_Update` reads it:
-    /// the bar's signal (`0x4bc84f`) waits on the notice lane, which fires once every feed has
-    /// pushed, this snapshot's included.
-    #[test]
-    fn unit_pet_reaches_lua_with_has_pet_ui_already_true() {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
-        assert!(crate::test_support::runs_before(
-            &mut app,
-            feed_pet_stats,
-            crate::lanes::fire_in_order
-        ));
     }
 }

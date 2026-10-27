@@ -392,9 +392,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // reads as the frame left it.
     ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "ui_party::GroupState"]),
-    // `UNIT_HAPPINESS`'s edge under its `Deviation:`, the bucket compared as the frame left it.
-    ("::ui_pet_stats::feed_pet_stats", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "ui_pet::PetBar"]),
     ("::ui_cast::feed_cast_reports", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
         "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",

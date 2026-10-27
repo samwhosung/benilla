@@ -65,7 +65,6 @@ use crate::ui_net::UiNetPlugin;
 use crate::ui_party::UiPartyPlugin;
 use crate::ui_pass::PlayerUiPlugin;
 use crate::ui_pet::UiPetPlugin;
-use crate::ui_pet_stats::UiPetStatsPlugin;
 use crate::ui_petition::UiPetitionPlugin;
 use crate::ui_quest::UiQuestPlugin;
 use crate::ui_quest_log::UiQuestLogPlugin;
@@ -206,7 +205,6 @@ impl PluginGroup for GamePlugins {
             // After UiActionPlugin, whose `Spells` and cooldown clock it shares.
             .add(UiPetPlugin)
             .add(ChrClassesPlugin)
-            .add(UiPetStatsPlugin)
             .add(UiNetPlugin)
             .add(UiCastPlugin)
             .add(UiMirrorPlugin)

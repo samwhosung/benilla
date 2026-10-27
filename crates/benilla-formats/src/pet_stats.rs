@@ -76,6 +76,11 @@ impl PetPersonality {
 pub struct PetPersonalities(HashMap<u32, PetPersonality>);
 
 impl PetPersonalities {
+    /// The table from its rows by id, as a loader or a test builds it.
+    pub fn from_rows(rows: HashMap<u32, PetPersonality>) -> Self {
+        Self(rows)
+    }
+
     /// The row for personality `id`, or the client's fallback row. The reference keys this table
     /// by `[[pet+0xb30]+0x24]` (`0x605600`), a field of the cached creature-query record whose
     /// wire source is untraced, so callers pass `None` and get row 1.
@@ -97,6 +102,11 @@ impl PetPersonalities {
 pub struct PetLoyaltyNames(HashMap<u32, String>);
 
 impl PetLoyaltyNames {
+    /// The table from its names by loyalty level, as a loader or a test builds it.
+    pub fn from_names(names: HashMap<u32, String>) -> Self {
+        Self(names)
+    }
+
     /// The name for a loyalty level. `None` is `GetPetLoyalty`'s nil, for level `0` and past the
     /// table (`0x4be700` bounds it against `[0xc0d9f8]`).
     pub fn name(&self, level: u32) -> Option<&str> {
