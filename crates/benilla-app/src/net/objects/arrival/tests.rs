@@ -125,7 +125,7 @@ fn a_packet_after_our_create_finds_us_arrived() {
 }
 
 /// Only a new object runs its create hook (`0x465d79`): a create block for our live player
-/// arrives nothing again, and the create after a purge (a worldport) arrives afresh.
+/// arrives nothing again, and the create after a worldport's purge arrives afresh.
 #[test]
 fn only_a_fresh_create_arrives() {
     let (mut app, rx) = client();
@@ -139,10 +139,95 @@ fn only_a_fresh_create_arrives() {
         "a re-create of the live player"
     );
 
-    let e = world.resource_mut::<GuidIndex>().0.remove(&ME).unwrap();
-    world.despawn(e);
-    crate::net::handlers::dispatch(world, crate::net::objects::packet([self_create()]));
+    crate::net::handlers::dispatch(
+        world,
+        std::iter::once(worldport())
+            .chain(crate::net::objects::packet([self_create()]))
+            .collect(),
+    );
     assert_eq!(movers(&rx), [format!("SetActiveMover {ME:#x}")]);
     let mut tagged = world.query_filtered::<(), With<SelfPlayer>>();
     assert_eq!(tagged.iter(world).count(), 1, "the new body is tagged");
+}
+
+fn connected() -> SessionEvent {
+    SessionEvent::Connected {
+        self_guid: ME,
+        name: "Me".into(),
+        billing: Default::default(),
+        tutorial_flags: None,
+        addon_info: None,
+    }
+}
+
+fn worldport() -> SessionEvent {
+    SessionEvent::Worldport {
+        map_id: 1,
+        position: [0.0; 3],
+        orientation: 0.0,
+        needs_ack: false,
+    }
+}
+
+/// `SetActiveMover` returns at once for the mover it holds (`0x6006ee`-`0x6006fb` →
+/// `0x600852`): a create whose mover nothing zeroed claims nothing, though the rest of the
+/// arrival runs.
+#[test]
+fn a_create_of_the_mover_already_held_sends_nothing() {
+    let (mut app, rx) = client();
+    let world = app.world_mut();
+    let net = NetCommands(world.resource::<NetCommands>().0.clone());
+    assert!(world
+        .resource_mut::<crate::net::MoverClaim>()
+        .claim(ME, &net));
+    assert_eq!(movers(&rx).len(), 1, "the claim that stands");
+    crate::net::handlers::dispatch(world, crate::net::objects::packet([self_create()]));
+    assert_eq!(movers(&rx), Vec::<String>::new(), "no second claim");
+    assert!(
+        !world.resource::<crate::player::OwnControlLost>().0,
+        "the restore still runs"
+    );
+}
+
+/// What zeroes the mover makes the next create claim it again: the world entry
+/// (`CGUnit_C::Initialize`, `0x6039a9`), and a world load's purge, whose destruction of our
+/// player zeroes the mover it names (`0x401bf7` → `0x467700`, `0x5fb650`).
+#[test]
+fn the_world_entry_and_a_worldport_zero_the_mover() {
+    let (mut app, rx) = client();
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, crate::net::objects::packet([self_create()]));
+    assert_eq!(movers(&rx).len(), 1);
+
+    crate::net::handlers::dispatch(
+        world,
+        std::iter::once(worldport())
+            .chain(crate::net::objects::packet([self_create()]))
+            .collect(),
+    );
+    assert_eq!(
+        movers(&rx),
+        [format!("SetActiveMover {ME:#x}")],
+        "the worldport's create claims again"
+    );
+
+    // A new session over a world nothing tore down: its entry zeroes the mover.
+    let e = world.resource_mut::<GuidIndex>().0.remove(&ME).unwrap();
+    world.despawn(e);
+    let net = NetCommands(world.resource::<NetCommands>().0.clone());
+    world
+        .resource_mut::<crate::net::MoverClaim>()
+        .claim(ME, &net);
+    movers(&rx);
+    crate::net::handlers::dispatch(
+        world,
+        std::iter::once(connected())
+            .chain(crate::net::objects::packet([self_create()]))
+            .collect(),
+    );
+    assert_eq!(
+        movers(&rx),
+        [format!("SetActiveMover {ME:#x}")],
+        "the session's first create claims"
+    );
 }

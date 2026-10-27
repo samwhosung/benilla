@@ -790,6 +790,10 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
+    // The unit's destructor zeroes the active mover it names (`0x5fb631`-`0x5fb655`).
+    if let Some(mover) = sc.mover.as_deref_mut() {
+        mover.forget(guid);
+    }
     bag_write(&mut sc, guid, None);
     // An item has no model to fade, so it goes now with its countdown cells.
     if benilla_protocol::guid::is_item(guid) {
@@ -857,6 +861,10 @@ fn release(sc: &mut Scene, guid: u64) {
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
+    // `CGUnit_C::Release` zeroes the active mover it names (`0x5fbc26`-`0x5fbc3b` → `0x6006b0`).
+    if let Some(mover) = sc.mover.as_deref_mut() {
+        mover.forget(guid);
+    }
     bag_write(sc, guid, None);
     let kept = sc
         .stores

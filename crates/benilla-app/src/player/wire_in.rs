@@ -137,6 +137,7 @@ pub(super) fn apply_server_moves(
     knock_msgs: &mut MessageReader<KnockBackMessage>,
     self_moves: &mut MessageReader<SelfMoveMessage>,
     control_msgs: &mut MessageReader<ClientControlMessage>,
+    mover: &mut crate::net::MoverClaim,
     self_guid: Option<u64>,
     transports: &super::TransportQuery,
     self_pose: Option<(Vec3, f32)>,
@@ -150,8 +151,12 @@ pub(super) fn apply_server_moves(
         match verdict {
             // Park, which stops the server extrapolating a run, and say nothing else: the mover has
             // not changed hands, and `CMSG_MOVE_NOT_ACTIVE_MOVER` would strand us.
+            // The stopped mover's global goes too (`0x5fa678`-`0x5fa696`, `0x6006e0(0)`).
             ControlVerdict::Revoked => {
                 movement_net::park_mover(&net_cmds.0, player);
+                if let Some(me) = self_guid {
+                    mover.forget(me);
+                }
             }
             ControlVerdict::Restored => {
                 player.foreign_mover = None;
@@ -160,10 +165,9 @@ pub(super) fn apply_server_moves(
                 // names the creature), and send nothing else: `GetConfirmedMover` resolves the
                 // mismatch to us (`Player.cpp:20267-20269`), so a parting stop for the creature
                 // would move our own character to it.
-                super::move_trace::mover_claim("SET_ACTIVE_MOVER", c.mover);
-                let _ = net_cmds
-                    .0
-                    .send(ClientCommand::SetActiveMover { guid: c.mover });
+                if mover.claim(c.mover, net_cmds) {
+                    super::move_trace::mover_claim("SET_ACTIVE_MOVER", c.mover);
+                }
             }
             // Claim it; recording the claim stops our body's pose streaming under its guid.
             ControlVerdict::Granted(guid) => {
@@ -176,14 +180,16 @@ pub(super) fn apply_server_moves(
                 }
                 player.foreign_mover = Some(guid);
                 player.reseat = true;
-                super::move_trace::mover_claim("SET_ACTIVE_MOVER", guid);
-                let _ = net_cmds.0.send(ClientCommand::SetActiveMover { guid });
+                if mover.claim(guid, net_cmds) {
+                    super::move_trace::mover_claim("SET_ACTIVE_MOVER", guid);
+                }
             }
             // vmangos sends this on unpossess, after `Restored`, and when the possessed unit is
             // feared or confused (`Unit.cpp:11157`). As in the reference (`0x5fa600`), only the
             // unit we drive matters: we keep it but may not move it. Clearing `foreign_mover`
             // would walk our own body while the server applies our steps to the creature.
-            ControlVerdict::Released(_) => {}
+            // Its mover global is zeroed (`0x5fa678`-`0x5fa696`), so a later grant claims it again.
+            ControlVerdict::Released(guid) => mover.forget(guid),
         }
     }
     // Cross-map worldport: snap, bump `CurrentMap` for the terrain streamer, ack if required.
@@ -1234,6 +1240,7 @@ mod seat_tests {
                         &mut readers.4,
                         &mut readers.5,
                         &mut readers.6,
+                        &mut crate::net::MoverClaim::default(),
                         Some(1),
                         &transports,
                         // The create's world position, which the seat replaces.

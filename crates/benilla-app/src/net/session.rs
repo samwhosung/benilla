@@ -112,6 +112,8 @@ pub(crate) struct Bridge<'w, 's> {
     net: Res<'w, NetCommands>,
     stores: Query<'w, 's, &'static mut ObjectStore>,
     transports: Query<'w, 's, &'static crate::transport::Transport>,
+    /// The active mover, which the world entry zeroes and the teardowns free with its unit.
+    mover: Option<ResMut<'w, super::MoverClaim>>,
 }
 
 fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
@@ -192,6 +194,11 @@ fn on_connected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
     } = ev
     {
         e.billing.0 = billing;
+        // `CGUnit_C::Initialize` zeroes the active mover (`0x6039a9`) at every world entry
+        // (`ClientInitializeGame`, `0x401639`), so the first create of a session claims it.
+        if let Some(mover) = b.mover.as_deref_mut() {
+            mover.reset();
+        }
         connected(
             guid,
             name,
@@ -220,6 +227,11 @@ fn on_logged_out(
             &mut b.self_guid,
             &mut e.logged_out,
         );
+        // The teardown destroys every object (`0x402011` → `0x467700`), the mover's unit with it
+        // (`0x5fb650`).
+        if let Some(mover) = b.mover.as_deref_mut() {
+            mover.forget_unless_held(&b.index);
+        }
         // The reference zeroes the forced table's count and the 64 slots only in teardown
         // `0x4d5360` (`0x4d5419`, `0x4d541f`), whose one caller is `ShutdownGame 0x491180`
         // (`0x4911dc`), never on a worldport. The session's end stands in for that shutdown: the
@@ -289,6 +301,9 @@ fn on_disconnected(
             &mut e.transfer,
             &mut e.disconnects,
         );
+        if let Some(mover) = b.mover.as_deref_mut() {
+            mover.forget_unless_held(&b.index);
+        }
     }
 }
 
@@ -428,6 +443,11 @@ fn on_worldport(
             player.as_ref().and_then(|p| p.ride_entity()),
             &mut e.worldports,
         );
+        // The world load destroys every object (`0x401bf7` → `0x467700` → `0x467800`), our own
+        // player too, whose destructor zeroes the active mover it names (`0x5fb650`).
+        if let Some(mover) = b.mover.as_deref_mut() {
+            mover.forget_unless_held(&b.index);
+        }
         // Loading a new world frees the released objects with the live ones (`0x467700`).
         released.clear();
     }

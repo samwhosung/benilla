@@ -150,6 +150,8 @@ pub(crate) struct Scene<'w, 's> {
     worn_pins: Query<'w, 's, &'static mut crate::entities::WornPins>,
     /// The viewer's zone and the objects' positions a party member's snapshot stores (`0x5f0880`).
     place: crate::ui_party::net::SnapshotPlace<'w, 's>,
+    /// The active mover, which its unit's release and destroy zero.
+    mover: Option<ResMut<'w, super::MoverClaim>>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).

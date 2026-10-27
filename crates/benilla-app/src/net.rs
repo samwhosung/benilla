@@ -129,6 +129,7 @@ impl Plugin for NetPlugin {
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
             .add_message::<WorldEnterCascadeMessage>()
+            .init_resource::<MoverClaim>()
             .add_message::<CinematicTriggeredMessage>()
             .add_message::<ServerSaidMessage>()
             .add_message::<LoggedOutMessage>()
@@ -434,6 +435,53 @@ pub(crate) struct Embodied;
 /// are attached to but lost control of still follows the server.
 #[derive(Component)]
 pub(crate) struct ActiveMover;
+
+/// The active-mover global (`0xc4da98`/`0xc4da9c`) as the claims read it: the guid the last
+/// `SetActiveMover` (`0x6006e0`) stored, or none. A claim of the guid it holds returns at once
+/// (`0x6006ee`-`0x6006fb` → `0x600852`), so `CMSG_SET_ACTIVE_MOVER` goes out only on a change.
+/// It is zeroed at every world entry (`CGUnit_C::Initialize`, `0x6039a9`, from
+/// `ClientInitializeGame` at `0x401639`), by the destructor of the unit it names
+/// (`0x5fb631`-`0x5fb655`), which a world load (`0x401bf7`) and the game's teardown (`0x402011`)
+/// run on every object through `ClntObjMgrDestroy` (`0x467700` → `0x467800`), by that unit's
+/// release (`0x5fbc26`-`0x5fbc3b` → `0x6006b0`), and by a control update that stops it
+/// (`0x5fa678`-`0x5fa696`).
+#[derive(Resource, Default)]
+pub(crate) struct MoverClaim(Option<u64>);
+
+impl MoverClaim {
+    /// `SetActiveMover(guid)`: whether the global moved, stored as it does (`0x600791`), with
+    /// `CMSG_SET_ACTIVE_MOVER` sent for a guid that is not zero (`0x6007a5`, `0x6007ae`).
+    pub(crate) fn claim(&mut self, guid: u64, net: &NetCommands) -> bool {
+        let guid = (guid != 0).then_some(guid);
+        if self.0 == guid {
+            return false;
+        }
+        self.0 = guid;
+        if let Some(guid) = guid {
+            let _ = net.0.send(ClientCommand::SetActiveMover { guid });
+        }
+        true
+    }
+
+    /// The unit `guid` gone or stopped: the global is zeroed when it names it.
+    pub(crate) fn forget(&mut self, guid: u64) {
+        if self.0 == Some(guid) {
+            self.0 = None;
+        }
+    }
+
+    /// The world entry's zeroing (`0x6039a9`).
+    pub(crate) fn reset(&mut self) {
+        self.0 = None;
+    }
+
+    /// A teardown that freed objects: the global is zeroed when its unit is no longer held.
+    pub(crate) fn forget_unless_held(&mut self, index: &GuidIndex) {
+        if self.0.is_some_and(|g| !index.0.contains_key(&g)) {
+            self.0 = None;
+        }
+    }
+}
 
 // ── ECS state: resources ─────────────────────────────────────────────────────────────────────────
 

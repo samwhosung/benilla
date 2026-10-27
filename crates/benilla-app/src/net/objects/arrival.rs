@@ -31,18 +31,26 @@ pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64, fields: &
     if let Some(own) = arrival.own_control.as_deref_mut() {
         crate::player::restore_own_control(own, &mut sc.field_notices);
     }
-    // `0x4958a0` (`0x5deb5b`) claims our own mover: `SetActiveMover` (`0x6006e0`, sending
-    // `CMSG_SET_ACTIVE_MOVER` at `0x6007ae`). `SMSG_LOGIN_VERIFY_WORLD` and `SMSG_NEW_WORLD` purge
-    // the streamed world (`session::worldport`), so a login, a reconnect and every cross-map
-    // worldport create us afresh; a same-map teleport creates nothing. The server has seated the
-    // player by then, so nothing sent here is dropped.
-    if benilla_assets::trace::enabled() {
+    // `0x4958a0` (`0x5deb5b`) claims our own mover through `SetActiveMover` (`0x6006e0`), which
+    // sends `CMSG_SET_ACTIVE_MOVER` only when the mover changes ([`crate::net::MoverClaim`]). The
+    // world entry and the world load that purges the streamed world for every login, reconnect
+    // and cross-map worldport zero the mover first, so each of those creates sends; a same-map
+    // teleport creates nothing. The server has seated the player by then, so nothing sent here is
+    // dropped.
+    let claimed = match sc.mover.as_deref_mut() {
+        Some(mover) => mover.claim(guid, &sc.net),
+        None => sc
+            .net
+            .0
+            .send(ClientCommand::SetActiveMover { guid })
+            .is_ok(),
+    };
+    if claimed && benilla_assets::trace::enabled() {
         benilla_assets::trace::line(
             "mvr",
             &format!("SET_ACTIVE_MOVER guid={guid:#x} (self create)"),
         );
     }
-    let _ = sc.net.0.send(ClientCommand::SetActiveMover { guid });
     // The world-enter cascade (`0x5deb60` → `0x4908c0`), run by its readers.
     if let Some(cascades) = arrival.cascades.as_mut() {
         cascades.write(WorldEnterCascadeMessage);

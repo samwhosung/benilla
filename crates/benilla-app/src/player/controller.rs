@@ -331,7 +331,7 @@ pub(super) fn control(
     mut body: BodyQuery,
     // The liquid query, the transports, the parent chain from a deck collider to its transport,
     // and the active mover `0xc4da98`, as whether it is our own character.
-    world_q: (
+    mut world_q: (
         benilla_world::world_point::WorldPoint,
         TransportQuery,
         Query<&ChildOf>,
@@ -343,6 +343,8 @@ pub(super) fn control(
             Query<&Transform, (Without<Embodied>, Without<FlyCam>, Without<Camera>)>,
             Query<&crate::net::ObjectStore>,
         ),
+        // The active mover global `SetActiveMover` (`0x6006e0`) compares a claim with.
+        ResMut<crate::net::MoverClaim>,
     ),
 ) {
     let (world, transports, child_of) = (&world_q.0, &world_q.1, &world_q.2);
@@ -482,6 +484,7 @@ pub(super) fn control(
         &mut net.11,
         &mut net.8,
         &mut net.10,
+        &mut world_q.5,
         self_guid,
         transports,
         body.single()
