@@ -1,4 +1,4 @@
-use mlua::{ObjectLike, Table};
+use mlua::Table;
 
 use crate::framexml::{self, Element};
 use crate::layout::Len;
@@ -109,9 +109,11 @@ impl Loader<'_> {
         }
     }
 
-    /// One `<TitleRegion>` arm of the child loop (`0x769b2f`-`0x769ba5`): the drag handle, built
-    /// through the idempotent `CreateTitleRegion` so the element and a later Lua call name one
-    /// object (`0x769b2a` takes `0x773910`'s path).
+    /// One `<TitleRegion>` arm of the child loop (`0x769b2f`-`0x769ba5`): a new drag-handle region
+    /// for each element, the frame's from then on ([`crate::script::object::xml_title_region`]),
+    /// so an instance's element replaces its template's whole and none of the template's anchors
+    /// reach the region the frame keeps. Its layout load is `0x767800` itself (`0x81c528[2]`,
+    /// called at `0x769b8a`), which never re-enters `inherits`: the node alone.
     pub(super) fn apply_title_region(
         &mut self,
         tr: &Element,
@@ -119,15 +121,13 @@ impl Loader<'_> {
         self_name: &str,
         dbg: &str,
     ) {
-        let region: Table = match wrapper.call_method("CreateTitleRegion", ()) {
+        let region = match crate::script::object::xml_title_region(self.lua, wrapper) {
             Ok(r) => r,
             Err(e) => {
-                self.report.fault(format!("{dbg}: CreateTitleRegion: {e}"));
+                self.report.fault(format!("{dbg}: <TitleRegion>: {e}"));
                 return;
             }
         };
-        // The title region's layout load is `0x767800` itself (`0x81c528[2]`, called at
-        // `0x769b8a`), which never re-enters `inherits`: the node alone.
         self.apply_geometry(tr, &region, true, self_name, dbg);
     }
 

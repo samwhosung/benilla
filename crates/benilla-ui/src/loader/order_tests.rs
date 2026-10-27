@@ -489,3 +489,56 @@ fn an_inherits_cycle_warns_and_loads_each_template_once() {
         .eval::<bool>("return math.abs(Cycled:GetAlpha() - 0.5) < 0.01")
         .unwrap());
 }
+
+/// Each `<TitleRegion>` allocates its own region and stores it over the frame's (`0x769b3e`-
+/// `0x769b97`), so an instance's element replaces its template's whole: the frame keeps the
+/// instance's anchors and size alone, none of the template's `<Size>`. A frame with the template's
+/// element only keeps the template's.
+#[test]
+fn each_title_region_element_is_a_region_of_its_own() {
+    let mut s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="TitledTemplate" virtual="true">
+                <Size><AbsDimension x="200" y="100"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <TitleRegion>
+                    <Size><AbsDimension x="50" y="40"/></Size>
+                    <Anchors>
+                        <Anchor point="TOPLEFT"/>
+                        <Anchor point="BOTTOMRIGHT"/>
+                    </Anchors>
+                </TitleRegion>
+            </Frame>
+            <Frame name="Retitled" inherits="TitledTemplate">
+                <TitleRegion>
+                    <Anchors><Anchor point="TOP"/></Anchors>
+                </TitleRegion>
+            </Frame>
+            <Frame name="Inherited" inherits="TitledTemplate"/>
+        </Ui>"#,
+    );
+    assert_eq!(
+        s.eval::<(i64, String)>(
+            "local t = Retitled:GetTitleRegion() return t:GetNumPoints(), (t:GetPoint(1))"
+        )
+        .unwrap(),
+        (1, "TOP".to_string())
+    );
+    assert_eq!(
+        s.eval::<i64>("return Inherited:GetTitleRegion():GetNumPoints()")
+            .unwrap(),
+        2
+    );
+    s.resolve();
+    assert_eq!(
+        s.eval::<(f64, f64)>(
+            "local t = Retitled:GetTitleRegion() return t:GetWidth(), t:GetHeight()"
+        )
+        .unwrap(),
+        (0.0, 0.0),
+        "the template's <Size> stayed on the template's own region"
+    );
+    assert_eq!(s.eval::<i64>("return Retitled:GetNumRegions()").unwrap(), 0);
+}

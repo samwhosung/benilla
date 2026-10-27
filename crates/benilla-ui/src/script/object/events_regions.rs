@@ -406,6 +406,31 @@ fn strict_string_arg(v: &Value) -> Option<String> {
     }
 }
 
+/// A `<TitleRegion>` element's own region (`0x769b3e`-`0x769b97`): unlike `CreateTitleRegion`,
+/// the XML arm never reuses the frame's region. It allocates a new one, parents it to the frame
+/// and stores it at `+0xa8` over whatever was there, so a template's title region and an
+/// instance's are two objects and only the last one read is the frame's. The one displaced is
+/// left unreferenced (the reference neither frees nor relinks it), detached here so it neither
+/// hits nor lists.
+pub(crate) fn xml_title_region(lua: &Lua, this: &Table) -> mlua::Result<Table> {
+    let owner = frame_handle_of(lua, this)?;
+    let wrapper = create_region(lua, this, RegionKind::Title, None, None)?;
+    let id = decode_id(&wrapper)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    let rh = *model
+        .id_to_region
+        .get(&id)
+        .expect("the region we just created is registered");
+    let old = model
+        .arena
+        .frame_mut(owner)
+        .and_then(|f| f.title_region.replace(rh));
+    if let Some(r) = old.and_then(|old| model.arena.region_mut(old)) {
+        r.detached = true;
+    }
+    Ok(wrapper)
+}
+
 fn create_region(
     lua: &Lua,
     this: &Table,
