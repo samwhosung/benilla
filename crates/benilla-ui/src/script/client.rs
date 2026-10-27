@@ -667,4 +667,33 @@ mod tests {
         s.run("SetEuropeanNumbers(1) fs:SetText(2.5)").unwrap();
         assert_eq!(s.eval::<String>("return fs:GetText()").unwrap(), "2,5");
     }
+
+    /// `0x771d80` rewrites `|1` and `|2` (`0x7716f0`) before it stores the text, with no locale
+    /// gate and whether or not the numbers swap, for a FontString and a Button alike.
+    #[test]
+    fn set_text_rewrites_the_grammar_escapes() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            r#"
+            local f = CreateFrame("Frame", "Owner")
+            fs = f:CreateFontString("FS", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
+            btn = CreateFrame("Button", "Btn")
+            function Put(text)
+                fs:SetText(text)
+                btn:SetText(text)
+                return fs:GetText(), btn:GetText()
+            end
+        "#,
+        )
+        .unwrap();
+        let put =
+            |text: &str| -> (String, String) { s.eval(&format!("return Put({text:?})")).unwrap() };
+        let both = |text: &str| (text.to_string(), text.to_string());
+        assert_eq!(put("Bataille |2Orgrimmar"), both("Bataille d'Orgrimmar"));
+        assert_eq!(put("2|1A;B;"), both("2B"));
+        assert_eq!(put("|cFF00FF00x|r"), both("|cFF00FF00x|r"));
+        // The rewrite runs first, the separator pass on its result.
+        s.run("SetEuropeanNumbers(1)").unwrap();
+        assert_eq!(put("|2Orgrimmar 1.5"), both("d'Orgrimmar 1,5"));
+    }
 }

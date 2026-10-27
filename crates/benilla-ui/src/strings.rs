@@ -38,6 +38,223 @@ pub fn string_to_bool(s: &str) -> bool {
     keyword_bool(s.as_bytes()).unwrap_or(false)
 }
 
+/// The grammar-escape rewrite `0x7716f0` that `SetText` (`0x771d80`) runs on its text, flag set,
+/// before the separator pass and with no locale gate (`0x771d94`-`0x771d98`). It scans for a `|`
+/// that is not doubled (`||` skips its second) and is followed by a number that `SStrToInt`
+/// (`0x64ac60`) reads as 1 or 2, then rewrites every escape of that kind in the text
+/// ([`korean_particles`] for `|1`, [`french_articles`] for `|2`), and starts over on the result
+/// until neither is left. Deviation: a pass that changes nothing (`|01`, `|02`) ends the scan, where
+/// the reference loops on it for ever. Text with no `|` is returned as it came.
+pub(crate) fn expand_grammar_escapes(text: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    let mut cur = Cow::Borrowed(text);
+    while let Some(kind) = first_grammar_escape(cur.as_bytes()) {
+        let units: Vec<u16> = cur.encode_utf16().take(UNITS_CAP).collect();
+        let units = if kind == 1 {
+            korean_particles(&units)
+        } else {
+            french_articles(&units)
+        };
+        let mut next = String::from_utf16_lossy(&units);
+        // The static buffer `0xcf1cc8` holds `0xfff` bytes and the NUL (`0x771887`); keep whole
+        // characters, as [`swap_number_separators`] does.
+        if next.len() > BYTES_CAP {
+            let mut end = BYTES_CAP;
+            while !next.is_char_boundary(end) {
+                end -= 1;
+            }
+            next.truncate(end);
+        }
+        if next == *cur {
+            break;
+        }
+        cur = Cow::Owned(next);
+    }
+    cur
+}
+
+/// The conversion buffers of `0x771770` and `0x7719a0`: `0x1000` UTF-16 units with the NUL
+/// (`0x771789`, `0x7719b9`), and `0x1000` bytes with the NUL for the static result (`0x771887`).
+const UNITS_CAP: usize = 0xfff;
+const BYTES_CAP: usize = 0xfff;
+
+/// The first escape `0x7716f0` hands on: 1 for `|1` (`0x771757`), 2 for `|2` (`0x77174c`), `None`
+/// when the text has neither. The digits after a `|` are read as one wrapping 32-bit number.
+fn first_grammar_escape(b: &[u8]) -> Option<u32> {
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'|' {
+            match b.get(i + 1) {
+                Some(b'|') => i += 1,
+                Some(d) if d.is_ascii_digit() => {
+                    let n = b[i + 1..]
+                        .iter()
+                        .take_while(|c| c.is_ascii_digit())
+                        .fold(0u32, |n, c| {
+                            n.wrapping_mul(10).wrapping_add(u32::from(c - b'0'))
+                        });
+                    if n == 1 || n == 2 {
+                        return Some(n);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The `|1` pass `0x771770`: `|1first;second;` becomes one of its parts, chosen by the text built
+/// so far ([`particle_part`]). A `|` followed by anything but `1`, or by `1` and a digit, is copied
+/// with that character; a part ends at its `;` or the end, and a missing part is empty.
+fn korean_particles(units: &[u16]) -> Vec<u16> {
+    let at = |i: usize| units.get(i).copied().unwrap_or(0);
+    let end_of = |from: usize| {
+        units[from.min(units.len())..]
+            .iter()
+            .position(|&u| u == u16::from(b';'))
+            .map_or(units.len(), |k| from + k)
+    };
+    let mut out = Vec::with_capacity(units.len());
+    let mut i = 0;
+    while i < units.len() {
+        if units[i] != u16::from(b'|') {
+            out.push(units[i]);
+            i += 1;
+        } else if at(i + 1) != u16::from(b'1') || is_digit_unit(at(i + 2)) {
+            // `0x77185e`: the bar and the character after it are copied, the second never read
+            // as a bar; a bar ending the text is copied alone (the reference reads on past it).
+            out.push(units[i]);
+            out.extend(units.get(i + 1));
+            i += 2;
+        } else {
+            let first = i + 2..end_of(i + 2);
+            let second_from = (first.end + 1).min(units.len());
+            let second = second_from..end_of(second_from);
+            let part = particle_part(&out, &units[first], &units[second.clone()]);
+            out.extend_from_slice(part);
+            i = (second.end + 1).min(units.len());
+        }
+    }
+    out
+}
+
+fn is_digit_unit(u: u16) -> bool {
+    (u16::from(b'0')..=u16::from(b'9')).contains(&u)
+}
+
+/// `0x7718b0`: which part of a particle pair follows the text `before`. It walks back from the last
+/// unit and stops at the first that decides, skipping a unit below `0x100` that follows a `|`
+/// (`0x771902`). A Hangul syllable (`0xac00..=0xd7a3`) with a final consonant, `(u - 0xac00) % 28`
+/// not 0, picks the first part, one without it the second, except that a final `ㄹ`
+/// (`(u - 0xac08) % 28 == 0`) picks the second when the first part starts with `으` (`0xc73c`,
+/// `0x7718ef`). A digit picks by the byte table at `0x81c6c4` (first for 0, 1, 3, 6, 7, 8) and an
+/// ASCII letter, lower-cased, by the one at `0x81c6d0` (first for b, c, k, l, m, n, p, q). Any
+/// other unit is passed over, and with nothing decided the first part wins (`0x771930`).
+fn particle_part<'a>(before: &[u16], first: &'a [u16], second: &'a [u16]) -> &'a [u16] {
+    const DIGITS: [bool; 10] = [
+        true, true, false, true, false, false, true, true, true, false,
+    ];
+    const LETTERS: [bool; 26] = [
+        false, true, true, false, false, false, false, false, false, false, true, true, true, true,
+        false, true, true, false, false, false, false, false, false, false, false, false,
+    ];
+    for (j, &u) in before.iter().enumerate().rev() {
+        if u >= 0x100 {
+            if (0xac00..=0xd7a3).contains(&u) {
+                let with_rieul_rule =
+                    (i32::from(u) - 0xac08) % 28 == 0 && first.first() == Some(&0xc73c);
+                let final_consonant = (i32::from(u) - 0xac00) % 28 != 0;
+                return if !with_rieul_rule && final_consonant {
+                    first
+                } else {
+                    second
+                };
+            }
+            continue;
+        }
+        if j > 0 && before[j - 1] == u16::from(b'|') {
+            continue;
+        }
+        let c = u as u8;
+        let decided = match c {
+            b'0'..=b'9' => Some(DIGITS[usize::from(c - b'0')]),
+            b'a'..=b'z' | b'A'..=b'Z' => Some(LETTERS[usize::from(c.to_ascii_lowercase() - b'a')]),
+            _ => None,
+        };
+        if let Some(first_wins) = decided {
+            return if first_wins { first } else { second };
+        }
+    }
+    first
+}
+
+/// The `|2` pass `0x7719a0`: `|2` and the spaces after it turn the word that follows into its "of
+/// the" form. `L'` becomes `l'`, `Le ` `du ` and `La ` `de la `; any other word gets `d'` when it
+/// starts with a vowel ([`french_vowel`]), with `h` or `H`, or with `y` or `Y` before a vowel, else
+/// `de `. The character after the escape is then copied whatever it is (`0x771b1a`), so it is never
+/// read as a bar. As in [`korean_particles`], `|` and a character other than `2`, and `|2` and a
+/// digit, are copied as they stand. A text that ends inside an escape ends there; the reference
+/// reads on past its terminator.
+fn french_articles(units: &[u16]) -> Vec<u16> {
+    let at = |i: usize| units.get(i).copied().unwrap_or(0);
+    let ch = |c: char| c as u16;
+    let mut out = Vec::with_capacity(units.len() + 8);
+    let mut i = 0;
+    while i < units.len() {
+        if units[i] != ch('|') {
+            out.push(units[i]);
+            i += 1;
+            continue;
+        }
+        if at(i + 1) != ch('2') || is_digit_unit(at(i + 2)) {
+            out.push(units[i]);
+            out.extend(units.get(i + 1));
+            i += 2;
+            continue;
+        }
+        i += 2;
+        while at(i) == ch(' ') {
+            i += 1;
+        }
+        let (c0, c1) = (at(i), at(i + 1));
+        let words: &[char] = if c0 == ch('L') && c1 == ch('\'') {
+            i += 2;
+            &['l', '\'']
+        } else if c0 == ch('L') && c1 == ch('e') && at(i + 2) == ch(' ') {
+            i += 3;
+            &['d', 'u', ' ']
+        } else if c0 == ch('L') && c1 == ch('a') && at(i + 2) == ch(' ') {
+            i += 3;
+            &['d', 'e', ' ', 'l', 'a', ' ']
+        } else if french_vowel(c0)
+            || c0 == ch('h')
+            || c0 == ch('H')
+            || ((c0 == ch('y') || c0 == ch('Y')) && french_vowel(c1))
+        {
+            &['d', '\'']
+        } else {
+            &['d', 'e', ' ']
+        };
+        out.extend(words.iter().map(|&c| ch(c)));
+        out.extend(units.get(i));
+        i += 1;
+    }
+    out
+}
+
+/// `0x771b60`: an ASCII vowel (`AEIOUaeiou`, the jump table `0x771bf4` over `0x771bfc`) or a
+/// Latin-1 letter in `0xc0..=0xc6`, `0xc8..=0xcf`, `0xd2..=0xd6`, `0xd8..=0xdc` or the same
+/// ranges plus `0x20`.
+fn french_vowel(u: u16) -> bool {
+    matches!(
+        u8::try_from(u),
+        Ok(b'A' | b'E' | b'I' | b'O' | b'U' | b'a' | b'e' | b'i' | b'o' | b'u')
+    ) || matches!(u, 0xc0..=0xc6 | 0xc8..=0xcf | 0xd2..=0xd6 | 0xd8..=0xdc)
+        || matches!(u, 0xe0..=0xe6 | 0xe8..=0xef | 0xf2..=0xf6 | 0xf8..=0xfc)
+}
+
 /// The number-separator pass `0x771c50` that `SetText` (`0x771d80`) runs on its text while
 /// `SetEuropeanNumbers` holds `[0xcf4d24]` set (`0x771d9f`-`0x771daa`). A number is a run of ASCII
 /// digits, `.` and `,` that starts at a digit. Its `.` and `,` trade places (`0x771d16`,
@@ -771,5 +988,139 @@ mod tests {
         let out = swap_number_separators(&format!("1.5 {}", "\u{e9}".repeat(3000)));
         assert!(out.starts_with("1,5 "));
         assert!(out.len() <= 4095 && !out.contains('\u{fffd}'));
+    }
+
+    /// `0x771770` and `0x7718b0`: the part follows the sound before the escape, read off the
+    /// bytes of the Hangul test, the digit table `0x81c6c4` and the letter table `0x81c6d0`.
+    #[test]
+    fn the_korean_particle_follows_the_sound_before_it() {
+        let x = |t: &str| expand_grammar_escapes(t).into_owned();
+        // 책 (U+CC45) has a final consonant: first. 과 (U+ACFC) has none: second.
+        assert_eq!(x("\u{CC45}|1\u{C774};\u{AC00};"), "\u{CC45}\u{C774}");
+        assert_eq!(x("\u{ACFC}|1\u{C774};\u{AC00};"), "\u{ACFC}\u{AC00}");
+        // 길 (U+AE38) ends in ㄹ: the second part only when the first starts with 으.
+        assert_eq!(
+            x("\u{AE38}|1\u{C73C}\u{B85C};\u{B85C};"),
+            "\u{AE38}\u{B85C}"
+        );
+        assert_eq!(x("\u{AE38}|1\u{C774};\u{AC00};"), "\u{AE38}\u{C774}");
+        // Digits: first for 0, 1, 3, 6, 7, 8.
+        for (d, first) in [
+            ('0', true),
+            ('1', true),
+            ('2', false),
+            ('3', true),
+            ('4', false),
+        ] {
+            assert_eq!(
+                x(&format!("{d}|1A;B;")),
+                format!("{d}{}", if first { "A" } else { "B" })
+            );
+        }
+        for (d, first) in [
+            ('5', false),
+            ('6', true),
+            ('7', true),
+            ('8', true),
+            ('9', false),
+        ] {
+            assert_eq!(
+                x(&format!("{d}|1A;B;")),
+                format!("{d}{}", if first { "A" } else { "B" })
+            );
+        }
+        // Letters, either case: first for b, c, k, l, m, n, p, q.
+        assert_eq!(x("b|1A;B;"), "bA");
+        assert_eq!(x("Q|1A;B;"), "QA");
+        assert_eq!(x("a|1A;B;"), "aB");
+        assert_eq!(x("Z|1A;B;"), "ZB");
+        // Spaces and punctuation are passed over; nothing to look at: the first part.
+        assert_eq!(x("a !|1A;B;"), "a !B");
+        assert_eq!(x("|1A;B;"), "A");
+        assert_eq!(x(" |1A;B;"), " A");
+        // A unit that follows a bar is passed over: "|c" is not a `c`.
+        assert_eq!(x("b|c|1A;B;"), "b|cA");
+        // Every escape in the text, and an unfinished one: parts end at `;` or the end.
+        assert_eq!(x("1|1A;B; 2|1A;B;"), "1A 2B");
+        assert_eq!(x("1|1A"), "1A");
+        assert_eq!(x("2|1A"), "2");
+        assert_eq!(x("2|1"), "2");
+    }
+
+    /// `0x771770`: a bar and the character after it are copied together, so `||` is not a bar
+    /// before `1`; and a `1` with a digit after it is another number.
+    #[test]
+    fn the_korean_escape_leaves_what_is_not_one() {
+        for t in ["||1A;B;", "|cFF00FF00x|r", "|15 A;B;", "a|10", "100%", "|"] {
+            assert_eq!(expand_grammar_escapes(t), t, "{t:?}");
+        }
+        // The digits after the bar are one number, wrapping at 32 bits: 4294967297 reads as 1.
+        assert_eq!(
+            expand_grammar_escapes("b|4294967297A;B;"),
+            "b|4294967297A;B;"
+        );
+        // `|01` reads as 1 but is no escape; the reference loops on it for ever, here it ends.
+        assert_eq!(expand_grammar_escapes("|01A;B;"), "|01A;B;");
+    }
+
+    /// `0x7719a0`: the word after `|2` turns into its "of the" form.
+    #[test]
+    fn the_french_article_follows_the_word_after_it() {
+        let x = |t: &str| expand_grammar_escapes(t).into_owned();
+        assert_eq!(x("Bataille |2Orgrimmar"), "Bataille d'Orgrimmar");
+        assert_eq!(x("|2Hurlevent"), "d'Hurlevent");
+        assert_eq!(x("|2hache"), "d'hache");
+        assert_eq!(x("|2Yeti"), "d'Yeti");
+        assert_eq!(x("|2yeti"), "d'yeti");
+        assert_eq!(x("|2Yser"), "de Yser");
+        assert_eq!(x("|2Mulgore"), "de Mulgore");
+        // The spaces after the escape go; the vowel table has the Latin-1 letters and no other.
+        assert_eq!(x("|2   Orgrimmar"), "d'Orgrimmar");
+        assert_eq!(x("|2\u{C9}cu"), "d'\u{C9}cu");
+        assert_eq!(x("|2\u{E8}re"), "d'\u{E8}re");
+        assert_eq!(x("|2\u{D1}u"), "de \u{D1}u");
+        assert_eq!(x("|2\u{D7}"), "de \u{D7}");
+        // L' / Le / La, the last two only before a space.
+        assert_eq!(x("|2L'Arche"), "l'Arche");
+        assert_eq!(x("|2Le Fort"), "du Fort");
+        assert_eq!(x("|2La Forge"), "de la Forge");
+        assert_eq!(x("|2Lac"), "de Lac");
+        assert_eq!(x("|2Le"), "de Le");
+        assert_eq!(x("|2Lune"), "de Lune");
+        // The character after the escape is copied without a look, so a bar there is not one
+        // in that pass; the rescan from the start then takes the second `|2`.
+        assert_eq!(x("|2|2Orgrimmar"), "de d'Orgrimmar");
+        // Colour codes and a number after the `2` are left alone.
+        assert_eq!(x("|cFFFFFFFF|2Orgrimmar|r"), "|cFFFFFFFFd'Orgrimmar|r");
+        assert_eq!(x("|22 gold"), "|22 gold");
+        assert_eq!(x("||2Orgrimmar"), "||2Orgrimmar");
+        // A text that ends inside the escape ends there.
+        assert_eq!(x("a |2"), "a de ");
+    }
+
+    /// `0x7716f0` hands on to whichever escape it meets first and starts over on the result.
+    #[test]
+    fn both_escapes_in_one_text_are_rewritten() {
+        let x = |t: &str| expand_grammar_escapes(t).into_owned();
+        assert_eq!(x("|2Orgrimmar 2|1A;B;"), "d'Orgrimmar 2B");
+        assert_eq!(x("2|1A;B; |2Orgrimmar"), "2B d'Orgrimmar");
+        // A part may carry the other escape, which the next pass takes.
+        assert_eq!(x("2|1|2Orgrimmar;B;"), "2B");
+        assert_eq!(x("1|1|2Orgrimmar;B;"), "1d'Orgrimmar");
+    }
+
+    /// The rewrite goes through the `0xcf1cc8` buffer, `0xfff` bytes and the NUL.
+    #[test]
+    fn the_rewrite_stops_at_the_static_buffer() {
+        let t = format!("|2Orgrimmar{}", "ab".repeat(3000));
+        let out = expand_grammar_escapes(&t);
+        assert_eq!(out.len(), 4095);
+        assert!(out.starts_with("d'Orgrimmarab"));
+        // Text with no escape is not touched, however long.
+        let plain = "ab".repeat(3000);
+        assert!(matches!(
+            expand_grammar_escapes(&plain),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 }

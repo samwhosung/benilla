@@ -1194,9 +1194,14 @@ impl Model {
             .unwrap_or_else(|| std::rc::Rc::new(super::NoNameLists))
     }
 
-    /// The text a `SetText` stores (`0x771d80` with its expand flag): the separator pass
-    /// `0x771c50` while `SetEuropeanNumbers` holds the switch (`0x771d9f`), else the text itself.
+    /// The text a `SetText` stores (`0x771d80` with its expand flag): the grammar escapes `|1` and
+    /// `|2` rewritten (`0x7716f0`, no locale gate), then the separator pass `0x771c50` while
+    /// `SetEuropeanNumbers` holds the switch (`0x771d9f`).
     pub(crate) fn localized_text(&self, text: String) -> String {
+        let text = match crate::strings::expand_grammar_escapes(&text) {
+            std::borrow::Cow::Borrowed(_) => text,
+            std::borrow::Cow::Owned(rewritten) => rewritten,
+        };
         if self.european_numbers {
             crate::strings::swap_number_separators(&text)
         } else {

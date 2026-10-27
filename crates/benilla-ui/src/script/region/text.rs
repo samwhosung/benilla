@@ -69,7 +69,8 @@ pub(crate) fn store_text_of(lua: &Lua, this: &Table, text: Option<String>) -> ml
 /// [`store_text_of`] by handle, the tail Lua's `SetText` shares.
 fn store_text(lua: &Lua, rh: crate::widget::RegionHandle, text: Option<String>) {
     let mut model = lua.app_data_mut::<Model>().expect("model");
-    // The separator pass runs before the same-text test (`0x771d9f`, `0x771dea`).
+    // The grammar rewrite and the separator pass run before the same-text test (`0x771d98`,
+    // `0x771d9f`, `0x771dea`).
     let text = text.map(|t| model.localized_text(t));
     let data = model.region_data.entry(rh).or_default();
     let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());

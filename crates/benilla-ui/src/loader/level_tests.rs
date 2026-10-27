@@ -2184,3 +2184,26 @@ fn a_default_value_fires_the_levels_on_value_changed_at_load() {
     assert_eq!(s.eval::<String>("return Seen").unwrap(), "t2,i5,load,");
     assert_eq!(s.eval::<f64>("return BarSeen").unwrap(), 3.0);
 }
+
+/// `0x771034` calls `SetText` with its grammar flag set: a `text=` is rewritten like Lua's.
+#[test]
+fn an_xml_text_runs_the_grammar_escapes() {
+    let s = ui();
+    s.eval::<()>("LEVEL_TEST_ZONE = \"|2Orgrimmar\"").unwrap();
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <Frame name="Host">
+                <Layers><Layer>
+                    <FontString name="Literal" inherits="LevelTestFont" text="2|1A;B;"/>
+                    <FontString name="Keyed" inherits="LevelTestFont" text="LEVEL_TEST_ZONE"/>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        ),
+    );
+    let text = |expr: &str| s.eval::<Option<String>>(&format!("return {expr}")).unwrap();
+    assert_eq!(text("Literal:GetText()").as_deref(), Some("2B"));
+    assert_eq!(text("Keyed:GetText()").as_deref(), Some("d'Orgrimmar"));
+}
