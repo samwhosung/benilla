@@ -433,9 +433,8 @@ fn other_unit_inputs<'a>(
 }
 
 /// Where one unit's list is read from, as `UnitBuff 0x519500` finds it: the object its token
-/// resolves (`0x51955e`), else a roster record (`0x519595` → `0x519735`). Both paths read it: the
-/// lent host's walk as the call runs ([`AuraLive`]), and each pushed list's build
-/// ([`UnitAuraSource::list`]).
+/// resolves (`0x51955e`), else a roster record (`0x519595` → `0x519735`). The lent host's walk
+/// reads it as the call runs ([`AuraLive`]); a test reads it whole ([`UnitAuraSource::list`]).
 pub(crate) struct UnitAuraSource<'a> {
     from: AuraFrom<'a>,
     ctx: AuraReadCtx<'a>,

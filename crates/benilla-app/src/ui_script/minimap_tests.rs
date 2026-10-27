@@ -72,7 +72,7 @@ fn minimap_zoom_buttons_resync_when_switching_inside_and_outside() {
 }
 
 /// Stock `MiniMapTrackingFrame` (`Minimap.xml:109-174`) follows `GetTrackingTexture()` on
-/// `PLAYER_AURAS_CHANGED`, which the aura feed fires beside `UNIT_AURA`.
+/// `PLAYER_AURAS_CHANGED`, which the aura watcher fires beside `UNIT_AURA`.
 #[test]
 fn tracking_frame_follows_get_tracking_texture_across_player_auras_changed() {
     let _data = benilla_formats::wow_data_or_skip!();

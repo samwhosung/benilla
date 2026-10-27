@@ -1,4 +1,4 @@
-//! The stock buff bar (`BuffFrame.xml`) under a stubbed aura feed. A button's `id` is an ordinal
+//! The stock buff bar (`BuffFrame.xml`) under a stubbed buff cache. A button's `id` is an ordinal
 //! within its filter; `GetPlayerBuff` maps it to the cache position every other buff verb takes.
 
 use benilla_ui::script::{AuraState, ExtractedQuad, QuadContent, UiScript};

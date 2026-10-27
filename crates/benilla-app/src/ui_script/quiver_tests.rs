@@ -324,7 +324,7 @@ fn auto_shot_bar_drains_the_moment_an_ammo_lock_event_arrives() {
 
 // ── The Aspect Tracker ─────────────────────────────────────────────────────────────────────────
 
-/// Seat one active player buff by name and announce it the way the app's aura feed does.
+/// Seat one active player buff by name and announce it the way the app's buff cache push does.
 fn seat_a_buff(s: &mut UiScript, spell_id: u32, name: &str, icon: &str) {
     use benilla_ui::script::AuraState;
     s.set_unit_guids(&benilla_ui::script::UnitGuids {

@@ -15,10 +15,10 @@
 //! caster and sends durations for the player alone, so the stock target frame shows no timers.
 //!
 //! The unit walks read the unit's slots as the call runs, through the lent host ([`read`]); the
-//! pushed lists answer only with no host to ask. The `GetPlayerBuff` family reads no object: the
-//! cache it reads is the client's own, rebuilt at each packet that moves the aura fields
-//! (`0x4e4140` → `0x4e4170`), and its timers the expiry array the duration packet writes
-//! (`0x4e4390` into `0xbc5f68`).
+//! app pushes no unit's list, and a harness's lists answer only with no host to ask. The
+//! `GetPlayerBuff` family reads no object: the cache it reads is the client's own, rebuilt at each
+//! packet that moves the aura fields (`0x4e4140` → `0x4e4170`), and its timers the expiry array
+//! the duration packet writes (`0x4e4390` into `0xbc5f68`).
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -32,8 +32,9 @@ pub(crate) use player_buff::{expiry_of, until_cancelled_of};
 pub(crate) use read::{aura_unit, nth_kept, read_auras_of};
 pub use read::{AuraListRead, AuraRead};
 
-/// One aura on one unit, as the app's feed pushes it ([`crate::script::UiScript::set_unit_auras`],
-/// [`crate::script::UiScript::set_player_auras`]).
+/// One aura on one unit: a record of the player's buff cache as the app pushes it
+/// ([`crate::script::UiScript::set_player_auras`]), or of a harness's unit list
+/// ([`crate::script::UiScript::set_unit_auras`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuraState {
     /// `Spell.dbc` id, what `CMSG_CANCEL_AURA` names and the app's icon lookup keys on.
@@ -83,8 +84,9 @@ pub struct AuraState {
     pub vision_hidden: bool,
 }
 
-/// One unit's auras as the app pushes them ([`crate::script::UiScript::set_unit_auras`]): every
-/// live aura in ascending slot, and `UnitBuff`'s unit gate over the helpful half.
+/// One unit's auras as a harness sets them with no host to ask
+/// ([`crate::script::UiScript::set_unit_auras`]): every live aura in ascending slot, and
+/// `UnitBuff`'s unit gate over the helpful half.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnitAuraList {
     pub auras: Vec<AuraState>,

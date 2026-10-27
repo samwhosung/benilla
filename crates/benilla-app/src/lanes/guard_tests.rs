@@ -377,8 +377,10 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState"]),
-    // The no-host resolver's guids: the aura getters walk each unit live through the host, and
-    // the world entry's rebuild runs in its cascade (`0x490983`).
+    // The resolver's guids, pushed before the drain and read with the host lent too: the
+    // mouseover, the group rows past a token's own, the pet records and every row of the field
+    // events' fan-out, which the `UNIT_HAPPINESS` gate reads. The aura getters walk each unit
+    // live, and the world entry's rebuild runs in its cascade (`0x490983`).
     ("::ui_aura::feed_unit_guids", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
     // The pet book's sorts, which each pet spell list counts and the derivation follows
@@ -593,7 +595,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The area under the player, which the host's raid rows read for our own zone (`0xb4e314`).
     "::CurrentArea",
     // The interface clock's pair as the last tick left it, which the call host's buff timers
-    // map each duration stamp through (`0x4e4450`); only the tick's copy writes it.
+    // map each duration stamp through (`0x4e4450`); only the tick's copy and a new VM's seed
+    // write it.
     "::ui_script::HostClock",
     // The duration packet's stamps (`0x4e4390`), which the call host's buff timers read at the
     // call (`0x4e4450`); a hosted handler reads them, the packet's handler writes them.

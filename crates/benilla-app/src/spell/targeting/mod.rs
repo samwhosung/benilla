@@ -851,9 +851,10 @@ mod tests {
         );
     }
 
-    /// What the aura feed pushes each frame for the units this world holds, us and the selection:
-    /// the resolver's inputs, and the object manager's index of them. `SpellCanTargetUnit`
-    /// resolves its token through the inputs, and the feed asks the verdict of each unit they list.
+    /// What the resolver feed pushes each frame for the units this world holds, us and the
+    /// selection: the resolver's inputs, and the object manager's index of them.
+    /// `SpellCanTargetUnit` resolves its token through the inputs, and the feed asks the verdict of
+    /// each unit they list.
     fn publish_guids(world: &mut World) {
         let me = world
             .query_filtered::<Entity, With<SelfPlayer>>()
@@ -1109,7 +1110,7 @@ mod tests {
             let mut index = world.resource_mut::<crate::net::GuidIndex>();
             index.0.insert(PET, pet);
             arm(&mut world, HEAL, 0x0002);
-            // The index of us and the ally, then the aura feed's inputs with the chain's units:
+            // The index of us and the ally, then the resolver feed's inputs with the chain's units:
             // each held unit and the target it names.
             publish_guids(&mut world);
             world.non_send_resource_mut::<UiScript>().set_unit_guids(

@@ -1381,7 +1381,7 @@ mod tests {
     const BOB: u64 = 0x20;
 
     /// A VM with the active player seated: its snapshot under `"player"` and its guid among the
-    /// resolver's inputs, as the unit feed and the aura feed seat them.
+    /// resolver's inputs, as the unit feed and the resolver feed seat them.
     fn seated() -> UiScript {
         let mut s = UiScript::new().unwrap();
         s.set_unit(

@@ -1631,8 +1631,8 @@ fn feed_units(
                 gate.audit("feed_units", "the world-enter events");
                 // `"player"` names us when the cascade runs, from our own create: the stock windows
                 // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated
-                // ahead of the aura feed's full resolver push, which this feed is not ordered
-                // against.
+                // ahead of the resolver feed's full push (`feed_unit_guids`), which this feed is
+                // not ordered against.
                 script.seat_player_guid(me.0);
                 // The arrival's ghost state (`0x5deb2a` → `0x5de9c0`) runs ahead of its cascade
                 // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
@@ -2527,7 +2527,7 @@ mod tests {
         }
     }
 
-    /// The range verbs end to end, with the aura feed that pushes the resolver's inputs and the
+    /// The range verbs end to end, with the resolver feed that pushes its inputs and the
     /// host that measures the unit each names at the call: `CheckInteractDistance` and `CanInspect`
     /// answer for a `target` chain (`0x48ba00` and `0x48a1b0` resolve their token through
     /// `0x515970`), on the unit the chain names and not on the base.
@@ -3067,7 +3067,7 @@ mod tests {
                 guid: Some(target.guid),
                 ..Default::default()
             });
-            // The resolver's inputs the aura feed would push: us and the target, both held.
+            // The resolver's inputs its feed would push: us and the target, both held.
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
                 .set_unit_guids(&benilla_ui::script::UnitGuids {

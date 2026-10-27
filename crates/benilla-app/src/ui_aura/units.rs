@@ -1,7 +1,8 @@
 //! The unit-token resolver's inputs (`0x515970`, [`UnitGuids`]) as the VM holds them: the guid
 //! globals, the group tables, and each held unit a `target` chain can reach. The aura getters
-//! resolve a token through them with no host to ask, and read the unit's slots at the call
-//! ([`super::AuraLive`]); the app's readers of the held units (the targeting feed's hover verdict)
+//! resolve a token through them and read the unit's slots at the call ([`super::AuraLive`]); the
+//! host's own lookups read them too (the mouseover, the group rows, the pet records, the field
+//! events' fan-out), and the app's readers of the held units (the targeting feed's hover verdict)
 //! walk them.
 
 use benilla_ui::script::{UiScript, UnitGuids};

@@ -1340,7 +1340,7 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
     "#,
     )
     .unwrap();
-    // The resolver's inputs, as the aura feed pushes them every frame.
+    // The resolver's inputs, as the resolver feed pushes them every frame.
     s.set_unit_guids(&UnitGuids {
         player: ME,
         target: GUARD,
