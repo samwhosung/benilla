@@ -943,6 +943,29 @@ fn a_replaced_sessions_close_keeps_the_next_copiers_end() {
     assert_eq!(seen(&mut l), "LOOT_OPENED");
 }
 
+/// A row another member takes before its item record answers stops the window waiting: the
+/// window opens on the rows left, where 1.12.1's count stays above 0 and the corpse never opens
+/// (`ClearLootRow 0x4c1f00` lowers nothing), a deviation `records_pending` records.
+#[test]
+fn a_row_cleared_while_its_record_is_pending_does_not_hold_the_window_shut() {
+    const UNCACHED: u32 = 40_000;
+    let mut l = client();
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN), row(1, UNCACHED)]);
+    assert_eq!(seen(&mut l), "", "the copier waits on the record");
+    packets(&mut l, vec![SessionEvent::LootRemoved { slot: 1 }]);
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:2");
+    let world = l.app.world_mut();
+    world
+        .resource_mut::<Items>()
+        .insert_template(UNCACHED, Some(crate::items::test_template("Silk Cloth")));
+    world.resource_scope(|world, mut loot: Mut<LootState>| {
+        loot.row_answered(world.resource::<Items>())
+    });
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_OPENED");
+}
+
 /// An inventory failure ends by signalling `LOOT_OPENED` again while a window is open
 /// (`0xb71b48`) and the auto-loot byte is set (`0x5e3aff`-`0x5e3b20`): a window whose copier
 /// waits on a row's record keeps the byte its interaction stored (`0x4c1ea6`, before the sweep's

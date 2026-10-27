@@ -655,7 +655,11 @@ impl LootState {
 
     /// `0xb71b44` above 0: a row's item record is still being fetched, counted from the copier
     /// (`0x4c1e77`) until its callback (`0x4c2ac0`); a negative answer releases the row, as
-    /// [`templates_outstanding`] has it.
+    /// [`templates_outstanding`] has it. Deviation: a row cleared meanwhile stops counting, where
+    /// `ClearLootRow` (`0x4c1f00`) cancels its callback (`0x4c1f52`) and never lowers the count
+    /// (its writers are `0x4c1def`, `0x4c1e94` and `0x4c2af6` alone), so in 1.12.1 a group
+    /// member's take of an uncached item before the answer leaves that corpse's window shut until
+    /// the next loot response resets the count (`0x4c1def`), and ours opens.
     fn records_pending(&self, items: &Items) -> bool {
         let w = &self.window;
         w.items.iter().any(|it| {
