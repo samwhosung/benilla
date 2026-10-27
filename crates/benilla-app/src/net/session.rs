@@ -48,7 +48,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::KnockBack, on_mover_edge)
         .net_handler(K::ClientControl, on_client_control)
         .net_handler(K::Worldport, on_worldport)
-        .net_handler(K::TransferPending, on_transfer)
+        .net_handler(K::TransferPending, on_transfer_pending)
         .net_handler(K::TransferAborted, on_transfer)
         .net_handler(K::TimeSpeed, on_clock)
         .net_handler(K::GameSpeedSet, on_clock)
@@ -418,15 +418,27 @@ fn on_worldport(
     }
 }
 
+/// The handler `0x401900` reaches `0x495920` on both of its arms (`0x40194c`), ahead of the
+/// loading screen: the cursor's payload and the cast are dropped.
+fn on_transfer_pending(
+    In(ev): In<SessionEvent>,
+    mut e: Edges,
+    mut vm: crate::script_calls::VmWith<crate::spell::SelfCancel<'static>>,
+) {
+    if let SessionEvent::TransferPending {
+        map_id,
+        transport_entry,
+        from_map,
+    } = ev
+    {
+        crate::spell::drop_hold(&mut vm, |mut cancel| cancel.abort_cast());
+        transfer_pending(map_id, transport_entry, from_map, &mut e.transfer);
+    }
+}
+
 fn on_transfer(In(ev): In<SessionEvent>, mut e: Edges) {
-    match ev {
-        SessionEvent::TransferPending {
-            map_id,
-            transport_entry,
-            from_map,
-        } => transfer_pending(map_id, transport_entry, from_map, &mut e.transfer),
-        SessionEvent::TransferAborted { reason } => transfer_aborted(reason, &mut e.transfer),
-        _ => {}
+    if let SessionEvent::TransferAborted { reason } = ev {
+        transfer_aborted(reason, &mut e.transfer);
     }
 }
 

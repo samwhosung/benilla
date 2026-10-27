@@ -126,3 +126,19 @@ fn losing_control_drops_the_cursor_and_the_cast_in_its_packet() {
         "a new fall"
     );
 }
+
+/// Both arms of `SMSG_TRANSFER_PENDING`'s handler reach `0x495920` (`0x40194c`).
+#[test]
+fn a_transfer_pending_drops_the_cursor_and_the_cast() {
+    for transport_entry in [None, Some(176_080)] {
+        let mut c = client();
+        let pending = SessionEvent::TransferPending {
+            map_id: 36,
+            transport_entry,
+            from_map: None,
+        };
+        crate::net::handlers::dispatch(c.world(), crate::net::wire([pending]));
+        assert_eq!(c.seen(), ["CURSOR_UPDATE 0"], "{transport_entry:?}");
+        assert_eq!(c.sent(), [format!("CancelCast {{ spell_id: {FIREBALL} }}")]);
+    }
+}
