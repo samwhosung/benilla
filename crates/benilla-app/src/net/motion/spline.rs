@@ -11,8 +11,8 @@ use bevy::prelude::*;
 use crate::entities::CollisionHeight;
 use crate::player::swim_enter_depth;
 
-use super::super::{GuidIndex, NetEntity, ObjectStore};
-use super::facing::{heading_between, resolve_facing};
+use super::super::{ActiveMover, GuidIndex, NetEntity, ObjectStore};
+use super::facing::{heading_between, resolve_facing, smoothed};
 use super::DisplayFacing;
 
 /// A server-dictated path (`SMSG_MONSTER_MOVE`) in raw WoW coordinates, walked at constant speed
@@ -329,6 +329,9 @@ pub(in crate::net) fn sample_splines(
         Option<&super::super::Guid>,
         // A deck path's destination; `transport::compose_riders` carries it to the world later.
         Option<&mut crate::transport::TransportRider>,
+        // Who turns to the end's facing through the display smoother.
+        Option<&NetEntity>,
+        Has<ActiveMover>,
     )>,
     // A `Target` facing's unit when it is not on a path itself.
     standing: Query<&Transform, Without<Spline>>,
@@ -345,7 +348,7 @@ pub(in crate::net) fn sample_splines(
     }
     // The paths that ended facing a unit, resolved once every path has moved this frame.
     let mut facing_targets: Vec<(Entity, u64, [f32; 3])> = Vec::new();
-    for (entity, spline, mut t, swimming, guid, rider) in &mut q {
+    for (entity, spline, mut t, swimming, guid, rider, net, mover) in &mut q {
         let (wow_pos, facing, pitch) = spline.sample(now);
         // A deck path's sample is the rider's transport-local pose, composed later this frame.
         if let Some(deck) = spline.deck {
@@ -408,8 +411,13 @@ pub(in crate::net) fn sample_splines(
                 MonsterMoveFacing::Target(g) => facing_targets.push((entity, g, wow_pos)),
                 other => {
                     if let Some(f) = resolve_facing(other, wow_pos, |_| None) {
-                        t.rotation = Quat::from_rotation_y(f);
-                        commands.entity(entity).remove::<DisplayFacing>();
+                        rest_facing(
+                            &mut commands,
+                            entity,
+                            &mut t,
+                            smoothed(net.map(|n| n.kind), mover),
+                            f,
+                        );
                     }
                 }
             }
@@ -434,10 +442,22 @@ pub(in crate::net) fn sample_splines(
         let Some(f) = resolve_facing(MonsterMoveFacing::Target(guid), at, |_| target) else {
             continue;
         };
-        if let Ok((_, _, mut t, ..)) = q.get_mut(entity) {
-            t.rotation = Quat::from_rotation_y(f);
-            commands.entity(entity).remove::<DisplayFacing>();
+        if let Ok((_, _, mut t, _, _, _, net, mover)) = q.get_mut(entity) {
+            let smooth = smoothed(net.map(|n| n.kind), mover);
+            rest_facing(&mut commands, entity, &mut t, smooth, f);
         }
+    }
+}
+
+/// A finished path's raw facing `f`. A smoothed unit takes it as the goal its display facing
+/// turns to over the next frames (`0x600cd0`), from where the path left it: the display is never
+/// reset on a move (`0x601020` runs only at create and reactivate, `0x5fbaa8`, `0x5fbd81`). Its
+/// ring starts empty, as no state is kept while a path drives the unit. Anything else shows it.
+fn rest_facing(commands: &mut Commands, e: Entity, t: &mut Mut<Transform>, smooth: bool, f: f32) {
+    if smooth {
+        commands.entity(e).insert(DisplayFacing::seeded(f));
+    } else {
+        t.rotation = Quat::from_rotation_y(f);
     }
 }
 
@@ -2158,6 +2178,41 @@ mod final_facing_tests {
 
     fn walk(facing: MonsterMoveFacing) -> Spline {
         monster_move_spline(along_x(), 1, false, 10_000, false, true, facing, None).expect("a walk")
+    }
+
+    /// A smoothed unit is not snapped at the end: the path leaves it on its tangent (0) and the
+    /// display smoother turns it to the final facing, half the gap on the first pump (`0x600cd0`).
+    /// A body the smoother does not govern (here: no `NetEntity`) shows the facing at once.
+    #[test]
+    fn a_unit_turns_to_its_final_facing_through_the_smoother() {
+        use crate::net::ObjectStore;
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<GuidIndex>()
+            .add_systems(
+                Update,
+                (sample_splines, super::super::facing::drive_display_facing).chain(),
+            );
+        let e = app
+            .world_mut()
+            .spawn((
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                ObjectStore::default(),
+                Transform::default(),
+                ended(walk(MonsterMoveFacing::Angle(FRAC_PI_2))),
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get::<Spline>(e).is_none(), "the path is over");
+        assert_yaw(&app, e, FRAC_PI_2 / 2.0);
+        for _ in 0..16 {
+            app.update();
+        }
+        assert_yaw(&app, e, FRAC_PI_2);
     }
 
     /// An evade's home path ends in `Angle(π)`: the unit rests facing π, not along its last leg

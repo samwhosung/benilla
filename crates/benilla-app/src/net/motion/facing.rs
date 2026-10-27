@@ -48,6 +48,23 @@ pub(crate) struct DisplayFacing {
     hist: [f32; 4],
 }
 
+impl DisplayFacing {
+    /// A unit's state with the raw facing `wire` and an empty ring, which the next pump turns the
+    /// display toward from wherever it stands.
+    pub(in crate::net) fn seeded(wire: f32) -> Self {
+        Self {
+            wire,
+            hist: [0.0; 4],
+        }
+    }
+}
+
+/// Whether [`drive_display_facing`] turns this body's display facing: a unit, not the body we
+/// steer. Anything else shows its raw facing at once, as the active mover's does (`0x600d03`).
+pub(in crate::net) fn smoothed(kind: Option<EntityKind>, active_mover: bool) -> bool {
+    kind == Some(EntityKind::Unit) && !active_mover
+}
+
 /// The signed yaw the facing pump applied this frame (positive turns left), the client's
 /// `0x607ed0` shuffle latch input; removed the frame the body stops moving.
 #[derive(Component)]
