@@ -540,23 +540,33 @@ impl Loader<'_> {
     pub(super) fn expand(&mut self, el: &Element) -> Element {
         let model = self.model();
         let templates = model.framexml_templates.borrow();
-        // A font object in an inherit chain is skipped, not warned as an unknown template.
-        let is_font = |name: &str| model.fonts.id(name).is_some();
         let mut warns = Vec::new();
-        let out = framexml::expand_known(el, &*templates, &is_font, &mut warns);
+        let out = framexml::expand(el, &*templates, &mut warns);
         drop(templates);
         drop(model);
         self.report.warnings.extend(warns);
         out
     }
 
-    /// The nodes `raw`'s `LoadXML` reads ([`Levels`]).
-    pub(super) fn levels<'a>(&self, raw: &'a Element) -> Levels<'a> {
-        let inherited = self
-            .model()
-            .framexml_templates
-            .borrow()
-            .inherited_levels(raw);
+    /// The nodes `raw`'s `LoadXML` reads ([`Levels`]), a frame's or a texture's. The walk stops at
+    /// an `inherits` the registry lacks, which the level naming it logs before anything else at
+    /// severity 1, `Couldn't find inherited node: %s` (`0x8786a8`; a frame `0x769861`, a texture
+    /// `0x76fe60`).
+    pub(super) fn levels<'a>(&mut self, raw: &'a Element) -> Levels<'a> {
+        let (inherited, missed) = {
+            let model = self.model();
+            let templates = model.framexml_templates.borrow();
+            let inherited = templates.inherited_levels(raw);
+            let first = inherited.first().map_or(raw, |t| &**t);
+            let missed = first
+                .attr("inherits")
+                .filter(|n| !n.is_empty() && !templates.contains(n))
+                .map(str::to_string);
+            (inherited, missed)
+        };
+        if let Some(name) = missed {
+            self.status_warning(format!("Couldn't find inherited node: {name}"));
+        }
         Levels {
             inherited,
             own: raw,
@@ -746,9 +756,7 @@ impl Loader<'_> {
         //     miss logs `"Unknown frame type: %s"` (`0x871124`, at `0x6ee356`), builds nothing for
         //     the node and goes on to the next sibling. Only the Lua door raises.
         if crate::script::object::registered_frame_kind(self.lua(), &el.tag).is_none() {
-            self.report
-                .warnings
-                .push(format!("Unknown frame type: {}", el.tag));
+            self.status_warning(format!("Unknown frame type: {}", el.tag));
             return None;
         }
 
@@ -769,10 +777,8 @@ impl Loader<'_> {
                         .is_ok_and(|id| self.model().id_to_frame.contains_key(&id))
                 });
                 if hit.is_none() {
-                    // The reference's wording (`0x8710f0`).
-                    self.report
-                        .warnings
-                        .push(format!("Couldn't find frame parent: {name}"));
+                    // `0x8710f0` at severity 1 (`0x6ee3fa`).
+                    self.status_warning(format!("Couldn't find frame parent: {name}"));
                 }
                 hit
             });

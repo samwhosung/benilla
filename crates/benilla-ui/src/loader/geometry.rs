@@ -20,16 +20,15 @@ impl Loader<'_> {
         if el.attr_bool("hidden") {
             self.call(wrapper, "Hide", (), dbg);
         }
-        // An unknown `frameStrata=` is logged (`0x7699a4`) and skipped, not raised as the Lua
-        // binding would (`0x774360`): `SetFrameStrata` runs only on a hit (`0x769971`), so the
-        // frame keeps the strata it had.
+        // An unknown `frameStrata=` is logged at severity 1, the name or `<unnamed>` (`0x878658`,
+        // `0x76999c`), and skipped, not raised as the Lua binding would (`0x774360`):
+        // `SetFrameStrata` runs only on a hit (`0x769971`), so the frame keeps the strata it had.
         if let Some(strata) = el.attr("frameStrata") {
             if crate::script::object::strata_from_str(strata).is_some() {
                 self.call(wrapper, "SetFrameStrata", strata.to_string(), dbg);
             } else {
-                self.report
-                    .warnings
-                    .push(format!("{dbg}: Unknown frame strata: {strata}"));
+                let name = self.object_name(wrapper);
+                self.status_warning(format!("Frame {name}: Unknown frame strata: {strata}"));
             }
         }
         // `frameLevel=` per level, read with `SStrToInt` (`0x7699c5`): above 0 it is set (`0x76a4f0`,

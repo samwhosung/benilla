@@ -1624,7 +1624,7 @@ fn both_reference_action_button_templates_are_inheritable() {
         !report
             .warnings
             .iter()
-            .any(|w| w.contains("unknown template")),
+            .any(|w| w.contains("Couldn't find inherited node")),
         "both names must resolve: {:?}",
         report.warnings
     );

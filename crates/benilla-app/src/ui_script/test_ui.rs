@@ -187,7 +187,7 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
         let missing: Vec<&String> = report
             .warnings
             .iter()
-            .filter(|w| w.contains("unknown template"))
+            .filter(|w| w.contains("Couldn't find inherited node"))
             .collect();
         assert!(
             missing.is_empty(),

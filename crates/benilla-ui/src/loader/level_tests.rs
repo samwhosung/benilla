@@ -2069,3 +2069,57 @@ fn every_rel_reader_keeps_its_layout_length() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The frame load faults go to the load status at severity 1, in the reference's words: an
+/// `inherits` miss at any level (`0x769861`, a texture's `0x76fe60`, `0x8786a8`), an unknown type
+/// (`0x6ee35f`, `0x871124`), a missing `parent=` (`0x6ee3fa`, `0x8710f0`), an unknown strata
+/// naming the frame (`0x76999c`, `0x878658`), and a stray child of `<Layers>` or a `<Layer>`
+/// (`0x769de6`, `0x769eb6`, `0x8786e0`).
+#[test]
+fn frame_load_faults_reach_the_load_status() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="MidLevel" virtual="true" inherits="NoSuchRoot"/>
+            <Frame name="MissesOwn" inherits="NoSuchTemplate"/>
+            <Frame name="MissesDeep" inherits="MidLevel"/>
+            <Bogus name="NotAFrame"/>
+            <Frame name="Orphan" parent="NoSuchParent"/>
+            <Frame name="Strata" frameStrata="BACKGROUND "/>
+            <Frame frameStrata="NOPE"/>
+            <Frame name="Strays">
+                <Layers>
+                    <Layer><Texture name="StrayTex" inherits="NoSuchTexture"/><Bad/></Layer>
+                    <Junk/>
+                </Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    for line in [
+        "Couldn't find inherited node: NoSuchTemplate",
+        "Couldn't find inherited node: NoSuchRoot",
+        "Unknown frame type: Bogus",
+        "Couldn't find frame parent: NoSuchParent",
+        "Frame Strata: Unknown frame strata: BACKGROUND ",
+        "Frame <unnamed>: Unknown frame strata: NOPE",
+        "Couldn't find inherited node: NoSuchTexture",
+        "Frame Strays: Unknown child node in Layer element: Bad",
+        "Frame Strays: Unknown child node in Layers element: Junk",
+    ] {
+        assert!(
+            has_line(&report, line),
+            "{line}: {:?}",
+            report.status.lines()
+        );
+    }
+    assert_eq!(
+        report.status.lines().len(),
+        9,
+        "{:?}",
+        report.status.lines()
+    );
+    assert!(s
+        .eval::<bool>("return MissesDeep ~= nil and StrayTex ~= nil")
+        .unwrap());
+}

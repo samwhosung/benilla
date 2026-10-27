@@ -18,7 +18,10 @@ pub(super) enum FontAttrs {
 }
 
 impl Loader<'_> {
-    /// One `<Layers>` (`0x769d70`): each `<Texture>` and `<FontString>`, created on its layer.
+    /// One `<Layers>` (`0x769d70`): each `<Texture>` and `<FontString>`, created on its layer. Any
+    /// other child of `<Layers>` (`0x769da9`-`0x769de6`) or of a `<Layer>` (`0x769e7b`-`0x769eb6`)
+    /// logs `Frame %s: Unknown child node in %s element: %s` (`0x8786e0`) at severity 1, the
+    /// frame's name or `<unnamed>`, the parent's tag and the child's as spelled.
     pub(super) fn apply_layers(
         &mut self,
         layers: &Element,
@@ -26,21 +29,28 @@ impl Loader<'_> {
         parent_name: &str,
         dbg: &str,
     ) {
-        for layer in children_named(layers, "Layer") {
+        for layer in &layers.children {
+            if !layer.tag.eq_ignore_ascii_case("Layer") {
+                self.unknown_child_node(wrapper, &layers.tag, &layer.tag);
+                continue;
+            }
             let level = layer.attr("level").unwrap_or("ARTWORK").to_string();
             for region in &layer.children {
                 let is_texture = region.tag.eq_ignore_ascii_case("Texture");
                 let is_fontstring = region.tag.eq_ignore_ascii_case("FontString");
                 if !is_texture && !is_fontstring {
-                    self.report.warnings.push(format!(
-                        "{dbg}: <Layer> child <{}> is not a Texture/FontString; skipped",
-                        region.tag
-                    ));
+                    self.unknown_child_node(wrapper, &layer.tag, &region.tag);
                     continue;
                 }
                 self.build_region(region, wrapper, parent_name, &level, is_texture, dbg);
             }
         }
+    }
+
+    fn unknown_child_node(&mut self, wrapper: &Table, parent_tag: &str, tag: &str) {
+        let name = self.object_name(wrapper);
+        let line = format!("Frame {name}: Unknown child node in {parent_tag} element: {tag}");
+        self.status_warning(line);
     }
 
     /// The texture a widget element's child (`<BarTexture>`, `<ThumbTexture>`, a ColorSelect

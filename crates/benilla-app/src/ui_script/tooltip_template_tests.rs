@@ -93,7 +93,7 @@ fn an_addon_tooltip_from_the_template_names_its_lines_after_the_caller() {
         !report
             .warnings
             .iter()
-            .any(|w| w.contains("unknown template")),
+            .any(|w| w.contains("Couldn't find inherited node")),
         "the template resolves: {:?}",
         report.warnings
     );

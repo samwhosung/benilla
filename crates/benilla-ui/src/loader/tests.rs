@@ -629,6 +629,22 @@ mod loader_tests {
         assert_eq!(s.eval::<String>("return Order").unwrap(), "file,body");
     }
 
+    /// An inline `<Script>` body runs with no status (`0x704cd1` passes 0), so its compile or run
+    /// error reaches only the Lua error handler, never the load status FrameXML.log prints.
+    #[test]
+    fn an_inline_script_error_writes_no_load_status_line() {
+        let s = UiScript::new().unwrap();
+        let doc =
+            parse(r#"<Ui><Script>error("inline boom")</Script><Script>if then</Script></Ui>"#);
+        let report = load(&s, &doc, &no_files);
+        assert_eq!(report.errors.len(), 2, "{:?}", report.errors);
+        assert!(
+            report.status.lines().is_empty(),
+            "{:?}",
+            report.status.lines()
+        );
+    }
+
     #[test]
     fn include_resolves_through_provider() {
         let s = UiScript::new().unwrap();

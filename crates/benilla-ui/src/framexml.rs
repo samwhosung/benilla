@@ -476,25 +476,13 @@ pub fn expand(
     templates: &dyn Inheritable,
     warnings: &mut Vec<String>,
 ) -> Element {
-    expand_known(element, templates, &|_| false, warnings)
-}
-
-/// [`expand`], skipping without a warning an `inherits` that `is_font` claims: a
-/// `<FontString inherits="GameFontNormalSmall">` takes a font, applied later, not a template.
-pub fn expand_known(
-    element: &Element,
-    templates: &dyn Inheritable,
-    is_font: &dyn Fn(&str) -> bool,
-    warnings: &mut Vec<String>,
-) -> Element {
     let mut active = HashSet::new();
-    expand_inner(element, templates, is_font, warnings, &mut active)
+    expand_inner(element, templates, warnings, &mut active)
 }
 
 fn expand_inner(
     element: &Element,
     templates: &dyn Inheritable,
-    is_font: &dyn Fn(&str) -> bool,
     warnings: &mut Vec<String>,
     active: &mut HashSet<String>,
 ) -> Element {
@@ -514,17 +502,12 @@ fn expand_inner(
             ));
             continue;
         }
+        // A miss is the loader's to log, level by level ([`Templates::inherited_levels`]).
         let Some(template) = templates.find(name) else {
-            // A font object is not an unknown template; it is applied after this.
-            if !is_font(name) {
-                warnings.push(format!(
-                    "unknown template '{name}' referenced by inherits; skipping"
-                ));
-            }
             active.remove(name);
             continue;
         };
-        let expanded_template = expand_inner(template, templates, is_font, warnings, active);
+        let expanded_template = expand_inner(template, templates, warnings, active);
         active.remove(name);
         base = Some(match base {
             None => expanded_template,
@@ -859,11 +842,9 @@ print(x)</Script>
         let mut warnings = Vec::new();
         let expanded = expand(inst, &templates, &mut warnings);
 
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(
-            warnings[0].contains("A, B"),
-            "the warning must name the literal it looked up: {warnings:?}"
-        );
+        // The miss is the loader's to log, by the literal it looked up.
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(templates.find("A, B").is_none());
 
         // The element loads with its own content only.
         assert_eq!(expanded.attr("alpha"), Some("1.0"));
@@ -879,7 +860,7 @@ print(x)</Script>
         };
         let mut w2 = Vec::new();
         let expanded = expand(padded, &templates, &mut w2);
-        assert_eq!(w2.len(), 1, "{w2:?}");
+        assert!(w2.is_empty(), "{w2:?}");
         assert!(
             expanded.children.is_empty(),
             "picked up A despite the spaces"
