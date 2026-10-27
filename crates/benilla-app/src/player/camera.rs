@@ -160,6 +160,15 @@ impl LookConfig {
     pub(super) fn pitch_rate(self) -> f32 {
         self.pitch_speed * LOOK_PITCH_PER_SPEED * self.sensitivity
     }
+
+    /// The camera travel `motion` charges an armed click (`0x514400`), per axis: the rotation it
+    /// asks for, before the pitch clamp.
+    pub(crate) fn click_travel(self, motion: Vec2) -> (f32, f32) {
+        (
+            (motion.x * self.yaw_rate()).abs(),
+            (motion.y * self.pitch_rate()).abs(),
+        )
+    }
 }
 /// `cameraYawSmoothSpeed`, default 180°/s (`[0xbe1070]`, read at `0x512d75`): a duration divisor,
 /// as a return lasts `|Δyaw| / rate × factor`. The AUTO_FOLLOW_SPEED slider, greyed under Never.
@@ -969,7 +978,8 @@ pub(super) fn run_look_session(
     // clamp: the reference accumulates raw motion, so a drag pinned at the pitch limit still spends
     // budget.
     let (yaw_rate, pitch_rate) = (look_cfg.yaw_rate(), look_cfg.pitch_rate());
-    arm.add_travel((motion.x * yaw_rate).abs(), (motion.y * pitch_rate).abs());
+    let (yaw, pitch) = look_cfg.click_travel(motion);
+    arm.add_travel(yaw, pitch);
 
     // `ToggleMouseMove` (`0x50f910`), each call against the camera's mouselook bit as it stands:
     // set, it leaves through `0x50f940(0)`, which also clears the sticky bit (`0x50f95d`); clear,

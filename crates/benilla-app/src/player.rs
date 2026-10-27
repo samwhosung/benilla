@@ -95,7 +95,7 @@ use controller::control;
 pub(crate) use controller::LookSample;
 // The private camera and `state` items are re-imported for the modules beside this one, which
 // name them `super::X`.
-pub(crate) use camera::{head_height, CameraControl, CameraPivot, PressGesture};
+pub(crate) use camera::{head_height, CameraControl, CameraPivot, LookConfig, PressGesture};
 use camera::{model_pivot_height, run_look_session, FlyCam, LookButton};
 use camera_zoom::{apply_zoom_scroll, CAM_DIST_DEFAULT};
 // `/follow`: chat sends the request, `crate::target` resolves the subject into the state, and

@@ -118,9 +118,13 @@ fn apply(world: &mut World, calls: Vec<ClickCall>, at: Option<Vec2>) -> bool {
             ClickCall::Disarm => world.resource_mut::<ClickArm>().disarm(),
             ClickCall::Release => {
                 let armed = world.resource_mut::<ClickArm>().armed.take();
-                let Some((mode, gesture)) = armed else {
+                let Some((mode, mut gesture)) = armed else {
                     continue;
                 };
+                // The frame's motion, which reaches the look session only after the records: the
+                // reference's motion messages reach `0x514400` ahead of the release's test.
+                let (yaw, pitch) = release_frame_travel(world);
+                gesture.add_travel(yaw, pitch);
                 if covering || !gesture.is_click(now) {
                     continue;
                 }
@@ -138,6 +142,25 @@ fn apply(world: &mut World, calls: Vec<ClickCall>, at: Option<Vec2>) -> bool {
         }
     }
     due
+}
+
+/// The camera travel the frame's mouse motion charges a click, as the look session charges it: none
+/// while the window lacks the focus, whose motion is the pointer travelling in another app.
+fn release_frame_travel(world: &mut World) -> (f32, f32) {
+    let focused = world
+        .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+        .single(world)
+        .is_ok_and(|w| w.focused);
+    let (Some(motion), Some(look)) = (
+        world.get_resource::<bevy::input::mouse::AccumulatedMouseMotion>(),
+        world.get_resource::<crate::player::LookConfig>(),
+    ) else {
+        return (0.0, 0.0);
+    };
+    if !focused {
+        return (0.0, 0.0);
+    }
+    look.click_travel(motion.delta)
 }
 
 /// Whether the world frame took a press: one no frame took, or any while a look session holds the

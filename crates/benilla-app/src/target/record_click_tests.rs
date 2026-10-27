@@ -421,3 +421,25 @@ fn a_ground_click_casts_at_the_press_point() {
     );
     assert!(!targeting(&app), "the cast ended the cursor");
 }
+
+/// A press held past the free window whose drag's last motion came in the release's own frame is
+/// a drag, not a click (`0x514ae0`): the release's test counts the frame's travel, as the motion
+/// reaches `0x514400` ahead of it.
+#[test]
+fn a_drag_whose_last_motion_is_in_the_release_frame_clicks_nothing() {
+    let mut app = client("CAMERAORSELECTORMOVE");
+    aim(&mut app);
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_millis(300),
+    ));
+    move_to(&mut app, ON_MOB);
+    button(&mut app, ButtonState::Pressed);
+    app.update();
+    app.world_mut()
+        .write_message(bevy::input::mouse::MouseMotion {
+            delta: Vec2::new(200.0, 0.0),
+        });
+    button(&mut app, ButtonState::Released);
+    app.update();
+    assert_eq!(target(&app), None, "the drag selected nothing");
+}
