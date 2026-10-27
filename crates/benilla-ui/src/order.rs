@@ -640,8 +640,8 @@ fn walk(arena: &WidgetArena, out: &mut Vec<DrawEntry>) {
 /// client skips a hidden frame's whole subtree (`0x76ae10`, `0x76ad50`). Every region of such a
 /// frame is listed; hidden ones (`region+0xc4`, set by `0x77fcb0`) are dropped by
 /// [`UiScript::extract`](crate::script::UiScript::extract), as the client never meets them at
-/// draw time: hiding a frame unlinks each region from its layer list (`0x76adbf` → `0x77fc95` →
-/// `0x76a910`). An unchanged walk returns the last list.
+/// draw time: hiding a region in a shown frame (`Texture::Hide` `0x79b830`, `FontString::Hide`
+/// `0x79ce70`) unlinks it from its layer list (`0x77fc60` → `0x77fc95` → `0x76a910`). An unchanged walk returns the last list.
 pub fn traversal(arena: &WidgetArena) -> DrawList {
     memo(&arena.order_cache.draw, |v| walk(arena, v), |e| e.key)
 }
