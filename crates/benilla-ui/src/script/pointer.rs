@@ -538,7 +538,7 @@ impl UiScript {
                     && over_world(&model, hit_handle)
                     && over_world(&model, pressed)
                     && !capture_lost
-                    && cursor::world_drop_click(&mut model);
+                    && cursor::world_drop_click(&self.lua, &mut model);
                 // The Button release slot `0x7792d0` (below, after `OnMouseUp`) does nothing on a
                 // started drag (`0x7792df` tests `0x76c040`), which already un-pressed the button.
                 (None, release, dropped, None, pressed.filter(|_| !started), None, None)

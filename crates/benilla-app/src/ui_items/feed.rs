@@ -1,42 +1,19 @@
-//! The per-frame feeds into the VM: the container snapshots built from the player's descriptor,
-//! and the item-tooltip views every window reads.
+//! The per-frame feeds into the VM: the item-tooltip views every window reads; and the one bag
+//! slot's derivation the container getters read at the call ([`resolve_slot`], [`super::bags`]).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use bevy::prelude::*;
 
 use benilla_protocol::ItemInfo;
-use benilla_ui::script::{ContainerSlot, ContainerState, ItemRead, UiScript};
+use benilla_ui::script::{ContainerSlot, ItemRead, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::ui_script::gate;
 
-use super::{
-    find_equip_slot, has_key, keyring_size, BAGS, BAG_SLOT_FIRST, BANK_BAGS, BANK_BAG_ID_FIRST,
-    BANK_CONTAINER, BANK_SLOTS, KEYRING_CONTAINER, KEYRING_SLOTS, PACK_SLOTS,
-};
-
-/// The doll's equipment slots, 0-based descriptor slots 0..=18 (live-API ids 1..=19).
-const WORN_SLOTS: u8 = 19;
-
-/// What the container feed last pushed, so a push happens on change only.
-#[derive(Default)]
-pub(crate) struct FeedMemory {
-    pushed: HashMap<i64, ContainerState>,
-    /// The last `HasKey()` pushed, so its flip is logged once.
-    had_key: bool,
-    /// The worn items' cooldowns last pushed, by live-API slot id.
-    worn_cooldowns: HashMap<usize, (i64, u32, bool)>,
-    /// Counters for the stores whose lazy resolves make `is_changed` always true.
-    items_templates: gate::Watch,
-    cooldown_epoch: gate::Watch,
-    names_generation: gate::Watch,
-    petition_records: gate::Watch,
-    enchant_deadlines: gate::Watch,
-}
+use super::find_equip_slot;
 
 /// What the `$`-tokens read of the caster, the active player for an item's lines (the expander's
 /// pet argument is 0, `0x52da24`): its level for a spell, the per-level terms' level
@@ -698,22 +675,23 @@ type CasterReads<'w, 's> = (
     Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
 );
 
-/// One bag slot from its item guid: instance, template, icon and use-spell cooldown. `None` is an
-/// empty slot or one whose item object has not streamed; an occupied one whose template is not yet
-/// resolved is `Some` with empty fields.
-fn resolve_slot(
+/// One bag slot from its item guid: instance, template, icon and use-spell cooldown, the object
+/// read off `held` (the item objects as of the getter's place) and its countdowns off `objects`.
+/// `None` is an empty slot or one whose item object has not streamed; an occupied one whose
+/// template is not yet resolved is `Some` with empty fields. With no cooldown list or clock pair
+/// (`cooldown`) the slot carries no cooldown.
+#[allow(clippy::too_many_arguments)] // the slot's inputs, each a store it reads
+pub(super) fn resolve_slot(
     guid: u64,
+    held: &(impl super::ItemObjects + ?Sized),
     objects: &Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    cooldowns: &crate::spell::Cooldowns,
+    cooldown: Option<(&crate::spell::Cooldowns, std::time::Instant, f64)>,
     spells: Option<&benilla_formats::SpellCatalog>,
     names: &crate::names::NameCache,
-    // Mutable: reading a charter's record is what queries it.
-    petitions: &crate::ui_petition::PetitionRecords,
-    now: std::time::Instant,
-    ui_now: f64,
+    petitions: Option<&crate::ui_petition::PetitionRecords>,
     // The class's `ChrClasses.dbc` relic flag, which decides slot 17 for every fit-rule read.
     has_relic_slot: bool,
 ) -> Option<ContainerSlot> {
@@ -728,7 +706,7 @@ fn resolve_slot(
     // A guid whose create has not landed: the reference finds no item object (`0x6228a0` returns
     // NULL), so `GetContainerItemInfo` pushes nothing (`0x4f96dc`, `0x4f96e0`, `0x4f9810`) and
     // the slot reads empty.
-    let fields = objects.object(guid)?;
+    let fields = held.object(guid)?;
     // What the getters read of it as they run, read here the same way.
     let live = super::live::LiveItem::object(fields, guid, items, icons, rolls);
     let (entry, count, durability, readable, creator, flags, already_bound, enchant_lines) = (
@@ -820,7 +798,7 @@ fn resolve_slot(
         petition: (t.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0)
             .then(|| {
                 let id = fields.item_enchant(0).unwrap_or(0);
-                let view = petitions.tooltip_view(id as u32, guid, names, Ask::Read)?;
+                let view = petitions?.tooltip_view(id as u32, guid, names, Ask::Read)?;
                 Some(benilla_ui::script::PetitionSlotView {
                     signatures: fields.item_petition_signatures(),
                     ..view
@@ -855,15 +833,17 @@ fn resolve_slot(
         // The tooltip's charges lines (`0x52d9e9`) and the sell price's charge scale
         // (`0x52e43d`) read them (`flds+0x28`).
         spell_charges: std::array::from_fn(|i| fields.item_spell_charges(i as u8).unwrap_or(0)),
-        cooldown: use_cooldown(
-            &t,
-            entry,
-            fields.item_spell_charges(0).unwrap_or(0),
-            cooldowns,
-            spells,
-            now,
-            ui_now,
-        ),
+        cooldown: cooldown.and_then(|(cooldowns, now, ui_now)| {
+            use_cooldown(
+                &t,
+                entry,
+                fields.item_spell_charges(0).unwrap_or(0),
+                cooldowns,
+                spells,
+                now,
+                ui_now,
+            )
+        }),
     })
 }
 
@@ -898,33 +878,10 @@ pub(crate) fn use_cooldown(
     )
 }
 
-/// The item query's answer for each worn item by live-API slot id (the descriptor slot plus one),
-/// for the tooltip's ITEM_COOLDOWN_TIME line and `GetInventoryItemCooldown`; a slot the query
-/// answers zeros for has no entry ([`use_cooldown`]). The doll snapshot does not carry it: a cooldown moves no
-/// inventory slot, and that snapshot is pushed on change.
-fn worn_cooldowns(
-    store: &ObjectStore,
-    objects: &Objects,
-    items: &Items,
-    cooldowns: &crate::spell::Cooldowns,
-    spells: Option<&benilla_formats::SpellCatalog>,
-    now: std::time::Instant,
-    ui_now: f64,
-) -> HashMap<usize, (i64, u32, bool)> {
-    (0..WORN_SLOTS)
-        .filter_map(|slot0| {
-            let guid = store.0.player_inv_slot(slot0).filter(|&g| g != 0)?;
-            let triple =
-                object_cooldown(objects, guid, items, cooldowns, spells, now, ui_now).flatten()?;
-            Some((usize::from(slot0) + 1, triple))
-        })
-        .collect()
-}
-
 /// [`use_cooldown`] for the item object held under `guid` in `objects`, its record only read
 /// (`0x4c8b3a`, `0x4f9a3f`): `None` for no object or no entry, `Some(None)` for the all-zero
-/// answer, a record not cached included. The worn feed and the getters' query at the call
-/// ([`crate::spell::CooldownLive`]) are this one read.
+/// answer, a record not cached included: the getters' query at the call
+/// ([`crate::spell::CooldownLive`]).
 pub(crate) fn object_cooldown(
     objects: &(impl super::ItemObjects + ?Sized),
     guid: u64,
@@ -951,600 +908,9 @@ pub(crate) fn object_cooldown(
     ))
 }
 
-#[allow(clippy::type_complexity)] // the param list is the input set
-pub(crate) fn feed_containers(
-    mut vm: crate::script_calls::VmWith<Res<'static, crate::spell::Cooldowns>>,
-    // `ChrClasses.dbc` field 16, the fit rule's relic flag.
-    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    // The tuples below pair parameters under Bevy's 16-parameter ceiling.
-    catalogs: (
-        Option<Res<crate::items::Enchants>>,
-        Option<Res<crate::items::RandomProperties>>,
-    ),
-    mut inv: crate::items::Inventory,
-    spells: Option<Res<crate::ui_action::Spells>>,
-    names: Res<crate::names::NameCache>,
-    clock_and_petitions: (
-        Res<crate::ui_script::UiClock>,
-        Res<crate::ui_petition::PetitionRecords>,
-    ),
-    mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
-    mut view: ResMut<BagView>,
-) {
-    // The frame's first write of our player or an item, and a swap the last drain left half
-    // done (it ended with no VM): the view it put back gives way to the one it owed.
-    // Taken only when set, so a quiet frame leaves the view unchanged.
-    let written = if view.written.is_some() {
-        view.written.take()
-    } else {
-        None
-    };
-    let owed = if view.swap.is_some() {
-        view.swap.take().filter(|s| !s.back).map(|s| s.new)
-    } else {
-        None
-    };
-    // The bags, read off the host's cooldowns among the rest. The push signals nothing: the bag
-    // events are the watchers' and the handlers', fired after it on the lanes
-    // ([`crate::item_lane`]).
-    let bags = vm.turn(|script, cooldowns| {
-        let script = script?;
-        let (clock, petitions) = clock_and_petitions;
-        let (memory, vm_reset) = memory.get_reset(script);
-        // The snapshot is a function of these inputs; the stores' counters stand in for their
-        // `is_changed`, which lazy resolves make always true. `UiClock` is not an input: a running
-        // cooldown's pushed start is absolute, and expiry moves `feed_epoch` through the prune.
-        let objects_moved = inv.changes.moved();
-        let templates_moved = memory.items_templates.moved(items.template_epoch());
-        let cooldowns_moved = memory.cooldown_epoch.moved(cooldowns.feed_epoch());
-        let names_moved = memory.names_generation.moved(names.generation());
-        let petitions_moved = memory.petition_records.moved(petitions.records_epoch());
-        // Countdowns are pushed in whole seconds, so only a displayed change reopens the gate.
-        let deadlines_moved = memory
-            .enchant_deadlines
-            .moved(inv.changes.countdown_steps());
-        let sweep = cooldowns.sweep_pending(clock.anchor);
-        let self_changed = !inv.self_changed.is_empty();
-        // `is_added`, not `is_changed`: only the load-once icon catalog is read here, and the
-        // resource's model cache changes every frame.
-        let icons_changed = icons.as_ref().is_some_and(|r| r.is_added());
-        // Both catalogs load once, at startup: one input covers the pair.
-        let enchants_changed = catalogs.0.as_ref().is_some_and(|r| r.is_changed())
-            || catalogs.1.as_ref().is_some_and(|r| r.is_changed());
-        let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
-        gate::trace(
-            "feed_containers",
-            &[
-                ("vm_reset", vm_reset),
-                ("objects", objects_moved),
-                ("templates", templates_moved),
-                ("cooldowns", cooldowns_moved),
-                ("sweep", sweep),
-                ("names", names_moved),
-                ("petition-records", petitions_moved),
-                ("deadlines", deadlines_moved),
-                ("self", self_changed),
-                ("icons", icons_changed),
-                ("enchants", enchants_changed),
-                ("spells", spells_changed),
-            ],
-        );
-        let gate = gate::Gate::new(
-            vm_reset
-            || objects_moved
-            || templates_moved
-            || cooldowns_moved
-            // The frame a timer crosses zero, before the prune moves the epoch.
-            || sweep
-            || names_moved
-            || petitions_moved
-            || deadlines_moved
-            || self_changed
-            || icons_changed
-            || enchants_changed
-            || spells_changed,
-        );
-        if gate.skip() {
-            return None;
-        }
-        // `WOW_FEED_COST=1` prints the body's mean cost every 60 runs.
-        let cost_t0 = std::env::var_os("WOW_FEED_COST")
-            .is_some()
-            .then(std::time::Instant::now);
-        // One clock pair for every slot, so a running cooldown's pushed start is frame-stable.
-        let (now, ui_now) = (clock.anchor, clock.ui_now);
-        let spell_catalog = spells.as_deref().map(|s| &s.catalog);
-        let rolls = crate::items::RollCatalogs {
-            enchants: catalogs.0.as_deref(),
-            props: catalogs.1.as_deref(),
-        };
-        let player = inv.self_store.iter().next();
-        let mut key_pair = None;
-
-        let mut fresh: HashMap<i64, ContainerState> = HashMap::new();
-        // The class's relic flag; without client data it is false, an ordinary ranged slot.
-        let has_relic_slot = player.is_some_and(|p| {
-            p.0.unit_class().is_some_and(|c| {
-                classes
-                    .as_deref()
-                    .is_some_and(|t| t.0.has_relic_slot(u32::from(c)))
-            })
-        });
-        if let Some(store) = player {
-            let mut slots = HashMap::new();
-            for i in 0..PACK_SLOTS {
-                let guid = store.0.player_pack_slot(i).unwrap_or(0);
-                if let Some(slot) = resolve_slot(
-                    guid,
-                    &inv.objects,
-                    &items,
-                    icons.as_deref(),
-                    rolls,
-                    &cooldowns,
-                    spell_catalog,
-                    &names,
-                    &petitions,
-                    now,
-                    ui_now,
-                    has_relic_slot,
-                ) {
-                    slots.insert(u32::from(i) + 1, slot);
-                }
-            }
-            fresh.insert(
-                0,
-                ContainerState {
-                    name: None,
-                    num_slots: u32::from(PACK_SLOTS),
-                    slots,
-                },
-            );
-
-            // Bags 1..4: each INV bag slot holds a container object with its own slot array.
-            for bag in 1..=BAGS {
-                let bag_guid = store
-                    .0
-                    .player_inv_slot(BAG_SLOT_FIRST + bag - 1)
-                    .unwrap_or(0);
-                if bag_guid == 0 {
-                    continue; // no bag equipped → absent → GetContainerNumSlots = 0
-                }
-                let (entry, num_slots, slot_guids) = match inv.objects.object(bag_guid) {
-                    Some(f) => {
-                        let n = f.container_num_slots().unwrap_or(0);
-                        let guids: Vec<u64> = (0..n.min(36) as u8)
-                            .map(|j| f.container_slot(j).unwrap_or(0))
-                            .collect();
-                        (f.object_entry().unwrap_or(0), n, guids)
-                    }
-                    None => (0, 0, Vec::new()),
-                };
-                let name = (entry != 0)
-                    .then(|| {
-                        // `GetBagName` only reads (`0x4fa75e`).
-                        items
-                            .template(entry, bag_guid, Ask::Read)
-                            .map(|t| t.name.clone())
-                    })
-                    .flatten();
-                let mut slots = HashMap::new();
-                for (j, &guid) in slot_guids.iter().enumerate() {
-                    if let Some(slot) = resolve_slot(
-                        guid,
-                        &inv.objects,
-                        &items,
-                        icons.as_deref(),
-                        rolls,
-                        &cooldowns,
-                        spell_catalog,
-                        &names,
-                        &petitions,
-                        now,
-                        ui_now,
-                        has_relic_slot,
-                    ) {
-                        slots.insert(j as u32 + 1, slot);
-                    }
-                }
-                fresh.insert(
-                    i64::from(bag),
-                    ContainerState {
-                        name,
-                        num_slots,
-                        slots,
-                    },
-                );
-            }
-
-            // The bank, container -1 (the vault) and 5..=10 (its bags), fed whether or not the
-            // window is open: the descriptor streams at login.
-            let mut slots = HashMap::new();
-            for i in 0..BANK_SLOTS {
-                let guid = store.0.player_bank_slot(i).unwrap_or(0);
-                if let Some(slot) = resolve_slot(
-                    guid,
-                    &inv.objects,
-                    &items,
-                    icons.as_deref(),
-                    rolls,
-                    &cooldowns,
-                    spell_catalog,
-                    &names,
-                    &petitions,
-                    now,
-                    ui_now,
-                    has_relic_slot,
-                ) {
-                    slots.insert(u32::from(i) + 1, slot);
-                }
-            }
-            fresh.insert(
-                BANK_CONTAINER,
-                ContainerState {
-                    name: None,
-                    num_slots: u32::from(BANK_SLOTS),
-                    slots,
-                },
-            );
-            for bank_bag in 0..BANK_BAGS {
-                let bag_id = BANK_BAG_ID_FIRST + i64::from(bank_bag);
-                let bag_guid = store.0.player_bank_bag_slot(bank_bag).unwrap_or(0);
-                if bag_guid == 0 {
-                    continue; // no bag in the slot → absent → GetContainerNumSlots = 0
-                }
-                let (entry, num_slots, slot_guids) = match inv.objects.object(bag_guid) {
-                    Some(f) => {
-                        let n = f.container_num_slots().unwrap_or(0);
-                        let guids: Vec<u64> = (0..n.min(36) as u8)
-                            .map(|j| f.container_slot(j).unwrap_or(0))
-                            .collect();
-                        (f.object_entry().unwrap_or(0), n, guids)
-                    }
-                    None => (0, 0, Vec::new()),
-                };
-                let name = (entry != 0)
-                    .then(|| {
-                        // `GetBagName` only reads (`0x4fa75e`).
-                        items
-                            .template(entry, bag_guid, Ask::Read)
-                            .map(|t| t.name.clone())
-                    })
-                    .flatten();
-                let mut slots = HashMap::new();
-                for (j, &guid) in slot_guids.iter().enumerate() {
-                    if let Some(slot) = resolve_slot(
-                        guid,
-                        &inv.objects,
-                        &items,
-                        icons.as_deref(),
-                        rolls,
-                        &cooldowns,
-                        spell_catalog,
-                        &names,
-                        &petitions,
-                        now,
-                        ui_now,
-                        has_relic_slot,
-                    ) {
-                        slots.insert(j as u32 + 1, slot);
-                    }
-                }
-                fresh.insert(
-                    bag_id,
-                    ContainerState {
-                        name,
-                        num_slots,
-                        slots,
-                    },
-                );
-            }
-
-            // The keyring, container -2: player slots 81.., sized by the level ladder that stock
-            // `GetKeyRingSize` (`ContainerFrame.lua:773`) reads off `UnitLevel` and the server
-            // shares. Slots past the size, which the server refuses, are not fed.
-            let size = keyring_size(store.0.unit_level().unwrap_or(1));
-            let mut slots = HashMap::new();
-            for i in 0..size.min(u32::from(KEYRING_SLOTS)) as u8 {
-                let guid = store.0.player_keyring_slot(i).unwrap_or(0);
-                if let Some(slot) = resolve_slot(
-                    guid,
-                    &inv.objects,
-                    &items,
-                    icons.as_deref(),
-                    rolls,
-                    &cooldowns,
-                    spell_catalog,
-                    &names,
-                    &petitions,
-                    now,
-                    ui_now,
-                    has_relic_slot,
-                ) {
-                    slots.insert(u32::from(i) + 1, slot);
-                }
-            }
-            fresh.insert(
-                KEYRING_CONTAINER,
-                ContainerState {
-                    name: None,
-                    num_slots: size,
-                    slots,
-                },
-            );
-
-            // `HasKey()`, which decides whether the keyring shows at all, pushed with the
-            // containers so it is fresh on every `BAG_UPDATE` frame.
-            let key = has_key(&store.0, &inv.objects, &items);
-            key_pair = Some((memory.had_key, key));
-            if key != memory.had_key {
-                gate.audit("feed_containers", "the HasKey() flip");
-                debug!(
-                    "ui_items: HasKey() -> {key} (keyring {})",
-                    if key { "shown" } else { "hidden" }
-                );
-                memory.had_key = key;
-            }
-
-            // The worn items' use cooldowns, for the tooltip line; no event rides them.
-            let worn = worn_cooldowns(
-                store,
-                &inv.objects,
-                &items,
-                &cooldowns,
-                spell_catalog,
-                now,
-                ui_now,
-            );
-            if worn != memory.worn_cooldowns {
-                gate.audit("feed_containers", "the worn items' cooldowns");
-                script.set_worn_cooldowns(worn.clone());
-                memory.worn_cooldowns = worn;
-            }
-        }
-
-        if let Some(t0) = cost_t0 {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static SUM_NS: AtomicU64 = AtomicU64::new(0);
-            static N: AtomicU64 = AtomicU64::new(0);
-            let sum = SUM_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            let n = N.fetch_add(1, Ordering::Relaxed) + 1;
-            if n.is_multiple_of(60) {
-                let slots: usize = fresh.values().map(|c| c.slots.len()).sum();
-                eprintln!(
-                    "[feed-cost] ms={:.3} slots={slots} containers={}",
-                    sum as f64 / n as f64 / 1e6,
-                    fresh.len(),
-                );
-            }
-        }
-        Some((player.is_some().then_some(fresh), key_pair, vm_reset, gate))
-    });
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        if let Some(owed) = owed {
-            owed.put(script);
-        }
-        let Some((source, key_pair, vm_reset, gate)) = bags else {
-            return;
-        };
-        let memory = memory.get(script);
-        let changed = push_changed(script, memory, source);
-        if !changed.is_empty() {
-            gate.audit("feed_containers", "a bag diff");
-        }
-        let Some((had_key, key)) = key_pair else {
-            return;
-        };
-        script.set_has_key(key);
-        // A fresh VM had no view before this one, so nothing stamped earlier reads an older one.
-        let Some(at) = written.filter(|_| !vm_reset) else {
-            return;
-        };
-        if changed.is_empty() && had_key == key {
-            return;
-        }
-        let (old, new) = changed
-            .into_iter()
-            .map(|(bag, old, new)| ((bag, old), (bag, new)))
-            .unzip();
-        view.swap = Some(Swap {
-            at,
-            back: true,
-            old: View {
-                bags: old,
-                key: had_key,
-            },
-            new: View { bags: new, key },
-        });
-    });
-}
-
-/// The bag view the lanes' events read, as the packets left it. The feed pushes the frame's whole
-/// view, which the feeds' own events after it read (the world-enter cascade's `BAG_UPDATE`s). An
-/// event a handler raised before the frame's first write of our player or an item reads the view
-/// that write changed, so when a lane holds one the drain starts on last frame's view and swaps to
-/// this frame's at that write's stamp.
-///
-/// The exact form is a view per packet (#2217): the bags here are last frame's or this frame's,
-/// never the one a packet between two writes left. And only the bag view swaps: while the old
-/// bags are up, an event's handler still reads this frame's state through everything else, among
-/// it `feed_char`'s inventory and bank-bag slots, `GetMoney`, and a verb a listener calls, which
-/// resolves against the live store (`ui_items::drain`).
-#[derive(Resource, Default)]
-pub(crate) struct BagView {
-    /// The stamp of the frame's first handler call that wrote our player or an item.
-    written: Option<crate::lanes::Stamp>,
-    swap: Option<Swap>,
-}
-
-/// One frame's change to the bag view: what the VM held before and after it.
-struct Swap {
-    /// The write's stamp, where the drain swaps to the new view.
-    at: crate::lanes::Stamp,
-    /// The drain's start still owes the old view.
-    back: bool,
-    old: View,
-    new: View,
-}
-
-/// The bags that changed and `HasKey()`.
-struct View {
-    bags: Vec<(i64, Option<ContainerState>)>,
-    key: bool,
-}
-
-impl View {
-    fn put(self, script: &mut UiScript) {
-        for (bag, state) in self.bags {
-            script.set_container(bag, state);
-        }
-        script.set_has_key(self.key);
-    }
-}
-
-impl BagView {
-    /// A handler wrote our player or an item: the first of the frame stamps the swap.
-    pub(crate) fn wrote(&mut self) {
-        if self.written.is_none() {
-            self.written = Some(crate::lanes::stamp());
-        }
-    }
-
-    /// The old view at the drain's start, then the new one at the write.
-    fn peek(&self) -> Option<crate::lanes::Stamp> {
-        self.swap.as_ref().map(|s| {
-            if s.back {
-                crate::lanes::Stamp::origin()
-            } else {
-                s.at
-            }
-        })
-    }
-}
-
-/// The lane and its drop, under the exact complement of the drain's gate.
-pub(super) fn add_bag_view_lane(app: &mut App) {
-    use crate::lanes::LaneApp;
-    app.init_resource::<BagView>()
-        .add_lane(
-            "bag view",
-            |world| world.get_resource::<BagView>()?.peek(),
-            fire_bag_view,
-            None,
-        )
-        .add_systems(
-            Update,
-            drop_bag_view
-                .in_set(crate::ui_script::UiFeed)
-                .run_if(not(crate::ui_script::ingame_ui_up)),
-        );
-}
-
-fn drop_bag_view(mut view: ResMut<BagView>) {
-    *view = BagView::default();
-}
-
-/// The lane's `fire_until` ([`crate::lanes`]): at the drain's start, last frame's view when an
-/// item stamped before the write is due ahead of it, else nothing to swap; at the write, the new.
-fn fire_bag_view(
-    In(until): In<crate::lanes::Until>,
-    mut vm: crate::script_calls::HostedVm,
-    mut view: ResMut<BagView>,
-) {
-    let Some(swap) = view.swap.as_mut() else {
-        return;
-    };
-    let put = if swap.back {
-        if until.admits(swap.at) {
-            view.swap = None;
-            return;
-        }
-        swap.back = false;
-        std::mem::replace(
-            &mut swap.old,
-            View {
-                bags: Vec::new(),
-                key: false,
-            },
-        )
-    } else {
-        let Some(swap) = view.swap.take() else {
-            return;
-        };
-        swap.new
-    };
-    vm.run(|script| {
-        if let Some(script) = script {
-            put.put(script);
-        }
-    });
-}
-
-/// [`push_changed`], with whether anything went into the VM.
-#[cfg(test)]
-pub(crate) fn push_containers(
-    script: &mut UiScript,
-    memory: &mut FeedMemory,
-    source: Option<HashMap<i64, ContainerState>>,
-) -> bool {
-    !push_changed(script, memory, source).is_empty()
-}
-
-/// Push every bag whose view changed since the last push, firing nothing: a bag's events are its
-/// watchers' runs (`0x4f8db0`, `0x4f90d0`, `0x4f8ec0`, `0x4f9480`, [`crate::item_watch`]), fired
-/// after this push on the item lane. Each changed bag with its view before and after, for the
-/// caller's gate audit and the lanes' swap ([`BagView`]).
-///
-/// `None` is an absent self store (before login, or the logout despawn frames before the VM shuts
-/// down), never "no items": the VM keeps its last push, as the reference's UI shutdown
-/// (`0x490bd0`) runs with the inventory intact.
-#[allow(clippy::type_complexity)] // (bag, before, after)
-fn push_changed(
-    script: &mut UiScript,
-    memory: &mut FeedMemory,
-    source: Option<HashMap<i64, ContainerState>>,
-) -> Vec<(i64, Option<ContainerState>, Option<ContainerState>)> {
-    let Some(fresh) = source else {
-        return Vec::new();
-    };
-    let changed: Vec<i64> = fresh
-        .keys()
-        .chain(memory.pushed.keys())
-        .copied()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .filter(|b| fresh.get(b) != memory.pushed.get(b))
-        .collect();
-    if changed.is_empty() {
-        return Vec::new();
-    }
-    for &bag in &changed {
-        script.set_container(bag, fresh.get(&bag).cloned());
-    }
-    debug!(
-        "ui_items: fed {} changed bag(s) — {}",
-        changed.len(),
-        changed
-            .iter()
-            .map(|b| format!("{b}:{}", fresh.get(b).map_or(0, |c| c.slots.len())))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    let out = changed
-        .iter()
-        .map(|&b| (b, memory.pushed.get(&b).cloned(), fresh.get(&b).cloned()))
-        .collect();
-    memory.pushed = fresh;
-    out
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{push_containers, resolve_slot, ContainerSlot, FeedMemory};
+    use super::resolve_slot;
 
     /// A set's member names come from the item-name store (`0x52df5a` looks up `0xc0e2dc` with a
     /// callback and a zero owner), asked with `CMSG_ITEM_NAME_QUERY`, never the template store.
@@ -1876,18 +1242,18 @@ mod tests {
         let cooldowns = crate::spell::Cooldowns::default();
         let petitions = crate::ui_petition::PetitionRecords::default();
         let mut slot = |guid: u64| {
+            let o = objs.get();
             resolve_slot(
                 guid,
-                &objs.get(),
+                &o,
+                &o,
                 &items,
                 None,
                 RollCatalogs::NONE,
-                &cooldowns,
+                Some((&cooldowns, std::time::Instant::now(), 0.0)),
                 None,
                 &names,
-                &petitions,
-                std::time::Instant::now(),
-                0.0,
+                Some(&petitions),
                 false,
             )
         };
@@ -1936,20 +1302,26 @@ mod tests {
                 ..Default::default()
             },
         );
-        let slot = resolve_slot(
-            0xC1,
-            &objs.get(),
-            &items,
-            None,
-            RollCatalogs::NONE,
-            &crate::spell::Cooldowns::default(),
-            None,
-            &NameCache::default(),
-            &petitions,
-            std::time::Instant::now(),
-            0.0,
-            false,
-        )
+        let slot = {
+            let o = objs.get();
+            resolve_slot(
+                0xC1,
+                &o,
+                &o,
+                &items,
+                None,
+                RollCatalogs::NONE,
+                Some((
+                    &crate::spell::Cooldowns::default(),
+                    std::time::Instant::now(),
+                    0.0,
+                )),
+                None,
+                &NameCache::default(),
+                Some(&petitions),
+                false,
+            )
+        }
         .expect("an occupied slot");
         let petition = slot.petition.expect("the record is cached");
         assert_eq!((petition.title.as_str(), petition.signatures), ("Pact", 4));
@@ -1992,20 +1364,22 @@ mod tests {
         let cooldowns = crate::spell::Cooldowns::default();
         let petitions = crate::ui_petition::PetitionRecords::default();
         let mut seats = |guid: u64| {
-            resolve_slot(
-                guid,
-                &objs.get(),
-                &items,
-                None,
-                RollCatalogs::NONE,
-                &cooldowns,
-                None,
-                &names,
-                &petitions,
-                std::time::Instant::now(),
-                0.0,
-                false,
-            )
+            {
+                let o = objs.get();
+                resolve_slot(
+                    guid,
+                    &o,
+                    &o,
+                    &items,
+                    None,
+                    RollCatalogs::NONE,
+                    Some((&cooldowns, std::time::Instant::now(), 0.0)),
+                    None,
+                    &names,
+                    Some(&petitions),
+                    false,
+                )
+            }
             .expect("an occupied slot")
             .occupied_seats
         };
@@ -2048,20 +1422,22 @@ mod tests {
         let cooldowns = crate::spell::Cooldowns::default();
         let petitions = crate::ui_petition::PetitionRecords::default();
         let mut readable = |guid: u64| {
-            resolve_slot(
-                guid,
-                &objs.get(),
-                &items,
-                None,
-                RollCatalogs::NONE,
-                &cooldowns,
-                None,
-                &names,
-                &petitions,
-                std::time::Instant::now(),
-                0.0,
-                false,
-            )
+            {
+                let o = objs.get();
+                resolve_slot(
+                    guid,
+                    &o,
+                    &o,
+                    &items,
+                    None,
+                    RollCatalogs::NONE,
+                    Some((&cooldowns, std::time::Instant::now(), 0.0)),
+                    None,
+                    &names,
+                    Some(&petitions),
+                    false,
+                )
+            }
             .expect("an occupied slot")
             .readable
         };
@@ -2109,20 +1485,22 @@ mod tests {
         let cooldowns = crate::spell::Cooldowns::default();
         let petitions = crate::ui_petition::PetitionRecords::default();
         let mut bound = |guid: u64| {
-            resolve_slot(
-                guid,
-                &objs.get(),
-                &items,
-                None,
-                rolls,
-                &cooldowns,
-                None,
-                &names,
-                &petitions,
-                std::time::Instant::now(),
-                0.0,
-                false,
-            )
+            {
+                let o = objs.get();
+                resolve_slot(
+                    guid,
+                    &o,
+                    &o,
+                    &items,
+                    None,
+                    rolls,
+                    Some((&cooldowns, std::time::Instant::now(), 0.0)),
+                    None,
+                    &names,
+                    Some(&petitions),
+                    false,
+                )
+            }
             .expect("an occupied slot")
             .already_bound
         };
@@ -2130,13 +1508,12 @@ mod tests {
         assert!(bound(0xE2), "any other item's binding enchant binds it");
     }
 
-    /// A worn item answers the item cooldown query by its entry (`0x6e2ed0`): its answer is pushed
-    /// under the live-API slot id, one past the descriptor slot. An on-use item with none running
+    /// A worn item answers the item cooldown query by its entry (`0x6e2ed0`), read by the live-API
+    /// slot id, one past the descriptor slot. An on-use item with none running
     /// answers cold and enabled (`0x6e1406`); one with no use spell is absent, the query leaving
     /// its zeros (`0x6e2f34`).
     #[test]
     fn a_worn_item_on_cooldown_is_keyed_by_its_live_slot_id() {
-        use super::worn_cooldowns;
         use crate::items::{test_template, Items};
         use crate::net::ObjectStore;
         use crate::ui_items::TestObjects;
@@ -2184,7 +1561,7 @@ mod tests {
             .collect();
         let store = ObjectStore(ObjectFields::from_pairs(&pairs));
 
-        let worn = worn_cooldowns(&store, &objs.get(), &items, &cooldowns, None, now, 50.0);
+        let worn = worn(&store, &mut objs, &items, &cooldowns, now, 50.0);
         assert_eq!(
             worn,
             HashMap::from([(13, (50_000, 120_000, true)), (14, (0, 0, true))]),
@@ -2197,7 +1574,6 @@ mod tests {
     /// the test is `template+0x144 != 0` (-1 included) against `ITEM_FIELD_SPELL_CHARGES[0] == 0`.
     #[test]
     fn a_charged_item_with_no_charge_left_has_no_cooldown() {
-        use super::worn_cooldowns;
         use crate::items::{test_template, Items, RollCatalogs};
         use crate::names::NameCache;
         use crate::net::ObjectStore;
@@ -2246,20 +1622,22 @@ mod tests {
         let names = NameCache::default();
         let petitions = crate::ui_petition::PetitionRecords::default();
         for (&(guid, ..), want) in cases.iter().zip(expected) {
-            let slot = resolve_slot(
-                guid,
-                &objs.get(),
-                &items,
-                None,
-                RollCatalogs::NONE,
-                &cooldowns,
-                None,
-                &names,
-                &petitions,
-                now,
-                50.0,
-                false,
-            )
+            let slot = {
+                let o = objs.get();
+                resolve_slot(
+                    guid,
+                    &o,
+                    &o,
+                    &items,
+                    None,
+                    RollCatalogs::NONE,
+                    Some((&cooldowns, now, 50.0)),
+                    None,
+                    &names,
+                    Some(&petitions),
+                    false,
+                )
+            }
             .expect("an occupied slot");
             assert_eq!(slot.cooldown, want, "bag slot of {guid:#x}");
         }
@@ -2274,7 +1652,7 @@ mod tests {
             })
             .collect();
         let store = ObjectStore(ObjectFields::from_pairs(&pairs));
-        let worn = worn_cooldowns(&store, &objs.get(), &items, &cooldowns, None, now, 50.0);
+        let worn = worn(&store, &mut objs, &items, &cooldowns, now, 50.0);
         let want: HashMap<usize, (i64, u32, bool)> = expected
             .iter()
             .enumerate()
@@ -2285,56 +1663,27 @@ mod tests {
 
     use crate::ui_action::real_spells;
     use benilla_protocol::messages::ItemSpellEntry;
-    use benilla_ui::script::{ContainerState, UiScript};
     use std::collections::HashMap;
 
-    /// The push fires nothing: a bag's events are its watchers' ([`crate::item_watch`]). An absent
-    /// self store is no source, which keeps the VM's bags; a present one that lost a bag pushes.
-    #[test]
-    fn the_push_fires_nothing_and_an_absent_source_keeps_the_bags() {
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            "SEEN = 0 \
-             local f = CreateFrame('Frame') \
-             for _, e in ipairs({'BAG_UPDATE', 'BAG_CLOSED', 'BAG_OPEN', \
-                     'PLAYERBANKSLOTS_CHANGED', 'ITEM_LOCK_CHANGED'}) do \
-                 f:RegisterEvent(e) \
-             end \
-             f:SetScript('OnEvent', function() SEEN = SEEN + 1 end)",
-        )
-        .unwrap();
-        let bag = |count: u32| {
-            HashMap::from([(
-                0,
-                ContainerState {
-                    name: None,
-                    num_slots: 16,
-                    slots: HashMap::from([(
-                        1,
-                        ContainerSlot {
-                            item_id: 2512,
-                            count,
-                            ..Default::default()
-                        },
-                    )]),
-                },
-            )])
-        };
-        let mut memory = FeedMemory::default();
-        assert!(push_containers(&mut s, &mut memory, Some(bag(200))));
-        assert!(push_containers(&mut s, &mut memory, Some(bag(199))));
-        assert!(!push_containers(&mut s, &mut memory, Some(bag(199))));
-        assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
-        // The logout despawn frame: the VM keeps its bags.
-        assert!(!push_containers(&mut s, &mut memory, None));
-        assert_eq!(
-            s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(),
-            16,
-            "an absent source must not empty the VM's containers"
-        );
-        assert!(push_containers(&mut s, &mut memory, Some(HashMap::new())));
-        assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 0);
-        assert_eq!(s.eval::<i64>("return SEEN").unwrap(), 0);
+    /// The worn items' cooldown answers by live-API slot id, as `CooldownQuery::Worn` reads each
+    /// at the call (`0x4c8b10` → `0x6228a0`, then `0x6e2ed0`).
+    fn worn(
+        store: &crate::net::ObjectStore,
+        objs: &mut crate::ui_items::TestObjects,
+        items: &crate::items::Items,
+        cooldowns: &crate::spell::Cooldowns,
+        now: std::time::Instant,
+        ui_now: f64,
+    ) -> HashMap<usize, (i64, u32, bool)> {
+        let o = objs.get();
+        (0..19u8)
+            .filter_map(|slot0| {
+                let guid = store.0.player_inv_slot(slot0).filter(|&g| g != 0)?;
+                let t = super::object_cooldown(&o, guid, items, cooldowns, None, now, ui_now)
+                    .flatten()?;
+                Some((usize::from(slot0) + 1, t))
+            })
+            .collect()
     }
 
     fn slot(spell_id: u32, charges: i32) -> ItemSpellEntry {
@@ -2465,14 +1814,6 @@ mod tests {
         assert_eq!(super::token_reads(Some(&store(1 | 2 << 8 | 1 << 24))), male);
     }
 }
-
-#[cfg(test)]
-#[path = "feed_cooldown_tests.rs"]
-mod cooldown_tests;
-
-#[cfg(test)]
-#[path = "feed_link_tests.rs"]
-mod link_tests;
 
 #[cfg(test)]
 mod ask_tests {

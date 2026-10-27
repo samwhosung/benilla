@@ -71,11 +71,8 @@ impl Plugin for UiCharPlugin {
                 (
                     // A `BAG_UPDATE` handler may read the bag item's own row
                     // (`GetInventoryItemLink("player", ContainerIDToInventoryID(bag))`): the lanes'
-                    // drain and the world-enter cascade both follow this push. Before the bag feed:
-                    // left to the VM pass, the pair links through one more command barrier
-                    // ([`crate::vm_pass`]).
+                    // drain and the world-enter cascade both follow this push.
                     feed_char
-                        .before(crate::ui_items::feed::feed_containers)
                         .in_set(UiFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     feed_skill_tiers.in_set(UiFeed),

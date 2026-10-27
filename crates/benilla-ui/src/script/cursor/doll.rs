@@ -111,8 +111,7 @@ pub(super) fn doll_click(
         )
     );
     if !placing && (model.item_pick_armed || model.repair_mode) {
-        let usable = model
-            .own_inv_view(id as usize)
+        let usable = crate::script::char_stats::own_inv_view(lua, model, id as usize)
             .is_some_and(|s| s.item_id != 0 && !item_locked(model, s.guid));
         if usable && model.item_pick_armed {
             return DollClick::Pick(super::ItemPick {
@@ -134,8 +133,7 @@ pub(super) fn doll_click(
             | CursorPayload::StablePet(_)
             | CursorPayload::Money(_),
         ) => {
-            let picked = model
-                .own_inv_view(id as usize)
+            let picked = crate::script::char_stats::own_inv_view(lua, model, id as usize)
                 .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
                 .map(|s| CursorItem {
                     item_class: None,
@@ -163,8 +161,7 @@ pub(super) fn doll_click(
         }
         Some(CursorPayload::Item(held)) => {
             // A locked occupant refuses the drop, the payload kept (`0x4c787b`).
-            let occupant = model
-                .own_inv_view(id as usize)
+            let occupant = crate::script::char_stats::own_inv_view(lua, model, id as usize)
                 .filter(|s| s.item_id != 0)
                 .map_or(0, |s| s.guid);
             if item_locked(model, occupant) {
@@ -233,7 +230,7 @@ fn ammo_click(lua: &Lua, model: &mut Model) -> DollClick {
     match model.cursor.clone() {
         Some(CursorPayload::Item(held)) => {
             let projectile = held.item_class == Some(ITEM_CLASS_PROJECTILE)
-                && super::equip::held_facts(model, &held).is_some();
+                && super::equip::held_facts(lua, model, &held).is_some();
             if projectile {
                 model.item_calls.push(ItemCall::SetAmmo {
                     entry: held.item_id,
@@ -246,8 +243,7 @@ fn ammo_click(lua: &Lua, model: &mut Model) -> DollClick {
             entry: held.item_id,
         }),
         _ => {
-            let loaded = model
-                .own_inv_view(0)
+            let loaded = crate::script::char_stats::own_inv_view(lua, model, 0)
                 .filter(|v| v.item_id != 0 && v.count > 0);
             if let Some(v) = loaded {
                 // The record through the item cache (`0x4c75c1`): an uncached one lifts nothing
@@ -299,7 +295,7 @@ fn equip_held(lua: &Lua, model: &mut Model, id: u32) -> Option<u64> {
     // The occupant of the player's slot, none past its 113 (`0x4896f8`-`0x489714`).
     let occupant = usize::try_from(id)
         .ok()
-        .and_then(|slot| model.own_inv_view(slot))
+        .and_then(|slot| crate::script::char_stats::own_inv_view(lua, model, slot))
         .filter(|s| s.item_id != 0)
         .map_or(0, |s| s.guid);
     if occupant != 0 && occupant == held.guid {
@@ -378,13 +374,11 @@ fn use_cleared(
     call: &mut Option<crate::script::ScriptCall>,
 ) {
     if !model.repair_mode {
-        let locked = model
-            .own_inv_view(id as usize)
+        let locked = crate::script::char_stats::own_inv_view(lua, model, id as usize)
             .is_some_and(|s| super::item_locked(model, s.guid));
         // Then the dispatcher's requirement and control gates (`0x5d8e0e`, `0x5d8eaa`), which an
         // empty slot never reaches.
-        let refusal = model
-            .own_inv_view(id as usize)
+        let refusal = crate::script::char_stats::own_inv_view(lua, model, id as usize)
             // A container returns ahead of both gates (`0x5d8d26`).
             .filter(|s| s.item_id != 0 && s.contents_count.is_none())
             .and_then(|s| {
@@ -410,8 +404,7 @@ fn use_cleared(
         return;
     }
     if (1..=19).contains(&id)
-        && model
-            .own_inv_view(id as usize)
+        && crate::script::char_stats::own_inv_view(lua, model, id as usize)
             .is_some_and(|s| s.item_id != 0)
     {
         model.item_calls.push(ItemCall::RepairWorn(id));
@@ -420,10 +413,10 @@ fn use_cleared(
 
 /// `IsInventoryItemLocked(id)`: whether the item in player slot `id` is locked ([`item_locked`]).
 /// Reads [`Model::inv_slot`], since `BankFrameItemButton_UpdateLock` asks about bank slots too.
-pub(super) fn is_inventory_item_locked(model: &Model, id: u32) -> bool {
+pub(super) fn is_inventory_item_locked(lua: &Lua, model: &Model, id: u32) -> bool {
     usize::try_from(id)
         .ok()
-        .and_then(|i| model.own_inv_view(i))
+        .and_then(|i| crate::script::char_stats::own_inv_view(lua, model, i))
         .is_some_and(|s| s.item_id != 0 && item_locked(model, s.guid))
 }
 
@@ -499,7 +492,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(Value::Nil);
             }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(is_inventory_item_locked(&model, slot0 as u32 + 1)))
+            Ok(flag(is_inventory_item_locked(
+                lua,
+                &model,
+                slot0 as u32 + 1,
+            )))
         })?,
     )?;
 

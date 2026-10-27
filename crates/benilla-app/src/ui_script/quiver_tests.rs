@@ -435,14 +435,13 @@ fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
 /// The arrows' item guid.
 const ARROW_GUID: u64 = 0x4000_0000_0000_0a12;
 
-/// An arrow stack one lighter, as a server update is: the bag pushed through
-/// [`crate::ui_items::feed::push_containers`] ahead of the lanes' drain, then the stack count
+/// An arrow stack one lighter, as a server update is: the bag as the getters read it (here the
+/// VM's harness copy), then the stack count
 /// watcher's run, its entry unlock (`0x5d94af`) and the backpack's `BAG_UPDATE` (`0x5d94ff`): the
 /// unlock's `ITEM_LOCK_CHANGED` starts Quiver's reload.
 #[test]
 fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     benilla_formats::wow_data_or_skip!();
-    use crate::ui_items::feed::{push_containers, FeedMemory};
     use benilla_ui::script::{ContainerSlot, ContainerState};
     use std::collections::HashMap;
 
@@ -453,7 +452,7 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     start_session(&mut s);
 
     let quiver = |count: u32| {
-        Some(HashMap::from([(
+        HashMap::from([(
             0i64,
             ContainerState {
                 name: None,
@@ -468,19 +467,23 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
                     },
                 )]),
             },
-        )]))
+        )])
     };
-    let mut memory = FeedMemory::default();
-    push_containers(&mut s, &mut memory, quiver(200));
+    let seat = |s: &mut UiScript, count: u32| {
+        for (bag, state) in quiver(count) {
+            s.set_container(bag, Some(state));
+        }
+    };
+    seat(&mut s, 200);
 
     s.fire_event("START_AUTOREPEAT_SPELL", Vec::new());
     s.tick(0.1);
     let (_, reloading_before, _, _) = shot_state(&mut s);
     assert!(!reloading_before, "no shot has landed yet");
 
-    // The server's stack count drops by one: a fired shot. The feed pushes the bag, then the
-    // watcher's run unlocks the entry and updates the backpack.
-    push_containers(&mut s, &mut memory, quiver(199));
+    // The server's stack count drops by one: a fired shot. The bag reads it, then the watcher's
+    // run unlocks the entry and updates the backpack.
+    seat(&mut s, 199);
     s.unlock_entry_items(&[ARROW_GUID]);
     s.fire_event("BAG_UPDATE", vec![benilla_ui::script::ScriptValue::Int(0)]);
     s.tick(0.1);

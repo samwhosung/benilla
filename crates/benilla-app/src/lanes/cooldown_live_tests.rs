@@ -265,8 +265,8 @@ fn an_item_cooldowns_listeners_read_its_packets_list() {
 }
 
 /// The getters answer the same through the lent host as off the frame's snapshots wherever the
-/// snapshots are current: every slot and the potion, cold and running. The book itself is read
-/// through the host alone, so its spells' lines are the live read's.
+/// snapshots are current: every slot, cold and running. The book and the bags are read through
+/// the host alone, so their lines are the live read's.
 #[test]
 fn every_cooldown_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client();
@@ -287,7 +287,7 @@ fn every_cooldown_getter_answers_the_same_live_as_off_the_snapshot() {
         let unbooked = |lines: &[String]| -> Vec<String> {
             lines
                 .iter()
-                .filter(|l| !l.starts_with("spell "))
+                .filter(|l| !l.starts_with("spell ") && !l.starts_with("bag "))
                 .cloned()
                 .collect()
         };
@@ -412,9 +412,7 @@ fn a_worn_items_cooldown_reads_live_inside_its_packet() {
         }],
     ]);
     assert_eq!(c.seen(&["WORN"]), ["WORN:0", "WORN:30"]);
-    for live in [false, true] {
-        assert_eq!(c.eval::<f64>(live, chunk), 30.0, "live {live}");
-    }
+    assert_eq!(c.eval::<f64>(true, chunk), 30.0);
 }
 
 /// The pet's list read inside the call, through the book and the bar: `GetSpellCooldown(id,

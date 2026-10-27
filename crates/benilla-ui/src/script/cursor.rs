@@ -211,14 +211,11 @@ pub struct CursorItem {
 
 /// How many items the cursor holds. A whole-stack pickup has `count: None`, so the size is read
 /// from the source slot, which a pickup locks but does not empty; 1 if that slot is unreadable.
-pub(super) fn held_count(model: &super::Model, item: &CursorItem) -> u32 {
+pub(super) fn held_count(lua: &Lua, model: &super::Model, item: &CursorItem) -> u32 {
     if let Some(n) = item.count {
         return n.max(1);
     }
-    model
-        .containers
-        .get(&item.bag)
-        .and_then(|c| c.slots.get(&item.slot))
+    super::held::held_slot(lua, model, item.bag, item.slot)
         .filter(|s| s.item_id == item.item_id)
         .map_or(1, |s| s.count.max(1))
 }
@@ -661,8 +658,8 @@ fn indestructible(model: &Model, item: &CursorItem) -> bool {
 /// record cached, `DELETE_ITEM_CONFIRM(name, quality)`. The record lookup passes no callback, so a
 /// miss returns with nothing raised (`0x4953a5`, `0x4953ac`). The payload stays held: the popup's
 /// `DeleteCursorItem` or `ClearCursor` clears it.
-fn raise_delete_item_confirm(model: &mut Model, item: &CursorItem) {
-    if equip::held_facts(model, item).is_none() {
+fn raise_delete_item_confirm(lua: &Lua, model: &mut Model, item: &CursorItem) {
+    if equip::held_facts(lua, model, item).is_none() {
         return;
     }
     if indestructible(model, item) {
@@ -767,14 +764,14 @@ fn world_drop(model: &Model) -> (WorldDrop, bool) {
 
 /// A left click on the world with a payload held, press and release both over the world and no
 /// drag: the drop of [`world_drop`]'s leg; returns whether the click was the payload's.
-pub(crate) fn world_drop_click(model: &mut Model) -> bool {
+pub(crate) fn world_drop_click(lua: &Lua, model: &mut Model) -> bool {
     let (drop, consumed) = world_drop(model);
     match drop {
         WorldDrop::Keep => {}
         WorldDrop::Clear => clear_cursor(model),
         WorldDrop::Confirm => {
             if let Some(CursorPayload::Item(item)) = model.cursor.clone() {
-                raise_delete_item_confirm(model, &item);
+                raise_delete_item_confirm(lua, model, &item);
             }
         }
     }
@@ -800,7 +797,7 @@ pub(crate) fn split_container_item(
             return Ok(false);
         }
         // The slot resolver (`0x4fa00a`), through the bag lookup `0x4f93e0`.
-        let Some(s) = model.bag_slot(bag, slot) else {
+        let Some(s) = super::held::bag_slot(lua, &model, bag, slot) else {
             return Ok(false);
         };
         if s.item_id == 0 || item_locked(&model, s.guid) {
@@ -843,12 +840,12 @@ pub(crate) fn split_container_item(
 /// otherwise it files its `(bag, slot, count)` destroy for the host, count 0 for the whole stack,
 /// then `ClearCursor(1,1)` (`0x4898af`) and `LockItem` on it again (`0x4898bc`) for the server's
 /// answer. Anything else is a no-op. Returns the refusal's message.
-pub(crate) fn delete_cursor_item(model: &mut Model) -> Option<&'static str> {
+pub(crate) fn delete_cursor_item(lua: &Lua, model: &mut Model) -> Option<&'static str> {
     let Some(CursorPayload::Item(item)) = &model.cursor else {
         return None;
     };
     let item = item.clone();
-    if equip::held_facts(model, &item).is_some() && indestructible(model, &item) {
+    if equip::held_facts(lua, model, &item).is_some() && indestructible(model, &item) {
         return Some(CANT_BE_DESTROYED);
     }
     model.item_calls.push(super::ItemCall::Destroy {
@@ -1224,7 +1221,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "DeleteCursorItem",
         lua.create_function(|lua, ()| {
             // The refusal is shown inside the verb, as `DisplayError` (`0x496720`) signals.
-            if let Some(key) = super::tick::verb(lua, delete_cursor_item) {
+            if let Some(key) = super::tick::verb(lua, |model| delete_cursor_item(lua, model)) {
                 return super::calls::display_error(lua, key);
             }
             super::item_calls::submit_item_calls(lua)
@@ -1647,7 +1644,7 @@ mod tests {
                 "{payload:?} {pick:?}: the press"
             );
             assert_eq!(
-                world_drop_click(&mut s.model_mut()),
+                world_drop_click(&s.lua().clone(), &mut s.model_mut()),
                 consumed,
                 "{payload:?} {pick:?}: the release"
             );
@@ -1672,7 +1669,7 @@ mod tests {
             }));
             s.model_mut().world_pick = pick;
             assert!(
-                world_drop_click(&mut s.model_mut()),
+                world_drop_click(&s.lua().clone(), &mut s.model_mut()),
                 "{pick:?}: the dismiss consumes the click"
             );
             assert!(
@@ -1698,13 +1695,13 @@ mod tests {
         s.set_cursor_for_test(item.clone());
         s.model_mut().world_pick = WorldPick::Terrain;
         assert!(
-            world_drop_click(&mut s.model_mut()),
+            world_drop_click(&s.lua().clone(), &mut s.model_mut()),
             "terrain: the item pops the popup"
         );
         assert!(s.cursor_item().is_some(), "and stays held");
         s.model_mut().world_pick = WorldPick::Object;
         assert!(
-            !world_drop_click(&mut s.model_mut()),
+            !world_drop_click(&s.lua().clone(), &mut s.model_mut()),
             "object: nothing drops at all"
         );
         assert!(s.cursor_item().is_some());
@@ -1740,7 +1737,7 @@ mod tests {
         );
         s.run("PickupContainerItem(0, 1)").unwrap();
         s.model_mut().world_pick = WorldPick::Nothing;
-        assert!(world_drop_click(&mut s.model_mut()));
+        assert!(world_drop_click(&s.lua().clone(), &mut s.model_mut()));
         s.tick(0.01);
         assert_eq!(
             s.eval::<String>("return table.concat(seen, ',')").unwrap(),
@@ -1777,7 +1774,7 @@ mod tests {
         s.run("PickupContainerItem(0, 1)").unwrap();
         s.model_mut().world_pick = WorldPick::Nothing;
         assert!(
-            world_drop_click(&mut s.model_mut()),
+            world_drop_click(&s.lua().clone(), &mut s.model_mut()),
             "the click is the payload's"
         );
         s.tick(0.01);
@@ -1791,7 +1788,7 @@ mod tests {
         assert!(s.cursor_item().is_some(), "still held");
 
         s.set_item_template(117, crate::script::ItemTemplateView::default());
-        assert!(world_drop_click(&mut s.model_mut()));
+        assert!(world_drop_click(&s.lua().clone(), &mut s.model_mut()));
         s.tick(0.01);
         assert_eq!(s.eval::<i64>("return heard").unwrap(), 1, "the popup");
         s.run("DeleteCursorItem()").unwrap();
@@ -1802,7 +1799,7 @@ mod tests {
         let mut gone = one_item_backpack().slots[&1].cursor_item(0, 1);
         gone.guid = 0x999;
         s.set_cursor_for_test(CursorPayload::Item(gone));
-        assert!(world_drop_click(&mut s.model_mut()));
+        assert!(world_drop_click(&s.lua().clone(), &mut s.model_mut()));
         s.tick(0.01);
         assert_eq!(
             s.eval::<i64>("return heard").unwrap(),
@@ -1815,7 +1812,7 @@ mod tests {
         s.model_mut().item_templates.remove(&117);
         s.run("ClearCursor() PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_item().is_some_and(|i| i.guid == 0x105));
-        assert!(world_drop_click(&mut s.model_mut()));
+        assert!(world_drop_click(&s.lua().clone(), &mut s.model_mut()));
         s.tick(0.01);
         assert_eq!(
             s.eval::<i64>("return heard").unwrap(),

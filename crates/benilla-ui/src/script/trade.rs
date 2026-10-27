@@ -264,10 +264,14 @@ impl super::UiScript {
             };
             // `GetCursorItemInfo`'s guid and source container, both nonzero (`0x4bf667`,
             // `0x4bf674`).
-            if item.guid == 0 || !source_container(model, &item) {
+            if item.guid == 0 || !source_container(&self.lua, model, &item) {
                 return None;
             }
-            let slot = if held_bound(model, &item) { 6 } else { 0 };
+            let slot = if held_bound(&self.lua, model, &item) {
+                6
+            } else {
+                0
+            };
             Some(TradeOpenItem {
                 slot: slot as u8,
                 guid: item.guid,
@@ -289,7 +293,7 @@ impl super::UiScript {
                 return;
             }
             let slot = usize::from(held.slot);
-            let row = trade_slot_item(model, &item);
+            let row = trade_slot_item(&self.lua, model, &item);
             cursor::clear(model, cursor::Clear::KEEP_LOCK);
             model.trade_offered[slot] = Some(cursor::CursorItem {
                 count: None,
@@ -314,7 +318,7 @@ impl super::UiScript {
             if item.guid == 0 {
                 return Ok(());
             }
-            let slot = if held_bound(&model, &item) {
+            let slot = if held_bound(&self.lua, &model, &item) {
                 model.trade_offered[6].is_none().then_some(6)
             } else if model.trade_offered[..6]
                 .iter()
@@ -339,7 +343,7 @@ impl super::UiScript {
     pub fn cursor_item_from_container(&self) -> bool {
         let model = self.model_ref();
         matches!(&model.cursor, Some(CursorPayload::Item(item))
-            if item.guid != 0 && source_container(&model, item))
+            if item.guid != 0 && source_container(&self.lua, &model, item))
     }
 
     /// The world click's refusal of the held item before its trade leg (`0x4926bc`-`0x49271f`): a
@@ -351,7 +355,7 @@ impl super::UiScript {
         let Some(CursorPayload::Item(item)) = model.cursor.as_ref() else {
             return None;
         };
-        let (_, _, seats) = held_record(&model, item)?;
+        let (_, _, seats) = held_record(&self.lua, &model, item)?;
         bag_refusal(item, seats)
     }
 
@@ -599,7 +603,7 @@ fn click_trade_button(lua: &Lua, id: i32) -> mlua::Result<()> {
         let refusal = {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             match &model.cursor {
-                Some(CursorPayload::Item(item)) => trade_refusal(&model, item),
+                Some(CursorPayload::Item(item)) => trade_refusal(lua, &model, item),
                 _ => None,
             }
         };
@@ -717,7 +721,7 @@ fn finish_placement(lua: &Lua, place: u64, sent: bool) {
     let wrote = sent || held.is_none();
     if wrote {
         super::tick::verb(lua, |model| {
-            let placed = held.as_ref().map(|item| trade_slot_item(model, item));
+            let placed = held.as_ref().map(|item| trade_slot_item(lua, model, item));
             model.trade_offered[slot] = held.map(|item| cursor::CursorItem {
                 count: None,
                 ..item
@@ -747,18 +751,17 @@ fn set_accept(lua: &Lua, flag: bool) -> mlua::Result<()> {
 
 /// The bag record behind a held item, as the reference reads its object: `(bound, bonding,
 /// filled seats)`; none when the record is gone or holds another item.
-fn held_record(model: &Model, item: &cursor::CursorItem) -> Option<(bool, u32, Option<u32>)> {
+fn held_record(
+    lua: &Lua,
+    model: &Model,
+    item: &cursor::CursorItem,
+) -> Option<(bool, u32, Option<u32>)> {
     if item.bag == cursor::EQUIPMENT_BAG {
-        let s = model
-            .player_slot_object(item.slot as usize)
+        let s = crate::script::char_stats::player_slot_object(lua, model, item.slot as usize)
             .filter(|s| s.guid == item.guid)?;
         Some((s.already_bound, s.bonding, s.occupied_seats))
     } else {
-        let s = model
-            .containers
-            .get(&item.bag)?
-            .slots
-            .get(&item.slot)
+        let s = super::held::held_slot(lua, model, item.bag, item.slot)
             .filter(|s| s.guid == item.guid)?;
         Some((s.already_bound, s.bonding, s.occupied_seats))
     }
@@ -767,7 +770,7 @@ fn held_record(model: &Model, item: &cursor::CursorItem) -> Option<(bool, u32, O
 /// Whether the held item's source container (`[0xb4b3c8]`) has a guid: the active player's own
 /// object for the backpack, the paper doll, the vault and the keyring; the bag item in the
 /// container's inventory slot (`ContainerIDToInventoryID`'s two bands) for a bag.
-fn source_container(model: &Model, item: &cursor::CursorItem) -> bool {
+fn source_container(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> bool {
     /// The vault's and the keyring's container ids.
     const BANK: i64 = -1;
     const KEYRING: i64 = -2;
@@ -775,8 +778,7 @@ fn source_container(model: &Model, item: &cursor::CursorItem) -> bool {
         0 | BANK | KEYRING | cursor::EQUIPMENT_BAG => model.unit_guids.player != 0,
         bag @ 1..=10 => {
             let slot = if bag <= 4 { bag + 19 } else { bag + 59 };
-            model
-                .player_slot_object(slot as usize)
+            crate::script::char_stats::player_slot_object(lua, model, slot as usize)
                 .is_some_and(|s| s.guid != 0)
         }
         _ => false,
@@ -785,8 +787,8 @@ fn source_container(model: &Model, item: &cursor::CursorItem) -> bool {
 
 /// `CGItem_C::IsBound` (`0x5da2c0`) on the held item; an item with no record reads unbound, as the
 /// open leg's lookup that finds no object leaves slot 1 (`0x4bf697`).
-fn held_bound(model: &Model, item: &cursor::CursorItem) -> bool {
-    held_record(model, item).is_some_and(|(bound, _, _)| bound)
+fn held_bound(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> bool {
+    held_record(lua, model, item).is_some_and(|(bound, _, _)| bound)
 }
 
 /// The error `ClickTradeButton` refuses a held item for slots 1 to 6 with (`0x4bfeb5`-`0x4bffae`),
@@ -796,8 +798,8 @@ fn held_bound(model: &Model, item: &cursor::CursorItem) -> bool {
 /// `ERR_TRADE_BOUND_ITEM` otherwise, a missing record included (`0x4bfee7`); a container with an
 /// item in any seat is `ERR_TRADE_BAG` (`0x4bff50`-`0x4bff62`); an empty one worn in a bag slot,
 /// player slots 19-22, is `ERR_TRADE_EQUIPPED_BAG` (`0x6225d0`, `0x4bffa4`-`0x4bffae`).
-fn trade_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
-    let (bound, bonding, seats) = held_record(model, item)?;
+fn trade_refusal(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
+    let (bound, bonding, seats) = held_record(lua, model, item)?;
     /// `BIND_QUEST_ITEM` and `BIND_QUEST_ITEM1`.
     const QUEST_BONDING: [u32; 2] = [4, 5];
     if bound {
@@ -836,12 +838,9 @@ fn write_player_slot(model: &mut Model, i: usize, item: Option<TradeSlotItem>) {
 }
 
 /// What our slot shows for a held item: the bag record the app fed, else what the cursor carries.
-fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
+fn trade_slot_item(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
     let name = |link: Option<&str>| link.map(|l| cursor::item_link_name(Some(l)));
-    model
-        .containers
-        .get(&item.bag)
-        .and_then(|c| c.slots.get(&item.slot))
+    super::held::held_slot(lua, model, item.bag, item.slot)
         .filter(|s| s.item_id == item.item_id)
         .map(|s| TradeSlotItem {
             item_id: s.item_id,
@@ -867,7 +866,7 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             item_id: item.item_id,
             name: name(item.link.as_deref()),
             texture: item.texture.clone(),
-            count: cursor::held_count(model, item),
+            count: cursor::held_count(lua, model, item),
             quality: item.quality,
             link: item.link.clone(),
             ..Default::default()

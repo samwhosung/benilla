@@ -153,7 +153,11 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
 /// charges are the summed absolute block-0 charges of every copy the same walk reaches
 /// (`0x622180` at `0x532553`, stored at `+0x428`); otherwise, and with no template cached
 /// (`0x532518`), they stay -1 and the builder reads the object's own.
-pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::ItemInstance> {
+pub(super) fn owned_instance(
+    lua: &Lua,
+    model: &Model,
+    item_id: u32,
+) -> Option<render::ItemInstance> {
     const BROKEN: u32 = 0x10;
     const WRAPPED: u32 = 0x8;
     let usable = |flags: u32, durability: Option<(u32, u32)>| {
@@ -165,13 +169,12 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
         |s: &&crate::script::InvSlotView| s.item_id == item_id && usable(s.flags, s.durability);
     let held_copy =
         |s: &&crate::script::ContainerSlot| s.item_id == item_id && usable(s.flags, s.durability);
+    // Every bag slot now, in bag and slot order.
+    let bags = crate::script::held::bag_items(lua, model);
     let held = |bag: i64| -> Option<render::ItemInstance> {
-        let c = model.containers.get(&bag)?;
-        let mut slots: Vec<_> = c.slots.iter().collect();
-        slots.sort_by_key(|(n, _)| **n);
-        slots
-            .into_iter()
-            .map(|(_, s)| s)
+        bags.iter()
+            .filter(|(b, _, _)| *b == bag)
+            .map(|(_, _, s)| s)
             .find(held_copy)
             .map(|s| slot_instance(s, false))
     };
@@ -197,10 +200,10 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
         return Some(found);
     }
     let worn_charges = model.inventory_slots.iter().skip(1).take(23).flatten();
-    let held_charges = (0..=4)
-        .chain([super::char_stats::KEYRING_CONTAINER])
-        .filter_map(|bag| model.containers.get(&bag))
-        .flat_map(|c| c.slots.values());
+    let held_charges = bags
+        .iter()
+        .filter(|(b, _, _)| (0..=4).contains(b) || *b == super::char_stats::KEYRING_CONTAINER)
+        .map(|(_, _, s)| s);
     let sum = worn_charges
         .filter(worn_copy)
         .map(|s| s.spell_charges[0])
@@ -239,12 +242,8 @@ pub(super) fn worn_instance(s: &crate::script::InvSlotView, object: bool) -> ren
 
 /// The item at `(bag, slot)` in the cursor's numbering, as a live object with no block, for the
 /// sell and send-mail slots (`0x5357c3`, `0x5353a0`).
-fn held_instance(model: &Model, bag: i64, slot: u32) -> Option<render::ItemInstance> {
-    model
-        .containers
-        .get(&bag)
-        .and_then(|c| c.slots.get(&slot))
-        .map(|s| slot_instance(s, true))
+fn held_instance(lua: &Lua, model: &Model, bag: i64, slot: u32) -> Option<render::ItemInstance> {
+    crate::script::held::held_slot(lua, model, bag, slot).map(|s| slot_instance(&s, true))
 }
 
 /// The id-keyed render; on a miss, the ask and a name-only line, as `SetBagItem`'s miss path. The
@@ -288,7 +287,7 @@ pub(super) fn render_owned(
     let h = frame_handle_of(lua, this)?;
     let sell_count = inst.as_ref().filter(|i| i.object).and_then(|i| {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        build::container_object(&model, i.guid).map(|s| s.count.max(1))
+        build::container_object(lua, &model, i.guid).map(|s| s.count.max(1))
     });
     build_item(
         lua,
@@ -499,12 +498,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 // record with the callback `0x6e2f70` inside the call (`0x533188` → `0x5331ec`,
                 // `0x6e2efb`); the ammo slot passes an entry and queries nothing (`0x53307d`).
                 if slot0 != -1 && unit.eq_ignore_ascii_case("player") {
-                    let pending = lua
-                        .app_data_ref::<Model>()
-                        .expect("model app_data")
-                        .own_inv_view(slot)
-                        .filter(|s| s.record_pending())
-                        .map(|s| s.item_id);
+                    let pending = {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        crate::script::char_stats::own_inv_view(lua, &model, slot)
+                    }
+                    .filter(|s| s.record_pending())
+                    .map(|s| s.item_id);
                     if let Some(entry) = pending {
                         super::container::ask_cooldown_record(lua, entry)?;
                     }
@@ -530,15 +529,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                 // record has none. A running one takes the p6=1 leg
                                 // (`0x533267`), every other the p6=0 leg (`0x5332ad`), whose
                                 // open hint a lootable box in the vault shows.
-                                let cooldown = player.then(|| model.inv_slot_cooldown(slot));
+                                let cooldown = player.then(|| {
+                                    crate::script::char_stats::inv_slot_cooldown(lua, &model, slot)
+                                });
                                 let cooldown = cooldown.flatten();
                                 let running = cooldown
                                     .is_some_and(|(start, dur, on)| on && start > 0.0 && dur > 0.0);
                                 // The vault and keyring are bag slots, read as the object they
                                 // hold: its text id, flags and charter all reach the builder.
-                                let mut inst = match player.then(|| model.inv_container_slot(slot))
-                                {
-                                    Some(Some(c)) => slot_instance(c, !running),
+                                let mut inst = match player.then(|| {
+                                    crate::script::char_stats::inv_container_slot(lua, &model, slot)
+                                }) {
+                                    Some(Some(c)) => slot_instance(&c, !running),
                                     _ => {
                                         let mut inst = worn_instance(&s, player);
                                         inst.openable_source = player && !running;
@@ -640,10 +642,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let slot = crate::script::binding_abi::ftol(slot) as u32;
             // The cooldown query asks a missing record with the callback `0x6e2f70` inside the
             // call (`0x53483a`, `0x6e2efb`), off its bag lookup, `0x4f93e0` (`0x534747`).
-            let pending = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .bag_slot(bag, slot)
+            let held = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                crate::script::held::bag_slot(lua, &model, bag, slot)
+            };
+            let pending = held
+                .as_ref()
                 .filter(|s| s.record_pending())
                 .map(|s| s.item_id);
             if let Some(entry) = pending {
@@ -652,7 +656,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let (item_id, count, link, quality, inst, repair_cost) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let cost = crate::script::merchant::repair_cost_at(lua, &model, bag, slot);
-                match model.bag_slot(bag, slot).filter(|s| s.item_id != 0) {
+                match held.as_ref().filter(|s| s.item_id != 0) {
                     // `0x534620` takes the p6=1 leg iff the cooldown query `0x6e2ed0` reports
                     // enable, start and duration all non-zero; that boolean is the inverse of the
                     // openable gate. `hasCooldown` is the builder's own return. A charged
@@ -665,7 +669,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         // `start + duration - now` (`0x534882`..`0x53488c`), into `+0x408`.
                         let mut inst = slot_instance(s, !has_cd);
                         inst.cooldown_ms = super::tooltip_spell::live_remaining_ms(
-                            model.container_cooldowns.get(&(bag, slot)).copied(),
+                            crate::script::container::slot_cooldown(s),
                             model.now,
                         );
                         (
@@ -744,7 +748,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         // stay -1 and its lock id 0 (`0x534337`, `0x534341`).
                         true => cell
                             .and_then(|n| model.trade_offered[n].as_ref())
-                            .and_then(|offered| build::live_object(&model, offered.guid))
+                            .and_then(|offered| build::live_object(lua, &model, offered.guid))
                             .map(|held| {
                                 let inst = render::ItemInstance {
                                     openable_source: false,
@@ -1070,7 +1074,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let (item_id, inst) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.auction_sell_item.as_ref() {
-                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
+                    Some(it) => (it.item_id, held_instance(lua, &model, it.bag, it.slot)),
                     None => (0, None),
                 }
             };
@@ -1102,7 +1106,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let (item_id, inst) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.mail_send_item.as_ref() {
-                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
+                    Some(it) => (it.item_id, held_instance(lua, &model, it.bag, it.slot)),
                     None => (0, None),
                 }
             };

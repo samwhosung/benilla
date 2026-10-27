@@ -68,9 +68,7 @@ impl super::UiScript {
     fn bags_enter_world(&mut self) {
         let held: Vec<i64> = {
             let model = self.model_ref();
-            (1..=10)
-                .filter(|n| model.containers.contains_key(n))
-                .collect()
+            super::held::held_bags(&self.lua, &model)
         };
         for n in held {
             self.fire_event("BAG_UPDATE", vec![super::ScriptValue::Int(n)]);

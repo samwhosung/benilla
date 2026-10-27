@@ -1,9 +1,9 @@
 //! The app side of the container seam around `benilla_ui::script`'s `container` module.
 //!
-//! [`feed`] builds each bag from the player's descriptor (the backpack's `PACK_SLOT` array, the
-//! equipped bags at `INV_SLOT` 19-22 with their own `CONTAINER_FIELD_SLOT` arrays, the keyring at
-//! 81.. with no container object, like the bank), the object index and the template cache, and
-//! fires `BAG_UPDATE(bagID)` per changed bag. The verbs' calls send inside their verbs over
+//! [`bags`] answers the container getters at the call off the player's descriptor (the backpack's
+//! `PACK_SLOT` array, the equipped bags at `INV_SLOT` 19-22 with their own `CONTAINER_FIELD_SLOT`
+//! arrays, the keyring at 81.. with no container object, like the bank), the object index and the
+//! template cache; the bag events are the item watchers' ([`crate::item_watch`]). The verbs' calls send inside their verbs over
 //! [`wire_pos`]: [`drain`]'s item use takes an equippable item that starts no quest out as
 //! `CMSG_AUTOEQUIP_ITEM` and anything else through [`send_item_use`], and [`calls`] the cursor's
 //! moves, stores, repairs, destroys and bind answers. The cursor verbs lock what they pick up and
@@ -19,6 +19,7 @@ use crate::net::Objects;
 use crate::query_cache::Ask;
 use crate::ui_unit::UnitFeed;
 
+mod bags;
 mod calls;
 mod drain;
 mod equip_error;
@@ -36,9 +37,10 @@ pub(crate) use drain::{dispatch_fork, send_auto_equip};
 pub(crate) use equip_error::{equip_error_key, EquipError, EquipErrors};
 // `UseContainerItem`, `UseInventoryItem` and the item verbs' calls, applied in call order by
 // `crate::script_calls`.
+pub(crate) use bags::{BagLive, BagReads};
 pub(crate) use calls::ItemSteps;
 pub(crate) use drain::ScriptItemUse;
-use feed::{feed_containers, feed_item_stats, feed_random_properties};
+use feed::{feed_item_stats, feed_random_properties};
 pub(crate) use requirements::RequirementsLive;
 pub(crate) use sets::ItemSetLive;
 
@@ -492,9 +494,13 @@ pub(crate) fn collect_inventory(
 /// walker (`0x6223a0` → `0x622420`) with predicate `0x6223d0`, `BagFamily == 9` (`template+0x1d0`),
 /// at mode `0x4f`, so a key in the bank counts. A slot whose template is still in flight reads as
 /// no key until the answer lands.
-pub(crate) fn has_key(store: &ObjectFields, objects: &Objects, items: &Items) -> bool {
+pub(crate) fn has_key(
+    store: &ObjectFields,
+    objects: &(impl ItemObjects + ?Sized),
+    items: &Items,
+) -> bool {
     // Every guid mode `0x4f` reaches, in the walker's order: each bag's contents follow its slot.
-    fn contents(bag_guid: u64, objects: &Objects, out: &mut Vec<u64>) {
+    fn contents(bag_guid: u64, objects: &(impl ItemObjects + ?Sized), out: &mut Vec<u64>) {
         let Some(f) = objects.object(bag_guid) else {
             return;
         };
@@ -1009,7 +1015,7 @@ impl Plugin for UiItemsPlugin {
         net::register(app);
         crate::item_lane::add_item_lane(app);
         equip_error::add_equip_error_lane(app);
-        feed::add_bag_view_lane(app);
+        bags::plugin(app);
         // The icons come from the equipment renderer's `ItemDisplays`.
         app.init_resource::<crate::ui_items::locks::HeldItemLocks>()
             .init_resource::<crate::ui_items::locks::LockWatch>()
@@ -1025,19 +1031,10 @@ impl Plugin for UiItemsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The dead objects' locks, ahead of both inventory feeds.
+                    // The dead objects' locks, ahead of the doll's feed.
                     crate::ui_items::locks::forget_gone_item_locks
                         .in_set(crate::ui_script::UiFeed)
-                        .before(feed_containers)
                         .before(crate::ui_char::feed_char),
-                    // The slot cooldowns precede `CooldownEvents`, as every cooldown push does
-                    // (the cooldown lane's `BAG_UPDATE_COOLDOWN` fires after every feed), and the
-                    // bags precede the world-enter cascade's `BAG_UPDATE`s
-                    // (`UiScript::fire_world_enter`).
-                    feed_containers
-                        .in_set(UnitFeed)
-                        .in_set(crate::ui_unit::WorldEnterSeats)
-                        .before(crate::ui_action::CooldownEvents),
                     // The item-tooltip store answers in the feed, so the next frame's input
                     // records, a re-hover among them, see the answer, and seats a new VM before its world entry; a
                     // refused cast's item name reads the store it leaves.
@@ -1046,8 +1043,7 @@ impl Plugin for UiItemsPlugin {
                         .in_set(crate::ui_unit::WorldEnterSeats)
                         .before(crate::ui_cast::feed_cast_reports),
                     // The equip callbacks an item record's answer ran, drained with the Lua's
-                    // asks, after the bag feed (and the doll's, ahead of it) has pushed what the
-                    // answer changed.
+                    // asks, after the doll's feed has pushed what the answer changed.
                     crate::ui_bind_confirm::replay_equip_records.in_set(crate::ui_script::UiDrain),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),

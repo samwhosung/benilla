@@ -7,7 +7,7 @@
 use benilla_protocol::messages::TradeStatus;
 use benilla_protocol::ObjectFields;
 use benilla_protocol::SessionEvent;
-use benilla_ui::script::{ContainerSlot, ContainerState, UiScript, UnitGuids};
+use benilla_ui::script::{UiScript, UnitGuids};
 use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
@@ -94,26 +94,6 @@ fn client() -> Trade {
         target: BOB,
         ..Default::default()
     });
-    let mut bag = ContainerState {
-        num_slots: 16,
-        ..Default::default()
-    };
-    for (slot, guid, item_id, name) in [
-        (1, CLOTH, 2589, "Linen Cloth"),
-        (2, JERKY, 117, "Tough Jerky"),
-    ] {
-        bag.slots.insert(
-            slot,
-            ContainerSlot {
-                item_id,
-                guid,
-                count: 1,
-                link: Some(format!("|cffffffff|Hitem:{item_id}:0:0:0|h[{name}]|h|r")),
-                ..Default::default()
-            },
-        );
-    }
-    script.set_container(0, Some(bag));
     script
         .run(
             r#"HEARD = ""
@@ -397,41 +377,40 @@ fn each_offer_edit_goes_out_with_or_without_a_window_and_is_counted() {
     assert_eq!(edits(&t), 3);
 }
 
-/// A placement whose send refuses (here a bag slot with no wire form) returns 0 from `0x4bfa70`
+/// A placement whose send refuses (here for an item whose object went after the pickup) returns 0
+/// from `0x4bfa70`
 /// (`0x4bfab3`): the slot is not written or signalled and nothing is counted, and the cursor's
 /// put-back unlocks the held item (`0x4c004a`), leaving the cursor empty.
 #[test]
 fn a_refused_placement_writes_nothing_and_drops_the_item_unlocked() {
     let mut t = client();
     open_with_bob(&mut t);
-    // Slot 30 of the backpack, which has no wire position.
-    with_hosted_vm(t.app.world_mut(), |vm| {
-        let vm = vm.expect("a VM");
-        let mut bag = ContainerState {
-            num_slots: 32,
-            ..Default::default()
-        };
-        bag.slots.insert(
-            30,
-            ContainerSlot {
-                item_id: 2589,
-                guid: CLOTH,
-                count: 1,
-                ..Default::default()
-            },
-        );
-        vm.set_container(0, Some(bag));
-    });
-    run(&mut t, "PickupContainerItem(0, 30) ClickTradeButton(1)");
+    run(&mut t, "PickupContainerItem(0, 1)");
+    assert!(eval::<bool>(&mut t, "return CursorHasItem() == 1"), "held");
+    let world = t.app.world_mut();
+    if let Some(cloth) = world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .remove(&CLOTH)
+    {
+        world.despawn(cloth);
+    }
+    run(&mut t, "ClickTradeButton(1)");
     assert!(sent(&t).is_empty(), "nothing went out");
     assert_eq!(heard(&mut t), "", "no slot signal");
     assert_eq!(
-        eval::<(bool, bool, bool)>(
+        eval::<(bool, bool)>(
             &mut t,
-            "local _, _, l = GetContainerItemInfo(0, 30) \
-             return GetTradePlayerItemInfo(1) == nil, CursorHasItem() == nil, l == nil"
+            "return GetTradePlayerItemInfo(1) == nil, CursorHasItem() == nil"
         ),
-        (true, true, true)
+        (true, true)
+    );
+    assert!(
+        !t.app
+            .world()
+            .non_send_resource::<UiScript>()
+            .item_locked(CLOTH),
+        "the put-back unlocks it"
     );
     assert_eq!(
         t.app.world().resource::<super::TradeSession>().own_edits,
@@ -735,33 +714,23 @@ fn a_click_on_the_partner_offers_the_item_and_on_anyone_else_refuses() {
 #[test]
 fn the_click_refuses_a_full_bag_and_a_dead_player_and_skips_a_targeting_cursor() {
     let mut t = client();
-    // Backpack slot 1 a bag with two of its seats filled.
-    with_hosted_vm(t.app.world_mut(), |vm| {
-        let mut bag = ContainerState {
-            num_slots: 16,
-            ..Default::default()
-        };
-        bag.slots.insert(
-            1,
-            ContainerSlot {
-                item_id: 2589,
-                guid: CLOTH,
-                count: 1,
-                occupied_seats: Some(2),
-                ..Default::default()
-            },
-        );
-        bag.slots.insert(
-            2,
-            ContainerSlot {
-                item_id: 117,
-                guid: JERKY,
-                count: 1,
-                ..Default::default()
-            },
-        );
-        vm.expect("a VM").set_container(0, Some(bag));
-    });
+    // Backpack slot 1 a bag with two of its four seats filled.
+    {
+        use benilla_protocol::field::FIELD_CONTAINER_SLOT_1;
+        let world = t.app.world_mut();
+        let cloth = world.resource::<crate::net::GuidIndex>().0[&CLOTH];
+        let mut pairs = vec![(2, 0x7), (3, 2589), (14, 1), (48, 4)];
+        for (i, guid) in [
+            (0u16, 0x4000_0000_0000_0c01_u64),
+            (2, 0x4000_0000_0000_0c02),
+        ] {
+            pairs.push((FIELD_CONTAINER_SLOT_1 + 2 * i, guid as u32));
+            pairs.push((FIELD_CONTAINER_SLOT_1 + 2 * i + 1, (guid >> 32) as u32));
+        }
+        world
+            .entity_mut(cloth)
+            .insert(crate::net::ObjectStore(ObjectFields::from_pairs(&pairs)));
+    }
     run(&mut t, "PickupContainerItem(0, 1)");
     click_on(&mut t, BOB);
     assert!(sent(&t).is_empty());
@@ -890,33 +859,22 @@ fn the_accept_signal_runs_before_its_packet() {
 }
 
 /// A drop on the open partner places inside an engine turn, where its call waits: a send that
-/// refuses (`0x4bfab3`, here a backpack slot with no wire form) still writes nothing, signals
-/// nothing and leaves the item on the cursor, as `0x4bfc50` clears it only past a placement that
-/// went (`0x4bfcd4`).
+/// refuses (`0x4bfab3`, here for an item whose object went after the pickup) still writes
+/// nothing, signals nothing and leaves the item on the cursor, as `0x4bfc50` clears it only past
+/// a placement that went (`0x4bfcd4`).
 #[test]
 fn a_refused_drop_placement_writes_nothing_and_keeps_the_cursor() {
     let mut t = client();
     open_with_bob(&mut t);
-    with_hosted_vm(t.app.world_mut(), |vm| {
-        let mut bag = ContainerState {
-            num_slots: 32,
-            ..Default::default()
-        };
-        bag.slots.insert(
-            30,
-            ContainerSlot {
-                item_id: 2589,
-                guid: CLOTH,
-                count: 1,
-                ..Default::default()
-            },
-        );
-        vm.expect("a VM").set_container(0, Some(bag));
-    });
-    run(
-        &mut t,
-        "PickupContainerItem(0, 30) DropItemOnUnit('target')",
-    );
+    run(&mut t, "PickupContainerItem(0, 1) DropItemOnUnit('target')");
+    let world = t.app.world_mut();
+    if let Some(cloth) = world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .remove(&CLOTH)
+    {
+        world.despawn(cloth);
+    }
     let drop = t.drop;
     run_system(&mut t, drop);
     assert!(sent(&t).is_empty(), "nothing went out");
@@ -1040,27 +998,43 @@ fn canceled_and_code_13_signal_the_purse_ahead_of_the_dispatcher() {
 /// The open leg's item path asks for the held item's guid and its source container's
 /// (`0x4bf667`, `0x4bf674`): an item from bag 1 with no bag known in inventory slot 20 leaves the
 /// cursor and the offer alone, and the world click asks no trade for it; with the bag seated
-/// both go on.
+/// both go on. The bag is in the world either way; the doll's slot holds it only when seated.
 #[test]
 fn the_open_leg_takes_no_item_whose_bag_has_no_guid() {
     for seated in [false, true] {
         let mut t = client();
+        {
+            use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_PLAYER_INV_SLOT_HEAD};
+            const BAG: u64 = 0x4000_0000_0000_0b01;
+            let world = t.app.world_mut();
+            crate::items::test_spawn_item(
+                world,
+                BAG,
+                ObjectFields::from_pairs(&[
+                    (2, 0x7),
+                    (3, 4496),
+                    (14, 1),
+                    (48, 4),
+                    (FIELD_CONTAINER_SLOT_1, CLOTH as u32),
+                    (FIELD_CONTAINER_SLOT_1 + 1, (CLOTH >> 32) as u32),
+                ]),
+                true,
+            );
+            let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+            let seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 19;
+            world
+                .get_mut::<crate::net::ObjectStore>(me)
+                .expect("our store")
+                .0
+                .merge(ObjectFields::from_pairs(&[
+                    (532, 0),
+                    (533, 0),
+                    (seat, BAG as u32),
+                    (seat + 1, (BAG >> 32) as u32),
+                ]));
+        }
         with_hosted_vm(t.app.world_mut(), |vm| {
             let vm = vm.expect("a VM");
-            let mut bag = ContainerState {
-                num_slots: 4,
-                ..Default::default()
-            };
-            bag.slots.insert(
-                1,
-                ContainerSlot {
-                    item_id: 2589,
-                    guid: CLOTH,
-                    count: 1,
-                    ..Default::default()
-                },
-            );
-            vm.set_container(1, Some(bag));
             if seated {
                 let mut slots: benilla_ui::script::InventorySlots = Default::default();
                 slots[20] = Some(benilla_ui::script::InvSlotView {

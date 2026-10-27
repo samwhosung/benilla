@@ -991,7 +991,7 @@ pub(super) fn seed_ui_fixture(
                     crate::net::SelfPlayer,
                     crate::net::Guid(PLAYER_GUID),
                 ));
-                // The bag feed fills the backpack from the player a frame on; then the window
+                // The backpack reads the player's seats; a frame on, the window
                 // opens and the tooltip opens over the top-left button (`Item16`, game slot 1)
                 // through the hover's OnEnter path. `ContainerFrame_GenerateFrame` numbers
                 // backwards from `Item1` at the bottom right (`ContainerFrame.lua:426-442`), and
@@ -1795,7 +1795,7 @@ fn seed_cooldown_filmstrip(
 }
 
 /// Seeds and opens the backpack with a fixed item set, for the `Bag` fixture. With no `SelfPlayer`
-/// in capture the `ui_items` feed leaves bag 0 alone.
+/// in capture the bag getters read this copy (`crate::ui_items::BagLive` answers nothing).
 fn seed_bag_window(
     script: &mut benilla_ui::script::UiScript,
     icons: Option<&crate::entities::ItemDisplays>,

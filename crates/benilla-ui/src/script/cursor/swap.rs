@@ -54,13 +54,12 @@ enum OtherEnd {
 /// active player's own list for the player's slots, the backpack, the vault and the keyring, the
 /// bag item in the container's inventory slot (`ContainerIDToInventoryID`'s two bands) for bags
 /// 1-10.
-fn bag_object(model: &Model, bag: i64) -> bool {
+fn bag_object(lua: &Lua, model: &Model, bag: i64) -> bool {
     match bag {
         EQUIPMENT_BAG | -2..=0 => true,
         1..=10 => {
             let live = if bag <= 4 { bag + 19 } else { bag + 59 };
-            model
-                .player_slot_object(live as usize)
+            crate::script::char_stats::player_slot_object(lua, model, live as usize)
                 .is_some_and(|v| v.guid != 0)
         }
         _ => false,
@@ -68,7 +67,7 @@ fn bag_object(model: &Model, bag: i64) -> bool {
 }
 
 /// The move's other end when exactly one end is an equipment position (`0x5e0ce1`-`0x5e0d69`).
-fn other_end(model: &Model, mv: &ContainerMove) -> OtherEnd {
+fn other_end(lua: &Lua, model: &Model, mv: &ContainerMove) -> OtherEnd {
     let (bag, slot) = match (
         equip_position(mv.src_bag, mv.src_slot),
         equip_position(mv.dst_bag, mv.dst_slot),
@@ -77,23 +76,20 @@ fn other_end(model: &Model, mv: &ContainerMove) -> OtherEnd {
         (false, true) => (mv.src_bag, mv.src_slot),
         _ => return OtherEnd::Unasked,
     };
-    if !bag_object(model, bag) {
+    if !bag_object(lua, model, bag) {
         return OtherEnd::NoBag;
     }
-    model
-        .containers
-        .get(&bag)
-        .and_then(|c| c.slots.get(&slot))
+    crate::script::held::held_slot(lua, model, bag, slot)
         .filter(|s| s.item_id != 0 && s.guid != 0)
         .map_or(OtherEnd::Unasked, |s| {
-            OtherEnd::Item(EquipFacts::of_slot(s))
+            OtherEnd::Item(EquipFacts::of_slot(&s))
         })
 }
 
 /// `SwapItem(mv, confirm)` (`0x5e0c40`): the question on the item the move would equip, unless
 /// `confirm` (the accept's re-issue, `0x5e1c46`) skips it; else the send and its clear.
 pub(crate) fn swap_items(lua: &Lua, model: &mut Model, mv: ContainerMove, confirm: bool) -> Swap {
-    let question = match other_end(model, &mv) {
+    let question = match other_end(lua, model, &mv) {
         OtherEnd::NoBag => return Swap::NoBag(mv),
         OtherEnd::Unasked => Question::Send,
         OtherEnd::Item(item) => equip_question(lua, model, item, confirm),

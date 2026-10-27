@@ -671,15 +671,14 @@ pub(crate) struct Model {
     /// character (`0x5d8ec0`-`0x5d8f6a`), fed by the app.
     pub(crate) control_bypass: HashSet<u32>,
 
-    /// Bag contents by API bag id (0 is the backpack).
+    /// A harness's copy of the bags by API bag id (0 is the backpack), read only with no host to
+    /// ask ([`super::held`]).
     pub(crate) containers: HashMap<i64, container::ContainerState>,
-    /// Per `(bag, slot)`, `(start, duration, enabled)` in `GetTime` seconds, stamped at push.
-    pub(crate) container_cooldowns: HashMap<(i64, u32), (f64, f64, bool)>,
-    /// The same triple for a worn item, by live-API slot id (1..=19); the cooldown query is keyed
-    /// by the item's entry (`0x6e2ed0`), so a worn trinket answers as a bagged one does. Kept off
-    /// the doll snapshot, which is pushed on change.
+    /// A harness's copy of the same triple for a worn item, by live-API slot id (1..=19), read
+    /// only with no host to ask; the cooldown query is keyed by the item's entry (`0x6e2ed0`), so
+    /// a worn trinket answers as a bagged one does.
     pub(crate) worn_cooldowns: HashMap<usize, (f64, f64, bool)>,
-    /// `HasKey()`: a keys-family item in equipment, bags, bank or keyring; gates the keyring UI.
+    /// A harness's `HasKey()`, read only with no host to ask ([`super::held::has_key`]).
     pub(crate) has_key: bool,
     /// What the cursor carries; nothing moves locally, the server's updates settle the bags.
     pub(crate) cursor: Option<cursor::CursorPayload>,
@@ -1549,7 +1548,6 @@ impl Model {
             far_sight_on: false,
             control_bypass: HashSet::new(),
             containers: HashMap::new(),
-            container_cooldowns: HashMap::new(),
             worn_cooldowns: HashMap::new(),
             has_key: false,
             cursor: None,

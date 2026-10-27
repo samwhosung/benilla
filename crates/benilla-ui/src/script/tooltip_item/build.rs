@@ -105,10 +105,10 @@ impl CacheWait {
             }),
             CacheWait::Name(guid) => name_of(lua, model, guid).is_some(),
             CacheWait::Petition(guid) => {
-                container_object(model, guid).is_some_and(|s| s.petition.is_some())
+                container_object(lua, model, guid).is_some_and(|s| s.petition.is_some())
             }
-            CacheWait::PetitionOwner(guid) => container_object(model, guid)
-                .and_then(|s| s.petition.as_ref())
+            CacheWait::PetitionOwner(guid) => container_object(lua, model, guid)
+                .and_then(|s| s.petition)
                 .is_some_and(|p| p.owner.is_some()),
         }
     }
@@ -146,14 +146,13 @@ fn name_of(lua: &Lua, model: &Model, guid: u64) -> Option<String> {
     held.chain(worn).chain(traded).next()
 }
 
-/// The bag slot that holds the item object `guid`, wherever it moved; none for guid 0.
-pub(super) fn container_object(model: &Model, guid: u64) -> Option<&crate::script::ContainerSlot> {
-    (guid != 0).then_some(())?;
-    model
-        .containers
-        .values()
-        .flat_map(|c| c.slots.values())
-        .find(|s| s.guid == guid)
+/// The bag slot that holds the item object `guid` now, wherever it moved; none for guid 0.
+pub(super) fn container_object(
+    lua: &Lua,
+    model: &Model,
+    guid: u64,
+) -> Option<crate::script::ContainerSlot> {
+    crate::script::held::find_guid(lua, model, guid).map(|(_, _, s)| s)
 }
 
 /// An item object the player holds, as the builder reads it live.
@@ -168,13 +167,13 @@ pub(super) struct HeldObject {
 
 /// The item object `guid` (`0x52b777` finds it by guid) wherever it is held, a bag slot or a worn
 /// one; none for guid 0.
-pub(super) fn live_object(model: &Model, guid: u64) -> Option<HeldObject> {
-    if let Some(s) = container_object(model, guid) {
+pub(super) fn live_object(lua: &Lua, model: &Model, guid: u64) -> Option<HeldObject> {
+    if let Some(s) = container_object(lua, model, guid) {
         return Some(HeldObject {
             item_id: s.item_id,
             quality: s.quality,
             count: s.count.max(1),
-            inst: super::slot_instance(s, true),
+            inst: super::slot_instance(&s, true),
         });
     }
     model
@@ -207,7 +206,10 @@ impl ItemBuild {
         let Some(kept) = self.inst.take() else {
             return self;
         };
-        let live = kept.object.then(|| live_object(model, kept.guid)).flatten();
+        let live = kept
+            .object
+            .then(|| live_object(lua, model, kept.guid))
+            .flatten();
         let mut inst = match live {
             Some(held) => {
                 let inst = ItemInstance {

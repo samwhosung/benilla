@@ -843,7 +843,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // send below. Checked before the money (`0x4ae917` ahead of `0x4ae99e`). The
                 // attachment is locked, so it cannot have moved.
                 if let Some(item) = model.mail_send_item.as_ref() {
-                    if !holds(model, item) {
+                    if !holds(lua, model, item) {
                         return Some(Err(()));
                     }
                 }
@@ -971,7 +971,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let held = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.mail_send_item.clone().map(|it| {
-                    let count = cursor::held_count(&model, &it);
+                    let count = cursor::held_count(lua, &model, &it);
                     // Off the snapshot: the VM's record copy, and the link's name.
                     let snapshot = model.item_templates.get(&it.item_id).map(|t| {
                         let name = cursor::item_link_name(it.link.as_deref());
@@ -1199,18 +1199,13 @@ fn submit(lua: &Lua, call: MailCall) -> mlua::Result<()> {
 /// (`0x4adf6d`, `0x4adf97`); record flags conjured `0x2` (`0x4adfbd`), an area (`0x5da500`, record
 /// `+0x1c8`) or a map (`0x5da570`, `+0x1cc`) is `ERR_MAIL_CONJURED_ITEM`; a container holding an
 /// item is `ERR_MAIL_BAG` (`0x4ae019`-`0x4ae042`).
-fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
+fn attach_refusal(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
     let (bound, seats) = if item.bag == cursor::EQUIPMENT_BAG {
-        let s = model
-            .player_slot_object(item.slot as usize)
+        let s = crate::script::char_stats::player_slot_object(lua, model, item.slot as usize)
             .filter(|s| s.guid == item.guid)?;
         (s.already_bound, s.occupied_seats)
     } else {
-        let s = model
-            .containers
-            .get(&item.bag)?
-            .slots
-            .get(&item.slot)
+        let s = super::held::held_slot(lua, model, item.bag, item.slot)
             .filter(|s| s.guid == item.guid)?;
         (s.already_bound, s.occupied_seats)
     };
@@ -1234,17 +1229,12 @@ fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static s
 
 /// Whether the attachment's slot, a bag's or the doll's, still holds its object: the send
 /// resolves the guid and tests its owner (`0x4ae92e`-`0x4ae955`), and a locked item cannot move.
-fn holds(model: &Model, item: &cursor::CursorItem) -> bool {
+fn holds(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> bool {
     if item.bag == cursor::EQUIPMENT_BAG {
-        model
-            .player_slot_object(item.slot as usize)
+        crate::script::char_stats::player_slot_object(lua, model, item.slot as usize)
             .is_some_and(|s| s.guid == item.guid)
     } else {
-        model
-            .containers
-            .get(&item.bag)
-            .and_then(|c| c.slots.get(&item.slot))
-            .is_some_and(|s| s.guid == item.guid)
+        super::held::held_slot(lua, model, item.bag, item.slot).is_some_and(|s| s.guid == item.guid)
     }
 }
 
@@ -1257,7 +1247,7 @@ fn click_send_mail_item(lua: &Lua) -> mlua::Result<()> {
     let refusal = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         match &model.cursor {
-            Some(cursor::CursorPayload::Item(item)) => attach_refusal(&model, item),
+            Some(cursor::CursorPayload::Item(item)) => attach_refusal(lua, &model, item),
             _ => None,
         }
     };

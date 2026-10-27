@@ -28,6 +28,8 @@ pub(crate) struct ItemSteps<'w, 's> {
     /// Absent in a world with no merchant window, whose repair clicks are dropped.
     merchant: Option<Res<'w, crate::ui_merchant::MerchantOpen>>,
     purse: Option<crate::ui_merchant::RepairPurse<'w, 's>>,
+    /// The bags the bind answer's re-issue reads, the host being out while it applies.
+    bags: Option<super::BagLive<'w, 's>>,
 }
 
 impl ItemSteps<'_, '_> {
@@ -42,9 +44,11 @@ impl ItemSteps<'_, '_> {
             equip_sound,
             merchant,
             purse,
+            bags,
         } = self;
         let store = self_q.iter().next();
-        match call {
+        // The verbs' own reads of the bags, with the host out while it applies.
+        let body = |script: &mut UiScript| match call {
             ItemCall::Move(mv) => send_container_move(net, mv),
             // `SwapItem`'s question (`0x5e0ee4`), its dialog up inside the call.
             ItemCall::SwapAsk(mv) => {
@@ -193,6 +197,10 @@ impl ItemSteps<'_, '_> {
             }
             // The host hands this one to the item use, which holds the cast ladder.
             ItemCall::BindOnUse { .. } => {}
+        };
+        match bags.as_mut() {
+            Some(bags) => script.reading(bags, body),
+            None => body(script),
         }
     }
 }

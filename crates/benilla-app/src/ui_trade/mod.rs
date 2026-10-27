@@ -1133,10 +1133,8 @@ fn feed_trade(
             }
         });
     }
-    vm.turn(|script, mut trade| {
-        let Some(script) = script else {
-            return;
-        };
+    let open_leg = vm.turn(|script, mut trade| {
+        let script = script?;
         let last = last.get(script);
         let last_open = last_open.get(script);
         if closes.since_last(script, NpcWindow::Trade) {
@@ -1285,46 +1283,79 @@ fn feed_trade(
         if trade.named_lines_asked != trade.named_lines.len() {
             trade.named_lines_asked = trade.named_lines.len();
         }
-        if opened {
-            // `SetTradePartner`'s open leg (`0x4bf5f1`): only a trade we started by dropping
-            // something on the partner moves what the cursor holds into the offer (`0x5d3f80`).
-            if trade.opens_with_held() {
-                // The coinage `0x5d4570` tests the total against, as the handler finds it.
-                let purse = objects
-                    .player_fields()
-                    .and_then(|p| p.player_money())
-                    .map_or(0, u64::from);
-                if let Some(offer) = script.trade_open_money(purse) {
-                    // Coins (`0x4bf5fe`-`0x4bf644`): `0x5d4500` sends the new offer, then the
-                    // cursor clears (`0x4bf61c`), the cache of our money `[0xb71740]` takes it
-                    // (`0x4bf62b`), and `PLAYER_TRADE_MONEY`, `PLAYER_MONEY` and `TRADE_SHOW` fire
-                    // once each, then the leg returns.
-                    trade.send_edit(&commands, ClientCommand::SetTradeGold { copper: offer });
-                    script.trade_open_money_clear();
-                    trade.fold_held_coins(offer);
-                    script.fire_event("PLAYER_TRADE_MONEY", vec![]);
-                    script.fire_event("PLAYER_MONEY", vec![]);
-                } else if let Some(held) = script.trade_open_item() {
-                    // An item (`0x4bf652`-`0x4bf6fa`): its send's answer is not read (`0x4bf6be`),
-                    // then the cursor clears and the slot is stored (`0x4bf6ca`-`0x4bf6fa`).
-                    let _ = trade.send_placement(
-                        &commands,
-                        &objects,
-                        &rows.items,
-                        held.slot,
-                        held.guid,
-                        held.bag,
-                        held.bag_slot,
-                    );
-                    script.trade_open_item_store(&held);
-                }
-            }
-            script.fire_event("TRADE_SHOW", vec![]);
-        }
-
         *last = fresh;
         *last_open = trade.is_open();
-    })
+        // `SetTradePartner`'s open leg (`0x4bf5f1`): only a trade we started by dropping
+        // something on the partner moves what the cursor holds into the offer (`0x5d3f80`), with
+        // the coinage `0x5d4570` tests the total against, as the handler finds it.
+        opened.then(|| {
+            trade.opens_with_held().then(|| {
+                objects
+                    .player_fields()
+                    .and_then(|p| p.player_money())
+                    .map_or(0, u64::from)
+            })
+        })
+    });
+    let Some(purse) = open_leg else {
+        return;
+    };
+    // What the cursor holds, read with the host lent, as the leg reads the bags at the call.
+    let held = purse.and_then(|purse| {
+        vm.run(|script| {
+            let script = script?;
+            Some(match script.trade_open_money(purse) {
+                Some(offer) => OpenHeld::Coins(offer),
+                None => OpenHeld::Item(script.trade_open_item()?),
+            })
+        })
+    });
+    let item = vm.turn(|script, mut trade| {
+        let script = script?;
+        match held? {
+            // Coins (`0x4bf5fe`-`0x4bf644`): `0x5d4500` sends the new offer, then the cursor
+            // clears (`0x4bf61c`), the cache of our money `[0xb71740]` takes it (`0x4bf62b`), and
+            // `PLAYER_TRADE_MONEY`, `PLAYER_MONEY` and `TRADE_SHOW` fire once each, then the leg
+            // returns.
+            OpenHeld::Coins(offer) => {
+                trade.send_edit(&commands, ClientCommand::SetTradeGold { copper: offer });
+                script.trade_open_money_clear();
+                trade.fold_held_coins(offer);
+                script.fire_event("PLAYER_TRADE_MONEY", vec![]);
+                script.fire_event("PLAYER_MONEY", vec![]);
+                None
+            }
+            // An item (`0x4bf652`-`0x4bf6fa`): its send's answer is not read (`0x4bf6be`), then
+            // the cursor clears and the slot is stored (`0x4bf6ca`-`0x4bf6fa`).
+            OpenHeld::Item(held) => {
+                let _ = trade.send_placement(
+                    &commands,
+                    &objects,
+                    &rows.items,
+                    held.slot,
+                    held.guid,
+                    held.bag,
+                    held.bag_slot,
+                );
+                Some(held)
+            }
+        }
+    });
+    vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if let Some(held) = item {
+            script.trade_open_item_store(&held);
+        }
+        script.fire_event("TRADE_SHOW", vec![]);
+    });
+}
+
+/// What the open leg moves into the offer.
+enum OpenHeld {
+    Coins(u32),
+    Item(benilla_ui::script::TradeOpenItem),
 }
 
 /// The callback behind `TRADE_UPDATE`, whose one producer is `0x4c0340` (`0x4c034f`), which an

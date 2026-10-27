@@ -5,9 +5,7 @@
 use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_OBJECT_ENTRY};
 use benilla_protocol::messages::ItemInfo;
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{
-    ContainerSlot, ContainerState, InvSlotView, InventorySlots, UiScript, UseFork,
-};
+use benilla_ui::script::{InvSlotView, InventorySlots, UiScript};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -58,21 +56,8 @@ fn roll() -> String {
     format!("{:?}", ClientCommand::RandomRoll { min: 1, max: 100 })
 }
 
-fn slot(guid: u64, item_id: u32, count: u32) -> ContainerSlot {
-    ContainerSlot {
-        guid,
-        item_id,
-        count,
-        texture: Some("Interface\\Icons\\INV_Misc_QuestionMark".into()),
-        link: Some(format!("|cffffffff|Hitem:{item_id}:0:0:0|h[Thing]|h|r")),
-        // The record cached.
-        quality: Some(1),
-        ..Default::default()
-    }
-}
-
-/// The whole client, headless: the backpack, a bag in doll slot 20 and a worn helm, as both the
-/// player's descriptor and the VM's snapshot hold them.
+/// The whole client, headless: the backpack, a bag in doll slot 20 and a worn helm, in the
+/// player's descriptor, and the doll as the VM's snapshot holds it.
 struct Bags {
     app: App,
     rx: Receiver<ClientCommand>,
@@ -113,10 +98,16 @@ impl Bags {
             (W, HELM),
             (X, LINEN),
         ] {
+            // `ITEM_FIELD_STACK_COUNT` (14): the linen in slot 3 is a stack of five.
+            let count = if guid == C { 5 } else { 1 };
             test_spawn_item(
                 world,
                 guid,
-                ObjectFields::from_pairs(&[(F_TYPE, 0x3), (FIELD_OBJECT_ENTRY, entry)]),
+                ObjectFields::from_pairs(&[
+                    (F_TYPE, 0x3),
+                    (FIELD_OBJECT_ENTRY, entry),
+                    (14, count),
+                ]),
                 false,
             );
         }
@@ -176,44 +167,6 @@ impl Bags {
         items.insert_template(BAG_ENTRY, Some(test_template("Linen Bag")));
 
         let mut script = UiScript::new().expect("a VM");
-        let helm = |guid: u64, item_id: u32, bonding: u32| ContainerSlot {
-            equip_slots: vec![1],
-            inventory_type: 1,
-            bonding,
-            ..slot(guid, item_id, 1)
-        };
-        let backpack = ContainerState {
-            name: None,
-            num_slots: 16,
-            slots: [
-                (1, slot(A, LINEN, 1)),
-                (2, slot(B, LINEN, 1)),
-                (3, slot(C, LINEN, 5)),
-                (4, helm(H, HELM, 0)),
-                (6, slot(P, PAPER, 1)),
-                (7, helm(E, BOE, 2)),
-                (
-                    8,
-                    ContainerSlot {
-                        bonding: 3,
-                        use_spell: 4321,
-                        use_fork: UseFork::Plain,
-                        item_class: Some(0),
-                        ..slot(U, BOU, 1)
-                    },
-                ),
-            ]
-            .into(),
-        };
-        script.set_container(0, Some(backpack));
-        script.set_container(
-            1,
-            Some(ContainerState {
-                name: Some("Linen Bag".into()),
-                num_slots: 4,
-                slots: [(1, slot(X, LINEN, 1))].into(),
-            }),
-        );
         let mut doll: InventorySlots = Default::default();
         doll[1] = Some(InvSlotView {
             item_id: HELM,
@@ -516,6 +469,75 @@ fn an_accepted_swap_sends_before_its_held_clear_signals() {
         "the packet, then the clear's handler"
     );
     crate::script_calls::census::shows_in_order("Item");
+}
+
+/// An auto-equip's bind answer re-issues the pick-up and equip from the slot as it stands
+/// (`0x5e1c23` into `0x5e1840`), which it reads with the host applying the answer: the
+/// bind-on-equip helm still in backpack slot 7 goes out from wire slot 29.
+#[test]
+fn an_auto_equips_accept_reads_the_slot_as_it_stands() {
+    let mut h = Bags::new();
+    h.run("UseContainerItem(0, 7)");
+    assert_eq!(h.sent(), Vec::<String>::new(), "the equip is parked");
+    assert_eq!(
+        h.verb("", "EquipPendingItem(0)"),
+        [
+            format!(
+                "{:?}",
+                ClientCommand::AutoEquipItem {
+                    bag_index: 255,
+                    slot: 29
+                }
+            ),
+            roll()
+        ]
+    );
+}
+
+/// An item action's press equips the item it finds in the bags (`0x4e602a` → `0x5e1840`), read
+/// with the host applying the press: with no helm worn, the helm in backpack slot 4 goes out from
+/// wire slot 26.
+#[test]
+fn an_item_actions_equip_reads_the_bags_as_it_runs() {
+    let mut h = Bags::new();
+    let world = h.app.world_mut();
+    let me = world
+        .query_filtered::<Entity, With<SelfPlayer>>()
+        .single(world)
+        .expect("us");
+    world
+        .get_mut::<ObjectStore>(me)
+        .expect("our store")
+        .0
+        .merge(ObjectFields::from_pairs(&[
+            (F_INV_SLOT_HEAD, 0),
+            (F_INV_SLOT_HEAD + 1, 0),
+        ]));
+    h.app
+        .world_mut()
+        .resource_mut::<crate::ui_action::ActionSlots>()
+        .buttons
+        .insert(
+            0,
+            benilla_protocol::messages::ActionButton {
+                slot: 0,
+                action: HELM,
+                kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+            },
+        );
+    assert_eq!(
+        h.verb("", "UseAction(1)"),
+        [
+            format!(
+                "{:?}",
+                ClientCommand::AutoEquipItem {
+                    bag_index: 255,
+                    slot: 26
+                }
+            ),
+            roll()
+        ]
+    );
 }
 
 /// The bind question fires inside the swap's call (`0x5e0ee4`). The doll click's `SwapItem`

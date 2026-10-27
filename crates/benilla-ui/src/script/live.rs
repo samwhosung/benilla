@@ -34,17 +34,29 @@ impl LiveAsk<'_> {
     }
 }
 
-/// `query`'s answer through the lent host, as of the place the getter runs: `None` with no host
-/// free to ask (a glue VM, or a call's apply under way), from a host no family of which answers
-/// it, and when its family declines, where the getter reads its snapshot. The answer runs no Lua.
+/// `query`'s answer through the lent host, as of the place the getter runs, or through the reads
+/// a call's apply lends while it runs the VM's own steps ([`super::UiScript::reading`]): `None`
+/// with neither to ask (a glue VM, or a call's apply that lends none), from a host no family of
+/// which answers it, and when its family declines, where the getter reads its snapshot. The
+/// answer runs no Lua.
 pub fn ask<Q: LiveQuery>(lua: &Lua, query: &Q) -> Option<Q::Answer> {
     let mut answer: Option<Q::Answer> = None;
-    super::host::read_host(lua, |h| {
+    let asked = super::host::read_host(lua, |h| {
         h.read_live(&mut LiveAsk {
             query,
             answer: &mut answer,
         })
     });
+    // A host's apply calling into the VM with the host out lends its own reads instead
+    // ([`super::UiScript::reading`]).
+    if asked.is_none() {
+        super::host::read_reader(lua, |r| {
+            r.read_live(&mut LiveAsk {
+                query,
+                answer: &mut answer,
+            })
+        });
+    }
     answer
 }
 

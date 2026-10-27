@@ -287,6 +287,17 @@ pub(super) fn item_cooldown_triple(query: Option<(f64, f64, bool)>, now: f64) ->
     }
 }
 
+/// A slot's item query answer as its view carries it, in `GetTime` seconds.
+pub(crate) fn slot_cooldown(s: &ContainerSlot) -> Option<(f64, f64, bool)> {
+    s.cooldown.map(|(start_ms, duration_ms, enabled)| {
+        (
+            start_ms as f64 / 1000.0,
+            f64::from(duration_ms) / 1000.0,
+            enabled,
+        )
+    })
+}
+
 /// The bank's bags, containers 5-10.
 const BANK_BAGS: std::ops::RangeInclusive<i64> = 5..=10;
 
@@ -298,22 +309,6 @@ impl super::Model {
         BANK_BAGS.contains(&id) && self.bank.is_none()
     }
 
-    /// The bag a container binding finds for `id` (`0x4f93e0`, through the slot resolver
-    /// `0x4f9820` at `0x4f98d1`): none for a shut bank bag ([`Self::bank_bag_shut`]).
-    pub(crate) fn bag(&self, id: i64) -> Option<&ContainerState> {
-        if self.bank_bag_shut(id) {
-            return None;
-        }
-        self.containers.get(&id)
-    }
-
-    /// Whether the slot resolver `0x4f9820` finds a list for container `id`: the player's own for
-    /// the backpack, the bank and the keyring (`0x4f988d`-`0x4f98c3`), a bag through
-    /// [`Self::bag`] for 1-10 (`0x4f98c5`-`0x4f98f2`), none above.
-    pub(crate) fn bag_resolves(&self, id: i64) -> bool {
-        id <= 0 || self.bag(id).is_some()
-    }
-
     /// Whether container `id` is the vault while no banker is open: its slots are the player
     /// list's 39 to 62, which `GetItemInSlot` (`0x6228a0`) answers empty then (`0x6228ad`-
     /// `0x6228cf`, the banker guid `[0xbdd038]`; the list's bank flag `+0x10` is set at the
@@ -321,46 +316,22 @@ impl super::Model {
     pub(crate) fn vault_shut(&self, id: i64) -> bool {
         id == super::char_stats::BANK_CONTAINER && self.bank.is_none()
     }
-
-    /// The slot a container binding finds at `(bag, slot)`, through [`Self::bag`] and
-    /// `GetItemInSlot`'s bank gate ([`Self::vault_shut`]).
-    // Deviation: the backpack is bounded by its own 16 slots, where `0x4f990f` bounds bag 0 by
-    // the player list's count (0x71), a reference bug that lets the backpack index read other
-    // containers.
-    pub(crate) fn bag_slot(&self, bag: i64, slot: u32) -> Option<&ContainerSlot> {
-        if self.vault_shut(bag) {
-            return None;
-        }
-        self.bag(bag)?.slots.get(&slot)
-    }
 }
 
-/// The item the bag slot `(bag, slot)` holds, as its getters read it; `None` for an empty or
-/// unknown slot.
-fn slot_key(lua: &Lua, bag: i64, slot: u32) -> Option<Option<super::ItemKey>> {
+/// The slot `(bag, slot)` a container binding finds now ([`super::held::bag_slot`]).
+fn live_slot(lua: &Lua, bag: i64, slot: u32) -> Option<ContainerSlot> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    model.bag_slot(bag, slot).map(ContainerSlot::item_key)
+    super::held::bag_slot(lua, &model, bag, slot)
 }
 
 impl super::UiScript {
-    /// Push one bag's snapshot, or remove it with `None`; cooldowns arrive in ms on the `GetTime`
-    /// clock and are stored in seconds.
+    /// Seat one bag's copy, or remove it with `None`, for a harness with no host to ask: the bag
+    /// getters read the bags live through the lent host ([`super::held`]), and this copy only when
+    /// none is lent.
     pub fn set_container(&mut self, bag: i64, state: Option<ContainerState>) {
         let mut model = self.model_mut();
-        model.container_cooldowns.retain(|&(b, _), _| b != bag);
         match state {
             Some(s) => {
-                for (&slot, cs) in &s.slots {
-                    let Some((start_ms, duration_ms, enabled)) = cs.cooldown else {
-                        continue;
-                    };
-                    let abs = (
-                        start_ms as f64 / 1000.0,
-                        f64::from(duration_ms) / 1000.0,
-                        enabled,
-                    );
-                    model.container_cooldowns.insert((bag, slot), abs);
-                }
                 model.containers.insert(bag, s);
             }
             None => {
@@ -369,9 +340,10 @@ impl super::UiScript {
         }
     }
 
-    /// Push the use cooldowns of the worn items, `(start_ms on the GetTime clock, duration_ms,
-    /// enabled)` by live-API slot id, stored in seconds like a bag slot's. No event fires: a
-    /// cooldown moves no inventory slot.
+    /// Seat the worn items' use cooldowns, `(start_ms on the GetTime clock, duration_ms,
+    /// enabled)` by live-API slot id, stored in seconds like a bag slot's, for a harness with no
+    /// host to ask: the getters query the list at the call through the lent host
+    /// ([`super::CooldownQuery::Worn`]). No event fires.
     pub fn set_worn_cooldowns(
         &mut self,
         cooldowns: std::collections::HashMap<usize, (i64, u32, bool)>,
@@ -391,7 +363,7 @@ impl super::UiScript {
             .collect();
     }
 
-    /// Push `HasKey()`'s answer: whether the player owns a `BagFamily` key item anywhere.
+    /// Seat `HasKey()`'s answer for a harness with no host to ask ([`super::held::has_key`]).
     pub fn set_has_key(&mut self, has_key: bool) {
         self.model_mut().has_key = has_key;
     }
@@ -419,7 +391,11 @@ impl super::UiScript {
     /// cursor takes mode 2 (the cast art, table `0x853b88`), and nothing is sent. The next
     /// left-click on a container slot completes it.
     pub fn arm_gift_wrap(&mut self, bag: i64, slot: u32) {
-        arm_gift_wrap(&mut self.model_mut(), bag, slot);
+        let guid = {
+            let model = self.model_ref();
+            super::held::held_slot(&self.lua, &model, bag, slot).map_or(0, |s| s.guid)
+        };
+        arm_gift_wrap(&mut self.model_mut(), bag, slot, guid);
     }
 
     /// The armed gift wrap, if any; the app reads it to hold the cursor's base at Cast.
@@ -545,10 +521,10 @@ fn use_cleared(
     call: &mut Option<super::ScriptCall>,
 ) -> Option<CursorItem> {
     // The slot through `GetItemInSlot` (`0x4fa1a6`): a shut vault's reads empty.
-    let s = model
-        .bag_slot(bag, slot)
+    let s = super::held::bag_slot(lua, model, bag, slot)
         .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))?;
     let (guid, fork, item_id, use_spell) = (s.guid, s.use_fork, s.item_id, s.use_spell);
+    let known = s.item_class.is_some();
     let equip = (fork == UseFork::Equip).then(|| s.cursor_item(bag, slot));
     if model.repair_mode {
         model.item_calls.push(ItemCall::Repair { bag, slot });
@@ -572,11 +548,6 @@ fn use_cleared(
     // the arm's lock (`0x5edcd9`): the requirement check ahead of the read, letter, open and
     // plain arms, the control gate ahead of the open and plain ones.
     if let UseArm::Item(fork) = arm {
-        let known = model
-            .containers
-            .get(&bag)
-            .and_then(|c| c.slots.get(&slot))
-            .is_some_and(|s| s.item_class.is_some());
         if let Some(key) =
             super::use_gates::item_use_refusal(lua, model, fork, item_id, use_spell, known)
         {
@@ -596,7 +567,7 @@ fn use_cleared(
     }));
     match arm {
         UseArm::Withdraw | UseArm::Deposit | UseArm::Sell => cursor::lock_item(model, guid),
-        UseArm::Item(UseFork::WrapPaper) => arm_gift_wrap(model, bag, slot),
+        UseArm::Item(UseFork::WrapPaper) => arm_gift_wrap(model, bag, slot, guid),
         UseArm::Item(_) => {}
     }
     None
@@ -648,14 +619,9 @@ fn use_equip_arm(
     Ok(())
 }
 
-/// The wrap arm `0x5edea0`: the paper at `(bag, slot)` locks, the cursor takes mode 2 (the cast
-/// art, table `0x853b88`), and nothing is sent.
-fn arm_gift_wrap(model: &mut super::Model, bag: i64, slot: u32) {
-    let guid = model
-        .containers
-        .get(&bag)
-        .and_then(|c| c.slots.get(&slot))
-        .map_or(0, |s| s.guid);
+/// The wrap arm `0x5edea0`: the paper `guid` at `(bag, slot)` locks, the cursor takes mode 2 (the
+/// cast art, table `0x853b88`), and nothing is sent.
+fn arm_gift_wrap(model: &mut super::Model, bag: i64, slot: u32, guid: u64) {
     model.pending_wrap = Some(PendingWrap { bag, slot, guid });
     model.ui_cursor = Some(UiCursorMode::Cast);
     model.ui_cursor_dirty = true;
@@ -687,23 +653,18 @@ fn pickup_container_item(
     if !cursor::equip::has_cursor_control(model) {
         return ContainerClick::Done;
     }
+    // The slot as the click finds it now, by its own place.
+    let here = super::held::held_slot(lua, model, bag, slot);
     // An armed gift wrap completes here, before the cursor is read. `PickupContainerItem` is the
     // only caller of the wrap sender `0x5edfc0`, so an equipped item cannot be wrapped.
     if let Some(wrap) = model.pending_wrap {
         // An empty or unresolved target leaves the wrap armed, as in the reference.
-        if !model
-            .containers
-            .get(&bag)
-            .and_then(|c| c.slots.get(&slot))
-            .is_some_and(|s| s.item_id != 0)
-        {
+        if !here.as_ref().is_some_and(|s| s.item_id != 0) {
             return ContainerClick::Done;
         }
         // A vanished paper also bails, the wrap armed and the paper locked (`0x5edfef`).
-        if !model
-            .containers
-            .get(&wrap.bag)
-            .and_then(|c| c.slots.get(&wrap.slot))
+        if !super::held::held_slot(lua, model, wrap.bag, wrap.slot)
+            .as_ref()
             .is_some_and(|s| s.item_id != 0)
         {
             return ContainerClick::Done;
@@ -739,11 +700,7 @@ fn pickup_container_item(
         )
     );
     if !placing && (model.item_pick_armed || model.repair_mode) {
-        let occupied = model
-            .containers
-            .get(&bag)
-            .and_then(|c| c.slots.get(&slot))
-            .is_some_and(|s| s.item_id != 0);
+        let occupied = here.as_ref().is_some_and(|s| s.item_id != 0);
         if occupied && model.item_pick_armed {
             return ContainerClick::Pick(cursor::ItemPick {
                 bag,
@@ -764,10 +721,8 @@ fn pickup_container_item(
             | CursorPayload::PetAction(_)
             | CursorPayload::StablePet(_)
             | CursorPayload::Money(_),
-        ) => model
-            .containers
-            .get(&bag)
-            .and_then(|c| c.slots.get(&slot))
+        ) => here
+            .as_ref()
             .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))
             .map_or(ContainerClick::Done, |s| {
                 ContainerClick::PickUp(s.cursor_item(bag, slot))
@@ -779,12 +734,7 @@ fn pickup_container_item(
         }
         Some(CursorPayload::Item(held)) => {
             // Cloned so the moves below can borrow `model`; an unresolved slot reads as empty.
-            let dest = model
-                .containers
-                .get(&bag)
-                .and_then(|c| c.slots.get(&slot))
-                .cloned()
-                .filter(|d| d.item_id != 0);
+            let dest = here.as_ref().cloned().filter(|d| d.item_id != 0);
             match (held.count, dest) {
                 // A split places and clears whatever the slot holds (`0x4f9e1c` → `0x5e1210`,
                 // then `ClearCursor(0,1)` at `0x4f9e4f`): the grid hide and `CURSOR_UPDATE`, and
@@ -953,7 +903,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 usize::try_from(inv)
                     .ok()
                     .filter(|_| !model.bank_bag_shut(container))
-                    .and_then(|slot| model.own_inv_view(slot))
+                    .and_then(|slot| crate::script::char_stats::own_inv_view(lua, &model, slot))
                     .and_then(|v| v.icon.clone())
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -983,7 +933,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(0);
             }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.bag(bag).map_or(0, |c| c.num_slots))
+            Ok(super::held::bag(lua, &model, bag).map_or(0, |c| c.num_slots))
         })?,
     )?;
 
@@ -1001,7 +951,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // rest (`0x4fa712`, `0x4fa717`).
             let name = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                match model.bag(bag) {
+                match super::held::bag(lua, &model, bag) {
                     Some(_) if bag == 0 => {
                         Some(super::glue_core::global_text(lua, "BACKPACK_TOOLTIP"))
                     }
@@ -1034,11 +984,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?;
             let (pending, object, snapshot) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let slot = key.and_then(|k| model.bag_slot(k.0, k.1));
-                let pending = slot.filter(|s| s.record_pending()).map(|s| s.item_id);
-                let object = slot.and_then(ContainerSlot::item_key);
-                let snapshot =
-                    slot.map(|_| key.and_then(|k| model.container_cooldowns.get(&k).copied()));
+                let slot = key.and_then(|k| super::held::bag_slot(lua, &model, k.0, k.1));
+                let pending = slot
+                    .as_ref()
+                    .filter(|s| s.record_pending())
+                    .map(|s| s.item_id);
+                let object = slot.as_ref().and_then(ContainerSlot::item_key);
+                let snapshot = slot.as_ref().map(slot_cooldown);
                 (pending, object, snapshot)
             };
             let triple = match snapshot {
@@ -1071,18 +1023,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             else {
                 return Ok(MultiValue::new());
             };
-            let Some(key) = slot_key(lua, bag, slot) else {
+            let Some(held) = live_slot(lua, bag, slot) else {
                 return Ok(MultiValue::new());
             };
             // The object and its record as the call runs (`0x4f997f` → `0x52ae00`).
             let link = read_item_or(
                 lua,
-                key,
+                held.item_key(),
                 |item| item.link().or_else(|| item.uncached_link()),
-                |f| {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model.bag_slot(bag, slot).map(|s| f(s))
-                },
+                |f| Some(f(&held)),
             )
             .flatten();
             // Nothing at all when the resolver fails or finds no item object (`0x4f996b`,
@@ -1110,17 +1059,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // The resolver failed (`0x4f990d`): nothing is pushed (`0x4f9810`).
                 return Ok(mlua::MultiValue::new());
             };
-            let (key, locked) = {
+            let Some(held) = live_slot(lua, bag, slot) else {
+                return Ok(mlua::MultiValue::new());
+            };
+            let locked = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let Some(s) = model.bag_slot(bag, slot) else {
-                    return Ok(mlua::MultiValue::new());
-                };
-                (s.item_key(), cursor::item_locked(&model, s.guid))
+                cursor::item_locked(&model, held.guid)
             };
             // The object and its record as the call runs (`0x4f96dc`, `0x4f978b`).
             let Some((texture, count, quality, readable)) = read_item_or(
                 lua,
-                key,
+                held.item_key(),
                 |item| {
                     (
                         item.texture(),
@@ -1130,10 +1079,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         item.readable(),
                     )
                 },
-                |f| {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model.bag_slot(bag, slot).map(|s| f(s))
-                },
+                |f| Some(f(&held)),
             ) else {
                 return Ok(mlua::MultiValue::new());
             };
@@ -1176,11 +1122,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `onSelf` through the client's flag coercion (`0x4fa17d`, `0x6f1c10`, default 0).
             let on_self = super::binding_abi::bool_or_default(rest.front(), false);
             // An unresolved bag ends the verb before its clear (`0x4fa156`, `0x4fa15d`).
-            if !lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .bag_resolves(bag)
-            {
+            let resolves = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                super::held::bag_resolves(lua, &model, bag)
+            };
+            if !resolves {
                 return Ok(());
             }
             // Every right-click clears the cursor before it reads the slot (`0x4fa198`): a held
@@ -1226,7 +1172,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // a vault slot with no banker open (`0x4f9bc6`-`0x4f9bf0`), a held item included.
             {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                if !model.bag_resolves(bag) || model.vault_shut(bag) {
+                if !super::held::bag_resolves(lua, &model, bag) || model.vault_shut(bag) {
                     return Ok(());
                 }
             }
@@ -1269,10 +1215,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             let slot =
                 binding_abi::index_arg32(lua, slot, "Usage: ShowContainerSellCursor(index, slot)")?;
+            let held = live_slot(lua, bag, slot);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let occupied = model
-                .bag_slot(bag, slot)
-                .is_some_and(|s| !cursor::item_locked(&model, s.guid));
+            let occupied = held.is_some_and(|s| !cursor::item_locked(&model, s.guid));
             if occupied {
                 model.ui_cursor = Some(UiCursorMode::Buy);
                 model.ui_cursor_dirty = true;
@@ -1296,7 +1241,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "HasKey",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if model.has_key {
+            Ok(if super::held::has_key(lua, &model) {
                 Value::Integer(1)
             } else {
                 Value::Nil

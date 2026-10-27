@@ -262,10 +262,10 @@ pub(crate) fn replay_equip_records(
 
 #[cfg(test)]
 mod tests {
-    /// The replays read the VM's views and its item records, so they run after the bag feed and
-    /// the record feed have pushed the answer.
+    /// The replays read the VM's item records, so they run after the record feed has pushed the
+    /// answer.
     #[test]
-    fn the_equip_replays_run_after_the_bag_feed() {
+    fn the_equip_replays_run_after_the_record_feed() {
         let app = crate::game_plugins::schedule_tests::headless_client();
         let order = &app.world().resource::<crate::vm_pass::PassOrder>().0;
         if !order.iter().any(|n| n.contains("benilla_app::")) {
@@ -279,7 +279,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("`{name}` is in the pass"))
         };
         let replay = at("::ui_bind_confirm::replay_equip_records");
-        assert!(at("::ui_items::feed::feed_containers") < replay);
         assert!(at("::ui_items::feed::feed_item_stats") < replay);
     }
 }

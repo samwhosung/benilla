@@ -216,9 +216,6 @@ struct Record {
 pub(crate) struct PetitionRecords {
     /// The record cache by petition id, asked once through [`QueryCache`].
     records: QueryCache<u32, Record>,
-    /// One step per landed or patched record. The charter tooltip's hover issues the record query,
-    /// so `ui_items`' bag feed gates its rebuild on this or keeps the `None` it read first.
-    records_epoch: u64,
 }
 
 impl PetitionRecords {
@@ -237,7 +234,6 @@ impl PetitionRecords {
     /// (`0x554e60`), so `0x555740` clears it (`0x55580c`).
     pub(crate) fn clear_world_session(&mut self) {
         self.records.clear();
-        self.records_epoch = self.records_epoch.wrapping_add(1);
     }
 
     /// Files a record as its answer does, for a test elsewhere.
@@ -252,14 +248,8 @@ impl PetitionRecords {
         self.records.get(petition_id).is_some()
     }
 
-    /// One step per landed or patched record.
-    pub(crate) fn records_epoch(&self) -> u64 {
-        self.records_epoch
-    }
-
     /// `SMSG_PETITION_QUERY_RESPONSE`: fill the cache.
     fn apply_record(&mut self, response: PetitionQueryResponse) {
-        self.records_epoch = self.records_epoch.wrapping_add(1);
         self.records.insert(
             response.petition_id,
             Record {
@@ -776,8 +766,6 @@ pub(crate) mod net {
             return;
         };
         record.name = rename.name;
-        // A patched title is a changed record: the tooltip's line 3 reads it too.
-        records.records_epoch = records.records_epoch.wrapping_add(1);
         lane.push(PetitionEvent::Show);
     }
 }

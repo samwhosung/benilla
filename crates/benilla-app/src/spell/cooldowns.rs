@@ -174,13 +174,6 @@ pub(crate) struct Cooldowns {
     /// and the cheat (`0x6e9721`). The pet's list calls the pet's flush `0x4bce90` in its place
     /// (`0x6e3080`). Only counts up.
     pub(crate) bag_flushes: u64,
-    /// Bumped when [`Self::prune`] removes records. Kept apart from [`Self::generation`]: gated
-    /// feeds must see an expiry, but the reference never fires the event for one.
-    expiry_epoch: u64,
-    /// Bumped by every record [`Self::add`] puts in. Kept apart from [`Self::generation`]: the
-    /// insert flushes nothing (`0x6e12c0`), nor does `StartCooldown 0x6e2c60`'s seed (`0x6e2dcc`),
-    /// but a gated feed must read the record.
-    insert_epoch: u64,
     /// The item cooldowns the spell go's item leg holds until the item's record arrives, the
     /// table `0xceca60` of `ITEMCOOLDOWNHASHNODE`s keyed by item entry ([`Self::pend_item`]).
     pending_items: std::collections::HashMap<u32, PendingItem>,
@@ -314,15 +307,7 @@ impl Cooldowns {
         self.records.len()
     }
 
-    /// The counter a gated feed watches: moves on any flush, insert or pruned expiry.
-    pub(crate) fn feed_epoch(&self) -> u64 {
-        self.generation
-            .wrapping_add(self.expiry_epoch)
-            .wrapping_add(self.insert_epoch)
-    }
-
-    /// An elapsed record awaits its prune. The feeds run before `feed_action_state`'s prune, so
-    /// on the frame a timer crosses zero the read changes a frame before [`Self::feed_epoch`].
+    /// An elapsed record awaits its prune.
     pub(crate) fn sweep_pending(&self, now: Instant) -> bool {
         self.records.iter().any(|r| expired(r, now))
     }
@@ -335,8 +320,7 @@ impl Cooldowns {
     /// `now` are dropped first ([`Self::prune`]), and a list holds its live records plus those
     /// that ran out since its last insert. The pet's list has no other pruner.
     ///
-    /// It flushes nothing: each caller's site does ([`Self::flush`]). It moves
-    /// [`Self::feed_epoch`].
+    /// It flushes nothing: each caller's site does ([`Self::flush`]).
     fn add(
         &mut self,
         now: Instant,
@@ -360,9 +344,6 @@ impl Cooldowns {
         {
             return;
         }
-        if self.sweep_pending(now) {
-            self.expiry_epoch = self.expiry_epoch.wrapping_add(1);
-        }
         let record = Record {
             spell_id,
             item_id,
@@ -375,17 +356,14 @@ impl Cooldowns {
             gcd: millis(gcd_ms),
         };
         self.write(Write::Add(now, record));
-        self.insert_epoch = self.insert_epoch.wrapping_add(1);
     }
 
     /// Drop fully elapsed records that are not on hold; invisible to reads, it stands in for the
-    /// client's event-driven sweeps. Bumps [`Self::expiry_epoch`], not [`Self::generation`], so it
-    /// flushes no event. [`Self::add`] runs it at every insert, and the player's feed each frame,
+    /// client's event-driven sweeps. It moves no [`Self::generation`], so it flushes no event. [`Self::add`] runs it at every insert, and the player's feed each frame,
     /// which the gated feeds need to see an expiry with no insert.
     pub(crate) fn prune(&mut self, now: Instant) {
         if self.sweep_pending(now) {
             self.write(Write::Prune(now));
-            self.expiry_epoch = self.expiry_epoch.wrapping_add(1);
         }
     }
 
@@ -675,11 +653,7 @@ impl Cooldowns {
         if benilla_assets::trace::enabled() {
             benilla_assets::trace::line("cd", &format!("clear-gcd spell={spell_id} (cast-fail)"));
         }
-        let before = self.records.len();
         self.write(Write::ClearGcd(spell_id, now));
-        if self.records.len() != before {
-            self.expiry_epoch = self.expiry_epoch.wrapping_add(1);
-        }
         self.flush();
     }
 
@@ -1757,44 +1731,6 @@ mod tests {
         assert_eq!(cds.records.len(), 2, "the GCD and Brief are gone");
         assert!(!cds.sweep_pending(now));
         assert_eq!(reads(&cds), before);
-    }
-
-    /// A prune that removes nothing must not move the epoch, or the per-frame prune would hold
-    /// every gated feed open.
-    #[test]
-    fn the_feed_epoch_moves_on_expiry_but_an_empty_prune_is_silent() {
-        let t0 = Instant::now();
-        let mut cds = Cooldowns::default();
-        let e0 = cds.feed_epoch();
-        cds.start_gcd(133, &fireball(), t0, &super::SpellModifiers::default());
-        let armed = cds.feed_epoch();
-        assert_ne!(e0, armed, "a mutation moves the epoch (generation)");
-
-        cds.prune(t0 + Duration::from_millis(100));
-        assert_eq!(
-            cds.feed_epoch(),
-            armed,
-            "nothing elapsed — the prune is silent"
-        );
-
-        cds.prune(t0 + Duration::from_secs(5));
-        let expired = cds.feed_epoch();
-        assert_ne!(
-            armed, expired,
-            "the expiry IS a feed edge (the triple flips to None)"
-        );
-        assert_eq!(
-            cds.generation,
-            {
-                let mut probe = Cooldowns::default();
-                probe.start_gcd(133, &fireball(), t0, &super::SpellModifiers::default());
-                probe.generation
-            },
-            "…but the event-edge generation never saw it (the reference is silent on expiry)"
-        );
-
-        cds.prune(t0 + Duration::from_secs(6));
-        assert_eq!(cds.feed_epoch(), expired, "an empty prune stays silent");
     }
 
     /// A fail-clear and re-arm between two feeds must still read as a new start.

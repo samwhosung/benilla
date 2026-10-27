@@ -3,10 +3,7 @@
 //! their own bodies, and the script's next line reads what the verb did.
 
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{
-    AuctionItemRow, AuctionListState, AuctionState, ContainerSlot, ContainerState, UiScript, LIST,
-    OWNER,
-};
+use benilla_ui::script::{AuctionItemRow, AuctionListState, AuctionState, UiScript, LIST, OWNER};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -41,6 +38,28 @@ struct House {
 }
 
 impl House {
+    /// Linen, object `0x4001`, in backpack slot 1, with `durability` (current, max).
+    fn seat_linen(&mut self, durability: Option<(u32, u32)>) {
+        const LINEN: u64 = 0x4001;
+        let world = self.app.world_mut();
+        let (now, max) = durability.unwrap_or((0, 0));
+        crate::items::test_spawn_item(
+            world,
+            LINEN,
+            ObjectFields::from_pairs(&[(2, 0x3), (3, 2589), (14, 1), (46, now), (47, max)]),
+            false,
+        );
+        world
+            .resource_mut::<crate::items::Items>()
+            .insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
+        let me = world.resource::<GuidIndex>().0[&ME];
+        world
+            .get_mut::<ObjectStore>(me)
+            .expect("our store")
+            .0
+            .merge(ObjectFields::from_pairs(&[(532, LINEN as u32), (533, 0)]));
+    }
+
     fn new(money: u32) -> Self {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -409,28 +428,7 @@ fn usable_and_quality_read_as_numbers() {
 #[test]
 fn a_start_sends_and_empties_the_slot_inside_the_call() {
     let mut h = House::new(0);
-    {
-        let mut script = h.app.world_mut().non_send_resource_mut::<UiScript>();
-        script.set_container(
-            0,
-            Some(ContainerState {
-                name: None,
-                num_slots: 16,
-                slots: [(
-                    1,
-                    ContainerSlot {
-                        item_id: 2589,
-                        count: 1,
-                        quality: Some(1),
-                        guid: 0x4001,
-                        ..Default::default()
-                    },
-                )]
-                .into_iter()
-                .collect(),
-            }),
-        );
-    }
+    h.seat_linen(None);
     h.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton() HEARD = {}");
     let _ = h.sent();
     h.run("StartAuction(100, 0, 480) AFTER = table.getn(HEARD) StartAuction(100, 0, 480)");
@@ -457,29 +455,7 @@ fn a_start_sends_and_empties_the_slot_inside_the_call() {
 #[test]
 fn a_damaged_items_start_is_refused_inside_the_call() {
     let mut h = House::new(0);
-    {
-        let mut script = h.app.world_mut().non_send_resource_mut::<UiScript>();
-        script.set_container(
-            0,
-            Some(ContainerState {
-                name: None,
-                num_slots: 16,
-                slots: [(
-                    1,
-                    ContainerSlot {
-                        item_id: 2589,
-                        count: 1,
-                        quality: Some(1),
-                        guid: 0x4001,
-                        durability: Some((10, 40)),
-                        ..Default::default()
-                    },
-                )]
-                .into_iter()
-                .collect(),
-            }),
-        );
-    }
+    h.seat_linen(Some((10, 40)));
     h.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton() HEARD = {}");
     let _ = h.sent();
     h.run("StartAuction(100, 0, 480) AFTER = table.getn(LINES)");

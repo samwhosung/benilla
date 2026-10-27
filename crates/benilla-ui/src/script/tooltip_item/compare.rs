@@ -34,7 +34,9 @@ fn compare_against_worn(
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         let mut hit = None;
         for &slot in equip_slots_for(offered.inventory_type) {
-            let Some(worn) = model.own_inv_view(slot as usize).filter(|s| s.item_id != 0) else {
+            let Some(worn) = crate::script::char_stats::own_inv_view(lua, &model, slot as usize)
+                .filter(|s| s.item_id != 0)
+            else {
                 continue; // an empty slot is not counted
             };
             let same_class = model

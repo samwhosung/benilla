@@ -881,7 +881,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let owned = action
                     .as_ref()
                     .filter(|a| a.kind == 0x80)
-                    .and_then(|a| super::tooltip_item::owned_instance(&model, a.action));
+                    .and_then(|a| super::tooltip_item::owned_instance(lua, &model, a.action));
                 let state = model.action_states.get(&slot);
                 (
                     action,

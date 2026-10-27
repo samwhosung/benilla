@@ -556,3 +556,76 @@ fn a_restacks_events_and_a_chat_line_keep_their_packets_order() {
         ]
     );
 }
+
+/// `chunk` on the VM with the host lent, as a getter runs inside a frame.
+fn hosted_eval<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, chunk: &str) -> T {
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM").eval::<T>(chunk).expect("runs")
+    })
+}
+
+/// A bag getter reads the bags as its listener's packet left them (`GetContainerItemInfo` finds
+/// the slot in the player's list at the call, `0x6228a0`): the potions leave the backpack's first
+/// seat and come back in one frame, and each seat's `BAG_UPDATE` reads its own packet's seat, not
+/// the frame's last.
+#[test]
+fn a_bag_updates_listener_reads_the_seat_its_packet_left() {
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("BAG_UPDATE")
+            f:SetScript("OnEvent", function()
+                if arg1 == 0 then
+                    table.insert(Seen, GetContainerItemLink(0, 1) and "held" or "empty")
+                end
+            end)
+            "#,
+        )
+        .unwrap();
+    frame(
+        &mut app,
+        vec![
+            values(ME, &seat(23, 0)),
+            combo(2),
+            values(ME, &seat(23, POTIONS)),
+        ],
+    );
+    let seen: Vec<String> = hosted_eval(&mut app, "return Seen");
+    assert_eq!(seen, ["empty", "held"]);
+}
+
+/// The logout despawns the avatar and the session end every object ahead of the shutdown's
+/// `PLAYER_LOGOUT`, which the reference signals with the world whole (`0x490c2a`): the bags read
+/// as the session left them, the backpack's potions and the equipped bag's four slots.
+#[test]
+fn the_shutdown_reads_the_bags_the_session_left() {
+    let mut app = client();
+    let chunk = "local _, count = GetContainerItemInfo(0, 1) \
+                 return count, GetContainerNumSlots(1), GetContainerItemLink(1, 1)";
+    let before: (i64, i64, String) = hosted_eval(&mut app, chunk);
+    frame(
+        &mut app,
+        vec![
+            SessionEvent::LoggedOut,
+            SessionEvent::Disconnected {
+                reason: "logged out".into(),
+                end: benilla_protocol::SessionEnd::LoggedOut,
+            },
+        ],
+    );
+    let world = app.world_mut();
+    let held = world
+        .query_filtered::<(), With<crate::net::SelfPlayer>>()
+        .iter(world)
+        .count();
+    assert_eq!(held, 0, "the avatar is gone");
+    assert!(
+        world.resource::<crate::net::GuidIndex>().0.is_empty(),
+        "every object is gone"
+    );
+    assert_eq!(hosted_eval::<(i64, i64, String)>(&mut app, chunk), before);
+}

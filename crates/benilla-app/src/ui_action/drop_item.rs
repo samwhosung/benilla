@@ -172,6 +172,9 @@ pub(crate) struct TradeLeg<'w, 's> {
     trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,
     net: Res<'w, crate::net::NetCommands>,
     errors: Res<'w, crate::ui_action::UiErrorKeys>,
+    /// The bags the world click's held-item tests read, lent with the host out; with no cooldown
+    /// list, which a system holding this may hold to write, as those tests read none.
+    bags: Option<crate::ui_items::BagReads<'w, 's>>,
 }
 
 impl TradeLeg<'_, '_> {
@@ -224,6 +227,24 @@ impl TradeLeg<'_, '_> {
     /// (`0x49276b`), which takes no coins; anyone else with a trade open is `ERR_ALREADY_TRADING`
     /// (`0x492777`), and with none the click asks to trade in the cursor-drop mode (`0x49278e`).
     fn click_on(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        entity: Entity,
+        guid: u64,
+        dead: bool,
+    ) {
+        let reads = self.bags.take();
+        match reads.as_ref() {
+            Some(reads) => script.reading(&mut reads.with(None), |script| {
+                self.click_held(script, entity, guid, dead)
+            }),
+            None => self.click_held(script, entity, guid, dead),
+        }
+        self.bags = reads;
+    }
+
+    /// [`Self::click_on`] with the bags lent.
+    fn click_held(
         &mut self,
         script: &mut benilla_ui::script::UiScript,
         entity: Entity,

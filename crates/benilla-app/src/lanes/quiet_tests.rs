@@ -24,7 +24,6 @@ fn ticks(world: &World) -> Vec<(&'static str, Option<Tick>)> {
         ("TradeSession", tick::<crate::ui_trade::TradeSession>(world)),
         ("LootState", tick::<crate::ui_loot::LootState>(world)),
         ("DeathNet", tick::<crate::death::DeathNet>(world)),
-        ("BagView", tick::<crate::ui_items::feed::BagView>(world)),
         ("BagCache", tick::<crate::item_watch::BagCache>(world)),
         ("HouseLane", tick::<crate::ui_auction::HouseLane>(world)),
     ]

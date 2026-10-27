@@ -156,6 +156,39 @@ struct HostSlot {
     /// The deferred stretches running now ([`UiScript::defer`]): while any is, every handler fired
     /// is held and nothing that waits runs, a lend's included.
     defer: Cell<u32>,
+    /// The live reads a host's apply lends while it calls into the VM's own steps with the host
+    /// out ([`UiScript::reading`]): what a getter's question asks when no host is in the slot.
+    /// The same invariant as `host`: valid and unaliased while set.
+    reader: Cell<Option<NonNull<dyn LiveReader + 'static>>>,
+}
+
+/// What answers the getters' live questions ([`super::live::ask`]) for a step the host's apply
+/// runs on the VM with the host out ([`UiScript::reading`]).
+pub trait LiveReader {
+    /// Answer `ask` if it is one of the reader's questions; whether it was.
+    fn read_live(&mut self, ask: &mut super::live::LiveAsk<'_>) -> bool;
+}
+
+/// Hand `f` the lent reader ([`UiScript::reading`]), if one is lent and free.
+pub(crate) fn read_reader<R>(lua: &Lua, f: impl FnOnce(&mut dyn LiveReader) -> R) -> Option<R> {
+    struct PutBack<'a> {
+        slot: &'a HostSlot,
+        reader: NonNull<dyn LiveReader + 'static>,
+    }
+    impl Drop for PutBack<'_> {
+        fn drop(&mut self) {
+            self.slot.reader.set(Some(self.reader));
+        }
+    }
+    let slot = slot(lua);
+    let reader = slot.reader.take()?;
+    let _back = PutBack {
+        slot: &slot,
+        reader,
+    };
+    // SAFETY: the pointer came out of the slot, so by its invariant it is valid, and this is the
+    // only `&mut` made from it until it goes back.
+    Some(f(unsafe { &mut *reader.as_ptr() }))
 }
 
 /// Install the empty slot at the VM's birth, a fork's included: every verb asks it
@@ -377,6 +410,35 @@ impl UiScript {
         let _hold = Hold::new(slot(&lua), true);
         #[cfg(any(test, feature = "test-support"))]
         let _census = super::census::Applying::turn(std::panic::Location::caller());
+        f(self)
+    }
+
+    /// Run `f`, a step of the VM's own that a host's apply calls with the host out (the accept of a
+    /// bind question re-issuing its equip), with `reader` answering the getters' live questions
+    /// meanwhile: the apply's own reads stand in for the host's. `f` runs no Lua that waits on the
+    /// reader past its return.
+    pub fn reading<R>(
+        &mut self,
+        reader: &mut dyn LiveReader,
+        f: impl FnOnce(&mut UiScript) -> R,
+    ) -> R {
+        struct Restore<'a> {
+            slot: mlua::AppDataRef<'a, HostSlot>,
+            before: Option<NonNull<dyn LiveReader + 'static>>,
+        }
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.slot.reader.set(self.before);
+            }
+        }
+        let lua = self.lua().clone();
+        // SAFETY: the reader is borrowed for this call; the pointer leaves the slot before the
+        // borrow ends, unwinding included ([`Restore`]), so it never outlives it.
+        let ptr: NonNull<dyn LiveReader + '_> = NonNull::from(reader);
+        let ptr: NonNull<dyn LiveReader + 'static> = unsafe { std::mem::transmute(ptr) };
+        let slot = slot(&lua);
+        let before = slot.reader.replace(Some(ptr));
+        let _restore = Restore { slot, before };
         f(self)
     }
 

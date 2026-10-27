@@ -273,6 +273,9 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the gossip getters, and quiet: the draw's `GOSSIP_SHOW` fires on the
     // gossip lane at its handler, and the gossip verbs hold it in their calls.
     "::ui_gossip::GossipState",
+    // Read through the host by the bag getters once no player is held, and quiet: no feed fires
+    // off it.
+    "::ui_items::bags::KeptBags",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
     // Read through the host by the merchant getters, and quiet: its events fire on the merchant
@@ -403,9 +406,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_action::cast_lines::CastFailRedisplays"]),
     // The locks of the objects that went, forgotten as the frame left the index.
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
-    ("::ui_items::feed::feed_containers", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "spell::cooldowns::Cooldowns",
-        "ui_petition::PetitionRecords"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
     ("::ui_auction::feed_auction", &["items::Items", "names::NameCache",
@@ -470,6 +470,10 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // The bags the session left, which the bag getters read through the host once no player is
+    // held, and the action feed's clock pair their slots' cooldowns map through.
+    "::ui_items::bags::KeptBags",
+    "::ui_action::state::ActionStateMemory",
     // `ItemBagFamily.dbc`, which the inventory refusal's handler names a bag's family by
     // (`0x5ede00`).
     "::ui_items::ItemBagFamilies",
@@ -619,9 +623,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 36] {
+fn lane_types() -> [TypeId; 35] {
     [
-        TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
         TypeId::of::<crate::field_watch::NoticeLane>(),
@@ -692,9 +695,8 @@ fn lane_types() -> [TypeId; 36] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 36] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
     [
-        ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
             "field notices",
@@ -912,7 +914,6 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
         lanes,
         [
             "auction house",
-            "bag view",
             "bank",
             "battlefield",
             "cast reports",
@@ -1563,7 +1564,6 @@ const QUEUES_NOT_VIEWS: &[&str] = &[
     "ui_party::feed::PartyLane",
     "ui_items::EquipErrors",
     "ui_unit::views::ViewLog",
-    "ui_items::feed::BagView",
     "target::scan::OwedSelects",
 ];
 

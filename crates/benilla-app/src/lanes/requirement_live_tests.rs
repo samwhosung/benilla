@@ -6,8 +6,7 @@
 
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
-    ContainerSlot, ContainerState, ItemTemplateView, LockOpeners, LockSlotView, PlayerReqState,
-    TaughtSpell, UiScript,
+    ItemTemplateView, LockOpeners, LockSlotView, PlayerReqState, TaughtSpell, UiScript,
 };
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
@@ -33,12 +32,13 @@ const CHARTER: u64 = 0x4000_0000_0000_0104;
 const CHARTER_ENTRY: u32 = 5863;
 const PETITION_ID: u32 = 77;
 
-/// `OBJECT_FIELD_TYPE`, `OBJECT_FIELD_ENTRY`, `ITEM_FIELD_OWNER`, `ITEM_FIELD_STACK_COUNT`,
-/// `ITEM_FIELD_ENCHANTMENT` slot 0, `UNIT_FIELD_LEVEL`, `UNIT_FIELD_BYTES_0` and
-/// `PLAYER_FIELD_PACK_SLOT_1`.
+/// `OBJECT_FIELD_TYPE`, `OBJECT_FIELD_ENTRY`, `ITEM_FIELD_OWNER`, `ITEM_FIELD_CREATOR`,
+/// `ITEM_FIELD_STACK_COUNT`, `ITEM_FIELD_ENCHANTMENT` slot 0, `UNIT_FIELD_LEVEL`,
+/// `UNIT_FIELD_BYTES_0` and `PLAYER_FIELD_PACK_SLOT_1`.
 const OBJECT_TYPE: u16 = 2;
 const OBJECT_ENTRY: u16 = 3;
 const ITEM_OWNER: u16 = 6;
+const ITEM_CREATOR: u16 = 10;
 const ITEM_STACK_COUNT: u16 = 14;
 const ITEM_ENCHANT_0: u16 = 22;
 const UNIT_LEVEL: u16 = 34;
@@ -57,9 +57,10 @@ fn item(entry: u32, extra: &[(u16, u32)]) -> ObjectFields {
     ObjectFields::from_pairs(&pairs)
 }
 
-/// The client with us in the world, a level-10 human warrior carrying the key in backpack slot 2,
-/// the VM's copy pushed as a level-60 player who knows nothing and opens nothing, the item records
-/// and the lock row seated, and the item objects of the backpack the VM's bag view holds.
+/// The client with us in the world, a level-10 human warrior carrying the lockbox, the key, the
+/// crafted bar and the charter in backpack slots 1 to 4 and their records cached, the VM's copy
+/// pushed as a level-60 player who knows nothing and opens nothing, and the VM's item records and
+/// the lock row seated.
 fn client() -> (App, Receiver<ClientCommand>) {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -74,18 +75,51 @@ fn client() -> (App, Receiver<ClientCommand>) {
             (OBJECT_TYPE, 0x19),
             (UNIT_LEVEL, 10),
             (UNIT_BYTES_0, 1 | (1 << 8)),
+            (PACK_SLOT_1, LOCKBOX as u32),
+            (PACK_SLOT_1 + 1, (LOCKBOX >> 32) as u32),
             (PACK_SLOT_1 + 2, KEY as u32),
             (PACK_SLOT_1 + 3, (KEY >> 32) as u32),
+            (PACK_SLOT_1 + 4, CRAFTED as u32),
+            (PACK_SLOT_1 + 5, (CRAFTED >> 32) as u32),
+            (PACK_SLOT_1 + 6, CHARTER as u32),
+            (PACK_SLOT_1 + 7, (CHARTER >> 32) as u32),
         ]),
     );
     world.entity_mut(me).insert(crate::net::SelfPlayer);
+    crate::items::test_spawn_item(world, LOCKBOX, item(LOCKBOX_ENTRY, &[]), false);
     crate::items::test_spawn_item(world, KEY, item(KEY_ENTRY, &[]), false);
+    crate::items::test_spawn_item(
+        world,
+        CRAFTED,
+        item(CRAFTED_ENTRY, &[(ITEM_CREATOR, SMITH as u32)]),
+        false,
+    );
     crate::items::test_spawn_item(
         world,
         CHARTER,
         item(CHARTER_ENTRY, &[(ITEM_ENCHANT_0, PETITION_ID)]),
         false,
     );
+    // The records the item cache holds, as the bags read them.
+    let mut items = world.resource_mut::<crate::items::Items>();
+    for (entry, name, flags) in [
+        (LOCKBOX_ENTRY, "Lockbox", 0),
+        (KEY_ENTRY, "Key", 0),
+        (CRAFTED_ENTRY, "Bar", 0),
+        (
+            CHARTER_ENTRY,
+            "Charter",
+            benilla_protocol::messages::ITEM_FLAG_CHARTER,
+        ),
+    ] {
+        items.insert_template(
+            entry,
+            Some(benilla_protocol::messages::ItemInfo {
+                flags,
+                ..crate::items::test_template(name)
+            }),
+        );
+    }
     let mut script = world.non_send_resource_mut::<UiScript>();
     crate::ui_script::test_ui::load_tooltip_template(&script);
     script
@@ -159,31 +193,6 @@ fn client() -> (App, Receiver<ClientCommand>) {
             ..view("Charter")
         },
     );
-    let held = |guid, item_id| ContainerSlot {
-        guid,
-        item_id,
-        count: 1,
-        quality: Some(1),
-        ..Default::default()
-    };
-    script.set_container(
-        0,
-        Some(ContainerState {
-            name: None,
-            num_slots: 16,
-            slots: std::collections::HashMap::from([
-                (1, held(LOCKBOX, LOCKBOX_ENTRY)),
-                (
-                    3,
-                    ContainerSlot {
-                        creator_guid: SMITH,
-                        ..held(CRAFTED, CRAFTED_ENTRY)
-                    },
-                ),
-                (4, held(CHARTER, CHARTER_ENTRY)),
-            ]),
-        }),
-    );
     (app, rx)
 }
 
@@ -231,7 +240,7 @@ fn a_recipe_reads_the_known_spell_list_as_the_call_runs() {
 }
 
 /// The lock walk's openers as the call runs: the key we carry opens the lockbox's lock, `LOCKED`
-/// in green (`0x52be1c`), where the copy opens nothing; with the key gone the lock reads closed.
+/// in green (`0x52be1c`); with the key gone the lock reads closed.
 #[test]
 fn a_locks_key_is_found_in_our_bags_as_the_call_runs() {
     let (mut app, _rx) = client();
@@ -239,8 +248,6 @@ fn a_locks_key_is_found_in_our_bags_as_the_call_runs() {
                           return LineColor('Locked')";
     let (r, g, _): (f32, f32, f32) = hosted(&mut app, LOCKED);
     assert!(g > r, "the key we carry opens it: {r} {g}");
-    let (r, g, _): (f32, f32, f32) = unhosted(&app, LOCKED);
-    assert!(r > g, "the copy opens nothing: {r} {g}");
     let world = app.world_mut();
     let me = world.resource::<crate::net::GuidIndex>().0[&ME];
     world
@@ -265,12 +272,10 @@ fn the_item_builds_lookups_are_asked_inside_the_build() {
         &mut app,
         "TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 3)",
     );
+    let asked = crate::query_cache::queries(&rx);
     assert!(
-        matches!(
-            crate::query_cache::queries(&rx)[..],
-            [ClientCommand::NameQuery { guid: SMITH }]
-        ),
-        "the maker's name is asked in the call"
+        matches!(asked[..], [ClientCommand::NameQuery { guid: SMITH }]),
+        "the maker's name is asked in the call: {asked:?}"
     );
     let _: () = hosted(
         &mut app,

@@ -92,8 +92,6 @@ pub(crate) struct Scene<'w, 's> {
     item_lane: ResMut<'w, crate::item_lane::ItemLane>,
     /// The bag cache `0xbdd060` the bag seats' runs rescan and the bag events number from.
     bag_cache: ResMut<'w, crate::item_watch::BagCache>,
-    /// Where the frame's bag view changes: its first write of our player or an item.
-    bag_view: ResMut<'w, crate::ui_items::feed::BagView>,
     /// What each packet changed in the stores, for the views a listener reads
     /// ([`crate::ui_unit::views`]).
     view_log: ResMut<'w, crate::ui_unit::views::ViewLog>,
@@ -194,18 +192,6 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`) and the questgiver rows'
             // (`0x5018c0`).
             let callbacks = sc.items.take_callbacks(entry);
-            // An answer an item of ours waited on changes what the bag view shows of it.
-            if answered
-                && callbacks.iter().any(|c| {
-                    matches!(
-                        c,
-                        crate::items::RecordCallback::SetUp(_)
-                            | crate::items::RecordCallback::Entry(_)
-                    )
-                })
-            {
-                sc.bag_view.wrote();
-            }
             for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
                 match callback {

@@ -524,16 +524,11 @@ pub(super) fn inventory_reader(lua: &Lua, model: &Model, token: &str) -> Option<
 }
 
 impl Model {
-    /// The active player's item at live-API id `slot` ([`Self::inv_slot_as`] of our own).
-    pub(super) fn own_inv_view(&self, slot: usize) -> Option<InvSlotView> {
-        self.own_inv_slot(slot)
-    }
-
     /// The item `reader`'s unit exposes at live-API id `slot`, the one routing the
     /// `GetInventoryItem*` getters and `GameTooltip:SetInventoryItem` share. Stock paints the bank
     /// through this API (`BankFrame.lua:35`) and hovers a key through it
     /// (`ContainerFrame.lua:616-619`), so the bank and keyring bands are answered from the
-    /// container snapshots. Another player answers its visible items alone, slots 1-19
+    /// container slots. Another player answers its visible items alone, slots 1-19
     /// (`0x5f0d60`), read through the lent host ([`super::inspect::visible_slot`]).
     pub(super) fn inv_slot_as(
         &self,
@@ -542,58 +537,12 @@ impl Model {
         slot: usize,
     ) -> Option<InvSlotView> {
         match reader {
-            InvReader::Own => self.own_inv_slot(slot),
+            InvReader::Own => own_inv_view(lua, self, slot),
             InvReader::Visible(guid) => (1..=19)
                 .contains(&slot)
                 .then(|| super::inspect::visible_slot(lua, self, guid, slot))
                 .flatten(),
         }
-    }
-
-    /// The active player's item at live-API id `slot`. The bank bands are the player list's
-    /// slots 39 to 68, which `GetItemInSlot` (`0x6228a0`) answers empty while no banker is open
-    /// (`0x6228ad`-`0x6228cf`, the banker guid `[0xbdd038]`), and every getter here reads through
-    /// it (`0x4c8449`, `0x4c8cd3`, `SetInventoryItem` at `0x53314e`).
-    fn own_inv_slot(&self, slot: usize) -> Option<InvSlotView> {
-        let bank_band = BANK_INV_SLOTS.contains(&slot) || BANK_BAG_INV_SLOTS.contains(&slot);
-        if bank_band && self.bank.is_none() {
-            return None;
-        }
-        self.player_slot_object(slot)
-    }
-
-    /// The item object at the active player's live-API id `slot`, with no bank gate: what the
-    /// client finds by the held item's guid (the object manager, not `GetItemInSlot`), so an item
-    /// held from a bank slot is still found after the banker closes. For the readers that stand in
-    /// for that guid lookup; a slot getter reads [`Self::inv_slot_as`].
-    pub(crate) fn player_slot_object(&self, slot: usize) -> Option<InvSlotView> {
-        if let Some(view) = self.bank_inv_slot(slot) {
-            return Some(view);
-        }
-        if KEYRING_INV_SLOTS.contains(&slot) {
-            let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
-            let keyring = self.containers.get(&KEYRING_CONTAINER)?;
-            return keyring.slots.get(&n).map(InvSlotView::from_container_slot);
-        }
-        self.inventory_slots.get(slot)?.clone()
-    }
-
-    /// The bag-slot item object behind the player's live id `slot` in the vault and keyring bands,
-    /// which `SetInventoryItem` resolves through the player's slot list as it does a worn item
-    /// (`0x53314e` → `0x6228a0`); `None` for every other band.
-    pub(super) fn inv_container_slot(
-        &self,
-        slot: usize,
-    ) -> Option<&super::container::ContainerSlot> {
-        let (bag, first) = if BANK_INV_SLOTS.contains(&slot) {
-            (BANK_CONTAINER, *BANK_INV_SLOTS.start())
-        } else if KEYRING_INV_SLOTS.contains(&slot) {
-            (KEYRING_CONTAINER, *KEYRING_INV_SLOTS.start())
-        } else {
-            return None;
-        };
-        let n = (slot - first + 1) as u32;
-        self.containers.get(&bag)?.slots.get(&n)
     }
 
     /// The player's repair cost at live id `slot` now (`0x5332e1`), the vault and keyring bands by
@@ -611,37 +560,69 @@ impl Model {
         };
         super::merchant::repair_cost_at(lua, self, bag, n)
     }
+}
 
-    /// The use cooldown `(start, duration, enabled)` in `GetTime` seconds of the player's item at
-    /// live id `slot`: the vault and keyring bands by their container slots, the doll's from the
-    /// worn push.
-    pub(super) fn inv_slot_cooldown(&self, slot: usize) -> Option<(f64, f64, bool)> {
-        if BANK_INV_SLOTS.contains(&slot) {
-            let n = (slot - BANK_INV_SLOTS.start() + 1) as u32;
-            self.container_cooldowns.get(&(BANK_CONTAINER, n)).copied()
-        } else if KEYRING_INV_SLOTS.contains(&slot) {
-            let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
-            self.container_cooldowns
-                .get(&(KEYRING_CONTAINER, n))
-                .copied()
-        } else {
-            self.worn_cooldowns.get(&slot).copied()
-        }
+/// The active player's item at live-API id `slot`. The bank bands are the player list's slots 39
+/// to 68, which `GetItemInSlot` (`0x6228a0`) answers empty while no banker is open (`0x6228ad`-
+/// `0x6228cf`, the banker guid `[0xbdd038]`), and every getter here reads through it (`0x4c8449`,
+/// `0x4c8cd3`, `SetInventoryItem` at `0x53314e`).
+pub(super) fn own_inv_view(lua: &Lua, model: &Model, slot: usize) -> Option<InvSlotView> {
+    let bank_band = BANK_INV_SLOTS.contains(&slot) || BANK_BAG_INV_SLOTS.contains(&slot);
+    if bank_band && model.bank.is_none() {
+        return None;
     }
+    player_slot_object(lua, model, slot)
+}
 
-    fn bank_inv_slot(&self, slot: usize) -> Option<InvSlotView> {
-        if BANK_INV_SLOTS.contains(&slot) {
-            let vault = self.containers.get(&BANK_CONTAINER)?;
-            let n = (slot - BANK_INV_SLOTS.start() + 1) as u32;
-            return vault.slots.get(&n).map(InvSlotView::from_container_slot);
-        }
-        if BANK_BAG_INV_SLOTS.contains(&slot) {
-            // A bank bag is a container, not a slot in one, so this band is its own store; stock
-            // picks it up and describes it through this API.
-            let i = slot - BANK_BAG_INV_SLOTS.start();
-            return self.bank_bag_slots.get(i)?.clone();
-        }
-        None
+/// The item object at the active player's live-API id `slot`, with no bank gate: what the client
+/// finds by the held item's guid (the object manager, not `GetItemInSlot`), so an item held from
+/// a bank slot is still found after the banker closes. For the readers that stand in for that
+/// guid lookup; a slot getter reads [`Model::inv_slot_as`].
+pub(crate) fn player_slot_object(lua: &Lua, model: &Model, slot: usize) -> Option<InvSlotView> {
+    if let Some(s) = inv_container_slot(lua, model, slot) {
+        return Some(InvSlotView::from_container_slot(&s));
+    }
+    if BANK_INV_SLOTS.contains(&slot) || KEYRING_INV_SLOTS.contains(&slot) {
+        return None;
+    }
+    if BANK_BAG_INV_SLOTS.contains(&slot) {
+        // A bank bag is a container, not a slot in one, so this band is its own store; stock
+        // picks it up and describes it through this API.
+        let i = slot - BANK_BAG_INV_SLOTS.start();
+        return model.bank_bag_slots.get(i)?.clone();
+    }
+    model.inventory_slots.get(slot)?.clone()
+}
+
+/// The bag-slot item object behind the player's live id `slot` in the vault and keyring bands,
+/// which `SetInventoryItem` resolves through the player's slot list as it does a worn item
+/// (`0x53314e` → `0x6228a0`), as it stands now; `None` for every other band.
+pub(super) fn inv_container_slot(
+    lua: &Lua,
+    model: &Model,
+    slot: usize,
+) -> Option<super::container::ContainerSlot> {
+    let (bag, first) = if BANK_INV_SLOTS.contains(&slot) {
+        (BANK_CONTAINER, *BANK_INV_SLOTS.start())
+    } else if KEYRING_INV_SLOTS.contains(&slot) {
+        (KEYRING_CONTAINER, *KEYRING_INV_SLOTS.start())
+    } else {
+        return None;
+    };
+    let n = (slot - first + 1) as u32;
+    super::held::held_slot(lua, model, bag, n)
+}
+
+/// The use cooldown `(start, duration, enabled)` in `GetTime` seconds of the player's item at
+/// live id `slot`: the vault and keyring bands by their container slots, the doll's from the worn
+/// copy a harness seats.
+pub(super) fn inv_slot_cooldown(lua: &Lua, model: &Model, slot: usize) -> Option<(f64, f64, bool)> {
+    if BANK_INV_SLOTS.contains(&slot) || KEYRING_INV_SLOTS.contains(&slot) {
+        inv_container_slot(lua, model, slot)
+            .as_ref()
+            .and_then(super::container::slot_cooldown)
+    } else {
+        model.worn_cooldowns.get(&slot).copied()
     }
 }
 
@@ -1272,11 +1253,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let live = usize::try_from(slot0 + 1).ok();
                 let own = inventory_reader(lua, &model, &token) == Some(InvReader::Own);
                 let asked = live.filter(|_| own).filter(|&live| {
-                    model
-                        .own_inv_view(live)
+                    crate::script::char_stats::own_inv_view(lua, &model, live)
                         .is_some_and(|v| v.item_id != 0 && v.spell_0)
                 });
-                let snapshot = asked.and_then(|live| model.inv_slot_cooldown(live));
+                let snapshot = asked.and_then(|live| {
+                    crate::script::char_stats::inv_slot_cooldown(lua, &model, live)
+                });
                 (asked, snapshot, model.now)
             };
             // A worn item's query reads the list inside the call (`0x4c8b86` → `0x6e2ed0`),
@@ -2681,7 +2663,8 @@ mod tests {
                 },
             );
             s.set_container(bag, Some(state));
-            let view = s.model_ref().own_inv_view(live_id).unwrap();
+            let view =
+                crate::script::char_stats::own_inv_view(s.lua(), &s.model_ref(), live_id).unwrap();
             assert_eq!(view.item_id, 7000, "bag {bag}");
             assert_eq!(view.field_duration, 3_600_000, "bag {bag}");
         }

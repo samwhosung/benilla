@@ -107,7 +107,7 @@ fn put_item(lua: &Lua, model: &mut Model, dest: Dest, vendor: VendorAtCall) -> b
             }
             let occupant = usize::try_from(live)
                 .ok()
-                .and_then(|slot| model.own_inv_view(slot))
+                .and_then(|slot| crate::script::char_stats::own_inv_view(lua, model, slot))
                 .map(|s| s.guid);
             let Some(occupant) = occupant else {
                 // The doll click on the empty slot: it places or buys what is held, and with
@@ -173,7 +173,7 @@ fn place_held(lua: &Lua, model: &mut Model, dest: Dest, held: CursorItem) -> boo
             // split count, so a split carry swaps its whole stack.
             let occupant = usize::try_from(live)
                 .ok()
-                .and_then(|slot| model.own_inv_view(slot))
+                .and_then(|slot| crate::script::char_stats::own_inv_view(lua, model, slot))
                 .map_or(0, |s| s.guid);
             lock_item(model, occupant);
             super::swap::swap_and_file(
@@ -229,7 +229,7 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) -> mlua::Result<()> {
             !model.player_control || (BANK_BAG_INV_SLOTS.contains(&live) && model.bank.is_none());
         let occupied = usize::try_from(live)
             .ok()
-            .and_then(|slot| model.own_inv_view(slot))
+            .and_then(|slot| crate::script::char_stats::own_inv_view(lua, &model, slot))
             .is_some_and(|s| s.item_id != 0);
         (gated, occupied)
     };
@@ -247,7 +247,7 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) -> mlua::Result<()> {
     }
     let picked = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        grab_bag(&model, live)
+        grab_bag(lua, &model, live)
     };
     if let Some(item) = picked {
         pick_up_item(lua, item);
@@ -257,10 +257,10 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) -> mlua::Result<()> {
 
 /// `PickupBagFromSlot`'s grab: an unlocked container in `live` (`0x4c7bc1`), which it picks up
 /// with `SetCursorItem(1, …)` and `LockItem` (`0x4c7be2`, `0x4c7be9`).
-fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
+fn grab_bag(lua: &Lua, model: &Model, live: u32) -> Option<CursorItem> {
     usize::try_from(live)
         .ok()
-        .and_then(|slot| model.own_inv_view(slot))
+        .and_then(|slot| crate::script::char_stats::own_inv_view(lua, model, slot))
         .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
         .map(|s| CursorItem {
             item_class: None,

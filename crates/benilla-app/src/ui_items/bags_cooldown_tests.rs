@@ -1,4 +1,5 @@
-//! [`super::feed_containers`] against the cooldown list's edges, through a real Lua VM.
+//! The bags' live read ([`crate::ui_items::BagLive`]) against the cooldown list's edges, through
+//! a real Lua VM.
 
 use benilla_protocol::messages::{ItemUseSpell, SpellCooldown};
 use benilla_protocol::ObjectFields;
@@ -13,8 +14,8 @@ const HEARTHSTONE: u32 = 6948;
 const RECALL: u32 = 8690;
 
 /// `StartCooldown 0x6e2c60` inserts with no flush (`0x6e2dcc`), so a login's
-/// `SMSG_INITIAL_SPELLS` seed of an item's cooldown moves no [`Cooldowns::generation`]; the bags'
-/// next frame still reads it, as `GetContainerItemCooldown` queries the list itself (`0x4f9a7f` →
+/// `SMSG_INITIAL_SPELLS` seed of an item's cooldown moves no [`Cooldowns::generation`]; the bags
+/// still read it, as `GetContainerItemCooldown` queries the list itself (`0x4f9a7f` →
 /// `0x6e2ed0`).
 #[test]
 fn an_initial_item_cooldown_alone_reaches_the_bags() {
@@ -22,17 +23,15 @@ fn an_initial_item_cooldown_alone_reaches_the_bags() {
     let mut app = App::new();
     app.init_resource::<Items>()
         .init_resource::<Cooldowns>()
-        .init_resource::<super::BagView>()
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
         .init_resource::<crate::names::NameCache>()
         .init_resource::<crate::ui_petition::PetitionRecords>()
-        .insert_resource(crate::ui_script::UiClock {
-            anchor: now,
-            ui_now: 1000.0,
-        })
-        .add_systems(Update, super::feed_containers);
+        .init_resource::<crate::ui_action::ActionStateMemory>();
+    app.world_mut()
+        .resource_mut::<crate::ui_action::ActionStateMemory>()
+        .set_clock((now, 1000.0));
     app.world_mut().resource_mut::<Items>().insert_template(
         HEARTHSTONE,
         Some(benilla_protocol::messages::ItemInfo {
@@ -70,12 +69,11 @@ fn an_initial_item_cooldown_alone_reaches_the_bags() {
     let mut script = UiScript::new().unwrap();
     script.set_now(1000.0);
     app.insert_non_send_resource(script);
-    app.update();
     let duration = |app: &mut App| {
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<f64>("local _, d = GetContainerItemCooldown(0, 1) return d")
-            .unwrap()
+        crate::ui_items::bags::eval_with_bags::<f64>(
+            app.world_mut(),
+            "local _, d = GetContainerItemCooldown(0, 1) return d",
+        )
     };
     assert_eq!(duration(&mut app), 0.0, "bagged, cold");
 
@@ -99,6 +97,5 @@ fn an_initial_item_cooldown_alone_reaches_the_bags() {
         CategoryPad::NoPlayer,
         now,
     );
-    app.update();
     assert_eq!(duration(&mut app), 60.0, "the seeded record, read");
 }

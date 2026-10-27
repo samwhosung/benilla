@@ -162,7 +162,7 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
         _ => None,
     };
     let book = crate::script::live::ask(lua, &crate::script::spellbook::BookNow);
-    let (placed, displaced) = match verb(lua, |model| plan_place(model, id, book.as_ref())) {
+    let (placed, displaced) = match verb(lua, |model| plan_place(lua, model, id, book.as_ref())) {
         Place::Refused => return Ok(false),
         // The passive spell's line, shown inside the verb (`0x4e63ad` → `0x496720`).
         Place::Shown(key) => {
@@ -217,7 +217,7 @@ enum Place {
 
 /// `PlaceAction`'s decision: the accept filters, then whether the held action is the slot's own,
 /// then what the slot takes from the held payload and the occupant that hops.
-fn plan_place(model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Place {
+fn plan_place(lua: &Lua, model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Place {
     // The two accept filters (`0x4e62e0`) refuse with a bare return: nothing stored or sent, and
     // the payload stays held. An item needs an on-use spell or an equip slot (`0x4e6571`), so a
     // bag is placeable; a passive spell (`Attributes & 0x40`) also raises errorId `0x9e` through
@@ -249,7 +249,7 @@ fn plan_place(model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Plac
         // (`0x4e5250`) is the template's consumable test, which the held item carries from its
         // bag or worn record.
         CursorPayload::Item(i) => ActionSlot {
-            count: carried_count(model, i.item_id),
+            count: carried_count(lua, model, i.item_id),
             consumable: i.consumable,
             ..slot(ACTION_KIND_ITEM, i.item_id, &i.texture)
         },
@@ -313,12 +313,11 @@ fn resolved_spell(model: &Model, id: u32) -> Option<u32> {
 }
 
 /// The stacks of `item_id` in the backpack and the four worn bags, the app's carried count.
-fn carried_count(model: &Model, item_id: u32) -> u32 {
-    (0..=4)
-        .filter_map(|bag| model.containers.get(&bag))
-        .flat_map(|c| c.slots.values())
-        .filter(|s| s.item_id == item_id)
-        .map(|s| s.count)
+fn carried_count(lua: &Lua, model: &Model, item_id: u32) -> u32 {
+    crate::script::held::bag_items(lua, model)
+        .into_iter()
+        .filter(|(bag, _, s)| (0..=4).contains(bag) && s.item_id == item_id)
+        .map(|(_, _, s)| s.count)
         .sum()
 }
 

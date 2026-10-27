@@ -189,7 +189,7 @@ mod tests {
         assert!(!s.item_locked(A) && !s.item_locked(B));
     }
 
-    /// The client in the world as our player with empty bags pushed, and a VM whose
+    /// The client in the world as our player with empty bags, and a VM whose
     /// `UI_ERROR_MESSAGE`, `PLAYER_ENTERING_WORLD` and `BAG_UPDATE_COOLDOWN` handlers each note
     /// `HasKey()` behind their letter.
     fn keyring_client() -> App {
@@ -241,9 +241,6 @@ mod tests {
             ))
             .unwrap();
         world.insert_non_send_resource(script);
-        world
-            .run_system_cached(super::super::feed::feed_containers)
-            .unwrap();
         app
     }
 
@@ -252,8 +249,8 @@ mod tests {
 
     /// One frame's refusal (`SMSG_INVENTORY_CHANGE_FAILURE`) and a key landing in backpack slot 1
     /// (its create, then our player's `PLAYER_FIELD_PACK_SLOT_1`, 532), the key first when
-    /// `key_first`, through the handlers; then the bag feed, `between` (what the feeds after it
-    /// fire), and the lanes' drain.
+    /// `key_first`, through the handlers; then `between` with the host lent (what a feed fires),
+    /// and the lanes' drain.
     fn refusal_and_key_frame(app: &mut App, key_first: bool, between: fn(&mut UiScript)) {
         frame(app, Vec::new(), packets_of(key_first), between);
     }
@@ -298,13 +295,8 @@ mod tests {
         }
     }
 
-    /// The refusal alone.
-    fn refusal() -> SessionEvent {
-        packets_of(false).swap_remove(0)
-    }
-
-    /// One frame: `ahead`, then `packets`, through the handlers; the bag feed, `between`, and the
-    /// lanes' drain.
+    /// One frame: `ahead`, then `packets`, through the handlers; `between` with the host lent, as a
+    /// feed runs, and the lanes' drain.
     fn frame(
         app: &mut App,
         ahead: Vec<SessionEvent>,
@@ -313,24 +305,27 @@ mod tests {
     ) {
         let world = app.world_mut();
         crate::net::handlers::dispatch(world, ahead.into_iter().chain(packets).collect());
-        world
-            .run_system_cached(super::super::feed::feed_containers)
-            .unwrap();
-        between(&mut world.non_send_resource_mut::<UiScript>());
+        crate::script_calls::with_hosted_vm(world, |s| between(s.expect("a VM")));
         crate::lanes::fire_in_order(world);
     }
 
     /// One frame's refusal and a key landing in the backpack, the key first when `key_first`,
-    /// over bags pushed empty; then what `HasKey()` read at the refusal's `UI_ERROR_MESSAGE`, and
-    /// after the frame.
+    /// over empty bags; then what `HasKey()` read at the refusal's `UI_ERROR_MESSAGE`, and after
+    /// the frame.
     fn refusal_and_key(key_first: bool) -> (String, bool) {
         let mut app = keyring_client();
         refusal_and_key_frame(&mut app, key_first, |_| {});
-        let s = app.world().non_send_resource::<UiScript>();
         (
-            s.eval::<String>("return SEEN").unwrap(),
-            s.eval::<bool>("return HasKey() == 1").unwrap(),
+            hosted_eval(&mut app, "return SEEN"),
+            hosted_eval(&mut app, "return HasKey() == 1"),
         )
+    }
+
+    /// `chunk` on the VM with the host lent, as a getter runs inside a frame.
+    fn hosted_eval<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, chunk: &str) -> T {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").eval::<T>(chunk).expect("runs")
+        })
     }
 
     /// The failure's handler shows its line and unlocks its items (`0x496720`, `0x5e3ac0`,
@@ -369,77 +364,18 @@ mod tests {
         assert_eq!(s.eval::<String>("return SEEN").unwrap(), "E0");
     }
 
-    /// The record answer for a key already in the backpack changes what the bags show of it
-    /// (`HasKey()` reads the key family off the record): a refusal ahead of the answer reads the
-    /// bags before it.
+    /// The feeds' own events read this frame's bags, whatever the lanes owe: the world-enter
+    /// cascade and a `BAG_UPDATE_COOLDOWN` fired after the packets read the key the frame seated,
+    /// while the refusal the key followed reads the bags before the key.
     #[test]
-    fn a_record_answer_after_a_refusal_swaps_the_bags_at_the_answer() {
-        let mut app = keyring_client_without_the_record();
-        let key = packets_of(true);
-        frame(&mut app, Vec::new(), key[..4].to_vec(), |_| {});
-        let s = app.world_mut().non_send_resource_mut::<UiScript>();
-        assert!(!s.eval::<bool>("return HasKey() == 1").unwrap());
-        s.run("SEEN = ''").unwrap();
-        let answer = SessionEvent::ItemTemplate {
-            entry: KEY,
-            info: Some(Box::new(key_record())),
-        };
-        frame(&mut app, Vec::new(), vec![refusal(), answer], |_| {});
-        let s = app.world().non_send_resource::<UiScript>();
-        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "E0");
-        assert!(s.eval::<bool>("return HasKey() == 1").unwrap());
-    }
-
-    /// The feeds' own events after the bag feed read this frame's bags, whatever the lanes owe:
-    /// the world-enter cascade `feed_units` fires after the seats it reads, and the usable
-    /// refresh's events `fire_action_events` fires after the feed, as a lane's
-    /// `BAG_UPDATE_COOLDOWN` does once the drain reaches it, while the refusal a key followed reads
-    /// the bags before the key.
-    #[test]
-    fn the_feeds_events_after_the_bag_feed_read_this_frames_bags() {
-        use crate::game_plugins::schedule_tests::{census, SyncPoints};
+    fn the_feeds_events_read_this_frames_bags() {
         let mut app = keyring_client();
         refusal_and_key_frame(&mut app, false, |s| {
             s.fire_world_enter();
             s.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
         });
-        let s = app.world().non_send_resource::<UiScript>();
-        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "W1C1E0");
-        let c = census(
-            &mut crate::game_plugins::schedule_tests::headless_client(),
-            Update,
-            SyncPoints::Declared,
-        );
-        if !crate::game_plugins::schedule_tests::type_names_available(&c) {
-            eprintln!("skipped: this build carries no type names");
-            return;
-        }
-        let key = |suffix: &str| {
-            c.systems
-                .iter()
-                .find(|(_, i)| i.name.ends_with(suffix))
-                .map(|(k, _)| *k)
-                .unwrap_or_else(|| panic!("{suffix} is in Update"))
-        };
-        let feed = key("::ui_items::feed::feed_containers");
-        let mut after = std::collections::HashSet::new();
-        let mut stack = vec![feed];
-        while let Some(n) = stack.pop() {
-            for (a, b) in &c.dependencies {
-                if *a == n && after.insert(*b) {
-                    stack.push(*b);
-                }
-            }
-        }
-        for reader in [
-            "::ui_unit::feed_units",
-            "::ui_action::state::fire_action_events",
-        ] {
-            assert!(
-                after.contains(&key(reader)),
-                "{reader} runs after the bag feed"
-            );
-        }
+        let seen: String = hosted_eval(&mut app, "return SEEN");
+        assert_eq!(seen, "W1C1E0");
     }
 
     /// A refusal that lands while no in-game interface is up is dropped by the frame, line and

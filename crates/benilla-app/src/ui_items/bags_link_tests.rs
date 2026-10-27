@@ -1,4 +1,4 @@
-//! A bag item's link as [`super::feed_containers`] pushes it, read back through
+//! A bag item's link as the bags' live read ([`crate::ui_items::BagLive`]) derives it, read through
 //! `GetContainerItemLink`: `0x52ae00` (called at `0x4f997f`) passes the permanent enchant, the
 //! random property id and the property seed to `0x52adb0`, all three 0 for a wrapped item and the
 //! enchant 0 for a charter.
@@ -25,17 +25,15 @@ fn bag_link(pairs: &[(u16, u32)], template_flags: u32) -> String {
     let mut app = App::new();
     app.init_resource::<Items>()
         .init_resource::<Cooldowns>()
-        .init_resource::<super::BagView>()
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
         .init_resource::<crate::names::NameCache>()
         .init_resource::<crate::ui_petition::PetitionRecords>()
-        .insert_resource(crate::ui_script::UiClock {
-            anchor: now,
-            ui_now: 1000.0,
-        })
-        .add_systems(Update, super::feed_containers);
+        .init_resource::<crate::ui_action::ActionStateMemory>();
+    app.world_mut()
+        .resource_mut::<crate::ui_action::ActionStateMemory>()
+        .set_clock((now, 1000.0));
     let mut template = crate::items::test_template("Bloodrazor");
     template.quality = 3;
     template.flags = template_flags;
@@ -64,11 +62,7 @@ fn bag_link(pairs: &[(u16, u32)], template_flags: u32) -> String {
     let mut script = UiScript::new().unwrap();
     script.set_now(1000.0);
     app.insert_non_send_resource(script);
-    app.update();
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .eval::<String>("return GetContainerItemLink(0, 1)")
-        .unwrap()
+    crate::ui_items::bags::eval_with_bags(app.world_mut(), "return GetContainerItemLink(0, 1)")
 }
 
 /// `0x52ae00` reads the enchant at `+0x40` (`0x52aeb2`), the id at `+0x98` and the seed at

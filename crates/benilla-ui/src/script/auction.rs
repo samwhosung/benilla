@@ -543,18 +543,13 @@ pub(crate) fn clear_sell_slot(model: &mut Model) {
 /// `ERR_AUCTION_WRAPPED_ITEM` (`0x4ce4b1`); record flags `& 4` are `ERR_AUCTION_LOOT_ITEM`
 /// (`0x4ce4d6`). The record is the item cache's, read with no callback (`0x55ba30`); without one
 /// its flags read 0 (`0x5da2b3`).
-fn sell_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
+fn sell_refusal(lua: &Lua, model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
     let (bound, flags, duration, seats) = if item.bag == cursor::EQUIPMENT_BAG {
-        let s = model
-            .player_slot_object(item.slot as usize)
+        let s = crate::script::char_stats::player_slot_object(lua, model, item.slot as usize)
             .filter(|s| s.guid == item.guid)?;
         (s.already_bound, s.flags, s.field_duration, s.occupied_seats)
     } else {
-        let s = model
-            .containers
-            .get(&item.bag)?
-            .slots
-            .get(&item.slot)
+        let s = super::held::held_slot(lua, model, item.bag, item.slot)
             .filter(|s| s.guid == item.guid)?;
         (s.already_bound, s.flags, s.field_duration, s.occupied_seats)
     };
@@ -766,7 +761,7 @@ fn sell_item_info(
 ) -> Option<(String, Option<String>, u32, i64, bool, u32)> {
     let it = model.auction_sell_item.as_ref()?;
     // The real stack size, not the split-carry field: the deposit is per stack.
-    let count = cursor::held_count(model, it);
+    let count = cursor::held_count(lua, model, it);
     let template = model.item_templates.get(&it.item_id);
     let name = cursor::item_link_name(it.link.as_deref());
     let quality = it.quality.map_or(-1, i64::from);
@@ -1340,11 +1335,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // A damaged item, not wrapped (`flags & 8`), with a max durability whose current
                 // falls short, refuses with `ERR_AUCTION_REPAIR_ITEM` (`0x4ce80f`-`0x4ce83f`). An
                 // item not found skips the check (`0x4ce802`).
-                let damaged = model
-                    .containers
-                    .values()
-                    .flat_map(|c| c.slots.values())
-                    .find(|s| s.guid == guid)
+                let damaged = super::held::find_guid(lua, &model, guid)
+                    .map(|(_, _, s)| s)
                     .is_some_and(|s| {
                         s.flags & 0x8 == 0
                             && s.durability.is_some_and(|(cur, max)| max > 0 && cur < max)
@@ -1474,7 +1466,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let refusal = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 match &model.cursor {
-                    Some(cursor::CursorPayload::Item(item)) => sell_refusal(&model, item),
+                    Some(cursor::CursorPayload::Item(item)) => sell_refusal(lua, &model, item),
                     _ => None,
                 }
             };

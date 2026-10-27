@@ -107,30 +107,23 @@ pub(super) fn equip_question(
 
 /// The held item's object as `AutoEquipCursorItem` finds it by guid (`0x5e15b2`): the view of the
 /// slot it came from, else any bag slot or player slot holding that guid.
-pub(super) fn held_facts(model: &Model, item: &CursorItem) -> Option<EquipFacts> {
+pub(super) fn held_facts(lua: &Lua, model: &Model, item: &CursorItem) -> Option<EquipFacts> {
     let from_slot = |bag: i64, slot: u32| {
         if bag == EQUIPMENT_BAG {
             usize::try_from(slot)
                 .ok()
-                .and_then(|slot| model.player_slot_object(slot))
+                .and_then(|slot| crate::script::char_stats::player_slot_object(lua, model, slot))
                 .filter(|v| v.guid == item.guid)
                 .map(|v| EquipFacts::of_inv(&v))
         } else {
-            model
-                .containers
-                .get(&bag)
-                .and_then(|c| c.slots.get(&slot))
+            crate::script::held::held_slot(lua, model, bag, slot)
                 .filter(|s| s.guid == item.guid)
-                .map(EquipFacts::of_slot)
+                .map(|s| EquipFacts::of_slot(&s))
         }
     };
     from_slot(item.bag, item.slot).or_else(|| {
-        model
-            .containers
-            .values()
-            .flat_map(|c| c.slots.values())
-            .find(|s| s.guid == item.guid)
-            .map(EquipFacts::of_slot)
+        crate::script::held::find_guid(lua, model, item.guid)
+            .map(|(_, _, s)| EquipFacts::of_slot(&s))
     })
 }
 
@@ -159,7 +152,7 @@ pub(crate) fn auto_equip_held(lua: &Lua, model: &mut Model, suppress: bool) -> A
         clear_cursor(model);
         return AutoEquip::Back;
     }
-    let Some(facts) = held_facts(model, &item) else {
+    let Some(facts) = held_facts(lua, model, &item) else {
         return AutoEquip::None;
     };
     let (bag, slot, guid) = (item.bag, item.slot, item.guid);
@@ -269,10 +262,7 @@ impl crate::script::UiScript {
     pub fn auto_equip_slot(&mut self, bag: i64, slot: u32, suppress: bool) -> AutoEquip {
         let item = {
             let model = self.model_ref();
-            model
-                .containers
-                .get(&bag)
-                .and_then(|c| c.slots.get(&slot))
+            crate::script::held::held_slot(&self.lua, &model, bag, slot)
                 .filter(|s| s.guid != 0)
                 .map(|s| s.cursor_item(bag, slot))
         };
@@ -290,12 +280,8 @@ impl crate::script::UiScript {
     pub fn auto_equip_guid(&mut self, guid: u64, suppress: bool) -> AutoEquip {
         let at = {
             let model = self.model_ref();
-            model.containers.iter().find_map(|(&bag, c)| {
-                c.slots
-                    .iter()
-                    .find(|(_, s)| s.guid == guid)
-                    .map(|(&slot, _)| (bag, slot))
-            })
+            crate::script::held::find_guid(&self.lua, &model, guid)
+                .map(|(bag, slot, _)| (bag, slot))
         };
         match at {
             Some((bag, slot)) => self.auto_equip_slot(bag, slot, suppress),

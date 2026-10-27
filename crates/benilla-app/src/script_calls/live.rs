@@ -70,6 +70,8 @@ live_reads! {
         /// without the relations' inputs.
         units: UnitLive<'static, 'static>,
         items: crate::ui_items::live::ItemLive<'static, 'static>,
+        /// The active player's bags; absent in a harness without the item stores.
+        bags: Option<crate::ui_items::BagLive<'static, 'static>>,
         stats: StatsLive<'static, 'static>,
         auras: Option<crate::ui_aura::AuraLive<'static, 'static>>,
         /// The player's cooldown lists.

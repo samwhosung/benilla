@@ -278,6 +278,9 @@ pub(crate) struct ActionPress<'w, 's> {
     equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,
     /// What the item's requirement gate and equip question read, seated with the host out.
     requirements: crate::ui_items::RequirementsLive<'w, 's>,
+    /// The bags the item slot's auto-equip reads, lent with the host out; with no cooldown list,
+    /// which the ladder holds to write, as the equip reads none.
+    bags: Option<crate::ui_items::BagReads<'w, 's>>,
 }
 
 /// What a `UseAction` press leaves to another applier.
@@ -300,6 +303,21 @@ pub(crate) fn use_action(
     script: &mut UiScript,
     press: benilla_ui::script::ActionUse,
 ) -> UseOutcome {
+    let reads = p.bags.take();
+    let outcome = match reads.as_ref() {
+        Some(reads) => script.reading(&mut reads.with(None), |script| press_slot(p, script, press)),
+        None => press_slot(p, script, press),
+    };
+    p.bags = reads;
+    outcome
+}
+
+/// [`use_action`] with the bags lent.
+fn press_slot(
+    p: &mut ActionPress,
+    script: &mut UiScript,
+    press: benilla_ui::script::ActionUse,
+) -> UseOutcome {
     let ActionPress {
         slots,
         targeting,
@@ -308,6 +326,7 @@ pub(crate) fn use_action(
         gate,
         equip_sound,
         requirements,
+        bags: _,
     } = p;
     let selection = &targeting.selection;
     let action = press.action;
