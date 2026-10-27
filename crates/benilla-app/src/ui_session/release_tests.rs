@@ -34,7 +34,11 @@ fn form(flags: u32) -> ShapeshiftForm {
 /// `SpellShapeshiftForm` rows: 1 and 5 plain forms, 7 a stance (flag 0x1), 8 a form that may still
 /// interact (flag 0x8).
 fn app() -> (App, Entity) {
-    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    seat(crate::game_plugins::schedule_tests::headless_client_unrun())
+}
+
+/// [`app`]'s seat on `app`.
+fn seat(mut app: App) -> (App, Entity) {
     let (tx, rx) = crossbeam_channel::unbounded();
     // Kept alive for the run: a dropped receiver fails the sends.
     std::mem::forget(rx);
@@ -137,10 +141,16 @@ fn a_shapeshift_into_a_form_that_cannot_interact_closes_the_window() {
 
 /// `0x5de010` releases the latch after its own signals (`0x5de011`-`0x5de01b`, then `0x5de07f`),
 /// inside the values packet that moved the form byte: the bank's close fires behind
-/// `UPDATE_BONUS_ACTIONBAR`, whose notice the notify pass wrote after the edge.
+/// `UPDATE_BONUS_ACTIONBAR`, whose notice the notify pass wrote after the edge, and ahead of the
+/// next packet's change into a stance, which signals again and closes nothing. The frame runs
+/// between the dispatch and the drain, as the client's does.
 #[test]
 fn a_form_change_closes_the_window_after_its_own_signals() {
-    let (mut app, _) = app();
+    let (mut app, _) = seat(crate::game_plugins::schedule_tests::headless_client());
+    app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+        bevy::ecs::error::ignore,
+    ))
+    .insert_resource(State::new(crate::client_state::ClientState::InWorld));
     let world = app.world_mut();
     world.insert_non_send_resource(crate::ui_script::sweep_test::spied_vm(&[
         "UPDATE_BONUS_ACTIONBAR",
@@ -161,17 +171,22 @@ fn a_form_change_closes_the_window_after_its_own_signals() {
         .0
         .insert(ME, me);
     open(&mut app, NpcWindow::Bank, BANKER);
-    crate::lanes::fire_in_order(app.world_mut());
-    let block = SessionEvent::ObjectValues {
+    // A frame that settles the open and the VM's first feeds.
+    app.world_mut().run_schedule(Update);
+    let settled = seen_in(&app).len();
+    let form = |form: u32| SessionEvent::ObjectValues {
         guid: ME,
-        fields: benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_BYTES_1, 1 << 16)]),
+        fields: benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_BYTES_1, form << 16)]),
     };
-    let world = app.world_mut();
-    crate::net::handlers::dispatch(world, crate::net::wire([block]));
-    crate::lanes::fire_in_order(world);
+    crate::net::handlers::dispatch(app.world_mut(), crate::net::wire([form(1), form(7)]));
+    app.world_mut().run_schedule(Update);
     assert_eq!(
-        seen_in(&app),
-        ["UPDATE_BONUS_ACTIONBAR", "BANKFRAME_CLOSED"]
+        seen_in(&app)[settled..],
+        [
+            "UPDATE_BONUS_ACTIONBAR",
+            "BANKFRAME_CLOSED",
+            "UPDATE_BONUS_ACTIONBAR"
+        ]
     );
 }
 

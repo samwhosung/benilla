@@ -1193,6 +1193,38 @@ fn a_rename_evicts_by_the_units_pet_number_for_any_unit() {
         })
         .count();
     assert_eq!(renamed, 1, "only our own pet's rename signals");
+
+    // The notices fired into a listening VM: the id names `LOCALPLAYER_PET_RENAMED`.
+    app.init_resource::<crate::ui_chat::ChatLog>()
+        .init_resource::<crate::sound::MessageSounds>();
+    let script = benilla_ui::script::UiScript::new().unwrap();
+    script
+        .run(
+            r#"RENAMED = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("LOCALPLAYER_PET_RENAMED")
+            f:SetScript("OnEvent", function() RENAMED = RENAMED + 1 end)"#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    use bevy::ecs::system::RunSystemOnce;
+    app.world_mut()
+        .run_system_once(
+            |mut sink: crate::ui_action::MessageSink,
+             mut lane: ResMut<crate::field_watch::NoticeLane>,
+             mut vm: NonSendMut<benilla_ui::script::UiScript>| {
+                for n in lane.drain() {
+                    crate::ui_unit::field_events::fire(&mut vm, &mut sink, n);
+                }
+            },
+        )
+        .unwrap();
+    let heard = app
+        .world()
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .eval::<i64>("return RENAMED")
+        .unwrap();
+    assert_eq!(heard, 1, "one LOCALPLAYER_PET_RENAMED reaches the listener");
 }
 
 /// Us, held as `me` and summoning `pet`: `"pet"` names our `UNIT_FIELD_SUMMON` (`0x515a6e`).
