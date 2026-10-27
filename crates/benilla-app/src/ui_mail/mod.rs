@@ -135,12 +135,6 @@ pub(crate) struct ListedSubject {
     pub(crate) rewritten: bool,
 }
 
-impl crate::query_cache::AskOnce for MailOpen {
-    fn clear_pending(&mut self) {
-        self.bodies.clear_pending();
-    }
-}
-
 impl MailOpen {
     /// The open core's cell write (`0x4acd27`): the guid, keeping the rows whichever mailbox they
     /// came from, and `MAIL_SHOW` owed, as the reference fires it on every use. [`open_mailbox`]
@@ -258,7 +252,6 @@ pub(crate) struct UiMailPlugin;
 
 impl Plugin for UiMailPlugin {
     fn build(&self, app: &mut App) {
-        crate::query_cache::register::<MailOpen>(app);
         net::register(app);
         app.init_resource::<MailOpen>()
             .init_resource::<MailPending>()

@@ -412,12 +412,6 @@ impl NameCache {
     }
 }
 
-impl crate::query_cache::AskOnce for NameCache {
-    fn clear_pending(&mut self) {
-        NameCache::clear_pending(self);
-    }
-}
-
 impl NameCache {
     /// Drop a player's cached name and traits so the next resolve re-asks: the reference's
     /// remove-by-key for `SMSG_INVALIDATE_PLAYER` (`0x555600` into `0x560170`).

@@ -197,7 +197,6 @@ fn on_connected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
             name,
             tutorial_flags,
             addon_info,
-            &mut b.commands,
             &mut e.addon_reply,
             &mut b.self_guid,
             &mut b.status,
@@ -767,7 +766,6 @@ fn connected(
     name: String,
     tutorial_flags: Option<Vec<u8>>,
     addon_info: Option<Vec<benilla_protocol::messages::AddonRecord>>,
-    commands: &mut Commands,
     addon_reply: &mut crate::net::AddonInfoReply,
     self_guid: &mut SelfGuid,
     status: &mut NetStatus,
@@ -778,12 +776,11 @@ fn connected(
     status.connected = true;
     status.last_reason = None;
     info!("net: in world as {name} (guid {guid})");
-    // The reference clears player and pet names at every world entry (`0x555740`, arm
-    // `0x5557ad`), since a guid may name a new character; creature templates survive.
+    // The reference clears the caches built unsaved at every world entry (`DBCacheClearUnsaved`,
+    // `0x555740`, ahead of the world's first packet): player and pet names here, since a guid may
+    // name a new character, and the guild and petition stores in [`crate::wdb`]. A saved
+    // cache, creature templates included, keeps its records and its asks.
     names.clear_world_session();
-    // And every ask-once cache's in-flight asks, applied with this handler's commands, before
-    // the next packet's handlers can ask.
-    commands.queue(crate::query_cache::release_pending);
     // Our own name came with the login, so "player" never queries.
     names.insert_player(guid, name, None);
     // Set before the world-entry UI load reads it, and every login, so a silent server inherits
@@ -1541,5 +1538,88 @@ mod login_ask_tests {
             .filter(|c| matches!(c, crate::net::ClientCommand::NameQuery { guid: CHALLENGER }))
             .count();
         assert_eq!(asked, 1, "the login frame forgot its packet's pending ask");
+    }
+
+    /// `DBCacheClearUnsaved` (`0x555740`) wipes a cache whole, records and asks, only when its
+    /// persist byte is 0 (player names `0xc0e228`, guilds, pet names and petitions); a saved
+    /// cache keeps both. The item cache's and the page cache's in-flight asks stand, and an
+    /// unsaved player name's ask and record are gone.
+    #[test]
+    fn the_world_entry_wipes_the_unsaved_caches_and_leaves_the_saved_ones() {
+        use crate::query_cache::Ask;
+        const ITEM: u32 = 5_000;
+        const PAGE: u32 = 358;
+        const ANSWERED_PAGE: u32 = 359;
+        const ASKED: u64 = 0x77;
+        const KNOWN: u64 = 0x78;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let (tx, sent) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let (inbound, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetEvents::for_test(rx));
+        let ask_all = |app: &App| {
+            let commands = app.world().resource::<NetCommands>();
+            app.world()
+                .resource::<Items>()
+                .template(ITEM, 0, Ask::Event(commands));
+            app.world()
+                .resource::<crate::ui_item_text::PageTexts>()
+                .page(PAGE, 0, Ask::Event(commands));
+            app.world()
+                .resource::<NameCache>()
+                .resolve_player(ASKED, Ask::Event(commands));
+            crate::query_cache::queries(&sent)
+        };
+        use crate::net::ClientCommand as C;
+        assert_eq!(ask_all(&app).len(), 3, "each cache sends its ask");
+        app.world_mut()
+            .resource_mut::<crate::ui_item_text::PageTexts>()
+            .insert(ANSWERED_PAGE, "A saved page.".into(), 0);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(KNOWN, "Unsaved".into(), None);
+
+        inbound
+            .send(SessionEvent::Connected {
+                self_guid: 0x2a,
+                name: "Probeseven".into(),
+                billing: Default::default(),
+                tutorial_flags: None,
+                addon_info: None,
+            })
+            .unwrap();
+        app.update();
+
+        let again = ask_all(&app);
+        assert!(
+            !again
+                .iter()
+                .any(|c| matches!(c, C::ItemQuery { .. } | C::PageTextQuery { .. })),
+            "a saved cache's ask stands, so it is not sent again: {again:?}"
+        );
+        assert!(
+            again
+                .iter()
+                .any(|c| matches!(c, C::NameQuery { guid: ASKED })),
+            "an unsaved cache's ask is gone, so it is sent again: {again:?}"
+        );
+        let world = app.world();
+        assert!(
+            world
+                .resource::<crate::ui_item_text::PageTexts>()
+                .page(ANSWERED_PAGE, 0, Ask::Read)
+                .is_some(),
+            "a saved cache keeps its records"
+        );
+        assert_eq!(
+            world
+                .resource::<NameCache>()
+                .resolve_player(KNOWN, Ask::Read),
+            None,
+            "an unsaved cache loses its records"
+        );
     }
 }

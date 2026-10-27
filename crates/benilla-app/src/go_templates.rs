@@ -163,12 +163,6 @@ pub(crate) struct GameObjectTemplates {
     quest_waits: std::sync::Mutex<Vec<u32>>,
 }
 
-impl crate::query_cache::AskOnce for GameObjectTemplates {
-    fn clear_pending(&mut self) {
-        self.templates.clear_pending();
-    }
-}
-
 impl GameObjectTemplates {
     /// The key an object's template is cached under: its descriptor's `OBJECT_FIELD_ENTRY`
     /// (`[descriptor+0xc]`, `0x5f7d77`), never the guid, whose bits carry the entry only on some

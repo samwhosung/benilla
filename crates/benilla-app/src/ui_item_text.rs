@@ -48,12 +48,6 @@ pub(crate) struct PageTexts {
     pages: QueryCache<u32, PageText>,
 }
 
-impl crate::query_cache::AskOnce for PageTexts {
-    fn clear_pending(&mut self) {
-        self.pages.clear_pending();
-    }
-}
-
 impl PageTexts {
     pub(crate) fn insert(&mut self, page_id: u32, text: String, next: u32) {
         self.pages.insert(page_id, PageText { text, next });
@@ -766,7 +760,6 @@ impl Plugin for UiItemTextPlugin {
     fn build(&self, app: &mut App) {
         use crate::lanes::LaneApp;
         net::register(app);
-        crate::query_cache::register::<PageTexts>(app);
         app.init_resource::<ItemTextOpen>()
             .init_resource::<ItemTextLane>()
             .init_resource::<PageTexts>()

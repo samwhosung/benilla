@@ -221,12 +221,6 @@ pub(crate) struct PetitionRecords {
     records_epoch: u64,
 }
 
-impl crate::query_cache::AskOnce for PetitionRecords {
-    fn clear_pending(&mut self) {
-        self.records.clear_pending();
-    }
-}
-
 impl PetitionRecords {
     /// Look the record up as `ask` says; whether the cache holds it.
     fn request_record(&self, petition_id: u32, item: u64, ask: Ask<'_>) -> bool {
@@ -513,7 +507,6 @@ impl Plugin for UiPetitionPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         lane::add_petition_lane(app);
-        crate::query_cache::register::<PetitionRecords>(app);
         app.init_resource::<GuildRegistrarState>()
             .init_resource::<PetitionState>()
             .init_resource::<PetitionRecords>()

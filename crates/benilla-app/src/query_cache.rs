@@ -30,7 +30,6 @@ use std::hash::Hash;
 use std::sync::Mutex;
 
 use benilla_assets::LockRecover;
-use bevy::prelude::*;
 
 use crate::net::NetCommands;
 
@@ -241,8 +240,8 @@ impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
         was
     }
 
-    /// Forgets the in-flight asks, which a disconnect or a send before the writer existed may
-    /// have dropped; [`release_pending`] runs it on every world entry.
+    /// Forgets the in-flight asks, which a disconnect may have dropped. The world entry wipes only
+    /// the unsaved caches (`DBCacheClearUnsaved`, `0x555740`), and a saved cache's asks stand.
     pub(crate) fn clear_pending(&mut self) {
         self.pending
             .get_mut()
@@ -278,41 +277,6 @@ impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.answered.is_empty()
-    }
-}
-
-/// A resource that owns one or more [`QueryCache`]s: what to forget on world entry.
-pub(crate) trait AskOnce: Resource {
-    fn clear_pending(&mut self);
-}
-
-/// Every registered owner's clear, in registration order.
-#[derive(Resource, Default)]
-struct AskOnceOwners(Vec<fn(&mut World)>);
-
-/// Registers a cache owner to clear its in-flight asks on world entry ([`release_pending`]), so a
-/// key asked before the writer existed, or across a disconnect, is asked again.
-pub(crate) fn register<T: AskOnce>(app: &mut App) {
-    app.world_mut()
-        .get_resource_or_init::<AskOnceOwners>()
-        .0
-        .push(|world| {
-            if let Some(mut cache) = world.get_resource_mut::<T>() {
-                cache.clear_pending();
-            }
-        });
-}
-
-/// Forgets every registered cache's in-flight asks: run by the world entry's handler, where the
-/// reference clears its caches at `CGGameUI::InitializeGame` (`0x48f586` → `0x555740`), ahead
-/// of the world's first packet, so an ask a later packet of the login frame makes stands.
-pub(crate) fn release_pending(world: &mut World) {
-    let owners = world
-        .get_resource::<AskOnceOwners>()
-        .map(|o| o.0.clone())
-        .unwrap_or_default();
-    for clear in owners {
-        clear(world);
     }
 }
 

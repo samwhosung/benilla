@@ -724,12 +724,6 @@ impl Items {
         std::mem::take(&mut self.dropped)
     }
 
-    /// World enter: release the ask-once latch and keep what the cache learned. An ask is marked
-    /// pending before the send, and a send made while no writer is held is dropped silently.
-    pub(crate) fn clear_pending(&mut self) {
-        self.templates.clear_pending();
-    }
-
     /// Disconnect: drop the in-flight asks, the callbacks waiting on them or on the VM, and the
     /// queued enchant times, keep the templates. The item objects and their countdowns go with
     /// the index's sweep.
@@ -744,12 +738,6 @@ impl Items {
             .unwrap_or_else(|e| e.into_inner())
             .clear();
         self.templates.clear_pending();
-    }
-}
-
-impl crate::query_cache::AskOnce for Items {
-    fn clear_pending(&mut self) {
-        Items::clear_pending(self);
     }
 }
 

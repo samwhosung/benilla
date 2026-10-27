@@ -248,12 +248,6 @@ pub(crate) fn seed_vm_guild(world: &mut World, script: &mut UiScript, reload: bo
     }
 }
 
-impl crate::query_cache::AskOnce for GuildState {
-    fn clear_pending(&mut self) {
-        self.identities.clear_pending();
-    }
-}
-
 impl GuildState {
     /// The world entry's clear ([`crate::wdb`]): the guild store is built with persistence off
     /// (`0x554d20`), so `0x555740` clears it (`0x5557c0`), the callbacks of its pending records
@@ -384,7 +378,7 @@ impl GuildState {
         self.mirror_self(guild_id, 0);
     }
 
-    /// Forgets the in-flight asks, as a world entry does, for a test elsewhere.
+    /// Forgets the in-flight asks, as a dropped connection does, for a test elsewhere.
     #[cfg(test)]
     pub(crate) fn drop_pending_for_test(&mut self) {
         self.identities.clear_pending();
@@ -988,7 +982,6 @@ impl Plugin for UiGuildPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.add_observer(on_cvar);
-        crate::query_cache::register::<GuildState>(app);
         app.init_resource::<GuildState>()
             .init_resource::<GuildLocal>()
             .init_resource::<GuildMemberNotify>();

@@ -60,12 +60,6 @@ pub(crate) struct QuestLog {
     pub(crate) giver_failures: Vec<u32>,
 }
 
-impl crate::query_cache::AskOnce for QuestLog {
-    fn clear_pending(&mut self) {
-        self.templates.clear_pending();
-    }
-}
-
 impl QuestLog {
     /// The template, read as `ask` says: an ask sends `CMSG_QUEST_QUERY`, once while in flight.
     /// vmangos answers nothing for an id it does not know (`QuestHandler.cpp:229-231`); an answer
@@ -561,7 +555,6 @@ impl Plugin for UiQuestLogPlugin {
     fn build(&self, app: &mut App) {
         use crate::lanes::LaneApp;
         net::register(app);
-        crate::query_cache::register::<QuestLog>(app);
         app.init_resource::<QuestLog>()
             .init_resource::<crate::ui_quest::LatchRefreshes>()
             .init_resource::<crate::item_lane::ItemLane>()

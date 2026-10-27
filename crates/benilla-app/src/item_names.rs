@@ -15,12 +15,6 @@ pub(crate) struct ItemNames {
     names: QueryCache<u32, String>,
 }
 
-impl crate::query_cache::AskOnce for ItemNames {
-    fn clear_pending(&mut self) {
-        self.names.clear_pending();
-    }
-}
-
 impl ItemNames {
     /// The name of `entry`, read as `ask` says. The set tooltip's lookup passes a zero owner
     /// (`0x52df41`-`0x52df44`), so the query's guid is 0.
@@ -59,7 +53,6 @@ pub(crate) struct ItemNamesPlugin;
 
 impl Plugin for ItemNamesPlugin {
     fn build(&self, app: &mut App) {
-        crate::query_cache::register::<ItemNames>(app);
         app.init_resource::<ItemNames>()
             .net_handler(SessionEventKind::ItemName, on_item_name);
     }
