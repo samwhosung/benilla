@@ -251,10 +251,10 @@ impl PartyMemberStatsInfo {
     /// its block is copied, and without one the pet block is emptied (`0x5f0a1f`-`0x5f0b72`).
     /// `pet_name` is what `0x609210` answers for that pet (`0x5f0a63`), copied into `+0x88`
     /// (`0x5f0a70`): its cached name, or on a miss the `UNKNOWNOBJECT` text (`0x609324`), so the
-    /// record never keeps the name of a pet it named before.
-    ///
-    /// Deviation: zone and position are kept, not set to the viewer's zone and the object's
-    /// position, because nothing in benilla reads them.
+    /// record never keeps the name of a pet it named before. `zone` is the viewer's own zone
+    /// (`0xb4e314`, stored at `0x5f095e`) and `position` the object's x and y as `_ftol`'s low
+    /// words (`0x5f0970`-`0x5f0986`), which the minimap's arrow and the roster's zone read until
+    /// the stats reply.
     ///
     /// [`ObjectFields::unit_pet_guid`]: crate::messages::update_object::ObjectFields::unit_pet_guid
     pub fn snapshot_descriptor(
@@ -262,6 +262,8 @@ impl PartyMemberStatsInfo {
         fields: &crate::messages::update_object::ObjectFields,
         pet: Option<&crate::messages::update_object::ObjectFields>,
         pet_name: &str,
+        zone: u16,
+        position: (i16, i16),
     ) {
         let mut status = member_status::ONLINE;
         if fields.player_is_ghost() {
@@ -288,6 +290,8 @@ impl PartyMemberStatsInfo {
         self.cur_power = Some(fields.unit_power(power_type).unwrap_or(0) as u16);
         self.max_power = Some(fields.unit_max_power(power_type).unwrap_or(0) as u16);
         self.level = Some(fields.unit_level().unwrap_or(0) as u16);
+        self.zone = Some(zone);
+        self.position = Some(position);
         let (buffs, debuffs) = snapshot_aura_block(fields);
         self.auras = Some(buffs);
         self.auras_negative = Some(debuffs);

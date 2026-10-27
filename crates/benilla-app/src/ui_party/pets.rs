@@ -584,7 +584,8 @@ pub(in crate::ui_party) mod tests {
                 super::super::net::member_deactivated(
                     member(1),
                     &mut group,
-                    Some(&store),
+                    Some((&store, (0, 0))),
+                    0,
                     |g| (g == pet(2)).then_some(&pet_store),
                     world.resource::<NameCache>(),
                     world.get_non_send_resource::<UiScript>(),

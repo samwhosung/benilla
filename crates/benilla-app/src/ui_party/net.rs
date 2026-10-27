@@ -444,21 +444,61 @@ pub(crate) fn snapshot_pet_name(name: Option<&str>, script: Option<&UiScript>) -
     }
 }
 
+/// What the deactivate snapshot (`0x5f0880`) reads off the world beside the descriptors: the
+/// viewer's zone (`0x5f0957`) and the object's position (`0x5f096a`).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SnapshotPlace<'w, 's> {
+    here: benilla_world::world_point::AreaUnderfoot<'w>,
+    areas: Option<Res<'w, crate::area::AreaTableRes>>,
+    positions: Query<'w, 's, &'static GlobalTransform>,
+}
+
+impl SnapshotPlace<'_, '_> {
+    /// The zone the zone-text commit stores in `0xb4e314`: the area underfoot's parent zone, else
+    /// the area itself, and 0 before one resolves.
+    pub(crate) fn zone(&self) -> u16 {
+        let Some(leaf) = self.here.area() else {
+            return 0;
+        };
+        let parent = self
+            .areas
+            .as_ref()
+            .and_then(|a| a.0.get(leaf))
+            .map_or(0, |row| row.zone_id);
+        (if parent == 0 { leaf } else { parent }) as u16
+    }
+
+    /// `entity`'s world x and y as the record keeps them: `_ftol` of each (`0x5f0970`,
+    /// `0x5f097c`), its low word (`0x5f0978`, `0x5f0986`).
+    pub(crate) fn position(&self, entity: Option<Entity>) -> (i16, i16) {
+        let wow = entity
+            .and_then(|e| self.positions.get(e).ok())
+            .map_or([0.0; 3], |tf| {
+                benilla_assets::coords::bevy_to_wow(tf.translation())
+            });
+        let word = |v: f32| benilla_ui::script::ftol(f64::from(v)) as i16;
+        (word(wow[0]), word(wow[1]))
+    }
+}
+
 /// The despawn hook, the reference's deactivate virtual `0x5e9aa0` (object destroyed or out of
-/// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), their
-/// pet's too while `held` finds it, with the name `names` holds for it or `UNKNOWNOBJECT` on a miss
+/// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), with
+/// the viewer's `zone` and the object's `position` ([`SnapshotPlace`]), their pet's block too
+/// while `held` finds it, with the name `names` holds for it or `UNKNOWNOBJECT` on a miss
 /// ([`snapshot_pet_name`]), then request their stats (`0x4e8646`). Nothing happens off the roster
 /// or without an object, since the hook is a virtual on the object.
+#[allow(clippy::too_many_arguments)] // the snapshot's reads, each as of the deactivate
 pub(crate) fn member_deactivated<'a>(
     guid: u64,
     group: &mut GroupState,
-    store: Option<&'a ObjectStore>,
+    object: Option<(&'a ObjectStore, (i16, i16))>,
+    zone: u16,
     held: impl Fn(u64) -> Option<&'a ObjectStore>,
     names: &NameCache,
     script: Option<&UiScript>,
     net_commands: &NetCommands,
 ) {
-    let Some(store) = store else {
+    let Some((store, position)) = object else {
         return;
     };
     if !group.members.iter().any(|m| m.guid == guid) {
@@ -474,6 +514,8 @@ pub(crate) fn member_deactivated<'a>(
         &store.0,
         pet.map(|p| &p.0),
         &pet_name,
+        zone,
+        position,
     );
     let _ = net_commands
         .0
@@ -489,6 +531,7 @@ pub(crate) fn roster_deactivated(
     group: &mut GroupState,
     index: &GuidIndex,
     stores: &Query<&mut ObjectStore>,
+    place: &SnapshotPlace,
     names: &NameCache,
     script: Option<&UiScript>,
     net_commands: &NetCommands,
@@ -500,8 +543,10 @@ pub(crate) fn roster_deactivated(
         .filter(|g| index.0.contains_key(g))
         .collect();
     let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
+    let zone = place.zone();
     for guid in streamed {
-        member_deactivated(guid, group, held(guid), held, names, script, net_commands);
+        let object = held(guid).map(|s| (s, place.position(index.0.get(&guid).copied())));
+        member_deactivated(guid, group, object, zone, held, names, script, net_commands);
     }
 }
 
@@ -784,7 +829,8 @@ mod tests {
         member_deactivated(
             guid,
             &mut group,
-            Some(&store),
+            Some((&store, (1234, -57))),
+            1537,
             |_| None,
             &NameCache::default(),
             None,
@@ -792,6 +838,9 @@ mod tests {
         );
 
         let rec = group.stats.get(&guid).expect("the member has a record");
+        // The viewer's zone and the object's position (`0x5f095e`, `0x5f0978`-`0x5f0986`), which
+        // the arrow and the roster's zone read until the stats reply.
+        assert_eq!((rec.zone, rec.position), (Some(1537), Some((1234, -57))));
         assert_eq!(
             (rec.cur_hp, rec.max_hp, rec.level),
             (Some(2400), Some(3000), Some(41)),
@@ -809,6 +858,51 @@ mod tests {
             "an object you can see belongs to an online, living, unflagged player"
         );
         assert_eq!(asked(&rx), vec![guid], "and the server is asked, once");
+    }
+
+    /// The snapshot's world reads: the zone the commit stores (`0xb4e314`), the leaf's parent zone,
+    /// and the object's x and y as `_ftol`'s low words (`0x5f0970`-`0x5f0986`), truncated toward
+    /// zero and wrapped past 32767.
+    #[test]
+    fn the_snapshot_reads_the_viewers_zone_and_the_objects_position() {
+        use benilla_formats::{AreaTableCatalog, AreaTableRow};
+        use bevy::ecs::system::RunSystemOnce;
+        const ELWYNN: u32 = 12;
+        const GOLDSHIRE: u32 = 87;
+        let row = |zone_id| AreaTableRow {
+            map_id: 0,
+            zone_id,
+            explore_flag: 0,
+            flags: 0,
+            faction_group_mask: 0,
+            exploration_level: 0,
+            name: String::new(),
+        };
+        let mut world = World::new();
+        world.insert_resource(crate::area::AreaTableRes(AreaTableCatalog::from_rows(
+            vec![(ELWYNN, row(0)), (GOLDSHIRE, row(ELWYNN))],
+        )));
+        let at = |x: f32, y: f32| {
+            GlobalTransform::from_translation(benilla_assets::coords::wow_to_bevy([x, y, 0.0]))
+        };
+        let near = world.spawn(at(-9464.9, 62.7)).id();
+        let far = world.spawn(at(40000.0, -0.5)).id();
+        let read = |world: &mut World| {
+            world
+                .run_system_once(move |place: SnapshotPlace| {
+                    (
+                        place.zone(),
+                        place.position(Some(near)),
+                        place.position(Some(far)),
+                    )
+                })
+                .unwrap()
+        };
+        assert_eq!(read(&mut world).0, 0, "no area resolved yet");
+        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(GOLDSHIRE)));
+        assert_eq!(read(&mut world), (12, (-9464, 62), (-25536, 0)));
+        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(ELWYNN)));
+        assert_eq!(read(&mut world).0, 12, "a zone is its own");
     }
 
     /// `0x5f098d`-`0x5f09f2`: a slot is copied when its id is set and its `AURAFLAGS` nibble has an
@@ -844,7 +938,16 @@ mod tests {
         let held = |g: u64| (g == pet_guid).then_some(&pet);
         let mut names = NameCache::default();
         names.insert_pet(4, "Whelp".into());
-        member_deactivated(guid, &mut group, Some(&store), held, &names, None, &net);
+        member_deactivated(
+            guid,
+            &mut group,
+            Some((&store, (0, 0))),
+            0,
+            held,
+            &names,
+            None,
+            &net,
+        );
 
         let rec = group.stats.get(&guid).expect("the member has a record");
         assert_eq!(
@@ -871,7 +974,8 @@ mod tests {
         member_deactivated(
             guid,
             &mut group,
-            Some(&store),
+            Some((&store, (0, 0))),
+            0,
             held,
             &unnamed,
             Some(&vm),
@@ -880,7 +984,16 @@ mod tests {
         assert_eq!(group.stats[&guid].pet_name.as_deref(), Some("Unknown"));
 
         // The pet not held: its block is emptied, not left as it was.
-        member_deactivated(guid, &mut group, Some(&store), |_| None, &names, None, &net);
+        member_deactivated(
+            guid,
+            &mut group,
+            Some((&store, (0, 0))),
+            0,
+            |_| None,
+            &names,
+            None,
+            &net,
+        );
         let rec = group.stats.get(&guid).unwrap();
         assert_eq!((rec.pet_guid, rec.pet_auras_negative.clone()), (None, None));
         assert_eq!(rec.pet_name, None, "and its name with it (`0x5f0a0f`)");
@@ -963,7 +1076,8 @@ mod tests {
             member_deactivated(
                 0x22,
                 &mut group,
-                Some(&store),
+                Some((&store, (0, 0))),
+                0,
                 held,
                 &NameCache::default(),
                 vm.as_ref(),
@@ -1268,7 +1382,8 @@ mod tests {
         member_deactivated(
             0xdead,
             &mut group,
-            Some(&store),
+            Some((&store, (0, 0))),
+            0,
             |_| None,
             &NameCache::default(),
             None,
@@ -1282,6 +1397,7 @@ mod tests {
             0x1234,
             &mut group,
             None,
+            0,
             |_| None,
             &NameCache::default(),
             None,
