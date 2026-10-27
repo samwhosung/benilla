@@ -519,6 +519,11 @@ pub(crate) fn world_takes_wheel(dispatch: Option<&BindingDispatch>, mods: Mods, 
 
 /// Whole notches out of a stream of line deltas, carrying the fraction between frames.
 ///
+/// Deviation: a trackpad's `Pixel` deltas are carried until they make a line, and step at most
+/// once per event ([`crate::ui_script::Record::Wheel`]). The reference steps on every
+/// `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); carried, a trackpad does not zoom or scroll
+/// at its event rate.
+///
 /// For consumers that act per notch off the sign alone: the UI's `OnMouseWheel` (stock
 /// `ScrollFrameTemplate_OnMouseWheel` moves half a pane per call, `UIPanelTemplates.lua:150`) and
 /// the world frame's binding, each wheel record's ([`crate::ui_script::Record::Wheel`]). A
@@ -893,11 +898,7 @@ fn dispatch_records(
                     legs.button(s.as_deref_mut(), *button, *state, r.mods, hover.0.is_some());
                 }
                 Record::Move => {}
-                Record::Wheel(notches) => {
-                    for _ in 0..notches.unsigned_abs() {
-                        legs.wheel(s.as_deref_mut(), r.mods, *notches > 0);
-                    }
-                }
+                Record::Wheel { up } => legs.wheel(s.as_deref_mut(), r.mods, *up),
             }
         }
     };
@@ -1067,18 +1068,20 @@ mod tests {
         app.world_mut()
             .write_message(bevy::window::WindowEvent::MouseButtonInput(ev));
     }
-    /// A wheel turn of `notches` whole notches (up positive), on the window's stream as winit hands
-    /// it over; the harness gives every notch to the world frame ([`dispatch_records`]).
+    /// `notches` wheel messages of one line each (up positive), on the window's stream as winit
+    /// hands them over; the harness gives every step to the world frame ([`dispatch_records`]).
     fn wheel(app: &mut App, notches: i32) {
-        app.world_mut()
-            .write_message(bevy::window::WindowEvent::MouseWheel(
-                bevy::input::mouse::MouseWheel {
-                    unit: MouseScrollUnit::Line,
-                    x: 0.0,
-                    y: notches as f32,
-                    window: Entity::PLACEHOLDER,
-                },
-            ));
+        for _ in 0..notches.unsigned_abs() {
+            app.world_mut()
+                .write_message(bevy::window::WindowEvent::MouseWheel(
+                    bevy::input::mouse::MouseWheel {
+                        unit: MouseScrollUnit::Line,
+                        x: 0.0,
+                        y: notches.signum() as f32,
+                        window: Entity::PLACEHOLDER,
+                    },
+                ));
+        }
     }
 
     /// What a keyboard frame ate this frame. Set, not pushed: `feed_ui_input` rewrites the list

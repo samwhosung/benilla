@@ -377,3 +377,27 @@ fn a_notch_over_the_world_binds_at_its_place() {
     app.update();
     assert_eq!(log(&app), "zoom;key;");
 }
+
+/// While the egui dev overlay holds the pointer, a notch over the world runs no binding: the
+/// world's wheel is not the overlay's to give.
+#[test]
+fn a_notch_runs_no_binding_while_the_dev_overlay_holds_the_pointer() {
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"WorldFrame:SetPoint("BOTTOMLEFT", 512, 0)
+            WorldFrame:SetWidth(512) WorldFrame:SetHeight(768)"#,
+        )
+        .expect("the world frame places");
+    app.update();
+    app.insert_resource(super::EguiPointerOver(true));
+    move_to(&mut app, Vec2::new(900.0, 700.0));
+    wheel_up(&mut app);
+    app.update();
+    assert_eq!(log(&app), "");
+    app.insert_resource(super::EguiPointerOver(false));
+    wheel_up(&mut app);
+    app.update();
+    assert_eq!(log(&app), "zoom;", "and does once the overlay lets go");
+}

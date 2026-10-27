@@ -74,26 +74,22 @@ pub(crate) trait WorldWheelSlot {
     fn run(&mut self, script: &mut UiScript, up: bool);
 }
 
-/// One wheel record at the cursor `at` (UI units), each notch whole before the next: the sweep
-/// `0x7664f0`, `arg1 = ±1` (the stock handlers act on the sign alone,
-/// `ScrollFrameTemplate_OnMouseWheel` scrolls half a pane per call, `UIPanelTemplates.lua:150`),
-/// and, when no frame took it, the world frame's binding at its place in the walk. With no cursor
-/// to sweep at (a probe's pointer) every notch is the world's.
+/// One wheel record, one step up (`up`) or down: the sweep `0x7664f0`, `arg1 = ±1` (the stock
+/// handlers act on the sign alone, `ScrollFrameTemplate_OnMouseWheel` scrolls half a pane per call,
+/// `UIPanelTemplates.lua:150`), and, when no frame took it, the world frame's binding at its place
+/// in the walk. The sweep is at the cursor the record was queued at (UI units), which is the last
+/// move's; with none (the cursor off the window, a probe's pointer) it is at the cursor the last
+/// mouse event left, as the reference walks at its saved cursor (`+0x1118`, `0x766524`).
 pub(crate) fn feed_wheel(
     script: &mut UiScript,
     at: Option<Vec2>,
-    notches: i32,
+    up: bool,
     world: &mut impl WorldWheelSlot,
 ) {
-    let up = notches > 0;
-    for _ in 0..notches.unsigned_abs() {
-        let to_world = at.is_none_or(|at| {
-            let sign = if up { 1.0 } else { -1.0 };
-            script.mouse_wheel_bound(at.x, at.y, sign, world.takes(up)) == WheelWalk::World
-        });
-        if to_world {
-            world.run(script, up);
-        }
+    let at = at.unwrap_or_else(|| Vec2::from(script.saved_cursor()));
+    let sign = if up { 1.0 } else { -1.0 };
+    if script.mouse_wheel_bound(at.x, at.y, sign, world.takes(up)) == WheelWalk::World {
+        world.run(script, up);
     }
 }
 
@@ -198,7 +194,7 @@ pub(super) fn feed_ui_input(
                             }
                             // No sweep: every notch is the world's, unless the dev overlay holds
                             // the pointer.
-                            super::Record::Wheel(_) if egui_pointer => continue,
+                            super::Record::Wheel { .. } if egui_pointer => continue,
                             _ => {}
                         }
                         let verdict = crate::bindings::KeyVerdict::default();
@@ -301,14 +297,14 @@ pub(super) fn feed_ui_input(
                 }
                 // The walk above was the move's handler.
                 super::Record::Move => {}
-                super::Record::Wheel(notches) => {
+                super::Record::Wheel { up } => {
                     let mut slot = WorldSlot {
                         frame: &mut world_frame,
                         mods,
                         live: in_world && !egui_pointer,
                     };
-                    feed_wheel(script, at, *notches, &mut slot);
-                    // Its world frame's leg ran inside the walk, per notch.
+                    feed_wheel(script, at, *up, &mut slot);
+                    // Its world frame's leg ran inside the walk.
                     continue;
                 }
                 super::Record::Key(ev) => {
@@ -411,12 +407,7 @@ fn world_frame_leg(
             world_frame.button(script, *button, *state, r.mods, over_ui)
         }
         super::Record::Move => {}
-        super::Record::Wheel(notches) => {
-            let mut script = script;
-            for _ in 0..notches.unsigned_abs() {
-                world_frame.wheel(script.as_deref_mut(), r.mods, *notches > 0);
-            }
-        }
+        super::Record::Wheel { up } => world_frame.wheel(script, r.mods, *up),
     }
 }
 
@@ -671,13 +662,13 @@ mod tests {
         }
     }
 
-    /// One wheel record of `notches` at `(x, y)`; the notches the world frame ran.
-    fn feed(s: &mut UiScript, (x, y): (f32, f32), notches: i32) -> i32 {
+    /// One wheel record up (`up`) or down at `(x, y)`; the steps the world frame ran.
+    fn feed(s: &mut UiScript, (x, y): (f32, f32), up: bool) -> i32 {
         let mut slot = Slot {
             binds: |_| true,
             ran: 0,
         };
-        feed_wheel(s, Some(Vec2::new(x, y)), notches, &mut slot);
+        feed_wheel(s, Some(Vec2::new(x, y)), up, &mut slot);
         slot.ran
     }
 
@@ -734,12 +725,12 @@ mod tests {
     #[test]
     fn a_notch_reaches_the_world_unless_a_frame_with_a_handler_takes_it() {
         let mut s = world_with_a_button_and_a_pane();
-        assert_eq!(feed(&mut s, (120.0, 120.0), 1), 1);
-        assert_eq!(feed(&mut s, (120.0, 120.0), -2), -2);
+        assert_eq!(feed(&mut s, (120.0, 120.0), true), 1);
+        assert_eq!(feed(&mut s, (120.0, 120.0), false), -1);
         assert_eq!(calls(&s).0, 0, "the button has no handler");
-        assert_eq!(feed(&mut s, (650.0, 150.0), 1), 0);
+        assert_eq!(feed(&mut s, (650.0, 150.0), true), 0);
         assert_eq!(calls(&s).0, 1, "the pane's handler took it");
-        assert_eq!(feed(&mut s, (900.0, 600.0), 1), 1);
+        assert_eq!(feed(&mut s, (900.0, 600.0), true), 1);
     }
 
     /// A chord with no binding is not taken by the world slot (`0x483d87`): the notch is nobody's.
@@ -750,31 +741,44 @@ mod tests {
             binds: |up| !up,
             ran: 0,
         };
-        feed_wheel(&mut s, Some(Vec2::new(120.0, 120.0)), 1, &mut slot);
+        feed_wheel(&mut s, Some(Vec2::new(120.0, 120.0)), true, &mut slot);
         assert_eq!(slot.ran, 0, "up is unbound");
-        feed_wheel(&mut s, Some(Vec2::new(120.0, 120.0)), -1, &mut slot);
+        feed_wheel(&mut s, Some(Vec2::new(120.0, 120.0)), false, &mut slot);
         assert_eq!(slot.ran, -1, "down is bound");
     }
 
-    /// With no cursor to sweep at (a probe's pointer) every notch is the world's, as the dispatch
-    /// pass ran it before the wheel had a sweep.
+    /// With no cursor for the record (off the window, a probe's pointer) the sweep is at the cursor
+    /// the last mouse event left (`+0x1118`, `0x766524`): over the pane, the pane's; over the
+    /// button, the world's.
     #[test]
-    fn a_wheel_with_no_cursor_goes_to_the_world() {
+    fn a_wheel_with_no_cursor_sweeps_at_the_last_one() {
         let mut s = world_with_a_button_and_a_pane();
         let mut slot = Slot {
             binds: |_| true,
             ran: 0,
         };
-        feed_wheel(&mut s, None, 2, &mut slot);
-        assert_eq!(slot.ran, 2);
+        s.mouse_move(650.0, 150.0);
+        feed_wheel(&mut s, None, true, &mut slot);
+        assert_eq!(
+            (slot.ran, calls(&s).0),
+            (0, 1),
+            "the pane under the saved cursor"
+        );
+        s.mouse_move(120.0, 120.0);
+        feed_wheel(&mut s, None, true, &mut slot);
+        assert_eq!(
+            (slot.ran, calls(&s).0),
+            (1, 1),
+            "the world's, over the button"
+        );
     }
 
     #[test]
     fn a_line_notch_fires_once() {
         let mut s = wheel_pane();
-        feed(&mut s, (512.0, 384.0), 1);
+        feed(&mut s, (512.0, 384.0), true);
         assert_eq!(calls(&s), (1, 1.0));
-        feed(&mut s, (512.0, 384.0), -1);
+        feed(&mut s, (512.0, 384.0), false);
         assert_eq!(calls(&s), (2, 0.0), "and the other way is a notch down");
     }
 }

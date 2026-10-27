@@ -12,6 +12,7 @@
 //! whose record has none (`{key, mods, repeat, time}`), the last move's.
 
 use bevy::input::keyboard::KeyboardInput;
+use bevy::input::mouse::MouseScrollUnit;
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowEvent};
@@ -28,13 +29,15 @@ pub(crate) enum Record {
     },
     /// The cursor moved to the record's [`InputRecord::at`].
     Move,
-    /// A wheel turn of this many whole notches, up positive: the vertical travel in lines
-    /// ([`crate::bindings::notch_travel`], [`crate::bindings::wheel_lines`]) with the fraction
-    /// carried to the next turn ([`crate::bindings::WheelNotches`]), as a trackpad gesture arrives
-    /// as a `Pixel` trickle. A turn that completes no notch is no record, and neither is a
-    /// horizontal one: `WM_MOUSEHWHEEL` takes the window procedure's default arm and never
-    /// reaches the client.
-    Wheel(i32),
+    /// A wheel turn, one step up (`true`) or down. The reference queues each `WM_MOUSEWHEEL`'s raw
+    /// delta (`0x42d58c`, `0x424159`) and steps once per message on its sign alone (`setge` at
+    /// `0x76c1a9`), so a line event is one step whatever its travel; a trackpad's `Pixel` events
+    /// step as their carry completes a line ([`crate::bindings::WheelNotches`]), at most once
+    /// each. A turn with no vertical travel is no record: `WM_MOUSEHWHEEL` takes the window
+    /// procedure's default arm and never reaches the client.
+    Wheel {
+        up: bool,
+    },
 }
 
 /// One record with the state it was queued in.
@@ -139,12 +142,16 @@ pub(crate) fn collect_input_records(
             WindowEvent::MouseWheel(w) => {
                 let mods = mods_of(&held);
                 let travel = crate::bindings::notch_travel(w.x, w.y, mods.shift);
-                let whole = records
-                    .notches
-                    .feed(crate::bindings::wheel_lines(w.unit, travel));
-                if whole != 0 {
+                let step = match w.unit {
+                    MouseScrollUnit::Line => i32::from(travel > 0.0) - i32::from(travel < 0.0),
+                    MouseScrollUnit::Pixel => records
+                        .notches
+                        .feed(crate::bindings::wheel_lines(w.unit, travel))
+                        .signum(),
+                };
+                if step != 0 {
                     out.push(InputRecord {
-                        record: Record::Wheel(whole),
+                        record: Record::Wheel { up: step > 0 },
                         mods,
                         at,
                     });
@@ -243,7 +250,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::SystemId;
     use bevy::input::keyboard::Key;
-    use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
+    use bevy::input::mouse::{MouseButtonInput, MouseWheel};
     use bevy::window::CursorMoved;
 
     /// The world and the collector as one system kept across frames, so its reader moves on.
@@ -309,7 +316,7 @@ mod tests {
                     Record::Key(k) => format!("{:?}", k.key_code),
                     Record::Button { state, .. } => format!("{state:?}"),
                     Record::Move => "Move".to_owned(),
-                    Record::Wheel(n) => format!("Wheel{n}"),
+                    Record::Wheel { up } => format!("Wheel{}", if *up { "Up" } else { "Down" }),
                 };
                 format!("{kind}@{:?}", r.at.map(|a| a.x))
             })
@@ -405,12 +412,21 @@ mod tests {
         assert_eq!(
             shape(&got),
             [
-                "Wheel1@Some(10.0)",
+                "WheelUp@Some(10.0)",
                 "Pressed@Some(10.0)",
                 "Move@Some(300.0)",
-                "Wheel-2@Some(300.0)"
+                "WheelDown@Some(300.0)"
             ]
         );
+        // A line event is one step whatever its travel, a fraction of a line included.
+        let got = collect(
+            &mut w,
+            vec![
+                wheel(MouseScrollUnit::Line, 3.0),
+                wheel(MouseScrollUnit::Line, 0.2),
+            ],
+        );
+        assert_eq!(shape(&got), ["WheelUp@Some(10.0)", "WheelUp@Some(10.0)"]);
         let quarter = MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR / 4.0;
         let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, quarter); 3]);
         assert!(
@@ -421,9 +437,13 @@ mod tests {
         let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, quarter)]);
         assert_eq!(
             shape(&got),
-            ["Wheel1@Some(10.0)"],
+            ["WheelUp@Some(10.0)"],
             "the fourth completes it"
         );
+        // A pixel event carrying more than a line is still one step.
+        let lines = MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR * 2.5;
+        let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, -lines)]);
+        assert_eq!(shape(&got), ["WheelDown@Some(10.0)"]);
         // The horizontal wheel is no notch: `WM_MOUSEHWHEEL` never reaches the client's wheel
         // walk.
         let sideways = WindowEvent::MouseWheel(MouseWheel {
