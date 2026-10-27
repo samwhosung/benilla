@@ -4,11 +4,12 @@
 //! 0x4245b0`). Bevy's typed input messages each keep only their own order; winit's window-event
 //! stream ([`WindowEvent`]) keeps them interleaved, so the records are read from it.
 //!
-//! Each record carries the modifier mask as its kind handler leaves it (`0x423d06`, `0x423d56`,
-//! before the dispatch), and the cursor where it was when the record was queued: a button record
-//! carries it in the reference (`0x42dd00` reads `GetCursorPos`); a key record does not
-//! (`{key, mods, repeat, time}`), and its position stands in for the move records queued before
-//! it, which here are not records of their own.
+//! A key or a button is a record (kinds 7 and 8, 9 and 0xd), and so is a cursor move (kind 0xa,
+//! category 0xc, `0x423fe0`) and a wheel turn (kind 0xb, category 0x10, `0x424130`). Each record
+//! carries the modifier mask as its kind handler leaves it (`0x423d06`, `0x423d56`, before the
+//! dispatch), and the cursor where it was when the record was queued: a move carries its own
+//! position, a button and a wheel turn the cursor's (`0x42dd00` reads `GetCursorPos`), and a key,
+//! whose record has none (`{key, mods, repeat, time}`), the last move's.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::ButtonState;
@@ -17,9 +18,7 @@ use bevy::window::{PrimaryWindow, WindowEvent};
 
 use crate::textinput::keymap::Mods;
 
-/// What one record is: a key down or up, or a button down or up. Moves are not records of their
-/// own: the button records carry the position they were queued at, and the frame's last position
-/// is the window's.
+/// What one record is: a key down or up, a button down or up, a cursor move or a wheel turn.
 #[derive(Clone, Debug)]
 pub(crate) enum Record {
     Key(KeyboardInput),
@@ -27,6 +26,15 @@ pub(crate) enum Record {
         button: MouseButton,
         state: ButtonState,
     },
+    /// The cursor moved to the record's [`InputRecord::at`].
+    Move,
+    /// A wheel turn of this many whole notches, up positive: the vertical travel in lines
+    /// ([`crate::bindings::notch_travel`], [`crate::bindings::wheel_lines`]) with the fraction
+    /// carried to the next turn ([`crate::bindings::WheelNotches`]), as a trackpad gesture arrives
+    /// as a `Pixel` trickle. A turn that completes no notch is no record, and neither is a
+    /// horizontal one: `WM_MOUSEHWHEEL` takes the window procedure's default arm and never
+    /// reaches the client.
+    Wheel(i32),
 }
 
 /// One record with the state it was queued in.
@@ -48,6 +56,8 @@ pub(crate) struct InputRecords {
     cursor: Option<Option<Vec2>>,
     /// The modifier keys held when the last frame's records were read.
     modifiers: Vec<KeyCode>,
+    /// The wheel travel short of a whole notch, carried between turns and frames.
+    notches: crate::bindings::WheelNotches,
 }
 
 impl InputRecords {
@@ -117,8 +127,29 @@ pub(crate) fn collect_input_records(
     let mut out = Vec::new();
     for event in events {
         match event {
-            WindowEvent::CursorMoved(m) => at = Some(m.position),
+            WindowEvent::CursorMoved(m) => {
+                at = Some(m.position);
+                out.push(InputRecord {
+                    record: Record::Move,
+                    mods: mods_of(&held),
+                    at,
+                });
+            }
             WindowEvent::CursorLeft(_) => at = None,
+            WindowEvent::MouseWheel(w) => {
+                let mods = mods_of(&held);
+                let travel = crate::bindings::notch_travel(w.x, w.y, mods.shift);
+                let whole = records
+                    .notches
+                    .feed(crate::bindings::wheel_lines(w.unit, travel));
+                if whole != 0 {
+                    out.push(InputRecord {
+                        record: Record::Wheel(whole),
+                        mods,
+                        at,
+                    });
+                }
+            }
             WindowEvent::KeyboardInput(ev) => {
                 if MODIFIER_KEYS.contains(&ev.key_code) {
                     held.retain(|&k| k != ev.key_code);
@@ -212,7 +243,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::SystemId;
     use bevy::input::keyboard::Key;
-    use bevy::input::mouse::MouseButtonInput;
+    use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
     use bevy::window::CursorMoved;
 
     /// The world and the collector as one system kept across frames, so its reader moves on.
@@ -269,8 +300,33 @@ mod tests {
         world.resource::<InputRecords>().iter().cloned().collect()
     }
 
-    /// The records keep the window's interleaving of keys and buttons, each button at the cursor
-    /// of its own moment: the frame's start before its first move, then each move's.
+    /// Each record as `kind@x`.
+    fn shape(records: &[InputRecord]) -> Vec<String> {
+        records
+            .iter()
+            .map(|r| {
+                let kind = match &r.record {
+                    Record::Key(k) => format!("{:?}", k.key_code),
+                    Record::Button { state, .. } => format!("{state:?}"),
+                    Record::Move => "Move".to_owned(),
+                    Record::Wheel(n) => format!("Wheel{n}"),
+                };
+                format!("{kind}@{:?}", r.at.map(|a| a.x))
+            })
+            .collect()
+    }
+
+    fn wheel(unit: MouseScrollUnit, y: f32) -> WindowEvent {
+        WindowEvent::MouseWheel(MouseWheel {
+            unit,
+            x: 0.0,
+            y,
+            window: Entity::PLACEHOLDER,
+        })
+    }
+
+    /// The records keep the window's interleaving of keys, buttons and moves, each button at the
+    /// cursor of its own moment: the frame's start before its first move, then each move's.
     #[test]
     fn the_records_keep_the_windows_order_and_each_ones_cursor() {
         let mut w = world();
@@ -283,25 +339,19 @@ mod tests {
                 button(ButtonState::Released),
             ],
         );
-        let shape: Vec<String> = got
-            .iter()
-            .map(|r| match &r.record {
-                Record::Key(k) => format!("{:?}@{:?}", k.key_code, r.at.map(|a| a.x)),
-                Record::Button { state, .. } => format!("{state:?}@{:?}", r.at.map(|a| a.x)),
-            })
-            .collect();
         assert_eq!(
-            shape,
+            shape(&got),
             [
                 "Pressed@Some(10.0)",
                 "Digit1@Some(10.0)",
+                "Move@Some(300.0)",
                 "Released@Some(300.0)"
             ],
             "the first frame read starts at the window's cursor"
         );
         // The next frame starts where the window's cursor stood at the last read.
         let got = collect(&mut w, vec![moved(500.0), button(ButtonState::Pressed)]);
-        assert_eq!(got[0].at, Some(Vec2::new(500.0, 10.0)));
+        assert_eq!(got[1].at, Some(Vec2::new(500.0, 10.0)));
         let got = collect(&mut w, vec![button(ButtonState::Pressed), moved(600.0)]);
         assert_eq!(
             got[0].at,
@@ -335,5 +385,53 @@ mod tests {
             .press(KeyCode::ControlLeft);
         let got = collect(&mut w, vec![key(KeyCode::Digit1, ButtonState::Pressed)]);
         assert!(got[0].mods.ctrl && got[0].mods.shift);
+    }
+
+    /// A wheel turn is a record at its place among the others (kind 0xb), at the cursor of its
+    /// moment, carrying its whole notches; a trickle short of a notch is no record until it adds
+    /// up to one, across frames.
+    #[test]
+    fn a_wheel_turn_is_a_record_at_its_place() {
+        let mut w = world();
+        let got = collect(
+            &mut w,
+            vec![
+                wheel(MouseScrollUnit::Line, 1.0),
+                button(ButtonState::Pressed),
+                moved(300.0),
+                wheel(MouseScrollUnit::Line, -2.0),
+            ],
+        );
+        assert_eq!(
+            shape(&got),
+            [
+                "Wheel1@Some(10.0)",
+                "Pressed@Some(10.0)",
+                "Move@Some(300.0)",
+                "Wheel-2@Some(300.0)"
+            ]
+        );
+        let quarter = MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR / 4.0;
+        let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, quarter); 3]);
+        assert!(
+            got.is_empty(),
+            "three quarters of a notch: {:?}",
+            shape(&got)
+        );
+        let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, quarter)]);
+        assert_eq!(
+            shape(&got),
+            ["Wheel1@Some(10.0)"],
+            "the fourth completes it"
+        );
+        // The horizontal wheel is no notch: `WM_MOUSEHWHEEL` never reaches the client's wheel
+        // walk.
+        let sideways = WindowEvent::MouseWheel(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 3.0,
+            y: 0.0,
+            window: Entity::PLACEHOLDER,
+        });
+        assert!(collect(&mut w, vec![sideways]).is_empty());
     }
 }

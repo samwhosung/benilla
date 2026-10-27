@@ -2,7 +2,6 @@
 //! ahead of the frame's packets and its tick, against the rects the last frame's paint resolved.
 
 use bevy::input::keyboard::KeyboardInput;
-use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -13,7 +12,6 @@ use super::{
     CursorPayloadHeld, PlayerUiClickConsumed, PlayerUiHover, PlayerUiPressConsumed,
     UiKeyboardCapture,
 };
-use crate::bindings::{WheelNotches, WorldWheel};
 use crate::textinput::{self, keymap, HostClipboard};
 
 /// The pointer-side state [`feed_ui_input`] reads and writes. The world pick reads last frame's
@@ -67,96 +65,56 @@ const UI_MOUSE_BUTTONS: [(MouseButton, &str); 5] = [
     (MouseButton::Back, "Button5"),
 ];
 
-/// One wheel sweep per whole notch (`0x7664f0`), `arg1 = ±1`, the fraction carried in `notches`: a
-/// trackpad gesture arrives as a `Pixel` trickle, and the stock handlers act on the sign alone
-/// (`ScrollFrameTemplate_OnMouseWheel` scrolls half a pane per call, `UIPanelTemplates.lua:150`).
-/// Only the vertical travel is a notch ([`crate::bindings::notch_travel`]): the horizontal wheel
-/// never reaches the client (`WM_MOUSEHWHEEL` takes the window procedure's default arm). Returns
-/// the signed notches that no frame took, which are the world frame's: its slot runs the wheel
-/// binding (`0x483d20`), and `world_binds(up)` says whether that chord has one.
+/// The world frame's wheel slot as the wheel walk meets it (`0x483d20`).
+pub(crate) trait WorldWheelSlot {
+    /// Whether the slot takes a notch up (`up`) or down: the notch's chord has a binding, so the
+    /// slot answers nonzero (`0x483d87`) and the walk stops there.
+    fn takes(&self, up: bool) -> bool;
+    /// The notch's binding, run inside the walk.
+    fn run(&mut self, script: &mut UiScript, up: bool);
+}
+
+/// One wheel record at the cursor `at` (UI units), each notch whole before the next: the sweep
+/// `0x7664f0`, `arg1 = ±1` (the stock handlers act on the sign alone,
+/// `ScrollFrameTemplate_OnMouseWheel` scrolls half a pane per call, `UIPanelTemplates.lua:150`),
+/// and, when no frame took it, the world frame's binding at its place in the walk. With no cursor
+/// to sweep at (a probe's pointer) every notch is the world's.
 pub(crate) fn feed_wheel(
     script: &mut UiScript,
-    notches: &mut WheelNotches,
-    at: Vec2,
-    travel: (MouseScrollUnit, f32),
-    world_binds: impl Fn(bool) -> bool,
-) -> i32 {
-    let whole = notches.feed(crate::bindings::wheel_lines(travel.0, travel.1));
-    let step = whole.signum();
-    let binds = world_binds(step > 0);
-    let mut to_world = 0;
-    for _ in 0..whole.unsigned_abs() {
-        if script.mouse_wheel_bound(at.x, at.y, step as f32, binds) == WheelWalk::World {
-            to_world += step;
+    at: Option<Vec2>,
+    notches: i32,
+    world: &mut impl WorldWheelSlot,
+) {
+    let up = notches > 0;
+    for _ in 0..notches.unsigned_abs() {
+        let to_world = at.is_none_or(|at| {
+            let sign = if up { 1.0 } else { -1.0 };
+            script.mouse_wheel_bound(at.x, at.y, sign, world.takes(up)) == WheelWalk::World
+        });
+        if to_world {
+            world.run(script, up);
         }
     }
-    to_world
 }
 
-/// The notches the world frame takes this frame. With a VM and a cursor they are what the sweep
-/// leaves ([`feed_wheel`]); a frame that sweeps nothing (no VM, no cursor, a probe's pointer)
-/// hands the whole travel to the world. None while the egui dev overlay holds the pointer.
-fn wheel_for_world(
-    script: Option<&mut UiScript>,
-    cursor: Option<Vec2>,
-    notches: &mut WheelNotches,
-    travel: (MouseScrollUnit, f32),
-    world_binds: impl Fn(bool) -> bool,
-    egui_over: bool,
-) -> i32 {
-    let swept = match (script, cursor) {
-        (Some(script), Some(at)) => feed_wheel(script, notches, at, travel, world_binds),
-        _ => notches.feed(crate::bindings::wheel_lines(travel.0, travel.1)),
-    };
-    if egui_over {
-        0
-    } else {
-        swept
+/// The world frame's wheel slot of one record: its binding with the record's modifiers, in the
+/// world only, and none while the egui dev overlay holds the pointer.
+struct WorldSlot<'a, 'w> {
+    frame: &'a mut crate::bindings::WorldFrameBindings<'w>,
+    mods: keymap::Mods,
+    live: bool,
+}
+
+impl WorldWheelSlot for WorldSlot<'_, '_> {
+    fn takes(&self, up: bool) -> bool {
+        self.frame.takes_wheel(self.mods, up)
     }
-}
 
-/// Feeds the frame's wheel travel to the UI's sweep and publishes what is left to the world as
-/// [`WorldWheel`], which the bindings pass runs. After [`feed_ui_input`], so the frame's clicks
-/// and keys have landed.
-pub(super) fn feed_ui_wheel(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    window: Query<&Window, With<PrimaryWindow>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    scroll: Res<AccumulatedMouseScroll>,
-    (mut notches, mut world_wheel): (ResMut<WheelNotches>, ResMut<WorldWheel>),
-    dispatch: Option<Res<crate::bindings::BindingDispatch>>,
-    egui: Option<Res<super::EguiPointerOver>>,
-    (synthetic, capture_pinned, widescreen): (
-        Res<super::SyntheticPointer>,
-        Res<super::CapturePointerPinned>,
-        Option<Res<crate::video::Widescreen>>,
-    ),
-) {
-    hosted_vm.run(|script| {
-        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        let window = window.single().ok();
-        // The same cursor the mouse half feeds.
-        let cursor = window.and_then(|w| {
-            w.cursor_position()
-                .or_else(crate::target::hover_probe_point)
-                .filter(|_| !(synthetic.0 || capture_pinned.0))
-                .map(|c| {
-                    super::window_to_ui(super::UiScreen::of_window(w, widescreen.as_deref()), c)
-                })
-        });
-        let travel = (
-            scroll.unit,
-            crate::bindings::notch_travel(scroll.delta.x, scroll.delta.y, shift),
-        );
-        world_wheel.0 = wheel_for_world(
-            script,
-            cursor,
-            &mut notches,
-            travel,
-            |up| crate::bindings::world_takes_wheel(dispatch.as_deref(), &keys, up),
-            egui.is_some_and(|e| e.0),
-        );
-    })
+    fn run(&mut self, script: &mut UiScript, up: bool) {
+        if self.live {
+            self.frame.wheel(Some(script), self.mods, up);
+        }
+    }
 }
 
 /// The keyboard and the pasteboard the feed reads and writes, as one param.
@@ -168,8 +126,9 @@ type KeyboardFeed<'w> = (
 
 /// Dispatches the frame's input records ([`super::InputRecords`]) into the UI engine, each whole
 /// and in arrival order, as the reference drains its ring (`0x423920` → `0x4239a0` → `0x4245b0`):
-/// the record's modifiers set, the hover moved to where the record was queued, the button's or
-/// the key's walk, then, in the world, the world frame's binding
+/// the record's modifiers set, the hover walked where the record was queued (a move's whole
+/// handler, category 0xc, `0x7660d0`), the button's, the key's or the wheel's walk (category 0x10,
+/// `0x7664f0`), then, in the world, the world frame's binding
 /// ([`crate::bindings::WorldFrameBindings`]), all before the next record. Publishes
 /// [`PlayerUiHover`] (the pointer arbiter yields to the UI) and [`UiKeyboardCapture`]. Runs in the
 /// `UiInput` set, before the feeds, the tick and every key reader.
@@ -231,10 +190,16 @@ pub(super) fn feed_ui_input(
                 let over_ui = hover.0.is_some() || egui_pointer;
                 let mut legs = |mut s: Option<&mut UiScript>| {
                     for r in records.iter() {
-                        if let super::Record::Button { button, state } = &r.record {
-                            if *state == ButtonState::Pressed {
-                                presses.0.push((*button, over_ui));
+                        match &r.record {
+                            super::Record::Button { button, state } => {
+                                if *state == ButtonState::Pressed {
+                                    presses.0.push((*button, over_ui));
+                                }
                             }
+                            // No sweep: every notch is the world's, unless the dev overlay holds
+                            // the pointer.
+                            super::Record::Wheel(_) if egui_pointer => continue,
+                            _ => {}
                         }
                         let verdict = crate::bindings::KeyVerdict::default();
                         world_frame_leg(
@@ -334,6 +299,18 @@ pub(super) fn feed_ui_input(
                         presses.0.push((*button, over_ui));
                     }
                 }
+                // The walk above was the move's handler.
+                super::Record::Move => {}
+                super::Record::Wheel(notches) => {
+                    let mut slot = WorldSlot {
+                        frame: &mut world_frame,
+                        mods,
+                        live: in_world && !egui_pointer,
+                    };
+                    feed_wheel(script, at, *notches, &mut slot);
+                    // Its world frame's leg ran inside the walk, per notch.
+                    continue;
+                }
                 super::Record::Key(ev) => {
                     // ── Keyboard capture gate ── read after the records before it (a click may
                     // have just focused a box) and before this key (an Escape that clears focus
@@ -418,7 +395,8 @@ pub(super) fn feed_ui_input(
     crate::script_calls::lent(&mut script, host.as_mut(), feed);
 }
 
-/// The world frame's leg of one record: its binding, with what the interface's walk left.
+/// The world frame's leg of one record: its binding, with what the interface's walk left. A move
+/// runs no binding; a wheel turn here, with no walk to sweep it, is the world's whole.
 fn world_frame_leg(
     world_frame: &mut crate::bindings::WorldFrameBindings,
     script: Option<&mut UiScript>,
@@ -431,6 +409,13 @@ fn world_frame_leg(
         super::Record::Key(ev) => world_frame.key(script, ev, r.mods, verdict, layout),
         super::Record::Button { button, state } => {
             world_frame.button(script, *button, *state, r.mods, over_ui)
+        }
+        super::Record::Move => {}
+        super::Record::Wheel(notches) => {
+            let mut script = script;
+            for _ in 0..notches.unsigned_abs() {
+                world_frame.wheel(script.as_deref_mut(), r.mods, *notches > 0);
+            }
         }
     }
 }
@@ -644,7 +629,6 @@ pub(crate) fn feed_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::input::mouse::MouseScrollUnit;
 
     fn wheel_pane() -> UiScript {
         let mut s = UiScript::new().unwrap();
@@ -672,37 +656,29 @@ mod tests {
             .unwrap()
     }
 
-    /// The travel `feed_wheel` takes, and the cursor `(x, y)` it sweeps at.
-    fn feed(
-        s: &mut UiScript,
-        notches: &mut WheelNotches,
-        (x, y): (f32, f32),
-        unit: MouseScrollUnit,
-        dy: f32,
-    ) -> i32 {
-        feed_wheel(s, notches, Vec2::new(x, y), (unit, dy), |_| true)
+    /// A world frame's slot that binds `binds` and counts the notches it ran, up positive.
+    struct Slot {
+        binds: fn(bool) -> bool,
+        ran: i32,
     }
 
-    #[test]
-    fn a_trackpad_trickle_fires_only_the_notches_it_adds_up_to() {
-        let mut s = wheel_pane();
-        let mut notches = WheelNotches::default();
-        let step = MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR / 10.0;
-        for _ in 0..10 {
-            feed(
-                &mut s,
-                &mut notches,
-                (512.0, 384.0),
-                MouseScrollUnit::Pixel,
-                step,
-            );
+    impl WorldWheelSlot for Slot {
+        fn takes(&self, up: bool) -> bool {
+            (self.binds)(up)
         }
-        let (n, sum) = calls(&s);
-        assert!(
-            n <= 1,
-            "ten frames adding up to one line fired {n} wheel calls (sum {sum})"
-        );
-        assert!(sum <= 1.0, "…and they may move at most one notch: {sum}");
+        fn run(&mut self, _: &mut UiScript, up: bool) {
+            self.ran += if up { 1 } else { -1 };
+        }
+    }
+
+    /// One wheel record of `notches` at `(x, y)`; the notches the world frame ran.
+    fn feed(s: &mut UiScript, (x, y): (f32, f32), notches: i32) -> i32 {
+        let mut slot = Slot {
+            binds: |_| true,
+            ran: 0,
+        };
+        feed_wheel(s, Some(Vec2::new(x, y)), notches, &mut slot);
+        slot.ran
     }
 
     /// Every button 1.12's frames take reaches the UI, under the name its binding chord agrees
@@ -758,95 +734,47 @@ mod tests {
     #[test]
     fn a_notch_reaches_the_world_unless_a_frame_with_a_handler_takes_it() {
         let mut s = world_with_a_button_and_a_pane();
-        let mut n = WheelNotches::default();
-        let line = MouseScrollUnit::Line;
-        assert_eq!(feed(&mut s, &mut n, (120.0, 120.0), line, 1.0), 1);
-        assert_eq!(feed(&mut s, &mut n, (120.0, 120.0), line, -2.0), -2);
+        assert_eq!(feed(&mut s, (120.0, 120.0), 1), 1);
+        assert_eq!(feed(&mut s, (120.0, 120.0), -2), -2);
         assert_eq!(calls(&s).0, 0, "the button has no handler");
-        assert_eq!(feed(&mut s, &mut n, (650.0, 150.0), line, 1.0), 0);
+        assert_eq!(feed(&mut s, (650.0, 150.0), 1), 0);
         assert_eq!(calls(&s).0, 1, "the pane's handler took it");
-        assert_eq!(feed(&mut s, &mut n, (900.0, 600.0), line, 1.0), 1);
+        assert_eq!(feed(&mut s, (900.0, 600.0), 1), 1);
     }
 
     /// A chord with no binding is not taken by the world slot (`0x483d87`): the notch is nobody's.
     #[test]
     fn a_notch_whose_chord_is_unbound_is_not_left_to_the_world() {
         let mut s = world_with_a_button_and_a_pane();
-        let mut n = WheelNotches::default();
-        let got = feed_wheel(
-            &mut s,
-            &mut n,
-            Vec2::new(120.0, 120.0),
-            (MouseScrollUnit::Line, 1.0),
-            |up| !up,
-        );
-        assert_eq!(got, 0, "up is unbound");
+        let mut slot = Slot {
+            binds: |up| !up,
+            ran: 0,
+        };
+        feed_wheel(&mut s, Some(Vec2::new(120.0, 120.0)), 1, &mut slot);
+        assert_eq!(slot.ran, 0, "up is unbound");
+        feed_wheel(&mut s, Some(Vec2::new(120.0, 120.0)), -1, &mut slot);
+        assert_eq!(slot.ran, -1, "down is bound");
     }
 
-    /// With no VM, no cursor or a probe's pointer the sweep cannot run, and the whole travel is the
-    /// world's, as the dispatch pass ran it before the wheel had a sweep. The egui dev overlay
-    /// holding the pointer takes it instead.
+    /// With no cursor to sweep at (a probe's pointer) every notch is the world's, as the dispatch
+    /// pass ran it before the wheel had a sweep.
     #[test]
-    fn a_wheel_that_cannot_sweep_goes_to_the_world_unless_egui_holds_the_pointer() {
-        let line = (MouseScrollUnit::Line, 2.0);
-        let mut n = WheelNotches::default();
-        assert_eq!(
-            wheel_for_world(None, Some(Vec2::ZERO), &mut n, line, |_| true, false),
-            2
-        );
+    fn a_wheel_with_no_cursor_goes_to_the_world() {
         let mut s = world_with_a_button_and_a_pane();
-        assert_eq!(
-            wheel_for_world(Some(&mut s), None, &mut n, line, |_| true, false),
-            2
-        );
-        // A VM and a cursor sweep: the pane at the cursor takes it.
-        let at = Some(Vec2::new(650.0, 150.0));
-        assert_eq!(
-            wheel_for_world(Some(&mut s), at, &mut n, line, |_| true, false),
-            0
-        );
-        // egui holds the pointer: no notch for the world, swept or not.
-        let over = Some(Vec2::new(120.0, 120.0));
-        assert_eq!(
-            wheel_for_world(Some(&mut s), over, &mut n, line, |_| true, true),
-            0
-        );
-        assert_eq!(wheel_for_world(None, None, &mut n, line, |_| true, true), 0);
-    }
-
-    /// The horizontal wheel is not a notch: `WM_MOUSEHWHEEL` never reaches the client's wheel
-    /// walk, so it neither runs a handler nor zooms.
-    #[test]
-    fn a_horizontal_only_scroll_is_no_notch() {
-        let mut s = world_with_a_button_and_a_pane();
-        let mut n = WheelNotches::default();
-        for at in [(120.0, 120.0), (650.0, 150.0)] {
-            // `feed_ui_wheel` hands `notch_travel(x, y, shift)`, which is `y` without the OS remap.
-            let travel = crate::bindings::notch_travel_with(3.0, 0.0, false, false);
-            assert_eq!(feed(&mut s, &mut n, at, MouseScrollUnit::Line, travel), 0);
-        }
-        assert_eq!(calls(&s).0, 0);
+        let mut slot = Slot {
+            binds: |_| true,
+            ran: 0,
+        };
+        feed_wheel(&mut s, None, 2, &mut slot);
+        assert_eq!(slot.ran, 2);
     }
 
     #[test]
     fn a_line_notch_fires_once() {
         let mut s = wheel_pane();
-        let mut notches = WheelNotches::default();
-        feed(
-            &mut s,
-            &mut notches,
-            (512.0, 384.0),
-            MouseScrollUnit::Line,
-            1.0,
-        );
+        feed(&mut s, (512.0, 384.0), 1);
         assert_eq!(calls(&s), (1, 1.0));
-        feed(
-            &mut s,
-            &mut notches,
-            (512.0, 384.0),
-            MouseScrollUnit::Line,
-            -1.0,
-        );
+        feed(&mut s, (512.0, 384.0), -1);
         assert_eq!(calls(&s), (2, 0.0), "and the other way is a notch down");
     }
 }

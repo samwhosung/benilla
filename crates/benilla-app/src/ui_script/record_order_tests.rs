@@ -4,15 +4,17 @@
 //! window's own message order gives them.
 
 use bevy::input::keyboard::{Key, KeyboardInput};
-use bevy::input::mouse::MouseButtonInput;
+use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, WindowEvent};
 
 use benilla_ui::script::UiScript;
 
-/// The whole client in the world with a VM that binds `1` to a body logging `key;`, and a button
-/// over the screen's left half logging its `OnClick` as `click;`. The cursor starts over it.
+/// The whole client in the world with a VM that binds `1` to a body logging `key;` and the wheel up
+/// to one logging `zoom;`, and a button over the screen's left half logging its `OnClick` as
+/// `click;` and its `OnMouseWheel` as `wheel;`. The cursor starts over it. A small frame on the
+/// right half logs its `OnEnter` and `OnLeave`.
 fn client() -> App {
     client_with(UVec2::new(1024, 768), true)
 }
@@ -32,7 +34,7 @@ fn client_with(size: UVec2, widescreen: bool) -> App {
     let mut script = UiScript::new().expect("a VM");
     script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(
         "bind 1 PROBEKEY\r\nbind SHIFT-1 PROBESHIFT\r\nbind ENTER PROBEBOX\r\n\
-         bind W PROBEW\r\nbind BUTTON1 PROBEBUTTON\r\n",
+         bind W PROBEW\r\nbind BUTTON1 PROBEBUTTON\r\nbind MOUSEWHEELUP PROBEWHEEL\r\n",
     ));
     script.load_binding_set(1);
     script.register_bindings(
@@ -42,6 +44,7 @@ fn client_with(size: UVec2, widescreen: bool) -> App {
                 <Binding name="PROBESHIFT">LOG = LOG .. "shift;"</Binding>
                 <Binding name="PROBEBOX">ProbeBox:Show() ProbeBox:SetFocus()</Binding>
                 <Binding name="PROBEW">LOG = LOG .. "w;"</Binding>
+                <Binding name="PROBEWHEEL">LOG = LOG .. "zoom;"</Binding>
                 <Binding name="PROBEBUTTON" runOnUp="true">LOG = LOG .. "b1 " .. keystate .. ";"</Binding>
             </Bindings>"#,
         )
@@ -55,6 +58,13 @@ fn client_with(size: UVec2, widescreen: bool) -> App {
             b:SetPoint("BOTTOMLEFT", 0, 0) b:SetWidth(512) b:SetHeight(768)
             b:EnableMouse(true)
             b:SetScript("OnClick", function() LOG = LOG .. "click;" end)
+            b:EnableMouseWheel(true)
+            b:SetScript("OnMouseWheel", function() LOG = LOG .. "wheel;" end)
+            local f = CreateFrame("Frame", "CrossedFrame")
+            f:SetPoint("BOTTOMLEFT", 700, 618) f:SetWidth(100) f:SetHeight(100)
+            f:EnableMouse(true)
+            f:SetScript("OnEnter", function() LOG = LOG .. "enter;" end)
+            f:SetScript("OnLeave", function() LOG = LOG .. "leave;" end)
             local e = CreateFrame("EditBox", "ProbeBox")
             e:SetPoint("TOPLEFT", 600, -10) e:SetWidth(200) e:SetHeight(20)
             e:SetAutoFocus(false) e:Hide()"#,
@@ -99,7 +109,10 @@ fn send(app: &mut App, event: WindowEvent) {
         WindowEvent::CursorMoved(e) => {
             world.write_message(e);
         }
-        _ => unreachable!("the fixture sends keys, buttons and moves"),
+        WindowEvent::MouseWheel(e) => {
+            world.write_message(e);
+        }
+        _ => unreachable!("the fixture sends keys, buttons, moves and wheel turns"),
     }
     world.write_message(event);
 }
@@ -149,6 +162,20 @@ fn button(app: &mut App, state: ButtonState) {
         WindowEvent::MouseButtonInput(MouseButtonInput {
             button: MouseButton::Left,
             state,
+            window,
+        }),
+    );
+}
+
+/// One wheel notch up.
+fn wheel_up(app: &mut App) {
+    let window = app.world().resource::<PrimaryId>().0;
+    send(
+        app,
+        WindowEvent::MouseWheel(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
             window,
         }),
     );
@@ -297,4 +324,56 @@ fn widescreen_off_takes_a_click_through_the_stretch_and_back() {
     button(&mut app, ButtonState::Released);
     app.update();
     assert_eq!(log(&app), "962 384 1024;");
+}
+
+/// Two moves in one frame, onto a frame and off it again: each move is a record with its own hover
+/// walk (`0x7660d0`), so the frame the cursor crossed gets its `OnEnter` and its `OnLeave`.
+#[test]
+fn a_frame_crossed_within_one_frame_is_entered_and_left() {
+    let mut app = client();
+    move_to(&mut app, Vec2::new(750.0, 100.0));
+    move_to(&mut app, Vec2::new(950.0, 100.0));
+    app.update();
+    assert_eq!(log(&app), "enter;leave;");
+}
+
+/// A wheel turn and a click in one frame run in the window's order: the wheel's record dispatches
+/// at its place (kind 0xb, category 0x10, `0x7664f0`), ahead of a click that follows it and behind
+/// one that came first.
+#[test]
+fn a_wheel_turn_runs_at_its_place_among_the_clicks() {
+    let mut app = client();
+    wheel_up(&mut app);
+    button(&mut app, ButtonState::Pressed);
+    button(&mut app, ButtonState::Released);
+    app.update();
+    assert_eq!(log(&app), "wheel;click;");
+
+    let mut app = client();
+    button(&mut app, ButtonState::Pressed);
+    button(&mut app, ButtonState::Released);
+    wheel_up(&mut app);
+    app.update();
+    assert_eq!(log(&app), "click;wheel;");
+}
+
+/// A notch over the world runs the world frame's wheel binding (`0x483d20`) inside its own record,
+/// so a key bound after it runs after it.
+#[test]
+fn a_notch_over_the_world_binds_at_its_place() {
+    let mut app = client();
+    // The world frame over the right half, where the wheel walk meets it.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"WorldFrame:SetPoint("BOTTOMLEFT", 512, 0)
+            WorldFrame:SetWidth(512) WorldFrame:SetHeight(768)"#,
+        )
+        .expect("the world frame places");
+    app.update();
+    move_to(&mut app, Vec2::new(900.0, 700.0));
+    wheel_up(&mut app);
+    key(&mut app, KeyCode::Digit1, ButtonState::Pressed);
+    app.update();
+    assert_eq!(log(&app), "zoom;key;");
 }

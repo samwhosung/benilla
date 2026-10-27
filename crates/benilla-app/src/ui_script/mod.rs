@@ -33,9 +33,6 @@ pub(crate) use input::feed_keys;
 #[cfg(test)]
 pub(crate) use records::records_from_planes;
 pub(crate) use records::{collect_input_records, InputRecord, InputRecords, Record};
-// Test-only: the bindings tests run the UI's wheel sweep ahead of the dispatch pass.
-#[cfg(test)]
-pub(crate) use input::feed_wheel;
 #[cfg(test)]
 pub(crate) mod layer_tests;
 mod load_log;
@@ -450,8 +447,6 @@ impl Plugin for UiScriptPlugin {
             .init_non_send_resource::<glue_mgr::SharedGlueMgr>()
             .init_resource::<UiAutoScaleCache>()
             .init_resource::<UiFrameCost>()
-            .init_resource::<crate::bindings::WheelNotches>()
-            .init_resource::<crate::bindings::WorldWheel>()
             .init_resource::<UiCostWanted>()
             .init_resource::<PointerOverUi>()
             .init_resource::<SyntheticPointer>()
@@ -578,15 +573,10 @@ impl Plugin for UiScriptPlugin {
             .add_systems(Last, records::note_frame_end_cursor)
             .add_systems(
                 Update,
-                (
-                    input::feed_ui_input.run_if(
+                input::feed_ui_input
+                    .run_if(
                         in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
-                    ),
-                    input::feed_ui_wheel.run_if(
-                        in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
-                    ),
-                )
-                    .chain()
+                    )
                     .in_set(UiInput)
                     // Each record's binding runs inside its walk, between the pass's head and tail.
                     .after(crate::bindings::BindingHead)
