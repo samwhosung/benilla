@@ -107,7 +107,7 @@ fn resolve_service_skilled(
             &deps.items,
             Ask::New(&deps.commands),
             text,
-            &probe_strings,
+            benilla_ui::strings::Strings::Host(&probe_strings),
         )
     })
 }
@@ -144,7 +144,7 @@ fn snap(open: &TrainerOpen, spells: &SpellCatalog) -> Option<TrainerState> {
             &deps.items,
             Ask::New(&deps.commands),
             text,
-            &probe_strings,
+            benilla_ui::strings::Strings::Host(&probe_strings),
         )
     })
 }
@@ -973,7 +973,7 @@ fn service_description_on_real_data_reads_astral_recalls_bind_area() {
             &deps.items,
             Ask::New(&deps.commands),
             text,
-            &probe_strings,
+            benilla_ui::strings::Strings::Host(&probe_strings),
         )
     });
     assert_eq!(
@@ -1801,7 +1801,7 @@ fn resolve_with_pet(
             &deps.items,
             Ask::New(&deps.commands),
             text,
-            &probe_strings,
+            benilla_ui::strings::Strings::Host(&probe_strings),
         )
     })
 }

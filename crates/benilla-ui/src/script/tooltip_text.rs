@@ -73,8 +73,8 @@ impl TooltipText {
         self.0.is_empty()
     }
 
-    /// The text with each template read through `get` now.
-    pub fn text(&self, get: &dyn Fn(&str) -> Option<String>) -> String {
+    /// The text with each template read through `strings` now.
+    pub fn text(&self, strings: crate::strings::Strings<'_>) -> String {
         let mut out = String::new();
         for part in &self.0 {
             match part {
@@ -86,8 +86,8 @@ impl TooltipText {
                     or,
                 } => {
                     let template = match ordinal {
-                        Some(_) => plural(key, *ordinal, get),
-                        None => get(key).filter(|s| !s.is_empty()),
+                        Some(_) => plural(key, *ordinal, strings),
+                        None => strings.global(key),
                     };
                     match (template, args) {
                         (Some(t), Some(args)) => {
@@ -106,7 +106,7 @@ impl TooltipText {
     /// [`Self::text`] read from the VM's globals, `None` when it comes out empty: the line core
     /// adds no line with no text (`0x5302a9`).
     pub(crate) fn line(&self, lua: &mlua::Lua) -> Option<String> {
-        Some(self.text(&|key| crate::strings::global(lua, key))).filter(|t| !t.is_empty())
+        Some(self.text(crate::strings::Strings::Vm(lua))).filter(|t| !t.is_empty())
     }
 }
 
@@ -125,6 +125,7 @@ impl From<String> for TooltipText {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strings::Strings::Host;
 
     /// A template is read at each call, so a rewrite between two reads shows; a missing key
     /// leaves its stand-in, a copied string keeps its `%` signs, and an ordinal other than 1 takes
@@ -133,21 +134,21 @@ mod tests {
     fn a_prepared_text_reads_its_templates_at_each_render() {
         let cost = TooltipText::keyed("MANA_COST", vec![KeyedArg::D(30)]);
         assert_eq!(
-            cost.text(&|k| (k == "MANA_COST").then(|| "%d Mana".into())),
+            cost.text(Host(&|k| (k == "MANA_COST").then(|| "%d Mana".into()))),
             "30 Mana"
         );
         assert_eq!(
-            cost.text(&|k| (k == "MANA_COST").then(|| "Mana: %d".into())),
+            cost.text(Host(&|k| (k == "MANA_COST").then(|| "Mana: %d".into()))),
             "Mana: 30"
         );
-        assert_eq!(cost.text(&|_| None), "");
+        assert_eq!(cost.text(Host(&|_| None)), "");
         let use_all = TooltipText::copied("SPELL_USE_ALL_MANA");
         assert_eq!(
-            use_all.text(&|_| Some("Uses 100% mana".into())),
+            use_all.text(Host(&|_| Some("Uses 100% mana".into()))),
             "Uses 100% mana"
         );
         let reagents = TooltipText::copied("SPELL_REAGENTS").then("Rune");
-        assert_eq!(reagents.text(&|_| None), "Rune");
+        assert_eq!(reagents.text(Host(&|_| None)), "Rune");
         let secs = TooltipText(vec![TextPart::Keyed {
             key: "INT_SPELL_DURATION_SEC".into(),
             ordinal: Some(30),
@@ -159,7 +160,7 @@ mod tests {
             "INT_SPELL_DURATION_SEC_P1" => Some("%d secs".to_string()),
             _ => None,
         };
-        assert_eq!(secs.text(&get), "30 secs");
-        assert_eq!(secs.text(&|_| None), "$d");
+        assert_eq!(secs.text(Host(&get)), "30 secs");
+        assert_eq!(secs.text(Host(&|_| None)), "$d");
     }
 }

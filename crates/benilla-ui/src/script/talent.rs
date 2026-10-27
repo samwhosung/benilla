@@ -92,11 +92,11 @@ pub enum TalentReq {
 impl TalentReq {
     /// The line as `0x52b390` writes it now, `None` for a missing or empty template.
     fn line(&self, lua: &Lua) -> Option<String> {
-        use crate::strings::{fill, global, plural, Arg};
+        use crate::strings::{fill, global, plural, Arg, Strings};
         let get = |key: &str| global(lua, key);
         Some(match self {
             Self::Prereq { rank, name } => fill(
-                &plural("TOOLTIP_TALENT_PREREQ", Some(*rank), &get)?,
+                &plural("TOOLTIP_TALENT_PREREQ", Some(*rank), Strings::Vm(lua))?,
                 &[Arg::D(i64::from(*rank)), Arg::S(name)],
             ),
             Self::Tier { points, tab } => fill(

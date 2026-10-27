@@ -193,7 +193,9 @@ mod statusbar;
 mod stdlib;
 /// An mlua error's bare Lua message, the one value the error handler is called with.
 pub use stdlib::lua_message;
-pub(crate) use stdlib::{execute_buffer, run_under_error_function};
+pub(crate) use stdlib::{
+    call_global_under_error_function, execute_buffer, run_under_error_function,
+};
 mod summon;
 mod talent;
 mod taxi;

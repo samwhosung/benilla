@@ -160,10 +160,11 @@ fn poll_play_time(
                 ),
                 Nag::IgrDialog => script.fire_event("IGR_BILLING_NAG_DIALOG", vec![]),
                 Nag::Line(minutes) => {
-                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                    let Some(template) =
-                        benilla_ui::strings::plural("BILLING_NAG_WARNING", Some(minutes), &get)
-                    else {
+                    let Some(template) = benilla_ui::strings::plural(
+                        "BILLING_NAG_WARNING",
+                        Some(minutes),
+                        benilla_ui::strings::Strings::Vm(script.lua()),
+                    ) else {
                         continue;
                     };
                     let text = benilla_ui::strings::fill(

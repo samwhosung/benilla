@@ -1510,7 +1510,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 } => {
                     // `FACTION_STANDING_LABEL<rank + 1>` (`0x84b5dc`) through `0x612bf0`.
                     let label = |rank: u8| {
-                        crate::strings::standing_label(&|k| global(lua, k), rank.into(), *female)
+                        crate::strings::standing_label(
+                            crate::strings::Strings::Vm(lua),
+                            rank.into(),
+                            *female,
+                        )
                     };
                     fill(
                         &template("QUEST_FACTION_NEEDED"),
@@ -3070,6 +3074,8 @@ mod tests {
     fn a_reputation_faction_is_the_last_line_finished_at_the_standing() {
         const ARGENT_DAWN: u32 = 529;
         let mut s = UiScript::new().unwrap();
+        // The label is the player's gendered text, a Lua `GetText` call (`0x612bf0`).
+        crate::test_support::install_text_rules(&s);
         caches(&mut s);
         s.set_item_template(
             900,

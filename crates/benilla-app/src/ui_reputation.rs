@@ -418,13 +418,13 @@ pub(crate) fn queue_standing_lines(
 /// whatever `0x703bf0` gave. Only a missing template prints nothing here, where the reference
 /// would send an empty string to the chat composer.
 pub(crate) fn standing_text(
-    get: &dyn Fn(&str) -> Option<String>,
+    strings: benilla_ui::strings::Strings<'_>,
     rank: u8,
     female: bool,
     faction_name: &str,
 ) -> Option<String> {
-    let label = benilla_ui::strings::standing_label(get, u32::from(rank.min(7)), female);
-    let template = get("FACTION_STANDING_CHANGED").filter(|v| !v.is_empty())?;
+    let label = benilla_ui::strings::standing_label(strings, u32::from(rank.min(7)), female);
+    let template = strings.global("FACTION_STANDING_CHANGED")?;
     Some(benilla_ui::strings::fill(
         &template,
         &[
@@ -818,24 +818,54 @@ mod tests {
                 .map(|(_, v)| v.to_string())
         };
         assert_eq!(
-            standing_text(&get, 4, false, "Stormwind").as_deref(),
+            standing_text(
+                benilla_ui::strings::Strings::Host(&get),
+                4,
+                false,
+                "Stormwind"
+            )
+            .as_deref(),
             Some("You are now Friendly with Stormwind.")
         );
         assert_eq!(
-            standing_text(&get, 5, false, "Stormwind").as_deref(),
+            standing_text(
+                benilla_ui::strings::Strings::Host(&get),
+                5,
+                false,
+                "Stormwind"
+            )
+            .as_deref(),
             Some("You are now Honored with Stormwind.")
         );
         assert_eq!(
-            standing_text(&get, 5, true, "Stormwind").as_deref(),
+            standing_text(
+                benilla_ui::strings::Strings::Host(&get),
+                5,
+                true,
+                "Stormwind"
+            )
+            .as_deref(),
             Some("You are now Honoured (f) with Stormwind.")
         );
         assert_eq!(
-            standing_text(&get, 4, true, "Stormwind").as_deref(),
+            standing_text(
+                benilla_ui::strings::Strings::Host(&get),
+                4,
+                true,
+                "Stormwind"
+            )
+            .as_deref(),
             Some("You are now Friendly with Stormwind."),
             "a missing twin falls back to the base label"
         );
         assert_eq!(
-            standing_text(&get, 0, false, "Stormwind").as_deref(),
+            standing_text(
+                benilla_ui::strings::Strings::Host(&get),
+                0,
+                false,
+                "Stormwind"
+            )
+            .as_deref(),
             Some("You are now  with Stormwind."),
             "an absent label is an empty one (`0x703bf0` never returns NULL), not a missing line"
         );
@@ -845,12 +875,20 @@ mod tests {
             other => get(other),
         };
         assert_eq!(
-            standing_text(&empty_twin, 5, true, "Stormwind").as_deref(),
+            standing_text(
+                benilla_ui::strings::Strings::Host(&empty_twin),
+                5,
+                true,
+                "Stormwind"
+            )
+            .as_deref(),
             Some("You are now Honored with Stormwind.")
         );
         assert_eq!(
             standing_text(
-                &|k| get(k).filter(|_| k != "FACTION_STANDING_CHANGED"),
+                benilla_ui::strings::Strings::Host(
+                    &|k| get(k).filter(|_| k != "FACTION_STANDING_CHANGED")
+                ),
                 4,
                 false,
                 "X"

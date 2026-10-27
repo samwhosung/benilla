@@ -888,7 +888,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .map(|s| (s.description, s.description_wait))
                     .unwrap_or_default()
             };
-            let description = description.map(|t| t.text(&|key| crate::strings::global(lua, key)));
+            let description = description.map(|t| t.text(crate::strings::Strings::Vm(lua)));
             // The miss asks and keeps its callback inside the call (`0x4d9cef`).
             if let Some(wait) = wait {
                 ask_item(lua, wait)?;

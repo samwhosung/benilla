@@ -312,9 +312,10 @@ fn resolve_service(
     items: &Items,
     ask: Ask<'_>,
     text: &ServiceText,
-    // The VM's own `GlobalStrings.lua`, for the group header labels.
-    get: &dyn Fn(&str) -> Option<String>,
+    // The VM's own `GlobalStrings.lua`, for the group header labels, and its `GetText`.
+    strings: benilla_ui::strings::Strings<'_>,
 ) -> TrainerService {
+    let get = &|key: &str| strings.global(key);
     // `taught` feeds only the group key (`0x4d7c60`); the name and subtext are the wire wrapper's
     // own columns (`0x4d8aa0`, `0x4d8b50`), which differ from the taught spell's on every
     // profession-learn row. The wrapper stays the buy id.
@@ -370,7 +371,7 @@ fn resolve_service(
         subtext: display.map(|d| d.rank.clone().unwrap_or_default()),
         texture: live.texture,
         icon_wait: live.icon_wait,
-        description: live.description.map(|t| t.text(get)),
+        description: live.description.map(|t| t.text(strings)),
         description_wait: live.description_wait,
         cost: wire.cost,
         prof_first_rank: wire.is_primary_prof_first_rank,
@@ -503,8 +504,9 @@ fn snapshot(
     items: &Items,
     ask: Ask<'_>,
     text: &ServiceText,
-    get: &dyn Fn(&str) -> Option<String>,
+    strings: benilla_ui::strings::Strings<'_>,
 ) -> Option<TrainerState> {
+    let get = |key: &str| strings.global(key);
     let guid = open.listed?;
     Some(TrainerState {
         guid,
@@ -526,7 +528,7 @@ fn snapshot(
                     items,
                     ask,
                     text,
-                    get,
+                    strings,
                 );
                 // The record keeps the -1 a list or a pass wrote, whatever its state now.
                 if known_key && service.group_key != TRAINER_GROUP_KNOWN {
@@ -782,7 +784,7 @@ impl TrainerReads<'_, '_> {
     fn snapshot(
         &self,
         open: &TrainerOpen,
-        get: &dyn Fn(&str) -> Option<String>,
+        strings: benilla_ui::strings::Strings<'_>,
     ) -> Option<Option<TrainerState>> {
         self.with(|r| {
             snapshot(
@@ -796,7 +798,7 @@ impl TrainerReads<'_, '_> {
                 // them (`0x4d9096`, `0x4d9d07`): the list and its passes look no item up.
                 Ask::Read,
                 r.text,
-                get,
+                strings,
             )
         })
     }
@@ -916,7 +918,7 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
     let (reads, open) = reads.get(world);
     let state = {
         let lua = script.lua();
-        reads.snapshot(&open, &|key| benilla_ui::strings::global(lua, key))
+        reads.snapshot(&open, benilla_ui::strings::Strings::Vm(lua))
     };
     if let Some(state) = state {
         script.reset_trainer_list_state(open.trainer_type);

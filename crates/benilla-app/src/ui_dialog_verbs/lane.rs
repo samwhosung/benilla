@@ -157,10 +157,12 @@ fn fire(
         DialogSignal::Duel(owed) => {
             crate::ui_duel::owed_text(&owed, &get).map(|text| Shown::unkeyed(MsgKind::Chat, text))
         }
-        DialogSignal::Lockout(line, map) => {
-            crate::ui_instance::lockout_text(&line, map.as_deref(), &get)
-                .map(|text| Shown::unkeyed(MsgKind::Chat, text))
-        }
+        DialogSignal::Lockout(line, map) => crate::ui_instance::lockout_text(
+            &line,
+            map.as_deref(),
+            benilla_ui::strings::Strings::Vm(script.lua()),
+        )
+        .map(|text| Shown::unkeyed(MsgKind::Chat, text)),
     };
     // Shown through `0x496720` or the chat composer `0x49a870`, inside the handler that adds it.
     if let Some(line) = line {

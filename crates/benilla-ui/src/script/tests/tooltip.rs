@@ -746,7 +746,9 @@ fn the_duration_ladder_ceils_every_arm_but_seconds() {
             .to_string(),
         )
     };
-    let d = |ms: u32| crate::script::tooltip::duration_text(ms, "T", true, &table);
+    let d = |ms: u32| {
+        crate::script::tooltip::duration_text(ms, "T", true, crate::strings::Strings::Host(&table))
+    };
 
     // The three arm edges are exact, and the arm below counts in its own unit up to the edge.
     assert_eq!(d(86_400_000).as_deref(), Some("<1 day>"), "the day edge");
@@ -789,19 +791,36 @@ fn the_duration_ladder_ceils_every_arm_but_seconds() {
 
     // roundUp = 0 truncates the top arms too.
     assert_eq!(
-        crate::script::tooltip::duration_text(61_000, "T", false, &table).as_deref(),
+        crate::script::tooltip::duration_text(
+            61_000,
+            "T",
+            false,
+            crate::strings::Strings::Host(&table)
+        )
+        .as_deref(),
         Some("<1 min>"),
     );
 
     // A key the string table lacks yields no line.
     assert_eq!(
-        crate::script::tooltip::duration_text(1_000, "NOPE", true, &table),
+        crate::script::tooltip::duration_text(
+            1_000,
+            "NOPE",
+            true,
+            crate::strings::Strings::Host(&table)
+        ),
         None
     );
     // A family with only the singular falls back to it.
     let singular_only = |key: &str| (key == "S_SEC").then(|| "<%d s>".to_string());
     assert_eq!(
-        crate::script::tooltip::duration_text(5_000, "S", true, &singular_only).as_deref(),
+        crate::script::tooltip::duration_text(
+            5_000,
+            "S",
+            true,
+            crate::strings::Strings::Host(&singular_only)
+        )
+        .as_deref(),
         Some("<5 s>"),
     );
 }

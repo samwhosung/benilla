@@ -52,7 +52,9 @@ pub(super) struct Shown {
 
 impl Shown {
     pub(super) fn of(v: &benilla_ui::script::SpellTooltipView) -> Self {
-        let text = |t: &benilla_ui::script::TooltipText| t.text(&shipped);
+        let text = |t: &benilla_ui::script::TooltipText| {
+            t.text(benilla_ui::strings::Strings::Host(&shipped))
+        };
         let cell = |t: &Option<benilla_ui::script::TooltipText>| t.as_ref().map(text);
         let line = |key: &str, name: &Option<String>| {
             name.as_ref()
@@ -324,7 +326,8 @@ fn aura_text(spell_id: u32, level: u8, stack: u8, spells: &Spells, vctx: &ViewCt
         stack,
     };
     let (view, _) = build_aura_view(key, spells, vctx).expect("an aura view");
-    view.description.text(&shipped)
+    view.description
+        .text(benilla_ui::strings::Strings::Host(&shipped))
 }
 
 /// The aura builder expands the aura text at the aura's level, and at its count when the spell

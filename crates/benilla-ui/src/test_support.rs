@@ -129,3 +129,30 @@ macro_rules! assert_near {
         }
     }};
 }
+
+/// The `GetText` and `GetPluralIndex` contract the engine's counted and gendered text calls
+/// (`0x703bf0`, `0x703cf0`), which FrameXML and GlueXML define (`LocaleProperties.lua:26`, `:56`):
+/// for a test VM that loads neither. A count other than 1 tags `_P1`, a gender its tag, and the
+/// tagged key falls back to the bare one.
+pub const TEXT_RULES: &str = r#"
+function GetPluralIndex(n)
+    if not n or n == 1 then return 1 end
+    return 2
+end
+local tags = { "_NONE", nil, "_FEMALE", "_MPLURAL", "_FPLURAL", "_MIXED" }
+function GetText(token, gender, ordinal)
+    local plural = GetPluralIndex(ordinal) == 2 and "_P1" or nil
+    local tag = gender and tags[gender]
+    local text = getglobal(token .. (plural or "") .. (tag or ""))
+    if text then return text end
+    if plural and tag then
+        return getglobal(token .. plural) or getglobal(token .. tag) or getglobal(token)
+    end
+    return getglobal(token)
+end
+"#;
+
+/// Define [`TEXT_RULES`] in `s`.
+pub fn install_text_rules(s: &crate::script::UiScript) {
+    s.run(TEXT_RULES).expect("the text rules load");
+}

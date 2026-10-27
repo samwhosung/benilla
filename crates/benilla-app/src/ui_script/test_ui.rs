@@ -17,6 +17,8 @@ pub(crate) fn load_ui(s: &UiScript, entry: &str) -> usize {
 /// template holds no line, as on 1.12.1; a test makes one with
 /// `CreateFrame("GameTooltip", name, parent, "TestTooltipTemplate")`.
 pub(crate) fn load_tooltip_template(s: &UiScript) {
+    // The FrameXML functions the tooltips' counted and gendered lines call (`0x703bf0`).
+    benilla_ui::test_support::install_text_rules(s);
     let mut xml = String::from(
         r#"<Ui><GameTooltip name="TestTooltipTemplate" virtual="true"><Layers><Layer level="ARTWORK">"#,
     );

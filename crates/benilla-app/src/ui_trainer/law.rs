@@ -152,7 +152,7 @@ pub(super) fn service_description(
     text: &ServiceText,
 ) -> Option<String> {
     service_description_waiting(wire, trainer_type, spells, items, ask, text, &mut None)
-        .map(|t| t.text(text.player.global))
+        .map(|t| t.text(benilla_ui::strings::Strings::Host(text.player.global)))
 }
 
 /// [`service_description`], with `wait` set to the recipe's product whose record the lookup

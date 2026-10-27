@@ -51,6 +51,8 @@ fn tooltip_line_xml(i: usize, font: &str) -> String {
 pub(super) fn script() -> UiScript {
     let s = UiScript::new().expect("construct UiScript");
     load_tooltip_template(&s);
+    // The FrameXML functions the tooltips' counted and gendered lines call (`0x703bf0`).
+    crate::test_support::install_text_rules(&s);
     s.register_cvars([("UberTooltips", "1")]);
     s
 }

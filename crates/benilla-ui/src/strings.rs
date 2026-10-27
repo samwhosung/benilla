@@ -268,36 +268,122 @@ pub fn global(lua: &mlua::Lua, key: &str) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
 
-/// `FACTION_STANDING_LABEL<rank + 1>` gendered by `0x612bf0`: a female player tries the
-/// `_FEMALE` twin and, when that is absent or empty, the bare key (`0x612c36`). A label absent
-/// altogether is the empty string, as `0x703bf0` never returns NULL. Read by the standing chat
-/// line, the quest log's faction objective and the item and spell tooltips' reputation lines.
-pub fn standing_label(get: &dyn Fn(&str) -> Option<String>, rank: u32, female: bool) -> String {
+/// Where the engine's text reads find their strings (`FrameScript_GetText`, `0x703bf0`). A bare
+/// key is a global's text (`0x704350`); a gendered or counted one is a call of the Lua `GetText`,
+/// and a plural index one of `GetPluralIndex` (`0x703cf0`), plain FrameXML functions an addon can
+/// replace (`LocaleProperties.lua:26`, `:56`).
+#[derive(Clone, Copy)]
+pub enum Strings<'a> {
+    /// A running VM: its globals, its `GetText` and its `GetPluralIndex`, called under the runners'
+    /// error function.
+    Vm(&'a mlua::Lua),
+    /// No VM runs: a key lookup, with the stock `LocaleProperties.lua` rule run over it here.
+    Host(&'a dyn Fn(&str) -> Option<String>),
+}
+
+impl Strings<'_> {
+    /// A key's global as a string, the empty one included; `None` when it is none.
+    pub fn lookup(&self, key: &str) -> Option<String> {
+        match self {
+            Self::Vm(lua) => lua.globals().get::<String>(key).ok(),
+            Self::Host(get) => get(key),
+        }
+    }
+
+    /// A key's text, `None` when absent or empty: `0x704350`'s answer, which callers test for
+    /// the empty string (`GetPVPRankInfo`, `0x51aa1c`/`0x51aa20`).
+    pub fn global(&self, key: &str) -> Option<String> {
+        self.lookup(key).filter(|s| !s.is_empty())
+    }
+
+    /// `FrameScript_GetText(key, ordinal, gender)` (`0x703bf0`), `None` for the empty string.
+    /// With neither a gender nor an ordinal it is [`Self::global`] (`0x703c0d`). Otherwise it calls
+    /// `GetText(key, gender, ordinal)`, each absent one nil (`0x703c67`-`0x703c9b`), and takes a
+    /// string or number result whatever the call's status (`0x703cb2`), so a failed call's text is
+    /// what the error function answered.
+    pub fn get_text(&self, key: &str, gender: Option<u32>, ordinal: Option<u32>) -> Option<String> {
+        if gender.is_none() && ordinal.is_none() {
+            return self.global(key);
+        }
+        let text = match self {
+            Self::Vm(lua) => {
+                let args = (key, gender.map(f64::from), ordinal.map(f64::from));
+                let answer = crate::script::call_global_under_error_function(lua, "GetText", args)
+                    .unwrap_or_else(|failed| failed);
+                lua.coerce_string(answer)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.to_string_lossy())
+            }
+            Self::Host(get) => host_get_text(*get, key, gender, ordinal),
+        };
+        text.filter(|s| !s.is_empty())
+    }
+
+    /// `FrameScriptGetPluralIndex(count)` (`0x703cf0`): `GetPluralIndex(count)` truncated, minus
+    /// one (`0x703d68`-`0x703d6f`), and 0 for a failed call or a result that is no number.
+    pub fn plural_index(&self, count: i32) -> i32 {
+        match self {
+            Self::Vm(lua) => crate::script::call_global_under_error_function(
+                lua,
+                "GetPluralIndex",
+                f64::from(count),
+            )
+            .ok()
+            .and_then(|v| lua.coerce_number(v).ok().flatten())
+            .map_or(0, |n| crate::script::ftol(n).wrapping_sub(1)),
+            Self::Host(_) => i32::from(count != 1),
+        }
+    }
+}
+
+/// The stock `GetText` (`LocaleProperties.lua:26-54`) over `get`: the plural tag `_P1` for any
+/// ordinal but 1 (`GetPluralIndex`, `:56`), the gender tag by `GenderTagInfo` (`:20`), the tagged
+/// key, then its fallbacks. A key that is defined, even as `""`, ends the search, as Lua's
+/// `not string` does.
+fn host_get_text(
+    get: &dyn Fn(&str) -> Option<String>,
+    token: &str,
+    gender: Option<u32>,
+    ordinal: Option<u32>,
+) -> Option<String> {
+    let plural = ordinal.filter(|&n| n != 1).map(|_| "_P1");
+    let gender = match gender {
+        Some(1) => Some("_NONE"),
+        Some(3) => Some("_FEMALE"),
+        Some(4) => Some("_MPLURAL"),
+        Some(5) => Some("_FPLURAL"),
+        Some(6) => Some("_MIXED"),
+        _ => None,
+    };
+    let tagged = format!("{token}{}{}", plural.unwrap_or(""), gender.unwrap_or(""));
+    get(&tagged).or_else(|| match (plural, gender) {
+        (Some(p), Some(g)) => get(&format!("{token}{p}"))
+            .or_else(|| get(&format!("{token}{g}")))
+            .or_else(|| get(token)),
+        _ => get(token),
+    })
+}
+
+/// `FACTION_STANDING_LABEL<rank + 1>` through the player's gendered text (`0x612bf0`): `GetText`
+/// with gender 3 for a female, 2 otherwise (`0x612c12`-`0x612c1a`), then the bare key when that
+/// gives the empty string (`0x612c36`). A label absent altogether is the empty string, as
+/// `0x703bf0` never returns NULL. Read by the standing chat line, the quest log's faction objective
+/// and the item and spell tooltips' reputation lines.
+pub fn standing_label(strings: Strings<'_>, rank: u32, female: bool) -> String {
     let key = format!("FACTION_STANDING_LABEL{}", rank.wrapping_add(1));
-    let defined = |k: &str| get(k).filter(|v| !v.is_empty());
-    female
-        .then(|| defined(&format!("{key}_FEMALE")))
-        .flatten()
-        .or_else(|| defined(&key))
+    strings
+        .get_text(&key, Some(if female { 3 } else { 2 }), None)
+        .or_else(|| strings.global(&key))
         .unwrap_or_default()
 }
 
-/// `GetText(token, nil, ordinal)`'s plural pick: `0x52fa50` formats the key and `0x703bf0`
-/// pcalls the Lua `GetText`, where `GetPluralIndex` (`LocaleProperties.lua:56`) is singular for
-/// `not ordinal or ordinal == 1`. So one or no ordinal takes the bare token, anything else the
-/// `_P1` twin, falling back to the bare token. Zero is plural: the test at `0x703c89` is signed,
-/// only a negative becomes nil, and the number `0` is truthy in Lua.
-pub fn plural(
-    token: &str,
-    ordinal: Option<u32>,
-    get: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
-    if ordinal.is_some_and(|n| n != 1) {
-        if let Some(twin) = get(&format!("{token}_P1")).filter(|s| !s.is_empty()) {
-            return Some(twin);
-        }
-    }
-    get(token).filter(|s| !s.is_empty())
+/// `GetText(token, nil, ordinal)`, the counted read `0x52fa50` and the other formatters make
+/// (`0x703bf0`): with the stock `GetPluralIndex`, one or no ordinal takes the bare token and
+/// anything else its `_P1` twin, falling back to the bare token. Zero is plural: the test at
+/// `0x703c89` is signed, only a negative becomes nil, and the number `0` is truthy in Lua.
+pub fn plural(token: &str, ordinal: Option<u32>, strings: Strings<'_>) -> Option<String> {
+    strings.get_text(token, None, ordinal)
 }
 
 /// Fill a reference template, by the rules in the module doc.
@@ -433,20 +519,76 @@ mod tests {
                 _ => None,
             }
         };
-        assert_eq!(plural("T", Some(1), &table).as_deref(), Some("<one>"));
-        assert_eq!(plural("T", Some(2), &table).as_deref(), Some("<many>"));
+        let table = Strings::Host(&table);
+        assert_eq!(plural("T", Some(1), table).as_deref(), Some("<one>"));
+        assert_eq!(plural("T", Some(2), table).as_deref(), Some("<many>"));
         assert_eq!(
-            plural("T", Some(0), &table).as_deref(),
+            plural("T", Some(0), table).as_deref(),
             Some("<many>"),
             "zero is plural — the signed test, not `> 1`"
         );
         assert_eq!(
-            plural("T", None, &table).as_deref(),
+            plural("T", None, table).as_deref(),
             Some("<one>"),
             "no ordinal at all takes GetText's short arm"
         );
-        assert_eq!(plural("ONLY", Some(7), &table).as_deref(), Some("<only>"));
-        assert_eq!(plural("ABSENT", Some(2), &table), None);
+        assert_eq!(plural("ONLY", Some(7), table).as_deref(), Some("<only>"));
+        assert_eq!(plural("ABSENT", Some(2), table), None);
+    }
+
+    /// The engine's counted and gendered text calls the Lua `GetText` at the call
+    /// (`0x703c43`-`0x703cad`): an addon's replacement changes it, the arguments are the key, the
+    /// gender or nil and the ordinal or nil, and a bare key reads the global with no call
+    /// (`0x703c0d`).
+    #[test]
+    fn counted_and_gendered_text_calls_the_lua_get_text() {
+        let s = crate::script::UiScript::new().unwrap();
+        s.run(
+            r#"
+            T = "<one>"  T_P1 = "<many>"
+            function GetText(token, gender, ordinal)
+                CALLS = (CALLS or "") .. token .. ":" .. tostring(gender) .. ":" .. tostring(ordinal) .. ";"
+                return "[" .. token .. "]"
+            end
+        "#,
+        )
+        .unwrap();
+        let vm = Strings::Vm(s.lua());
+        assert_eq!(plural("T", Some(2), vm).as_deref(), Some("[T]"));
+        assert_eq!(standing_label(vm, 4, true), "[FACTION_STANDING_LABEL5]");
+        assert_eq!(vm.get_text("T", None, None).as_deref(), Some("<one>"));
+        assert_eq!(
+            s.eval::<String>("return CALLS").unwrap(),
+            "T:nil:2;FACTION_STANDING_LABEL5:3:nil;"
+        );
+    }
+
+    /// A failed `GetText` reaches the error handler, and the text is what the error function
+    /// answered, a string or number taken whatever the status (`0x703cb2`); `GetPluralIndex` is
+    /// truncated minus one, and 0 when it fails or answers no number (`0x703d4c`-`0x703d6f`).
+    #[test]
+    fn a_failed_call_answers_the_error_function_and_the_plural_index_is_lua_s() {
+        let s = crate::script::UiScript::new().unwrap();
+        s.run(
+            r#"
+            function GetText() error("boom") end
+            seterrorhandler(function(m) HEARD = m return 7 end)
+            function GetPluralIndex(n) return n + 0.5 end
+        "#,
+        )
+        .unwrap();
+        let vm = Strings::Vm(s.lua());
+        assert_eq!(vm.get_text("T", Some(2), None).as_deref(), Some("7"));
+        assert!(s.eval::<String>("return HEARD").unwrap().contains("boom"));
+        assert_eq!(vm.plural_index(3), 2);
+        s.run("function GetPluralIndex() return 'x' end").unwrap();
+        assert_eq!(vm.plural_index(3), 0);
+        s.run("function GetPluralIndex() error('no') end").unwrap();
+        assert_eq!(vm.plural_index(3), 0);
+        // No `GetText` at all: the call itself fails, and the handler answers.
+        s.run("GetText = nil seterrorhandler(function() return 'none' end)")
+            .unwrap();
+        assert_eq!(vm.get_text("T", None, Some(2)).as_deref(), Some("none"));
     }
 
     /// The duel pair, `GlobalStrings.lua:958-959`.

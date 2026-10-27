@@ -1932,8 +1932,12 @@ fn fire_one(
                 rank,
                 female,
             } => {
-                let line =
-                    crate::ui_reputation::standing_text(&globals(script), rank, female, &faction);
+                let line = crate::ui_reputation::standing_text(
+                    benilla_ui::strings::Strings::Vm(script.lua()),
+                    rank,
+                    female,
+                    &faction,
+                );
                 if let Some(text) = line {
                     route(
                         script,

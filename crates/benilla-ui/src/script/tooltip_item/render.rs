@@ -9,7 +9,7 @@ use mlua::{Lua, Table};
 
 use crate::script::tooltip::{append_line, duration_text, plural_template};
 use crate::script::{ItemTemplateView, Model, ReqRead};
-use crate::strings::{fill, Arg};
+use crate::strings::{fill, Arg, Strings};
 
 use super::build::{note_miss, CacheWait};
 use super::names::*;
@@ -356,7 +356,9 @@ pub(super) fn render_view_flagged(
         }
         // The count, white, with itself as the plural ordinal; none at 0 (`0x52ba51`..`0x52ba8d`).
         if p.signatures != 0 {
-            if let Some(t) = plural_template("PETITION_NUM_SIGNATURES", p.signatures, &get) {
+            if let Some(t) =
+                plural_template("PETITION_NUM_SIGNATURES", p.signatures, Strings::Vm(lua))
+            {
                 add((fill(&t, &[Arg::D(i64::from(p.signatures))]), WHITE))?;
             }
         }
@@ -636,7 +638,7 @@ pub(super) fn render_view_flagged(
             let mut text = match e.remaining_ms {
                 // A missing template skips the slot, not falling back to the bare name: the
                 // reference formats an empty string, which `AddLine` drops.
-                Some(ms) => match enchant_time_left(&e.name, ms, &get) {
+                Some(ms) => match enchant_time_left(&e.name, ms, Strings::Vm(lua)) {
                     Some(t) => {
                         live = true;
                         t
@@ -648,7 +650,7 @@ pub(super) fn render_view_flagged(
             // The slot's charges: ITEM_SPELL_CHARGES inside the literal `" (%s)"` (`0x854820`,
             // `0x52caa6..0x52cb38`), none at 0 (`0x52cac9`).
             if let Some(charges) = (e.charges != 0)
-                .then(|| charges_phrase(e.charges, &get))
+                .then(|| charges_phrase(e.charges, Strings::Vm(lua)))
                 .flatten()
             {
                 text.push_str(&format!(" ({charges})"));
@@ -684,7 +686,7 @@ pub(super) fn render_view_flagged(
     // 49.7 days saturates here; no 1.12 item lasts past a fortnight.
     if let Some(ms) = inst.and_then(|i| i.duration_ms) {
         let ms = u32::try_from(ms).unwrap_or(u32::MAX);
-        if let Some(line) = duration_text(ms, "ITEM_DURATION", true, &get) {
+        if let Some(line) = duration_text(ms, "ITEM_DURATION", true, Strings::Vm(lua)) {
             add((line, WHITE))?;
             live = true;
         }
@@ -811,7 +813,9 @@ pub(super) fn render_view_flagged(
             Some(i) => i.charges(line.block, line.charges),
             None => (line.charges != 0 && line.charges != -1).then_some(line.charges),
         };
-        if let Some(phrase) = charges.and_then(|n| charges_phrase(n.unsigned_abs(), &get)) {
+        if let Some(phrase) =
+            charges.and_then(|n| charges_phrase(n.unsigned_abs(), Strings::Vm(lua)))
+        {
             add((phrase, WHITE))?;
         }
         if let Some(recipe) = &line.recipe {
@@ -883,7 +887,7 @@ pub(super) fn render_view_flagged(
     // recovery, unlike the spell's. `0x52fa50` rounds days, hours and minutes up and seconds down.
     // The return value is set after the add whether or not the install's strings gave a line.
     if let Some(ms) = inst.map(|i| i.cooldown_ms).filter(|&ms| ms > 0) {
-        if let Some(line) = duration_text(ms, "ITEM_COOLDOWN_TIME", true, &get) {
+        if let Some(line) = duration_text(ms, "ITEM_COOLDOWN_TIME", true, Strings::Vm(lua)) {
             add((line, WHITE))?;
         }
         live = true;
@@ -1051,9 +1055,9 @@ pub(super) fn render_view(
 /// A temporary enchant's name with its countdown (`0x52fa50`): `ITEM_ENCHANT_TIME_LEFT_<unit>`, its
 /// `_P1` twin picked by [`plural_template`]. Two holes, the name then the count, so not
 /// `duration_text`; `None` when the install lacks the family, and the caller draws no line.
-fn enchant_time_left(name: &str, ms: u64, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+fn enchant_time_left(name: &str, ms: u64, strings: Strings<'_>) -> Option<String> {
     let (suffix, n) = time_bucket(ms);
-    let template = plural_template(&format!("ITEM_ENCHANT_TIME_LEFT_{suffix}"), n, get)?;
+    let template = plural_template(&format!("ITEM_ENCHANT_TIME_LEFT_{suffix}"), n, strings)?;
     Some(fill(&template, &[Arg::S(name), Arg::D(i64::from(n))]))
 }
 
@@ -1129,8 +1133,8 @@ fn add_recipe(
 
 /// `ITEM_SPELL_CHARGES` or its `_P1` twin (`0x84e3b4`), pushed at `0x52cae8` for the enchant
 /// suffix and `0x52db61` for the charges line, `n` its own plural ordinal.
-fn charges_phrase(n: u32, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    let template = plural_template("ITEM_SPELL_CHARGES", n, get)?;
+fn charges_phrase(n: u32, strings: Strings<'_>) -> Option<String> {
+    let template = plural_template("ITEM_SPELL_CHARGES", n, strings)?;
     Some(fill(&template, &[Arg::D(i64::from(n))]))
 }
 
@@ -1160,7 +1164,7 @@ mod tests {
     /// The `0x52fa50` ladder: minutes and seconds have no `_P1` twin, so each reaches one key.
     #[test]
     fn enchant_countdown_buckets_and_rounding() {
-        let t = |ms| enchant_time_left("Rockbiter", ms, &table);
+        let t = |ms| enchant_time_left("Rockbiter", ms, Strings::Host(&table));
         // Seconds truncate: 1900 ms is 1, not 2.
         assert_eq!(t(1_900).as_deref(), Some("<Rockbiter :: 1 S>"));
         assert_eq!(t(59_999).as_deref(), Some("<Rockbiter :: 59 S>"));
@@ -1227,14 +1231,26 @@ mod tests {
 
     #[test]
     fn a_missing_countdown_family_draws_nothing() {
-        assert_eq!(enchant_time_left("Rockbiter", 60_000, &|_| None), None);
-        assert_eq!(charges_phrase(3, &|_| None), None);
+        assert_eq!(
+            enchant_time_left("Rockbiter", 60_000, Strings::Host(&|_| None)),
+            None
+        );
+        assert_eq!(charges_phrase(3, Strings::Host(&|_| None)), None);
     }
 
     #[test]
     fn charges_phrase_picks_the_plural() {
-        assert_eq!(charges_phrase(1, &table).as_deref(), Some("<1 chg>"));
-        assert_eq!(charges_phrase(5, &table).as_deref(), Some("<5 chgs>"));
-        assert_eq!(charges_phrase(0, &table).as_deref(), Some("<0 chgs>"));
+        assert_eq!(
+            charges_phrase(1, Strings::Host(&table)).as_deref(),
+            Some("<1 chg>")
+        );
+        assert_eq!(
+            charges_phrase(5, Strings::Host(&table)).as_deref(),
+            Some("<5 chgs>")
+        );
+        assert_eq!(
+            charges_phrase(0, Strings::Host(&table)).as_deref(),
+            Some("<0 chgs>")
+        );
     }
 }

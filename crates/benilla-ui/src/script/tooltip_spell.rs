@@ -544,7 +544,7 @@ fn render_spell(
                 opts.remaining_ms,
                 "ITEM_COOLDOWN_TIME",
                 true,
-                &|key| crate::strings::global(lua, key),
+                crate::strings::Strings::Vm(lua),
             );
             if let Some(line) = line {
                 append_line(lua, this, (line, WHITE), None, false)?;
@@ -605,8 +605,7 @@ fn render_spell(
 /// `ITEM_REQ_REPUTATION` of the faction and the rank's gendered label
 /// ([`crate::strings::standing_label`]).
 fn reputation_line(lua: &Lua, r: &ReputationRequirement) -> Option<String> {
-    let label =
-        crate::strings::standing_label(&|k| crate::strings::global(lua, k), r.rank, r.female);
+    let label = crate::strings::standing_label(crate::strings::Strings::Vm(lua), r.rank, r.female);
     let template = crate::strings::global(lua, "ITEM_REQ_REPUTATION")?;
     Some(crate::strings::fill(
         &template,

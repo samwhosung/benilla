@@ -215,14 +215,10 @@ impl DeathView<'_, '_> {
                     t.translation.distance_squared(self_t.translation) <= SPIRIT_HEALER_RANGE_SQ
                 })
         });
-        let sickness = sickness_duration(store.0.unit_level().unwrap_or(0), &|key: &str| {
-            script
-                .lua()
-                .globals()
-                .get::<String>(key)
-                .ok()
-                .filter(|t| !t.is_empty())
-        });
+        let sickness = sickness_duration(
+            store.0.unit_level().unwrap_or(0),
+            benilla_ui::strings::Strings::Vm(script.lua()),
+        );
         DeathUiState {
             release_remaining,
             recovery_delay,
@@ -572,14 +568,14 @@ fn self_res(
 ///
 /// Deviation: the minutes come from the server's table, not from spell 15007's `Spell.dbc`
 /// duration, because the aura the server applies is what the dialog must warn about.
-fn sickness_duration(level: u32, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+fn sickness_duration(level: u32, strings: benilla_ui::strings::Strings<'_>) -> Option<String> {
     let minutes = match level {
         0..=10 => return None,
         11..=19 => level - 10,
         _ => 10,
     };
-    // `GetText(token, nil, ordinal)`'s plural pick, through the shared primitive.
-    let template = benilla_ui::strings::plural("GENERIC_MIN", Some(minutes), get)?;
+    // `GetText(token, nil, ordinal)`, the VM's own.
+    let template = benilla_ui::strings::plural("GENERIC_MIN", Some(minutes), strings)?;
     Some(benilla_ui::strings::fill(
         &template,
         &[benilla_ui::strings::Arg::D(i64::from(minutes))],

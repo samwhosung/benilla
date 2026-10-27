@@ -190,7 +190,7 @@ fn push(
     };
     let state = {
         let lua = script.lua();
-        reads.snapshot(open, &|key| benilla_ui::strings::global(lua, key))?
+        reads.snapshot(open, benilla_ui::strings::Strings::Vm(lua))?
     };
     // The per-list reset goes in before the push, so `TRAINER_SHOW` finds it; the stock window
     // re-applies its saved filter only on its own `ADDON_LOADED`.

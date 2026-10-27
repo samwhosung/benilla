@@ -247,10 +247,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             };
             // `0x52fa50`'s text from the player's own strings; without them the line is skipped.
             let remaining = remaining_ms.and_then(|ms| {
-                let g = lua.globals();
-                super::tooltip::duration_text(ms, "SPELL_TIME_REMAINING", true, &|key| {
-                    g.get::<String>(key).ok()
-                })
+                super::tooltip::duration_text(
+                    ms,
+                    "SPELL_TIME_REMAINING",
+                    true,
+                    crate::strings::Strings::Vm(lua),
+                )
             });
             set_aura(lua, &this, key, name, remaining)
         })?,

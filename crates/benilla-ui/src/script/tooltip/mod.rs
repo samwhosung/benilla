@@ -437,12 +437,12 @@ pub(in crate::script) const DEFAULT_TEXT_GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0
 /// The client's duration formatter (`0x52fa50`): days, hours, minutes or seconds by threshold,
 /// each dividing by its own unit. `round_up` ceils every arm but seconds, which truncates, so 61 s
 /// reads "2 minutes" and 3 599 999 ms "60 minutes". The text is the player's own
-/// `GlobalStrings.lua` through `get`; a missing key renders no line.
+/// `GlobalStrings.lua` through `strings`; a missing key renders no line.
 pub(in crate::script) fn duration_text(
     ms: u32,
     key_prefix: &str,
     round_up: bool,
-    get: &dyn Fn(&str) -> Option<String>,
+    strings: crate::strings::Strings<'_>,
 ) -> Option<String> {
     const DAY_MS: u32 = 86_400_000;
     const HOUR_MS: u32 = 3_600_000;
@@ -463,7 +463,7 @@ pub(in crate::script) fn duration_text(
     } else {
         ms / divisor
     };
-    let template = plural_template(&format!("{key_prefix}_{suffix}"), n, get)?;
+    let template = plural_template(&format!("{key_prefix}_{suffix}"), n, strings)?;
     Some(template.replacen("%d", &n.to_string(), 1))
 }
 
@@ -473,9 +473,9 @@ pub(in crate::script) fn duration_text(
 pub(in crate::script) fn plural_template(
     token: &str,
     n: u32,
-    get: &dyn Fn(&str) -> Option<String>,
+    strings: crate::strings::Strings<'_>,
 ) -> Option<String> {
-    crate::strings::plural(token, Some(n), get)
+    crate::strings::plural(token, Some(n), strings)
 }
 
 /// A colour component by `lua_tonumber`'s coercion: a number or a string `luaO_str2d` reads as

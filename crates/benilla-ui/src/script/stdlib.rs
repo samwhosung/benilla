@@ -240,6 +240,40 @@ pub(crate) fn run_under_error_function(lua: &Lua, f: &mlua::Function) -> mlua::R
     })
 }
 
+/// Call the Lua global `name` as the engine calls `GetText` (`0x703c43`-`0x703cad`) and
+/// `GetPluralIndex` (`0x703d14`-`0x703d47`): looked up at the call, `lua_pcall` under the runners'
+/// error function, one result. `Err` is a failed call's value, what the error function answered
+/// (`0x703b40`); a global that is no function fails as `lua_pcall` does, at the call.
+pub(crate) fn call_global_under_error_function(
+    lua: &Lua,
+    name: &str,
+    args: impl mlua::IntoLuaMulti,
+) -> Result<Value, Value> {
+    let handler = error_function(lua);
+    let raised = |e: mlua::Error| match e {
+        mlua::Error::LuaValue { value: Some(v), .. } => v.get(lua).unwrap_or(Value::Nil),
+        e => lua
+            .create_string(lua_message(&e))
+            .map_or(Value::Nil, Value::String),
+    };
+    match lua.globals().get::<Value>(name).unwrap_or(Value::Nil) {
+        Value::Function(f) => match &handler {
+            Some(h) => f.call_under::<Value>(h, args),
+            None => f.call::<Value>(args),
+        }
+        .map_err(raised),
+        other => {
+            let message = format!("attempt to call a {} value", other.type_name());
+            Err(match handler {
+                Some(h) => h.call::<Value>(message).unwrap_or_else(raised),
+                None => lua
+                    .create_string(&message)
+                    .map_or(Value::Nil, Value::String),
+            })
+        }
+    }
+}
+
 /// `FrameScriptExecuteBuffer` (`0x704ae0`): compile `src` as the chunk `name` and run it under the
 /// error function (`lua_pcall(0, 0, -2)`, `0x704b68`). A chunk that fails to compile goes to the
 /// error function directly, `lua_pcall(1, 0, 0)` (`0x704b42`): no `this` set, nothing on the
