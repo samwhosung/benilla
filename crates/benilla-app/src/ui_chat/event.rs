@@ -304,7 +304,7 @@ impl ChatEventKind {
 /// | 7 | `zone_channel_id` | the ChannelID, 0 for a custom channel (`ChatFrame.lua:1379`) |
 /// | 8 | `channel_number` | the local slot, `ChatTypeInfo["CHANNEL"..arg8]` |
 /// | 9 | `channel_base` | the channel name without its number |
-/// | 10 | none | the split index, 0 from vmangos (`Chat/Channel.cpp:823-827`) |
+/// | 10 | `instance` | the channel record's instance number (`+0x98`, `0x49b115`), 0 from vmangos (`Chat/Channel.cpp:827`) |
 ///
 /// arg4, arg7, arg8 and arg9 are one record ([`super::edit::ChannelState::stamp_channel`]). arg1
 /// is the garbled text: the reference fills one buffer (`SStrCopy` at `0x49a9f0`, the garble
@@ -322,6 +322,10 @@ pub(crate) struct ChatEvent {
     pub zone_channel_id: u32,
     pub channel_number: u32,
     pub channel_base: String,
+    /// arg10, the instance number the channel's record holds, stamped with arg4 and arg7-arg9.
+    pub instance: u32,
+    /// A `YOU_JOINED` notice's instance word, which the confirm stores on the slot.
+    pub joined_instance: u32,
     pub notice: String,
     /// The notice's token when its byte alone does not name it: a mode change (`0x0C`) shows up
     /// to four, `SET_`/`UNSET_` `MODERATOR`/`VOICE`, one per bit (`0x49e8a0`).
@@ -373,8 +377,7 @@ impl ChatEvent {
             ScriptValue::Int(i64::from(self.zone_channel_id)),
             ScriptValue::Int(i64::from(self.channel_number)),
             ScriptValue::Str(self.channel_base.clone()),
-            // arg10: always 0, see the struct doc.
-            ScriptValue::Int(0),
+            ScriptValue::Int(i64::from(self.instance)),
         ]
     }
 }

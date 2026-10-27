@@ -45,8 +45,9 @@ pub mod channel_notice {
 pub enum ChannelNoticeTail {
     /// The member who joined or left.
     Guid(u64),
-    /// Our channel flags; the `u32` after them is always 0.
-    YouJoined { flags: u32 },
+    /// Our channel flags, then the instance number the client keeps on the slot (`+0x98`,
+    /// `0x49bb20`); vmangos always sends 0 (`Chat/Channel.cpp:827`).
+    YouJoined { flags: u32, instance: u32 },
     /// Nothing follows the channel name.
     Empty,
     /// The player who made the change or sent the invite.
@@ -81,8 +82,8 @@ pub(super) fn read_channel_notify(r: &mut &[u8]) -> io::Result<ChannelNotify> {
         n::JOINED | n::LEFT => ChannelNoticeTail::Guid(read_u64_le(r)?),
         n::YOU_JOINED => {
             let flags = read_u32_le(r)?;
-            let _reserved = read_u32_le(r)?; // always 0 on the wire
-            ChannelNoticeTail::YouJoined { flags }
+            let instance = read_u32_le(r)?;
+            ChannelNoticeTail::YouJoined { flags, instance }
         }
         n::YOU_LEFT
         | n::WRONG_PASSWORD

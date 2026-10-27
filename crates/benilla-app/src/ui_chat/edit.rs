@@ -114,6 +114,10 @@ pub(crate) struct ChannelState {
     /// gate. Only a confirm (`0x49bbbf`) and a free (`0x49bc41`) recompute it, so it holds
     /// through a rename, a suspend or a pending join.
     pub defense_channel: bool,
+    /// Each slot's instance number (`+0x98`), stored by the join notice's confirm (`0x49bb20`) and
+    /// written by no allocator, so a freed and reused slot keeps the last one; the session's end
+    /// frees the array.
+    pub instances: [u32; MAX_CHANNELS],
 }
 
 /// One slot, the reference's `[0xb4fe04] + n*0xa0` record, in the fields this client uses.
@@ -252,6 +256,7 @@ impl ChannelState {
             self.ended_custom = Some(self.live_custom_channels());
         }
         self.joined.clear();
+        self.instances = [0; MAX_CHANNELS];
     }
 
     /// Whether the mask carries `id`'s bit, the walk's live predicate `0x49a494`.
@@ -333,6 +338,16 @@ impl ChannelState {
         }
         self.recompute_defense_channel();
         Some(i as u32 + 1)
+    }
+
+    /// `0x49bb20`'s store of the join notice's instance (`+0x98`) on slot `number`.
+    pub(crate) fn store_instance(&mut self, number: u32, instance: u32) {
+        if let Some(cell) = (number as usize)
+            .checked_sub(1)
+            .and_then(|i| self.instances.get_mut(i))
+        {
+            *cell = instance;
+        }
     }
 
     /// `0x49bd50`: whether a slot with a number (`0x49bd72`) in state 0 (`0x49bd7c`) has a
@@ -464,6 +479,7 @@ impl ChannelState {
         Some(ChannelStamp {
             number,
             id: self.joined[number as usize - 1].id(),
+            instance: self.instances[number as usize - 1],
         })
     }
 
@@ -481,16 +497,18 @@ impl ChannelState {
 pub(crate) struct ChannelStamp {
     number: u32,
     id: u32,
+    instance: u32,
 }
 
 impl ChannelStamp {
     /// Stamp `event`, whose `channel` is the record's name: arg4 becomes `"N. Name"` (`0x8445c8`,
     /// the hit leg `0x49aa48`), arg8 the number, arg9 the name with its zone tail and arg7 the
-    /// slot's id.
+    /// slot's id; arg10 is its instance.
     pub(crate) fn apply(self, event: &mut super::event::ChatEvent) {
         event.channel_base = event.channel.clone();
         event.zone_channel_id = self.id;
         event.channel_number = self.number;
+        event.instance = self.instance;
         event.channel = format!("{}. {}", self.number, event.channel_base);
     }
 }

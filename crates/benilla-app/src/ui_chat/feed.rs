@@ -533,7 +533,10 @@ impl ChatLog {
                 tries: 0,
             });
         } else {
-            if let Some(event) = notice_event(notice_byte, channel, name, None) {
+            if let Some(mut event) = notice_event(notice_byte, channel, name, None) {
+                if let ChannelNoticeTail::YouJoined { instance, .. } = tail {
+                    event.joined_instance = *instance;
+                }
                 self.q().push(Pending::Event(event));
             }
         }
@@ -1267,10 +1270,14 @@ fn deliver_before(
         // The slot was taken when the join was sent; the notice only confirms it, which a
         // handler's `SendChatMessage` to it reads from this event on.
         match channels.confirm_slot(&event.channel) {
-            Some(slot) => debug!(
-                "chat: server confirms channel {:?} joined (slot {slot})",
-                event.channel
-            ),
+            Some(slot) => {
+                // `0x49bb20` stores the notice's instance with the confirm.
+                channels.store_instance(slot, event.joined_instance);
+                debug!(
+                    "chat: server confirms channel {:?} joined (slot {slot})",
+                    event.channel
+                );
+            }
             None => debug!("chat: {:?} joined with no slot to confirm", event.channel),
         }
         channels.mirror_into(script);

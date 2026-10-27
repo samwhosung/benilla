@@ -145,14 +145,25 @@ fn channel_notify_decodes_each_tail_shape() {
         _ => panic!("expected ChannelNotify"),
     }
 
-    // 0x02 YOU_JOINED: u32 flags + u32 0 (reserved).
-    let body = hx("0247656e6572616c001800000000000000");
-    match messages::parse_server(messages::opcode::SMSG_CHANNEL_NOTIFY, &body).unwrap() {
-        ServerPacket::ChannelNotify(n) => {
-            assert_eq!(n.notice, messages::channel_notice::YOU_JOINED);
-            assert_eq!(n.tail, ChannelNoticeTail::YouJoined { flags: 0x18 });
+    // 0x02 YOU_JOINED: u32 flags + u32 instance (`0x49bb20` stores it on the slot).
+    for (body, instance) in [
+        ("0247656e6572616c001800000000000000", 0),
+        ("0247656e6572616c001800000007000000", 7),
+    ] {
+        let body = hx(body);
+        match messages::parse_server(messages::opcode::SMSG_CHANNEL_NOTIFY, &body).unwrap() {
+            ServerPacket::ChannelNotify(n) => {
+                assert_eq!(n.notice, messages::channel_notice::YOU_JOINED);
+                assert_eq!(
+                    n.tail,
+                    ChannelNoticeTail::YouJoined {
+                        flags: 0x18,
+                        instance
+                    }
+                );
+            }
+            _ => panic!("expected ChannelNotify"),
         }
-        _ => panic!("expected ChannelNotify"),
     }
 
     // 0x05 NOT_MEMBER: empty tail; `MakeNotMember` and `MakeNotOnPacket` both send it.

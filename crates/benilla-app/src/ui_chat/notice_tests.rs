@@ -139,6 +139,45 @@ fn a_members_join_reaches_the_stock_frame_numbered() {
     assert!(f.script().errors().is_empty(), "{:?}", f.script().errors());
 }
 
+/// The join notice's second word is the slot's instance (`0x49bb20`, `+0x98`), which every event
+/// the channel's record stamps reads as arg10 (`0x49b115`): our own join, another member's, and
+/// a reused slot's, since no allocator writes it (`0x49ba01`).
+#[test]
+fn a_joins_instance_number_is_arg10_of_the_slots_events() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut f = Feed::new();
+    f.name(ANN, "Ann");
+    f.push(
+        n::YOU_JOINED,
+        "Mychan",
+        ChannelNoticeTail::YouJoined {
+            flags: 0,
+            instance: 7,
+        },
+    );
+    f.drain();
+    assert_eq!(f.spy().1, "YOU_JOINED|||3. Mychan|||0|3|Mychan|7");
+    f.push(n::JOINED, "Mychan", ChannelNoticeTail::Guid(ANN));
+    f.drain();
+    assert_eq!(f.spy().1, "|Ann||3. Mychan|||0|3|Mychan|7");
+
+    // Freed and claimed again by another name, the slot keeps its instance until a join stores one.
+    let mut channels = f.world.resource_mut::<super::edit::ChannelState>();
+    channels.free_slot("Mychan");
+    channels.claim_slot("Otherchan", 0);
+    assert_eq!(channels.instances[2], 7);
+    let mut line =
+        super::event::ChatEvent::text_only(super::event::ChatEventKind::Channel, "".into());
+    line.channel = "Otherchan".into();
+    channels.stamp_channel(&mut line);
+    assert_eq!((line.channel_number, line.instance), (3, 7));
+    let mut missing =
+        super::event::ChatEvent::text_only(super::event::ChatEventKind::Channel, "".into());
+    missing.channel = "Nowhere".into();
+    channels.stamp_channel(&mut missing);
+    assert_eq!(missing.instance, 0, "no record, no instance");
+}
+
 /// A join whose name is not cached waits on the name query, then prints stamped, as the
 /// reference's queued node carries the channel name to the callback (`0x49cfb4`-`0x49cfc1`).
 #[test]
@@ -331,7 +370,10 @@ fn our_own_join_notice_is_unchanged() {
     f.push(
         n::YOU_JOINED,
         "Mychan",
-        ChannelNoticeTail::YouJoined { flags: 0 },
+        ChannelNoticeTail::YouJoined {
+            flags: 0,
+            instance: 0,
+        },
     );
     f.drain();
     assert_eq!(
