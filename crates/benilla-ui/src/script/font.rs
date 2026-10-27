@@ -763,7 +763,8 @@ pub(super) fn install_shared(lua: &Lua, m: &Table, resolve: ResolveFont) -> mlua
 
     // ── face ────────────────────────────────────────────────────────────────────────────────
     // SetFont(path, height [, flags]) → 1, or nil when the font fails to load, which does not raise
-    // and writes nothing: an empty path, one the host's probe refuses, or a height of 0 or less.
+    // and writes nothing: an empty path, one the host's probe refuses, or a height outside (0, 1)
+    // of the screen ([`super::font_block::font_size_loads`]).
     m.set(
         "SetFont",
         lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {

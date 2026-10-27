@@ -637,8 +637,9 @@ impl Loader<'_> {
                 let monochrome = el.attr("monochrome").is_some_and(|v| !v.is_empty());
                 // The font the node already holds (the path ignoring case, the height within 2⁻²²,
                 // the same flags) is kept as spelled and still clears the bit (`0x783e17`-`0x783e5d`
-                // → `0x783ea9`); any other loads first (`0x783e7c`). A file that fails is logged
-                // (`0x87a4c8`) and the node goes on to `spacing`, keeping what it follows.
+                // → `0x783ea9`); any other loads first (`0x783e7c`), which also refuses a height of
+                // a screen or more. A load that fails is logged (`0x87a4c8`) and the node goes on
+                // to `spacing`, keeping what it follows.
                 let mut model = self.model();
                 let u = model.layout_units();
                 let fo = &model.fonts.get(id).block;
@@ -650,7 +651,9 @@ impl Loader<'_> {
                         (h.script(u) - height.script(u)).abs() < crate::script::SAME_FONT_HEIGHT
                     })
                     && (fo.outline, fo.monochrome) == (outline, monochrome);
-                if held || crate::script::face_loads(&model, path) {
+                let loads = crate::script::font_size_loads(u, height.layout(u))
+                    && crate::script::face_loads(&model, path);
+                if held || loads {
                     font::set(&mut model, id, FontMask::FONT, |fo| {
                         if !held {
                             fo.font = Some(path.to_string());

@@ -219,7 +219,14 @@ pub(crate) fn fontstring_size_loads(model: &Model, rh: RegionHandle, height: Len
         .region(rh)
         .and_then(|r| model.arena.frame(r.owner))
         .map_or(1.0, |f| f.effective_scale);
-    let size = height.layout(units) * scale / units.k2();
+    font_size_loads(units, height.layout(units) * scale)
+}
+
+/// Whether `GxuFontCreateFont` takes a height of `layout` units: `0x44d040` divides it by `K2`
+/// (`0x44d073`), and the factory refuses a quotient of 0 or less (`0x5c1b0e`), 1 or more, or NaN
+/// (`0x44d07b`-`0x44d088`, `0x5c1afe`).
+pub(crate) fn font_size_loads(units: crate::screencoord::LayoutUnits, layout: f32) -> bool {
+    let size = f64::from(layout) / f64::from(units.k2());
     size > 0.0 && size < 1.0
 }
 
@@ -227,11 +234,19 @@ pub(crate) fn fontstring_size_loads(model: &Model, rh: RegionHandle, height: Len
 /// the FontString's `0x77152a` and the Font's `0x783e4d`).
 pub(crate) const SAME_FONT_HEIGHT: f32 = 1.0 / 4_194_304.0;
 
-/// The shared path's verdict (`0x79f210`): no load for a height of 0 or less
-/// (`0x79f2f1`-`0x79f2ff`), else [`face_loads`]. A failure writes nothing (`0x79f30f` →
-/// `0x79f361`). Borrows the model, so a caller asks before it holds it.
+/// The shared path's verdict (`0x79f210`): the height in layout units (`0x79f264`-`0x79f27b`)
+/// must load ([`font_size_loads`], through `0x44d040` at `0x79f30a`), so neither 0 or less nor a
+/// screen or more does, and the path must ([`face_loads`]). A failure writes nothing (`0x79f30f`
+/// → `0x79f361`).
+fn shared_loads(model: &Model, path: &str, height: f32) -> bool {
+    let units = model.layout_units();
+    font_size_loads(units, units.store(height)) && face_loads(model, path)
+}
+
+/// [`shared_loads`] for a caller that does not hold the model: it borrows it, so a caller asks
+/// before it holds it.
 pub(super) fn instance_loads(lua: &Lua, path: &str, height: f32) -> bool {
-    height > 0.0 && face_loads(&lua.app_data_ref::<Model>().expect("model"), path)
+    shared_loads(&lua.app_data_ref::<Model>().expect("model"), path, height)
 }
 
 /// Install the twelve font-block methods onto `m`, reading `this` through `resolve`; only for a
@@ -331,8 +346,8 @@ pub(super) fn install(
                             && face_loads(&model, &path),
                     ),
                     // The shared path answers nil for a height of 0 or less without loading
-                    // (`0x79f2f1`-`0x79f2ff`).
-                    FontKind::Instance => Load::verdict(height > 0.0 && face_loads(&model, &path)),
+                    // (`0x79f2f1`-`0x79f2ff`), and for one the load refuses ([`shared_loads`]).
+                    FontKind::Instance => Load::verdict(shared_loads(&model, &path, height)),
                 };
                 if load == Load::Failed {
                     return Ok(Value::Nil);
