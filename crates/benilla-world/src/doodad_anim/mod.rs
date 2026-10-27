@@ -232,6 +232,13 @@ pub struct DoodadAnimHost {
     pub(crate) parked_at: f32,
 }
 
+/// The model-local sphere centre of a host that rides a mover (a transport's prop): the gate takes
+/// its world centre from the host root's `GlobalTransform` every frame, as the transport tick
+/// re-poses each doodad def of its map object with new bounds before the def cull reads them
+/// (`0x5f50a0` → `0x6709a0` → `0x698f50` → `0x6a81d0`; `0x683700`, `0x6838f0`).
+#[derive(Component, Clone, Copy)]
+pub(crate) struct CarriedSphere(pub(crate) Vec3);
+
 impl DoodadAnimHost {
     /// The armed clip's `(node, seek)` on the shared clock, `(now − armed_at) mod duration`. It
     /// answers while parked, but the reference fires no events for a doodad culled out of its
@@ -308,6 +315,7 @@ fn gate_doodad_anim(
         Has<crate::rig_palette::RigSkin>,
         Option<&mut AnimationPlayer>,
         Option<&mut GlobalSeqDrive>,
+        Option<(&CarriedSphere, Ref<GlobalTransform>)>,
     )>,
     vis: Query<&Visibility>,
     cam: Query<
@@ -347,7 +355,7 @@ fn gate_doodad_anim(
         !tf.is_changed() && !proj.is_changed() && !local.as_ref().is_some_and(|l| l.is_changed())
     }) && !scene.changed()
         && changed_vis.is_empty();
-    // Fixed at spawn (`EmitterFade`), so a reused verdict never sees the sphere move.
+    // Fixed at spawn (`EmitterFade`) but on a mover, whose moves re-judge it below.
     let in_frustum = |frustum: &bevy::camera::primitives::Frustum,
                       fade: &crate::particles::EmitterFade| {
         frustum.intersects_sphere(
@@ -358,9 +366,17 @@ fn gate_doodad_anim(
             false,
         )
     };
-    for (entity, mut host, lazy, pose, has_rig, player, drive) in &mut hosts {
+    for (entity, mut host, lazy, pose, has_rig, player, drive, carried) in &mut hosts {
+        // A carried host's sphere follows its mover; one that moved has no verdict to reuse.
+        let moved = carried.is_some_and(|(local, world)| {
+            let center = world.transform_point(local.0);
+            if host.fade.center != center {
+                host.fade.center = center;
+            }
+            world.is_changed()
+        });
         // A host born this frame has no verdict to reuse (`active` starts false).
-        let drawn = if verdicts_still && !host.is_added() {
+        let drawn = if verdicts_still && !host.is_added() && !moved {
             host.active
         } else if host.meshes.is_empty() {
             // Meshless: the reference ticks any model in the draw set, and a 0-batch model is
@@ -1187,6 +1203,79 @@ mod tests {
         assert!(
             !world.entity(ahead).contains::<AnimParked>(),
             "in front of the camera ⇒ drawn"
+        );
+    }
+
+    /// A transport's prop builds its sphere in the transport's frame; the gate judges it where the
+    /// prop is this frame, as the tick re-poses the map object's defs before the def cull
+    /// (`0x698f50` → `0x6a81d0`, then `0x683700`), and re-judges it as the ship moves under a
+    /// still camera.
+    #[test]
+    fn a_carried_host_is_culled_where_its_mover_has_it() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_resource::<crate::view::ViewDistance>();
+        app.init_resource::<crate::wmo_portal::ExteriorWindows>();
+        app.init_resource::<crate::wmo_portal::CameraInteriorClaim>();
+        app.init_resource::<crate::rig_palette::RigPalettes>();
+        app.init_asset::<SkinnedMeshInverseBindposes>();
+        app.add_systems(Update, gate_doodad_anim);
+
+        // Looking down -Z from the origin.
+        let seat =
+            Transform::from_xyz(0.0, 0.0, 0.0).looking_at(Vec3::new(0.0, 0.0, -20.0), Vec3::Y);
+        let projection = bevy::camera::Projection::from(bevy::camera::PerspectiveProjection {
+            far: 5000.0,
+            ..default()
+        });
+        let frustum = bevy::camera::primitives::Frustum::from_clip_from_world(
+            &(projection.get_clip_from_view() * GlobalTransform::from(seat).affine().inverse()),
+        );
+        app.world_mut().spawn((
+            crate::view::WorldCamera,
+            GlobalTransform::from(seat),
+            seat,
+            frustum,
+            projection,
+        ));
+        // The prop sits 30 yd behind the camera in the ship's frame, and the ship has it 30 yd
+        // ahead in the world.
+        let local = Transform::from_xyz(0.0, 0.0, 30.0);
+        let ahead = GlobalTransform::from_xyz(0.0, 0.0, -30.0);
+        let mesh = app.world_mut().spawn(Visibility::Inherited).id();
+        let host = app
+            .world_mut()
+            .spawn((
+                DoodadAnimHost {
+                    meshes: vec![mesh],
+                    fade: crate::particles::EmitterFade::sphere(2.0, local.translation),
+                    clip: Some((AnimationNodeIndex::new(1), 2.0)),
+                    armed_at: 0.0,
+                    window_hi: f32::INFINITY,
+                    anim_id: Some(0),
+                    active: true,
+                    parked_at: 0.0,
+                },
+                CarriedSphere(Vec3::ZERO),
+                local,
+                ahead,
+            ))
+            .id();
+        app.update();
+        app.update();
+        assert!(
+            !app.world().entity(host).contains::<AnimParked>(),
+            "ahead of the camera in the world ⇒ drawn, wherever it sits on the ship"
+        );
+        // The ship carries it behind the camera; nothing else moves.
+        *app.world_mut()
+            .entity_mut(host)
+            .get_mut::<GlobalTransform>()
+            .unwrap() = GlobalTransform::from_xyz(0.0, 0.0, 60.0);
+        app.update();
+        assert!(
+            app.world().entity(host).contains::<AnimParked>(),
+            "carried behind the camera ⇒ parked, under a still camera"
         );
     }
 

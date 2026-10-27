@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::Buffer;
 
 use crate::billboard::BillboardCard;
-use crate::doodad_anim::DoodadAnimHost;
+use crate::doodad_anim::{CarriedSphere, DoodadAnimHost};
 use crate::mesh_tag::alpha_bits;
 use crate::model_fade::DoodadFade;
 use crate::model_render::{model_material, MaterialCache, ShadeSel};
@@ -71,7 +71,7 @@ pub fn spawn_model_entities(
     interior_slot: Option<u16>,
     // The placement's draw-set gate, shared with its emitters, ribbons, lights and anim host: a
     // meshless prop's only verdict. `None` on the entity-hosted lane, as a mover has no baked
-    // world point to measure from; the mesh lane then builds a bare sphere from `radius`.
+    // world point to measure from; the host then judges a bare sphere of `radius` where it is.
     fade: Option<&crate::particles::EmitterFade>,
     radius: f32,
     local_center: Vec3,
@@ -101,7 +101,9 @@ pub fn spawn_model_entities(
         crate::static_gx::GxSite<'_>,
     )>,
 ) -> SpawnedModel {
-    // The caller's gate, else the bare sphere; every radius or centre read below goes through it.
+    // The caller's gate, else the bare sphere of a mover's prop, whose `transform` is parent-local:
+    // its host's gate re-centres it in world space each frame ([`CarriedSphere`]).
+    let carried = fade.is_none();
     let fade = match fade {
         Some(f) => f.clone(),
         None => {
@@ -639,6 +641,9 @@ pub fn spawn_model_entities(
             active: false,
             parked_at: now,
         });
+        if carried {
+            commands.entity(h.root).insert(CarriedSphere(local_center));
+        }
         // The lazy rig, only with skinnable parts: an emitter-only host never takes a slot.
         if !lazy_parts.is_empty() {
             commands.entity(h.root).insert(crate::doodad_anim::LazyRig {

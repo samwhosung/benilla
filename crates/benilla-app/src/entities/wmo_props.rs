@@ -282,7 +282,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                 shade,
                 interior_slot,
                 // No draw-set gate, whose `EmitterFade` measures from a fixed world point; the
-                // assembler builds its sphere from `radius` and `center` instead.
+                // host judges a sphere of `radius` about `center` where the ship has it.
                 None,
                 radius,
                 center,
