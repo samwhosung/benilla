@@ -646,10 +646,21 @@ impl Loader<'_> {
     /// each `<FogColor>` in document order. The base load reads no `scale` (`0x769820`), so a plain
     /// frame's is ignored.
     fn model_level(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
-        // `file=` is `SetModel` (slot `0x94`, `0x76caf5`).
+        // `file=` as written is `SetModel` (slot `0x94`, `0x76caf2`), no global-string lookup. A
+        // pane left with no model logs `0x878904` at severity 1 (`0x76cb01`-`0x76cb2d`), which the
+        // error cube's stand-in for a file that does not load (`0x70737f`) keeps for a load that
+        // fails outright.
         if let Some(file) = level.attr("file").filter(|f| !f.is_empty()) {
-            let text = self.resolve_text(file, dbg);
-            self.call(wrapper, "SetModel", text, dbg);
+            self.call(wrapper, "SetModel", file.to_string(), dbg);
+            let held = wrapper
+                .call_method::<Option<String>>("GetModel", ())
+                .ok()
+                .flatten()
+                .is_some_and(|m| !m.is_empty());
+            if !held {
+                let name = self.object_name(wrapper);
+                self.status_warning(format!("Frame {name}: Bad model file: {file}"));
+            }
         }
         // `scale=` through `SStrToFloat` is the model's scale, the field `SetModelScale` writes
         // (`0x76cb61`); a value of 0 or less is logged (`0x8788d8`), never clamped (`0x76cb92`).

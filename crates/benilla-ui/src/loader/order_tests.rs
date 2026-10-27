@@ -614,3 +614,21 @@ fn a_parent_miss_is_logged_before_a_missing_template() {
         ]
     );
 }
+
+/// A model pane's `file=` goes to `SetModel` as written (`0x76caf2`), never through the global
+/// strings, and a file the pane takes logs nothing (`0x76cb03`).
+#[test]
+fn a_model_file_is_passed_as_written() {
+    let s = ui();
+    s.run(r#"MODEL_KEY = "Some\\Other.mdx""#).unwrap();
+    let report = load_str(&s, r#"<Ui><Model name="Pane" file="MODEL_KEY"/></Ui>"#);
+    assert_eq!(
+        s.eval::<String>("return Pane:GetModel()").unwrap(),
+        "MODEL_KEY"
+    );
+    assert!(
+        report.status.lines().is_empty(),
+        "{:?}",
+        report.status.lines()
+    );
+}
