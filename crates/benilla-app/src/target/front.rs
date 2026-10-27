@@ -14,7 +14,7 @@
 //! owner binds it.
 //!
 //! A world click does not pass here: it holds off while the cursor is up and the cursor's own click
-//! binds the picked object ([`crate::spell::targeting::commit_object_cast_on_click`],
+//! binds the picked object ([`crate::spell::targeting::ClickCommits::object`],
 //! `0x4925d0` → `0x493540`).
 
 use bevy::ecs::system::SystemParam;

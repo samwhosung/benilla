@@ -178,90 +178,91 @@ impl AttackPress<'_, '_> {
 /// [`drain_click_casts`] after a walk's arrival in the frame time, whose dispatch queues the
 /// cast the walk owed.
 pub(crate) fn drain_arrival_casts(
-    vm: crate::script_calls::VmWith<(
-        cast_target::CastTargeting<'static, 'static>,
-        CastLadder<'static, 'static>,
-        crate::ui_bind_confirm::BindGate<'static>,
-        crate::ui_items::RequirementsLive<'static, 'static>,
-    )>,
-    queue: ResMut<crate::ui_action::ClickCasts>,
-    ui_errors: Res<UiErrorKeys>,
+    vm: crate::script_calls::VmWith<ClickCastDrain<'static, 'static>>,
 ) {
-    drain_click_casts(vm, queue, ui_errors);
+    drain_click_casts(vm);
 }
 
-/// Sends the queued right-click casts through the cast ladder, inside the click among the
-/// frame's input records: the reference's release handler reaches the click router (`0x514b70`
-/// → `0x481f60`), whose dispatchers try the cast. The reference reaches `TryCast`
-/// from a right-click as from a button (`0x5f35c0` and `0x5f06dc`, then `0x6e5a90`, `0x6e4b60`),
-/// so every rung applies: a second click on a chest mid-cast is `0x6e4d43`'s silent same-spell
-/// bail, and a skin while another spell is in flight `0x6e4d97`'s 0x61.
+/// Sends the casts a dispatcher outside the world click queued (a nameplate's right-click, a
+/// crate's `Interact`) through the cast ladder, as an engine turn among the frame's input records.
+/// The world click's own are drained inside its call ([`ClickCastDrain::drain`]).
 pub(crate) fn drain_click_casts(
-    mut vm: crate::script_calls::VmWith<(
-        cast_target::CastTargeting<'static, 'static>,
-        CastLadder<'static, 'static>,
-        crate::ui_bind_confirm::BindGate<'static>,
-        crate::ui_items::RequirementsLive<'static, 'static>,
-    )>,
-    mut queue: ResMut<crate::ui_action::ClickCasts>,
-    // Not a `CastLadder` field: Bevy panics on a resource reachable twice from one system.
-    ui_errors: Res<UiErrorKeys>,
+    mut vm: crate::script_calls::VmWith<ClickCastDrain<'static, 'static>>,
 ) {
-    vm.turn(
-        |script, (targeting, mut ladder, mut gate, mut requirements)| {
-            if queue.0.is_empty() {
-                return;
-            }
-            let ctx = targeting.context();
-            let mut script = script;
-            for cast in std::mem::take(&mut queue.0) {
-                match cast {
-                    super::ClickCast::AtObject { spell_id, go_guid } => {
-                        debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
-                        ladder.send_at_object(spell_id, &ctx, go_guid);
-                    }
-                    super::ClickCast::AtUnit {
+    vm.turn(|script, mut drain| drain.drain(script));
+}
+
+/// The queued right-click casts and the cast ladder they go through: the reference's release
+/// handler reaches the click router (`0x514b70` → `0x481f60`), whose dispatchers try the cast. The
+/// reference reaches `TryCast` from a right-click as from a button (`0x5f35c0` and `0x5f06dc`,
+/// then `0x6e5a90`, `0x6e4b60`), so every rung applies: a second click on a chest mid-cast is
+/// `0x6e4d43`'s silent same-spell bail, and a skin while another spell is in flight `0x6e4d97`'s
+/// 0x61.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ClickCastDrain<'w, 's> {
+    targeting: cast_target::CastTargeting<'w, 's>,
+    ladder: CastLadder<'w, 's>,
+    gate: crate::ui_bind_confirm::BindGate<'w>,
+    requirements: crate::ui_items::RequirementsLive<'w, 's>,
+    queue: ResMut<'w, crate::ui_action::ClickCasts>,
+    // Not a `CastLadder` field: Bevy panics on a resource reachable twice from one system.
+    ui_errors: Res<'w, UiErrorKeys>,
+}
+
+impl ClickCastDrain<'_, '_> {
+    /// Send every queued cast, in the order queued.
+    pub(crate) fn drain(&mut self, mut script: Option<&mut UiScript>) {
+        if self.queue.0.is_empty() {
+            return;
+        }
+        let ctx = self.targeting.context();
+        for cast in std::mem::take(&mut self.queue.0) {
+            match cast {
+                super::ClickCast::AtObject { spell_id, go_guid } => {
+                    debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
+                    self.ladder.send_at_object(spell_id, &ctx, go_guid);
+                }
+                super::ClickCast::AtUnit {
+                    spell_id,
+                    entity,
+                    guid,
+                    auto_loot,
+                } => {
+                    debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
+                    self.ladder.send(
                         spell_id,
-                        entity,
-                        guid,
-                        auto_loot,
-                    } => {
-                        debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
-                        ladder.send(
-                            spell_id,
-                            &targeting.context_at(entity, guid),
-                            crate::spell::CastCommit::Spell,
-                        );
-                        // Then the store, whatever the attempt answered (`0x5f06e1`-`0x5f06ef`).
-                        if let (Some(byte), Some(script)) = (auto_loot, script.as_deref_mut()) {
-                            script.set_auto_loot(byte);
-                        }
-                    }
-                    // The key goes through the shared `CGItem::Use` fork, as a bag click does.
-                    super::ClickCast::Key(it) => {
-                        let Some(script) = script.as_deref_mut() else {
-                            continue;
-                        };
-                        // The use's requirement gate (`0x5d8e0e`) reads the player as of here.
-                        requirements.seat(script);
-                        debug!(
-                            "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
-                            it.bag_index, it.slot, it.on_object
-                        );
-                        crate::ui_items::send_item_use(
-                            it,
-                            &ctx,
-                            &mut ladder,
-                            script,
-                            &mut gate,
-                            false,
-                            &ui_errors,
-                        );
+                        &self.targeting.context_at(entity, guid),
+                        crate::spell::CastCommit::Spell,
+                    );
+                    // Then the store, whatever the attempt answered (`0x5f06e1`-`0x5f06ef`).
+                    if let (Some(byte), Some(script)) = (auto_loot, script.as_deref_mut()) {
+                        script.set_auto_loot(byte);
                     }
                 }
+                // The key goes through the shared `CGItem::Use` fork, as a bag click does.
+                super::ClickCast::Key(it) => {
+                    let Some(script) = script.as_deref_mut() else {
+                        continue;
+                    };
+                    // The use's requirement gate (`0x5d8e0e`) reads the player as of here.
+                    self.requirements.seat(script);
+                    debug!(
+                        "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
+                        it.bag_index, it.slot, it.on_object
+                    );
+                    crate::ui_items::send_item_use(
+                        it,
+                        &ctx,
+                        &mut self.ladder,
+                        script,
+                        &mut self.gate,
+                        false,
+                        &self.ui_errors,
+                    );
+                }
             }
-        },
-    )
+        }
+    }
 }
 
 /// What a `UseAction` press reads and writes.

@@ -52,14 +52,12 @@ fn client() -> Client {
     app.insert_resource(NetCommands(tx));
     // What the dispatchers and the cursor read that a headless build leaves to its plugins.
     app.init_resource::<PressPick>()
-        .init_resource::<Messages<WorldRightClick>>()
         .init_resource::<Messages<PlateRightClick>>()
         .init_resource::<Messages<Interact>>()
         .init_resource::<crate::player::Approach>()
         .init_resource::<crate::player::FollowState>()
         .init_resource::<crate::player::Player>()
         .init_resource::<crate::player::OwnControlLost>()
-        .init_resource::<crate::ui_script::CursorPayloadHeld>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<Messages<crate::player::StandStateRequest>>();
     let world = app.world_mut();
@@ -263,10 +261,7 @@ impl Client {
     fn right_click(&mut self, press: PressPick) {
         let world = self.app.world_mut();
         *world.resource_mut::<PressPick>() = press;
-        world
-            .resource_mut::<Messages<WorldRightClick>>()
-            .write(WorldRightClick);
-        world.run_system_once(act_on_right_click).unwrap();
+        super::release_click(world, benilla_ui::script::ClickMode::Action);
     }
 
     /// The server's answer for `guid`, then the frame's loot feed.

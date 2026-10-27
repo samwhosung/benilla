@@ -32,7 +32,6 @@ pub(crate) mod server_alert;
 pub(crate) use input::dispatch_input_records;
 #[cfg(test)]
 pub(crate) use input::feed_keys;
-pub(crate) use input::take_click_calls;
 #[cfg(test)]
 pub(crate) use records::records_from_planes;
 pub(crate) use records::{collect_input_records, InputRecord, InputRecords, Record};
@@ -171,11 +170,6 @@ impl WorldPresses {
             .map(|(_, over)| *over)
     }
 }
-
-/// Whether the cursor carries a payload, a `Send` mirror. A click on sky with one held never
-/// deselects: the reference gates its nothing-leg `SetSelection(0,0)` on no payload (`0x492d30`).
-#[derive(Resource, Default)]
-pub(crate) struct CursorPayloadHeld(pub(crate) bool);
 
 /// What [`extract::tick_script`] hands [`extract::paint_script`]; with `live` false (no VM or
 /// window) the paint does nothing.
@@ -480,7 +474,6 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<PlayerUiClickConsumed>()
             .init_resource::<PlayerUiPressConsumed>()
             .init_resource::<WorldPresses>()
-            .init_resource::<CursorPayloadHeld>()
             .init_resource::<UiClock>()
             .init_resource::<HostClock>()
             .init_resource::<benilla_world::frame_pace::FrameStep>()

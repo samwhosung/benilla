@@ -5,13 +5,11 @@
 use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
 use benilla_protocol::messages::ObjectType;
 use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use super::{click, Hovered, PressPick, Selection};
 use crate::net::{ClientCommand, GuidIndex, SelfGuid};
 use crate::test_support::runs_before;
-use benilla_world::interact::WorldClick;
 
 const ME: u64 = 0x10;
 const MOB: u64 = 0xF130_0000_0031_0001;
@@ -132,7 +130,7 @@ fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
         distance: 3.0,
         ..Hovered::default()
     };
-    world.write_message(WorldClick);
+    crate::script_calls::insert_test_vm(world);
     for ev in crate::net::wire([
         SessionEvent::ObjectsRemoved(vec![MOB]),
         SessionEvent::ObjectUpdateEnd,
@@ -141,9 +139,9 @@ fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
     }
     for step in order {
         match step {
-            Step::Click => world
-                .run_system_once(click::select_on_click)
-                .expect("the click runs"),
+            Step::Click => {
+                super::release_click(world, benilla_ui::script::ClickMode::Select);
+            }
             Step::Net => crate::net::apply_net_updates(world),
         }
     }
@@ -170,16 +168,9 @@ fn a_click_on_a_unit_its_frames_packet_removes_selects_it_first() {
 #[test]
 fn a_right_clicks_cast_goes_out_ahead_of_the_packets() {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
-    let legs = || crate::target::WorldClickLegs;
     assert!(crate::test_support::runs_before_in(
         &mut app,
-        legs(),
-        click::act_on_right_click,
-        crate::ui_action::drain_click_casts
-    ));
-    assert!(crate::test_support::runs_before_in(
-        &mut app,
-        legs(),
+        crate::target::WorldClickLegs,
         click::act_on_interact,
         crate::ui_action::drain_click_casts
     ));

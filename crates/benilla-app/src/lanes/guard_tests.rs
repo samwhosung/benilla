@@ -112,6 +112,13 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          that lends the host reads it, and none fires from it",
     ),
     (
+        Row::Queue,
+        "::creature_anim::gesture::GestureQueue",
+        "the gestures a chat line or a world click's greeting queues, which `drive_gestures` \
+         plays; every feed that lends the host reads it, as the click's select queues the \
+         greeting's in its call, and none fires from it",
+    ),
+    (
         Row::HostHeld,
         "::ui_action::ActionSlots",
         "the action slots, which `feed_actions` resolves; a handler's Lua writes them in its \
@@ -201,6 +208,9 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // changes on the notice lane in place (`0x4958e0`), and the action bar's diff of it is
     // `fire_action_events`'s edge row.
     "::player::state::OwnControlLost",
+    // Read through the host by the world click's legs (who we drive, the gathering skills its
+    // cursor forks on), and quiet: no feed fires off them.
+    "::player::state::MoverLock",
     "::spell::cast_send::HeldForPick",
     "::spell::cast_send::ScriptCastPermit",
     "::spell::cast_send::unit_caster::UnitAttackOwed",
@@ -213,6 +223,7 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::spell::targeting::SpellTargeting",
     "::target::Selection",
     "::ui_action::PlayerActions",
+    "::ui_action::LearnedAbilities",
     "::ui_auction::AuctionOpen",
     // Read through the host by the bank getters, and quiet: its events fire on the bank lane at
     // their handlers, and `PurchaseSlot` and `CloseBankFrame` hold it in their calls.
@@ -442,6 +453,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
     "::tutorial::Tutorials",
     "::ui_session::latch::LatchCloses",
     "::ui_logout::SessionPosts",
+    // The gestures a chat line or a world click's greeting plays, which `drive_gestures` takes.
+    "::creature_anim::gesture::GestureQueue",
 ];
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
@@ -608,6 +621,19 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // `ItemSet.dbc` and the item-name cache the call host's set block reads (`0x52df5a`).
     "::ItemSets",
     "::ItemNames",
+    // What the world click's legs read in the call (`0x481f60`): the lock tables an object's
+    // open gates on, the cover and the inspector that refuse an arm, the look tuning and the
+    // frame's motion its drag test reads, `deselectOnClick`, and Shift for `SetAutoLoot`.
+    "::go_templates::LockTypes",
+    "::go_templates::Locks",
+    // The gathering skills the world click's cursor forks on, read through the host.
+    "::ui_action::LearnedAbilities",
+    "::loading_screen::LoadingScreen",
+    "::player::camera::LookConfig",
+    "::target::ClickConfig",
+    "::ui_script::InspectMode",
+    "bevy_input::button_input::ButtonInput<bevy_input::keyboard::KeyCode>",
+    "bevy_input::mouse::AccumulatedMouseMotion",
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.

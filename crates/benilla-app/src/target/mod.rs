@@ -8,12 +8,16 @@ use bevy::prelude::*;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_script::InspectMode;
 use benilla_assets::AssetSet;
-use benilla_world::interact::{WorldClick, WorldRightClick};
 use benilla_world::schedule::WorldStage;
 
 mod arm;
+#[cfg(test)]
+pub(crate) use crate::script_calls::{
+    error_lines, record_error_lines, release_click, take_error_lines,
+};
 pub(crate) use arm::{
-    plate_clicks_first, right_press, run_world_clicks, world_steps, ClickArm, WorldClickLegs,
+    begin_records, plate_clicks_first, run_world_clicks, trace_press, world_steps, ClickArm,
+    ClickLegs, WorldClickLegs,
 };
 mod by_name;
 // `pub(crate)` for the chest live probe, which drives the mouse's own `click::resolve_go_action`.
@@ -147,7 +151,7 @@ pub(crate) struct Hovered {
     pub(crate) corpse_guid: Option<u64>,
     /// The `IsSelectable` grader refused the winning pick (`0x482982`): both slots are empty but
     /// [`Self::distance`] holds the hit, so a chest behind the unit does not inherit the mouseover.
-    /// To [`click::select_on_click`] it is an object hit, which clears no selection.
+    /// To [`click::ClickSelect::select`] it is an object hit, which clears no selection.
     pub(crate) refused: bool,
     /// The pick is the hovered plate's unit, the plate's enter publishing it (`0x7cb850`), not the
     /// world's own pick: it stands only while that plate still holds the hover.
@@ -329,50 +333,35 @@ impl Plugin for TargetPlugin {
                     (ring::load_factions, scan::load_creature_types).after(AssetSet::Open),
                 ),
             )
-            // The click's legs, which each record that clicked runs before the next record
-            // ([`world_steps`]), and the frame's records' end once more, ahead of the packets, as
-            // the reference's world-frame handlers run in the window input (`0x423920` at
-            // `0x420d23`): a click acts on the world as the last frame left it, and a unit this
-            // frame's packets remove is clicked first. In the dispatcher's order (`0x481f60`): the
-            // payload, the selects, the cursor's commits, the right-click's action, the binds of
-            // the units the selects parked and the interacts.
+            // What no mouse command's call dispatches, where the frame's records begin and end,
+            // ahead of the packets, as the reference's world-frame handlers run in the window
+            // input (`0x423920` at `0x420d23`), in the dispatcher's order: a plate click's trade
+            // leg and select, the binds of the units the selects parked, the interacts, the drops
+            // and the casts the dispatchers queued.
             .edit_schedule(WorldClickLegs, |legs| {
                 legs.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
             })
             .add_systems(
                 WorldClickLegs,
                 (
-                    // It lends the call host, whose casts read the player's outdoors answer: the
-                    // last re-place's, as a key or action-button cast in `UiInput` reads it, and as
-                    // the client's bit does.
-                    click::world_right_click_payload,
-                    // The world click's trade leg, ahead of the select in the same click
-                    // (`0x4925d0`); then a plate click replayed as a click, then the select that
-                    // reads it.
+                    // A plate's left click's trade leg, ahead of the select in the same click
+                    // (`0x4925d0`), then the select.
                     (
-                        crate::ui_action::drop_item::trade_on_world_click,
+                        crate::ui_action::drop_item::trade_on_plate_click,
                         click::select_on_plate_click,
-                        click::select_on_click,
                     )
                         .chain(),
-                    // After the gated select, which must read the targeting mode before a commit
-                    // clears it. The pending spell feeds only one of the two legs, so their mutual
-                    // order is free. Each reads the press's pick.
-                    crate::spell::targeting::commit_ground_cast_on_click,
-                    crate::spell::targeting::commit_object_cast_on_click,
-                    click::act_on_right_click,
-                    // The units the writers above parked with the targeting cursor up, bound to its
+                    // The units the plate selects parked with the targeting cursor up, bound to its
                     // cast; then the unit interact of a nameplate's right-click and a crate's
                     // `Interact`, so the cast goes out ahead of the interact it came with; then
-                    // `DropItemOnUnit`'s pet leg.
+                    // `DropItemOnUnit`'s legs.
                     (
                         crate::script_calls::bind_parked_picks,
                         click::act_on_interact,
                         crate::ui_action::drop_item::drop_item_on_unit,
                     )
                         .chain(),
-                    // The casts the click's dispatch queued, sent inside the click, as the
-                    // reference's dispatchers try them (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`).
+                    // The casts the dispatchers queued (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`).
                     crate::ui_action::drain_click_casts,
                 )
                     .chain(),

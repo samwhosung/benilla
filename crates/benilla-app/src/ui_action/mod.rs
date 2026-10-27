@@ -23,8 +23,8 @@ pub(crate) use drain::{
 };
 // The bar's sends and slot writes inside their calls.
 pub(crate) use drain::ActionBarSteps;
-// The right-click casts' drain, which the world's clicks run inside the click.
-pub(crate) use drain::drain_click_casts;
+// The right-click casts' drain, which the world click runs inside its call.
+pub(crate) use drain::{drain_click_casts, ClickCastDrain};
 #[cfg(test)]
 mod drain_tests;
 pub(crate) mod drop_item;

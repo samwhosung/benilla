@@ -959,10 +959,10 @@ pub(crate) mod schedule_tests {
     ///   `lanes::guard_tests` checks that it stays so, and that no exclusive system is among them. Commands a firing defers, which the drain applies after
     ///   it, are outside that model;
     /// - the input records' dispatch (`ui_script::input::dispatch_input_records`), exclusive as
-    ///   each record's world steps run the click's legs before the next record, against the 72
-    ///   world systems no declared order places against it, which bevy lists with no component:
-    ///   every one of them the net drain (`net::apply::apply_net_updates`), exclusive too, meets
-    ///   the same way, none a host;
+    ///   each record's binding runs the click's legs in its calls before the next record, against
+    ///   the 72 world systems no declared order places against it, which bevy lists with no
+    ///   component: every one of them the net drain (`net::apply::apply_net_updates`), exclusive
+    ///   too, meets the same way, none a host;
     /// - the minimap's draw (`minimap::emit_minimap`), which reads `QuestGiver`'s dialog statuses,
     ///   against `ui_panes::feed_character_panes`, which lends the call host, whose quest verbs
     ///   write that window's cell and panel latches and never a status.
@@ -970,7 +970,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_732;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_731;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1081,8 +1081,10 @@ pub(crate) mod schedule_tests {
     /// `video::apply_present_mode` and `video::apply_window_mode` and before `paint_script`, which
     /// puts the barrier between `video::drain_restart_gx` and those two applies on the paint's path
     /// (its commands fire the `gx*` CVar events whose observer writes the `VideoConfig` they read).
-    /// Without those two edges the count is 57. `WOW_SYNC_DUMP=1` lists each barrier's neighbours.
-    const UPDATE_SYNC_POINT_CEILING: usize = 58;
+    /// Without those two edges the count is 57. Lowered to 52 when the click's dispatchers queued
+    /// their window opens as unit edits, the call host applying the world click inside its call.
+    /// `WOW_SYNC_DUMP=1` lists each barrier's neighbours.
+    const UPDATE_SYNC_POINT_CEILING: usize = 52;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]
@@ -1500,11 +1502,11 @@ pub(crate) mod schedule_tests {
         assert!(after(cancel).contains(&tick), "the cancel before the tick");
     }
 
-    /// The world click's trade leg runs ahead of its select (`0x4925d0`: the trade request at
+    /// A plate click's trade leg runs ahead of its select (`0x4925d0`: the trade request at
     /// `0x49278e`, `SelectTarget` at `0x49280c`), so the targeting cursor it tests (`0x492668`)
     /// is the one the click found, not what the select's bind left.
     #[test]
-    fn the_world_clicks_trade_leg_runs_before_its_select() {
+    fn a_plate_clicks_trade_leg_runs_before_its_select() {
         let mut app = headless_client();
         let c = census(
             &mut app,
@@ -1524,7 +1526,7 @@ pub(crate) mod schedule_tests {
                 _ => panic!("exactly one system named `…{suffix}` in the click's legs"),
             }
         };
-        let trade = one("::ui_action::drop_item::trade_on_world_click");
+        let trade = one("::ui_action::drop_item::trade_on_plate_click");
         let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
         for (a, b) in &c.dependencies {
             succ.entry(*a).or_default().push(*b);
@@ -1538,10 +1540,7 @@ pub(crate) mod schedule_tests {
                 }
             }
         }
-        for select in [
-            "::target::click::select_on_plate_click",
-            "::target::click::select_on_click",
-        ] {
+        for select in ["::target::click::select_on_plate_click"] {
             assert!(
                 seen.contains(&one(select)),
                 "the trade leg runs before {select}"

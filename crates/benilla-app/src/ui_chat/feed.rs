@@ -1342,7 +1342,7 @@ fn deliver_after(
 pub(super) struct SpeakerEffects<'w> {
     bubbles: ResMut<'w, crate::chat_bubble::BubbleQueue>,
     bubble_cfg: Res<'w, crate::chat_bubble::BubbleConfig>,
-    gestures: ResMut<'w, crate::creature_anim::GestureQueue>,
+    gestures: Res<'w, crate::creature_anim::GestureQueue>,
 }
 
 /// `UNIT_FIELD_FLAGS` bit `0x20000000` (`PREVENT_ANIM`: Polymorph, Kidney Shot, Gouge, Sleep).

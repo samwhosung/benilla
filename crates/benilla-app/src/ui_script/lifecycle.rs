@@ -10,7 +10,7 @@ use benilla_ui::script::UiScript;
 use benilla_world::frame_pace::FrameStep;
 
 use super::manifest::silenced_ui_load;
-use super::{load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock, UiKeyboardCapture};
+use super::{load_ingame_ui, PlayerUiHover, UiClock, UiKeyboardCapture};
 use crate::ui_script::addons;
 
 /// The startup's glue: built, then put up on the screen the `movie` CVar picks
@@ -1058,9 +1058,6 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
         keys.typing = false;
         keys.arrows_fall_through = false;
         keys.consumed.clear();
-    }
-    if let Some(mut held) = world.get_resource_mut::<CursorPayloadHeld>() {
-        *held = CursorPayloadHeld::default();
     }
     if let Some(mut minimap) = world.get_resource_mut::<crate::minimap::MinimapWidget>() {
         minimap.0 = None;

@@ -28,7 +28,6 @@ struct Trade {
     rx: Receiver<ClientCommand>,
     /// The drop's system, registered once so its memory persists.
     drop: SystemId,
-    click: SystemId,
 }
 
 /// Our object with `extra` fields: `OBJECT_FIELD_TYPE` a player, alive, the human template,
@@ -111,14 +110,10 @@ fn client() -> Trade {
     let drop = app
         .world_mut()
         .register_system(crate::ui_action::drop_item::drop_item_on_unit);
-    let click = app
-        .world_mut()
-        .register_system(crate::ui_action::drop_item::trade_on_world_click);
     Trade {
         app,
         rx,
         drop,
-        click,
     }
 }
 
@@ -131,22 +126,22 @@ fn click_on(t: &mut Trade, guid: u64) {
         guid: Some(guid),
         ..Default::default()
     };
-    world
-        .resource_mut::<Messages<benilla_world::interact::WorldClick>>()
-        .write(benilla_world::interact::WorldClick);
-    let click = t.click;
-    run_system(t, click);
+    crate::target::record_error_lines(world);
+    crate::target::release_click(world, benilla_ui::script::ClickMode::Select);
 }
 
-/// The refusals queued since the last read.
+/// The refusals shown inside a click's call, then those queued, since the last read.
 fn errors(t: &Trade) -> Vec<&'static str> {
-    t.app
-        .world()
-        .resource::<crate::ui_action::UiErrorKeys>()
-        .take()
-        .into_iter()
-        .map(|e| e.key)
-        .collect()
+    let world = t.app.world();
+    let mut keys = crate::target::take_error_lines(world);
+    keys.extend(
+        world
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .take()
+            .into_iter()
+            .map(|e| e.key),
+    );
+    keys
 }
 
 fn run(t: &mut Trade, lua: &str) {
@@ -703,7 +698,11 @@ fn a_click_on_the_partner_offers_the_item_and_on_anyone_else_refuses() {
         fixture::store_of(&fixture::player(ALICE, fixture::HUMAN)).0,
     );
     click_on(&mut t, ALICE);
-    assert!(sent(&t).is_empty());
+    // The click goes on to select her (`0x49280c`); the trade leg sends nothing.
+    assert!(matches!(
+        sent(&t)[..],
+        [ClientCommand::SetSelection { guid: ALICE }]
+    ));
     assert_eq!(errors(&t), ["ERR_ALREADY_TRADING"]);
 }
 

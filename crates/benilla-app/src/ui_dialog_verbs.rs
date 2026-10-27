@@ -637,8 +637,8 @@ const MEETING_STONE_PARTY_CAP: usize = 4;
 
 /// The join drain: the meeting stone's use slot, run with the click's guid.
 fn drain_meeting_stone_joins(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut uses: MessageReader<MeetingStoneUse>,
+    // The click's uses, which the call host's click writes: read before the host is lent.
+    mut vm: crate::script_calls::VmWith<MessageReader<'static, 'static, MeetingStoneUse>>,
     group: Option<Res<GroupState>>,
     self_guid: Res<SelfGuid>,
     templates: Res<crate::go_templates::GameObjectTemplates>,
@@ -647,14 +647,14 @@ fn drain_meeting_stone_joins(
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    hosted_vm.run(|script| {
+    let uses: Vec<MeetingStoneUse> = vm.own().read().copied().collect();
+    vm.run(|script| {
         let Some(script) = script else {
-            uses.clear();
             return;
         };
         let level = self_q.single().ok().and_then(|s| s.0.unit_level());
         let mut lines = Vec::new();
-        for &MeetingStoneUse { go_guid } in uses.read() {
+        for &MeetingStoneUse { go_guid } in &uses {
             let stone = templates
                 .of_guid(&objects, go_guid)
                 .and_then(|t| t.meeting_stone);

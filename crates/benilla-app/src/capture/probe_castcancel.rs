@@ -94,10 +94,11 @@ fn cast_cancel_probe(
     time: ProbeClock,
     mut probe: ResMut<ProbeCastCancel>,
     self_player: Query<(), With<SelfPlayer>>,
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut keys: ResMut<ButtonInput<KeyCode>>,
+    // The keys, which the call host's click reads: pressed once the host is back.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ButtonInput<KeyCode>>>,
 ) {
-    hosted_vm.run(|script| {
+    let mut w = None;
+    vm.run(|script| {
         if self_player.is_empty() {
             return;
         }
@@ -130,14 +131,19 @@ fn cast_cancel_probe(
             1 if t >= probe.used_at.unwrap_or(f32::MAX) + 2.0 => {
                 probe.phase = 2;
                 info!("castcancel probe: pressing W mid-cast — the local cancel should fire NOW");
-                keys.press(KeyCode::KeyW);
+                w = Some(true);
             }
             2 if t >= probe.used_at.unwrap_or(f32::MAX) + 2.3 => {
                 probe.phase = 3;
                 info!("castcancel probe: releasing W — read the cast-trace for the verdict");
-                keys.release(KeyCode::KeyW);
+                w = Some(false);
             }
             _ => {}
         }
-    })
+    });
+    match w {
+        Some(true) => vm.own().press(KeyCode::KeyW),
+        Some(false) => vm.own().release(KeyCode::KeyW),
+        None => {}
+    }
 }

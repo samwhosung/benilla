@@ -277,6 +277,10 @@ pub enum ScriptCall {
     /// `ConfirmPetUnlearn()` (`0x48dca0` → `0x5dfba0(0, 0)`): `CMSG_PET_UNLEARN` to the
     /// remembered trainer, or the money refusal's line, inside the call.
     ConfirmPetUnlearn,
+    /// A step of the world click a mouse command takes ([`super::ClickCall`]): the arm's pick at
+    /// the press (`ArmClick 0x514810` → `0x481f00`), or the last primary's release and its
+    /// dispatch (`ReleaseCommands 0x514b70` → `DispatchWorldClick 0x481f60`), inside the call.
+    WorldClick(super::ClickCall),
 }
 
 /// A getter's lookup with a callback, which the host makes inside the getter's call: the cache

@@ -8,7 +8,6 @@ use crossbeam_channel::Receiver;
 use super::{click, scan, Hovered, PressPick, Selection};
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
 use crate::vplates::PlateClicks;
-use benilla_world::interact::WorldClick;
 
 pub(super) const ME: u64 = 0x10;
 /// Selected before each writer runs.
@@ -88,12 +87,11 @@ impl Fix {
         self.app.world().resource::<Selection>().guid
     }
 
+    /// A clean left click released over `pick`, through the mouse command's call.
     pub(super) fn click(&mut self, pick: Hovered) {
         let world = self.app.world_mut();
         world.resource_mut::<PressPick>().hovered = pick;
-        world
-            .resource_mut::<Messages<WorldClick>>()
-            .write(WorldClick);
+        super::release_click(world, benilla_ui::script::ClickMode::Select);
     }
 
     /// A unit the TAB scan can pick, `x` yards along.
@@ -272,10 +270,6 @@ fn a_charmed_player_is_refused_by_every_selector() {
             |f| {
                 let pick = f.over_the_mob();
                 f.click(pick);
-                f.app
-                    .world_mut()
-                    .run_system_once(click::select_on_click)
-                    .unwrap();
             },
             Some(MOB),
             false,
@@ -285,10 +279,6 @@ fn a_charmed_player_is_refused_by_every_selector() {
             false,
             |f| {
                 f.click(Hovered::default());
-                f.app
-                    .world_mut()
-                    .run_system_once(click::select_on_click)
-                    .unwrap();
             },
             None,
             false,
@@ -299,10 +289,6 @@ fn a_charmed_player_is_refused_by_every_selector() {
             |f| {
                 let pick = f.over_the_mob();
                 f.click(pick);
-                f.app
-                    .world_mut()
-                    .run_system_once(crate::spell::targeting::commit_object_cast_on_click)
-                    .unwrap();
             },
             Some(OLD),
             true,
@@ -536,15 +522,18 @@ fn a_click_the_cursor_cannot_bind_deselects() {
             ray: None,
         };
         world.resource_mut::<crate::ui_cast::CastReports>().clear();
+        // The word's changes, signalled inside the click's call.
+        crate::script_calls::insert_test_vm(world);
+        world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .run(
+                r#"CHANGES = 0
+                local r = CreateFrame("Frame")
+                r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+                r:SetScript("OnEvent", function() CHANGES = CHANGES + 1 end)"#,
+            )
+            .expect("the recorder installs");
         f.click(Hovered::default());
-        f.app
-            .world_mut()
-            .run_system_once(click::select_on_click)
-            .expect("the click runs");
-        f.app
-            .world_mut()
-            .run_system_once(crate::spell::targeting::commit_ground_cast_on_click)
-            .expect("the terrain commit runs");
         let sent: Vec<_> = f.rx.try_iter().collect();
         let selections: Vec<_> = sent
             .iter()
@@ -553,15 +542,12 @@ fn a_click_the_cursor_cannot_bind_deselects() {
                 _ => None,
             })
             .collect();
-        let reports = &f
+        let signalled: usize = f
             .app
             .world()
-            .resource::<crate::ui_cast::CastReports>()
-            .reports();
-        let signalled = reports
-            .iter()
-            .filter(|r| matches!(r, crate::ui_cast::CastReport::Changed))
-            .count();
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval("return CHANGES")
+            .unwrap();
         if deselects {
             assert_eq!(f.selected(), None, "{label}");
             assert_eq!(selections, [0], "{label}");
@@ -588,10 +574,6 @@ fn a_body_click_greets_with_the_cursor_up_unless_charmed_or_on_an_object() {
     let click = |f: &mut Fix| {
         let pick = f.over_the_mob();
         f.click(pick);
-        f.app
-            .world_mut()
-            .run_system_once(click::select_on_click)
-            .expect("the click runs");
         f.greetings()
     };
     let mut up = fix(false);
@@ -729,10 +711,6 @@ fn a_click_off_a_dead_selection_while_attacking_swings_at_nothing() {
         super::cursor_mode::CursorKind::Attack;
     let over = f.over_the_mob();
     f.click(over);
-    f.app
-        .world_mut()
-        .run_system_once(click::select_on_click)
-        .expect("the click runs");
     let sent: Vec<_> =
         f.rx.try_iter()
             .filter(|c| {
@@ -785,10 +763,6 @@ fn a_world_click_signals_its_target_change_before_the_re_swing() {
         super::cursor_mode::CursorKind::Attack;
     let over = f.over_the_mob();
     f.click(over);
-    f.app
-        .world_mut()
-        .run_system_once(click::select_on_click)
-        .expect("the click runs");
     let wire: Vec<String> =
         f.rx.try_iter()
             .filter_map(|c| match c {
@@ -847,11 +821,7 @@ fn a_world_click_deselects_reporting_its_strike_cancel_first() {
     })
     .expect("the listener is in");
     f.click(Hovered::default());
-    let world = f.app.world_mut();
-    world
-        .run_system_once(click::select_on_click)
-        .expect("the click runs");
-    crate::ui_cast::signal_reports(world);
+    crate::ui_cast::signal_reports(f.app.world_mut());
     assert_eq!(f.selected(), None);
     let order: String = f
         .app
@@ -924,12 +894,7 @@ fn a_right_click_attack_signals_its_select_before_the_swing() {
         attack_fork: super::cursor_mode::AttackFork(true),
         ..PressPick::default()
     };
-    world
-        .resource_mut::<Messages<benilla_world::interact::WorldRightClick>>()
-        .write(benilla_world::interact::WorldRightClick);
-    world
-        .run_system_once(click::act_on_right_click)
-        .expect("the right-click runs");
+    super::release_click(world, benilla_ui::script::ClickMode::Action);
     assert_eq!(
         wire_order(&f.rx),
         ["SetSelection 0x43", "RandomRoll", "AttackSwing 0x43"]

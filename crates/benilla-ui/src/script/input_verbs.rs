@@ -160,8 +160,24 @@ pub(crate) struct InputState {
     /// The two primary bits of `[InputControl+4]` (`0x1`, `0x2`) as the mouse commands moved
     /// them, which `ArmClick` and the release handler test (`0x51481a`, `0x514c35`).
     primaries: u8,
-    /// The world click steps since the app last drained them.
+    /// The world click steps made with no host to apply them, since the app last drained them.
     clicks: Vec<ClickCall>,
+    /// The press of the record whose binding runs now, which an arm made in it picks at.
+    press: ClickPress,
+    /// A world click step was made since the app last asked ([`UiScript::take_click_stepped`]).
+    stepped: bool,
+}
+
+/// The press of the input record whose binding runs the mouse commands, as the app's walk hands it
+/// over before the binding: where `ArmClick`'s pick (`0x481f00`) traces, and whether the press is
+/// one the world's select may not arm on.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClickPress {
+    /// The record's cursor in window coordinates; `None` for a call no record made, which picks
+    /// at the window's cursor.
+    pub at: Option<[f32; 2]>,
+    /// A left press the cursor's payload took for its drop, which arms no select.
+    pub eaten: bool,
 }
 
 impl UiScript {
@@ -200,7 +216,9 @@ impl UiScript {
         std::mem::take(&mut self.model_mut().input.look)
     }
 
-    /// Take the world click steps the mouse commands made since the last call, in call order.
+    /// Take the world click steps the mouse commands made with no host lent since the last call,
+    /// in call order; with a host lent each applies inside its command's call
+    /// ([`ScriptCall::WorldClick`]).
     pub fn take_click_calls(&mut self) -> Vec<ClickCall> {
         std::mem::take(&mut self.model_mut().input.clicks)
     }
@@ -208,6 +226,50 @@ impl UiScript {
     /// Whether a mouse command made a world click step not yet taken.
     pub fn has_click_calls(&self) -> bool {
         !self.model_ref().input.clicks.is_empty()
+    }
+
+    /// Apply the world click steps made with no host lent ([`Self::take_click_calls`]) through the
+    /// host lent now, in the order made; with none lent they are dropped.
+    pub fn submit_queued_clicks(&mut self) {
+        let steps = self.take_click_calls();
+        if !super::host::open(self.lua()) {
+            return;
+        }
+        for step in steps {
+            self.submit_click(step);
+        }
+    }
+
+    /// A world click step the engine makes itself, applied as a mouse command's call applies it
+    /// ([`ScriptCall::WorldClick`]); with no host lent it waits ([`Self::take_click_calls`]).
+    pub fn submit_click(&mut self, step: ClickCall) {
+        let lua = self.lua().clone();
+        if let Err(e) = click(&lua, step) {
+            self.model_mut().record_lua_error(&e);
+        }
+    }
+
+    /// Put a world click step back to wait with those made with no host lent
+    /// ([`Self::take_click_calls`]): a step the host cannot apply yet, in the order made.
+    pub fn defer_click(&mut self, step: ClickCall) {
+        self.model_mut().input.clicks.push(step);
+    }
+
+    /// Whether a world click step was made since the last call, applied or waiting: the app's
+    /// walk ends a record whose binding made one before the next.
+    pub fn take_click_stepped(&mut self) -> bool {
+        std::mem::take(&mut self.model_mut().input.stepped)
+    }
+
+    /// Hand over the press of the record whose binding runs next ([`ClickPress`]), or the default
+    /// once it has run.
+    pub fn set_click_press(&mut self, press: ClickPress) {
+        self.model_mut().input.press = press;
+    }
+
+    /// The press of the record whose binding runs now ([`Self::set_click_press`]).
+    pub fn click_press(&self) -> ClickPress {
+        self.model_ref().input.press
     }
 
     /// The world enter's release of every command (`0x5144c0` → `0x514b70(-1, …)`): the primary
@@ -220,45 +282,70 @@ impl UiScript {
     /// `TURNORACTION` up (`0x492b50` → `TurnOrActionStop 0x514160` → `0x515090(1, 0, …)`): the
     /// TurnOrAction bit's release, as the command's.
     pub fn release_turn_or_action(&mut self) {
-        release_primary(&self.lua, TURN_OR_ACTION);
+        if let Err(e) = release_primary(&self.lua, TURN_OR_ACTION) {
+            self.model_mut().record_lua_error(&e);
+        }
     }
 }
 
 /// A primary command's press (`0x514840`), behind the arm the command makes first (`0x514810`):
 /// `mode` is the pair's click mode, `None` for `MouselookStart`, whose arm stores 0.
-fn press_primary(lua: &Lua, bit: u8, mode: Option<ClickMode>) {
+fn press_primary(lua: &Lua, bit: u8, mode: Option<ClickMode>) -> mlua::Result<()> {
+    let held = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .input
+        .primaries;
+    match mode {
+        // `0x51481a`: a nonzero mode stores only while neither primary is held.
+        Some(mode) if held == 0 => click(lua, ClickCall::Arm(mode))?,
+        Some(_) => {}
+        None => click(lua, ClickCall::Disarm)?,
+    }
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let input = &mut model.input;
     let held = input.primaries;
-    match mode {
-        // `0x51481a`: a nonzero mode stores only while neither primary is held.
-        Some(mode) if held == 0 => input.clicks.push(ClickCall::Arm(mode)),
-        Some(_) => {}
-        None => input.clicks.push(ClickCall::Disarm),
-    }
     // `0x51484c`: a bit already held changes nothing.
     if held & bit != 0 {
-        return;
-    }
-    // `0x514ac1`: the press leaves another primary held beside it, which kills the armed click.
-    if held != 0 && mode.is_some() {
-        input.clicks.push(ClickCall::Disarm);
+        return Ok(());
     }
     input.primaries |= bit;
+    drop(model);
+    // `0x514ac1`: the press leaves another primary held beside it, which kills the armed click.
+    if held != 0 && mode.is_some() {
+        click(lua, ClickCall::Disarm)?;
+    }
+    Ok(())
 }
 
 /// A primary command's release (`0x514b70`): a bit not held changes nothing (`0x514b83`); the last
 /// primary's release dispatches the armed click (`0x514c35`, `0x514d68`).
-fn release_primary(lua: &Lua, bit: u8) {
+fn release_primary(lua: &Lua, bit: u8) -> mlua::Result<()> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let input = &mut model.input;
     if input.primaries & bit == 0 {
-        return;
+        return Ok(());
     }
     input.primaries &= !bit;
-    if input.primaries == 0 {
-        input.clicks.push(ClickCall::Release);
+    let last = input.primaries == 0;
+    drop(model);
+    if last {
+        click(lua, ClickCall::Release)?;
     }
+    Ok(())
+}
+
+/// A world click step, inside the command's call through the host lent; with none lent it waits
+/// for the app ([`UiScript::take_click_calls`]).
+fn click(lua: &Lua, step: ClickCall) -> mlua::Result<()> {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    model.input.stepped = true;
+    if super::host::open(lua) {
+        drop(model);
+        return push_call(lua, ScriptCall::WorldClick(step));
+    }
+    model.input.clicks.push(step);
+    Ok(())
 }
 
 /// The gate `0x494a50(0)`, whether a movement call may go on.
@@ -349,7 +436,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if gate(lua) {
                     // `ArmClick` then the press, inside the call (`0x51413e`, `0x51414c`).
                     if let Some((bit, mode)) = primary {
-                        press_primary(lua, bit, Some(mode));
+                        press_primary(lua, bit, Some(mode))?;
                     }
                     push(lua, BindingInput::Start(input));
                 }
@@ -361,7 +448,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             lua.create_function(move |lua, args: MultiValue| {
                 if gate(lua) {
                     if let Some((bit, _)) = primary {
-                        release_primary(lua, bit);
+                        release_primary(lua, bit)?;
                     }
                     push(lua, BindingInput::Stop(input));
                     // A mouse bit's release carries its fourth argument to the camera: the sticky
@@ -418,14 +505,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             lua.create_function(move |lua, _: MultiValue| {
                 // `0x514810(0)`, then `0x515090(1, on, …)`.
                 if on {
-                    press_primary(lua, TURN_OR_ACTION, None);
+                    press_primary(lua, TURN_OR_ACTION, None)?;
                 } else {
-                    lua.app_data_mut::<Model>()
-                        .expect("model app_data")
-                        .input
-                        .clicks
-                        .push(ClickCall::Disarm);
-                    release_primary(lua, TURN_OR_ACTION);
+                    click(lua, ClickCall::Disarm)?;
+                    release_primary(lua, TURN_OR_ACTION)?;
                 }
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.input.turn_or_action = on;

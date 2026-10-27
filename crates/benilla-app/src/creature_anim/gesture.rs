@@ -40,16 +40,28 @@ impl Gesture {
 }
 
 /// Gestures asked for and not yet played, `(speaker guid, code)`, from the chat display path and
-/// the interact click, the two callers of `0x60bb30`.
+/// the interact click, the two callers of `0x60bb30`. Pushed through `&self`, as the unit edits
+/// are: its pushers run one at a time, in the VM pass's order ([`crate::vm_pass::shared_sinks`]).
 #[derive(Resource, Default)]
-pub(crate) struct GestureQueue(Vec<(u64, Gesture)>);
+pub(crate) struct GestureQueue(std::sync::Mutex<Vec<(u64, Gesture)>>);
 
 impl GestureQueue {
     /// A zero guid (a system line, a channel notice) has no speaker and is dropped.
-    pub(crate) fn push(&mut self, guid: u64, gesture: Gesture) {
+    pub(crate) fn push(&self, guid: u64, gesture: Gesture) {
         if guid != 0 {
-            self.0.push((guid, gesture));
+            self.queue().push((guid, gesture));
         }
+    }
+
+    /// The gestures asked for since the last take, in the order asked.
+    fn take(&self) -> Vec<(u64, Gesture)> {
+        std::mem::take(&mut *self.queue())
+    }
+
+    fn queue(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Gesture)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -92,14 +104,14 @@ pub(crate) fn select_gesture(
 
 /// Drain [`GestureQueue`]: the client's `0x60bb30` and its tail call into `0x5fcd20`.
 pub(super) fn drive_gestures(
-    mut queue: ResMut<GestureQueue>,
+    queue: Res<GestureQueue>,
     mut out: MessageWriter<EmoteAnim>,
     mut play_seq: ResMut<PlaySeq>,
     index: Res<GuidIndex>,
     emotes: Option<Res<crate::sound::EmoteSounds>>,
     units: super::emote_anim::PerformerQuery,
 ) {
-    let asked = std::mem::take(&mut queue.0);
+    let asked = queue.take();
     let Some(emotes) = emotes else { return };
     for (guid, gesture) in asked {
         let Some(&entity) = index.0.get(&guid) else {
@@ -291,16 +303,16 @@ mod tests {
             "EXCLAMATION resolves through the shipped DBC to EmoteTalkExclamation"
         );
         assert!(
-            app.world().resource::<GestureQueue>().0.is_empty(),
+            app.world().resource::<GestureQueue>().take().is_empty(),
             "the queue drains every frame"
         );
     }
 
     #[test]
     fn a_speakerless_line_is_dropped_at_the_queue() {
-        let mut q = GestureQueue::default();
+        let q = GestureQueue::default();
         q.push(0, Gesture::Talk);
         q.push(7, Gesture::Talk);
-        assert_eq!(q.0, vec![(7, Gesture::Talk)]);
+        assert_eq!(q.take(), vec![(7, Gesture::Talk)]);
     }
 }

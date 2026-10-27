@@ -47,7 +47,7 @@ pub(crate) use item::EnchantConfirmItem;
 pub(crate) use pick::{
     publish_go_pick, publish_unit_pick, spell_opens_go, GoPick, GoPickChecks, PickChecks, UnitPick,
 };
-pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
+pub(crate) use world::ClickCommits;
 
 use bevy::prelude::*;
 
@@ -491,7 +491,7 @@ impl SpellTargeting {
 /// The world frame's right-press hook's first leg (`0x492c20`, `0x492c26`-`0x492c3f`): a pending
 /// target is cancelled (`StopTargeting 0x6e4900`), sending nothing and consuming nothing, so the
 /// press still turns the camera. It tests no payload; a press the payload's clear consumed
-/// (`0x492b50`) or a UI frame took never reaches it ([`crate::target::right_press`]). The
+/// (`0x492b50`) or a UI frame took never reaches it ([`crate::target::trace_press`]). The
 /// rotate-placement skip on flag `0xceca90` (effect `0x51`) is not built.
 pub(crate) fn cancel_targeting_on_right_press(mut cursor: crate::spell::CursorCancel) {
     if cursor.active() {

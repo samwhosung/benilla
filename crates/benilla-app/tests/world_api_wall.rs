@@ -215,8 +215,6 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
     ("instance_tint::IDENTITY", "CLOSE/absorb"),
     ("instance_tint::pack", "CLOSE/absorb"),
     ("interact::PickBox", "CLOSE/absorb"),
-    ("interact::WorldClick", "CLOSE/move-game"),
-    ("interact::WorldRightClick", "CLOSE/move-game"),
     ("interact::cast_pick_ray_inflated", "CLOSE/absorb"),
     ("interior::BodyBakeCenter", "CLOSE/absorb"),
     ("interior::ContainmentAttach", "CLOSE/absorb"),
@@ -753,7 +751,7 @@ fn expand(s: &str) -> Vec<String> {
                 break;
             }
             let tail = &after[2..];
-            // `interact::{WorldClick, WorldRightClick}`: a group hanging off a walked path.
+            // `interact::{CreaturePickPart, GoPickPart}`: a group hanging off a walked path.
             if tail.trim_start().starts_with('{') {
                 let head = out;
                 return expand(tail)

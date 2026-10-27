@@ -105,6 +105,26 @@ fn client_bound(wtf: &str) -> App {
                     end
                 </Binding>
                 <Binding name="PROBEBUTTON" runOnUp="true">LOG = LOG .. "b1 " .. keystate .. ";"</Binding>
+                <Binding name="PROBESELECT" runOnUp="true">
+                    if ( keystate == "down" ) then
+                        CameraOrSelectOrMoveStart();
+                    else
+                        CameraOrSelectOrMoveStop();
+                        LOG = LOG .. tostring(UnitName("target")) .. ";"
+                    end
+                </Binding>
+                <Binding name="PROBEKEYCLICK">
+                    CameraOrSelectOrMoveStart();
+                    CameraOrSelectOrMoveStop();
+                </Binding>
+                <Binding name="PROBETHENBUTTON" runOnUp="true">
+                    if ( keystate == "down" ) then
+                        CameraOrSelectOrMoveStart();
+                    else
+                        CameraOrSelectOrMoveStop();
+                        TargetMeButton:Click();
+                    end
+                </Binding>
                 <Binding name="PROBERIGHT">
                     LOG = LOG .. "targeting " .. tostring(SpellIsTargeting())
                         .. ", repair " .. tostring(InRepairMode()) .. ";"
@@ -297,6 +317,94 @@ fn a_ui_click_and_a_world_click_in_one_frame_resolve_in_arrival_order() {
     click_at(&mut app, ON_BUTTON);
     app.update();
     assert_eq!(target(&app), Some(ME), "the button's click came last");
+}
+
+/// The release's click runs inside `CameraOrSelectOrMoveStop` (`0x514b70` → `0x481f60`), so the
+/// binding body's next line reads the target the click selected.
+#[test]
+fn the_binding_line_after_the_release_reads_the_clicks_target() {
+    let mut app = client("PROBESELECT");
+    aim(&mut app);
+    click_at(&mut app, ON_MOB);
+    app.update();
+    assert_eq!(target(&app), Some(MOB));
+    let name: String = app
+        .world()
+        .non_send_resource::<UiScript>()
+        .eval(r#"return tostring(UnitName("target"))"#)
+        .unwrap();
+    assert_ne!(name, "nil");
+    assert_eq!(
+        log(&app),
+        format!("{name};"),
+        "the line after the stop read the mob"
+    );
+}
+
+/// A hook around `CameraOrSelectOrMoveStop` reads the click's target inside the hook, after the
+/// command it wraps returns.
+#[test]
+fn a_hook_around_the_release_reads_the_clicks_target() {
+    let mut app = client("CAMERAORSELECTORMOVE");
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"local stop = CameraOrSelectOrMoveStop
+            CameraOrSelectOrMoveStop = function(sticky)
+                stop(sticky)
+                LOG = LOG .. tostring(UnitName("target")) .. ";"
+            end"#,
+        )
+        .unwrap();
+    aim(&mut app);
+    click_at(&mut app, ON_MOB);
+    app.update();
+    assert_eq!(target(&app), Some(MOB));
+    let name: String = app
+        .world()
+        .non_send_resource::<UiScript>()
+        .eval(r#"return tostring(UnitName("target"))"#)
+        .unwrap();
+    assert_ne!(name, "nil");
+    assert_eq!(log(&app), format!("{name};"), "the hook read the mob");
+}
+
+/// A body that releases the world click and then clicks a button whose `OnClick` targets us ends on
+/// us: the world click selected inside the release, before the button's `TargetUnit`.
+#[test]
+fn a_ui_click_after_the_release_in_one_body_lands_after_the_world_click() {
+    let mut app = client("PROBETHENBUTTON");
+    aim(&mut app);
+    click_at(&mut app, ON_MOB);
+    app.update();
+    assert_eq!(log(&app), "click;");
+    assert_eq!(target(&app), Some(ME), "the button's target came last");
+}
+
+/// A key whose binding arms and releases the click in one body, with no press of the mouse's to
+/// trace the pick at, clicks what is under the cursor: the pick is traced where the key's record
+/// returns, and the release that waited for it applies there.
+#[test]
+fn a_key_bound_click_selects_under_the_cursor() {
+    let mut app = client_bound(
+        "bind BUTTON1 CAMERAORSELECTORMOVE\r\nbind BUTTON2 TURNORACTION\r\nbind F PROBEKEYCLICK\r\n",
+    );
+    aim(&mut app);
+    move_to(&mut app, ON_MOB);
+    app.update();
+    let ev = bevy::input::keyboard::KeyboardInput {
+        key_code: KeyCode::KeyF,
+        logical_key: bevy::input::keyboard::Key::Character("f".into()),
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window: app.world().resource::<PrimaryId>().0,
+    };
+    app.world_mut().write_message(ev.clone());
+    app.world_mut()
+        .write_message(WindowEvent::KeyboardInput(ev));
+    app.update();
+    assert_eq!(target(&app), Some(MOB), "the key's click selected the mob");
 }
 
 /// A press at a new position picks what is under the press: the frame's hover stood beside the

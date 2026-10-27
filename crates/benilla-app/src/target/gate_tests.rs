@@ -8,8 +8,9 @@ use benilla_protocol::field::{
     FIELD_UNIT_NPC_FLAGS,
 };
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{ContainerSlot, ContainerState, MerchantItem, MerchantState, UiScript};
-use benilla_world::interact::WorldRightClick;
+use benilla_ui::script::{
+    ClickMode, ContainerSlot, ContainerState, MerchantItem, MerchantState, UiScript,
+};
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
@@ -115,14 +116,9 @@ impl Fix {
 
     /// The world's right-click on what `press_on` latched.
     fn right_click(&mut self) {
-        self.app
-            .world_mut()
-            .resource_mut::<Messages<WorldRightClick>>()
-            .write(WorldRightClick);
-        self.app
-            .world_mut()
-            .run_system_once(click::act_on_right_click)
-            .expect("the right-click runs");
+        let world = self.app.world_mut();
+        super::record_error_lines(world);
+        super::release_click(world, ClickMode::Action);
     }
 
     /// A right-click on `unit`'s nameplate, begun on what the press latched, through the systems
@@ -151,14 +147,18 @@ impl Fix {
         self.rx.try_iter().collect()
     }
 
+    /// The refusals shown inside a call ([`super::error_lines`]), then those queued outside one.
     fn errors(&self) -> Vec<&'static str> {
-        self.app
-            .world()
-            .resource::<UiErrorKeys>()
-            .snapshot()
-            .iter()
-            .map(|e| e.key)
-            .collect()
+        let world = self.app.world();
+        let mut keys = super::error_lines(world);
+        keys.extend(
+            world
+                .resource::<UiErrorKeys>()
+                .snapshot()
+                .iter()
+                .map(|e| e.key),
+        );
+        keys
     }
 
     /// The player's control, `[0xb4b3e4]`.
@@ -530,12 +530,16 @@ fn the_skin_leg_measures_its_own_reach_not_the_spell_cursors() {
         );
         f.press_under_spell(body, CORPSE, false, spell_unable);
         f.right_click();
-        let cast = !f
-            .app
-            .world()
-            .resource::<crate::ui_action::ClickCasts>()
-            .0
-            .is_empty();
+        // The click's cast goes through the ladder inside the click's call.
+        let cast = f.sent().iter().any(|c| {
+            matches!(
+                c,
+                ClientCommand::CastSpell {
+                    spell_id: SKINNING,
+                    ..
+                }
+            )
+        });
         let walking = f.app.world().resource::<crate::player::Approach>().active();
         assert_eq!(
             (cast, walking),
@@ -578,14 +582,7 @@ fn the_router_legs_clear_the_payload_as_the_reference_does() {
             },
         };
         f.app.world_mut().resource_mut::<PressPick>().hovered = hovered;
-        f.app
-            .world_mut()
-            .resource_mut::<Messages<WorldRightClick>>()
-            .write(WorldRightClick);
-        f.app
-            .world_mut()
-            .run_system_once(click::world_right_click_payload)
-            .expect("the payload leg runs");
+        super::release_click(f.app.world_mut(), ClickMode::Action);
         assert_eq!(
             !f.held(),
             cleared,

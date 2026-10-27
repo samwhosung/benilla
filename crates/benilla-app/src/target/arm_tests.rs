@@ -14,7 +14,6 @@ fn a_right_press_in_the_world_ends_repair_mode_and_a_wrap_and_one_on_the_ui_does
     let press = |over_ui: bool, payload_held: bool| {
         let mut world = World::new();
         world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
-        world.insert_resource(crate::ui_script::CursorPayloadHeld(payload_held));
         world.init_resource::<crate::spell::targeting::SpellTargeting>();
         let mut script = UiScript::new().unwrap();
         script.set_merchant(Some(MerchantState {
@@ -25,8 +24,14 @@ fn a_right_press_in_the_world_ends_repair_mode_and_a_wrap_and_one_on_the_ui_does
         assert!(script.repair_mode(), "the repair vendor arms repair mode");
         script.arm_gift_wrap(0, 6);
         assert!(script.gift_wrap_armed().is_some(), "the paper arms a wrap");
+        if payload_held {
+            use benilla_ui::script::{CursorMoney, CursorPayload, HeldCursor};
+            script.seed_held_cursor(HeldCursor::holding(CursorPayload::Money(CursorMoney {
+                copper: 1,
+            })));
+        }
         world.insert_non_send_resource(script);
-        right_press(&mut world, over_ui);
+        trace_press(&mut world, MouseButton::Right, None, over_ui);
         let script = world.non_send_resource::<UiScript>();
         (script.repair_mode(), script.gift_wrap_armed().is_some())
     };

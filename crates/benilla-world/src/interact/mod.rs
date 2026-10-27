@@ -1,6 +1,6 @@
-//! What the player is pointing at: the identity of every pickable world thing ([`WorldObject`]),
-//! the world click gestures, and the ray caster ([`pick`]), which casts against resident geometry
-//! so colliderless props that a physics ray misses still pick.
+//! What the player is pointing at: the identity of every pickable world thing ([`WorldObject`])
+//! and the ray caster ([`pick`]), which casts against resident geometry so colliderless props that
+//! a physics ray misses still pick.
 //!
 //! The consolidated render lanes draw many placements with no entity per placement, so a pick
 //! declaration takes three shapes: [`PickMesh`] or [`PickBox`] on an entity, [`PickBlob`] members
@@ -55,17 +55,6 @@ pub struct GoPickPart;
 /// pick's skinless-fallback set. Doodad and WMO parts carry neither marker.
 #[derive(Component, Clone, Copy)]
 pub struct CreaturePickPart;
-
-/// A left select gesture, sent on release when the press met the reference's click predicate:
-/// under 200 ms, or under 800 ms having turned the camera less than 2.25° of yaw and 2.0° of
-/// pitch. A drag that meets it selects too, as the reference arms the click beside the camera look.
-/// It carries no position: the pick is latched at the press (`target::PressPick`).
-#[derive(Message, Clone, Copy)]
-pub struct WorldClick;
-
-/// The right button's context gesture, on the same predicate as [`WorldClick`].
-#[derive(Message, Clone, Copy)]
-pub struct WorldRightClick;
 
 /// The world's pick sources as one `SystemParam`: the entity pick geometry ([`PickParts`]) and
 /// every lane that draws without entities ([`PickSource`]). Use this, not [`PickParts`] alone,
@@ -194,15 +183,5 @@ impl DoodadOccluders<'_, '_> {
             best = Some(best.map_or(d, |b| b.min(d)));
         }
         best
-    }
-}
-
-/// Registers the three world click messages.
-pub struct InteractPlugin;
-
-impl Plugin for InteractPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_message::<WorldClick>()
-            .add_message::<WorldRightClick>();
     }
 }

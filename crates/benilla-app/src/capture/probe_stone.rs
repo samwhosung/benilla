@@ -165,17 +165,17 @@ fn vm_state(script: &UiScript) -> (bool, Option<String>, bool) {
 fn stone_probe(
     time: ProbeClock,
     mut probe: ResMut<StoneProbe>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<MessageWriter<'static, MeetingStoneUse>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     objects: Query<NearbyObject, Without<SelfPlayer>>,
     templates: Res<GameObjectTemplates>,
     queue: Res<MeetingStone>,
-    mut uses: MessageWriter<MeetingStoneUse>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    hosted_vm.run(|script| {
+    let mut uses = Vec::new();
+    vm.run(|script| {
         let Ok(store) = self_store.single() else {
             return; // not in-world yet
         };
@@ -269,7 +269,7 @@ fn stone_probe(
             Phase::WaitLevel { want, since, join } => {
                 if level == want {
                     let guid = probe.stone.unwrap_or_default();
-                    uses.write(MeetingStoneUse { go_guid: guid });
+                    uses.push(MeetingStoneUse { go_guid: guid });
                     if join {
                         info!("PROBE_STONE: level {level} — clicking INSIDE the band");
                         probe.phase = Phase::WaitQueue { since: now };
@@ -403,5 +403,9 @@ fn stone_probe(
                 });
             }
         }
-    })
+    });
+    // The click's uses, written once the host is back: the call host's click writes them too.
+    for used in uses {
+        vm.own().write(used);
+    }
 }

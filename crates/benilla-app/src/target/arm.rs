@@ -1,21 +1,24 @@
-//! The world click as the mouse commands make it: `CameraOrSelectOrMoveStart` and
-//! `TurnOrActionStart` arm it and pick the world under the press (`ArmClick 0x514810` →
+//! The world click as the mouse commands make it, inside their calls: `CameraOrSelectOrMoveStart`
+//! and `TurnOrActionStart` arm it with the pick under the press (`ArmClick 0x514810` →
 //! `PickObjectUnderCursor 0x481f00` → `PickAtCursor 0x481190`), and the last primary's release
-//! dispatches it (`ReleaseCommands 0x514b70` → `DispatchWorldClick 0x481f60`), all inside the
-//! command's call. The VM keeps the command bits and hands the steps on in call order
-//! ([`benilla_ui::script::ClickCall`]); [`world_steps`] applies them at the record whose binding
-//! made them, before the next record, so a UI click and a world click in one frame resolve in the
-//! order they came.
+//! dispatches it (`ReleaseCommands 0x514b70` → `DispatchWorldClick 0x481f60`) and runs its legs
+//! before the command returns. The VM keeps the command bits and hands each step to the call host
+//! ([`benilla_ui::script::ClickCall`]), which applies it with the click's legs ([`ClickLegs`]), so
+//! Lua after the command, in the same binding body or a hook around it, reads the world as the
+//! click left it.
 //!
-//! The click's legs, which are engine systems ([`WorldClickLegs`]), still run as the record's walk
-//! returns, not inside the call as the reference's do: Lua after the command in the same binding
-//! body, or a hook around it, reads the world as the click found it, not as it left it (#1988).
+//! The pick is traced at a world press's point ahead of its binding ([`trace_press`]), which the
+//! arm takes. An arm no world press traced for (a key's binding, a handler's call) is traced where
+//! the record's walk returns, and the steps after it wait for that trace and apply there, in
+//! order. What no mouse command dispatches runs where the frame's records end ([`WorldClickLegs`]):
+//! a nameplate's click, a crate's `Interact`, a `DropItemOnUnit`.
 
 use bevy::ecs::schedule::ScheduleLabel;
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
-use benilla_ui::script::{ClickCall, ClickMode};
-use benilla_world::interact::{WorldClick, WorldRightClick};
+use benilla_ui::script::{ClickCall, ClickMode, ClickPress};
 
 use super::PressPick;
 use crate::player::PressGesture;
@@ -27,12 +30,21 @@ use crate::ui_script::{InputRecord, Record};
 #[derive(Resource, Default)]
 pub(crate) struct ClickArm {
     armed: Option<(ClickMode, PressGesture)>,
+    /// The pick traced at the press whose binding runs now ([`trace_press`]), for its arm.
+    traced: Option<PressPick>,
+    /// An arm took a press's pick since the frame's records began or the last record's world
+    /// steps ([`world_steps`]), which then leave the press's plate alone.
+    latched: bool,
+    /// An arm found no press's pick to take: it is traced where the record's walk returns, and the
+    /// steps made after it wait for it.
+    untraced: bool,
 }
 
 impl ClickArm {
     /// Mode 0 stored: nothing dispatches at the release.
     pub(crate) fn disarm(&mut self) {
         self.armed = None;
+        self.untraced = false;
     }
 
     /// One motion's camera travel, while a click is armed (`0x514400`).
@@ -41,15 +53,123 @@ impl ClickArm {
             gesture.add_travel(yaw, pitch);
         }
     }
+
+    /// Arm `mode` with a press at `now`, as a test's release finds it, the pick left as it stands.
+    #[cfg(test)]
+    pub(crate) fn arm_at(&mut self, mode: ClickMode, now: f32) {
+        self.armed = Some((mode, PressGesture::new(now)));
+    }
 }
 
-/// The world click's legs, the dispatcher's in its order (`0x481f60`): the payload, the trade
-/// leg, the selects, the cursor's commits, the right-click's action, the binds of the units the
-/// selects parked, the interacts, the pet's feed and the casts the dispatch queued. Run after the
-/// record that clicked, and once more where the frame's records end for what no record made (a
-/// crate's `Interact`, a `DropItemOnUnit`, a select a packet parked).
+/// What no mouse command's call dispatches, the click dispatcher's order kept: a nameplate's
+/// left click's trade leg and select, the binds of the units the selects parked, a nameplate's
+/// right-click's and a crate's `Interact`, `DropItemOnUnit`'s legs, and the casts their
+/// dispatchers queued. Run where the frame's records begin, for the plate clicks the last frame
+/// completed, and where they end.
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct WorldClickLegs;
+
+crate::script_calls::disjoint::disjoint_set! {
+    /// The world click's state, as its call applies it: the arm and its pick, then the
+    /// dispatcher's legs in its order (`0x481f60`). Each is lent alone: they share the press pick,
+    /// the selection and the cast ladder. A leg whose state a harness lacks is absent and does
+    /// nothing.
+    pub(crate) struct ClickLegs, ClickLegsState {
+        /// The armed click and the pick at its press.
+        arm: Option<ArmLeg<'static, 'static>>,
+        /// The right-click's payload leg.
+        payload: Option<super::click::PayloadLeg<'static, 'static>>,
+        /// The left click's object leg ahead of its select (`0x4925d0`): the trade and the pet's
+        /// feed.
+        trade: Option<crate::ui_action::drop_item::ClickTrade<'static, 'static>>,
+        feed: Option<crate::ui_action::drop_item::ClickFeed<'static, 'static>>,
+        /// The left click's select, then its terrain and object commits.
+        select: Option<super::click::ClickSelect<'static, 'static>>,
+        commits: Option<crate::spell::targeting::ClickCommits<'static, 'static>>,
+        /// The right-click's router past its payload leg.
+        dispatch: Option<super::click::ClickDispatch<'static, 'static>>,
+        /// The casts the dispatchers queued.
+        casts: Option<crate::ui_action::ClickCastDrain<'static, 'static>>,
+    }
+}
+
+/// The armed click and the pick at its press.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ArmLeg<'w, 's> {
+    arm: ResMut<'w, ClickArm>,
+    press: ResMut<'w, PressPick>,
+    time: Res<'w, Time>,
+    cover: Option<Res<'w, crate::loading_screen::LoadingScreen>>,
+    inspect: Option<Res<'w, crate::ui_script::InspectMode>>,
+    window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    motion: Option<Res<'w, AccumulatedMouseMotion>>,
+    look: Option<Res<'w, crate::player::LookConfig>>,
+}
+
+impl ArmLeg<'_, '_> {
+    /// The world enter behind the cover releases everything (`0x5144c0`): a gesture in flight is
+    /// dropped, so the release clicks nothing in the world just left.
+    fn covering(&self) -> bool {
+        self.cover.as_deref().is_some_and(|c| c.covering())
+    }
+
+    /// Whether an arm of `mode` at `press` stores: a left press the payload's drop consumed, or
+    /// the inspector's, selects nothing.
+    pub(crate) fn admits(&self, mode: ClickMode, press: ClickPress) -> bool {
+        let refused = mode == ClickMode::Select
+            && (press.eaten || self.inspect.as_deref().is_some_and(|i| i.enabled));
+        !(self.covering() || refused)
+    }
+
+    /// Mode 0 stored.
+    pub(crate) fn disarm(&mut self) {
+        self.arm.disarm();
+    }
+
+    /// `ArmClick`'s store of `mode` (`0x514827`): the pick under the press (`0x481f00`), as
+    /// [`trace_press`] traced it, and the press time (`0x514910`).
+    pub(crate) fn arm(&mut self, mode: ClickMode) {
+        match self.arm.traced {
+            Some(pick) => {
+                *self.press = pick;
+                self.arm.latched = true;
+                self.arm.untraced = false;
+            }
+            None => self.arm.untraced = true,
+        }
+        let now = self.time.elapsed_secs();
+        self.arm.armed = Some((mode, PressGesture::new(now)));
+    }
+
+    /// Whether `step` waits for an arm's pick to be traced: a release of an arm that found none,
+    /// or any step made after one already `waiting`.
+    pub(crate) fn waits(&self, waiting: bool, step: ClickCall) -> bool {
+        waiting || (self.arm.untraced && step == ClickCall::Release)
+    }
+
+    /// The last primary's release (`0x514c35`): the armed click's mode when it dispatches, which it
+    /// does unless the release is a drag (`0x514ae0`, `0x514d4b`) or the cover is up.
+    pub(crate) fn release(&mut self) -> Option<ClickMode> {
+        let (mode, mut gesture) = self.arm.armed.take()?;
+        // The frame's motion, which reaches the look session only after the records: the
+        // reference's motion messages reach `0x514400` ahead of the release's test.
+        let (yaw, pitch) = self.frame_travel();
+        gesture.add_travel(yaw, pitch);
+        let now = self.time.elapsed_secs();
+        (!self.covering() && gesture.is_click(now)).then_some(mode)
+    }
+
+    /// The camera travel the frame's mouse motion charges a click, as the look session charges it:
+    /// none while the window lacks the focus, whose motion is the pointer travelling in another
+    /// app.
+    fn frame_travel(&self) -> (f32, f32) {
+        let focused = self.window.single().is_ok_and(|w| w.focused);
+        match (self.motion.as_deref(), self.look.as_deref()) {
+            (Some(motion), Some(look)) if focused => look.click_travel(motion.delta),
+            _ => (0.0, 0.0),
+        }
+    }
+}
 
 /// The press's pick at `at`, in window coordinates ([`super::hover::PointPick`]).
 fn pick_at(In(at): In<Option<Vec2>>, mut pick: super::hover::PointPick) -> PressPick {
@@ -63,9 +183,9 @@ fn run<M>(world: &mut World, system: impl IntoSystem<(), (), M> + 'static) {
     }
 }
 
-/// Trace the press's pick at `at` into [`PressPick`], against the targeting word as it stands
-/// now: a right press's cancel may have ended it, so its readers are published first.
-fn latch(world: &mut World, at: Option<Vec2>) {
+/// The press's pick at `at`, against the targeting word as it stands now: a right press's hook
+/// may have ended it, so its readers are published first.
+fn trace(world: &mut World, at: Option<Vec2>) -> Option<PressPick> {
     run(world, crate::spell::targeting::publish_picks_self);
     run(world, crate::spell::targeting::publish_corpse_pick);
     run(world, crate::spell::targeting::publish_unit_pick);
@@ -79,87 +199,16 @@ fn latch(world: &mut World, at: Option<Vec2>) {
     if let Some(t0) = t0 {
         info!("pick-cost: press pick {} us", t0.elapsed().as_micros());
     }
-    match picked {
-        Ok(pick) => *world.resource_mut::<PressPick>() = pick,
-        Err(err) => debug!("world click: the press pick did not run: {err}"),
-    }
+    picked
+        .inspect_err(|err| debug!("world click: the press pick did not run: {err}"))
+        .ok()
 }
 
-/// Apply the click steps `calls` made at the cursor `at`: an arm traces the pick and starts the
-/// gesture, a disarm drops it, and the release dispatches the armed click when it is no drag.
-/// Whether a click is due for the legs.
-fn apply(world: &mut World, calls: Vec<ClickCall>, at: Option<Vec2>) -> bool {
-    let mut due = false;
-    for call in calls {
-        let now = world.resource::<Time>().elapsed_secs();
-        // The world enter behind the cover releases everything (`0x5144c0`); a gesture in flight
-        // is dropped, so the release clicks nothing in the world just left.
-        let covering = world
-            .get_resource::<crate::loading_screen::LoadingScreen>()
-            .is_some_and(|c| c.covering());
-        match call {
-            ClickCall::Arm(mode) => {
-                // A left press the payload's drop consumed, or the inspector's, selects nothing.
-                let refused = mode == ClickMode::Select
-                    && (world
-                        .get_resource::<crate::ui_script::PlayerUiClickConsumed>()
-                        .is_some_and(|c| c.0)
-                        || world
-                            .get_resource::<crate::ui_script::InspectMode>()
-                            .is_some_and(|i| i.enabled));
-                if covering || refused {
-                    world.resource_mut::<ClickArm>().disarm();
-                    continue;
-                }
-                latch(world, at);
-                world.resource_mut::<ClickArm>().armed = Some((mode, PressGesture::new(now)));
-            }
-            ClickCall::Disarm => world.resource_mut::<ClickArm>().disarm(),
-            ClickCall::Release => {
-                let armed = world.resource_mut::<ClickArm>().armed.take();
-                let Some((mode, mut gesture)) = armed else {
-                    continue;
-                };
-                // The frame's motion, which reaches the look session only after the records: the
-                // reference's motion messages reach `0x514400` ahead of the release's test.
-                let (yaw, pitch) = release_frame_travel(world);
-                gesture.add_travel(yaw, pitch);
-                if covering || !gesture.is_click(now) {
-                    continue;
-                }
-                // `0x514d8b` dispatches action 1 for mode 1, `0x514d77` action 4 for mode 2.
-                match mode {
-                    ClickMode::Select => {
-                        world.write_message(WorldClick);
-                    }
-                    ClickMode::Action => {
-                        world.write_message(WorldRightClick);
-                    }
-                }
-                due = true;
-            }
-        }
+/// Trace the press's pick at `at` into [`PressPick`].
+fn latch(world: &mut World, at: Option<Vec2>) {
+    if let Some(pick) = trace(world, at) {
+        *world.resource_mut::<PressPick>() = pick;
     }
-    due
-}
-
-/// The camera travel the frame's mouse motion charges a click, as the look session charges it: none
-/// while the window lacks the focus, whose motion is the pointer travelling in another app.
-fn release_frame_travel(world: &mut World) -> (f32, f32) {
-    let focused = world
-        .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
-        .single(world)
-        .is_ok_and(|w| w.focused);
-    let (Some(motion), Some(look)) = (
-        world.get_resource::<bevy::input::mouse::AccumulatedMouseMotion>(),
-        world.get_resource::<crate::player::LookConfig>(),
-    ) else {
-        return (0.0, 0.0);
-    };
-    if !focused {
-        return (0.0, 0.0);
-    }
-    look.click_travel(motion.delta)
 }
 
 /// Whether the world frame took a press: one no frame took, or any while a look session holds the
@@ -174,17 +223,14 @@ fn world_press(world: &World, over_ui: bool) -> bool {
     in_world && (looking || !over_ui)
 }
 
-/// The world frame's right press (`CGWorldFrame::OnMouseDown 0x483c40`), when the world frame took
-/// it: its hook `0x492c20` at `0x483c62`, ahead of the binding (`0x483c93`), so the binding and
-/// the pick its arm traces read what the hook left. The hook's legs in its order: a pending target
-/// cancelled (`0x492c26`-`0x492c3f`), a pending gift wrap's cursor cleared (`0x492c44`,
-/// `0x492c54`), a Repair base mode back to Point (`0x492c59`-`0x492c72`). It tests no payload and
-/// consumes nothing (`0x492c77`), so the binding runs. Then the targeting word as the hook left it
-/// goes to the VM, for the binding's `SpellIsTargeting`.
-pub(crate) fn right_press(world: &mut World, over_ui: bool) {
-    if !world_press(world, over_ui) {
-        return;
-    }
+/// The world frame's right press (`CGWorldFrame::OnMouseDown 0x483c40`), which [`trace_press`]
+/// runs when the world frame took it: its hook `0x492c20` at `0x483c62`, ahead of the binding
+/// (`0x483c93`), so the binding and the pick its arm takes read what the hook left. The hook's legs
+/// in its order: a pending target cancelled (`0x492c26`-`0x492c3f`), a pending gift wrap's cursor
+/// cleared (`0x492c44`, `0x492c54`), a Repair base mode back to Point (`0x492c59`-`0x492c72`). It
+/// tests no payload and consumes nothing (`0x492c77`), so the binding runs. Then the targeting
+/// word as the hook left it goes to the VM, for the binding's `SpellIsTargeting`.
+fn right_press(world: &mut World) {
     run(
         world,
         crate::spell::targeting::cancel_targeting_on_right_press,
@@ -194,10 +240,34 @@ pub(crate) fn right_press(world: &mut World, over_ui: bool) {
     run(world, crate::spell::targeting::feed_targeting_to_vm);
 }
 
-/// The world's steps of one input record, as its walk returns and before the next record: the
-/// click steps its binding's mouse commands made and the click's legs when the record clicked the
-/// world, and a press on a nameplate's pick. A right press's hook ran ahead of the binding
-/// ([`right_press`]).
+/// A mouse press, stopped ahead of its binding (`0x483c93`): when the world frame took it, the
+/// right press's hook ([`right_press`]), then the pick under the press (`0x481f00`), traced at its
+/// point `at` against the plate the interface's walk left hovered, for an arm its binding makes.
+pub(crate) fn trace_press(world: &mut World, button: MouseButton, at: Option<Vec2>, over_ui: bool) {
+    if !world_press(world, over_ui) {
+        return;
+    }
+    if button == MouseButton::Right {
+        right_press(world);
+    }
+    run(world, crate::vplates::seed_plate_hover);
+    let pick = trace(world, at);
+    if let Some(mut arm) = world.get_resource_mut::<ClickArm>() {
+        arm.traced = pick;
+    }
+}
+
+/// The frame's records begin: an arm made before them traced no press of theirs.
+pub(crate) fn begin_records(world: &mut World) {
+    if let Some(mut arm) = world.get_resource_mut::<ClickArm>() {
+        arm.latched = false;
+    }
+}
+
+/// The world's steps of one input record, as its walk returns and before the next record: an
+/// arm its binding made with no press's pick, traced at the record's point, and the steps waiting
+/// for it; and a press on a nameplate's pick. The click its binding's mouse commands made applied
+/// inside their calls; a press's pick was traced ahead of the binding ([`trace_press`]).
 pub(crate) fn world_steps(world: &mut World, record: &InputRecord) {
     let press = match record.record {
         Record::Button {
@@ -206,14 +276,16 @@ pub(crate) fn world_steps(world: &mut World, record: &InputRecord) {
         } => Some(button),
         _ => None,
     };
-    let calls = crate::ui_script::take_click_calls(world);
-    let armed = calls.iter().any(|c| matches!(c, ClickCall::Arm(_)));
+    if let Some(mut arm) = world.get_resource_mut::<ClickArm>() {
+        arm.traced = None;
+    }
+    settle(world, record.at);
+    let armed = world
+        .get_resource_mut::<ClickArm>()
+        .is_some_and(|mut arm| std::mem::take(&mut arm.latched));
     if press.is_some() {
         // The plate the walk left hovered, as the record's press found it.
         run(world, crate::vplates::seed_plate_hover);
-    }
-    if apply(world, calls, record.at) {
-        world.run_schedule(WorldClickLegs);
     }
     // A press a nameplate took: its click acts on the plate's unit (`0x7cb910` → `0x4949f0`), which
     // the pick names, classified as the press found it.
@@ -222,6 +294,24 @@ pub(crate) fn world_steps(world: &mut World, record: &InputRecord) {
         .is_some_and(|h| h.0.is_some());
     if matches!(press, Some(MouseButton::Left | MouseButton::Right)) && plate && !armed {
         latch(world, record.at);
+    }
+}
+
+/// Trace an arm that found no press's pick at `at`, then apply the click steps waiting, through
+/// the call host, in the order made; again while an applied arm leaves its steps waiting.
+fn settle(world: &mut World, at: Option<Vec2>) {
+    // Each pass traces the arm the last one left untraced; the bound is a guard.
+    for _ in 0..16 {
+        let untraced = world.get_resource_mut::<ClickArm>().is_some_and(|mut arm| {
+            arm.latched |= arm.untraced;
+            std::mem::take(&mut arm.untraced)
+        });
+        if untraced {
+            latch(world, at);
+        }
+        if !crate::script_calls::submit_waiting_clicks(world) {
+            return;
+        }
     }
 }
 
@@ -236,12 +326,11 @@ pub(crate) fn plate_clicks_first(world: &mut World) {
     }
 }
 
-/// Where the frame's records end: the click steps made since the last record's (a packet
-/// handler's `MouselookStart`, a stuck-latch sweep's release), then the legs once more for what no
-/// record made.
+/// Where the frame's records end: the click steps made with no host lent or waiting for an arm's
+/// pick, applied now (a packet handler's `MouselookStart`, a stuck-latch sweep's release), then the
+/// legs for what no command dispatched.
 pub(crate) fn run_world_clicks(world: &mut World) {
-    let calls = crate::ui_script::take_click_calls(world);
-    apply(world, calls, None);
+    settle(world, None);
     world.run_schedule(WorldClickLegs);
 }
 
