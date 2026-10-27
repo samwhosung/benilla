@@ -275,13 +275,30 @@ mod net {
             .net_handler(K::Disconnected, on_session_end);
     }
 
-    fn on_packet(In(ev): In<SessionEvent>, mut rolls: ResMut<LootRolls>) {
+    fn on_packet(
+        In(ev): In<SessionEvent>,
+        mut rolls: ResMut<LootRolls>,
+        loot: Option<ResMut<crate::ui_loot::LootState>>,
+    ) {
         match ev {
             SessionEvent::LootStartRoll(p) => loot_start_roll(p, &mut rolls),
             SessionEvent::LootRoll(p) => loot_roll(p, &mut rolls),
-            SessionEvent::LootRollWon(p) => loot_roll_won(p, &mut rolls),
-            SessionEvent::LootAllPassed(p) => loot_all_passed(p, &mut rolls),
+            SessionEvent::LootRollWon(p) => {
+                resolved(loot, p.looted_target, p.item_slot);
+                loot_roll_won(p, &mut rolls);
+            }
+            SessionEvent::LootAllPassed(p) => {
+                resolved(loot, p.looted_target, p.item_slot);
+                loot_all_passed(p, &mut rolls);
+            }
             _ => {}
+        }
+    }
+
+    /// The window's row stops waiting on the roll (`ClearLootRollState 0x5ebcf0`).
+    fn resolved(loot: Option<ResMut<crate::ui_loot::LootState>>, guid: u64, slot: u32) {
+        if let (Some(mut loot), Ok(slot)) = (loot, u8::try_from(slot)) {
+            loot.roll_resolved(guid, slot);
         }
     }
 

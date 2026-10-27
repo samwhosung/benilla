@@ -318,6 +318,63 @@ fn a_roll_or_master_rows_click_answers_inside_it() {
     assert!(sent(&l).is_empty());
 }
 
+/// `SMSG_LOOT_ALL_PASSED` and `SMSG_LOOT_ROLL_WON` both run `ClearLootRollState` (`0x61b5dd`,
+/// `0x61b97c` → `0x5ebcf0`), which zeroes the type of the open source's row: the next click on it
+/// takes, where the pending row refused. Another source's packet, or another slot's, frees nothing.
+#[test]
+fn a_resolved_roll_frees_the_open_row() {
+    let packet = |won: bool, guid: u64, slot: u32| {
+        if won {
+            SessionEvent::LootRollWon(benilla_protocol::messages::LootRollWon {
+                looted_target: guid,
+                item_slot: slot,
+                item_id: LINEN,
+                random_property_id: 0,
+                suffix_factor: 0,
+                winner: THRALL,
+                roll_number: 50,
+                roll_type: 2,
+            })
+        } else {
+            SessionEvent::LootAllPassed(benilla_protocol::messages::LootAllPassed {
+                looted_target: guid,
+                item_slot: slot,
+                item_id: LINEN,
+                random_property_id: 0,
+                suffix_factor: 0,
+            })
+        }
+    };
+    for won in [false, true] {
+        let mut l = client();
+        let (mut first, mut second) = (row(0, LINEN), row(1, WOOL));
+        first.slot_type = slot_type::ROLL_ONGOING;
+        second.slot_type = slot_type::ROLL_ONGOING;
+        open(&mut l, CORPSE, 1, 0, vec![first, second]);
+        let _ = (seen(&mut l), sent(&l));
+        packets(&mut l, vec![packet(won, GONE, 0), packet(won, CORPSE, 7)]);
+        click(&mut l, 1);
+        assert_eq!(
+            seen(&mut l),
+            "UI_ERROR_MESSAGE:ERR_LOOT_ROLL_PENDING",
+            "won: {won}"
+        );
+        packets(&mut l, vec![packet(won, CORPSE, 0)]);
+        let _ = seen(&mut l);
+        click(&mut l, 1);
+        assert!(
+            matches!(sent(&l)[..], [ClientCommand::AutostoreLootItem { slot: 0 }]),
+            "won: {won}"
+        );
+        click(&mut l, 2);
+        assert_eq!(
+            seen(&mut l),
+            "UI_ERROR_MESSAGE:ERR_LOOT_ROLL_PENDING",
+            "the other row"
+        );
+    }
+}
+
 /// `CloseLoot` closes inside its call (`0x4c2ec0` → `0x48f200` → `0x4c1cb0`): the release is out,
 /// `LOOT_CLOSED` has run and the window reads closed on the next line.
 #[test]
