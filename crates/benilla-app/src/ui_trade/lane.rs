@@ -7,7 +7,9 @@
 //! status's slot invalidations (`0x5d4ad3`, `0x5d4b33`) and its compare `0x4bf2b0` (`0x4bf414`,
 //! `0x4bf452`, `0x4bf487`, `0x4bf4ab`, `0x4bf4d6`); and the initiate's name callback
 //! (`0x5d40ca`). A handler queues its item here, stamped where it runs, and the getters its
-//! listeners call read the trade through the host ([`super::live`]).
+//! listeners call read the trade through the host ([`super::live`]). A close run while the lane
+//! holds an earlier item queues its VM half and its send here too ([`close_step`]), so it
+//! undoes the VM's open after the open has run.
 
 use std::collections::VecDeque;
 
@@ -49,9 +51,16 @@ pub(crate) enum TradeEvent {
     Purse,
     /// A message line, by its catalog key and arguments (`0x496720`).
     Line(UiError),
-    /// What a close core run outside a call signalled while this lane held items, parked in the
-    /// VM of the session under the key ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
+    /// A closing status arm's start: both money offers zeroed (`0x5d4884`, `0x5d48eb`), for
+    /// `CANCELED` its handler's `PLAYER_MONEY` (`0x5d48a8`) and its arm's `TRADE_REQUEST_CANCEL`
+    /// (`0x4bf832`), then `UnlockTradeItems` (`0x4bf837`, `0x4bf859`, `0x4bf87e`).
+    Unlock { canceled: bool },
+    /// The close core's store of its `done` argument (`[0xb71748]`, `0x4bf4fd`).
+    Done(bool),
+    /// The close core's cell clear and `TRADE_CLOSED` (`0x4bf516`-`0x4bf522`).
+    Closed,
+    /// The close core's `CMSG_CANCEL_TRADE` (`0x4bf527` → `0x5d4310`).
+    Cancel,
 }
 
 /// The trade lane's queue.
@@ -103,8 +112,22 @@ pub(super) fn add_trade_lane(app: &mut App) {
         );
 }
 
-fn drop_trade_events(mut lane: ResMut<TradeLane>) {
-    lane.events.clear();
+/// The drop keeps the queued sends, which go out whether or not an interface hears the signals.
+fn drop_trade_events(mut lane: ResMut<TradeLane>, commands: Option<Res<NetCommands>>) {
+    for (_, event) in lane.events.drain(..) {
+        if let (Some(command), Some(commands)) = (send_of(&event), commands.as_deref()) {
+            let _ = commands.0.send(command);
+        }
+    }
+}
+
+/// The packet an item sends, for the two that only send.
+fn send_of(event: &TradeEvent) -> Option<ClientCommand> {
+    match event {
+        TradeEvent::Unaccept => Some(ClientCommand::UnacceptTrade),
+        TradeEvent::Cancel => Some(ClientCommand::CancelTrade),
+        _ => None,
+    }
 }
 
 /// What the open leg sends through and reads beside the session: the socket, the objects the
@@ -134,8 +157,10 @@ fn fire_trade(
         };
         let ((), moved) = crate::lanes::firing(at, || match event {
             TradeEvent::Show { partner, purse } => open(&mut vm, &leg, partner, purse),
-            TradeEvent::Unaccept => {
-                let _ = leg.commands.0.send(ClientCommand::UnacceptTrade);
+            TradeEvent::Unaccept | TradeEvent::Cancel => {
+                if let Some(command) = send_of(&event) {
+                    let _ = leg.commands.0.send(command);
+                }
             }
             event => vm.run(|script| {
                 if let Some(script) = script {
@@ -203,12 +228,32 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: TradeEvent) {
                 crate::ui_action::show_now(script, sink, "ui_trade", shown);
             }
         }
-        TradeEvent::Parked { session, key } => {
-            if script.session() == session {
-                script.run_parked(key);
-            }
+        TradeEvent::Unlock { .. } | TradeEvent::Done(_) | TradeEvent::Closed => {
+            close_vm(script, &event)
         }
-        TradeEvent::Show { .. } | TradeEvent::Unaccept => {}
+        TradeEvent::Show { .. } | TradeEvent::Unaccept | TradeEvent::Cancel => {}
+    }
+}
+
+/// A close's VM half, at the handler or at its place on the lane.
+fn close_vm(script: &mut UiScript, event: &TradeEvent) {
+    match *event {
+        TradeEvent::Unlock { canceled } => {
+            script.zero_trade_gold();
+            if canceled {
+                script.fire_event("PLAYER_MONEY", vec![]);
+                script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
+            }
+            script.unlock_trade_items();
+        }
+        TradeEvent::Done(done) => script.set_trade_done(done),
+        // The cell clears, so the item table's guids stop counting as offered (`0x4bfd20`); both
+        // offers stay for the handlers' getters, and for the next open to clear.
+        TradeEvent::Closed => {
+            script.close_trade_window();
+            script.fire_event("TRADE_CLOSED", vec![]);
+        }
+        _ => {}
     }
 }
 
@@ -284,13 +329,28 @@ enum OpenHeld {
     Item(benilla_ui::script::TradeOpenItem),
 }
 
-/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
-/// of the open it closes.
-pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    let head = world.get_resource::<TradeLane>().and_then(TradeLane::head);
-    crate::lanes::behind(world, head, core, |world, session, key| {
-        world
-            .resource_mut::<TradeLane>()
-            .push(TradeEvent::Parked { session, key });
-    });
+/// Whether a close starting now waits behind the lane ([`crate::lanes::waits_behind`]): the open
+/// it closes, or any earlier signal, has not fired yet.
+pub(super) fn close_waits(world: &World) -> bool {
+    crate::lanes::waits_behind(world.get_resource::<TradeLane>().and_then(TradeLane::head))
+}
+
+/// One step of a close: queued on the lane when the close `waits` ([`close_waits`]), so the VM
+/// undoes its open after the open has run and the cancel follows the open's own sends; else run
+/// now, its signals fired with the host lent.
+pub(super) fn close_step(world: &mut World, waits: bool, event: TradeEvent) {
+    if waits {
+        if let Some(mut lane) = world.get_resource_mut::<TradeLane>() {
+            lane.push(event);
+            return;
+        }
+    }
+    match send_of(&event) {
+        Some(command) => {
+            if let Some(net) = world.get_resource::<NetCommands>() {
+                let _ = net.0.send(command);
+            }
+        }
+        None => crate::ui_session::fire(world, |script| close_vm(script, &event)),
+    }
 }

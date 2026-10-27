@@ -1274,7 +1274,7 @@ fn the_getters_read_the_session_inside_the_calls_and_the_close() {
 }
 
 /// A close core run by a handler while the lane still holds an earlier packet's signals waits
-/// behind them ([`super::lane::behind_lane`]): the accept, then the close and its line.
+/// behind them ([`super::lane::close_step`]): the accept, then the close and its line.
 #[test]
 fn a_close_fires_behind_the_lanes_earlier_items() {
     let mut t = client();
@@ -1303,4 +1303,58 @@ fn a_close_fires_behind_the_lanes_earlier_items() {
         heard(&mut t),
         "TRADE_ACCEPT_UPDATE(0,1) TRADE_CLOSED TRADE_CLOSED "
     );
+}
+
+/// One frame's `OPEN_WINDOW` then `CANCELED` on a trade a drop started: the open places the held
+/// item at its packet (`0x4bf652`-`0x4bf6fa`, locked in our table), and the cancel after it
+/// unlocks it (`0x4bf837`), shuts the cell (`0x4bf516`) and sends its `CMSG_CANCEL_TRADE` after
+/// the placement's packet (`0x4bf527`): the item ends unlocked, and no longer in a trade.
+#[test]
+fn a_cancel_behind_a_drop_started_open_undoes_what_the_open_placed() {
+    let mut t = client();
+    run(&mut t, "PickupContainerItem(0, 1)");
+    let _ = sent(&t);
+    t.app
+        .world_mut()
+        .resource_mut::<super::TradeSession>()
+        .initiate(BOB, true);
+    crate::net::handlers::dispatch(
+        t.app.world_mut(),
+        vec![
+            SessionEvent::TradeStatus {
+                status: TradeStatus::OpenWindow,
+            },
+            SessionEvent::TradeStatus {
+                status: TradeStatus::Canceled,
+            },
+        ],
+    );
+    drain(&mut t);
+    let order: Vec<&str> = sent(&t)
+        .iter()
+        .filter_map(|c| match c {
+            ClientCommand::SetTradeItem { .. } => Some("place"),
+            ClientCommand::CancelTrade => Some("cancel"),
+            _ => None,
+        })
+        .collect();
+    // The partner holds the latch, so the release runs the core once more inside it (`0x493365`).
+    assert_eq!(
+        order,
+        ["place", "cancel", "cancel"],
+        "the cancels follow the placement"
+    );
+    assert!(
+        !t.app
+            .world()
+            .non_send_resource::<UiScript>()
+            .item_locked(CLOTH),
+        "the cancel unlocks what the open placed"
+    );
+    // An entry's arrival unlocks the item unless it sits in an open trade (`0x4bfd20`), which
+    // tests the cell first: shut, it frees the item the table still names.
+    run(&mut t, "PickupContainerItem(0, 1)");
+    let mut vm = t.app.world_mut().non_send_resource_mut::<UiScript>();
+    vm.unlock_entry_items(&[CLOTH]);
+    assert!(!vm.item_locked(CLOTH), "the window is shut");
 }

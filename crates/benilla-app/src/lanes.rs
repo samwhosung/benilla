@@ -151,9 +151,7 @@ pub(crate) fn behind(
         core(world);
         return Behind::Nested;
     }
-    let now = firing_now();
-    let waits = head.is_some_and(|head| now.is_none_or(|now| head < now));
-    let Some((_held, mark)) = waits
+    let Some((_held, mark)) = waits_behind(head)
         .then(|| crate::script_calls::defer_vm(world))
         .flatten()
     else {
@@ -167,6 +165,13 @@ pub(crate) fn behind(
         park(world, session, key);
     }
     Behind::Parked
+}
+
+/// Whether a close run now must wait behind a lane whose head is `head`: the lane holds an item
+/// stamped before the item firing now (any item, with none firing), and no other core's hold
+/// already takes what it signals ([`behind`]).
+pub(crate) fn waits_behind(head: Option<Stamp>) -> bool {
+    !BEHIND.get() && head.is_some_and(|head| firing_now().is_none_or(|now| head < now))
 }
 
 /// Run `f` as the firing of the item stamped `at`, so what it pushes nests under the item; with

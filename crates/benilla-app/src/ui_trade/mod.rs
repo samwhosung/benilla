@@ -505,60 +505,48 @@ pub(crate) fn open_window(world: &mut World, purse: Option<u64>) {
     }
 }
 
-/// The close core, `0x4bf4e0` with a zero guid, held behind what the lane still holds
-/// ([`lane::behind_lane`]): with a window open, the latch release (`0x4bf50a`), the cell cleared
-/// and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE` (`0x4bf527` → `0x5d4310`), open or
-/// not. Entered while the partner holds the latch, the release's `0x493310` runs this once more
-/// inside it (`0x493365`), so a direct close fires `TRADE_CLOSED` twice and sends the cancel twice.
+/// The close core, `0x4bf4e0` with a zero guid: with a window open, the latch release
+/// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`
+/// (`0x4bf527` → `0x5d4310`), open or not. Entered while the partner holds the latch, the
+/// release's `0x493310` runs this once more inside it (`0x493365`), so a direct close fires
+/// `TRADE_CLOSED` twice and sends the cancel twice. The session closes here; the VM's half and the
+/// send wait behind what the lane still holds ([`lane::close_step`]).
 pub(crate) fn close_core(world: &mut World) {
-    lane::behind_lane(world, |world| close_core_done(world, false));
+    let waits = lane::close_waits(world);
+    close_core_done(world, waits, false);
 }
 
 /// [`close_core`] with its `done` argument, which only `TRADE_COMPLETE` passes as 1 (`0x4bf862`).
 /// With a partner it is stored first (`[0xb71748]`, `0x4bf4fd`), so the release's inner run
 /// stores 0 over it when the partner holds the latch.
-fn close_core_done(world: &mut World, done: bool) {
+fn close_core_done(world: &mut World, waits: bool, done: bool) {
     drain_trade_touches(world);
     if let Some(partner) = world.resource::<TradeSession>().cell() {
-        crate::ui_session::with_script(world, |script| script.set_trade_done(done));
+        lane::close_step(world, waits, TradeEvent::Done(done));
         crate::ui_session::release(world, partner);
         world.resource_mut::<TradeSession>().close_window();
         crate::ui_session::note_closed(world, NpcWindow::Trade);
-        // The cell clears and the signal fires (`0x4bf516`-`0x4bf522`); both offers stay for the
-        // handlers' getters, and for the next open to clear.
-        crate::ui_session::fire(world, |script| {
-            script.close_trade_window();
-            script.fire_event("TRADE_CLOSED", vec![]);
-        });
+        lane::close_step(world, waits, TradeEvent::Closed);
     }
-    if let Some(net) = world.get_resource::<NetCommands>() {
-        let _ = net.0.send(ClientCommand::CancelTrade);
-    }
+    lane::close_step(world, waits, TradeEvent::Cancel);
 }
 
-/// The status dispatcher's three closing arms (`0x4bf720`), held behind what the lane still
-/// holds: `CANCELED`'s handler signals `PLAYER_MONEY` over the zeroed offers (`0x5d48a8`) and its
-/// arm `TRADE_REQUEST_CANCEL` (`0x4bf832`), and each runs `UnlockTradeItems` (`0x4bf837`,
-/// `0x4bf859`, `0x4bf87e`) before the close core (`0x4bf842`, `0x4bf867`, `0x4bf89c`), which
-/// `COMPLETE` enters with `done` 1 (`0x4bf862`); then the arm's `line` (`0x4bf847`, `0x4bf871`).
+/// The status dispatcher's three closing arms (`0x4bf720`): `CANCELED`'s handler signals
+/// `PLAYER_MONEY` over the zeroed offers (`0x5d48a8`) and its arm `TRADE_REQUEST_CANCEL`
+/// (`0x4bf832`), and each runs `UnlockTradeItems` (`0x4bf837`, `0x4bf859`, `0x4bf87e`) before the
+/// close core (`0x4bf842`, `0x4bf867`, `0x4bf89c`), which `COMPLETE` enters with `done` 1
+/// (`0x4bf862`); then the arm's `line` (`0x4bf847`, `0x4bf871`). All of it waits behind what the
+/// lane still holds, the open it closes among them.
 pub(crate) fn server_close(
     world: &mut World,
     canceled: bool,
     done: bool,
     line: Option<&'static str>,
 ) {
-    lane::behind_lane(world, |world| {
-        drain_trade_touches(world);
-        crate::ui_session::fire(world, |script| {
-            script.zero_trade_gold();
-            if canceled {
-                script.fire_event("PLAYER_MONEY", vec![]);
-                script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
-            }
-            script.unlock_trade_items();
-        });
-        close_core_done(world, done);
-    });
+    let waits = lane::close_waits(world);
+    drain_trade_touches(world);
+    lane::close_step(world, waits, TradeEvent::Unlock { canceled });
+    close_core_done(world, waits, done);
     if let (Some(key), Some(mut lane)) = (line, world.get_resource_mut::<TradeLane>()) {
         lane.push(TradeEvent::Line(UiError::key(key)));
     }
