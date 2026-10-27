@@ -316,12 +316,19 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
                 None => warnings.push("<Include> without a file attribute; skipped".to_string()),
             }
         } else if tag.eq_ignore_ascii_case("Script") {
-            match attr_ci(child, "file") {
-                Some(file) => items.push(TopLevel::Script(ScriptRef::File(file))),
-                None => items.push(TopLevel::Script(ScriptRef::Inline {
-                    body: direct_text(child),
+            // The file runs first (`0x6ee0d4`), then a non-empty body, file or no file
+            // (`0x6ee0d9`-`0x6ee10f`).
+            let body = direct_text(child);
+            let file = attr_ci(child, "file");
+            let has_file = file.is_some();
+            if let Some(file) = file {
+                items.push(TopLevel::Script(ScriptRef::File(file)));
+            }
+            if !has_file || !body.is_empty() {
+                items.push(TopLevel::Script(ScriptRef::Inline {
+                    body,
                     line: inline_start_line(&doc, child),
-                })),
+                }));
             }
         } else if tag.eq_ignore_ascii_case("Font") {
             // An unnamed one is kept: the loader reports it where the reference does.
@@ -756,6 +763,27 @@ print(x)</Script>
             }
             other => panic!("expected inline script, got {other:?}"),
         }
+    }
+
+    /// A `<Script file>` with a body is the file, then the body (`0x6ee0d4`, `0x6ee10f`).
+    #[test]
+    fn a_script_file_with_a_body_keeps_both_in_order() {
+        let doc = parse(
+            r#"<Ui>
+                <Script file="Foo.lua">Ran = true</Script>
+            </Ui>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            doc.items,
+            [
+                TopLevel::Script(ScriptRef::File("Foo.lua".to_string())),
+                TopLevel::Script(ScriptRef::Inline {
+                    body: "Ran = true".to_string(),
+                    line: 2,
+                }),
+            ]
+        );
     }
 
     #[test]

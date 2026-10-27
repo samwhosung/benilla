@@ -616,6 +616,19 @@ mod loader_tests {
         );
     }
 
+    /// A `<Script file>`'s body runs after the file (`0x6ee0d4`, then `0x6ee0ff`-`0x6ee10f`).
+    #[test]
+    fn a_script_file_body_runs_after_the_file() {
+        let s = UiScript::new().unwrap();
+        let provider = |path: &str| -> Option<Vec<u8>> {
+            (path == "A.lua").then(|| b"Order = 'file'".to_vec())
+        };
+        let doc = parse(r#"<Ui><Script file="A.lua">Order = Order .. ',body'</Script></Ui>"#);
+        let report = load(&s, &doc, &provider);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(s.eval::<String>("return Order").unwrap(), "file,body");
+    }
+
     #[test]
     fn include_resolves_through_provider() {
         let s = UiScript::new().unwrap();
