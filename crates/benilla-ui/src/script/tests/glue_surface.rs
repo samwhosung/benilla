@@ -131,28 +131,21 @@ fn the_glue_surface_matches_the_shapes_table() {
 
 /// Glue-state functions the glue VM does not answer yet, by registrar table, each with why. The
 /// list only shrinks: a verb is absent until built, never stubbed.
-const NOT_YET: &[(&str, &[&str])] = &[
-    (
-        "0x51bb20's file trio, each only `luaL_error(\"Access Denied\")`; unbuilt in the in-game \
-         VM too, tracked by #338",
-        &["ReadFile", "DeleteFile", "AppendToFile"],
-    ),
-    (
-        "the glue core (0x46ddf0, table 0x8373b8): the movie's setter, the \
+const NOT_YET: &[(&str, &[&str])] = &[(
+    "the glue core (0x46ddf0, table 0x8373b8): the movie's setter, the \
          patch and survey and the billing; each a binding of its own, the ones \
          with an in-game namesake included",
-        &[
-            "GetBillingPlan",
-            "GetBillingTimeRemaining",
-            "GetBillingTimeRested",
-            "PatchDownloadApply",
-            "PatchDownloadCancel",
-            "PatchDownloadProgress",
-            "SetMovieSubtitles",
-            "SurveyNotificationDone",
-        ],
-    ),
-];
+    &[
+        "GetBillingPlan",
+        "GetBillingTimeRemaining",
+        "GetBillingTimeRested",
+        "PatchDownloadApply",
+        "PatchDownloadCancel",
+        "PatchDownloadProgress",
+        "SetMovieSubtitles",
+        "SurveyNotificationDone",
+    ],
+)];
 
 /// The glue VM's globals by Lua type name.
 fn glue_globals() -> BTreeMap<String, String> {

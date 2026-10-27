@@ -695,10 +695,11 @@ fn open_state(vm: VmKind) -> mlua::Result<Lua> {
 fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
     let lua = open_state(vm)?;
 
-    // `0x51bb20` (table `0x8503f4`): `GetTime`, `GetGameTime` and `ConsoleExec`. `ReadFile`,
-    // `DeleteFile` and `AppendToFile` are not built.
+    // `0x51bb20` (table `0x8503f4`): `GetTime`, `GetGameTime`, `ConsoleExec`, then the file trio
+    // `ReadFile`, `DeleteFile` and `AppendToFile`, each a refusal.
     clock::install(&lua)?;
     console_exec::install(&lua)?;
+    denied::install_files(&lua)?;
 
     // `0x706350`: `CreateFrame`, `CreateFont`, `GetNumFrames`, `EnumerateFrames` (table
     // `0x872e74`), then the widget method tables `0x7a2e70`..`0x78dc60`.
