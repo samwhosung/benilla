@@ -35,6 +35,7 @@ pub(super) fn fix(charmed: bool) -> Fix {
     let unit = |guid: u64| {
         (
             Guid(guid),
+            Transform::default(),
             GlobalTransform::default(),
             ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
                 (22, 100),

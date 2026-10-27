@@ -9,7 +9,7 @@
 //!
 //! The ranking is [`benilla_ui::script::by_name::resolve`], the one resolver the VM's name verbs
 //! (`SetLootMethod`'s master name, `StartDuel`, `PromoteByName`) share; this module feeds it the
-//! held units, positioned by [`GlobalTransform`], and breaks a full tie by guid, as the VM's walk
+//! held units, each positioned at the call, and breaks a full tie by guid, as the VM's walk
 //! over the units the call host offers does ([`crate::ui_unit::live`]). The reference's walk follows the object
 //! list's order (a tail append, `0x4646c3`-`0x4646d4`), the deviation documented there.
 //!
@@ -144,17 +144,10 @@ enum FollowRefusal {
 pub(crate) struct ByNameScan<'w, 's> {
     /// Every known unit, our own avatar included: the reference has no self-exclusion here.
     units: UnitQuery<'w, 's>,
-    self_q: Query<
-        'w,
-        's,
-        (
-            Entity,
-            &'static Guid,
-            &'static GlobalTransform,
-            Option<&'static ObjectStore>,
-        ),
-        With<SelfPlayer>,
-    >,
+    self_q: Query<'w, 's, Entity, With<SelfPlayer>>,
+    /// The positions as of the call, each composed through its parents on demand, so a unit
+    /// created or moved this frame reads where it stands (`0x468380` measures it then).
+    transforms: bevy::transform::helper::TransformHelper<'w, 's>,
     /// Read-only: a sweep fires no name query, so an uncached name does not match, as in the
     /// reference.
     names: Res<'w, NameCache>,
@@ -171,10 +164,8 @@ impl ByNameScan<'_, '_> {
     /// The distance origin, the active player's position; without one the reference resolves
     /// nothing (`0x493ae0`).
     fn origin(&self) -> Option<Vec3> {
-        self.self_q
-            .single()
-            .ok()
-            .map(|(_, _, tf, _)| tf.translation())
+        let me = self.self_q.single().ok()?;
+        position(&self.transforms, me)
     }
 
     /// [`assistable_alive`] for a unit the scan walks.
@@ -241,7 +232,7 @@ impl ByNameScan<'_, '_> {
         scan_units(
             self.units
                 .iter()
-                .map(|(e, g, tf, store)| (e, g.0, tf.translation(), store)),
+                .filter_map(|(e, g, store)| Some((e, g.0, position(&self.transforms, e)?, store))),
             self.origin(),
             &self.names,
             query,
@@ -268,18 +259,19 @@ pub(crate) fn assistable_alive(
     })
 }
 
-/// One unit query's candidates, positioned by [`GlobalTransform`]: nothing writes it during
-/// `Update`, so it adds no undeclared order against the systems that move units.
-type UnitQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        Entity,
-        &'static Guid,
-        &'static GlobalTransform,
-        Option<&'static ObjectStore>,
-    ),
->;
+/// One unit query's candidates, the entities the scene places, each positioned at the call
+/// ([`position`]).
+type UnitQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static Guid, Option<&'static ObjectStore>), With<GlobalTransform>>;
+
+/// `entity`'s position in the world as of the call, composed from its `Transform` through its
+/// parents, so a propagation still to run this frame does not leave it where it stood.
+fn position(transforms: &bevy::transform::helper::TransformHelper, entity: Entity) -> Option<Vec3> {
+    transforms
+        .compute_global_transform(entity)
+        .ok()
+        .map(|g| g.translation())
+}
 
 /// The roster passes' input (`0x493b22`, `0x493ba7`): the party slots and the raid members, by the
 /// name the wire gave and whether the object manager holds them. A pick from it has a guid and no
@@ -391,10 +383,10 @@ fn scan_units<'a>(
 /// take [`ByNameScan`]: `DoEmote`'s target (`0x49fdb1`).
 #[derive(SystemParam)]
 pub(crate) struct PlayerLookup<'w, 's> {
-    /// World positions, [`GlobalTransform`]: the chat drain already reads it, where `Transform`
-    /// would put it in an undeclared order against every system that moves a unit.
-    units: Query<'w, 's, (Entity, &'static Guid, &'static GlobalTransform)>,
-    self_q: Query<'w, 's, &'static GlobalTransform, With<SelfPlayer>>,
+    units: Query<'w, 's, (Entity, &'static Guid), With<GlobalTransform>>,
+    self_q: Query<'w, 's, Entity, With<SelfPlayer>>,
+    /// The positions as of the call ([`position`]).
+    transforms: bevy::transform::helper::TransformHelper<'w, 's>,
 }
 
 impl PlayerLookup<'_, '_> {
@@ -410,12 +402,16 @@ impl PlayerLookup<'_, '_> {
         index: &GuidIndex,
         name: &str,
     ) -> Option<u64> {
-        let origin = self.self_q.single().ok().map(|tf| tf.translation());
+        let origin = self
+            .self_q
+            .single()
+            .ok()
+            .and_then(|me| position(&self.transforms, me));
         let roster = Roster::of(group, index);
         scan_units(
             self.units
                 .iter()
-                .map(|(e, g, tf)| (e, g.0, tf.translation(), None)),
+                .filter_map(|(e, g)| Some((e, g.0, position(&self.transforms, e)?, None))),
             origin,
             names,
             name,
@@ -1251,6 +1247,7 @@ mod tests {
                 SelfPlayer,
                 crate::net::ActiveMover,
                 Guid(me.guid),
+                Transform::default(),
                 GlobalTransform::default(),
                 alive(&me),
             ))
@@ -1259,6 +1256,7 @@ mod tests {
         let t = world
             .spawn((
                 Guid(them.guid),
+                Transform::from_translation(Vec3::X),
                 GlobalTransform::from_translation(Vec3::X),
                 alive(&them),
             ))
@@ -1508,6 +1506,7 @@ mod tests {
         world.spawn((
             SelfPlayer,
             Guid(ME),
+            Transform::from_translation(Vec3::ZERO),
             GlobalTransform::from_translation(Vec3::ZERO),
         ));
         world
@@ -1541,6 +1540,7 @@ mod tests {
         let bobby = world
             .spawn((
                 Guid(BOBBY),
+                Transform::from_translation(Vec3::new(9.0, 0.0, 0.0)),
                 GlobalTransform::from_translation(Vec3::new(9.0, 0.0, 0.0)),
             ))
             .id();
@@ -1551,8 +1551,74 @@ mod tests {
         assert_eq!(find(&mut world, "Bo"), Some(BOBBY));
         // Once Bob is streamed too, the roster leaves him to the object pass; unnamed, he is
         // nobody's candidate.
-        let bob = world.spawn((Guid(BOB), GlobalTransform::default())).id();
+        let bob = world
+            .spawn((Guid(BOB), Transform::default(), GlobalTransform::default()))
+            .id();
         world.resource_mut::<GuidIndex>().0.insert(BOB, bob);
         assert_eq!(find(&mut world, "Bob"), Some(BOBBY));
+    }
+
+    /// The searches measure each unit where it stands at the call (`0x468380` with `0x493d30`):
+    /// of two players of an equal prefix, the one a handler moved nearer this frame wins, though
+    /// the scene's propagation, which runs after the frame's systems, still has it where it was.
+    #[test]
+    fn the_searches_measure_a_unit_moved_this_frame() {
+        use bevy::ecs::system::RunSystemOnce;
+        const ME: u64 = 0x10;
+        const BOBA: u64 = 0x20;
+        const BOBO: u64 = 0x30;
+        let mut world = World::new();
+        world.init_resource::<crate::ui_party::GroupState>();
+        world.init_resource::<GuidIndex>();
+        // The relation inputs the scan holds.
+        world.init_resource::<crate::net::Reputations>();
+        world.init_resource::<crate::spell::group_relation::GroupRoster>();
+        world.insert_resource(crate::net::SelfGuid(Some(ME)));
+        world.init_resource::<NameCache>();
+        let at = |x: f32| {
+            let v = Vec3::new(x, 0.0, 0.0);
+            (
+                Transform::from_translation(v),
+                GlobalTransform::from_translation(v),
+            )
+        };
+        world.spawn((SelfPlayer, Guid(ME), at(0.0)));
+        let boba = world.spawn((Guid(BOBA), at(5.0))).id();
+        let bobo = world.spawn((Guid(BOBO), at(9.0))).id();
+        for (guid, entity, name) in [(BOBA, boba, "Boba"), (BOBO, bobo, "Bobo")] {
+            world.resource_mut::<GuidIndex>().0.insert(guid, entity);
+            world
+                .resource_mut::<NameCache>()
+                .insert_player(guid, name.into(), None);
+        }
+        let find = |world: &mut World| {
+            world
+                .run_system_once(
+                    |lookup: PlayerLookup,
+                     scan: ByNameScan,
+                     names: Res<NameCache>,
+                     group: Res<crate::ui_party::GroupState>,
+                     index: Res<GuidIndex>| {
+                        (
+                            lookup.find(&names, &group, &index, "Bob"),
+                            scan.resolve(
+                                "Bob",
+                                NameSearch::PlayerOnly,
+                                Filter::AcceptAll,
+                                Match::PrefixOk,
+                            ),
+                        )
+                    },
+                )
+                .expect("the searches run as a one-shot system")
+        };
+        assert_eq!(find(&mut world), (Some(BOBA), Some(BOBA)), "the nearer");
+        // A handler moves Bobo to 1 yard; the propagation has not run.
+        world.get_mut::<Transform>(bobo).unwrap().translation = Vec3::new(1.0, 0.0, 0.0);
+        assert_eq!(
+            find(&mut world),
+            (Some(BOBO), Some(BOBO)),
+            "where it stands now"
+        );
     }
 }
