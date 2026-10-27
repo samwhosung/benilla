@@ -6,15 +6,18 @@ use bevy::prelude::*;
 use benilla_formats::ShapeshiftForm;
 use benilla_protocol::field::FIELD_UNIT_BYTES_1;
 use benilla_protocol::messages::ObjectType;
+use benilla_protocol::SessionEvent;
 
-use super::latch_tests::{harness, latch, open, vocals, BANKER, VENDOR};
-use super::release::{form_bars_interaction, release_on_field_edges};
+use super::latch_tests::{latch, open, vocals, BANKER, VENDOR};
+use super::release::form_bars_interaction;
 use super::{LatchVocal, NpcWindow};
-use crate::net::{FieldChanged, SelfPlayer};
+use crate::net::{FieldChanged, SelfGuid};
 use crate::ui_action::Spells;
 use crate::ui_script::sweep_test::seen_in;
 
 const ME: u64 = 0x0000_0000_0000_0001;
+/// Another player.
+const OTHER: u64 = 0x0000_0000_0000_0002;
 
 /// A form row with `flags1` set as given; nothing else of it is read here.
 fn form(flags: u32) -> ShapeshiftForm {
@@ -27,20 +30,40 @@ fn form(flags: u32) -> ShapeshiftForm {
     }
 }
 
-/// The latch harness with the release system, the active player and `SpellShapeshiftForm` rows: 1
-/// and 5 plain forms, 7 a stance (flag 0x1), 8 a form that may still interact (flag 0x8).
+/// The whole client headless, a VM spying on the windows' closes, the active player and
+/// `SpellShapeshiftForm` rows: 1 and 5 plain forms, 7 a stance (flag 0x1), 8 a form that may still
+/// interact (flag 0x8).
 fn app() -> (App, Entity) {
-    let mut app = harness();
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    // Kept alive for the run: a dropped receiver fails the sends.
+    std::mem::forget(rx);
     let mut spells = Spells::empty_for_tests();
     spells.forms.insert(1, form(0));
     spells.forms.insert(5, form(0x2));
     spells.forms.insert(7, form(0x1 | 0x2));
     spells.forms.insert(8, form(0x8));
-    app.insert_resource(spells)
-        .add_message::<FieldChanged>()
-        .add_systems(Update, release_on_field_edges);
-    let me = app.world_mut().spawn(SelfPlayer).id();
+    app.insert_resource(crate::net::NetCommands(tx))
+        .insert_resource(spells)
+        .insert_resource(SelfGuid(Some(ME)))
+        .insert_non_send_resource(crate::ui_script::sweep_test::spied_vm(&[
+            "BANKFRAME_CLOSED",
+            "MERCHANT_CLOSED",
+            "GOSSIP_CLOSED",
+            "QUEST_FINISHED",
+            "TAXIMAP_CLOSED",
+            "TRAINER_CLOSED",
+        ]));
+    let me = app.world_mut().spawn_empty().id();
     (app, me)
+}
+
+/// The update packet's end on the edges written, which runs their callbacks, then the frame's
+/// lanes.
+fn packet_end(app: &mut App) {
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, vec![SessionEvent::ObjectUpdateEnd]);
+    crate::lanes::fire_in_order(world);
 }
 
 fn edge(
@@ -62,16 +85,16 @@ fn edge(
     }
 }
 
-fn shift(app: &mut App, entity: Entity, old: u8, new: u8) {
+fn shift(app: &mut App, entity: Entity, guid: u64, old: u8, new: u8) {
     app.world_mut().write_message(edge(
         entity,
-        ME,
+        guid,
         ObjectType::Player,
         FIELD_UNIT_BYTES_1,
         u32::from(old) << 16 | 0x0102,
         u32::from(new) << 16 | 0x0102,
     ));
-    app.update();
+    packet_end(app);
 }
 
 /// `0x5de07f`: a form without flag 0x8 closes the window with the goodbye; none, a stance, a form
@@ -83,11 +106,11 @@ fn a_shapeshift_into_a_form_that_cannot_interact_closes_the_window() {
     open(&mut app, NpcWindow::Bank, BANKER);
     vocals(&mut app);
 
-    shift(&mut app, me, 1, 0);
-    shift(&mut app, me, 0, 7);
-    shift(&mut app, me, 0, 8);
-    shift(&mut app, me, 0, 99);
-    shift(&mut app, other, 0, 1);
+    shift(&mut app, me, ME, 1, 0);
+    shift(&mut app, me, ME, 0, 7);
+    shift(&mut app, me, ME, 0, 8);
+    shift(&mut app, me, ME, 0, 99);
+    shift(&mut app, other, OTHER, 0, 1);
     // The form byte unchanged, the byte beside it moved.
     app.world_mut().write_message(edge(
         me,
@@ -97,19 +120,59 @@ fn a_shapeshift_into_a_form_that_cannot_interact_closes_the_window() {
         1 << 16,
         1 << 16 | 0x0100,
     ));
-    app.update();
+    packet_end(&mut app);
     assert_eq!(latch(&app), Some(BANKER));
     assert!(seen_in(&app).is_empty());
 
-    shift(&mut app, me, 0, 1);
+    shift(&mut app, me, ME, 0, 1);
     assert_eq!(seen_in(&app), ["BANKFRAME_CLOSED"]);
     assert_eq!(latch(&app), None);
     assert_eq!(vocals(&mut app), [LatchVocal::Goodbye(BANKER)]);
 
     // A form on a plain, non-stance row with the interact flag clear, from another form.
     open(&mut app, NpcWindow::Merchant, VENDOR);
-    shift(&mut app, me, 1, 5);
+    shift(&mut app, me, ME, 1, 5);
     assert_eq!(latch(&app), None);
+}
+
+/// `0x5de010` releases the latch after its own signals (`0x5de011`-`0x5de01b`, then `0x5de07f`),
+/// inside the values packet that moved the form byte: the bank's close fires behind
+/// `UPDATE_BONUS_ACTIONBAR`, whose notice the notify pass wrote after the edge.
+#[test]
+fn a_form_change_closes_the_window_after_its_own_signals() {
+    let (mut app, _) = app();
+    let world = app.world_mut();
+    world.insert_non_send_resource(crate::ui_script::sweep_test::spied_vm(&[
+        "UPDATE_BONUS_ACTIONBAR",
+        "BANKFRAME_CLOSED",
+    ]));
+    let me = world
+        .spawn((
+            crate::net::Guid(ME),
+            crate::net::SelfPlayer,
+            crate::net::ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19), (FIELD_UNIT_BYTES_1, 0)])
+                    .into_created(ObjectType::Player),
+            ),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(ME, me);
+    open(&mut app, NpcWindow::Bank, BANKER);
+    crate::lanes::fire_in_order(app.world_mut());
+    let block = SessionEvent::ObjectValues {
+        guid: ME,
+        fields: benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_BYTES_1, 1 << 16)]),
+    };
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, crate::net::wire([block]));
+    crate::lanes::fire_in_order(world);
+    assert_eq!(
+        seen_in(&app),
+        ["UPDATE_BONUS_ACTIONBAR", "BANKFRAME_CLOSED"]
+    );
 }
 
 /// The shipped `SpellShapeshiftForm.dbc` through the gate: every druid form that is not a stance
@@ -176,7 +239,7 @@ fn an_npc_that_loses_a_service_flag_closes_its_window() {
                 old,
                 new,
             ));
-            app.update();
+            packet_end(app);
         };
         flags(&mut app, other, BANKER, bit | KEEP, KEEP);
         flags(&mut app, npc, VENDOR, KEEP, bit | KEEP);
@@ -201,7 +264,7 @@ fn an_npc_that_loses_a_service_flag_closes_its_window() {
         u32::MAX,
         0,
     ));
-    app.update();
+    packet_end(&mut app);
     assert!(seen_in(&app).is_empty());
     assert_eq!(latch(&app), Some(VENDOR));
 }

@@ -68,11 +68,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "Messages<benilla_app::net::FieldChanged>",
-        "the field changes",
-    ),
-    (
-        Row::Queue,
         "::ui_action::errors::MountErrors",
         "the mount refusals",
     ),
@@ -642,8 +637,9 @@ fn lane_types() -> [TypeId; 35] {
         TypeId::of::<crate::ui_party::PartyLane>(),
         // The list rebuilds a learn, an unlearn or a pet's spells owe, stamped at their packets.
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
-        // The deaths lane: the signals each death's legs parked, stamped under its health edge.
-        TypeId::of::<crate::target::Deaths>(),
+        // The field callbacks' lane: the signals each callback's legs parked, stamped under its
+        // edge.
+        TypeId::of::<crate::field_callbacks::FieldCallbacks>(),
         // The release lane: the signals each selection teardown parked, stamped under its release.
         TypeId::of::<crate::target::Releases>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
@@ -718,7 +714,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 35] {
             "list rebuilds",
             TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         ),
-        ("deaths", TypeId::of::<crate::target::Deaths>()),
+        (
+            "field callbacks",
+            TypeId::of::<crate::field_callbacks::FieldCallbacks>(),
+        ),
         ("releases", TypeId::of::<crate::target::Releases>()),
         (
             "item text",
@@ -920,9 +919,9 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "chat",
             "chat setup arrivals",
             "cooldowns",
-            "deaths",
             "dialogs",
             "equip errors",
+            "field callbacks",
             "field notices",
             "gossip",
             "guild",
@@ -1219,30 +1218,9 @@ pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[
 /// as the drain fires the whole frame by stamp after them; once
 /// the dispatch fires each packet's lanes after its handlers, an item stamped at an earlier
 /// packet and pushed after the dispatch fires behind every later packet's. The reference runs
-/// each of these inside the update packet's notify pass (`0x465277` → `0x465330`).
-pub(super) const PLACED_OUTSIDE_THE_DISPATCH: &[(&str, &str)] = &[
-    (
-        "::ui_chat::combat::watch::aura_lines",
-        "the combat log's aura lines, which the aura watchers write (`0x604d00`, `0x604ea0`)",
-    ),
-    (
-        "::ui_chat::combat::watch::death_lines",
-        "the unit-death line, which the health watcher writes (`0x6046f0` → `0x625190`)",
-    ),
-    (
-        "::ui_chat::combat::watch::pet_loyalty_lines",
-        "the pet-loyalty line, which the loyalty watcher writes (`0x5ff860`)",
-    ),
-    (
-        "::ui_pet::unit::feed_pet_unit",
-        "the pet's rename, `LOCALPLAYER_PET_RENAMED`, off its name stamp's edge",
-    ),
-    (
-        "::ui_session::release::release_on_field_edges",
-        "the form change's latch release and the lost service flags' closes, run from its \
-         commands at its own place, behind every packet of the frame",
-    ),
-];
+/// each such consumer inside the update packet's notify pass (`0x465277` → `0x465330`), as
+/// [`crate::field_callbacks`] runs the field edges' callbacks at the packet's end.
+pub(super) const PLACED_OUTSIDE_THE_DISPATCH: &[(&str, &str)] = &[];
 
 /// The placed queues' readers that defer work to their commands and push nothing onto a lane
 /// from them, by a suffix of the system's name, with what the commands do.

@@ -159,6 +159,20 @@ impl NoticeLane {
         }
     }
 
+    /// The stamp of the first notice waiting after `at` that `which` picks: where a callback's
+    /// tail goes that comes after the signals the notify pass wrote for it.
+    pub(crate) fn first_after(
+        &self,
+        at: crate::lanes::Stamp,
+        which: impl Fn(&FieldNotice) -> bool,
+    ) -> Option<crate::lanes::Stamp> {
+        let from = self.0.partition_point(|(s, _)| *s <= at);
+        self.0
+            .range(from..)
+            .find(|(_, n)| which(n))
+            .map(|(s, _)| *s)
+    }
+
     /// The head's stamp.
     pub(crate) fn peek(&self) -> Option<crate::lanes::Stamp> {
         self.0.front().map(|(s, _)| *s)
@@ -230,6 +244,7 @@ pub(crate) mod id {
     pub(crate) const LANGUAGE_LIST_CHANGED: u16 = 258;
     pub(crate) const PET_ATTACK_START: u16 = 334;
     pub(crate) const PET_ATTACK_STOP: u16 = 335;
+    pub(crate) const LOCALPLAYER_PET_RENAMED: u16 = 331;
     pub(crate) const PLAYER_GUILD_UPDATE: u16 = 345;
     pub(crate) const UPDATE_FACTION: u16 = 372;
     pub(crate) const TABARD_CANSAVE_CHANGED: u16 = 376;

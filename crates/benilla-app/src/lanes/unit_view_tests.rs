@@ -534,6 +534,7 @@ fn player_dead_reads_its_packets_health_after_an_earlier_packets_line() {
 /// line (`0x62c160`) and ends in `SignalDeathState` (`0x6251cc` → `0x495850`).
 #[test]
 fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
+    #[cfg(debug_assertions)]
     use bevy::ecs::system::RunSystemOnce;
 
     let mut app = client();
@@ -560,11 +561,8 @@ fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
     world
         .run_system_once(crate::ui_unit::views::mark_frame_start)
         .unwrap();
+    // The packet's end writes the line among the death's legs.
     crate::net::handlers::dispatch(world, wire([values(ME, &health(0))]));
-    // The death line's watcher, which the frame runs ahead of the drain.
-    world
-        .run_system_once(crate::ui_chat::combat::watch::death_lines)
-        .unwrap();
     crate::ui_unit::run_feed_units_once(world);
     crate::lanes::fire_in_order(world);
     let seen = world
@@ -577,6 +575,54 @@ fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
         .filter(|s| !s.starts_with("UNIT_"))
         .collect();
     assert_eq!(ours, ["PLAYER_TARGET_CHANGED", "death line", "PLAYER_DEAD"]);
+}
+
+/// The death line's listener runs where the health watcher wrote it, inside its update packet
+/// (`0x465277` → `0x6046f0` → `0x605860` → `0x62c160`), before the next packet's handler runs
+/// (`0x537ae5`): its `SendChatMessage` goes out ahead of the name query the next packet's create
+/// asks in its handler (`0x5dec12` → `0x609210`). The lanes fire after the whole dispatch until
+/// they fire inside it, so the query goes first today.
+#[test]
+#[ignore = "the lanes fire inside the dispatch only from the flip on"]
+fn a_death_lines_listener_sends_ahead_of_the_next_packets_handler() {
+    const STRANGER: u64 = 0x31;
+    let mut app = client();
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    app.world_mut()
+        .resource_mut::<crate::net::NetStatus>()
+        .connected = true;
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"UNITDIESOTHER = "%s dies."
+            local d = CreateFrame("Frame")
+            d:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
+            d:SetScript("OnEvent", function() SendChatMessage("down", "SAY") end)"#,
+        )
+        .unwrap();
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(
+        world,
+        wire_packets(vec![
+            vec![values(BOAR, &health(0))],
+            vec![created(
+                STRANGER,
+                EntityKind::Player,
+                &[(FIELD_UNIT_HEALTH, 100)],
+            )],
+        ]),
+    );
+    crate::lanes::fire_in_order(world);
+    let order: Vec<&str> = sent
+        .try_iter()
+        .filter_map(|c| match c {
+            crate::net::ClientCommand::Chat { .. } => Some("chat"),
+            crate::net::ClientCommand::NameQuery { guid: STRANGER } => Some("name query"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["chat", "name query"]);
 }
 
 /// A spy on the level-up's events, each with its arguments, into the client's `Seen`.

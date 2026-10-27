@@ -63,10 +63,9 @@ pub(crate) use cursor_mode::{
 };
 /// `GO_FLAG_LOCKED`, the bit the lock chain and the GameObject tooltip's "Locked" line read.
 pub(crate) use lock::GO_FLAG_LOCKED;
+// `OnDied`, which the update packet's field callbacks run on a unit's death edge.
+pub(crate) use died::died;
 // This frame's combat-flash verdict, for the ring's material and the nameplate colour gate.
-pub(crate) use died::drop_parked_deaths;
-#[cfg(test)]
-pub(crate) use died::Deaths;
 pub(crate) use flash::CombatFlash;
 // The discount `0x612b80` the repair cost and the taxi fare take off their DBC prices.
 pub(crate) use price_discount::vendor_price_discount;
@@ -322,7 +321,9 @@ pub(crate) struct TargetPlugin;
 impl Plugin for TargetPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar);
-        died::register(app);
+        // The update packet's field callbacks, a death's among them, after the net plugin's
+        // update end, which writes their edges.
+        crate::field_callbacks::register(app);
         release::register(app);
         app.init_resource::<Selection>()
             .init_resource::<ClickConfig>()

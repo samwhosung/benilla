@@ -1,7 +1,9 @@
 //! The combat-log lines that come off descriptor edges, not packets, as in the reference: the
 //! death line (the unit-death reflex `0x625190`; 1.12 has no death opcode), the aura lines (the
 //! `UNIT_FIELD_AURA` and `UNIT_FIELD_AURAAPPLICATIONS` callbacks `0x604d00` and `0x604ea0`,
-//! through `0x612320`, `0x6123f0` and `0x612450`) and the pet-loyalty line (`0x5ff860`).
+//! through `0x612320`, `0x6123f0` and `0x612450`) and the pet-loyalty line (`0x5ff860`). Each is
+//! written inside the update packet's notify pass (`0x465277` → `0x465330`), so the packet's end
+//! words them ([`crate::field_callbacks`]), over the world its packet left.
 
 use bevy::prelude::*;
 
@@ -114,77 +116,92 @@ const DESTROYED_EFFECTS: [u32; 10] = [50, 74, 87, 88, 89, 90, 104, 105, 106, 107
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub(crate) struct XpAwarded;
 
-/// Each death line's place, by its health edge's stamp: where `PresentUnitDeath` (`0x6058ae` →
-/// `0x62c160`) comes in the death's legs, between `0x5e99b0`'s list and `PLAYER_DEAD`, which the
-/// death handler takes (`crate::target`'s `died`). A line with none goes under its edge.
-#[derive(Resource, Default)]
-pub(crate) struct DeathLineAt(std::collections::HashMap<crate::lanes::Stamp, crate::lanes::Stamp>);
-
-impl DeathLineAt {
-    /// The line of the death at health edge `edge` goes at `line`.
-    pub(crate) fn place(&mut self, edge: crate::lanes::Stamp, line: crate::lanes::Stamp) {
-        self.0.insert(edge, line);
+/// The unit-death line (`0x625190` → `0x62c160`), off the `UNIT_FIELD_HEALTH` edge `e` as the
+/// reference's watcher `0x6046f0` takes it (alive to dead at `0x6047a3`), written where
+/// `PresentUnitDeath` comes in the death's legs (`0x6058ae`, `crate::target`'s `died`); a unit
+/// that streams in dead prints nothing, and neither does one an XP award named ([`XpAwarded`]).
+pub(crate) fn death_line(world: &mut World, e: FieldChanged) {
+    if let Err(err) = world.run_system_cached_with(word_death, e) {
+        // A world with no chat log words nothing.
+        debug!("combat log: no death line: {err}");
     }
 }
 
-/// The unit-death line (`0x625190` → `0x62c160`), off the `UNIT_FIELD_HEALTH` edge as the
-/// reference's watcher `0x6046f0` takes it (alive to dead at `0x6047a3`); a unit that streams in
-/// dead prints nothing, and neither does one an XP award named ([`XpAwarded`]).
-pub(crate) fn death_lines(
+/// [`death_line`] over the world as the packet left it.
+fn word_death(
+    In(e): In<FieldChanged>,
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
     awarded: Query<(), With<XpAwarded>>,
-    mut edges: MessageReader<FieldChanged>,
     poses: Query<&Transform>,
     log: Res<ChatLog>,
-    mut places: Option<ResMut<DeathLineAt>>,
 ) {
-    for e in edges.read() {
-        // The health watcher's own edge, compared signed (`0x604774`, `0x604778`).
-        if !e.unit_died() {
-            continue;
-        }
-        let at = places
-            .as_mut()
-            .and_then(|p| p.0.remove(&e.at))
-            .unwrap_or(e.at);
-        if awarded.contains(e.entity) {
-            continue;
-        }
-        let Ok((_, store)) = stores.get(e.entity) else {
-            continue;
-        };
-        let guid = e.guid;
-        let class = ctx.classify(guid, &stores);
-        // A summoned thing is destroyed, a living one dies, by its creating spell's first effect.
-        let destroyed = store
-            .0
-            .unit_created_by_spell()
-            .filter(|&id| id != 0)
-            .and_then(|id| ctx.spells.as_ref()?.catalog.get(id))
-            .is_some_and(|d| DESTROYED_EFFECTS.contains(&d.effects[0]));
-        let family = match (class, destroyed) {
-            (UnitClass::Me, _) => super::UNITDIES,
-            (_, true) => super::UNITDESTROYEDOTHER,
-            (_, false) => super::UNITDIES,
-        };
-        queue_one(
-            at,
-            &log,
-            &ctx,
-            &poses,
-            death_kind(class),
-            family,
-            (guid, class),
-            ctx.ranges.death(),
-            Fills::default(),
-            None,
-        );
+    if awarded.contains(e.entity) {
+        return;
     }
-    // A death the line skips, or one no line reads, leaves no place behind.
-    if let Some(places) = places.as_mut() {
-        places.0.clear();
+    let Ok((_, store)) = stores.get(e.entity) else {
+        return;
+    };
+    let guid = e.guid;
+    let class = ctx.classify(guid, &stores);
+    // A summoned thing is destroyed, a living one dies, by its creating spell's first effect.
+    let destroyed = store
+        .0
+        .unit_created_by_spell()
+        .filter(|&id| id != 0)
+        .and_then(|id| ctx.spells.as_ref()?.catalog.get(id))
+        .is_some_and(|d| DESTROYED_EFFECTS.contains(&d.effects[0]));
+    let family = match (class, destroyed) {
+        (UnitClass::Me, _) => super::UNITDIES,
+        (_, true) => super::UNITDESTROYEDOTHER,
+        (_, false) => super::UNITDIES,
+    };
+    queue_one(
+        crate::lanes::stamp(),
+        &log,
+        &ctx,
+        &poses,
+        death_kind(class),
+        family,
+        (guid, class),
+        ctx.ranges.death(),
+        Fills::default(),
+        None,
+    );
+}
+
+/// The packet's aura, stack and loyalty lines, off its field `edges` and the aura watcher's
+/// `calls`, each at its watcher's place.
+pub(crate) fn lines(world: &mut World, edges: &[FieldChanged], calls: &[AuraFieldsChanged]) {
+    use benilla_protocol::field::{FIELD_UNIT_AURAAPPLICATIONS, FIELD_UNIT_BYTES_1};
+    const SLOTS: u16 = benilla_protocol::messages::UNIT_AURA_SLOTS as u16;
+    let edges: Vec<FieldChanged> = edges
+        .iter()
+        .filter(|e| {
+            e.unit_field(FIELD_UNIT_BYTES_1)
+                || e.unit_array_slot(FIELD_UNIT_AURAAPPLICATIONS, SLOTS / 4)
+                    .is_some()
+        })
+        .copied()
+        .collect();
+    if edges.is_empty() && calls.is_empty() {
+        return;
     }
+    if let Err(err) = world.run_system_cached_with(word_lines, (edges, calls.to_vec())) {
+        debug!("combat log: no aura lines: {err}");
+    }
+}
+
+/// [`lines`] over the world as the packet left it.
+fn word_lines(
+    In((edges, calls)): In<(Vec<FieldChanged>, Vec<AuraFieldsChanged>)>,
+    ctx: WatchCtx,
+    stores: Query<(Entity, &ObjectStore)>,
+    poses: Query<&Transform>,
+    log: Res<ChatLog>,
+) {
+    aura_lines(&ctx, &stores, &poses, &log, &calls, &edges);
+    pet_loyalty_lines(&ctx, &stores, &log, &edges);
 }
 
 /// The aura lines (`0x62b480`, `0x62b800`):
@@ -201,25 +218,24 @@ pub(crate) fn death_lines(
 /// `AURA_END_HARMFUL` for a loss, with the spell's name (`0x62b74f`-`0x62b7ac`); a stack line
 /// raises none. An arrival or a loss writes nothing for a passive spell, and a loss nothing on a
 /// unit with no health (`0x62b503`-`0x62b515`), so the auras death strips leave silently.
-pub(crate) fn aura_lines(
-    ctx: WatchCtx,
-    stores: Query<(Entity, &ObjectStore)>,
-    mut calls: MessageReader<AuraFieldsChanged>,
-    mut edges: MessageReader<FieldChanged>,
-    poses: Query<&Transform>,
-    log: Res<ChatLog>,
+fn aura_lines(
+    ctx: &WatchCtx,
+    stores: &Query<(Entity, &ObjectStore)>,
+    poses: &Query<&Transform>,
+    log: &ChatLog,
+    calls: &[AuraFieldsChanged],
+    edges: &[FieldChanged],
 ) {
     use benilla_protocol::field::FIELD_UNIT_AURAAPPLICATIONS;
     const SLOTS: u16 = benilla_protocol::messages::UNIT_AURA_SLOTS as u16;
 
-    let calls: Vec<AuraFieldsChanged> = calls.read().copied().collect();
-    for call in &calls {
-        aura_call(&ctx, &stores, &poses, &log, call);
+    for call in calls {
+        aura_call(ctx, stores, poses, log, call);
     }
 
     // Stack counts: four slots per dword, one byte each, holding `stack - 1`. Each byte is its
     // own watch (`0x604ea0`), and `0x612450` compares the bytes alone (`cmp`, `jbe`).
-    for e in edges.read().filter(|e| {
+    for e in edges.iter().filter(|e| {
         e.unit_array_slot(FIELD_UNIT_AURAAPPLICATIONS, SLOTS / 4)
             .is_some()
     }) {
@@ -233,24 +249,24 @@ pub(crate) fn aura_lines(
             if now <= before {
                 continue;
             }
-            // `0x62b800` reads the slot's spell dword as the descriptor holds it then
-            // (`0x62b822`), and writes only for a spell whose `StackAmount` is above 1
-            // (`0x62b87c`, `jle`).
-            let spell_id = spell_at(&calls, store, e, slot);
+            // `0x62b800` reads the slot's spell dword as the descriptor holds it then, every
+            // block of the packet written (`0x62b822`), and writes only for a spell whose
+            // `StackAmount` is above 1 (`0x62b87c`, `jle`).
+            let spell_id = store.0.unit_aura_ids().nth(usize::from(slot)).unwrap_or(0);
             let Some(display) = super::logged_spell(ctx.spells.as_deref(), spell_id)
                 .filter(|d| d.stack_amount as i32 > 1)
             else {
                 continue;
             };
-            let class = ctx.classify(e.guid, &stores);
+            let class = ctx.classify(e.guid, stores);
             let Some(kind) = periodic_kind(class, !harmful(slot)) else {
                 continue;
             };
             queue_one(
                 e.at,
-                &log,
-                &ctx,
-                &poses,
+                log,
+                ctx,
+                poses,
                 kind,
                 if harmful(slot) {
                     super::AURAAPPLICATIONADDED_HARMFUL
@@ -274,19 +290,6 @@ pub(crate) fn aura_lines(
 /// Whether an aura slot is harmful: slots below 0x20 are helpful (`0x61238e`).
 fn harmful(slot: u16) -> bool {
     slot >= 0x20
-}
-
-/// `slot`'s spell dword on the unit as the edge `e` found it: the old dword of the first watcher
-/// call on the unit after the edge, or the descriptor's when none follows it in the drain.
-fn spell_at(calls: &[AuraFieldsChanged], store: &ObjectStore, e: &FieldChanged, slot: u16) -> u32 {
-    calls
-        .iter()
-        .filter(|c| c.entity == e.entity && c.at > e.at)
-        .min_by_key(|c| c.at)
-        .map_or_else(
-            || store.0.unit_aura_ids().nth(usize::from(slot)).unwrap_or(0),
-            |c| c.old[usize::from(slot)],
-        )
 }
 
 /// One slot's aura in the watcher's dwords: its spell when the spell is nonzero and the slot's
@@ -387,13 +390,13 @@ fn aura_call(
 /// The pet-loyalty line (`0x5ff860` → `0x62d440`) on `UNIT_FIELD_BYTES_1` byte 1 moving, for your
 /// own pet only, at chat type `0x19` `COMBAT_MISC_INFO`. The reference prints the text through a
 /// bare `"%s"`, which a family with no slots matches.
-pub(crate) fn pet_loyalty_lines(
-    ctx: WatchCtx,
-    stores: Query<(Entity, &ObjectStore)>,
-    mut edges: MessageReader<FieldChanged>,
-    log: Res<ChatLog>,
+fn pet_loyalty_lines(
+    ctx: &WatchCtx,
+    stores: &Query<(Entity, &ObjectStore)>,
+    log: &ChatLog,
+    edges: &[FieldChanged],
 ) {
-    for e in edges.read() {
+    for e in edges {
         if !e.unit_field(benilla_protocol::field::FIELD_UNIT_BYTES_1) {
             continue;
         }
@@ -402,12 +405,12 @@ pub(crate) fn pet_loyalty_lines(
         if level == before || level == 0 || before == 0 {
             continue;
         }
-        if ctx.classify(e.guid, &stores) != UnitClass::MyPet {
+        if ctx.classify(e.guid, stores) != UnitClass::MyPet {
             continue;
         }
         push_at(
             e.at,
-            &log,
+            log,
             PendingCombat {
                 kind: ChatEventKind::CombatMiscInfo,
                 family: if level > before {

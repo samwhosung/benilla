@@ -682,6 +682,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PLAYERBANKBAGSLOTS_CHANGED => "PLAYERBANKBAGSLOTS_CHANGED",
         id::PLAYER_FARSIGHT_FOCUS_CHANGED => "PLAYER_FARSIGHT_FOCUS_CHANGED",
         id::LANGUAGE_LIST_CHANGED => "LANGUAGE_LIST_CHANGED",
+        id::LOCALPLAYER_PET_RENAMED => "LOCALPLAYER_PET_RENAMED",
         _ => return None,
     })
 }

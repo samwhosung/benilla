@@ -24,11 +24,10 @@ pub(crate) struct PetUnitMemory {
     names_generation: gate::Watch,
 }
 
-/// Feed the `"pet"` token and the rename event. The token is the unit our `UNIT_FIELD_CHARM`,
-/// else our `UNIT_FIELD_SUMMON`, names (`0x515a5e`-`0x515a6e`). The reaction is 0: the pet frame
-/// reads none.
+/// Feed the `"pet"` token: the unit our `UNIT_FIELD_CHARM`, else our `UNIT_FIELD_SUMMON`, names
+/// (`0x515a5e`-`0x515a6e`). The reaction is 0: the pet frame reads none.
 pub(crate) fn feed_pet_unit(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, NameCache>>,
+    mut vm: crate::script_calls::VmWith<Res<'static, NameCache>>,
     pet: PetUnit,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
@@ -42,23 +41,12 @@ pub(crate) fn feed_pet_unit(
         Option<Res<crate::ui_pet_stats::PetFamilyTables>>,
     ),
     group: Option<Res<crate::ui_party::GroupState>>,
-    mut edges: MessageReader<crate::net::FieldChanged>,
     mut memory: Local<crate::ui_script::VmMemo<PetUnitMemory>>,
 ) {
-    let renamed: Vec<u64> = edges
-        .read()
-        .filter(|e| e.unit_field(UNIT_FIELD_PET_NAME_TIMESTAMP))
-        .map(|e| e.guid)
-        .collect();
-    vm.feed(|script, mut names, fires| {
+    vm.turn(|script, names| {
         let Some(script) = script else {
             return;
         };
-        for &guid in &renamed {
-            if watch_name_timestamp(guid, &pet, &mut names, &commands) {
-                fires.post("LOCALPLAYER_PET_RENAMED", vec![]);
-            }
-        }
         let (memory, vm_reset) = memory.get_reset(script);
         let names_moved = memory.names_generation.moved(names.generation());
         let stores_changed = !changed_stores.is_empty();
@@ -187,6 +175,35 @@ pub(crate) fn pet_state(
 /// `UNIT_FIELD_PET_NAME_TIMESTAMP`, the field whose watcher `0x604400` registers on every unit
 /// (unit block offset `0x218`).
 const UNIT_FIELD_PET_NAME_TIMESTAMP: u16 = 140;
+
+/// The callbacks of one field edge: the name stamp's watch (`0x604aa0`), a type watcher's, at
+/// the edge's own place inside the update packet ([`crate::field_callbacks`]).
+pub(crate) fn on_field_edge(world: &mut World, e: crate::net::FieldChanged) {
+    if !e.unit_field(UNIT_FIELD_PET_NAME_TIMESTAMP) {
+        return;
+    }
+    crate::lanes::firing(e.at, || {
+        if let Err(err) = world.run_system_cached_with(name_timestamp_moved, e.guid) {
+            debug!("ui_pet: the name stamp's watch did not run: {err}");
+        }
+    });
+}
+
+/// [`watch_name_timestamp`] on `guid`, its `LOCALPLAYER_PET_RENAMED` signalled bare (`0x604b12`,
+/// `0x604b17` → `0x703e50`) on the notice lane.
+fn name_timestamp_moved(
+    In(guid): In<u64>,
+    pet: PetUnit,
+    mut names: ResMut<NameCache>,
+    commands: Res<NetCommands>,
+    mut lane: ResMut<crate::field_watch::NoticeLane>,
+) {
+    if watch_name_timestamp(guid, &pet, &mut names, &commands) {
+        lane.write(crate::field_watch::FieldNotice::Global {
+            id: crate::field_watch::id::LOCALPLAYER_PET_RENAMED,
+        });
+    }
+}
 
 /// `0x604aa0` on a unit whose name timestamp moved: evict the pet-name cache under the unit's own
 /// `UNIT_FIELD_PETNUMBER` (`0x604ac6`-`0x604ad8`, unit block `+0x214`) and name it again

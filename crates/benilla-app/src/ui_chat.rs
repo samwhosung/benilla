@@ -163,16 +163,6 @@ impl Plugin for UiChatPlugin {
                 )
                     .before(crate::lanes::UiLanes),
             )
-            // Descriptor-diff combat-log lines, ahead of the drain so none lands a frame late.
-            .add_systems(
-                Update,
-                (
-                    combat::watch::death_lines,
-                    combat::watch::aura_lines,
-                    combat::watch::pet_loyalty_lines,
-                )
-                    .before(crate::lanes::UiLanes),
-            )
             // After the drain, so the log files take the frame's lines in one order.
             .add_systems(
                 Update,
@@ -250,7 +240,6 @@ impl Plugin for UiChatPlugin {
 /// welcome. Ahead of each drain the held lines' age pass is queued ([`ChatLog::begin_frame`]).
 pub(crate) fn add_chat_lane(app: &mut App) {
     use crate::lanes::LaneApp;
-    app.init_resource::<combat::watch::DeathLineAt>();
     app.init_resource::<ChatLog>().add_lane(
         "chat",
         |world| world.get_resource::<ChatLog>()?.peek(),

@@ -1,6 +1,5 @@
 //! The aura lines' words, gates and order (`0x604d00`, `0x62b480`, `0x612450`, `0x62b800`).
 
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS, FIELD_UNIT_AURAFLAGS};
@@ -163,7 +162,7 @@ fn lines(app: &App) -> Vec<(String, String)> {
 fn on_me(moves: &[Move]) -> Vec<(String, String)> {
     let mut app = world(100);
     notify(&mut app, ME, moves);
-    app.world_mut().run_system_once(super::aura_lines).unwrap();
+    crate::field_callbacks::run_written(app.world_mut());
     lines(&app)
 }
 
@@ -177,7 +176,7 @@ fn slot(health: u32, guid: u64, slot: u16, old: u32, new: u32) -> Vec<(String, O
         guid,
         &[(slot, old, nibble(old), new, nibble(new))],
     );
-    app.world_mut().run_system_once(super::aura_lines).unwrap();
+    crate::field_callbacks::run_written(app.world_mut());
     app.world()
         .resource::<ChatLog>()
         .pending_combat()
@@ -295,7 +294,7 @@ fn an_aura_line_fires_at_its_field_edges_place() {
     let mut app = world(100);
     notify(&mut app, ME, &[(0, 0, 0, FORTITUDE, PRESENT)]);
     app.world().resource::<ChatLog>().push_combat_edge(true);
-    app.world_mut().run_system_once(super::aura_lines).unwrap();
+    crate::field_callbacks::run_written(app.world_mut());
     assert_eq!(
         app.world().resource::<ChatLog>().pending_kinds(),
         ["combat", "PLAYER_ENTER_COMBAT"]
@@ -333,7 +332,7 @@ fn stacks(
         old: before,
         new: now,
     });
-    app.world_mut().run_system_once(super::aura_lines).unwrap();
+    crate::field_callbacks::run_written(app.world_mut());
     app.world()
         .resource::<ChatLog>()
         .pending_combat()
@@ -383,19 +382,25 @@ fn a_stack_rise_words_its_line_though_the_slot_changed_spell() {
     );
 }
 
-/// `0x62b800` names the spell the slot holds when the byte rises: a later block in the frame that
-/// empties the slot does not take the stack's line away.
+/// `0x62b800` names the spell the slot holds when the byte rises, as the descriptor holds it at
+/// the packet's notify (`0x62b822`): a later packet that empties the slot does not take the
+/// stack's line away.
 #[test]
 fn a_stack_line_names_the_spell_its_slot_held_at_the_rise() {
     let mut app = world(100);
     let entity = app.world().resource::<GuidIndex>().0[&MOB];
-    // The descriptor after both blocks: the slot emptied, the byte left as it rose.
-    app.world_mut().get_mut::<ObjectStore>(entity).unwrap().0 =
-        benilla_protocol::ObjectFields::from_pairs(&[
-            (2, 0x09),
-            (22, 100),
-            (FIELD_UNIT_AURAAPPLICATIONS, 1),
-        ]);
+    let descriptor = |app: &mut App, spell: u32, flags: u32| {
+        app.world_mut().get_mut::<ObjectStore>(entity).unwrap().0 =
+            benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x09),
+                (22, 100),
+                (FIELD_UNIT_AURA, spell),
+                (FIELD_UNIT_AURAFLAGS, flags),
+                (FIELD_UNIT_AURAAPPLICATIONS, 1),
+            ]);
+    };
+    // The first packet: the byte rises on the slot's Sunder.
+    descriptor(&mut app, SUNDER, PRESENT);
     app.world_mut().write_message(FieldChanged {
         at: crate::lanes::stamp(),
         entity,
@@ -405,8 +410,11 @@ fn a_stack_line_names_the_spell_its_slot_held_at_the_rise() {
         old: 0,
         new: 1,
     });
+    crate::field_callbacks::run_written(app.world_mut());
+    // The second: the slot empties, the byte left as it rose.
+    descriptor(&mut app, 0, 0);
     notify(&mut app, MOB, &[(0, SUNDER, PRESENT, 0, 0)]);
-    app.world_mut().run_system_once(super::aura_lines).unwrap();
+    crate::field_callbacks::run_written(app.world_mut());
     assert_eq!(
         lines(&app),
         [

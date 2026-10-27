@@ -110,8 +110,7 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_pet::drain::arm_owed_pet_gcds", &["ui_pet::PetBar"],
         "puts the GCDs the pet's sends owe into its list, which the reference arms at the send \
          (`0x6e58fb`)"),
-    ("::ui_pet::unit::feed_pet_unit", &["UiScript", "names::NameCache"],
-        "a field event's listeners read its push; it watches the name cache's record of the pet's name"),
+    ("::ui_pet::unit::feed_pet_unit", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",
         &["ui_binder::BinderState"],
         "closes the bind question once the player leaves service range, which \

@@ -1040,8 +1040,8 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     if let Some(mut minimap) = world.get_resource_mut::<crate::minimap::MinimapWidget>() {
         minimap.0 = None;
     }
-    // And the signals the frame's deaths and releases parked in it, for their lanes.
-    crate::target::drop_parked_deaths(world);
+    // And the signals the frame's field callbacks and releases parked in it, for their lanes.
+    crate::field_callbacks::drop_parked(world);
     crate::target::drop_parked_releases(world);
 }
 

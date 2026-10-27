@@ -9,7 +9,6 @@ use bevy::ecs::system::RunSystemOnce;
 
 use super::*;
 use crate::target::relations::fixture::{creature, player, store_of, HUMAN, ORC};
-use crate::ui_chat::combat::watch::death_lines;
 
 const ME: u64 = 1;
 const MOB: u64 = 2;
@@ -54,12 +53,12 @@ fn award(app: &mut App, victim: u64, total: u32, kill: bool) {
         .unwrap();
 }
 
-/// `guid` drops from alive to dead; what lines the death watcher then parks, by key.
+/// `guid` drops from alive to dead in a packet; what lines its end then parks, by key.
 fn dies(app: &mut App, guid: u64) -> Vec<String> {
     health_moves(app, guid, 40, 0)
 }
 
-/// `guid`'s health moves from `old` to `new`; what lines the death watcher then parks, by key.
+/// `guid`'s health moves from `old` to `new` in a packet; what lines its end then parks, by key.
 fn health_moves(app: &mut App, guid: u64, old: u32, new: u32) -> Vec<String> {
     let entity = app.world().resource::<GuidIndex>().0[&guid];
     app.world_mut().write_message(crate::net::FieldChanged {
@@ -71,7 +70,7 @@ fn health_moves(app: &mut App, guid: u64, old: u32, new: u32) -> Vec<String> {
         old,
         new,
     });
-    app.world_mut().run_system_once(death_lines).unwrap();
+    crate::field_callbacks::run_written(app.world_mut());
     app.world()
         .resource::<ChatLog>()
         .pending_combat()

@@ -31,7 +31,7 @@ pub(crate) use usable::actions_usable as pet_actions_usable;
 pub(crate) use drain::call_pet_off;
 pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
 pub(crate) use steps::PetSteps;
-pub(crate) use unit::{feed_pet_unit, pet_state, PetSources};
+pub(crate) use unit::{feed_pet_unit, on_field_edge, pet_state, PetSources};
 
 #[cfg(test)]
 mod call_tests;
