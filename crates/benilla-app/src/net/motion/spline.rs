@@ -5,13 +5,15 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
-use benilla_protocol::{CreateSpline, EntityKind};
+use benilla_protocol::{CreateSpline, EntityKind, MonsterMoveFacing};
 use bevy::prelude::*;
 
 use crate::entities::CollisionHeight;
 use crate::player::swim_enter_depth;
 
 use super::super::{NetEntity, ObjectStore};
+use super::facing::resolve_facing;
+use super::DisplayFacing;
 
 /// A server-dictated path (`SMSG_MONSTER_MOVE`) in raw WoW coordinates, walked at constant speed
 /// over `duration` from `start`; present only while the unit is on it.
@@ -34,6 +36,13 @@ pub(crate) struct Spline {
     /// The transport of a deck path (`SMSG_MONSTER_MOVE_TRANSPORT`), whose points are deck-local:
     /// sampled into the rider's [`crate::transport::TransportRider`] pose, never terrain-clamped.
     pub(crate) deck: Option<u64>,
+    /// The yaw the unit rests at once the path ends: the packet's final facing (`Angle`, or `Spot`
+    /// resolved against the last point) in raw WoW orientation, deck-local on a deck path. The
+    /// path overwrites the yaw with its tangent every frame, so this is written on the frame the
+    /// spline is dropped, as vmangos's `MoveSpline.cpp:45-49` sets the unit's own orientation at
+    /// the end. `None` (no facing, or a `Target`, which the goal chain squares up on) keeps the
+    /// last leg's direction.
+    pub(crate) final_facing: Option<f32>,
 }
 
 /// The id of a spline the server ended with a stop, owed in `CMSG_MOVE_SPLINE_DONE`. vmangos arms
@@ -187,6 +196,7 @@ pub(in crate::net) fn monster_move_spline(
     duration_ms: u32,
     flying: bool,
     run_mode: bool,
+    final_facing: Option<f32>,
     deck: Option<u64>,
 ) -> Option<Spline> {
     if stop || duration_ms == 0 || path.len() < 2 {
@@ -202,7 +212,19 @@ pub(in crate::net) fn monster_move_spline(
         grounded: !flying,
         run_mode,
         deck,
+        final_facing,
     })
+}
+
+/// The yaw a path ending at `end` rests at under the packet's final `facing`: an `Angle` as sent,
+/// a `Spot` as the bearing from `end`. A `Target` is `None`: it is a unit, not a place, and the
+/// goal chain's target row turns the unit to it once it stands.
+pub(in crate::net) fn final_yaw(facing: MonsterMoveFacing, end: Option<[f32; 3]>) -> Option<f32> {
+    match (facing, end) {
+        (MonsterMoveFacing::Angle(a), _) => Some(a),
+        (MonsterMoveFacing::Spot(_), Some(end)) => resolve_facing(facing, end, |_| None),
+        _ => None,
+    }
 }
 
 /// The [`Spline`] a unit is already riding in its create block, back-dated by
@@ -217,6 +239,7 @@ pub(in crate::net) fn create_spline(spline: CreateSpline) -> Option<Spline> {
         return None;
     }
     let passed = Duration::from_millis(u64::from(spline.time_passed_ms));
+    let final_facing = final_yaw(spline.facing, spline.path.last().copied());
     Some(Spline {
         points: spline.path,
         // `checked_sub`: a spline older than the monotonic clock's origin would panic on `-`.
@@ -229,6 +252,7 @@ pub(in crate::net) fn create_spline(spline: CreateSpline) -> Option<Spline> {
         run_mode: spline.run_mode,
         // The create block's spline tail names no transport; its path is in world coordinates.
         deck: None,
+        final_facing,
     })
 }
 
@@ -335,13 +359,18 @@ pub(in crate::net) fn sample_splines(
         if let Some(deck) = spline.deck {
             // Written as a world pose it would sit near the map origin, so a missing or mismatched
             // rider freezes the unit for the frame instead.
+            let done = now.saturating_duration_since(spline.start) >= spline.duration;
             if let Some(mut rider) = rider.filter(|r| r.transport_guid == deck) {
                 rider.local_pos = wow_pos;
                 if let Some(f) = facing {
                     rider.local_orientation = f;
                 }
+                // The path's end rests at the packet's final facing, not the last leg's tangent.
+                if let Some(f) = spline.final_facing.filter(|_| done) {
+                    rider.local_orientation = f;
+                }
             }
-            if now.saturating_duration_since(spline.start) >= spline.duration {
+            if done {
                 commands.entity(entity).remove::<Spline>();
             }
             continue;
@@ -373,6 +402,14 @@ pub(in crate::net) fn sample_splines(
         }
         // A finished path drops its spline: `creature_anim` reads the spline's presence as moving.
         if now.saturating_duration_since(spline.start) >= spline.duration {
+            // The unit rests at the packet's final facing, as the server's own orientation does
+            // (`MoveSpline.cpp:45-49`). The path wrote its tangent into the rotation every frame;
+            // without this the unit lies along its last leg. `DisplayFacing` is dropped so its
+            // first governed frame seeds from this yaw, as after a stop's snap.
+            if let Some(f) = spline.final_facing {
+                t.rotation = Quat::from_rotation_y(f);
+                commands.entity(entity).remove::<DisplayFacing>();
+            }
             if tracing {
                 benilla_assets::trace::line(
                     "spl",
@@ -1123,6 +1160,7 @@ mod tests {
     fn spline_at(points: Vec<[f32; 3]>, grounded: bool, frac: f32) -> (Spline, Instant) {
         let spline = Spline {
             deck: None,
+            final_facing: None,
             points,
             start: Instant::now() - Duration::from_secs_f32(10.0 * frac),
             duration: Duration::from_secs(10),
@@ -1215,6 +1253,7 @@ mod tests {
             flying: false,
             cyclic: false,
             run_mode: true,
+            facing: MonsterMoveFacing::None,
         })
         .expect("a live walk");
         let (pos, facing, _) = s.sample(Instant::now());
@@ -1237,6 +1276,7 @@ mod tests {
             flying: false,
             cyclic: false,
             run_mode: true,
+            facing: MonsterMoveFacing::None,
         };
         let straight = vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]];
         assert!(create_spline(spline(5_000, 5_000, straight.clone())).is_none());
@@ -1453,6 +1493,7 @@ mod server_moved_players {
     fn walking(app: &mut App, e: Entity) {
         app.world_mut().entity_mut(e).insert(Spline {
             deck: None,
+            final_facing: None,
             points: vec![RIM_A, RIM_B],
             start: Instant::now(),
             duration: Duration::from_secs(4),
@@ -1531,6 +1572,7 @@ mod server_moved_players {
         let (mut app, body) = hollow(EntityKind::Player);
         app.world_mut().entity_mut(body).insert(Spline {
             deck: None,
+            final_facing: None,
             points: vec![RIM_A, RIM_B],
             start: Instant::now(),
             duration: Duration::from_secs(4),
@@ -1841,6 +1883,7 @@ mod inside_a_hull {
     fn path(app: &mut App, e: Entity, id: u32, a: [f32; 3], b: [f32; 3], secs: u64) {
         app.world_mut().entity_mut(e).insert(Spline {
             deck: None,
+            final_facing: None,
             points: vec![a, b],
             start: Instant::now(),
             duration: Duration::from_secs(secs),
@@ -2036,5 +2079,151 @@ mod inside_a_hull {
             "a new path is seated from the server's own Z: {}",
             y_of(&app, npc)
         );
+    }
+}
+
+/// Where a walked path leaves the unit's yaw: its last leg's tangent, or the packet's final facing.
+#[cfg(test)]
+mod final_facing_tests {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    use std::time::{Duration, Instant};
+
+    use benilla_protocol::{CreateSpline, MonsterMoveFacing};
+    use bevy::prelude::*;
+
+    use super::{create_spline, final_yaw, monster_move_spline, sample_splines, Spline};
+    use crate::transport::TransportRider;
+
+    /// Two points along +X (orientation 0), 20 yd in 10 s.
+    fn along_x() -> Vec<[f32; 3]> {
+        vec![[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]]
+    }
+
+    /// The spline, made `past` ago so that it has run its whole duration, on a fresh unit; runs
+    /// `sample_splines` once and returns the app and the unit.
+    fn run_to_the_end(mut spline: Spline) -> (App, Entity) {
+        spline.start = Instant::now() - spline.duration - Duration::from_secs(1);
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .add_systems(Update, sample_splines);
+        let e = app.world_mut().spawn((Transform::default(), spline)).id();
+        app.update();
+        (app, e)
+    }
+
+    #[track_caller]
+    fn assert_yaw(app: &App, e: Entity, yaw: f32) {
+        let q = app.world().get::<Transform>(e).unwrap().rotation;
+        assert!(
+            q.angle_between(Quat::from_rotation_y(yaw)) < 1e-4,
+            "expected yaw {yaw}, rotation {q:?}"
+        );
+    }
+
+    fn walk(final_facing: Option<f32>) -> Spline {
+        monster_move_spline(along_x(), 1, false, 10_000, false, true, final_facing, None)
+            .expect("a walk")
+    }
+
+    /// An evade's home path ends in `Angle(π)`: the unit rests facing π, not along its last leg
+    /// (0 here), and the spline is gone.
+    #[test]
+    fn a_path_ends_at_its_final_angle() {
+        let (app, e) = run_to_the_end(walk(Some(PI)));
+        assert_yaw(&app, e, PI);
+        assert!(app.world().get::<Spline>(e).is_none(), "the path is over");
+    }
+
+    /// No final facing keeps the last leg's direction (+X is yaw 0).
+    #[test]
+    fn a_path_without_a_facing_ends_on_its_travel_direction() {
+        let (app, e) = run_to_the_end(walk(None));
+        assert_yaw(&app, e, 0.0);
+        assert!(app.world().get::<Spline>(e).is_none());
+    }
+
+    /// While the path is still being walked the tangent rules, whatever the final facing is.
+    #[test]
+    fn a_path_still_walked_faces_its_tangent() {
+        let mut spline = walk(Some(PI));
+        spline.start = Instant::now() - Duration::from_secs(5);
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .add_systems(Update, sample_splines);
+        let e = app.world_mut().spawn((Transform::default(), spline)).id();
+        app.update();
+        assert_yaw(&app, e, 0.0);
+        assert!(app.world().get::<Spline>(e).is_some());
+    }
+
+    /// A unit streamed in mid-path with an `Angle` ends at it too.
+    #[test]
+    fn a_create_block_path_ends_at_its_final_angle() {
+        let create = |facing| CreateSpline {
+            path: along_x(),
+            id: 7,
+            time_passed_ms: 9_000,
+            duration_ms: 12_000,
+            flying: false,
+            cyclic: false,
+            run_mode: true,
+            facing,
+        };
+        let spline = create_spline(create(MonsterMoveFacing::Angle(PI))).expect("a live walk");
+        assert_eq!(spline.final_facing, Some(PI));
+        let (app, e) = run_to_the_end(spline);
+        assert_yaw(&app, e, PI);
+
+        let plain = create_spline(create(MonsterMoveFacing::None)).expect("a live walk");
+        assert_eq!(plain.final_facing, None);
+        let (app, e) = run_to_the_end(plain);
+        assert_yaw(&app, e, 0.0);
+    }
+
+    /// A `Spot` is the bearing from the path's last point; a `Target` is a unit, not a place.
+    #[test]
+    fn a_spot_resolves_against_the_last_point_and_a_target_not_at_all() {
+        let end = Some([10.0, 0.0, 0.0]);
+        assert_eq!(
+            final_yaw(MonsterMoveFacing::Spot([10.0, 5.0, 0.0]), end),
+            Some(FRAC_PI_2)
+        );
+        assert_eq!(final_yaw(MonsterMoveFacing::Angle(1.5), end), Some(1.5));
+        assert_eq!(final_yaw(MonsterMoveFacing::Target(0x42), end), None);
+        assert_eq!(final_yaw(MonsterMoveFacing::None, end), None);
+        assert_eq!(
+            final_yaw(MonsterMoveFacing::Spot([10.0, 0.0, 0.0]), end),
+            None,
+            "a spot under the last point is no direction"
+        );
+    }
+
+    /// A deck path rests its rider at the final local orientation.
+    #[test]
+    fn a_deck_path_ends_at_its_final_local_orientation() {
+        let spline =
+            monster_move_spline(along_x(), 1, false, 10_000, false, true, Some(PI), Some(9))
+                .expect("a deck walk");
+        let mut spline = spline;
+        spline.start = Instant::now() - spline.duration - Duration::from_secs(1);
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .add_systems(Update, sample_splines);
+        let e = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                spline,
+                TransportRider {
+                    transport_guid: 9,
+                    local_pos: [0.0; 3],
+                    local_orientation: 0.0,
+                },
+            ))
+            .id();
+        app.update();
+        let rider = app.world().get::<TransportRider>(e).unwrap();
+        assert_eq!(rider.local_orientation, PI);
+        assert!(app.world().get::<Spline>(e).is_none());
     }
 }

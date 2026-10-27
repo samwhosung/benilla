@@ -28,7 +28,7 @@ pub(in crate::net) use remote::{apply_move, arrival_snap, trace_relay, RelayOutc
 pub(super) use remote::{drain_pending_moves, extrapolate_remote_units};
 pub(crate) use spline::grounded_y;
 pub(super) use spline::{
-    create_spline, ground_clamp_creatures, mark_swimming_creatures, monster_move_spline,
+    create_spline, final_yaw, ground_clamp_creatures, mark_swimming_creatures, monster_move_spline,
     sample_splines, trace_create_spline, trace_move_snap,
 };
 pub(crate) use spline::{CreatureSwimming, Spline, SplineStopped};

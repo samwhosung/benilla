@@ -4,6 +4,7 @@ use crate::messages::movement::{
     TransportPose, MOVEMENT_FLAG_JUMPING, MOVEMENT_FLAG_ON_TRANSPORT,
     MOVEMENT_FLAG_SPLINE_ELEVATION, MOVEMENT_FLAG_SPLINE_ENABLED, MOVEMENT_FLAG_SWIMMING,
 };
+use crate::messages::MonsterMoveFacing;
 use crate::wire::{
     capacity_hint, read_f32_le, read_packed_guid, read_u32_le, read_u64_le, read_u8, Vector3d,
 };
@@ -70,6 +71,10 @@ pub struct CreateSpline {
     pub cyclic: bool,
     /// `MoveSplineFlag::Runmode`; its absence forces walk mode on.
     pub run_mode: bool,
+    /// The final facing the spline ends on (`MoveSplineFlag` final point, target or angle), which
+    /// the reference reads in that order (`0x47f0bf`, `0x47f0e8`, `0x47f0f9`); `None` when none is
+    /// set, and the unit then keeps the direction of its last leg.
+    pub facing: MonsterMoveFacing,
 }
 
 /// A `LIVING` block's live mover state: the `MOVEMENTFLAGS` word and the swim pitch that rides it.
@@ -148,15 +153,17 @@ impl MovementBlock {
                 let spline_flags = read_u32_le(r)?;
                 // The final facing, three independent reads in the reference's order: a point
                 // (`0x47f0bf`), a guid (`0x47f0e8`), an angle (`0x47f0f9`). vmangos writes at most
-                // one (`packet_builder.cpp:162-167`); a unit on a path faces along it.
+                // one (`packet_builder.cpp:162-167`); the unit turns to it where the path ends.
+                let mut facing = MonsterMoveFacing::None;
                 if spline_flags & SPLINE_FLAG_FINAL_POINT != 0 {
-                    let _ = Vector3d::read(r)?;
+                    let spot = Vector3d::read(r)?;
+                    facing = MonsterMoveFacing::Spot([spot.x, spot.y, spot.z]);
                 }
                 if spline_flags & SPLINE_FLAG_FINAL_TARGET != 0 {
-                    let _ = read_u64_le(r)?;
+                    facing = MonsterMoveFacing::Target(read_u64_le(r)?);
                 }
                 if spline_flags & SPLINE_FLAG_FINAL_ANGLE != 0 {
-                    let _ = read_f32_le(r)?;
+                    facing = MonsterMoveFacing::Angle(read_f32_le(r)?);
                 }
                 let time_passed_ms = read_u32_le(r)?;
                 let duration_ms = read_u32_le(r)?;
@@ -178,6 +185,7 @@ impl MovementBlock {
                     flying: spline_flags & SPLINE_FLAG_FLYING != 0,
                     cyclic: spline_flags & SPLINE_FLAG_CYCLIC != 0,
                     run_mode: spline_flags & SPLINE_FLAG_RUNMODE != 0,
+                    facing,
                 });
             }
         } else if update_flag & UPDATE_FLAG_HAS_POSITION != 0 {
