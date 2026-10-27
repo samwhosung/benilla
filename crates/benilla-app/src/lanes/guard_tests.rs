@@ -158,14 +158,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_pet::PetAttackLatch",
-        "the pet's attack latch, which a new pet's `SMSG_PET_SPELLS` lowers (`0x4bc8ce`) inside \
-         `SetPet`, whose own `PET_BAR_UPDATE` (`0x4bc90c`) fires on the notice lane; the \
-         selection's release and `PetStopAttack`, acting in their calls, hold it in the host, \
-         and the bar's getters read it there",
-    ),
-    (
-        Row::HostHeld,
         "::ui_trade::TradeSession",
         "the trade session, which `feed_trade` fires from; the trade verbs, acting in their \
          calls, hold it in the host",
@@ -277,6 +269,13 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the merchant getters, and quiet: its events fire on the merchant
     // lane at their handlers and callbacks.
     "::ui_merchant::MerchantOpen",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read, and quiet. A new pet's
+    // `SMSG_PET_SPELLS` lowers it inside `SetPet` (`0x4bc8ce`), whose `PET_BAR_UPDATE` (`0x4bc90c`)
+    // fires on the notice lane; `IsPetAttackActive` and the bar's getters read it through the host,
+    // and the selection's release and `PetStopAttack` lower it in their calls. No feed fires off it:
+    // the world entry's pet reset lowers it beside its own `PET_BAR_UPDATE`, which the reset's
+    // change raises, not the latch.
+    "::ui_pet::PetAttackLatch",
     "::ui_petition::GuildRegistrarState",
     "::ui_petition::PetitionRecords",
     // Read through the host by the charter getters, and quiet: its events fire on the charter lane
