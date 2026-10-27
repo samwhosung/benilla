@@ -375,7 +375,7 @@ impl CastReporter<'_, '_> {
                         out.push(Ready::TradeSkillCastFailed(fail.spell_id));
                     }
                     if let Some(resolved) = self.lines.resolve(script, fail) {
-                        out.extend(self.line(resolved.shown));
+                        out.extend(self.line(script, resolved.shown));
                         // After the line (`0x6e21dd`), `0x6e21fc` → `LogCastFailure 0x62c360`,
                         // whose line fires its chat event inside the report.
                         if let Some(log) = resolved.log {
@@ -403,7 +403,7 @@ impl CastReporter<'_, '_> {
                 CastReport::Line(e) => {
                     let get = |key: &str| script.lua().globals().get::<String>(key).ok();
                     if let Some(text) = crate::ui_action::ui_error_text(&e, &get) {
-                        out.extend(self.line(Shown::keyed(e.key, text)));
+                        out.extend(self.line(script, Shown::keyed(e.key, text)));
                     }
                 }
             }
@@ -414,13 +414,17 @@ impl CastReporter<'_, '_> {
     /// The refused lines whose item record has answered since (`0x6e29b0`).
     pub(crate) fn redisplays(&mut self, script: &UiScript) -> Vec<Ready> {
         let shown = self.lines.redisplays(script);
-        shown.into_iter().filter_map(|s| self.line(s)).collect()
+        shown
+            .into_iter()
+            .filter_map(|s| self.line(script, s))
+            .collect()
     }
 
-    /// A line's world half done, its event readied.
-    pub(crate) fn line(&mut self, shown: Shown) -> Option<Ready> {
+    /// A line's world half done, its event readied: a chat line's too, which `DisplayError`
+    /// writes in place (`0x49a870`).
+    pub(crate) fn line(&mut self, script: &UiScript, shown: Shown) -> Option<Ready> {
         shown
-            .sink(&mut self.sink, "ui_action")
+            .sink_now(script, &mut self.sink, "ui_action")
             .map(|(event, args)| Ready::Event(event, args))
     }
 }
@@ -464,7 +468,7 @@ impl CallReports<'_, '_> {
                 })
                 .map(|t| Shown::keyed(e.key, t))
             })
-            .filter_map(|shown| self.reporter.line(shown))
+            .filter_map(|shown| self.reporter.line(script, shown))
             .collect();
         let reports = self.reports.take_since(reports);
         ready.extend(self.reporter.ready(script, reports));

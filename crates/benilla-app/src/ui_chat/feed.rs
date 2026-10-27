@@ -478,9 +478,19 @@ impl ChatLog {
     /// fires now, and only its log-file tee waits for the drain, in order with the lines around
     /// it. For a line whose composition reads no default language.
     pub(crate) fn show_now(&self, script: &mut benilla_ui::script::UiScript, event: &ChatEvent) {
-        let Some(kind) = event.kind else {
-            return;
-        };
+        if let Some((name, args)) = self.write_now(script, event) {
+            script.fire_event(name, args);
+        }
+    }
+
+    /// [`Self::show_now`] for a caller that signals in place: the line's tee queued, its event
+    /// handed back.
+    pub(crate) fn write_now(
+        &self,
+        script: &benilla_ui::script::UiScript,
+        event: &ChatEvent,
+    ) -> Option<(&'static str, Vec<benilla_ui::script::ScriptValue>)> {
+        let kind = event.kind?;
         let line = super::frames::compose(event, kind, "", &|key| {
             script.lua().globals().get::<String>(key).ok()
         });
@@ -490,7 +500,7 @@ impl ChatLog {
                 line,
             });
         }
-        script.fire_event(super::event::event_name(kind), event.script_args());
+        Some((super::event::event_name(kind), event.script_args()))
     }
 
     /// Queue one combat-log line, classified at the packet by [`super::combat`], for its names.
@@ -868,6 +878,21 @@ impl ChatLog {
     #[cfg(test)]
     pub(crate) fn pending_lines(&self) -> Vec<String> {
         self.pending_events().into_iter().map(|e| e.text).collect()
+    }
+
+    /// The text of every line written since the drain, in order: those waiting to render, and
+    /// the tees of those whose event fired where they were written.
+    #[cfg(test)]
+    pub(crate) fn written_lines(&self) -> Vec<String> {
+        self.q()
+            .pending
+            .iter()
+            .filter_map(|q| match &q.item {
+                Pending::Event(e) => Some(e.text.clone()),
+                Pending::Tee { line, .. } => Some(line.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Every composed event waiting to render, in order.

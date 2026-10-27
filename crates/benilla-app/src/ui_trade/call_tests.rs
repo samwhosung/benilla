@@ -1394,3 +1394,25 @@ fn close_window_prints_its_line_before_the_close() {
         "the cancel's line follows its close"
     );
 }
+
+/// `InitiateTrade` with the partner's name cached prints `ERR_INITIATE_TRADE_S` inside its call
+/// (`0x5d4042` → `0x496720`), a chat-surface line whose `CHAT_MSG_SYSTEM` the composer fires at
+/// once (`0x49a870`), ahead of the chunk's next line.
+#[test]
+fn a_cached_initiate_prints_its_line_inside_the_call() {
+    let mut t = client();
+    run(
+        &mut t,
+        r#"ERR_INITIATE_TRADE_S = "Requested to trade with %s."
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("CHAT_MSG_SYSTEM")
+        f:SetScript("OnEvent", function() HEARD = HEARD .. event .. "(" .. arg1 .. ") " end)
+        HEARD = ""
+        InitiateTrade("target")
+        HEARD = HEARD .. "next""#,
+    );
+    assert_eq!(
+        heard(&mut t),
+        "CHAT_MSG_SYSTEM(Requested to trade with Bob.) next"
+    );
+}

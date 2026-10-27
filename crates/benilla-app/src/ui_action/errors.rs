@@ -436,6 +436,29 @@ impl Shown {
     }
 }
 
+impl Shown {
+    /// [`Shown::sink`] with a chat line written now, as `DisplayError` (`0x496720`) writes it
+    /// through `0x49a870` inside whatever adds it: its event comes back for the caller to signal in
+    /// place, where [`Shown::sink`] queues it for the chat drain.
+    pub(crate) fn sink_now(
+        self,
+        script: &UiScript,
+        sink: &mut MessageSink,
+        who: &str,
+    ) -> Option<(&'static str, Vec<ScriptValue>)> {
+        if !matches!(self.kind, MsgKind::Chat) || self.text.is_empty() {
+            return self.sink(sink, who);
+        }
+        let Shown { record, text, .. } = self;
+        debug!("{who}: message (Chat) {text:?}");
+        if let Some(record) = record {
+            sink.sounds.push(record);
+        }
+        let event = ChatEvent::text_only(ChatEventKind::System, text);
+        sink.chat.write_now(script, &event)
+    }
+}
+
 /// Where a shown message lands besides the VM: the chat log and the sound queue, one parameter
 /// because the feeds that raise messages are at Bevy's parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]

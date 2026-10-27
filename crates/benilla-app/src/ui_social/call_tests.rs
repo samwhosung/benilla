@@ -195,7 +195,7 @@ fn seq(s: &mut Social) -> String {
 /// strings are their keys.
 fn shown(s: &Social) -> Vec<String> {
     let chat = s.app.world().resource::<crate::ui_chat::ChatLog>();
-    let lines = chat.pending_lines();
+    let lines = chat.written_lines();
     chat.reset();
     lines
 }
