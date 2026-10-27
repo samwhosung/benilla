@@ -765,15 +765,18 @@ impl Loader<'_> {
         //      built parentless (`0x6ee408`); an empty `parent=""` keeps the default parent
         //      silently (`0x6ee3c7`).
         //      `None`: no attribute, or an empty one. `Some(None)`: a miss, parentless and logged.
-        let levels = self.levels(raw);
-        let parent_attr: Option<String> = {
-            let nodes: Vec<&Element> = levels.iter().collect();
-            nodes
+        //      The walk is silent: a missing template is the load's to log, after `CreateFrame`
+        //      (`0x769861`, inside slot 8).
+        let parent_attr: Option<String> = raw.attr("parent").map(str::to_string).or_else(|| {
+            let model = self.model();
+            let templates = model.framexml_templates.borrow();
+            let chain = templates.inherited_levels(raw);
+            chain
                 .iter()
                 .rev()
                 .find_map(|n| n.attr("parent"))
                 .map(str::to_string)
-        };
+        });
         let attr_parent: Option<Option<Table>> = parent_attr
             .as_deref()
             .filter(|name| !name.is_empty())
@@ -857,6 +860,8 @@ impl Loader<'_> {
         // `$parent` for its contents; a nameless frame passes its nearest named ancestor on.
         let self_name = resolved_name.as_deref().unwrap_or(parent_name).to_string();
 
+        // The levels the load reads, its first line a missing template's (`0x769861`).
+        let levels = self.levels(raw);
         self.decorate(
             &levels,
             &el.tag,

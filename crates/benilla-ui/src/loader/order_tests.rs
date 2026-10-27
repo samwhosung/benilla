@@ -596,3 +596,21 @@ fn a_minimap_reads_its_models_on_its_own_node_and_an_empty_one_is_passed_on() {
         )
         .unwrap());
 }
+
+/// `Instantiate 0x6ee280` looks `parent=` up (`0x6ee3fa`) before it builds the frame, and the
+/// missing template is logged only inside the load (`0x769861`), so the parent miss comes first.
+#[test]
+fn a_parent_miss_is_logged_before_a_missing_template() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui><Frame name="O" inherits="Missing" parent="Nowhere"/></Ui>"#,
+    );
+    assert_eq!(
+        report.status.lines(),
+        [
+            "Couldn't find frame parent: Nowhere",
+            "Couldn't find inherited node: Missing"
+        ]
+    );
+}
