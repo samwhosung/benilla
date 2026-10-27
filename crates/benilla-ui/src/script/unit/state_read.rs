@@ -35,3 +35,30 @@ impl crate::script::live::LiveQuery for UnitStateQuery {
     /// getters name apart ([`super::ObjectNameQuery`]).
     type Answer = UnitStateAnswer;
 }
+
+/// The thinner question the object, identity and record readers ask, which read the unit's own
+/// fields through the host themselves: whether the object manager holds the guid as a unit, and
+/// the two legs those readers take off the state beside the object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitHeldQuery(pub UnitStateQuery);
+
+/// The thin answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitHeld {
+    /// Held as a unit (typemask 8).
+    Held {
+        /// The guid is a player's.
+        is_player: bool,
+        /// [`UnitState::reaction`]: its reaction toward the active player plus one, 0 for
+        /// `"player"` itself.
+        reaction: u8,
+    },
+    /// The object manager holds nothing under the guid; [`UnitStateQuery`] says what the client
+    /// knows of it.
+    Unheld,
+}
+
+impl crate::script::live::LiveQuery for UnitHeldQuery {
+    /// Declined as [`UnitStateQuery`] is.
+    type Answer = UnitHeld;
+}

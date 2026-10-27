@@ -376,8 +376,8 @@ pub(crate) struct Model {
     /// Each unit token's state as pushed this frame, keyed lowercased because 1.12's resolver
     /// (`0x515970`) matches with `SStrCmpI`: read it only through `unit`, where the fold lives.
     pub(crate) units_by_lower: HashMap<String, UnitState>,
-    /// The snapshot of each unit a `target` chain can end on, by guid, which the app pushes for
-    /// [`super::UnitGuids::chain_ends`]: a token with a hop that no push names reads its
+    /// The snapshot of a unit by guid, a no-host fallback a harness seats
+    /// ([`super::UiScript::set_unit_by_guid`]): a token with a hop that no push names reads its
     /// resolved guid's entry here.
     pub(crate) units_by_guid: HashMap<u64, UnitState>,
     /// Every unit `TargetByName` can pick, by guid, as the app's by-name scan sees it this frame:

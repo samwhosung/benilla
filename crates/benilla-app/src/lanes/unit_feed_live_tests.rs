@@ -458,3 +458,30 @@ fn the_by_name_walk_offers_the_units_at_the_call() {
         .collect();
     assert_eq!(leads, [ALLY]);
 }
+
+/// The cost of one getter call on `"target"`, with the host lent and off the snapshot: object
+/// getters (`UnitHealth`, `UnitName`, `UnitLevel`), a state getter (`GetRaidTargetIndex`), a guid
+/// compare (`UnitIsUnit`) and a bare Lua call (`type`) for the loop's own cost. A measurement, run
+/// by hand: `cargo test -p benilla-app --lib getter_cost -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn getter_cost() {
+    let mut c = client();
+    const N: u32 = 20_000;
+    for getter in [
+        "UnitHealth",
+        "GetRaidTargetIndex",
+        "UnitName",
+        "UnitLevel",
+        "UnitIsUnit",
+        "type",
+    ] {
+        for live in [true, false] {
+            let chunk = format!(r#"for i = 1, {N} do {getter}("target", "target") end"#);
+            let start = std::time::Instant::now();
+            c.eval::<()>(live, &chunk);
+            let ns = start.elapsed().as_secs_f64() * 1e9 / f64::from(N);
+            eprintln!("{getter}(\"target\") live={live}: {ns:.0} ns a call");
+        }
+    }
+}

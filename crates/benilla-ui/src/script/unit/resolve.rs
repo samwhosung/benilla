@@ -597,15 +597,6 @@ impl UnitGuids {
         resolve_unit_in(self, self, base, hops)
     }
 
-    /// The guids a `target` hop can end on: each held unit's target, when it names one. `held`
-    /// holds the bases' units and each unit a hop reaches from them, so a token with a hop names
-    /// one of these or nobody, and a per-guid feed over them covers the chains a script can spell.
-    /// A guid repeats when two units share a target, and the last hop's unit need not be held: the
-    /// lookup that finds its object is the reader's.
-    pub(crate) fn chain_ends(&self) -> impl Iterator<Item = u64> + '_ {
-        self.held.values().copied().filter(|&guid| guid != 0)
-    }
-
     /// Every token that names a unit off the snapshot alone ([`bound_tokens_in`] over it).
     pub fn bound_tokens(&self) -> Vec<String> {
         bound_tokens_in(self, self)

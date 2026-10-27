@@ -478,9 +478,10 @@ pub use unit::by_name::{
 pub use unit::{
     grey_band, level_reads_unknown, parse_unit_token, power_token, resolve_unit_in, unit_is_grey,
     ObjectNameQuery, PlayerNameQuery, PlayerRecord, RelationAnswer, RelationQuery,
-    SelectionGlobals, SelectionQuery, SelectionRequest, UnitBase, UnitGuids, UnitIdentityRead,
-    UnitObject, UnitObjectRead, UnitRecord, UnitRecordQuery, UnitRelations, UnitState,
-    UnitStateAnswer, UnitStateQuery, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
+    SelectionGlobals, SelectionQuery, SelectionRequest, UnitBase, UnitGuids, UnitHeld,
+    UnitHeldQuery, UnitIdentityRead, UnitObject, UnitObjectRead, UnitRecord, UnitRecordQuery,
+    UnitRelations, UnitState, UnitStateAnswer, UnitStateQuery, UnitTokenGlobals, UnitTokenObjects,
+    UnitTokenParse,
 };
 pub use use_gates::ControlBypassQuery;
 pub use weapon_enchant::WeaponEnchant;

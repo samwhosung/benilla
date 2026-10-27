@@ -14,8 +14,8 @@
 //! member's group record before it signals (`0x5e5110`: `0x5e54c4`, `0x5e54d8`, then `0x5e54fa`),
 //! so the log holds the records too, and the roster cells a group list or ending writes (its party
 //! slots before its first signal `0x5e6c66`, its leader, loot and raid rows after), whole per
-//! packet; and the views built over them: the group tokens, the pet, the units a `target` chain
-//! ends on and every unit's aura list ([`families`]).
+//! packet; and the views built over them: the group tokens, the pet and every unit's aura list
+//! ([`families`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -1240,7 +1240,6 @@ fn fire_unit_views(
                 pushes += usize::from(saved.token(script, TOKENS[i], view));
             }
         }
-        let held_units = held_units(&src, &stores);
         let rel = world.get();
         let ffa = |guid: u64| {
             object(guid).is_some_and(|store| super::pvp_free_for_all_of(&rel, guid, store))
@@ -1265,7 +1264,6 @@ fn fire_unit_views(
             auras,
             world: &world,
             ffa: &ffa,
-            held: &held_units,
         };
         pushes += families::push(script, saved, &ctx);
         if let Some(records) = records.as_mut() {

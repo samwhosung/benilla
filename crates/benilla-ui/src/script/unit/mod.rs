@@ -419,8 +419,9 @@ impl super::UiScript {
     /// Push, or clear with `None`, the snapshot of a unit a `target` chain can end on, by guid. A
     /// token with a hop that no push names (`"party1target"`, `"raid3targettarget"`) resolves
     /// through [`UnitGuids`] to a guid and reads that guid's entry, the reference's order
-    /// (`0x515970`, then each getter's object lookup `0x468460`); the guids to cover are
-    /// [`Self::chain_end_guids`]. A token without a hop reads its own push, not this.
+    /// (`0x515970`, then each getter's object lookup `0x468460`), with no host free to ask; the
+    /// app pushes none, as its getters read the unit through the host ([`UnitStateQuery`]). A
+    /// token without a hop reads its own push, not this.
     pub fn set_unit_by_guid(&mut self, guid: u64, state: Option<UnitState>) {
         let mut model = self.model_mut();
         match state {
@@ -438,23 +439,9 @@ impl super::UiScript {
         self.model_ref().pushed_unit(token).cloned()
     }
 
-    /// The snapshot pushed for `guid`, as [`Self::set_unit_by_guid`] left it.
-    pub fn unit_view_by_guid(&self, guid: u64) -> Option<UnitState> {
-        self.model_ref().units_by_guid.get(&guid).cloned()
-    }
-
     /// The unit-token resolver's inputs as last pushed ([`Self::set_unit_guids`]).
     pub fn unit_guids_view(&self) -> UnitGuids {
         self.model_ref().unit_guids.clone()
-    }
-
-    /// The guids the chains a script can spell end on ([`UnitGuids::chain_ends`]), each once: the
-    /// units whose snapshots [`Self::set_unit_by_guid`] serves.
-    pub fn chain_end_guids(&self) -> Vec<u64> {
-        let mut ends: Vec<u64> = self.model_ref().unit_guids.chain_ends().collect();
-        ends.sort_unstable();
-        ends.dedup();
-        ends
     }
 
     /// Push the player's copper (`PLAYER_FIELD_COINAGE`), read by `GetMoney`.
@@ -608,6 +595,21 @@ pub(crate) fn check_unit_token(token: &Option<String>) -> mlua::Result<()> {
 /// reads the snapshots: the token's push while it names the same unit, else what the getters read
 /// for the guid ([`Model::unit_of_guid`]), else [`Model::snapshot_unit`].
 pub(crate) fn view<'m>(lua: &Lua, model: &'m Model, token: &str) -> Option<Cow<'m, UnitState>> {
+    view_as(lua, model, token, false)
+}
+
+/// [`view`] for a reader that takes the held unit's own fields off the object through the host
+/// ([`read_object`], [`read_identity`], [`read_record`]): a held unit is its guid and the legs
+/// [`UnitHeldQuery`] answers, with nothing built or copied; an unheld one is [`view`]'s.
+pub(crate) fn view_held<'m>(
+    lua: &Lua,
+    model: &'m Model,
+    token: &str,
+) -> Option<Cow<'m, UnitState>> {
+    view_as(lua, model, token, true)
+}
+
+fn view_as<'m>(lua: &Lua, model: &'m Model, token: &str, thin: bool) -> Option<Cow<'m, UnitState>> {
     let snapshot = model.snapshot_unit(token);
     let UnitTokenParse::Unit { base, hops } = parse_unit_token(token) else {
         return snapshot.map(Cow::Borrowed);
@@ -631,6 +633,23 @@ pub(crate) fn view<'m>(lua: &Lua, model: &'m Model, token: &str) -> Option<Cow<'
                 guid,
                 player: base == UnitBase::Player && hops == 0,
             };
+            if thin {
+                if let Some(UnitHeld::Held {
+                    is_player,
+                    reaction,
+                }) = super::live::ask(lua, &UnitHeldQuery(query))
+                {
+                    return Some(Cow::Owned(UnitState {
+                        exists: true,
+                        has_object: true,
+                        is_connected: true,
+                        guid,
+                        is_player,
+                        reaction,
+                        ..Default::default()
+                    }));
+                }
+            }
             match super::live::ask(lua, &query) {
                 Some(UnitStateAnswer::Held(state)) => return Some(Cow::Owned(state)),
                 Some(UnitStateAnswer::Unheld(state)) => {
@@ -718,7 +737,7 @@ pub(crate) fn read_object<T>(
     f: impl FnOnce(&UnitState, &dyn UnitObjectRead) -> T,
 ) -> Option<T> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let unit = view(lua, &model, token)?;
+    let unit = view_held(lua, &model, token)?;
     let unit: &UnitState = &unit;
     let mut f = Some(f);
     let mut out = None;
@@ -748,7 +767,7 @@ pub(crate) fn read_identity<T>(
     f: impl FnOnce(&UnitState, &dyn UnitIdentityRead) -> T,
 ) -> Option<T> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let unit = view(lua, &model, token)?;
+    let unit = view_held(lua, &model, token)?;
     let unit: &UnitState = &unit;
     let mut f = Some(f);
     let mut out = None;
@@ -841,6 +860,6 @@ pub use resolve::{
 };
 pub(crate) use resolve::{token_guid, with_live_objects, LiveGlobals};
 pub use selection_read::{ObjectNameQuery, SelectionGlobals, SelectionQuery};
-pub use state_read::{UnitStateAnswer, UnitStateQuery};
+pub use state_read::{UnitHeld, UnitHeldQuery, UnitStateAnswer, UnitStateQuery};
 
 pub(super) use bindings::install;

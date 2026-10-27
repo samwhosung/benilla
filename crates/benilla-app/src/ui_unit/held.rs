@@ -3,8 +3,8 @@
 //!
 //! The reference resolves a token to a guid (`0x515970`) and reads that guid's object, so a unit it
 //! holds answers a `Unit*` getter however the token spelled it. The getters ask the lent host for
-//! the unit as of the call ([`super::live::UnitFeedLive`]), which builds it here; the views lane
-//! builds the same snapshots for a guid a `target` chain ends on ([`super::views`]).
+//! the unit as of the call ([`super::live::UnitFeedLive`]), which builds it here, and the views
+//! lane builds the four tokens' snapshots off it ([`super::views`]).
 
 use bevy::prelude::*;
 
@@ -76,16 +76,6 @@ impl HeldUnits<'_> {
             .resolve_unit(guid, Some(store), ask)
             .map(str::to_string);
         self.state_named(store, guid, name)
-    }
-
-    /// The snapshot of the unit a `target` chain ends on, by guid, whose descriptor is `store`:
-    /// a held unit's, a no-object entry for a guid the object manager does not hold, nothing for
-    /// one held as anything but a unit.
-    pub(super) fn chain_end(&self, guid: u64, store: Option<&ObjectStore>) -> Option<UnitState> {
-        match store {
-            Some(store) => store.is_unit().then(|| self.state(store, guid)),
-            None => Some(unheld_state(self.names, self.group, guid, self.unit_names)),
-        }
     }
 
     /// [`Self::state`] under a name the caller looked up, which sends no name query.

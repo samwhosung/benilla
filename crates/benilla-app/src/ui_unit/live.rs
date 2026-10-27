@@ -14,8 +14,8 @@ use bevy::prelude::*;
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
     ControlBypassQuery, DefaultLanguageQuery, HeldCandidatesQuery, KnownLanguagesQuery,
-    LiveCandidate, LiveCandidates, RelationQuery, UnitReach, UnitReachQuery, UnitRelations,
-    UnitStateAnswer, UnitStateQuery,
+    LiveCandidate, LiveCandidates, RelationQuery, UnitHeld, UnitHeldQuery, UnitReach,
+    UnitReachQuery, UnitRelations, UnitStateAnswer, UnitStateQuery,
 };
 
 use crate::names::NameCache;
@@ -238,6 +238,34 @@ impl UnitFeedLive<'_, '_> {
         Some(UnitStateAnswer::Held(held.state_named(store, q.guid, name)))
     }
 
+    /// Whether `q` names a unit held as of here, with the legs a reader takes beside the object:
+    /// built from the descriptor and the relation inputs alone, nothing copied; `None` for a guid
+    /// held as no unit.
+    fn unit_held(&self, q: &UnitStateQuery) -> Option<UnitHeld> {
+        let entity = self
+            .index
+            .as_deref()
+            .and_then(|i| i.0.get(&q.guid).copied());
+        let Some(store) = self.stores.at(q.guid, entity) else {
+            return Some(UnitHeld::Unheld);
+        };
+        if !store.is_unit() {
+            return None;
+        }
+        // `"player"` carries no reaction toward itself; any other token the unit's toward us
+        // (`0x5167e0`), plus one.
+        let reaction = if q.player {
+            0
+        } else {
+            let unit = self.relations.unit_of(q.guid, store);
+            super::unit_reaction(&self.rel(), &unit, self.me().as_ref())
+        };
+        Some(UnitHeld::Held {
+            is_player: q.player || benilla_protocol::guid::is_player(q.guid),
+            reaction,
+        })
+    }
+
     /// The units `0x493aa0`'s object pass offers as of here (typemask 8, a cached name, no query
     /// sent), each measured from the active player at the call; none without an active player
     /// (`0x493ae0`), `None` without the name cache.
@@ -257,10 +285,9 @@ impl UnitFeedLive<'_, '_> {
                         return None;
                     };
                     let at = self.position(entity)?;
-                    let unit = self
-                        .stores
-                        .at(guid, Some(entity))
-                        .map(|s| (self.relations.unit_of(guid, s), s));
+                    // Held as a unit as of here (typemask 8): one a later packet creates is not.
+                    let store = self.stores.at(guid, Some(entity)).filter(|s| s.is_unit())?;
+                    let unit = self.relations.unit_of(guid, store);
                     Some(LiveCandidate {
                         guid,
                         name: name.to_string(),
@@ -269,7 +296,7 @@ impl UnitFeedLive<'_, '_> {
                         assistable_alive: crate::target::assistable_alive(
                             &rel,
                             me.as_ref(),
-                            unit.as_ref().map(|(u, s)| (u, *s)),
+                            Some((&unit, store)),
                         ),
                     })
                 })
@@ -324,7 +351,8 @@ impl UnitRelations for UnitFeedLive<'_, '_> {
 
 impl crate::script_calls::live::LiveFamily for UnitFeedLive<'_, '_> {
     fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
-        ask.answer(|q: &UnitStateQuery| self.unit_state(q))
+        ask.answer(|q: &UnitHeldQuery| self.unit_held(&q.0))
+            || ask.answer(|q: &UnitStateQuery| self.unit_state(q))
             || ask.answer(|_: &HeldCandidatesQuery| self.candidates())
             || ask.answer(|q: &RelationQuery| Some(q.answer(&*self)))
             || ask.answer(|q: &UnitReachQuery| Some(self.reach(q.0)))

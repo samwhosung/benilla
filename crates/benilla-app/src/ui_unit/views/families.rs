@@ -1,7 +1,7 @@
 //! The views beside the four tokens that the lane builds as a packet left them: the party and
 //! raid tokens with their pets, off the members' descriptors and group records (`0x5174d0` reads
-//! the object, else the record `0x496400`, else the pet record `0x496420`); the `"pet"` token; the
-//! units a `target` chain ends on, by guid; and every unit's aura list, which `UnitBuff` and
+//! the object, else the record `0x496400`, else the pet record `0x496420`); the `"pet"` token; and
+//! every unit's aura list, which `UnitBuff` and
 //! `UnitDebuff` walk off the descriptor or the record (`0x519500`, `0x5198f0`). Each is rebuilt
 //! only when what it is built from moved, and what the VM held before is kept to put back
 //! ([`Saved`]).
@@ -22,7 +22,6 @@ use crate::ui_party::{GroupSources, GroupState, Roster};
 #[derive(Default)]
 pub(super) struct Saved {
     tokens: HashMap<String, Option<UnitState>>,
-    by_guid: HashMap<u64, Option<UnitState>>,
     auras: HashMap<u64, Option<UnitAuraList>>,
     /// The party's faction group the group tokens were last built with, while the lane built
     /// any.
@@ -46,17 +45,6 @@ impl Saved {
         true
     }
 
-    /// Push `view` for the chain end `guid` when the VM holds another; whether it did.
-    fn by_guid(&mut self, script: &mut UiScript, guid: u64, view: Option<UnitState>) -> bool {
-        let held = script.unit_view_by_guid(guid);
-        if held == view {
-            return false;
-        }
-        self.by_guid.entry(guid).or_insert(held);
-        script.set_unit_by_guid(guid, view);
-        true
-    }
-
     /// Push `list` as `guid`'s auras when the VM holds another; whether it did.
     fn auras(&mut self, script: &mut UiScript, guid: u64, list: Option<UnitAuraList>) -> bool {
         let held = script.unit_auras_view(guid);
@@ -75,12 +63,6 @@ impl Saved {
         for (token, view) in self.tokens.drain() {
             if !frozen.contains(&token.as_str()) && script.unit_view(&token) != view {
                 script.set_unit(&token, view);
-                pushes += 1;
-            }
-        }
-        for (guid, view) in self.by_guid.drain() {
-            if script.unit_view_by_guid(guid) != view {
-                script.set_unit_by_guid(guid, view);
                 pushes += 1;
             }
         }
@@ -120,8 +102,6 @@ pub(super) struct Families<'a, 'w, 's> {
     pub(super) world: &'a RelationWorld<'w, 's>,
     /// `UnitIsPVPFreeForAll` (`0x516540`) of a held unit as of here, by guid.
     pub(super) ffa: &'a dyn Fn(u64) -> bool,
-    /// What a held unit's snapshot reads, for the chain ends.
-    pub(super) held: &'a crate::ui_unit::held::HeldUnits<'a>,
 }
 
 impl Families<'_, '_, '_> {
@@ -132,10 +112,7 @@ impl Families<'_, '_, '_> {
 
 /// Push every family's views whose inputs moved; the views pushed.
 pub(super) fn push(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
-    group_tokens(script, saved, f)
-        + pet_token(script, saved, f)
-        + chain_ends(script, saved, f)
-        + aura_lists(script, saved, f)
+    group_tokens(script, saved, f) + pet_token(script, saved, f) + aura_lists(script, saved, f)
 }
 
 /// `party1..4`, `partypet1..4`, `raid1..40` and `raidpet1..40`: a member's token when its
@@ -219,18 +196,6 @@ fn pet_token(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
     };
     let view = crate::ui_pet::pet_state(guid, (f.object)(guid), &src);
     usize::from(saved.token(script, "pet", view))
-}
-
-/// Each unit a `target` chain ends on, by guid, when its descriptor moved.
-fn chain_ends(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
-    let mut pushes = 0;
-    for guid in script.chain_end_guids() {
-        if f.moved(guid) {
-            let view = f.held.chain_end(guid, (f.object)(guid));
-            pushes += usize::from(saved.by_guid(script, guid, view));
-        }
-    }
-    pushes
 }
 
 /// Each moved unit's aura list a token can reach, the player's among them: `UnitBuff("player")`

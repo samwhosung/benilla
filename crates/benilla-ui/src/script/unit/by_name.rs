@@ -310,13 +310,6 @@ impl super::super::UiScript {
         }
     }
 
-    /// Move a pushed candidate's distance, which changes every frame its snapshot does not.
-    pub fn set_name_candidate_dist2(&mut self, guid: u64, dist2: f32) {
-        if let Some(c) = self.model_mut().name_candidates.get_mut(&guid) {
-            c.dist2 = dist2;
-        }
-    }
-
     /// Whether a selection call moved the `"target"` view since the last ask; the app's unit feed
     /// then re-pushes `"target"` from the committed selection, which its memo no longer matches.
     pub fn take_target_view_moved(&mut self) -> bool {
