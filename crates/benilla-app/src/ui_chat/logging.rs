@@ -152,22 +152,18 @@ pub(super) fn plugin(app: &mut App) {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
-
-    extern "C" {
-        fn tzset();
-    }
+    use benilla_ui::civil::ZoneGuard;
 
     /// Under a zone 5:45 east of UTC, the epoch reads 05:45, and 20:00 UTC is past local midnight.
+    /// The stamp is `GetLocalTime`'s (`0x65a871`), the system's zone as it is now, so it reads the
+    /// platform's `localtime_r` and not [`benilla_ui::civil`]'s once-read zone; the guard only
+    /// holds `TZ` (and runs `tzset`) for the test.
     #[test]
     fn the_stamp_fields_follow_the_local_zone() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tz = EnvGuard::set("TZ", "NPT-05:45");
-        // SAFETY: `tzset` rereads `TZ`; the lock keeps other env tests out.
-        unsafe { tzset() };
-        let fields = [super::local_fields(0), super::local_fields(72_000)];
-        drop(tz);
-        unsafe { tzset() };
+        let fields = {
+            let _zone = ZoneGuard::set("NPT-05:45");
+            [super::local_fields(0), super::local_fields(72_000)]
+        };
         assert_eq!(fields, [[1, 1, 5, 45, 0], [1, 2, 1, 45, 0]]);
     }
 }

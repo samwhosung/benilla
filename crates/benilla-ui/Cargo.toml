@@ -9,7 +9,8 @@ description = "Engine-free WoW UI engine core: TOC and FrameXML parsing, templat
 workspace = true
 
 [features]
-# `test_support`: the geometry comparisons other crates' tests check the UI with.
+# `test_support`: the geometry comparisons and the zone guard (`civil::ZoneGuard`) other crates'
+# tests check the UI with. Only their dev-dependencies enable it: the player build has neither.
 test-support = []
 
 [dependencies]

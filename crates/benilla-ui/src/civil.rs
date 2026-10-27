@@ -333,26 +333,31 @@ pub fn unix_seconds() -> i64 {
 }
 
 /// Holds the process's time zone at a `TZ` value for a test, so a local-time answer is the same on
-/// every machine: the lock keeps two zone tests apart, and the drop puts the old `TZ` back.
-#[cfg(test)]
-pub(crate) struct ZoneGuard {
+/// every machine: the lock keeps two zone tests apart, the zone is read at once (so `tzset` has
+/// run for the platform's own `localtime_r` too), and the drop puts the old `TZ` and zone back.
+/// The process reads its zone once (`0x414568`), so a test sets it here and never through `TZ`
+/// alone. Behind `test-support` for the tests of crates that read local time through [`local`].
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub struct ZoneGuard {
     old: Option<std::ffi::OsString>,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ZoneGuard {
-    pub(crate) fn set(tz: &str) -> Self {
+    pub fn set(tz: &str) -> Self {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let old = std::env::var_os("TZ");
         std::env::set_var("TZ", tz);
         reread_zone();
+        drop(zone());
         Self { old, _lock: lock }
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ZoneGuard {
     fn drop(&mut self) {
         match self.old.take() {
@@ -360,11 +365,12 @@ impl Drop for ZoneGuard {
             None => std::env::remove_var("TZ"),
         }
         reread_zone();
+        drop(zone());
     }
 }
 
 /// Drops the zone the process read, so the next use reads the one a test set.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn reread_zone() {
     *ZONE.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
