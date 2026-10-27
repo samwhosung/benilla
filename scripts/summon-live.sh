@@ -101,11 +101,11 @@ printf '%s\n' "$plog"
 fail() { echo; echo "SUMMON-LIVE FAILED: $1"; strip "$work/rx.log" | grep -E "ERROR" | tail -10; exit 1; }
 [ $rx_code -eq 124 ] && fail "the receiver did not exit within the timeout"
 [ $tx_code -eq 124 ] && fail "the summoner did not exit within the timeout"
-printf '%s' "$trace" | grep -q "recv SMSG_SUMMON_REQUEST" ||
+grep -q "recv SMSG_SUMMON_REQUEST" <<<"$trace" ||
     fail "no summon request arrived — did the invite land? (see the summoner's lines above)"
-printf '%s' "$trace" | grep -q "fire CONFIRM_SUMMON" || fail "the request landed but no event fired"
-printf '%s' "$trace" | grep -q "SEND CMSG_SUMMON_RESPONSE" || fail "Accept sent no packet"
-printf '%s' "$plog" | grep -q "wants to summon you to" || fail "the dialog text never composed"
+grep -q "fire CONFIRM_SUMMON" <<<"$trace" || fail "the request landed but no event fired"
+grep -q "SEND CMSG_SUMMON_RESPONSE" <<<"$trace" || fail "Accept sent no packet"
+grep -q "wants to summon you to" <<<"$plog" || fail "the dialog text never composed"
 # The character must move, and land where the dialog said: that ties GetSummonConfirmAreaName to
 # the server rather than to our own AreaTable lookup.
 before="$(printf '%s' "$plog" | sed -n 's/^zone before=\[\(.*\)\]$/\1/p')"

@@ -94,18 +94,18 @@ fail() {
 
 # Before the timeout check, which it usually explains: a WOW_CHAR not on the account leaves the
 # client waiting at the roster.
-printf '%s' "$plain" | grep -q "not on this account" &&
+grep -q "not on this account" <<<"$plain" &&
     fail "$char is not on $user — the client sat at the roster (make it, or rig it: WOW_RIG=…)"
 [ $code -eq 124 ] && fail "the client did not exit within the timeout"
-printf '%s' "$plain" | grep -q "logout-smoke: empty roster" &&
+grep -q "logout-smoke: empty roster" <<<"$plain" &&
     fail "$user has no characters — the re-entry leg cannot run (make one, or rig it: WOW_RIG=…)"
-printf '%s' "$plain" | grep -q "logout-smoke: done" ||
+grep -q "logout-smoke: done" <<<"$plain" ||
     fail "the round trip never completed (no 'logout-smoke: done')"
 # The logout returns to character select on the link the world was entered by and re-lists there
 # (`0x5aaeb0` → `0x46b880`): a roster on that world session, and one realmd logon for the walk.
-printf '%s' "$plain" | grep -q "logout-smoke: FAILED" &&
+grep -q "logout-smoke: FAILED" <<<"$plain" &&
     fail "$(printf '%s\n' "$plain" | sed -n 's/.*logout-smoke: FAILED — //p' | tail -1)"
-printf '%s' "$plain" | grep -q "logout-smoke: roster after the logout on the same link" ||
+grep -q "logout-smoke: roster after the logout on the same link" <<<"$plain" ||
     fail "no roster came on the same link after the logout"
 logons="$(printf '%s\n' "$plain" | grep -cF "net: parked at the realm list")"
 [ "$logons" -eq 1 ] ||
@@ -122,7 +122,7 @@ printf '  %-24s %s\n' "re-entry suppressors" "${sup:-<unreported>}"
 # vmangos skips the logout root when resting, on a taxi or at account security >= `InstantLogout`
 # (`MiscHandler.cpp`, `CMSG_LOGOUT_REQUEST`); probe accounts are GM, so report whether the check
 # above met a real root. `player::wire_in::session_end_tests` forces the rooted case.
-if printf '%s\n' "$plain" | grep -q "mover mode Root granted"; then
+if grep -q "mover mode Root granted" <<<"$plain"; then
     printf '  %-24s %s\n' "rooted logout" "yes — the drivable check above is a real pass"
 else
     printf '  %-24s %s\n' "rooted logout" \
@@ -217,9 +217,9 @@ realm_fail() {
     exit 1
 }
 [ $rcode -eq 124 ] && realm_fail "the realm walk did not finish within the timeout"
-printf '%s' "$rplain" | grep -q "realm-smoke: FAILED" &&
+grep -q "realm-smoke: FAILED" <<<"$rplain" &&
     realm_fail "$(printf '%s\n' "$rplain" | sed -n 's/.*realm-smoke: FAILED — //p' | tail -1)"
-printf '%s' "$rplain" | grep -q "realm-smoke: done" ||
+grep -q "realm-smoke: done" <<<"$rplain" ||
     realm_fail "the walk never completed (no 'realm-smoke: done')"
 rp="$(printf '%s\n' "$rplain" | grep -cE 'panicked at')"
 [ "$rp" -ne 0 ] && realm_fail "$rp panic(s)"
