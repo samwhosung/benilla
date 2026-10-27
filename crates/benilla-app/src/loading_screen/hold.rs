@@ -293,10 +293,17 @@ fn defer_input_through_the_hold(
     mut deferred: ResMut<HeldInput>,
     mut queues: RawQueues,
     mut pointer: ResMut<HeldPointer>,
-    mut window: Query<&mut Window, With<PrimaryWindow>>,
+    mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
 ) {
     let held = hold.held;
-    if let (true, Ok(mut window)) = (held, window.single_mut()) {
+    if !held {
+        let live = window
+            .single()
+            .ok()
+            .and_then(|(e, w)| w.cursor_position().map(|at| (e, at)));
+        at_the_live_cursor(&mut deferred.window.held, live);
+    }
+    if let (true, Ok((_, mut window))) = (held, window.single_mut()) {
         pointer.live = Some(window.physical_cursor_position());
         // Unchanged, so `changed_windows` does not read it as a warp; handed back in `PostUpdate`.
         window
@@ -312,6 +319,27 @@ fn defer_input_through_the_hold(
     deferred.moved.step(held, &mut queues.moved);
     if let Some(window) = queues.window.as_deref_mut() {
         deferred.window.step(held, window);
+    }
+}
+
+/// The window's stream held through the frozen frames, as the first frame shown reads it. The
+/// reference's records each take the cursor when the window procedure queues them (`0x42dd00`
+/// reads `GetCursorPos`), which is after the load, and the queued moves are one: so the held moves
+/// give way to one move to where the cursor is now, ahead of the held records, which all take it.
+fn at_the_live_cursor(held: &mut Vec<WindowEvent>, live: Option<(Entity, Vec2)>) {
+    if held.is_empty() {
+        return;
+    }
+    held.retain(|e| !matches!(e, WindowEvent::CursorMoved(_)));
+    if let Some((window, position)) = live {
+        held.insert(
+            0,
+            WindowEvent::CursorMoved(CursorMoved {
+                window,
+                position,
+                delta: None,
+            }),
+        );
     }
 }
 
@@ -478,14 +506,16 @@ mod tests {
     }
     /// The window's stream waits through the hold with the typed queues, so the input records read
     /// from it (a move among them, whose walk would fire `OnEnter` under the frozen frame) are the
-    /// first shown frame's, in arrival order.
+    /// first shown frame's, in arrival order. The held moves are one, to where the cursor is when
+    /// the frame is shown, ahead of every held record; what arrives with that frame is as it came.
     #[test]
-    fn the_window_stream_waits_through_a_held_frame() {
+    fn the_window_stream_waits_through_a_held_frame_and_takes_the_live_cursor() {
         #[derive(Resource, Default)]
-        struct Streamed(Vec<f32>);
+        struct Streamed(Vec<String>);
         fn read(mut events: MessageReader<WindowEvent>, mut seen: ResMut<Streamed>) {
             seen.0.extend(events.read().filter_map(|e| match e {
-                WindowEvent::CursorMoved(m) => Some(m.position.x),
+                WindowEvent::CursorMoved(m) => Some(format!("move {}", m.position.x)),
+                WindowEvent::MouseButtonInput(b) => Some(format!("{:?}", b.state)),
                 _ => None,
             }));
         }
@@ -496,6 +526,11 @@ mod tests {
                 delta: None,
             })
         };
+        let press = WindowEvent::MouseButtonInput(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window: Entity::PLACEHOLDER,
+        });
         let mut app = App::new();
         app.add_message::<KeyboardInput>()
             .add_message::<KeyboardFocusLost>()
@@ -509,12 +544,18 @@ mod tests {
             .init_resource::<HeldPointer>()
             .init_resource::<Streamed>()
             .add_systems(PreUpdate, defer_input_through_the_hold)
-            .add_systems(Update, read);
+            .add_systems(Update, read)
+            .add_systems(PostUpdate, hand_back_the_pointer);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
         let seen =
             |app: &mut App| std::mem::take(&mut app.world_mut().resource_mut::<Streamed>().0);
 
         app.world_mut().resource_mut::<PresentHold>().held = true;
         app.world_mut().write_message(moved(1.0));
+        app.world_mut().write_message(press.clone());
         app.update();
         app.world_mut().write_message(moved(2.0));
         app.update();
@@ -523,9 +564,13 @@ mod tests {
             "no record while the frame is held"
         );
         app.world_mut().resource_mut::<PresentHold>().held = false;
-        app.world_mut().write_message(moved(3.0));
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(40.0, 5.0)));
+        app.world_mut().write_message(moved(50.0));
         app.update();
-        assert_eq!(seen(&mut app), [1.0, 2.0, 3.0]);
+        assert_eq!(seen(&mut app), ["move 40", "Pressed", "move 50"]);
         app.update();
         assert!(seen(&mut app).is_empty(), "and delivers it once");
     }
