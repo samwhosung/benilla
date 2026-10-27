@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 30
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 130
+- [benilla-ui](#benilla-ui): 132
 - [benilla-world](#benilla-world): 50
 
 ### benilla-app
@@ -688,7 +688,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### civil
 
-- The zone database's offset for the date, where the reference's CRT applies today's rules, so a date in a zone whose offset has since changed does not round-trip through `time{}`. ([`src/civil.rs:124`](../crates/benilla-ui/src/civil.rs#L124))
+- A `_dstbias` that takes the time below 0 faults the client, which copies the second `localtime`'s null answer unchecked (`0x740842` → `0x740860`); here it is refused. ([`src/civil.rs:87`](../crates/benilla-ui/src/civil.rs#L87))
+- The zone database's offset for the date, where the reference's CRT applies the rules it read for every date, so a date in a zone whose offset has since changed does not round-trip through `time{}`. ([`src/civil.rs:121`](../crates/benilla-ui/src/civil.rs#L121))
 
 #### loader
 
@@ -753,8 +754,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The getter reads `CVAR_WORLD_DETAIL`, where the reference's reads only `smallCull` (`0x488d77`), because benilla's stop follows the knob that draws: a console `frillDensity` write moves the ground clutter and `WorldDetail` with it, and no renderer reads `smallCull` (its callback's `[0x868620]` has no reader). ([`src/script/cvars.rs:1094`](../crates/benilla-ui/src/script/cvars.rs#L1094))
 - The promotion's IME legs (`0x77d417`–`0x77d431`) and the IME writer's `or 6` (`0x77acde`, in `0x77ac60`) are not modelled: benilla has no IME composition. ([`src/script/editbox/flush.rs:28`](../crates/benilla-ui/src/script/editbox/flush.rs#L28))
 - The nameplate glow is shown but never drawn, because its additive rim reads as hard edge lines in our linear-blending pipeline; the lit plate brightens its bar instead. ([`src/script/extract.rs:223`](../crates/benilla-ui/src/script/extract.rs#L223))
-- A host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut host could end in a whitelisted suffix the real one does not; this takes the safe side. ([`src/script/glue_core.rs:415`](../crates/benilla-ui/src/script/glue_core.rs#L415))
-- Benilla keeps that decode and then encodes it again, every byte outside the URL characters `URL_SAFE` as `%XY` (a decoded `%` too), because the opener on some platforms is a shell script (`xdg-open`) or takes the raw command tail (`rundll32`) and the string comes off the wire: no space, quote, backtick, `$`, `;`, `<`, `>`, `|`, `^`, `\`, brace or control byte reaches it. ([`src/script/glue_core.rs:460`](../crates/benilla-ui/src/script/glue_core.rs#L460))
+- A host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut host could end in a whitelisted suffix the real one does not; this takes the safe side. ([`src/script/glue_core.rs:424`](../crates/benilla-ui/src/script/glue_core.rs#L424))
+- Benilla keeps that decode and then encodes it again, every byte outside the URL characters `URL_SAFE` as `%XY` (a decoded `%` too), because the opener on some platforms is a shell script (`xdg-open`) or takes the raw command tail (`rundll32`) and the string comes off the wire: no space, quote, backtick, `$`, `;`, `<`, `>`, `|`, `^`, `\`, brace or control byte reaches it. ([`src/script/glue_core.rs:469`](../crates/benilla-ui/src/script/glue_core.rs#L469))
 - Past `NAME_TRIES` names the answer is nil, where the reference keeps trying, forever when the generator has learned nothing. ([`src/script/glue_create.rs:968`](../crates/benilla-ui/src/script/glue_create.rs#L968))
 - With no Region rows the reference reads a NULL category (`0x46e5b8`, `0x46f26a`) and faults; benilla lists every realm under one category, so a client whose `Wow.ini` names another Region still reaches a realm. ([`src/script/glue_realm.rs:195`](../crates/benilla-ui/src/script/glue_realm.rs#L195))
 - Equal nonzero counts tie here, where the reference answers +1 both ways (its name tie-break at `0x46e841` is clobbered by `0x46e846`), because a comparator that is not a total order has no defined sort. ([`src/script/glue_realm.rs:260`](../crates/benilla-ui/src/script/glue_realm.rs#L260))
@@ -796,7 +797,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:68`](../crates/benilla-ui/src/script/sound.rs#L68))
 - `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file. ([`src/script/spellbook.rs:10`](../crates/benilla-ui/src/script/spellbook.rs#L10))
 - Ours answers milliseconds, since a cycle count of unknown rate is no use to an addon timing its code. ([`src/script/stdlib.rs:101`](../crates/benilla-ui/src/script/stdlib.rs#L101))
-- A format that ends in `%` reads past its terminator in the client (`0x4135c3`), into whatever memory follows the string; here the output ends there. ([`src/script/stdlib.rs:563`](../crates/benilla-ui/src/script/stdlib.rs#L563))
+- A format that ends in `%` reads past its terminator in the client (`0x4135c3`), into whatever memory follows the string; here the output ends there. ([`src/script/stdlib.rs:560`](../crates/benilla-ui/src/script/stdlib.rs#L560))
+- With `#` and one byte of room, `_store_number` writes no digit and its reversal swaps before it tests (`0x413ab3`), trading the last byte written for the stale byte after it in the caller's buffer, which then ends the client's answer; here the output is kept. ([`src/script/stdlib.rs:611`](../crates/benilla-ui/src/script/stdlib.rs#L611))
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:122`](../crates/benilla-ui/src/script/tabard.rs#L122))
 - Returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API, and copying a stack-top leak would copy a bug. ([`src/script/taxi.rs:238`](../crates/benilla-ui/src/script/taxi.rs#L238))
 - A handler that unregisters the saved next ends the dispatch, because the reference then reads a freed node. ([`src/script/tick.rs:30`](../crates/benilla-ui/src/script/tick.rs#L30))
