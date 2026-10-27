@@ -330,6 +330,25 @@ fn a_language_learn_signals_at_its_packet() {
     );
 }
 
+/// The signal is the spell registrar's alone, never a diff of the known languages: a removal
+/// fires nothing (`0x4b2c50`), nor does a skill line arriving after its spell, and a learn of a
+/// language already known fires again (`0x4b2659`).
+#[test]
+fn only_a_language_learn_signals_never_a_removal_or_a_skill_line() {
+    let mut c = client();
+    let learn = |spell_id| vec![SessionEvent::SpellLearned { spell_id }];
+    c.frame(vec![learn(COMMON)]);
+    assert_eq!(c.seen(), ["LANGUAGE_LIST_CHANGED"]);
+    c.frame(vec![vec![SessionEvent::SpellRemoved { spell_id: COMMON }]]);
+    assert_eq!(c.seen(), Vec::<String>::new(), "an unlearn");
+    c.frame(vec![vec![values(ME, &[(SKILL_1, 0)])]]);
+    c.frame(vec![vec![values(ME, &[(SKILL_1, 98)])]]);
+    assert_eq!(c.seen(), Vec::<String>::new(), "a skill line");
+    c.frame(vec![learn(COMMON)]);
+    c.frame(vec![learn(COMMON)]);
+    assert_eq!(c.seen(), ["LANGUAGE_LIST_CHANGED", "LANGUAGE_LIST_CHANGED"]);
+}
+
 /// A unit created in the frame reads its real distance before the scene's propagation has run:
 /// the host composes its position from its `Transform` at the call, so the create's own packet
 /// left it where it stands, not at the origin.
