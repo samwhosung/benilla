@@ -10,7 +10,7 @@ use benilla_formats::{ChrClasses, ChrRaces, Reaction};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
     parse_unit_token, resolve_unit_in, ScriptValue, UiScript, UnitObject, UnitObjectRead,
-    UnitState, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse, WornDisplay,
+    UnitState, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse, WornDisplay, WornDisplaySet,
 };
 
 use crate::creature_type::CreatureTypeSources;
@@ -95,8 +95,7 @@ struct UnitFeedMemo {
     last_combo: Option<(u8, u64)>,
     /// Our faction template's `(friend, enemy)` masks, as last pushed.
     faction_masks: Option<Option<(u32, u32)>>,
-    /// `(HIDE_HELM, HIDE_CLOAK)`, pushed on the edge only: the Options setter flips the VM's
-    /// belief ahead of the server, and a per-frame push would snap it back.
+    /// `(HIDE_HELM, HIDE_CLOAK)`, as last pushed.
     worn_hidden: Option<(bool, bool)>,
     /// `PLAYER_FIELD_BYTES` byte 2 (`GetActionBarToggles`, `0x4e7660`); no field watch, no event.
     action_bar_toggles: Option<u8>,
@@ -1054,6 +1053,12 @@ impl benilla_ui::script::SelfRead for StoreObject<'_> {
     fn shapeshift_form(&self) -> u8 {
         self.0 .0.unit_shapeshift_form()
     }
+    fn shows_helm(&self) -> bool {
+        !self.0 .0.player_hides_helm()
+    }
+    fn shows_cloak(&self) -> bool {
+        !self.0 .0.player_hides_cloak()
+    }
 }
 
 /// `PLAYER_FLAGS` bit 7, free-for-all PvP (vmangos `Player.h:322`).
@@ -1136,21 +1141,42 @@ impl PvpSteps<'_> {
     }
 }
 
-/// `ShowHelm` and `ShowCloak` past the VM's belief, inside their calls
+/// `ShowHelm` and `ShowCloak`, inside their calls
 /// ([`benilla_ui::script::ScriptCall::WornDisplay`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct WornDisplaySteps<'w> {
+pub(crate) struct WornDisplaySteps<'w, 's> {
     net: Res<'w, NetCommands>,
+    me: Query<
+        'w,
+        's,
+        (&'static ObjectStore, &'static mut crate::entities::WornPins),
+        With<SelfPlayer>,
+    >,
 }
 
-impl WornDisplaySteps<'_> {
-    /// The flip's bodiless packet (`0x5ee6e3`, `push 0x2b9`, and its cloak twin): the VM, which
-    /// alone knows what the Options row did, has already decided it is needed.
-    pub(crate) fn flip(&self, which: WornDisplay) {
-        let _ = self.net.0.send(match which {
-            WornDisplay::Helm => crate::net::ClientCommand::ToggleHelm,
-            WornDisplay::Cloak => crate::net::ClientCommand::ToggleCloak,
-        });
+impl WornDisplaySteps<'_, '_> {
+    /// The show or hide method on the active player, nothing with none (`0x48de43`): the model's
+    /// piece re-dressed, then the toggle the live bit owes.
+    pub(crate) fn set(&mut self, set: WornDisplaySet) {
+        let Ok((store, mut pins)) = self.me.single_mut() else {
+            return;
+        };
+        let s = &store.0;
+        let hidden = match set.piece {
+            WornDisplay::Helm => s.player_hides_helm(),
+            WornDisplay::Cloak => s.player_hides_cloak(),
+        };
+        // The piece on the model, on the native display alone (`0x5ee690`, `0x5ee75e`).
+        if s.unit_displayid().is_some() && s.unit_displayid() == s.unit_native_displayid() {
+            pins.pin(set.piece, set.show);
+        }
+        // The bodiless toggle only while the bit says the opposite (`0x5ee6c4`, `0x5ee783`).
+        if set.show == hidden {
+            let _ = self.net.0.send(match set.piece {
+                WornDisplay::Helm => crate::net::ClientCommand::ToggleHelm,
+                WornDisplay::Cloak => crate::net::ClientCommand::ToggleCloak,
+            });
+        }
     }
 }
 
@@ -1654,8 +1680,7 @@ fn feed_units(
             }
         }
 
-        // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips
-        // the VM's belief on the click, and a stale push before the server answers would undo it.
+        // The hide bits for `ShowingHelm()`/`ShowingCloak()` with no host free to ask.
         if let Some((store, _)) = self_pair {
             let hidden = (store.0.player_hides_helm(), store.0.player_hides_cloak());
             if memo.worn_hidden != Some(hidden) {

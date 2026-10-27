@@ -509,8 +509,8 @@ pub(crate) struct Model {
     /// An inspect-honor query is out (`0xb71fcc`); `RequestInspectHonorData` (`0x4c80a0`) refuses
     /// while set. Cleared by a reply (`0x4c6f4c`) or by the app clearing the slot (`0x4c6f9d`).
     pub(crate) inspect_honor_pending: bool,
-    /// `ShowingHelm()`: `PLAYER_FLAGS`' `HIDE_HELM` bit as pushed, set ahead on `ShowHelm` because
-    /// the wire verb is a blind toggle. Starts shown, as a fresh character's flags are 0.
+    /// `ShowingHelm()` with no host free to ask: `PLAYER_FLAGS`' `HIDE_HELM` bit clear, as
+    /// pushed. Starts shown, as a fresh character's flags are 0.
     pub(crate) helm_shown: bool,
     /// `ShowingCloak()`, the same for `HIDE_CLOAK`.
     pub(crate) cloak_shown: bool,

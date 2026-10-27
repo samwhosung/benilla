@@ -414,7 +414,9 @@ pub(crate) fn apply_fields_for_test(world: &mut World, entity: Entity, delta: Ob
 }
 
 /// Our own character's entity (guid == [`SelfGuid`]): identity, not what we steer ([`Embodied`]).
+/// It carries what its own `ShowHelm` and `ShowCloak` calls left on its model.
 #[derive(Component)]
+#[require(crate::entities::WornPins)]
 pub(crate) struct SelfPlayer;
 
 /// The body this client is attached to: the reference's camera anchor (`camera+0x88`), written

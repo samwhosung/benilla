@@ -496,7 +496,7 @@ pub use worldmap::{
     WorldMapOverlayView, WorldMapSheetRow, WorldMapState, WorldMapZoneView,
 };
 pub use worldstate::WorldStateUiView;
-pub use worn_display::WornDisplay;
+pub use worn_display::{WornDisplay, WornDisplaySet};
 pub use zone_text::{ZonePvp, ZoneTexts};
 
 use mlua::Lua;

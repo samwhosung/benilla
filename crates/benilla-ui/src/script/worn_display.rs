@@ -1,16 +1,15 @@
 //! `ShowHelm`/`ShowingHelm` and `ShowCloak`/`ShowingCloak`, over the `PLAYER_FLAGS` bits
 //! `HIDE_HELM` (`0x400`) and `HIDE_CLOAK` (`0x800`), which the server keeps per character, so no
-//! CVar backs them. The wire verbs are bodiless flips (vmangos `HandleShowingHelmOpcode` is a bare
-//! `ToggleFlag`), so a set sends a flip only when it differs from a belief that moves at the call
-//! and is overwritten when the wire bit moves; the host sends it inside the call (`0x5ee6e3`).
+//! CVar backs them. The getters read the live bit (`0x48dd8b`, `0x48ddeb`); the setters hand the
+//! host the ask, which re-dresses the model and sends the bodiless toggle only while the live bit
+//! says the opposite (`0x5ee660`, `0x5ee740`, `0x5ee7f0`, `0x5ee8d0`).
 
 use mlua::{Lua, MultiValue};
 
 use super::binding_abi::bool_or_default;
-use super::Model;
+use super::stat_read::read_self;
 
-/// A flip: one `CMSG_TOGGLE_HELM` or `CMSG_TOGGLE_CLOAK`, which the host sends inside the call
-/// ([`super::ScriptCall::WornDisplay`]).
+/// The piece a `ShowHelm` or `ShowCloak` call asks about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WornDisplay {
     /// The head slot, `PLAYER_FLAGS_HIDE_HELM`.
@@ -19,47 +18,39 @@ pub enum WornDisplay {
     Cloak,
 }
 
+/// One `ShowHelm(flag)` or `ShowCloak(flag)`, which the host applies inside the call
+/// ([`super::ScriptCall::WornDisplay`]): the show method for a true flag, the hide method for a
+/// false one (`0x48de59`, `0x48de63`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WornDisplaySet {
+    /// The helm or the cloak.
+    pub piece: WornDisplay,
+    /// The flag, `GetBoolOrDefault`'s answer (`0x48de4e`).
+    pub show: bool,
+}
+
 impl super::UiScript {
-    /// The flips a harness's VM kept ([`Self::keep_calls`]), one packet each, in call order.
-    pub fn take_worn_display_toggles(&mut self) -> Vec<WornDisplay> {
+    /// The asks a harness's VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_worn_display_sets(&mut self) -> Vec<WornDisplaySet> {
         self.take_calls_where(|c| match c {
-            super::ScriptCall::WornDisplay(which) => Some(*which),
+            super::ScriptCall::WornDisplay(set) => Some(*set),
             _ => None,
         })
     }
 
-    /// Push the wire truth, only on a `PLAYER_FLAGS` edge: pushed per frame, it would undo an
-    /// optimistic flip before the server answers, and a second click would flip the wrong way.
+    /// Push the wire bits, `(helm_shown, cloak_shown)`, for a getter that runs with no host free
+    /// to ask ([`super::SelfRead`]).
     pub fn set_worn_display(&mut self, helm_shown: bool, cloak_shown: bool) {
         let mut model = self.model_mut();
         model.helm_shown = helm_shown;
         model.cloak_shown = cloak_shown;
     }
-
-    /// What the VM currently believes, `(helm_shown, cloak_shown)`.
-    pub fn worn_display(&self) -> (bool, bool) {
-        let model = self.model_ref();
-        (model.helm_shown, model.cloak_shown)
-    }
-}
-
-/// Ask for a state: whether a flip is owed, which it is only if we are not already in it.
-fn want(model: &mut Model, which: WornDisplay, show: bool) -> bool {
-    let held = match which {
-        WornDisplay::Helm => &mut model.helm_shown,
-        WornDisplay::Cloak => &mut model.cloak_shown,
-    };
-    if *held == show {
-        return false;
-    }
-    *held = show; // optimistic: the wire edge overwrites it when the server answers
-    true
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    for (name, which) in [
+    for (name, piece) in [
         ("ShowHelm", WornDisplay::Helm),
         ("ShowCloak", WornDisplay::Cloak),
     ] {
@@ -68,32 +59,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `GetBoolOrDefault` (`0x6f1c10`) with default 1 (`0x48de4e`, `0x48de9e`): a bare call
             // shows, and the stock panel's string `"0"` hides where Lua 5.0 holds it truthy.
             lua.create_function(move |lua, args: MultiValue| {
-                let flip = want(
-                    &mut lua.app_data_mut::<Model>().expect("model app_data"),
-                    which,
-                    bool_or_default(args.front(), true),
-                );
-                if flip {
-                    super::calls::submit(lua, super::ScriptCall::WornDisplay(which))?;
-                }
-                Ok(())
+                let show = bool_or_default(args.front(), true);
+                super::calls::submit(
+                    lua,
+                    super::ScriptCall::WornDisplay(WornDisplaySet { piece, show }),
+                )
             })?,
         )?;
     }
 
-    // `1` or nil, which the Options row feeds straight into `SetChecked`.
-    for (name, which) in [
+    // `1` or nil off the live bit (`0x48dd8b`, `0x48ddeb`), nil with no player (`0x48dd80`); the
+    // Options row feeds it straight into `SetChecked`.
+    for (name, piece) in [
         ("ShowingHelm", WornDisplay::Helm),
         ("ShowingCloak", WornDisplay::Cloak),
     ] {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let shown = match which {
-                    WornDisplay::Helm => model.helm_shown,
-                    WornDisplay::Cloak => model.cloak_shown,
-                };
+                let shown = read_self(lua, |own| match piece {
+                    WornDisplay::Helm => own.shows_helm(),
+                    WornDisplay::Cloak => own.shows_cloak(),
+                });
                 Ok(shown.then_some(1u32))
             })?,
         )?;
@@ -103,37 +90,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::WornDisplay;
+    use super::{WornDisplay, WornDisplaySet};
     use crate::script::UiScript;
 
-    #[test]
-    fn the_setter_reads_its_argument_numerically_so_the_string_zero_hides() {
-        let mut s = UiScript::new().unwrap();
-        s.keep_calls();
-        assert!(
-            s.eval::<bool>("return ShowingHelm() == 1").unwrap(),
-            "shown by default"
-        );
-
-        s.run(r#"ShowHelm("0")"#).unwrap();
-        assert!(s.eval::<bool>("return ShowingHelm() == nil").unwrap());
-        assert_eq!(s.take_worn_display_toggles(), vec![WornDisplay::Helm]);
-
-        s.run(r#"ShowHelm("1")"#).unwrap();
-        assert!(s.eval::<bool>("return ShowingHelm() == 1").unwrap());
-        assert_eq!(s.take_worn_display_toggles(), vec![WornDisplay::Helm]);
-
-        // The other spellings the API is handed elsewhere in 1.12: a bare number and nil.
-        s.run("ShowCloak(0)").unwrap();
-        assert!(s.eval::<bool>("return ShowingCloak() == nil").unwrap());
-        s.run("ShowCloak(1)").unwrap();
-        assert!(s.eval::<bool>("return ShowingCloak() == 1").unwrap());
-        s.run("ShowCloak(nil)").unwrap();
-        assert!(s.eval::<bool>("return ShowingCloak() == nil").unwrap());
-        assert_eq!(
-            s.take_worn_display_toggles(),
-            vec![WornDisplay::Cloak, WornDisplay::Cloak, WornDisplay::Cloak]
-        );
+    fn set(piece: WornDisplay, show: bool) -> WornDisplaySet {
+        WornDisplaySet { piece, show }
     }
 
     /// The flag is `GetBoolOrDefault` with default 1 (`0x48de4e`): a bare call shows, a table
@@ -142,65 +103,51 @@ mod tests {
     fn the_setter_takes_the_flag_with_default_one() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        for (arg, shown) in [
+        for (arg, show) in [
             ("", true),
             ("nil", false),
             ("{}", true),
+            (r#""0""#, false),
+            (r#""1""#, true),
             (r#""no""#, false),
             (r#""yes""#, true),
             (r#""off""#, false),
             (r#""""#, true),
             ("0.5", false),
+            ("0", false),
+            ("1", true),
         ] {
-            s.run(&format!("ShowHelm({})", if shown { "0" } else { "1" }))
-                .unwrap();
-            s.take_worn_display_toggles();
-            s.run(&format!("ShowHelm({arg})")).unwrap();
+            s.run(&format!("ShowHelm({arg}) ShowCloak({arg})")).unwrap();
             assert_eq!(
-                s.eval::<bool>("return ShowingHelm() == 1").unwrap(),
-                shown,
+                s.take_worn_display_sets(),
+                [set(WornDisplay::Helm, show), set(WornDisplay::Cloak, show)],
                 "ShowHelm({arg})"
             );
         }
     }
 
-    /// The Options window's Defaults button writes every row, so a flip on no difference would
-    /// invert a preference already at its default.
+    /// Every call reaches the host, which alone reads the live bit (`0x5ee6b4`, `0x5ee773`): two
+    /// hides before the server answers are two asks, not one.
     #[test]
-    fn asking_for_the_state_we_are_already_in_sends_nothing() {
+    fn every_call_is_an_ask_and_the_getter_reads_the_wire_bit_not_the_ask() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.run("ShowHelm(1) ShowCloak(1)").unwrap();
-        assert!(
-            s.take_worn_display_toggles().is_empty(),
-            "both already shown — no packet"
-        );
-
-        s.run("ShowHelm(0)").unwrap();
-        assert_eq!(s.take_worn_display_toggles(), vec![WornDisplay::Helm]);
-        s.run("ShowHelm(0)").unwrap();
-        assert!(
-            s.take_worn_display_toggles().is_empty(),
-            "the belief moved at the first call, so the second is a no-op"
-        );
-    }
-
-    #[test]
-    fn the_wire_push_overrides_the_optimistic_belief() {
-        let mut s = UiScript::new().unwrap();
-        s.keep_calls();
-        s.run("ShowHelm(0)").unwrap();
-        let _ = s.take_worn_display_toggles();
-        assert_eq!(s.worn_display(), (false, true));
-
-        // The server answers otherwise; the descriptor wins and the next ask is computed from it.
-        s.set_worn_display(true, false);
-        assert_eq!(s.worn_display(), (true, false));
-        s.run("ShowHelm(0)").unwrap();
+        s.run("ShowHelm(0) ShowHelm(0) ShowHelm(1)").unwrap();
         assert_eq!(
-            s.take_worn_display_toggles(),
-            vec![WornDisplay::Helm],
-            "re-asked against the server's value, not the stale belief"
+            s.take_worn_display_sets(),
+            [
+                set(WornDisplay::Helm, false),
+                set(WornDisplay::Helm, false),
+                set(WornDisplay::Helm, true),
+            ]
         );
+        s.run("ShowHelm(0)").unwrap();
+        assert!(
+            s.eval::<bool>("return ShowingHelm() == 1").unwrap(),
+            "the flag has not moved, so the getter still says shown"
+        );
+        s.set_worn_display(false, true);
+        assert!(s.eval::<bool>("return ShowingHelm() == nil").unwrap());
+        assert!(s.eval::<bool>("return ShowingCloak() == 1").unwrap());
     }
 }

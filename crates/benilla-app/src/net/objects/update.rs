@@ -998,6 +998,15 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             go.set_wire_state(state);
         }
     }
+    // `0x5ee990`'s helm and cloak arms re-dress the piece by its moved bit (`0x5eea45`-`0x5eea8e`).
+    if kind == ObjectType::Player {
+        let flags = block
+            .edges()
+            .find(|&(index, _, _)| index == benilla_protocol::field::FIELD_PLAYER_FLAGS);
+        if let (Some((_, old, new)), Ok(mut pins)) = (flags, sc.worn_pins.get_mut(e)) {
+            pins.flags_moved(old ^ new);
+        }
+    }
     let me = sc.self_guid.0;
     let (names, index, stores, net) = (&sc.names, &sc.index, &sc.stores, &sc.net);
     let others = || {

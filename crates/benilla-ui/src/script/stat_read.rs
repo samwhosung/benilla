@@ -216,6 +216,10 @@ pub trait SelfRead {
     /// `UNIT_FIELD_BYTES_1` byte 2 (`+0x212`), the form `IsCurrentAction`'s form arm compares
     /// (`0x4e558b`).
     fn shapeshift_form(&self) -> u8;
+    /// `PLAYER_FLAGS` bit `0x400` clear, `ShowingHelm`'s (`0x48dd8b`).
+    fn shows_helm(&self) -> bool;
+    /// `PLAYER_FLAGS` bit `0x800` clear, `ShowingCloak`'s (`0x48ddeb`).
+    fn shows_cloak(&self) -> bool;
 }
 
 /// No active player held, as the reference's player getters answer one: 0, nil, three nils
@@ -250,6 +254,13 @@ impl SelfRead for NoPlayer {
     fn shapeshift_form(&self) -> u8 {
         0
     }
+    // Nil with no player (`0x48dd80`, `0x48dde0`).
+    fn shows_helm(&self) -> bool {
+        false
+    }
+    fn shows_cloak(&self) -> bool {
+        false
+    }
 }
 
 /// The VM's copy, as the pushes left it.
@@ -280,6 +291,12 @@ impl SelfRead for Model {
     }
     fn shapeshift_form(&self) -> u8 {
         self.cast_view.form
+    }
+    fn shows_helm(&self) -> bool {
+        self.helm_shown
+    }
+    fn shows_cloak(&self) -> bool {
+        self.cloak_shown
     }
 }
 

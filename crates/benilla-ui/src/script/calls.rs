@@ -240,9 +240,9 @@ pub enum ScriptCall {
     Instance(super::InstanceCall),
     /// The PvP flag's toggle ([`super::PvpCall`]): its packet inside the call.
     Pvp(super::PvpCall),
-    /// `ShowHelm` or `ShowCloak` past the belief's test ([`super::WornDisplay`]): the flip's packet
-    /// inside the call (`0x5ee6e3`).
-    WornDisplay(super::WornDisplay),
+    /// `ShowHelm` or `ShowCloak` ([`super::WornDisplaySet`]): the model's piece and the toggle
+    /// the live bit owes, inside the call (`0x5ee660`-`0x5ee8d0`).
+    WornDisplay(super::WornDisplaySet),
     /// An action bar verb's packet ([`super::ActionBarCall`]): the toggles' send, or a slot write
     /// stored and sent ahead of its signal (`0x4e58e0`).
     ActionBar(super::ActionBarCall),

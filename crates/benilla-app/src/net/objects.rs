@@ -144,6 +144,9 @@ pub(crate) struct Scene<'w, 's> {
     pending: Query<'w, 's, (Entity, &'static Guid), With<update::ReleasePending>>,
     creatures: Option<Res<'w, crate::entities::Creatures>>,
     held_displays: Query<'w, 's, &'static mut update::HeldDisplay>,
+    /// What our own `ShowHelm` and `ShowCloak` calls left on the model, which a hide bit's edge
+    /// ends.
+    worn_pins: Query<'w, 's, &'static mut crate::entities::WornPins>,
     /// The viewer's zone and the objects' positions a party member's snapshot stores (`0x5f0880`).
     place: crate::ui_party::net::SnapshotPlace<'w, 's>,
 }

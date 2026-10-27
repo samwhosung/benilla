@@ -124,7 +124,7 @@ disjoint::disjoint_set! {
         /// The sends of the action bar, the worn display, the Help window, the unserved systems,
         /// the inspect window, the reader, the aura cancel, the minimap and the pet trainer.
         action_bar: crate::ui_action::ActionBarSteps<'static>,
-        worn: crate::ui_unit::WornDisplaySteps<'static>,
+        worn: crate::ui_unit::WornDisplaySteps<'static, 'static>,
         gm_ticket: crate::ui_gm_ticket::GmTicketSteps<'static>,
         inspect: crate::ui_inspect::InspectSteps<'static, 'static>,
         item_text: crate::ui_item_text::ItemTextSteps<'static>,
@@ -847,7 +847,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::Instance(InstanceCall::Reset) => appliers.instance().reset(),
             ScriptCall::Pvp(PvpCall::Toggle) => appliers.pvp().toggle(),
-            ScriptCall::WornDisplay(which) => appliers.worn().flip(which),
+            ScriptCall::WornDisplay(set) => appliers.worn().set(set),
             ScriptCall::ActionBar(call) => appliers.action_bar().apply(call),
             ScriptCall::GmTicket(GmTicketCall::Ticket(intent)) => {
                 appliers.gm_ticket().ticket(intent);

@@ -113,19 +113,136 @@ fn spells(app: &mut App, spells: &[(u32, &str)]) {
     });
 }
 
-/// `ShowHelm(flag)` and `ShowCloak(flag)` (`0x48de20`, `0x48de70`) send their flip inside the call
-/// (`0x5ee6e3`, `push 0x2b9`), ahead of the chunk's next verb, and `ShowingHelm()` on the next
-/// line reads what the call left.
+/// `UNIT_FIELD_DISPLAYID`, `UNIT_FIELD_NATIVEDISPLAYID` and `PLAYER_FLAGS`.
+const DISPLAY: u16 = 131;
+const NATIVE_DISPLAY: u16 = 132;
+const PLAYER_FLAGS: u16 = 190;
+
+/// Our player created off the wire with display `display` on native display 49, seated.
+fn seat_created(app: &mut App, display: u32) -> Entity {
+    let fields = ObjectFields::from_pairs(&[
+        (2, 0x19),
+        (22, 100),
+        (28, 100),
+        (DISPLAY, display),
+        (NATIVE_DISPLAY, 49),
+    ])
+    .into_created(benilla_protocol::messages::ObjectType::Player);
+    app.world_mut().resource_mut::<SelfGuid>().0 = Some(ME);
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![
+            benilla_protocol::SessionEvent::ObjectCreate {
+                guid: ME,
+                kind: benilla_protocol::EntityKind::Player,
+                display_id: None,
+                position: [0.0; 3],
+                orientation: 0.0,
+                scale: 1.0,
+                speeds: None,
+                mover: None,
+                transport_progress: None,
+                transport: None,
+                spline: None,
+                fields,
+            },
+            benilla_protocol::SessionEvent::ObjectUpdateEnd,
+        ],
+    );
+    let me = app.world().resource::<GuidIndex>().0[&ME];
+    app.world_mut().entity_mut(me).insert(SelfPlayer);
+    me
+}
+
+/// The server's `PLAYER_FLAGS` for us, one update packet.
+fn flags(app: &mut App, flags: u32) {
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![
+            benilla_protocol::SessionEvent::ObjectValues {
+                guid: ME,
+                fields: ObjectFields::from_pairs(&[(PLAYER_FLAGS, flags)]),
+            },
+            benilla_protocol::SessionEvent::ObjectUpdateEnd,
+        ],
+    );
+}
+
+/// `ShowHelm(flag)` and `ShowCloak(flag)` (`0x48de20`, `0x48de70`) read the live `PLAYER_FLAGS`
+/// bit inside the call and send the toggle only while it says the opposite (`0x5ee6c4`,
+/// `0x5ee783`), ahead of the chunk's next verb; `ShowingHelm()` reads the same bit (`0x48dd8b`).
 #[test]
-fn show_helm_and_show_cloak_send_inside_their_calls() {
+fn show_helm_and_show_cloak_send_on_the_live_bit_inside_their_calls() {
     let (mut app, rx) = client();
-    seat(&mut app, &[]);
+    let none: Option<i64> = eval(&mut app, "ShowHelm(0) ShowCloak(1) return ShowingHelm()");
+    assert_eq!(none, None, "no player: nil, and nothing sent (`0x48de43`)");
+    seat_created(&mut app, 49);
     let shown: Option<i64> = eval(
         &mut app,
-        "ShowHelm(0) RandomRoll(1, 2) ShowCloak(0) return ShowingHelm()",
+        "ShowHelm(0) ShowHelm(0) RandomRoll(1, 2) ShowCloak(1) ShowCloak(0) return ShowingHelm()",
+    );
+    assert_eq!(
+        shown,
+        Some(1),
+        "the bit has not moved, so the getter says shown"
+    );
+    assert_eq!(
+        sent(&rx),
+        ["helm", "helm", "roll 1", "cloak"],
+        "two hides on a shown bit are two toggles, a show on it none"
+    );
+
+    // The server's answers set both hide bits: now a show is owed the toggle and a hide none.
+    flags(&mut app, 0xc00);
+    let shown: Option<i64> = eval(
+        &mut app,
+        "ShowHelm(0) ShowHelm(1) ShowCloak(1) return ShowingHelm()",
     );
     assert_eq!(shown, None);
-    assert_eq!(sent(&rx), ["helm", "roll 1", "cloak"]);
+    assert_eq!(sent(&rx), ["helm", "cloak"]);
+}
+
+/// On the native display the call re-dresses the model ahead of the server, attaching
+/// (`0x5ee6af`) or detaching (`0x5ee76e`) the piece, until the bit's next edge re-dresses it by
+/// the flag (`0x5eea45`); on another display it leaves the model alone (`0x5ee696`).
+#[test]
+fn show_helm_redresses_the_native_model_until_the_bit_moves() {
+    let hidden = |app: &App, me| {
+        let w = app.world();
+        crate::entities::WornPins::hidden(
+            w.get::<crate::entities::WornPins>(me),
+            &w.get::<ObjectStore>(me).unwrap().0,
+        )
+    };
+    let (mut app, rx) = client();
+    let me = seat_created(&mut app, 49);
+    eval::<()>(&mut app, "ShowHelm(0) ShowCloak(0) ShowCloak(1)");
+    assert_eq!(
+        hidden(&app, me),
+        (true, false),
+        "the helm comes off at the call"
+    );
+    assert_eq!(sent(&rx), ["helm", "cloak"]);
+
+    // The answer, then a `/togglehelm` and its answer: each edge dresses by the flag.
+    flags(&mut app, 0x400);
+    assert_eq!(hidden(&app, me), (true, false));
+    eval::<()>(&mut app, "ShowHelm(1)");
+    assert_eq!(hidden(&app, me), (false, false), "back on at the call");
+    flags(&mut app, 0);
+    flags(&mut app, 0x400);
+    assert_eq!(
+        hidden(&app, me),
+        (true, false),
+        "the bit moved after the call, so the flag dresses it"
+    );
+
+    // Shapeshifted: the model is another display's, and only the toggle goes out.
+    let (mut app, rx) = client();
+    let me = seat_created(&mut app, 892);
+    eval::<()>(&mut app, "ShowHelm(0)");
+    assert_eq!(hidden(&app, me), (false, false));
+    assert_eq!(sent(&rx), ["helm"]);
 }
 
 /// `SetActionBarToggles` (`0x4e76e0`) sends `CMSG_SET_ACTIONBAR_TOGGLES` inside its call

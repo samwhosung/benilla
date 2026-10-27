@@ -87,6 +87,49 @@ pub(crate) struct Equipment {
     pub(crate) settled: bool,
 }
 
+/// The active player's helm and cloak as a `ShowHelm` or `ShowCloak` call left its model, ahead of
+/// the server: on the native display the call attaches (`0x5ee6af`) or detaches (`0x5ee76e`) the
+/// piece, and the next edge of the piece's `PLAYER_FLAGS` bit re-dresses it by the flag
+/// (`0x5eea45`-`0x5eea8e`). Each is `Some(shown)` from the call to that edge.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) struct WornPins {
+    helm: Option<bool>,
+    cloak: Option<bool>,
+}
+
+impl WornPins {
+    /// A call's re-dress of `piece`.
+    pub(crate) fn pin(&mut self, piece: benilla_ui::script::WornDisplay, shown: bool) {
+        match piece {
+            benilla_ui::script::WornDisplay::Helm => self.helm = Some(shown),
+            benilla_ui::script::WornDisplay::Cloak => self.cloak = Some(shown),
+        }
+    }
+
+    /// A `PLAYER_FLAGS` edge, `flipped` its changed bits: `HIDE_HELM 0x400` (`0x5eea45`) and
+    /// `HIDE_CLOAK 0x800` (`0x5eea6d`) hand their piece back to the flag.
+    pub(crate) fn flags_moved(&mut self, flipped: u32) {
+        if flipped & 0x400 != 0 {
+            self.helm = None;
+        }
+        if flipped & 0x800 != 0 {
+            self.cloak = None;
+        }
+    }
+
+    /// `(helm hidden, cloak hidden)` as the model shows them: a call's re-dress, else the bit.
+    pub(crate) fn hidden(
+        pins: Option<&Self>,
+        s: &benilla_protocol::messages::ObjectFields,
+    ) -> (bool, bool) {
+        let pins = pins.copied().unwrap_or_default();
+        (
+            pins.helm.map_or(s.player_hides_helm(), |shown| !shown),
+            pins.cloak.map_or(s.player_hides_cloak(), |shown| !shown),
+        )
+    }
+}
+
 /// The [`Equipment`] a player's visual was dressed with; a change re-dresses it in place.
 #[derive(Component)]
 pub(in crate::entities) struct AppliedEquipment(pub(in crate::entities) Equipment);
