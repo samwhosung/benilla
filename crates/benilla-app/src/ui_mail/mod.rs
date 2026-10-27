@@ -169,17 +169,23 @@ impl MailOpen {
         self.show_requested = false;
     }
 
-    /// The world-enter init (`0x4acb10`) and a disconnect: no mailbox and no rows. The bodies
-    /// stay: the item-text store is saved (`0x554eb0`), and neither the init nor the world entry
-    /// (`0x555811`) clears it.
+    /// The world-enter init (`0x4acb10`): no mailbox and no rows. The bodies stay, asks
+    /// included: the item-text store is saved (`0x554eb0`), and neither the init (it touches no
+    /// cache) nor the world entry (`0x555811`) clears it.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
         self.results.clear();
         self.mails.clear();
         self.auction_subjects.clear();
-        self.bodies.clear_pending();
         self.request_resolved = false;
         self.list_results = 0;
+    }
+
+    /// A disconnect: the session's rows as [`Self::clear_session`], and the body asks that died
+    /// with the socket, which the saved store would otherwise wait on for ever.
+    pub(crate) fn clear_disconnected(&mut self) {
+        self.clear_session();
+        self.bodies.clear_pending();
     }
 }
 
@@ -1206,6 +1212,22 @@ mod tests {
         m.clear_session();
         assert!(m.mails.is_empty());
         assert!(!m.bodies.is_empty());
+    }
+
+    /// The world-enter init (`0x4acb10`) touches no cache: a body ask in flight stands (the
+    /// item-text store is saved), and only a disconnect, whose socket took the ask, drops it.
+    #[test]
+    fn the_world_enter_init_keeps_a_body_ask_and_a_disconnect_drops_it() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut m = MailOpen::default();
+        let ask = |m: &MailOpen| m.bodies.read(7, Ask::Event(&commands), |_| {}).is_none();
+        assert!(ask(&m));
+        assert!(m.bodies.is_pending(7));
+        m.clear_session();
+        assert!(m.bodies.is_pending(7), "the init leaves the ask");
+        m.clear_disconnected();
+        assert!(!m.bodies.is_pending(7), "a disconnect drops it");
     }
 
     /// No GlobalStrings in a unit test: every key misses.

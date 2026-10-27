@@ -142,7 +142,7 @@ fn on_session_end(
     mut mail: ResMut<MailOpen>,
     mut pending: ResMut<MailPending>,
 ) {
-    mail.clear_session();
+    mail.clear_disconnected();
     *pending = MailPending::default();
 }
 
