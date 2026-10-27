@@ -398,6 +398,17 @@ pub enum ServerPacket {
     GameObjectPageText {
         guid: u64,
     },
+    /// `SMSG_READ_ITEM_OK`: the book may be read (the item's guid).
+    ReadItemOk {
+        guid: u64,
+    },
+    /// `SMSG_READ_ITEM_FAILED`: the item's guid, the reason byte and, for reason 1, the translation
+    /// time in milliseconds (`items::read_read_item_failed`).
+    ReadItemFailed {
+        guid: u64,
+        reason: u8,
+        milliseconds: i32,
+    },
     /// `SMSG_FISH_NOT_HOOKED`: the channel ended unhooked (empty body; `ERR_FISH_NOT_HOOKED`).
     FishNotHooked,
     /// `SMSG_FISH_ESCAPED`: the skill roll failed on the click (empty body; `ERR_FISH_ESCAPED`).
@@ -1401,6 +1412,8 @@ impl ServerPacket {
             ServerPacket::GameObjectCustomAnim { .. } => "SMSG_GAMEOBJECT_CUSTOM_ANIM".into(),
             ServerPacket::GameObjectDespawnAnim { .. } => "SMSG_GAMEOBJECT_DESPAWN_ANIM".into(),
             ServerPacket::GameObjectPageText { .. } => "SMSG_GAMEOBJECT_PAGETEXT".into(),
+            ServerPacket::ReadItemOk { .. } => "SMSG_READ_ITEM_OK".into(),
+            ServerPacket::ReadItemFailed { .. } => "SMSG_READ_ITEM_FAILED".into(),
             ServerPacket::OpenContainer { .. } => "SMSG_OPEN_CONTAINER".into(),
             ServerPacket::Inspect { .. } => "SMSG_INSPECT".into(),
             ServerPacket::StandStateUpdate { .. } => "SMSG_STANDSTATE_UPDATE".into(),

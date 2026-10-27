@@ -546,6 +546,17 @@ pub enum SessionEvent {
     /// `SMSG_GAMEOBJECT_PAGETEXT`: the reference resolves the GameObject and opens the item-text
     /// reader on it (`0x5f88c0` → `0x4e32e0(guid, 0)`), as a right-click on a TEXT object does.
     GameObjectPageText { guid: u64 },
+    /// `SMSG_READ_ITEM_OK` (`0x5ec600`): the book may be read; the reference marks the item read
+    /// and shows its page.
+    ReadItemOk { guid: u64 },
+    /// `SMSG_READ_ITEM_FAILED` (`0x5ec600`): reason 0 shows the page, 1 shows it untranslated and
+    /// signals `ITEM_TEXT_TRANSLATION` with `milliseconds`, any other closes the reader when the
+    /// guid is its item.
+    ReadItemFailed {
+        guid: u64,
+        reason: u8,
+        milliseconds: i32,
+    },
     /// `SMSG_OPEN_CONTAINER`: the reference fires `BAG_OPEN` with 0 for our own guid (the
     /// backpack), 1..10 for a bag-cache slot, and nothing for a miss.
     OpenContainer { item: u64 },

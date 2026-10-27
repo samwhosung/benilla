@@ -933,6 +933,16 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::GameObjectPageText { guid } => {
             vec![SessionEvent::GameObjectPageText { guid }]
         }
+        ServerPacket::ReadItemOk { guid } => vec![SessionEvent::ReadItemOk { guid }],
+        ServerPacket::ReadItemFailed {
+            guid,
+            reason,
+            milliseconds,
+        } => vec![SessionEvent::ReadItemFailed {
+            guid,
+            reason,
+            milliseconds,
+        }],
         ServerPacket::OpenContainer { item } => vec![SessionEvent::OpenContainer { item }],
         ServerPacket::StandStateUpdate { state } => {
             vec![SessionEvent::StandStateUpdate { state }]

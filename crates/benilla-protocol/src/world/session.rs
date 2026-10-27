@@ -526,6 +526,11 @@ impl WorldSession {
         )
     }
 
+    /// Read a book by bag position (`CMSG_READ_ITEM`).
+    pub fn read_item(&mut self, bag: u8, slot: u8) -> Result<()> {
+        self.send(opcode::CMSG_READ_ITEM, &messages::read_item(bag, slot))
+    }
+
     /// Equip a bag item (`CMSG_AUTOEQUIP_ITEM`).
     pub fn auto_equip_item(&mut self, bag_index: u8, slot: u8) -> Result<()> {
         self.send(

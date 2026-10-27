@@ -48,6 +48,12 @@ impl WorldWriter {
         )
     }
 
+    /// `CMSG_READ_ITEM`: read a book; the server answers `SMSG_READ_ITEM_OK` or
+    /// `SMSG_READ_ITEM_FAILED` on the item's guid.
+    pub fn read_item(&mut self, bag: u8, slot: u8) -> Result<()> {
+        self.send(opcode::CMSG_READ_ITEM, &messages::read_item(bag, slot))
+    }
+
     /// `CMSG_WRAP_ITEM`: wrap an item in the `ITEM_FLAG_WRAPPER` paper; success is silent and
     /// consumes one paper.
     pub fn wrap_item(

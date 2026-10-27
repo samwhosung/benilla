@@ -600,3 +600,45 @@ fn pet_feedback_family_parses_and_decodes() {
         }]
     ));
 }
+
+/// `CMSG_READ_ITEM` is the container byte and the slot (`0x5ec500` writes opcode 0xad and the two
+/// bytes); `SMSG_READ_ITEM_OK` is the item's guid, `SMSG_READ_ITEM_FAILED` the guid and a reason
+/// byte that vmangos leaves out (`ItemHandler.cpp:445-452`), read as 0 (`0x5ec664`), with the
+/// translation time in milliseconds after a reason of 1 (`0x5ec6a5`), the opcode's 0xaf when the
+/// packet ends before it.
+#[test]
+fn read_item_bodies_encode_parse_and_decode() {
+    assert_eq!(messages::read_item(255, 25), [255, 25]);
+    assert_eq!(messages::opcode::CMSG_READ_ITEM, 0xAD);
+    let ok = messages::parse_server(messages::opcode::SMSG_READ_ITEM_OK, &hx("0700000000000040"))
+        .unwrap();
+    assert!(matches!(
+        decode(ok).as_slice(),
+        [SessionEvent::ReadItemOk {
+            guid: 0x4000_0000_0000_0007
+        }]
+    ));
+    let failed = |body: &str| {
+        let packet =
+            messages::parse_server(messages::opcode::SMSG_READ_ITEM_FAILED, &hx(body)).unwrap();
+        decode(packet)
+            .into_iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<_>>()
+    };
+    let guid = "0700000000000040";
+    let event = |reason: u8, ms: i32| {
+        format!(
+            "ReadItemFailed {{ guid: 4611686018427387911, reason: {reason}, milliseconds: {ms} }}"
+        )
+    };
+    assert_eq!(failed(guid), [event(0, 0)], "vmangos writes no reason");
+    assert_eq!(failed(&format!("{guid}00")), [event(0, 0)]);
+    assert_eq!(failed(&format!("{guid}01e8030000")), [event(1, 1000)]);
+    assert_eq!(
+        failed(&format!("{guid}01")),
+        [event(1, 0xAF)],
+        "the opcode stays in the slot"
+    );
+    assert_eq!(failed(&format!("{guid}02")), [event(2, 0)]);
+}

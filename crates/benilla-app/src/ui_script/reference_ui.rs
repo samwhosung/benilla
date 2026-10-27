@@ -1940,7 +1940,6 @@ mod tests {
                  a divergence, not a fix",
             ),
             ("DISPLAY_SIZE_CHANGED", "the four paperdoll files"),
-            ("ITEM_TEXT_TRANSLATION", "ItemTextFrame.lua"),
             (
                 "SHOW_COMPARE_TOOLTIP",
                 "PaperDollFrame.lua — the second `TRADE_REQUEST`: event 377 is \

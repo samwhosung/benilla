@@ -299,7 +299,8 @@ impl ScriptItemUse<'_, '_> {
                     ui_errors,
                 );
             }
-            // The reader, with no packet (`0x4e32e0`); a re-click closes it.
+            // The reader (`0x4e32e0`), whose open sends `CMSG_READ_ITEM` for a book not yet read;
+            // a re-click closes it.
             (UseFork::Read, Some(c)) => {
                 if item_text.read_pages(c.guid) {
                     debug!("ui_items: re-click closes the book {:#x}", c.guid);

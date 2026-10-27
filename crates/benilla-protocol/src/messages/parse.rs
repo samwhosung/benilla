@@ -1332,6 +1332,17 @@ fn parse_server_body(
         opcode::SMSG_GAMEOBJECT_PAGETEXT => ServerPacket::GameObjectPageText {
             guid: gameobject::read_gameobject_page_text(&mut r)?,
         },
+        opcode::SMSG_READ_ITEM_OK => ServerPacket::ReadItemOk {
+            guid: read_u64_le(&mut r)?,
+        },
+        opcode::SMSG_READ_ITEM_FAILED => {
+            let (guid, reason, milliseconds) = items::read_read_item_failed(&mut r)?;
+            ServerPacket::ReadItemFailed {
+                guid,
+                reason,
+                milliseconds,
+            }
+        }
         opcode::SMSG_OPEN_CONTAINER => ServerPacket::OpenContainer {
             item: items::read_open_container(&mut r)?,
         },

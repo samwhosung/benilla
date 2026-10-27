@@ -157,10 +157,10 @@ pub use instance::{
 };
 pub use items::{
     auto_equip_item, auto_store_bag_item, destroy_item, item_name_query, item_query, open_item,
-    set_ammo, split_item, swap_inv_item, swap_item, use_item, wrap_item, ItemDamage, ItemInfo,
-    ItemSpellEntry, ItemUseSpell, UseItemTarget, BAG_PLAYER_INVENTORY, ITEM_DYNFLAG_UNLOCKED,
-    ITEM_DYNFLAG_WRAPPED, ITEM_FLAG_LOOTABLE, ITEM_FLAG_PLAYERCAST, ITEM_FLAG_WRAPPER,
-    SLOT_BAG_FIRST, SLOT_PACK_FIRST,
+    read_item, set_ammo, split_item, swap_inv_item, swap_item, use_item, wrap_item, ItemDamage,
+    ItemInfo, ItemSpellEntry, ItemUseSpell, UseItemTarget, BAG_PLAYER_INVENTORY,
+    ITEM_DYNFLAG_UNLOCKED, ITEM_DYNFLAG_WRAPPED, ITEM_FLAG_LOOTABLE, ITEM_FLAG_PLAYERCAST,
+    ITEM_FLAG_WRAPPER, SLOT_BAG_FIRST, SLOT_PACK_FIRST,
 };
 pub use loot::{
     autostore_loot_item, loot, loot_error, loot_master_give, loot_money, loot_release, loot_roll,

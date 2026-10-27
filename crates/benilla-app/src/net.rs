@@ -1072,6 +1072,13 @@ pub(crate) enum ClientCommand {
         bag_index: u8,
         slot: u8,
     },
+    /// `CMSG_READ_ITEM`: the bag (255 for the player's own slots, else the equipped bag's inventory
+    /// slot) and the slot; the server answers `SMSG_READ_ITEM_OK` or `SMSG_READ_ITEM_FAILED` on the
+    /// item's guid.
+    ReadItem {
+        bag: u8,
+        slot: u8,
+    },
     /// `CMSG_WRAP_ITEM`, the paper first as on the wire. The client filters nothing; the server
     /// refuses with an `ERR_CANT_WRAP_*`, and success is silent.
     WrapItem {

@@ -362,6 +362,13 @@ pub const CMSG_USE_ITEM: u16 = 0x00AB; // 171
 /// Open an openable item (a clam, a lockbox, a gift) by bag position; the loot that answers names
 /// the item's own guid (`HandleOpenItemOpcode`).
 pub const CMSG_OPEN_ITEM: u16 = 0x00AC; // 172
+/// Read a book from a bag position (`HandleReadItemOpcode`, `ItemHandler.cpp:410-436`): `bag`,
+/// `slot`, as in [`CMSG_OPEN_ITEM`]; sent by the reader's open (`0x4e3586` → `0x5ec580`).
+pub const CMSG_READ_ITEM: u16 = 0x00AD; // 173
+/// The book may be read: the item's guid (`0x5ec600`).
+pub const SMSG_READ_ITEM_OK: u16 = 0x00AE; // 174
+/// The book may not: the item's guid, then a reason byte vmangos does not write.
+pub const SMSG_READ_ITEM_FAILED: u16 = 0x00AF; // 175
 /// Gift-wrap an item: `giftBag`, `giftSlot`, `itemBag`, `itemSlot`, paper first. Sent when the
 /// wrap cursor, armed locally by right-clicking the paper (`0x5edea0`), clicks the item.
 pub const CMSG_WRAP_ITEM: u16 = 0x01D3; // 467

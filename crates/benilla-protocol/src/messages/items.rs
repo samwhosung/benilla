@@ -574,6 +574,29 @@ pub fn open_item(bag_index: u8, slot: u8) -> Vec<u8> {
     vec![bag_index, slot]
 }
 
+/// Body of `CMSG_READ_ITEM` (opcode 173, `0x5ec500`): the container byte, 255 for the player's own
+/// slots or the equipped bag's inventory slot, then the slot, as in [`open_item`].
+pub fn read_item(bag: u8, slot: u8) -> Vec<u8> {
+    vec![bag, slot]
+}
+
+/// `SMSG_READ_ITEM_FAILED`'s tail (`0x5ec600`): the reason byte (0 shows the page, 1 shows it
+/// untranslated with the translation time, anything else closes the reader), and for 1 the time in
+/// milliseconds. vmangos writes neither (`ItemHandler.cpp:445-452`): the reference's failed read of
+/// the byte leaves its stack slot as it was, the high byte of an address, 0, so an absent reason is
+/// 0; a failed read of the time (`0x418e30`) leaves the handler's first argument in its slot, the
+/// opcode 0xaf, so an absent time is 175 ms.
+pub fn read_read_item_failed(r: &mut &[u8]) -> io::Result<(u64, u8, i32)> {
+    let guid = read_u64_le(r)?;
+    let reason = read_u8(r).unwrap_or(0);
+    let milliseconds = if reason == 1 {
+        read_i32_le(r).unwrap_or(i32::from(super::opcode::SMSG_READ_ITEM_FAILED))
+    } else {
+        0
+    };
+    Ok((guid, reason, milliseconds))
+}
+
 /// Body of `CMSG_WRAP_ITEM` (opcode 467, `Server/Packets/Item.cpp:121-127`): the paper's bag and
 /// slot, then the target's. The server refuses with `SMSG_INVENTORY_CHANGE_FAILURE`; success is
 /// only field updates, the target taking the paper's gift entry and `ITEM_DYNFLAG_WRAPPED`.

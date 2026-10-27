@@ -2,13 +2,16 @@
 //! opens in. Every route ends at `0x4e32e0(guid, flag)`, which looks the guid up as any object and
 //! asks it for its text (`vtbl+0x74`), a mail-made letter's `ITEM_FIELD_ITEM_TEXT_ID` or else a
 //! page chain from an item template's `PageText` or a GameObject's pageID column (TEXT `data[0]`,
-//! GOOBER `data[7]`). A bag item or a TEXT object opens locally, with no packet: vmangos has no use
+//! GOOBER `data[7]`). A letter or a TEXT object opens locally, with no packet: vmangos has no use
 //! arm for a type-9 object and refuses `CMSG_READ_ITEM` without a template `PageText`, which the
 //! Plain Letter lacks (`ItemHandler.cpp:421`). A GOOBER's opens on `SMSG_GAMEOBJECT_PAGETEXT`
-//! (`0x5f88c0`), the server's answer to its use.
+//! (`0x5f88c0`), the server's answer to its use. A bag book, an item with a page chain and no
+//! item-text id whose `ITEM_FIELD_FLAGS` lack bit 0x2, sends `CMSG_READ_ITEM` after its begin
+//! (`0x4e3586` → `0x5ec580`) and shows only on the reply ([`request_read`], `0x5ec600`):
+//! `SMSG_READ_ITEM_OK` marks the item read and shows, `SMSG_READ_ITEM_FAILED` shows (reason 0),
+//! shows untranslated with `ITEM_TEXT_TRANSLATION` (reason 1) or closes (any other).
 //!
-//! The events follow `ItemTextFrame.lua:10-96`; `ITEM_TEXT_TRANSLATION`, the foreign-language
-//! bar, never fires, as neither source carries the language column.
+//! The events follow `ItemTextFrame.lua:10-96`.
 //!
 //! The reader is a window on the interaction latch. Its cell is written at the read
 //! (`0x4e3364`), but it registers only once the text resolves (`0x4e349a`), right before
@@ -101,6 +104,15 @@ pub(crate) struct ReadSession {
     /// The text record the open asked for and waits on (`0x4e3465`, `0x4e347c`), whose answer's
     /// callback `0x4e3280` opens again (`0x4e32a5`), on the item-text lane at the answer's place.
     awaiting: Option<TextRecord>,
+    /// A bag book's show waits on the server's reply to its read (`0x4e3586`), or on a read the
+    /// open could not send.
+    awaiting_reply: bool,
+    /// The reply showed the page again (`0x4e35b0`): the next feed repaints and signals
+    /// `ITEM_TEXT_READY`.
+    reshow: bool,
+    /// The translation time of a reply of reason 1, in seconds (`0x5ec6ac`), signalled after the
+    /// show.
+    translation: Option<f64>,
 }
 
 /// The record a reader's text comes from: a page of the page cache (`0xc0e174`), or a letter's
@@ -170,7 +182,20 @@ impl ItemTextOpen {
             told: Default::default(),
             opened: false,
             awaiting: None,
+            awaiting_reply: false,
+            reshow: false,
+            translation: None,
         });
+    }
+
+    /// `0x4e35b0` from a read reply: the page shows again when the guid is the open one, with the
+    /// translation time of a reply that carries one.
+    fn show(&mut self, guid: u64, translation: Option<f64>) {
+        if let Some(sess) = self.pending.as_mut().filter(|s| s.object_guid == guid) {
+            sess.awaiting_reply = false;
+            sess.reshow = true;
+            sess.translation = translation;
+        }
     }
 
     /// A bag letter's session written directly, for a test that seats it.
@@ -227,6 +252,19 @@ enum TextStep {
     /// A text record's answer (`SMSG_PAGE_TEXT_QUERY_RESPONSE`, `SMSG_ITEM_TEXT_QUERY_RESPONSE`),
     /// whose callback `0x4e3280` opens the reader again when it waits on that record.
     Landed(TextRecord),
+    /// A read's reply (`SMSG_READ_ITEM_OK`, `SMSG_READ_ITEM_FAILED`), which `0x5ec600` applies.
+    Reply(ReadReply),
+}
+
+/// What a read item's reply says (`0x5ec600`).
+#[derive(Clone, Copy, Debug)]
+enum ReadReply {
+    Ok(u64),
+    Failed {
+        guid: u64,
+        reason: u8,
+        milliseconds: i32,
+    },
 }
 
 /// The item-text lane: each step stamped at its packet ([`crate::lanes::stamp`]).
@@ -314,7 +352,7 @@ fn fire_item_text(In(until): In<crate::lanes::Until>, world: &mut World) {
                         .iter()
                         .filter_map(|(_, s)| match s {
                             TextStep::Landed(record) => Some(*record),
-                            TextStep::Read(_) => None,
+                            TextStep::Read(_) | TextStep::Reply(_) => None,
                         })
                         .collect();
                     world.resource_mut::<ItemTextOpen>().landing = landing;
@@ -325,6 +363,10 @@ fn fire_item_text(In(until): In<crate::lanes::Until>, world: &mut World) {
                         Some(sess) if sess.awaiting == Some(record) => sess.awaiting = None,
                         _ => return,
                     }
+                }
+                TextStep::Reply(reply) => {
+                    apply_reply(world, reply);
+                    return;
                 }
             }
             if let Err(e) = world.run_system_cached(begin_item_text) {
@@ -352,6 +394,8 @@ fn spill_item_text_lane(mut lane: ResMut<ItemTextLane>, mut open: ResMut<ItemTex
                     sess.awaiting = None;
                 }
             }
+            // No reader is open with no interface up to hear it.
+            TextStep::Reply(_) => {}
         }
     }
 }
@@ -482,6 +526,141 @@ fn begin_core(world: &mut World, object: u64, begun: ItemTextState) {
             sess.told.get(script).begun = true;
         }
     });
+    if let Err(e) = world.run_system_cached_with(request_read, object) {
+        debug!("item text: the read request did not run: {e}");
+    }
+}
+
+/// `0x5ec600` on a read's reply, at its packet's place on the item-text lane. OK finds the item
+/// (mask 2, `0x5ec635`), marks it read (`0x5d9a80`, `ITEM_FIELD_FLAGS` bit 0x2) and shows its page
+/// translated (`0x4e35b0`); a missing item does neither. FAILED reads a reason: 0 shows, 1 shows
+/// untranslated and signals `ITEM_TEXT_TRANSLATION` with the time in seconds, whatever item it
+/// names, any other signals
+/// `ITEM_TEXT_CLOSED` when the guid is the open item's, closing nothing else.
+fn apply_reply(world: &mut World, reply: ReadReply) {
+    match reply {
+        ReadReply::Ok(guid) => {
+            let Some(entity) = world
+                .resource::<crate::net::GuidIndex>()
+                .0
+                .get(&guid)
+                .copied()
+            else {
+                return;
+            };
+            let Some(mut store) = world.get_mut::<crate::net::ObjectStore>(entity) else {
+                return;
+            };
+            if !store.0.is_item() {
+                return;
+            }
+            let flags = store.0.item_flags().unwrap_or(0) | ITEM_FLAG_READ;
+            store.0.merge(benilla_protocol::ObjectFields::from_pairs(&[(
+                ITEM_FIELD_FLAGS,
+                flags,
+            )]));
+            world.resource_mut::<ItemTextOpen>().show(guid, None);
+        }
+        ReadReply::Failed {
+            guid,
+            reason,
+            milliseconds,
+        } => match reason {
+            0 => world.resource_mut::<ItemTextOpen>().show(guid, None),
+            1 => {
+                // The signal follows the show but is not gated by it (`0x5ec6a1`-`0x5ec6c5`): an
+                // open item's comes after its `ITEM_TEXT_READY`, any other's at once.
+                let seconds = f64::from(milliseconds) * 0.001;
+                if world.resource::<ItemTextOpen>().object() == Some(guid) {
+                    world
+                        .resource_mut::<ItemTextOpen>()
+                        .show(guid, Some(seconds));
+                } else {
+                    crate::ui_session::fire(world, |script| {
+                        script.fire_event(
+                            "ITEM_TEXT_TRANSLATION",
+                            vec![benilla_ui::script::ScriptValue::Number(seconds)],
+                        );
+                    });
+                }
+            }
+            _ if world.resource::<ItemTextOpen>().object() == Some(guid) => {
+                crate::ui_session::fire(world, |script| {
+                    script.fire_event("ITEM_TEXT_CLOSED", vec![]);
+                });
+            }
+            _ => {}
+        },
+    }
+}
+
+/// The open's last step for an item (`0x4e34a9`-`0x4e3586`), after `ITEM_TEXT_BEGIN`: one with a
+/// page chain and no item-text id (`+0x9c`) whose `ITEM_FIELD_FLAGS` lack bit 0x2, which a read
+/// reply sets (`0x5d9a80`), sends `CMSG_READ_ITEM` from its place in its container (`0x5ec580`)
+/// and shows on the reply; with no active player, no container or no place in it the open ends
+/// there, and nothing shows. Any other object goes straight to the show (`0x4e359b`).
+fn request_read(
+    In(object): In<u64>,
+    mut open: ResMut<ItemTextOpen>,
+    objects: Objects,
+    net: Res<NetCommands>,
+) {
+    let Some(sess) = open.pending.as_mut().filter(|s| s.object_guid == object) else {
+        return;
+    };
+    let Some(item) = objects.object(object).filter(|f| f.is_item()) else {
+        return;
+    };
+    let reads_by_server = matches!(sess.source, ReadSource::Pages { .. })
+        && item.item_text_id().unwrap_or(0) == 0
+        && item.item_flags().unwrap_or(0) & ITEM_FLAG_READ == 0;
+    if !reads_by_server {
+        return;
+    }
+    sess.awaiting_reply = true;
+    match read_position(object, &objects) {
+        Some((bag, slot)) => {
+            let _ = net.0.send(ClientCommand::ReadItem { bag, slot });
+        }
+        None => debug!("item text: {object:#x} has no place in a container to read from"),
+    }
+}
+
+/// `ITEM_FIELD_FLAGS` (field 21) and its bit 0x2, which `SMSG_READ_ITEM_OK` sets on the item
+/// (`0x5d9a80`).
+const ITEM_FIELD_FLAGS: u16 = 21;
+const ITEM_FLAG_READ: u32 = 0x2;
+
+/// The container byte and slot `0x5ec580` sends for the item: the player's own slots as 255 and the
+/// index in the player's 113 guids, an equipped bag (inventory slots 19 to 22) as its slot and the
+/// index in the bag (`0x5ec598`, `0x5ec5b3`-`0x5ec5e5`); a bank bag or an unequipped container
+/// sends nothing.
+fn read_position(item: u64, objects: &Objects) -> Option<(u8, u8)> {
+    let contained = objects.object(item)?.item_contained()?;
+    let player = objects.player_fields()?;
+    if objects.entity(contained) == objects.player() {
+        let index = (0..=112u8).find(|&i| player_slot(player, i) == Some(item))?;
+        return Some((0xFF, index));
+    }
+    let bag = (19..23u8).find(|&i| player.player_inv_slot(i) == Some(contained))?;
+    let container = objects.object(contained)?;
+    let index = (0..36u8).find(|&i| container.container_slot(i) == Some(item))?;
+    Some((bag, index))
+}
+
+/// Slot `i` of the player's guid array: equipment and equipped bags (0 to 22), the backpack
+/// (23 to 38), the bank (39 to 62), the bank bags (63 to 68), the buyback (69 to 80) and the
+/// keyring (81 to 112).
+fn player_slot(player: &benilla_protocol::ObjectFields, i: u8) -> Option<u64> {
+    match i {
+        0..=22 => player.player_inv_slot(i),
+        23..=38 => player.player_pack_slot(i - 23),
+        39..=62 => player.player_bank_slot(i - 39),
+        63..=68 => player.player_bank_bag_slot(i - 63),
+        69..=80 => player.player_buyback_slot(i - 69),
+        81..=112 => player.player_keyring_slot(i - 81),
+        _ => None,
+    }
 }
 
 /// A read of `object_guid`'s pages run to its begin, as a click and the next feed's reads and
@@ -510,7 +689,28 @@ mod net {
                 SessionEventKind::GameObjectPageText,
                 on_gameobject_page_text,
             )
-            .net_handler(SessionEventKind::MailItemText, on_item_text);
+            .net_handler(SessionEventKind::MailItemText, on_item_text)
+            .net_handler(SessionEventKind::ReadItemOk, on_read_item)
+            .net_handler(SessionEventKind::ReadItemFailed, on_read_item);
+    }
+
+    /// `SMSG_READ_ITEM_OK` and `SMSG_READ_ITEM_FAILED` (`0x5e7d90` → `0x5ec600`), applied at their
+    /// place on the item-text lane ([`super::apply_reply`]).
+    fn on_read_item(In(ev): In<SessionEvent>, mut lane: ResMut<super::ItemTextLane>) {
+        let reply = match ev {
+            SessionEvent::ReadItemOk { guid } => super::ReadReply::Ok(guid),
+            SessionEvent::ReadItemFailed {
+                guid,
+                reason,
+                milliseconds,
+            } => super::ReadReply::Failed {
+                guid,
+                reason,
+                milliseconds,
+            },
+            _ => return,
+        };
+        lane.push(super::TextStep::Reply(reply));
     }
 
     /// `SMSG_ITEM_TEXT_QUERY_RESPONSE`: a letter's body landing, whose callback `0x4e3280` opens
@@ -682,7 +882,10 @@ fn feed_item_text(
             return;
         };
         // The begin ([`begin_item_text`]) fires first, latching the reader.
-        if sess.told.get(script).ready || !sess.told.get(script).begun {
+        if std::mem::take(&mut sess.reshow) {
+            sess.told.get(script).ready = false;
+        }
+        if sess.told.get(script).ready || !sess.told.get(script).begun || sess.awaiting_reply {
             return;
         }
         let ask = Ask::at(
@@ -770,6 +973,12 @@ fn feed_item_text(
             material: readable.material,
         }));
         fires.post("ITEM_TEXT_READY", vec![]);
+        if let Some(seconds) = sess.translation.take() {
+            fires.post(
+                "ITEM_TEXT_TRANSLATION",
+                vec![benilla_ui::script::ScriptValue::Number(seconds)],
+            );
+        }
         sess.told.get(script).ready = true;
     })
 }
@@ -1060,6 +1269,174 @@ mod tests {
             .eval("return ItemTextGetText()")
             .expect("runs");
         assert_eq!(text, "Oh darn it.");
+    }
+
+    /// A bag book (a page chain, no item-text id, `ITEM_FIELD_FLAGS` bit 0x2 clear) sends
+    /// `CMSG_READ_ITEM` from its pack slot once its begin has run (`0x4e3586` → `0x5ec580`) and
+    /// shows nothing until the reply: OK marks the item read and shows (`0x5ec640`), a later read
+    /// of it sends nothing; FAILED shows (reason 0), shows untranslated and signals
+    /// `ITEM_TEXT_TRANSLATION` in seconds (1) or only signals `ITEM_TEXT_CLOSED` (2) (`0x5ec600`).
+    #[test]
+    fn a_bag_book_asks_the_server_and_shows_on_the_reply() {
+        use benilla_protocol::SessionEvent as E;
+        const BOOK: u64 = 0x4000_0000_0000_0021;
+        const ME: u64 = 0x10;
+        const PACK_SLOT_1: u16 = 532;
+        for reply in ["ok", "reason 0", "reason 1", "reason 2"] {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.insert_resource(NetCommands(tx))
+                .init_resource::<ItemTextOpen>()
+                .init_resource::<ItemTextLane>()
+                .init_resource::<PageTexts>()
+                .init_resource::<MailOpen>()
+                .init_resource::<Items>()
+                .init_resource::<NameCache>()
+                .init_resource::<GameObjectTemplates>()
+                .init_resource::<crate::net::GuidIndex>()
+                .init_resource::<crate::world_state::WorldStates>()
+                .add_systems(
+                    Update,
+                    (apply_reads, begin_item_text, feed_item_text).chain(),
+                );
+            net::register(&mut app);
+            let script = UiScript::new().unwrap();
+            script
+                .run(
+                    r#"SEEN = {} local f = CreateFrame("Frame")
+                    for _, e in ipairs({"ITEM_TEXT_BEGIN", "ITEM_TEXT_READY",
+                            "ITEM_TEXT_TRANSLATION", "ITEM_TEXT_CLOSED"}) do f:RegisterEvent(e) end
+                    f:SetScript("OnEvent", function()
+                        table.insert(SEEN, event .. (arg1 and (":" .. arg1) or ""))
+                    end)"#,
+                )
+                .unwrap();
+            app.insert_non_send_resource(script);
+            let world = app.world_mut();
+            let mut template = crate::items::test_template("Gnarled Book");
+            template.page_text = 358;
+            world
+                .resource_mut::<Items>()
+                .insert_template(5_000, Some(template));
+            world
+                .resource_mut::<PageTexts>()
+                .insert(358, "Once upon a time.".into(), 0);
+            let player = world
+                .spawn((
+                    crate::net::Guid(ME),
+                    crate::net::SelfPlayer,
+                    crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                        (PACK_SLOT_1 + 6, BOOK as u32),
+                        (PACK_SLOT_1 + 7, (BOOK >> 32) as u32),
+                    ])),
+                ))
+                .id();
+            world
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(ME, player);
+            crate::items::test_spawn_item(
+                world,
+                BOOK,
+                benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x3),
+                    (3, 5_000),
+                    (8, ME as u32),
+                    (9, (ME >> 32) as u32),
+                ]),
+                false,
+            );
+            let seen = |app: &mut App| -> String {
+                app.world()
+                    .non_send_resource::<UiScript>()
+                    .eval::<String>("local s = table.concat(SEEN, ',') SEEN = {} return s")
+                    .expect("runs")
+            };
+            let reads = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<(u8, u8)> {
+                rx.try_iter()
+                    .filter_map(|c| match c {
+                        ClientCommand::ReadItem { bag, slot } => Some((bag, slot)),
+                        _ => None,
+                    })
+                    .collect()
+            };
+
+            app.world_mut()
+                .resource_mut::<ItemTextOpen>()
+                .read_pages(BOOK);
+            for _ in 0..4 {
+                app.update();
+            }
+            assert_eq!(
+                reads(&rx),
+                [(0xFF, 23 + 3)],
+                "{reply}: the read, from pack slot 4"
+            );
+            assert_eq!(
+                seen(&mut app),
+                "ITEM_TEXT_BEGIN",
+                "{reply}: no page before the reply"
+            );
+
+            let reply_events = match reply {
+                "ok" => vec![E::ReadItemOk { guid: BOOK }],
+                other => vec![E::ReadItemFailed {
+                    guid: BOOK,
+                    reason: other.strip_prefix("reason ").unwrap().parse().unwrap(),
+                    milliseconds: 2_500,
+                }],
+            };
+            crate::net::handlers::dispatch(app.world_mut(), reply_events);
+            app.world_mut()
+                .run_system_cached_with(fire_item_text, crate::lanes::Until::all())
+                .expect("the item-text lane fires");
+            for _ in 0..4 {
+                app.update();
+            }
+            let want = match reply {
+                "ok" | "reason 0" => "ITEM_TEXT_READY",
+                "reason 1" => "ITEM_TEXT_READY,ITEM_TEXT_TRANSLATION:2.5",
+                _ => "ITEM_TEXT_CLOSED",
+            };
+            assert_eq!(seen(&mut app), want, "{reply}");
+            if reply == "reason 1" {
+                // The signal does not wait on the item being the open one (`0x5ec6a1`).
+                let stranger = vec![E::ReadItemFailed {
+                    guid: BOOK + 1,
+                    reason: 1,
+                    milliseconds: 175,
+                }];
+                crate::net::handlers::dispatch(app.world_mut(), stranger);
+                app.world_mut()
+                    .run_system_cached_with(fire_item_text, crate::lanes::Until::all())
+                    .expect("the item-text lane fires");
+                assert_eq!(seen(&mut app), "ITEM_TEXT_TRANSLATION:0.175");
+            }
+            if reply == "ok" {
+                let flags = app
+                    .world()
+                    .resource::<crate::net::GuidIndex>()
+                    .0
+                    .get(&BOOK)
+                    .and_then(|&e| app.world().get::<crate::net::ObjectStore>(e))
+                    .and_then(|s| s.0.item_flags());
+                assert_eq!(flags, Some(2), "the item is marked read (`0x5d9a80`)");
+                // A read of it again: no request, the page at once (`0x4e359b`).
+                close_core(app.world_mut());
+                app.world_mut()
+                    .resource_mut::<ItemTextOpen>()
+                    .read_pages(BOOK);
+                for _ in 0..4 {
+                    app.update();
+                }
+                assert_eq!(reads(&rx), Vec::<(u8, u8)>::new());
+                let events = seen(&mut app);
+                assert!(
+                    events.ends_with("ITEM_TEXT_BEGIN,ITEM_TEXT_READY"),
+                    "{events}"
+                );
+            }
+        }
     }
 
     /// `SMSG_GAMEOBJECT_PAGETEXT` (`0x5f88c0`) resolves the GameObject and opens the reader on it

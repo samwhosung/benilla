@@ -1465,6 +1465,7 @@ pub(super) fn writer_loop(
                         target,
                     } => w.use_item(bag_index, slot, spell_index, target),
                     ClientCommand::OpenItem { bag_index, slot } => w.open_item(bag_index, slot),
+                    ClientCommand::ReadItem { bag, slot } => w.read_item(bag, slot),
                     ClientCommand::WrapItem {
                         gift_bag,
                         gift_slot,
