@@ -908,7 +908,6 @@ impl Loader<'_> {
         //     alone (`0x6f2c50`), each child whole before its next sibling, so their OnLoads fire
         //     before ours.
         crate::script::visibility::set_load_window(self.lua(), wrapper, false);
-        crate::script::tooltip_post_load(self.lua(), wrapper);
         for level in levels {
             if let Some(frames) = children_named(level, "Frames").next() {
                 for child in &frames.children {
@@ -923,8 +922,10 @@ impl Loader<'_> {
         }
         // 5 · and its OnShow, if it is visible now (`0x76a3b3`).
         crate::script::visibility::post_load_show(self.lua(), wrapper);
-        // 6 · a Minimap's models, which its post-load override sets after chaining to this one
-        //      (`0x4ee2b0` calls `0x76a2f0` first).
+        // 6 · the two game-side post-load overrides, each after chaining to this one: a
+        //     GameTooltip's line lookup (`0x529668` calls `0x76a2f0` first), so the lines its own
+        //     `<Frames>`, OnLoad or OnShow made count, and a Minimap's models (`0x4ee2c0`).
+        crate::script::tooltip_post_load(self.lua(), wrapper);
         if kind.eq_ignore_ascii_case("Minimap") {
             self.apply_minimap(levels.own, wrapper, dbg_name);
         }

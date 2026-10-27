@@ -542,3 +542,25 @@ fn each_title_region_element_is_a_region_of_its_own() {
     );
     assert_eq!(s.eval::<i64>("return Retitled:GetNumRegions()").unwrap(), 0);
 }
+
+/// A GameTooltip's post-load override chains to the frame's first (`0x529668` → `0x76a2f0`), so
+/// its `TextLeft%d`/`TextRight%d` lookup runs after the tooltip's `<Frames>`, `OnLoad` and
+/// `OnShow`, and a pair its `OnLoad` makes is a line.
+#[test]
+fn a_tooltip_finds_the_lines_its_own_onload_made() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <GameTooltip name="LateTip">
+                <Scripts><OnLoad>
+                    this:CreateFontString("LateTipTextLeft1")
+                    this:CreateFontString("LateTipTextRight1")
+                </OnLoad></Scripts>
+            </GameTooltip>
+        </Ui>"#,
+    );
+    s.run(r#"LateTip:AddLine("one") LateTip:AddLine("two")"#)
+        .unwrap();
+    assert_eq!(s.eval::<i64>("return LateTip:NumLines()").unwrap(), 1);
+}
