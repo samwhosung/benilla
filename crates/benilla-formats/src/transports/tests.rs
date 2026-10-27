@@ -277,10 +277,11 @@ fn onto_polyline(
     (best, along, seg)
 }
 
-/// Path 241 (Ratchet to Booty Bay) sampled every 50 ms over its whole period, as `0x5f4cc0`
-/// builds it from every node (`0x5f4dda`-`0x5f4de9`) and `0x5f50a0` places it: on each leg the
-/// ship only ever moves the way it faces, never back along the line its nodes draw, never more
-/// than a curve's bow off that line and never off its map.
+/// A regression guard, not a report's reproduction: path 241 (Ratchet to Booty Bay) sampled
+/// every 50 ms over its whole period, as `0x5f4cc0` builds it from every node
+/// (`0x5f4dda`-`0x5f4de9`) and `0x5f50a0` places it. On each leg the ship only ever moves the way
+/// it faces, never back along the line its nodes draw (its run north from node 29 to 32 and back
+/// to 35 is the route's own), never more than a curve's bow off that line and never off its map.
 #[test]
 fn path_241_runs_forward_along_its_route_over_the_whole_period() {
     let data = crate::wow_data_or_skip!();
