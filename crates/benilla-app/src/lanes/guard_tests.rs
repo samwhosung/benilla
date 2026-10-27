@@ -23,7 +23,7 @@ fn headless_client() -> App {
 
 /// What a row names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Row {
+pub(super) enum Row {
     /// A queue the handlers fill that a feed of the `UiFeed` phase takes and fires itself, by a
     /// suffix of its type's name.
     Queue,
@@ -44,7 +44,7 @@ enum Row {
 /// What still fires in the frame's system order rather than the packets', with what it is. A
 /// queue's row stays while any feed takes that queue; each goes when its producer moves onto a
 /// lane, and a row whose queue, feed or system is gone fails as stale.
-const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
+pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (
         Row::Queue,
         "::account_data::AccountData",
@@ -218,7 +218,7 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
 /// raised. Each goes once its feeds are read, to a [`Row::HostHeld`] row when one does, or named
 /// quiet beside why when none does; a new one fails, and an entry whose queue the handlers or the
 /// host no longer hold fails as stale.
-const HOST_HELD_UNREAD: &[&str] = &[
+pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::creature_anim::AttackStopInFlight",
     "::creature_anim::PlaySeq",
     // Read through the host by the set block, and quiet: a member's answer rebuilds the tooltip
@@ -1150,7 +1150,8 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
 /// The handler queues whose items carry their place among what the packets queued, so a system
 /// that pushes onto a lane off one pushes at the item's place, not its own: the field edges'
 /// `at`, and the aura watcher's calls'. A wrong entry lets a system that pushes at its own place,
-/// behind every packet of the frame, pass [`every_lane_push_off_a_handler_queue_keeps_its_place`].
+/// behind every packet of the frame, pass [`every_lane_push_off_a_handler_queue_keeps_its_place`];
+/// their readers that push are [`PLACED_OUTSIDE_THE_DISPATCH`]'s.
 fn placed_queues() -> [TypeId; 2] {
     [
         TypeId::of::<bevy::ecs::message::Messages<crate::net::FieldChanged>>(),
@@ -1194,7 +1195,7 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
 
 /// The systems outside the phase that lend the call host and take a handler queue, firing off it
 /// in system order: remaining work, which only shrinks, by a suffix of the system's name.
-const NOT_YET_PLACED: &[(&str, &str)] = &[
+pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[
     (
         "::swing_refusal::apply_swing_refusals",
         "the server's swing stop `0x5ecac0`, `CancelNextSwingSpells` (`0x6e6f30`) and the \
@@ -1213,83 +1214,177 @@ const NOT_YET_PLACED: &[(&str, &str)] = &[
     ),
 ];
 
+/// The systems that take a placed queue ([`placed_queues`]) after the dispatch and push onto a
+/// lane, at the item's place or, from their commands, at their own, by a suffix of the system's
+/// name: remaining work, which only shrinks. The order of those at the item's place holds today,
+/// as the drain fires the whole frame by stamp after them; once
+/// the dispatch fires each packet's lanes after its handlers, an item stamped at an earlier
+/// packet and pushed after the dispatch fires behind every later packet's. The reference runs
+/// each of these inside the update packet's notify pass (`0x465277` → `0x465330`).
+pub(super) const PLACED_OUTSIDE_THE_DISPATCH: &[(&str, &str)] = &[
+    (
+        "::ui_chat::combat::watch::aura_lines",
+        "the combat log's aura lines, which the aura watchers write (`0x604d00`, `0x604ea0`)",
+    ),
+    (
+        "::ui_chat::combat::watch::death_lines",
+        "the unit-death line, which the health watcher writes (`0x6046f0` → `0x625190`)",
+    ),
+    (
+        "::ui_chat::combat::watch::pet_loyalty_lines",
+        "the pet-loyalty line, which the loyalty watcher writes (`0x5ff860`)",
+    ),
+    (
+        "::ui_pet::unit::feed_pet_unit",
+        "the pet's rename, `LOCALPLAYER_PET_RENAMED`, off its name stamp's edge",
+    ),
+    (
+        "::ui_session::release::release_on_field_edges",
+        "the form change's latch release and the lost service flags' closes, run from its \
+         commands at its own place, behind every packet of the frame",
+    ),
+];
+
+/// The placed queues' readers that defer work to their commands and push nothing onto a lane
+/// from them, by a suffix of the system's name, with what the commands do.
+const DEFERS_NO_LANE_ITEM: &[(&str, &str)] = &[
+    (
+        "::creature_anim::spell_visual::arm_aura_state_fx",
+        "removes and inserts the aura state kit's pins, which no script reads",
+    ),
+    (
+        "::go_anim::drive_go_collision",
+        "turns an object's collider off and on, which no script reads",
+    ),
+];
+
+/// What [`lane_pushes_off_handler_queues`] finds, each a system's name with its line.
+struct LanePushes {
+    /// Off a queue whose items carry no place: pushed at the system's own place.
+    unplaced: BTreeSet<(String, String)>,
+    /// Off a [`placed_queues`] queue: pushed at the item's place, after the dispatch.
+    placed: BTreeSet<(String, String)>,
+    /// A [`placed_queues`] queue's readers that push no lane themselves and defer work to their
+    /// commands, which may.
+    deferring: BTreeSet<(String, String)>,
+}
+
+/// Every system of `Update` that takes a handler queue and pushes onto a lane; `None` in a build
+/// that carries no type names.
+fn lane_pushes_off_handler_queues() -> Option<LanePushes> {
+    let mut app = headless_client();
+    let caches = census(&mut headless_client(), Update, SyncPoints::Declared)
+        .classes
+        .caches;
+    let queues = handler_queues(app.world(), &caches);
+    let (pushes, placed_pushes, deferring, systems) =
+        app.world_mut().schedule_scope(Update, |world, schedule| {
+            schedule.graph_mut().systems.initialize(world);
+            let host = call_host_access(world);
+            let id = |t: TypeId| world.components().get_resource_id(t);
+            let vm = id(TypeId::of::<benilla_ui::script::UiScript>());
+            let lanes: Vec<ComponentId> = lane_types().into_iter().filter_map(id).collect();
+            // The chat lane is pushed through a shared reference, the others through a write.
+            let chat = id(TypeId::of::<crate::ui_chat::ChatLog>());
+            let pushes_onto = |access: &bevy::ecs::query::Access, lane: ComponentId| {
+                if Some(lane) == chat {
+                    access.has_resource_read(lane)
+                } else {
+                    access.has_resource_write(lane)
+                }
+            };
+            let placed: Vec<ComponentId> = placed_queues().into_iter().filter_map(id).collect();
+            let graph = schedule.graph();
+            let mut pushes = BTreeSet::new();
+            let mut placed_pushes = BTreeSet::new();
+            let mut deferring = BTreeSet::new();
+            let mut systems = BTreeSet::new();
+            for (key, system, _) in graph.systems.iter() {
+                systems.insert(system.name().to_string());
+                let Some(with_access) = graph.systems.get(key) else {
+                    continue;
+                };
+                let access = with_access.access.combined_access();
+                let fires = vm.is_some_and(|vm| access.has_resource_write(vm));
+                if system.is_exclusive() {
+                    continue;
+                }
+                let name = system.name().to_string();
+                let pushes_a_lane = lanes.iter().any(|&l| pushes_onto(access, l));
+                // A placed queue's reader pushes at the item's place wherever it runs, so every one
+                // that pushes counts, a feed of the phase among them; one that defers its work to
+                // its commands may push from them, which its access does not show.
+                for &q in &placed {
+                    if access.has_resource_read(q)
+                        && !access.has_resource_write(q)
+                        && !host.has_resource_read(q)
+                    {
+                        let n = self::name(world, q);
+                        if pushes_a_lane {
+                            placed_pushes.insert((name.clone(), format!("{name} takes {n}")));
+                        } else if system.has_deferred() {
+                            deferring.insert((name.clone(), format!("{name} defers off {n}")));
+                        }
+                    }
+                }
+                if !pushes_a_lane {
+                    continue;
+                }
+                // A feed of the phase that fires is the other guard's, and an exclusive one is its
+                // row; a system that lends the call host outside the phase is judged here, by the
+                // queues it reads: a plain resource it writes is its verbs' own state.
+                if fires && in_feed(graph, bevy::ecs::schedule::NodeId::System(key)) {
+                    continue;
+                }
+                let lends = host.is_subset_resources(access);
+                for &q in &queues {
+                    if Some(q) == vm || lanes.contains(&q) || placed.contains(&q) {
+                        continue;
+                    }
+                    let n = self::name(world, q);
+                    // The host's own state is what a call touches, never a queue taken.
+                    let takes = if ends_with_any(&n, FILLED_THROUGH_A_READ) {
+                        access.has_resource_read(q) && !host.has_resource_read(q)
+                    } else if is_messages(world, q) {
+                        access.has_resource_read(q)
+                            && !access.has_resource_write(q)
+                            && !host.has_resource_read(q)
+                    } else {
+                        !lends
+                            && access.has_resource_write(q)
+                            && !host.has_resource_read(q)
+                            && !host.has_resource_write(q)
+                    };
+                    if takes {
+                        pushes.insert((name.clone(), format!("{name} takes {n}")));
+                    }
+                }
+            }
+            (pushes, placed_pushes, deferring, systems)
+        });
+    systems
+        .iter()
+        .any(|n| n.contains("benilla_app::"))
+        .then_some(LanePushes {
+            unplaced: pushes,
+            placed: placed_pushes,
+            deferring,
+        })
+}
+
 /// A system of any phase that takes a handler queue and pushes onto a lane stamps the push where
 /// it runs, behind every packet of the frame, unless the queue's items carry their place
 /// ([`placed_queues`]). Each such system needs a row in [`AT_THEIR_OWN_PLACE`] or
 /// [`NOT_YET_PLACED`].
 #[test]
 fn every_lane_push_off_a_handler_queue_keeps_its_place() {
-    let mut app = headless_client();
-    let caches = census(&mut headless_client(), Update, SyncPoints::Declared)
-        .classes
-        .caches;
-    let queues = handler_queues(app.world(), &caches);
-    let (pushes, systems) = app.world_mut().schedule_scope(Update, |world, schedule| {
-        schedule.graph_mut().systems.initialize(world);
-        let host = call_host_access(world);
-        let id = |t: TypeId| world.components().get_resource_id(t);
-        let vm = id(TypeId::of::<benilla_ui::script::UiScript>());
-        let lanes: Vec<ComponentId> = lane_types().into_iter().filter_map(id).collect();
-        // The chat lane is pushed through a shared reference, the others through a write.
-        let chat = id(TypeId::of::<crate::ui_chat::ChatLog>());
-        let pushes_onto = |access: &bevy::ecs::query::Access, lane: ComponentId| {
-            if Some(lane) == chat {
-                access.has_resource_read(lane)
-            } else {
-                access.has_resource_write(lane)
-            }
-        };
-        let placed: Vec<ComponentId> = placed_queues().into_iter().filter_map(id).collect();
-        let graph = schedule.graph();
-        let mut pushes = BTreeSet::new();
-        let mut systems = BTreeSet::new();
-        for (key, system, _) in graph.systems.iter() {
-            systems.insert(system.name().to_string());
-            let Some(with_access) = graph.systems.get(key) else {
-                continue;
-            };
-            let access = with_access.access.combined_access();
-            let fires = vm.is_some_and(|vm| access.has_resource_write(vm));
-            // A feed of the phase that fires is the other guard's, and an exclusive one is its
-            // row; a system that lends the call host outside the phase is judged here, by the
-            // queues it reads: a plain resource it writes is its verbs' own state.
-            if system.is_exclusive()
-                || (fires && in_feed(graph, bevy::ecs::schedule::NodeId::System(key)))
-                || !lanes.iter().any(|&l| pushes_onto(access, l))
-            {
-                continue;
-            }
-            let name = system.name().to_string();
-            let lends = host.is_subset_resources(access);
-            for &q in &queues {
-                if Some(q) == vm || lanes.contains(&q) || placed.contains(&q) {
-                    continue;
-                }
-                let n = self::name(world, q);
-                // The host's own state is what a call touches, never a queue taken.
-                let takes = if ends_with_any(&n, FILLED_THROUGH_A_READ) {
-                    access.has_resource_read(q) && !host.has_resource_read(q)
-                } else if is_messages(world, q) {
-                    access.has_resource_read(q)
-                        && !access.has_resource_write(q)
-                        && !host.has_resource_read(q)
-                } else {
-                    !lends
-                        && access.has_resource_write(q)
-                        && !host.has_resource_read(q)
-                        && !host.has_resource_write(q)
-                };
-                if takes {
-                    pushes.insert((name.clone(), format!("{name} takes {n}")));
-                }
-            }
-        }
-        (pushes, systems)
-    });
-    if !systems.iter().any(|n| n.contains("benilla_app::")) {
+    let Some(LanePushes {
+        unplaced: pushes, ..
+    }) = lane_pushes_off_handler_queues()
+    else {
         eprintln!("skipped: this build carries no type names");
         return;
-    }
+    };
     let rows: Vec<&str> = AT_THEIR_OWN_PLACE
         .iter()
         .chain(NOT_YET_PLACED)
@@ -1313,6 +1408,56 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
     let stale: Vec<&str> = rows
         .into_iter()
         .filter(|s| !pushes.iter().any(|(system, _)| system.ends_with(s)))
+        .collect();
+    assert!(stale.is_empty(), "stale rows: {stale:?}");
+}
+
+/// Every system that takes a placed queue and pushes onto a lane outside the dispatch has its row
+/// in [`PLACED_OUTSIDE_THE_DISPATCH`], found as
+/// [`every_lane_push_off_a_handler_queue_keeps_its_place`] finds pushes, without its exemption
+/// of the placed queues; a row whose system no longer does is stale.
+#[test]
+fn every_lane_push_off_a_placed_queue_is_listed() {
+    let Some(LanePushes {
+        mut placed,
+        deferring,
+        ..
+    }) = lane_pushes_off_handler_queues()
+    else {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    };
+    let quiet: Vec<&str> = DEFERS_NO_LANE_ITEM.iter().map(|(s, _)| *s).collect();
+    let gone: Vec<&str> = quiet
+        .iter()
+        .copied()
+        .filter(|s| !deferring.iter().any(|(system, _)| system.ends_with(s)))
+        .collect();
+    assert!(gone.is_empty(), "stale DEFERS_NO_LANE_ITEM rows: {gone:?}");
+    placed.extend(
+        deferring
+            .into_iter()
+            .filter(|(system, _)| !ends_with_any(system, &quiet)),
+    );
+    let rows: Vec<&str> = PLACED_OUTSIDE_THE_DISPATCH
+        .iter()
+        .map(|(s, _)| *s)
+        .collect();
+    let unlisted: Vec<&str> = placed
+        .iter()
+        .filter(|(system, _)| !ends_with_any(system, &rows))
+        .map(|(_, line)| line.as_str())
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "these push onto a lane off a placed queue after the dispatch, or defer to commands that \
+         may: push from the handler's notify step instead, or give the system a row in \
+         PLACED_OUTSIDE_THE_DISPATCH, or in DEFERS_NO_LANE_ITEM when its commands push none:\n  {}",
+        unlisted.join("\n  ")
+    );
+    let stale: Vec<&str> = rows
+        .into_iter()
+        .filter(|s| !placed.iter().any(|(system, _)| system.ends_with(s)))
         .collect();
     assert!(stale.is_empty(), "stale rows: {stale:?}");
 }
@@ -1600,7 +1745,7 @@ const VERSIONED_FOR_THE_DRAIN: &[&str] = &["net::reputations::Reputations"];
 /// only shrinks: a read goes once a log versions it ([`crate::ui_unit::views`]), and a row that no
 /// longer matches its firing fails.
 #[rustfmt::skip]
-const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
+pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The chat setup's restore reads the channel rows its shortcuts and auto-joins come from as
     // the frame left them, past the notices of the packets after the section's.
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),

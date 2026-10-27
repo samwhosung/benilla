@@ -1,16 +1,29 @@
 //! The readiness guard for firing each packet's lanes inside the net dispatch, after its handlers,
 //! with the host lent: the reference's handler signals inside itself (`0x703e50`) and runs whole
 //! before the next packet's (`0x537ae5`), so a listener reads the live state its packet left and
-//! its sends go out in packet order. That move is right only once a lane's listener reads nothing
-//! a later system of the frame writes or pushes, which two lists name, each the whole of that
-//! remaining work and only shrinking; the move needs both empty.
+//! its sends go out in packet order. That move is right once five lists are empty, each the whole
+//! of its remaining work and only shrinking; [`flip_readiness`] prints where they stand.
 //!
-//! - The feeds that push a view of what a handler writes, which a getter reads in place of the
-//!   live state through the host: [`super::guard_tests::READS_FRAME_FINAL`], held here to its
-//!   count. A family's getters going live ([`crate::script_calls::live`]) drops its feed's row.
-//! - [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]: the systems that may run after the dispatch and
-//!   ahead of the drain and write what the host's live reads read, or push a view the drain waits
-//!   for.
+//! - [`super::guard_tests::READS_FRAME_FINAL`], held here to its count: the feeds that push a
+//!   view of what a handler writes, which a getter reads in place of the live state. A family's
+//!   getters going live ([`crate::script_calls::live`]) drops its feed's row.
+//! - [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]: the systems after the dispatch and ahead of the drain
+//!   that write what the host's live reads read, or push a view the drain waits for, where the
+//!   reference writes inside a packet. A listener fired inside the dispatch would read each as the
+//!   frame before left it. The writers the reference too runs after the packets, and those no
+//!   listener can see, are [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, which stays.
+//! - [`super::guard_tests::NOT_YET_ON_A_LANE`]: what fires off a handler's queue or edge from a
+//!   feed, ahead of every lane. Once the lanes fire inside the dispatch, each such event moves
+//!   from ahead of every packet event of its frame to behind them all.
+//! - [`super::guard_tests::NOT_YET_PLACED`]: the systems outside the phase that fire off a
+//!   handler queue in system order.
+//! - [`super::guard_tests::PLACED_OUTSIDE_THE_DISPATCH`]: the systems that push lane items off a
+//!   placed queue's field edges after the dispatch, at the edge's earlier stamp, which the
+//!   dispatch's own firing would already have passed, or at their own.
+//!
+//! [`super::guard_tests::LANE_READS_FRAME_FINAL`] empties at the flip itself, which makes the
+//! world a lane firing reads its packet's, and every entry of
+//! [`super::guard_tests::HOST_HELD_UNREAD`] is read first, as quiet or as a row of its own.
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -29,8 +42,11 @@ const FRAME_FINAL_INPUTS: usize = 237;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
-/// reads ([`crate::script_calls::live::LiveReads`]), by its name in the crate, and why. A listener
-/// fired inside the dispatch would read each of these as the frame before left it. `UiScript`
+/// reads ([`crate::script_calls::live::LiveReads`]), by its name in the crate, and why: the
+/// obstacles to the flip, each a write the reference makes inside a packet, or a view pushed in
+/// its place. A listener fired inside the dispatch would read each of these as the frame before
+/// left it. The writers the reference also runs after the packets are
+/// [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, not these. `UiScript`
 /// names a view the drain waits for ([`crate::ui_unit::field_events::FieldEventPushes`]);
 /// `Commands` names a component a system filters out and may add with its commands, which
 /// access does not show; `exclusive` a system whose access Bevy does not report.
@@ -39,18 +55,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::net::apply::tag_self_player", &["Commands net::SelfPlayer"],
         "tags our created entity as the player, which the token resolver finds it by; the \
          reference makes it the active player inside its create (`0x5dea50`)"),
-    ("::net::motion::facing::drive_display_facing", &["Transform"],
-        "turns the units' models toward their facing each frame; the range verbs read the \
-         translation alone, which this leaves"),
-    ("::net::motion::remote::extrapolate_remote_units", &["Transform"],
-        "advances the remote units along their last movement each frame, the positions the range \
-         verbs measure, outside any packet's handler"),
-    ("::net::motion::spline::ground_clamp_creatures", &["Transform"],
-        "settles the creatures on the ground each frame, the height the range verbs measure, \
-         outside any packet's handler"),
-    ("::net::motion::spline::sample_splines", &["Transform"],
-        "moves the units along their splines each frame, the positions the range verbs measure, \
-         outside any packet's handler"),
     ("::player::wire_in::regain_control_on_arrival", &["player::state::OwnControlLost"],
         "gives control back on our own create, which the stance bar's usability walk reads \
          (`0x6e3dc3`); the reference raises it inside the create (`0x5deb56`)"),
@@ -78,21 +82,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::swing_refusal::apply_swing_refusals", &["ui_pet::PetAttackLatch"],
         "holds the attack seam, whose selection release lowers the pet's attack latch \
          (`0x493a18`); the server's silent stop it runs (`0x625ab8`) reaches no release"),
-    ("::transport::compose_riders", &["Transform"],
-        "places the riders on their transports each frame, the positions the range verbs \
-         measure, outside any packet's handler"),
-    ("::transport::ground_deck_riders", &["Transform"],
-        "settles the riders on their decks each frame, the positions the range verbs measure, \
-         outside any packet's handler"),
-    ("::transport::tick_transports", &["Transform"],
-        "moves the transports along their paths each frame, which carry their riders' positions \
-         the range verbs measure, outside any packet's handler"),
-    ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::spell::cooldowns::Cooldowns>",
-        &["spell::cooldowns::Cooldowns"],
-        "drops the player's cooldown log with no in-game interface up; it goes with the log"),
-    ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::ui_pet::PetBar>",
-        &["ui_pet::PetBar"],
-        "drops the pet's cooldown log with no in-game interface up; it goes with the log"),
     ("::ui_action::feed::feed_actions", &["ui_action::PlayerActions"],
         "clears the bar's re-resolve flag; the known spells the book and the talents read are \
          the learn handlers' alone"),
@@ -147,19 +136,60 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         &["ui_talent_wipe::TalentWipeState"],
         "closes the respec question once the player leaves service range, which \
          `CheckTalentMasterDist` reports; the reference tests the range at the call (`0x5df980`)"),
-    ("::ui_reputation::drop_reputation_log", &["net::reputations::Reputations"],
-        "drops the reputation log with no in-game interface up; it goes with the log"),
     ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Items"],
         "writes the item cache as it builds the spell tooltips"),
     ("::ui_unit::feed_units", &["UiScript", "ui_pet::PetAttackLatch", "ui_pet::PetBar"],
         "a field event's listeners read its push; the world entry's pet reset writes the bar and \
          lowers the attack latch (`0x4bc6f0`, `0x4bc8ce`)"),
-    ("::ui_unit::views::drop_unit_views", &["ui_unit::views::UnitViews"],
-        "drops the unit views' log with no in-game interface up; it goes with the log"),
 ];
 
-/// The systems [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`] holds to, with what each writes of the
-/// host's live reads, by suffix; see its doc for the kinds.
+/// The systems between the dispatch and the drain that write what the host's live reads read,
+/// as [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]'s, but where the reference too runs them after the
+/// packets, or where no listener can read them: they stay after the flip, and a listener fired
+/// inside the dispatch reads them as the frame before left them, as 1.12.1's does. Same shape,
+/// held to its systems' access by the same test.
+#[rustfmt::skip]
+const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
+    ("::net::motion::facing::drive_display_facing", &["Transform"],
+        "turns the units' models toward their facing; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::motion::remote::extrapolate_remote_units", &["Transform"],
+        "advances the remote units along their last movement; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::motion::spline::ground_clamp_creatures", &["Transform"],
+        "settles the creatures on the ground; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::motion::spline::sample_splines", &["Transform"],
+        "moves the units along their splines; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::transport::compose_riders", &["Transform"],
+        "places the riders on their transports; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::transport::ground_deck_riders", &["Transform"],
+        "settles the riders on their decks; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::transport::tick_transports", &["Transform"],
+        "moves the transports along their paths; unit movement is \
+         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::spell::cooldowns::Cooldowns>",
+        &["spell::cooldowns::Cooldowns"],
+        "drops the player's cooldown log, run only while no in-game interface \
+         is up, so no listener exists; it goes with the log"),
+    ("::ui_action::cooldown_lane::drop_cooldown_log<benilla_app::ui_pet::PetBar>",
+        &["ui_pet::PetBar"],
+        "drops the pet's cooldown log, run only while no in-game interface \
+         is up, so no listener exists; it goes with the log"),
+    ("::ui_reputation::drop_reputation_log", &["net::reputations::Reputations"],
+        "drops the reputation log, run only while no in-game interface \
+         is up, so no listener exists; it goes with the log"),
+    ("::ui_unit::views::drop_unit_views", &["ui_unit::views::UnitViews"],
+        "drops the unit views' log, run only while no in-game interface \
+         is up, so no listener exists; it goes with the log"),
+];
+
+/// The systems [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`] and [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]
+/// hold to, with what each writes of the host's live reads, by suffix; see the first's doc for the
+/// kinds.
 fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> {
     let world = app.world_mut();
     use bevy::ecs::system::System;
@@ -304,8 +334,17 @@ fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> 
     Some(found)
 }
 
+/// Every row between the dispatch and the drain: the obstacles, then the writers that stay.
+fn rows_between(
+) -> impl Iterator<Item = &'static (&'static str, &'static [&'static str], &'static str)> {
+    BETWEEN_THE_DISPATCH_AND_THE_DRAIN
+        .iter()
+        .chain(AFTER_THE_PACKETS_IN_THE_REFERENCE)
+}
+
 /// Every system between the dispatch and the drain that writes what the host's live reads read
-/// has its row, as it stands, and a row whose system no longer does is stale.
+/// has its row, in one of the two lists, as it stands, and a row whose system no longer does is
+/// stale.
 #[test]
 fn every_writer_between_the_dispatch_and_the_drain_is_listed() {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
@@ -313,11 +352,17 @@ fn every_writer_between_the_dispatch_and_the_drain_is_listed() {
         eprintln!("skipped: this build carries no type names");
         return;
     };
-    let row = |system: &str| {
-        BETWEEN_THE_DISPATCH_AND_THE_DRAIN
-            .iter()
-            .find(|(s, _, _)| format!("::{system}").ends_with(s))
-    };
+    let twice: Vec<&str> = BETWEEN_THE_DISPATCH_AND_THE_DRAIN
+        .iter()
+        .filter(|(s, _, _)| {
+            AFTER_THE_PACKETS_IN_THE_REFERENCE
+                .iter()
+                .any(|(a, _, _)| a == s)
+        })
+        .map(|(s, _, _)| *s)
+        .collect();
+    assert!(twice.is_empty(), "rows in both lists: {twice:?}");
+    let row = |system: &str| rows_between().find(|(s, _, _)| format!("::{system}").ends_with(s));
     let wrong: Vec<String> = found
         .iter()
         .filter(|(system, writes)| {
@@ -334,8 +379,7 @@ fn every_writer_between_the_dispatch_and_the_drain_is_listed() {
             format!("(\"::{system}\", &[{}], \"\"),", writes.join(", "))
         })
         .collect();
-    let stale: Vec<&str> = BETWEEN_THE_DISPATCH_AND_THE_DRAIN
-        .iter()
+    let stale: Vec<&str> = rows_between()
         .filter(|(s, _, _)| {
             !found
                 .keys()
@@ -346,13 +390,13 @@ fn every_writer_between_the_dispatch_and_the_drain_is_listed() {
     assert!(
         wrong.is_empty(),
         "these run between the dispatch and the drain and write what the host's live reads read: \
-         move the write into its handler, or give each its row in \
-         BETWEEN_THE_DISPATCH_AND_THE_DRAIN as it stands:\n  {}",
+         move the write into its handler, or give each its row as it stands: in \
+         AFTER_THE_PACKETS_IN_THE_REFERENCE when the reference too writes it after the packets, \
+         else in BETWEEN_THE_DISPATCH_AND_THE_DRAIN:\n  {}",
         wrong.join("\n  ")
     );
     assert!(stale.is_empty(), "stale rows: {stale:?}");
-    let empty: Vec<&str> = BETWEEN_THE_DISPATCH_AND_THE_DRAIN
-        .iter()
+    let empty: Vec<&str> = rows_between()
         .filter(|(_, _, why)| why.is_empty())
         .map(|(s, _, _)| *s)
         .collect();
@@ -371,4 +415,63 @@ fn the_frame_final_views_only_shrink() {
          {FRAME_FINAL_INPUTS}: read the new state live through the host instead",
         rows.len()
     );
+}
+
+/// Where the flip stands: every list's count, printed, failing nothing (`cargo test
+/// flip_readiness -- --nocapture`). The flip needs the first five empty; the rest are context.
+#[test]
+fn flip_readiness() {
+    use super::guard_tests as g;
+    let inputs: usize = g::READS_FRAME_FINAL.iter().map(|(_, i)| i.len()).sum();
+    let lane_inputs: usize = g::LANE_READS_FRAME_FINAL.iter().map(|(_, i)| i.len()).sum();
+    let needs = [
+        (
+            "READS_FRAME_FINAL",
+            g::READS_FRAME_FINAL.len(),
+            format!(" ({inputs} inputs)"),
+        ),
+        (
+            "BETWEEN_THE_DISPATCH_AND_THE_DRAIN",
+            BETWEEN_THE_DISPATCH_AND_THE_DRAIN.len(),
+            String::new(),
+        ),
+        (
+            "NOT_YET_ON_A_LANE",
+            g::NOT_YET_ON_A_LANE.len(),
+            String::new(),
+        ),
+        ("NOT_YET_PLACED", g::NOT_YET_PLACED.len(), String::new()),
+        (
+            "PLACED_OUTSIDE_THE_DISPATCH",
+            g::PLACED_OUTSIDE_THE_DISPATCH.len(),
+            String::new(),
+        ),
+    ];
+    let context = [
+        (
+            "HOST_HELD_UNREAD (to read; a quiet entry stays)",
+            g::HOST_HELD_UNREAD.len(),
+            String::new(),
+        ),
+        (
+            "LANE_READS_FRAME_FINAL (empties at the flip)",
+            g::LANE_READS_FRAME_FINAL.len(),
+            format!(" ({lane_inputs} inputs)"),
+        ),
+        (
+            "AFTER_THE_PACKETS_IN_THE_REFERENCE (stays)",
+            AFTER_THE_PACKETS_IN_THE_REFERENCE.len(),
+            String::new(),
+        ),
+    ];
+    let left: usize = needs.iter().map(|(_, n, _)| n).sum();
+    let mut out = format!("flip readiness: {left} rows to empty\n");
+    for (list, n, extra) in &needs {
+        out += &format!("  {n:>4}  {list}{extra}\n");
+    }
+    out += "  context:\n";
+    for (list, n, extra) in &context {
+        out += &format!("  {n:>4}  {list}{extra}\n");
+    }
+    eprint!("{out}");
 }
