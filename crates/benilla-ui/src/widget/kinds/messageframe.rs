@@ -68,8 +68,8 @@ pub struct ScrollingMessageState {
     /// (`+0x37c`-`+0x388`); only XML `<TextInsets>` sets them (`0x787fb0`).
     pub insets: [crate::layout::Len; 4],
     /// The XML `<FontString bytes="N">` (`+0x358`, `0x787d1e`): each display node's text buffer
-    /// length (`0x78898d` → `0x771680`), which holds N - 1 bytes; 0 is no limit.
-    pub line_bytes: usize,
+    /// length (`0x78898d` → `0x771680`), which holds N - 1 bytes ([`clip_line`]).
+    pub line_bytes: LineBytes,
     /// The detached FontString that holds the lines' font (the frame's own `+0x338`), the font
     /// verbs' receiver; never in `GetRegions`, as the reference's font is no region.
     pub font_region: Option<crate::widget::RegionHandle>,
@@ -104,7 +104,7 @@ impl Default for ScrollingMessageState {
             at_top: false,
             at_bottom: true,
             insets: [crate::layout::Len::Script(0.0); 4],
-            line_bytes: 0,
+            line_bytes: LineBytes::Whole,
             font_region: None,
             links_dirty: false,
             laid_font: None,
@@ -113,15 +113,43 @@ impl Default for ScrollingMessageState {
         }
     }
 }
-/// `text` as a line's FontString holds it under the XML `bytes`: a fixed buffer of `bytes` + 1
-/// takes `SStrCopy(buffer, text, bytes)` (`0x771e0f`), which stops one byte short of the size
-/// (`0x64a5cf`, `0x64a5e0`), so N - 1 bytes (a cut inside a character backs up to its start); 0
-/// is the buffer that grows (`0x771e16`).
-fn clip_line(mut text: String, bytes: usize) -> String {
-    if bytes > 0 {
-        text.truncate(text.floor_char_boundary(bytes - 1));
+/// `text` as a line's FontString holds it under the XML `bytes` (`0x771680` tests only zero,
+/// `0x771692`): a fixed buffer of `bytes` + 1 takes `SStrCopy(buffer, text, bytes)` (`0x771e0f`),
+/// which stops one byte short of the size (`0x64a5cf`, `0x64a5e0`), so N - 1 bytes; 0 is the
+/// buffer that grows (`0x771e16`), and -1 a buffer of no bytes, so an empty line.
+/// Deviation: the cut backs up to a character start, where the reference cuts at the byte,
+/// because a Rust string holds whole characters. Deviation: N of -2 or less is an empty line too,
+/// where the reference asks `SMemAlloc` for about 4 GB and fails.
+fn clip_line(mut text: String, bytes: LineBytes) -> String {
+    match bytes {
+        LineBytes::Whole => {}
+        LineBytes::Fixed(n) => text.truncate(text.floor_char_boundary(n - 1)),
+        LineBytes::Empty => text.clear(),
     }
     text
+}
+
+/// The XML `<FontString bytes="N">` of a message frame (`0x785b15`, `0x787d1e`), as `SStrToInt`
+/// read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LineBytes {
+    /// 0, or no attribute: the line's buffer grows with its text.
+    #[default]
+    Whole,
+    /// A positive N: the line holds N - 1 bytes.
+    Fixed(usize),
+    /// A negative N: the line holds nothing.
+    Empty,
+}
+
+impl From<i32> for LineBytes {
+    fn from(n: i32) -> Self {
+        match n {
+            0 => Self::Whole,
+            n if n > 0 => Self::Fixed(n as usize),
+            _ => Self::Empty,
+        }
+    }
 }
 
 /// A `0..1` colour component as a byte, rounded half up as `AddMessage` does (`0x788150`).
@@ -727,8 +755,8 @@ pub struct MessageFrameState {
     /// (`0x785b80`).
     pub insets: [crate::layout::Len; 4],
     /// The XML `<FontString bytes="N">` (`+0x340`, `0x785b15`): each line's text buffer length
-    /// (`0x786176` → `0x771680`), which holds N - 1 bytes; 0 is no limit.
-    pub line_bytes: usize,
+    /// (`0x786176` → `0x771680`), which holds N - 1 bytes ([`clip_line`]).
+    pub line_bytes: LineBytes,
     /// The lines' font holder (`+0x320`), as [`ScrollingMessageState::font_region`].
     pub font_region: Option<crate::widget::RegionHandle>,
 }
@@ -744,7 +772,7 @@ impl Default for MessageFrameState {
             fading_enabled: true,
             lines_gen: 0,
             insets: [crate::layout::Len::Script(0.0); 4],
-            line_bytes: 0,
+            line_bytes: LineBytes::Whole,
             font_region: None,
         }
     }

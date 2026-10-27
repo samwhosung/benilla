@@ -400,7 +400,7 @@ pub(crate) fn set_xml_insets(
 
 /// XML `<FontString bytes="N">` on a MessageFrame or a ScrollingMessageFrame (`0x785b10`,
 /// `0x787d19`): `SStrToInt` of a non-empty value, the length each line's text buffer takes
-/// (`0x771680`); 0 or less is no limit.
+/// (`0x771680`).
 pub(crate) fn set_xml_bytes(lua: &mlua::Lua, frame: &mlua::Table, bytes: &str) -> mlua::Result<()> {
     if bytes.is_empty() {
         return Ok(());
@@ -413,7 +413,7 @@ pub(crate) fn set_xml_bytes(lua: &mlua::Lua, frame: &mlua::Table, bytes: &str) -
         .frame_mut(h)
         .and_then(|f| f.kind_state.message_line_bytes_mut())
     {
-        *slot = usize::try_from(n).unwrap_or(0);
+        *slot = n.into();
     }
     Ok(())
 }

@@ -1523,7 +1523,8 @@ fn a_message_frame_lays_its_lines_out_inside_its_text_insets() {
 /// A MessageFrame's and a ScrollingMessageFrame's `<FontString bytes="N">` (`0x785b10`,
 /// `0x787d19`) is the length of each line's text buffer (`0x786176`, `0x78898d` → `0x771680`),
 /// which `SStrCopy` fills to N - 1 bytes (`0x771e0f`, `0x64a5cf`), backing up to a character
-/// start; 0 or less, or an empty value, leaves the lines whole.
+/// start; 0 or an empty value leaves the lines whole, and a negative one (`0x771692` tests only
+/// zero) empties them.
 #[test]
 fn a_message_frames_fontstring_bytes_cuts_its_lines() {
     let mut s = ui();
@@ -1544,7 +1545,7 @@ fn a_message_frames_fontstring_bytes_cuts_its_lines() {
             {}{}{}{}{}</Ui>"#,
         frame("ScrollingMessageFrame", "CutSmf", "6", 0),
         frame("MessageFrame", "CutMf", "6", 100),
-        frame("ScrollingMessageFrame", "WholeNeg", "-2", 200),
+        frame("ScrollingMessageFrame", "EmptyNeg", "-2", 200),
         frame("MessageFrame", "WholeEmpty", "", 300),
         frame("MessageFrame", "CutMulti", "5", 400),
     );
@@ -1553,7 +1554,7 @@ fn a_message_frames_fontstring_bytes_cuts_its_lines() {
     for (f, text) in [
         ("CutSmf", "abcdefghij"),
         ("CutMf", "klmnopqrst"),
-        ("WholeNeg", "uvwxyzuvwxyz"),
+        ("EmptyNeg", "uvwxyzuvwxyz"),
         ("WholeEmpty", "ABCDEFGHIJ"),
         ("CutMulti", "a\u{e9}\u{e9}\u{e9}"),
     ] {
@@ -1573,10 +1574,16 @@ fn a_message_frames_fontstring_bytes_cuts_its_lines() {
             _ => None,
         })
         .collect();
-    for want in ["abcde", "klmno", "uvwxyzuvwxyz", "ABCDEFGHIJ", "a\u{e9}"] {
+    for want in ["abcde", "klmno", "ABCDEFGHIJ", "a\u{e9}"] {
         assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
     }
-    for uncut in ["abcdefghij", "klmnopqrst", "a\u{e9}\u{e9}\u{e9}"] {
+    for uncut in [
+        "abcdefghij",
+        "klmnopqrst",
+        "a\u{e9}\u{e9}\u{e9}",
+        "uvwxyzuvwxyz",
+        "uvwxyzuvwx",
+    ] {
         assert!(!texts.iter().any(|t| t == uncut), "{uncut}: {texts:?}");
     }
 }
