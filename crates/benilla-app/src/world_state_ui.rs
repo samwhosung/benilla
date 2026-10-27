@@ -516,7 +516,6 @@ mod tests {
     /// (`0x49bdd6`), and a frame with nothing new signals nothing.
     #[test]
     fn every_packet_signals_the_readout_whether_or_not_a_row_moved() {
-        use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         let script = benilla_ui::script::UiScript::new().expect("a VM");
         script

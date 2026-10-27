@@ -25,6 +25,8 @@ pub(crate) struct PetitionSteps<'w, 's> {
     tabard: Option<Res<'w, crate::ui_tabard::TabardOpen>>,
     names: Res<'w, NameCache>,
     objects: Objects<'w, 's>,
+    /// The units `OfferPetition`'s guards resolve and judge (`0x468460`, `0x606ba0`).
+    relations: crate::target::RelationWorld<'w, 's>,
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     self_guid: Option<Res<'w, SelfGuid>>,
     /// `OfferPetition`'s target: `CGGameUI`'s selection pair (`0xb4e2d8`), not its interaction pair.
@@ -71,7 +73,6 @@ impl PetitionSteps<'_, '_> {
             debug!("ui_petition: no charter state in this world; {call:?} dropped");
             return None;
         }
-        let me = self.self_guid.as_ref().and_then(|g| g.0).unwrap_or(0);
         let registrar_npc = self.registrar.as_deref().and_then(GuildRegistrarState::npc);
         let send = |net: &NetCommands, command| {
             let _ = net.0.send(command);
@@ -124,7 +125,7 @@ impl PetitionSteps<'_, '_> {
                 send(&self.net, ClientCommand::PetitionSign { item, byte });
                 petition.signing = true;
             }
-            PetitionCall::Offer => self.offer(script, me),
+            PetitionCall::Offer => self.offer(script),
             // `0x4f4930`: the open item's guid first (`0x4f495e`), and with none nothing at all
             // (`0x4f4970`); then the name check's line or the send (`0x4f4987`-`0x4f49d5`).
             PetitionCall::Rename { name, refusal } => {
@@ -146,11 +147,9 @@ impl PetitionSteps<'_, '_> {
         None
     }
 
-    /// `OfferPetition()` (`0x4f4790`): nothing without a petition (`0x4f47ac`) or a target
-    /// (`0x4f47bd`); the player itself shows `ERR_PETITION_CREATOR` (`0x4f4839`); then the send and
-    /// `ERR_PETITION_OFFERED_S` at once, with no reply awaited (`0x4f48dc`-`0x4f48fa`). Guards 3-5,
-    /// 7 and 8 are not built, and the server refuses those.
-    fn offer(&mut self, script: &mut UiScript, me: u64) {
+    /// `OfferPetition()` (`0x4f4790`): [`offer_verdict`]'s eight guards in order, then the send and
+    /// `ERR_PETITION_OFFERED_S` at once, with no reply awaited (`0x4f48dc`-`0x4f48fa`).
+    fn offer(&mut self, script: &mut UiScript) {
         let Some(item) = self.petition.as_deref().and_then(PetitionState::open_item) else {
             return;
         };
@@ -158,19 +157,43 @@ impl PetitionSteps<'_, '_> {
             debug!("ui_petition: OfferPetition with no target — dropped");
             return;
         };
-        if player == me {
-            return self.show(script, lines::self_offer_line());
+        let me = self
+            .relations
+            .me_guid()
+            .and_then(|g| self.relations.unit(g));
+        let target = self.relations.unit(player);
+        let guild = self
+            .objects
+            .object(player)
+            .map_or(0, |fields| fields.player_guild_id());
+        // The target's name, asked for only where a line or the echo shows it (`0x609210`).
+        let (names, net) = (&self.names, &self.net);
+        let name = || {
+            names
+                .resolve_player(player, Ask::Event(net))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let relations = self.relations.get();
+        let verdict = offer_verdict(me, target, guild, name, |a, b| {
+            relations.can_cooperate(a, b)
+        });
+        match verdict {
+            Offer::Quiet => {}
+            Offer::Show(line) => self.show(script, line),
+            Offer::Send => {
+                let _ = self
+                    .net
+                    .0
+                    .send(ClientCommand::OfferPetition { item, player });
+                let name = self
+                    .names
+                    .resolve_player(player, Ask::Event(&self.net))
+                    .unwrap_or_default()
+                    .to_string();
+                self.show(script, lines::offered_line(&name));
+            }
         }
-        let _ = self
-            .net
-            .0
-            .send(ClientCommand::OfferPetition { item, player });
-        let name = self
-            .names
-            .resolve_player(player, Ask::Event(&self.net))
-            .unwrap_or_default()
-            .to_string();
-        self.show(script, lines::offered_line(&name));
     }
 
     /// Show `line` inside the call, as `0x496720` does; a key the VM's `GlobalStrings.lua` lacks
@@ -180,6 +203,51 @@ impl PetitionSteps<'_, '_> {
             crate::ui_action::show_now(script, &mut self.sink, "ui_petition", shown);
         }
     }
+}
+
+/// What `OfferPetition` does with its target once the petition and the selection are in hand.
+#[derive(Debug, PartialEq)]
+enum Offer {
+    /// A guard returned without a line.
+    Quiet,
+    /// A guard showed a line and returned.
+    Show(lines::Line),
+    /// Every guard passed: the packet and the echo.
+    Send,
+}
+
+/// `OfferPetition`'s guards after the petition and the target (`0x4f47ac`, `0x4f47bd`), in order:
+/// no player object of our own is silent (`0x4f47e4`); a target that does not resolve as a unit
+/// shows `ERR_OUT_OF_RANGE` (`0x4f4810`-`0x4f4814`); one that is no player is silent
+/// (`0x4f4831`); ourselves shows `ERR_PETITION_CREATOR` (`0x4f4839`); `CanCooperate` false shows
+/// `ERR_GUILD_NOT_ALLIED` (`0x4f485b`-`0x4f485f`); a target with a guild (`PLAYER_GUILDID`,
+/// `[+0xe68]+0xc`) shows `ERR_ALREADY_IN_GUILD_S` with its name (`0x4f4870`-`0x4f4886`).
+fn offer_verdict(
+    me: Option<crate::target::RelUnit>,
+    target: Option<crate::target::RelUnit>,
+    target_guild: u32,
+    target_name: impl FnOnce() -> String,
+    can_cooperate: impl FnOnce(&crate::target::RelUnit, &crate::target::RelUnit) -> bool,
+) -> Offer {
+    let Some(me) = me else {
+        return Offer::Quiet;
+    };
+    let Some(target) = target else {
+        return Offer::Show(lines::out_of_range_line());
+    };
+    if !target.is_player {
+        return Offer::Quiet;
+    }
+    if target.guid == me.guid {
+        return Offer::Show(lines::self_offer_line());
+    }
+    if !can_cooperate(&me, &target) {
+        return Offer::Show(lines::not_allied_line());
+    }
+    if target_guild != 0 {
+        return Offer::Show(lines::already_in_guild_line(&target_name()));
+    }
+    Offer::Send
 }
 
 /// `0x5e00e0`, the designer's opener, for `GetTabardInfo` with the registrar's guid `npc`
@@ -249,5 +317,48 @@ mod tests {
         let (sent, refusal) = run(0x42, 0, &player(2281, 49));
         assert!(sent.is_empty());
         assert_eq!(refusal, Some("ERR_EMBLEMERROR_NOTABARDGEOSET"));
+    }
+
+    fn unit(guid: u64, is_player: bool) -> Option<crate::target::RelUnit> {
+        Some(crate::target::RelUnit {
+            guid,
+            is_player,
+            ..Default::default()
+        })
+    }
+
+    /// `0x4f4790`'s guards run in order, each answering before the next is read.
+    #[test]
+    fn offer_petition_runs_its_guards_in_order() {
+        let me = unit(1, true);
+        let verdict = |me, target, guild, allied: bool| {
+            offer_verdict(me, target, guild, || "Bob".to_string(), |_, _| allied)
+        };
+        // No player object of our own: silent, though the target would be out of range.
+        assert_eq!(verdict(None, None, 0, true), Offer::Quiet);
+        // A target that is no unit: out of range.
+        assert_eq!(
+            verdict(me, None, 0, true),
+            Offer::Show(lines::out_of_range_line())
+        );
+        // A creature: silent, whatever else would refuse (`0x4f4831`).
+        assert_eq!(verdict(me, unit(7, false), 5, false), Offer::Quiet);
+        // Ourselves.
+        assert_eq!(
+            verdict(me, unit(1, true), 5, false),
+            Offer::Show(lines::self_offer_line())
+        );
+        // A player of the other faction group.
+        assert_eq!(
+            verdict(me, unit(2, true), 5, false),
+            Offer::Show(lines::not_allied_line())
+        );
+        // A player in a guild: the line carries its name, and nothing is sent.
+        assert_eq!(
+            verdict(me, unit(2, true), 9, true),
+            Offer::Show(lines::already_in_guild_line("Bob"))
+        );
+        // A free player of ours.
+        assert_eq!(verdict(me, unit(2, true), 0, true), Offer::Send);
     }
 }

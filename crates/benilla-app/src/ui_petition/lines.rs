@@ -68,6 +68,22 @@ pub(super) fn self_offer_line() -> Line {
     UiError::key("ERR_PETITION_CREATOR")
 }
 
+/// `OfferPetition`'s target does not resolve as a unit (`0x4f4810`, id `0x7d`).
+pub(super) fn out_of_range_line() -> Line {
+    UiError::key("ERR_OUT_OF_RANGE")
+}
+
+/// `OfferPetition`'s target is not one `CanCooperate` allows (`0x4f485b`, id `0x6d`).
+pub(super) fn not_allied_line() -> Line {
+    UiError::key("ERR_GUILD_NOT_ALLIED")
+}
+
+/// `OfferPetition`'s target is in a guild already (`0x4f4886`, id `0x50`), named as the offer's
+/// echo names it.
+pub(super) fn already_in_guild_line(name: &str) -> Line {
+    UiError::s("ERR_ALREADY_IN_GUILD_S", name)
+}
+
 /// `TurnInGuildCharter()` found no charter in the bags: a red line and no packet (`0x5ef49a`
 /// emits id `0x7c`, kind 2).
 pub(super) fn no_charter_line() -> Line {
