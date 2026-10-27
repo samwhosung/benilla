@@ -968,22 +968,43 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetRaidRosterSelection(index) / GetRaidRosterSelection(): a client-side cursor; the
-    // reference's `0x4bb820` writes a global and sends nothing.
+    // SetRaidRosterSelection(index) / GetRaidRosterSelection(): a client-side cursor that holds the
+    // member's guid, not the row, and sends nothing. Set stores the guid of the 1-based row, 0 for
+    // an index outside the count (`0x4bb85f`-`0x4bb871`, `0x4bb87b`); Get finds that guid's current
+    // row from the top (`0x4bae90`) and adds 1 (`0x4bb89c`), so it answers 0 for a zero guid, a
+    // guid that left the roster, and one the roster no longer lists (`or eax,-1` at `0x4baeca`).
     g.set(
         "SetRaidRosterSelection",
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: SetRaidRosterSelection(index)")?;
+            let guid = usize::try_from(index.wrapping_sub(1))
+                .ok()
+                .and_then(|i| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    roster_read::raid_row(lua, &model.party, i)
+                })
+                .map_or(0, |m| m.guid);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.raid_selection = i64::from(index);
+            model.raid_selection = guid;
             Ok(())
         })?,
     )?;
     g.set(
         "GetRaidRosterSelection",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.raid_selection)
+            let guid = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .raid_selection;
+            if guid == 0 {
+                return Ok(0);
+            }
+            let count = cells(lua).raid_count as usize;
+            let row = (0..count).find(|&i| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                roster_read::raid_row(lua, &model.party, i).is_some_and(|m| m.guid == guid)
+            });
+            Ok(row.map_or(0, |i| i as i64 + 1))
         })?,
     )?;
 
@@ -2308,19 +2329,47 @@ mod tests {
             .is_err());
     }
 
+    /// The cursor holds the member's guid (`0x4bb866`-`0x4bb871`) and is read back as that
+    /// guid's current row plus one (`0x4bae90`, `0x4bb89c`).
     #[test]
     fn the_raid_roster_selection_is_a_local_cursor() {
         let mut s = vm();
-        assert_eq!(s.eval::<i64>("return GetRaidRosterSelection()").unwrap(), 0);
+        let get = |s: &UiScript| s.eval::<i64>("return GetRaidRosterSelection()").unwrap();
+        assert_eq!(get(&s), 0);
+        // Outside a raid, any index stores 0 (`0x4bb87b`).
         s.run("SetRaidRosterSelection(11)").unwrap();
-        assert_eq!(
-            s.eval::<i64>("return GetRaidRosterSelection()").unwrap(),
-            11
-        );
+        assert_eq!(get(&s), 0);
+
+        s.set_party(ten_player_raid());
+        s.run("SetRaidRosterSelection(4)").unwrap();
+        assert_eq!(get(&s), 4);
+        // An index past the count, zero or negative clears the cursor.
+        for bad in ["11", "0", "-3"] {
+            s.run("SetRaidRosterSelection(4)").unwrap();
+            s.run(&format!("SetRaidRosterSelection({bad})")).unwrap();
+            assert_eq!(get(&s), 0, "index {bad}");
+        }
         assert!(
             s.take_party_requests().is_empty(),
             "nothing about a selection goes on the wire"
         );
+    }
+
+    /// The row the selection reads is where its guid stands now, not where it stood.
+    #[test]
+    fn the_raid_roster_selection_follows_its_member() {
+        let mut s = vm();
+        let mut party = ten_player_raid();
+        s.set_party(party.clone());
+        s.run("SetRaidRosterSelection(4)").unwrap();
+        // The roster reorders: the selected member (guid 0x103) moves to row 1.
+        party.raid.swap(0, 3);
+        s.set_party(party.clone());
+        assert_eq!(s.eval::<i64>("return GetRaidRosterSelection()").unwrap(), 1);
+        // The member leaves: no row holds the guid.
+        party.raid.remove(0);
+        s.set_party(party);
+        assert_eq!(s.eval::<i64>("return GetRaidRosterSelection()").unwrap(), 0);
     }
 
     #[test]

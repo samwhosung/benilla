@@ -431,8 +431,8 @@ pub(crate) struct Model {
     pub(crate) ready_check: party::ReadyCheckState,
     /// Saved raid lockouts from `SMSG_RAID_INSTANCE_INFO`, which outlive any roster change.
     pub(crate) saved_instances: Vec<party::SavedInstanceInfo>,
-    /// `SetRaidRosterSelection`'s raid row index, client-side only.
-    pub(crate) raid_selection: i64,
+    /// `SetRaidRosterSelection`'s member guid (`[0xb713e8]`), client-side only; 0 selects none.
+    pub(crate) raid_selection: u64,
     /// `GetTime()`'s session seconds, which only the host moves ([`super::UiScript::tick`],
     /// [`super::UiScript::set_now`]); off `_G`, as the reference's clock is the OS tick count.
     pub(crate) now: f64,
