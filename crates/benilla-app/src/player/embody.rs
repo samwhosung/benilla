@@ -17,7 +17,6 @@ use bevy::prelude::*;
 
 use super::approach::Approach;
 use super::follow::FollowState;
-use super::state::Player;
 use crate::creature_anim::MovementState;
 use crate::net::{ActiveMover, Embodied, GuidIndex, RemoteMotion, SelfGuid, SelfPlayer};
 
@@ -87,6 +86,7 @@ pub(super) fn maintain_embodiment(
 
 #[cfg(test)]
 mod tests {
+    use super::super::state::Player;
     use super::*;
     use crate::net::RemoteMotion;
 
