@@ -710,6 +710,38 @@ mod loader_tests {
         );
     }
 
+    /// An empty `name=` leaves a region unnamed: the region loader skips it (`0x76fe07`) and
+    /// `SetName 0x76c650` refuses `""` (`0x76c664`), which the Lua constructors reach too.
+    #[test]
+    fn an_empty_region_name_leaves_it_unnamed() {
+        let s = UiScript::new().unwrap();
+        let doc = parse(
+            r#"<Ui>
+                 <Frame name="EmptyNames">
+                   <Layers><Layer level="ARTWORK">
+                     <FontString name="" inherits="GameFontNormal"/>
+                     <Texture name=""/>
+                   </Layer></Layers>
+                 </Frame>
+               </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let names: String = s
+            .eval(
+                r#"local out = {}
+                   for _, r in ipairs({ EmptyNames:GetRegions() }) do
+                     table.insert(out, tostring(r:GetName()))
+                   end
+                   table.insert(out, tostring(EmptyNames:CreateTexture(""):GetName()))
+                   table.insert(out, tostring(EmptyNames:CreateFontString(""):GetName()))
+                   table.insert(out, tostring(getglobal("")))
+                   return table.concat(out, ",")"#,
+            )
+            .unwrap();
+        assert_eq!(names, "nil,nil,nil,nil,nil");
+    }
+
     /// `0x6f2630` rewrites a stop on every matching child (`0x6f2690`-`0x6f26d8`): the last
     /// `MinColor` and the last `MaxColor` win.
     #[test]

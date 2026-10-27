@@ -408,7 +408,8 @@ fn create_region(
     };
 
     let wrapper = region_wrapper(lua, id)?;
-    if let Some(name) = name {
+    // `SetName 0x76c650` refuses null or `""` (`0x76c664`), so an empty name leaves it unnamed.
+    if let Some(name) = name.filter(|n| !n.is_empty()) {
         // A leading `$parent` expands as in XML, its walk to a named frame starting at the owner:
         // both bindings name the region through `CScriptRegion::SetName 0x76c650` (`0x773ba1`,
         // `0x773dc4`).
