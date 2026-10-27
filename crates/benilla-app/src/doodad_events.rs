@@ -59,7 +59,8 @@ fn fire_doodad_anim_events(
         let Some((node, cur)) = host.arm_clock(now) else {
             continue; // a gseq-only host with no sound arm
         };
-        let Some(clip) = anims.clips.iter().find(|c| c.node == node) else {
+        // Either of the clip's tracks: a carried re-arm of the sequence fading out runs on its twin.
+        let Some(clip) = anims.clip_at(node) else {
             continue;
         };
         if let Some(prev) = advance_track(&mut last, entity, node, cur) {
