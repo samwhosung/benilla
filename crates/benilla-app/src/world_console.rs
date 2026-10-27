@@ -176,7 +176,7 @@ fn max_lod(world: &mut World, args: &str) -> Vec<String> {
 fn water_max_lod(world: &mut World, args: &str) -> Vec<String> {
     let mut levels = world.get_resource_or_init::<WorldLevels>();
     if let Some(v) = scanf_d(args) {
-        levels.water_max_lod = v as i32;
+        levels.water_max_lod = v;
     }
     levels.water_max_lod = levels.water_max_lod.clamp(0, 4);
     Vec::new()
@@ -186,7 +186,7 @@ fn water_max_lod(world: &mut World, args: &str) -> Vec<String> {
 /// (`0x673710`, `[0x86a034]`) and `waterSpecular` (`0x673730`, `[0x86a038]`). Prints nothing.
 fn scan_level(world: &mut World, args: &str, level: fn(&mut WorldLevels) -> &mut i32) {
     if let Some(v) = scanf_d(args) {
-        *level(&mut world.get_resource_or_init::<WorldLevels>()) = v as i32;
+        *level(&mut world.get_resource_or_init::<WorldLevels>()) = v;
     }
 }
 
@@ -204,7 +204,7 @@ fn water_specular(world: &mut World, args: &str) -> Vec<String> {
 /// the ripple emitter's gate (`0x68bda3`). Prints nothing.
 fn water_ripples(world: &mut World, args: &str) -> Vec<String> {
     if let Some(v) = scanf_d(args) {
-        world.get_resource_or_init::<WaterRipples>().0 = v as i32;
+        world.get_resource_or_init::<WaterRipples>().0 = v;
     }
     Vec::new()
 }
@@ -265,7 +265,7 @@ fn sky_sun_glare(world: &mut World, args: &str) -> Vec<String> {
     let blank = args
         .bytes()
         .all(|c| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'));
-    let enabled = blank || scanf_d(args).is_some_and(|v| v as i32 != 0);
+    let enabled = blank || scanf_d(args).is_some_and(|v| v != 0);
     world
         .get_resource_or_init::<benilla_world::sun::SunGlare>()
         .enabled = enabled;

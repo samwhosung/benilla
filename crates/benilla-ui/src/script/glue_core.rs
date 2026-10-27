@@ -93,20 +93,29 @@ impl GlueNotices {
     }
 }
 
-/// The first `%d` of the CRT's `sscanf` (`0x73fb5d`): leading whitespace skipped, an optional sign
-/// and the leading digits; `None` when no digit follows, which leaves the out-slot untouched; 0
-/// for a number past `i64`.
-pub fn scanf_d(s: &str) -> Option<i64> {
-    let s = s.trim_start();
-    let (sign, digits) = match s.as_bytes().first() {
-        Some(b'-') => (-1, &s[1..]),
-        Some(b'+') => (1, &s[1..]),
-        _ => (1, s),
-    };
-    let end = digits
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(digits.len());
-    (end > 0).then(|| sign * digits[..end].parse::<i64>().unwrap_or(0))
+/// The first `%d` of the CRT's `sscanf` (`0x73fb5d`, `__input` `0x744e21`) over `s` as a C
+/// string: blanks skipped (`__whiteout`, `0x7458ae`), an optional sign and the leading digits,
+/// accumulated in 32 bits that wrap (`0x7456c9`, `0x74570f`), negated for `-` (`0x745744`) and
+/// stored as a dword (`0x745781`). `None` when no digit follows, which leaves the out-slot
+/// untouched.
+pub fn scanf_d(s: &str) -> Option<i32> {
+    let b = s.as_bytes();
+    let b = &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())];
+    let mut i = b
+        .iter()
+        .take_while(|&&c| c == b' ' || (0x09..=0x0d).contains(&c))
+        .count();
+    let neg = b.get(i) == Some(&b'-');
+    if matches!(b.get(i), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let digits = b[i..].iter().take_while(|c| c.is_ascii_digit());
+    let (mut n, mut v) = (0, 0i32);
+    for &c in digits {
+        v = v.wrapping_mul(10).wrapping_add(i32::from(c - b'0'));
+        n += 1;
+    }
+    (n > 0).then(|| if neg { v.wrapping_neg() } else { v })
 }
 
 /// `DefaultServerLogin`'s two strings. Never logged: the `Debug` form names the account only.
@@ -1178,6 +1187,24 @@ mod tests {
         *host.replies.borrow_mut() = replies;
         s.set_glue_host(host.clone());
         (s, host)
+    }
+
+    /// `sscanf`'s `%d` accumulates in 32 bits that wrap, after C's blanks only.
+    #[test]
+    fn scanf_d_wraps_in_32_bits() {
+        assert_eq!(scanf_d(" 42x"), Some(42));
+        assert_eq!(scanf_d("-7"), Some(-7));
+        assert_eq!(scanf_d("+7"), Some(7));
+        assert_eq!(scanf_d("2147483647"), Some(i32::MAX));
+        assert_eq!(scanf_d("2147483648"), Some(i32::MIN));
+        assert_eq!(scanf_d("-2147483648"), Some(i32::MIN));
+        assert_eq!(scanf_d("4294967296"), Some(0));
+        assert_eq!(scanf_d("4294967301"), Some(5));
+        assert_eq!(scanf_d("99999999999999999999"), Some(1_661_992_959));
+        assert_eq!(scanf_d("\u{a0}1"), None, "no blank past C's");
+        for text in ["", " ", "-", "+x", "x1"] {
+            assert_eq!(scanf_d(text), None, "{text:?}");
+        }
     }
 
     /// A seated host runs the call inside the verb, and what it raised has run its handlers by
