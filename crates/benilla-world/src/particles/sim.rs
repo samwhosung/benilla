@@ -962,6 +962,7 @@ pub(super) fn simulate_particles(
         let cam = CamBasis {
             right: e_right,
             up: e_up,
+            pos: e_cam_pos,
         };
         // A geometry emitter draws instances ([`super::model`]), never quads.
         let want_quads = def.geometry_model.is_none() && images.contains(&*texture);
