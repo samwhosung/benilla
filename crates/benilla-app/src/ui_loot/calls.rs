@@ -12,7 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::{
-    bind_confirm_required, close_interaction, show, unlock_closed_source, AutoLootByte,
+    bind_confirm_required, close_interaction_in_place, show, unlock_closed_source, AutoLootByte,
     DeadUnitDeselect, LootAction, LootConfig, LootLatch, LootState,
 };
 use crate::items::Items;
@@ -263,7 +263,7 @@ impl LootSteps<'_, '_> {
         if failed {
             self.errors.push(UiError::key("ERR_LOOT_NO_UI"));
         }
-        let closed = close_interaction(&mut self.loot, &mut self.latch, Some(&self.net));
+        let closed = close_interaction_in_place(&mut self.loot, &mut self.latch, Some(&self.net));
         // The window goes (`0x48f33d` → `0x4c1cb0`) before the dead unit's deselect (`0x48f369`).
         if let Some(source) = self.dead.dead_unit(closed) {
             self.loot.then.push(Then::Deselect(source));

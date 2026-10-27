@@ -192,14 +192,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Edge,
-        "::ui_items::locks::apply_item_releases",
-        "the item source's two unlocks a loot close owes (`0x48f2bd`, `0x4c1d36`) and the copier's \
-         ending's (`0x5ebc35` → `0x4c1d36`), taken off the loot session, a lane's type the queue \
-         check skips: `close_interaction` serves the packets' closes and the calls' and clicks' \
-         alike, so they move when it does",
-    ),
-    (
-        Row::Edge,
         "::ui_action::state::fire_action_events",
         "the usable cache's refresh `0x4e5c00` (`ACTIONBAR_UPDATE_USABLE`) of `EditMacro` \
          (`0x4f132e`) and `RaiseBagUpdate` (`0x4f9374`), which the reference runs in the call and \
@@ -409,8 +401,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
         "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",
         "ui_action::cast_lines::CastFailRedisplays"]),
-    ("::ui_items::locks::apply_item_releases", &["items::Countdowns", "net::GuidIndex",
-        "net::ObjectStore", "ui_loot::LootState"]),
+    // The locks of the objects that went, forgotten as the frame left the index.
+    ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_containers", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "spell::cooldowns::Cooldowns",
         "ui_petition::PetitionRecords"]),

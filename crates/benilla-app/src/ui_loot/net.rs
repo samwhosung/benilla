@@ -207,12 +207,10 @@ impl WindowPacket<'_, '_> {
         if self.loot.source().is_none() || self.loot.has_contents(&self.objects) {
             return;
         }
-        let owed = self.loot.owed_unlocks();
         let closed = super::close_interaction(&mut self.loot, &mut self.latch, Some(&self.net));
         if let Some(guid) = closed {
             debug!("net: loot emptied — release {guid:#x}");
         }
-        self.loot.defer_close_unlocks(owed);
         self.dead.after_close(closed);
     }
 }
@@ -796,7 +794,7 @@ mod tests {
         assert_eq!(
             world
                 .resource_mut::<LootState>()
-                .take_item_unlocks()
+                .take_queued_unlocks()
                 .into_iter()
                 .map(|(g, _)| g)
                 .collect::<Vec<_>>(),
@@ -814,7 +812,7 @@ mod tests {
             .expect("the handler runs as a one-shot system");
         assert!(world
             .resource_mut::<LootState>()
-            .take_item_unlocks()
+            .take_queued_unlocks()
             .into_iter()
             .map(|(g, _)| g)
             .collect::<Vec<_>>()
@@ -833,7 +831,7 @@ mod tests {
             Some(CORPSE)
         );
         assert!(loot
-            .take_item_unlocks()
+            .take_queued_unlocks()
             .into_iter()
             .map(|(g, _)| g)
             .collect::<Vec<_>>()
@@ -847,7 +845,7 @@ mod tests {
         let mut loot = LootState::default();
         loot.open(LOCKBOX, 1, 0, Vec::new());
         assert!(
-            loot.take_item_unlocks()
+            loot.take_queued_unlocks()
                 .into_iter()
                 .map(|(g, _)| g)
                 .collect::<Vec<_>>()
@@ -856,7 +854,7 @@ mod tests {
         );
         loot.open(CORPSE, 1, 0, Vec::new());
         assert_eq!(
-            loot.take_item_unlocks()
+            loot.take_queued_unlocks()
                 .into_iter()
                 .map(|(g, _)| g)
                 .collect::<Vec<_>>(),
@@ -864,7 +862,7 @@ mod tests {
         );
         loot.open(CHEST, 2, 0, Vec::new());
         assert!(
-            loot.take_item_unlocks()
+            loot.take_queued_unlocks()
                 .into_iter()
                 .map(|(g, _)| g)
                 .collect::<Vec<_>>()
@@ -938,7 +936,7 @@ mod tests {
         world
             .resource_mut::<LootState>()
             .open(CORPSE, 1, 0, Vec::new());
-        world.resource_mut::<LootState>().take_item_unlocks();
+        world.resource_mut::<LootState>().take_queued_unlocks();
         world.resource_mut::<LootLatch>().0 = Some(CHEST); // the `CMSG_LOOT` for B
         world
             .run_system_once_with(

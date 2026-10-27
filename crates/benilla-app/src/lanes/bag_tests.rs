@@ -145,7 +145,7 @@ fn client() -> App {
             for _, e in ipairs({"BAG_UPDATE", "BAG_CLOSED", "BAG_OPEN", "ITEM_LOCK_CHANGED",
                     "PLAYERBANKSLOTS_CHANGED", "PLAYER_MONEY", "PLAYER_COMBO_POINTS",
                     "ACTIONBAR_SLOT_CHANGED", "UNIT_INVENTORY_CHANGED", "UI_ERROR_MESSAGE",
-                    "CHAT_MSG_MONSTER_SAY"}) do
+                    "CHAT_MSG_MONSTER_SAY", "LOOT_CLOSED"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function()
@@ -436,6 +436,40 @@ fn a_loot_refusals_unlock_fires_at_its_packet() {
     assert_eq!(
         frame(&mut app, vec![refused(), combo(0)]),
         ["ITEM_LOCK_CHANGED:nil", "PLAYER_COMBO_POINTS:nil"]
+    );
+}
+
+/// A window open on an item of ours, the potions, as an opened lockbox's is, latched; what the
+/// open signalled is spent.
+fn loot_open_on_the_potions(app: &mut App) {
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ui_loot::LootState>()
+        .open(POTIONS, 1, 0, Vec::new());
+    world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(POTIONS);
+    let _ = frame(app, Vec::new());
+}
+
+/// The server's release of a window open on an item closes it inside its handler (`0x5ec090` →
+/// `0x48f200`): the close's `UnlockItem` (`0x48f2bd`), the teardown's (`0x4c1d36`), then the
+/// teardown's `LOOT_CLOSED` (`0x4c1dac`), between the packets around it.
+#[test]
+fn a_released_item_windows_two_unlocks_fire_at_its_packet() {
+    let mut app = client();
+    loot_open_on_the_potions(&mut app);
+    let released = SessionEvent::LootReleaseResponse {
+        guid: POTIONS,
+        result: 1,
+    };
+    assert_eq!(
+        frame(&mut app, vec![combo(2), released, combo(0)]),
+        [
+            "PLAYER_COMBO_POINTS:nil",
+            "ITEM_LOCK_CHANGED:nil",
+            "ITEM_LOCK_CHANGED:nil",
+            "LOOT_CLOSED:nil",
+            "PLAYER_COMBO_POINTS:nil"
+        ]
     );
 }
 

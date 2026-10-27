@@ -677,8 +677,12 @@ fn a_lockboxs_last_row_signals_its_unlocks_between_the_clear_and_the_close() {
         "LOOT_SLOT_CLEARED:1,ITEM_LOCK_CHANGED,ITEM_LOCK_CHANGED,LOOT_CLOSED"
     );
     assert!(
-        !l.app.world().resource::<LootState>().owes_unlocks(),
-        "signalled in their place, none left for the inventory pass"
+        l.app
+            .world()
+            .resource::<LootState>()
+            .queued_unlocks()
+            .is_empty(),
+        "signalled in their place, none left on the lane"
     );
 }
 

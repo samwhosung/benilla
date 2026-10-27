@@ -5,15 +5,14 @@
 //! guid changes unlocks the item now in it (`0x5ddd50`, `0x4f8e15`, `0x4f912c`), and an item of
 //! ours set up or changing its stack count unlocks its entry or itself (`0x5d8590`, `0x5d85ab`,
 //! `0x5d94af`, `0x5d94ca`); a sale's refusal's on the item lane too (`0x5dd26b`); an inventory
-//! refusal's on its own lane ([`super::EquipErrors`]). What is left here is the loot window's
-//! release the loot lane did not run, and the locks whose objects went ([`apply_item_releases`]).
+//! refusal's on its own lane ([`super::EquipErrors`]); a loot close's and the copier's ending's on
+//! the loot lane ([`crate::ui_loot::close_interaction`]). What is left here is the locks whose
+//! objects went ([`forget_gone_item_locks`]).
 
 use std::collections::HashMap;
 
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
-
-use crate::net::Objects;
 
 /// The VM's locks between a VM and the next: the reference's bit lives on the item object
 /// (`item+0x314`), which a `/reload` keeps, while ours lives in the VM it rebuilds.
@@ -78,33 +77,21 @@ pub(crate) struct LockWatch {
     lock_owners: HashMap<u64, Entity>,
 }
 
-/// Run the loot window's owed unlocks, each `UnlockItem` (`0x495420`) whose `ITEM_LOCK_CHANGED`
-/// fires whether or not the guid names an item we hold (`0x495450`), and forget the locks whose
-/// objects went: a locked item whose object went away, or came back as a new one (a cross-map
-/// worldport rebuilds them all), loses the lock silently, as it lived on the old object and the
-/// new one is built unlocked (`0x5d821f`, `0x5d823e`).
-pub(crate) fn apply_item_releases(
-    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, crate::ui_loot::LootState>>>,
-    objects: Objects,
+/// Forget the locks whose objects went: a locked item whose object went away, or came back as a
+/// new one (a cross-map worldport rebuilds them all), loses the lock silently, as it lived on the
+/// old object and the new one is built unlocked (`0x5d821f`, `0x5d823e`). No event fires.
+pub(crate) fn forget_gone_item_locks(
+    mut vm: crate::script_calls::HostedVm,
+    index: Res<crate::net::GuidIndex>,
     mut watch: ResMut<LockWatch>,
 ) {
-    vm.turn(|script, loot| {
-        // Read before taking, so a frame owing nothing leaves the session unchanged for its feed.
-        let owed: Vec<u64> = match loot.filter(|l| l.owes_unlocks()) {
-            Some(mut loot) => loot
-                .take_item_unlocks()
-                .into_iter()
-                .filter(|&(guid, live)| !live || objects.object(guid).is_some_and(|f| f.is_item()))
-                .map(|(guid, _)| guid)
-                .collect(),
-            None => Vec::new(),
-        };
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };
         let mut owners = HashMap::new();
         for guid in script.item_locks() {
-            let now = objects.entity(guid);
+            let now = index.0.get(&guid).copied();
             let was = watch.lock_owners.get(&guid).copied();
             match now {
                 Some(e) if was.is_none_or(|w| w == e) => {
@@ -114,9 +101,6 @@ pub(crate) fn apply_item_releases(
             }
         }
         watch.lock_owners = owners;
-        for guid in owed {
-            script.unlock_item(guid);
-        }
     })
 }
 
@@ -143,14 +127,14 @@ mod tests {
         ])
     }
 
-    /// The release system over a world with the arrows as an item object, and a VM that counts
+    /// The lock watch over a world with the arrows as an item object, and a VM that counts
     /// `ITEM_LOCK_CHANGED`.
     fn arrow_world() -> App {
         let mut app = App::new();
         app.init_resource::<crate::items::Items>()
             .init_resource::<LockWatch>()
             .init_resource::<crate::net::GuidIndex>()
-            .add_systems(Update, apply_item_releases);
+            .add_systems(Update, forget_gone_item_locks);
         crate::items::test_spawn_item(app.world_mut(), A, arrows(200), false);
         let script = UiScript::new().unwrap();
         script
@@ -169,25 +153,6 @@ mod tests {
         let n = script.eval::<usize>("return table.getn(SEEN)").unwrap();
         script.run("SEEN = {}").unwrap();
         n
-    }
-
-    /// A closed window's source unlocks only while it resolves as a live item object
-    /// (`0x48f299`/`0x48f2ab`): a fully looted box, already destroyed, owes nothing.
-    #[test]
-    fn a_window_sources_unlock_needs_a_live_item() {
-        const GONE: u64 = 0x4000_0000_0000_0dea;
-        let mut app = arrow_world();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .lock_item(A);
-        let _ = heard(&mut app);
-        let mut loot = crate::ui_loot::LootState::default();
-        loot.unlock_item_source(GONE);
-        loot.unlock_item_source(A);
-        app.insert_resource(loot);
-        app.update();
-        assert_eq!(heard(&mut app), 1, "A's alone");
-        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
     }
 
     /// The lock is the item object's: one rebuilt under the same guid (a cross-map worldport)
@@ -222,21 +187,5 @@ mod tests {
         app.update();
         assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
         assert_eq!(heard(&mut app), 0, "no event for the drop itself");
-    }
-
-    /// The loot window's owed unlocks run here, ahead of the feeds.
-    #[test]
-    fn the_loot_windows_owed_unlocks_run() {
-        let mut app = arrow_world();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .lock_item(A);
-        let _ = heard(&mut app);
-        let mut loot = crate::ui_loot::LootState::default();
-        loot.unlock_item_source(A);
-        app.insert_resource(loot);
-        app.update();
-        assert_eq!(heard(&mut app), 1);
-        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
     }
 }

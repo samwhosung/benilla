@@ -458,10 +458,10 @@ impl Plugin for UiActionPlugin {
                         .after(crate::ui_macro::MacroBindings)
                         .after(ranks::normalize_action_ranks)
                         .before(feed::feed_actions),
-                    // Our player's arrival recount, after the server's unlocks.
+                    // Our player's arrival recount, after the dead objects' locks go.
                     recount::recount_item_actions
                         .in_set(UnitFeed)
-                        .after(crate::ui_items::locks::apply_item_releases)
+                        .after(crate::ui_items::locks::forget_gone_item_locks)
                         .before(feed::feed_actions),
                     // Before the aura feed, whose `raidFilter` verdicts rebuild off the book
                     // when `PlayerActions` moves, so a book this pass settles is read this frame.

@@ -1025,9 +1025,8 @@ impl Plugin for UiItemsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The loot window's owed unlocks and the dead objects' locks, ahead of both
-                    // inventory feeds.
-                    crate::ui_items::locks::apply_item_releases
+                    // The dead objects' locks, ahead of both inventory feeds.
+                    crate::ui_items::locks::forget_gone_item_locks
                         .in_set(crate::ui_script::UiFeed)
                         .before(feed_containers)
                         .before(crate::ui_char::feed_char),
