@@ -265,6 +265,8 @@ fn a_made_nan_is_the_x87_indefinite() {
         "math.log(-1)",
         "math.log10(-3)",
         "math.mod(1, 0)",
+        "math.mod(z, z)",
+        "math.mod(-z, z)",
         "math.sin(1/z)",
         "math.pow(-8, 1/3)",
         "math.acos(0/z)",

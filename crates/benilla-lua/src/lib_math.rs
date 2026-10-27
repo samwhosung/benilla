@@ -131,8 +131,9 @@ fn pow(a: f64, b: f64) -> f64 {
 
 /// The client's `fmod` (`__CIfmod`, `0x73f90a`), `fprem` with the sign of the dividend, behind
 /// the operand classes of `__cintrindisp2` (`0x7436c0`, its table at `0x875eb0`): an infinite
-/// divisor is a domain error, the indefinite (`0x743ad6`), where C's answers the dividend, and a
-/// zero dividend over a finite divisor is `fldz` (`0x743a38`), so `fmod(-0, 2)` is `+0`.
+/// divisor is a domain error, the indefinite (`0x743ad6`), where C's answers the dividend, a
+/// zero dividend over a non-zero finite divisor is `fldz` (`0x743a38`), so `fmod(-0, 2)` is `+0`,
+/// and zero over zero is the indefinite again (`0x743ad6`).
 fn fmod(a: f64, b: f64) -> f64 {
     if b.is_infinite() {
         f64::NAN
