@@ -81,6 +81,8 @@ pub(super) struct ChatWindowFile {
     path: Option<PathBuf>,
     /// The `(realm, character)` [`Self::path`] was built for, per VM: a fresh VM restores again.
     identity: VmMemo<Option<(String, String)>>,
+    /// The character a held reader registered for, per VM, until its section settles.
+    held: VmMemo<Option<(String, String)>>,
     /// Whether this VM has unsaved Lua writes, per VM: a replaced VM's stock table must not save.
     dirty: VmMemo<bool>,
     last_change: Option<std::time::Instant>,
@@ -401,24 +403,36 @@ fn shortcut_rows(channels: &super::edit::ChannelState) -> Vec<(u32, String)> {
 /// (`ChatFrame.lua:1357-1365`), whose `.id` is 0, and `UpdateColorByID(0, …)` recolours every line
 /// printed with no explicit colour, an addon's login `Print` among them.
 pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
-    // A chat section the server's file replaced before this load is the file read here, not
-    // again: the handlers run ahead of the deferred entry load.
-    if let Some(data) = world.get_resource::<crate::account_data::AccountData>() {
-        data.take_arrived(crate::account_data::CHAT);
+    // `0x498a20` registers the reader through `0x5afe50`: it runs now on a settled section, else
+    // when the section settles ([`fire_arrived_chat_looks`]), for the character seated here.
+    let held = world
+        .get_resource::<crate::account_data::AccountData>()
+        .is_some_and(|data| !data.register(crate::account_data::CHAT));
+    if held {
+        let id = world
+            .get_resource::<crate::glue_session::roster::Roster>()
+            .and_then(crate::ui_macro::identity);
+        if let Some(mut file) = world.get_resource_mut::<ChatWindowFile>() {
+            *file.held.get(script) = id;
+        }
+        return;
     }
     restore_chat_looks_again(world, script, false);
 }
 
-/// [`restore_chat_looks`], into a VM that restored the file already when `again`: a chat section
-/// the server's file replaced, read as the reference's reader (`0x498a60`) runs once the section
-/// lands (`0x5afd19`).
+/// [`restore_chat_looks`], into a VM seated for its character already when `again`: a chat section
+/// that settled, read as the reference's reader (`0x498a60`) runs once it does (`0x5afaca`,
+/// `0x5afd19`).
 fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: bool) {
     // Again, the character the VM restored for, not the roster's pick, which the session's edges
     // move in no order against the lanes.
     let id = if again {
         world
             .get_resource_mut::<ChatWindowFile>()
-            .and_then(|mut file| file.identity.get(script).clone())
+            .and_then(|mut file| {
+                let held = file.held.get(script).take();
+                file.identity.get(script).clone().or(held)
+            })
     } else {
         world
             .get_resource::<crate::glue_session::roster::Roster>()
@@ -598,12 +612,11 @@ fn write(script: &UiScript, channels: &super::edit::ChannelState, path: &std::pa
 ///   state such as the zone mask never marks the file dirty.
 /// - Deviation: the debounce also writes Lua's changes (`dirty`) after the quiet time, where the
 ///   reference writes only at teardown, so a crash loses at most a second of changes.
+///
+/// A held reader has restored nothing, so neither writes, as `0x5afed0` skips a pending section
+/// (`0x5afee0`).
 fn owes_write(exiting: bool, restored: bool, dirty: bool, quiet: bool) -> bool {
-    if exiting {
-        restored
-    } else {
-        dirty && quiet
-    }
+    restored && (exiting || (dirty && quiet))
 }
 
 /// The write itself, on the terms [`owes_write`] set.
@@ -639,16 +652,16 @@ fn save_chat_looks(
     })
 }
 
-/// The chat section's arrival, the head of its lane: the reader runs where its packet's handler
-/// ran (`0x5afd19`), in the packets' order with the other lanes' events.
+/// The chat section's settling, the head of its lane: the reader runs where its packet's handler
+/// ran (`0x5afaca`, `0x5afd19`), in the packets' order with the other lanes' events.
 fn peek_arrived_chat_looks(world: &World) -> Option<crate::lanes::Stamp> {
     world
         .get_resource::<crate::account_data::AccountData>()?
-        .arrived_at(crate::account_data::CHAT)
+        .owed_at(crate::account_data::CHAT)
 }
 
-/// The section the server's file replaced, restored again, its burst fired as the firing of the
-/// arrival's stamp; the load's own restore took what came before it.
+/// The section, settled, restored into the VM its reader registered with, its burst fired as the
+/// firing of the settling's stamp.
 fn fire_arrived_chat_looks(In(until): In<crate::lanes::Until>, world: &mut World) {
     let Some(at) = peek_arrived_chat_looks(world).filter(|at| until.admits(*at)) else {
         return;
@@ -659,8 +672,8 @@ fn fire_arrived_chat_looks(In(until): In<crate::lanes::Until>, world: &mut World
     };
     world
         .resource::<crate::account_data::AccountData>()
-        .take_arrived(crate::account_data::CHAT);
-    info!("chat cache: the server's file read");
+        .take_owed(crate::account_data::CHAT);
+    info!("chat cache: the settled section read");
     crate::lanes::firing(at, || restore_chat_looks_again(world, &mut script, true));
     world.insert_non_send_resource(script);
 }
@@ -997,10 +1010,14 @@ mod tests {
             !owes_write(true, false, true, true),
             "a VM that never read the file has nothing of the player's to write"
         );
-        // The debounce: dirty and quiet.
+        // The debounce: dirty and quiet, over a file it read.
         assert!(owes_write(false, true, true, true));
         assert!(!owes_write(false, true, true, false), "still being dragged");
         assert!(!owes_write(false, true, false, true), "nothing Lua moved");
+        assert!(
+            !owes_write(false, false, true, true),
+            "a held reader's section is not written"
+        );
     }
 
     #[test]
@@ -1366,11 +1383,11 @@ mod tests {
         on_disk
     }
 
-    /// A chat section the server's file replaced is restored again into the live VM, as the
-    /// reference's reader (`0x498a60`) runs once the section lands (`0x5afd19`); without the
-    /// arrival nothing reads it twice.
+    /// The chat reader registers at the load through `0x5afe50` (`0x498a2c`): on a pending section
+    /// it is held, and the file is read once the section settles at the check (`0x5afaca`), and
+    /// again at every later settling, the server's file landing (`0x5afd19`).
     #[test]
-    fn a_chat_section_from_the_server_is_restored_again() {
+    fn the_chat_reader_waits_for_its_section_and_reads_each_settling() {
         let _l = crate::local_state::test_env::ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1406,7 +1423,14 @@ mod tests {
         let mut script = world.remove_non_send_resource::<UiScript>().unwrap();
         restore_chat_looks(&mut world, &mut script);
         world.insert_non_send_resource(script);
-        assert_eq!(name(&world), "Alpha");
+        assert_ne!(name(&world), "Alpha", "pending: the reader is held");
+        reread_arrived_chat_looks(&mut world);
+        assert_ne!(name(&world), "Alpha", "still pending");
+        world
+            .resource::<crate::account_data::AccountData>()
+            .settle_section_for_test(crate::account_data::CHAT);
+        reread_arrived_chat_looks(&mut world);
+        assert_eq!(name(&world), "Alpha", "the check settled it: the file read");
 
         std::fs::write(&path, file("Bravo")).expect("the server's file");
         reread_arrived_chat_looks(&mut world);
@@ -1419,16 +1443,17 @@ mod tests {
         assert!(
             !world
                 .resource::<crate::account_data::AccountData>()
-                .arrived(crate::account_data::CHAT),
-            "the restore took the arrival"
+                .owed(crate::account_data::CHAT),
+            "the restore took the settling"
         );
         drop(world);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A chat section the server's answer stores before the interface loads (the handlers run
-    /// ahead of the deferred entry load) is the file the load restores, and its arrival is taken:
-    /// nothing reads it twice, and nothing writes the stock setup over it.
+    /// A chat section the server's answer settles before the interface loads (the handlers run
+    /// ahead of the deferred entry load) is read at the registration, as `0x5afe50` runs a reader
+    /// on a settled section at once (`0x5afe7b`): nothing reads it twice, and nothing writes the
+    /// stock setup over it.
     #[test]
     fn a_chat_section_that_lands_before_the_load_is_what_it_restores() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -1471,8 +1496,8 @@ mod tests {
         assert!(
             !world
                 .resource::<crate::account_data::AccountData>()
-                .arrived(crate::account_data::CHAT),
-            "the load took the arrival"
+                .owed(crate::account_data::CHAT),
+            "no reader was held, so none is owed"
         );
         drop(world);
         let _ = std::fs::remove_dir_all(&tmp);

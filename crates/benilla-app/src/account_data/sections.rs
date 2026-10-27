@@ -92,7 +92,7 @@ fn diff_path(section: usize, identity: Option<&Identity>) -> Option<PathBuf> {
     }
 }
 
-/// Store a section's file from the server, as it came; whether it was stored. A binding section
+/// Store a section's file from the server, as it came. A binding section
 /// is also read into the diff its set loads from, and a character table binding no key is the
 /// account set in use (`0x4b64b0`): the character's diff goes.
 pub(crate) fn write(
@@ -100,9 +100,9 @@ pub(crate) fn write(
     identity: Option<&Identity>,
     defaults: &[KeyBinding],
     bytes: &[u8],
-) -> bool {
+) {
     let Some(path) = path(section, identity) else {
-        return false;
+        return;
     };
     let result = match section {
         2 | 3 => local_state::write_atomic_bytes(&path, bytes).and_then(|()| {
@@ -123,12 +123,8 @@ pub(crate) fn write(
         }
         _ => local_state::write_atomic_bytes(&path, bytes),
     };
-    match result {
-        Ok(()) => true,
-        Err(e) => {
-            bevy::log::warn!("account data: storing {}: {e}", path.display());
-            false
-        }
+    if let Err(e) = result {
+        bevy::log::warn!("account data: storing {}: {e}", path.display());
     }
 }
 

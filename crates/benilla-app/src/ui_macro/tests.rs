@@ -500,13 +500,16 @@ fn a_save_writes_the_sorted_table_and_a_load_sorts_it_again() {
         script.eval::<String>("return GetMacroInfo(1)").unwrap(),
         "B"
     );
-    let mut app = App::new();
-    app.insert_resource(super::MacroFiles {
+    // The table read into this VM, as the load leaves it: a save writes only over a read file.
+    let mut files = super::MacroFiles {
         account: Some(account.clone()),
         ..Default::default()
-    })
-    .insert_non_send_resource(script)
-    .add_systems(Update, super::save_dirty_macros);
+    };
+    *files.identity.get(&script) = Some(("Realm".into(), "Probeone".into()));
+    let mut app = App::new();
+    app.insert_resource(files)
+        .insert_non_send_resource(script)
+        .add_systems(Update, super::save_dirty_macros);
     app.update();
 
     let text = std::fs::read_to_string(&account).unwrap();
@@ -998,6 +1001,61 @@ fn a_macro_section_from_the_server_is_read_again() {
         .owe_reader_for_test(4);
     app.update();
     assert_eq!(macro_names(&app), ["New"], "the server's file read again");
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// The reader registers through `0x5afe50` (`0x4f0a7c`, `0x4f0a8d`): while its sections are
+/// pending nothing is read, and the files are read once they settle (`0x5afaca`), not before.
+#[test]
+fn the_macro_reader_waits_for_its_sections() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-macros-held-{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+    let account = crate::local_state::macros_account_path().unwrap();
+    crate::local_state::write_atomic(&account, "MACRO 1 \"Mine\" Ability_Ambush\nEND\n").unwrap();
+    let mut script = UiScript::new().unwrap();
+    script.set_macro_icons(vec!["Interface\\Icons\\Ability_Ambush".into()]);
+    let mut app = file_app(script);
+    app.world()
+        .resource::<crate::account_data::AccountData>()
+        .pend_for_test();
+    app.update();
+    assert!(macro_names(&app).is_empty(), "pending: the reader is held");
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(r#"CreateMacro("Hi", 1, "/say hi")"#)
+        .unwrap();
+    app.update();
+    assert_eq!(
+        std::fs::read_to_string(&account).unwrap(),
+        "MACRO 1 \"Mine\" Ability_Ambush\nEND\n",
+        "a held table is not saved over the file (`0x5afee0`)"
+    );
+    let settle = |app: &bevy::prelude::App, section| {
+        app.world()
+            .resource::<crate::account_data::AccountData>()
+            .settle_section_for_test(section)
+    };
+    settle(&app, 4);
+    app.update();
+    assert_eq!(
+        macro_names(&app),
+        ["Hi"],
+        "the character's scope still pending: nothing read"
+    );
+    settle(&app, 5);
+    app.update();
+    assert_eq!(
+        macro_names(&app),
+        ["Mine"],
+        "both settled: the files read over the held table"
+    );
+    app.update();
+    assert_eq!(macro_names(&app), ["Mine"]);
     std::fs::remove_dir_all(&tmp).ok();
 }
 

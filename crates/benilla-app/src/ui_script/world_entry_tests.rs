@@ -229,7 +229,7 @@ fn quitting_from_the_character_screen_does_not_blank_the_session_it_wrote() {
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("the glue VM is live at the character screen");
     // At the character screen there is no active player and no world to sweep.
-    super::shutdown_ui_state(&mut script, identity.as_ref());
+    super::shutdown_ui_state(&mut script, identity.as_ref(), false);
 
     assert_eq!(
         std::fs::read_to_string(&saved).ok().as_deref(),
@@ -376,7 +376,7 @@ fn a_shutdown_with_no_world_fires_logout_without_leaving_world() {
         let mut script = app
             .world_mut()
             .non_send_resource_mut::<benilla_ui::script::UiScript>();
-        super::shutdown_ui_state(&mut script, None);
+        super::shutdown_ui_state(&mut script, None, false);
     };
     let seen = |app: &App, global: &str| {
         app.world()
@@ -1820,11 +1820,11 @@ fn an_anchor_form_file_is_restored_and_rewritten_as_the_rect() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// A layout section the server's file replaced is seated again into the live tree, as the
-/// reference's reader (`0x490380`) runs once the section lands (`0x5afd19`); without the arrival
-/// the loader reads once per VM.
+/// The layout reader (`0x490380`) registers through `0x5afe50` (`0x4900c2`): held while its
+/// section is pending, it seats the file once the section settles (`0x5afaca`), and again into the
+/// live tree when the server's file lands (`0x5afd19`); otherwise it reads once per VM.
 #[test]
-fn a_layout_section_from_the_server_is_seated_again() {
+fn the_layout_reader_waits_for_its_section_and_seats_each_settling() {
     use bevy::ecs::system::RunSystemOnce;
 
     let _l = ENV_LOCK
@@ -1847,7 +1847,18 @@ fn a_layout_section_from_the_server_is_seated_again() {
             .expect("the layout loader ran")
     };
     load(&mut world);
-    assert_eq!(window_geometry(&world).0, 413.0);
+    assert_eq!(
+        window_geometry(&world).0,
+        100.0,
+        "pending: the reader is held"
+    );
+    load(&mut world);
+    assert_eq!(window_geometry(&world).0, 100.0, "still pending");
+    world
+        .resource::<crate::account_data::AccountData>()
+        .settle_section_for_test(crate::account_data::LAYOUT);
+    load(&mut world);
+    assert_eq!(window_geometry(&world).0, 413.0, "settled: the file seated");
 
     std::fs::write(&path, "Frame: LayoutProbe\nW: 222\nH: 111\n").unwrap();
     load(&mut world);

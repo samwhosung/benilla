@@ -225,13 +225,15 @@ fn download(section: u32, file: &[u8]) -> UpdateAccountData {
     }
 }
 
-/// A download stores the file, clears the pending byte and owes the section's reader once; the
-/// bindings arrive as the reference's table and are kept as benilla's diff.
+/// A download stores the file, clears the pending byte and owes the section's held reader once
+/// (`0x5afd01`-`0x5afd19`); the bindings arrive as the reference's table and are kept as
+/// benilla's diff.
 #[test]
 fn a_download_stores_the_file_and_owes_its_reader() {
     let home = Home::new("down");
     let data = AccountData::default();
     data.lock().identity = Some(me());
+    assert!(!data.register(6), "pending: the reader is held");
     data.lock()
         .arrive(&download(6, b"Frame: ChatFrame1\r\nX: 10\r\n"));
     assert_eq!(
@@ -239,9 +241,13 @@ fn a_download_stores_the_file_and_owes_its_reader() {
         Some(&b"Frame: ChatFrame1\r\nX: 10\r\n"[..])
     );
     assert!(!data.lock().pending[6]);
-    assert!(data.arrived(6));
-    assert!(data.take_arrived(6));
-    assert!(!data.take_arrived(6), "the reader is owed once");
+    assert!(data.owed(6));
+    assert!(data.take_owed(6));
+    assert!(!data.take_owed(6), "the reader is owed once");
+    assert!(
+        data.register(6),
+        "settled: a reader registered now runs at once"
+    );
 
     *data.lock() = State {
         identity: Some(me()),
@@ -273,8 +279,9 @@ fn a_download_stores_the_file_and_owes_its_reader() {
     );
 }
 
-/// A size of 0 writes nothing (`0x5afc87`) yet ends the wait; a stream that does not inflate
-/// writes nothing either; a section past the table is dropped.
+/// A size of 0 writes nothing (`0x5afc87`) yet ends the wait and runs the held reader
+/// (`0x5afd19`); a stream that does not inflate writes nothing either; a section past the table
+/// is dropped.
 #[test]
 fn an_empty_or_broken_download_writes_nothing_and_ends_the_wait() {
     let home = Home::new("empty");
@@ -287,7 +294,17 @@ fn an_empty_or_broken_download_writes_nothing_and_ends_the_wait() {
         stream: Vec::new(),
     });
     assert!(!s.pending[7]);
-    assert!(s.arrived[7].is_none());
+    assert!(s.owed[7].is_none(), "no reader registered, none owed");
+    s.readers[7] = true;
+    s.arrive(&UpdateAccountData {
+        section: 7,
+        size: 0,
+        stream: Vec::new(),
+    });
+    assert!(
+        s.owed[7].take().is_some(),
+        "the held reader runs on the file it has"
+    );
     assert_eq!(
         home.get("chat/Realm-Probesix.txt").as_deref(),
         Some(&b"VERSION 2\n"[..])
@@ -297,9 +314,12 @@ fn an_empty_or_broken_download_writes_nothing_and_ends_the_wait() {
         size: 4,
         stream: vec![1, 2, 3],
     });
-    assert!(s.arrived[7].is_none());
+    assert!(
+        s.owed[7].take().is_some(),
+        "and on a stream that did not inflate"
+    );
     s.arrive(&download(8, b"x"));
-    assert_eq!(s.arrived, [None; 8]);
+    assert_eq!(s.owed, [None; 8]);
 }
 
 fn settled(home: &Path) -> AccountData {
@@ -400,7 +420,8 @@ fn leaving_the_world_drops_the_timers_and_pends_every_section() {
     let s = data.lock();
     assert_eq!(s.pending, [true; 8]);
     assert_eq!(s.timers, [None; 8]);
-    assert_eq!(s.arrived, [None; 8]);
+    assert_eq!(s.owed, [None; 8]);
+    assert_eq!(s.readers, [false; 8], "the next load registers its own");
     assert!(s.identity.is_none());
     assert!(s.defaults.is_some(), "the defaults outlive the session");
 }
@@ -443,15 +464,32 @@ fn a_chat_section_from_the_server_is_kept_as_an_undamaged_file() {
     );
 }
 
-/// A per-character section with no character to store it under owes no reader, so no reader
-/// waits on a file that never came.
+/// The check settles every section it does not ask for (`0x5afa42`) and runs each held reader
+/// there (`0x5afab1`-`0x5afaca`); a section it asks for stays pending, its reader held for the
+/// download.
 #[test]
-fn a_download_with_nowhere_to_go_owes_no_reader() {
-    let _home = Home::new("nowhere");
+fn the_check_runs_the_held_readers_of_the_sections_it_settles() {
+    let home = Home::new("held");
+    let layout = b"Frame: ChatFrame1\nFrameLevel: 1\n";
+    home.put("layout/Realm-Probesix.txt", layout);
+    let mut cached = [[0u8; 16]; 8];
+    cached[6] = md5(layout);
+    home.put("cache.md5", cached.as_flattened());
+    let mut server = [[0u8; 16]; 8];
+    server[6] = [0x66; 16];
     let mut s = state();
-    s.arrive(&download(7, b"VERSION 2\n"));
-    assert!(!s.pending[7]);
-    assert!(s.arrived[7].is_none());
+    s.readers = [true; 8];
+    run(|send| s.reconcile(&server, Some(me()), send));
+    assert!(s.pending[6] && s.owed[6].is_none(), "asked for: held");
+    for section in [0, 1, 2, 3, 4, 5, 7] {
+        assert!(!s.pending[section]);
+        assert!(s.owed[section].is_some(), "section {section}'s reader runs");
+    }
+    // With no state folder nothing is checked, so nothing waits.
+    drop(home);
+    let _lock = ENV_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let _capture = EnvGuard::set("WOW_CAPTURE", "1");
+    assert_eq!(State::default().pending, [false; 8]);
 }
 
 /// An account table from another client, in its own order: kept as it came, so the next login's

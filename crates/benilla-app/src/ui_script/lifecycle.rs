@@ -914,9 +914,18 @@ fn cancel_move_action(world: &mut World) {
 /// ordered against each other; the layout save is here because a `/reload` never leaves
 /// `InWorld`. No autosave, as the reference has none (the layout cache's crash-only debounce in
 /// [`crate::ui_layout`] is ours).
-pub(crate) fn shutdown_ui_state(script: &mut UiScript, identity: Option<&(String, String)>) {
+///
+/// `layout_held`: the layout section is pending, its reader held, so its write is skipped
+/// (`0x5afed0` returns at `0x5afee0`).
+pub(crate) fn shutdown_ui_state(
+    script: &mut UiScript,
+    identity: Option<&(String, String)>,
+    layout_held: bool,
+) {
     script.fire_event("PLAYER_LOGOUT", vec![]);
-    crate::ui_layout::save_now(script, identity);
+    if !layout_held {
+        crate::ui_layout::save_now(script, identity);
+    }
     crate::ui_saved::save(script);
     addons::save_addon_variables(script, identity);
     addons::save_enable_state(script, identity);
@@ -996,10 +1005,13 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     let identity = world
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
+    let layout_held = world
+        .get_resource::<crate::account_data::AccountData>()
+        .is_some_and(|data| data.pending(crate::account_data::LAYOUT));
     if !ui_never_loaded {
         crate::script_calls::with_hosted_vm(world, |script| {
             if let Some(script) = script {
-                shutdown_ui_state(script, identity.as_ref());
+                shutdown_ui_state(script, identity.as_ref(), layout_held);
             }
         });
         // The shutdown's account-data writes (`0x490c55`-`0x490c79` through `0x5afed0`) arm
@@ -1123,9 +1135,12 @@ pub(crate) fn shutdown_on_exit(
     let identity = world
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
+    let layout_held = world
+        .get_resource::<crate::account_data::AccountData>()
+        .is_some_and(|data| data.pending(crate::account_data::LAYOUT));
     crate::script_calls::with_hosted_vm(world, |script| {
         if let Some(script) = script {
-            shutdown_ui_state(script, identity.as_ref());
+            shutdown_ui_state(script, identity.as_ref(), layout_held);
         }
     });
     if silenced {

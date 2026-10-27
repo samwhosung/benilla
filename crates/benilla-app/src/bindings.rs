@@ -206,6 +206,8 @@ struct BindingFiles {
     /// The account-data sections' files, the reference's `bindings-cache.wtf` pair.
     account_cache: Option<std::path::PathBuf>,
     character_cache: Option<std::path::PathBuf>,
+    /// Whether this VM's sets wait for their sections: nothing read, so nothing saved over them.
+    held: crate::ui_script::VmMemo<bool>,
 }
 
 /// This module's systems inside [`crate::ui_script::UiInput`]: the pass's head ([`BindingHead`])
@@ -278,14 +280,22 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     let character = id
         .as_ref()
         .and_then(|(realm, name)| crate::local_state::bindings_character_path(realm, name));
-    // A binding section the server's file replaced before this load is read here, not again.
-    if let Some(data) = world.get_resource::<crate::account_data::AccountData>() {
-        for section in crate::account_data::BINDINGS {
-            data.take_arrived(section);
-        }
+    // The reader (`0x4b6240`) registers for both sections through `0x5afe50` (`0x4b62ef`,
+    // `0x4b6300`): the sets are read now on settled sections, else held, with nothing in the live
+    // table, until they settle ([`reread_arrived_bindings`]). Deviation: the reference reads each
+    // set as its own section settles; here the two are read together once both have.
+    let held = world
+        .get_resource::<crate::account_data::AccountData>()
+        .is_some_and(|data| {
+            crate::account_data::BINDINGS
+                .map(|section| data.register(section))
+                .contains(&false)
+        });
+    if !held {
+        seed_sets(script, &account, &character);
     }
-    seed_sets(script, &account, &character);
     if let Some(mut files) = world.get_resource_mut::<BindingFiles>() {
+        *files.held.get(script) = held;
         files.account = account;
         files.character = character;
         files.account_cache = crate::local_state::bindings_cache_account_path();
@@ -319,23 +329,26 @@ fn seed_sets(
     }
 }
 
-/// A binding section the server's file replaced: both sets read again and the one in use loaded,
-/// as the reference's readers (`0x4b6240`) run once the section lands (`0x5afd19`).
+/// A binding section that settled: both sets read again and the one in use loaded, as the
+/// reference's reader (`0x4b6240`) runs once its section settles (`0x5afaca`, `0x5afd19`), once
+/// neither is pending.
 fn reread_arrived_bindings(
     mut hosted_vm: crate::script_calls::HostedVm,
-    files: Res<BindingFiles>,
+    mut files: ResMut<BindingFiles>,
     data: Option<Res<crate::account_data::AccountData>>,
 ) {
     let Some(data) = data else { return };
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        let mut arrived = false;
+        let mut owed = false;
         for section in crate::account_data::BINDINGS {
-            arrived |= data.take_arrived(section);
+            owed |= data.take_owed(section);
         }
-        if arrived {
-            info!("bindings: the server's sets read");
+        let pending = crate::account_data::BINDINGS.map(|section| data.pending(section));
+        if owed && !pending.contains(&true) {
+            info!("bindings: the settled sets read");
             seed_sets(script, &files.account, &files.character);
+            *files.held.get(script) = false;
         }
     })
 }
@@ -357,12 +370,17 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
 /// deletes the character file.
 fn drain_binding_requests(
     mut hosted_vm: crate::script_calls::HostedVm,
-    files: Res<BindingFiles>,
+    mut files: ResMut<BindingFiles>,
     data: Option<Res<crate::account_data::AccountData>>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
+        let held = *files.held.get(script);
         for req in script.take_keybind_requests() {
+            // A held set is not saved over its files (`0x5afed0` skips a pending section).
+            if held {
+                continue;
+            }
             let KeybindRequest::Save(which) = req;
             // The set as the call stored it (`0x4b6310`), not the live table a later binding in
             // the frame moved. None: a later `SaveBindings(1)` in the frame dropped set 2, and
@@ -2538,6 +2556,7 @@ mod tests {
             character: Some(character.clone()),
             account_cache: Some(home.join("bindings/account.wtf")),
             character_cache: Some(home.join("bindings/Realm-Probesix.wtf")),
+            held: Default::default(),
         })
         .init_resource::<crate::account_data::AccountData>()
         .insert_non_send_resource(core_script())
@@ -2582,6 +2601,58 @@ mod tests {
             "H",
             "the character's set is the one in use"
         );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The reader registers for both sections through `0x5afe50` (`0x4b62ef`, `0x4b6300`): while
+    /// they are pending the sets are not read, and once both settle (`0x5afaca`) they are.
+    #[test]
+    fn the_binding_reader_waits_for_its_sections() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-held-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _h = crate::local_state::test_env::EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let account = crate::local_state::bindings_account_path().unwrap();
+        crate::local_state::write_atomic(&account, "bind JUMP G\n").unwrap();
+        let mut app = App::new();
+        app.init_resource::<BindingFiles>()
+            .init_resource::<crate::account_data::AccountData>()
+            .add_systems(Update, reread_arrived_bindings);
+        let mut script = core_script();
+        seed_bindings_for_vm(app.world_mut(), &mut script);
+        app.insert_non_send_resource(script);
+        let jump = r#"return GetBindingKey("JUMP") or """#;
+        assert_ne!(eval_str(&app, jump), "G", "pending: the sets are held");
+        app.add_systems(Update, drain_binding_requests);
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("SaveBindings(1)")
+            .unwrap();
+        app.update();
+        assert_eq!(
+            std::fs::read_to_string(&account).unwrap(),
+            "bind JUMP G\n",
+            "a held set is not saved over its file (`0x5afee0`)"
+        );
+        let settle = |app: &App, section| {
+            app.world()
+                .resource::<crate::account_data::AccountData>()
+                .settle_section_for_test(section)
+        };
+        settle(&app, 2);
+        app.update();
+        assert_ne!(
+            eval_str(&app, jump),
+            "G",
+            "the character's section still pending"
+        );
+        settle(&app, 3);
+        app.update();
+        assert_eq!(eval_str(&app, jump), "G", "both settled: the sets read");
+        drop(app);
         std::fs::remove_dir_all(&tmp).ok();
     }
 

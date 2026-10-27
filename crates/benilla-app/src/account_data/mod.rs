@@ -17,10 +17,13 @@
 //!   so what a logout writes goes up at the next login's check. benilla saves bindings and macros
 //!   when they change and its layout and chat on a debounce; none of those saves arms a timer.
 //!
-//! The readers here run at the interface load, before the server's digests, where the
-//! reference's readers wait for their pending section (`0x5afe50`); a section that comes down is
-//! stored and its reader runs again ([`AccountData::take_arrived`]), as the reference's runs once
-//! it lands (`0x5afd19`).
+//! - A section's reader registers as the interface loads, through `0x5afe50`: the layout
+//!   (`0x4900c2`), the bindings (`0x4b62ef`, `0x4b6300`), the macros (`0x4f0a7c`, `0x4f0a8d`) and
+//!   the chat setup (`0x498a2c`). It runs at once on a settled section, else it is held and runs
+//!   once the section settles, at the check (`0x5afaca`) or the download (`0x5afd19`), and again at
+//!   every later settling ([`AccountData::register`], [`AccountData::take_owed`]). A server that
+//!   sends no digests leaves every section pending and its reader unrun. A held reader's section
+//!   is written by none of benilla's saves, as `0x5afed0` writes no pending section (`0x5afee0`).
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -66,25 +69,39 @@ impl AccountData {
         }
     }
 
-    /// Whether a file from the server replaced section `section` since its reader last ran; the
-    /// reader takes it, at its first run too, so it reads the stored file once.
-    pub(crate) fn take_arrived(&self, section: usize) -> bool {
+    /// `0x5afe50`, a reader's registration: whether it runs now, on a settled section. A pending
+    /// one holds it (`0x5afe62`-`0x5afe6f`) until it settles ([`Self::take_owed`]). Kept either way,
+    /// as the reference's load always registers ahead of the digests, which here may come first.
+    pub(crate) fn register(&self, section: usize) -> bool {
+        let mut state = self.lock();
+        state.readers[section] = true;
+        !state.pending[section]
+    }
+
+    /// Whether section `section` is pending.
+    pub(crate) fn pending(&self, section: usize) -> bool {
+        self.lock().pending[section]
+    }
+
+    /// Whether section `section` settled since its reader was held or last ran: the reader takes
+    /// it and runs.
+    pub(crate) fn take_owed(&self, section: usize) -> bool {
         self.lock()
-            .arrived
+            .owed
             .get_mut(section)
             .is_some_and(|at| at.take().is_some())
     }
 
-    /// When section `section`'s file landed, its reader still owed: the stamp of its handler, for
-    /// a reader that fires on a lane in the packets' order ([`crate::lanes`]).
-    pub(crate) fn arrived_at(&self, section: usize) -> Option<crate::lanes::Stamp> {
-        self.lock().arrived.get(section).copied().flatten()
+    /// When section `section` settled, its reader still owed: the stamp of its handler, for a
+    /// reader that fires on a lane in the packets' order ([`crate::lanes`]).
+    pub(crate) fn owed_at(&self, section: usize) -> Option<crate::lanes::Stamp> {
+        self.lock().owed.get(section).copied().flatten()
     }
 
     /// Whether section `section`'s reader is owed, without taking it.
     #[cfg(test)]
-    pub(crate) fn arrived(&self, section: usize) -> bool {
-        self.arrived_at(section).is_some()
+    pub(crate) fn owed(&self, section: usize) -> bool {
+        self.owed_at(section).is_some()
     }
 
     /// The sections as the server's digests leave them with nothing sent: none pending, for a test
@@ -99,7 +116,22 @@ impl AccountData {
     /// Section `section` as a download leaves it, its reader owed, for a test of the reader.
     #[cfg(test)]
     pub(crate) fn owe_reader_for_test(&self, section: usize) {
-        self.lock().arrived[section] = Some(crate::lanes::stamp());
+        self.lock().owed[section] = Some(crate::lanes::stamp());
+    }
+
+    /// Every section pending, as a world entry leaves them before the server's digests.
+    #[cfg(test)]
+    pub(crate) fn pend_for_test(&self) {
+        self.lock().pending = [true; ACCOUNT_DATA_SECTIONS];
+    }
+
+    /// Section `section` as a check that sends nothing leaves it: no longer pending, its reader
+    /// owed if one registered.
+    #[cfg(test)]
+    pub(crate) fn settle_section_for_test(&self, section: usize) {
+        let mut state = self.lock();
+        state.pending[section] = false;
+        state.settle(section);
     }
 
     /// The interface's shutdown (`0x490bd0`), its section writes: the chat and the layout always
@@ -159,14 +191,16 @@ pub(crate) struct State {
     /// The pending byte (`+0xc`): set at world entry and by a request, cleared by the check and by
     /// the section's arrival.
     pending: [bool; ACCOUNT_DATA_SECTIONS],
+    /// A reader registered (`+0x10`), which every settling runs.
+    readers: [bool; ACCOUNT_DATA_SECTIONS],
     /// The cached digest (`+0x1c`), the `cache.md5` file's.
     cache: [AccountDataDigest; ACCOUNT_DATA_SECTIONS],
     /// Saved here since the interface last shut down, owed the shutdown's write.
     saved: [bool; ACCOUNT_DATA_SECTIONS],
     /// The save timer (`+0x18`): when it fires.
     timers: [Option<Instant>; ACCOUNT_DATA_SECTIONS],
-    /// A section the server's file replaced, owed its reader: the stamp it landed at.
-    arrived: [Option<crate::lanes::Stamp>; ACCOUNT_DATA_SECTIONS],
+    /// A section that settled with its reader registered, owed that reader: the stamp it settled at.
+    owed: [Option<crate::lanes::Stamp>; ACCOUNT_DATA_SECTIONS],
     /// The default key bindings the binding sections are written against, read on first need.
     defaults: Option<Vec<KeyBinding>>,
 }
@@ -175,11 +209,14 @@ impl Default for State {
     fn default() -> Self {
         Self {
             identity: None,
-            pending: [true; ACCOUNT_DATA_SECTIONS],
+            // With no state folder (a capture, a unit test) the sections are the session's alone:
+            // the digests are never checked ([`on_digests`]), so none waits for them.
+            pending: [crate::local_state::home().is_some(); ACCOUNT_DATA_SECTIONS],
+            readers: [false; ACCOUNT_DATA_SECTIONS],
             cache: [[0; 16]; ACCOUNT_DATA_SECTIONS],
             saved: [false; ACCOUNT_DATA_SECTIONS],
             timers: [None; ACCOUNT_DATA_SECTIONS],
-            arrived: [None; ACCOUNT_DATA_SECTIONS],
+            owed: [None; ACCOUNT_DATA_SECTIONS],
             defaults: None,
         }
     }
@@ -199,8 +236,9 @@ impl State {
     }
 
     /// The world entry's reset (`0x5af840`) and the world leave's (`0x5afe00`): every section
-    /// pending, no timer armed, the character unknown. The cached digests stay, as the reference's
-    /// do when `cache.md5` will not open at the next entry (`0x5af898`).
+    /// pending, no timer armed, the character unknown, no reader held; the next load registers its
+    /// own. The cached digests stay, as the reference's do when `cache.md5` will not open at the
+    /// next entry (`0x5af898`).
     fn reset(&mut self) {
         let (cache, defaults) = (self.cache, self.defaults.take());
         *self = Self {
@@ -224,6 +262,7 @@ impl State {
             self.pending[s] = false;
             // No character (a rigged run): its sections are left as they are on both sides.
             if !self.has_file(s) {
+                self.settle(s);
                 continue;
             }
             let identity = self.identity.clone();
@@ -243,13 +282,22 @@ impl State {
                 }
             }
             self.cache[s] = checked.cache;
+            // A section the check settled runs its reader (`0x5afab1`-`0x5afaca`).
+            self.settle(s);
         }
         write_cache(&self.cache);
     }
 
-    /// `0x5afc60`: the section's file stored unless the size is 0, the pending byte cleared and,
-    /// for a stored file, its reader owed. The section number is the server's and the reference
-    /// checks no range (`0x5afd01`); one past the table is dropped here.
+    /// Section `s` no longer pending: its reader, if one registered, is owed a run.
+    fn settle(&mut self, s: usize) {
+        if !self.pending[s] && self.readers[s] {
+            self.owed[s] = Some(crate::lanes::stamp());
+        }
+    }
+
+    /// `0x5afc60`: the section's file stored unless the size is 0, the pending byte cleared and its
+    /// reader owed, stored or not (`0x5afd08`-`0x5afd19`). The section number is the server's and
+    /// the reference checks no range (`0x5afd01`); one past the table is dropped here.
     fn arrive(&mut self, data: &UpdateAccountData) {
         let s = data.section as usize;
         if s >= ACCOUNT_DATA_SECTIONS {
@@ -258,13 +306,12 @@ impl State {
         }
         if let Some(contents) = data.contents() {
             let identity = self.identity.clone();
-            if sections::write(s, identity.as_ref(), self.defaults(), &contents) {
-                self.arrived[s] = Some(crate::lanes::stamp());
-            }
+            sections::write(s, identity.as_ref(), self.defaults(), &contents);
         } else if data.size != 0 {
             warn!("account data: section {s}'s stream does not inflate to its size");
         }
         self.pending[s] = false;
+        self.settle(s);
     }
 
     /// The save timers due by `now` (every armed one for `None`): each runs `0x5afd70`, which

@@ -125,15 +125,28 @@ fn load_macros(
     vm.feed(|script, mut bar, fires| {
         let Some(script) = script else { return };
         let Some(id) = identity(&roster) else { return };
-        // A macro section the server's file replaced is read again, as the reference's readers
-        // (`0x4f0a70`) run once it lands (`0x5afd19`); the first load takes what came before it.
-        let arrived = data.as_deref().is_some_and(|data| {
+        // The reader (`0x4f0600`) registers once per VM for both sections through `0x5afe50`
+        // (`0x4f0a70`): it reads now on settled sections, else when they settle, and at every
+        // later settling.
+        let owed = data.as_deref().is_some_and(|data| {
             crate::account_data::MACROS
                 .iter()
-                .fold(false, |any, &section| data.take_arrived(section) | any)
+                .fold(false, |any, &section| data.take_owed(section) | any)
         });
-        if !arrived && files.identity.get(script).as_ref() == Some(&id) {
-            return; // already loaded into this VM
+        let first = files.identity.get(script).as_ref() != Some(&id);
+        if !owed && !first {
+            return; // read into this VM, and nothing settled since
+        }
+        // Deviation: the reference reads each scope as its own section settles; the two scopes
+        // load here as one table, so a scope settled first waits for the other. Held, nothing is
+        // read and nothing written over the files ([`save_dirty_macros`]).
+        let held = data.as_deref().is_some_and(|data| {
+            crate::account_data::MACROS
+                .map(|section| data.register(section))
+                .contains(&false)
+        });
+        if held {
+            return;
         }
         let (realm, character) = (&id.0, &id.1);
         files.account = crate::local_state::macros_account_path();
@@ -223,12 +236,13 @@ fn migrate_character_bar(
 /// calls.
 fn save_dirty_macros(
     mut hosted_vm: crate::script_calls::HostedVm,
-    files: Res<MacroFiles>,
+    mut files: ResMut<MacroFiles>,
     data: Option<Res<crate::account_data::AccountData>>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        if !script.take_macros_dirty() {
+        // A table no file was read into (a held reader) is no copy of the player's to write.
+        if files.identity.get(script).is_none() || !script.take_macros_dirty() {
             return;
         }
         let state = script.macros();
