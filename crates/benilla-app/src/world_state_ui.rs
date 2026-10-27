@@ -138,7 +138,10 @@ fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
 }
 
 /// Pushes the readout when a world-state packet arrives or the defense-channel flag flips, the
-/// reference's two rebuild triggers (`0x49bdc7`-`0x49bdcf`).
+/// reference's two rebuild triggers (`0x49bdc7`-`0x49bdcf`), and signals `UPDATE_WORLD_STATES` on
+/// each: every packet, init and update alike (`0x48fa12`), and a flip once an init has set the
+/// scope (`0x49bdc0`-`0x49bdd6`), whether or not a row changed. A first run signals when a packet
+/// has come already, for the frames that loaded after it.
 fn feed_world_state_ui(
     mut vm: crate::script_calls::VmWith<Res<'static, crate::ui_chat::ChannelState>>,
     catalog: Option<Res<WorldStateUiRes>>,
@@ -151,11 +154,18 @@ fn feed_world_state_ui(
             return;
         };
         let key = (states.generation(), defense_channel);
-        if *last.get(script) == Some(key) {
+        let before = *last.get(script);
+        if before == Some(key) {
             return;
         }
         *last.get(script) = Some(key);
         script.set_world_state_ui(build(&catalog.0, &states, defense_channel));
+        let packet = before.map_or(key.0 != 0, |(generation, _)| generation != key.0);
+        let flip =
+            before.is_some_and(|(_, flag)| flag != defense_channel) && states.scope().is_some();
+        if packet || flip {
+            script.signal_world_states();
+        }
     })
 }
 
@@ -164,7 +174,13 @@ pub(crate) struct WorldStateUiPlugin;
 impl Plugin for WorldStateUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_world_state_ui.after(AssetSet::Open))
-            .add_systems(Update, feed_world_state_ui.after(crate::ui_script::UiTick));
+            // After the landmark rebuild, whose `WORLD_MAP_UPDATE` the handler signals first.
+            .add_systems(
+                Update,
+                feed_world_state_ui
+                    .after(crate::ui_script::UiTick)
+                    .after(crate::ui_world_map::WorldMapFeed),
+            );
     }
 }
 
@@ -493,6 +509,49 @@ mod tests {
             .resource_mut::<crate::ui_chat::ChannelState>()
             .free_slot(west);
         assert_eq!(shown(&mut world), 0, "the free recomputes");
+    }
+
+    /// `0x48f9f6`-`0x48fa17`: every world-state packet signals `UPDATE_WORLD_STATES`, an init and an
+    /// update alike, whether or not a row moved; the defense flip signals once a scope is set
+    /// (`0x49bdd6`), and a frame with nothing new signals nothing.
+    #[test]
+    fn every_packet_signals_the_readout_whether_or_not_a_row_moved() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let script = benilla_ui::script::UiScript::new().expect("a VM");
+        script
+            .run(
+                "seen = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_WORLD_STATES') \
+                 f:SetScript('OnEvent', function() seen = seen + 1 end)",
+            )
+            .expect("a listener");
+        world.insert_non_send_resource(script);
+        world.insert_resource(WorldStates::default());
+        world.insert_resource(WorldStateUiRes(WorldStateUiCatalog::from_rows(vec![(
+            1,
+            row(0, 139, 0),
+        )])));
+        world.insert_resource(crate::ui_chat::ChannelState::default());
+        // One registered system, so its memo of the last generation lives across the frames.
+        let feed = world.register_system(feed_world_state_ui);
+        let seen = |world: &mut World| -> i64 {
+            world.run_system(feed).expect("the feed runs");
+            let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+            script.tick(0.0);
+            script.eval("return seen").expect("the count")
+        };
+        assert_eq!(seen(&mut world), 0, "no packet yet");
+
+        world.resource_mut::<WorldStates>().init_scope(0, 139);
+        world.resource_mut::<WorldStates>().write(&[(2327, 3)]);
+        assert_eq!(seen(&mut world), 1, "an init");
+        assert_eq!(seen(&mut world), 1, "a frame with no packet");
+        // The same init again, and an update to a state no row shows: the rows do not move.
+        world.resource_mut::<WorldStates>().init_scope(0, 139);
+        world.resource_mut::<WorldStates>().write(&[(2327, 3)]);
+        assert_eq!(seen(&mut world), 2, "a re-sent init");
+        world.resource_mut::<WorldStates>().write(&[(9999, 1)]);
+        assert_eq!(seen(&mut world), 3, "an update no row shows");
     }
 
     /// An init clears the table.

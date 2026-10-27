@@ -790,6 +790,10 @@ fn dev_map_jump(
     })
 }
 
+/// The world-map data feed's systems, which a world-state packet's signals come after.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct WorldMapFeed;
+
 /// The world-map data feed.
 pub(crate) struct WorldMapUiPlugin;
 
@@ -799,7 +803,9 @@ impl Plugin for WorldMapUiPlugin {
             Update,
             (
                 // After the script tick: a selection changed this tick projects on the next.
-                feed_world_map.after(crate::ui_script::UiTick),
+                feed_world_map
+                    .in_set(WorldMapFeed)
+                    .after(crate::ui_script::UiTick),
                 // After the script tick, so the jump hit-tests this tick's frame rects.
                 dev_map_jump.after(crate::ui_script::UiTick),
             ),

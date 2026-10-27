@@ -902,3 +902,34 @@ fn world_loc_map_position_projects_through_the_host() {
         );
     }
 }
+
+/// `0x4a67a0` signals `WORLD_MAP_UPDATE` at its end on every call (`0x4a6cdf`-`0x4a6ce4`), so a
+/// rebuild that leaves the list as it was still signals: a world-state packet that moves no POI.
+#[test]
+fn a_landmark_rebuild_signals_even_when_the_list_is_unchanged() {
+    let mut s = script();
+    s.run(
+        r#"
+        seen = 0
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("WORLD_MAP_UPDATE")
+        f:SetScript("OnEvent", function() seen = seen + 1 end)
+        "#,
+    )
+    .unwrap();
+    let source = || WorldMapLandmarkSource {
+        name: "The Inn".into(),
+        description: String::new(),
+        map: 0,
+        pos: (0.2, 0.2),
+        icons: [Some(6); 3],
+    };
+    let seen = |s: &mut UiScript| {
+        s.tick(0.0);
+        s.eval::<i64>("return seen").unwrap()
+    };
+    s.set_world_map_landmark_sources(vec![source()]);
+    assert_eq!(seen(&mut s), 1);
+    s.set_world_map_landmark_sources(vec![source()]);
+    assert_eq!(seen(&mut s), 2, "the same list again");
+}

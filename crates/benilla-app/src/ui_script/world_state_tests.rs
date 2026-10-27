@@ -66,6 +66,7 @@ fn textures(s: &mut UiScript) -> Vec<String> {
 
 pub(crate) fn push(s: &mut UiScript, rows: Vec<WorldStateUiView>) {
     s.set_world_state_ui(rows);
+    s.signal_world_states();
     s.tick(0.0);
     s.fire_event("UPDATE_WORLD_STATES", vec![]);
 }
