@@ -459,26 +459,17 @@ pub(super) fn set_members(
 
 /// Pushes the whole random-suffix table once per VM, when both catalogs are in, and the enchant
 /// names once the enchant catalog is: their consumers are click-driven, and a chat-link tooltip
-/// has no hover loop to repaint a late answer.
+/// has no hover loop to repaint a late answer. Both are load-once tables no packet writes.
 pub(super) fn feed_random_properties(
-    // The table is the host's too: a trade scan's placed row reads its rolls.
-    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, crate::items::RandomProperties>>>,
+    mut vm: crate::script_calls::VmWith<Option<Res<'static, crate::items::RandomProperties>>>,
     enchants: Option<Res<crate::items::Enchants>>,
     mut pushed: Local<crate::ui_script::VmMemo<bool>>,
     mut names_pushed: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    vm.turn(|script, mut props| {
+    vm.turn(|script, props| {
         let Some(script) = script else {
             return;
         };
-        // The name formatter's `ITEM_SUFFIX_TEMPLATE` (`0x5d8b78`), as `FrameScript_GetText` reads
-        // it (`0x703bf0`); written only on a change, so the name feeds rebuild then alone.
-        if let Some(props) = props.as_mut() {
-            let template = script.global_text("ITEM_SUFFIX_TEMPLATE");
-            if props.suffix_template.as_deref() != Some(template.as_str()) {
-                props.suffix_template = Some(template);
-            }
-        }
         // The enchant names a link's bare id reads (`0x52c9f2`): every named row, as the builder's
         // loop tests no flag before it prints the name (`0x52ca23`..`0x52ca8b`).
         if let Some(enchants) = enchants.as_deref() {
@@ -508,6 +499,24 @@ pub(super) fn feed_random_properties(
         script.set_random_properties(rows);
         *pushed.get(script) = true;
     })
+}
+
+/// The name formatter's `ITEM_SUFFIX_TEMPLATE` (`0x5d8b7f` → `0x703bf0`), read off the VM as
+/// `FrameScript_GetText` reads it, into the copy every surface names through
+/// ([`crate::items::RandomProperties::suffix_template`]), once the frame's Lua has run: a handler
+/// holds no VM to read it at its call, so a script's write reaches the names the next frame's
+/// packets compose. Written only on a change, so the name feeds rebuild then alone.
+pub(super) fn copy_suffix_template(
+    script: Option<NonSend<UiScript>>,
+    props: Option<ResMut<crate::items::RandomProperties>>,
+) {
+    let (Some(script), Some(mut props)) = (script, props) else {
+        return;
+    };
+    let template = script.global_text("ITEM_SUFFIX_TEMPLATE");
+    if props.suffix_template.as_deref() != Some(template.as_str()) {
+        props.suffix_template = Some(template);
+    }
 }
 
 /// The item-tooltip feed: every template that lands is pushed unprompted, and a new VM is seated
@@ -2616,7 +2625,7 @@ mod ask_tests {
         assert_eq!(line, "Rockbiter 3");
     }
 
-    /// The name formatter's template is the VM's `ITEM_SUFFIX_TEMPLATE` (`0x5d8b78` →
+    /// The name formatter's template is the VM's `ITEM_SUFFIX_TEMPLATE` (`0x5d8b7f` →
     /// `0x703bf0`), read off the VM into the catalog every surface names through, and read again
     /// when it changes.
     #[test]
@@ -2631,7 +2640,7 @@ mod ask_tests {
                 },
             )])),
         ))
-        .add_systems(Update, super::feed_random_properties);
+        .add_systems(Update, super::copy_suffix_template);
         let script = benilla_ui::script::UiScript::new().unwrap();
         script.run(r#"ITEM_SUFFIX_TEMPLATE = "%s -- %s""#).unwrap();
         app.insert_non_send_resource(script);

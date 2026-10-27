@@ -1051,6 +1051,8 @@ impl Plugin for UiItemsPlugin {
                     crate::ui_bind_confirm::replay_equip_records.in_set(crate::ui_script::UiDrain),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),
+                    // The suffix template, copied once the frame's Lua has run.
+                    feed::copy_suffix_template.in_set(crate::ui_script::UiDrain),
                     // The item tooltip's lock check: `Lock.dbc` once; the getters read the player's
                     // openers through the host ([`RequirementsLive`]).
                     lock_openers::feed_lock_rows.in_set(UnitFeed),

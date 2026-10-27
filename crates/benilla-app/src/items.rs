@@ -347,8 +347,9 @@ fn enchant_lines_quiet(
 #[derive(Resource)]
 pub(crate) struct RandomProperties {
     pub(crate) catalog: benilla_formats::RandomPropertyCatalog,
-    /// `ITEM_SUFFIX_TEMPLATE` as `FrameScript_GetText` reads it off the VM (`0x5d8b78` →
-    /// `0x703bf0`), the empty string for a missing key; `None` until a VM has been read.
+    /// `ITEM_SUFFIX_TEMPLATE` as `FrameScript_GetText` reads it off the VM (`0x5d8b7f` →
+    /// `0x703bf0`), the empty string for a missing key, copied as each frame's Lua ends
+    /// ([`crate::ui_items::feed::copy_suffix_template`]); `None` until a VM has been read.
     pub(crate) suffix_template: Option<String>,
 }
 
