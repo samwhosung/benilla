@@ -370,6 +370,7 @@
 - `WOW_PHYS_PREPROP` — benilla-world/src/world_plugins.rs
 - `WOW_PICK` — benilla-app/src/capture/pick_probe.rs, benilla-app/src/dev.rs, benilla-world/src/bgwin.rs
 - `WOW_PICK_AT` — benilla-app/src/capture/pick_probe.rs
+- `WOW_PICK_COST` — benilla-app/src/target/arm.rs
 - `WOW_PICK_COUNT` — benilla-app/src/capture/pick_probe.rs
 - `WOW_PICK_EVERY` — benilla-app/src/capture/pick_probe.rs
 - `WOW_PIN` — benilla-app/src/run_mode.rs
