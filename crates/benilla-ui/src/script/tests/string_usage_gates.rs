@@ -248,7 +248,8 @@ fn guild_verbs_raise_their_usage_line() {
 
 /// `GuildInviteByName` (`0x48aef0`) shows ERR_COMMAND_NEEDS_TARGET for a non-string, nil or ""
 /// (`0x48af06`, `0x48af1c`, `0x48af20` → `push 0x132`) and raises nothing, as an empty
-/// ADD_GUILDMEMBER box calls it with "" (`StaticPopup.lua:847`). The other names go on as given.
+/// ADD_GUILDMEMBER box calls it with "" (`StaticPopup.lua:847`). The other names go on as given,
+/// and `GuildSetLeaderByName` sends the packet for "" too (`0x48b220`).
 #[test]
 fn guild_invite_without_a_name_shows_needs_target_and_names_go_as_given() {
     use crate::script::ui_errors::shown::seen_in_call;
@@ -284,6 +285,7 @@ fn guild_invite_without_a_name_shows_needs_target_and_names_go_as_given() {
             GuildCall::Invite(" ".into()),
             GuildCall::Uninvite(String::new()),
             GuildCall::Promote(" Bob".into()),
+            GuildCall::SetLeader(String::new()),
             GuildCall::SetMotd(String::new()),
         ]
     );
@@ -331,4 +333,37 @@ fn notify_inspect_raises_its_usage_line_then_gates_on_the_player_then_the_token(
 
 fn notify(token: &str) -> crate::script::ScriptCall {
     crate::script::ScriptCall::Inspect(crate::script::InspectCall::Notify(token.into()))
+}
+
+/// `GuildSetLeaderByName` (`0x48b190`) writes a name only when it is neither empty (`0x48b1e1`) nor
+/// `target` in any case (`SStrCmpI` against `0x8428d8`, `0x48b1fc`), as `/gleader` passes the word
+/// when a player is targeted (`ChatFrame.lua:650-657`); the packet goes either way (`0x48b220`).
+#[test]
+fn guild_set_leader_sends_no_name_for_target_in_any_case() {
+    use crate::script::ui_errors::shown::seen_in_call;
+    use crate::script::{GuildCall, ScriptCall};
+    let mut s = script();
+    let (_, host) = seen_in_call(
+        &mut s,
+        "GuildSetLeaderByName('target') GuildSetLeaderByName('TaRgEt') GuildSetLeaderByName('Bob') \
+         GuildSetLeaderByName(' target') GuildSetLeaderByName('targets')",
+    );
+    let guild: Vec<GuildCall> = host
+        .calls
+        .into_iter()
+        .filter_map(|c| match c {
+            ScriptCall::Guild(g) => Some(g),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        guild,
+        vec![
+            GuildCall::SetLeader(String::new()),
+            GuildCall::SetLeader(String::new()),
+            GuildCall::SetLeader("Bob".into()),
+            GuildCall::SetLeader(" target".into()),
+            GuildCall::SetLeader("targets".into()),
+        ]
+    );
 }

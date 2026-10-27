@@ -742,8 +742,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // Four more name-taking verbs (`0x48afb0`, `0x48b050`, `0x48b0f0`, `0x48b190`): a non-string
     // raises each one's usage line (`0x842848`, `0x84286c`, `0x842890`, `0x8428b4`). The name is
-    // sent as given, "" and whitespace included; `GuildSetLeaderByName` puts no name for ""
-    // (`0x48b1e1`), and sends nothing here.
+    // sent as given, "" and whitespace included; `GuildSetLeaderByName` puts no name for "" or
+    // `target` (`0x48b1e1`, `0x48b1fc`) but sends all the same.
     for (global, usage, make) in [
         (
             "GuildUninviteByName",
@@ -769,9 +769,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             global,
             lua.create_function(move |lua, name: Value| {
-                let name = binding_abi::string_arg(lua, name, usage)?;
-                if name.is_empty() && global == "GuildSetLeaderByName" {
-                    return Ok(());
+                let mut name = binding_abi::string_arg(lua, name, usage)?;
+                // `GuildSetLeaderByName` sends its packet whatever the name (`0x48b220`) and
+                // writes the name only when it is neither empty (`0x48b1e1`) nor `target` in any
+                // case (`SStrCmpI` against `0x8428d8`, `0x48b1fc`): the others send none.
+                if global == "GuildSetLeaderByName" && name.eq_ignore_ascii_case("target") {
+                    name.clear();
                 }
                 submit(lua, make(name))
             })?,

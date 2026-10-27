@@ -512,8 +512,15 @@ pub fn guild_disband() -> Vec<u8> {
 }
 
 /// Body of `CMSG_GUILD_LEADER` (`Server/Packets/Guild.cpp:33-36`): the new guild master's name.
+/// The reference writes the name only when it is neither empty nor `target` (`0x48b1e1`,
+/// `0x48b1fc`) and sends the packet either way (`0x48b220`), so an empty `name` is an empty body,
+/// not a lone NUL.
 pub fn guild_leader(name: &str) -> Vec<u8> {
-    cstring_body(name)
+    if name.is_empty() {
+        Vec::new()
+    } else {
+        cstring_body(name)
+    }
 }
 
 /// Body of `CMSG_GUILD_MOTD` (`Server/Packets/Guild.cpp:38-42`): the new MOTD; `""`, a lone NUL,

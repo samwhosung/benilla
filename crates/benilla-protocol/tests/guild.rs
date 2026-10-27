@@ -52,6 +52,11 @@ fn cmsg_bodies_golden() {
         "CMSG_GUILD_LEADER body"
     );
     assert_eq!(
+        messages::guild_leader(""),
+        hx(""),
+        "CMSG_GUILD_LEADER with no name has no body (`0x48b21a`)"
+    );
+    assert_eq!(
         messages::guild_add_rank("Grunt"),
         hx("4772756e7400"),
         "CMSG_GUILD_ADD_RANK body"
