@@ -406,7 +406,9 @@ pub(super) fn edge(
 
 /// Whether a hover edge on `h` reaches the base notify, the HIGHLIGHT layer and the Lua
 /// `<OnEnter>`/`<OnLeave>`: `OnEnter`/`OnLeave` (`0x779490`/`0x7794e0`) skip it on a DISABLED
-/// Button, leaving only the hover sound (`0x7794b0`). Every hover path goes through that pair
+/// Button. The tail they still run (`0x7794b0`) calls a C++ listener at `+0x31c`, which the constructor
+/// zeroes (`0x7786be`) and whose only setter `0x779760` nothing references, so no hover sound plays.
+/// Every hover path goes through that pair
 /// (the hover walk `0x766218`, `SetMouseFocus` `0x764dc0`, the hide tail `0x764cce`), and the
 /// Hyperlink and NamePlate overrides chain back (`0x7cb8a5`). The hover target still moves, so
 /// `GetMouseFocus()` answers a disabled button.
