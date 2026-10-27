@@ -205,6 +205,25 @@ impl LanguageWords {
         self.0.get(&language)
     }
 
+    /// The pools of `(language, word)` rows in file order; an empty word is skipped.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, String)>) -> Self {
+        let mut out: HashMap<u32, LanguagePool> = HashMap::new();
+        for (lang, word) in rows {
+            if word.is_empty() {
+                continue;
+            }
+            let pool = out.entry(lang).or_default();
+            let len = word.len();
+            let idx = u32::try_from(pool.words.len()).unwrap_or(u32::MAX);
+            pool.words.push(word);
+            if pool.by_len.len() <= len {
+                pool.by_len.resize(len + 1, Vec::new());
+            }
+            pool.by_len[len].push(idx);
+        }
+        Self(out)
+    }
+
     /// How many languages have a pool.
     pub fn len(&self) -> usize {
         self.0.len()
@@ -228,24 +247,9 @@ pub fn load_language_words(chain: &mut Chain) -> Result<LanguageWords> {
         .read_file(LANGUAGE_WORDS)
         .with_context(|| format!("reading {LANGUAGE_WORDS}"))?;
     let table = parse(&bytes, language_words_schema(), "LanguageWords.dbc")?;
-    let mut out: HashMap<u32, LanguagePool> = HashMap::new();
-    for r in table.records() {
-        let (Some(lang), Some(word)) = (u32_at(r, 1), str_at(&table, r, 2)) else {
-            continue;
-        };
-        if word.is_empty() {
-            continue;
-        }
-        let pool = out.entry(lang).or_default();
-        let len = word.len();
-        let idx = u32::try_from(pool.words.len()).unwrap_or(u32::MAX);
-        pool.words.push(word);
-        if pool.by_len.len() <= len {
-            pool.by_len.resize(len + 1, Vec::new());
-        }
-        pool.by_len[len].push(idx);
-    }
-    Ok(LanguageWords(out))
+    Ok(LanguageWords::from_rows(table.records().iter().filter_map(
+        |r| Some((u32_at(r, 1)?, str_at(&table, r, 2)?)),
+    )))
 }
 
 #[cfg(test)]

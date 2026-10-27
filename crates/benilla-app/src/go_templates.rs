@@ -59,6 +59,13 @@ impl GoTemplate {
         self.column(go, GoColumn::PageId).max(0) as u32
     }
 
+    /// The `Languages.dbc` id its page text is written in, the language column (`0x4e37fc` →
+    /// `0x5f5930`, `0x621b00` id `0x10`): TEXT's `data[1]`, GOOBER's `data[8]`; 0 for a type
+    /// without one.
+    pub(crate) fn language(&self, go: &ObjectFields) -> u32 {
+        self.column(go, GoColumn::Language).max(0) as u32
+    }
+
     /// The `PageTextMaterial.dbc` id, the pageMaterial column (`0x5f5950`), which the reader and
     /// `GetQuestBackgroundMaterial` paint on: QUESTGIVER's and TEXT's `data[2]`, GOOBER's
     /// `data[9]`; 0 for a type without one.
@@ -76,6 +83,8 @@ pub(crate) enum GoColumn {
     AutoClose,
     /// `pageID` (0xf).
     PageId,
+    /// `language` (0x10).
+    Language,
     /// `pageMaterial` (0x11).
     PageMaterial,
     /// `noDamageImmune` (0x39).
@@ -107,9 +116,11 @@ fn data_column(type_id: u32, id: GoColumn) -> Option<usize> {
         (3, NotInCombat) => Some(12),
         (6, AutoClose) => Some(6),
         (9, PageId) => Some(0),
+        (9, Language) => Some(1),
         (9, PageMaterial) => Some(2),
         (10, AutoClose) => Some(3),
         (10, PageId) => Some(7),
+        (10, Language) => Some(8),
         (10, PageMaterial) => Some(9),
         (10, NoDamageImmune) => Some(11),
         (12, AutoClose) => Some(5),
@@ -409,6 +420,23 @@ mod tests {
             "a GOOBER (type 10) reads data[9]"
         );
         assert_eq!(t.templates.get(103).unwrap().page_material(&go(15)), 0);
+    }
+
+    /// The language column (`0x621b00` id `0x10`): TEXT (9) reads `data[1]`, GOOBER (10)
+    /// `data[8]`, every other type has none.
+    #[test]
+    fn the_language_column_is_text_data1_and_goober_data8() {
+        let mut t = GameObjectTemplates::default();
+        let mut data = [0i32; 24];
+        data[1] = 7;
+        data[8] = 33;
+        for (entry, ty) in [(1, 9), (2, 10), (3, 2), (4, 15)] {
+            t.insert(entry, ty, "Object".into(), &data);
+        }
+        let language = |entry, ty| t.templates.get(entry).unwrap().language(&go(ty));
+        assert_eq!(language(1, 9), 7);
+        assert_eq!(language(2, 10), 33);
+        assert_eq!((language(3, 2), language(4, 15)), (0, 0));
     }
 
     #[test]

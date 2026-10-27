@@ -802,6 +802,10 @@ struct Readable {
     material: Option<String>,
     /// The first `PageText` id; 0 for a letter or a template with no page.
     page_head: u32,
+    /// The language the page text is rewritten in at the show (`0x4e3856`): an item template's
+    /// (`+0x1a0`, `0x4e37e9`) unless the read marked the item (`ITEM_FIELD_FLAGS` bit 0x2,
+    /// `0x4e3762`), a GameObject's language column (`0x4e37fc`) always; `None` shows it as it is.
+    language: Option<u32>,
 }
 
 /// The material a quest from `guid` paints on, `GetQuestBackgroundMaterial` (`0x502230`), the
@@ -844,14 +848,16 @@ fn readable(
             title: go.name.clone(),
             material: name(go.page_material(fields)),
             page_head: go.page_id(fields),
+            language: Some(go.language(fields)),
         });
     }
-    let entry = objects.object(guid)?.object_entry()?;
-    let t = items.template(entry, guid, ask)?;
+    let fields = objects.object(guid)?;
+    let t = items.template(fields.object_entry()?, guid, ask)?;
     Some(Readable {
         title: t.name.clone(),
         material: name(t.page_material),
         page_head: t.page_text,
+        language: (fields.item_flags().unwrap_or(0) & ITEM_FLAG_READ == 0).then_some(t.language_id),
     })
 }
 
@@ -873,6 +879,8 @@ fn feed_item_text(
     unit_names: crate::ui_unit::NameTables,
     filter: Option<Res<crate::text_filter::TextFilter>>,
     switches: Option<Res<crate::text_filter::TextFilterSwitches>>,
+    // The character's skill per language and the word pools, absent in a harness without chat.
+    languages: Option<Res<crate::ui_chat::ChatLanguages>>,
 ) {
     vm.feed(|script, (mut open, mail), fires| {
         let Some(script) = script else {
@@ -963,6 +971,14 @@ fn feed_item_text(
         // pages are not (`0x4e3744`-`0x4e3860` reach no masker).
         if let (true, Some(filter)) = (is_letter, filter.as_deref()) {
             filter.mask(switches.as_deref().is_some_and(|s| s.profanity), &mut text);
+        }
+        // A page is rewritten in its object's language to the player's skill (`0x4e3856`,
+        // `0x49b560`), or to skill 0 when the show is a reason-1 read reply's (`0x4e37b3`); a
+        // single item text is not (`0x4e3666`-`0x4e3677`).
+        if let (false, Some(language), Some(languages)) =
+            (is_letter, readable.language, languages.as_deref())
+        {
+            text = languages.garble_item_text(language, sess.translation.is_none(), &text);
         }
         script.set_item_text(Some(ItemTextState {
             item: readable.title,
@@ -1567,6 +1583,200 @@ mod tests {
         let open = world.resource::<ItemTextOpen>();
         let sess = open.pending.as_ref().expect("open");
         assert!(matches!(&sess.source, ReadSource::Pages { visited } if visited.is_empty()));
+    }
+
+    /// The word pool of language 1 (the tests' own): every five-letter word becomes `kazum`.
+    fn orcish() -> benilla_formats::LanguageWords {
+        benilla_formats::LanguageWords::from_rows([(1, "kazum".to_string())])
+    }
+
+    /// The reader's resources over a character who knows language 1 to `skill`.
+    fn reading_app(skill: u32) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<ItemTextOpen>()
+            .init_resource::<ItemTextLane>()
+            .init_resource::<PageTexts>()
+            .init_resource::<MailOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<GameObjectTemplates>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .insert_resource(crate::ui_chat::ChatLanguages::for_test(
+                orcish(),
+                &[(1, skill)],
+            ))
+            .add_systems(
+                Update,
+                (apply_reads, begin_item_text, feed_item_text).chain(),
+            );
+        net::register(&mut app);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        (app, rx)
+    }
+
+    fn page_text(app: &App) -> String {
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval("return ItemTextGetText()")
+            .expect("runs")
+    }
+
+    /// "hello" is understood at skill 150 and not at 0 (`hash % 300 < skill`, `0x49b79c`).
+    const PAGE: &str = "hello <br> hello.";
+
+    /// A GameObject's page text always goes through the rewrite in its language column
+    /// (`0x4e37fc`, a GOOBER's `data[8]`): to the player's skill, keeping `<..>` spans and
+    /// punctuation (`0x4e3856`, both flags set); language 0 shows it as it is.
+    #[test]
+    fn a_game_objects_page_is_rewritten_in_its_language() {
+        const TABLET: u64 = 0xF110_0043_2400_0001;
+        for (skill, language, want) in [(0, 1, "kazum <br> kazum."), (150, 1, PAGE), (0, 0, PAGE)] {
+            let (mut app, _rx) = reading_app(skill);
+            let mut data = [0i32; 24];
+            data[7] = 358;
+            data[8] = language;
+            app.world_mut()
+                .resource_mut::<GameObjectTemplates>()
+                .insert(17188, 10, "The Lay".into(), &data);
+            let tablet = app
+                .world_mut()
+                .spawn((
+                    crate::net::Guid(TABLET),
+                    crate::net::ObjectStore(crate::go_templates::test_typed_fields(17188, 10)),
+                ))
+                .id();
+            app.world_mut()
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(TABLET, tablet);
+            app.world_mut()
+                .resource_mut::<PageTexts>()
+                .insert(358, PAGE.into(), 0);
+            crate::net::handlers::dispatch(
+                app.world_mut(),
+                vec![benilla_protocol::SessionEvent::GameObjectPageText { guid: TABLET }],
+            );
+            app.world_mut()
+                .run_system_cached_with(fire_item_text, crate::lanes::Until::all())
+                .expect("the item-text lane fires");
+            for _ in 0..4 {
+                app.update();
+            }
+            assert_eq!(page_text(&app), want, "skill {skill}, language {language}");
+        }
+    }
+
+    /// A letter's single item text is not rewritten, whatever its template's language
+    /// (`0x4e3666`-`0x4e3677` reach no `0x49b560`).
+    #[test]
+    fn a_letters_text_is_not_rewritten() {
+        const LETTER: u64 = 0x4000_0000_0000_0009;
+        let (mut app, _rx) = reading_app(0);
+        let mut template = crate::items::test_template("Letter");
+        template.language_id = 1;
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(5_000, Some(template));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            LETTER,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, 5_000)]),
+            false,
+        );
+        app.world_mut()
+            .resource_mut::<MailOpen>()
+            .bodies
+            .insert(77, PAGE.into());
+        app.world_mut()
+            .resource_mut::<ItemTextOpen>()
+            .read_letter(LETTER, 77);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(page_text(&app), PAGE);
+    }
+
+    /// A bag book's page is rewritten in its template's language (`+0x1a0`, `0x4e37e9`) to the
+    /// player's skill, unless a read marked the item (`0x4e3762`: the OK reply, so it shows as
+    /// it is) or the show is a reason-1 reply's, which reads skill 0 (`0x4e37b3`); a letter's
+    /// single text is never rewritten (`0x4e3666`).
+    #[test]
+    fn a_bag_books_page_is_rewritten_unless_read_and_untranslated_on_reason_1() {
+        use benilla_protocol::SessionEvent as E;
+        const BOOK: u64 = 0x4000_0000_0000_0021;
+        const ME: u64 = 0x10;
+        const PACK_SLOT_1: u16 = 532;
+        const SCRAMBLED: &str = "kazum <br> kazum.";
+        for (skill, reply, want) in [
+            (0, "ok", PAGE),
+            (150, "ok", PAGE),
+            (0, "reason 0", SCRAMBLED),
+            (150, "reason 0", PAGE),
+            // Skill 150 passes "hello" whole: only the untranslated show scrambles it.
+            (150, "reason 1", SCRAMBLED),
+        ] {
+            let (mut app, _rx) = reading_app(skill);
+            let world = app.world_mut();
+            let mut template = crate::items::test_template("Gnarled Book");
+            template.page_text = 358;
+            template.language_id = 1;
+            world
+                .resource_mut::<Items>()
+                .insert_template(5_000, Some(template));
+            world
+                .resource_mut::<PageTexts>()
+                .insert(358, PAGE.into(), 0);
+            let player = world
+                .spawn((
+                    crate::net::Guid(ME),
+                    crate::net::SelfPlayer,
+                    crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                        (PACK_SLOT_1 + 6, BOOK as u32),
+                        (PACK_SLOT_1 + 7, (BOOK >> 32) as u32),
+                    ])),
+                ))
+                .id();
+            world
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(ME, player);
+            crate::items::test_spawn_item(
+                world,
+                BOOK,
+                benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x3),
+                    (3, 5_000),
+                    (8, ME as u32),
+                    (9, (ME >> 32) as u32),
+                ]),
+                false,
+            );
+            app.world_mut()
+                .resource_mut::<ItemTextOpen>()
+                .read_pages(BOOK);
+            for _ in 0..4 {
+                app.update();
+            }
+            let reply_events = match reply {
+                "ok" => vec![E::ReadItemOk { guid: BOOK }],
+                other => vec![E::ReadItemFailed {
+                    guid: BOOK,
+                    reason: other.strip_prefix("reason ").unwrap().parse().unwrap(),
+                    milliseconds: 2_500,
+                }],
+            };
+            crate::net::handlers::dispatch(app.world_mut(), reply_events);
+            app.world_mut()
+                .run_system_cached_with(fire_item_text, crate::lanes::Until::all())
+                .expect("the item-text lane fires");
+            for _ in 0..4 {
+                app.update();
+            }
+            assert_eq!(page_text(&app), want, "skill {skill}, {reply}");
+        }
     }
 }
 
