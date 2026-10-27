@@ -2,106 +2,22 @@
 //! its 32-bit `strtoul` for `tonumber`, and `lua_number2str`'s `%.14g` in its MSVC runtime's
 //! spelling.
 
-use std::fmt::Write;
-
 /// C's `isspace`.
 fn is_space(b: u8) -> bool {
     matches!(b, 0x20 | 0x09..=0x0D)
 }
 
-/// The 1.12.1 client's `luaO_str2d` (`0x6f5900`): its `strtod` (`0x741e39`) and a trailing-space
-/// skip, up to the C string's end at its first NUL. That `strtod` reads a decimal numeral only (no
-/// hexadecimal, `inf` or `nan`), and its exponent marker is `e`, `E`, `d` or `D` (`0x4112d1`).
+/// The 1.12.1 client's `luaO_str2d` (`0x6f5900`): its `strtod` (`0x741e39`, [`crate::strtod`]),
+/// refused when it read nothing (`0x6f591f`), then blanks (`0x6f593e`) and the C string's end at
+/// its first NUL (`0x6f5964`). That `strtod` reads a decimal numeral only (no hexadecimal, `inf` or
+/// `nan`), its exponent marker `e`, `E`, `d` or `D` (`0x4112d1`), and rounds it its own way.
 pub fn str2d(s: &[u8]) -> Option<f64> {
     let s = &s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())];
-    let end = decimal_end(s)?;
-    if !s[end..].iter().all(|&b| is_space(b)) {
+    let r = crate::strtod::strtod(s);
+    if r.end == 0 || !s[r.end..].iter().all(|&b| is_space(b)) {
         return None;
     }
-    let mut num = &s[..end];
-    while is_space(num[0]) {
-        num = &num[1..];
-    }
-    let neg = num[0] == b'-';
-    if matches!(num[0], b'+' | b'-') {
-        num = &num[1..];
-    }
-    let mark = num
-        .iter()
-        .position(|b| matches!(b, b'e' | b'E' | b'd' | b'D'))
-        .unwrap_or(num.len());
-    let (mant, exp) = num.split_at(mark);
-    // The exponent, saturated far past any double's range.
-    let mut e: i64 = 0;
-    if let Some(&sign) = exp.get(1) {
-        for &c in exp[1..].iter().filter(|c| c.is_ascii_digit()) {
-            e = (e * 10 + (c - b'0') as i64).min(1 << 40);
-        }
-        if sign == b'-' {
-            e = -e;
-        }
-    }
-    let int_len = mant.iter().position(|&b| b == b'.').unwrap_or(mant.len());
-    let mut digits = mant.iter().copied().filter(u8::is_ascii_digit).peekable();
-    let mut lead = 0;
-    while digits.next_if_eq(&b'0').is_some() {
-        lead += 1;
-    }
-    let v = if digits.peek().is_none() {
-        0.0
-    } else {
-        // `0.<digits> * 10^scale`, the digits whole and the exponent small: Rust's parser drops
-        // exponent digits past 65536 where glibc's `strtod` offsets them against the digits.
-        let scale = (int_len as i64 - lead + e).clamp(-1000, 1000);
-        let mut text = String::with_capacity(mant.len() + 8);
-        text.push_str("0.");
-        text.extend(digits.map(char::from));
-        let _ = write!(text, "e{scale}");
-        text.parse().ok()?
-    };
-    Some(if neg { -v } else { v })
-}
-
-/// The end of the client's `strtod` numeral at the head of `s` (`0x4111f0`): spaces, a sign,
-/// digits with at most one `.`, then an exponent marker, a sign and digits only when a digit
-/// follows. `None` when it has no digit.
-fn decimal_end(s: &[u8]) -> Option<usize> {
-    let digit = |i: usize| s.get(i).is_some_and(u8::is_ascii_digit);
-    let mut i = 0;
-    while s.get(i).is_some_and(|&b| is_space(b)) {
-        i += 1;
-    }
-    if matches!(s.get(i), Some(b'+' | b'-')) {
-        i += 1;
-    }
-    let mut digits = 0;
-    while digit(i) {
-        i += 1;
-        digits += 1;
-    }
-    if s.get(i) == Some(&b'.') {
-        i += 1;
-        while digit(i) {
-            i += 1;
-            digits += 1;
-        }
-    }
-    if digits == 0 {
-        return None;
-    }
-    if matches!(s.get(i), Some(b'e' | b'E' | b'd' | b'D')) {
-        let mut k = i + 1;
-        if matches!(s.get(k), Some(b'+' | b'-')) {
-            k += 1;
-        }
-        if digit(k) {
-            while digit(k) {
-                k += 1;
-            }
-            i = k;
-        }
-    }
-    Some(i)
+    Some(r.value)
 }
 
 /// C's `ldexp` (`scalbn`): `x * 2^n` with one rounding, in steps that neither overflow nor
@@ -340,10 +256,26 @@ mod tests {
         assert_eq!(str2d(b"-0"), Some(-0.0));
         assert!(str2d(b"-0").unwrap().is_sign_negative());
         assert_eq!(str2d(b"0.000e99999999999"), Some(0.0));
-        // A seven-digit exponent offset by as many digits, which glibc reads exactly.
+        // The exponent is held at 5201 (`0x41151e`) before the digits offset it: a 700000-digit
+        // numeral and a seven-digit exponent that cancel are zero and the infinity.
         let z = "0".repeat(699_999);
-        assert_eq!(str2d(format!("0.{z}1e700000").as_bytes()), Some(1.0));
-        assert_eq!(str2d(format!("1{z}0e-700000").as_bytes()), Some(1.0));
+        assert_eq!(str2d(format!("0.{z}1e700000").as_bytes()), Some(0.0));
+        assert_eq!(
+            str2d(format!("1{z}0e-700000").as_bytes()),
+            Some(f64::INFINITY)
+        );
+        // Below 2^-1022 is +0 whatever the sign; `-1e-5000` flushes in the 12-byte real and keeps
+        // it; 25 digits read as their first 24, the 24th raised.
+        assert_eq!(str2d(b"-1e-400").map(f64::to_bits), Some(0));
+        assert_eq!(str2d(b"-1e-5000").map(f64::to_bits), Some(1 << 63));
+        assert_eq!(
+            str2d(b"6e23").map(f64::to_bits),
+            Some(0x44df_c384_2bd1_f071)
+        );
+        assert_eq!(
+            str2d(b"123456789012345678901234567890").map(f64::to_bits),
+            Some(0x45f8_ee90_ff6c_373e)
+        );
         assert_eq!(str2d(b"1e-99999999999999999999"), Some(0.0));
         assert_eq!(str2d(b"1\0x"), Some(1.0), "a C string ends at its NUL");
         assert_eq!(str2d(b"12\0 "), Some(12.0));

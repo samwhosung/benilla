@@ -511,50 +511,64 @@ pub fn check_ffx_echo(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarV
     })
 }
 
-/// `sscanf(s, "%f")` as the reference's CRT reads it: leading white space, an optional sign, digits
-/// with at most one `.` (at least one digit), then `e`/`E` with an optional sign and digits,
-/// converted as a double and stored as a float. `None` when no number starts the string.
+/// `sscanf(s, "%f")` as the reference's CRT reads it ([`scanf_f_prefix`]). `None` when no number
+/// starts the string.
 fn scanf_f(s: &str) -> Option<f32> {
     scanf_f_prefix(s).map(|(v, _)| v)
 }
 
-/// [`scanf_f`]'s conversion with the bytes it consumed, so a format of several `%f` goes on
-/// after it.
+/// `sscanf`'s `%f` (`__input`, `0x744e21`) over `s` as a C string: the float and the bytes it
+/// consumed, so a format of several `%f` goes on after it. Blanks skipped (`__whiteout`,
+/// `0x7458ae`), then a sign, digits, a `.` and digits, and only after a digit an `e` or `E`
+/// (`0x74518d`), a sign and digits, every byte after the sign counted against a width of 349
+/// (`0x7450c9`). The marker is consumed, and its sign, whether or not a digit follows: only the
+/// byte after them is pushed back (`0x745220`). The text goes to `_fassign` (`0x745251`), which
+/// rounds it once to the float (`_atoflt`, `0x40b53b`). `None` when the mantissa has no digit.
 pub fn scanf_f_prefix(s: &str) -> Option<(f32, usize)> {
     let b = s.as_bytes();
+    let b = &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())];
     let mut i = b
         .iter()
-        .take_while(|c| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
+        .take_while(|&&c| c == b' ' || (0x09..=0x0d).contains(&c))
         .count();
     let start = i;
     if matches!(b.get(i), Some(b'+' | b'-')) {
         i += 1;
     }
-    let digits = |i: &mut usize| {
-        let from = *i;
-        while b.get(*i).is_some_and(u8::is_ascii_digit) {
-            *i += 1;
-        }
-        *i - from
+    // A byte is taken while the width lasts.
+    let mut width = 0x15d;
+    let mut take = |ok: bool| {
+        let took = ok && width > 0;
+        width -= usize::from(took);
+        took
     };
-    let mut n = digits(&mut i);
-    if b.get(i) == Some(&b'.') {
+    let digit = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+    let mut digits = 0;
+    while take(digit(i)) {
         i += 1;
-        n += digits(&mut i);
+        digits += 1;
     }
-    if n == 0 {
+    if take(b.get(i) == Some(&b'.')) {
+        i += 1;
+        while take(digit(i)) {
+            i += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
         return None;
     }
-    if matches!(b.get(i), Some(b'e' | b'E')) {
-        let mut e = i + 1;
-        if matches!(b.get(e), Some(b'+' | b'-')) {
-            e += 1;
+    if take(matches!(b.get(i), Some(b'e' | b'E'))) {
+        i += 1;
+        if take(matches!(b.get(i), Some(b'+' | b'-'))) {
+            i += 1;
         }
-        if digits(&mut e) > 0 {
-            i = e;
+        while take(digit(i)) {
+            i += 1;
         }
     }
-    s[start..i].parse::<f64>().ok().map(|v| (v as f32, i))
+    // The bytes stored are these but a `+`, which `___strgtold12` reads the same either way.
+    Some((mlua::benilla_lua::strtod::atoflt(&b[start..i]), i))
 }
 
 #[cfg(test)]
@@ -564,6 +578,33 @@ mod tests {
     }
 
     use super::*;
+
+    /// `sscanf`'s `%f`: one rounding to the float, the exponent marker and its sign consumed with
+    /// no digit after them, and a width of 349 bytes after the sign.
+    #[test]
+    fn scanf_f_is_the_clients() {
+        assert_eq!(scanf_f("460e8"), Some(45_999_996_928.0));
+        assert_eq!(scanf_f_prefix("1e 2"), Some((1.0, 2)));
+        assert_eq!(scanf_f_prefix("1e+"), Some((1.0, 3)));
+        assert_eq!(scanf_f_prefix("-2.5E-1x"), Some((-0.25, 7)));
+        assert_eq!(scanf_f_prefix(" \x0b+.5"), Some((0.5, 5)));
+        assert_eq!(
+            scanf_f_prefix("1d5"),
+            Some((1.0, 1)),
+            "only `e` and `E` mark"
+        );
+        assert_eq!(scanf_f_prefix("5."), Some((5.0, 2)));
+        for text in ["", " ", "-", ".", "e5", ".e5", "x1"] {
+            assert_eq!(scanf_f_prefix(text), None, "{text:?}");
+        }
+        let long = format!("-{}", "1".repeat(400));
+        assert_eq!(scanf_f_prefix(&long), Some((f32::NEG_INFINITY, 350)));
+        let long = format!("-0.{}", "1".repeat(400));
+        let (v, used) = scanf_f_prefix(&long).unwrap();
+        assert_eq!((v.to_bits(), used), (0xbde3_8e39, 350));
+        assert_eq!(scanf_f("1e39"), Some(f32::INFINITY));
+        assert_eq!(scanf_f("1e-40").map(f32::to_bits), Some(0x0001_16c2));
+    }
 
     /// `0x50b330` through each wrapper: values at the float bounds pass, values past them do not,
     /// and the line prints the float bounds with `%f`.
