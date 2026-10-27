@@ -302,6 +302,11 @@ pub struct ParticleEmitterDef {
 }
 
 impl ParticleEmitterDef {
+    /// File flag 0x2 (runtime 0x10, through `SetSorted` `0x7b5d00` at `0x70fd1d`): the draw writes
+    /// the cloud's particles back to front by view depth (`0x7b3a1b`), else in live-list order.
+    pub fn sorted(&self) -> bool {
+        self.flags & 0x2 != 0
+    }
     /// File flag 0x10 (runtime 0x100; the flag remap `0x70faf8`..`0x70fc44` is not the identity).
     /// Set, particles live emitter-local and the draw re-applies the live emitter matrix, so the
     /// cloud rides the emitter; clear, the spawn bakes them into world space, so a moving host lays
