@@ -21,9 +21,10 @@ use super::{
     VendorItem, WhoResults, WowTime, XpGain,
 };
 
-/// The final facing a `SMSG_MONSTER_MOVE` dictates (`moveType`), applied as a hard snap, not a
-/// turn (`0x6018f0`); `Spot` and `Target` resolve once, from positions at receipt.
-#[derive(Debug, Clone, Copy)]
+/// The final facing a `SMSG_MONSTER_MOVE` dictates (`moveType`): kept for the path's end when a
+/// path installs, else the unit's raw facing at once (`0x6018f0`, `0x601fee`). `Spot` and `Target`
+/// resolve when applied, from the positions then.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MonsterMoveFacing {
     /// `moveType` 0 or a stop: the unit faces its travel direction.
     None,
