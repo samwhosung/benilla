@@ -359,9 +359,11 @@ fn a_teardown_and_a_new_bar_do_not_hide_the_next_flush() {
 /// of a cooldown: an elapsed record moves neither the list nor the events.
 #[test]
 fn a_natural_expiry_fires_nothing() {
+    // Ten minutes, far longer than any run, so the cooldown is still running at the first
+    // read however slow the machine; the clock is then stepped past it.
     let brief = || SpellDisplay {
         name: "Brief".into(),
-        recovery_ms: 30,
+        recovery_ms: 600_000,
         ..Default::default()
     };
     let mut rig = rig(vec![(GROWL, brief())], &[GROWL], Some(summoned_pet()));
@@ -369,7 +371,7 @@ fn a_natural_expiry_fires_nothing() {
     assert_eq!(rig.frame(), FLUSH);
     assert!(rig.cooldown(1).1 > 0.0, "running");
 
-    rig.step_clock(Duration::from_millis(80));
+    rig.step_clock(Duration::from_secs(601));
 
     assert!(
         rig.frame().is_empty(),
