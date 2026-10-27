@@ -39,9 +39,11 @@ pub enum TradeStatus {
     TargetTooFar,
     /// Cross-faction, unless the server allows two-side interaction.
     WrongFaction,
-    /// The tail is usually zero; the `u8` vmangos writes between the two fields is dropped.
+    /// An inventory result and a byte, which the client reads as zero or not, pick the message
+    /// it prints (`0x5d48af`, `0x4bfd70`); vmangos writes the tail but never sends the status.
     CloseWindow {
         result: u32,
+        side: u8,
         item_limit_category: u32,
     },
     /// Per a vmangos note, handled as `Canceled`; kept distinct so the code round-trips.
@@ -194,10 +196,11 @@ pub(super) fn read_trade_status(r: &mut &[u8]) -> io::Result<TradeStatus> {
         11 => TradeStatus::WrongFaction,
         12 => {
             let result = read_u32_le(r)?;
-            let _unk = read_u8(r)?; // vmangos writes it; carries nothing for player trade
+            let side = read_u8(r)?;
             let item_limit_category = read_u32_le(r)?;
             TradeStatus::CloseWindow {
                 result,
+                side,
                 item_limit_category,
             }
         }
@@ -364,13 +367,14 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(&12u32.to_le_bytes()); // CLOSE_WINDOW
         buf.extend_from_slice(&7u32.to_le_bytes()); // result
-        buf.push(0); // unk (dropped)
+        buf.push(1); // side
         buf.extend_from_slice(&3u32.to_le_bytes()); // itemLimitCategory
         let mut r = &buf[..];
         assert_eq!(
             read_trade_status(&mut r).unwrap(),
             TradeStatus::CloseWindow {
                 result: 7,
+                side: 1,
                 item_limit_category: 3
             }
         );

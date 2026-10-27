@@ -533,22 +533,26 @@ fn close_core_done(world: &mut World, waits: bool, done: bool) {
 
 /// The status dispatcher's three closing arms (`0x4bf720`): `CANCELED`'s handler signals
 /// `PLAYER_MONEY` over the zeroed offers (`0x5d48a8`) and its arm `TRADE_REQUEST_CANCEL`
-/// (`0x4bf832`), and each runs `UnlockTradeItems` (`0x4bf837`, `0x4bf859`, `0x4bf87e`) before the
-/// close core (`0x4bf842`, `0x4bf867`, `0x4bf89c`), which `COMPLETE` enters with `done` 1
-/// (`0x4bf862`); then the arm's `line` (`0x4bf847`, `0x4bf871`). All of it waits behind what the
-/// lane still holds, the open it closes among them.
-pub(crate) fn server_close(
-    world: &mut World,
-    canceled: bool,
-    done: bool,
-    line: Option<&'static str>,
-) {
+/// (`0x4bf832`), and each runs `UnlockTradeItems` (`0x4bf837`, `0x4bf859`, `0x4bf87e`); then
+/// `CLOSE_WINDOW`'s line (`0x4bf88e`), the close core (`0x4bf842`, `0x4bf867`, `0x4bf89c`), which
+/// `COMPLETE` enters with `done` 1 (`0x4bf862`), and the other two's line (`0x4bf847`,
+/// `0x4bf871`). All of it waits behind what the lane still holds, the open it closes among them.
+pub(crate) fn server_close(world: &mut World, close: net::Close) {
     let waits = lane::close_waits(world);
     drain_trade_touches(world);
-    lane::close_step(world, waits, TradeEvent::Unlock { canceled });
-    close_core_done(world, waits, done);
-    if let (Some(key), Some(mut lane)) = (line, world.get_resource_mut::<TradeLane>()) {
-        lane.push(TradeEvent::Line(UiError::key(key)));
+    lane::close_step(
+        world,
+        waits,
+        TradeEvent::Unlock {
+            canceled: close.canceled,
+        },
+    );
+    if let Some(line) = close.first {
+        lane::close_step(world, waits, TradeEvent::Line(line));
+    }
+    close_core_done(world, waits, close.done);
+    if let Some(line) = close.after {
+        lane::close_step(world, waits, TradeEvent::Line(line));
     }
 }
 

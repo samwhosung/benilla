@@ -771,13 +771,7 @@ const EMOTE_WAVE: u32 = 3;
 /// display shows nothing.
 fn command_error_key(error: u32, inventory_result: u32) -> Option<&'static str> {
     Some(match error {
-        // `0x622630`: past 66 is id 9 (`0x62278d`), 0 is `0x1d1`, which the display refuses
-        // (`0x49672c`), the rest the inventory table's.
-        auction_error::INVENTORY => match inventory_result {
-            0 => return None,
-            r if r > 66 => "ERR_BAG_FULL",
-            r => crate::ui_items::equip_error_key(r as u8),
-        },
+        auction_error::INVENTORY => crate::ui_items::inventory_result_key(inventory_result)?,
         auction_error::NOT_ENOUGH_MONEY => "ERR_NOT_ENOUGH_MONEY", // `0x25`
         auction_error::ITEM_NOT_FOUND => "ERR_ITEM_NOT_FOUND",     // `0x17`
         auction_error::BID_INCREMENT => "ERR_AUCTION_BID_INCREMENT", // `0x174`

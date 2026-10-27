@@ -215,6 +215,16 @@ fn bag_family_name(
     families.name(family).map(str::to_string)
 }
 
+/// `0x622630` on a whole inventory result: past 66 its default, errorId 9 (`0x62278d`); 0 the
+/// table's 0x1d1, which the display refuses (`0x49672c`); the rest the table's.
+pub(crate) fn inventory_result_key(result: u32) -> Option<&'static str> {
+    match result {
+        0 => None,
+        r if r > 66 => Some("ERR_BAG_FULL"),
+        r => Some(equip_error_key(r as u8)),
+    }
+}
+
 /// A refusal reason's key, total like the reference's errorId table (`0x622794`). Positions are
 /// vmangos `ItemDefines.h` with every band up to 5875 (stunned 37, dead 38, inventory full 50).
 /// Reason 1's string carries a `%d` for the required level.

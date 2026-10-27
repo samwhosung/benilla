@@ -1358,3 +1358,39 @@ fn a_cancel_behind_a_drop_started_open_undoes_what_the_open_placed() {
     vm.unlock_entry_items(&[CLOTH]);
     assert!(!vm.item_locked(CLOTH), "the window is shut");
 }
+
+/// `CLOSE_WINDOW` unlocks, prints its line, then runs the close core (`0x4bf87e`, `0x4bf88e`,
+/// `0x4bf89c`): the line's message ahead of `TRADE_CLOSED`, the cancel's and the complete's after.
+#[test]
+fn close_window_prints_its_line_before_the_close() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(
+        &mut t,
+        r#"ERR_TRADE_BAG_FULL = "full" ERR_TRADE_CANCELLED = "cancelled"
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("TRADE_CLOSED") f:RegisterEvent("UI_ERROR_MESSAGE")
+        f:RegisterEvent("UI_INFO_MESSAGE")
+        f:SetScript("OnEvent", function()
+            HEARD = HEARD .. event .. "(" .. tostring(arg1) .. ") "
+        end)"#,
+    );
+    status(
+        &mut t,
+        TradeStatus::CloseWindow {
+            result: 4,
+            side: 1,
+            item_limit_category: 0,
+        },
+    );
+    assert_eq!(
+        heard(&mut t),
+        "UI_ERROR_MESSAGE(full) TRADE_CLOSED(nil) TRADE_CLOSED(nil) "
+    );
+    open_with_bob(&mut t);
+    status(&mut t, TradeStatus::Canceled);
+    assert!(
+        heard(&mut t).ends_with("TRADE_CLOSED(nil) UI_INFO_MESSAGE(cancelled) "),
+        "the cancel's line follows its close"
+    );
+}

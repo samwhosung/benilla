@@ -218,21 +218,32 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: TradeEvent) {
             script.zero_trade_gold();
             script.fire_event("PLAYER_MONEY", vec![]);
         }
-        // Shown, and spoken, as its message row says, inside the handler that adds it.
-        TradeEvent::Line(line) => {
-            let text = crate::ui_action::ui_error_text(&line, &|key| {
-                script.lua().globals().get::<String>(key).ok()
-            });
-            if let Some(text) = text {
-                let shown = crate::ui_action::Shown::keyed(line.key, text);
-                crate::ui_action::show_now(script, sink, "ui_trade", shown);
-            }
-        }
+        TradeEvent::Line(line) => show_line(script, sink, &line),
         TradeEvent::Unlock { .. } | TradeEvent::Done(_) | TradeEvent::Closed => {
             close_vm(script, &event)
         }
         TradeEvent::Show { .. } | TradeEvent::Unaccept | TradeEvent::Cancel => {}
     }
+}
+
+/// A line shown, and spoken, as its message row says, inside the handler that adds it.
+fn show_line(script: &mut UiScript, sink: &mut MessageSink, line: &UiError) {
+    let text = crate::ui_action::ui_error_text(line, &|key| {
+        script.lua().globals().get::<String>(key).ok()
+    });
+    if let Some(text) = text {
+        let shown = crate::ui_action::Shown::keyed(line.key, text);
+        crate::ui_action::show_now(script, sink, "ui_trade", shown);
+    }
+}
+
+/// [`show_line`] now, with the host lent.
+fn line_now(In(line): In<UiError>, mut vm: crate::script_calls::HostedVm, mut sink: MessageSink) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            show_line(script, &mut sink, &line);
+        }
+    });
 }
 
 /// A close's VM half, at the handler or at its place on the lane.
@@ -344,6 +355,12 @@ pub(super) fn close_step(world: &mut World, waits: bool, event: TradeEvent) {
             lane.push(event);
             return;
         }
+    }
+    if let TradeEvent::Line(line) = event {
+        if let Err(err) = world.run_system_cached_with(line_now, line) {
+            debug!(target: "trade", "a close's line did not show: {err}");
+        }
+        return;
     }
     match send_of(&event) {
         Some(command) => {

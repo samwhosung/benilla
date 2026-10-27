@@ -614,6 +614,7 @@ fn canceled_fires_trade_request_cancel_and_the_siblings_do_not() {
         TradeStatus::Complete,
         TradeStatus::CloseWindow {
             result: 0,
+            side: 0,
             item_limit_category: 0,
         },
     ] {
@@ -1188,6 +1189,7 @@ fn both_offers_answer_after_the_close_and_until_the_next_open() {
         TradeStatus::Canceled,
         TradeStatus::CloseWindow {
             result: 0,
+            side: 0,
             item_limit_category: 0,
         },
     ] {

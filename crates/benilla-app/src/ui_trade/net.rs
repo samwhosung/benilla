@@ -44,26 +44,28 @@ fn on_trade_status(
     };
     world_commands.queue(move |world: &mut World| match window {
         Window::Open => super::open_window(world, purse),
-        Window::Close {
-            canceled,
-            done,
-            line,
-        } => super::server_close(world, canceled, done, line),
+        Window::Close(close) => super::server_close(world, close),
     });
 }
 
 /// What a status arm does to the window, run with the world in hand after the handler's tail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Window {
     /// `OPEN_WINDOW` (`0x4bf7f8` → `0x4bf4e0(partner)`).
     Open,
-    /// `CANCELED`, `COMPLETE` or `CLOSE_WINDOW`; only `CANCELED` signals `TRADE_REQUEST_CANCEL`,
-    /// only `COMPLETE` closes with `done` 1 (`0x4bf862`), and `line` is the arm's after its close.
-    Close {
-        canceled: bool,
-        done: bool,
-        line: Option<&'static str>,
-    },
+    /// `CANCELED`, `COMPLETE` or `CLOSE_WINDOW`.
+    Close(Close),
+}
+
+/// A closing arm: only `CANCELED` signals `TRADE_REQUEST_CANCEL`, only `COMPLETE` closes with
+/// `done` 1 (`0x4bf862`); `CLOSE_WINDOW` prints its line before the close core (`0x4bf88e`), the
+/// other two theirs after it (`0x4bf847`, `0x4bf871`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Close {
+    pub(super) canceled: bool,
+    pub(super) done: bool,
+    pub(super) first: Option<UiError>,
+    pub(super) after: Option<UiError>,
 }
 
 fn on_trade_status_extended(
@@ -118,27 +120,30 @@ fn trade_status(
         // The three that close the window through the core ([`super::server_close`]), which sends
         // `CMSG_CANCEL_TRADE` as the reference's does (`0x4bf527`); vmangos ignores it once the
         // trade is gone (`Player.cpp:11739`). The tail's clear runs here, the core's reset later.
-        // `CLOSE_WINDOW` (12) prints an id `0x4bfd70` computes from `result` (61 ids, the rest
-        // through `0x622630`, `0x1d1` printing nothing), not built: vmangos never sends 12.
         TradeStatus::Canceled | TradeStatus::Complete | TradeStatus::CloseWindow { .. } => {
             trade.clear_pending();
-            return Some(match status {
-                TradeStatus::Canceled => Window::Close {
+            let after = |key| Some(UiError::key(key));
+            return Some(Window::Close(match status {
+                TradeStatus::Canceled => Close {
                     canceled: true,
                     done: false,
-                    line: Some("ERR_TRADE_CANCELLED"),
+                    first: None,
+                    after: after("ERR_TRADE_CANCELLED"),
                 },
-                TradeStatus::Complete => Window::Close {
+                TradeStatus::Complete => Close {
                     canceled: false,
                     done: true,
-                    line: Some("ERR_TRADE_COMPLETE"),
+                    first: None,
+                    after: after("ERR_TRADE_COMPLETE"),
                 },
-                _ => Window::Close {
+                TradeStatus::CloseWindow { result, side, .. } => Close {
                     canceled: false,
                     done: false,
-                    line: None,
+                    first: game_error(result, side != 0),
+                    after: None,
                 },
-            });
+                _ => unreachable!("the three closing statuses"),
+            }));
         }
         // The line, then the placement bounced, not the window (case 22, `0x4bf9ec` →
         // `0x4bfbd0`).
@@ -184,6 +189,26 @@ fn trade_status(
         TradeStatus::Unknown(_) => {}
     }
     None
+}
+
+/// `CLOSE_WINDOW`'s line, `GetGameError` (`0x4bfd70`) on the status's inventory result and its
+/// byte, which the handler passes as zero or not (`0x5d4916`): bag full (4) and too many (0x11)
+/// name the player or the partner by the byte, in opposite senses (`0x4bfda4`, `0x4bfd97`), a
+/// missing reagent (0x1c) prints only for byte 0 (`0x4bfd84`, 0x1d1 printing nothing), and every
+/// other result goes through the inventory table (`0x4bfd7f` → `0x622630`). The display reads one
+/// argument word past the id, the status handler's tail flag, 1 for this status (`0x5d4905`),
+/// which only result 1's level line prints.
+fn game_error(result: u32, side: bool) -> Option<UiError> {
+    let key = match (result, side) {
+        (4, false) => "ERR_TRADE_TARGET_BAG_FULL",
+        (4, true) => "ERR_TRADE_BAG_FULL",
+        (0x11, false) => "ERR_TRADE_MAX_COUNT_EXCEEDED",
+        (0x11, true) => "ERR_TRADE_TARGET_MAX_COUNT_EXCEEDED",
+        (0x1c, false) => "ERR_SPELL_FAILED_REAGENTS_GENERIC",
+        (0x1c, true) => return None,
+        (result, _) => crate::ui_items::inventory_result_key(result)?,
+    };
+    Some(UiError::args(key, vec![FillArg::D(1)]))
 }
 
 /// The `GlobalStrings` key a status arm with no argument raises through `DisplayError`, or `None`.
@@ -249,6 +274,7 @@ mod tests {
             TradeStatus::WrongFaction,
             TradeStatus::CloseWindow {
                 result: 0,
+                side: 0,
                 item_limit_category: 0,
             },
             TradeStatus::Unknown13,
@@ -358,7 +384,9 @@ mod tests {
                 let printed = !lines(&mut lane).is_empty()
                     || matches!(
                         trade_status_window(*s),
-                        Some(Window::Close { line: Some(_), .. })
+                        Some(Window::Close(
+                            Close { first: Some(_), .. } | Close { after: Some(_), .. }
+                        ))
                     );
                 !printed
             })
@@ -368,8 +396,7 @@ mod tests {
             silent,
             vec![1, 2, 4, 7, 9, 12, 13],
             "silent: BEGIN_TRADE (the ladder's line is its own), OPEN_WINDOW, TRADE_ACCEPT, \
-             BACK_TO_TRADE, REJECTED, CLOSE_WINDOW (a computed id we deliberately do not build) \
-             and UNKNOWN_13"
+             BACK_TO_TRADE, REJECTED, CLOSE_WINDOW on result 0 (id 0x1d1) and UNKNOWN_13"
         );
     }
 
@@ -389,11 +416,8 @@ mod tests {
             let mut lane = TradeLane::default();
             let window = trade_status(status, &mut open_trade(), &mut lane, &grubbis);
             let mut keys: Vec<&str> = lines(&mut lane).into_iter().map(|l| l.key).collect();
-            if let Some(Window::Close {
-                line: Some(key), ..
-            }) = window
-            {
-                keys.push(key);
+            if let Some(Window::Close(close)) = window {
+                keys.extend(close.first.iter().chain(&close.after).map(|l| l.key));
             }
             for key in keys {
                 assert!(
@@ -424,30 +448,68 @@ mod tests {
                 (2, Window::Open),
                 (
                     3,
-                    Window::Close {
+                    Window::Close(Close {
                         canceled: true,
                         done: false,
-                        line: Some("ERR_TRADE_CANCELLED"),
-                    },
+                        first: None,
+                        after: Some(UiError::key("ERR_TRADE_CANCELLED")),
+                    }),
                 ),
                 (
                     8,
-                    Window::Close {
+                    Window::Close(Close {
                         canceled: false,
                         done: true,
-                        line: Some("ERR_TRADE_COMPLETE"),
-                    },
+                        first: None,
+                        after: Some(UiError::key("ERR_TRADE_COMPLETE")),
+                    }),
                 ),
                 (
                     12,
-                    Window::Close {
+                    Window::Close(Close {
                         canceled: false,
                         done: false,
-                        line: None,
-                    },
+                        first: None,
+                        after: None,
+                    }),
                 ),
             ]
         );
+    }
+
+    /// `CLOSE_WINDOW`'s line, `GetGameError` (`0x4bfd70`) on its result and byte: the three
+    /// results it maps itself, by the byte, and the rest through the inventory table
+    /// (`0x622630`), past 66 its default and 0 nothing.
+    #[test]
+    fn close_window_prints_the_line_its_result_and_byte_pick() {
+        let line = |result, side| {
+            let status = TradeStatus::CloseWindow {
+                result,
+                side,
+                item_limit_category: 0,
+            };
+            match trade_status_window(status) {
+                Some(Window::Close(close)) => {
+                    assert_eq!(close.after, None, "the line comes before the close");
+                    close.first.map(|l| l.key)
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(line(4, 0), Some("ERR_TRADE_TARGET_BAG_FULL"));
+        assert_eq!(line(4, 1), Some("ERR_TRADE_BAG_FULL"));
+        assert_eq!(
+            line(4, 9),
+            Some("ERR_TRADE_BAG_FULL"),
+            "the byte is read as nonzero"
+        );
+        assert_eq!(line(0x11, 0), Some("ERR_TRADE_MAX_COUNT_EXCEEDED"));
+        assert_eq!(line(0x11, 1), Some("ERR_TRADE_TARGET_MAX_COUNT_EXCEEDED"));
+        assert_eq!(line(0x1c, 0), Some("ERR_SPELL_FAILED_REAGENTS_GENERIC"));
+        assert_eq!(line(0x1c, 1), None);
+        assert_eq!(line(0x32, 0), Some("ERR_INV_FULL"));
+        assert_eq!(line(67, 1), Some("ERR_BAG_FULL"));
+        assert_eq!(line(0, 0), None);
     }
 
     /// The tail's clear set minus the three closing codes.
