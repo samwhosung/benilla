@@ -639,3 +639,108 @@ fn the_logouts_shutdown_reads_no_bags() {
         (None, 0, 0, None)
     );
 }
+
+/// A spy on `PLAYER_COMBO_POINTS` that records `chunk`'s answer at each firing, as text.
+fn spy_at_combo(app: &mut App, chunk: &str) {
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(&format!(
+            r#"AtCombo = {{}}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_COMBO_POINTS")
+            f:SetScript("OnEvent", function()
+                table.insert(AtCombo, tostring(({chunk})))
+            end)"#
+        ))
+        .unwrap();
+}
+
+/// A bag's slot array as its packet left it: the linen moved out of the bag's first slot in one
+/// frame and back in the next, behind a combo packet. The combo's listener finds the slot empty,
+/// as the reference's `GetContainerItemLink` reads the bag object's slot at the call (`0x4f997f`
+/// → `0x6228a0`), not the later packet's.
+#[test]
+fn a_bags_slot_reads_as_its_packet_left_it() {
+    let mut app = client();
+    let lo = FIELD_CONTAINER_SLOT_1;
+    let moved: Vec<(u16, u32)> = guid_pair(lo, 0)
+        .into_iter()
+        .chain(guid_pair(lo + 2, INNER))
+        .collect();
+    frame(&mut app, vec![values(BAG, &moved)]);
+    spy_at_combo(&mut app, "GetContainerItemLink(1, 1)");
+    let back: Vec<(u16, u32)> = guid_pair(lo, INNER)
+        .into_iter()
+        .chain(guid_pair(lo + 2, 0))
+        .collect();
+    frame(&mut app, vec![combo(2), values(BAG, &back)]);
+    let seen: Vec<String> = hosted_eval(&mut app, "return AtCombo");
+    assert_eq!(seen, ["nil"]);
+    let now: Option<String> = hosted_eval(&mut app, "return GetContainerItemLink(1, 1)");
+    assert!(now.is_some(), "the frame's end reads the linen back");
+}
+
+/// An item's stack count as its packet left it (`ITEM_FIELD_STACK_COUNT`, `0x4f9742`): a combo
+/// packet ahead of a restack reads the old count.
+#[test]
+fn a_stack_count_reads_as_its_packet_left_it() {
+    let mut app = client();
+    spy_at_combo(
+        &mut app,
+        "(function() local _, n = GetContainerItemInfo(0, 1) return n end)()",
+    );
+    frame(
+        &mut app,
+        vec![
+            combo(2),
+            values(POTIONS, &[(FIELD_ITEM_STACK_COUNT, 5)]),
+            combo(0),
+        ],
+    );
+    let seen: Vec<String> = hosted_eval(&mut app, "return AtCombo");
+    assert_eq!(seen, ["1", "5"]);
+}
+
+/// A bank bag's slot array as its packet left it, with the banker open: linen put into the bank
+/// bag's first slot behind a combo packet is not there to the combo's listener (`0x4f93e0` finds
+/// the bag by its seat `PLAYER_FIELD_BANKBAG_SLOT_1`, `0x6228a0` reads its slot).
+#[test]
+fn a_bank_bags_slot_reads_as_its_packet_left_it() {
+    const BANK_BAG: u64 = 0x4000_0000_0000_0047;
+    const BANK_LINEN: u64 = 0x4000_0000_0000_0048;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_bank(Some(benilla_ui::script::BankState::default()));
+    let mut pairs = vec![(2, 0x7), (FIELD_OBJECT_ENTRY, BAG_ID), (48, 4)];
+    pairs.extend(guid_pair(6, ME));
+    pairs.extend(guid_pair(8, ME));
+    let bank_bag = SessionEvent::ItemCreate {
+        guid: BANK_BAG,
+        container: true,
+        fields: ObjectFields::from_pairs(&pairs).into_created(ObjectType::Container),
+    };
+    frame(
+        &mut app,
+        vec![
+            bank_bag,
+            item(BANK_LINEN, LINEN, BANK_BAG),
+            values(ME, &seat(63, BANK_BAG)),
+        ],
+    );
+    spy_at_combo(&mut app, "GetContainerItemLink(5, 1)");
+    frame(
+        &mut app,
+        vec![
+            combo(2),
+            values(BANK_BAG, &guid_pair(FIELD_CONTAINER_SLOT_1, BANK_LINEN)),
+        ],
+    );
+    let seen: Vec<String> = hosted_eval(&mut app, "return AtCombo");
+    assert_eq!(seen, ["nil"]);
+    let now: Option<String> = hosted_eval(&mut app, "return GetContainerItemLink(5, 1)");
+    assert!(
+        now.is_some(),
+        "the frame's end reads the linen in the bank bag"
+    );
+}

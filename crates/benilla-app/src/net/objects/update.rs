@@ -385,7 +385,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         (Some(e), _) => {
             found_live(&mut sc, e);
             match sc.stores.get_mut(e) {
-                Ok(mut store) => write_fields(&mut store.0, fields),
+                Ok(mut store) => write_logged(&mut sc.view_log, guid, &mut store, fields),
                 Err(_) => Vec::new(),
             }
         }
@@ -397,6 +397,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             }),
         ) => {
             let moved = write_fields(&mut store, fields);
+            sc.view_log.replaced(guid, None);
             let e =
                 crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, store, container);
             if let Body::Item { countdowns, .. } = body {
@@ -407,6 +408,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
         (None, None) => {
             allocate(&mut sc, guid, item_type(container));
+            sc.view_log.replaced(guid, None);
             crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, fields, container);
             sc.pass.unshown.insert(guid);
             Vec::new()
@@ -424,16 +426,14 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
 
 /// A block's write into a held store ([`write_fields`]), logged for the views a listener reads
 /// ([`crate::ui_unit::views::ViewLog`]): the dwords it moved, or the store whole when it had no
-/// type to diff by. An item's store no token names, and goes unlogged.
+/// type to diff by. An item's too, whose stack, durability and slots the bag getters read as its
+/// packet left them.
 fn write_logged(
     log: &mut crate::ui_unit::views::ViewLog,
     guid: u64,
     store: &mut ObjectStore,
     delta: ObjectFields,
 ) -> Vec<(u16, u32, u32)> {
-    if guid::is_item(guid) {
-        return write_fields(&mut store.0, delta);
-    }
     let untyped = store.0.created_as().is_none().then(|| store.clone());
     let moved = write_fields(&mut store.0, delta);
     match untyped {
@@ -650,9 +650,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
         }
     }
     sc.pass.reactivated.push(guid);
-    if !guid::is_item(guid) {
-        sc.view_log.replaced(guid, None);
-    }
+    sc.view_log.replaced(guid, None);
 }
 
 /// The out-of-range list, which the protocol hands over only as a packet's first block

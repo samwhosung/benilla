@@ -188,18 +188,16 @@ impl ViewLog {
         self.open = false;
     }
 
-    /// The world left at once (a worldport, a disconnect, a logout): every unit the object manager
-    /// holds is logged as its store stands, a destroy for each the teardown takes. For one it
-    /// keeps, the entry holds the store unchanged, which undoing and replaying leaves as it is.
+    /// The world left at once (a worldport, a disconnect, a logout): every object the object
+    /// manager holds is logged as its store stands, a destroy for each the teardown takes. For one
+    /// it keeps, the entry holds the store unchanged, which undoing and replaying leaves as it is.
     pub(crate) fn torn_down<'a>(
         &mut self,
         index: &GuidIndex,
         store: impl Fn(Entity) -> Option<&'a ObjectStore>,
     ) {
         for (&guid, &e) in &index.0 {
-            if !benilla_protocol::guid::is_item(guid) {
-                self.replaced(guid, store(e).cloned());
-            }
+            self.replaced(guid, store(e).cloned());
         }
         self.close();
     }
@@ -742,16 +740,19 @@ struct Readable {
     grouped: HashSet<u64>,
 }
 
-/// The items a store's seats name that the getters walk at mask 0 (`0x622420`): the active
-/// player's equipment and equipped bags (0-22), backpack and keyring, private fields only its store
-/// carries, whose weapons the stat getters read (`UnitAttackSpeed` `0x518f19`, `HasWandEquipped`
-/// `0x4c99c2`) and whose whole set the bar's worn and reagent walks read; and a container's slots.
+/// The items a store's seats name: the active player's equipment and equipped bags (0-22),
+/// backpack, bank seats, bank bags and keyring, private fields only its store carries, whose
+/// weapons the stat getters read (`UnitAttackSpeed` `0x518f19`, `HasWandEquipped` `0x4c99c2`),
+/// whose whole set the bar's worn and reagent walks read (`0x622420`) and the bag getters find by
+/// seat (`0x6228a0`); and a container's slots.
 fn carried(f: &ObjectFields) -> Vec<Option<u64>> {
     use benilla_protocol::messages::ObjectType;
     match f.created_as() {
         Some(ObjectType::Player) => (0..23)
             .map(|i| f.player_inv_slot(i))
             .chain((0..16).map(|i| f.player_pack_slot(i)))
+            .chain((0..24).map(|i| f.player_bank_slot(i)))
+            .chain((0..6).map(|i| f.player_bank_bag_slot(i)))
             .chain((0..32).map(|i| f.player_keyring_slot(i)))
             .collect(),
         Some(ObjectType::Container) => (0..36).map(|i| f.container_slot(i)).collect(),
@@ -976,7 +977,13 @@ impl UnitViews {
                 _ => {}
             }
         }
-        queue.extend(stores.iter().filter(|g| readable.all.contains(g)));
+        // Every item the frame changed too: the bag getters find an item by its seat or a bag's
+        // slot as its packet left them, wherever the item came from.
+        queue.extend(
+            stores
+                .iter()
+                .filter(|g| readable.all.contains(g) || benilla_protocol::guid::is_item(**g)),
+        );
         while let Some(guid) = queue.pop() {
             if scratch.contains_key(&guid) {
                 continue;

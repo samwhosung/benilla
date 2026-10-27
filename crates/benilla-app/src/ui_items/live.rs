@@ -222,6 +222,8 @@ pub(crate) struct ItemLive<'w, 's> {
     icons: Option<Res<'w, ItemDisplays>>,
     rolls: crate::items::Rolls<'w>,
     objects: crate::net::Objects<'w, 's>,
+    /// The item objects as of the drain's place, so a listener reads its own packet's item.
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
     classes: Option<Res<'w, super::ItemClasses>>,
     sub_classes: Option<Res<'w, super::ItemSubClasses>>,
 }
@@ -236,7 +238,11 @@ impl ItemLive<'_, '_> {
         };
         match key {
             ItemKey::Object(guid) => {
-                let Some(fields) = self.objects.object(guid) else {
+                let Some(fields) = self
+                    .stores
+                    .by_guid(guid, self.objects.store(guid))
+                    .map(|s| &s.0)
+                else {
                     return false;
                 };
                 read(&LiveItem::object(fields, guid, items, icons, rolls).with_classes(classes));
