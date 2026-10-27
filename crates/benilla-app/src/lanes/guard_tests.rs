@@ -158,9 +158,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-    ),
-    (
-        Row::HostHeld,
         "::death::DeathNet",
         "the death stores, which `feed_death` fires the offers and the corpse range from; the death verbs, acting in their calls, hold them in the host",
     ),
