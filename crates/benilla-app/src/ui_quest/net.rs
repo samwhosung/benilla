@@ -291,7 +291,9 @@ pub(crate) fn quest_detail(world: &mut World, d: QuestDetails) {
         return;
     }
     // The trailing flag is the latch, not part of the view.
-    world.resource_mut::<QuestGiver>().close_on_cancel = d.auto_finish;
+    if super::giver_held(world, d.npc) {
+        world.resource_mut::<QuestGiver>().close_on_cancel = d.auto_finish;
+    }
     super::open_panel(world, d.npc, crate::ui_quest::QuestView::Detail(d));
 }
 
@@ -302,7 +304,9 @@ fn quest_progress(world: &mut World, p: QuestRequestItems) {
         p.quest_id, p.npc, p.is_complete
     );
     // The progress publisher `0x501070` writes `closeOnCancel` into the same latch (`0x50111a`).
-    world.resource_mut::<QuestGiver>().close_on_cancel = p.close_on_cancel;
+    if super::giver_held(world, p.npc) {
+        world.resource_mut::<QuestGiver>().close_on_cancel = p.close_on_cancel;
+    }
     super::open_panel(world, p.npc, crate::ui_quest::QuestView::Progress(p));
 }
 
@@ -314,7 +318,9 @@ fn quest_offer(world: &mut World, o: QuestOfferReward) {
     );
     // The `u32` after the reward text lands in the latch through DETAILS' publisher `0x500ef0`
     // (`0x50101a`).
-    world.resource_mut::<QuestGiver>().close_on_cancel = o.auto_finish;
+    if super::giver_held(world, o.npc) {
+        world.resource_mut::<QuestGiver>().close_on_cancel = o.auto_finish;
+    }
     super::open_panel(world, o.npc, crate::ui_quest::QuestView::Reward(o));
 }
 
@@ -522,6 +528,15 @@ mod tests {
         world.init_resource::<QuestGiver>();
         world.init_resource::<QuestGiverLane>();
         world.insert_resource(NetCommands(tx));
+        world.init_resource::<crate::net::GuidIndex>();
+        // The givers the tests name, held as units (`0x500bf1`-`0x500c35`).
+        for guid in [0xF130_0000_0000_0007, 0x4000_0000_0000_0BAD, 0x2A] {
+            crate::items::test_spawn_object(
+                &mut world,
+                guid,
+                benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]),
+            );
+        }
         (world, rx)
     }
 

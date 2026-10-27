@@ -518,12 +518,31 @@ struct PanelMacros<'w, 's> {
 /// The reward panel's chime (`0x841530`, played at `0x500d43`).
 const QUEST_LIST_COMPLETE_SOUND: &str = "igQuestListComplete";
 
+/// Whether the object store holds `guid` as a unit, a game object or an item (`0x468460`, then
+/// the type tests at `0x500c16`-`0x500c35`: `TYPEMASK_UNIT` 0x8, `_GAMEOBJECT` 0x20, `_ITEM` 0x2).
+pub(crate) fn giver_held(world: &World, guid: u64) -> bool {
+    const GIVER_TYPES: u32 = 0x8 | 0x20 | 0x2;
+    world
+        .resource::<crate::net::GuidIndex>()
+        .0
+        .get(&guid)
+        .and_then(|&e| world.get::<ObjectStore>(e))
+        .and_then(|s| s.0.object_type_mask())
+        .is_some_and(|mask| mask & GIVER_TYPES != 0)
+}
+
 /// A panel's open (`0x500bd0`, every panel packet's): the latch first, with no test of the cell
 /// (`0x500d74`), so a panel replacing the giver's own closes it, `QUEST_FINISHED` ahead of the new
 /// panel's event; then the cells, each text expanded against the player as the packet finds them,
 /// and the cell (`0x500d86`); then the panel's event at the setter's end (`0x500ee5`,
 /// `0x50105d`, `0x501120`), on the lane at this packet.
 pub(crate) fn open_panel(world: &mut World, npc: u64, view: QuestView) {
+    // The setter resolves its giver first and ends when none is held as a unit, a game object or
+    // an item (`0x500bf1`-`0x500c35` → `0x500d96`): no panel, no cell store, no cue.
+    if !giver_held(world, npc) {
+        debug!("ui_quest: no panel — giver {npc:#x} is not held");
+        return;
+    }
     crate::ui_session::register(world, npc);
     let panel = match &view {
         QuestView::Greeting(_) => QuestPanel::Greeting,
@@ -1055,6 +1074,7 @@ mod tests {
     fn panel_events_queue_per_publish_and_item_updates_per_callback() {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_non_send_resource(UiScript::new().unwrap());
+        hold_giver(app.world_mut(), 0x42);
         let detail = |app: &mut App, choice| {
             open_panel(app.world_mut(), 0x42, detail(100, "", vec![triple(choice)]))
         };
@@ -1094,6 +1114,53 @@ mod tests {
         assert!(lane(&mut app).is_empty(), "the callbacks are spent");
     }
 
+    /// A unit under `guid` in the object store (`TYPEMASK_OBJECT | _UNIT`).
+    fn hold_giver(world: &mut World, guid: u64) {
+        crate::items::test_spawn_object(
+            world,
+            guid,
+            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]),
+        );
+    }
+
+    /// The setter resolves its giver first (`0x500bf1`-`0x500c35`) and ends when none is held as
+    /// a unit, a game object or an item (`0x500d96`): no panel, no cell store, no cue.
+    #[test]
+    fn a_panel_for_a_giver_not_held_opens_nothing() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.init_resource::<crate::sound::MessageSounds>();
+        hold_giver(app.world_mut(), 0x42);
+        // A corpse (type mask 0x80) is held, but is no giver.
+        crate::items::test_spawn_object(
+            app.world_mut(),
+            0x44,
+            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x81)]),
+        );
+        open_panel(
+            app.world_mut(),
+            0x42,
+            progress("Bring it.", Vec::new(), true),
+        );
+        lane(&mut app);
+        for gone in [0x43, 0x44] {
+            // Quest 100 is the progress panel's: held, this reward would play the chime.
+            open_panel(app.world_mut(), gone, reward(100));
+            open_panel(app.world_mut(), gone, reward(101));
+            let giver = app.world().resource::<QuestGiver>();
+            assert_eq!(giver.npc, Some(0x42), "{gone:#x}: the open panel stays");
+            assert_eq!(giver.cells.quest, 100, "{gone:#x}: no cell store");
+            assert!(lane(&mut app).is_empty(), "{gone:#x}: no event");
+            assert!(
+                app.world()
+                    .resource::<crate::sound::MessageSounds>()
+                    .take_cues()
+                    .is_empty(),
+                "{gone:#x}: no cue"
+            );
+        }
+    }
+
     fn reward(quest_id: u32) -> QuestView {
         QuestView::Reward(QuestOfferReward {
             npc: 0x42,
@@ -1117,6 +1184,7 @@ mod tests {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         app.insert_non_send_resource(UiScript::new().unwrap());
         app.init_resource::<crate::sound::MessageSounds>();
+        hold_giver(app.world_mut(), 0x42);
         let cues = |app: &mut App| {
             app.world()
                 .resource::<crate::sound::MessageSounds>()
