@@ -121,7 +121,8 @@ pub struct QuestRecordView {
     pub reward_money: u32,
     /// The template's money at the top level (`+0x2c`), in copper.
     pub reward_money_max_level: i32,
-    /// `(item id, count)`, the ids that are set, in order (`+0x3c`, `+0x4c`).
+    /// `(item id, count)` per slot as the template stores them, 0 for an unset id (`+0x3c` x 4,
+    /// `+0x5c` x 6): the counts stop at the first unset one and the getters index the slots.
     pub rewards: Vec<(u32, u32)>,
     pub choices: Vec<(u32, u32)>,
     /// `GetQuestLogQuestText`'s two returns, the macros expanded.
@@ -904,6 +905,11 @@ fn line_parts(lua: &Lua, model: &mut Model, index: usize, line: usize) -> Option
     }
 }
 
+/// The reward or choice slots up to the first unset id, the count the log's getters make.
+fn count_to_first_unset(slots: &[(u32, u32)]) -> i64 {
+    slots.iter().take_while(|&&(id, _)| id != 0).count() as i64
+}
+
 /// One reward or choice of the selected quest as a [`QuestItemView`], the item record read
 /// without a callback; `None` past the list or with no selection.
 pub(crate) fn selected_quest_item(
@@ -920,7 +926,10 @@ pub(crate) fn selected_quest_item(
     } else {
         return None;
     };
-    let &(item_id, count) = list.get(index.checked_sub(1)?)?;
+    // An unset slot holds no item.
+    let &(item_id, count) = list
+        .get(index.checked_sub(1)?)
+        .filter(|&&(id, _)| id != 0)?;
     let template = model.item_templates.get(&item_id);
     Some(QuestItemView {
         name: template.map(|t| t.name.clone()),
@@ -1623,11 +1632,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     }
     // The reference counts the reward ids to the first unset one (`0x4e0a34`-`0x4e0a40`), so
     // `[A, 0, B, 0]` counts 1, and `GetQuestLogRewardInfo` indexes the raw array (`0x4e0b98`);
-    // the record holds the set ids compacted.
+    // the choices count the same way (`0x4e0ac4`-`0x4e0ad0`).
     // Deviation: four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips
     // the store at `0x4e0a49` and answers 0, a client bug.
-    install_detail_count(lua, "GetNumQuestLogRewards", |r| r.rewards.len() as i64)?;
-    install_detail_count(lua, "GetNumQuestLogChoices", |r| r.choices.len() as i64)?;
+    install_detail_count(lua, "GetNumQuestLogRewards", |r| {
+        count_to_first_unset(&r.rewards)
+    })?;
+    install_detail_count(lua, "GetNumQuestLogChoices", |r| {
+        count_to_first_unset(&r.choices)
+    })?;
     // `0x4e1070`: the base money when not negative (`0x4e10f7`), plus the top-level money
     // (`+0x2c`, `0x4e1102`) for a player of level 60 or more (`0x4e10b2`, signed), summed as a
     // signed dword (`fild` at `0x4e1108`).
@@ -1666,7 +1679,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                     let pair = model.selected_quest_record().and_then(|r| {
                         let list = if choices { &r.choices } else { &r.rewards };
-                        usize::try_from(row).ok().and_then(|n| list.get(n)).copied()
+                        usize::try_from(row)
+                            .ok()
+                            .and_then(|n| list.get(n))
+                            .copied()
+                            // An unset slot holds no item.
+                            .filter(|&(id, _)| id != 0)
                     });
                     pair.and_then(|(id, count)| {
                         let (name, quality, icon) = model.quest_item_lookup(id)?;

@@ -414,3 +414,39 @@ fn the_folds_outlive_the_vm_by_id() {
         ]
     );
 }
+
+/// `0x4e0a34`-`0x4e0a40`, `0x4e0ac4`: the counts stop at the first unset slot, and the getters
+/// index the raw slots (`0x4e0b98`), so `[A, 0, B, 0]` counts 1 and slot 2 is empty.
+#[test]
+fn the_log_counts_stop_at_the_first_unset_slot_and_the_getters_index_the_raw_slots() {
+    const SHIELD: u32 = 2001;
+    let mut s = UiScript::new().unwrap();
+    s.set_player_req_state(warrior(10));
+    s.set_item_template(SWORD, sword(5, 13));
+    s.set_item_template(SHIELD, sword(5, 13));
+    let mut r = record("Sword", 5, 12, "Elwynn Forest");
+    r.rewards = vec![(SWORD, 1), (0, 0), (SHIELD, 2), (0, 0)];
+    r.choices = vec![(SWORD, 1), (SHIELD, 1), (0, 0), (SWORD, 1), (0, 0), (0, 0)];
+    seat(&mut s, &[(10, r, slot(10, 0, 0))]);
+    s.run("SelectQuestLogEntry(2)").unwrap();
+    let int = |code: &str| s.eval::<i64>(&format!("return {code}")).unwrap();
+    assert_eq!(int("GetNumQuestLogRewards()"), 1);
+    assert_eq!(int("GetNumQuestLogChoices()"), 2);
+    // Slot 2 is empty: the nil tuple, not the next set slot; slot 3 is still its own item.
+    let named = |code: &str| {
+        s.eval::<Option<String>>(&format!("return ({code})"))
+            .unwrap()
+    };
+    assert_eq!(named("GetQuestLogRewardInfo(1)").as_deref(), Some("Sword"));
+    assert_eq!(named("GetQuestLogRewardInfo(2)"), None);
+    assert_eq!(
+        s.eval::<i64>("local _, _, n = GetQuestLogRewardInfo(3) return n")
+            .unwrap(),
+        2
+    );
+    assert_eq!(named("GetQuestLogChoiceInfo(3)"), None);
+    assert_eq!(named("GetQuestLogChoiceInfo(4)").as_deref(), Some("Sword"));
+    assert!(s
+        .eval::<bool>("return GetQuestLogItemLink('reward', 2) == nil")
+        .unwrap());
+}

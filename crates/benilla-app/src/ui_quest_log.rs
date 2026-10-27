@@ -628,9 +628,6 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
             .unwrap_or_default()
             .to_string()
     };
-    let set = |list: &[(u32, u32)]| -> Vec<(u32, u32)> {
-        list.iter().copied().filter(|&(id, _)| id != 0).collect()
-    };
     QuestRecordView {
         title: t.title.clone(),
         level: t.level,
@@ -670,8 +667,10 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
         required_money,
         reward_money,
         reward_money_max_level: t.money_max_level as i32,
-        rewards: set(&t.rewards),
-        choices: set(&t.choices),
+        // The raw slots, an unset one 0: the log's counts stop at the first and its getters index
+        // the array (`0x4e0a34`, `0x4e0b98`).
+        rewards: t.rewards.to_vec(),
+        choices: t.choices.to_vec(),
         // Quest text arrives with its `$N`, `$B`, `$G` and `$<n>w` macros unexpanded.
         description: crate::npc_text::substitute(&t.details, tables.macros),
         objectives_text: crate::npc_text::substitute(&t.objectives_text, tables.macros),
