@@ -11,9 +11,18 @@ pub const WARNING: u8 = 1;
 /// A file-level failure: a file that did not open or did not parse (`0x6edad4`, `0x704c15`).
 pub const FAILURE: u8 = 2;
 
-/// The most bytes of a line the record holds: the formatting buffer of `0x41a000` is 256 bytes,
-/// and its terminator takes one (`0x41a049`).
+/// The most bytes of a line the record holds: the formatting buffer of `0x41a000` is 256 bytes
+/// (`push 0x100` at `0x41a049`), and its terminator takes one.
 pub const LINE_MAX: usize = 255;
+
+/// `text` as the formatting buffer of `0x41a000` and `0x419ed0` holds it, or `None` for an empty
+/// one, which both drop (`0x41a05f`/`0x419f2f`). Deviation: the cut at 255 bytes backs up to a
+/// character start, where the reference cuts at the byte, mid-character (`0x64a868`, `SStrCopy`
+/// `0x64a5e0`), because a Rust string holds whole characters.
+fn buffered(mut text: String) -> Option<String> {
+    text.truncate(text.floor_char_boundary(LINE_MAX));
+    (!text.is_empty()).then_some(text)
+}
 
 /// One level's record: its lines in order and the running maximum severity (`+0x10`, which the
 /// append `0x41a000` and the prepend `0x419ed0` raise, never a count).
@@ -26,10 +35,12 @@ pub struct Status {
 impl Status {
     /// Append a line (`0x41a000`), cut at 255 bytes: it formats into a 256-byte stack buffer
     /// through `0x64a8b0` (`sub esp,0x100` at `0x41a003`, the call at `0x41a04f`), which ends the
-    /// string at the size less one (`0x64a868`). The cut backs up to a character boundary.
+    /// string at the size less one (`0x64a868`); an empty one is dropped, its severity unraised
+    /// (`0x41a05f` → `0x41a0f9`).
     pub fn report(&mut self, severity: u8, text: impl Into<String>) {
-        let mut text = text.into();
-        text.truncate(text.floor_char_boundary(LINE_MAX));
+        let Some(text) = buffered(text.into()) else {
+            return;
+        };
         self.lines.push(text);
         self.max = self.max.max(severity);
     }
@@ -45,7 +56,10 @@ impl Status {
     /// `jle` on the maximum, `0x6eddb6`/`0x6eddbb`, `0x6ee207`, `0x51f44f`), then the merge.
     pub fn close_into(mut self, parent: &mut Status, debug: bool, banner: String) {
         if debug || self.max > TRACE {
-            self.lines.insert(0, banner);
+            // The prepend formats into the same 256-byte buffer (`0x419ed3`, `0x419f19`).
+            if let Some(banner) = buffered(banner) {
+                self.lines.insert(0, banner);
+            }
         }
         parent.merge(self);
     }
@@ -139,6 +153,22 @@ pub(crate) struct LoadLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An empty line is dropped and raises nothing (`0x41a05f` → `0x41a0f9`), and a banner past
+    /// the buffer is cut like a line (`0x419f19`).
+    #[test]
+    fn an_empty_line_is_dropped_and_a_long_banner_is_cut() {
+        let mut level = Status::default();
+        level.report(FAILURE, "");
+        assert!(level.is_empty());
+        let mut parent = Status::default();
+        level.close_into(&mut parent, false, "banner".into());
+        assert!(parent.is_empty(), "an empty failure raised the severity");
+        let mut level = Status::default();
+        level.report(WARNING, "w");
+        level.close_into(&mut parent, false, "b".repeat(300));
+        assert_eq!(parent.lines()[0], "b".repeat(255));
+    }
 
     /// A line longer than the 256-byte buffer of `0x41a000` is cut at 255 bytes, and a cut inside
     /// a multi-byte character backs up to the character before it.
