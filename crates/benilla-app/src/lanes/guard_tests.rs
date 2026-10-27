@@ -273,9 +273,6 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the gossip getters, and quiet: the draw's `GOSSIP_SHOW` fires on the
     // gossip lane at its handler, and the gossip verbs hold it in their calls.
     "::ui_gossip::GossipState",
-    // Read through the host by the bag getters once no player is held, and quiet: no feed fires
-    // off it.
-    "::ui_items::bags::KeptBags",
     "::ui_loot::AutoLootByte",
     "::ui_loot::LootLatch",
     // Read through the host by the merchant getters, and quiet: its events fire on the merchant
@@ -470,10 +467,6 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
-    // The bags the session left, which the bag getters read through the host once no player is
-    // held, and the action feed's clock pair their slots' cooldowns map through.
-    "::ui_items::bags::KeptBags",
-    "::ui_action::state::ActionStateMemory",
     // `ItemBagFamily.dbc`, which the inventory refusal's handler names a bag's family by
     // (`0x5ede00`).
     "::ui_items::ItemBagFamilies",

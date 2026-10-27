@@ -598,15 +598,22 @@ fn a_bag_updates_listener_reads_the_seat_its_packet_left() {
     assert_eq!(seen, ["empty", "held"]);
 }
 
-/// The logout despawns the avatar and the session end every object ahead of the shutdown's
-/// `PLAYER_LOGOUT`, which the reference signals with the world whole (`0x490c2a`): the bags read
-/// as the session left them, the backpack's potions and the equipped bag's four slots.
+/// A logout's shutdown finds no bags: `SMSG_LOGOUT_COMPLETE` (`0x5aaeb0`) tears the game down
+/// through `0x401ee0`, which destroys the object manager (`0x402011` → `0x467700`, storing 0 at
+/// `0xb41414`, `0x46771e`) before the interface shutdown (`0x402039` → `0x491180` →
+/// `0x490bd0`), so `PLAYER_LOGOUT` (`0x490c2a`) runs with no active player (`0x468550`), and
+/// `GetContainerNumSlots` returns 0 for every bag (`0x4f95ab`).
 #[test]
-fn the_shutdown_reads_the_bags_the_session_left() {
+fn the_logouts_shutdown_reads_no_bags() {
     let mut app = client();
     let chunk = "local _, count = GetContainerItemInfo(0, 1) \
-                 return count, GetContainerNumSlots(1), GetContainerItemLink(1, 1)";
-    let before: (i64, i64, String) = hosted_eval(&mut app, chunk);
+                 return count, GetContainerNumSlots(0), GetContainerNumSlots(1), \
+                 GetContainerItemLink(1, 1)";
+    let held: (Option<i64>, i64, i64, Option<String>) = hosted_eval(&mut app, chunk);
+    assert!(
+        held.0.is_some() && held.1 == 16 && held.2 == 4 && held.3.is_some(),
+        "{held:?}"
+    );
     frame(
         &mut app,
         vec![
@@ -627,5 +634,8 @@ fn the_shutdown_reads_the_bags_the_session_left() {
         world.resource::<crate::net::GuidIndex>().0.is_empty(),
         "every object is gone"
     );
-    assert_eq!(hosted_eval::<(i64, i64, String)>(&mut app, chunk), before);
+    assert_eq!(
+        hosted_eval::<(Option<i64>, i64, i64, Option<String>)>(&mut app, chunk),
+        (None, 0, 0, None)
+    );
 }

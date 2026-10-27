@@ -1179,8 +1179,7 @@ fn bagnon_forevers_records_survive_the_logout_boundary() {
         "an equipped bag's size row carries its own count and short link"
     );
 
-    // The logout boundary: the shutdown events, which read the bags as the session left them (the
-    // client keeps them past the despawn, `crate::ui_items::bags::KeptBags`).
+    // The logout boundary: the shutdown events, which fire no `BAG_UPDATE`, so the records stand.
     s.fire_event("PLAYER_LEAVING_WORLD", Vec::new());
     s.fire_event("PLAYER_LOGOUT", Vec::new());
     let (size, item) = s

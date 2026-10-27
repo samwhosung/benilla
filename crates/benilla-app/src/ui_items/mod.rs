@@ -1015,7 +1015,6 @@ impl Plugin for UiItemsPlugin {
         net::register(app);
         crate::item_lane::add_item_lane(app);
         equip_error::add_equip_error_lane(app);
-        bags::plugin(app);
         // The icons come from the equipment renderer's `ItemDisplays`.
         app.init_resource::<crate::ui_items::locks::HeldItemLocks>()
             .init_resource::<crate::ui_items::locks::LockWatch>()

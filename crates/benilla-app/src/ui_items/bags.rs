@@ -3,13 +3,10 @@
 //! player's list or the bag's as they run (`GetItemInSlot`, `0x6228a0`; the bag lookup
 //! `0x4f93e0`), so a listener reads the bags its own packet left. The player's store and the item
 //! objects are read as of the drain's place ([`crate::ui_unit::views::ViewStores`]), each slot
-//! derived as it is asked for ([`super::feed::resolve_slot`]).
-//!
-//! The reference's UI shutdown signals `PLAYER_LOGOUT` (`0x490c2a`) with the world whole, where
-//! benilla's logout despawns the avatar and the items before it, so the logout's handler keeps the
-//! bags as the session left them ([`KeptBags`]), which answer once no player is held.
-
-use std::collections::HashMap;
+//! derived as it is asked for ([`super::feed::resolve_slot`]). With no player held the family
+//! answers nothing: a logout's `PLAYER_LOGOUT` (`0x490c2a`) runs after the object manager is gone
+//! (`0x402011` before `0x402039`), where `GetContainerNumSlots` finds no active player and returns
+//! 0 (`0x4f95ab`), and only a harness's copy stands in.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -17,8 +14,8 @@ use bevy::prelude::*;
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
-    BagGuidQuery, BagHead, BagItemsQuery, BagQuery, BagSlotQuery, ContainerSlot, ContainerState,
-    HasKeyQuery, LiveReader,
+    BagGuidQuery, BagHead, BagItemsQuery, BagQuery, BagSlotQuery, ContainerSlot, HasKeyQuery,
+    LiveReader,
 };
 
 use crate::entities::ItemDisplays;
@@ -34,27 +31,15 @@ use super::{
 /// Every container id a getter can name, in the order a walk over them reads.
 const CONTAINERS: [i64; 13] = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-/// The bags and `HasKey()` as the session left them: kept by the logout's and the session end's
-/// handlers while the world was whole, read once no player is held, cleared after the shutdown.
-#[derive(Resource, Default)]
-pub(crate) struct KeptBags(Option<Kept>);
-
-struct Kept {
-    bags: HashMap<i64, ContainerState>,
-    key: bool,
-}
-
 /// What the container getters read as they run.
 #[derive(SystemParam)]
 pub(crate) struct BagLive<'w, 's> {
     reads: BagReads<'w, 's>,
     cooldowns: Option<Res<'w, crate::spell::Cooldowns>>,
-    kept: Option<Res<'w, KeptBags>>,
 }
 
-/// [`BagLive`] but the cooldown list and the kept bags, for a read in the world with the list held
-/// to write (the cast ladder's [`crate::spell::CastLadder`]) or the kept bags themselves
-/// ([`Self::with`]).
+/// [`BagLive`] but the cooldown list, for a read in a system that holds the list to write (the
+/// cast ladder's [`crate::spell::CastLadder`]), which lends both ([`Self::with`]).
 #[derive(SystemParam)]
 pub(crate) struct BagReads<'w, 's> {
     objects: Objects<'w, 's>,
@@ -73,7 +58,7 @@ pub(crate) struct BagReads<'w, 's> {
 }
 
 impl<'w, 's> BagReads<'w, 's> {
-    /// The bags while a player is held, their slots' cooldowns read off `cooldowns`.
+    /// The bags, their slots' cooldowns read off `cooldowns`.
     pub(crate) fn with<'a>(
         &'a self,
         cooldowns: Option<&'a crate::spell::Cooldowns>,
@@ -81,17 +66,13 @@ impl<'w, 's> BagReads<'w, 's> {
         Bags {
             reads: self,
             cooldowns,
-            kept: None,
         }
     }
 }
 
 impl<'w, 's> BagLive<'w, 's> {
     fn bags(&self) -> Bags<'_, 'w, 's> {
-        Bags {
-            kept: self.kept.as_deref().and_then(|k| k.0.as_ref()),
-            ..self.reads.with(self.cooldowns.as_deref())
-        }
+        self.reads.with(self.cooldowns.as_deref())
     }
 }
 
@@ -99,8 +80,6 @@ impl<'w, 's> BagLive<'w, 's> {
 pub(crate) struct Bags<'a, 'w, 's> {
     reads: &'a BagReads<'w, 's>,
     cooldowns: Option<&'a crate::spell::Cooldowns>,
-    /// The bags the session left, read once no player is held.
-    kept: Option<&'a Kept>,
 }
 
 impl<'w, 's> std::ops::Deref for Bags<'_, 'w, 's> {
@@ -230,37 +209,6 @@ impl Bags<'_, '_, '_> {
             .collect()
     }
 
-    /// Every container the player holds now, whole: what [`KeptBags`] keeps.
-    fn containers(&self) -> Option<Kept> {
-        let store = self.player()?;
-        let me = &store.0;
-        let objects = self.stores.item_objects(&self.objects);
-        let bags = CONTAINERS
-            .iter()
-            .filter_map(|&bag| {
-                let h = self.held(me, &objects, bag)?;
-                let slots = h
-                    .guids
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(j, &g)| Some((j as u32 + 1, self.slot(me, &objects, g)?)))
-                    .collect();
-                Some((
-                    bag,
-                    ContainerState {
-                        name: h.head.name,
-                        num_slots: h.head.num_slots,
-                        slots,
-                    },
-                ))
-            })
-            .collect();
-        Some(Kept {
-            bags,
-            key: has_key(me, &objects, &self.items),
-        })
-    }
-
     /// `ask` answered off the player's bags as of here; `false` for not one of the family's.
     fn answer_held(&self, me: &ObjectFields, ask: &mut LiveAsk<'_>) -> bool {
         let objects = self.stores.item_objects(&self.objects);
@@ -289,53 +237,14 @@ impl Bags<'_, '_, '_> {
             })
             || ask.answer(|_: &HasKeyQuery| Some(has_key(me, objects, &self.items)))
     }
-
-    /// `ask` answered off the bags the session left ([`KeptBags`]).
-    fn answer_kept(kept: &Kept, ask: &mut LiveAsk<'_>) -> bool {
-        let items = || {
-            let mut out: Vec<(i64, u32, ContainerSlot)> = kept
-                .bags
-                .iter()
-                .flat_map(|(&bag, c)| c.slots.iter().map(move |(&slot, s)| (bag, slot, s.clone())))
-                .collect();
-            out.sort_by_key(|&(bag, slot, _)| (CONTAINERS.iter().position(|&b| b == bag), slot));
-            out
-        };
-        ask.answer(|q: &BagSlotQuery| {
-            Some(
-                kept.bags
-                    .get(&q.bag)
-                    .and_then(|c| c.slots.get(&q.slot))
-                    .cloned(),
-            )
-        }) || ask.answer(|q: &BagQuery| {
-            Some(kept.bags.get(&q.0).map(|c| BagHead {
-                num_slots: c.num_slots,
-                name: c.name.clone(),
-            }))
-        }) || ask.answer(|_: &BagItemsQuery| Some(items()))
-            || ask.answer(|q: &BagGuidQuery| {
-                Some(
-                    items()
-                        .into_iter()
-                        .find(|(_, _, s)| q.0 != 0 && s.guid == q.0),
-                )
-            })
-            || ask.answer(|_: &HasKeyQuery| Some(kept.key))
-    }
 }
 
 impl Bags<'_, '_, '_> {
     /// `ask` answered off the bags; `false` for not one of the family's.
     fn answer(&self, ask: &mut LiveAsk<'_>) -> bool {
-        match self.player() {
-            Some(store) => self.answer_held(&store.0, ask),
-            // No player: the bags the session left, else nothing, and a harness's copy answers.
-            None => match self.kept {
-                Some(kept) => Self::answer_kept(kept, ask),
-                None => false,
-            },
-        }
+        // No player declines, and a harness's copy answers.
+        self.player()
+            .is_some_and(|store| self.answer_held(&store.0, ask))
     }
 }
 
@@ -357,46 +266,6 @@ impl LiveReader for Bags<'_, '_, '_> {
     fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
         Bags::answer(self, ask)
     }
-}
-
-/// The logout's and the session end's handler, ahead of the teardown that despawns the avatar
-/// and the items: the bags as the session leaves them, which the shutdown's `PLAYER_LOGOUT`
-/// reads (`0x490c2a`, with the world whole). A session event with no player held keeps what an
-/// earlier one kept.
-pub(super) fn keep_bags(
-    In(ev): In<benilla_protocol::SessionEvent>,
-    bags: BagReads,
-    cooldowns: Option<Res<crate::spell::Cooldowns>>,
-    mut kept: ResMut<KeptBags>,
-) {
-    use benilla_protocol::SessionEvent;
-    if !matches!(
-        ev,
-        SessionEvent::LoggedOut | SessionEvent::Disconnected { .. }
-    ) {
-        return;
-    }
-    if let Some(now) = bags.with(cooldowns.as_deref()).containers() {
-        kept.0 = Some(now);
-    }
-}
-
-/// After the shutdown's `PLAYER_LOGOUT`: the kept bags go with the session.
-pub(super) fn forget_kept_bags(mut kept: ResMut<KeptBags>) {
-    kept.0 = None;
-}
-
-/// The family, the handlers and the clear.
-pub(super) fn plugin(app: &mut App) {
-    use crate::net::NetHandlerApp;
-    use benilla_protocol::SessionEventKind as K;
-    app.init_resource::<KeptBags>()
-        .net_handler_ahead(K::LoggedOut, keep_bags)
-        .net_handler_ahead(K::Disconnected, keep_bags)
-        .add_systems(
-            OnExit(crate::client_state::ClientState::InWorld),
-            forget_kept_bags.in_set(crate::ui_script::SessionEnd::Clears),
-        );
 }
 
 /// `chunk` on the world's VM with the bags lent as its reads, as an engine turn lends them
