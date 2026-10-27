@@ -378,10 +378,9 @@ impl PetPress<'_, '_> {
 /// to the pet's guid inserts the same pair for every entry whose spell lacks `Attributes` bit 25
 /// (`0x6e9553`-`0x6e9598`, `Cooldowns::apply_wire_cooldown`). The attempt's send starts it too
 /// (`0x6e58fb`), with the list picked by the caster's charmed-by, else summoned-by, guid
-/// (`0x6e58c2`-`0x6e58f3`), for the presses [`cast_pet_press`] takes; it owes them to the bar
-/// ([`crate::spell::PetGcdsOwed`], [`arm_owed_pet_gcds`]). The `SMSG_SPELL_GO` pet leg inserts the
-/// spell's own timers and no GCD (`0x6e85f7`).
-pub(super) fn arm_pet_gcd(
+/// (`0x6e58c2`-`0x6e58f3`), for the presses [`cast_pet_press`] takes: inside the send, through this
+/// arm. The `SMSG_SPELL_GO` pet leg inserts the spell's own timers and no GCD (`0x6e85f7`).
+pub(crate) fn arm_pet_gcd(
     bar: &mut PetBar,
     spell_id: u32,
     spell: &benilla_formats::SpellDisplay,
@@ -389,25 +388,6 @@ pub(super) fn arm_pet_gcd(
     now: Instant,
 ) {
     bar.cooldowns.start_gcd(spell_id, spell, now, mods);
-}
-
-/// The GCDs the attempt's sends owe the pet's list (`0x6e58fb`), each at its send's instant, put
-/// in before the bar's feed reads the list. A world with no spell plugin owes none.
-pub(crate) fn arm_owed_pet_gcds(
-    owed: Option<ResMut<crate::spell::PetGcdsOwed>>,
-    mut bar: ResMut<PetBar>,
-    spells: Option<Res<Spells>>,
-    mods: Option<Res<crate::spell::SpellModifiers>>,
-) {
-    let (Some(mut owed), Some(mods)) = (owed, mods) else {
-        return;
-    };
-    for (spell_id, at) in owed.take() {
-        let Some(d) = spells.as_ref().and_then(|s| s.catalog.get(spell_id)) else {
-            continue;
-        };
-        arm_pet_gcd(&mut bar, spell_id, d, &mods, at);
-    }
 }
 
 /// `TogglePetAutocast`'s local half (`0x4bcbb0`): flip bit 30 in place and return the whole word

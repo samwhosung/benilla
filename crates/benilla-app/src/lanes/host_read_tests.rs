@@ -91,9 +91,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "drains the superseded ranks the bar's macros take; the known spells are the handlers' \
          alone"),
     ("::ui_party::feed::feed_party", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_pet::drain::arm_owed_pet_gcds", &["ui_pet::PetBar"],
-        "puts the GCDs the pet's sends owe into its list, which the reference arms at the send \
-         (`0x6e58fb`)"),
     ("::ui_pet::unit::feed_pet_unit", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",
         &["ui_binder::BinderState"],

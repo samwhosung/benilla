@@ -11,7 +11,6 @@ use benilla_protocol::messages::PetSpells;
 
 use crate::net::{GuidIndex, ObjectStore};
 use crate::spell::Cooldowns;
-use crate::ui_action::CooldownEvents;
 use crate::ui_unit::UnitFeed;
 
 mod bar;
@@ -29,7 +28,7 @@ pub(crate) use usable::actions_usable as pet_actions_usable;
 
 // A pet bar press and the pet's other verbs, applied in call order by `crate::script_calls`.
 pub(crate) use drain::call_pet_off;
-pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
+pub(crate) use drain::{arm_pet_gcd, cast_pet_press, PetPress, PetStep};
 pub(crate) use steps::PetSteps;
 pub(crate) use unit::{feed_pet_unit, on_field_edge, pet_state, PetSources};
 
@@ -154,17 +153,11 @@ impl Plugin for UiPetPlugin {
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
                 Update,
-                (
-                    // The getters read the bar, its pet and its book at the call (`PetLive`), and
-                    // every verb is a script call (`PetPress`, `PetSteps`). The GCDs the attempt's
-                    // sends owe the pet's list go in before the cooldown events.
-                    drain::arm_owed_pet_gcds
-                        .in_set(UnitFeed)
-                        .before(CooldownEvents),
-                    feed_pet_unit
-                        .in_set(UnitFeed)
-                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                ),
+                // The getters read the bar, its pet and its book at the call (`PetLive`), and every
+                // verb is a script call (`PetPress`, `PetSteps`).
+                feed_pet_unit
+                    .in_set(UnitFeed)
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes),
             );
     }
 }

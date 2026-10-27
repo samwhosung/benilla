@@ -229,7 +229,6 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::player::state::OwnControlLost",
     "::spell::cast_send::HeldForPick",
     "::spell::cast_send::ScriptCastPermit",
-    "::spell::cast_send::unit_caster::PetGcdsOwed",
     "::spell::cast_send::unit_caster::UnitAttackOwed",
     "::spell::inflight::ActiveChannel",
     "::spell::inflight::AutoRepeatActive",

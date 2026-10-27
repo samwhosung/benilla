@@ -32,7 +32,6 @@ fn feedable_pet(pet: &benilla_protocol::ObjectFields, self_guid: u64) -> bool {
 #[allow(clippy::too_many_arguments)] // the two legs' reads
 pub(crate) fn drop_item_on_unit(
     mut vm: crate::script_calls::VmWith<(
-        Res<'static, crate::ui_pet::PetBar>,
         crate::spell::ScriptCast<'static, 'static>,
         TradeLeg<'static, 'static>,
     )>,
@@ -43,12 +42,12 @@ pub(crate) fn drop_item_on_unit(
     press: Res<crate::target::PressPick>,
     mut clicks: MessageReader<benilla_world::interact::WorldClick>,
 ) {
-    vm.turn(|script, (pet_bar, mut cast, mut trade)| {
+    vm.turn(|script, (mut cast, mut trade)| {
         let Some(script) = script else {
             clicks.clear();
             return;
         };
-        let pet_guid = pet_bar.spells.pet_guid;
+        let pet_guid = cast.ladder.pet_guid();
         let hovered = press.hovered;
         let tokens = script.take_drop_item_on_unit();
         // The world entry: a click whose press-time pick is the pet. That is the pick the click

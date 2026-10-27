@@ -356,7 +356,7 @@ fn feed_craft(
                 .then(|| display_line(listed.first().copied(), skill_lines, store))
                 .flatten()
                 .map_or((None, 0, 0), |(n, r, m)| (Some(n), r, m));
-            let pet = PetView::of(&pet_reads, &skill_lines.catalog, &spells.catalog);
+            let pet = pet_reads.view(&skill_lines.catalog, &spells.catalog);
             let recipes: Vec<CraftRecipe> = listed
                 .iter()
                 .filter_map(|&s| {

@@ -26,25 +26,46 @@ pub(crate) struct PetReads<'w> {
     families: Option<Res<'w, crate::ui_pet_stats::PetFamilyTables>>,
 }
 
+impl PetReads<'_> {
+    /// [`PetView::of`] over these reads.
+    pub(crate) fn view<'a>(
+        &'a self,
+        skill_lines: &'a benilla_formats::SkillLineCatalog,
+        spells: &'a benilla_formats::SpellCatalog,
+    ) -> Option<PetView<'a>> {
+        PetView::of(
+            self.bar.as_deref(),
+            self.names.as_deref(),
+            self.families.as_deref(),
+            skill_lines,
+            spells,
+        )
+    }
+}
+
 /// The pet's knowledge, resolved once per use.
 pub(crate) struct PetView<'a> {
     pub(crate) bar_guid: u64,
     /// The pet book's spells, the ids `KnowsSpell` scans for the pet bar's unit (`0x60c7a0`):
     /// the bar packet's book words that pass the book's add gate (`0x4b2f90`).
     book: Vec<u32>,
-    reads: &'a PetReads<'a>,
+    names: Option<&'a crate::names::NameCache>,
+    families: Option<&'a crate::ui_pet_stats::PetFamilyTables>,
     skill_lines: &'a benilla_formats::SkillLineCatalog,
     spells: &'a benilla_formats::SpellCatalog,
 }
 
 impl<'a> PetView<'a> {
-    /// The view over the pet bar, `None` without one.
+    /// The view over the pet bar `bar`, `None` without one; `names` and `families` name a unit's
+    /// family lines.
     pub(crate) fn of(
-        reads: &'a PetReads<'a>,
+        bar: Option<&crate::ui_pet::PetBar>,
+        names: Option<&'a crate::names::NameCache>,
+        families: Option<&'a crate::ui_pet_stats::PetFamilyTables>,
         skill_lines: &'a benilla_formats::SkillLineCatalog,
         spells: &'a benilla_formats::SpellCatalog,
     ) -> Option<Self> {
-        let bar = reads.bar.as_deref()?;
+        let bar = bar?;
         Some(Self {
             bar_guid: bar.spells.pet_guid,
             book: bar
@@ -54,7 +75,8 @@ impl<'a> PetView<'a> {
                 .map(|e| e.action())
                 .filter(|&s| spells.get(s).is_some_and(|d| d.in_pet_book()))
                 .collect(),
-            reads,
+            names,
+            families,
             skill_lines,
             spells,
         })
@@ -72,8 +94,8 @@ impl<'a> PetView<'a> {
         }
         let lines = fields
             .object_entry()
-            .and_then(|e| self.reads.names.as_deref()?.creature_record(e))
-            .and_then(|r| self.reads.families.as_deref()?.families.get(r.pet_family))
+            .and_then(|e| self.names?.creature_record(e))
+            .and_then(|r| self.families?.families.get(r.pet_family))
             .map(|f| f.skill_lines);
         Some(PetUnit {
             guid,

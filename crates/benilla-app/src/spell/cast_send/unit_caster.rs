@@ -19,19 +19,6 @@ use crate::net::Objects;
 
 use super::{cast_target, CastCommit, CastCore, CastLadder, TargetedBind};
 
-/// The GCDs a unit caster's sends started in the pet's history (`0x6e2de0(spell, 1)` from
-/// `0x6e58fb`), which the pet bar keeps ([`crate::ui_pet::PetBar`]); it takes them before its
-/// next feed. Each is the spell and the instant of its send.
-#[derive(Resource, Default)]
-pub(crate) struct PetGcdsOwed(Vec<(u32, Instant)>);
-
-impl PetGcdsOwed {
-    /// The GCDs owed since the last take, in send order.
-    pub(crate) fn take(&mut self) -> Vec<(u32, Instant)> {
-        std::mem::take(&mut self.0)
-    }
-}
-
 /// The attack a unit caster's send owes: TryCast's tail calls `StartAttack 0x6131a0` on the caster
 /// at its target (`0x6e51c9`-`0x6e51de`) for a spell that starts melee from its send, unless the
 /// caster is attacking already (`0x60ecb0`). Its caller, which holds the pet bar, applies it
@@ -51,7 +38,8 @@ impl UnitAttackOwed {
 pub(super) struct UnitCaster<'a> {
     /// The active player's guid (`0x468550`).
     pub(super) active: Option<u64>,
-    pub(super) pet_gcds: Option<&'a mut PetGcdsOwed>,
+    /// The pet bar, whose history a send for our pet starts its GCD in (`0x6e58fb`).
+    pub(super) pet_bar: Option<&'a mut crate::ui_pet::PetBar>,
     /// The caster's `[unit+0xc48]` (`0x60ecb0`), which the pick (`0x6e4eeb`) and the attack tail
     /// (`0x6e51cb`) test.
     pub(super) engaged: bool,
@@ -89,6 +77,11 @@ impl CastLadder<'_, '_> {
         self.send_bound(spell_id, ctx, CastCommit::Pet { caster }, None, Some(held));
     }
 
+    /// The pet bar's guid (`[0xb714a0]`), 0 with no bar.
+    pub(crate) fn pet_guid(&self) -> u64 {
+        self.pet_bar.as_deref().map_or(0, |b| b.spells.pet_guid)
+    }
+
     /// The attack a unit caster's send owes ([`UnitAttackOwed`]), if one does.
     pub(crate) fn take_unit_attack(&mut self) -> Option<(u64, u64)> {
         self.unit_attack
@@ -110,7 +103,7 @@ impl CastLadder<'_, '_> {
         // A cursor's commit is past TryCast, whose attack tail it never reaches.
         let unit = UnitCaster {
             active: self.active.as_ref().and_then(|g| g.0),
-            pet_gcds: self.pet_gcds.as_deref_mut(),
+            pet_bar: self.pet_bar.as_deref_mut(),
             engaged: false,
             attack: None,
         };
@@ -157,9 +150,10 @@ pub(super) fn send_tail(
         cooldowns.start_gcd(spell_id, d, now, spell_mods);
         return;
     }
-    // A world with no pet bar keeps no pet history to owe.
-    if let Some(owed) = unit.pet_gcds {
-        owed.0.push((spell_id, now));
+    // `StartGlobalCooldown(spell, 1)` into the pet's history at the send, and its flush; a world
+    // with no pet bar keeps no pet history.
+    if let Some(bar) = unit.pet_bar {
+        crate::ui_pet::arm_pet_gcd(bar, spell_id, d, spell_mods, now);
     }
 }
 

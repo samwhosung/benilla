@@ -176,10 +176,9 @@ pub(super) fn rig(
         bar.spells.bar[i] = PetActionEntry::from(spell_id | (u32::from(PET_ACT_ENABLED) << 24));
     }
     world.insert_non_send_resource(listening_vm());
-    // The GCDs the attempt's sends owe the pet's list; the flush is the pet's cooldown lane's, in
-    // the drain.
-    let mut feed = Schedule::default();
-    feed.add_systems(super::drain::arm_owed_pet_gcds);
+    // The pet's feeds: none is left, as the send arms its GCD inside the call; the flush is the pet's
+    // cooldown lane's, in the drain.
+    let feed = Schedule::default();
     let mut rig = Rig {
         app,
         commands,
@@ -415,7 +414,9 @@ fn a_possessed_units_press_casts_through_the_attempt_as_the_units_cast() {
         )]
     );
     assert!(rig.player_list_untouched(), "the GCD is not the player's");
-    // The send's GCD reaches the pet's list before the bar's feed reads it, and sweeps the slot.
+    // The send's GCD is in the pet's list as the call returns, with no system after it.
+    assert_eq!(rig.pet_reads(CLAW, &claw()).1, 1500, "armed at the send");
+    // Its flush fires on the pet's cooldown lane, and the slot sweeps.
     assert_eq!(
         rig.frame(),
         [
@@ -426,6 +427,20 @@ fn a_possessed_units_press_casts_through_the_attempt_as_the_units_cast() {
     );
     assert_eq!(rig.pet_reads(CLAW, &claw()).1, 1500);
     let (_, duration, enable) = rig.cooldown(1);
+    assert!((duration - 1.5).abs() < 1e-9 && enable == 1, "{duration}");
+}
+
+/// The send's GCD (`0x6e2de0` from `0x6e58fb`) is in the pet's list inside the call that sent it:
+/// the rest of the chunk, as a later packet's listener, reads it through `GetPetActionCooldown`.
+#[test]
+fn a_pet_casts_gcd_reads_in_the_chunk_that_cast_it() {
+    let mut rig = rig(vec![(CLAW, claw())], &[CLAW], Some(possessed()));
+    view_on(&mut rig, PET);
+
+    let (_, duration, enable): (f64, f64, i32) =
+        rig.eval("CastPetAction(1) return GetPetActionCooldown(1)");
+
+    assert_eq!(pet_casts(&rig.sent()).len(), 1, "the unit's cast went out");
     assert!((duration - 1.5).abs() < 1e-9 && enable == 1, "{duration}");
 }
 
