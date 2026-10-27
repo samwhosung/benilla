@@ -9,7 +9,8 @@
 //! trips its anti-flood kick (`WorldSession.cpp:1316-1342`).
 //!
 //! `SMSG_GM_TICKET_STATUS_UPDATE` is cmangos's; vmangos never sends it. Its status 2 fires the
-//! no-ticket `UPDATE_TICKET` and status 3 `GMSURVEY_DISPLAY`, which `Blizzard_GMSurveyUI` hears.
+//! no-ticket `UPDATE_TICKET` and status 3 `GMSURVEY_DISPLAY`, which `HelpFrame` hears
+//! (`HelpFrame.xml:744`, `HelpFrame.lua:391`).
 
 use benilla_ui::script::{GmTicketIntent, GmTicketWrite, ScriptValue, UnservedSend};
 use bevy::prelude::*;
@@ -159,13 +160,18 @@ fn update_ticket_args(ticket: Option<&benilla_protocol::messages::GmTicket>) -> 
 /// The no-ticket `UPDATE_TICKET` (`0x5e450c`, `0x5e7945`): seven dwords 0, `""`, -1, -1, -1, 0, 0
 /// under the format `%d%s%f%f%f%d%d` (`0x8603e4`), which reads ten. A `%f` takes eight bytes
 /// (`fld qword` at `0x704fe3`), so arg3 is `0xFFFFFFFFFFFFFFFF`, a NaN, and arg4
-/// `0x00000000FFFFFFFF`, a denormal. Arg5's high half and both `%d` are read from past the pushed
-/// arguments, stack the handler never wrote; we answer zero there.
+/// `0x00000000FFFFFFFF`, a denormal; the bits are kept, so `tostring` reads `-1.#QNAN`. Arg5's
+/// high half and both `%d` are read from past the pushed arguments: on the fetch path (esp at
+/// `0x5e450c`) the handler's saved edi, saved esi and its local `[ebp-0x9b8]`, on status 2
+/// (`0x5e7945`) the saved ebp, the return address into the dispatcher and the handler's first
+/// argument.
+///
+/// Deviation: those three are stack residue, so benilla sends 0 for each.
 fn no_ticket_args() -> Vec<ScriptValue> {
     vec![
         ScriptValue::Int(0),
         ScriptValue::Str(String::new()),
-        ScriptValue::Number(f64::NAN),
+        ScriptValue::Number(f64::from_bits(u64::MAX)),
         ScriptValue::Number(f64::from_bits(0xFFFF_FFFF)),
         ScriptValue::Number(0.0),
         ScriptValue::Int(0),
@@ -639,7 +645,7 @@ mod tests {
             ScriptValue::Number(n) => n,
             ref other => panic!("arg{} is {other:?}", i + 1),
         };
-        assert!(float(2).is_nan(), "(-1, -1) read as one double");
+        assert_eq!(float(2).to_bits(), u64::MAX, "(-1, -1) read as one double");
         assert_eq!(
             float(3).to_bits(),
             0xFFFF_FFFF,
