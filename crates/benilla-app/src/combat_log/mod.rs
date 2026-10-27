@@ -24,7 +24,7 @@ use crate::net::{
 };
 use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
-use crate::vplates::PlateFlash;
+use crate::vplates::PlateFlashes;
 
 pub(crate) mod chat;
 #[cfg(test)]
@@ -133,8 +133,8 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::PvpCredit, on_pvp_credit)
             // Written by the missile flight; declared here too, as registering is idempotent.
             .add_message::<MissileMiss>()
-            // Read by the plate driver; declared here too for the same reason.
-            .add_message::<PlateFlash>()
+            // Taken by the plate driver; declared here too, as registering is idempotent.
+            .init_resource::<PlateFlashes>()
             // After the flight that writes the arrivals (`entities::move_missiles`), so the
             // flash and the line queue together, in `0x61dd50`'s order, the frame the missile
             // lands. The flight runs after the frame's feeds (the sheath request it follows is
@@ -162,12 +162,12 @@ fn on_spell_damage_log(
     In(ev): In<SessionEvent>,
     c: Ctx,
     mut l: Sinks,
-    mut flashes: MessageWriter<PlateFlash>,
+    mut flashes: ResMut<PlateFlashes>,
 ) {
     if let SessionEvent::SpellDamageLog(s) = ev {
         let ctx = c.ctx();
         if let Some(victim) = chat::spell_damage_log(s, &ctx, &l.stores, &l.poses, &l.log) {
-            flashes.write(PlateFlash(victim));
+            flashes.0.push(victim);
         }
         text::spell_damage_log(
             s,
@@ -416,12 +416,12 @@ fn on_environmental_damage_log(
     In(ev): In<SessionEvent>,
     c: Ctx,
     l: Sinks,
-    mut flashes: MessageWriter<PlateFlash>,
+    mut flashes: ResMut<PlateFlashes>,
 ) {
     if let SessionEvent::EnvironmentalDamageLog(e) = ev {
         let ctx = c.ctx();
         if let Some(victim) = chat::environmental_damage_log(e, &ctx, &l.stores, &l.poses, &l.log) {
-            flashes.write(PlateFlash(victim));
+            flashes.0.push(victim);
         }
     }
 }
