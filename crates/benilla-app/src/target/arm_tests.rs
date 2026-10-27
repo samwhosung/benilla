@@ -3,18 +3,18 @@
 use super::*;
 use benilla_ui::script::UiScript;
 
-/// A right mouse-down in the world ends repair mode (`0x492c68`); the same press on a UI frame,
-/// or one that drops a held payload (`0x492b50`), leaves it standing.
+/// A right mouse-down the world frame takes runs the hook's legs whatever the cursor holds: repair
+/// mode ends (`0x492c68`) and a pending gift wrap clears (`0x492c44`, `0x492c54`). The same press
+/// on a UI frame never reaches the hook.
 #[test]
-fn a_right_press_in_the_world_ends_repair_mode_and_one_on_the_ui_does_not() {
+fn a_right_press_in_the_world_ends_repair_mode_and_a_wrap_and_one_on_the_ui_does_not() {
     use benilla_ui::script::MerchantState;
 
-    // One right press with repair mode armed; returns whether repair mode survived it.
+    // One right press with repair mode and a wrap armed; returns whether each survived it.
     let press = |over_ui: bool, payload_held: bool| {
         let mut world = World::new();
         world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         world.insert_resource(crate::ui_script::CursorPayloadHeld(payload_held));
-        world.init_resource::<Messages<WorldRightPress>>();
         world.init_resource::<crate::spell::targeting::SpellTargeting>();
         let mut script = UiScript::new().unwrap();
         script.set_merchant(Some(MerchantState {
@@ -23,27 +23,27 @@ fn a_right_press_in_the_world_ends_repair_mode_and_one_on_the_ui_does_not() {
         }));
         script.run("ShowRepairCursor()").unwrap();
         assert!(script.repair_mode(), "the repair vendor arms repair mode");
+        script.arm_gift_wrap(0, 6);
+        assert!(script.gift_wrap_armed().is_some(), "the paper arms a wrap");
         world.insert_non_send_resource(script);
-        if world_press(&world, over_ui) {
-            world.write_message(WorldRightPress);
-            run(
-                &mut world,
-                crate::ui_merchant::end_repair_mode_on_right_press,
-            );
-        }
-        world.non_send_resource::<UiScript>().repair_mode()
+        right_press(&mut world, over_ui);
+        let script = world.non_send_resource::<UiScript>();
+        (script.repair_mode(), script.gift_wrap_armed().is_some())
     };
 
-    assert!(
-        !press(false, false),
-        "a right press in the world ends repair mode"
+    assert_eq!(
+        press(false, false),
+        (false, false),
+        "a right press in the world ends repair mode and the wrap"
     );
-    assert!(
+    assert_eq!(
         press(true, false),
+        (true, true),
         "a right press on a UI frame never reaches the world's hook"
     );
-    assert!(
+    assert_eq!(
         press(false, true),
-        "a press while a payload is held skips the repair reset"
+        (false, false),
+        "the hook tests no payload"
     );
 }

@@ -16,7 +16,7 @@ use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
 
 use benilla_ui::script::{ClickCall, ClickMode};
-use benilla_world::interact::{WorldClick, WorldRightClick, WorldRightPress};
+use benilla_world::interact::{WorldClick, WorldRightClick};
 
 use super::PressPick;
 use crate::player::PressGesture;
@@ -152,26 +152,31 @@ fn world_press(world: &World, over_ui: bool) -> bool {
     in_world && (looking || !over_ui)
 }
 
-/// The world frame's right press (`CGWorldFrame::OnMouseDown 0x483c40`): its hook `0x492c20`
-/// cancels ground targeting and resets repair mode; it consumes nothing, so the binding runs.
-///
-/// Deviation: the hook runs as the record's walk returns, after the binding its record ran, where
-/// the reference runs it ahead of `ExecuteBinding` (`0x483c62`, `0x483c93`). The pick the binding's
-/// arm traces runs after it here as well, so it reads the cancelled word.
-pub(crate) fn right_press(world: &mut World) {
-    world.write_message(WorldRightPress);
+/// The world frame's right press (`CGWorldFrame::OnMouseDown 0x483c40`), when the world frame took
+/// it: its hook `0x492c20` at `0x483c62`, ahead of the binding (`0x483c93`), so the binding and
+/// the pick its arm traces read what the hook left. The hook's legs in its order: a pending target
+/// cancelled (`0x492c26`-`0x492c3f`), a pending gift wrap's cursor cleared (`0x492c44`,
+/// `0x492c54`), a Repair base mode back to Point (`0x492c59`-`0x492c72`). It tests no payload and
+/// consumes nothing (`0x492c77`), so the binding runs. Then the targeting word as the hook left it
+/// goes to the VM, for the binding's `SpellIsTargeting`.
+pub(crate) fn right_press(world: &mut World, over_ui: bool) {
+    if !world_press(world, over_ui) {
+        return;
+    }
     run(
         world,
         crate::spell::targeting::cancel_targeting_on_right_press,
     );
+    run(world, crate::ui_items::clear_wrap_on_right_press);
     run(world, crate::ui_merchant::end_repair_mode_on_right_press);
+    run(world, crate::spell::targeting::feed_targeting_to_vm);
 }
 
-/// The world's steps of one input record, as its walk returns and before the next record: a right
-/// press's hook, the click steps its binding's mouse commands made and the click's legs when the
-/// record clicked the world, and a press on a nameplate's pick. `over_ui` is whether a frame
-/// took the record's press.
-pub(crate) fn world_steps(world: &mut World, record: &InputRecord, over_ui: bool) {
+/// The world's steps of one input record, as its walk returns and before the next record: the
+/// click steps its binding's mouse commands made and the click's legs when the record clicked the
+/// world, and a press on a nameplate's pick. A right press's hook ran ahead of the binding
+/// ([`right_press`]).
+pub(crate) fn world_steps(world: &mut World, record: &InputRecord) {
     let press = match record.record {
         Record::Button {
             button,
@@ -179,9 +184,6 @@ pub(crate) fn world_steps(world: &mut World, record: &InputRecord, over_ui: bool
         } => Some(button),
         _ => None,
     };
-    if press == Some(MouseButton::Right) && world_press(world, over_ui) {
-        right_press(world);
-    }
     let calls = crate::ui_script::take_click_calls(world);
     let armed = calls.iter().any(|c| matches!(c, ClickCall::Arm(_)));
     if press.is_some() {

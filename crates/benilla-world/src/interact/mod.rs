@@ -67,13 +67,6 @@ pub struct WorldClick;
 #[derive(Message, Clone, Copy)]
 pub struct WorldRightClick;
 
-/// The right button's press in the world (off the UI, or any press while a look holds the hidden
-/// cursor), sent at its input record, as the reference's `CGWorldFrame::OnMouseDown` (`0x483c40`),
-/// where ground targeting's right-click cancel and the repair-mode reset hang (`0x492c20`). It
-/// consumes nothing, so the turn and the release's context click still run.
-#[derive(Message, Clone, Copy)]
-pub struct WorldRightPress;
-
 /// The world's pick sources as one `SystemParam`: the entity pick geometry ([`PickParts`]) and
 /// every lane that draws without entities ([`PickSource`]). Use this, not [`PickParts`] alone,
 /// which still returns hits but misses most of the static world.
@@ -210,7 +203,6 @@ pub struct InteractPlugin;
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<WorldClick>()
-            .add_message::<WorldRightClick>()
-            .add_message::<WorldRightPress>();
+            .add_message::<WorldRightClick>();
     }
 }

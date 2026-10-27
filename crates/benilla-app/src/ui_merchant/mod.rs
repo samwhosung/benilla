@@ -5,7 +5,6 @@
 //! their calls. A bag click sells through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
-use benilla_world::interact::WorldRightPress;
 use bevy::prelude::*;
 
 use benilla_ui::script::{ItemStatsHead, MerchantItem, UiScript};
@@ -489,18 +488,11 @@ pub(crate) fn close_tail(script: &mut UiScript) {
     script.end_repair_mode();
 }
 
-/// A right mouse-down in the world ends repair mode: the WorldFrame hook `0x492c20` resets the
-/// Repair base mode to Point (`0x492c68`) and consumes nothing. A held payload pre-empts the hook
-/// (`0x492b50`), and a press over a UI frame never reaches it.
-pub(crate) fn end_repair_mode_on_right_press(
-    mut presses: MessageReader<WorldRightPress>,
-    payload_held: Res<crate::ui_script::CursorPayloadHeld>,
-    mut hosted_vm: crate::script_calls::HostedVm,
-) {
+/// The world frame's right-press hook's last leg (`0x492c20`, `0x492c59`-`0x492c72`): a Repair
+/// base mode returns to Point (`0x492c68`). It tests no payload and consumes nothing
+/// ([`crate::target::right_press`]).
+pub(crate) fn end_repair_mode_on_right_press(mut hosted_vm: crate::script_calls::HostedVm) {
     hosted_vm.run(|script| {
-        if presses.read().last().is_none() || payload_held.0 {
-            return;
-        }
         if let Some(script) = script {
             script.end_repair_mode();
         }

@@ -12,7 +12,9 @@ use benilla_world::interact::{WorldClick, WorldRightClick};
 use benilla_world::schedule::WorldStage;
 
 mod arm;
-pub(crate) use arm::{plate_clicks_first, run_world_clicks, world_steps, ClickArm, WorldClickLegs};
+pub(crate) use arm::{
+    plate_clicks_first, right_press, run_world_clicks, world_steps, ClickArm, WorldClickLegs,
+};
 mod by_name;
 // `pub(crate)` for the chest live probe, which drives the mouse's own `click::resolve_go_action`.
 pub(crate) mod click;

@@ -458,6 +458,17 @@ pub(crate) fn use_fork(
     }
 }
 
+/// The world frame's right-press hook's wrap leg (`0x492c20`): a pending gift wrap
+/// (`IsWrappingItem 0x5edf10` at `0x492c44`) clears the cursor, `ClearCursor(1, 1)` (`0x495190` at
+/// `0x492c54`), which ends the wrap with whatever it held ([`crate::target::right_press`]).
+pub(crate) fn clear_wrap_on_right_press(mut hosted_vm: crate::script_calls::HostedVm) {
+    hosted_vm.run(|script| {
+        if let Some(script) = script.filter(|s| s.gift_wrap_armed().is_some()) {
+            script.clear_cursor_payload();
+        }
+    })
+}
+
 /// [`use_fork`] past the equip fork: the dispatcher's own arms, which `UseInventoryItem` reaches
 /// directly (`0x4c7af0`).
 pub(crate) fn dispatch_fork(

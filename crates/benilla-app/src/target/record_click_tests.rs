@@ -21,6 +21,8 @@ use super::Selection;
 use crate::net::{GuidIndex, SelfGuid};
 
 const ME: u64 = 0x10;
+/// A spell whose cursor wants a ground point.
+const BLIZZARD: u32 = 10;
 const MOB: u64 = 0xF130_0000_0031_0001;
 
 /// Over the left half's button, which targets us on its `OnClick`.
@@ -56,23 +58,34 @@ fn created(guid: u64, kind: EntityKind, as_type: ObjectType, mask: u32) -> Sessi
 #[derive(Resource)]
 struct PrimaryId(Entity);
 
-/// The whole client in the world with us and a mob streamed, the mob's pick box on the camera's
-/// ray through [`ON_MOB`], `BUTTON1` bound to `bindings` (the stock `CAMERAORSELECTORMOVE`, or a
-/// rebind), and a button over the screen's left half whose `OnClick` runs `TargetUnit("player")`.
+/// The client's sends.
+#[derive(Resource)]
+struct Sent(crossbeam_channel::Receiver<crate::net::ClientCommand>);
+
+/// [`client_bound`] with `BUTTON1` bound to `binding` (the stock `CAMERAORSELECTORMOVE`, or a
+/// rebind) and `BUTTON2` to the stock `TURNORACTION`.
 fn client(binding: &str) -> App {
+    client_bound(&format!(
+        "bind BUTTON1 {binding}\r\nbind BUTTON2 TURNORACTION\r\n"
+    ))
+}
+
+/// The whole client in the world with us and a mob streamed, the mob's pick box on the camera's
+/// ray through [`ON_MOB`], the buttons bound as `wtf` binds them, and a button over the screen's
+/// left half whose `OnClick` runs `TargetUnit("player")`.
+fn client_bound(wtf: &str) -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
     ));
-    let (tx, _sent) = crossbeam_channel::unbounded();
+    let (tx, sent) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
+    app.insert_resource(Sent(sent));
     let (inbound, rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetEvents::for_test(rx));
     app.update();
     let mut script = UiScript::new().expect("a VM");
-    script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(&format!(
-        "bind BUTTON1 {binding}\r\n"
-    )));
+    script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(wtf));
     script.load_binding_set(1);
     script.register_bindings(
         &benilla_ui::bindings_xml::parse(
@@ -84,7 +97,18 @@ fn client(binding: &str) -> App {
                         CameraOrSelectOrMoveStop();
                     end
                 </Binding>
+                <Binding name="TURNORACTION" runOnUp="true">
+                    if ( keystate == "down" ) then
+                        TurnOrActionStart();
+                    else
+                        TurnOrActionStop();
+                    end
+                </Binding>
                 <Binding name="PROBEBUTTON" runOnUp="true">LOG = LOG .. "b1 " .. keystate .. ";"</Binding>
+                <Binding name="PROBERIGHT">
+                    LOG = LOG .. "targeting " .. tostring(SpellIsTargeting())
+                        .. ", repair " .. tostring(InRepairMode()) .. ";"
+                </Binding>
             </Bindings>"#,
         )
         .expect("well-formed"),
@@ -187,15 +211,61 @@ fn move_to(app: &mut App, at: Vec2) {
 }
 
 fn button(app: &mut App, state: ButtonState) {
+    press_button(app, MouseButton::Left, state);
+}
+
+fn press_button(app: &mut App, button: MouseButton, state: ButtonState) {
     let window = app.world().resource::<PrimaryId>().0;
     send(
         app,
         WindowEvent::MouseButtonInput(MouseButtonInput {
-            button: MouseButton::Left,
+            button,
             state,
             window,
         }),
     );
+}
+
+/// A right click at `at`: the move there, the press and the release.
+fn right_click_at(app: &mut App, at: Vec2) {
+    move_to(app, at);
+    press_button(app, MouseButton::Right, ButtonState::Pressed);
+    press_button(app, MouseButton::Right, ButtonState::Released);
+}
+
+/// The targeting cursor up for a spell whose word wants a ground point (`TARGET_FLAG_DEST_LOCATION`
+/// `0x40`), as the VM reads it.
+fn arm_ground_cast(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<crate::spell::SpellTargeting>()
+        .enter(BLIZZARD, crate::spell::CastCommit::Spell, 0x0040);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_spell_targeting(true);
+}
+
+fn targeting(app: &App) -> bool {
+    app.world()
+        .resource::<crate::spell::SpellTargeting>()
+        .active()
+}
+
+fn log(app: &App) -> String {
+    app.world()
+        .non_send_resource::<UiScript>()
+        .eval("return LOG")
+        .unwrap()
+}
+
+/// Repair mode armed, as `ShowRepairCursor` arms it at a repair vendor.
+fn in_repair_mode(app: &mut App) {
+    let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script.set_merchant(Some(benilla_ui::script::MerchantState {
+        can_repair: true,
+        ..Default::default()
+    }));
+    script.run("ShowRepairCursor()").unwrap();
+    assert!(script.repair_mode());
 }
 
 /// A left click at `at`: the move there, the press and the release.
@@ -251,10 +321,103 @@ fn a_button_rebound_away_from_the_mouse_command_clicks_nothing() {
     click_at(&mut app, ON_MOB);
     app.update();
     assert_eq!(target(&app), None);
-    let log: String = app
-        .world()
-        .non_send_resource::<UiScript>()
-        .eval("return LOG")
-        .unwrap();
-    assert_eq!(log, "b1 down;b1 up;");
+    assert_eq!(log(&app), "b1 down;b1 up;");
+}
+
+/// The world frame's right-press hook runs ahead of the binding (`0x483c62`, then `0x483c93`): the
+/// binding reads the pending target the hook cancelled, and the repair mode it ended.
+#[test]
+fn a_right_press_hooks_ahead_of_its_binding() {
+    let mut app = client_bound("bind BUTTON2 PROBERIGHT\r\n");
+    arm_ground_cast(&mut app);
+    right_click_at(&mut app, BESIDE_MOB);
+    app.update();
+    assert!(!targeting(&app), "the hook cancelled the pending target");
+    assert_eq!(
+        log(&app),
+        "targeting nil, repair nil;",
+        "the binding read the cancel"
+    );
+
+    let mut app = client_bound("bind BUTTON2 PROBERIGHT\r\n");
+    in_repair_mode(&mut app);
+    right_click_at(&mut app, BESIDE_MOB);
+    app.update();
+    assert_eq!(
+        log(&app),
+        "targeting nil, repair nil;",
+        "the binding read repair mode ended"
+    );
+}
+
+/// A right click on the world with a pending target cancels it and sends nothing; the click's
+/// action is the router's, on the pick the press traced after the cancel.
+#[test]
+fn a_right_click_cancels_the_pending_target() {
+    let mut app = client("CAMERAORSELECTORMOVE");
+    aim(&mut app);
+    arm_ground_cast(&mut app);
+    right_click_at(&mut app, BESIDE_MOB);
+    app.update();
+    assert!(!targeting(&app));
+    let sent: Vec<_> = app.world().resource::<Sent>().0.try_iter().collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, crate::net::ClientCommand::CastSpellAtDest { .. })),
+        "a cancel casts nothing: {sent:?}"
+    );
+}
+
+/// Over the world's ground, away from the mob and the button.
+const ON_GROUND: Vec2 = Vec2::new(800.0, 700.0);
+
+/// A ground plane under [`ON_GROUND`], ten yards out along its ray: a static doodad's opaque batch,
+/// which the press's trace hits.
+fn ground(app: &mut App) {
+    let world = app.world_mut();
+    let mut q = world.query_filtered::<(&Camera, &GlobalTransform), With<WorldCamera>>();
+    let (camera, cam_tf) = q.single(world).expect("the world camera");
+    let ray = camera
+        .viewport_to_world(cam_tf, ON_GROUND)
+        .expect("the camera projects");
+    let at = ray.origin + *ray.direction * 10.0;
+    // A wide triangle in the model's horizontal plane (WoW z = 0, Bevy y = 0), under `at`.
+    let plane = benilla_formats::RenderSubmesh {
+        positions: vec![[50.0, 50.0, 0.0], [50.0, -50.0, 0.0], [-50.0, 0.0, 0.0]],
+        indices: vec![0, 1, 2],
+        ..Default::default()
+    };
+    let plane = world
+        .spawn((
+            benilla_world::interact::PickMesh(std::sync::Arc::new(plane)),
+            benilla_world::interact::PickOccluderPart,
+            GlobalTransform::from_translation(at),
+            ViewVisibility::HIDDEN,
+        ))
+        .id();
+    use bevy::camera::visibility::SetViewVisibility;
+    world
+        .get_mut::<ViewVisibility>(plane)
+        .expect("spawned")
+        .set_visible();
+}
+
+/// A left click on the ground with a ground spell's cursor up binds the press's point and sends
+/// the cast there (`0x492c90` → `0x492580` → `BindLocation 0x6e60f0`), ending the cursor.
+#[test]
+fn a_ground_click_casts_at_the_press_point() {
+    let mut app = client("CAMERAORSELECTORMOVE");
+    aim(&mut app);
+    ground(&mut app);
+    arm_ground_cast(&mut app);
+    click_at(&mut app, ON_GROUND);
+    app.update();
+    let sent: Vec<_> = app.world().resource::<Sent>().0.try_iter().collect();
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, crate::net::ClientCommand::CastSpellAtDest { .. })),
+        "the click casts at the ground: {sent:?}"
+    );
+    assert!(!targeting(&app), "the cast ended the cursor");
 }
