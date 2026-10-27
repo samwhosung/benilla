@@ -445,37 +445,38 @@ pub(crate) fn snapshot_pet_name(name: Option<&str>, script: Option<&UiScript>) -
 }
 
 /// What the deactivate snapshot (`0x5f0880`) reads off the world beside the descriptors: the
-/// viewer's zone (`0x5f0957`) and the object's position (`0x5f096a`).
+/// viewer's committed zone (`0x5f0957`) and the object's position at the snapshot (`0x5f096a`).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SnapshotPlace<'w, 's> {
-    here: benilla_world::world_point::AreaUnderfoot<'w>,
-    areas: Option<Res<'w, crate::area::AreaTableRes>>,
-    positions: Query<'w, 's, &'static GlobalTransform>,
+    committed: Option<Res<'w, crate::area::CommittedZone>>,
+    parents: Query<'w, 's, &'static ChildOf>,
 }
 
 impl SnapshotPlace<'_, '_> {
-    /// The zone the zone-text commit stores in `0xb4e314`: the area underfoot's parent zone, else
-    /// the area itself, and 0 before one resolves.
+    /// `0xb4e314`, the zone the zone-text commit stored ([`crate::area::CommittedZone`]), read as
+    /// its word (`0x5f095e`); 0 before the first commit.
     pub(crate) fn zone(&self) -> u16 {
-        let Some(leaf) = self.here.area() else {
-            return 0;
-        };
-        let parent = self
-            .areas
-            .as_ref()
-            .and_then(|a| a.0.get(leaf))
-            .map_or(0, |row| row.zone_id);
-        (if parent == 0 { leaf } else { parent }) as u16
+        self.committed.as_deref().and_then(|z| z.0).unwrap_or(0) as u16
     }
 
-    /// `entity`'s world x and y as the record keeps them: `_ftol` of each (`0x5f0970`,
-    /// `0x5f097c`), its low word (`0x5f0978`, `0x5f0986`).
-    pub(crate) fn position(&self, entity: Option<Entity>) -> (i16, i16) {
-        let wow = entity
-            .and_then(|e| self.positions.get(e).ok())
-            .map_or([0.0; 3], |tf| {
-                benilla_assets::coords::bevy_to_wow(tf.translation())
-            });
+    /// `entity`'s world x and y as of now, its own and each ancestor's local transform folded in
+    /// (`local` reads one), as the unit's position virtual answers (`0x5f096a`), not the
+    /// propagated transform a frame behind: `_ftol` of each (`0x5f0970`, `0x5f097c`), its low
+    /// word (`0x5f0978`, `0x5f0986`).
+    pub(crate) fn position(
+        &self,
+        entity: Option<Entity>,
+        local: impl Fn(Entity) -> Option<Transform>,
+    ) -> (i16, i16) {
+        let world = entity.and_then(|mut e| {
+            let mut global = GlobalTransform::from(local(e)?);
+            while let Ok(parent) = self.parents.get(e) {
+                e = parent.parent();
+                global = GlobalTransform::from(local(e)?) * global;
+            }
+            Some(global.translation())
+        });
+        let wow = world.map_or([0.0; 3], benilla_assets::coords::bevy_to_wow);
         let word = |v: f32| benilla_ui::script::ftol(f64::from(v)) as i16;
         (word(wow[0]), word(wow[1]))
     }
@@ -527,11 +528,13 @@ pub(crate) fn member_deactivated<'a>(
 /// destructor runs the same roster search in mode 0 (`0x5dd600`, at `0x5dd6a0` → `0x4e85d0`): the
 /// record built (`0x4e8630`) and the stats asked, with no `PARTY_MEMBER_DISABLE`, which only the
 /// release signals (`0x5e9b78`).
+#[allow(clippy::too_many_arguments)] // the snapshot's reads, each as of the teardown
 pub(crate) fn roster_deactivated(
     group: &mut GroupState,
     index: &GuidIndex,
     stores: &Query<&mut ObjectStore>,
     place: &SnapshotPlace,
+    local: &dyn Fn(Entity) -> Option<Transform>,
     names: &NameCache,
     script: Option<&UiScript>,
     net_commands: &NetCommands,
@@ -545,7 +548,7 @@ pub(crate) fn roster_deactivated(
     let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
     let zone = place.zone();
     for guid in streamed {
-        let object = held(guid).map(|s| (s, place.position(index.0.get(&guid).copied())));
+        let object = held(guid).map(|s| (s, place.position(index.0.get(&guid).copied(), local)));
         member_deactivated(guid, group, object, zone, held, names, script, net_commands);
     }
 }
@@ -860,49 +863,44 @@ mod tests {
         assert_eq!(asked(&rx), vec![guid], "and the server is asked, once");
     }
 
-    /// The snapshot's world reads: the zone the commit stores (`0xb4e314`), the leaf's parent zone,
-    /// and the object's x and y as `_ftol`'s low words (`0x5f0970`-`0x5f0986`), truncated toward
-    /// zero and wrapped past 32767.
+    /// The snapshot's world reads: the zone the commit stored (`0xb4e314`), whatever the area
+    /// underfoot is now, and the object's x and y at the snapshot, its parents' transforms folded
+    /// in and not the propagated one a frame behind, as `_ftol`'s low words (`0x5f0970`-`0x5f0986`):
+    /// truncated toward zero and wrapped past 32767.
     #[test]
-    fn the_snapshot_reads_the_viewers_zone_and_the_objects_position() {
-        use benilla_formats::{AreaTableCatalog, AreaTableRow};
+    fn the_snapshot_reads_the_committed_zone_and_the_objects_position_now() {
         use bevy::ecs::system::RunSystemOnce;
-        const ELWYNN: u32 = 12;
-        const GOLDSHIRE: u32 = 87;
-        let row = |zone_id| AreaTableRow {
-            map_id: 0,
-            zone_id,
-            explore_flag: 0,
-            flags: 0,
-            faction_group_mask: 0,
-            exploration_level: 0,
-            name: String::new(),
+        let at = |x: f32, y: f32| {
+            Transform::from_translation(benilla_assets::coords::wow_to_bevy([x, y, 0.0]))
         };
         let mut world = World::new();
-        world.insert_resource(crate::area::AreaTableRes(AreaTableCatalog::from_rows(
-            vec![(ELWYNN, row(0)), (GOLDSHIRE, row(ELWYNN))],
-        )));
-        let at = |x: f32, y: f32| {
-            GlobalTransform::from_translation(benilla_assets::coords::wow_to_bevy([x, y, 0.0]))
-        };
-        let near = world.spawn(at(-9464.9, 62.7)).id();
-        let far = world.spawn(at(40000.0, -0.5)).id();
+        // Underfoot is Goldshire (87), but the last commit stored Elwynn (12).
+        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(87)));
+        let ride = world
+            .spawn((at(-9000.0, 60.0), GlobalTransform::IDENTITY))
+            .id();
+        // The propagated transforms are stale: identity, a frame behind the locals.
+        let near = world
+            .spawn((at(-464.9, 2.7), GlobalTransform::IDENTITY, ChildOf(ride)))
+            .id();
+        let far = world
+            .spawn((at(40000.0, -0.5), GlobalTransform::IDENTITY))
+            .id();
         let read = |world: &mut World| {
             world
-                .run_system_once(move |place: SnapshotPlace| {
+                .run_system_once(move |place: SnapshotPlace, tf: Query<&Transform>| {
+                    let local = |e: Entity| tf.get(e).ok().copied();
                     (
                         place.zone(),
-                        place.position(Some(near)),
-                        place.position(Some(far)),
+                        place.position(Some(near), local),
+                        place.position(Some(far), local),
                     )
                 })
                 .unwrap()
         };
-        assert_eq!(read(&mut world).0, 0, "no area resolved yet");
-        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(GOLDSHIRE)));
+        assert_eq!(read(&mut world).0, 0, "no commit yet");
+        world.insert_resource(crate::area::CommittedZone(Some(12)));
         assert_eq!(read(&mut world), (12, (-9464, 62), (-25536, 0)));
-        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(ELWYNN)));
-        assert_eq!(read(&mut world).0, 12, "a zone is its own");
     }
 
     /// `0x5f098d`-`0x5f09f2`: a slot is copied when its id is set and its `AURAFLAGS` nibble has an

@@ -807,7 +807,8 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     sc.item_lane.push(gone.unwrap_or_default());
     let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
     let before = sc.group.stats.get(&guid).cloned();
-    let object = held(guid).map(|s| (s, sc.place.position(sc.index.0.get(&guid).copied())));
+    let local = |e: Entity| sc.transforms.get(e).ok().copied();
+    let object = held(guid).map(|s| (s, sc.place.position(sc.index.0.get(&guid).copied(), local)));
     crate::ui_party::net::member_deactivated(
         guid,
         &mut sc.group,
@@ -1312,7 +1313,9 @@ fn compare_party_record(
         .and_then(|(g, p)| sc.names.resolve_unit(g, Some(p), Ask::Read));
     let pet_name = crate::ui_party::net::snapshot_pet_name(pet_name, script);
     let mut live = old.clone();
-    let position = sc.place.position(sc.index.0.get(&guid).copied());
+    let position = sc.place.position(sc.index.0.get(&guid).copied(), |e| {
+        sc.transforms.get(e).ok().copied()
+    });
     live.snapshot_descriptor(
         fields,
         pet.map(|p| &p.0),

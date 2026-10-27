@@ -62,6 +62,13 @@ fn load_area_table(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     }
 }
 
+/// `s_zoneId` (`0xb4e314`): the zone the last zone-text commit stored, the leaf's parent zone
+/// (`AreaTable +0x8`) else the leaf. Committed on the tenth-tick poll while our player is held,
+/// so an area id with no row keeps the last commit; `None` until the first commit of a world
+/// session, and only the session's teardown (`0x491180`) zeroes it, so a reload keeps it.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct CommittedZone(pub(crate) Option<u32>);
+
 /// The client's zone-text cache: the compare targets of `0x494780`, the minimap line's cache
 /// (`0x494970`) and the indoor dedup pair (`[0x868608]`, `[0x86860c]`). It lives per VM, so every
 /// login starts zeroed and its first resolve is a NEW_AREA.
@@ -122,6 +129,7 @@ fn feed_zone_events(
     factions: Option<Res<Factions>>,
     realm_pvp: Option<Res<RealmPvp>>,
     mut cache: Local<crate::ui_script::VmMemo<ZoneCache>>,
+    mut committed: ResMut<CommittedZone>,
 ) {
     *ticks += 1;
     let due = *ticks >= 10;
@@ -157,6 +165,7 @@ fn feed_zone_events(
         } else {
             leaf_row.zone_id
         };
+        committed.set_if_neq(CommittedZone(Some(zone)));
         let real_zone_text = areas.0.name(zone).unwrap_or_default().to_string();
         let indoor = world.area_interior().is_some();
 
@@ -313,6 +322,14 @@ pub(crate) struct AreaPlugin;
 impl Plugin for AreaPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RealmPvp>()
+            .init_resource::<CommittedZone>()
+            // The session's end stands in for `ShutdownGame` (`0x491180`), the one zeroing.
+            .add_systems(
+                OnExit(crate::client_state::ClientState::InWorld),
+                |mut z: ResMut<CommittedZone>| {
+                    z.set_if_neq(CommittedZone(None));
+                },
+            )
             .add_systems(Startup, load_area_table.after(AssetSet::Open))
             .add_systems(
                 OnEnter(crate::client_state::ClientState::InWorld),
@@ -696,6 +713,11 @@ mod tests {
         );
         assert!(ticks(&mut app, GOLDSHIRE, 9).is_empty());
         assert_eq!(ticks(&mut app, GOLDSHIRE, 1), ["ZONE_CHANGED"]);
+        // `0xb4e314` holds the leaf's parent zone, and an id with no row keeps the last commit.
+        let committed = |app: &App| app.world().resource::<CommittedZone>().0;
+        assert_eq!(committed(&app), Some(ELWYNN));
+        ticks(&mut app, 4242, 10);
+        assert_eq!(committed(&app), Some(ELWYNN), "no row, no commit");
     }
 
     /// `0x67e6e4` compares the whole-WMO name with the subzone by `SStrCmpI` (`0x64a4c0`, limit
