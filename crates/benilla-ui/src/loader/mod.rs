@@ -544,7 +544,9 @@ impl Loader<'_> {
     /// `0x76fe60`).
     ///
     /// Deviation: a cycle (`A` inherits `B`, `B` inherits `A`) stops at the repeated name with a
-    /// warning; the reference has no guard, and its load recursion (`0x76985c`) never returns.
+    /// warning. The reference has no guard: its `parent=` walk (`0x6ee390`-`0x6ee3c2`) spins
+    /// forever round a cycle with no `parent=` on it, and where one stops that walk, the level
+    /// recursion (`0x76985c`, and `0x76a092` for the `<Frames>`) overflows the stack.
     pub(super) fn levels<'a>(&mut self, raw: &'a Element) -> Levels<'a> {
         let (inherited, stop) = {
             let model = self.model();

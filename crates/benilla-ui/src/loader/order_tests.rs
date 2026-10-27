@@ -462,8 +462,9 @@ fn a_parent_attribute_is_found_up_the_inherits_chain() {
         .unwrap());
 }
 
-/// Deviation: an `inherits` cycle stops at the repeated name with a warning, where the reference's
-/// load recursion (`0x76985c`) never returns; each template in it loads once.
+/// Deviation: an `inherits` cycle stops at the repeated name with a warning, and each template in
+/// it loads once. The reference hangs in its unguarded `parent=` walk (`0x6ee390`-`0x6ee3c2`), or,
+/// with a `parent=` on the cycle, overflows the stack in the level recursion (`0x76985c`).
 #[test]
 fn an_inherits_cycle_warns_and_loads_each_template_once() {
     let s = ui();
