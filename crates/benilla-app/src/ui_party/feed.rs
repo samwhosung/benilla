@@ -253,31 +253,35 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
     }
 }
 
-/// The ready check a dying VM held ([`fold_dying_vm_ready_check`]), for the next VM's seed
-/// ([`seed_vm_ready_check`]).
+/// What `InitializeGame`'s group init zeroes at a world login and a `/reload` leaves (`0x4ba0b0`,
+/// from `0x48f603`): the ready check a dying VM held and the raid roster selection's guid
+/// (`[0xb713e8]`, `0x4ba0e7`), for the next VM's seed ([`seed_vm_ready_check`]).
 #[derive(Resource, Default)]
-pub(crate) struct ReadyCheckCarry(benilla_ui::script::ReadyCheckState);
+pub(crate) struct ReadyCheckCarry(benilla_ui::script::ReadyCheckState, u64);
 
-/// Fold the ready check out of the dying VM, with the item locks: its deadline (`[0xb713f4]`) and
-/// pending flags are engine state, which no reload path writes.
+/// Fold the ready check and the raid selection out of the dying VM, with the item locks: the
+/// deadline (`[0xb713f4]`), the pending flags and the selection are engine state, which no reload
+/// path writes.
 pub(crate) fn fold_dying_vm_ready_check(world: &mut World) {
-    let Some(state) = world
-        .get_non_send_resource_mut::<UiScript>()
-        .map(|mut s| s.take_ready_check())
-    else {
+    let Some((state, selection)) = world.get_non_send_resource_mut::<UiScript>().map(|mut s| {
+        let selection = s.take_raid_selection();
+        (s.take_ready_check(), selection)
+    }) else {
         return;
     };
-    world.insert_resource(ReadyCheckCarry(state));
+    world.insert_resource(ReadyCheckCarry(state, selection));
 }
 
-/// Seat a new in-game VM's ready check before its load runs: a `/reload`'s is the dying VM's, a
-/// world entry's none, as `InitializeGame`'s group init zeroes it (`0x4ba130`, from `0x48f603`).
+/// Seat a new in-game VM's ready check and raid selection before its load runs: a `/reload`'s are
+/// the dying VM's, a world entry's none, as `InitializeGame`'s group init zeroes them (`0x4ba130`,
+/// `0x4ba0e7`, from `0x48f603`).
 pub(crate) fn seed_vm_ready_check(world: &mut World, script: &mut UiScript, reload: bool) {
     let carried = world
         .remove_resource::<ReadyCheckCarry>()
         .unwrap_or_default();
     if reload {
         script.seed_ready_check(carried.0);
+        script.seed_raid_selection(carried.1);
     }
 }
 

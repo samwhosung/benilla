@@ -294,6 +294,18 @@ impl super::UiScript {
         self.model_mut().ready_check = state;
     }
 
+    /// Take the raid roster selection's guid (`[0xb713e8]`) out of a dying VM, for
+    /// [`Self::seed_raid_selection`] to seat in the next: `InitializeGame` zeroes it once, at a
+    /// world login (`0x4ba0e7`, from `0x48f603`), and a `/reload` does not.
+    pub fn take_raid_selection(&mut self) -> u64 {
+        std::mem::take(&mut self.model_mut().raid_selection)
+    }
+
+    /// Seat a `/reload`'s VM with the selection the last one held.
+    pub fn seed_raid_selection(&mut self, guid: u64) {
+        self.model_mut().raid_selection = guid;
+    }
+
     /// Take the party calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_party_requests(&mut self) -> Vec<PartyRequest> {
         self.take_calls_where(|call| match call {
@@ -2356,6 +2368,34 @@ mod tests {
     }
 
     /// The row the selection reads is where its guid stands now, not where it stood.
+    /// `InitializeGame` zeroes the selection at a world login only (`0x4ba0e7`), so a `/reload`'s
+    /// VM is seated with the dying one's guid, read back against its roster.
+    #[test]
+    fn the_raid_roster_selection_survives_a_reload() {
+        let mut old = vm();
+        old.set_party(ten_player_raid());
+        old.run("SetRaidRosterSelection(4)").unwrap();
+        let guid = old.take_raid_selection();
+        assert_eq!(guid, 0x103);
+
+        let mut fresh = vm();
+        fresh.set_party(ten_player_raid());
+        assert_eq!(
+            fresh
+                .eval::<i64>("return GetRaidRosterSelection()")
+                .unwrap(),
+            0,
+            "a world login's VM starts with none"
+        );
+        fresh.seed_raid_selection(guid);
+        assert_eq!(
+            fresh
+                .eval::<i64>("return GetRaidRosterSelection()")
+                .unwrap(),
+            4
+        );
+    }
+
     #[test]
     fn the_raid_roster_selection_follows_its_member() {
         let mut s = vm();
