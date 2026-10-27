@@ -591,6 +591,12 @@ impl UnitGuids {
         }
     }
 
+    /// The guid `token` names off the snapshot alone, `None` for nobody and for a token the
+    /// resolver does not recognise ([`Self::resolve`]).
+    pub fn guid_of(&self, token: &str) -> Option<u64> {
+        self.resolve(token).ok().flatten()
+    }
+
     /// The guid a parsed token names off the snapshot alone ([`resolve_unit_in`] over it): its
     /// base's guid, then each `target` hop. `None` is nobody.
     pub(crate) fn resolve_unit(&self, base: UnitBase, hops: usize) -> Option<u64> {

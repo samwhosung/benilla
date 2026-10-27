@@ -82,22 +82,48 @@ impl super::UiScript {
         self.model_mut().aura_tooltip_asks.drain().collect()
     }
 
-    /// The keys the setters can ask for from the VM's own state: the player's auras, every other
-    /// unit's, and the tracking spell at level 1 and stack 1. The app pushes their views ahead of
-    /// a hover.
+    /// The keys the setters can ask for: the player's buff cache, every unit a token can name
+    /// ([`super::UnitGuids`]), each read as `SetUnitBuff` reads it, through the lent host when one
+    /// is free ([`super::aura::read_auras_of`]), and the tracking spell at level 1 and stack 1.
+    /// The app pushes their views ahead of a hover.
     pub fn aura_tooltip_subjects(&self) -> Vec<AuraKey> {
-        let model = self.model_ref();
-        let auras = model
-            .player_auras
-            .iter()
-            .chain(model.unit_auras.values().flat_map(|l| &l.auras))
-            .map(|a| AuraKey {
-                spell_id: a.spell_id,
-                level: a.level,
-                stack: a.count,
+        let key = |(spell_id, level, stack)| AuraKey {
+            spell_id,
+            level,
+            stack,
+        };
+        let (mut keys, units) = {
+            let model = self.model_ref();
+            let mut keys: Vec<AuraKey> = model
+                .player_auras
+                .iter()
+                .map(|a| key(super::aura::AuraRead::key(a)))
+                .collect();
+            keys.extend(model.tracking.iter().map(|t| tracking_key(t.spell_id)));
+            let g = &model.unit_guids;
+            let units: std::collections::BTreeSet<u64> = [g.player, g.pet, g.target, g.mouseover]
+                .into_iter()
+                .chain([g.npc])
+                .chain(g.party)
+                .chain(g.party_pets)
+                .chain(g.raid.iter().chain(&g.raid_pets).copied())
+                .chain(g.held.keys().copied())
+                .filter(|&guid| guid != 0)
+                .collect();
+            (keys, units)
+        };
+        for guid in units {
+            super::aura::read_auras_of(&self.lua, Some(guid), |list| {
+                if let Some(list) = list {
+                    list.find(&mut |a| {
+                        keys.push(key(super::aura::AuraRead::key(a)));
+                        false
+                    });
+                }
             });
-        let tracking = model.tracking.iter().map(|t| tracking_key(t.spell_id));
-        auras.chain(tracking).filter(|k| k.spell_id != 0).collect()
+        }
+        keys.retain(|k| k.spell_id != 0);
+        keys
     }
 }
 

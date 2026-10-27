@@ -97,6 +97,7 @@ mod tests {
             craft_order: spells.to_vec(),
             effect_slots: Default::default(),
             openers: Vec::new(),
+            dispels: Vec::new(),
             stuck_spell: None,
             superseded: Vec::new(),
             unlearned: Vec::new(),

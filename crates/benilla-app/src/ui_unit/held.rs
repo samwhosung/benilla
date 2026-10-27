@@ -804,10 +804,10 @@ mod tests {
         }
     }
 
-    /// The targeting feed reads the resolver inputs the aura feed pushes in the same frame, so the
-    /// declared order puts the feed after it: read off the schedule graph.
+    /// The targeting feed reads the resolver inputs the resolver's feed pushes in the same frame,
+    /// so the declared order puts the feed after it: read off the schedule graph.
     #[test]
-    fn the_targeting_feed_runs_after_the_aura_feed_it_reads() {
+    fn the_targeting_feed_runs_after_the_resolver_feed_it_reads() {
         use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
 
         let mut app = headless_client();
@@ -823,11 +823,11 @@ mod tests {
                 _ => panic!("exactly one system named `…{suffix}` in Update"),
             }
         };
-        let aura = one("::ui_aura::feed_auras");
+        let guids = one("::ui_aura::feed_unit_guids");
         let feed = "::targeting::feed_targeting_to_vm";
         assert!(
-            c.dependencies.contains(&(aura, one(feed))),
-            "{feed} is declared after feed_auras"
+            c.dependencies.contains(&(guids, one(feed))),
+            "{feed} is declared after feed_unit_guids"
         );
     }
 }

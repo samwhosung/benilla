@@ -134,3 +134,75 @@ fn a_trade_skill_opener_learn_fills_its_effect_slot() {
     );
     assert_eq!(actions.effect_slots, [Some(10), None, None, None]);
 }
+
+/// The registrar's dispel leg (`0x4b26a2`-`0x4b26ee`): each `SPELL_EFFECT_DISPEL` effect not aimed
+/// at an enemy adds its dispel type once, an unlearn takes none out, and the book's reset empties
+/// the list (`0x4b2486`-`0x4b24c2`).
+#[test]
+fn the_dispel_list_takes_each_friendly_dispel_type_once() {
+    let row = |f: fn(&mut benilla_formats::SpellDisplay)| {
+        let mut d = benilla_formats::SpellDisplay::default();
+        f(&mut d);
+        d
+    };
+    let mut spells = Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [
+            // Dispel Magic: Magic (1) on its second effect, aimed at a friend.
+            (
+                527,
+                row(|d| {
+                    (d.effects[1], d.effect_misc_value[1]) = (38, 1);
+                    d.effect_implicit_target_a[1] = 21;
+                }),
+            ),
+            // Its second rank, Magic again.
+            (
+                988,
+                row(|d| (d.effects[0], d.effect_misc_value[0]) = (38, 1)),
+            ),
+            // An offensive dispel of Curse (2), aimed at an enemy.
+            (
+                370,
+                row(|d| {
+                    (d.effects[0], d.effect_misc_value[0]) = (38, 2);
+                    d.effect_implicit_target_a[0] = 6;
+                }),
+            ),
+            // Cure Poison (4) and Disease (3) on two effects.
+            (
+                526,
+                row(|d| {
+                    (d.effects[0], d.effect_misc_value[0]) = (38, 4);
+                    (d.effects[2], d.effect_misc_value[2]) = (38, 3);
+                }),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut actions = PlayerActions::default();
+    let errors = UiErrorKeys::default();
+    for id in [527, 370, 988, 526] {
+        learned_spell(id, &mut actions, Some(&spells), &errors);
+    }
+    assert_eq!(actions.dispels, [1, 4, 3]);
+    removed_spell(526, &mut actions, Some(&spells), &errors);
+    assert_eq!(actions.dispels, [1, 4, 3], "an unlearn takes none out");
+    spell_book(
+        vec![370],
+        vec![],
+        &mut actions,
+        &mut Cooldowns::default(),
+        (
+            Some(&spells),
+            &crate::items::Items::default(),
+            &crate::spell::SpellModifiers::default(),
+            crate::spell::CategoryPad::for_list(false, None),
+        ),
+    );
+    assert!(
+        actions.dispels.is_empty(),
+        "the book's reset, then no friendly dispel"
+    );
+}

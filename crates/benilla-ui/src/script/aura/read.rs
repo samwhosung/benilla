@@ -25,6 +25,9 @@ pub trait AuraRead {
     fn raid_listed(&self) -> bool;
     /// The aura as the getters return it.
     fn state(&self) -> AuraState;
+    /// Its spell, its caster's level and its stack count, the tooltip's key
+    /// ([`crate::script::AuraKey`]), without building the whole aura.
+    fn key(&self) -> (u32, u8, u8);
 }
 
 impl AuraRead for AuraState {
@@ -39,6 +42,9 @@ impl AuraRead for AuraState {
     }
     fn state(&self) -> AuraState {
         self.clone()
+    }
+    fn key(&self) -> (u32, u8, u8) {
+        (self.spell_id, self.level, self.count)
     }
 }
 

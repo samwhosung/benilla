@@ -196,6 +196,12 @@ fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
             ui_now: now,
         };
     }
+    if let Some(mut clock) = world.get_resource_mut::<super::HostClock>() {
+        clock.0 = UiClock {
+            anchor,
+            ui_now: now,
+        };
+    }
 }
 
 /// Start the new VM's `GetGameTime()` at the game clock as it stands: the reference's clock is one

@@ -673,9 +673,11 @@ fn spell_book(
         initial_cooldowns.len()
     );
     let (spells, items, mods, pad) = seed;
-    // `ResetSpellBook 0x4b23a0` empties the opener list (`0x4b2464`-`0x4b2470`) before the
-    // arrival's replay learns the list in wire order (`0x5dea8b`-`0x5deab9`).
+    // `ResetSpellBook 0x4b23a0` empties the opener and dispel lists (`0x4b2464`-`0x4b2470`,
+    // `0x4b2486`-`0x4b24c2`) before the arrival's replay learns the list in wire order
+    // (`0x5dea8b`-`0x5deab9`).
     actions.openers.clear();
+    actions.dispels.clear();
     // It zeroes the effect-spell globals too (`0x4b2433`), `Stuck()`'s among them.
     actions.stuck_spell = None;
     for &spell_id in &spell_ids {
@@ -769,12 +771,13 @@ fn list_unlearn(spell_id: u32, actions: &mut PlayerActions) {
 /// `SPELL_EFFECT_STUCK` in `Effect[0]`, the registrar's test for `Stuck()`'s spell (`0x4b2614`).
 const SPELL_EFFECT_STUCK: u32 = 0x54;
 
-/// The registrar `0x4b25b0`'s effect legs this client keeps: the opener list, and `Stuck()`'s
-/// spell `[0xb70098]`, which each registered spell whose `Effect[0]` is `SPELL_EFFECT_STUCK`
-/// overwrites (`0x4b2614`-`0x4b261d`), so the last such learn holds it. No unlearn clears it; the
-/// book's reset does.
+/// The registrar `0x4b25b0`'s effect legs this client keeps: the opener list, the dispel list, and
+/// `Stuck()`'s spell `[0xb70098]`, which each registered spell whose `Effect[0]` is
+/// `SPELL_EFFECT_STUCK` overwrites (`0x4b2614`-`0x4b261d`), so the last such learn holds it. No
+/// unlearn clears it; the book's reset does.
 fn register_in_book(spell_id: u32, spells: Option<&Spells>, actions: &mut PlayerActions) {
     list_opener(spell_id, spells, actions);
+    list_dispels(spell_id, spells, actions);
     if spells
         .and_then(|s| s.catalog.get(spell_id))
         .is_some_and(|d| d.effects[0] == SPELL_EFFECT_STUCK)
@@ -795,6 +798,30 @@ fn list_opener(spell_id: u32, spells: Option<&Spells>, actions: &mut PlayerActio
         .is_some_and(|d| d.effects[0] == SPELL_EFFECT_OPEN_LOCK)
     {
         actions.openers.push(spell_id);
+    }
+}
+
+/// `SPELL_EFFECT_DISPEL` (38), the registrar's test for the dispel list (`0x4b26a2`).
+const SPELL_EFFECT_DISPEL: u32 = 0x26;
+/// `TARGET_UNIT_ENEMY` (vmangos `SpellDefines.h:31`): a dispel aimed there is an offensive one,
+/// left off the dispel list (`0x4b26ab`).
+const TARGET_UNIT_ENEMY: u32 = 6;
+
+/// The registrar's dispel leg (`0x4b26a2`-`0x4b26ee`): each of the three effects that is
+/// `SPELL_EFFECT_DISPEL` with `EffectImplicitTargetA` not 6 appends its `EffectMiscValue` to
+/// [`PlayerActions::dispels`] when the list lacks it.
+fn list_dispels(spell_id: u32, spells: Option<&Spells>, actions: &mut PlayerActions) {
+    let Some(d) = spells.and_then(|s| s.catalog.get(spell_id)) else {
+        return;
+    };
+    for i in 0..3 {
+        let kind = d.effect_misc_value[i] as u32;
+        if d.effects[i] == SPELL_EFFECT_DISPEL
+            && d.effect_implicit_target_a[i] != TARGET_UNIT_ENEMY
+            && !actions.dispels.contains(&kind)
+        {
+            actions.dispels.push(kind);
+        }
     }
 }
 

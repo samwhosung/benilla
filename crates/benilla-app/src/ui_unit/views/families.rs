@@ -1,18 +1,16 @@
 //! The views beside the four tokens that the lane builds as a packet left them: the party and
 //! raid tokens with their pets, off the members' descriptors and group records (`0x5174d0` reads
-//! the object, else the record `0x496400`, else the pet record `0x496420`); the `"pet"` token; and
-//! every unit's aura list, which `UnitBuff` and
-//! `UnitDebuff` walk off the descriptor or the record (`0x519500`, `0x5198f0`). Each is rebuilt
-//! only when what it is built from moved, and what the VM held before is kept to put back
-//! ([`Saved`]).
+//! the object, else the record `0x496400`, else the pet record `0x496420`); and the `"pet"` token.
+//! Each is rebuilt only when what it is built from moved, and what the VM held before is kept to
+//! put back ([`Saved`]). The aura getters walk each unit's slots at the call
+//! ([`crate::ui_aura::AuraLive`]), so no aura list is built here.
 
 use std::collections::{HashMap, HashSet};
 
-use benilla_ui::script::{UiScript, UnitAuraList, UnitState};
+use benilla_ui::script::{UiScript, UnitState};
 
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore};
-use crate::target::RelationWorld;
 use benilla_protocol::messages::GroupMemberEntry;
 
 use crate::ui_party::{GroupSources, GroupState, Roster};
@@ -22,7 +20,6 @@ use crate::ui_party::{GroupSources, GroupState, Roster};
 #[derive(Default)]
 pub(super) struct Saved {
     tokens: HashMap<String, Option<UnitState>>,
-    auras: HashMap<u64, Option<UnitAuraList>>,
     /// The party's faction group the group tokens were last built with, while the lane built
     /// any.
     own_group: Option<Option<String>>,
@@ -45,17 +42,6 @@ impl Saved {
         true
     }
 
-    /// Push `list` as `guid`'s auras when the VM holds another; whether it did.
-    fn auras(&mut self, script: &mut UiScript, guid: u64, list: Option<UnitAuraList>) -> bool {
-        let held = script.unit_auras_view(guid);
-        if held == list {
-            return false;
-        }
-        self.auras.entry(guid).or_insert(held);
-        script.set_unit_auras(guid, list);
-        true
-    }
-
     /// Put back what the VM held of every view pushed over, but the tokens of `frozen`, which a
     /// call during the drain seated itself; the views put back.
     pub(super) fn restore(&mut self, script: &mut UiScript, frozen: &[&str]) -> usize {
@@ -66,23 +52,15 @@ impl Saved {
                 pushes += 1;
             }
         }
-        for (guid, list) in self.auras.drain() {
-            if script.unit_auras_view(guid) != list {
-                script.set_unit_auras(guid, list);
-                pushes += 1;
-            }
-        }
         self.own_group = None;
         pushes
     }
 }
 
 /// What the families read, each store and record as of the place they are built for.
-pub(super) struct Families<'a, 'w, 's> {
+pub(super) struct Families<'a, 'w> {
     /// The guids whose store or record moved since the VM's views were built.
     pub(super) dirty: &'a HashSet<u64>,
-    /// The guids a group token names, whose roster record stands in for its object.
-    pub(super) grouped: &'a HashSet<u64>,
     /// The object manager's lookup (`0x468460`), as of here.
     pub(super) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
     /// Our guid and descriptor as of here, and as the frame left it.
@@ -98,13 +76,11 @@ pub(super) struct Families<'a, 'w, 's> {
     pub(super) guild: &'a crate::ui_guild::GuildState,
     pub(super) factions: Option<&'a crate::target::Factions>,
     pub(super) areas: Option<&'a benilla_formats::AreaTableCatalog>,
-    pub(super) auras: &'a crate::ui_aura::AuraViews<'w>,
-    pub(super) world: &'a RelationWorld<'w, 's>,
     /// `UnitIsPVPFreeForAll` (`0x516540`) of a held unit as of here, by guid.
     pub(super) ffa: &'a dyn Fn(u64) -> bool,
 }
 
-impl Families<'_, '_, '_> {
+impl Families<'_, '_> {
     fn moved(&self, guid: u64) -> bool {
         guid != 0 && self.dirty.contains(&guid)
     }
@@ -112,7 +88,7 @@ impl Families<'_, '_, '_> {
 
 /// Push every family's views whose inputs moved; the views pushed.
 pub(super) fn push(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
-    group_tokens(script, saved, f) + pet_token(script, saved, f) + aura_lists(script, saved, f)
+    group_tokens(script, saved, f) + pet_token(script, saved, f)
 }
 
 /// `party1..4`, `partypet1..4`, `raid1..40` and `raidpet1..40`: a member's token when its
@@ -196,24 +172,4 @@ fn pet_token(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
     };
     let view = crate::ui_pet::pet_state(guid, (f.object)(guid), &src);
     usize::from(saved.token(script, "pet", view))
-}
-
-/// Each moved unit's aura list a token can reach, the player's among them: `UnitBuff("player")`
-/// walks the fields, not the buff cache (`0x51960f`).
-fn aura_lists(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
-    let mut pushes = 0;
-    let mut dirty: Vec<u64> = f.dirty.iter().copied().filter(|&g| g != 0).collect();
-    dirty.sort_unstable();
-    for guid in dirty {
-        let list = f.auras.list(
-            guid,
-            (f.object)(guid),
-            f.grouped.contains(&guid),
-            Some(f.group),
-            f.world,
-            f.me.map(|(_, s)| s),
-        );
-        pushes += usize::from(saved.auras(script, guid, list));
-    }
-    pushes
 }

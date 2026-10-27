@@ -377,12 +377,10 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState"]),
-    // Each unit's list reads its store and record as of the drain's place (`ui_unit::views`), and
-    // the buff cache is rebuilt at each packet's watcher; the resolver's inputs, the unit gate's
-    // relations and the world entry's rebuild read as the frame left them.
-    ("::ui_aura::feed_auras", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
-        "ui_action::PlayerActions", "ui_party::GroupState", "ui_pet::PetBar"]),
+    // The no-host resolver's guids: the aura getters walk each unit live through the host, and
+    // the world entry's rebuild runs in its cascade (`0x490983`).
+    ("::ui_aura::feed_unit_guids", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
+        "ui_party::GroupState"]),
     // The pet book's sorts, which each pet spell list counts and the derivation follows
     // (`0x4bdae0`): the frame's lists derive once, after the last.
     ("::ui_macro::rebind_macro_spells", &["ui_action::ActionSlots", "ui_action::PlayerActions",
@@ -594,9 +592,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_unit::DefaultLanguagesRes",
     // The area under the player, which the host's raid rows read for our own zone (`0xb4e314`).
     "::CurrentArea",
-    // The `raidFilter` books the call host's aura walk reads (`0x4b3870`, `0x4b3920`), which
-    // only the aura feed writes.
-    "::ui_aura::AuraFeedMemory",
+    // The interface clock's pair as the last tick left it, which the call host's buff timers
+    // map each duration stamp through (`0x4e4450`); only the tick's copy writes it.
+    "::ui_script::HostClock",
     // The duration packet's stamps (`0x4e4390`), which the call host's buff timers read at the
     // call (`0x4e4450`); a hosted handler reads them, the packet's handler writes them.
     "::ui_aura::AuraDurations",

@@ -1391,6 +1391,8 @@ fn feed_units(
     mut enter_usable: Option<ResMut<crate::ui_action::EnterUsable>>,
     // The known spells the arrival's replay registers, whose language legs signal.
     actions: Option<Res<crate::ui_action::PlayerActions>>,
+    // The buff cache the cascade sets up on the new player object (`0x490983` → `0x4e4100`).
+    mut auras: crate::ui_aura::AuraEntry,
 ) {
     let arrived = !arrivals.is_empty();
     // The pushes are an engine turn, as they read the relation inputs a call can write; the
@@ -1752,6 +1754,8 @@ fn feed_units(
     vm.run(|script| {
         if let Some(script) = script {
             script.fire_world_enter_head(enter.bonus_bar_offset, usable_changed);
+            crate::ui_aura::enter_world(script, &mut auras);
+            script.fire_world_enter_watchers();
         }
     });
     // `0x4909c9` → `0x4bc6f0`: `SetPetGuid(0, 0)` as an engine turn on the bar and the VM, its

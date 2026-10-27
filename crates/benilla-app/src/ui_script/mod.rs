@@ -248,6 +248,21 @@ pub(crate) struct UiClock {
     pub(crate) ui_now: f64,
 }
 
+/// [`UiClock`] as the call host reads it. The system that ticks the VM lends the host and writes
+/// [`UiClock`], so the host reads this copy, made after each tick and at a new VM's seed: the last
+/// tick's pair until the next, which maps an instant onto `GetTime` the same way, as both of its
+/// legs move by the same steps.
+#[derive(Resource, Default)]
+pub(crate) struct HostClock(pub(crate) UiClock);
+
+/// The copy after the tick ([`HostClock`]).
+fn copy_host_clock(clock: Res<UiClock>, mut host: ResMut<HostClock>) {
+    host.0 = UiClock {
+        anchor: clock.anchor,
+        ui_now: clock.ui_now,
+    };
+}
+
 /// The pre-boot pair, replaced by [`lifecycle::seed_vm_clock`] at the first VM.
 impl Default for UiClock {
     fn default() -> Self {
@@ -467,6 +482,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<WorldPresses>()
             .init_resource::<CursorPayloadHeld>()
             .init_resource::<UiClock>()
+            .init_resource::<HostClock>()
             .init_resource::<benilla_world::frame_pace::FrameStep>()
             .init_resource::<AddOnIdentity>()
             // After `AssetSet::Open`: the VM's first load is the chain's `GlobalStrings.lua`.
@@ -596,6 +612,7 @@ impl Plugin for UiScriptPlugin {
                 Update,
                 (
                     extract::tick_script,
+                    copy_host_clock,
                     // After the input pass's hover walk and the pump's leaves and re-pick, for the
                     // pick after the pass.
                     crate::vplates::seed_plate_hover,

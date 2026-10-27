@@ -33,7 +33,7 @@ fn frame(app: &mut App, packets: Vec<Vec<SessionEvent>>) -> Vec<String> {
     }
     crate::net::handlers::dispatch(world, wire_packets(packets));
     crate::ui_unit::run_feed_units_once(world);
-    crate::ui_aura::run_feed_auras_once(world);
+    crate::ui_aura::run_feed_unit_guids_once(world);
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Auras").unwrap();

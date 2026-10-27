@@ -2,7 +2,7 @@
 //! ([`crate::field_watch`]): the notice lane, whose notices fire their callbacks' signals in the
 //! packets' order among the other lanes ([`crate::lanes`]), after every snapshot those events'
 //! handlers read is pushed ([`FieldEventPushes`]) and the unit tokens are seated
-//! ([`crate::ui_aura::AuraEvents`]), as the update handler's notify pass follows its two write
+//! ([`crate::ui_aura::UnitGuidPush`]), as the update handler's notify pass follows its two write
 //! passes over every block of the packet (`0x465277` after `0x46520e`, `0x465222`). The unit
 //! tokens' views the drain then steps back to each packet's state ([`super::views`]).
 
@@ -1692,6 +1692,38 @@ mod tests {
                 "the cascade takes it"
             );
         }
+    }
+
+    /// The cascade's buff cache set-up (`0x490983` → `0x4e4100`): its rebuild's
+    /// `PLAYER_AURAS_CHANGED` (`0x4e437f`) after the action bar's refresh (`0x490979`) and before
+    /// the pet reset (`0x4909c9`), inside the cascade, with the cache already holding our auras.
+    #[test]
+    fn the_world_entry_rebuilds_the_buff_cache_inside_the_cascade() {
+        /// `UNIT_FIELD_AURA` and `UNIT_FIELD_AURAFLAGS`.
+        const AURA: u16 = 47;
+        const AURAFLAGS: u16 = 95;
+        let spy = r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"PLAYER_ENTERING_WORLD", "UPDATE_BONUS_ACTIONBAR",
+                    "PLAYER_AURAS_CHANGED", "PET_BAR_UPDATE"}) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function()
+                table.insert(SEEN, event .. " " .. tostring(GetPlayerBuff(0, "HELPFUL")) .. " nil")
+            end)"#;
+        let (mut app, _) = feed_world(&[(AURA, 1126), (AURAFLAGS, 0x9)], spy);
+        app.init_resource::<crate::ui_aura::PlayerAuraCache>();
+        app.add_systems(Update, super::super::feed_units);
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            [
+                "PLAYER_ENTERING_WORLD -1 nil",
+                "UPDATE_BONUS_ACTIONBAR -1 nil",
+                "PLAYER_AURAS_CHANGED 0 nil",
+                "PET_BAR_UPDATE 0 nil",
+            ]
+        );
     }
 
     /// The cascade's `SetPetGuid(0, 0)` stores the zero guid (`0x4bc822`, `0x4bc827`) before its

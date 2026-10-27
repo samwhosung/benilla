@@ -1660,6 +1660,14 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
     s.set_unit_auras(0xF140_0000_0000_0077, Some(vec![aura(172, 20, 1)].into()));
     s.set_unit_auras(0x21, Some(vec![aura(589, 60, 1)].into()));
     s.set_unit_auras(0x22, Some(vec![aura(8921, 0, 1)].into()));
+    // The units the tokens reach: the pet, party1, and the target holding the target-of-target.
+    s.set_unit_guids(&UnitGuids {
+        pet: 0xF140_0000_0000_0077,
+        target: 0x20,
+        party: [0x22, 0, 0, 0],
+        held: [(0x20, 0x21), (0x21, 0)].into_iter().collect(),
+        ..Default::default()
+    });
     s.set_tracking(Some(TrackingState {
         spell_id: 2580,
         name: Some("Find Minerals".into()),

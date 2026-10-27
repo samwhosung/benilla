@@ -1,9 +1,8 @@
 //! The unit aura getters read the unit's aura slots off its object as they run, through the lent
 //! host, as the reference's walk the fields at the call (`UnitBuff` `0x519500` from `[unit+0x110]`
 //! `+0xa4`, `UnitDebuff` `0x5198f0` from `+0x124`, `GameTooltip:SetUnitBuff` `0x534ac0`), and gate
-//! the buffs on the active player as it stands then (`0x5195be`-`0x5195f7`): the live answer and
-//! the frame's snapshot agree on every getter wherever the snapshot is current, and a listener
-//! reads its own packet's auras.
+//! the buffs on the active player as it stands then (`0x5195be`-`0x5195f7`): every leg of every
+//! getter reads the object, and a listener reads its own packet's auras.
 
 use std::collections::HashMap;
 
@@ -95,7 +94,7 @@ impl Client {
     /// Every census getter's answer for every token, one line each: `UnitBuff` and `UnitDebuff`
     /// at every index of each half and past it, with and without `raidFilter`, and the tooltip's
     /// `SetUnitBuff` and `SetUnitDebuff` lines.
-    fn answers(&mut self, live: bool) -> Vec<String> {
+    fn answers(&mut self) -> Vec<String> {
         let tokens = TOKENS
             .iter()
             .map(|t| format!("'{t}'"))
@@ -132,7 +131,7 @@ impl Client {
             end
             return out"
         );
-        self.eval(live, &chunk)
+        self.eval(true, &chunk)
     }
 
     /// `guid`'s store, written in place with no packet or frame, as a packet's handler leaves it
@@ -304,6 +303,8 @@ fn client() -> Client {
         .get_resource_mut::<crate::ui_action::PlayerActions>()
     {
         actions.spells.extend([FORT, DISPEL]);
+        // The dispel's type in the book's list, as its learn appends it (`0x4b26a2`).
+        actions.dispels.push(1);
     }
     let mut c = Client {
         app,
@@ -368,18 +369,13 @@ fn client() -> Client {
     c
 }
 
-/// Wherever the frame's snapshots are current, every census getter answers the same off the live
-/// object as off the snapshot, for every token: the slots and the gate the snapshot's list holds
-/// are the ones the live read takes ([`crate::ui_aura::UnitAuraSource`]).
+/// Every census getter answers off the live object for every token, through the slots and the
+/// gate the walk takes ([`crate::ui_aura::UnitAuraSource`]).
 #[test]
-fn every_aura_getter_answers_the_same_live_as_off_the_snapshot() {
+fn every_aura_getter_answers_off_the_live_object() {
     let mut c = client();
-    let snapshot = c.answers(false);
-    let live = c.answers(true);
-    assert_eq!(snapshot.len(), TOKENS.len() * 6 * 2 * 4);
-    let differ: Vec<(&String, &String)> =
-        snapshot.iter().zip(&live).filter(|(s, l)| s != l).collect();
-    assert!(differ.is_empty(), "snapshot vs live: {differ:#?}");
+    let live = c.answers();
+    assert_eq!(live.len(), TOKENS.len() * 6 * 2 * 4);
     // The fixture reaches every leg: a stacked buff, the vision test, the unit gate, the
     // dispel class, `raidFilter` on both halves, the roster record and the tooltip.
     for line in [
@@ -402,8 +398,8 @@ fn every_aura_getter_answers_the_same_live_as_off_the_snapshot() {
     }
 }
 
-/// A store a packet moved after the frame's pushes reads as the object holds it, through the
-/// host, for the token's own unit and through a `target` hop; the snapshot still holds the push.
+/// A store a packet moved after the frame's feeds reads as the object holds it, through the
+/// host, for the token's own unit and through a `target` hop.
 #[test]
 fn an_aura_getter_reads_the_object_as_it_runs() {
     let mut c = client();
@@ -414,8 +410,6 @@ fn an_aura_getter_reads_the_object_as_it_runs() {
         return wolf, mine";
     let live: (i64, i64) = c.eval(true, chunk);
     assert_eq!(live, (4, 5));
-    let snapshot: (i64, i64) = c.eval(false, chunk);
-    assert_eq!(snapshot, (1, 1));
 }
 
 /// A unit no token names, so no list of the frame holds its auras, reads them the moment a verb
@@ -497,7 +491,7 @@ fn each_unit_aura_listener_reads_its_own_packets_auras() {
     );
 }
 
-/// The aura getters' per-call cost with the host lent and off the snapshots: 10k calls of each,
+/// The aura getters' per-call cost with the host lent: 10k calls of each,
 /// on a unit wearing [`every_kind`].
 ///
 /// Run with `cargo nextest run -p benilla-app --lib aura_getter_cost --run-ignored only
@@ -514,17 +508,14 @@ fn aura_getter_cost() {
         "UnitBuff('player', 1, 1)",
     ] {
         let chunk = format!("for n = 1, 10000 do {call} end");
-        let mut median = |live: bool| {
-            let mut times = Vec::new();
-            for _ in 0..30 {
-                let t = std::time::Instant::now();
-                c.eval::<()>(live, &chunk);
-                times.push(t.elapsed().as_secs_f64() * 1e9 / 10_000.0);
-            }
-            times.sort_by(f64::total_cmp);
-            times[times.len() / 2]
-        };
-        let (live, snapshot) = (median(true), median(false));
-        eprintln!("{call}: {live:.0} ns a call live, {snapshot:.0} ns off the snapshot");
+        let mut times = Vec::new();
+        for _ in 0..30 {
+            let t = std::time::Instant::now();
+            c.eval::<()>(true, &chunk);
+            times.push(t.elapsed().as_secs_f64() * 1e9 / 10_000.0);
+        }
+        times.sort_by(f64::total_cmp);
+        let live = times[times.len() / 2];
+        eprintln!("{call}: {live:.0} ns a call live");
     }
 }

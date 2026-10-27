@@ -776,8 +776,11 @@ pub(super) fn feed_spell_tooltips(
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
-    // Read with the host lent, so the questgiver panel's reward spell is the cells' as they stand.
-    let subjects = vm.run(|script| script.map(|s| s.spell_tooltip_subjects()));
+    // Read with the host lent, so the questgiver panel's reward spell is the cells' as they stand,
+    // and each unit's auras are its slots as they stand.
+    let (subjects, aura_subjects) = vm
+        .run(|script| script.map(|s| (s.spell_tooltip_subjects(), s.aura_tooltip_subjects())))
+        .unzip();
     vm.turn(|script, (mut items, reputations, pet_bar)| {
         let (sub_classes, spell_mods, skill_lines, factions) = &lookups;
         let SpellTooltipSources {
@@ -812,9 +815,9 @@ pub(super) fn feed_spell_tooltips(
         // The aura views: every unit's auras, the tracking spell, and what their setters asked for.
         let mut wanted_aura: Vec<AuraKey> = script.take_aura_tooltip_asks();
         wanted_aura.extend(
-            script
-                .aura_tooltip_subjects()
+            aura_subjects
                 .into_iter()
+                .flatten()
                 .filter(|k| !memory.aura_pushed.contains_key(k)),
         );
         // The pet views: the spells of the pet's bar and book, and what their setters asked for.

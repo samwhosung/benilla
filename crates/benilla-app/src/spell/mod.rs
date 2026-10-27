@@ -110,12 +110,12 @@ impl Plugin for SpellPlugin {
                         .in_set(crate::ui_script::UiInputViews)
                         .run_if(crate::ui_script::ingame_ui_up),
                     // And after the packets and the clicks, for the handlers and the tick. After
-                    // the aura feed, whose resolver inputs list the units the hover verdict is
-                    // asked for.
+                    // the resolver's feed, whose inputs list the units the hover verdict is asked
+                    // for.
                     targeting::feed_targeting_to_vm
                         .in_set(UnitFeed)
                         .after(LocalCancel)
-                        .after(crate::ui_aura::AuraEvents),
+                        .after(crate::ui_aura::UnitGuidPush),
                     // Readers of the word, which the local cancel can clear.
                     (
                         targeting::publish_picks_self,

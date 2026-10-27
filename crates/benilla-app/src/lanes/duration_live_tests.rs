@@ -22,7 +22,7 @@ fn buff() -> AuraState {
     }
 }
 
-/// A client with a VM, one frame run (so the feed has kept the clock pair), and the buff pushed
+/// A client with a VM and its clock pair, one frame run, and the buff pushed
 /// with a stale expiry of its own.
 fn client() -> bevy::app::App {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
@@ -71,6 +71,17 @@ fn client() -> bevy::app::App {
         },
     );
     app.insert_non_send_resource(script);
+    // The interface clock's pair as a new VM's seed writes it, `GetTime` at the paced clock's
+    // instant before the step, which a headless frame, with no window to tick, keeps; the host's
+    // copy follows it after the frame's tick.
+    let (anchor, _) = app
+        .world()
+        .resource::<benilla_world::frame_pace::FrameStep>()
+        .before_step();
+    *app.world_mut().resource_mut::<crate::ui_script::UiClock>() = crate::ui_script::UiClock {
+        anchor,
+        ui_now: 1000.0,
+    };
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.update();
@@ -82,7 +93,7 @@ fn client() -> bevy::app::App {
     app
 }
 
-/// The stamps' clock where the last frame's feed read it.
+/// The stamps' clock where a handler of this frame reads it, before the step.
 fn stamp_clock(app: &bevy::app::App) -> f64 {
     app.world()
         .resource::<benilla_world::frame_pace::FrameStep>()
