@@ -2123,3 +2123,34 @@ fn frame_load_faults_reach_the_load_status() {
         .eval::<bool>("return MissesDeep ~= nil and StrayTex ~= nil")
         .unwrap());
 }
+
+/// `0x769820` reads the flags on each level, template first (`0x76985c`): an empty one is skipped
+/// (`cmp byte [eax],0`), an unknown strata leaves the template's (`0x769968`-`0x7699ad`), and
+/// `enableMouse`/`enableKeyboard` only enable (`0x769aaf`, `0x769adb`).
+#[test]
+fn frame_flags_apply_level_by_level() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="FlagTemplate" virtual="true" hidden="true" frameStrata="HIGH"
+                   enableMouse="true" enableKeyboard="true" movable="true" alpha="0.5"/>
+            <Frame name="EmptyOver" inherits="FlagTemplate" hidden="" frameStrata="" alpha=""/>
+            <Frame name="FalseOver" inherits="FlagTemplate" enableMouse="false"
+                   enableKeyboard="false" movable="false" frameStrata="BOGUS"/>
+        </Ui>"#,
+    );
+    let got: String = s
+        .eval(
+            r#"return table.concat({ tostring(EmptyOver:IsShown()), EmptyOver:GetFrameStrata(),
+                string.format("%.2f", EmptyOver:GetAlpha()), tostring(FalseOver:IsMouseEnabled()),
+                tostring(FalseOver:IsKeyboardEnabled()), tostring(FalseOver:IsMovable()),
+                FalseOver:GetFrameStrata() }, ",")"#,
+        )
+        .unwrap();
+    assert_eq!(got, "nil,HIGH,0.50,1,1,nil,HIGH");
+    assert!(has_line(
+        &report,
+        "Frame FalseOver: Unknown frame strata: BOGUS"
+    ));
+}

@@ -9,7 +9,8 @@ use super::{children_named, color_of, Levels, Loader};
 
 impl Loader<'_> {
     /// A frame element's LoadXML attributes and simple children (`0x769820`), and a model pane's
-    /// own (`0x76cac0`): from the merged `el`, and `frameLevel` from each of `levels`.
+    /// own (`0x76cac0`): the flags from each of `levels` in turn ([`Self::apply_level_flags`]),
+    /// the rest from the merged `el`.
     pub(super) fn apply_attrs(
         &mut self,
         el: &Element,
@@ -17,40 +18,8 @@ impl Loader<'_> {
         wrapper: &Table,
         dbg: &str,
     ) {
-        if el.attr_bool("hidden") {
-            self.call(wrapper, "Hide", (), dbg);
-        }
-        // An unknown `frameStrata=` is logged at severity 1, the name or `<unnamed>` (`0x878658`,
-        // `0x76999c`), and skipped, not raised as the Lua binding would (`0x774360`):
-        // `SetFrameStrata` runs only on a hit (`0x769971`), so the frame keeps the strata it had.
-        if let Some(strata) = el.attr("frameStrata") {
-            if crate::script::object::strata_from_str(strata).is_some() {
-                self.call(wrapper, "SetFrameStrata", strata.to_string(), dbg);
-            } else {
-                let name = self.object_name(wrapper);
-                self.status_warning(format!("Frame {name}: Unknown frame strata: {strata}"));
-            }
-        }
-        // `frameLevel=` per level, read with `SStrToInt` (`0x7699c5`): above 0 it is set (`0x76a4f0`,
-        // the setter `SetFrameLevel` calls), else logged (`0x878628`) and the level kept, so an
-        // instance's `"0"` leaves its template's level.
         for level in levels {
-            let Some(value) = level.attr("frameLevel").filter(|v| !v.is_empty()) else {
-                continue;
-            };
-            let n = s_str_to_int(value);
-            if n > 0 {
-                self.call(wrapper, "SetFrameLevel", n, dbg);
-            } else {
-                let name = self.object_name(wrapper);
-                self.status_warning(format!("Frame {name}: Unknown frame level: {value}"));
-            }
-        }
-        // `0x769a10`: a non-empty `alpha` through `SStrToFloat` (`0x64aaa0`), clamped with NaN
-        // at 1 and handed to the alpha walk as Lua's `SetAlpha` hands it (`0x769a76`-`0x769a8a`).
-        if let Some(alpha) = el.attr("alpha").filter(|v| !v.is_empty()) {
-            let a = crate::script::binding_abi::s_str_to_float(alpha);
-            self.call(wrapper, "SetAlpha", a, dbg);
+            self.apply_level_flags(level, wrapper, dbg);
         }
 
         // A model pane's `file=` is `SetModel` (`0x76cac0`).
@@ -98,13 +67,6 @@ impl Loader<'_> {
                 self.call(wrapper, "SetID", n, dbg);
             }
         }
-        // `clampedToScreen`: the layout's screen clamp, geometry flag `0x10` (`0x768cc0`).
-        if el.attr_bool("clampedToScreen") {
-            self.call(wrapper, "SetClampedToScreen", true, dbg);
-        }
-        if el.attr_bool("enableMouse") {
-            self.call(wrapper, "EnableMouse", true, dbg);
-        }
         // `<HitRectInsets>` and `<ResizeBounds>` are arms of the frame's child loop
         // (`0x769b27`-`0x769d22`), so each one applies in turn and the last wins; the merged
         // element holds a template's children first, so an instance's own one wins over it.
@@ -130,20 +92,70 @@ impl Loader<'_> {
                 crate::script::xml_layout::resize_bound(self.lua, wrapper, tag == "maxResize", v);
             }
         }
-        // `movable`/`resizable`: flag bits 0x100/0x200, via the setter Lua uses (`0x76a3c0`).
-        if el.attr_bool("movable") {
-            self.call(wrapper, "SetMovable", true, dbg);
+    }
+
+    /// One level's flag attributes, as `0x769820` reads them on each node, the template first
+    /// (`0x76985c`): each is skipped when empty (a first-byte test), so an instance's `""` leaves
+    /// its template's value.
+    fn apply_level_flags(&mut self, level: &Element, wrapper: &Table, dbg: &str) {
+        // `hidden` hides or shows (`0x7698a2`-`0x7698c4`).
+        match level.attr_bool_opt("hidden") {
+            Some(true) => self.call(wrapper, "Hide", (), dbg),
+            Some(false) => self.call(wrapper, "Show", (), dbg),
+            None => {}
         }
-        if el.attr_bool("resizable") {
-            self.call(wrapper, "SetResizable", true, dbg);
+        // `toplevel`, `movable` and `resizable` set or clear bits 0x1, 0x100 and 0x200 of the flag
+        // word through the setter Lua uses (`0x76a3c0`, at `0x7698ec`, `0x769916`, `0x769940`).
+        for (attr, verb) in [
+            ("toplevel", "SetToplevel"),
+            ("movable", "SetMovable"),
+            ("resizable", "SetResizable"),
+        ] {
+            if let Some(on) = level.attr_bool_opt(attr) {
+                self.call(wrapper, verb, on, dbg);
+            }
         }
-        // `toplevel`: bit 0x1 of the same flag word (`0x7698ec`).
-        if el.attr_bool("toplevel") {
-            self.call(wrapper, "SetToplevel", true, dbg);
+        // An unknown `frameStrata=` is logged at severity 1, the name or `<unnamed>` (`0x878658`,
+        // `0x76999c`), and skipped, not raised as the Lua binding would (`0x774360`):
+        // `SetFrameStrata` runs only on a hit (`0x769971`), so the earlier level's stands.
+        if let Some(strata) = level.attr("frameStrata").filter(|v| !v.is_empty()) {
+            if crate::script::object::strata_from_str(strata).is_some() {
+                self.call(wrapper, "SetFrameStrata", strata.to_string(), dbg);
+            } else {
+                let name = self.object_name(wrapper);
+                self.status_warning(format!("Frame {name}: Unknown frame strata: {strata}"));
+            }
         }
-        // `enableKeyboard` enables both key kinds (`0x769ae8`, `0x769af3`).
-        if el.attr_bool("enableKeyboard") {
+        // `frameLevel=` with `SStrToInt` (`0x7699c5`): above 0 it is set (`0x76a4f0`, the setter
+        // `SetFrameLevel` calls), else logged (`0x878628`) and the level kept, so an instance's
+        // `"0"` leaves its template's level.
+        if let Some(value) = level.attr("frameLevel").filter(|v| !v.is_empty()) {
+            let n = s_str_to_int(value);
+            if n > 0 {
+                self.call(wrapper, "SetFrameLevel", n, dbg);
+            } else {
+                let name = self.object_name(wrapper);
+                self.status_warning(format!("Frame {name}: Unknown frame level: {value}"));
+            }
+        }
+        // `0x769a10`: a non-empty `alpha` through `SStrToFloat` (`0x64aaa0`), clamped with NaN
+        // at 1 and handed to the alpha walk as Lua's `SetAlpha` hands it (`0x769a76`-`0x769a8a`).
+        if let Some(alpha) = level.attr("alpha").filter(|v| !v.is_empty()) {
+            let a = crate::script::binding_abi::s_str_to_float(alpha);
+            self.call(wrapper, "SetAlpha", a, dbg);
+        }
+        // `enableMouse` and `enableKeyboard` only ever enable (`0x769aaf`, `0x769adb`), the
+        // keyboard both key kinds (`0x769ae8`, `0x769af3`), so `"false"` undoes no template.
+        if level.attr_bool("enableMouse") {
+            self.call(wrapper, "EnableMouse", true, dbg);
+        }
+        if level.attr_bool("enableKeyboard") {
             self.call(wrapper, "EnableKeyboard", true, dbg);
+        }
+        // `clampedToScreen` sets or clears the layout's screen clamp, geometry flag `0x10`
+        // (`0x769b17` → `0x768cc0`).
+        if let Some(on) = level.attr_bool_opt("clampedToScreen") {
+            self.call(wrapper, "SetClampedToScreen", on, dbg);
         }
     }
 

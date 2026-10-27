@@ -359,9 +359,10 @@ fn the_status_bar_is_the_templates_because_tipbuddy_anchors_to_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// An instance's `frameStrata` (`Necrosis.xml:1332`) and `hidden="false"` (`PowerAuras.xml:20`)
-/// win over the template's; PowerAuras never calls `Show()`, and `GameTooltip_OnLoad` does not
-/// hide the frame (`GameTooltip.lua:79-82`).
+/// An instance's `frameStrata` (`Necrosis.xml:1332`) wins over the template's. `hidden="false"`
+/// (`PowerAuras.xml:20`) is read on its own level after the template's `"true"` (`0x76985c`): it
+/// sets the shown bit and runs the tooltip's show (`0x7698b8`-`0x7698c4`), which with no owner
+/// clears the bit and hides again (`0x530aba`-`0x530ac8`), so the tooltip loads hidden.
 #[test]
 fn an_instance_attribute_beats_the_templates() {
     benilla_formats::wow_data_or_skip!();
@@ -380,8 +381,9 @@ fn an_instance_attribute_beats_the_templates() {
         "the instance's strata overrides the template's TOOLTIP"
     );
     assert!(
-        s.eval::<bool>("return Powa_Tooltip:IsShown()").unwrap(),
-        "hidden=\"false\" beats the template's hidden=\"true\" — PowerAuras never calls Show()"
+        !s.eval::<bool>("return Powa_Tooltip:IsShown() == 1")
+            .unwrap(),
+        "an ownerless tooltip's show hides it again"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
