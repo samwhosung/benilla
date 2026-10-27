@@ -2052,6 +2052,8 @@ pub(crate) mod schedule_tests {
          "`pending` holds only the VM's own `Screenshot()` asks, and the take spawns a capture, publishing nothing"),
         ("screenshot.rs", "report_captures", Because::FilledByVm,
          "the outcome chain starts with the VM's own `Screenshot()` call"),
+        ("vplates.rs", "drive_vplates", Because::Deliberate,
+         "its take is the hits queued for plates: a hit before the interface is up has no plate to flash, since a plate exists only once this driver has bound it under a loaded interface, so a dropped one loses nothing"),
         ("target/click.rs", "select_on_plate_click", Because::FilledByVm,
          "filled only by a nameplate frame's click, which a frameless VM has no plate to make"),
         ("ui_action/cooldown_lane.rs", "fire_cooldowns", Because::Deliberate,

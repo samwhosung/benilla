@@ -1053,12 +1053,13 @@ mod tests {
         );
     }
 
-    /// The driver's hand-over of the queued hits, as a system of its own for the test.
-    fn hand_flashes_over(
-        mut script: NonSendMut<benilla_ui::script::UiScript>,
-        mut flashes: ResMut<PlateFlashes>,
-    ) {
-        for guid in std::mem::take(&mut flashes.0) {
+    /// The driver's hand-over of the queued hits: what [`drive_vplates`] does with them.
+    fn hand_over(app: &mut App) {
+        let guids = std::mem::take(&mut app.world_mut().resource_mut::<PlateFlashes>().0);
+        let mut script = app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>();
+        for guid in guids {
             script.flash_nameplate(guid);
         }
     }
@@ -1114,7 +1115,7 @@ mod tests {
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<PlateFlashes>()
             .insert_non_send_resource(script)
-            .add_systems(Update, (flash_on_health_loss, hand_flashes_over).chain());
+            .add_systems(Update, flash_on_health_loss);
         let colour = |app: &App, plate: u32| {
             app.world()
                 .non_send_resource::<benilla_ui::script::UiScript>()
@@ -1138,23 +1139,27 @@ mod tests {
         // Both plates read white: green is 1.
         assert_eq!((colour(&app, 1), colour(&app, 2)), (1.0, 1.0));
 
-        // A rise, and a health drop on a field that is not the health: nothing.
+        // A rise (signed: -16 to 5 is one), and a drop on a field that is not the health: nothing.
         app.world_mut()
             .write_message(edge(WOLF, FIELD_UNIT_HEALTH, 10, 20));
         app.world_mut()
+            .write_message(edge(WOLF, FIELD_UNIT_HEALTH, 0xFFFF_FFF0, 5));
+        app.world_mut()
             .write_message(edge(WOLF, FIELD_UNIT_HEALTH + 1, 20, 10));
         app.update();
+        hand_over(&mut app);
         assert_eq!(colour(&app, 1), 1.0);
 
-        // A drop, compared signed, flashes the wolf's plate alone, red having no green.
+        // A drop flashes the wolf's plate alone, red having no green.
         app.world_mut()
             .write_message(edge(WOLF, FIELD_UNIT_HEALTH, 20, 10));
         app.update();
+        hand_over(&mut app);
         assert_eq!((colour(&app, 1), colour(&app, 2)), (0.0, 1.0));
 
         // A logged hit names the bear; a unit with no plate is ignored.
         app.world_mut().resource_mut::<PlateFlashes>().0 = vec![0x9999, BEAR];
-        app.update();
+        hand_over(&mut app);
         assert_eq!((colour(&app, 1), colour(&app, 2)), (0.0, 0.0));
     }
 
