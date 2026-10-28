@@ -391,3 +391,50 @@ fn a_second_corpse_in_the_frame_ends_with_its_loot() {
     c.frame(vec![]);
     assert!(c.seen().is_empty(), "nothing fires after");
 }
+
+/// A candidate the roster holds by name but the player-name cache lacks reads nil: the getter asks
+/// the cache alone (`0x4c2f70`, `0xc0e228`), never the roster, and its miss's callback signals
+/// `UPDATE_MASTER_LOOT_LIST` when the name lands (`0x4c2fba`), after which it reads the name.
+#[test]
+fn a_roster_member_the_name_cache_lacks_reads_nil_until_its_name_lands() {
+    let mut c = client();
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_party::GroupState>()
+        .members
+        .push(benilla_protocol::messages::GroupMemberEntry {
+            name: "Thrall".into(),
+            guid: THRALL,
+            status: 0,
+            flags: 0,
+        });
+    c.ask_loot(CORPSE);
+    c.frame(vec![
+        vec![SessionEvent::LootMasterList {
+            candidates: vec![THRALL],
+        }],
+        vec![SessionEvent::LootResponse {
+            guid: CORPSE,
+            loot_type: loot_type::CORPSE,
+            gold: 0,
+            items: vec![row(0, LINEN, slot_type::MASTER)],
+        }],
+    ]);
+    c.seen();
+    assert!(
+        c.eval::<bool>(true, "return GetMasterLootCandidate(1) == nil"),
+        "the roster names no candidate"
+    );
+    c.frame(vec![vec![SessionEvent::PlayerName {
+        guid: THRALL,
+        name: "Thrall".into(),
+        race: 2,
+        gender: 0,
+        class: 1,
+    }]]);
+    assert_eq!(c.seen(), ["UPDATE_MASTER_LOOT_LIST:nil"]);
+    assert_eq!(
+        c.eval::<String>(true, "return GetMasterLootCandidate(1)"),
+        "Thrall"
+    );
+}

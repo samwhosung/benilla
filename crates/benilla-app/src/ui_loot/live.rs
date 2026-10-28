@@ -4,7 +4,7 @@
 //! (the source `0xb71b48`, the money `0xb71ba0`, the type `0xb71bbc`, the rows `0xb71968`), each
 //! row resolved off the item cache as the reference's accessors read it as they run
 //! (`0x4c22a0`-`0x4c2670`), the source's object (`0x468460`, typemask 8) and the candidate array
-//! `0xc4dc38` named off the name cache (`0x4c2f70`).
+//! `0xc4dc38` named off the player-name cache alone (`0x4c2f70`).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -20,7 +20,6 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::query_cache::Ask;
-use crate::ui_party::GroupState;
 
 /// What the loot getters read as they run; the session absent in a harness without it, where they
 /// read the VM's copy.
@@ -31,7 +30,6 @@ pub(crate) struct LootLive<'w, 's> {
     icons: Option<Res<'w, ItemDisplays>>,
     rolls: crate::items::Rolls<'w>,
     names: Option<Res<'w, NameCache>>,
-    group: Option<Res<'w, GroupState>>,
     objects: LootSourceObjects<'w, 's>,
 }
 
@@ -56,27 +54,20 @@ impl LootLive<'_, '_> {
         )
     }
 
-    /// The candidate at the 0-based `index`, named off the roster for a member and the name cache
-    /// for our own guid, which vmangos lists as a candidate (`Group.cpp:928-937`) but never sends as
-    /// a member; `None` with no session to read.
+    /// The candidate at the 0-based `index` (`0x4c2f50` → `0x61c660`), named off the player-name
+    /// cache alone (`0x4c2f70`, `0xc0e228`), never the roster, so a member the cache lacks reads nil
+    /// and takes the miss's callback (`0x4c2f65`); `None` with no session to read.
     fn candidate(&self, index: usize) -> Option<MasterLootCandidate> {
         let loot = self.loot.as_deref()?;
         let Some(guid) = loot.master_candidate(index) else {
             return Some(MasterLootCandidate::Nobody);
         };
-        let member = self
-            .group
-            .as_deref()
-            .and_then(|g| g.members.iter().find(|m| m.guid == guid))
-            .map(|m| m.name.clone());
-        let name = member
-            .or_else(|| {
-                self.names
-                    .as_deref()?
-                    .resolve_unit(guid, None, Ask::Read)
-                    .map(str::to_string)
-            })
-            .filter(|n| !n.is_empty());
+        let name = self
+            .names
+            .as_deref()?
+            .resolve_player(guid, Ask::Read)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
         Some(match name {
             Some(name) => MasterLootCandidate::Named(name),
             None => MasterLootCandidate::Unnamed(guid),
