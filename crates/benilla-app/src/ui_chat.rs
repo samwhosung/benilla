@@ -64,6 +64,8 @@ pub(crate) use edit::ChannelState;
 #[cfg(test)]
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
+#[cfg(test)]
+pub(crate) use feed::EmoteTexts;
 pub(crate) use feed::{release_display, Answer, ChatLog};
 /// The chat applier off a bare world, for the tests that send through it.
 #[cfg(test)]

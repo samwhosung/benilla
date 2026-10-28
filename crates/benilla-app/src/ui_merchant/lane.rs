@@ -154,6 +154,13 @@ pub(crate) struct MerchantRecordAnswers<'w> {
 }
 
 impl MerchantRecordAnswers<'_> {
+    /// Our create's merchant reset, in its packet ([`super::MerchantOpen::reset_world_state`]).
+    pub(crate) fn reset_world_state(&mut self) {
+        if let Some(open) = self.open.as_mut() {
+            open.reset_world_state();
+        }
+    }
+
     /// A vendor row's callback (`0x4fb0f0`).
     pub(crate) fn row_answered(&mut self) {
         let (Some(open), Some(lane)) = (self.open.as_deref_mut(), self.lane.as_deref_mut()) else {

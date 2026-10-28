@@ -82,17 +82,23 @@ fn catch_up(group: &GroupState) -> Vec<GroupSignal> {
 }
 
 /// The party lane's place in [`GroupState::signals`]: the sequence number of the first entry it
-/// has not fired.
+/// has not fired, and a fresh VM's [`catch_up`], stamped where the feed found it owed, so it fires
+/// after the arrival stamped at our create, as the list that follows the create would.
 #[derive(Resource, Default)]
 pub(crate) struct PartyLane {
     fired: u64,
+    owed: Option<(crate::lanes::Stamp, Vec<GroupSignal>)>,
 }
 
-/// The party lane's head ([`crate::lanes`]): the stamp of the first entry it has not fired.
+/// The party lane's head ([`crate::lanes`]): the catch-up owed, else the stamp of the first entry
+/// it has not fired. The catch-up is stamped after every entry it passed over.
 pub(super) fn peek_group_signals(world: &World) -> Option<crate::lanes::Stamp> {
+    let lane = world.get_resource::<PartyLane>()?;
+    if let Some((at, _)) = &lane.owed {
+        return Some(*at);
+    }
     let log = &world.get_resource::<GroupState>()?.signals;
-    let fired = world.get_resource::<PartyLane>()?.fired;
-    log.at(fired.max(log.first())).map(|(stamp, _)| *stamp)
+    log.at(lane.fired.max(log.first())).map(|(stamp, _)| *stamp)
 }
 
 /// The party lane's `fire_until`: each group event `until` admits, signalled with the host lent at
@@ -109,6 +115,24 @@ pub(super) fn fire_group_signals(
     )>,
     mut sink: crate::ui_action::MessageSink,
 ) {
+    let owed = {
+        let (_, mut lane, _) = vm.own();
+        lane.owed.take_if(|(at, _)| until.admits(*at))
+    };
+    if let Some((at, signals)) = owed {
+        let ((), moved) = crate::lanes::firing(at, || {
+            vm.run(|script| {
+                if let Some(script) = script {
+                    for signal in signals {
+                        fire_signal(script, &mut sink, signal, Vec::new());
+                    }
+                }
+            })
+        });
+        if moved {
+            return;
+        }
+    }
     loop {
         let next = {
             let (group, mut lane, maps) = vm.own();
@@ -371,7 +395,6 @@ pub(crate) fn feed_party(
     mut fed: Local<crate::ui_script::VmMemo<FedParty>>,
     chat: Res<crate::ui_chat::ChatLog>,
     seeded: Option<Res<ReloadSeed>>,
-    mut sink: crate::ui_action::MessageSink,
     mut lane: ResMut<PartyLane>,
 ) {
     let GroupView {
@@ -474,8 +497,8 @@ pub(crate) fn feed_party(
         // signals, and a stats packet signals none. `RAID_ROSTER_UPDATE`'s fourth site, the world
         // entry's fill of a zero row (`0x4ba1a2`), is not built: our row holds our guid
         // ([`GroupState::raid`]). A world entry's fresh VM heard none of them and is told
-        // [`catch_up`] here instead, the lane passing over what was logged; a reload's seeded VM
-        // hears from the lane only what came after its seed.
+        // [`catch_up`] by the lane instead, stamped here, past what was logged; a reload's seeded
+        // VM hears from the lane only what came after its seed.
         if vm_reset {
             let seed = seeded
                 .as_ref()
@@ -487,9 +510,7 @@ pub(crate) fn feed_party(
                     let owed = catch_up(group);
                     if !owed.is_empty() {
                         gate.audit("feed_party", "the catch-up's group signals");
-                    }
-                    for signal in owed {
-                        fire_signal(script, &mut sink, signal, Vec::new());
+                        lane.owed = Some((crate::lanes::stamp(), owed));
                     }
                     group.signals.end()
                 }

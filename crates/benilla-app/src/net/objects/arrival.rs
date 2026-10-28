@@ -6,7 +6,6 @@
 //! reference's order ([`crate::ui_world_enter`]). The restore is the arrival's alone, never the
 //! cascade's, which a `/reload` runs too.
 
-use benilla_protocol::ObjectFields;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -17,13 +16,13 @@ use crate::net::ClientCommand;
 #[derive(SystemParam)]
 pub(super) struct Arrival<'w> {
     own_control: Option<ResMut<'w, crate::player::OwnControlLost>>,
-    mods: Option<ResMut<'w, crate::spell::SpellModifiers>>,
-    classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
+    actions: Option<ResMut<'w, crate::ui_action::PlayerActions>>,
     lane: Option<ResMut<'w, crate::ui_world_enter::ArrivalLane>>,
+    stable: Option<ResMut<'w, crate::ui_stable::StableOpen>>,
 }
 
 /// The arrival's writes, in its order, and its item on the arrival lane, at the create's place.
-pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64, fields: &ObjectFields) {
+pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64) {
     // `0x5deb49`: the manager's `+0xc8` gates the restore, the claim and the cascade; its
     // constructor (`0x4650e7`) is its only store, so it is clear at every create.
     let control_gained = crate::player::regain_control_on_arrival(
@@ -52,23 +51,24 @@ pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64, fields: &
             &format!("SET_ACTIVE_MOVER guid={guid:#x} (self create)"),
         );
     }
-    // The arrival's signals and its world-enter cascade (`0x5dea86`-`0x5deb73`, `0x5deb60` →
-    // `0x4908c0`), with the flag's rise among them (`0x5deb56`).
+    // The arrival's signals and its world-enter cascade (`0x5dea86`-`0x5debcc`, `0x5deb60` →
+    // `0x4908c0`), with the flag's rise among them (`0x5deb56`); the form-list edits of the
+    // packets after this one are kept for its replay to apply after its own.
     if let Some(lane) = arrival.lane.as_mut() {
         lane.push(crate::ui_world_enter::Entry::Arrival { control_gained });
-    }
-    // The class family the spell modifiers gate on (`0x5debcc` → `0x6e6ca0`): `ChrClasses` field
-    // 15 of the class, byte 1 of `UNIT_FIELD_BYTES_0`. Written only on a move, as the tooltip feed
-    // diffs the tables whenever they are marked changed.
-    if let (Some(mods), Some(classes), Some(class)) = (
-        arrival.mods.as_mut(),
-        arrival.classes.as_ref(),
-        fields.unit_class(),
-    ) {
-        let family = classes.0.spell_family(u32::from(class));
-        if mods.class_family() != family {
-            mods.set_class_family(family);
+        if let Some(actions) = arrival.actions.as_mut() {
+            actions.form_edits = Some(Vec::new());
         }
+    }
+    // The cascade's silent window resets (`0x4909ab`, `0x4909b0`, `0x4909b5`, `0x490a0a`), in
+    // the packet as the reference runs them ([`crate::ui_world_enter::reset_windows`]).
+    sc.trainer.reset_world_state();
+    sc.merchant.reset_world_state();
+    if let Some(trade) = sc.trade.as_mut() {
+        trade.reset_world_tables();
+    }
+    if let Some(stable) = arrival.stable.as_mut() {
+        stable.clear();
     }
 }
 

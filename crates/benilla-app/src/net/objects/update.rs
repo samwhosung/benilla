@@ -1248,7 +1248,7 @@ fn create_hook(
             if sc.self_guid.0 != Some(guid) {
                 compare_party_record(sc, guid, &fields, script);
             } else {
-                super::arrival::arrive(sc, arrival, guid, &fields);
+                super::arrival::arrive(sc, arrival, guid);
             }
         }
         Created::World(EntityKind::Unit) => {

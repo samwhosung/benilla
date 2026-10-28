@@ -93,8 +93,8 @@ fn movers(rx: &Receiver<ClientCommand>) -> Vec<String> {
 
 /// The arrival's writes are its packet's (`0x5dec7b` → `0x5dea50`): a packet after our own
 /// create in the same drain finds our player tagged and in control (`0x5deb56`), its send
-/// goes out after the mover's claim (`0x5deb5b`), the flag's rise is owed to the arrival's item,
-/// and the class family is stored (`0x5debcc`).
+/// goes out after the mover's claim (`0x5deb5b`), and the flag's rise and the class family
+/// (`0x5debcc`) are owed to the arrival's item.
 #[test]
 fn a_packet_after_our_create_finds_us_arrived() {
     let (mut app, rx) = client();
@@ -119,7 +119,8 @@ fn a_packet_after_our_create_finds_us_arrived() {
         world
             .resource::<crate::spell::SpellModifiers>()
             .class_family(),
-        3
+        0,
+        "the class family is the arrival item's last step (`0x5debcc`)"
     );
     assert_eq!(
         world
@@ -129,6 +130,14 @@ fn a_packet_after_our_create_finds_us_arrived() {
             control_gained: true
         }],
         "one arrival on its lane, the flag's rise owed among its signals"
+    );
+    crate::ui_world_enter::fire_lane(world);
+    assert_eq!(
+        world
+            .resource::<crate::spell::SpellModifiers>()
+            .class_family(),
+        3,
+        "set once the item has run its cascade"
     );
 }
 

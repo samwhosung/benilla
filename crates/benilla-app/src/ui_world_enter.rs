@@ -29,6 +29,25 @@ use bevy::prelude::*;
 use crate::lanes::{Stamp, Until};
 use crate::net::{Guid, ObjectStore, SelfPlayer};
 
+/// The cascade's silent window resets' engine half (`0x4909ab`, `0x4909b0`, `0x4909b5`,
+/// `0x490a0a`), as a `/reload` pushes its cascade; our create runs the same in its packet
+/// (`crate::net::objects`' arrival), so a later packet's window in the same frame is not reset, as
+/// the reference runs them inside the create's packet.
+pub(crate) fn reset_windows(world: &mut World) {
+    if let Some(mut trainer) = world.get_resource_mut::<crate::ui_trainer::TrainerOpen>() {
+        trainer.reset_world_state();
+    }
+    if let Some(mut merchant) = world.get_resource_mut::<crate::ui_merchant::MerchantOpen>() {
+        merchant.reset_world_state();
+    }
+    if let Some(mut trade) = world.get_resource_mut::<crate::ui_trade::TradeSession>() {
+        trade.reset_world_tables();
+    }
+    if let Some(mut stable) = world.get_resource_mut::<crate::ui_stable::StableOpen>() {
+        stable.clear();
+    }
+}
+
 /// What one item on the lane runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Entry {
@@ -135,6 +154,9 @@ fn arrival(world: &mut World, control_gained: bool) {
     cascade(world);
     crate::death::signal_death_state(world);
     leg(world, crate::ui_logout::set_in_world);
+    // `0x5debcc` → `0x6e6ca0`: the class family the spell modifiers gate on.
+    leg(world, class_family);
+    apply_form_edits(world);
 }
 
 /// The cascade `0x4908c0` past its once-per-world latch (`0x4908c7`, the sweep's
@@ -169,6 +191,11 @@ fn cascade(world: &mut World) {
             }
         })
     });
+    // `0x4909ab`, `0x4909b0`, `0x4909b5`: the trainer's, the merchant's and the trade's resets,
+    // which signal nothing; their engine half ran where the item was pushed ([`reset_windows`]).
+    leg(world, crate::ui_trainer::reset_vm_on_world_enter);
+    leg(world, crate::ui_merchant::reset_vm_on_world_enter);
+    leg(world, crate::ui_trade::reset_vm_on_world_enter);
     // `0x4909bf`, `0x4909c4`: the profession windows' resets.
     leg(world, crate::ui_tradeskill::reset_crafts_on_world_enter);
     // `0x4909c9` → `0x4bc6f0`: the pet's.
@@ -189,8 +216,11 @@ fn cascade(world: &mut World) {
     leg(world, crate::ui_battlefield::reset_on_world_enter);
     // `0x490a05` → `0x4cc280`: the auction reset.
     leg(world, crate::ui_auction::reset_auction_on_world_enter);
+    // `0x490a0a` → `0x4caab0`: the stable's, all engine, run where the item was pushed.
     // `0x490a14` → `0x4c9f40`: the meeting stone's.
     leg(world, crate::ui_dialog_verbs::meeting_stone_enter_world);
+    // `0x490a28` → `0x491f50`: the corpse cache reset, and a ghost's `MSG_CORPSE_QUERY`.
+    leg(world, crate::death::query_corpse_on_world_enter);
     // `0x490a2d`-`0x490a3c`: a dead body released.
     leg(world, crate::death::repop_on_world_enter);
     // `0x490a48`, `0x490a51`: Welcome, then Questgivers.
@@ -314,6 +344,52 @@ fn replay_book(world: &mut World) {
     }
 }
 
+/// `0x6e6ca0` at the arrival's end (`0x5debcc`): the spell modifiers' class family, `ChrClasses`
+/// field 15 of our class, byte 1 of `UNIT_FIELD_BYTES_0`. Written only on a move, as the tooltip
+/// feed diffs the tables whenever they are marked changed.
+fn class_family(
+    me: Query<&ObjectStore, With<SelfPlayer>>,
+    mods: Option<ResMut<crate::spell::SpellModifiers>>,
+    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
+) {
+    let (Some(mut mods), Some(classes), Some(class)) = (
+        mods,
+        classes,
+        me.iter().next().and_then(|s| s.0.unit_class()),
+    ) else {
+        return;
+    };
+    let family = classes.0.spell_family(u32::from(class));
+    if mods.class_family() != family {
+        mods.set_class_family(family);
+    }
+}
+
+/// The form-list edits the packets after our create made while its item waited
+/// ([`crate::ui_action::PlayerActions::form_edits`]), applied after the replay, signalling
+/// nothing: their own signals fire at their packets' places, after this item. While another
+/// arrival waits behind this one, its edits stay for it.
+fn apply_form_edits(world: &mut World) {
+    if !world.contains_resource::<crate::ui_action::PlayerActions>() {
+        return;
+    }
+    let another = world
+        .get_resource::<ArrivalLane>()
+        .is_some_and(|l| l.0.iter().any(|(_, e)| matches!(e, Entry::Arrival { .. })));
+    world.resource_scope(|world, mut actions: Mut<crate::ui_action::PlayerActions>| {
+        let edits = if another {
+            actions.form_edits.clone().unwrap_or_default()
+        } else {
+            actions.form_edits.take().unwrap_or_default()
+        };
+        if let Some(spells) = world.get_resource::<crate::ui_action::Spells>() {
+            for edit in edits {
+                edit.apply(&mut actions.forms, &spells.catalog);
+            }
+        }
+    });
+}
+
 /// `UpdateGhostState 0x5de9c0` at the arrival: a ghost's `PLAYER_FLAGS` bit 0x10 fires the Death
 /// tutorial (`0x5de9f0`); any other body signals `PLAYER_UNGHOST` (`0x5dea2a`).
 fn ghost_state(world: &mut World) {
@@ -345,10 +421,16 @@ fn control_rose(mut vm: crate::script_calls::VmWith<()>) {
     vm.engine_usable_refresh();
 }
 
-/// The cascade's opening: `SelectTarget(0)` (`0x490927`) as an engine turn on the selection, then
-/// the bracket, the collection, `PLAYER_LOGIN` if armed, `PLAYER_ENTERING_WORLD` and the
-/// minimap's (`0x49096a`, `0x49096f`).
+/// The cascade's opening: the sound bracket (`0x4908d5`), then `SelectTarget(0)` (`0x490927`)
+/// inside it as an engine turn on the selection, so its handlers' sounds are dropped, then the
+/// collection, `PLAYER_LOGIN` if armed, `PLAYER_ENTERING_WORLD` and the minimap's (`0x49096a`,
+/// `0x49096f`).
 fn open_cascade(mut vm: crate::script_calls::VmWith<()>) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.open_world_enter();
+        }
+    });
     vm.engine_clear_target(crate::lanes::mark());
     vm.run(|script| {
         if let Some(script) = script {
@@ -398,8 +480,13 @@ fn reads(world: &mut World) -> FilteredAccessSet {
         system_access(world, crate::ui_battlefield::reset_on_world_enter),
         system_access(world, crate::ui_auction::reset_auction_on_world_enter),
         system_access(world, crate::ui_dialog_verbs::meeting_stone_enter_world),
+        system_access(world, crate::ui_trainer::reset_vm_on_world_enter),
+        system_access(world, crate::ui_merchant::reset_vm_on_world_enter),
+        system_access(world, crate::ui_trade::reset_vm_on_world_enter),
+        system_access(world, crate::death::query_corpse_on_world_enter),
         system_access(world, crate::death::repop_on_world_enter),
         system_access(world, crate::ui_logout::set_in_world),
+        system_access(world, class_family),
         system_access(world, fire_signal),
         system_access(world, crate::tutorial::fire_now),
         system_access(world, ghost_of),

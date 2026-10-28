@@ -110,6 +110,32 @@ pub(crate) fn form_learned(
     true
 }
 
+/// A learn's or an unlearn's form leg, kept to apply again ([`crate::ui_action::PlayerActions::form_edits`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FormEdit {
+    Learned {
+        spell_id: u32,
+        replaces: Option<u32>,
+    },
+    Unlearned {
+        spell_id: u32,
+    },
+}
+
+impl FormEdit {
+    /// The edit's leg on `forms`, signalling nothing.
+    pub(crate) fn apply(self, forms: &mut Vec<u32>, catalog: &SpellCatalog) {
+        match self {
+            FormEdit::Learned { spell_id, replaces } => {
+                form_learned(forms, spell_id, replaces, catalog);
+            }
+            FormEdit::Unlearned { spell_id } => {
+                form_unlearned(forms, spell_id);
+            }
+        }
+    }
+}
+
 /// The unlearn's form leg (`0x4b2dc2`-`0x4b2e4e`): the last copy of `spell_id` the list holds
 /// leaves it, the rest closing up; whether it held one, which signals `UPDATE_SHAPESHIFT_FORMS`.
 pub(crate) fn form_unlearned(forms: &mut Vec<u32>, spell_id: u32) -> bool {

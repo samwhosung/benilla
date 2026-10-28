@@ -283,10 +283,6 @@ pub(crate) fn feed_death(
                 // (`Map.cpp:3617-3629`).
                 let _ = net.0.send(ClientCommand::CorpseQuery);
             }
-            // Logging in a ghost: no edge, just the corpse ask.
-            (None, _, true) => {
-                let _ = net.0.send(ClientCommand::CorpseQuery);
-            }
             _ => {}
         }
 
@@ -438,6 +434,23 @@ pub(crate) fn signal_death_state(world: &mut World) {
 fn send_repop_request(store: &benilla_protocol::ObjectFields, net: &NetCommands) {
     if store.is_dead_or_ghost() {
         let _ = net.0.send(ClientCommand::RepopRequest);
+    }
+}
+
+/// `QueryCorpse 0x491f50` in the world-enter cascade (`0x490a28`), after its other sends: the
+/// corpse cache reset (`0x491f74` → `0x492010(-1, …)`), then, for a ghost (`PLAYER_FLAGS` bit 4,
+/// `0x491fad`), `MSG_CORPSE_QUERY` (`0x491fb2`). The flags watcher's release and revive asks are
+/// [`feed_death`]'s.
+pub(crate) fn query_corpse_on_world_enter(
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    death_net: Option<ResMut<DeathNet>>,
+    net: Res<NetCommands>,
+) {
+    if let Some(mut death_net) = death_net {
+        death_net.corpse = None;
+    }
+    if self_q.single().is_ok_and(|store| store.0.player_is_ghost()) {
+        let _ = net.0.send(ClientCommand::CorpseQuery);
     }
 }
 

@@ -1739,9 +1739,11 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
     // Our arrival's legs read and reset what later packets of its frame write, as the frame left
     // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
-    // death stores its death state reads, and the connection the clock resync asks through.
-    ("arrival", &["death::DeathNet", "net::NetStatus", "ui_action::PlayerActions",
-        "ui_battlefield::Battlefield", "ui_dialog_verbs::MeetingStone"]),
+    // death stores its death state reads and its corpse ask resets, the class family it sets, and
+    // the connection the clock resync asks through.
+    ("arrival", &["death::DeathNet", "net::NetStatus", "spell::mods::SpellModifiers",
+        "ui_action::PlayerActions", "ui_battlefield::Battlefield",
+        "ui_dialog_verbs::MeetingStone"]),
     // The watchers' callbacks: the quest log's slots, the skill line's race and class and the
     // bonus bar's form off our live descriptor, as the frame left them (#2217); the aura
     // watcher's own store is the one its packet left, and the buff timers read the duration

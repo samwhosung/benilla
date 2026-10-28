@@ -435,6 +435,26 @@ impl LatchedWindow for MerchantOpen {
     }
 }
 
+impl MerchantOpen {
+    /// The world-enter cascade's merchant reset (`0x4909b0` → `0x4fac50`), which signals nothing:
+    /// the vendor and its rows zeroed (`0x4fac61`-`0x4fac7a`), the list cache's guid kept. The
+    /// buy-back watch it registers (`0x4fac8d`) is the field watchers' standing one, and the list
+    /// it rebuilds (`0x4fafd0`) is read off the player's fields at each call.
+    pub(crate) fn reset_world_state(&mut self) {
+        self.vendor = None;
+        self.items.clear();
+    }
+}
+
+/// The merchant reset's VM half in the cascade's place: the VM's vendor.
+pub(crate) fn reset_vm_on_world_enter(mut vm: crate::script_calls::HostedVm) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.set_merchant(None);
+        }
+    });
+}
+
 /// The close core `0x4fadf0`, every close's: with a vendor open, the latch release (`0x4fae04`),
 /// the cell cleared, `MERCHANT_CLOSED` (`0x4fae2c`), then the tail ([`close_tail`]).
 /// The leave-world sweep's leg (`0x490ada` → `0x4facc0`) calls it as it is.

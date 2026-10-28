@@ -128,6 +128,12 @@ enum Pending {
     Combat(Box<super::combat::PendingCombat>),
     /// A ready event (client-composed lines; name-carrying notices).
     Event(ChatEvent),
+    /// A ready line the display latch holds (`0x49cae0`): a defence broadcast's (`0x49dcc0`,
+    /// `0x49de30`) or the billing warning's (`0x49577a`).
+    Display(ChatEvent),
+    /// An item the display latch holds, past its name lookup (`0x49db5c`, `0x49ce3c`): it does not
+    /// age, and fires once the world-enter cascade's release clears the latch (`0x4989c0`).
+    Latched(Box<Pending>),
     /// A line whose event fired where it was written ([`ChatLog::write_combat_now`]): its tee to
     /// the log files alone, in order with the lines around it.
     Tee { combat: bool, line: String },
@@ -136,13 +142,6 @@ enum Pending {
 }
 
 impl Pending {
-    /// A line of `SMSG_MESSAGECHAT`'s, which the handler queues while the display latch is set
-    /// (`0x49db5c` → `0x49db8c`), and whose name answer queues it again (`0x49ce3c`); the addon
-    /// test is downstream of both (`0x49dbcb`).
-    fn latched(&self) -> bool {
-        matches!(self, Pending::Wire { .. } | Pending::Addon { .. })
-    }
-
     /// A monster or battleground line, which waits only on its `$`-macro subject's name and is
     /// retried only by that name's answer (`0x49ccc0`), never by the frame's age pass.
     fn held_for_subject(&self) -> bool {
@@ -498,6 +497,12 @@ impl ChatLog {
         self.q().push(Pending::Event(event));
     }
 
+    /// Queue a ready line the display latch holds (`0x49cae0`): a defence broadcast's or the
+    /// billing warning's.
+    pub(crate) fn push_display(&self, event: ChatEvent) {
+        self.q().push(Pending::Display(event));
+    }
+
     /// Show a client-composed line inside the verb that adds it, as `0x49a870` does: its event
     /// fires now, and only its log-file tee waits for the drain, in order with the lines around
     /// it. For a line whose composition reads no default language.
@@ -748,6 +753,8 @@ impl ChatLog {
                 Pending::Standing { .. } => "standing",
                 Pending::Combat(_) => "combat",
                 Pending::Event(_) => "event",
+                Pending::Display(_) => "display",
+                Pending::Latched(_) => "latched",
                 Pending::Tee { .. } => "tee",
                 Pending::Release { .. } => "release",
             })
@@ -912,7 +919,7 @@ impl ChatLog {
             .pending
             .iter()
             .filter_map(|q| match &q.item {
-                Pending::Event(e) => Some(e.text.clone()),
+                Pending::Event(e) | Pending::Display(e) => Some(e.text.clone()),
                 Pending::Tee { line, .. } => Some(line.clone()),
                 _ => None,
             })
@@ -927,7 +934,7 @@ impl ChatLog {
             .iter()
             .map(|q| &q.item)
             .filter_map(|p| match p {
-                Pending::Event(e) => Some(e.clone()),
+                Pending::Event(e) | Pending::Display(e) => Some(e.clone()),
                 _ => None,
             })
             .collect()
@@ -1496,11 +1503,13 @@ fn fire_one(
     item: Pending,
     at: crate::lanes::Stamp,
 ) -> Option<Pending> {
-    // Under the display latch a wire line waits for the cascade's release (`0x49db5c`,
-    // `0x49ce3c`).
-    if item.latched() && log.latched() {
-        return Some(item);
-    }
+    // A held item waits, unaged, for the cascade's release; once the latch is clear it runs as
+    // it came in, its names now cached.
+    let item = match item {
+        Pending::Latched(inner) if log.latched() => return Some(Pending::Latched(inner)),
+        Pending::Latched(inner) => *inner,
+        item => item,
+    };
     if item
         .waits_on()
         .into_iter()
@@ -1538,6 +1547,13 @@ fn fire_one(
     // A channel notice writes its slot around its event, outside the host's lend.
     let item = match item {
         Pending::Event(mut event) => {
+            deliver_hosted(script, set, windows, &mut event);
+            None
+        }
+        Pending::Display(event) if log.latched() => {
+            return Some(Pending::Latched(Box::new(Pending::Display(event))));
+        }
+        Pending::Display(mut event) => {
             deliver_hosted(script, set, windows, &mut event);
             None
         }
@@ -1618,6 +1634,8 @@ fn fire_one(
             Pending::Tee { combat, line } => windows.logs.record(combat, &line),
             // Delivered above.
             Pending::Event(_)
+            | Pending::Display(_)
+            | Pending::Latched(_)
             | Pending::Notice { .. }
             | Pending::ModeChange { .. }
             | Pending::Release { .. } => {}
@@ -1693,6 +1711,11 @@ fn fire_one(
                 } else {
                     None
                 };
+                // The display latch, past the name and the expansion (`0x49db5c`): the line is
+                // queued (`0x49db8c`) for the cascade's release.
+                if log.latched() {
+                    return Some(Pending::Latched(Box::new(Pending::Wire { msg, tries })));
+                }
                 let plain = expanded.unwrap_or_else(|| msg.text.clone());
                 // The language gate: the garble writes the one buffer the line, `arg1` and the
                 // bubble read, as `0x49a870` fills `[ebp-0xd0c]` once (`0x49a9f0` copy,
@@ -1784,6 +1807,17 @@ fn fire_one(
                         guid,
                         tries,
                     });
+                }
+                // The display latch, past the name (`0x49ce3c`, the addon test downstream at
+                // `0x49dbcb`).
+                if log.latched() {
+                    return Some(Pending::Latched(Box::new(Pending::Addon {
+                        prefix,
+                        message,
+                        distribution,
+                        guid,
+                        tries,
+                    })));
                 }
                 fire_addon_message(
                     script,
@@ -1938,6 +1972,11 @@ fn fire_one(
                         target,
                         tries,
                     });
+                }
+                // A named emote under the display latch is held apart and never shown
+                // (`0x49dc7f` → `0x49dc95`, `0x49d165`).
+                if performer_name.is_some() && log.latched() {
+                    return None;
                 }
                 // No performer name, no line (not "Unknown"): the reference bails when its
                 // player-only name cache misses (`0x49b28c`); the animation rode

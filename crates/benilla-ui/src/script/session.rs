@@ -115,17 +115,25 @@ impl super::UiScript {
     /// ([`Self::fire_world_enter_events`]), then the action bar's ([`Self::fire_world_enter_action_bar`]).
     /// [`Self::fire_world_enter_tail`] closes it.
     pub fn fire_world_enter_head(&mut self, bonus_bar_offset: u8, usable_changed: bool) {
+        self.open_world_enter();
         self.fire_world_enter_events();
         self.fire_world_enter_action_bar(bonus_bar_offset, usable_changed);
     }
 
-    /// The cascade's opening: the bracket opened (`0x4908d5`), the collection, `PLAYER_LOGIN` if
-    /// armed, `PLAYER_ENTERING_WORLD`, then the first call after the signal, the minimap
-    /// initializer (`0x49096f`). The chat release follows it (`0x490974`), the caller's.
+    /// The cascade's sound bracket opened (`0x4908d5` → `0x458f50`), ahead of its
+    /// `SelectTarget(0)` (`0x490927`), the caller's, so the target's handlers play nothing.
+    /// [`Self::close_world_enter`] closes it.
+    pub fn open_world_enter(&mut self) {
+        self.push_sound_suppression();
+    }
+
+    /// The cascade past its `SelectTarget(0)`: the collection, `PLAYER_LOGIN` if armed,
+    /// `PLAYER_ENTERING_WORLD`, then the first call after the signal, the minimap initializer
+    /// (`0x49096f`), inside the bracket [`Self::open_world_enter`] opened. The chat release follows
+    /// it (`0x490974`), the caller's.
     pub fn fire_world_enter_events(&mut self) {
         self.seat_reputation();
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
-        self.push_sound_suppression();
         // `0x703bc0` with 1: the threshold set to 0 (`0x703bd6`), so the collection runs now.
         self.lua.set_gc_threshold_kb(0);
         if armed {

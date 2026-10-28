@@ -429,6 +429,19 @@ impl TradeSession {
         self.their.gold = 0;
     }
 
+    /// The world-enter cascade's reset of the window's tables (`0x4bf0e0`): both offers' slots,
+    /// the accepts and the compare's caches. The handler's cells (the pending initiate, the edit
+    /// counter, the partner flag, the offered money and spells) are not the window's and stay; the
+    /// sweep ahead of every cascade has closed the window.
+    pub(crate) fn reset_world_tables(&mut self) {
+        self.our.slots = Default::default();
+        self.their.slots = Default::default();
+        self.our_accept = false;
+        self.their_accept = false;
+        self.money_seen = [0; 2];
+        self.spell_seen = [0; 2];
+    }
+
     /// Disconnect: a full reset, offers and waits included; a session teardown is not a trade
     /// event.
     pub(crate) fn clear_session(&mut self) {
@@ -503,6 +516,16 @@ pub(crate) fn open_window(world: &mut World, purse: Option<u64>) {
     if let Some(mut lane) = world.get_resource_mut::<TradeLane>() {
         lane.push(TradeEvent::Show { partner, purse });
     }
+}
+
+/// The trade reset's VM half in the cascade's place (`0x4909b5` → `0x4bf0e0`), which signals
+/// nothing: the VM's tables and partner cell.
+pub(crate) fn reset_vm_on_world_enter(mut vm: crate::script_calls::HostedVm) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.reset_trade_tables();
+        }
+    });
 }
 
 /// The close core, `0x4bf4e0` with a zero guid: with a window open, the latch release

@@ -27,7 +27,7 @@ const FIREBALL: u32 = 133;
 struct Client {
     app: App,
     inbound: Sender<SessionEvent>,
-    _sent: Receiver<ClientCommand>,
+    sent: Receiver<ClientCommand>,
 }
 
 impl Client {
@@ -42,6 +42,27 @@ impl Client {
     /// What the spy heard.
     fn seen(&mut self) -> Vec<String> {
         crate::script_calls::eval_in_vm(self.app.world(), "local s = Seen Seen = {} return s")
+    }
+
+    /// The guids the name queries sent since the last call asked for.
+    fn name_queries(&mut self) -> Vec<u64> {
+        self.sent
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::NameQuery { guid } => Some(guid),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+fn named(guid: u64, name: &str) -> SessionEvent {
+    SessionEvent::PlayerName {
+        guid,
+        name: name.into(),
+        race: 1,
+        gender: 0,
+        class: 1,
     }
 }
 
@@ -98,11 +119,7 @@ fn client(spy: &str) -> Client {
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     app.world().resource::<crate::ui_chat::ChatLog>().latch();
-    Client {
-        app,
-        inbound,
-        _sent: sent,
-    }
+    Client { app, inbound, sent }
 }
 
 fn me() -> SessionEvent {
@@ -195,6 +212,314 @@ fn the_arrival_fires_between_the_packets_around_its_create() {
             "PLAYER_ENTERING_WORLD:nil",
             "CHAT_MSG_SYSTEM:before",
             "CHAT_MSG_SYSTEM:after",
+        ]
+    );
+}
+
+/// A player.
+const ALICE: u64 = 0x31;
+
+/// The display latch tests a line after its sender's name (`0x49d77f` before `0x49db5c`): an
+/// uncached sender's name is asked at the packet, and the held line does not age, so however long
+/// the loading screen lasts it shows at the cascade's release with its name.
+#[test]
+fn a_latched_line_asks_its_name_at_once_and_keeps_it_to_the_release() {
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "CHAT_MSG_SAY"}) do f:RegisterEvent(e) end
+        f:SetScript("OnEvent", function()
+            table.insert(Seen, event .. ":" .. tostring(arg1) .. ":" .. tostring(arg2))
+        end)"#,
+    );
+    c.frame(vec![vec![SessionEvent::Chat(ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_SAY,
+        language: 0,
+        sender_guid: ALICE,
+        target_guid: 0,
+        sender_name: None,
+        channel: None,
+        text: "hi".into(),
+        chat_tag: 0,
+    })]]);
+    assert_eq!(c.name_queries(), [ALICE], "the name is asked at the packet");
+    c.frame(vec![vec![named(ALICE, "Alice")]]);
+    // A long loading screen: far past the name wait's frame budget.
+    for _ in 0..200 {
+        c.frame(vec![]);
+    }
+    assert_eq!(c.seen(), Vec::<String>::new(), "held under the latch");
+    c.frame(vec![vec![me()]]);
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_ENTERING_WORLD:nil:nil", "CHAT_MSG_SAY:hi:Alice"]
+    );
+}
+
+/// The latch holds a defence broadcast (`0x49de30`) as it holds a chat line, and a text emote
+/// from a named performer apart, never to be shown (`0x49dc7f` → `0x49dc95`).
+#[test]
+fn the_latch_holds_a_defence_line_and_drops_a_named_emote() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let emotes = benilla_formats::load_emote_text_catalog(&mut chain).expect("emote texts");
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "CHAT_MSG_CHANNEL", "CHAT_MSG_TEXT_EMOTE"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. tostring(arg1)) end)"#,
+    );
+    c.app.insert_resource(crate::ui_chat::EmoteTexts(emotes));
+    let world_defense =
+        benilla_formats::ChatChannelsCatalog::from_rows(vec![benilla_formats::ChatChannelRow {
+            id: 23,
+            flags: 0x1_0004,
+            pattern: "WorldDefense".into(),
+            shortcut: "WorldDefense".into(),
+        }]);
+    c.app.insert_resource(crate::ui_chat::ChannelState {
+        joined: vec![crate::ui_chat::edit::ChannelSlot::confirmed("WorldDefense", 23).into()],
+        channels: world_defense,
+        ..Default::default()
+    });
+    c.frame(vec![vec![named(ALICE, "Alice"), named(ME, "Me")]]);
+    c.frame(vec![
+        vec![SessionEvent::DefenseMessage {
+            zone_id: 40,
+            text: "under attack".into(),
+        }],
+        vec![SessionEvent::TextEmote {
+            guid: ALICE,
+            text_emote: 101,
+            target_name: String::new(),
+        }],
+    ]);
+    assert_eq!(c.seen(), Vec::<String>::new(), "both held under the latch");
+    c.frame(vec![vec![me()]]);
+    c.frame(vec![]);
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_ENTERING_WORLD:nil", "CHAT_MSG_CHANNEL:under attack"],
+        "the defence line at the release; the emote never"
+    );
+}
+
+/// The party's catch-up for a fresh VM fires after the arrival stamped at our create, as the
+/// group list that follows the create signals after the login events.
+#[test]
+fn a_fresh_vms_party_catch_up_fires_after_entering_the_world() {
+    use benilla_protocol::messages::{member_status, GroupLootInfo, GroupMemberEntry};
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "PARTY_MEMBERS_CHANGED"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() table.insert(Seen, event) end)"#,
+    );
+    c.app
+        .world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(ALICE, "Alice".into(), None);
+    c.frame(vec![
+        vec![me()],
+        vec![SessionEvent::GroupList {
+            group_type: 0,
+            own_flags: 0,
+            members: vec![GroupMemberEntry {
+                name: "Alice".into(),
+                guid: ALICE,
+                status: member_status::ONLINE,
+                flags: 0,
+            }],
+            leader: ME,
+            loot: Some(GroupLootInfo {
+                method: 1,
+                master: 0,
+                threshold: 2,
+            }),
+        }],
+    ]);
+    let seen = c.seen();
+    assert_eq!(
+        seen.first().map(String::as_str),
+        Some("PLAYER_ENTERING_WORLD"),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|e| e == "PARTY_MEMBERS_CHANGED"),
+        "{seen:?}"
+    );
+}
+
+/// A form learned after our create in its frame joins the list our arrival's replay rebuilds:
+/// the reference's arrival ran inside the create's packet, ahead of the learn.
+#[test]
+fn a_form_learned_after_the_create_outlives_the_replay() {
+    let mut c = client("Seen = {}");
+    c.frame(vec![
+        vec![SessionEvent::SpellBook {
+            spell_ids: vec![BEAR],
+            cooldowns: Vec::new(),
+        }],
+        vec![me()],
+        vec![SessionEvent::SpellLearned { spell_id: CAT }],
+    ]);
+    let forms = c
+        .app
+        .world()
+        .resource::<crate::ui_action::PlayerActions>()
+        .forms
+        .clone();
+    assert_eq!(forms, [BEAR, CAT]);
+}
+
+/// The cascade's sound bracket opens before its `SelectTarget(0)` (`0x4908d5`, `0x490927`): a
+/// target's lost-target sound at a world entry is dropped.
+#[test]
+fn the_world_entrys_target_clear_plays_no_sound() {
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_TARGET_CHANGED")
+        f:SetScript("OnEvent", function()
+            table.insert(Seen, event .. ":" .. tostring(UnitExists("target")))
+            if not UnitExists("target") then PlaySound("INTERFACESOUND_LOSTTARGETUNIT") end
+        end)"#,
+    );
+    c.frame(vec![vec![me()]]);
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM").run("TargetUnit('player')").expect("runs")
+    });
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["PLAYER_TARGET_CHANGED:1"], "targeted");
+    world_sounds(&mut c);
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
+    // The lane alone, so the frame's sound drain leaves what the cascade queued.
+    crate::ui_world_enter::fire_lane(c.app.world_mut());
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_TARGET_CHANGED:nil"],
+        "the cascade's clear"
+    );
+    assert_eq!(
+        world_sounds(&mut c),
+        Vec::<String>::new(),
+        "inside the bracket"
+    );
+}
+
+/// The kit names the VM queued since the last call.
+fn world_sounds(c: &mut Client) -> Vec<String> {
+    c.app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .take_sounds()
+        .into_iter()
+        .filter_map(|r| match r {
+            benilla_ui::script::SoundRequest::KitName(n) => Some(n),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The cascade's silent resets (`0x4909ab`, `0x4909b0`, `0x4909b5`, `0x490a0a`): what the
+/// windows' closes leave, the trainer's services, the vendor's rows and the stable's slots, goes
+/// at our create, inside its packet.
+#[test]
+fn the_cascade_resets_what_the_closes_leave() {
+    let mut c = client("Seen = {}");
+    let world = c.app.world_mut();
+    world
+        .resource_mut::<crate::ui_trainer::TrainerOpen>()
+        .services = vec![benilla_protocol::messages::TrainerSpell {
+        spell: 133,
+        state: 0,
+        cost: 0,
+        can_learn_primary_prof: false,
+        is_primary_prof_first_rank: false,
+        req_level: 0,
+        req_skill: 0,
+        req_skill_value: 0,
+        req_spells: [0; 3],
+    }];
+    world
+        .resource_mut::<crate::ui_merchant::MerchantOpen>()
+        .items = vec![benilla_protocol::messages::VendorItem {
+        slot: 1,
+        entry: 159,
+        display_id: 0,
+        current_count: 1,
+        price: 1,
+        max_durability: 0,
+        buy_count: 1,
+    }];
+    world
+        .resource_mut::<crate::ui_stable::StableOpen>()
+        .num_stable_slots = 2;
+    crate::net::handlers::dispatch(world, vec![me(), SessionEvent::ObjectUpdateEnd]);
+    let world = c.app.world();
+    assert!(world
+        .resource::<crate::ui_trainer::TrainerOpen>()
+        .services
+        .is_empty());
+    assert!(world
+        .resource::<crate::ui_merchant::MerchantOpen>()
+        .items
+        .is_empty());
+    assert_eq!(
+        world
+            .resource::<crate::ui_stable::StableOpen>()
+            .num_stable_slots,
+        0
+    );
+}
+
+/// `QueryCorpse` is the cascade's (`0x490a28` → `0x491f50`), after its time, mail, battlefield and
+/// stone sends and ahead of the dead body's release: a ghost's `MSG_CORPSE_QUERY` goes out there.
+#[test]
+fn a_ghosts_corpse_query_goes_out_in_its_cascade_place() {
+    /// `PLAYER_FLAGS`, bit 4 the ghost.
+    const PLAYER_FLAGS: u16 = 190;
+    let mut c = client("Seen = {}");
+    c.sent.try_iter().for_each(drop);
+    c.frame(vec![vec![created(
+        ME,
+        EntityKind::Player,
+        &[
+            (FIELD_UNIT_HEALTH, 1),
+            (FIELD_UNIT_MAXHEALTH, 100),
+            (PLAYER_FLAGS, 0x10),
+        ],
+    )]]);
+    let order: Vec<String> = c
+        .sent
+        .try_iter()
+        .map(|c| format!("{c:?}"))
+        .filter(|c| {
+            [
+                "QueryTime",
+                "QueryNextMailTime",
+                "BattlefieldStatusRequest",
+                "MeetingStoneStatusQuery",
+                "CorpseQuery",
+            ]
+            .contains(&c.as_str())
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "QueryTime",
+            "QueryNextMailTime",
+            "BattlefieldStatusRequest",
+            "MeetingStoneStatusQuery",
+            "CorpseQuery",
         ]
     );
 }

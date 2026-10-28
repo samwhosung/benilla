@@ -20,19 +20,7 @@ pub(super) fn register(app: &mut App) {
     app.net_handler(K::ListStabledPets, on_list)
         .net_handler(K::StableResult, on_result)
         .net_handler(K::CreatureName, on_creature_answer)
-        .net_handler(K::Connected, on_world_enter)
-        .net_handler(K::Worldport, on_world_enter)
         .net_handler(K::Disconnected, on_session_end);
-}
-
-/// The enter-world cascade's reset (`0x490a0a` → `0x4caab0`), at a login and every worldport.
-fn on_world_enter(In(ev): In<SessionEvent>, mut stable_open: ResMut<StableOpen>) {
-    if matches!(
-        ev,
-        SessionEvent::Connected { .. } | SessionEvent::Worldport { .. }
-    ) {
-        stable_open.clear();
-    }
 }
 
 /// The creature cache's answer runs the window's callbacks waiting on its entry, a refusal with

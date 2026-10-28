@@ -171,7 +171,8 @@ fn poll_play_time(
                         &template,
                         &[benilla_ui::strings::Arg::D(i64::from(minutes))],
                     );
-                    chat.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+                    // Held while the display latch is set (`0x49577a` → `0x4957ad`).
+                    chat.push_display(ChatEvent::text_only(ChatEventKind::System, text));
                 }
             }
         }

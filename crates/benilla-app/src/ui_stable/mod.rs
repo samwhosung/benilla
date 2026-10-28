@@ -65,7 +65,8 @@ impl StableOpen {
         self.list = self.list.wrapping_add(1);
     }
 
-    /// The world entry's reset (`0x4caab0`): no master, no slot bought, no pet.
+    /// The world-enter cascade's reset (`0x490a0a` → `0x4caab0`): no master, no slot bought, no
+    /// pet.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
         self.num_stable_slots = 0;

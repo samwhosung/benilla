@@ -132,6 +132,10 @@ pub(crate) struct PlayerActions {
     /// `[0xb71108]` (count `[0xb71104]`): the form bar's spells in bar order, which the registrar
     /// grows one learn at a time and the book's reset empties ([`crate::ui_shapeshift`]).
     pub forms: Vec<u32>,
+    /// The form-list edits since our latest create, while its arrival waits on the arrival lane:
+    /// the reference's arrival runs inside the create's packet, ahead of every later learn, so the
+    /// arrival's replay applies these after its own ([`crate::ui_world_enter`]).
+    pub form_edits: Option<Vec<crate::ui_shapeshift::FormEdit>>,
     /// Set by every book change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
     /// resolves an item slot's count moves only by the item watchers' recount (`recount`).

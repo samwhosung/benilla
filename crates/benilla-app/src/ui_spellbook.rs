@@ -123,6 +123,9 @@ impl BookSignals<'_, '_> {
             Learned::Fresh => None,
             Learned::Rank { old } => Some(old),
         };
+        if let Some(edits) = actions.form_edits.as_mut() {
+            edits.push(crate::ui_shapeshift::FormEdit::Learned { spell_id, replaces });
+        }
         if crate::ui_shapeshift::form_learned(
             &mut actions.forms,
             spell_id,
@@ -171,6 +174,11 @@ impl BookSignals<'_, '_> {
         let d = spells.and_then(|s| s.catalog.get(spell_id));
         if !was_known || self.me.is_empty() {
             return;
+        }
+        if unlists {
+            if let Some(edits) = actions.form_edits.as_mut() {
+                edits.push(crate::ui_shapeshift::FormEdit::Unlearned { spell_id });
+            }
         }
         if unlists && crate::ui_shapeshift::form_unlearned(&mut actions.forms, spell_id) {
             self.lane.write(FieldNotice::Global {

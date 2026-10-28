@@ -238,6 +238,16 @@ impl super::UiScript {
         model.trade_done = false;
     }
 
+    /// The world-enter cascade's trade reset (`0x4909b5` → `0x4bf0e0`): both offers' tables, our
+    /// item table and the partner cell zeroed, with no unlock and no signal; the done flag
+    /// `[0xb71748]` is kept (`0x4bf20e`).
+    pub fn reset_trade_tables(&mut self) {
+        let mut model = self.model_mut();
+        model.trade = None;
+        model.trade_offered = Default::default();
+        model.trade_partner = 0;
+    }
+
     /// The close core's store of its `done` argument (`[0xb71748]`, `0x4bf4fd`), made only with a
     /// partner, before the latch's release re-enters the core with 0: `CloseTrade` signals
     /// `PLAYER_TRADE_MONEY` only while it is 0 (`0x4bfdc7`).

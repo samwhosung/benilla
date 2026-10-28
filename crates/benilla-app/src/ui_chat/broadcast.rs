@@ -209,7 +209,7 @@ pub(crate) fn transfer_abort_line(
 
 /// One `CHAT_MSG_CHANNEL` line per defense channel reached, with no sender or language: the
 /// handlers push NULL for both (`0x49ddf5`/`0x49ddf7`), hence the bare colon of
-/// `[LocalDefense] : text`.
+/// `[LocalDefense] : text`. The display latch holds them, as it holds a chat line.
 fn push_channel_lines(
     log: &ChatLog,
     channels: &ChannelState,
@@ -218,7 +218,7 @@ fn push_channel_lines(
     text: &str,
 ) {
     for channel in defense_targets(channels, zone, player_zone) {
-        log.push_event(ChatEvent {
+        log.push_display(ChatEvent {
             kind: Some(ChatEventKind::Channel),
             text: text.to_string(),
             channel,
