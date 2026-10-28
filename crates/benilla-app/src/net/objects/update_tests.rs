@@ -814,6 +814,99 @@ fn a_first_create_raises_no_flag_tutorial() {
     );
 }
 
+/// The ghost flag's clear runs `SetAreaSpiritHealer(0, 0)` (`0x5dea20` → `0x4921c0`) ahead of
+/// `PLAYER_UNGHOST` (`0x5dea2a`), inside its packet: with a resurrection wave pending, the healer
+/// is cleared, `CMSG_CANCEL_AURA` for 2584 goes out (`0x6e70eb`) and
+/// `AREA_SPIRIT_HEALER_OUT_OF_RANGE` signals ahead of the unghost.
+#[test]
+fn the_unghost_edge_clears_a_pending_area_spirit_healer_ahead_of_its_event() {
+    use crate::field_watch::{id, FieldNotice};
+    const PLAYER_FLAGS: u16 = 190;
+    const HEALER: u64 = 0xF130_0000_0042_0001;
+    let mut app = client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [player(ME, &[(PLAYER_FLAGS, 0x10)])]);
+    {
+        let mut spirit = world.resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>();
+        spirit.set_healer(Some(HEALER));
+        assert!(spirit.on_time(HEALER, 30_000, std::time::Instant::now()));
+    }
+    notices(world);
+    rx.try_iter().count();
+
+    send(world, [values(ME, &[(PLAYER_FLAGS, 0)])]);
+    let at =
+        |id: u16, all: &[FieldNotice]| all.iter().position(|n| *n == FieldNotice::Global { id });
+    let all = notices(world);
+    let (out, unghost) = (
+        at(id::AREA_SPIRIT_HEALER_OUT_OF_RANGE, &all),
+        at(id::PLAYER_UNGHOST, &all),
+    );
+    assert!(out.is_some(), "the wave's cancel signals: {all:?}");
+    assert!(out < unghost, "ahead of PLAYER_UNGHOST: {all:?}");
+    assert_eq!(
+        rx.try_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::CancelAura { .. }))
+            .map(|c| format!("{c:?}"))
+            .collect::<Vec<_>>(),
+        [format!(
+            "{:?}",
+            crate::net::ClientCommand::CancelAura {
+                spell_id: crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA
+            }
+        )]
+    );
+    let spirit = world.resource::<crate::ui_dialog_verbs::AreaSpiritHealer>();
+    assert!(
+        spirit.healer().is_none() && !spirit.armed(),
+        "the healer is cleared"
+    );
+}
+
+/// With no wave pending the same call changes nothing the reference signals or sends
+/// (`0x4921cf`-`0x4921df` return on an unchanged guid; a cached healer with no clock sends
+/// nothing, `0x4921fa`).
+#[test]
+fn the_unghost_edge_with_no_wave_pending_signals_and_sends_no_healer_cancel() {
+    use crate::field_watch::{id, FieldNotice};
+    const PLAYER_FLAGS: u16 = 190;
+    const HEALER: u64 = 0xF130_0000_0042_0001;
+    for cached in [false, true] {
+        let mut app = client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let world = app.world_mut();
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        send(world, [player(ME, &[(PLAYER_FLAGS, 0x10)])]);
+        if cached {
+            world
+                .resource_mut::<crate::ui_dialog_verbs::AreaSpiritHealer>()
+                .set_healer(Some(HEALER));
+        }
+        notices(world);
+        rx.try_iter().count();
+
+        send(world, [values(ME, &[(PLAYER_FLAGS, 0)])]);
+        let all = notices(world);
+        let global = |id: u16| FieldNotice::Global { id };
+        assert!(all.contains(&global(id::PLAYER_UNGHOST)), "{all:?}");
+        assert!(
+            !all.contains(&global(id::AREA_SPIRIT_HEALER_OUT_OF_RANGE)),
+            "cached {cached}: {all:?}"
+        );
+        assert!(
+            !rx.try_iter()
+                .any(|c| matches!(c, crate::net::ClientCommand::CancelAura { .. })),
+            "cached {cached}"
+        );
+        let spirit = world.resource::<crate::ui_dialog_verbs::AreaSpiritHealer>();
+        assert!(spirit.healer().is_none(), "cached {cached}: cleared");
+    }
+}
+
 /// `PLAYER_GUILD_TIMESTAMP`'s player watcher (`0x5e2890`) keeps each guild's last stamp: an
 /// unchanged one does nothing (`0x5e28fa`), a new one drops the guild's record (`0x561d20`) and
 /// asks it again with the callback `0x5e29c0`, whose answer refreshes the guild tag of every held

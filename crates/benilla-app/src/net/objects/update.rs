@@ -1110,6 +1110,27 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::TrainerPass) => {
                 sc.trainer.owed()
             }
+            // The ghost flag's clear (`0x5dea20`): `SetAreaSpiritHealer(0, 0)` runs at the packet,
+            // a pending wave's `CMSG_CANCEL_AURA` going out here and its event on the lane ahead
+            // of the `PLAYER_UNGHOST` that follows.
+            crate::field_watch::Step::Notice(
+                crate::field_watch::FieldNotice::AreaSpiritHealerClear,
+            ) => {
+                let Some(spirit) = sc.spirit.as_deref_mut() else {
+                    continue;
+                };
+                if spirit.set_healer(None).cancel_aura {
+                    let player = Some((e, fields.player_farsight()));
+                    let held = |guid: u64| sc.index.0.contains_key(&guid);
+                    let spell = crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA;
+                    if sc.aura.cancel_at_packet(player, held, spell) {
+                        sc.field_notices
+                            .write(crate::field_watch::FieldNotice::Global {
+                                id: crate::field_watch::id::AREA_SPIRIT_HEALER_OUT_OF_RANGE,
+                            });
+                    }
+                }
+            }
             crate::field_watch::Step::Notice(n) => sc.field_notices.write(n),
             crate::field_watch::Step::Item(run) => sc.item_lane.push(run),
         }

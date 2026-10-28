@@ -541,6 +541,9 @@ pub(crate) fn fire(
         | FieldNotice::PetGuidSet { .. } => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
         FieldNotice::TrainerPass => {}
+        // Run at its place by the packet's handler ([`crate::net::objects`]), its signal written
+        // there.
+        FieldNotice::AreaSpiritHealerClear => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:

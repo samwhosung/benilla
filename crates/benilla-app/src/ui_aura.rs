@@ -1096,11 +1096,19 @@ fn end_session_aura_stamps(mut durations: ResMut<AuraDurations>) {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuraSteps<'w, 's> {
     me: Query<'w, 's, (Entity, &'static ObjectStore), With<SelfPlayer>>,
+    index: Option<Res<'w, GuidIndex>>,
+    gate: AuraGate<'w>,
+}
+
+/// What the cancel `0x6e7040` reads beside the active player and the object index, which its
+/// caller lends: a system that already holds the stores takes this alone ([`AuraSteps`] is this
+/// with the reads it brings itself).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct AuraGate<'w> {
     /// Absent in a harness without the unit changes' queue.
     edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
     /// The record the gate reads; absent without client data, which gates nothing.
     spells: Option<Res<'w, Spells>>,
-    index: Option<Res<'w, GuidIndex>>,
     net: Res<'w, NetCommands>,
     /// The machine `UpdateFarSight` runs; absent in a harness without the player's plugin.
     far_sight: Option<Res<'w, crate::player::FarSight>>,
@@ -1111,13 +1119,16 @@ const ATTR_EX_FAR_SIGHT: u32 = 0x2000;
 /// `AttributesEx` 0x4, the channelled spells, which the cancel's far-sight gate passes.
 const ATTR_EX_CHANNELED: u32 = 0x4;
 
-impl AuraSteps<'_, '_> {
+/// The active player as the cancel reads it: its entity and `PLAYER_FARSIGHT`.
+pub(crate) type CancelPlayer = (Entity, Option<u64>);
+
+impl AuraGate<'_> {
     /// For an active player: the precast of `spell_id` ended with its tail
     /// (`0x60d040(player, spell, 1, 1)` at `0x6e7075`), then the spell's kits stopped
     /// (`0x614150(player, spell, 0)` at `0x6e707e`). Both are unit edits, applied at the pass's
     /// end with the rest of the frame's: the components they write are read beside the call host.
-    pub(crate) fn end_on_player(&self, spell_id: u32) {
-        let (Ok((entity, _)), Some(edits)) = (self.me.single(), self.edits.as_deref()) else {
+    pub(crate) fn end_on_player(&self, player: Option<CancelPlayer>, spell_id: u32) {
+        let (Some((entity, _)), Some(edits)) = (player, self.edits.as_deref()) else {
             return;
         };
         edits.push(crate::creature_anim::UnitEdit::EndPrecast {
@@ -1132,9 +1143,14 @@ impl AuraSteps<'_, '_> {
     /// 0x4 stops the cancel with no player, or else runs `UpdateFarSight` (`0x5ee290`, at
     /// `0x6e70ad`, [`crate::player::FarSight::update`]), which toggles the view and tells the
     /// server, and stops the cancel when it answers nonzero: unless `PLAYER_FARSIGHT` names an
-    /// object the client does not hold (`0x5ee32b` → `0x5ee360`). Whether the cancel goes on to
-    /// its event and packet.
-    pub(crate) fn passes_far_sight(&self, spell_id: u32) -> bool {
+    /// object the client does not hold (`0x5ee32b` → `0x5ee360`), `held` saying which it holds.
+    /// Whether the cancel goes on to its event and packet.
+    pub(crate) fn passes_far_sight(
+        &self,
+        player: Option<CancelPlayer>,
+        held: impl Fn(u64) -> bool,
+        spell_id: u32,
+    ) -> bool {
         let ex = self
             .spells
             .as_deref()
@@ -1143,14 +1159,8 @@ impl AuraSteps<'_, '_> {
         if ex & ATTR_EX_FAR_SIGHT == 0 || ex & ATTR_EX_CHANNELED != 0 {
             return true;
         }
-        let Ok((_, store)) = self.me.single() else {
+        let Some((_, field)) = player else {
             return false;
-        };
-        let field = store.0.player_farsight();
-        let held = |guid: u64| {
-            self.index
-                .as_deref()
-                .is_some_and(|index| index.0.contains_key(&guid))
         };
         match self.far_sight.as_deref() {
             Some(far_sight) => !far_sight.update(field, held, &self.net),
@@ -1162,6 +1172,57 @@ impl AuraSteps<'_, '_> {
     /// `CMSG_CANCEL_AURA` (`0x6e70eb`), the spell's id.
     pub(crate) fn send(&self, spell_id: u32) {
         let _ = self.net.0.send(ClientCommand::CancelAura { spell_id });
+    }
+
+    /// `0x6e7040(spell)` from a packet handler, the time packet's scan (`0x492296` → `0x492201`)
+    /// and the ghost flag's clear (`0x5dea20`), whose signals go on the notice lane at the
+    /// packet's place: the halves, the gate and the packet here, the event left to the lane.
+    /// Whether the area spirit healer aura's event is owed.
+    pub(crate) fn cancel_at_packet(
+        &self,
+        player: Option<CancelPlayer>,
+        held: impl Fn(u64) -> bool,
+        spell_id: u32,
+    ) -> bool {
+        self.end_on_player(player, spell_id);
+        if !self.passes_far_sight(player, held, spell_id) {
+            return false;
+        }
+        self.send(spell_id);
+        spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA
+    }
+}
+
+impl AuraSteps<'_, '_> {
+    fn player(&self) -> Option<CancelPlayer> {
+        self.me
+            .single()
+            .ok()
+            .map(|(entity, store)| (entity, store.0.player_farsight()))
+    }
+
+    fn held(&self) -> impl Fn(u64) -> bool + '_ {
+        |guid| {
+            self.index
+                .as_deref()
+                .is_some_and(|index| index.0.contains_key(&guid))
+        }
+    }
+
+    /// [`AuraGate::end_on_player`] for the active player.
+    pub(crate) fn end_on_player(&self, spell_id: u32) {
+        self.gate.end_on_player(self.player(), spell_id);
+    }
+
+    /// [`AuraGate::passes_far_sight`] for the active player.
+    pub(crate) fn passes_far_sight(&self, spell_id: u32) -> bool {
+        self.gate
+            .passes_far_sight(self.player(), self.held(), spell_id)
+    }
+
+    /// `CMSG_CANCEL_AURA` (`0x6e70eb`), the spell's id.
+    pub(crate) fn send(&self, spell_id: u32) {
+        self.gate.send(spell_id);
     }
 
     /// `0x6e7040(spell)` outside a script call, the healer scan's (`0x492201`): its event fired
@@ -1179,17 +1240,10 @@ impl AuraSteps<'_, '_> {
         self.send(spell_id);
     }
 
-    /// `0x6e7040(spell)` from a packet handler, the time packet's scan (`0x492296` → `0x492201`),
-    /// whose signals go on the notice lane at the packet's place: the halves, the gate and the
-    /// packet here, the event left to the lane. Whether the area spirit healer aura's event is
-    /// owed.
+    /// [`AuraGate::cancel_at_packet`] for the active player.
     pub(crate) fn cancel_at_packet(&self, spell_id: u32) -> bool {
-        self.end_on_player(spell_id);
-        if !self.passes_far_sight(spell_id) {
-            return false;
-        }
-        self.send(spell_id);
-        spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA
+        self.gate
+            .cancel_at_packet(self.player(), self.held(), spell_id)
     }
 }
 

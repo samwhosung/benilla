@@ -157,6 +157,10 @@ pub(crate) struct Scene<'w, 's> {
     mover: Option<ResMut<'w, super::MoverClaim>>,
     /// Who we drive and whether we may, which our own arrival gives back.
     mover_lock: Option<ResMut<'w, crate::player::MoverLock>>,
+    /// The area spirit healer the ghost flag's clear empties (`0x5dea20` → `0x4921c0`), and the
+    /// aura cancel it runs.
+    spirit: Option<ResMut<'w, crate::ui_dialog_verbs::AreaSpiritHealer>>,
+    aura: crate::ui_aura::AuraGate<'w>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).

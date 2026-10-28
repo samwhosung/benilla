@@ -147,6 +147,11 @@ pub(crate) enum FieldNotice {
     /// The skill value watch's profession list rebuild (`0x5de434` → `0x4fca20`), behind its
     /// trainer pass (`0x5de42d`).
     Professions,
+    /// `SetAreaSpiritHealer(0, 0)` (`0x4921c0`) as the ghost flag clears (`0x5dea20`), ahead of
+    /// `PLAYER_UNGHOST`: a pending wave's aura cancel, `CMSG_CANCEL_AURA` with its
+    /// `AREA_SPIRIT_HEALER_OUT_OF_RANGE`. The packet's handler runs it at its place and writes
+    /// the signal, so this never reaches the lane.
+    AreaSpiritHealerClear,
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -887,7 +892,8 @@ pub(crate) fn placed_values(
             if around.me == Some(guid) {
                 let flags = fields.player_flags();
                 // 0x10, the ghost state (`0x5eeab4` → `0x5de9c0`) on either edge: set, its
-                // tutorial (`0x5de9eb`-`0x5de9f0`); clear, `PLAYER_UNGHOST` (`0x5dea2a`).
+                // tutorial (`0x5de9eb`-`0x5de9f0`); clear, the healer's clear (`0x5dea20`), then
+                // `PLAYER_UNGHOST` (`0x5dea2a`).
                 if flipped & 0x10 != 0 {
                     if flags & 0x10 != 0 {
                         pass.push(
@@ -897,6 +903,7 @@ pub(crate) fn placed_values(
                             },
                         );
                     } else {
+                        pass.push(at, FieldNotice::AreaSpiritHealerClear);
                         let id = id::PLAYER_UNGHOST;
                         pass.push(at, FieldNotice::Global { id });
                     }
@@ -1935,8 +1942,8 @@ mod tests {
 
     /// `0x5ee990`'s ghost arm runs the ghost state `0x5de9c0` on either edge of bit 0x10
     /// (`0x5eeab4` → `0x5eeabc`), after `PLAYER_FLAGS_CHANGED` (`0x5eea35`): set, its tutorial
-    /// (`0x5de9eb`-`0x5de9f0`); clear, `PLAYER_UNGHOST` (`0x5dea25`-`0x5dea2a`), with no gate
-    /// before it, so the health plays no part. Another player's ghost bit reaches neither.
+    /// (`0x5de9eb`-`0x5de9f0`); clear, the healer's clear (`0x5dea20`) and `PLAYER_UNGHOST`
+    /// (`0x5dea25`-`0x5dea2a`), with no gate before them, so the health plays no part. Another player's ghost bit reaches neither.
     #[test]
     fn the_ghost_bit_runs_the_ghost_state_on_either_edge() {
         let flags = pf(PLAYER_FLAGS.0);
@@ -1948,7 +1955,11 @@ mod tests {
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0)]),
-            [changed, FieldNotice::Global { id: 401 }],
+            [
+                changed,
+                FieldNotice::AreaSpiritHealerClear,
+                FieldNotice::Global { id: 401 }
+            ],
             "with no health in the store"
         );
         let mut other = player();
@@ -2063,7 +2074,11 @@ mod tests {
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0)]),
-            [changed, FieldNotice::Global { id: 401 }],
+            [
+                changed,
+                FieldNotice::AreaSpiritHealerClear,
+                FieldNotice::Global { id: 401 }
+            ],
             "the ghost bit's clear runs the ghost state too, its event and no tutorial"
         );
         let mut other = player();
