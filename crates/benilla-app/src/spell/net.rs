@@ -121,7 +121,8 @@ pub(crate) struct Scene<'w, 's> {
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the known spells and the learn latches, the book's
 /// reset first (`0x4b2439`, `0x4b243f`) and then each spell in wire order, as the arrival learns
-/// them (`0x5dea8b`-`0x5deab9`); then the bar's ranks ([`crate::ui_action::normalize_ranks`]).
+/// them (`0x5dea8b`-`0x5deab9`); then the bar's ranks ([`crate::ui_action::normalize_ranks`]),
+/// once this login's bar has come.
 fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene, mut bar: LoginRanks) {
     if let SessionEvent::SpellBook {
         spell_ids,
@@ -142,7 +143,11 @@ fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene, mut bar:
             &mut l.cooldowns,
             (l.spells.as_deref(), &sc.items, &l.spell_mods, pad),
         );
-        bar.normalize(&l.actions, &l.net);
+        // Only over this login's bar: the book comes ahead of it (vmangos `Player.cpp:19253`,
+        // `:19256`).
+        if bar.slots.arrived() {
+            bar.normalize(&l.actions, &l.net);
+        }
     }
 }
 
@@ -804,11 +809,11 @@ fn spell_book(
     }
 }
 
-/// `SMSG_ACTION_BUTTONS`, at login and on server-side edits, into the action store.
+/// `SMSG_ACTION_BUTTONS`, at login and on server-side edits, into the action store, every slot
+/// replaced.
 fn action_buttons(buttons: Vec<ActionButton>, slots: &mut crate::ui_action::ActionSlots) {
     debug!("net: action bar — {} occupied slots", buttons.len());
-    slots.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
-    slots.touch();
+    slots.arrive(buttons);
 }
 
 /// `SMSG_LEARNED_SPELL`: the spell joins the known spells, which the book reads (learning never

@@ -86,9 +86,32 @@ pub(crate) struct ActionSlots {
     /// Moved by every write ([`Self::touch`]); the identity feed re-resolves when it moved past
     /// the count it last resolved, and writes nothing here.
     generation: u64,
+    /// Whether this login's `SMSG_ACTION_BUTTONS` has come, so the bar is this character's.
+    arrived: bool,
 }
 
 impl ActionSlots {
+    /// `SMSG_ACTION_BUTTONS`'s 120 words, every slot replaced (`0x5e6680` into `0xc4c2b4`).
+    pub(crate) fn arrive(&mut self, buttons: impl IntoIterator<Item = ActionButton>) {
+        self.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
+        self.arrived = true;
+        self.touch();
+    }
+
+    /// Whether this login's bar has come ([`Self::arrive`]).
+    pub(crate) fn arrived(&self) -> bool {
+        self.arrived
+    }
+
+    /// The session's end: the bar emptied, as the next game entry zeroes it ahead of any world
+    /// packet (`CGGameUI::InitializeGame` `0x48f5a4` → `ResetActionBarState 0x4e4f50`), so the next
+    /// character's book and bar never meet this one's.
+    fn end_session(&mut self) {
+        self.buttons.clear();
+        self.arrived = false;
+        self.touch();
+    }
+
     /// Mark the words written, for the identity feed's next resolve.
     pub(crate) fn touch(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -409,22 +432,6 @@ const SPELL_EFFECT_SKIN_PLAYER_CORPSE: u32 = 0x74;
 /// The effect latched into `[0xcecad8]` at learn time (`0x5e9e42`); only Feed Pet 6991 has it.
 const SPELL_EFFECT_FEED_PET: u32 = 0x65;
 
-/// The skinning latch as the book alone gives it, for a reader with no latch: the last known
-/// spell in id order whose `Effect[0]` is `effect`, as a rank chain ascends by id (Skinning 8613,
-/// 8617, 8618, 10768).
-pub(crate) fn latched_ability(
-    actions: &PlayerActions,
-    spells: &Spells,
-    effect: u32,
-) -> Option<u32> {
-    actions.spells.iter().copied().rfind(|&id| {
-        spells
-            .catalog
-            .get(id)
-            .is_some_and(|d| d.effects[0] == effect)
-    })
-}
-
 /// `SpellMechanic.dbc`: the name in `SPELL_FAILED_PREVENTED_BY_MECHANIC`'s `%s` (reason `0x8d`).
 #[derive(Resource)]
 pub(crate) struct SpellMechanics {
@@ -497,7 +504,7 @@ impl Plugin for UiActionPlugin {
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                drop_held_lines.in_set(crate::ui_script::SessionEnd::Clears),
+                (drop_held_lines, empty_bar).in_set(crate::ui_script::SessionEnd::Clears),
             );
     }
 }
@@ -506,6 +513,11 @@ impl Plugin for UiActionPlugin {
 /// reference's, drawn at once by `0x4945b0`, dies in the UI teardown (`0x490bd0`).
 fn drop_held_lines(mut texts: ResMut<UiErrorTexts>) {
     texts.0.clear();
+}
+
+/// `OnExit(InWorld)`: the bar's words go with the session ([`ActionSlots::end_session`]).
+fn empty_bar(mut slots: ResMut<ActionSlots>) {
+    slots.end_session();
 }
 
 fn load_spells(mut commands: Commands, assets: Option<Res<WorldAssets>>) {

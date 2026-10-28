@@ -96,12 +96,11 @@ pub(super) fn player_req_state(store: &ObjectStore, inputs: &ReqInputs) -> Playe
     }
 }
 
-/// The latches a learn sets, `0x4b25e0`'s skinning spell and `0x5e9fc1`'s dual-wield flag, read
-/// off the book the last time it or the catalog changed.
+/// The dual-wield flag a learn sets (`0x5e9fc1`), read off the book the last time it or the
+/// catalog changed.
 #[derive(Default)]
 pub(crate) struct LatchMemo {
     key: Option<(Tick, Tick)>,
-    skinning: Option<u32>,
     dual_wield: bool,
 }
 
@@ -118,6 +117,8 @@ pub(crate) struct RequirementsLive<'w, 's> {
     actions: Option<Res<'w, PlayerActions>>,
     spells: Option<Res<'w, Spells>>,
     skill_lines: Option<Res<'w, SkillLines>>,
+    /// `[0xb700e4]`, the skinning spell the registrar latched (`0x4b262c`).
+    learned: Option<Res<'w, crate::ui_action::LearnedAbilities>>,
     latches: Local<'s, LatchMemo>,
 }
 
@@ -127,22 +128,19 @@ impl RequirementsLive<'_, '_> {
         self.objects.player().and_then(|e| self.stores.get(e).ok())
     }
 
-    /// The two learn latches, read again only when the book or the catalog moved.
+    /// The two learn latches: the skinning spell as the registrar holds it, and the dual-wield
+    /// flag, read again only when the book or the catalog moved.
     fn latches(&mut self) -> Option<(Option<u32>, bool)> {
         let (actions, spells) = (self.actions.as_ref()?, self.spells.as_ref()?);
         let key = (actions.last_changed(), spells.last_changed());
         if self.latches.key != Some(key) {
             *self.latches = LatchMemo {
                 key: Some(key),
-                skinning: crate::ui_action::latched_ability(
-                    actions,
-                    spells,
-                    benilla_formats::SPELL_EFFECT_SKINNING,
-                ),
                 dual_wield: actions.knows_dual_wield(Some(spells)),
             };
         }
-        Some((self.latches.skinning, self.latches.dual_wield))
+        let skinning = self.learned.as_ref().and_then(|l| l.skinning);
+        Some((skinning, self.latches.dual_wield))
     }
 
     /// The whole requirement state as of here, which the app seats in the VM for its own reads
