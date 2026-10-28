@@ -735,9 +735,9 @@ impl Items {
         self.templates.iter().map(|(&id, _)| id).collect()
     }
 
-    /// Disconnect: drop the in-flight asks, the callbacks waiting on them or on the VM, and the
-    /// queued enchant times, keep the templates. The item objects and their countdowns go with
-    /// the index's sweep.
+    /// Disconnect: drop the callbacks waiting on asks or on the VM, and the queued enchant times,
+    /// keep the templates; [`crate::wdb`] clears their in-flight asks. The item objects and their
+    /// countdowns go with the index's sweep.
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
         self.callbacks
@@ -748,7 +748,6 @@ impl Items {
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        self.templates.clear_pending();
     }
 }
 
@@ -1244,6 +1243,7 @@ mod tests {
         items.insert_template(117, Some(info("Tough Jerky")));
         assert!(items.template(118, 0, Ask::New(&cmds)).is_none()); // leaves 118 in flight
         items.clear_session();
+        items.template_store_mut().clear_pending(); // the saved stores' clear, in `wdb`
         assert!(items.take_enchant_times(0x43).is_empty());
         assert!(
             items.template(117, 0, Ask::New(&cmds)).is_some(),

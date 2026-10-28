@@ -403,11 +403,11 @@ impl NameCache {
         Some(self.creatures.get(entry)?.creature_type)
     }
 
-    /// Forget the in-flight asks a disconnect may have dropped; player and creature names stay,
-    /// pet names go with the spawns they named.
+    /// Forget the in-flight player-name asks a disconnect may have dropped; player names stay, pet
+    /// names go with the spawns they named. The creature store is saved, so [`crate::wdb`] clears
+    /// its asks.
     pub(crate) fn clear_pending(&mut self) {
         self.players.clear_pending();
-        self.creatures.clear_pending();
         self.pets.clear();
     }
 }
@@ -1174,16 +1174,16 @@ mod tests {
     fn clear_pending_allows_a_reconnect_reask() {
         let (cmds, rx) = commands();
         let mut cache = NameCache::default();
-        let g = compose(guid::HIGH_UNIT, 100, 1);
+        let g = compose(guid::HIGH_PLAYER, 100, 1);
 
-        assert_eq!(cache.resolve_unit(g, None, Ask::New(&cmds)), None);
+        assert_eq!(cache.resolve_player(g, Ask::New(&cmds)), None);
         let _ = rx.try_recv();
         // A disconnect dropped the answer.
         cache.clear_pending();
-        assert_eq!(cache.resolve_unit(g, None, Ask::New(&cmds)), None);
+        assert_eq!(cache.resolve_player(g, Ask::New(&cmds)), None);
         assert!(matches!(
             rx.try_recv(),
-            Ok(ClientCommand::CreatureQuery { entry: 100, .. })
+            Ok(ClientCommand::NameQuery { guid }) if guid == g
         ));
     }
 

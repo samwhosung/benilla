@@ -691,3 +691,60 @@ fn each_answer_reaches_its_own_stores_file_through_the_live_handlers() {
     assert!(held_next_session::<PageTexts>(PAGE), "page text");
     assert!(held_next_session::<MailOpen>(ITEM_TEXT), "item text");
 }
+
+/// The reference's saved stores keep an ask "pending" for the process (`0x555740` clears only the
+/// unsaved ones), so a query a lost link took is never sent again; benilla's disconnect clears
+/// every saved store's asks, and the next session's read asks again. The answered record stays.
+#[test]
+fn an_ask_in_flight_at_a_disconnect_is_asked_again_after_the_relogin() {
+    use crate::net::handlers::dispatch;
+    const KEPT_PAGE: u32 = PAGE + 1;
+    let mut app = App::new();
+    app.init_resource::<Time>().add_plugins(WdbPlugin);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let commands = NetCommands(tx);
+    let fields = crate::go_templates::test_fields(GAME_OBJECT);
+    let ask_all = |app: &mut App| {
+        let w = app.world_mut();
+        w.resource::<NameCache>()
+            .resolve_creature(CREATURE, 1, Ask::Event(&commands));
+        w.resource::<GameObjectTemplates>()
+            .request_at_create(1, &fields, &commands);
+        w.resource::<ItemNames>().name(ITEM, Ask::Event(&commands));
+        w.resource::<Items>()
+            .template(ITEM, 0, Ask::Event(&commands));
+        w.resource::<QuestLog>()
+            .template(QUEST, Ask::Event(&commands));
+        w.resource::<PageTexts>()
+            .page(PAGE, 0, Ask::Event(&commands));
+        w.resource::<MailOpen>().bodies.lookup(ITEM_TEXT, || {
+            let _ = commands.0.send(ClientCommand::ItemTextQuery {
+                text_id: ITEM_TEXT,
+                mail_id: 1,
+            });
+        });
+        crate::query_cache::queries(&rx).len()
+    };
+    app.world_mut()
+        .resource_mut::<PageTexts>()
+        .insert(KEPT_PAGE, "Kept.".into(), 0);
+    assert_eq!(ask_all(&mut app), 7, "each saved store sends its ask");
+    assert_eq!(ask_all(&mut app), 0, "and an ask in flight is not repeated");
+
+    dispatch(
+        app.world_mut(),
+        vec![SessionEvent::Disconnected {
+            reason: "lost".into(),
+            end: benilla_protocol::SessionEnd::Lost,
+        }],
+    );
+
+    assert_eq!(ask_all(&mut app), 7, "the relogin asks each again");
+    assert!(
+        app.world()
+            .resource::<PageTexts>()
+            .page(KEPT_PAGE, 0, Ask::Read)
+            .is_some(),
+        "an answered record stays"
+    );
+}

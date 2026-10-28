@@ -92,6 +92,10 @@ pub(crate) trait SavedCache: Resource + Default {
     fn forget(&mut self) {
         self.store_mut().clear();
     }
+    /// Forgets the store's in-flight asks, keeping its records ([`clear_saved_asks`]).
+    fn forget_asks(&mut self) {
+        self.store_mut().clear_pending();
+    }
 }
 
 impl SavedCache for NameCache {
@@ -293,7 +297,8 @@ impl Plugin for WdbPlugin {
         app.init_resource::<GuildState>()
             .init_resource::<PetitionRecords>()
             .net_handler(SessionEventKind::SavedAnswer, keep_answer)
-            .net_handler(SessionEventKind::Connected, clear_session_stores);
+            .net_handler(SessionEventKind::Connected, clear_session_stores)
+            .net_handler(SessionEventKind::Disconnected, clear_saved_asks);
     }
 }
 
@@ -318,6 +323,39 @@ fn clear_session_stores(
         guilds.clear_world_session();
         petitions.clear_world_session();
     }
+}
+
+/// Every saved store, for the disconnect's clear of their asks.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Stores<'w> {
+    creatures: ResMut<'w, NameCache>,
+    game_objects: ResMut<'w, GameObjectTemplates>,
+    item_names: ResMut<'w, ItemNames>,
+    items: ResMut<'w, Items>,
+    npc_text: ResMut<'w, GossipState>,
+    quests: ResMut<'w, QuestLog>,
+    pages: ResMut<'w, PageTexts>,
+    item_text: ResMut<'w, MailOpen>,
+}
+
+/// The session end's clear of every saved store's in-flight asks, whose answers the socket took;
+/// the records stay, and the unsaved stores are left to the world entry's wipe.
+///
+/// Deviation: the reference keeps a saved store's ask "pending" for the rest of the process
+/// (`0x555740` clears only the stores built with persistence off), so a query a lost link dropped
+/// is never sent again until restart; benilla's reconnect asks it again.
+fn clear_saved_asks(In(ev): In<SessionEvent>, mut stores: Stores) {
+    if !matches!(ev, SessionEvent::Disconnected { .. }) {
+        return;
+    }
+    stores.creatures.forget_asks();
+    stores.game_objects.forget_asks();
+    stores.item_names.forget_asks();
+    stores.items.forget_asks();
+    stores.npc_text.forget_asks();
+    stores.quests.forget_asks();
+    stores.pages.forget_asks();
+    stores.item_text.forget_asks();
 }
 
 /// Every saved store's file, for the answer bytes' handler.

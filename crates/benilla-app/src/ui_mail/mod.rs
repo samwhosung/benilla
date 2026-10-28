@@ -199,12 +199,10 @@ impl MailOpen {
         self.auction_subjects.clear();
     }
 
-    /// A disconnect: the session's rows as [`Self::clear_session`], and the body asks that died
-    /// with the socket, which the saved store would otherwise wait on for ever, with the callbacks
-    /// that waited on any ask.
+    /// A disconnect: the session's rows as [`Self::clear_session`], with the callbacks that waited
+    /// on any ask. The body asks that died with the socket are cleared by [`crate::wdb`].
     pub(crate) fn clear_disconnected(&mut self) {
         self.clear_session();
-        self.bodies.clear_pending();
         self.waits.clear();
     }
 }
@@ -1126,9 +1124,9 @@ mod tests {
     }
 
     /// The world-enter init (`0x4acb10`) touches no cache: a body ask in flight stands (the
-    /// item-text store is saved), and only a disconnect, whose socket took the ask, drops it.
+    /// item-text store is saved), and the mail's own disconnect leaves it to [`crate::wdb`].
     #[test]
-    fn the_world_enter_init_keeps_a_body_ask_and_a_disconnect_drops_it() {
+    fn the_world_enter_init_and_the_mails_disconnect_keep_a_body_ask() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
         let mut m = MailOpen::default();
@@ -1138,7 +1136,10 @@ mod tests {
         m.clear_session();
         assert!(m.bodies.is_pending(7), "the init leaves the ask");
         m.clear_disconnected();
-        assert!(!m.bodies.is_pending(7), "a disconnect drops it");
+        assert!(
+            m.bodies.is_pending(7),
+            "the store's clear is the saved stores'"
+        );
     }
 
     /// No GlobalStrings in a unit test: every key misses.

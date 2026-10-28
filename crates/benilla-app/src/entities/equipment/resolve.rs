@@ -1134,8 +1134,8 @@ mod tests {
         );
     }
 
-    /// A disconnect keeps our own avatar and drops the in-flight asks (`Items::clear_session`,
-    /// the guild cache's world-entry release). A slot and a crest whose ask was dropped are
+    /// A disconnect keeps our own avatar and drops the in-flight asks (the saved stores' clear in
+    /// `wdb`, the guild cache's world-entry release). A slot and a crest whose ask was dropped are
     /// unknown to the cache, so the next resolve asks again rather than waiting forever.
     #[test]
     fn a_slot_whose_ask_was_dropped_is_asked_again() {
@@ -1158,7 +1158,7 @@ mod tests {
             .any(|c| matches!(c, ClientCommand::GuildQuery { guild_id: 7 })));
         assert!(!app.world().get::<Equipment>(player).unwrap().settled);
 
-        app.world_mut().resource_mut::<Items>().clear_session();
+        crate::wdb::SavedCache::forget_asks(&mut *app.world_mut().resource_mut::<Items>());
         app.world_mut()
             .resource_mut::<crate::ui_guild::GuildState>()
             .drop_pending_for_test();
