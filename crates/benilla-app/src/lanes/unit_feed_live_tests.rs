@@ -162,10 +162,14 @@ fn arrived(known: &[u32]) -> (Client, Vec<String>) {
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
-        .spells
-        .extend(known.iter().copied());
+    {
+        // As `SMSG_INITIAL_SPELLS` leaves the book, for the arrival to learn again.
+        let mut actions = app
+            .world_mut()
+            .resource_mut::<crate::ui_action::PlayerActions>();
+        actions.spells.extend(known.iter().copied());
+        actions.initial.extend(known.iter().copied());
+    }
     let mut c = Client { app, inbound, sent };
     let unit = [(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
     c.frame(vec![vec![

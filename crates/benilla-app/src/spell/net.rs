@@ -148,12 +148,11 @@ fn on_spell_learned(
     mut book: BookSignals,
 ) {
     if let SessionEvent::SpellLearned { spell_id } = ev {
-        let was_known = l.actions.spells.contains(&spell_id);
         learned_spell(spell_id, &mut l.actions, l.spells.as_deref(), &errors);
         book.entered(
             spell_id,
-            Learned::Fresh { was_known },
-            &l.actions.spells,
+            Learned::Fresh,
+            &mut l.actions,
             l.spells.as_deref(),
         );
     }
@@ -169,7 +168,13 @@ fn on_spell_removed(
     if let SessionEvent::SpellRemoved { spell_id } = ev {
         let was_known = l.actions.spells.contains(&spell_id);
         removed_spell(spell_id, &mut l.actions, l.spells.as_deref(), &errors);
-        book.left(spell_id, was_known, true, l.spells.as_deref());
+        book.left(
+            spell_id,
+            was_known,
+            true,
+            &mut l.actions,
+            l.spells.as_deref(),
+        );
     }
 }
 
@@ -194,14 +199,17 @@ fn on_spell_superceded(
             l.spells.as_deref(),
             &errors,
         );
-        book.left(old_spell_id, was_known, false, l.spells.as_deref());
+        book.left(
+            old_spell_id,
+            was_known,
+            false,
+            &mut l.actions,
+            l.spells.as_deref(),
+        );
         book.entered(
             new_spell_id,
-            Learned::Rank {
-                old: old_spell_id,
-                old_known: was_known,
-            },
-            &l.actions.spells,
+            Learned::Rank { old: old_spell_id },
+            &mut l.actions,
             l.spells.as_deref(),
         );
     }
@@ -687,6 +695,9 @@ fn spell_book(
     actions.profession_order.clear();
     actions.craft_order.clear();
     actions.effect_slots = Default::default();
+    // The list itself (`0xc4d2a8`), which our player's arrival learns again one spell at a time,
+    // the form list's growth with it (`0x5dea86`-`0x5deab9`, [`crate::ui_world_enter`]).
+    actions.initial.clone_from(&spell_ids);
     for spell_id in spell_ids {
         actions.spells.insert(spell_id);
         list_learn(spell_id, actions, spells);

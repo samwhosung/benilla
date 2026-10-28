@@ -18,7 +18,7 @@
 //! unregistrations (`0x490aad`, `0x490ab7`, `0x490acb`, `0x490ae4`, `0x490af3`, and the tail of
 //! `0x490ada`'s leg), frees of caches it does not hold (the minimap's points of interest
 //! `0x490a99`, the durability alert `0x490aa8`, the battlefield list `0x490b20`, the minigame `0x490b34`), the sound band's reset (`0x490b3e` →
-//! `0x72a450`, `[0xcf06e4]`), the pending-chat latch (`0x490a9e`), an empty stub (`0x490b43`), six
+//! `0x72a450`, `[0xcf06e4]`), an empty stub (`0x490b43`), six
 //! bare `ret`s, and past the event the camera's detach (`0x490b52`-`0x490b5a`, `0x4841a0` →
 //! `0x50d0f0(0)`).
 
@@ -68,6 +68,9 @@ pub(crate) struct WorldLeaveSweep;
 pub(crate) enum SweepLeg {
     /// `0x490a94` → `0x458f50`: the `PlaySound` suppression scope opens.
     Silence,
+    /// `0x490a9e` → `0x498a10`: the chat display latch set, so the wire's lines wait for the next
+    /// world-enter cascade.
+    ChatLatch,
     /// `0x490ab2` → `0x4c1ca0` → `CloseInteraction 0x48f200(cl=1, dl=0)`.
     Loot,
     /// `0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`.
@@ -201,6 +204,7 @@ fn sweep_schedule() -> Schedule {
         .configure_sets(
             (
                 SweepLeg::Silence,
+                SweepLeg::ChatLatch,
                 SweepLeg::Loot,
                 SweepLeg::ItemText,
                 SweepLeg::Gossip,

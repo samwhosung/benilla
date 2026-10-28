@@ -64,7 +64,7 @@ pub(crate) use edit::ChannelState;
 #[cfg(test)]
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
-pub(crate) use feed::{Answer, ChatLog};
+pub(crate) use feed::{release_display, Answer, ChatLog};
 /// The chat applier off a bare world, for the tests that send through it.
 #[cfg(test)]
 pub(crate) use input::{chat_world, run_chat};
@@ -125,9 +125,14 @@ pub(crate) struct ChatDrain;
 
 impl Plugin for UiChatPlugin {
     fn build(&self, app: &mut App) {
+        use crate::ui_script::SweepApp;
         net::register(app);
         add_chat_lane(app);
         app.add_observer(combat::on_cvar);
+        app.add_sweep_leg(
+            crate::ui_script::SweepLeg::ChatLatch,
+            feed::latch_on_leave_world,
+        );
         app.init_resource::<ChatLog>()
             .init_resource::<away::AfkMirror>()
             .init_resource::<away::AfkMirrorMemo>()

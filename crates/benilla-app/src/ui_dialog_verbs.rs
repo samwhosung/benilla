@@ -44,12 +44,10 @@ use crate::area::AreaTableRes;
 use crate::creature_anim::spell_visual::{meeting_stone_join_fx, SpellKitFx, SpellVisuals};
 use crate::names::NameCache;
 
-use crate::net::{
-    ClientCommand, NetCommands, ObjectStore, SelfGuid, SelfPlayer, WorldEnterCascadeMessage,
-};
+use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_party::GroupState;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiTick};
+use crate::ui_script::{SweepApp, SweepLeg, UiTick};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The pet trainer's pending question: the latch (`0xc4d7b0/b4`) and the cost (`0xc4d7b8`).
@@ -344,9 +342,10 @@ pub(crate) struct MeetingStone {
     /// `0x299` guids whose name has not resolved yet, each waiting on the name cache's callback
     /// `0x4ca510` (`0x4ca4b2`).
     pending_members: Vec<u64>,
-    /// A `0x295` rebuilt the text in this frame's packets, which the world entry's reset, ordered
-    /// ahead of them as our own create's cascade is (`0x4908c0` inside `0x5dea50`), leaves.
-    rebuilt: bool,
+    /// Where the last `0x295` rebuilt the text, by the clock: one after our own create's place,
+    /// which the world entry's reset runs ahead of (`0x4908c0` inside `0x5dea50`), keeps its text
+    /// past the reset the arrival lane fires later in the frame.
+    rebuilt_at: Option<crate::lanes::Mark>,
 }
 
 impl MeetingStone {
@@ -355,7 +354,7 @@ impl MeetingStone {
     pub(crate) fn apply(&mut self, area: u32) -> u32 {
         let old = std::mem::replace(&mut self.area, area);
         self.text = StoneText::Built;
-        self.rebuilt = true;
+        self.rebuilt_at = Some(crate::lanes::mark());
         old
     }
 
@@ -551,23 +550,25 @@ impl DialogNameAnswers<'_> {
 }
 
 /// The world-enter cascade's meeting-stone leg (`0x490a14` → `0x4c9f40`), after the battlefield
-/// status: the text reset, then the empty `CMSG 0x296` (`0x4ca1c0`). The cascade runs at login,
-/// after every cross-map worldport and on every `/reload`; until the reply fires
-/// `MEETINGSTONE_CHANGED` (`0x4ca38f`) the minimap icon is hidden, as in the reference. The
-/// queued area survives.
+/// status, in the cascade's place ([`crate::ui_world_enter`]): the text reset, then the empty
+/// `CMSG 0x296` (`0x4ca1c0`). The cascade runs at login, after every cross-map worldport and on
+/// every `/reload`; until the reply fires `MEETINGSTONE_CHANGED` (`0x4ca38f`) the minimap icon is
+/// hidden, as in the reference. The queued area survives.
 pub(crate) fn meeting_stone_enter_world(
-    mut cascades: MessageReader<WorldEnterCascadeMessage>,
-    mut stone: ResMut<MeetingStone>,
+    mut stone: Option<ResMut<MeetingStone>>,
     commands: Res<NetCommands>,
 ) {
-    let rebuilt = std::mem::take(&mut stone.rebuilt);
-    if cascades.read().next().is_none() {
-        return;
-    }
-    // The reset is the create's, ahead of the frame's later packets: a `0x295` among them keeps
-    // its rebuild.
-    if !rebuilt {
-        stone.enter_world();
+    if let Some(stone) = stone.as_deref_mut() {
+        // The reset is the create's, ahead of the frame's later packets: a `0x295` among them
+        // keeps its rebuild.
+        let at = crate::lanes::firing_now();
+        let later = stone
+            .rebuilt_at
+            .take()
+            .is_some_and(|m| at.is_some_and(|at| !at.since(m)));
+        if !later {
+            stone.enter_world();
+        }
     }
     let _ = commands.0.send(ClientCommand::MeetingStoneStatusQuery);
 }
@@ -1042,7 +1043,6 @@ impl Plugin for UiDialogVerbsPlugin {
             .init_resource::<BattlefieldQueue>()
             .init_resource::<MeetingStone>()
             .add_message::<MeetingStoneUse>()
-            .add_message::<WorldEnterCascadeMessage>()
             .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world)
             .add_systems(
                 Update,
@@ -1060,11 +1060,6 @@ impl Plugin for UiDialogVerbsPlugin {
                         .after(crate::target::TargetUpdate)
                         .run_if(crate::ui_script::ingame_ui_up)
                         .in_set(crate::client_state::InWorldGated),
-                    // The cascade's order: the battlefield status, then this (`0x4909fb`,
-                    // `0x490a14`), so `CMSG 0x296` follows `CMSG 0x2D3` on the wire.
-                    meeting_stone_enter_world
-                        .in_set(UiFeed)
-                        .after(crate::ui_battlefield::reset_on_world_enter),
                     // After the target chain, which writes `MeetingStoneUse`, so the join leaves
                     // on the click's own frame.
                     drain_meeting_stone_joins
@@ -1647,16 +1642,8 @@ mod tests {
         app.init_resource::<MeetingStone>()
             .insert_resource(NetCommands(tx))
             .add_message::<crate::net::WorldportMessage>()
-            .add_message::<WorldEnterCascadeMessage>()
             .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world)
-            .add_systems(
-                Update,
-                (
-                    crate::ui_script::sweep_on_worldport,
-                    meeting_stone_enter_world,
-                )
-                    .chain(),
-            );
+            .add_systems(Update, crate::ui_script::sweep_on_worldport);
         app.world_mut()
             .resource_mut::<crate::ui_script::LeavingWorldArmed>()
             .arm();
@@ -1673,7 +1660,14 @@ mod tests {
     fn answered(app: &mut App, area: u32) {
         let mut stone = app.world_mut().resource_mut::<MeetingStone>();
         stone.apply(area);
-        stone.rebuilt = false;
+        stone.rebuilt_at = None;
+    }
+
+    /// The cascade's meeting-stone leg, as the arrival lane runs it.
+    fn enter(app: &mut App) {
+        app.world_mut()
+            .run_system_cached(meeting_stone_enter_world)
+            .expect("the stone's leg runs");
     }
 
     fn stone_text(app: &App) -> StoneText {
@@ -1704,8 +1698,7 @@ mod tests {
             "a second worldport's",
         ] {
             answered(&mut app, 1519);
-            app.world_mut().write_message(WorldEnterCascadeMessage);
-            app.update();
+            enter(&mut app);
             assert_eq!(stone_queries(&rx), 1, "{entry} asks the server");
             assert_eq!(
                 stone_text(&app),
@@ -1728,8 +1721,7 @@ mod tests {
     #[test]
     fn a_cross_map_worldport_drops_the_text_and_the_login_map_does_not() {
         let (mut app, rx) = stone_app();
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        enter(&mut app);
         answered(&mut app, 1519);
 
         app.world_mut().write_message(stone_port(false));
@@ -1757,14 +1749,12 @@ mod tests {
     #[test]
     fn a_reload_drops_the_text_then_resets_it_and_asks_again() {
         let (mut app, rx) = stone_app();
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        enter(&mut app);
         assert_eq!(stone_queries(&rx), 1);
         answered(&mut app, 1519);
 
         assert!(crate::ui_script::run_leave_world_sweep(app.world_mut()));
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        enter(&mut app);
         assert_eq!(stone_queries(&rx), 1, "the reload re-asks the server");
         assert_eq!(
             stone_text(&app),

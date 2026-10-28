@@ -353,9 +353,7 @@ fn the_unlearn_question_drops_past_the_range_gate() {
 #[test]
 fn a_rebuild_in_the_cascades_frame_stands() {
     let mut c = client();
-    c.app
-        .world_mut()
-        .write_message(crate::net::WorldEnterCascadeMessage);
+    crate::ui_world_enter::push_arrival(c.app.world_mut());
     c.frame(vec![vec![SessionEvent::MeetingStoneSetQueue {
         area: STORMWIND,
         status: 1,

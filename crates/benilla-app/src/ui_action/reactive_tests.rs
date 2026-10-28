@@ -84,11 +84,9 @@ fn app() -> App {
         .init_resource::<crate::ui_script::SweptWorlds>()
         .insert_resource(NetCommands(tx))
         // The enter cascade and the cast targeting the walk reads.
-        .add_message::<crate::net::WorldEnterCascadeMessage>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
         .init_resource::<super::state::ActionEvents>()
-        .init_resource::<super::state::EnterUsable>()
         .init_resource::<super::state::ActionStateMemory>();
     seat(&mut app);
     app.insert_non_send_resource(listener());

@@ -671,7 +671,9 @@ fn a_paper_picked_up_between_rebuilds_changes_nothing_until_the_next() {
     ));
     // The init finds the paper's record and misses the free one's, so one is awaited and the
     // list is not rebuilt.
-    world.write_message(crate::net::WorldEnterCascadeMessage);
+    world
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
     c.frame(vec![]);
     let read = "local n = GetNumStationeries() return n .. '/' .. tostring(GetStationeryInfo(1))";
     let first = "return tostring(GetStationeryInfo(1))";
@@ -746,7 +748,8 @@ fn leaving_the_world_cancels_the_paper_waits() {
         ));
     c.app
         .world_mut()
-        .write_message(crate::net::WorldEnterCascadeMessage);
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
     c.frame(vec![]);
     c.app
         .world_mut()
@@ -765,7 +768,8 @@ fn leaving_the_world_cancels_the_paper_waits() {
     );
     c.app
         .world_mut()
-        .write_message(crate::net::WorldEnterCascadeMessage);
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
     c.frame(vec![]);
     assert_eq!(
         c.eval::<String>(true, read),

@@ -93,8 +93,8 @@ fn movers(rx: &Receiver<ClientCommand>) -> Vec<String> {
 
 /// The arrival's writes are its packet's (`0x5dec7b` → `0x5dea50`): a packet after our own
 /// create in the same drain finds our player tagged and in control (`0x5deb56`), its send
-/// goes out after the mover's claim (`0x5deb5b`), the flag's rise is on the notice lane, and
-/// the class family is stored (`0x5debcc`).
+/// goes out after the mover's claim (`0x5deb5b`), the flag's rise is owed to the arrival's item,
+/// and the class family is stored (`0x5debcc`).
 #[test]
 fn a_packet_after_our_create_finds_us_arrived() {
     let (mut app, rx) = client();
@@ -115,22 +115,21 @@ fn a_packet_after_our_create_finds_us_arrived() {
         movers(&rx),
         [format!("SetActiveMover {ME:#x}"), "later packet".into()]
     );
-    let signals: Vec<_> = world
-        .resource_mut::<crate::field_watch::NoticeLane>()
-        .drain()
-        .collect();
-    assert!(
-        signals.contains(&crate::field_watch::FieldNotice::PlayerControl { in_control: true }),
-        "{signals:?}"
-    );
     assert_eq!(
         world
             .resource::<crate::spell::SpellModifiers>()
             .class_family(),
         3
     );
-    let cascades = world.resource::<Messages<crate::net::WorldEnterCascadeMessage>>();
-    assert_eq!(cascades.len(), 1, "one cascade for its readers");
+    assert_eq!(
+        world
+            .resource::<crate::ui_world_enter::ArrivalLane>()
+            .entries(),
+        [crate::ui_world_enter::Entry::Arrival {
+            control_gained: true
+        }],
+        "one arrival on its lane, the flag's rise owed among its signals"
+    );
 }
 
 /// Only a new object runs its create hook (`0x465d79`): a create block for our live player
@@ -244,46 +243,16 @@ fn the_world_entry_and_a_worldport_zero_the_mover() {
 /// A `/reload` re-enters the world-enter cascade alone (`0x490168` → `0x4908c0`): the restore
 /// and the claim are the arrival's (`0x4958a0` is called from `0x5deb5b` only, `0x5fa600` from
 /// `0x5deb56` and `0x603eeb`), so a reload while feared, possessing or locked by a
-/// battleground's end leaves the lock, the possession and `[0xb4b3e4]` as they were. The reload
-/// writes the cascade for its readers (`ui_script::lifecycle`), so no reader of it writes the
-/// lock or the flag; the whole frame cannot run headless, so the client's schedule is read.
+/// battleground's end leaves the lock, the possession and `[0xb4b3e4]` as they were.
 #[test]
 fn a_reload_cascade_leaves_control_as_it_was() {
-    use std::any::TypeId;
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let (mut app, _rx) = client();
     let world = app.world_mut();
-    let id = |world: &World, t: TypeId| world.components().get_resource_id(t).expect("registered");
-    let cascade = id(
-        world,
-        TypeId::of::<Messages<crate::net::WorldEnterCascadeMessage>>(),
-    );
-    let held = [
-        id(world, TypeId::of::<crate::player::MoverLock>()),
-        id(world, TypeId::of::<crate::player::OwnControlLost>()),
-    ];
-    let (readers, writers) = world.schedule_scope(Update, |world, schedule| {
-        schedule.graph_mut().systems.initialize(world);
-        let graph = schedule.graph();
-        let mut readers = 0;
-        let mut writers = Vec::new();
-        for (k, system, _) in graph.systems.iter() {
-            let Some(with_access) = graph.systems.get(k) else {
-                continue;
-            };
-            let access = with_access.access.combined_access();
-            if !access.has_resource_read(cascade) {
-                continue;
-            }
-            readers += 1;
-            if held.iter().any(|&h| access.has_resource_write(h)) {
-                writers.push(system.name().to_string());
-            }
-        }
-        (readers, writers)
-    });
-    assert!(readers > 0, "the cascade has readers");
-    assert!(
-        writers.is_empty(),
-        "these answer a reload's cascade by writing the control state: {writers:?}"
-    );
+    world
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
+    crate::ui_world_enter::fire_lane(world);
+    assert!(world.resource::<crate::player::OwnControlLost>().0);
+    let lock = world.resource::<crate::player::MoverLock>();
+    assert!(lock.control_lost && lock.foreign_mover.is_some());
 }

@@ -599,26 +599,21 @@ fn apply_self_move(
 /// `[0xb4b3e4]` through `0x4958e0` (`PLAYER_CONTROL_GAINED` if it was down) and `0x4958a0`
 /// (`0x5deb5b`) stores 1 and re-claims our own mover, ending the movement lock and any
 /// possession. vmangos sends a battleground's closing `control 0` and no restore
-/// (`BattleGround.cpp:905-908`). A flag that was down signals as the control packet's handler's
-/// does, on the notice lane at the create's place: the event, then the usable refresh
-/// (`0x4958f7`, `0x4958fc`). Only the arrival runs it: `0x4958a0` has the one caller `0x5deb5b`,
-/// and `0x5fa600` is called at `0x5deb56` and `0x603eeb` alone, so a `/reload`'s cascade
-/// (`0x490168` → `0x4908c0`) leaves the lock as it was.
+/// (`BattleGround.cpp:905-908`). Whether the flag was down, whose rise signals in the arrival's
+/// place (`0x4958f7`, `0x4958fc`, [`crate::ui_world_enter`]): the event, then the usable refresh.
+/// Only the arrival runs it: `0x4958a0` has the one caller `0x5deb5b`, and `0x5fa600` is called at
+/// `0x5deb56` and `0x603eeb` alone, so a `/reload`'s cascade (`0x490168` → `0x4908c0`) leaves the
+/// lock as it was.
 pub(crate) fn regain_control_on_arrival(
     lock: Option<&mut MoverLock>,
     own_control: Option<&mut OwnControlLost>,
-    lane: &mut crate::field_watch::NoticeLane,
-) {
+) -> bool {
     let own = own_control.as_ref().is_some_and(|o| o.0);
     let held = lock
         .as_ref()
         .is_some_and(|l| l.control_lost || l.foreign_mover.is_some());
     if !own && !held {
-        return;
-    }
-    if own {
-        lane.write(crate::field_watch::FieldNotice::PlayerControl { in_control: true });
-        lane.write(crate::field_watch::FieldNotice::UsableRefresh);
+        return false;
     }
     if let Some(own_control) = own_control {
         own_control.0 = false;
@@ -629,6 +624,7 @@ pub(crate) fn regain_control_on_arrival(
         lock.foreign_mover = None;
         lock.reseat = true;
     }
+    own
 }
 
 /// On a `/logout` or a lost session, reset the whole resource to its boot state, so the next login
@@ -1001,7 +997,6 @@ mod teleport_tests {
 #[cfg(test)]
 mod arrival_tests {
     use super::*;
-    use crate::field_watch::{FieldNotice, NoticeLane};
 
     const ME: u64 = 0x45;
 
@@ -1011,10 +1006,9 @@ mod arrival_tests {
         track_control(lock, control_verdict(ME, false, Some(ME)));
     }
 
-    fn arrive(lock: &mut MoverLock, own: &mut OwnControlLost) -> Vec<FieldNotice> {
-        let mut lane = NoticeLane::default();
-        regain_control_on_arrival(Some(lock), Some(own), &mut lane);
-        lane.drain().collect()
+    /// Whether the arrival's flag rise is owed its signals.
+    fn arrive(lock: &mut MoverLock, own: &mut OwnControlLost) -> bool {
+        regain_control_on_arrival(Some(lock), Some(own))
     }
 
     /// A battleground's end sends `control 0` for us and never the restore; the teleport out
@@ -1029,16 +1023,7 @@ mod arrival_tests {
         assert!(!own.0, "the bar's flag is back");
         assert!(!lock.control_lost, "and the controller's movement lock");
         assert_eq!(lock.foreign_mover, None);
-        assert!(
-            matches!(
-                signals[..],
-                [
-                    FieldNotice::PlayerControl { in_control: true },
-                    FieldNotice::UsableRefresh
-                ]
-            ),
-            "the flag's rise signals (`0x4958f7`, `0x4958fc`): {signals:?}"
-        );
+        assert!(signals, "the flag's rise signals (`0x4958f7`, `0x4958fc`)");
     }
 
     /// A possession does not outlive the world either: the create claims our own mover, with no
@@ -1051,7 +1036,7 @@ mod arrival_tests {
         let signals = arrive(&mut lock, &mut own);
         assert_eq!(lock.foreign_mover, None);
         assert!(!lock.control_lost && lock.reseat);
-        assert!(signals.is_empty(), "{signals:?}");
+        assert!(!signals, "the flag never fell");
     }
 
     /// A login in control touches nothing.
@@ -1059,7 +1044,7 @@ mod arrival_tests {
     fn a_create_in_control_changes_nothing() {
         let (mut lock, mut own) = (MoverLock::default(), OwnControlLost::default());
         let signals = arrive(&mut lock, &mut own);
-        assert!(!lock.reseat && signals.is_empty());
+        assert!(!lock.reseat && !signals);
     }
 }
 

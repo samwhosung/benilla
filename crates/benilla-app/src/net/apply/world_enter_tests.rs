@@ -8,14 +8,13 @@ use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
 use crate::net::{
-    ClientCommand, EnteredWorldMessage, NetCommands, NetStatus, SelfGuid, ServerWallClock,
-    WorldEnterCascadeMessage,
+    ClientCommand, EnteredWorldMessage, NetCommands, NetStatus, QueryTimeAsks, SelfGuid,
+    ServerWallClock,
 };
 
 const ME: u64 = 0x0000_0000_0000_0042;
 
-/// The cascade's four senders and the release, in the order the client schedules them
-/// (`the_client_schedules_the_sends_in_the_reference_order` pins that), logged in as [`ME`].
+/// The cascade's senders' state and the hourly resync, logged in as [`ME`].
 fn app() -> (App, Receiver<ClientCommand>) {
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
@@ -26,24 +25,14 @@ fn app() -> (App, Receiver<ClientCommand>) {
             last_reason: None,
         })
         .init_resource::<ServerWallClock>()
+        .init_resource::<QueryTimeAsks>()
         .init_resource::<crate::ui_mail::MailPending>()
         .init_resource::<crate::ui_mail::MailOpen>()
         .init_resource::<crate::ui_battlefield::Battlefield>()
         .init_resource::<crate::ui_battlefield::BattlefieldLeash>()
         .init_resource::<crate::ui_dialog_verbs::MeetingStone>()
         .add_message::<EnteredWorldMessage>()
-        .add_message::<WorldEnterCascadeMessage>()
-        .add_systems(
-            Update,
-            (
-                crate::net::send_query_time,
-                crate::ui_mail::send_query_next_mail_time_on_enter,
-                crate::ui_battlefield::reset_on_world_enter,
-                crate::ui_dialog_verbs::meeting_stone_enter_world,
-                crate::death::repop_on_world_enter,
-            )
-                .chain(),
-        );
+        .add_systems(Update, crate::net::send_query_time);
     (app, rx)
 }
 
@@ -54,18 +43,8 @@ fn log_in(app: &mut App) {
     });
 }
 
-/// What our own create's arrival writes.
-fn self_create(app: &mut App) {
-    app.world_mut().write_message(WorldEnterCascadeMessage);
-}
-
 fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
-    rx.try_iter()
-        .map(|c| match c {
-            ClientCommand::SetActiveMover { guid } => format!("SetActiveMover {guid:#x}"),
-            other => format!("{other:?}"),
-        })
-        .collect()
+    rx.try_iter().map(|c| format!("{c:?}")).collect()
 }
 
 fn the_four() -> Vec<String> {
@@ -90,15 +69,16 @@ fn the_login_edge_alone_sends_nothing() {
     assert_eq!(sent(&rx), Vec::<String>::new());
 }
 
+/// The cascade's sends in its call order (`0x4909a1`, `0x4909f6`, `0x4909fb`, `0x490a14`), and no
+/// later frame sends them again.
 #[test]
 fn the_cascade_sends_the_four_in_the_reference_order() {
     let (mut app, rx) = app();
     log_in(&mut app);
     app.update();
-    self_create(&mut app);
+    crate::ui_world_enter::run_cascade(app.world_mut());
     app.update();
     assert_eq!(sent(&rx), the_four());
-    // Later frames run no new cascade.
     app.update();
     app.update();
     assert_eq!(sent(&rx), Vec::<String>::new());
@@ -125,8 +105,7 @@ fn a_dead_body_is_released_at_the_end_of_the_cascade() {
         client
             .world_mut()
             .spawn((crate::net::Guid(ME), crate::net::SelfPlayer, body(health)));
-        self_create(&mut client);
-        client.update();
+        crate::ui_world_enter::run_cascade(client.world_mut());
         (client, rx)
     };
     let (mut client, rx) = enter(0);
@@ -135,56 +114,9 @@ fn a_dead_body_is_released_at_the_end_of_the_cascade() {
     assert_eq!(sent(&rx), released);
 
     // A `/reload` re-enters the cascade with the body still dead.
-    client.world_mut().write_message(WorldEnterCascadeMessage);
-    client.update();
+    crate::ui_world_enter::run_cascade(client.world_mut());
     assert_eq!(sent(&rx).last().map(String::as_str), Some("RepopRequest"));
 
     let (_, rx) = enter(100);
     assert_eq!(sent(&rx), the_four(), "alive: no release");
-}
-
-/// The production schedule: the net drain, whose create writes the cascade, then the time, mail,
-/// battlefield and meeting stone sends (`0x4909a1`, `0x4909f6`, `0x4909fb`, `0x490a14`); and a
-/// `/reload` frame's sweep drops the stone's text before its cascade resets it (`0x490c20`, then
-/// `0x490168`).
-#[test]
-fn the_client_schedules_the_sends_in_the_reference_order() {
-    use crate::test_support::runs_before;
-    let mut app = crate::game_plugins::schedule_tests::headless_client();
-    assert!(runs_before(
-        &mut app,
-        super::apply_net_updates,
-        crate::net::send_query_time
-    ));
-    assert!(runs_before(
-        &mut app,
-        crate::net::send_query_time,
-        crate::ui_mail::send_query_next_mail_time_on_enter
-    ));
-    assert!(runs_before(
-        &mut app,
-        crate::ui_mail::send_query_next_mail_time_on_enter,
-        crate::ui_battlefield::reset_on_world_enter
-    ));
-    assert!(runs_before(
-        &mut app,
-        crate::ui_battlefield::reset_on_world_enter,
-        crate::ui_dialog_verbs::meeting_stone_enter_world
-    ));
-    // The release last (`0x490a3c`), after the pet ask in the unit feed (`0x4909c9`), then the
-    // arrival's death signal (`0x5deb65`).
-    assert!(runs_before(
-        &mut app,
-        crate::ui_dialog_verbs::meeting_stone_enter_world,
-        crate::death::repop_on_world_enter
-    ));
-    assert!(crate::ui_unit::feed_units_runs_before(
-        &mut app,
-        crate::death::repop_on_world_enter
-    ));
-    assert!(runs_before(
-        &mut app,
-        crate::death::repop_on_world_enter,
-        crate::death::feed_death
-    ));
 }

@@ -287,8 +287,9 @@ struct BindingsSeen {
 /// Derive the bound spells the engine's verbs do not (they derive the record a create or an edit
 /// touches inside the call, `0x4f123c`, `0x4f1313`), where the reference's other callers of
 /// `0x4efe00` do, and nowhere else:
-/// - every record after the macro files load (`0x4f0a55` into `0x4f0ca0`) and after our player's
-///   arrival learns its initial spells (`0x5deacc`);
+/// - every record after the macro files load (`0x4f0a55` into `0x4f0ca0`); after our player's
+///   arrival learns its initial spells (`0x5deacc`) the arrival derives them itself
+///   ([`derive_on_arrival`]);
 /// - at each pet spell list (`0x4bdae0` into `0x4f0ce0`), the same list again included, the
 ///   records that follow the pet's book: a `/cast` that did not resolve and any record whose
 ///   selector is the pet's (`0x4f0cfb`-`0x4f0d11`). The frame's lists derive once, after the
@@ -309,11 +310,8 @@ fn rebind_macro_spells(
         ResMut<'static, MacroBoundSpells>,
         Option<Res<'static, crate::ui_pet::PetBar>>,
     )>,
-    arrivals: Query<(), Added<crate::net::SelfPlayer>>,
-    mut owed: Local<(bool, crate::ui_script::VmMemo<BindingsSeen>)>,
+    mut seen: Local<crate::ui_script::VmMemo<BindingsSeen>>,
 ) {
-    let (arrived, seen) = &mut *owed;
-    *arrived |= !arrivals.is_empty();
     let derive = vm.turn(|script, (mut actions, slots, _, pet_bar)| {
         // With no VM the supersede pairs wait for the first pass that can apply them.
         let script = script?;
@@ -322,14 +320,12 @@ fn rebind_macro_spells(
         let book_sorts = pet_bar.map_or(0, |b| b.book_sorts);
         let table_moved = seen.macros != Some(generation);
         let pet_moved = seen.pet_book != Some(book_sorts);
-        if !table_moved && !pet_moved && !*arrived && actions.superseded.is_empty() {
+        if !table_moved && !pet_moved && actions.superseded.is_empty() {
             return None;
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(book_sorts);
-        // Both taken, so neither stays owed to the next pass.
-        let (arrival, load) = (std::mem::take(arrived), script.take_macro_derives().loaded);
-        let every = arrival || load;
+        let every = script.take_macro_derives().loaded;
 
         // The queue empties without marking the bar changed: the supersede marked it already.
         let superseded = std::mem::take(&mut actions.bypass_change_detection().superseded);
@@ -362,27 +358,49 @@ fn rebind_macro_spells(
         }
     });
     vm.turn(|script, (_, _, mut bound, _)| {
-        let Some(script) = script else {
-            return;
-        };
-        let records = script.macro_bindings();
-        let fresh: std::collections::HashMap<u32, Bound> = script
-            .macros()
-            .views()
-            .map(|m| (m.id, records.get(&m.id).copied().unwrap_or_default().into()))
-            .collect();
-        if fresh != bound.0 {
-            let spells = fresh
-                .values()
-                .filter(|b| matches!(b.spell, BoundSpell::Spell(_)))
-                .count();
-            debug!(
-                "ui_macro: {} macro(s), {spells} bound to a spell",
-                fresh.len()
-            );
-            bound.0 = fresh;
+        if let Some(script) = script {
+            copy_bound(script, &mut bound);
         }
     })
+}
+
+/// Our player's arrival's derivation of every record (`0x5deacc` → `0x4f0ca0`), after its initial
+/// spells are learned, with the host lent, so a derivation reads the book as it stands; then the
+/// records copied out for the action bar.
+pub(crate) fn derive_on_arrival(
+    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, MacroBoundSpells>>>,
+) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.derive_macro_bindings(|_, _| true);
+        }
+    });
+    vm.turn(|script, bound| {
+        if let (Some(script), Some(mut bound)) = (script, bound) {
+            copy_bound(script, &mut bound);
+        }
+    })
+}
+
+/// The VM's derived records, copied out for the action bar when they moved.
+fn copy_bound(script: &UiScript, bound: &mut MacroBoundSpells) {
+    let records = script.macro_bindings();
+    let fresh: std::collections::HashMap<u32, Bound> = script
+        .macros()
+        .views()
+        .map(|m| (m.id, records.get(&m.id).copied().unwrap_or_default().into()))
+        .collect();
+    if fresh != bound.0 {
+        let spells = fresh
+            .values()
+            .filter(|b| matches!(b.spell, BoundSpell::Spell(_)))
+            .count();
+        debug!(
+            "ui_macro: {} macro(s), {spells} bound to a spell",
+            fresh.len()
+        );
+        bound.0 = fresh;
+    }
 }
 
 /// The event each macro line is fired as: id `0x188`, whose registry slot `0xbe17b8` is written

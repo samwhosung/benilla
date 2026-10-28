@@ -1,8 +1,8 @@
 //! The stance bar's getters at the call, the call host's half of
-//! [`benilla_ui::script::ShapeshiftList`] and [`benilla_ui::script::ShapeshiftForm`]: the form list
-//! off the known spells as the learn handlers leave them ([`super::form_list`]), and each entry's
-//! four values off the active player's store as of the drain's place, as `0x4b45c0` reads the
-//! form byte, the aura slots and the usability walk `0x6e3d60` inside the call.
+//! [`benilla_ui::script::ShapeshiftList`] and [`benilla_ui::script::ShapeshiftForm`]: the stored
+//! form list as the registrar's learns leave it ([`crate::ui_action::PlayerActions::forms`]), and
+//! each entry's four values off the active player's store as of the drain's place, as `0x4b45c0`
+//! reads the form byte, the aura slots and the usability walk `0x6e3d60` inside the call.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -34,15 +34,9 @@ pub(crate) struct StanceLive<'w, 's> {
 }
 
 impl StanceLive<'_, '_> {
-    /// The list's spells as they stand, `None` without the known spells or the catalog.
+    /// The list's spells as they stand, `None` without the book.
     fn list(&self) -> Option<Vec<u32>> {
-        let (actions, spells) = (self.actions.as_deref()?, self.spells.as_deref()?);
-        Some(
-            super::form_list(&actions.spells, &spells.catalog)
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect(),
-        )
+        Some(self.actions.as_deref()?.forms.clone())
     }
 
     /// Entry `index`, 0-based, as `0x4b45c0` reads it: `Some(None)` past the list (`0x4b4633`);
@@ -52,9 +46,10 @@ impl StanceLive<'_, '_> {
         let (actions, spells) = (self.actions.as_deref()?, self.spells.as_deref()?);
         let (cooldowns, items) = (self.cooldowns.as_deref()?, self.items.as_deref()?);
         let spell_mods = self.spell_mods.as_deref()?;
-        let Some((id, d)) = super::form_list(&actions.spells, &spells.catalog)
+        let Some((id, d)) = actions
+            .forms
             .get(index)
-            .copied()
+            .and_then(|&id| Some((id, spells.catalog.get(id)?)))
         else {
             return Some(None);
         };

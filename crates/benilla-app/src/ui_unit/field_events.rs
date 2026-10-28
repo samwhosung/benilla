@@ -1357,6 +1357,22 @@ mod tests {
         out
     }
 
+    /// A frame's feeds, then our create's arrival item fired (`0x5dec7b` → `0x5dea50`).
+    fn arrive(app: &mut App) {
+        app.update();
+        crate::ui_world_enter::push_arrival(app.world_mut());
+        crate::ui_world_enter::fire_lane(app.world_mut());
+    }
+
+    /// A frame's feeds, then a `/reload`'s cascade fired (`0x490168`).
+    fn reenter(app: &mut App) {
+        app.update();
+        app.world_mut()
+            .get_resource_or_init::<crate::ui_world_enter::ArrivalLane>()
+            .push(crate::ui_world_enter::Entry::Reload);
+        crate::ui_world_enter::fire_lane(app.world_mut());
+    }
+
     /// A values block with new XP: `PLAYER_XP_UPDATE`'s handler reads the new `UnitXP`, because
     /// the schedule runs every push the field events' handlers read ahead of the firing.
     #[test]
@@ -1454,7 +1470,7 @@ mod tests {
         ] {
             let (mut app, _) = feed_world(&[(PLAYER_FLAGS, flags)], spy);
             app.add_systems(Update, super::super::feed_units);
-            app.update();
+            arrive(&mut app);
             assert_eq!(seen(&mut app), heard, "flags {flags:#x}: the arrival");
             let mut reloaded = UiScript::new().unwrap();
             reloaded.run(spy).unwrap();
@@ -1463,7 +1479,7 @@ mod tests {
                 ..Default::default()
             });
             app.insert_non_send_resource(reloaded);
-            app.update();
+            reenter(&mut app);
             assert_eq!(
                 seen(&mut app),
                 ["PLAYER_ENTERING_WORLD"],
@@ -1504,7 +1520,7 @@ mod tests {
                 ..crate::ui_action::Spells::empty_for_tests()
             });
             app.add_systems(Update, super::super::feed_units);
-            app.update();
+            arrive(&mut app);
             let heard = [
                 "PLAYER_ENTERING_WORLD".to_string(),
                 format!("UPDATE_BONUS_ACTIONBAR {offset}"),
@@ -1513,7 +1529,7 @@ mod tests {
             let reloaded = UiScript::new().unwrap();
             reloaded.run(spy).unwrap();
             app.insert_non_send_resource(reloaded);
-            app.update();
+            reenter(&mut app);
             assert_eq!(seen(&mut app), heard, "form {form}: the reload");
         }
     }
@@ -1575,9 +1591,8 @@ mod tests {
                     crate::ui_script::test_ui::load_ui(s, file);
                 }
             }
-            app.world_mut()
-                .run_system_once(super::super::feed_units)
-                .unwrap();
+            app.add_systems(Update, super::super::feed_units);
+            arrive(&mut app);
             let s = app.world().non_send_resource::<UiScript>();
             let shown = |frame: &str| {
                 s.eval::<bool>(&format!("return {frame}:IsShown() ~= nil"))
@@ -1634,7 +1649,7 @@ mod tests {
                     .0 = Some(PET);
             }
             app.add_systems(Update, super::super::feed_units);
-            app.update();
+            arrive(&mut app);
             let mut heard = vec!["UPDATE_BONUS_ACTIONBAR nil nil"];
             if summoned {
                 heard.push("UNIT_PET player nil");
@@ -1679,22 +1694,30 @@ mod tests {
             f:SetScript("OnEvent", function()
                 table.insert(SEEN, event .. " " .. tostring(arg1) .. " nil")
             end)"#;
-        for changed in [true, false] {
-            let (mut app, _) = feed_world(&[], spy);
-            app.insert_resource(crate::ui_action::EnterUsable(changed));
-            app.add_systems(Update, super::super::feed_units);
-            app.update();
-            let mut heard = vec!["PLAYER_ENTERING_WORLD nil nil"];
-            if changed {
-                heard.push("ACTIONBAR_UPDATE_USABLE nil nil");
-            }
-            heard.extend(["UPDATE_BONUS_ACTIONBAR nil nil", "PET_BAR_UPDATE nil nil"]);
-            assert_eq!(seen(&mut app), heard, "changed {changed}");
-            assert!(
-                !app.world().resource::<crate::ui_action::EnterUsable>().0,
-                "the cascade takes it"
-            );
-        }
+        let (mut app, _) = feed_world(&[], spy);
+        app.add_systems(Update, super::super::feed_units);
+        arrive(&mut app);
+        assert_eq!(
+            seen(&mut app),
+            [
+                "PLAYER_ENTERING_WORLD nil nil",
+                "UPDATE_BONUS_ACTIONBAR nil nil",
+                "PET_BAR_UPDATE nil nil"
+            ],
+            "no pair changed"
+        );
+        let mut script = UiScript::new().unwrap();
+        script.run(spy).unwrap();
+        script.fire_world_enter_action_bar(0, true);
+        script.resolve();
+        assert_eq!(
+            script.eval::<Vec<String>>("return SEEN").unwrap(),
+            [
+                "ACTIONBAR_UPDATE_USABLE nil nil",
+                "UPDATE_BONUS_ACTIONBAR nil nil"
+            ],
+            "a changed pair signals ahead of the bonus bar"
+        );
     }
 
     /// The cascade's buff cache set-up (`0x490983` → `0x4e4100`): its rebuild's
@@ -1717,7 +1740,7 @@ mod tests {
         let (mut app, _) = feed_world(&[(AURA, 1126), (AURAFLAGS, 0x9)], spy);
         app.init_resource::<crate::ui_aura::PlayerAuraCache>();
         app.add_systems(Update, super::super::feed_units);
-        app.update();
+        arrive(&mut app);
         assert_eq!(
             seen(&mut app),
             [
@@ -1772,7 +1795,7 @@ mod tests {
             .spells
             .pet_guid = PET;
         app.add_systems(Update, super::super::feed_units);
-        app.update();
+        reenter(&mut app);
         assert_eq!(seen(&mut app), ["UNIT_PET nil nil"], "the reload's entry");
         // `SMSG_PET_SPELLS` brings the same pet back.
         app.world_mut()

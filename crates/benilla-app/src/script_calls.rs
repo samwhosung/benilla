@@ -278,6 +278,16 @@ impl ScriptCallHost<'_, '_> {
         }
     }
 
+    /// The world-enter cascade's usable cache refresh (`0x490979` → `0x4e4f90` → `0x4e5c00`),
+    /// in its place ([`crate::ui_action::ActionStates::enter_world_refresh`]): whether a pair
+    /// changed. A harness without the action feed's inputs refreshes nothing.
+    pub(crate) fn engine_enter_world_refresh(&mut self, script: &mut UiScript) -> bool {
+        self.appliers
+            .action_states()
+            .as_mut()
+            .is_some_and(|states| states.enter_world_refresh(script))
+    }
+
     /// A recount's slot write outside any call (`0x4e58e0`): the slot's usable pair stored and
     /// pushed, with nothing signalled ([`crate::ui_action::ActionStates::slot_written`]).
     pub(crate) fn engine_slot_written(&mut self, script: &mut UiScript) {
@@ -1138,6 +1148,16 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
             if let Some(host) = self.set.p1().as_mut() {
                 host.engine_usable_refresh(script);
             }
+        }
+    }
+
+    /// The world-enter cascade's cache refresh with the host
+    /// ([`ScriptCallHost::engine_enter_world_refresh`]): whether a pair changed; with no VM or no
+    /// host, none did.
+    pub(crate) fn engine_enter_world_refresh(&mut self) -> bool {
+        match (self.script.as_deref_mut(), self.set.p1().as_mut()) {
+            (Some(script), Some(host)) => host.engine_enter_world_refresh(script),
+            _ => false,
         }
     }
 
@@ -3954,10 +3974,12 @@ mod tests {
             catalog: benilla_formats::SpellCatalog::from_displays([(spell_id, display)].into()),
             ..crate::ui_action::Spells::empty_for_tests()
         });
-        world
-            .resource_mut::<crate::ui_action::PlayerActions>()
-            .spells
-            .insert(spell_id);
+        world.resource_scope(|world, mut actions: Mut<crate::ui_action::PlayerActions>| {
+            actions.spells.insert(spell_id);
+            // The learn's form leg (`0x4b25b0`): a stance-bar spell joins the stored list.
+            let catalog = &world.resource::<crate::ui_action::Spells>().catalog;
+            crate::ui_shapeshift::form_learned(&mut actions.forms, spell_id, None, catalog);
+        });
     }
 
     /// `party1` (`NEW`) a friendly player-controlled player, alive or dead.

@@ -813,6 +813,15 @@ pub(crate) fn enter_world(script: &mut UiScript, entry: &mut AuraEntry) {
     script.fire_event("PLAYER_AURAS_CHANGED", vec![]);
 }
 
+/// [`enter_world`] in the cascade's place ([`crate::ui_world_enter`]), with the host lent.
+pub(crate) fn enter_world_in_place(mut vm: crate::script_calls::HostedVm, mut entry: AuraEntry) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            enter_world(script, &mut entry);
+        }
+    })
+}
+
 /// `PlayerAuras_Update` (`0x4e4170`) over the player's descriptor `store`: the cache's two passes
 /// ([`reconcile`]) over the slots the attribute test keeps (`0x4e42b6`-`0x4e42c8`), and the
 /// tracking global the walk leaves (`0x4e4302`).

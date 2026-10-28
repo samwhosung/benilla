@@ -30,7 +30,7 @@ use crate::net::{ClientCommand, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::script_calls::VmWith;
 use crate::ui_action::{ui_error_text, Shown, UiError};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
+use crate::ui_script::{SweepApp, SweepLeg};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 mod live;
@@ -594,11 +594,9 @@ impl Plugin for UiAuctionPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.init_resource::<AuctionOpen>()
-            .add_message::<crate::net::WorldEnterCascadeMessage>()
             .add_latched_window::<AuctionOpen>()
             // `0x490b25` → `0x4cc2f0` → `0x4cd5f0`, the core.
             .add_sweep_leg(SweepLeg::Auction, close_core)
-            .add_systems(Update, reset_auction_on_world_enter.in_set(UiFeed))
             .add_systems(
                 OnEnter(crate::client_state::ClientState::InWorld),
                 start_up_at_world_entry,
@@ -606,19 +604,16 @@ impl Plugin for UiAuctionPlugin {
     }
 }
 
-/// The world-enter cascade's auction reset (`0x490a05` → `0x4cc280`), which a login, a cross-map
-/// worldport and a `/reload` all run: the sell slot emptied (`0x4cc280` → `0x4cd640`), the session
-/// and the lists cleared ([`AuctionOpen::reset_world_state`], `0x4cc285`-`0x4cc2cd`) and the
-/// selection with them (`0x4cc2d5`), signalling nothing else.
-fn reset_auction_on_world_enter(
-    mut vm: VmWith<ResMut<'static, AuctionOpen>>,
-    mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
-) {
-    if cascades.read().count() == 0 {
-        return;
-    }
+/// The world-enter cascade's auction reset (`0x490a05` → `0x4cc280`) in its place
+/// ([`crate::ui_world_enter`]), which a login, a cross-map worldport and a `/reload` all run: the
+/// sell slot emptied (`0x4cc280` → `0x4cd640`), the session and the lists cleared
+/// ([`AuctionOpen::reset_world_state`], `0x4cc285`-`0x4cc2cd`) and the selection with them
+/// (`0x4cc2d5`), signalling nothing else.
+pub(crate) fn reset_auction_on_world_enter(mut vm: VmWith<Option<ResMut<'static, AuctionOpen>>>) {
     let state = {
-        let mut auction = vm.own();
+        let Some(mut auction) = vm.own() else {
+            return;
+        };
         auction.reset_world_state();
         AuctionState {
             lists: [LIST, BIDDER, OWNER].map(|i| auction.bare_state(i)),

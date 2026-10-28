@@ -5,14 +5,16 @@
 //! `AttributesEx2 & 0x10`; the bar sorts by `StanceBarOrder`, negative last, then spell id
 //! (`0x4b2bb0`).
 //!
-//! `UPDATE_SHAPESHIFT_FORMS` is the list's own learn and unlearn edge (`0x4b2904`, `0x4b2e4e`),
-//! raised by the book's handlers ([`crate::ui_spellbook::BookSignals`]) and the arrival's replay.
+//! The list is stored ([`crate::ui_action::PlayerActions::forms`]): the book's reset empties it
+//! (`0x4b23a0`, at our player's arrival), and each learn the registrar runs grows it
+//! ([`form_learned`]), the arrival's learns one at a time in `SMSG_INITIAL_SPELLS`'s order. Its
+//! own learn and unlearn edge, `UPDATE_SHAPESHIFT_FORMS` (`0x4b2904`, `0x4b2e4e`), is raised by
+//! the book's handlers ([`crate::ui_spellbook::BookSignals`]) and by the arrival's replay
+//! ([`crate::ui_world_enter`]), each listener reading the list as that learn left it.
 //! Castability, active form, texture and cooldown change silently: the castable flags refresh
 //! inside the usable refresh `0x4b31c0`, whose callers signal `SPELL_UPDATE_USABLE`
 //! (`crate::ui_action`), and the rest repaint on `PLAYER_AURAS_CHANGED` (a form's aura holds a
 //! slot, warrior stances included) and `SPELL_UPDATE_COOLDOWN`; a cooldown's expiry fires nothing.
-
-use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 
@@ -67,28 +69,57 @@ fn form_texture(d: &SpellDisplay, active: bool) -> Option<String> {
     }
 }
 
-/// The form list `0xb71108` as it stands off `known`: the stance-bar spells (admission and order,
-/// module doc), each with its record.
-pub(crate) fn form_list<'a>(
-    known: &BTreeSet<u32>,
-    catalog: &'a SpellCatalog,
-) -> Vec<(u32, &'a SpellDisplay)> {
-    let mut rows: Vec<(u32, &SpellDisplay)> = known
-        .iter()
-        .filter_map(|&id| {
-            let d = catalog.get(id)?;
-            on_stance_bar(d).then_some((id, d))
-        })
-        .collect();
-    rows.sort_by_key(|&(id, d)| {
-        let order = if d.stance_bar_order < 0 {
-            i64::MAX
-        } else {
-            i64::from(d.stance_bar_order)
+/// The bar's order (`0x4b2bb0`): by `StanceBarOrder`, negative last, then spell id; a spell with
+/// no record last of all.
+fn bar_key(id: u32, catalog: &SpellCatalog) -> (i64, u32) {
+    let order = match catalog.get(id) {
+        Some(d) if d.stance_bar_order >= 0 => i64::from(d.stance_bar_order),
+        _ => i64::MAX,
+    };
+    (order, id)
+}
+
+/// The registrar's form leg (`0x4b27f4`-`0x4b2904`) for `spell_id`, on the stored list `forms`
+/// ([`crate::ui_action::PlayerActions::forms`]): a stance-bar spell (module doc) replacing
+/// `replaces` takes its place where the list holds it, unsorted, and adds nothing where it does not
+/// (`0x4b2849`-`0x4b2878`); any other is appended unless listed (`0x4b2893`) and the list sorted
+/// (`0x4b28f7`). Whether the list moved, which signals `UPDATE_SHAPESHIFT_FORMS` (`0x4b2904`).
+pub(crate) fn form_learned(
+    forms: &mut Vec<u32>,
+    spell_id: u32,
+    replaces: Option<u32>,
+    catalog: &SpellCatalog,
+) -> bool {
+    if !catalog.get(spell_id).is_some_and(on_stance_bar) {
+        return false;
+    }
+    if let Some(old) = replaces {
+        return match forms.iter().position(|&f| f == old) {
+            Some(at) => {
+                forms[at] = spell_id;
+                true
+            }
+            None => false,
         };
-        (order, id)
-    });
-    rows
+    }
+    if forms.contains(&spell_id) {
+        return false;
+    }
+    forms.push(spell_id);
+    forms.sort_by_key(|&id| bar_key(id, catalog));
+    true
+}
+
+/// The unlearn's form leg (`0x4b2dc2`-`0x4b2e4e`): the last copy of `spell_id` the list holds
+/// leaves it, the rest closing up; whether it held one, which signals `UPDATE_SHAPESHIFT_FORMS`.
+pub(crate) fn form_unlearned(forms: &mut Vec<u32>, spell_id: u32) -> bool {
+    match forms.iter().rposition(|&f| f == spell_id) {
+        Some(at) => {
+            forms.remove(at);
+            true
+        }
+        None => false,
+    }
 }
 
 /// `CastShapeshiftForm` (`0x4b4810`), forked on the form id like the info call: the active form

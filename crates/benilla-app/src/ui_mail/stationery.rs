@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use super::{stationeries, Stationery};
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{NetCommands, WorldEnterCascadeMessage};
+use crate::net::NetCommands;
 use crate::query_cache::Ask;
 
 /// The list as last rebuilt, in the picker's order, and the papers' items the world-enter init
@@ -98,20 +98,16 @@ impl StationeryRebuild<'_, '_> {
     }
 }
 
-/// The mail init's stationery half (`0x4acb73`-`0x4acbd7`) at each world-enter cascade: the count
-/// starts over, each row's item is looked up with the callback `0x4acbf0` (`0x4acbba`), one
-/// awaited per miss (`0x4acbc3`), and the list is rebuilt when none is. The lookups ask without the
-/// rebuild's reads, in a harness without them.
-pub(super) fn count_papers_on_enter(
-    mut cascades: MessageReader<WorldEnterCascadeMessage>,
+/// The mail init's stationery half (`0x4acb73`-`0x4acbd7`) in each world-enter cascade's place
+/// ([`crate::ui_world_enter`]): the count starts over, each row's item is looked up with the
+/// callback `0x4acbf0` (`0x4acbba`), one awaited per miss (`0x4acbc3`), and the list is rebuilt
+/// when none is. The lookups ask without the rebuild's reads, in a harness without them.
+pub(crate) fn count_papers_on_enter(
     commands: Res<NetCommands>,
     items: Option<Res<Items>>,
     stationery: Option<Res<Stationery>>,
     paper: Option<StationeryRebuild>,
 ) {
-    if cascades.read().next().is_none() {
-        return;
-    }
     let Some(items) = items.as_deref() else {
         return;
     };

@@ -39,6 +39,43 @@ pub(crate) fn drop_bar(
     changed
 }
 
+/// The world-enter cascade's pet reset (`0x4909c9` → `0x4bc6f0`) in its place
+/// ([`crate::ui_world_enter`]): `SetPetGuid(0, 0)` as an engine turn on the bar and the VM
+/// ([`drop_bar`]), its signals with the host lent, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`) when
+/// our charm, else our summon, is set (`0x4bc721`-`0x4bc736`). Its trainer refresh (`0x4bc872`)
+/// never runs here: the cascade zeroes the trainer cell before it (`0x4909ab` → `0x4d73e0`).
+#[allow(clippy::type_complexity)]
+pub(crate) fn reset_pet_on_world_enter(
+    mut vm: crate::script_calls::VmWith<(
+        Option<bevy::prelude::ResMut<'static, PetBar>>,
+        Option<bevy::prelude::ResMut<'static, super::PetAttackLatch>>,
+    )>,
+    me: bevy::prelude::Query<&ObjectStore, bevy::prelude::With<crate::net::SelfPlayer>>,
+    commands: bevy::prelude::Res<crate::net::NetCommands>,
+) {
+    let dropped = vm.turn(|script, (bar, latch)| {
+        let script = script?;
+        Some(match (bar, latch) {
+            (Some(mut bar), Some(mut latch)) => drop_bar(script, &mut bar, &mut latch),
+            _ => script.drop_pet_bar(),
+        })
+    });
+    if let Some(dropped) = dropped {
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.fire_pet_bar_dropped(dropped);
+            }
+        });
+    }
+    if me
+        .iter()
+        .next()
+        .is_some_and(|s| s.0.unit_pet_guid().is_some())
+    {
+        let _ = commands.0.send(crate::net::ClientCommand::RequestPetInfo);
+    }
+}
+
 /// A command token's `(name, texture)` pair, both global names (`PetActionBarFrame.lua:98-104`):
 /// keys from `GlobalStrings.lua:3029-3032`, textures from `PetActionBarFrame.lua:6-12`.
 pub(super) fn command_token(action: u32) -> Option<(&'static str, &'static str)> {

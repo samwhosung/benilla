@@ -29,7 +29,16 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::PlayedTime, on_played_time)
         .net_handler(K::ChannelNotify, on_channel_notify)
         .net_handler(K::RandomRoll, on_random_roll)
+        .net_handler(K::Connected, latch_on_connect)
         .net_handler(K::Disconnected, on_session_end);
+}
+
+/// The world session's start finds the display latch set (`[0x8435fc]` is 1 from start-up, and
+/// every leave of the world sets it again).
+fn latch_on_connect(In(ev): In<SessionEvent>, log: Res<ChatLog>) {
+    if let SessionEvent::Connected { .. } = ev {
+        log.latch();
+    }
 }
 
 fn on_chat(

@@ -166,7 +166,8 @@ impl House {
     fn cascade(&mut self) {
         self.app
             .world_mut()
-            .write_message(crate::net::WorldEnterCascadeMessage);
+            .run_system_cached(super::reset_auction_on_world_enter)
+            .expect("the auction init runs");
         self.app.update();
     }
 

@@ -73,29 +73,19 @@ pub(crate) fn seed_repeat(world: &World, script: &mut UiScript) {
 }
 
 /// The world-enter inits for the craft windows (`0x4fc750` at `0x4909bf`, `0x4f5ee0` at
-/// `0x4909c4`) on each cascade, the worldport's included, whose VM survives: the lists and
-/// selections go and the armed spell disarms silently, the repeat count kept.
+/// `0x4909c4`) in each cascade's place ([`crate::ui_world_enter`]), the worldport's included, whose VM
+/// survives: the lists and selections go and the armed spell disarms silently, the repeat count
+/// kept; the craft init's type write (`0x4f5ee0` zeroes `[0xbdcfb8]`) closes the window with no
+/// event, under the VM that survives a worldport and under a reload's new one.
 pub(crate) fn reset_crafts_on_world_enter(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
+    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, crate::ui_craft::CraftOpen>>>,
 ) {
-    hosted_vm.run(|script| {
-        if cascades.read().next().is_none() {
-            return;
-        }
+    vm.run(|script| {
         if let Some(script) = script {
             script.reset_crafts_on_world_enter();
         }
-    })
-}
-
-/// The craft init's type write (`0x4f5ee0` zeroes `[0xbdcfb8]`) on each cascade, with no event:
-/// the window is closed under the VM that survives a worldport and under a reload's new one.
-pub(crate) fn close_craft_on_world_enter(
-    mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
-    mut craft_open: ResMut<crate::ui_craft::CraftOpen>,
-) {
-    if cascades.read().count() > 0 {
+    });
+    if let Some(mut craft_open) = vm.own() {
         craft_open.line = None;
     }
 }
@@ -128,10 +118,6 @@ impl Plugin for UiTradeSkillPlugin {
                         .in_set(crate::ui_script::UiFeed),
                     feed_trade_skill.in_set(UnitFeed),
                     drain_trade_skill.in_set(crate::ui_script::UiDrain),
-                    // In the feed phase, ahead of every feed that pushes the lists.
-                    (reset_crafts_on_world_enter, close_craft_on_world_enter)
-                        .in_set(crate::ui_script::UiFeed)
-                        .before(UnitFeed),
                 ),
             );
     }
@@ -2030,8 +2016,6 @@ mod tests {
     #[test]
     fn the_world_enter_cascade_empties_the_lists_and_disarms_silently() {
         let mut app = App::new();
-        app.add_message::<crate::net::WorldEnterCascadeMessage>()
-            .add_systems(Update, reset_crafts_on_world_enter);
         let mut script = UiScript::new().unwrap();
         script.keep_calls();
         script.set_trade_skill(Some(TradeSkillState {
@@ -2076,8 +2060,8 @@ mod tests {
         };
         assert_eq!(count(&app), 2, "no cascade, no reset");
         app.world_mut()
-            .write_message(crate::net::WorldEnterCascadeMessage);
-        app.update();
+            .run_system_cached(reset_crafts_on_world_enter)
+            .expect("the craft inits run");
         let script = app.world().non_send_resource::<UiScript>();
         assert_eq!(count(&app), 0);
         assert_eq!(script.eval::<i64>("return GetNumCrafts()").unwrap(), 0);

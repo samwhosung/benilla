@@ -16,7 +16,7 @@ use benilla_assets::coords::bevy_to_wow;
 use benilla_protocol::messages::{BattlefieldPosition, BattlefieldPositions as PositionsPacket};
 
 use crate::names::NameCache;
-use crate::net::{EnteredWorldMessage, GuidIndex, NetCommands, NetEntity};
+use crate::net::{GuidIndex, NetCommands, NetEntity};
 use crate::query_cache::Ask;
 
 /// `RequestBattlefieldPositions` (`0x4aa5c0`) sends at most once per 5000 ms (stamp
@@ -64,9 +64,11 @@ impl BattlefieldPositions {
         }
     }
 
-    /// Everything the last packet left, at a world entry.
-    fn clear(&mut self) {
+    /// The world-enter cascade's clear (`0x4a9db0`): everything the last packet left, the teammate
+    /// count among it (`0x4a9e6d`), and the request stamp (`0x4a9e93`).
+    pub(crate) fn world_enter(&mut self) {
         self.packet = None;
+        self.last_request = None;
     }
 
     /// The carrier the last packet left, if any.
@@ -120,17 +122,6 @@ pub(crate) fn flag_token(side: i8) -> Option<&'static str> {
     }
 }
 
-fn reset_on_world_enter(
-    mut entered: MessageReader<EnteredWorldMessage>,
-    mut state: ResMut<BattlefieldPositions>,
-) {
-    if entered.read().next().is_none() {
-        return;
-    }
-    state.clear();
-    state.last_request = None;
-}
-
 /// The battlefield map's packet handler.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -155,14 +146,9 @@ pub(crate) struct BattlefieldPositionsPlugin;
 impl Plugin for BattlefieldPositionsPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<BattlefieldPositions>().add_systems(
-            Update,
-            // After the drain whose session edge it reads, and before the pass resumes: the
-            // positions request's call reads and stamps the state.
-            reset_on_world_enter
-                .after(benilla_world::schedule::WorldStage::Net)
-                .before(crate::vm_pass::VmPass::Resume),
-        );
+        // The world entry clears it in the cascade's battlefield init
+        // ([`crate::ui_battlefield::reset_on_world_enter`]).
+        app.init_resource::<BattlefieldPositions>();
     }
 }
 

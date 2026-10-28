@@ -48,7 +48,7 @@ mod reactive;
 mod reactive_tests;
 pub(crate) mod recount;
 mod state;
-pub(crate) use state::{wears_entry, ActionStateMemory, ActionStates, EnterUsable};
+pub(crate) use state::{wears_entry, ActionStateMemory, ActionStates};
 pub(crate) mod toggle;
 mod unlearn;
 mod weapon_icon;
@@ -126,6 +126,12 @@ pub(crate) struct PlayerActions {
     /// arrival order, whose bar slots the unlearn clears (`0x5ea253` into `0x4e5e20`), drained by
     /// the bar's clear (`unlearn`).
     pub unlearned: Vec<u32>,
+    /// `[0xc4d2a8]` (count `[0xc4d2a4]`): `SMSG_INITIAL_SPELLS`'s list in wire order, which our
+    /// player's arrival learns one spell at a time (`0x5dea8b`-`0x5deab9`).
+    pub initial: Vec<u32>,
+    /// `[0xb71108]` (count `[0xb71104]`): the form bar's spells in bar order, which the registrar
+    /// grows one learn at a time and the book's reset empties ([`crate::ui_shapeshift`]).
+    pub forms: Vec<u32>,
     /// Set by every book change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
     /// resolves an item slot's count moves only by the item watchers' recount (`recount`).
@@ -285,7 +291,6 @@ impl Spells {
 pub(crate) fn run_feed_action_state_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
     world.init_resource::<state::ActionStateMemory>();
-    world.init_resource::<state::EnterUsable>();
     world
         .run_system_once(state::feed_action_state)
         .expect("the action-state feed runs as a one-shot system");
@@ -431,9 +436,7 @@ impl Plugin for UiActionPlugin {
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<state::ActionEvents>()
-            .init_resource::<state::EnterUsable>()
             .init_resource::<state::ActionStateMemory>()
-            .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<PlayerActions>()
             .init_resource::<ActionSlots>()
             .init_resource::<LearnedAbilities>()
@@ -463,11 +466,6 @@ impl Plugin for UiActionPlugin {
                         .in_set(UnitFeed)
                         .after(crate::ui_macro::MacroBindings)
                         .after(ranks::normalize_action_ranks)
-                        .before(feed::feed_actions),
-                    // Our player's arrival recount, after the dead objects' locks go.
-                    recount::recount_item_actions
-                        .in_set(UnitFeed)
-                        .after(crate::ui_items::locks::forget_gone_item_locks)
                         .before(feed::feed_actions),
                     feed::feed_actions.in_set(UnitFeed),
                     // A seat: the world-enter events' handlers read the slots' state, which the

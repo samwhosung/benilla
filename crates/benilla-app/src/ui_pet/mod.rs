@@ -14,7 +14,9 @@ use crate::spell::Cooldowns;
 use crate::ui_unit::UnitFeed;
 
 mod bar;
-pub(crate) use bar::{active_aura_press, drop_bar};
+#[cfg(test)]
+use bar::drop_bar;
+pub(crate) use bar::{active_aura_press, reset_pet_on_world_enter};
 mod drain;
 mod live;
 pub(crate) use live::PetLive;

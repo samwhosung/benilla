@@ -60,7 +60,6 @@ fn range_answers(
         .init_resource::<crate::creature_anim::UnitEdits>()
         .add_message::<crate::player::StandStateRequest>()
         .add_message::<crate::net::FieldChanged>()
-        .add_message::<crate::net::WorldEnterCascadeMessage>()
         .init_resource::<crate::item_lane::ItemLane>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
@@ -103,7 +102,6 @@ fn range_answers(
     });
     app.insert_non_send_resource(UiScript::new().unwrap());
     app.init_resource::<ActionEvents>()
-        .init_resource::<EnterUsable>()
         .init_resource::<ActionStateMemory>()
         .add_systems(Update, feed_action_state);
     app.update();

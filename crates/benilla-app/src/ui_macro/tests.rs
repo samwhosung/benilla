@@ -763,8 +763,9 @@ fn the_players_arrival_derives_every_macro() {
         BoundSpell::Unresolved,
         "a book alone derives nothing"
     );
-    app.world_mut().spawn(crate::net::SelfPlayer);
-    app.update();
+    // The arrival's derivation leg, as the arrival lane fires it.
+    crate::script_calls::run_cached(app.world_mut(), super::derive_on_arrival)
+        .expect("the derivation runs");
     assert_eq!(bound_of(&app, 1), BoundSpell::Spell(11366));
 }
 

@@ -241,10 +241,12 @@ fn arrived(known: &[u32]) -> Client {
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     let world = app.world_mut();
     world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    world
-        .resource_mut::<crate::ui_action::PlayerActions>()
-        .spells
-        .extend(known.iter().copied());
+    {
+        // As `SMSG_INITIAL_SPELLS` leaves the book, for the arrival to learn again.
+        let mut actions = world.resource_mut::<crate::ui_action::PlayerActions>();
+        actions.spells.extend(known.iter().copied());
+        actions.initial.extend(known.iter().copied());
+    }
     let mut c = Client {
         app,
         inbound,

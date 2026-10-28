@@ -1588,8 +1588,7 @@ mod tests {
             .insert_resource(crate::ui_action::Spells::empty_for_tests())
             .insert_resource(SkillLines {
                 catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
-            })
-            .add_message::<crate::net::WorldEnterCascadeMessage>();
+            });
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
         let listening = || {
@@ -1604,15 +1603,12 @@ mod tests {
             script
         };
         app.insert_non_send_resource(listening());
-        app.add_systems(
-            Update,
-            (
-                crate::ui_tradeskill::reset_crafts_on_world_enter,
-                crate::ui_tradeskill::close_craft_on_world_enter,
-                feed_craft,
-            )
-                .chain(),
-        );
+        app.add_systems(Update, feed_craft);
+        let world_enter = |app: &mut App| {
+            app.world_mut()
+                .run_system_cached(crate::ui_tradeskill::reset_crafts_on_world_enter)
+                .expect("the craft inits run");
+        };
         let heard = |app: &mut App| {
             app.update();
             app.world()
@@ -1629,15 +1625,13 @@ mod tests {
         };
 
         assert_eq!(open(&mut app), ["CRAFT_UPDATE", "CRAFT_SHOW"]);
-        app.world_mut()
-            .write_message(crate::net::WorldEnterCascadeMessage);
+        world_enter(&mut app);
         assert!(heard(&mut app).is_empty(), "a worldport closes it silently");
         assert_eq!(app.world().resource::<CraftOpen>().line, None);
 
         assert_eq!(open(&mut app), ["CRAFT_UPDATE", "CRAFT_SHOW"]);
         app.insert_non_send_resource(listening());
-        app.world_mut()
-            .write_message(crate::net::WorldEnterCascadeMessage);
+        world_enter(&mut app);
         assert!(heard(&mut app).is_empty(), "a reload shows nothing");
         assert_eq!(app.world().resource::<CraftOpen>().line, None);
     }

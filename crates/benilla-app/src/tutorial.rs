@@ -26,10 +26,7 @@ use bevy::prelude::*;
 use benilla_ui::script::{ScriptValue, TutorialCall, UiScript};
 
 use crate::client_state::ClientState;
-use crate::net::{
-    ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer,
-    WorldEnterCascadeMessage,
-};
+use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::Player;
 use crate::query_cache::Ask;
 use crate::ui_script::UiFeed;
@@ -423,7 +420,7 @@ impl TutorialState {
 
 /// The last-seen swimming state, for the edge-triggered `0x4b5390` site polled here. The ghost,
 /// resting, PvP and rested tutorials ride their field watchers ([`crate::field_watch`]), the
-/// ghost's arrival leg the cascade ([`run_world_enter_cascade`]), the level tutorials the
+/// ghost's arrival leg the arrival's ghost state ([`fire_now`]), the level tutorials the
 /// level-up message (`crate::ui_unit::field_events`).
 #[derive(Default)]
 struct SelfWatch {
@@ -682,34 +679,45 @@ pub(crate) struct WorldEnterCascade {
     reset_watch: bool,
 }
 
-/// The arrival's tutorial and the cascade's. Our player's create (`0x5dea50`) runs its ghost state
-/// (`0x5deb2a` → `0x5de9c0`) before the cascade (`0x5deb60`): arriving with `PLAYER_FLAGS` bit
-/// 0x10 triggers Death (`0x5de9eb`-`0x5de9f0`), at login and at every cross-map port, so it comes
-/// ahead of Welcome. The cascade `0x4908c0` triggers Welcome (`0x490a48`) then Questgivers
-/// (`0x490a51`) on every pass: that create, and a `/reload` with the player held (`0x490168`).
-fn run_world_enter_cascade(
-    mut cascade: ResMut<WorldEnterCascade>,
-    tutorials: Res<Tutorials>,
-    mut cascades: MessageReader<WorldEnterCascadeMessage>,
-    arrivals: Query<&ObjectStore, Added<SelfPlayer>>,
-) {
-    let mut tutorials = tutorials.lock();
+/// The Movement popup's silence window: its tutorial when no movement input came in
+/// [`MOVEMENT_SILENCE`] since the world session began. The arrival's tutorial and the cascade's
+/// fire in their places ([`fire_now`]).
+fn run_world_enter_cascade(mut cascade: ResMut<WorldEnterCascade>, tutorials: Res<Tutorials>) {
     let now = Instant::now();
-    for store in &arrivals {
-        if store.0.player_flags() & 0x10 != 0 {
-            tutorials.trigger(id::DEATH, 0, now);
-        }
-    }
-    for _ in cascades.read() {
-        tutorials.trigger(id::WELCOME, 0, now);
-        tutorials.trigger(id::QUESTGIVERS, 0, now);
-    }
     if let Some(at) = cascade.entered_at {
         if !cascade.moved && now.duration_since(at) >= MOVEMENT_SILENCE {
             cascade.entered_at = None;
-            tutorials.trigger(id::MOVEMENT, 0, now);
+            tutorials.lock().trigger(id::MOVEMENT, 0, now);
         }
     }
+}
+
+/// `FireTutorial 0x4b5390(id, 0)` in its caller's place: the arrival's ghost state's Death
+/// (`0x5de9f0`) and the world-enter cascade's Welcome and Questgivers (`0x490a48`, `0x490a51`).
+/// The fire-once test, then its `TUTORIAL_TRIGGER` with the host lent; with no VM the published
+/// id waits for the feed, as every other site's does.
+pub(crate) fn fire_now(
+    In(id): In<u32>,
+    mut hosted_vm: crate::script_calls::HostedVm,
+    tutorials: Res<Tutorials>,
+    sounds: Res<crate::sound::MessageSounds>,
+) {
+    hosted_vm.run(|script| {
+        let published = {
+            let mut tutorials = tutorials.lock();
+            let before = tutorials.fired.len();
+            tutorials.trigger(id, 0, Instant::now());
+            match script {
+                Some(_) => tutorials.fired.split_off(before),
+                None => Vec::new(),
+            }
+        };
+        if let Some(script) = script {
+            for published in published {
+                fire_published(script, &sounds, published);
+            }
+        }
+    })
 }
 
 /// The world-input sites (`0x514840`), bundled for the controller: a movement input
@@ -783,8 +791,6 @@ impl Plugin for TutorialPlugin {
         app.init_resource::<Tutorials>()
             .init_resource::<WorldEnterCascade>()
             .add_message::<TutorialEvent>()
-            // Written by the player's create and the reload ([`crate::net`]), read here.
-            .add_message::<WorldEnterCascadeMessage>()
             .add_systems(
                 Update,
                 (
@@ -1207,8 +1213,8 @@ mod tests {
                 .init_resource::<crate::ui_merchant::MerchantOpen>()
                 .init_resource::<crate::ui_taxi::TaxiState>()
                 .init_resource::<Player>()
-                .add_message::<EnteredWorldMessage>()
-                .add_message::<crate::net::WorldEnterCascadeMessage>();
+                .add_plugins(crate::ui_world_enter::WorldEnterPlugin)
+                .add_message::<EnteredWorldMessage>();
             let (tx, _rx) = crossbeam_channel::unbounded();
             app.insert_resource(crate::net::NetCommands(tx));
             app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
@@ -1231,9 +1237,8 @@ mod tests {
                     flags,
                 )])),
             ));
-            // The create's cascade (`0x5deb60`), as our own create's arrival writes it.
-            app.world_mut()
-                .write_message(crate::net::WorldEnterCascadeMessage);
+            // The create's arrival (`0x5dec7b`), as our own create's handler pushes it.
+            crate::ui_world_enter::push_arrival(app.world_mut());
             app.update();
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.resolve();
@@ -1260,8 +1265,8 @@ mod tests {
             .init_resource::<crate::ui_merchant::MerchantOpen>()
             .init_resource::<crate::ui_taxi::TaxiState>()
             .init_resource::<Player>()
-            .add_message::<EnteredWorldMessage>()
-            .add_message::<crate::net::WorldEnterCascadeMessage>();
+            .add_plugins(crate::ui_world_enter::WorldEnterPlugin)
+            .add_message::<EnteredWorldMessage>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(crate::net::NetCommands(tx));
         app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
@@ -1291,7 +1296,8 @@ mod tests {
         };
         assert!(seen(&mut app).is_empty(), "no cascade, nothing");
         app.world_mut()
-            .write_message(crate::net::WorldEnterCascadeMessage);
+            .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+            .push(crate::ui_world_enter::Entry::Reload);
         app.update();
         assert_eq!(
             seen(&mut app),

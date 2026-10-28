@@ -31,26 +31,12 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::QuestGiverInvalid, on_giver_invalid)
         .net_handler(K::QuestGiverFailed, on_giver_failed)
         .net_handler(K::QuestTemplate, on_template_giver_failures)
-        .net_handler(K::Disconnected, on_session_end)
-        .net_handler(K::Connected, on_login)
-        .net_handler(K::Worldport, on_worldport);
+        .net_handler(K::Disconnected, on_session_end);
 }
 
-/// The reference's world-enter reset `0x500af0`, run by the enter-world cascade `0x4908c0` on a
-/// login and on every worldport, is the `0xbe0824` latch's only clear.
-fn on_login(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
-    if let SessionEvent::Connected { .. } = ev {
-        world_enter_reset(&mut quest);
-    }
-}
-
-/// The same reset on a worldport.
-fn on_worldport(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
-    if let SessionEvent::Worldport { .. } = ev {
-        world_enter_reset(&mut quest);
-    }
-}
-
+/// The reference's world-enter reset `0x500af0`, run by the enter-world cascade `0x4908c0`
+/// (`0x49099c`) at a login, every worldport and a `/reload` ([`super::world_enter_cascade`]), is
+/// the `0xbe0824` latch's only clear.
 pub(super) fn world_enter_reset(quest: &mut QuestGiver) {
     quest.close_on_cancel = 0;
     // The same reset zeroes the chosen reward (`0x500b15`) and both pools (`0x500b21`-`0x500b5c`).

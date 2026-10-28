@@ -320,24 +320,28 @@ impl Plugin for UiLogoutPlugin {
                     feed_logout
                         .in_set(UiFeed)
                         .before(crate::ui_script::sweep_on_worldport),
-                    // After the unit feed, which fires the arrival's world-enter cascade: the
-                    // handle is seated after it (`0x5deb60`, then `0x5deb73`).
-                    seat_world_handle
-                        .in_set(UiFeed)
-                        .after(crate::ui_unit::UnitFeed),
                     exit_on_logout_complete.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
 }
 
-/// The active player's arrival (`0x5dea50`) seats the world handle (`0x5deb73`).
-fn seat_world_handle(
-    mut arrivals: MessageReader<crate::net::WorldEnterCascadeMessage>,
-    mut logout: ResMut<LogoutState>,
+/// `SetInWorld(1)` (`0x5aae70`), our player's arrival's last call into the connection (`0x5deb73`),
+/// after its world-enter cascade: the world handle seated (`0x5aae82`), then `LOGOUT_CANCEL` in
+/// place when a logout request was pending (`0x5aae88`-`0x5aae9c`), its byte cleared.
+pub(crate) fn set_in_world(
+    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, LogoutState>>>,
 ) {
-    if arrivals.read().count() > 0 {
+    let called_off = vm.own().is_some_and(|mut logout| {
         logout.world_handle = true;
+        std::mem::take(&mut logout.pending)
+    });
+    if called_off {
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.fire_event("LOGOUT_CANCEL", Vec::new());
+            }
+        });
     }
 }
 
@@ -656,9 +660,7 @@ mod tests {
         let logout = app.world().resource::<LogoutState>();
         assert!(!logout.pending && !logout.quitting, "nothing stored");
         app.world_mut()
-            .write_message(crate::net::WorldEnterCascadeMessage);
-        app.world_mut()
-            .run_system_once(seat_world_handle)
+            .run_system_cached(set_in_world)
             .expect("the arrival");
         assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
     }

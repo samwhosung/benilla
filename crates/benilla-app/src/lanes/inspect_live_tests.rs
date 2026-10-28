@@ -247,7 +247,7 @@ fn the_slot_getters_read_the_object_inside_the_hover_and_target_events() {
 
 /// `PLAYER_ENTERING_WORLD`'s handler reads the honor block off the active player as it runs
 /// (`0x51a4b0`): `HonorFrame_Update(1)` reads the weekly values only then
-/// (`HonorFrame.lua:10-11`). A fresh VM hears the cascade over a block written with no push.
+/// (`HonorFrame.lua:10-11`). A reload's VM hears the cascade over a block written with no push.
 #[test]
 fn the_world_enter_listener_reads_the_honor_block() {
     let mut app = client();
@@ -266,6 +266,10 @@ fn the_world_enter_listener_reads_the_honor_block() {
         )
         .unwrap();
     app.world_mut().insert_non_send_resource(script);
+    // A `/reload`'s cascade (`0x490168`), as the reload queues it on the arrival lane.
+    app.world_mut()
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
     let seen = frame(&mut app, vec![]);
     assert!(
         seen.iter().any(|l| l == "PLAYER_ENTERING_WORLD:3"),

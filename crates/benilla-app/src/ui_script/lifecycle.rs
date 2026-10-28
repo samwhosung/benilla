@@ -1081,8 +1081,8 @@ pub(crate) struct ReloadUiPending(pub(crate) bool);
 /// reads it.
 /// The load runs under the live player, which never left. `UI_Init` then enters the world-enter
 /// cascade itself (`0x490168`), firing the `PLAYER_LOGIN` it armed and `PLAYER_ENTERING_WORLD`;
-/// ours fire from [`crate::ui_unit`]'s feed on the new VM's first `Update`, once it has re-seated
-/// the player. In-world only, as the reference's gate (`0x494a50(0xa)`) is; elsewhere the request
+/// ours is the arrival lane's item ([`crate::ui_world_enter::Entry::Reload`]), which fires in the
+/// drain after the new VM's feeds have seated it. In-world only, as the reference's gate (`0x494a50(0xa)`) is; elsewhere the request
 /// is dropped, and the glue's own rebuild is [`super::glue::run_pending_glue_rebuild`]'s.
 pub(crate) fn run_pending_reload(world: &mut World) {
     if !std::mem::take(&mut world.resource_mut::<ReloadUiPending>().0) {
@@ -1111,10 +1111,11 @@ pub(crate) fn run_pending_reload(world: &mut World) {
         .next()
         .is_some();
     if seated {
-        // The cascade's questgiver reset (`0x49099c` → `0x500af0`), which a login's and a
-        // worldport's run from their own packets.
-        crate::ui_quest::world_enter_cascade(world);
-        world.write_message(crate::net::WorldEnterCascadeMessage);
+        // The cascade itself, as an item on the arrival lane at this place
+        // ([`crate::ui_world_enter`]).
+        if let Some(mut lane) = world.get_resource_mut::<crate::ui_world_enter::ArrivalLane>() {
+            lane.push(crate::ui_world_enter::Entry::Reload);
+        }
         // Its release of every command (`0x49093c` → `0x5144c0`): the shutdown's leave cleared
         // the once-per-world latch (`0x490c20`, `0x490a8d`), so the cascade runs whole. The new
         // VM's mouse commands start clear; the look session's channels and the armed click go.
@@ -1686,16 +1687,16 @@ mod tests {
     }
 
     /// A `ReloadUI()` runs the leave-world sweep (`0x490c20`, past the armed latch) and then
-    /// re-enters the world-enter cascade (`0x490168`), whose readers re-send the time, mail,
-    /// battlefield and meeting-stone queries, only with the active player set (`0x490166 je`).
+    /// re-enters the world-enter cascade (`0x490168`), queued on the arrival lane, only with the
+    /// active player set (`0x490166 je`).
     #[test]
     fn a_reload_sweeps_and_reenters_the_world_enter_cascade_once_the_player_exists() {
-        use crate::net::WorldEnterCascadeMessage;
+        use crate::ui_world_enter::{ArrivalLane, Entry};
         let reload = |seated: bool| {
             let mut world = World::new();
             world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
             world.insert_resource(crate::run_mode::CaptureMode);
-            world.init_resource::<Messages<WorldEnterCascadeMessage>>();
+            world.init_resource::<ArrivalLane>();
             world.init_resource::<super::super::SweptWorlds>();
             world.init_resource::<super::super::LeavingWorldArmed>();
             world
@@ -1708,16 +1709,12 @@ mod tests {
             run_pending_reload(&mut world);
             assert!(!world.resource::<ReloadUiPending>().0, "the reload ran");
             let sweeps = world.resource::<super::super::SweptWorlds>().0;
-            let cascades = world
-                .resource_mut::<Messages<WorldEnterCascadeMessage>>()
-                .drain()
-                .count();
-            (sweeps, cascades)
+            (sweeps, world.resource::<ArrivalLane>().entries())
         };
-        assert_eq!(reload(true), (1, 1), "in the world");
+        assert_eq!(reload(true), (1, vec![Entry::Reload]), "in the world");
         assert_eq!(
             reload(false).1,
-            0,
+            Vec::<Entry>::new(),
             "no cascade before our own player's create"
         );
     }
@@ -1729,7 +1726,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         world.insert_resource(crate::run_mode::CaptureMode);
-        world.init_resource::<Messages<crate::net::WorldEnterCascadeMessage>>();
         world.init_resource::<super::super::SweptWorlds>();
         world.init_resource::<super::super::LeavingWorldArmed>();
         world.init_resource::<crate::death::DeathNet>();
@@ -1754,7 +1750,7 @@ mod tests {
             let mut world = World::new();
             world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
             world.insert_resource(crate::run_mode::CaptureMode);
-            world.init_resource::<Messages<crate::net::WorldEnterCascadeMessage>>();
+            world.init_resource::<crate::ui_world_enter::ArrivalLane>();
             world.init_resource::<super::super::SweptWorlds>();
             world.init_resource::<super::super::LeavingWorldArmed>();
             world.init_resource::<crate::ui_quest::QuestGiver>();
@@ -1778,6 +1774,7 @@ mod tests {
             );
             world.insert_resource(ReloadUiPending(true));
             run_pending_reload(&mut world);
+            crate::ui_world_enter::fire_lane(&mut world);
             let cells = &world.resource::<crate::ui_quest::QuestGiver>().cells.state;
             (cells.greeting.clone(), cells.active_titles.clone())
         };

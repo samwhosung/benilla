@@ -1359,13 +1359,10 @@ pub(crate) fn feed_units_runs_before<M>(
 }
 
 /// What [`feed_units`] reads that the call host also reaches: the selection and the relation
-/// inputs, and the bar and the attack latch the world entry's pet reset (`0x4bc6f0`) writes;
-/// `Option`, as a UI-only harness lacks the pet plugin.
+/// inputs.
 type UnitFeedShared = (
     Res<'static, Selection>,
     crate::target::RelationWorld<'static, 'static>,
-    Option<ResMut<'static, crate::ui_pet::PetBar>>,
-    Option<ResMut<'static, crate::ui_pet::PetAttackLatch>>,
 );
 
 fn feed_units(
@@ -1385,25 +1382,13 @@ fn feed_units(
     // The guild-identity cache is lazy: a miss sends `CMSG_GUILD_QUERY` through a shared read.
     guild: Res<crate::ui_guild::GuildState>,
     interact: Option<Res<crate::ui_session::InteractNpc>>,
-    // Our player's create since this feed last ran: an arrival (`0x5dea50`), which a `/reload`'s
-    // cascade lacks. The feed runs only with an interface up, so an arrival before one waits.
-    arrivals: Query<(), Added<SelfPlayer>>,
-    mut enter_usable: Option<ResMut<crate::ui_action::EnterUsable>>,
-    // The known spells the arrival's replay registers, whose language legs signal.
-    actions: Option<Res<crate::ui_action::PlayerActions>>,
-    // The buff cache the cascade sets up on the new player object (`0x490983` → `0x4e4100`).
-    mut auras: crate::ui_aura::AuraEntry,
 ) {
-    let arrived = !arrivals.is_empty();
-    // The pushes are an engine turn, as they read the relation inputs a call can write; the
-    // events they owe fire after it with the host lent, so a call their handlers make applies
-    // inside the verb.
-    let owed = vm.turn(|script, (selection, world, _, _)| {
+    // The pushes are an engine turn, as they read the relation inputs a call can write.
+    vm.turn(|script, (selection, world)| {
         let selection_changed = selection.is_changed();
         let selection = *selection;
-        let mut owed = OwedUnitEvents::default();
         let Some(script) = script else {
-            return owed;
+            return;
         };
         // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
         let feed = &mut *feed;
@@ -1449,7 +1434,7 @@ fn feed_units(
         );
         stores.removed.clear();
         if gate.skip() {
-            return owed;
+            return;
         }
 
         // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
@@ -1620,48 +1605,11 @@ fn feed_units(
             script.set_player_faction_masks(faction_masks);
         }
 
-        // The world-enter cascade's events once per world entry, after our descriptor lands and the
-        // pushes above seat it: the reference runs the cascade from the local player's own create
-        // (`0x5deb60 call 0x4908c0`) and, on a `/reload`, from `UI_Init` (`0x490168`), the player
-        // in the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a
-        // worldport's re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry
-        // and forget the player-global memos so the next character seeds them.
-        if let Some((store, me)) = self_pair {
-            if !memo.entered_world {
-                gate.audit("feed_units", "the world-enter events");
-                // `"player"` names us when the cascade runs, from our own create: the stock windows
-                // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated
-                // ahead of the resolver feed's full push (`feed_unit_guids`), which this feed is
-                // not ordered against.
-                script.seat_player_guid(me.0);
-                // The arrival's ghost state (`0x5deb2a` → `0x5de9c0`) runs ahead of its cascade
-                // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
-                // ghost's leg is its tutorial (`crate::tutorial`).
-                owed.unghost = arrived && store.0.player_flags() & 0x10 == 0;
-                // Ahead of both, the arrival's replay learns the list (`0x5dea8b`-`0x5deab9`),
-                // each language spell a `LANGUAGE_LIST_CHANGED` (`0x4b2659`), each stance-bar
-                // spell an `UPDATE_SHAPESHIFT_FORMS` (`0x4b2904`), then sorts the book and
-                // signals it (`0x5deac2`).
-                owed.book_sorted = arrived;
-                owed.languages = match (arrived, actions.as_deref(), tables.catalog()) {
-                    (true, Some(actions), Some(catalog)) => actions
-                        .spells
-                        .iter()
-                        .filter_map(|&id| catalog.get(id))
-                        .filter(|d| crate::ui_spellbook::teaches_language(d))
-                        .count(),
-                    _ => 0,
-                };
-                owed.world_enter = Some(WorldEnter {
-                    bonus_bar_offset: crate::ui_action::bonus_bar_offset(
-                        Some(store),
-                        tables.spells.as_deref(),
-                    ),
-                    // `0x4bc721`-`0x4bc736`: our charm, else our summon, nonzero.
-                    ask_pet: store.0.unit_pet_guid().is_some(),
-                });
-                memo.entered_world = true;
-            }
+        // The world entry's own events are its arrival's and its cascade's
+        // ([`crate::ui_world_enter`]); here only the world's exit is seen, which forgets the
+        // player-global memos so the next character seeds them.
+        if self_pair.is_some() {
+            memo.entered_world = true;
         } else if memo.entered_world {
             gate.audit("feed_units", "the world-exit disarm");
             memo.entered_world = false;
@@ -1718,97 +1666,7 @@ fn feed_units(
                 script.set_combo_points(banked.0, banked.1);
             }
         }
-        owed
     });
-    // The entry's usable refresh, which the action feed ran ahead of the cascade.
-    let usable_changed = owed.world_enter.is_some()
-        && enter_usable
-            .as_deref_mut()
-            .is_some_and(|u| std::mem::take(&mut u.0));
-    vm.run(|script| {
-        let script = script?;
-        if owed.book_sorted {
-            // The language legs, fired ahead of the form edges, which the replay interleaves with
-            // them in the list's order.
-            for _ in 0..owed.languages {
-                script.fire_event("LANGUAGE_LIST_CHANGED", vec![]);
-            }
-            // One per form the list holds, read through the lent host off the known spells.
-            for _ in 0..script.shapeshift_form_count() {
-                script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
-            }
-            script.fire_event("SPELLS_CHANGED", vec![]);
-        }
-        if owed.unghost {
-            script.fire_event("PLAYER_UNGHOST", vec![]);
-        }
-        Some(())
-    });
-    let Some(enter) = owed.world_enter else {
-        return;
-    };
-    // The cascade's `SelectTarget(0)` (`0x490927`) comes ahead of `PLAYER_LOGIN` and
-    // `PLAYER_ENTERING_WORLD` (`0x490965`): a transfer released no target, so whatever the guid
-    // still names goes here, as an engine turn on the selection.
-    vm.engine_clear_target(crate::lanes::mark());
-    vm.run(|script| {
-        if let Some(script) = script {
-            script.fire_world_enter_head(enter.bonus_bar_offset, usable_changed);
-            crate::ui_aura::enter_world(script, &mut auras);
-            script.fire_world_enter_watchers();
-        }
-    });
-    // `0x4909c9` → `0x4bc6f0`: `SetPetGuid(0, 0)` as an engine turn on the bar and the VM, its
-    // signals, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`), then the cascade's rest. Its trainer
-    // refresh (`0x4bc872`) never runs here: the cascade zeroes the trainer cell before it
-    // (`0x4909ab` → `0x4d73e0`).
-    let dropped = vm.turn(|script, (_, _, bar, latch)| {
-        let script = script?;
-        Some(match (bar, latch) {
-            (Some(mut bar), Some(mut latch)) => {
-                crate::ui_pet::drop_bar(script, &mut bar, &mut latch)
-            }
-            _ => script.drop_pet_bar(),
-        })
-    });
-    let Some(dropped) = dropped else {
-        return;
-    };
-    vm.run(|script| {
-        if let Some(script) = script {
-            script.fire_pet_bar_dropped(dropped);
-        }
-    });
-    if enter.ask_pet {
-        let _ = commands.0.send(crate::net::ClientCommand::RequestPetInfo);
-    }
-    vm.run(|script| {
-        if let Some(script) = script {
-            script.fire_world_enter_tail();
-        }
-    });
-}
-
-/// The events [`feed_units`]' turn owes, fired after it in its order with the host lent.
-#[derive(Default)]
-struct OwedUnitEvents {
-    /// The arrival's form-list edges and its `SPELLS_CHANGED`, ahead of its ghost state.
-    book_sorted: bool,
-    /// The arrival's language spells, one `LANGUAGE_LIST_CHANGED` each.
-    languages: usize,
-    /// `PLAYER_UNGHOST`, ahead of the arrival's cascade.
-    unghost: bool,
-    /// The world-enter cascade.
-    world_enter: Option<WorldEnter>,
-}
-
-/// What the world-enter cascade reads of our player at its start.
-#[derive(Clone, Copy)]
-struct WorldEnter {
-    /// The bonus bar offset our form gives (`0x4e4fc0`).
-    bonus_bar_offset: u8,
-    /// Whether the pet reset asks for the bar again (`0x4bc738`).
-    ask_pet: bool,
 }
 
 /// The bare unit feed, for a test driving the stock unit frames off engine state, which lends no

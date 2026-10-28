@@ -220,9 +220,9 @@ impl Until {
 pub(crate) type LaneReads = fn(&mut World) -> bevy::ecs::query::FilteredAccessSet;
 
 /// The access `system` declares, measured on `world` by initializing a copy of it.
-pub(crate) fn system_access<M>(
+pub(crate) fn system_access<I: bevy::ecs::system::SystemInput + 'static, O: 'static, M>(
     world: &mut World,
-    system: impl IntoSystem<(), (), M>,
+    system: impl IntoSystem<I, O, M>,
 ) -> bevy::ecs::query::FilteredAccessSet {
     use bevy::ecs::system::System;
     IntoSystem::into_system(system).initialize(world)
@@ -480,6 +480,8 @@ pub(crate) fn fire_in_order(world: &mut World) {
 
 #[cfg(test)]
 mod action_live_tests;
+#[cfg(test)]
+mod arrival_live_tests;
 #[cfg(test)]
 mod auction_live_tests;
 #[cfg(test)]

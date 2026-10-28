@@ -122,15 +122,13 @@ impl DeathNet {
 pub(crate) struct DeathFeedState {
     /// World-scoped: the last `(guid, dead, ghost)` the self body showed.
     mirror: Option<(u64, bool, bool)>,
-    /// World-scoped: our player arrived and its death state is not signalled yet.
-    arrival_owed: bool,
     /// VM-scoped: the announce latches.
     vm: crate::ui_script::VmMemo<DeathAnnounced>,
 }
 
 /// What the live VM has been told. A fresh VM's first sight of the body is no edge: a `/reload`'s
 /// cascade signals no death state (`0x490168` never reaches `0x495850`), and an arrival signals it
-/// after its cascade (`0x5deb65`, [`feed_death`]).
+/// after its cascade (`0x5deb65`, [`signal_death_state`]).
 #[derive(Default)]
 struct DeathAnnounced {
     /// The last `(guid, dead, ghost)` this VM was given an event for.
@@ -239,12 +237,9 @@ impl DeathView<'_, '_> {
 }
 
 /// Derive the death state from the self descriptor, push the snapshot, and fire the death events
-/// on its edges.
-///
-/// Our player's arrival first signals the death state after its world-enter cascade
-/// (`0x5deb60`, `0x5deb65` → `0x495850`): a login, a reconnect or a worldport to a dead body hears
-/// `PLAYER_DEAD`, any other `PLAYER_ALIVE`. benilla holds it until the interface is up.
-#[allow(clippy::too_many_arguments)]
+/// on its edges. Our player's arrival signals the death state itself, after its world-enter
+/// cascade (`0x5deb65` → `0x495850`, [`signal_death_state`]): a login, a reconnect or a worldport
+/// to a dead body hears `PLAYER_DEAD`, any other `PLAYER_ALIVE`.
 pub(crate) fn feed_death(
     // The death stores, which the death calls write: an engine turn, its events signalled after.
     mut vm: crate::script_calls::VmWith<DeathView<'static, 'static>>,
@@ -252,14 +247,11 @@ pub(crate) fn feed_death(
     names: Res<crate::names::NameCache>,
     net: Res<NetCommands>,
     map: Option<Res<benilla_world::world_map::CurrentMap>>,
+    // Our player's create this frame, which runs no watcher (`0x465d80`): its death state is the
+    // arrival's own signal, not an edge.
     arrivals: Query<(), Added<SelfPlayer>>,
-    pending_load: Option<Res<crate::ui_script::PendingEntryUiLoad>>,
-    state: Option<Res<State<crate::client_state::ClientState>>>,
 ) {
-    feed.arrival_owed |= !arrivals.is_empty();
-    if feed.arrival_owed && crate::ui_script::ingame_ui_up(pending_load, state) {
-        feed.arrival_owed = !signal(&mut vm, &mut feed);
-    }
+    let arrived = !arrivals.is_empty();
     vm.turn(|script, view| {
         let Some(script) = script else {
             return;
@@ -300,7 +292,7 @@ pub(crate) fn feed_death(
 
         // ── The VM edges: a fresh VM's memo is empty, and its first sight is no edge.
         let memo = feed.vm.get(script);
-        let prev = memo.last.filter(|&(g, ..)| g == guid);
+        let prev = memo.last.filter(|&(g, ..)| g == guid && !arrived);
         memo.last = Some((guid, dead, ghost));
         fire_vm_edges(script, prev.map(|(_, d, g)| (d, g)), dead, ghost);
 
@@ -383,7 +375,7 @@ pub(crate) fn feed_death(
 /// `0x495876`) `PLAYER_DEAD` (`0x113`, `0x49587d`), its handlers reading the timer the death armed,
 /// then `ClearCursor(1, 1)` (`0x495889` → `0x495190`); else `PLAYER_ALIVE` (`0x112`, `0x495893`).
 /// The VM's memo takes the state, so the feed signals no edge of it again.
-fn signal_death(
+pub(crate) fn signal_death(
     mut vm: crate::script_calls::VmWith<DeathView<'static, 'static>>,
     mut feed: ResMut<DeathFeedState>,
 ) {
@@ -432,7 +424,8 @@ pub(crate) fn zero_release_timer(world: &mut World) {
     }
 }
 
-/// [`signal_death`] in place, from our own death's handler (`crate::target`'s `died`).
+/// [`signal_death`] in place, from our own death's handler (`crate::target`'s `died`) and from our
+/// player's arrival (`0x5deb65`, [`crate::ui_world_enter`]).
 pub(crate) fn signal_death_state(world: &mut World) {
     if let Err(e) = world.run_system_cached(signal_death) {
         // A harness without the death state signals nothing.
@@ -451,16 +444,12 @@ fn send_repop_request(store: &benilla_protocol::ObjectFields, net: &NetCommands)
 /// The world-enter cascade's last test (`0x490a2d`-`0x490a38`): with our health 0 or less it
 /// releases the body (`0x490a3c` → `0x5e0ae0`), after its 38 calls and ahead of its tutorials. The
 /// cascade runs at an arrival, a `/reload` and a reactivation (`0x5deb60`, `0x490168`,
-/// `0x5e9c08`), so logging in or
-/// reloading dead and unreleased goes to the graveyard (`MiscHandler.cpp:48-67`).
+/// `0x5e9c08`), so logging in or reloading dead and unreleased goes to the graveyard
+/// (`MiscHandler.cpp:48-67`).
 pub(crate) fn repop_on_world_enter(
-    mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     net: Res<NetCommands>,
 ) {
-    if cascades.read().next().is_none() {
-        return;
-    }
     if let Ok(store) = self_q.single() {
         if store.0.unit_is_dead() {
             send_repop_request(&store.0, &net);
@@ -817,7 +806,6 @@ impl Plugin for DeathPlugin {
         net::register(app);
         app.init_resource::<DeathNet>()
             .init_resource::<DeathFeedState>()
-            .add_message::<crate::net::WorldEnterCascadeMessage>()
             .add_systems(
                 Update,
                 (
@@ -827,13 +815,6 @@ impl Plugin for DeathPlugin {
                     drive_death_look,
                     // Before the feed, so the frame a session ends carries no memory of it.
                     end_session_death_feed.before(feed_death),
-                    // The cascade's last send, after its pet and meeting-stone legs (`0x4909c9`,
-                    // `0x490a14`); the feed's arrival signal follows the cascade (`0x5deb65`).
-                    repop_on_world_enter
-                        .in_set(UiFeed)
-                        .after(crate::ui_unit::UnitSnapshots)
-                        .after(crate::ui_dialog_verbs::meeting_stone_enter_world)
-                        .before(feed_death),
                 ),
             );
     }
@@ -1476,7 +1457,6 @@ mod tests {
         app.add_message::<crate::net::DisconnectedMessage>()
             .insert_resource(DeathFeedState {
                 mirror: Some((0x1234, true, true)),
-                arrival_owed: false,
                 vm: crate::ui_script::VmMemo::default(),
             });
 
@@ -1531,6 +1511,7 @@ mod tests {
             .init_resource::<crate::items::Items>()
             .init_resource::<Time<Real>>()
             .insert_resource(State::new(crate::client_state::ClientState::InWorld))
+            .add_plugins(crate::ui_world_enter::WorldEnterPlugin)
             .add_systems(Update, feed_death);
         app.insert_non_send_resource(recording_vm());
         let body = ObjectFields::from_pairs(&[
@@ -1548,6 +1529,7 @@ mod tests {
             .0
             .insert(ME, me);
         app.world_mut().resource_mut::<SelfGuid>().0 = Some(ME);
+        crate::ui_world_enter::push_arrival(app.world_mut());
         app
     }
 

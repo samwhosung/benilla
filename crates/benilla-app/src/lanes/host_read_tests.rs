@@ -37,8 +37,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 38;
-const FRAME_FINAL_INPUTS: usize = 200;
+const FRAME_FINAL_FEEDS: usize = 35;
+const FRAME_FINAL_INPUTS: usize = 190;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -67,39 +67,13 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          writes the list as it walks the slots"),
     ("::ui_action::unlearn::clear_unlearned_slots", &["ui_action::PlayerActions"],
         "drains the unlearned spells the bar clears; the known spells are the handlers' alone"),
-    ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"],
-        "empties the lists, the throttle and the session at the world-enter cascade \
-         (`0x490a05` → `0x4cc280`), which the reference runs inside our own player's create \
-         (`0x4908c0`)"),
-    ("::ui_battlefield::reset_on_world_enter", &["ui_battlefield::Battlefield"],
-        "clears the list and the notices waiting on names at the world-enter cascade \
-         (`0x4a9db0`), which the reference runs inside our own player's create (`0x4908c0`)"),
-    ("::ui_battlefield_positions::reset_on_world_enter",
-        &["ui_battlefield_positions::BattlefieldPositions"],
-        "clears the last positions packet on world entry, ahead of any packet of the new world"),
-    ("::ui_battlefield_score::reset_on_world_enter", &["ui_battlefield_score::BattlefieldScoreboard"],
-        "zeroes the board at the world-enter cascade (`0x4a9db0`), which the reference runs \
-         inside our own player's create (`0x4908c0`)"),
     ("::ui_char::feed_char", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_dialog_verbs::meeting_stone_enter_world", &["ui_dialog_verbs::MeetingStone"],
-        "resets the status text to `UNKNOWN` at the world-enter cascade (`0x490a14` → \
-         `0x4c9f40`), which the reference runs inside our own player's create (`0x4908c0`); a \
-         `0x295` the frame's packets rebuilt keeps its text, as the create comes first"),
     ("::ui_instance::track_instance_state", &["ui_instance::InstanceState"],
         "latches the dungeon just left once the map the transfer lands on is known, which the \
          reference latches inside the map load and the packet (`0x464ff0`, `0x49e6ac`)"),
     ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions"],
         "drains the superseded ranks the bar's macros take; the known spells are the handlers' \
          alone"),
-    ("::ui_mail::send_query_next_mail_time_on_enter", &["ui_mail::MailOpen",
-        "ui_mail::pending::MailPending"],
-        "the mail init (`0x4acb10`) clears the session and stamps \"no mail\" at the world-enter \
-         cascade (`0x4909f6`), which the reference runs inside our own player's create \
-         (`0x4908c0`)"),
-    ("::ui_mail::stationery::count_papers_on_enter", &["ui_mail::stationery::UsableStationery"],
-        "the mail init (`0x4acb10`) counts the papers' items it awaits and rebuilds the stationery \
-         list when none is (`0x4acbd7`) at the world-enter cascade (`0x4909f6`), which the \
-         reference runs inside our own player's create (`0x4908c0`)"),
     ("::ui_party::feed::feed_party", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_pet::unit::feed_pet_unit", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",
@@ -116,9 +90,7 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          `CheckTalentMasterDist` reports; the reference tests the range at the call (`0x5df980`)"),
     ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Items"],
         "writes the item cache as it builds the spell tooltips"),
-    ("::ui_unit::feed_units", &["UiScript", "ui_pet::PetAttackLatch", "ui_pet::PetBar"],
-        "a field event's listeners read its push; the world entry's pet reset writes the bar and \
-         lowers the attack latch (`0x4bc6f0`, `0x4bc8ce`)"),
+    ("::ui_unit::feed_units", &["UiScript"], "a field event's listeners read its push"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

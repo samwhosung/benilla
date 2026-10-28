@@ -127,7 +127,6 @@ impl Plugin for NetPlugin {
             .add_message::<CharRenameMessage>()
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
-            .add_message::<WorldEnterCascadeMessage>()
             .init_resource::<MoverClaim>()
             .add_message::<CinematicTriggeredMessage>()
             .add_message::<ServerSaidMessage>()
@@ -161,8 +160,9 @@ impl Plugin for NetPlugin {
                 // `apply_net_updates` and before `drive_display_facing`, so the `"npc"` token is
                 // current when a window's show handler reads it.
             )
-            // Not part of the movement chain above: the cascade's time query, after the self create
+            // Not part of the movement chain above: the hourly time query, after the self create
             // has claimed the mover.
+            .init_resource::<QueryTimeAsks>()
             .add_systems(
                 Update,
                 send_query_time
@@ -806,24 +806,42 @@ impl ServerWallClock {
 /// `[0xbb749c]`, armed `now + 0xe10` at `0x4def11`).
 const RESYNC_AFTER: Duration = Duration::from_secs(3600);
 
-/// Ask for the server's wall clock at each world-enter cascade (the quest-log init `0x4de430`,
-/// called at `0x4909a1`, sends it at `0x4de45b`) and hourly after, which tracks a server
+/// When the wall clock was last asked for, and whether a cascade has seated us since the session
+/// began, which the hourly resync waits for.
+#[derive(Resource, Default)]
+pub(crate) struct QueryTimeAsks {
+    asked_at: Option<Instant>,
+    seated: bool,
+}
+
+/// Ask for the server's wall clock in each world-enter cascade's place (the quest-log init
+/// `0x4de430`, called at `0x4909a1`, sends it at `0x4de45b`, [`crate::ui_world_enter`]).
+pub(crate) fn query_time_at_world_enter(
+    asks: Option<ResMut<QueryTimeAsks>>,
+    commands: Res<NetCommands>,
+) {
+    if let Some(mut asks) = asks {
+        asks.asked_at = Some(Instant::now());
+        asks.seated = true;
+    }
+    let _ = commands.0.send(ClientCommand::QueryTime);
+}
+
+/// Ask for the server's wall clock hourly after a cascade asked it, which tracks a server
 /// re-clocked under us.
 pub(crate) fn send_query_time(
-    mut cascades: MessageReader<WorldEnterCascadeMessage>,
     commands: Res<NetCommands>,
     clock: Res<ServerWallClock>,
     status: Res<NetStatus>,
-    mut asked_at: Local<Option<Instant>>,
-    mut seated: Local<bool>,
+    mut asks: ResMut<QueryTimeAsks>,
 ) {
-    let entering = cascades.read().next().is_some();
     // `connected` rises at `CMSG_PLAYER_LOGIN`, before the server seats us, so the resync waits
     // for the first cascade; a logout or a disconnect clears `connected` and so the wait re-arms.
-    *seated = status.connected && (*seated || entering);
-    let due = *seated && clock.stale() && asked_at.is_none_or(|t| t.elapsed() >= RESYNC_AFTER);
-    if entering || due {
-        *asked_at = Some(Instant::now());
+    asks.seated &= status.connected;
+    let due =
+        asks.seated && clock.stale() && asks.asked_at.is_none_or(|t| t.elapsed() >= RESYNC_AFTER);
+    if due {
+        asks.asked_at = Some(Instant::now());
         let _ = commands.0.send(ClientCommand::QueryTime);
     }
 }
@@ -2361,12 +2379,6 @@ pub(crate) struct EnteredWorldMessage {
     /// The tutorial flags, if `SMSG_TUTORIAL_FLAGS` came during the login handshake.
     pub(crate) tutorial_flags: Option<Vec<u8>>,
 }
-
-/// The reference's world-enter cascade (`0x4908c0`) ran: our own player's create, at login and
-/// every cross-map worldport (the arrival in [`objects`]'s update handler). Its sends wait for
-/// this, not [`EnteredWorldMessage`], which fires before the server has seated the player.
-#[derive(Message)]
-pub(crate) struct WorldEnterCascadeMessage;
 
 /// `SMSG_ADDON_INFO`: the addons the server hid from the Lua index space, or `None` if it did
 /// not answer. A resource, since it must exist before the world-entry UI load runs any addon;

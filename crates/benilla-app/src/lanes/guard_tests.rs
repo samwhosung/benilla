@@ -68,14 +68,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "Messages<benilla_app::net::WorldEnterCascadeMessage>",
-        "the world-enter cascade, which our own create's arrival writes inside its packet \
-         (`0x5deb60` → `0x4908c0`) and whose readers (the action bar's slot pass, the item \
-         recount) fire off it in system order, where the reference runs the cascade in the \
-         arrival",
-    ),
-    (
-        Row::Queue,
         "::ui_action::errors::MountErrors",
         "the mount refusals",
     ),
@@ -332,13 +324,11 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore"]),
     // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
     // XP pair, the rest state, the combo points, the bar toggles and the worn display read the
-    // live store, and every snapshot its names, relations, selection and group; the world entry's
-    // pet reset reads the bar's guid and the attack latch, and its replay's language legs the
-    // known spells, as the frame left them.
+    // live store, and every snapshot its names, relations, selection and group, as the frame left
+    // them.
     ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
-        "ui_action::PlayerActions", "ui_guild::GuildState", "ui_party::GroupState",
-        "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
+        "ui_guild::GuildState", "ui_party::GroupState"]),
     // The party and raid tokens read the members' stores, records and the roster's cells as of
     // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
     // the roster push is their no-host fallback, and every snapshot's names and relations read as
@@ -362,8 +352,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    ("::ui_action::recount::recount_item_actions", &["items::Countdowns", "items::Items",
-        "net::GuidIndex", "net::ObjectStore"]),
     ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "ui_action::ActionSlots", "ui_action::PlayerActions",
         "ui_action::errors::MountErrors",
@@ -404,9 +392,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"]),
-    ("::ui_mail::send_query_next_mail_time_on_enter", &["ui_mail::MailOpen",
-        "ui_mail::pending::MailPending"]),
     ("::ui_item_text::feed_item_text", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts", "ui_mail::MailOpen",
@@ -638,7 +623,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 37] {
+fn lane_types() -> [TypeId; 38] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -710,12 +695,14 @@ fn lane_types() -> [TypeId; 37] {
         // The mail lane: the list's and the results' signals and lines, the cores' halves, the
         // record callbacks' and the pending-mail time's.
         TypeId::of::<crate::ui_mail::MailLane>(),
+        // Our player's arrival, stamped at its create.
+        TypeId::of::<crate::ui_world_enter::ArrivalLane>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 37] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 38] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -784,6 +771,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 37] {
         ),
         ("trade", TypeId::of::<crate::ui_trade::TradeLane>()),
         ("mail", TypeId::of::<crate::ui_mail::MailLane>()),
+        (
+            "arrival",
+            TypeId::of::<crate::ui_world_enter::ArrivalLane>(),
+        ),
     ]
 }
 
@@ -935,6 +926,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
     assert_eq!(
         lanes,
         [
+            "arrival",
             "auction house",
             "bank",
             "battlefield",
@@ -1745,6 +1737,11 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The chat setup's restore reads the channel rows its shortcuts and auto-joins come from as
     // the frame left them, past the notices of the packets after the section's.
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
+    // Our arrival's legs read and reset what later packets of its frame write, as the frame left
+    // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
+    // death stores its death state reads, and the connection the clock resync asks through.
+    ("arrival", &["death::DeathNet", "net::NetStatus", "ui_action::PlayerActions",
+        "ui_battlefield::Battlefield", "ui_dialog_verbs::MeetingStone"]),
     // The watchers' callbacks: the quest log's slots, the skill line's race and class and the
     // bonus bar's form off our live descriptor, as the frame left them (#2217); the aura
     // watcher's own store is the one its packet left, and the buff timers read the duration

@@ -22,7 +22,7 @@ use benilla_ui::script::{MailInboxRow, ScriptValue, StationeryView, UiScript};
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
-use crate::net::{ClientCommand, NetCommands, WorldEnterCascadeMessage};
+use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::query_cache::QueryCache;
 use crate::script_calls::VmWith;
@@ -41,7 +41,7 @@ mod verbs;
 pub(crate) use lane::{MailEvent, MailLane};
 pub(crate) use live::MailLive;
 pub(crate) use pending::MailPending;
-pub(crate) use stationery::{StationeryRebuild, UsableStationery};
+pub(crate) use stationery::{count_papers_on_enter, StationeryRebuild, UsableStationery};
 pub(crate) use verbs::MailVerbs;
 
 /// `checked` mask bits (vmangos `Mail.h`): READ, RETURNED, COPIED.
@@ -290,26 +290,14 @@ impl Plugin for UiMailPlugin {
             .add_sweep_leg(SweepLeg::Mail, close_mail_on_leave_world)
             .add_systems(
                 Update,
-                (
-                    // In the frame time, after the input records and the packets, as the world
-                    // frame's update steps it (`0x4818d0`), behind its walk-away watch
-                    // (`0x4818c0`) and that close's flush, with the in-game interface up.
-                    step_pending_mail
-                        .after(benilla_world::schedule::WorldStage::Net)
-                        .after(crate::ui_session::watch_interaction_range)
-                        .before(UiFeed)
-                        .run_if(crate::ui_script::ingame_ui_up),
-                    // The cascade's order: the time query, this, then the battlefield status.
-                    send_query_next_mail_time_on_enter
-                        .after(crate::net::send_query_time)
-                        .in_set(UiFeed),
-                    // Inside the init: the papers' lookups after the time query and ahead of the
-                    // init's own query (`0x4acbba`, `0x4acbdc`).
-                    stationery::count_papers_on_enter
-                        .after(crate::net::send_query_time)
-                        .before(send_query_next_mail_time_on_enter)
-                        .in_set(UiFeed),
-                ),
+                // In the frame time, after the input records and the packets, as the world
+                // frame's update steps it (`0x4818d0`), behind its walk-away watch
+                // (`0x4818c0`) and that close's flush, with the in-game interface up.
+                step_pending_mail
+                    .after(benilla_world::schedule::WorldStage::Net)
+                    .after(crate::ui_session::watch_interaction_range)
+                    .before(UiFeed)
+                    .run_if(crate::ui_script::ingame_ui_up),
             );
     }
 }
@@ -326,26 +314,24 @@ fn step_pending_mail(
     }
 }
 
-/// The mail init (`0x4acb10`, called at `0x4909f6`) at each world-enter cascade, which a login, a
-/// cross-map worldport and a `/reload` all run: the mailbox, the rows, the list throttle
-/// (`0x4acb7d`) and the request lock (`0x4acb82`) start over, every stationery's item is looked up
-/// with a callback (`0x4acbba`, [`stationery::count_papers_on_enter`]), then it stamps "no mail"
+/// The mail init (`0x4acb10`, called at `0x4909f6`) in each world-enter cascade's place
+/// ([`crate::ui_world_enter`]), which a login, a cross-map worldport and a `/reload` all run: the
+/// mailbox, the rows, the list throttle (`0x4acb7d`) and the request lock (`0x4acb82`) start over,
+/// every stationery's item is looked up with a callback (`0x4acbba`,
+/// [`stationery::count_papers_on_enter`], its leg just ahead), then it stamps "no mail"
 /// (`0x4acb87`) and sends `MSG_QUERY_NEXT_MAIL_TIME` (`0x4acbdc`), after the time query and before
 /// the battlefield status.
 pub(crate) fn send_query_next_mail_time_on_enter(
     mut vm: VmWith<MailSession>,
-    mut cascades: MessageReader<WorldEnterCascadeMessage>,
     commands: Res<NetCommands>,
 ) {
     vm.turn(|script, (mut mail, mut pending)| {
-        if cascades.read().next().is_some() {
-            mail.clear_session();
-            if let Some(script) = script {
-                script.reset_mail_world_state();
-            }
-            pending.on_query_sent();
-            let _ = commands.0.send(ClientCommand::QueryNextMailTime);
+        mail.clear_session();
+        if let Some(script) = script {
+            script.reset_mail_world_state();
         }
+        pending.on_query_sent();
+        let _ = commands.0.send(ClientCommand::QueryNextMailTime);
     })
 }
 
@@ -1086,9 +1072,7 @@ mod tests {
         app.init_resource::<MailOpen>()
             .init_resource::<MailPending>()
             .init_resource::<Items>()
-            .insert_resource(NetCommands(tx))
-            .add_message::<WorldEnterCascadeMessage>()
-            .add_systems(Update, send_query_next_mail_time_on_enter);
+            .insert_resource(NetCommands(tx));
         let mut script = UiScript::new().unwrap();
         script.keep_calls();
         script.set_mail(Some(MailState {
@@ -1111,8 +1095,9 @@ mod tests {
         assert!(!check(&mut app), "the lock holds");
         app.update();
         assert!(!check(&mut app), "no cascade, no reset");
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        app.world_mut()
+            .run_system_cached(send_query_next_mail_time_on_enter)
+            .expect("the mail init runs");
         let mail = app.world().resource::<MailOpen>();
         assert!(mail.mails.is_empty() && mail.mailbox.is_none());
         assert!(check(&mut app), "the lock and the throttle start over");
@@ -1846,7 +1831,6 @@ mod tests {
             .init_resource::<MailPending>()
             .init_resource::<Items>()
             .insert_resource(NetCommands(tx))
-            .add_message::<WorldEnterCascadeMessage>()
             .insert_resource(Stationery(benilla_formats::StationeryCatalog::from_rows(
                 vec![benilla_formats::StationeryRow {
                     id: 5,
@@ -1854,15 +1838,7 @@ mod tests {
                     texture: "PAPER".into(),
                     flags: 1,
                 }],
-            )))
-            .add_systems(
-                Update,
-                (
-                    stationery::count_papers_on_enter,
-                    send_query_next_mail_time_on_enter,
-                )
-                    .chain(),
-            );
+            )));
         app.world_mut().spawn((
             SelfPlayer,
             crate::net::Guid(7),
@@ -1872,8 +1848,12 @@ mod tests {
             app.update();
         }
         assert!(crate::query_cache::queries(&rx).is_empty(), "no frame asks");
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        app.world_mut()
+            .run_system_cached(count_papers_on_enter)
+            .expect("the mail init's papers run");
+        app.world_mut()
+            .run_system_cached(send_query_next_mail_time_on_enter)
+            .expect("the mail init runs");
         assert!(matches!(
             crate::query_cache::queries(&rx)[..],
             [ClientCommand::ItemQuery { entry: 9_311, .. }]

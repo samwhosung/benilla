@@ -356,6 +356,8 @@ fn seed_demo_forms(
     *done = true;
     if fixture != UiFixture::SpellBook {
         actions.spells.extend(crate::ui_script::DEMO_STANCES);
+        // The stored form list, as their learns leave it: the stances are in bar order already.
+        actions.forms.extend(crate::ui_script::DEMO_STANCES);
     }
 }
 

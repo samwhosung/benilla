@@ -82,31 +82,36 @@ pub(crate) struct BookSignals<'w, 's> {
 /// What a learn's spell replaces, for the registrar's form-list leg (`0x4b2849`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Learned {
-    /// `SMSG_LEARNED_SPELL`, `was_known` whether the known spells already held it.
-    Fresh { was_known: bool },
-    /// `SMSG_SUPERCEDED_SPELL`'s new rank, over `old`, which the known spells held if `old_known`.
-    Rank { old: u32, old_known: bool },
+    /// `SMSG_LEARNED_SPELL`.
+    Fresh,
+    /// `SMSG_SUPERCEDED_SPELL`'s new rank, over `old`.
+    Rank { old: u32 },
 }
 
 impl BookSignals<'_, '_> {
-    /// `0x4b25b0`'s tail for `spell_id`, now among `known`. First its language leg's
-    /// `LANGUAGE_LIST_CHANGED` for a spell whose first effect is `SPELL_EFFECT_LANGUAGE`
-    /// (`0x4b2641`-`0x4b2659`, live or not), then the form list's edge,
-    /// `UPDATE_SHAPESHIFT_FORMS` (`0x4b2904`), for a stance-bar spell it appends unless listed
-    /// (`0x4b2893`), or for a rank that replaces a listed old one in place (`0x4b2878`); an
-    /// unlisted old rank adds nothing (`0x4b2870`). Then the book's: the sort's `SPELLS_CHANGED`
-    /// (`0x4b2b5a`), `LEARNED_SPELL_IN_TAB` with its tab's 1-based place in the order it left
-    /// (`0x4b2b92`), then The Spellbook's tutorial (`0x4b2ba1`), none of them for a spell the
-    /// gates keep out of the book (`0x4b2911`, `0x4b2944`, `0x4b29c4`). Nothing with no player
-    /// held, whose learn waits in the initial list (`0x5e61c0`).
+    /// `0x4b25b0`'s tail for `spell_id`, now among `actions`' known spells. First its language
+    /// leg's `LANGUAGE_LIST_CHANGED` for a spell whose first effect is `SPELL_EFFECT_LANGUAGE`
+    /// (`0x4b2641`-`0x4b2659`, live or not), then the form list's leg on the stored list
+    /// ([`crate::ui_shapeshift::form_learned`]) and its edge, `UPDATE_SHAPESHIFT_FORMS`
+    /// (`0x4b2904`), when it moved. Then the book's: the sort's `SPELLS_CHANGED` (`0x4b2b5a`),
+    /// `LEARNED_SPELL_IN_TAB` with its tab's 1-based place in the order it left (`0x4b2b92`), then
+    /// The Spellbook's tutorial (`0x4b2ba1`), none of them for a spell the gates keep out of the
+    /// book (`0x4b2911`, `0x4b2944`, `0x4b29c4`). With no player held a fresh learn joins the
+    /// initial list, which the arrival learns (`0x5e61fb` → `0x5e621e`), and signals nothing.
     pub(crate) fn entered(
         &mut self,
         spell_id: u32,
         how: Learned,
-        known: &BTreeSet<u32>,
+        actions: &mut crate::ui_action::PlayerActions,
         spells: Option<&Spells>,
     ) {
-        let (Some(spells), Ok(store)) = (spells, self.me.single()) else {
+        let Ok(store) = self.me.single() else {
+            if matches!(how, Learned::Fresh) {
+                actions.initial.push(spell_id);
+            }
+            return;
+        };
+        let Some(spells) = spells else {
             return;
         };
         if spells.catalog.get(spell_id).is_some_and(teaches_language) {
@@ -114,18 +119,16 @@ impl BookSignals<'_, '_> {
                 id: crate::field_watch::id::LANGUAGE_LIST_CHANGED,
             });
         }
-        let listed = |id: u32| {
-            spells
-                .catalog
-                .get(id)
-                .is_some_and(crate::ui_shapeshift::on_stance_bar)
+        let replaces = match how {
+            Learned::Fresh => None,
+            Learned::Rank { old } => Some(old),
         };
-        let forms_edge = listed(spell_id)
-            && match how {
-                Learned::Fresh { was_known } => !was_known,
-                Learned::Rank { old, old_known } => old_known && listed(old),
-            };
-        if forms_edge {
+        if crate::ui_shapeshift::form_learned(
+            &mut actions.forms,
+            spell_id,
+            replaces,
+            &spells.catalog,
+        ) {
             self.lane.write(FieldNotice::Global {
                 id: crate::field_watch::id::UPDATE_SHAPESHIFT_FORMS,
             });
@@ -135,7 +138,7 @@ impl BookSignals<'_, '_> {
             store.0.unit_class().unwrap_or(0),
         );
         let lines = self.skill_lines.as_deref().map(|l| &l.catalog);
-        let order = book_order(known, &spells.catalog, lines, race, class);
+        let order = book_order(&actions.spells, &spells.catalog, lines, race, class);
         let Some(tab) = tab_flash_index(spell_id, &order.tab_lines, spells, lines, race, class)
         else {
             return;
@@ -154,21 +157,22 @@ impl BookSignals<'_, '_> {
 
     /// `0x4b2c50`'s tail for `spell_id`, which `was_known` says the known spells held, with a
     /// player held. An unlearn (`unlists` true; a rank-up's removal passes 1, `0x4b2db7`) first
-    /// takes a listed stance-bar spell off the form list and signals `UPDATE_SHAPESHIFT_FORMS`
-    /// (`0x4b2e4e`); then the sort's `SPELLS_CHANGED` (`0x4b2f3f`) when it was in the book
-    /// (`0x4b2f2f`).
+    /// takes the spell off the stored form list where it holds it and signals
+    /// `UPDATE_SHAPESHIFT_FORMS` ([`crate::ui_shapeshift::form_unlearned`]); then the sort's
+    /// `SPELLS_CHANGED` (`0x4b2f3f`) when it was in the book (`0x4b2f2f`).
     pub(crate) fn left(
         &mut self,
         spell_id: u32,
         was_known: bool,
         unlists: bool,
+        actions: &mut crate::ui_action::PlayerActions,
         spells: Option<&Spells>,
     ) {
         let d = spells.and_then(|s| s.catalog.get(spell_id));
         if !was_known || self.me.is_empty() {
             return;
         }
-        if unlists && d.is_some_and(crate::ui_shapeshift::on_stance_bar) {
+        if unlists && crate::ui_shapeshift::form_unlearned(&mut actions.forms, spell_id) {
             self.lane.write(FieldNotice::Global {
                 id: crate::field_watch::id::UPDATE_SHAPESHIFT_FORMS,
             });

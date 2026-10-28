@@ -286,12 +286,6 @@ fn range_answers(
     (has_range, in_range)
 }
 
-/// Whether the world entry's usable refresh found a slot's pair changed (`0x4e4f90` →
-/// `0x4e5c00`): its `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`), which the enter cascade signals after
-/// the minimap's set-up and before `UPDATE_BONUS_ACTIONBAR` (`0x490979`), and takes.
-#[derive(Resource, Default)]
-pub(crate) struct EnterUsable(pub(crate) bool);
-
 /// The event one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
 #[derive(Resource, Default)]
 pub(crate) struct ActionEvents {
@@ -430,6 +424,26 @@ impl ActionStates<'_, '_> {
         }
     }
 
+    /// The world-enter cascade's refresh of the bar's usable cache (`0x490979` → `0x4e4f90` →
+    /// `0x4e5c00`), in its place: every slot's state recomputed and pushed and its pair stored;
+    /// whether a pair changed, which signals `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`).
+    pub(crate) fn enter_world_refresh(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+    ) -> bool {
+        let now = Instant::now();
+        let clock = self.memory.clock.unwrap_or((now, script.now()));
+        let pass = Pass {
+            now,
+            clock,
+            trace_cd: false,
+            refresh: false,
+            refresh_cache: true,
+            arrived: false,
+        };
+        self.pass(script, pass).0
+    }
+
     /// `0x4e58e0` for a slot a write outside the feed moved, a recount's (`0x4e5caa` →
     /// `0x4e5cb1`): its pair recomputed and stored (`0x4e5903`-`0x4e5914`) and pushed, with no
     /// refresh and no event, ahead of the slot's `ACTIONBAR_SLOT_CHANGED` (`0x4e5998`). The pass
@@ -455,13 +469,11 @@ impl ActionStates<'_, '_> {
         &mut self,
         script: &mut benilla_ui::script::UiScript,
         clock: (Instant, f64),
-        entered: bool,
         bag_updates: u64,
         arrived: bool,
         owed: &mut ActionEvents,
-        enter_usable: &mut bool,
     ) {
-        let (memory, new_vm) = self.memory.vm.get_reset(script);
+        let (memory, _) = self.memory.vm.get_reset(script);
         let cooldowns = &mut *self.cooldowns;
         let (items, spells) = (&*self.items, &self.spells);
         let now = Instant::now();
@@ -479,15 +491,12 @@ impl ActionStates<'_, '_> {
             memory.last_cd_trace = Some(now);
         }
 
-        // The usable cache's refreshes outside the usable refresh (`0x4e5c00`): world entry
-        // (`0x4e4f90`, from the enter cascade at our player's arrival or a reload's), `EditMacro`
-        // (`0x4f132e`) and each `RaiseBagUpdate` a watcher's run calls (`0x4f9374`); a new VM meets
-        // the cache as it stands.
+        // The usable cache's refreshes outside the usable refresh (`0x4e5c00`) that the frame owes:
+        // `EditMacro` (`0x4f132e`) and each `RaiseBagUpdate` a watcher's run calls (`0x4f9374`); a
+        // new VM meets the cache as it stands, and the world entry's runs in its cascade
+        // ([`Self::enter_world_refresh`]).
         let macro_edits = script.macro_edits();
-        let refresh_cache = entered
-            || new_vm
-            || macro_edits != memory.macro_edits
-            || bag_updates != memory.bag_updates;
+        let refresh_cache = macro_edits != memory.macro_edits || bag_updates != memory.bag_updates;
         (memory.macro_edits, memory.bag_updates) = (macro_edits, bag_updates);
 
         // The reactive list: emptied at an arrival and filled from the book; the pass re-checks it
@@ -515,13 +524,7 @@ impl ActionStates<'_, '_> {
             arrived,
         };
         let (usable_changed, _) = self.pass(script, pass);
-        // A pass that ran the world entry's refresh owes its pair change to the enter cascade,
-        // which signals it inside itself (`0x490979` → `0x4e4f90` → `0x4e5c00`).
-        if entered || new_vm {
-            *enter_usable |= usable_changed;
-        } else {
-            owed.usable_changed |= usable_changed;
-        }
+        owed.usable_changed |= usable_changed;
     }
 
     /// Compute every occupied slot's state and diff-push it, store the pairs in the bar's usable
@@ -866,12 +869,8 @@ pub(super) fn feed_action_state(
         ActionStates<'static, 'static>,
         Option<Res<'static, crate::item_lane::ItemLane>>,
     )>,
-    // The enter cascade and the events owed, the cascade's own apart.
-    (mut entries, mut owed, mut enter_usable): (
-        MessageReader<crate::net::WorldEnterCascadeMessage>,
-        ResMut<ActionEvents>,
-        ResMut<EnterUsable>,
-    ),
+    // The events owed.
+    mut owed: ResMut<ActionEvents>,
     // The active player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
     // empties the reactive list (`0x5dea86`); a reload reaches neither.
     created: Query<(), Added<SelfPlayer>>,
@@ -880,22 +879,13 @@ pub(super) fn feed_action_state(
     clock: Res<crate::ui_script::UiClock>,
 ) {
     let clock = (clock.anchor, clock.ui_now);
-    let entered = entries.read().count() > 0;
     let bag_updates = vm.own().1.map_or(0, |l| l.bag_raises());
     let arrived = !created.is_empty();
     vm.turn(|script, (mut states, _)| {
         let Some(script) = script else {
             return;
         };
-        states.feed(
-            script,
-            clock,
-            entered,
-            bag_updates,
-            arrived,
-            &mut owed,
-            &mut enter_usable.0,
-        );
+        states.feed(script, clock, bag_updates, arrived, &mut owed);
     })
 }
 

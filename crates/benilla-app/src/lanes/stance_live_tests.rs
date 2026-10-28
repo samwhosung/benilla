@@ -78,13 +78,15 @@ impl Client {
             .merge(ObjectFields::from_pairs(pairs));
     }
 
-    /// A spell known, as a learn's handler leaves the known spells.
+    /// A spell known, as a learn's handler leaves the known spells and the form list
+    /// (`0x4b25b0`).
     fn know(&mut self, spell_id: u32) {
-        self.app
-            .world_mut()
-            .resource_mut::<crate::ui_action::PlayerActions>()
-            .spells
-            .insert(spell_id);
+        let world = self.app.world_mut();
+        world.resource_scope(|world, mut actions: Mut<crate::ui_action::PlayerActions>| {
+            actions.spells.insert(spell_id);
+            let catalog = &world.resource::<crate::ui_action::Spells>().catalog;
+            crate::ui_shapeshift::form_learned(&mut actions.forms, spell_id, None, catalog);
+        });
     }
 }
 
@@ -164,10 +166,12 @@ fn client() -> Client {
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     let world = app.world_mut();
     world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    world
-        .resource_mut::<crate::ui_action::PlayerActions>()
-        .spells
-        .extend([BEAR, WARDED]);
+    {
+        // As `SMSG_INITIAL_SPELLS` leaves the book, for the arrival to learn again.
+        let mut actions = world.resource_mut::<crate::ui_action::PlayerActions>();
+        actions.spells.extend([BEAR, WARDED]);
+        actions.initial.extend([BEAR, WARDED]);
+    }
     let mut c = Client {
         app,
         inbound,
@@ -352,7 +356,7 @@ fn the_mirror_timers_fire_at_their_packets_places() {
     );
 }
 
-/// The capture's demo seat with no player held: the list off the known spells the capture seeds
+/// The capture's demo seat with no player held: the list the capture seeds
 /// ([`crate::ui_script::DEMO_STANCES`]), in bar order, each entry off the copy the demo feed
 /// seeds, by its spell.
 #[test]
@@ -388,6 +392,8 @@ fn the_demo_seat_shows_its_forms() {
     let mut actions = world.resource_mut::<crate::ui_action::PlayerActions>();
     actions.spells.clear();
     actions.spells.extend(crate::ui_script::DEMO_STANCES);
+    actions.forms.clear();
+    actions.forms.extend(crate::ui_script::DEMO_STANCES);
     use bevy::ecs::system::RunSystemOnce;
     world
         .run_system_once(crate::ui_script::demo_unit_feed)

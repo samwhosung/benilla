@@ -136,6 +136,13 @@ enum Pending {
 }
 
 impl Pending {
+    /// A line of `SMSG_MESSAGECHAT`'s, which the handler queues while the display latch is set
+    /// (`0x49db5c` → `0x49db8c`), and whose name answer queues it again (`0x49ce3c`); the addon
+    /// test is downstream of both (`0x49dbcb`).
+    fn latched(&self) -> bool {
+        matches!(self, Pending::Wire { .. } | Pending::Addon { .. })
+    }
+
     /// A monster or battleground line, which waits only on its `$`-macro subject's name and is
     /// retried only by that name's answer (`0x49ccc0`), never by the frame's age pass.
     fn held_for_subject(&self) -> bool {
@@ -271,6 +278,9 @@ struct ChatQueue {
     /// How many player-name answers `pending` holds, so a line looks for a later one only then.
     answers: usize,
     broadcasts: Vec<super::broadcast::Broadcast>,
+    /// The display latch `[0x8435fc]`: while set the wire's chat lines are held, not shown
+    /// ([`Pending::latched`]), until the world-enter cascade's release (`0x4989c0`).
+    latched: bool,
 }
 
 /// One item in the lane, with its stamp ([`crate::lanes::stamp`]).
@@ -293,6 +303,8 @@ pub(super) enum Release {
     Answer(Answer),
     /// The frame's pass, which ages each line held before `before` by a frame.
     Age { before: u64 },
+    /// The display latch's release (`0x4989c0` → `0x49d230`): every held line shows that can.
+    Display,
 }
 
 impl ChatQueue {
@@ -325,6 +337,18 @@ impl ChatLog {
     /// Drop everything queued: the session's end.
     pub(crate) fn reset(&self) {
         *self.q() = ChatQueue::default();
+    }
+
+    /// Set the display latch `[0x8435fc]`, as the world session's start finds it (1 from start-up)
+    /// and the leave-world sweep sets it (`0x490a9e` → `0x498a10`): the wire's lines are held from
+    /// here until the world-enter cascade's release ([`release_display`]).
+    pub(crate) fn latch(&self) {
+        self.q().latched = true;
+    }
+
+    /// Whether the display latch holds the wire's lines.
+    pub(crate) fn latched(&self) -> bool {
+        self.q().latched
     }
 
     /// The lane's head, for the drain ([`crate::lanes`]).
@@ -1386,7 +1410,7 @@ pub(super) struct ChatReads<'w, 's> {
 /// The chat lane's firing: the VM, the slots the channel notices write between their Lua and the
 /// host its calls apply through; the log; and the rest of what a line reads.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct ChatFiring<'w, 's> {
+pub(crate) struct ChatFiring<'w, 's> {
     vm: crate::script_calls::VmWith<'w, 's, ResMut<'static, ChannelState>>,
     log: Res<'w, ChatLog>,
     reads: ChatReads<'w, 's>,
@@ -1438,7 +1462,7 @@ fn release(
     from: u64,
 ) -> bool {
     let (step, before) = match cause {
-        Release::Answer(_) => (0, None),
+        Release::Answer(_) | Release::Display => (0, None),
         Release::Age { before } => (1, Some(before)),
     };
     let mut next = from;
@@ -1472,6 +1496,11 @@ fn fire_one(
     item: Pending,
     at: crate::lanes::Stamp,
 ) -> Option<Pending> {
+    // Under the display latch a wire line waits for the cascade's release (`0x49db5c`,
+    // `0x49ce3c`).
+    if item.latched() && log.latched() {
+        return Some(item);
+    }
     if item
         .waits_on()
         .into_iter()
@@ -2024,6 +2053,28 @@ fn fire_one(
 /// The chat lane's `fire_until` ([`crate::lanes`]).
 pub(super) fn fire_chat(In(until): In<crate::lanes::Until>, mut firing: ChatFiring) {
     firing.fire(until);
+}
+
+/// The world-enter cascade's chat release (`0x490974` → `0x4989c0`), in its place
+/// ([`crate::ui_world_enter`]), after both login events: the display latch cleared (`0x4989fd`), then
+/// the queued lines shown (`0x498a03` → `0x49d230`), each that can, in the order they were held, at
+/// the cascade's stamp, with the host lent; one still waiting on its name stays held. The AFK
+/// mirror's reseed beside it is [`super::away`]'s. With no VM the latch clears and the lines wait.
+pub(crate) fn release_display(mut firing: ChatFiring) {
+    let ChatFiring { vm, log, reads } = &mut firing;
+    log.q().latched = false;
+    let (Some(script), set) = vm.parts() else {
+        return;
+    };
+    let at = crate::lanes::firing_now().unwrap_or_else(crate::lanes::stamp);
+    release(reads, log, script, set, at, Release::Display, 0);
+}
+
+/// The leave-world sweep's chat leg (`0x490a9e` → `0x498a10`): the display latch set.
+pub(super) fn latch_on_leave_world(log: Option<Res<ChatLog>>) {
+    if let Some(log) = log {
+        log.latch();
+    }
 }
 
 /// One frame of the chat lane alone, for a test: the age pass, then every item.

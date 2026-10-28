@@ -1423,6 +1423,9 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
     let is_red = |c: [f32; 4]| (c[0] - 1.0).abs() < 1e-6 && c[1].abs() < 1e-6 && c[2].abs() < 1e-6;
 
     app.update();
+    // Our create's arrival, whose `PLAYER_ENTERING_WORLD` the target frame updates on.
+    crate::ui_world_enter::push_arrival(app.world_mut());
+    crate::ui_world_enter::fire_lane(app.world_mut());
     let _ = seen(&mut app);
     let before = plate(&mut app);
     assert!(

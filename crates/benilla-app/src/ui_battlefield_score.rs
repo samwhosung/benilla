@@ -18,9 +18,8 @@ use benilla_protocol::messages::PvpLogData;
 use benilla_ui::script::{BattlefieldScoreRead, BattlefieldScoreRow, BattlefieldStatColumn};
 
 use crate::names::NameCache;
-use crate::net::{NetCommands, WorldEnterCascadeMessage};
+use crate::net::NetCommands;
 use crate::query_cache::Ask;
-use crate::ui_script::UiFeed;
 use crate::world_state_ui::WorldStateUiRes;
 
 /// `RequestBattlefieldScoreData`'s throttle (`0x4aa170`).
@@ -39,7 +38,9 @@ struct ScoreBlock {
     stats: [u32; 8],
 }
 
-/// The board, its filter and the request stamp, all zeroed when the session ends.
+/// The board, its filter and the request stamp, all zeroed when the session ends, and at each
+/// world-enter cascade by its battlefield init (`0x4909fb` → `0x4a9db0`,
+/// [`crate::ui_battlefield::reset_on_world_enter`]), which fires no event.
 #[derive(Resource)]
 pub(crate) struct BattlefieldScoreboard {
     /// The blocks in board order (`0xb6e880`): the last message's in wire order, sorted in place
@@ -282,20 +283,6 @@ impl BattlefieldScoreboard {
     }
 }
 
-/// The world-enter cascade's score reset (`0x4909fb` → `0x4a9db0`): the pending names released,
-/// the ended flag `0xb6ebcc`, the winner `0xb6ebd0`, the wire and filtered counts
-/// `0xb6ebc0`/`0xb6ebc4`, the pending-name count `0xb6ebd4` and the score request stamp `0xb6ebc8`
-/// and the stat count `0xb6ebd8` (`0x4a9e67`) all zero, and the filter back to -1. The cascade
-/// fires no event, and `SMSG_BATTLEFIELD_STATUS` is no part of it.
-pub(crate) fn reset_on_world_enter(
-    mut cascades: MessageReader<WorldEnterCascadeMessage>,
-    mut board: ResMut<BattlefieldScoreboard>,
-) {
-    if cascades.read().next().is_some() {
-        *board = BattlefieldScoreboard::default();
-    }
-}
-
 /// The column headers for `map`: the first contiguous run of matching `WorldStateUI.dbc` rows in
 /// table order, as the status-3 arm builds them (`0x4aa9c3`–`0x4aaa17`; the run ends at
 /// `0x4aa9fe`).
@@ -360,8 +347,7 @@ pub(crate) struct BattlefieldScorePlugin;
 impl Plugin for BattlefieldScorePlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<BattlefieldScoreboard>()
-            .add_systems(Update, reset_on_world_enter.in_set(UiFeed));
+        app.init_resource::<BattlefieldScoreboard>();
     }
 }
 
@@ -382,9 +368,7 @@ mod tests {
         app.insert_resource(NetCommands(tx))
             .init_resource::<BattlefieldScoreboard>()
             .init_resource::<BattlefieldLane>()
-            .init_resource::<NameCache>()
-            .add_message::<WorldEnterCascadeMessage>()
-            .add_systems(Update, reset_on_world_enter);
+            .init_resource::<NameCache>();
         crate::ui_unit::TestNames::english().insert(&mut app);
         net::register(&mut app);
         crate::names::net::register(&mut app);
@@ -585,8 +569,7 @@ mod tests {
             let s = board.summary();
             assert_eq!((s.filtered, s.ended, s.winner), (1, true, 1));
         }
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        world_enter(&mut app);
         let mut board = app.world_mut().resource_mut::<BattlefieldScoreboard>();
         let s = board.summary();
         assert_eq!((s.filtered, s.ended), (0, false));
@@ -595,6 +578,13 @@ mod tests {
             board.request_due(now),
             "the stamp is zeroed, so the next request is not throttled"
         );
+    }
+
+    /// The world-enter cascade's battlefield init (`0x4a9db0`).
+    fn world_enter(app: &mut App) {
+        app.world_mut()
+            .run_system_cached(crate::ui_battlefield::reset_on_world_enter)
+            .expect("the battlefield init runs");
     }
 
     /// The board's guids in board order.
@@ -701,8 +691,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<BattlefieldScoreboard>()
             .columns = vec![BattlefieldStatColumn::default()];
-        app.world_mut().write_message(WorldEnterCascadeMessage);
-        app.update();
+        world_enter(&mut app);
         let board = app.world().resource::<BattlefieldScoreboard>();
         assert_eq!(board.summary().columns, 0);
     }

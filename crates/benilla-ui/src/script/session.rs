@@ -111,11 +111,18 @@ impl super::UiScript {
         self.fire_world_enter_tail();
     }
 
-    /// The cascade up to the buff cache's setup (`0x490983`): the bracket opened, the collection,
-    /// `PLAYER_LOGIN` if armed, `PLAYER_ENTERING_WORLD` and the calls after it through the action
-    /// bar's (`0x490979`). `usable_changed` is whether the action bar's refresh found a slot's pair
-    /// changed, which the caller's slots decide. [`Self::fire_world_enter_tail`] closes it.
+    /// The cascade up to the buff cache's setup (`0x490983`): its events
+    /// ([`Self::fire_world_enter_events`]), then the action bar's ([`Self::fire_world_enter_action_bar`]).
+    /// [`Self::fire_world_enter_tail`] closes it.
     pub fn fire_world_enter_head(&mut self, bonus_bar_offset: u8, usable_changed: bool) {
+        self.fire_world_enter_events();
+        self.fire_world_enter_action_bar(bonus_bar_offset, usable_changed);
+    }
+
+    /// The cascade's opening: the bracket opened (`0x4908d5`), the collection, `PLAYER_LOGIN` if
+    /// armed, `PLAYER_ENTERING_WORLD`, then the first call after the signal, the minimap
+    /// initializer (`0x49096f`). The chat release follows it (`0x490974`), the caller's.
+    pub fn fire_world_enter_events(&mut self) {
         self.seat_reputation();
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
@@ -125,12 +132,14 @@ impl super::UiScript {
             self.fire_event("PLAYER_LOGIN", Vec::new());
         }
         self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
-        // The calls after the signal, inside the bracket: the minimap initializer first
-        // (`0x49096f`), then among the rest the action bar's refresh (`0x490979` → `0x4e4f90`):
-        // the usable refresh `0x4e5c00`, signalling `ACTIONBAR_UPDATE_USABLE` on a changed pair
-        // (`0x4e5c53`), then the bonus bar (`0x4e4f95` → `0x4e4fc0`), which sets the offset and
-        // signals whether or not it moved (`0x4e5018`).
         self.minimap_enter_world();
+    }
+
+    /// The action bar's call (`0x490979` → `0x4e4f90`): the usable refresh `0x4e5c00`, signalling
+    /// `ACTIONBAR_UPDATE_USABLE` on a changed pair (`0x4e5c53`), which `usable_changed` says the
+    /// caller's slots found, then the bonus bar (`0x4e4f95` → `0x4e4fc0`), which sets the offset
+    /// and signals whether or not it moved (`0x4e5018`).
+    pub fn fire_world_enter_action_bar(&mut self, bonus_bar_offset: u8, usable_changed: bool) {
         if usable_changed {
             self.fire_event("ACTIONBAR_UPDATE_USABLE", Vec::new());
         }
@@ -141,15 +150,35 @@ impl super::UiScript {
     /// The cascade after the buff cache's setup up to the pet bar's reset (`0x4909c9`): the bag
     /// watchers' set-up (`0x49098d`) and the quest log's (`0x4909a1`).
     pub fn fire_world_enter_watchers(&mut self) {
+        self.fire_world_enter_bags();
+        self.fire_world_enter_quest_log();
+    }
+
+    /// The bag watchers' set-up (`0x49098d`, [`Self::bags_enter_world`]).
+    pub fn fire_world_enter_bags(&mut self) {
         self.bags_enter_world();
+    }
+
+    /// The quest log's init (`0x4909a1`): its rebuild and `QUEST_LOG_UPDATE`.
+    pub fn fire_world_enter_quest_log(&mut self) {
         self.quest_log_enter_world();
     }
 
-    /// The cascade after the pet bar's reset: the reputation rebuild (`0x4909d3`) and the skill
-    /// list's (`0x4909f1` → `0x4d2c90`), then the bracket closed (`0x490a56`).
+    /// The cascade after the pet bar's reset: its rebuilds ([`Self::fire_world_enter_rebuilds`]),
+    /// then the bracket closed ([`Self::close_world_enter`]).
     pub fn fire_world_enter_tail(&mut self) {
+        self.fire_world_enter_rebuilds();
+        self.close_world_enter();
+    }
+
+    /// The reputation rebuild (`0x4909d3`) and the skill list's (`0x4909f1` → `0x4d2c90`).
+    pub fn fire_world_enter_rebuilds(&mut self) {
         self.reputation_enter_world();
         self.rebuild_skills();
+    }
+
+    /// The cascade's bracket closed (`0x490a56`), after its last call.
+    pub fn close_world_enter(&mut self) {
         self.pop_sound_suppression();
     }
 }

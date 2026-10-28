@@ -1432,7 +1432,7 @@ fn unit_feed_app() -> (App, crossbeam_channel::Receiver<crate::net::ClientComman
     app.init_resource::<crate::ui_chat::ChatLog>();
     app.init_resource::<crate::ui_guild::GuildState>();
     app.add_message::<crate::creature_anim::SwingImpact>();
-    app.add_message::<crate::net::WorldEnterCascadeMessage>();
+    app.add_plugins(crate::ui_world_enter::WorldEnterPlugin);
     // The glue VM, which stands until the entry load and must hear none of the in-game events.
     super::setup_script(app.world_mut());
     (app, rx)
@@ -1475,6 +1475,7 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
                 .into_created(benilla_protocol::messages::ObjectType::Player),
         ),
     ));
+    crate::ui_world_enter::push_arrival(app.world_mut());
 
     let seen = |app: &App| -> i64 {
         app.world()
@@ -2463,13 +2464,16 @@ fn spawn_self_player(world: &mut World) -> Entity {
         (717, 5000),
     ])
     .into_created(ObjectType::Player);
-    world
+    let me = world
         .spawn((
             crate::net::SelfPlayer,
             crate::net::Guid(1),
             crate::net::ObjectStore(fields),
         ))
-        .id()
+        .id();
+    // The create's arrival (`0x5dec7b`), as our own create's handler pushes it.
+    crate::ui_world_enter::push_arrival(world);
+    me
 }
 
 /// A probe global off the live VM, as a string.
