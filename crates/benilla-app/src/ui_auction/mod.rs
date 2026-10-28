@@ -483,8 +483,11 @@ impl AuctionOpen {
         self.query_gate = None;
     }
 
+    /// The socket's end: the close's clear, and the lines waiting on records, whose callbacks the
+    /// item cache drops with its in-flight asks ([`Items::clear_session`]).
     pub(crate) fn clear_session(&mut self) {
         self.clear();
+        self.messages.clear();
     }
 }
 
