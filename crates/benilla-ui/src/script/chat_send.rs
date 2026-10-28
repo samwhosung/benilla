@@ -70,7 +70,7 @@ impl super::live::LiveQuery for KnownLanguagesQuery {
 fn known_languages(lua: &Lua) -> Option<Vec<String>> {
     super::live::ask(lua, &KnownLanguagesQuery).unwrap_or_else(|| {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        super::battlefield_queue::player_exists(&model).then(|| model.known_languages.clone())
+        super::battlefield_queue::player_exists(lua, &model).then(|| model.known_languages.clone())
     })
 }
 
@@ -259,6 +259,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // No local player ends the call quietly, ahead of every check (`0x49f219`-
                 // `0x49f223` to `0x49f78a`).
                 if !super::battlefield_queue::player_exists(
+                    lua,
                     &lua.app_data_ref::<Model>().expect("model app_data"),
                 ) {
                     return Ok(());

@@ -198,8 +198,7 @@ pub(super) fn seat(app: &mut App, tot: u64) {
         });
 }
 
-/// One frame: the packets through the handler table, the unit feed's push of the frame's state,
-/// then the lanes' drain; what the spy saw.
+/// One frame: the packets through the handler table, then the lanes' drain; what the spy saw.
 pub(super) fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
     frame_after(app, |_| {}, packets)
 }
@@ -220,7 +219,6 @@ pub(super) fn frame_after(
     }
     before(world);
     crate::net::handlers::dispatch(world, wire(packets));
-    crate::ui_unit::run_feed_units_once(world);
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Seen").unwrap();
@@ -242,6 +240,37 @@ fn each_unit_health_listener_reads_its_own_packets_target_health() {
         ),
         ["UNIT_HEALTH:target:70", "UNIT_HEALTH:target:40"]
     );
+}
+
+/// The unit tooltip watches the health of the unit it shows on the object itself (`0x52a0a8`
+/// registers `0x529560`), so a values block re-seats the plate's bar inside its packet's notify
+/// pass, with no token pushed: the target's plate follows each packet's health.
+#[test]
+fn a_unit_tooltips_bar_follows_its_units_health_at_each_packet() {
+    let mut app = client();
+    let world = app.world_mut();
+    crate::ui_script::test_ui::load_tooltip_template(world.non_send_resource::<UiScript>());
+    crate::script_calls::with_hosted_vm(world, |s| {
+        s.expect("a VM").run(
+            r#"
+            Tip = CreateFrame("GameTooltip", "Tip", nil, "TestTooltipTemplate")
+            local bar = CreateFrame("StatusBar", "TipStatusBar", Tip)
+            bar:SetWidth(100) bar:SetHeight(8)
+            Bars = {}
+            bar:SetScript("OnValueChanged", function() table.insert(Bars, arg1) end)
+            Tip:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+            Tip:SetUnit("target")
+            "#,
+        )
+    })
+    .expect("the plate shows the target");
+    frame(
+        &mut app,
+        vec![values(WOLF, &health(70)), values(WOLF, &health(40))],
+    );
+    let bars: Vec<f64> = crate::script_calls::eval_in_vm(app.world(), "return Bars");
+    // Each seat sets the range, re-firing the held value, then the packet's (`0x529560`).
+    assert_eq!(bars, [100.0, 100.0, 70.0, 70.0, 40.0]);
 }
 
 /// A combat-log `UNIT_COMBAT` raised ahead of the update packet that writes the hit reads the
@@ -444,8 +473,7 @@ struct Stuck(Option<crate::lanes::Stamp>);
 fn fire_stuck(In(_): In<crate::lanes::Until>) {}
 
 /// A drain that stops before the views lane has replayed its entries leaves no rewound store
-/// behind: the next frame's feed reads the live store, and the next drain puts the feed's views
-/// back, so the target reads the health its last packet wrote.
+/// behind, so the target reads, through the host, the health its last packet wrote.
 #[test]
 fn a_drain_that_stops_early_leaves_no_rewound_store() {
     use crate::lanes::LaneApp;
@@ -466,11 +494,10 @@ fn a_drain_that_stops_early_leaves_no_rewound_store() {
     assert!(!views.holds(WOLF), "the stop left nothing rewound");
     app.world_mut().resource_mut::<Stuck>().0 = None;
     assert_eq!(frame(&mut app, vec![]), ["UNIT_HEALTH:target:70"]);
-    let health = app
-        .world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .eval::<f64>("return UnitHealth('target')")
-        .unwrap();
+    let health = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM").eval::<f64>("return UnitHealth('target')")
+    })
+    .unwrap();
     assert_eq!(health, 70.0);
 }
 
@@ -563,7 +590,6 @@ fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
         .unwrap();
     // The packet's end writes the line among the death's legs.
     crate::net::handlers::dispatch(world, wire([values(ME, &health(0))]));
-    crate::ui_unit::run_feed_units_once(world);
     crate::lanes::fire_in_order(world);
     let seen = world
         .non_send_resource::<UiScript>()

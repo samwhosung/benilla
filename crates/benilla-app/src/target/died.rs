@@ -1304,7 +1304,6 @@ mod tests {
         let mut c = client();
         // In the world before the bar: the entry's pet reset drops a bar (`0x4bc6f0`).
         crate::script_calls::insert_test_vm(c.world());
-        crate::ui_unit::run_feed_units_once(c.world());
         possessing_an_attacker(&mut c);
         let mob = c.mob;
         c.select(MOB, mob);
@@ -1335,7 +1334,6 @@ mod tests {
             })
             .collect();
         assert_eq!(wire, ["PetStopAttack", "SetSelection 0x0", "RandomRoll"]);
-        crate::ui_unit::run_feed_units_once(c.world());
         let heard: Vec<String> = crate::script_calls::eval_in_vm(c.world(), "return HEARD");
         assert_eq!(heard, ["PET_BAR_UPDATE", "PLAYER_TARGET_CHANGED"]);
     }

@@ -4,7 +4,7 @@
 
 use benilla_protocol::messages::{mail_message_type, MailAttachment, MailListEntry};
 use benilla_protocol::SessionEvent;
-use benilla_ui::script::{StationeryView, UiScript, UnitState};
+use benilla_ui::script::{StationeryView, UiScript};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -72,7 +72,7 @@ impl Mailbox {
             mail.click(MAILBOX);
             mail.mails = mails;
         }
-        let mut script = UiScript::new().expect("a VM");
+        let script = UiScript::new().expect("a VM");
         script
             .run(
                 r#"HEARD = {}
@@ -81,9 +81,14 @@ impl Mailbox {
                 f:SetScript("OnEvent", function() table.insert(HEARD, event) end)"#,
             )
             .expect("the recorder installs");
-        script.set_unit("player", Some(UnitState::default()));
-        script.set_money(1_000);
         world.insert_non_send_resource(script);
+        // The player object the item verbs need (`0x4af992`), with the purse a COD is paid from
+        // (`0x4af9c5`).
+        crate::test_support::hold_self_player(
+            world,
+            0x7,
+            &[(benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE, 1_000)],
+        );
         Self { app, rx }
     }
 
@@ -351,13 +356,8 @@ fn the_list_defaults_the_paper_and_masks_the_subject() {
         }
     }
     world.insert_resource(darn_filter());
-    // The list as `GetNumStationeries` rebuilds it (`0x4ae202`) for a player in the world
+    // The list as `GetNumStationeries` rebuilds it (`0x4ae202`) for the player in the world
     // (`0x4ad9aa`), which the parse reads.
-    world.spawn((
-        crate::net::SelfPlayer,
-        crate::net::Guid(7),
-        crate::net::ObjectStore(Default::default()),
-    ));
     assert_eq!(h.eval::<i64>("return GetNumStationeries()"), 2);
     let world = h.app.world_mut();
     let mut none = entry(1, 0);

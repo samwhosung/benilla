@@ -839,8 +839,9 @@ fn line_parts(lua: &Lua, model: &mut Model, index: usize, line: usize) -> Option
                 let name = record.rep_faction_name.clone()?;
                 // `0x4d6370`, as the turn-in test reads it: 0 for a faction with no reputation index.
                 let standing = quest_live::standing(lua, model, faction);
-                // `0x612bf0` on the active player: its gender 1 takes the `_FEMALE` text.
-                let female = model.snapshot_unit("player").is_some_and(|u| u.sex == 3);
+                // `0x612bf0` on the active player as the call runs: its gender 1 takes the
+                // `_FEMALE` text.
+                let female = super::unit::view(lua, model, "player").is_some_and(|u| u.sex == 3);
                 return Some(LineParts {
                     text: LineText::Faction {
                         name,

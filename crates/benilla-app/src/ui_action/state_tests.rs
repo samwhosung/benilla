@@ -29,17 +29,15 @@ fn feed_inputs(app: &mut App) {
         .init_resource::<crate::net::Reputations>();
 }
 
-/// The feed's two halves, around the unit snapshots as the plugin orders them.
+/// The feed's two halves, as the plugin orders them.
 fn add_action_feed(app: &mut App) {
     app.init_resource::<ActionEvents>()
         .init_resource::<super::ActionStateMemory>()
         .add_systems(
             Update,
             (
-                feed_action_state.before(crate::ui_unit::UnitSnapshots),
-                fire_action_events
-                    .in_set(crate::ui_action::CooldownEvents)
-                    .after(crate::ui_unit::UnitSnapshots),
+                feed_action_state,
+                fire_action_events.in_set(crate::ui_action::CooldownEvents),
                 // The cooldown lane, after every feed, as the drain fires it.
                 crate::ui_action::fire_cooldown_lane,
             )
@@ -1479,7 +1477,7 @@ fn usable_reader_app() -> App {
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
         .init_resource::<crate::ui_guild::GuildState>();
-    crate::ui_unit::add_unit_feed(&mut app);
+    crate::ui_unit::add_token_seats(&mut app);
     app.world()
         .non_send_resource::<UiScript>()
         .run(
@@ -1813,16 +1811,13 @@ fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
     assert!(frame(&mut app).is_empty(), "once");
 }
 
-/// The feed's two halves sit around the unit snapshots, and its signals come ahead of the events
-/// its producers precede. The push half seats the action states before the snapshots, which
-/// `PLAYER_ENTERING_WORLD`'s handlers read. The fire half runs after the snapshots are this
-/// frame's, and signals before `UNIT_HEALTH` and
-/// `UNIT_MANA` (the type watchers ahead of the object's bridge at one field, `0x46544a`),
+/// The feed's push half runs ahead of its fire half, whose signals come ahead of the events its
+/// producers precede: `UNIT_HEALTH` and `UNIT_MANA` (the type watchers ahead of the object's bridge at one field, `0x46544a`),
 /// `PLAYER_REGEN_DISABLED` (`0x5ff51b` ahead of `0x5ff533`), `PLAYER_COMBO_POINTS` (`0x5ddff0`)
 /// and the form's cast change (`0x5de011` ahead of `0x5de016`). Read off the declared graph; skips
 /// where bevy carries no system names.
 #[test]
-fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_precede() {
+fn the_feed_pushes_then_signals_ahead_of_the_events_its_producers_precede() {
     use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
     use std::collections::HashSet;
 
@@ -1861,14 +1856,7 @@ fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_preced
     };
     let key = |name: &str| named(name).unwrap_or_else(|| panic!("{name} is scheduled"));
     let fire = key("::fire_action_events");
-    assert!(
-        later_than(push).contains(&key("::ui_unit::feed_units")),
-        "the push half runs before the unit snapshots"
-    );
-    assert!(
-        later_than(key("::ui_unit::feed_units")).contains(&fire),
-        "the fire half runs after the unit snapshots"
-    );
+    assert!(later_than(push).contains(&fire), "the push half runs first");
     let seen = later_than(fire);
     for later in ["::lanes::fire_in_order", "::ui_cast::feed_cast_reports"] {
         assert!(

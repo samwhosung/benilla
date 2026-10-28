@@ -611,7 +611,6 @@ mod tests {
         world.insert_non_send_resource(script);
         let frame = |app: &mut App| {
             let world = app.world_mut();
-            crate::ui_unit::run_feed_units_once(world);
             // The poll's tenth tick (`0x5db906`).
             for _ in 0..10 {
                 world.run_system_cached(feed_zone_events).unwrap();

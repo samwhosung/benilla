@@ -3483,6 +3483,8 @@ fn the_call_host_applies_the_chat_calls_inside_the_verb() {
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     app.world_mut().insert_non_send_resource(in_world_vm());
+    // `SendChatMessage` needs the player object (`0x49f219`).
+    crate::test_support::hold_self_player(app.world_mut(), 0x7, &[]);
     let sent_at_each_line = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = sent_at_each_line.clone();
     crate::script_calls::with_hosted_vm(app.world_mut(), |s| {

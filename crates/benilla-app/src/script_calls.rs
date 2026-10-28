@@ -1464,9 +1464,6 @@ mod tests {
         world.insert_non_send_resource(script);
         let mut f = Frame { app, rx };
         if selected {
-            // The world entry first, as a session has it (`0x490927` clears a target there): the
-            // target comes after.
-            settle(&mut f);
             f.rx.try_iter().for_each(drop);
             *f.app.world_mut().resource_mut::<Selection>() = Selection {
                 target: Some(old),
@@ -2793,24 +2790,12 @@ mod tests {
             }],
         });
         f.app.world_mut().insert_non_send_resource(script);
-        // This VM's world entry first, as a session has it (`0x490927` clears a target there):
-        // the selection comes after.
-        let selected = std::mem::take(&mut *f.app.world_mut().resource_mut::<Selection>());
-        settle(f);
-        *f.app.world_mut().resource_mut::<Selection>() = selected;
-    }
-
-    /// The unit feed, which signals the selection's change; the calls its handlers make apply
-    /// inside them.
-    fn settle(f: &mut Frame) {
-        crate::ui_unit::run_feed_units_once(f.app.world_mut());
     }
 
     /// `SetSelection` signals `PLAYER_TARGET_CHANGED` inside `ExecuteBinding` (`0x4b7b02`-
     /// `0x4b7b11`), so an insecure addon's handler that casts passes after a TAB press: the call
     /// signals it in place, under the key's input events, as the stock `TARGETNEARESTENEMY`
-    /// binding moves the target, and the addon's handler casts at the new one. A change no call
-    /// made (the server's) hears it from the unit feed with none up, and its cast is refused.
+    /// binding moves the target, and the addon's handler casts at the new one.
     #[test]
     fn a_tab_targets_and_the_addons_target_handler_casts() {
         benilla_formats::wow_data_or_skip!();
@@ -2818,8 +2803,6 @@ mod tests {
         with_factions(&mut f, FRIEND, &[]);
         spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
         with_stock_ui_and_a_casting_hook(&mut f);
-        // The feed's first pass seats the selection it finds, with its world-enter events.
-        settle(&mut f);
         f.rx.try_iter().for_each(drop);
 
         let pressed = with_hosted_vm(f.app.world_mut(), |s| {
@@ -2827,21 +2810,11 @@ mod tests {
         })
         .expect("the binding runs");
         assert!(pressed);
-        settle(&mut f);
         assert_eq!(selected(&f), Some(MOB), "TAB picked the enemy");
         assert_eq!(
             casts(&f),
             vec![(HEAL, Some(MOB))],
             "the handler's cast passed"
-        );
-
-        // The same edge with no call behind it: the server moves the target.
-        f.app.world_mut().resource_mut::<Selection>().guid = Some(NEW);
-        settle(&mut f);
-        assert_eq!(
-            casts(&f),
-            vec![],
-            "no input event up for the handler: refused"
         );
     }
 
@@ -3787,7 +3760,6 @@ mod tests {
         with_factions(&mut f, FRIEND, &[]);
         spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
         with_stock_ui(&mut f, false);
-        settle(&mut f);
         with_the_cursor_up(&mut f);
         f.rx.try_iter().for_each(drop);
 
@@ -3797,7 +3769,6 @@ mod tests {
             })
             .expect("the binding runs");
             assert!(pressed);
-            settle(f);
             f.rx.try_iter().collect::<Vec<_>>()
         };
         let sent = tab(&mut f);

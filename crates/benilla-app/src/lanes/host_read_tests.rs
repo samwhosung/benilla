@@ -39,8 +39,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 28;
-const FRAME_FINAL_INPUTS: usize = 144;
+const FRAME_FINAL_FEEDS: usize = 27;
+const FRAME_FINAL_INPUTS: usize = 136;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -91,7 +91,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         &["ui_talent_wipe::TalentWipeState"],
         "closes the respec question once the player leaves service range, which \
          `CheckTalentMasterDist` reports; the reference tests the range at the call (`0x5df980`)"),
-    ("::ui_unit::feed_units", &["UiScript"], "a field event's listeners read its push"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

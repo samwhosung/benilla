@@ -14,8 +14,8 @@ use benilla_ui::strings::Arg;
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
 
-/// The feeds that push what a field event's handlers read: the unit tokens' snapshots
-/// (`feed_units`), the group's and the pet's tokens, the player's combat stats and
+/// The feeds that push what a field event's handlers read: the group's and the pet's tokens, the
+/// player's combat stats and
 /// inventory, the inspected unit's slots, the honor block and the watched faction. The lanes'
 /// drain runs after all of them, as the update handler writes every block of its packet before its
 /// notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
@@ -138,11 +138,36 @@ impl NoticeFiring<'_, '_> {
             return false;
         }
         fire(script, &mut self.sink, notice);
+        if let FieldNotice::Unit {
+            guid,
+            id: crate::field_watch::id::UNIT_HEALTH,
+        } = notice
+        {
+            self.tooltip_health(script, guid);
+        }
         false
     }
 }
 
 impl NoticeFiring<'_, '_> {
+    /// The unit tooltip's own watcher on the health of the unit it shows (`0x529560`, which the
+    /// render registers on the object, `0x52a0a8`), after the bridge's: `guid`'s health as its
+    /// packet left it.
+    fn tooltip_health(&self, script: &mut UiScript, guid: u64) {
+        let store = self
+            .index
+            .as_ref()
+            .and_then(|i| i.0.get(&guid))
+            .and_then(|&e| self.views.get(e).ok());
+        if let Some(store) = store {
+            script.tooltip_unit_health(
+                guid,
+                store.0.unit_health().unwrap_or(0),
+                store.0.unit_max_health().unwrap_or(0),
+            );
+        }
+    }
+
     /// `SetPetGuid`'s signals in its order (`0x4bc847`-`0x4bc911`): on a change, `UNIT_PET`, then,
     /// with a pet trainer open and our player held, `TalkToTrainer` on it (`0x4bc8b2`), then, when
     /// the new guid resolves as a unit (`0x4bc8e4`) that `IsPlayerOrHunterPet` passes (`0x4bc8ef`),
@@ -1312,7 +1337,7 @@ mod tests {
         assert!(heard(&mut app, FieldNotice::Player { id: 406 }).is_empty());
     }
 
-    /// A self player seated in a world that runs `feed_units`, its VM
+    /// A self player seated in a world that seats the four tokens' copies, its VM
     /// recording what `lua` registers.
     fn feed_world(pairs: &[(u16, u32)], lua: &str) -> (App, Entity) {
         use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
@@ -1320,7 +1345,6 @@ mod tests {
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<crate::field_watch::NoticeLane>()
             .init_resource::<crate::target::Selection>()
-            .init_resource::<super::super::UnitFeedState>()
             .init_resource::<crate::names::NameCache>()
             .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::ui_party::GroupState>()
@@ -1383,11 +1407,6 @@ mod tests {
         let ahead = [
             crate::test_support::runs_before(
                 &mut headless,
-                super::super::feed_units,
-                crate::lanes::fire_in_order,
-            ),
-            crate::test_support::runs_before(
-                &mut headless,
                 crate::ui_char::feed_char,
                 crate::lanes::fire_in_order,
             ),
@@ -1402,7 +1421,7 @@ mod tests {
                 crate::lanes::fire_in_order,
             ),
         ];
-        assert_eq!(ahead, [true; 4], "feed_units, char, party, pet");
+        assert_eq!(ahead, [true; 3], "char, party, pet");
     }
 
     /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)
@@ -1423,7 +1442,7 @@ mod tests {
             (0x10, &["PLAYER_ENTERING_WORLD"][..]),
         ] {
             let (mut app, _) = feed_world(&[(PLAYER_FLAGS, flags)], spy);
-            app.add_systems(Update, super::super::feed_units);
+            app.add_systems(Update, super::super::seat_tokens);
             arrive(&mut app);
             assert_eq!(seen(&mut app), heard, "flags {flags:#x}: the arrival");
             let mut reloaded = UiScript::new().unwrap();
@@ -1473,7 +1492,7 @@ mod tests {
                 forms: spells.forms.clone(),
                 ..crate::ui_action::Spells::empty_for_tests()
             });
-            app.add_systems(Update, super::super::feed_units);
+            app.add_systems(Update, super::super::seat_tokens);
             arrive(&mut app);
             let heard = [
                 "PLAYER_ENTERING_WORLD".to_string(),
@@ -1545,7 +1564,7 @@ mod tests {
                     crate::ui_script::test_ui::load_ui(s, file);
                 }
             }
-            app.add_systems(Update, super::super::feed_units);
+            app.add_systems(Update, super::super::seat_tokens);
             arrive(&mut app);
             let s = app.world().non_send_resource::<UiScript>();
             let shown = |frame: &str| {
@@ -1602,7 +1621,7 @@ mod tests {
                     .resource_mut::<crate::ui_pet::PetAttackLatch>()
                     .0 = Some(PET);
             }
-            app.add_systems(Update, super::super::feed_units);
+            app.add_systems(Update, super::super::seat_tokens);
             arrive(&mut app);
             let mut heard = vec!["UPDATE_BONUS_ACTIONBAR nil nil"];
             if summoned {
@@ -1649,7 +1668,7 @@ mod tests {
                 table.insert(SEEN, event .. " " .. tostring(arg1) .. " nil")
             end)"#;
         let (mut app, _) = feed_world(&[], spy);
-        app.add_systems(Update, super::super::feed_units);
+        app.add_systems(Update, super::super::seat_tokens);
         arrive(&mut app);
         assert_eq!(
             seen(&mut app),
@@ -1693,7 +1712,7 @@ mod tests {
             end)"#;
         let (mut app, _) = feed_world(&[(AURA, 1126), (AURAFLAGS, 0x9)], spy);
         app.init_resource::<crate::ui_aura::PlayerAuraCache>();
-        app.add_systems(Update, super::super::feed_units);
+        app.add_systems(Update, super::super::seat_tokens);
         arrive(&mut app);
         assert_eq!(
             seen(&mut app),
@@ -1748,7 +1767,7 @@ mod tests {
             .resource_mut::<crate::ui_pet::PetBar>()
             .spells
             .pet_guid = PET;
-        app.add_systems(Update, super::super::feed_units);
+        app.add_systems(Update, super::super::seat_tokens);
         reenter(&mut app);
         assert_eq!(seen(&mut app), ["UNIT_PET nil nil"], "the reload's entry");
         // `SMSG_PET_SPELLS` brings the same pet back.

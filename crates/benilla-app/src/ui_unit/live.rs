@@ -230,7 +230,6 @@ impl UnitFeedLive<'_, '_> {
         };
         let held = super::held::HeldUnits {
             names,
-            commands: None,
             group,
             self_store: self.player().map(|(_, s)| s),
             unit_names: src.tables.unit_names(),

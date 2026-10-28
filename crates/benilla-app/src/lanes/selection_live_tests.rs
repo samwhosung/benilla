@@ -49,6 +49,8 @@ fn a_hosted_getter_reads_the_live_target_and_npc() {
     const READ: &str = r#"return UnitHealth("target"), UnitHealth("npc"),
         UnitIsUnit("target", "npc") and 1 or 0"#;
     assert_eq!(hosted::<(u32, u32, u8)>(&mut app, READ), (100, 0, 0));
+    // The VM's copies of the tokens, which no feed pushes in game, seated on the wolf.
+    crate::ui_unit::seat_tokens_once(app.world_mut());
     // The boar selected and latched, the VM told nothing.
     select(&mut app, Some(BOAR));
     app.world_mut()

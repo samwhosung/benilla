@@ -59,13 +59,8 @@ impl Plugin for UiPartyPlugin {
             .add_systems(
                 Update,
                 (
-                    // Ahead of the field events, whose handlers read the group tokens, and after
-                    // the unit snapshots: TargetFrame answers RAID_TARGET_UPDATE with
-                    // GetRaidTargetIndex("target"), which reads the target snapshot's
-                    // `raid_target`, so a new mark landed on the target frame only when the target
-                    // changed if this ran first.
+                    // Ahead of the field events, whose handlers read the group tokens.
                     feed::feed_party
-                        .after(crate::ui_unit::UnitSnapshots)
                         .in_set(UiFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     feed::drain_party.in_set(crate::ui_script::UiDrain),

@@ -528,7 +528,10 @@ impl MailRowVerb {
             if row.item_id == 0 {
                 return Err(None);
             }
-            let player = model.units_by_lower.contains_key("player");
+            // The object lookup as the call runs, through the lent host; with none, the VM's copy.
+            let mut held = None;
+            super::host::read_host(lua, |h| h.read_self(&mut |own| held = Some(own.held())));
+            let player = held.unwrap_or_else(|| model.units_by_lower.contains_key("player"));
             if !player || super::stat_read::purse(lua, model) < u64::from(row.cod) {
                 return Err(Some("ERR_NOT_ENOUGH_MONEY"));
             }

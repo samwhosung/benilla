@@ -99,6 +99,30 @@ fn matching(text: &str, open: usize, lhs: u8, rhs: u8) -> Option<usize> {
     None
 }
 
+/// Our player held by the object manager under `guid`, its descriptor `fields`, as its create
+/// leaves it: for a test whose getters read the active player through the lent host.
+pub(crate) fn hold_self_player(
+    world: &mut bevy::prelude::World,
+    guid: u64,
+    fields: &[(u16, u32)],
+) -> bevy::prelude::Entity {
+    let fields = benilla_protocol::ObjectFields::from_pairs(fields)
+        .into_created(benilla_protocol::messages::ObjectType::Player);
+    let me = world
+        .spawn((
+            crate::net::SelfPlayer,
+            crate::net::Guid(guid),
+            crate::net::ObjectStore(fields),
+        ))
+        .id();
+    world
+        .get_resource_or_init::<crate::net::GuidIndex>()
+        .0
+        .insert(guid, me);
+    world.get_resource_or_init::<crate::net::SelfGuid>().0 = Some(guid);
+    me
+}
+
 /// `a` runs before `b` in `app`'s built `Update`, by system identity: a `.after()` on a system
 /// missing from the schedule is silently nothing, and debug names may be off. The dependency graph
 /// is walked with the set hierarchy unfolded, so a set `a` sits in precedes what that set

@@ -111,7 +111,6 @@ fn frame_after(
     }
     before(world);
     crate::net::handlers::dispatch(world, packets);
-    crate::ui_unit::run_feed_units_once(world);
     world
         .run_system_cached(crate::ui_party::feed_party)
         .expect("the party feed runs");

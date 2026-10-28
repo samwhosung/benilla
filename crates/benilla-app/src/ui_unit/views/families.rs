@@ -42,12 +42,11 @@ impl Saved {
         true
     }
 
-    /// Put back what the VM held of every view pushed over, but the tokens of `frozen`, which a
-    /// call during the drain seated itself; the views put back.
-    pub(super) fn restore(&mut self, script: &mut UiScript, frozen: &[&str]) -> usize {
+    /// Put back what the VM held of every view pushed over; the views put back.
+    pub(super) fn restore(&mut self, script: &mut UiScript) -> usize {
         let mut pushes = 0;
         for (token, view) in self.tokens.drain() {
-            if !frozen.contains(&token.as_str()) && script.unit_view(&token) != view {
+            if script.unit_view(&token) != view {
                 script.set_unit(&token, view);
                 pushes += 1;
             }

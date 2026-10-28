@@ -722,7 +722,7 @@ mod tests {
     }
 
     /// The pass runs its phases in the reference's tick order: the input records (the UI's input
-    /// pass and its world clicks, the world's mouse), then the net feeds (the unit feed), then the tick,
+    /// pass and its world clicks, the world's mouse), then the net feeds (the unit feeds), then the tick,
     /// then the drains of what their Lua asked, then the paint.
     #[test]
     fn the_pass_runs_the_input_then_the_feeds_then_the_tick_then_the_drains() {
@@ -734,7 +734,7 @@ mod tests {
         let (input, mouse, feed, tick) = (
             at("::dispatch_input_records"),
             at("::latch_world_mouse"),
-            at("::ui_unit::feed_units"),
+            at("::ui_unit::feed_far_sight_bit"),
             at("::tick_script"),
         );
         let (drain, paint) = (at("::drain_chat_input"), at("::paint_script"));

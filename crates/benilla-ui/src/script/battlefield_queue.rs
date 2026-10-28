@@ -72,10 +72,14 @@ fn slot_index(index: i32, n: usize) -> Option<usize> {
         .filter(|&i| i < n)
 }
 
-/// The local-player gate of `GetBattlefieldInfo` and `GetBattlefieldInstanceInfo`, read at call
-/// time (`0x468550`, `0x468460` with `ecx = 0x10`): the answer `UnitExists("player")` gives.
-pub(super) fn player_exists(model: &Model) -> bool {
-    model.snapshot_unit("player").is_some_and(|u| u.exists)
+/// The local-player gate of `GetBattlefieldInfo`, `GetBattlefieldInstanceInfo` and the senders,
+/// read at call time (`0x468550`, `0x468460` with `ecx = 0x10`): whether the object manager holds
+/// the active player, through the lent host; with none to ask, the `"player"` snapshot's
+/// existence.
+pub(super) fn player_exists(lua: &Lua, model: &Model) -> bool {
+    let mut held = None;
+    super::host::read_host(lua, |h| h.read_self(&mut |own| held = Some(own.held())));
+    held.unwrap_or_else(|| model.snapshot_unit("player").is_some_and(|u| u.exists))
 }
 
 /// The reference's four-entry status jump table with its `"error"` default (`0x4ab604`).
@@ -183,7 +187,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let list = live::list(lua, &model);
-            let (Some(info), true) = (list.info.as_ref(), player_exists(&model)) else {
+            let (Some(info), true) = (list.info.as_ref(), player_exists(lua, &model)) else {
                 return Ok(MultiValue::new());
             };
             let description = match &info.description {
@@ -211,7 +215,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: GetBattlefieldInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if !player_exists(&model) {
+            if !player_exists(lua, &model) {
                 return Ok(MultiValue::new());
             }
             let list = live::list(lua, &model);

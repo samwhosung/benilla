@@ -321,11 +321,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::minimap::ping::drive_minimap_ping", &["minimap::ping::MinimapPing",
         "ui_party::GroupState"]),
     ("::minimap::feed_game_time", &["net::game_time::ServerTime"]),
-    // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`), and
-    // every snapshot its names, relations, selection and group, as the frame left them.
-    ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
-        "ui_guild::GuildState", "ui_party::GroupState"]),
     // The party and raid tokens read the members' stores, records and the roster's cells as of
     // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
     // the roster push is their no-host fallback, and every snapshot's names and relations read as

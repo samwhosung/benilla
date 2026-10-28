@@ -1435,6 +1435,11 @@ fn unit_feed_app() -> (App, crossbeam_channel::Receiver<crate::net::ClientComman
     app.init_resource::<crate::ui_guild::GuildState>();
     app.add_message::<crate::creature_anim::SwingImpact>();
     app.add_plugins(crate::ui_world_enter::WorldEnterPlugin);
+    // No host is lent here: the four tokens' copies stand in, seated where the feeds run.
+    app.add_systems(
+        Update,
+        crate::ui_unit::seat_tokens.in_set(crate::ui_unit::UnitFeed),
+    );
     // The glue VM, which stands until the entry load and must hear none of the in-game events.
     super::setup_script(app.world_mut());
     (app, rx)

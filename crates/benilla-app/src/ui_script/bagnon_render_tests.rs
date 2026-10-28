@@ -70,7 +70,7 @@ const INSTALLED: &[&str] = &[
 enum Seat {
     /// The app's order: the roster row goes in ahead of `load_ingame_ui`.
     BeforeAddons,
-    /// Nothing writes `"player"` until `ui_unit::feed_units` sees the self descriptor.
+    /// Nothing writes `"player"` until the self descriptor is seen.
     AfterAddons,
 }
 
@@ -105,7 +105,7 @@ fn roster() -> crate::glue_session::roster::Roster {
     crate::glue_session::roster::Roster::with_pending_pick(vec![row], 7)
 }
 
-/// The `"player"` snapshot the self descriptor builds, as `ui_unit::feed_units` pushes it: the
+/// The `"player"` snapshot the self descriptor builds, as the host reads it: the
 /// roster seat plus what only the descriptor says (the unit exists, its level, health, a live
 /// object). The seat leaves those nil and 0, as the reference answers before the object exists.
 fn descriptor_snapshot(seat: &benilla_ui::script::UnitState) -> benilla_ui::script::UnitState {

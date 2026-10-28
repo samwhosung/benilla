@@ -1145,7 +1145,7 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
         .init_resource::<crate::ui_guild::GuildState>()
         .insert_resource(NetCommands(crossbeam_channel::unbounded().0))
         .insert_non_send_resource(s);
-    crate::ui_unit::add_unit_feed(&mut app);
+    crate::ui_unit::add_token_seats(&mut app);
     app.world_mut().spawn((
         SelfPlayer,
         Guid(ME),
@@ -1360,7 +1360,7 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
         .insert_resource(NetCommands(crossbeam_channel::unbounded().0))
         .add_message::<FieldChanged>()
         .insert_non_send_resource(s);
-    crate::ui_unit::add_unit_feed(&mut app);
+    crate::ui_unit::add_token_seats(&mut app);
     // A human warrior player: the guard's standing leg needs the player's type, flag `0x8` and
     // template (`0x606576`-`0x6065b6`).
     app.world_mut().spawn((

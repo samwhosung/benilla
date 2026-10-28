@@ -807,6 +807,14 @@ fn world_hover_drive_and_health_watcher() {
     s.set_unit("target", Some(as_target));
     s.run(r#"assert(GameTooltipStatusBar:GetValue() == 8, "the watcher follows the guid")"#)
         .unwrap();
+    // The object's own health watch, with no token pushed: the same seat, and another unit's
+    // health moves nothing.
+    s.tooltip_unit_health(wolf().guid, 5, 50);
+    s.run(r#"assert(GameTooltipStatusBar:GetValue() == 5, "the object's health watch")"#)
+        .unwrap();
+    s.tooltip_unit_health(wolf().guid + 1, 1, 50);
+    s.run(r#"assert(GameTooltipStatusBar:GetValue() == 5, "another unit's health")"#)
+        .unwrap();
     s.tick(2.0);
     s.run(r#"assert(not GameTooltip:IsShown(), "faded out after the ramp")"#)
         .unwrap();

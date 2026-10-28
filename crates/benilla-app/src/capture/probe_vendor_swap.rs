@@ -374,7 +374,7 @@ fn vendor_swap_probe(
                         probe.phase = Phase::Done;
                     }
                     None => {}
-                    // The unit feed drops the token the frame after the session clears.
+                    // The token names nobody the frame after the session clears.
                     Some(at) if now - at >= 0.25 => {
                         // `and 1 or 0` turns `UnitExists`'s `1` or nil into a number.
                         let exists: i64 = script

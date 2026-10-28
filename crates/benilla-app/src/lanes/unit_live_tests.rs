@@ -224,6 +224,8 @@ fn every_getter_answers_the_same_live_as_off_the_snapshot() {
         vec![values(PET, &[(FIELD_UNIT_HEALTH, 35)])],
         vec![values(ME, &[(FIELD_UNIT_HEALTH, 20)])],
     ]);
+    // The four tokens' copies, which no feed pushes in game, seated for the host-less answer.
+    crate::ui_unit::seat_tokens_once(c.app.world_mut());
     let snapshot = c.answers(false);
     let live = c.answers(true);
     assert_eq!(snapshot.len(), TOKENS.len() * GETTERS.len());
@@ -241,7 +243,8 @@ fn every_getter_answers_the_same_live_as_off_the_snapshot() {
 }
 
 /// A store a packet moved after the frame's pushes reads as the object holds it, through the host,
-/// for the token's own unit and through a `target` hop; the snapshot still holds the push.
+/// for the token's own unit and through a `target` hop; with no host lent, the VM holds no copy of
+/// the four tokens, which no feed pushes.
 #[test]
 fn a_getter_reads_the_object_as_it_runs() {
     let mut c = client();
@@ -253,7 +256,7 @@ fn a_getter_reads_the_object_as_it_runs() {
     });
     assert_eq!(live, (15, 5, 5));
     let snapshot: (i64, i64, i64) = crate::script_calls::eval_in_vm(c.app.world(), chunk);
-    assert_eq!(snapshot, (80, 90, 90));
+    assert_eq!(snapshot, (0, 0, 0));
 }
 
 /// `UnitOnTaxi` tests bit 20 of the resolved object's flags as it runs (`0x517a80`-`0x517a8c`): a

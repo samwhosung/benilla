@@ -398,7 +398,7 @@ fn close_button_draws_above_the_paper_doll_page() {
 
 /// `PaperDollFrame_SetLevel` writes `PLAYER_LEVEL` to `CharacterLevelText` and `HonorLevelText`
 /// (`PaperDollFrame.lua:100-103`); `UNIT_LEVEL` repaints it while the page shows (`:42-49`). A nil
-/// race raises in its `format`, and `ui_unit::feed_units` always pushes the player snapshot before
+/// race raises in its `format`, and the getters read the player through the host before
 /// `PLAYER_ENTERING_WORLD`, so the test seats one first.
 #[test]
 fn level_line_reads_the_snapshot_and_repaints_on_unit_level() {

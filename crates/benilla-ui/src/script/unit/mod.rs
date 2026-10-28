@@ -377,8 +377,9 @@ impl super::UiScript {
             .unwrap_or_else(|| "Unknown Being".to_string())
     }
 
-    /// Push, or clear with `None`, a token's snapshot; the app's feed calls it each frame before
-    /// event dispatch, so a frame's `OnEvent` sees current values.
+    /// Push, or clear with `None`, the VM's copy of a token's unit, which the getters read with no
+    /// host free to ask ([`UnitStateQuery`]); a `/reload`'s seat and the mouseover's hover push
+    /// it, and the group's and the pet's feeds.
     pub fn set_unit(&mut self, token: &str, state: Option<UnitState>) {
         {
             let mut model = self.model_mut();

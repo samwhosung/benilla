@@ -268,8 +268,7 @@ pub(crate) fn arm_leaving_world_on_self_create(
 
 /// The sweep from the local player's destructor (`0x5dd543`) on a cross-map worldport; a
 /// same-map teleport destroys nothing and never sweeps. The sweep runs at this system's sync
-/// point, so its legs and their events land before the entering edge `feed_units`, ordered after
-/// it, raises for the same port.
+/// point, so its legs and their events land ahead of the unit feeds, ordered after it.
 pub(crate) fn sweep_on_worldport(
     mut ports: MessageReader<crate::net::WorldportMessage>,
     mut commands: Commands,

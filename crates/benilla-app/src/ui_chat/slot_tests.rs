@@ -494,13 +494,12 @@ fn the_cascades_join_takes_its_slot_ahead_of_a_later_join() {
     assert_eq!(c.joins(), ["GuildRecruitment - City", "Y"]);
 }
 
-/// Each chat verb sends inside its call, so call order is wire order: `DoEmote` (`0x49fd30`,
-/// `0x5ef560` at `0x49fe16`), the join body (`0x49ee02`), `UninviteByName` (`0x48a669`) and
-/// `SendAddonMessage` (`0x49faff`).
+/// The senders' local-player gate looks the active player up as the call runs (`0x49f944`-
+/// `0x49f94b`, `0x468550` → `0x468460`): a `"player"` copy in the VM with no object held sends
+/// nothing, and the object held with no copy sends.
 #[test]
-fn the_chat_verbs_go_out_in_call_order() {
+fn the_senders_gate_on_the_player_object_not_its_copy() {
     let mut script = UiScript::new().expect("a VM");
-    // `SendAddonMessage` needs the player object (`0x49f94b`).
     script.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -509,6 +508,31 @@ fn the_chat_verbs_go_out_in_call_order() {
         }),
     );
     let mut c = Client::new(&[], script);
+    let addon = |c: &mut Client| {
+        c.run("SendAddonMessage('P', 'm')");
+        super::drain_chat_input_once(c.world());
+        c.sent
+            .try_iter()
+            .filter(|cmd| matches!(cmd, ClientCommand::AddonMessage { .. }))
+            .count()
+    };
+    assert_eq!(addon(&mut c), 0, "a copy, no object");
+    crate::test_support::hold_self_player(c.world(), 0x7, &[]);
+    c.world()
+        .non_send_resource_mut::<UiScript>()
+        .set_unit("player", None);
+    assert_eq!(addon(&mut c), 1, "the object, no copy");
+}
+
+/// Each chat verb sends inside its call, so call order is wire order: `DoEmote` (`0x49fd30`,
+/// `0x5ef560` at `0x49fe16`), the join body (`0x49ee02`), `UninviteByName` (`0x48a669`) and
+/// `SendAddonMessage` (`0x49faff`).
+#[test]
+fn the_chat_verbs_go_out_in_call_order() {
+    let script = UiScript::new().expect("a VM");
+    let mut c = Client::new(&[], script);
+    // `SendAddonMessage` needs the player object (`0x49f94b`).
+    crate::test_support::hold_self_player(c.world(), 0x7, &[]);
     // WAVE as a chat-only text emote, which reads `Emotes.dbc` row 0.
     c.world().insert_resource(crate::sound::EmoteSounds(
         benilla_formats::EmoteSoundCatalog::default()

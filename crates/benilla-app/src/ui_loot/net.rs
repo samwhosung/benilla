@@ -1354,7 +1354,7 @@ mod tests {
         "Interface\\FrameXML\\StaticPopup.xml",
     ];
 
-    /// [`tabbed_world`] under the stock `ui` files, with the unit feed and both creatures named.
+    /// [`tabbed_world`] under the stock `ui` files, with the token seats and both creatures named.
     fn stock_app(ui: &[&[&str]]) -> App {
         use benilla_ui::script::UiScript;
         let mut s = UiScript::new().expect("VM");
@@ -1392,7 +1392,7 @@ mod tests {
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_guild::GuildState>()
             .insert_non_send_resource(s);
-        crate::ui_unit::add_unit_feed(&mut app);
+        crate::ui_unit::add_token_seats(&mut app);
         app
     }
 
@@ -1407,7 +1407,7 @@ mod tests {
     }
 
     /// The issue's symptom on the stock frames: the Tab target is on `TargetFrame` when the body's
-    /// window opens, and the unit feed then names the body there (`TargetFrame.lua:63`,
+    /// window opens, and the target's name reads the body there (`TargetFrame.lua:63`,
     /// `UnitFrame.lua:25`).
     #[test]
     fn the_stock_target_frame_names_the_looted_body() {

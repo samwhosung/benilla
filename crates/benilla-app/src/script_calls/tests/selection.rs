@@ -34,9 +34,8 @@ fn seen(f: &mut Frame) -> String {
     eval(f, "return SEEN")
 }
 
-/// The feeds that signal what a change no call made owes: the unit events and the action events.
+/// The feed that signals what a change no call made owes: the action events.
 fn feeds(f: &mut Frame) {
-    settle(f);
     crate::ui_action::run_action_events_once(f.app.world_mut());
 }
 
@@ -54,7 +53,6 @@ fn stops_and_selections(f: &Frame) -> Vec<String> {
 /// The bar's attack latch up on `PET`; `possessed` makes it `0x5ee5a0`'s answer. The world is
 /// entered first, as the bar comes after it: the entry's pet reset drops a bar (`0x4bc6f0`).
 fn with_pet_attacking(f: &mut Frame, possessed: bool) {
-    settle(f);
     let world = f.app.world_mut();
     let pet = world
         .spawn((
@@ -689,7 +687,6 @@ const SUMMONEDBY: u16 = 12;
 /// it, with `slot1` the bar's first word; the VM shows the bar, as its feed pushes it. The world
 /// is entered first, as the bar comes after it: the entry's pet reset drops a bar (`0x4bc6f0`).
 fn with_pet(f: &mut Frame, possessed: bool, slot1: u32) {
-    settle(f);
     let world = f.app.world_mut();
     let mut fields = vec![(22, 100), (28, 100)];
     if possessed {
@@ -902,10 +899,7 @@ fn a_creature_family_is_read_off_the_held_units_record() {
         &mut f,
         &[(OBJECT_FIELD_TYPE, 0x9), (OBJECT_FIELD_ENTRY, BOAR)],
     );
-    // The world entry first, as a session has it: the target comes after.
-    settle(&mut f);
     f.app.world_mut().resource_mut::<Selection>().guid = Some(MOB);
-    settle(&mut f);
     let family =
         |f: &mut Frame| eval::<Option<String>>(f, r#"return UnitCreatureFamily("target")"#);
     assert_eq!(family(&mut f), None, "no record cached yet");

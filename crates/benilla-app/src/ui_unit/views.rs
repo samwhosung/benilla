@@ -2,11 +2,12 @@
 //! packet's handler runs whole before the next (`0x537aa0` calls it at `0x537ae5`), its watchers
 //! fire inside it (`0x465570` → `0x4655dc`), and `UnitHealth` reads the live object
 //! (`0x5174d0`, `[obj+0x110]+0x40` at `0x517553`), so a listener sees the state its own packet
-//! left, never a later packet's. The unit feed pushes the frame's last state, so here each update
-//! packet logs what it moved ([`ViewLog`]); the views lane rewinds the stores the tokens name and
-//! the group's records and roster cells to the frame's start and replays the log in stamp order
-//! among the other lanes, rebuilding the tokens' views once per gap between events
-//! ([`UnitViews`]).
+//! left, never a later packet's. The lanes fire after every packet of the frame is applied, so
+//! here each update packet logs what it moved ([`ViewLog`]); the views lane rewinds the stores the
+//! tokens name and the group's records and roster cells to the frame's start and replays the log
+//! in stamp order among the other lanes ([`UnitViews`]), so the getters read each as of their
+//! listener's packet ([`ViewStores`]), and rebuilds the group's and the pet's views once per gap
+//! between events.
 //!
 //! The unit of "as of" is the packet: the update handler `0x4651a0` runs both write passes over
 //! every block (`0x46520e`, `0x465222`) before its notify pass (`0x46522d`-`0x46528b`), so a
@@ -20,7 +21,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use benilla_protocol::messages::PartyMemberStatsInfo;
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{UiScript, UnitState};
+use benilla_ui::script::UiScript;
+#[cfg(test)]
+use benilla_ui::script::UnitState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -32,10 +35,8 @@ use crate::ui_party::RosterCells;
 
 mod families;
 
-/// The four tokens [`super::feed_units`] pushes and this lane versions, in [`Tokens`]' order.
-const TOKENS: [&str; 4] = ["player", "target", "targettarget", "npc"];
-
-/// One value per token of [`TOKENS`].
+/// One value per token of the four [`token_views`] builds.
+#[cfg(test)]
 pub(super) type Tokens<T> = [T; 4];
 
 /// One change an update packet made to a store.
@@ -296,9 +297,6 @@ pub(crate) struct UnitViews {
     readable: Readable,
     /// The drain has fired the lane's start.
     started: bool,
-    /// The guids `"target"` and `"npc"` named as the drain began: a call during it that moves one
-    /// seats that token itself, and the lane leaves it to the next frame's feed.
-    named: (Option<u64>, Option<u64>),
     /// What the VM held of each view before the lane pushed its own, put back as the drain ends.
     saved: families::Saved,
     /// The builds made, for the tests.
@@ -530,6 +528,7 @@ impl ViewStores<'_, '_> {
 }
 
 /// What the four tokens' snapshots read beside their stores.
+#[cfg(test)]
 pub(super) struct TokenSources<'a, 'w, 's> {
     pub(super) tables: &'a super::SnapshotTables<'w>,
     pub(super) names: &'a NameCache,
@@ -540,6 +539,7 @@ pub(super) struct TokenSources<'a, 'w, 's> {
 }
 
 /// The stores the four tokens read, each as of the place they are built for.
+#[cfg(test)]
 pub(super) struct TokenStores<'a> {
     /// Our own store and guid.
     pub(super) me: Option<(&'a ObjectStore, u64)>,
@@ -552,6 +552,7 @@ pub(super) struct TokenStores<'a> {
 }
 
 /// What a held unit's snapshot reads, off `stores`.
+#[cfg(test)]
 fn held_units<'a>(
     src: &TokenSources<'a, '_, '_>,
     stores: &TokenStores<'a>,
@@ -559,7 +560,6 @@ fn held_units<'a>(
     let world = src.world;
     super::held::HeldUnits {
         names: src.names,
-        commands: Some(src.commands),
         group: src.group,
         self_store: stores.me.map(|(s, _)| s),
         unit_names: src.tables.unit_names(),
@@ -579,6 +579,7 @@ fn held_units<'a>(
 /// The four tokens' snapshots off `stores`: `"player"` off our descriptor, `"target"` and
 /// `"npc"` off theirs, and `"targettarget"` one hop off the target's `UNIT_FIELD_TARGET`, streamed
 /// guids only, for the stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`).
+#[cfg(test)]
 pub(super) fn token_views<'a>(
     src: &TokenSources<'a, '_, '_>,
     stores: &TokenStores<'a>,
@@ -604,12 +605,23 @@ pub(super) fn token_views<'a>(
         s
     });
     let held = held_units(src, stores);
-    let target = stores.target.map(|(store, guid)| held.state(store, guid));
+    let state = |store: &ObjectStore, guid: u64| {
+        let name = src
+            .names
+            .resolve_unit(
+                guid,
+                Some(store),
+                crate::query_cache::Ask::New(src.commands),
+            )
+            .map(str::to_string);
+        held.state_named(store, guid, name)
+    };
+    let target = stores.target.map(|(store, guid)| state(store, guid));
     let tot = stores
         .target
         .and_then(|(store, _)| store.0.unit_target())
         .filter(|guid| *guid != 0)
-        .and_then(|guid| Some(held.state((stores.by_guid)(guid)?, guid)));
+        .and_then(|guid| Some(state((stores.by_guid)(guid)?, guid)));
     // Not a game object's or an item's: those exist for nobody (`0x515fee`), and are named live.
     let npc = stores
         .npc
@@ -619,7 +631,7 @@ pub(super) fn token_views<'a>(
                 .object_type_mask()
                 .is_none_or(|mask| mask & 0x8 != 0 || mask & 0x22 == 0)
         })
-        .map(|(store, guid)| held.state(store, guid));
+        .map(|(store, guid)| state(store, guid));
     [player, target, tot, npc]
 }
 
@@ -880,20 +892,11 @@ fn end_drain(world: &mut World) {
 }
 
 /// [`end_drain`]'s putting back.
-fn restore_after_stop(
-    mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, UnitViews>,
-        Option<Res<'static, Selection>>,
-    )>,
-    interact: Option<Res<crate::ui_session::InteractNpc>>,
-) {
-    vm.turn(|script, (mut views, selection)| {
+fn restore_after_stop(mut vm: crate::script_calls::VmWith<ResMut<'static, UnitViews>>) {
+    vm.turn(|script, mut views| {
         if let Some(script) = script {
-            let target = selection.as_deref().and_then(|s| s.guid);
-            let npc = interact.as_deref().and_then(|i| i.1);
-            let skip = views.frozen(target, npc);
             let views = &mut *views;
-            let _pushes = views.saved.restore(script, &skip);
+            let _pushes = views.saved.restore(script);
             #[cfg(test)]
             {
                 views.pushes += _pushes;
@@ -1027,7 +1030,6 @@ impl UnitViews {
             !benilla_protocol::guid::is_item(g)
                 && (scratch.contains_key(&g) || readable.all.contains(&g))
         });
-        self.named = (seats.target.map(|(g, _)| g), seats.npc.map(|(g, _)| g));
         self.scratch = scratch;
         self.touched = touched;
         self.readable = readable;
@@ -1035,19 +1037,6 @@ impl UnitViews {
         {
             self.starts_checked += checked.get();
         }
-    }
-
-    /// The tokens a call during the drain seated itself, by moving the selection from the guid
-    /// the drain began with to `target` or the interaction to `npc`: the lane leaves them.
-    fn frozen(&self, target: Option<u64>, npc: Option<u64>) -> Vec<&'static str> {
-        let mut frozen = Vec::new();
-        if target != self.named.0 {
-            frozen.extend(["target", "targettarget"]);
-        }
-        if npc != self.named.1 {
-            frozen.push("npc");
-        }
-        frozen
     }
 }
 
@@ -1149,10 +1138,9 @@ fn fire_unit_views(
             views.finish(live_store, &group.stats, group.cells());
             return;
         }
-        let frozen = views.frozen(selection.guid, npc_seat.map(|(g, _)| g));
         if last {
             let views = &mut *views;
-            let _pushes = views.saved.restore(script, &frozen);
+            let _pushes = views.saved.restore(script);
             #[cfg(test)]
             {
                 views.pushes += _pushes;
@@ -1191,47 +1179,6 @@ fn fire_unit_views(
             Some((scratch_as_of(scratch, guid, live)?, guid))
         };
         let me = self_q.iter().next().and_then(|(e, g)| held(g.0, Some(e)));
-        let src = TokenSources {
-            tables,
-            names,
-            commands,
-            group: &group,
-            guild,
-            world: &world,
-        };
-        let stores = TokenStores {
-            me,
-            target: selection
-                .target
-                .zip(selection.guid)
-                .and_then(|(e, g)| held(g, Some(e))),
-            npc: interact
-                .as_deref()
-                .and_then(|i| Some((i.0?, i.1?)))
-                .and_then(|(e, g)| held(g, Some(e))),
-            by_guid: &object,
-        };
-        let mut pushes = 0;
-        // The four tokens when one of their units moved: ours, the target, its target, the NPC.
-        let hop = stores.target.and_then(|(s, _)| s.0.unit_target());
-        let tokens_moved = [
-            self_q.iter().next().map(|(_, g)| g.0),
-            selection.guid,
-            hop,
-            npc_seat.map(|(g, _)| g),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|g| dirty.contains(&g));
-        if tokens_moved {
-            for (i, view) in token_views(&src, &stores).into_iter().enumerate() {
-                // `"player"` is pushed only while its descriptor exists, as the feed pushes it.
-                if frozen.contains(&TOKENS[i]) || (i == 0 && view.is_none()) {
-                    continue;
-                }
-                pushes += usize::from(saved.token(script, TOKENS[i], view));
-            }
-        }
         let rel = world.get();
         let ffa = |guid: u64| {
             object(guid).is_some_and(|store| super::pvp_free_for_all_of(&rel, guid, store))
@@ -1254,7 +1201,7 @@ fn fire_unit_views(
             areas: areas.as_deref().map(|a| &a.0),
             ffa: &ffa,
         };
-        pushes += families::push(script, saved, &ctx);
+        let pushes = families::push(script, saved, &ctx);
         if let Some(records) = records.as_mut() {
             std::mem::swap(&mut group.bypass_change_detection().stats, records);
         }

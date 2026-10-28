@@ -107,6 +107,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // No local player returns no values ahead of every check (`0x49f944`-`0x49f94b`
                 // to `0x49fb21`), as `SendChatMessage` does.
                 if !super::battlefield_queue::player_exists(
+                    lua,
                     &lua.app_data_ref::<Model>().expect("model app_data"),
                 ) {
                     return Ok(());
