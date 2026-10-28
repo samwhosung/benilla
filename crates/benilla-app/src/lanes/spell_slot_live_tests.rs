@@ -260,14 +260,22 @@ fn a_learned_abilitys_latch_reads_at_the_learn_packet() {
     assert_eq!(latch(&c), None);
 }
 
-/// A relog in the same run: A's bar holds Frostbolt's first rank, which A knows. B's book, which
-/// knows only the second, comes ahead of B's bar (vmangos `Player.cpp:19253`, `:19256`); the
-/// session's end emptied A's bar (`0x48f5a4` → `0x4e4f50`), so neither packet's rank pass moves
-/// or sends A's slots, and B's bar is B's alone.
-#[test]
-fn a_relogs_rank_pass_never_reaches_the_last_characters_bar() {
+/// The next login in the same run, as B: `logout` runs the session's end first, else the session
+/// dropped with no logout. Then B's login, B's book, which knows only Frostbolt's second rank, and
+/// B's bar, in vmangos's order (`Player.cpp:19253`, `:19256`). A's bar held the first rank, which
+/// A knew. Returns the bar's sends and B's bar.
+fn next_login(logout: bool) -> (Vec<(u8, u32)>, Vec<ActionButton>, ActionButton) {
     use benilla_formats::{SkillLineCatalog, SlaInfo};
     let mut c = client();
+    // A's bar as A's login brought it.
+    let a_bar: Vec<ActionButton> = {
+        let slots = c.app.world().resource::<crate::ui_action::ActionSlots>();
+        slots.buttons.values().copied().collect()
+    };
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::ActionButtons { buttons: a_bar }],
+    );
     let ability = |forward_spell_id| SlaInfo {
         skill_id: 6,
         req_skill_value: 0,
@@ -281,9 +289,11 @@ fn a_relogs_rank_pass_never_reaches_the_last_characters_bar() {
             (FROSTBOLT_2, ability(0)),
         ]),
     });
-    c.app
-        .world_mut()
-        .run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+    if logout {
+        c.app
+            .world_mut()
+            .run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+    }
     let b_bar = ActionButton {
         slot: 5,
         action: FIREBALL,
@@ -292,6 +302,13 @@ fn a_relogs_rank_pass_never_reaches_the_last_characters_bar() {
     crate::net::handlers::dispatch(
         c.app.world_mut(),
         vec![
+            SessionEvent::Connected {
+                self_guid: 0x8,
+                name: "Bee".into(),
+                billing: Default::default(),
+                tutorial_flags: None,
+                addon_info: None,
+            },
             SessionEvent::SpellBook {
                 spell_ids: vec![FIREBALL, FROSTBOLT_2],
                 cooldowns: Vec::new(),
@@ -301,7 +318,25 @@ fn a_relogs_rank_pass_never_reaches_the_last_characters_bar() {
             },
         ],
     );
-    assert_eq!(c.sends(), [], "nothing for A's slots");
     let slots = c.app.world().resource::<crate::ui_action::ActionSlots>();
-    assert_eq!(slots.buttons.values().copied().collect::<Vec<_>>(), [b_bar]);
+    let bar = slots.buttons.values().copied().collect();
+    (c.sends(), bar, b_bar)
+}
+
+/// A relog in the same run: the game entry empties A's bar (`0x48f5a4` → `0x4e4f50`) and the
+/// book's rank pass waits for B's bar, so neither moves or sends A's slots.
+#[test]
+fn a_relogs_rank_pass_never_reaches_the_last_characters_bar() {
+    let (sent, bar, b_bar) = next_login(true);
+    assert_eq!(sent, [], "nothing for A's slots");
+    assert_eq!(bar, [b_bar]);
+}
+
+/// The session dropped with no logout, so no session end ran: the game entry alone empties A's
+/// bar.
+#[test]
+fn a_login_after_a_dropped_session_never_reaches_the_last_characters_bar() {
+    let (sent, bar, b_bar) = next_login(false);
+    assert_eq!(sent, [], "nothing for A's slots");
+    assert_eq!(bar, [b_bar]);
 }

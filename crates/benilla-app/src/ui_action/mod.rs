@@ -103,10 +103,9 @@ impl ActionSlots {
         self.arrived
     }
 
-    /// The session's end: the bar emptied, as the next game entry zeroes it ahead of any world
-    /// packet (`CGGameUI::InitializeGame` `0x48f5a4` → `ResetActionBarState 0x4e4f50`), so the next
-    /// character's book and bar never meet this one's.
-    fn end_session(&mut self) {
+    /// The game entry's reset (`ResetActionBarState 0x4e4f50`): every word 0, and no bar yet for
+    /// this login.
+    fn game_entry(&mut self) {
         self.buttons.clear();
         self.arrived = false;
         self.touch();
@@ -504,7 +503,7 @@ impl Plugin for UiActionPlugin {
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                (drop_held_lines, empty_bar).in_set(crate::ui_script::SessionEnd::Clears),
+                drop_held_lines.in_set(crate::ui_script::SessionEnd::Clears),
             );
     }
 }
@@ -513,11 +512,6 @@ impl Plugin for UiActionPlugin {
 /// reference's, drawn at once by `0x4945b0`, dies in the UI teardown (`0x490bd0`).
 fn drop_held_lines(mut texts: ResMut<UiErrorTexts>) {
     texts.0.clear();
-}
-
-/// `OnExit(InWorld)`: the bar's words go with the session ([`ActionSlots::end_session`]).
-fn empty_bar(mut slots: ResMut<ActionSlots>) {
-    slots.end_session();
 }
 
 fn load_spells(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
