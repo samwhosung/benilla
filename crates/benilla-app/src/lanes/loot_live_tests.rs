@@ -196,7 +196,9 @@ fn the_loot_getters_read_the_session_at_the_call() {
 }
 
 /// Each loot event fires at its packet's place among a chat line's of the packets around it: the
-/// copier's end, a row's and the coin's removals, and the release's close.
+/// copier's end, a row's and the coin's removals, the release's close, and a removal after it,
+/// which clears its row with no window open (`0x4c1f00` asks for no source; the close leaves the
+/// rows, `0x4c1da0`) while the latch it is admitted by resolves (`0x5ebedf`).
 #[test]
 fn the_loot_events_fire_at_their_packets() {
     let mut c = client();
@@ -231,6 +233,23 @@ fn the_loot_events_fire_at_their_packets() {
     );
     c.frame(vec![]);
     assert!(c.seen().is_empty(), "nothing fires after");
+
+    // The next `CMSG_LOOT`'s latch, and the closed window's last row taken.
+    c.ask_loot(SECOND);
+    c.frame(vec![
+        vec![boar_says("f")],
+        vec![SessionEvent::LootRemoved { slot: 0 }],
+        vec![boar_says("g")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CHAT_MSG_MONSTER_SAY:f",
+            "LOOT_SLOT_CLEARED:2",
+            "CHAT_MSG_MONSTER_SAY:g",
+        ]
+    );
+    assert_eq!(c.eval::<i64>(true, "return GetNumLootItems()"), 0);
 }
 
 /// The list packet places the candidates and signals nothing (`0x61c550`); a candidate the name
