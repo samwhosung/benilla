@@ -52,6 +52,8 @@ pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     update::register(app);
     app.net_handler(K::ItemTemplate, on_item)
+        // Next, so the stationery rebuild reads the record the cache now holds.
+        .net_handler(K::ItemTemplate, on_paper_record)
         .net_handler(K::ItemTime, on_item)
         .net_handler(K::ItemEnchantTime, on_item)
         .net_handler(K::MoveTimeSkipped, on_move_time_skipped)
@@ -174,6 +176,19 @@ fn item_watch<'a, 'w, 's>(
                 .map(|s| &s.0)
         },
         items,
+    }
+}
+
+/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE`'s stationery callbacks (`0x4acbf0`), a record or a refusal,
+/// registered right after [`on_item`] so the rebuild they may run (`0x4acbf8`) reads the record
+/// [`on_item`] just cached ([`crate::ui_mail::StationeryRebuild::answered`]).
+fn on_paper_record(
+    In(ev): In<SessionEvent>,
+    paper: Option<crate::ui_mail::StationeryRebuild>,
+    items: Res<Items>,
+) {
+    if let (SessionEvent::ItemTemplate { entry, .. }, Some(mut paper)) = (ev, paper) {
+        paper.answered(entry, &items);
     }
 }
 

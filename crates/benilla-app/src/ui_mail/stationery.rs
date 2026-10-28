@@ -66,7 +66,7 @@ impl StationeryRebuild<'_, '_> {
 
     /// `entry`'s answer, a record or a refusal: each awaited row's callback counts it down
     /// (`0x4acbf0`), and the one that reaches zero rebuilds the list (`0x4acbf8`).
-    pub(super) fn answered(&mut self, entry: u32, items: &Items) {
+    pub(crate) fn answered(&mut self, entry: u32, items: &Items) {
         let Some(usable) = self.usable.as_deref_mut() else {
             return;
         };

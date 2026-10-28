@@ -24,7 +24,6 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::CreatureName, on_creature_name)
         .net_handler(K::GameObjectInfo, on_object_answer)
         .net_handler(K::GameObjectUnknown, on_object_answer)
-        .net_handler(K::ItemTemplate, on_paper_record)
         .net_handler(K::Disconnected, on_session_end);
 }
 
@@ -64,19 +63,6 @@ fn on_object_answer(
         _ => return,
     };
     mail.answered(MailWait::Object(entry), found, &mut lane);
-}
-
-/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE` for a paper's item the init awaits, a record or a refusal
-/// ([`super::StationeryRebuild::answered`]). It runs after the item cache's own handler, which the
-/// net plugin registers ahead of the windows, so the rebuild reads the record just landed.
-fn on_paper_record(
-    In(ev): In<SessionEvent>,
-    paper: Option<super::StationeryRebuild>,
-    items: Res<crate::items::Items>,
-) {
-    if let (SessionEvent::ItemTemplate { entry, .. }, Some(mut paper)) = (ev, paper) {
-        paper.answered(entry, &items);
-    }
 }
 
 /// What the list handler reads beside the session: the papers it defaults a row to, the item
