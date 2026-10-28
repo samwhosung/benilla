@@ -23,6 +23,7 @@ const SILK: u32 = 4306;
 struct Client {
     app: App,
     inbound: Sender<SessionEvent>,
+    sent: crossbeam_channel::Receiver<crate::net::ClientCommand>,
 }
 
 impl Client {
@@ -64,7 +65,7 @@ fn client() -> Client {
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
     ));
-    let (tx, _sent) = crossbeam_channel::unbounded();
+    let (tx, sent) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
     let (inbound, rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetEvents::for_test(rx));
@@ -74,6 +75,7 @@ fn client() -> Client {
         .run(
             r#"
             ERR_AUCTION_SOLD_S = "A buyer has been found for your auction of %s."
+            ERR_AUCTION_OUTBID_S = "You have been outbid on %s."
             Seen, Up = {}, false
             local f = CreateFrame("Frame")
             for _, e in ipairs({"AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
@@ -93,7 +95,7 @@ fn client() -> Client {
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    let mut c = Client { app, inbound };
+    let mut c = Client { app, inbound, sent };
     // The auctioneer beside us, so the latch's leash (`0x493230`) holds.
     c.frame(vec![vec![
         created(ME, EntityKind::Player, &[(FIELD_UNIT_HEALTH, 100)]),
@@ -250,5 +252,47 @@ fn a_close_in_the_opens_frame_follows_the_show() {
         c.eval::<i64>(false, "return GetAuctionHouseDepositRate()"),
         0,
         "the VM's copy of the house is closed"
+    );
+}
+
+/// A stock-like auction window: `AUCTION_HOUSE_SHOW` shows it, and `AUCTION_HOUSE_CLOSED` hides it,
+/// whose `OnHide` calls `CloseAuctionHouse()` (`Blizzard_AuctionUI.xml:1977`).
+const STOCK_FRAME: &str = r#"
+    local w = CreateFrame("Frame")
+    w:RegisterEvent("AUCTION_HOUSE_SHOW")
+    w:RegisterEvent("AUCTION_HOUSE_CLOSED")
+    w:SetScript("OnEvent", function()
+        if event == "AUCTION_HOUSE_SHOW" then Shown = true
+        elseif Shown then Shown = false CloseAuctionHouse() end
+    end)
+"#;
+
+/// Two greetings in one frame (a double right-click): the second's latch closes the first, behind
+/// its show, and the window's hide re-enters the close core (`0x4cd5f0`) for the session it is
+/// closing, never the one the second greeting opened, which stays up with its verbs live.
+#[test]
+fn a_close_nested_in_a_parked_close_leaves_the_reopened_session() {
+    let mut c = client();
+    c.eval::<()>(true, STOCK_FRAME);
+    c.frame(vec![vec![hello()], vec![hello()]]);
+    let seen = c.seen();
+    assert_eq!(
+        seen.last().map(String::as_str),
+        Some("AUCTION_HOUSE_SHOW:nil"),
+        "{seen:?}"
+    );
+    assert_eq!(
+        c.app.world().resource::<AuctionOpen>().auctioneer,
+        Some(AUCTIONEER),
+        "the second greeting's session stands"
+    );
+    assert!(c.eval::<bool>(false, "return Shown"));
+    let _ = c.sent.try_iter().count();
+    c.eval::<()>(true, "QueryAuctionItems('')");
+    assert!(
+        c.sent
+            .try_iter()
+            .any(|cmd| matches!(cmd, crate::net::ClientCommand::AuctionListItems { .. })),
+        "a verb reaches the session"
     );
 }

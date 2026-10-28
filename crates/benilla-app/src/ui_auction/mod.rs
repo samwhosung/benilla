@@ -174,6 +174,11 @@ pub(crate) struct AuctionOpen {
     /// The key stacks; neither [`Self::open`] nor [`Self::clear`] touches them.
     pub(crate) sorts: SortStacks,
     pub(crate) wire: AuctionWireLog,
+    /// A close parked behind the house lane is firing its VM half ([`net::HouseStep::Closed`]):
+    /// the session it closes is already cleared, so a close core its listeners re-enter is that
+    /// session's re-entry with its cell still set (`0x4cd602` before `0x4cd613`), not a close of
+    /// a session opened since.
+    pub(crate) closing_parked: bool,
 }
 
 /// How far past the tick a bid notice pushes a deadline at least (`0x15f90`, `0x4cc5a2`).
@@ -540,6 +545,10 @@ pub(crate) fn open_auction(world: &mut World, auctioneer: u64, house_id: u32) {
 /// earlier step closes the session here and queues its VM half behind that step
 /// ([`net::close_waits`]), so it never undoes an open that has not yet shown.
 pub(crate) fn close_core(world: &mut World) {
+    if world.resource::<AuctionOpen>().closing_parked {
+        crate::ui_session::fire(world, reenter_parked_close);
+        return;
+    }
     let Some(auctioneer) = world.resource::<AuctionOpen>().auctioneer else {
         return;
     };
@@ -566,6 +575,14 @@ pub(crate) fn close_core(world: &mut World) {
         crate::ui_session::with_script(world, UiScript::close_auction_session);
     }
     crate::ui_session::fire(world, |script| script.clear_auction_sell_item());
+}
+
+/// The close core re-entered from inside a parked close's signal, for the session that close is
+/// clearing: `AUCTION_HOUSE_CLOSED` again and the sell slot's clear (`0x4cd602`, `0x4cd640`); the
+/// session it leaves alone is one a later greeting opened.
+pub(crate) fn reenter_parked_close(script: &mut UiScript) {
+    script.fire_event("AUCTION_HOUSE_CLOSED", vec![]);
+    script.clear_auction_sell_item();
 }
 
 pub(crate) struct UiAuctionPlugin;

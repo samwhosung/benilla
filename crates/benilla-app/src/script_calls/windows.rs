@@ -85,6 +85,12 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4cd613`-`0x4cd629`), then the sell slot emptied with its unlock (`0x4cd62e` →
     /// `0x4cd640`).
     pub(super) fn close_auction(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        // Inside a parked close's signal, the re-entry of the session it closes.
+        if self.appliers.auction().closing_parked() {
+            crate::ui_auction::reenter_parked_close(script);
+            self.signalled(script, mark);
+            return;
+        }
         if self.appliers.auction().auctioneer().is_none() {
             return;
         }

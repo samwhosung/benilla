@@ -403,11 +403,16 @@ fn fire_house(In(until): In<crate::lanes::Until>, mut vm: HouseVm, mut sink: Mes
                 HouseStep::Line { then, .. } => *then,
                 _ => None,
             };
+            let closing = matches!(step, HouseStep::Closed);
+            vm.own().auction.closing_parked = closing;
             vm.run(|script| {
                 if let Some(script) = script {
                     apply_step(script, &mut sink, step);
                 }
             });
+            if closing {
+                vm.own().auction.closing_parked = false;
+            }
             if let Some(then) = then {
                 continue_after_line(&mut vm, then);
             }
