@@ -129,30 +129,8 @@ impl InteractLatch {
 pub(crate) struct LatchCloses([AtomicU64; NpcWindow::ALL.len()]);
 
 impl LatchCloses {
-    fn count(&self, window: NpcWindow) -> u64 {
-        self.0[window.index()].load(Ordering::Relaxed)
-    }
-
     fn note(&self, window: NpcWindow) {
         self.0[window.index()].fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// A window feed's view of its core: the feed fires its window's opens and updates, never its
-/// close, which the core told the VM as it ran.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct CoreCloses<'w, 's> {
-    /// Absent in a harness with no window on the latch.
-    closes: Option<Res<'w, LatchCloses>>,
-    seen: crate::ui_script::WindowMemo<'w, 's, u64>,
-}
-
-impl CoreCloses<'_, '_> {
-    /// Whether `window`'s core cleared its cell since this feed last asked: what the feed last
-    /// announced is gone, and it starts over from closed.
-    pub(crate) fn since_last(&mut self, script: &UiScript, window: NpcWindow) -> bool {
-        let now = self.closes.as_ref().map_or(0, |c| c.count(window));
-        std::mem::replace(self.seen.get(script), now) != now
     }
 }
 
