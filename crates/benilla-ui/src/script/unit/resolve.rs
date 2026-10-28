@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use mlua::Lua;
 
-use super::super::roster_read::{GroupRow, RowQuery};
+use super::super::roster_read::{GroupRow, GroupRows, GroupRowsQuery, RowQuery};
 use super::selection_read::{live_selection, SelectionGlobals};
 
 /// What `0x515970` reads of the client's own state, no object's field: the reference keeps each in
@@ -313,6 +313,7 @@ pub(crate) fn live_parsed(
     let globals = LiveGlobals {
         guids,
         row,
+        rows: None,
         selection,
     };
     if reads_objects(base, hops) {
@@ -329,22 +330,40 @@ pub(crate) fn live_parsed(
 }
 
 /// The client's globals, each read live where the lent host answered for it: the selection's and
-/// the interaction's ([`super::SelectionQuery`]) and one group row, the row its base names
-/// ([`RowQuery`]); every other global as `guids` holds it.
+/// the interaction's ([`super::SelectionQuery`]), and one group row, the row its base names
+/// ([`RowQuery`]), or every row ([`GroupRowsQuery`]); every other global as `guids` holds it.
 pub(crate) struct LiveGlobals<'a> {
     guids: &'a UnitGuids,
     row: Option<(UnitBase, GroupRow)>,
+    rows: Option<GroupRows>,
     selection: Option<SelectionGlobals>,
 }
 
 impl<'a> LiveGlobals<'a> {
-    /// `guids` with the selection's and the interaction's globals asked of the lent host.
+    /// `guids` with the selection's and the interaction's globals and every group row asked of
+    /// the lent host, for the walks over all the tokens (`0x515c50`).
     pub(crate) fn asked(lua: &Lua, guids: &'a UnitGuids) -> Self {
         Self {
             guids,
             row: None,
+            rows: crate::script::live::ask(lua, &GroupRowsQuery),
             selection: live_selection(lua),
         }
+    }
+
+    /// Row `row` of the party's or the raid's rows asked, `None` where none was.
+    fn asked_row(&self, raid: bool, row: u32) -> Option<GroupRow> {
+        let rows = self.rows.as_ref()?;
+        let row = usize::try_from(row).ok()?;
+        Some(
+            if raid {
+                rows.raid.get(row)
+            } else {
+                rows.party.get(row)
+            }
+            .copied()
+            .unwrap_or_default(),
+        )
     }
 }
 
@@ -361,25 +380,33 @@ impl UnitTokenGlobals for LiveGlobals<'_> {
     fn party(&self, row: u32) -> u64 {
         match self.row {
             Some((UnitBase::Party(r) | UnitBase::PartyPet(r), live)) if r == row => live.member,
-            _ => self.guids.party(row),
+            _ => self
+                .asked_row(false, row)
+                .map_or_else(|| self.guids.party(row), |r| r.member),
         }
     }
     fn raid(&self, row: u32) -> u64 {
         match self.row {
             Some((UnitBase::Raid(r) | UnitBase::RaidPet(r), live)) if r == row => live.member,
-            _ => self.guids.raid(row),
+            _ => self
+                .asked_row(true, row)
+                .map_or_else(|| self.guids.raid(row), |r| r.member),
         }
     }
     fn party_pet_record(&self, row: u32) -> u64 {
         match self.row {
             Some((UnitBase::PartyPet(r), live)) if r == row => live.pet_record,
-            _ => self.guids.party_pet_record(row),
+            _ => self
+                .asked_row(false, row)
+                .map_or_else(|| self.guids.party_pet_record(row), |r| r.pet_record),
         }
     }
     fn raid_pet_record(&self, row: u32) -> u64 {
         match self.row {
             Some((UnitBase::RaidPet(r), live)) if r == row => live.pet_record,
-            _ => self.guids.raid_pet_record(row),
+            _ => self
+                .asked_row(true, row)
+                .map_or_else(|| self.guids.raid_pet_record(row), |r| r.pet_record),
         }
     }
 }

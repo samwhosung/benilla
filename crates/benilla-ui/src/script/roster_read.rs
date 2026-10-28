@@ -166,6 +166,23 @@ impl LiveQuery for RowQuery {
     type Answer = GroupRow;
 }
 
+/// Every group row the token walk reads as an event names its unit (`0x515c50`): party rows 1 to
+/// 4 (`0x491920`, `0x491930`) and raid rows 1 to 40 (`0x491940`, `0x491960`), each as
+/// [`RowQuery`] answers it, at the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupRowsQuery;
+
+/// The party rows and the raid rows, an empty row past the roster's end.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupRows {
+    pub party: [GroupRow; 4],
+    pub raid: Vec<GroupRow>,
+}
+
+impl LiveQuery for GroupRowsQuery {
+    type Answer = GroupRows;
+}
+
 /// `guid`'s place in the group, live where a host answers, else off the snapshot: the active
 /// player or a party slot (`0x4e7f70`), a raid row below the count (`0x4baee0`) with its rank.
 pub(crate) fn membership(lua: &Lua, snapshot: &PartyState, guid: u64) -> Membership {

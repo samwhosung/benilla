@@ -10,8 +10,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    GroupCells, GroupCellsQuery, GroupRow, MemberOrPetQuery, MemberQuery, Membership,
-    RaidMemberInfo, RaidRowQuery, RosterName, RosterNames, RosterNamesQuery, RowQuery, UnitBase,
+    GroupCells, GroupCellsQuery, GroupRow, GroupRows, GroupRowsQuery, MemberOrPetQuery,
+    MemberQuery, Membership, RaidMemberInfo, RaidRowQuery, RosterName, RosterNames,
+    RosterNamesQuery, RowQuery, UnitBase,
 };
 
 use super::feed::{loot_read, raid_row_at, RaidSelf, RowReads};
@@ -190,6 +191,16 @@ impl RosterLive<'_, '_> {
         };
         Some(GroupRow { member, pet_record })
     }
+
+    /// Every party and raid row as [`Self::row`] reads it, as of here.
+    fn rows(&self) -> Option<GroupRows> {
+        self.group.as_deref()?;
+        let row = |base| self.row(base).unwrap_or_default();
+        Some(GroupRows {
+            party: [0, 1, 2, 3].map(|i| row(UnitBase::Party(i))),
+            raid: (0..40).map(|i| row(UnitBase::Raid(i))).collect(),
+        })
+    }
 }
 
 impl crate::script_calls::live::LiveFamily for RosterLive<'_, '_> {
@@ -198,6 +209,7 @@ impl crate::script_calls::live::LiveFamily for RosterLive<'_, '_> {
             || ask.answer(|q: &RaidRowQuery| self.raid_row(q.0))
             || ask.answer(|q: &MemberQuery| self.member(q.0))
             || ask.answer(|q: &RowQuery| self.row(q.0))
+            || ask.answer(|_: &GroupRowsQuery| self.rows())
             || ask.answer(|q: &MemberOrPetQuery| self.member_or_pet(q.guid, q.raid))
             || ask.answer(|_: &RosterNamesQuery| self.roster_names())
     }

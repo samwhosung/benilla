@@ -7,7 +7,7 @@
 use benilla_protocol::field::{FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
 use benilla_protocol::messages::{member_status, GroupMemberEntry, PartyMemberStatsInfo};
 use benilla_protocol::{EntityKind, SessionEvent};
-use benilla_ui::script::{UiScript, UnitGuids};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use super::unit_view_tests::{client, created, fall, frame, values};
@@ -162,22 +162,68 @@ fn a_member_update_listener_reads_party1_and_raid3_as_its_packet_wrote_them() {
             "#,
         )
         .unwrap();
-    // The resolver's inputs an event's token walk reads (`0x515c50`), as the feeds push them
-    // ahead of the drain: the frame's last rows.
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .set_unit_guids(&UnitGuids {
-            player: ME,
-            party: [MATE, 0, 0, 0],
-            raid: vec![MATE, CORA, DUNN, ME],
-            ..Default::default()
-        });
     let seen = frame(
         &mut app,
         vec![mate_hp(40), raid_list([CORA, DUNN]), mate_hp(30)],
     );
     let seen: Vec<_> = seen.iter().filter(|s| !s.starts_with("UNIT_")).collect();
     assert_eq!(seen, ["40:Bram", "30:Dunn"]);
+}
+
+/// A member's `UNIT_HEALTH` names the tokens its own packet's roster gives it: `0x515e50` walks the
+/// party slots and the raid rows at the signal (`0x515c50`, through `0x491920` and `0x491940`).
+/// So [`MATE`], moved out of our subgroup by a list later in the frame, is `party1` and `raid1` at
+/// the first stats packet; at the second, after a list that seats it third, `raid3` alone.
+#[test]
+fn a_member_health_event_names_the_tokens_its_packets_roster_gives() {
+    let mut app = client();
+    let list = |rows: [(u64, u8); 3]| SessionEvent::GroupList {
+        group_type: crate::ui_party::GROUPTYPE_RAID,
+        own_flags: 0,
+        members: rows
+            .iter()
+            .map(|&(guid, subgroup)| GroupMemberEntry {
+                name: String::new(),
+                guid,
+                status: member_status::ONLINE,
+                flags: subgroup,
+            })
+            .collect(),
+        leader: ME,
+        loot: None,
+    };
+    frame(
+        &mut app,
+        vec![
+            list([(MATE, 0), (ALIA, 1), (BRAM, 1)]),
+            SessionEvent::PartyMemberStats {
+                guid: MATE,
+                full: true,
+                info: Box::new(PartyMemberStatsInfo {
+                    status: Some(member_status::ONLINE),
+                    cur_hp: Some(100),
+                    max_hp: Some(100),
+                    ..Default::default()
+                }),
+            },
+        ],
+    );
+    let seen = frame(
+        &mut app,
+        vec![
+            mate_hp(40),
+            list([(ALIA, 1), (BRAM, 1), (MATE, 1)]),
+            mate_hp(30),
+        ],
+    );
+    assert_eq!(
+        seen,
+        [
+            "UNIT_HEALTH:party1:40",
+            "UNIT_HEALTH:raid1:40",
+            "UNIT_HEALTH:raid3:30"
+        ]
+    );
 }
 
 /// Our pet, `UNIT_FIELD_SUMMON`'s, and the one that replaces it.

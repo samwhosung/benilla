@@ -513,13 +513,15 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !exists || guid == 0 {
                     return Ok(Value::Nil);
                 }
+                // The party slots never hold the active player (`0x4e8fa0`); the raid roster does.
+                let own = roster_read::cells(lua, &model.party).own_guid;
                 let in_group = |guid: u64| {
-                    guid != 0
-                        && if raid {
-                            model.party.raid.iter().any(|m| m.guid == guid)
-                        } else {
-                            model.party.members.iter().any(|m| m.guid == guid)
-                        }
+                    let at = roster_read::membership(lua, &model.party, guid);
+                    if raid {
+                        at.raid
+                    } else {
+                        at.party && guid != own
+                    }
                 };
                 // The pets the last push resolved for the rows, else the owner's.
                 let pets = if raid {

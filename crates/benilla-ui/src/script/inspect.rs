@@ -64,8 +64,9 @@ impl super::UiScript {
 
     /// The unit tokens that name a unit now ([`super::unit::bound_tokens_in`]): the set a field's
     /// change is fanned out to (`0x515e50`). The objects, the target and the interaction globals
-    /// are read through the lent host as of the place this runs, the other globals as the VM holds
-    /// them; with no host to ask, the snapshot's ([`super::UnitGuids::bound_tokens`]).
+    /// and the party and raid rows (`0x491920`, `0x491940`) are read through the lent host as of
+    /// the place this runs, the other globals as the VM holds them; with no host to ask, the
+    /// snapshot's ([`super::UnitGuids::bound_tokens`]).
     pub fn bound_unit_tokens(&self) -> Vec<String> {
         let model = self.model_ref();
         let guids = &model.unit_guids;

@@ -2054,11 +2054,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(unit) = crate::script::unit::view(lua, &model, &token) else {
                 return Ok(Value::Nil);
             };
-            // The active player or one of the four party slots, by guid (`0x4e7f70`): a raid mate
-            // outside our subgroup, a pet or a stranger answers nil.
-            let me = crate::script::unit::view(lua, &model, "player").map_or(0, |p| p.guid);
-            let grouped = unit.guid != 0
-                && (unit.guid == me || model.party.members.iter().any(|m| m.guid == unit.guid));
+            // The active player or one of the four party slots, by guid, at the call (`0x4e7f70`):
+            // a raid mate outside our subgroup, a pet or a stranger answers nil.
+            let grouped = super::roster_read::membership(lua, &model.party, unit.guid).party;
             // Held as a player (`0x468460`, typemask `0x10`) and not deactivated (`0x614ea0`, a
             // state the app's despawn never leaves held), then the 20 slots' ids, stride 12
             // (`0x4dfebd`-`0x4dfed7`); a non-player's window is all zero.
@@ -4064,6 +4062,7 @@ mod tests {
                     guid: FAR_MATE,
                 },
             ],
+            own_guid: ME,
             ..Default::default()
         });
         s.set_unit("player", Some(held(ME, &[7, 783])));

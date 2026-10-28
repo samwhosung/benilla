@@ -761,18 +761,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsRaidOfficer",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let officer = match roster_read::live_cells(lua) {
-                Some(cells) => {
-                    cells.own_guid != 0
-                        && roster_read::live_membership(lua, cells.own_guid)
-                            .and_then(|m| m.rank)
-                            .is_some_and(|rank| rank > 0)
-                }
-                None => {
-                    let me = crate::script::unit::view(lua, &model, "player").map_or(0, |u| u.guid);
-                    me != 0 && model.party.raid.iter().any(|m| m.guid == me && m.rank > 0)
-                }
-            };
+            let own = roster_read::cells(lua, &model.party).own_guid;
+            let officer = own != 0
+                && roster_read::membership(lua, &model.party, own)
+                    .rank
+                    .is_some_and(|rank| rank > 0);
             Ok(if officer {
                 Value::Integer(1)
             } else {
@@ -2013,11 +2006,13 @@ mod tests {
         let mut s = vm();
         assert_eq!(officer(&s), None, "ungrouped");
         // We are the last row, a plain member under row 1's lead.
+        // Our guid is the roster's own cell.
         let mut raid = ten_player_raid();
         raid.raid[1].rank = 1; // someone else assists
         s.set_party(raid.clone());
-        assert_eq!(officer(&s), None, "no player unit yet");
-        s.set_unit("player", Some(unit(true, 0x109)));
+        assert_eq!(officer(&s), None, "no guid of ours yet");
+        raid.own_guid = 0x109;
+        s.set_party(raid.clone());
         assert_eq!(
             officer(&s),
             None,
@@ -2028,9 +2023,10 @@ mod tests {
         assert_eq!(officer(&s), Some(1), "assistant");
         raid.raid[0].rank = 0;
         raid.raid[9].rank = 2;
-        s.set_party(raid);
+        s.set_party(raid.clone());
         assert_eq!(officer(&s), Some(1), "leader");
-        s.set_unit("player", Some(unit(true, 0x999)));
+        raid.own_guid = 0x999;
+        s.set_party(raid);
         assert_eq!(officer(&s), None, "no row of ours");
     }
 
