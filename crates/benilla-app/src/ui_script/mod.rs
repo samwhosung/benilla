@@ -420,7 +420,7 @@ pub(crate) fn window_to_ui(screen: UiScreen, cursor: Vec2) -> Vec2 {
 pub(crate) struct UiScriptPlugin;
 
 /// `uiScale`'s change callback: the dial's own `[0.5, 1.5]` clamp.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<UiScaleCvar>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, scale: &mut UiScaleCvar) {
     if ev.is("uiScale") {
         scale.0 = ev.num().clamp(0.5, 1.5);
     }
@@ -445,7 +445,6 @@ fn console_reload_ui(steps: &mut crate::console::ConsoleSteps, _args: &str) -> V
 impl Plugin for UiScriptPlugin {
     fn build(&self, app: &mut App) {
         use crate::console::ConsoleCommandApp;
-        app.add_observer(on_cvar);
         // Category 1 with no help (`0x402ba6`-`0x402bb4`).
         app.console_command_in_call(
             "reloadUI",

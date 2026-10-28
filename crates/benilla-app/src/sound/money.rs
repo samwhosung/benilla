@@ -62,5 +62,9 @@ fn play_coin_on_coinage_change(
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(Update, play_coin_on_coinage_change);
+    // After the calls, whose callbacks write the volumes it plays at.
+    app.add_systems(
+        Update,
+        play_coin_on_coinage_change.after(crate::vm_pass::VmPass::End),
+    );
 }

@@ -312,118 +312,139 @@ impl Default for Widescreen {
     }
 }
 
-/// The change callbacks of the reference's video-options registration block (`0x688470`); each
-/// arm writes only its own resource.
-pub(crate) fn on_cvar(
-    ev: On<crate::cvars::CvarChanged>,
-    mut cfg: ResMut<VideoConfig>,
-    mut view: ResMut<benilla_world::view::ViewDistance>,
-    mut msaa: ResMut<benilla_world::view::MsaaSetting>,
-    msaa_formats: Res<benilla_world::view::MsaaFormats>,
-    mut tex_filter: ResMut<benilla_assets::TexFilterSetting>,
-    mut clutter: ResMut<benilla_world::clutter::ClutterConfig>,
-    mut weather: ResMut<benilla_world::weather::WeatherState>,
-    particles: Option<ResMut<benilla_world::particles::ParticleTuning>>,
-    mut spell_effect_level: ResMut<SpellEffectLevel>,
-    mut ffx: ResMut<benilla_world::ffx_glow::FfxSwitches>,
-    mut widescreen: ResMut<Widescreen>,
-    mut cvars: ResMut<crate::cvars::Cvars>,
-) {
-    use benilla_world::view::{FARCLIP_RANGE, MSAA_RANGE};
-    let v = ev.num();
-    match ev.key().as_str() {
-        // A value that is not a size is ignored with a warning.
-        "gxresolution" => match parse_resolution(&ev.new) {
-            Some(size) => cfg.windowed = size,
-            None => warn!("cvar gxResolution: unparseable value '{}' ignored", ev.new),
-        },
-        "gxvsync" => cfg.vsync = ev.flag(),
-        "widescreen" => widescreen.0 = ev.flag(),
-        // The reference's polarity: `1` is windowed (the row is "Windowed Mode").
-        "gxwindow" => cfg.display = display_from_flag(v),
-        // Latched like `gxWindow`: the commit is `RestartGx`, which rebuilds the window
-        // (`0x58cf10` reads `+0x09`); `apply_window_mode` is that rebuild.
-        "gxmaximize" => cfg.maximize = ev.flag(),
-        // The FFX pass's three switches, read every frame by the reference (`0x6cd8a6`, `0x6cc5a8`,
-        // `0x6cdf10`), so a write shows on the next frame.
-        "ffx" | "ffxglow" | "ffxdeath" => {
-            match ev.key().as_str() {
-                "ffx" => ffx.master = ev.flag(),
-                "ffxglow" => ffx.glow = ev.flag(),
-                _ => ffx.death = ev.flag(),
+/// The knobs the video rows' change callbacks write ([`VideoKnobs::on_cvar`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct VideoKnobs<'w> {
+    cfg: ResMut<'w, VideoConfig>,
+    view: ResMut<'w, benilla_world::view::ViewDistance>,
+    msaa: ResMut<'w, benilla_world::view::MsaaSetting>,
+    msaa_formats: Res<'w, benilla_world::view::MsaaFormats>,
+    tex_filter: ResMut<'w, benilla_assets::TexFilterSetting>,
+    clutter: ResMut<'w, benilla_world::clutter::ClutterConfig>,
+    weather: ResMut<'w, benilla_world::weather::WeatherState>,
+    particles: Option<ResMut<'w, benilla_world::particles::ParticleTuning>>,
+    spell_effect_level: ResMut<'w, SpellEffectLevel>,
+    ffx: ResMut<'w, benilla_world::ffx_glow::FfxSwitches>,
+    widescreen: ResMut<'w, Widescreen>,
+}
+
+impl VideoKnobs<'_> {
+    /// The change callbacks of the reference's video-options registration block (`0x688470`);
+    /// each arm writes only its own knob.
+    pub(crate) fn on_cvar(
+        &mut self,
+        ev: &crate::cvars::CvarChanged,
+        cvars: &mut crate::cvars::Cvars,
+    ) {
+        let VideoKnobs {
+            cfg,
+            view,
+            msaa,
+            msaa_formats,
+            tex_filter,
+            clutter,
+            weather,
+            particles,
+            spell_effect_level,
+            ffx,
+            widescreen,
+        } = self;
+        use benilla_world::view::{FARCLIP_RANGE, MSAA_RANGE};
+        let v = ev.num();
+        match ev.key().as_str() {
+            // A value that is not a size is ignored with a warning.
+            "gxresolution" => match parse_resolution(&ev.new) {
+                Some(size) => cfg.windowed = size,
+                None => warn!("cvar gxResolution: unparseable value '{}' ignored", ev.new),
+            },
+            "gxvsync" => cfg.vsync = ev.flag(),
+            "widescreen" => widescreen.0 = ev.flag(),
+            // The reference's polarity: `1` is windowed (the row is "Windowed Mode").
+            "gxwindow" => cfg.display = display_from_flag(v),
+            // Latched like `gxWindow`: the commit is `RestartGx`, which rebuilds the window
+            // (`0x58cf10` reads `+0x09`); `apply_window_mode` is that rebuild.
+            "gxmaximize" => cfg.maximize = ev.flag(),
+            // The FFX pass's three switches, read every frame by the reference (`0x6cd8a6`, `0x6cc5a8`,
+            // `0x6cdf10`), so a write shows on the next frame.
+            "ffx" | "ffxglow" | "ffxdeath" => {
+                match ev.key().as_str() {
+                    "ffx" => ffx.master = ev.flag(),
+                    "ffxglow" => ffx.glow = ev.flag(),
+                    _ => ffx.death = ev.flag(),
+                }
+                info!("video: full-screen effects {:?}", **ffx);
             }
-            info!("video: full-screen effects {:?}", *ffx);
-        }
-        // The registry refuses a value outside the callback's range (`0x688d40`); the clamp only
-        // keeps the knob in it.
-        "farclip" => view.farclip = v.clamp(*FARCLIP_RANGE.start(), *FARCLIP_RANGE.end()),
-        // Clamped, where the reference refuses an out-of-range write and keeps the value
-        // (`0x688d90` echoes "NearClip must be in range 0.01 - 0.33" and returns 0).
-        "nearclip" => view.set_nearclip(v),
-        // The reference's `atoi` and clamp to `[1, 16]` (`0x63b250`), then this GPU's ceiling:
-        // an unoffered count is a wgpu validation error on the first frame. The camera reads it
-        // once, at spawn.
-        "gxmultisample" => {
-            let asked = (v as u32).clamp(*MSAA_RANGE.start(), *MSAA_RANGE.end());
-            let granted = msaa_formats.clamp(asked);
-            if granted != asked {
-                warn!("cvar gxMultisample: this GPU does not offer {asked}x multisampling — using {granted}x");
+            // The registry refuses a value outside the callback's range (`0x688d40`); the clamp only
+            // keeps the knob in it.
+            "farclip" => view.farclip = v.clamp(*FARCLIP_RANGE.start(), *FARCLIP_RANGE.end()),
+            // Clamped, where the reference refuses an out-of-range write and keeps the value
+            // (`0x688d90` echoes "NearClip must be in range 0.01 - 0.33" and returns 0).
+            "nearclip" => view.set_nearclip(v),
+            // The reference's `atoi` and clamp to `[1, 16]` (`0x63b250`), then this GPU's ceiling:
+            // an unoffered count is a wgpu validation error on the first frame. The camera reads it
+            // once, at spawn.
+            "gxmultisample" => {
+                let asked = (v as u32).clamp(*MSAA_RANGE.start(), *MSAA_RANGE.end());
+                let granted = msaa_formats.clamp(asked);
+                if granted != asked {
+                    warn!("cvar gxMultisample: this GPU does not offer {asked}x multisampling — using {granted}x");
+                }
+                msaa.samples = granted;
             }
-            msaa.samples = granted;
-        }
-        // Not applied until the next launch (the filter policy is published once at the end of
-        // `CvarLoad`); the reference registers both with `flags = 1` and applies them live.
-        // `anisotropic` is refused outside `[1, 16]` before it reaches here (`0x689110`,
-        // `check_anisotropic`); the clamp covers a saved value, which the file read does not check.
-        "trilinear" => tex_filter.trilinear = ev.flag(),
-        "anisotropic" => {
-            tex_filter.aniso = (v as u32).clamp(
-                *benilla_assets::ANISO_RANGE.start(),
-                *benilla_assets::ANISO_RANGE.end(),
-            )
-        }
-        // The panel's 0/1/2 is the density multiplier x1/x2/x3, clamped to the 1.12 slider's
-        // range. `frillDensity` is the same knob, mirrored so `GetCVar` never answers two levels.
-        "worlddetail" => {
-            clutter.density = v.clamp(0.0, 2.0) + 1.0;
-            cvars.mirror(
-                benilla_ui::script::CVAR_FRILL_DENSITY,
-                &clutter.frill_density().to_string(),
-            );
-            // The stop's other half, as `SetWorldDetail` writes it, so a stop set as a CVar keeps
-            // `SmallCull` in step too.
-            cvars.mirror(
-                benilla_ui::script::CVAR_SMALL_CULL,
-                &benilla_ui::script::small_cull_text(v.clamp(0.0, 2.0) as usize),
-            );
-        }
-        // The same knob in the reference's cells per chunk, which the registry holds to `[1, 256]`
-        // (`0x688de0`); the callback hands on `SStrToInt`'s integer (`0x688dfa`), so "48.9" is 48.
-        // The loaded tiles re-scatter off the change.
-        "frilldensity" => {
-            clutter.set_frill_density(benilla_ui::script::s_str_to_int(&ev.new) as f32);
-            cvars.mirror(
-                benilla_ui::script::CVAR_WORLD_DETAIL,
-                &(clutter.density - 1.0).to_string(),
-            );
-        }
-        // Weather Intensity 0..3: the reference's callback `0x67b870` jumps (`0x67b8e8`) to the
-        // quality cells {0.1, 0.33, 0.66, 1.0} at `[0x8680ec]`, and refuses a value outside 0..=3
-        // before it applies (`check_weather_density`); the clamp covers a saved value.
-        "weatherdensity" => weather.weather_density = v.trunc().clamp(0.0, 3.0) as u8,
-        // Spell Detail (`0x689510`): `SStrToInt`, clamped to [0, 2] in the handler's own copy,
-        // echoed, then the emission scalar 0.33, 0.66 or 1.0 through `0x7adfb0`, shared with
-        // `particleDensity`. The reference runs it on every write, an unchanged one included; an
-        // observer fires only on a change.
-        "spelleffectlevel" => {
-            spell_effect_level.0 = benilla_ui::script::s_str_to_int(&ev.new);
-            let level = spell_effect_level.0.clamp(0, 2);
-            cvars.print(format!("Spell effect level set to {level}."));
-            if let Some(mut particles) = particles {
-                particles.set_density(spell_effect_scale(level));
+            // Not applied until the next launch (the filter policy is published once at the end of
+            // `CvarLoad`); the reference registers both with `flags = 1` and applies them live.
+            // `anisotropic` is refused outside `[1, 16]` before it reaches here (`0x689110`,
+            // `check_anisotropic`); the clamp covers a saved value, which the file read does not check.
+            "trilinear" => tex_filter.trilinear = ev.flag(),
+            "anisotropic" => {
+                tex_filter.aniso = (v as u32).clamp(
+                    *benilla_assets::ANISO_RANGE.start(),
+                    *benilla_assets::ANISO_RANGE.end(),
+                )
             }
+            // The panel's 0/1/2 is the density multiplier x1/x2/x3, clamped to the 1.12 slider's
+            // range. `frillDensity` is the same knob, mirrored so `GetCVar` never answers two levels.
+            "worlddetail" => {
+                clutter.density = v.clamp(0.0, 2.0) + 1.0;
+                cvars.mirror(
+                    benilla_ui::script::CVAR_FRILL_DENSITY,
+                    &clutter.frill_density().to_string(),
+                );
+                // The stop's other half, as `SetWorldDetail` writes it, so a stop set as a CVar keeps
+                // `SmallCull` in step too.
+                cvars.mirror(
+                    benilla_ui::script::CVAR_SMALL_CULL,
+                    &benilla_ui::script::small_cull_text(v.clamp(0.0, 2.0) as usize),
+                );
+            }
+            // The same knob in the reference's cells per chunk, which the registry holds to `[1, 256]`
+            // (`0x688de0`); the callback hands on `SStrToInt`'s integer (`0x688dfa`), so "48.9" is 48.
+            // The loaded tiles re-scatter off the change.
+            "frilldensity" => {
+                clutter.set_frill_density(benilla_ui::script::s_str_to_int(&ev.new) as f32);
+                cvars.mirror(
+                    benilla_ui::script::CVAR_WORLD_DETAIL,
+                    &(clutter.density - 1.0).to_string(),
+                );
+            }
+            // Weather Intensity 0..3: the reference's callback `0x67b870` jumps (`0x67b8e8`) to the
+            // quality cells {0.1, 0.33, 0.66, 1.0} at `[0x8680ec]`, and refuses a value outside 0..=3
+            // before it applies (`check_weather_density`); the clamp covers a saved value.
+            "weatherdensity" => weather.weather_density = v.trunc().clamp(0.0, 3.0) as u8,
+            // Spell Detail (`0x689510`): `SStrToInt`, clamped to [0, 2] in the handler's own copy,
+            // echoed, then the emission scalar 0.33, 0.66 or 1.0 through `0x7adfb0`, shared with
+            // `particleDensity`. The reference runs it on every write, an unchanged one included; an
+            // observer fires only on a change.
+            "spelleffectlevel" => {
+                spell_effect_level.0 = benilla_ui::script::s_str_to_int(&ev.new);
+                let level = spell_effect_level.0.clamp(0, 2);
+                cvars.print(format!("Spell effect level set to {level}."));
+                if let Some(particles) = particles.as_deref_mut() {
+                    particles.set_density(spell_effect_scale(level));
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -455,7 +476,6 @@ impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SpellEffectLevel>()
             .init_resource::<Widescreen>();
-        app.add_observer(on_cvar);
         app.init_resource::<VideoConfig>()
             .init_resource::<GxRestarts>()
             .init_resource::<RefreshPacing>()
@@ -489,12 +509,10 @@ pub(crate) struct GxRestarts(u32);
 /// where the reference's restart calls `CVar::Update` (`0x63e060`) on each; `GetCVar` answers the
 /// applied value until then.
 fn drain_restart_gx(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<crate::cvars::CvarSteps<'static>>,
     mut restarts: ResMut<GxRestarts>,
-    mut cvars: ResMut<crate::cvars::Cvars>,
-    mut commands: Commands,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut steps| {
         let Some(script) = script else {
             return;
         };
@@ -503,13 +521,12 @@ fn drain_restart_gx(
             // A `ResMut` deref-mut is a change signal, so a quiet frame touches nothing.
             return;
         }
+        let Some(cvars) = steps.cvars() else {
+            return;
+        };
         restarts.0 = restarts.0.wrapping_add(asks);
         let committed = cvars.commit_latched();
-        if cvars.has_events() {
-            for event in cvars.take_events() {
-                commands.trigger(event);
-            }
-        }
+        steps.sync(Some(script));
         info!(
             "video: RestartGx — {committed} staged setting(s) committed; re-asserting the \
                display mode and present mode"
@@ -590,14 +607,14 @@ type PublishedModes = Option<(Vec<ScreenResolution>, Option<ScreenResolution>)>;
 /// size here.
 /// The list is recomputed on change; the reference builds its list once and never invalidates it.
 fn publish_display_modes(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // `widescreen` is a CVar knob, which the call host's callbacks write.
+    mut vm: crate::script_calls::VmWith<Option<Res<'static, Widescreen>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     monitors: Query<&bevy::window::Monitor>,
-    widescreen: Option<Res<Widescreen>>,
     mut last: Local<crate::ui_script::VmMemo<PublishedModes>>,
 ) {
-    let widescreen = widescreen.is_none_or(|w| w.0);
-    hosted_vm.run(|script| {
+    let widescreen = vm.own().is_none_or(|w| w.0);
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };

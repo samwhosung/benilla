@@ -251,7 +251,7 @@ pub(crate) struct WorldBackdropPlugin;
 
 /// Render scale's change callback, clamped to [`RENDER_SCALE_RANGE`]; the backdrop and the
 /// camera's factor follow together on the next frame.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<RenderScale>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, scale: &mut RenderScale) {
     if ev.is("renderScale") {
         scale.0 = ev
             .num()
@@ -261,12 +261,14 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<Rende
 
 impl Plugin for WorldBackdropPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         app.init_resource::<RenderScale>()
             .add_systems(Startup, setup_backdrop)
             .add_systems(
                 Update,
-                (track_render_size, retarget_world_camera, claim_backdrop).chain(),
+                (track_render_size, retarget_world_camera, claim_backdrop)
+                    .chain()
+                    // After the calls, whose `renderScale` callback writes the knob.
+                    .after(crate::vm_pass::VmPass::End),
             );
     }
 }

@@ -30,8 +30,6 @@ pub(super) struct PointerFeed<'w> {
     /// The dev overlay holds the pointer: a press then is no frame's and not the world's.
     egui_pointer: Option<Res<'w, super::EguiPointerOver>>,
     presses: ResMut<'w, super::WorldPresses>,
-    /// `widescreen`, which shapes the interface's screen on the window ([`super::UiScreen`]).
-    widescreen: Option<Res<'w, crate::video::Widescreen>>,
 }
 
 impl PointerFeed<'_> {
@@ -297,7 +295,8 @@ pub(super) fn feed_ui_input(
     let wl_display = textinput::wayland_display(raw_handle);
     // The interface's screen on the window, 4:3 and stretched with `widescreen` 0
     // ([`super::UiScreen`]).
-    let screen = super::UiScreen::of_window(window, pointer.widescreen.as_deref());
+    let widescreen = host.widescreen();
+    let screen = super::UiScreen::of_window(window, widescreen.as_ref());
     // The window cursor in the root's y-up 768-high units, `GetCursorPosition`'s answer. The
     // headless hover probe's aim stands in for a missing cursor, so `PointerOverUi` rises and falls
     // over a panel in an automated run as for a person; a real pointer wins.

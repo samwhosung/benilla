@@ -385,7 +385,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::reputations::Reputations", "spell::group_relation::GroupRoster",
-        "ui_action::PlayerActions", "ui_guild::GuildState"]),
+        "ui_action::PlayerActions", "ui_guild::GuildState", "video::Widescreen"]),
 
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
@@ -410,7 +410,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::UnitSpeeds", "net::game_time::ServerTime", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
-        "player::state::OwnControlLost", "player::state::StandPending", "spell::cooldowns::Cooldowns",
+        "player::state::OwnControlLost", "player::state::StandPending",
+        "spell::cast_target::AutoSelfCast", "spell::cooldowns::Cooldowns",
         "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers", "target::Selection",
         "ui_action::ActionSlots",
         "ui_action::PlayerActions", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
@@ -444,6 +445,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore", "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_craft::CraftItemWaits", "ui_craft::CraftOpen",
         "ui_pet::PetBar"]),
+    // The resolution list's `widescreen` filter (`0x48bcac`), which a listener's `SetCVar` moves
+    // inside its call; the reference builds the list at the first resolution verb (`0x48bc90`).
+    ("::video::publish_display_modes", &["video::Widescreen"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
@@ -544,8 +548,7 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::RacePvpTeams",
     "::MacroBoundSpells",
     "::NameCache",
-    // The Video menus' lists the host's resolution and multisample verbs read (`0x48bc90`, `0x48c3e0`).
-    "::video::Widescreen",
+    // The Video menu's list the host's multisample verbs read (`0x48c3e0`).
     "::view::MsaaFormats",
     "::ServerTime",
     "::GuidIndex",
@@ -595,6 +598,8 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::GuildMemberNotify",
     "::PetitionRecords",
     "::ItemSubClasses",
+    // `showLootSpam`, which the roll handlers read as their lines compose (`0x61ba3a`,
+    // `0x61bafe`, `0x61c0b9`); a listener's `SetCVar` writes it inside its call.
     "::LootConfig",
     "::LootKneel",
     "::MailOpen",
@@ -655,15 +660,13 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ItemSets",
     "::ItemNames",
     // What the world click's legs read in the call (`0x481f60`): the lock tables an object's
-    // open gates on, the cover and the inspector that refuse an arm, the look tuning and the
-    // frame's motion its drag test reads, `deselectOnClick`, and Shift for `SetAutoLoot`.
+    // open gates on, the cover and the inspector that refuse an arm, the frame's motion its drag
+    // test reads, and Shift for `SetAutoLoot`.
     "::go_templates::LockTypes",
     "::go_templates::Locks",
     // The gathering skills the world click's cursor forks on, read through the host.
     "::ui_action::LearnedAbilities",
     "::loading_screen::LoadingScreen",
-    "::player::camera::LookConfig",
-    "::target::ClickConfig",
     "::ui_script::InspectMode",
     "bevy_input::button_input::ButtonInput<bevy_input::keyboard::KeyCode>",
     "bevy_input::mouse::AccumulatedMouseMotion",
@@ -1805,7 +1808,8 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
     // death stores its death state reads and its corpse ask resets, the class family it sets, and
     // the connection the clock resync asks through.
-    ("arrival", &["death::DeathNet", "net::NetStatus", "spell::mods::SpellModifiers",
+    ("arrival", &["chat_bubble::BubbleConfig", "death::DeathNet", "net::NetStatus",
+        "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_battlefield::Battlefield",
         "ui_dialog_verbs::MeetingStone"]),
     // The watchers' callbacks: the quest log's slots, the skill line's race and class and the
@@ -1829,7 +1833,7 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // names, the source's object and the records a copier and a push read, as the frame left them
     // (#2217); the getters read the window each step's packet left through the host.
     ("loot", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
+        "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootConfig", "ui_loot::LootLatch",
         "ui_loot::LootMoveStart", "ui_party::GroupState"]),
     // A list's copy reads the stable, the creature cache and the pet as the frame left them; its
     // listeners read the stable through the host (#2217).
@@ -1847,8 +1851,10 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // A close's tail parked behind the lane reads the deferred refresh at its place (`0x4acda8`),
     // past an arrival's arm by a later packet of the frame (`0x4ad642`).
     ("mail", &["ui_mail::pending::MailPending"]),
-    ("chat", &["go_templates::GameObjectTemplates", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "ui_chat::edit::ChannelState",
+    // With the bubble and filter switches, which a listener's `SetCVar` moves inside its call.
+    ("chat", &["chat_bubble::BubbleConfig", "go_templates::GameObjectTemplates", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "text_filter::TextFilterSwitches", "ui_chat::edit::ChannelState",
         "world_state::WorldStates"]),
 ];
 

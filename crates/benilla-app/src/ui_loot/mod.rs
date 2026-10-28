@@ -953,7 +953,7 @@ pub(crate) struct LootCloseAtRest(pub(crate) bool);
 pub(crate) struct UiLootPlugin;
 
 /// Applies a loot CVar change.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut loot: ResMut<LootConfig>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, loot: &mut LootConfig) {
     match ev.key().as_str() {
         "autolootdefault" => loot.auto_loot = ev.flag(),
         "showlootspam" => loot.show_loot_spam = ev.flag(),
@@ -964,7 +964,6 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut loot: ResMut<LootCo
 impl Plugin for UiLootPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.add_observer(on_cvar);
         use crate::lanes::LaneApp;
         app.init_resource::<LootState>()
             .add_lane("loot", peek_loot, fire_loot, None)

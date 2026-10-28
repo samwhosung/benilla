@@ -775,7 +775,7 @@ pub(crate) struct NameplatesPlugin;
 struct NameAnchorTrace(bool);
 
 /// The overhead-name rows' change callback: the name trio, the guild line and the rank prefix.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut names: ResMut<NameConfig>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, names: &mut NameConfig) {
     match ev.key().as_str() {
         "unitnameplayer" => names.player = ev.flag(),
         "unitnamenpc" => names.npc = ev.flag(),
@@ -788,7 +788,6 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut names: ResMut<NameC
 
 impl Plugin for NameplatesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         app.insert_resource(NameAnchorTrace(
             std::env::var_os("WOW_PROBE_NAME_TRACE").is_some(),
         ))

@@ -1083,10 +1083,10 @@ mod tests {
         }
     }
 
-    /// A `SetCVar` the input pass makes moves the camera the frame it is made: the registry's
-    /// sync triggers the observers (the camera's look, zoom and follow knobs) and a sync point
-    /// runs them ahead of the controller, as the reference's `CVar::Set` (`0x63df50`) calls the
-    /// change callback inside the call (`0x63df7d`).
+    /// A CVar write no call took moves the camera the frame it is made: the registry's sync runs
+    /// its callbacks (the camera's look, zoom and follow knobs) ahead of the controller. A Lua
+    /// verb's write ran them inside its call, as the reference's `CVar::Set` (`0x63df50`) calls
+    /// the change callback inside the write (`0x63df7d`).
     #[test]
     fn a_set_cvar_reaches_the_camera_the_frame_it_is_made() {
         let mut app = headless_client();
@@ -1097,16 +1097,16 @@ mod tests {
         let sync = one(&built, "cvars::sync_cvars");
         let control = one(&built, "controller::control");
         assert!(
-            built.applies_before(sync, control),
-            "the CVar observers run after the controller reads their knobs"
+            built.runs_before(sync, control),
+            "the CVar callbacks run after the controller reads their knobs"
         );
     }
 
-    /// A `SetCVar` an input record makes reaches the look session the frame it is made: the
-    /// registry's sync after the UI's input pass triggers the observers (the look's rates, the
-    /// camera's dynamics) and a sync point runs them ahead of the world's mouse, as the
-    /// reference's `CVar::Set` (`0x63df50`) calls the change callback inside the call
-    /// (`0x63df7d`), before the next mouse message.
+    /// A CVar write an input record makes outside any call reaches the look session the frame
+    /// it is made: the registry's sync after the UI's input pass runs its callbacks (the look's
+    /// rates, the camera's dynamics) ahead of the world's mouse. A Lua verb's write ran them
+    /// inside its call, as the reference's `CVar::Set` (`0x63df50`) calls the change callback
+    /// inside the write (`0x63df7d`), before the next mouse message.
     #[test]
     fn a_set_cvar_an_input_record_makes_reaches_the_look_session_that_frame() {
         let mut app = headless_client();
@@ -1117,8 +1117,8 @@ mod tests {
         let sync = one(&built, "cvars::sync_input_cvars");
         let sample = one(&built, "controller::sample_look");
         assert!(
-            built.applies_before(sync, sample),
-            "the CVar observers run after the look session reads their knobs"
+            built.runs_before(sync, sample),
+            "the CVar callbacks run after the look session reads their knobs"
         );
     }
 

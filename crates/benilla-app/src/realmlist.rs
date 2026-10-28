@@ -16,7 +16,7 @@ use bevy::prelude::*;
 pub(crate) struct RealmlistPlugin;
 
 /// `realmList`'s change callback: a value that is not an address is ignored with a warning.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut realmlist: ResMut<Realmlist>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, realmlist: &mut Realmlist) {
     if !ev.is(CVAR_REALMLIST) {
         return;
     }
@@ -31,7 +31,6 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut realmlist: ResMut<R
 
 impl Plugin for RealmlistPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         app.init_resource::<Realmlist>();
     }
 }
@@ -100,6 +99,12 @@ impl Realmlist {
     /// The last value refused as no address, taken once.
     pub(crate) fn take_refused(&mut self) -> Option<String> {
         self.refused.take()
+    }
+
+    /// Put back a refused value [`Self::take_refused`] took, for a later reader; a newer refusal
+    /// stands.
+    pub(crate) fn keep_refused(&mut self, typed: String) {
+        self.refused.get_or_insert(typed);
     }
 
     /// Points at an already normalized `address`; ignored while pinned by the env.

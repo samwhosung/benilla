@@ -1281,9 +1281,18 @@ pub(super) fn deliver(
 type SlotsAndHost<'w, 's> = crate::script_calls::disjoint::Pair<
     'w,
     's,
-    ResMut<'static, ChannelState>,
+    ChatSlots<'static>,
     Option<crate::script_calls::ScriptCallHost<'w, 's>>,
 >;
+
+/// The chat lane's channel slots, and the bubble and filter switches a line reads as it shows:
+/// CVar knobs, which the host's callbacks write inside the calls that write their rows.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ChatSlots<'w> {
+    channels: ResMut<'w, ChannelState>,
+    bubbles: Res<'w, crate::chat_bubble::BubbleConfig>,
+    filters: Res<'w, crate::text_filter::TextFilterSwitches>,
+}
 
 /// [`deliver`] with the host lent around the event alone: a join a handler makes takes its slot
 /// through the host against the slots the confirm left, and the free after it leaves that join's
@@ -1294,11 +1303,11 @@ fn deliver_hosted(
     windows: &mut ChatWindows,
     event: &mut ChatEvent,
 ) {
-    let dropping = deliver_before(script, &mut set.p0(), event);
+    let dropping = deliver_before(script, &mut set.p0().channels, event);
     crate::script_calls::lent(script, set.p1().as_mut(), |script| {
         route(script, windows, event)
     });
-    deliver_after(script, &mut set.p0(), dropping);
+    deliver_after(script, &mut set.p0().channels, dropping);
 }
 
 /// [`deliver`]'s half before the event: the confirm and the stamp. Returns the name whose slot
@@ -1376,7 +1385,6 @@ fn deliver_after(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct SpeakerEffects<'w> {
     bubbles: ResMut<'w, crate::chat_bubble::BubbleQueue>,
-    bubble_cfg: Res<'w, crate::chat_bubble::BubbleConfig>,
     gestures: Res<'w, crate::creature_anim::GestureQueue>,
 }
 
@@ -1425,7 +1433,7 @@ pub(super) struct ChatReads<'w, 's> {
 /// host its calls apply through; the log; and the rest of what a line reads.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ChatFiring<'w, 's> {
-    vm: crate::script_calls::VmWith<'w, 's, ResMut<'static, ChannelState>>,
+    vm: crate::script_calls::VmWith<'w, 's, ChatSlots<'static>>,
     log: Res<'w, ChatLog>,
     reads: ChatReads<'w, 's>,
 }
@@ -1528,7 +1536,7 @@ fn fire_one(
     // A broadcast's lines, each fired here at its packet's place; a defence line the latch holds
     // waits as a held line.
     if let Pending::Broadcast(b) = item {
-        let lines = super::broadcast::resolve(&b, script, &set.p0(), &reads.broadcasts);
+        let lines = super::broadcast::resolve(&b, script, &set.p0().channels, &reads.broadcasts);
         for line in lines {
             let line = match line {
                 super::broadcast::BroadcastLine::Display(e) => Pending::Display(e),
@@ -1564,7 +1572,7 @@ fn fire_one(
         Pending::Wire { msg, .. } | Pending::Composed { msg, .. } => msg
             .channel
             .as_deref()
-            .and_then(|name| set.p0().stamp_of(name)),
+            .and_then(|name| set.p0().channels.stamp_of(name)),
         _ => None,
     };
     // A channel notice writes its slot around its event, outside the host's lend.
@@ -1641,6 +1649,11 @@ fn fire_one(
         item => Some(item),
     };
     let item = item?;
+    // The knobs as the line's Lua begins; a write its handlers make moves the next line's.
+    let (filters, bubbles) = {
+        let slots = set.p0();
+        (*slots.filters, *slots.bubbles)
+    };
     crate::script_calls::lent(script, set.p1().as_mut(), |script| {
         match item {
             Pending::UnitCombat(ev) => {
@@ -1802,7 +1815,13 @@ fn fire_one(
 
                 // The text filters, on the garbled buffer as in `0x49a870`: spam first, then
                 // the mask, so a dropped line consumes no mask indices (the phase is global).
-                if text_filter.should_drop(msg.chat_type, msg.chat_tag, langs.is_gm(), &text) {
+                if text_filter.should_drop(
+                    filters,
+                    msg.chat_type,
+                    msg.chat_tag,
+                    langs.is_gm(),
+                    &text,
+                ) {
                     // Nothing shows in its place: the not-a-whisper leg (`0x49ab33`) jumps to
                     // the epilogue `0x49afd7`. A whisper with a non-zero report guid also sends
                     // `CMSG_CHAT_FILTERED` (`0x331`, the `u64` guid, `0x49ab50`) in the
@@ -1814,7 +1833,7 @@ fn fire_one(
                     );
                     return None;
                 }
-                text_filter.mask_chat(msg.chat_type, &mut text);
+                text_filter.mask_chat(filters, msg.chat_type, &mut text);
                 let text = text;
                 let mut event = ChatEvent {
                     kind,
@@ -1840,9 +1859,7 @@ fn fire_one(
                 // The bubble gets the same text: the reference spawns it in this path
                 // (`0x49acd9`).
                 if let Some(kind) = event.kind {
-                    speaker
-                        .bubbles
-                        .push(&speaker.bubble_cfg, msg.sender_guid, kind, &text);
+                    speaker.bubbles.push(&bubbles, msg.sender_guid, kind, &text);
                 }
             }
             Pending::Addon {

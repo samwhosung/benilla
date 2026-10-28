@@ -8,15 +8,16 @@
 //!   [`inert::INERT`] the reference's other script-visible ones, which `GetCVar` and `SetCVar`
 //!   would otherwise raise on. A row's default is the reference's, and
 //!   [`table::Registered::reference`] says where it stands against it.
-//! - The change callback is a Bevy observer on [`CvarChanged`], beside the knob it writes; the
-//!   registry applies nothing itself. A callback that can refuse a write is also the row's
+//! - The change callbacks are plain functions beside the knobs they write, run together by
+//!   [`callbacks::CvarCallbacks`]: inside a Lua verb's call for its writes ([`CvarSteps`]), and for a move
+//!   triggered as [`CvarChanged`]; the registry applies nothing itself. A callback that can refuse a write is also the row's
 //!   [`CvarCheck`], which the registry and the VM's mirror run before storing.
 //! - A latched row's write is staged in [`Row::pending`] until [`Cvars::commit_latched`], the
 //!   reference's `0x639ec0` inside `RestartGx`. A stage never committed is what the save writes,
 //!   as the reference's `SaveConfig` takes the latched text first (`rec+0x38`, `0x63da27`), so it
 //!   applies at the next launch.
-//! - Boot folds `benilla-config/config.toml` in and fires the observers before anything after
-//!   [`CvarLoad`]; each frame drains the VM's writes in and pushes the registry's out; a dirty
+//! - Boot folds `benilla-config/config.toml` in and runs the callbacks before anything after
+//!   [`CvarLoad`]; each frame drains the VM writes no call took in and pushes the registry's out; a dirty
 //!   registry saves after one quiet second or at exit, writing only values off their default and
 //!   keeping unknown keys verbatim.
 //!
@@ -31,6 +32,7 @@ use bevy::prelude::*;
 use crate::ui_script::VmMemo;
 use benilla_ui::script::{CvarCheck, CvarWrite, SeededCvar, UiScript};
 
+mod callbacks;
 #[cfg(test)]
 mod deviations_doc;
 mod inert;
@@ -38,6 +40,7 @@ mod listing;
 #[cfg(test)]
 mod reference_table;
 mod table;
+pub(crate) use callbacks::CvarSteps;
 pub(crate) use listing::list_rank;
 pub(crate) use listing::reference_help;
 #[cfg(test)]
@@ -847,17 +850,18 @@ pub(crate) struct CvarPlugin;
 impl Plugin for CvarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Cvars>()
+            .add_observer(callbacks::on_cvar_changed)
             .add_systems(
                 Startup,
                 (load_config, publish_filter_policy)
                     .chain()
                     .in_set(CvarLoad),
             )
-            // After the tick, so a `SetCVar` from this frame reaches the registry and its observers
+            // After the tick, so a write no call took reaches the registry and its callbacks
             // before the frame's drains; `video::drain_restart_gx` orders after this so the commit
-            // finds the stage. Before the world's input stage, so the observers run ahead of the
-            // camera's controller: the reference calls the change callback inside the call
-            // (`CVar::Set` `0x63df50`, `0x63df7d`).
+            // finds the stage. Before the world's input stage, so the callbacks run ahead of the
+            // camera's controller. A Lua verb's write ran them inside its call (`CVar::Set`
+            // `0x63df50`, `0x63df7d`).
             .add_systems(
                 Update,
                 sync_cvars
@@ -865,7 +869,7 @@ impl Plugin for CvarPlugin {
                     .before(benilla_world::schedule::WorldStage::Input),
             )
             // And after the input records' calls, ahead of the world's mouse, whose look session
-            // reads the knobs their observers write.
+            // reads the knobs their callbacks write.
             .add_systems(
                 Update,
                 sync_input_cvars
@@ -949,8 +953,8 @@ fn session_values(world: &World) -> Vec<(&'static str, Option<String>)> {
     out
 }
 
-/// Startup: mark what the session owns, fold `config.toml` in (no file means all defaults) and fire
-/// the observers now, so everything after [`CvarLoad`] finds its knob written. The VM does not
+/// Startup: mark what the session owns, fold `config.toml` in (no file means all defaults) and run
+/// the callbacks now, so everything after [`CvarLoad`] finds its knob written. The VM does not
 /// exist yet; [`sync_cvars`] seeds its mirror.
 fn load_config(world: &mut World) {
     let session = session_values(world);
@@ -1037,35 +1041,14 @@ pub(crate) fn boot_cvar(name: &str) -> Option<String> {
     }
 }
 
-/// After the UI's input pass and its bindings: drain the writes their calls made into the registry,
-/// push the registry's writes into the mirror and trigger the accepted moves, so the observers
-/// (the look's rates, the camera's dynamics) run before the world's mouse reads their knobs, as
-/// the reference's `CVar::Set` (`0x63df50`) calls the change callback inside the call
-/// (`0x63df7d`). A new VM is seeded by [`sync_cvars`], which drains its writes first as well.
-pub(crate) fn sync_input_cvars(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut cvars: ResMut<Cvars>,
-    mut commands: Commands,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
-            cvars.drain_vm(script);
-            cvars.log_console_lines();
-        }
-        if cvars.has_outbox() {
-            for (name, value) in cvars.take_outbox() {
-                script.set_cvar_host(&name, &value);
-            }
-        }
-        if cvars.has_events() {
-            for event in cvars.take_events() {
-                commands.trigger(event);
-            }
-        }
-    })
+/// After the UI's input pass and its bindings: take in the writes no call took, run their
+/// callbacks and push the registry's writes into the mirror, so the look's rates and the camera's
+/// dynamics have moved before the world's mouse reads them. A Lua verb's write ran its callback
+/// inside its call already ([`CvarSteps`]), as the reference's `CVar::Set` (`0x63df50`) calls it
+/// inside the write (`0x63df7d`). A new VM is seeded by [`sync_cvars`], which drains its writes
+/// first as well.
+pub(crate) fn sync_input_cvars(mut vm: crate::script_calls::VmWith<CvarSteps<'static>>) {
+    vm.turn(|script, mut steps| steps.sync(script))
 }
 
 /// The device's multisample formats as `GetMultisampleFormats` lists them; none before
@@ -1089,17 +1072,18 @@ pub(crate) fn multisample_formats(
         .unwrap_or_default()
 }
 
-/// Per frame: seed a new VM's mirror, drain its registrations and writes into the registry, push
-/// the registry's writes into the mirror, and trigger every accepted move.
+/// Per frame: seed a new VM's mirror, take in the registrations and the writes no call took, run
+/// their callbacks and push the registry's writes into the mirror.
 pub(crate) fn sync_cvars(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut cvars: ResMut<Cvars>,
+    mut vm: crate::script_calls::VmWith<CvarSteps<'static>>,
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     msaa_formats: Option<Res<benilla_world::view::MsaaFormats>>,
     mut seeded: Local<VmMemo<bool>>,
-    mut commands: Commands,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut steps| {
+        let Some(cvars) = steps.cvars() else {
+            return;
+        };
         // The live render backend; absent headless, where the registered `""` stands.
         if let Some(adapter) = adapter.as_deref() {
             let backend = adapter.backend.to_str();
@@ -1107,29 +1091,17 @@ pub(crate) fn sync_cvars(
                 cvars.own_for_session("gxApi", Some(backend));
             }
         }
-        if cvars.has_console_lines() {
-            cvars.log_console_lines();
-        }
         let Some(script) = script else {
             // Nothing to mirror into; a later VM is seeded from the table, which carries it all.
-            if cvars.has_outbox() {
-                cvars.take_outbox();
-            }
-            if cvars.has_events() {
-                for event in cvars.take_events() {
-                    commands.trigger(event);
-                }
-            }
+            steps.sync(None);
             return;
         };
-        // The VM's writes before the seed: an addon's `SetCVar` at load is already queued, and
-        // seeding first would overwrite the mirror with the older value. Read before taking, so a
-        // quiet frame never deref-muts the registry.
-        if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
-            cvars.drain_vm(script);
-            cvars.log_console_lines();
-        }
         if seeded.claim(script) {
+            // The VM's writes before the seed: an addon's `SetCVar` at load is already queued, and
+            // seeding first would overwrite the mirror with the older value.
+            if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
+                cvars.drain_vm(script);
+            }
             cvars.seed_vm(script);
             if cvars.has_outbox() {
                 cvars.take_outbox(); // the seed just carried everything
@@ -1153,23 +1125,14 @@ pub(crate) fn sync_cvars(
                 hardware_cursor: true,
             });
         }
-        if cvars.has_outbox() {
-            for (name, value) in cvars.take_outbox() {
-                script.set_cvar_host(&name, &value);
-            }
-        }
-        if cvars.has_events() {
-            for event in cvars.take_events() {
-                commands.trigger(event);
-            }
-        }
+        steps.sync(Some(script));
     })
 }
 
 /// Fold the dying VM's last writes into the registry. Called from the shutdown
 /// ([`crate::ui_script::SessionEnd::Shutdown`]) after its events (a `PLAYER_LOGOUT` handler may
 /// `SetCVar`, and the reference keeps that write) and before the VM is replaced, so a final-frame
-/// write is not lost to the next VM's seed. The observers fire here.
+/// write is not lost to the next VM's seed. The callbacks run here.
 pub(crate) fn fold_dying_vm_cvars(world: &mut World) {
     // No registry: a test or stripped world without the plugin.
     if !world.contains_resource::<Cvars>() {
@@ -2735,7 +2698,7 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
-    /// A client with a real CVar host: every knob resource an observer writes, every observer,
+    /// A client with a real CVar host: every knob resource a callback writes, the callbacks,
     /// [`CvarPlugin`] and a VM for the mirror.
     fn cvar_app() -> App {
         let mut app = App::new();
@@ -2792,86 +2755,9 @@ mod tests {
             .init_resource::<crate::game_tip::GameTipSetting>()
             .init_resource::<crate::player::Approach>()
             .add_plugins(CvarPlugin);
-        for observer in ALL_OBSERVERS {
-            observer(&mut app);
-        }
         app.insert_non_send_resource(UiScript::new().unwrap());
         app
     }
-
-    /// Every CVar observer in the crate; a new one is a line here and an `add_observer` in its
-    /// plugin.
-    const ALL_OBSERVERS: &[fn(&mut App)] = &[
-        |app| {
-            app.add_observer(crate::player::approach_on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::sound::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::ui_script::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::video::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::player::camera::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::player::camera_dynamics::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::target::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::spell::cast_target::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::combat_text::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::ui_chat::combat::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::ui_loot::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::nameplates::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::game_tip::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::text_filter::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::chat_bubble::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::ui_guild::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::ui_trade::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::minimap::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::portrait::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::perf::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::realmlist::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::ui_gamma::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::world_backdrop::on_cvar);
-        },
-    ];
 
     /// A host write, its latch committed at once, and its observers run before this returns.
     fn apply(app: &mut App, name: &str, value: &str) -> SetOutcome {

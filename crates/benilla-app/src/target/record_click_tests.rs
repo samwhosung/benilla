@@ -119,6 +119,15 @@ fn client_bound(wtf: &str) -> App {
                     CameraOrSelectOrMoveStart();
                     CameraOrSelectOrMoveStop();
                 </Binding>
+                <Binding name="PROBESTICKY" runOnUp="true">
+                    if ( keystate == "down" ) then
+                        CameraOrSelectOrMoveStart();
+                    else
+                        if ARMED then SetCVar("deselectOnClick", "0") end
+                        CameraOrSelectOrMoveStop();
+                        LOG = LOG .. tostring(UnitName("target")) .. ";"
+                    end
+                </Binding>
                 <Binding name="PROBEKEYACTION">
                     TurnOrActionStart();
                     TurnOrActionStop();
@@ -456,6 +465,32 @@ fn a_key_bound_click_reads_its_target_on_the_next_line() {
         log(&app),
         format!("{name};"),
         "the line after the stop read the mob"
+    );
+}
+
+/// A release whose body turns Sticky Targeting on, then dispatches its click on the empty world:
+/// `CVar::Set` (`0x63df50`) runs `deselectOnClick`'s callback inside the write (`0x63df7d`), so the
+/// click's deselect gate reads 0 and the body's next line still reads the mob. Main ran the
+/// callback in the frame's sync, after the input pass, and deselected.
+#[test]
+fn a_set_cvar_moves_its_knob_before_the_chunks_next_line() {
+    let mut app = client("PROBESTICKY");
+    aim(&mut app);
+    click_at(&mut app, ON_MOB);
+    app.update();
+    assert_eq!(target(&app), Some(MOB));
+    let name = target_name(&app);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run("LOG = '' ARMED = true")
+        .unwrap();
+    click_at(&mut app, BESIDE_MOB);
+    app.update();
+    assert_eq!(target(&app), Some(MOB), "the click kept the target");
+    assert_eq!(
+        log(&app),
+        format!("{name};"),
+        "the line after the click read it"
     );
 }
 

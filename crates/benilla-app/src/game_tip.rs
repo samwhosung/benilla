@@ -367,7 +367,7 @@ pub(crate) struct GameTipPlugin;
 
 /// The tip CVars' change callback. A hand-edited cursor lands verbatim; [`raise`] clamps it, as the
 /// reference does (`0x46b682`).
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut setting: ResMut<GameTipSetting>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, setting: &mut GameTipSetting) {
     match ev.key().as_str() {
         "showgametips" => setting.show = ev.flag(),
         "gametip" => setting.next = ev.num() as i64,
@@ -377,10 +377,9 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut setting: ResMut<Gam
 
 impl Plugin for GameTipPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         app.init_resource::<GameTips>()
-            // Initialised here, not by the CVar host: [`on_cvar`] takes it as a plain `ResMut` and
-            // panics without it.
+            // Initialised here, not by the CVar host: without it [`on_cvar`]'s writes go nowhere
+            // ([`crate::cvars::CvarCallbacks`]).
             .init_resource::<GameTipSetting>()
             .add_systems(
                 Startup,

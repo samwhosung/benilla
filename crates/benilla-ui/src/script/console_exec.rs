@@ -150,7 +150,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The rest through `ConsoleCommandExecute` inside the call (`0x515f43` →
             // `0x63ce00`), against what the host lends.
             if ran {
-                return Ok(());
+                return super::cvars::written(lua);
             }
             super::calls::submit(lua, super::ScriptCall::Console(line.to_string()))
         })?,

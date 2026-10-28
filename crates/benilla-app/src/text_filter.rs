@@ -875,7 +875,6 @@ impl benilla_ui::script::NameLists for NameFilter {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ChatTextFilter<'w> {
     filter: Res<'w, TextFilter>,
-    switches: Res<'w, TextFilterSwitches>,
 }
 
 impl ChatTextFilter<'_> {
@@ -884,6 +883,7 @@ impl ChatTextFilter<'_> {
     /// Every exit, a GM viewer's included, still reaches the mask arm (`0x49abb7`).
     pub(crate) fn should_drop(
         &self,
+        switches: TextFilterSwitches,
         chat_type: u8,
         chat_tag: u8,
         viewer_is_gm: bool,
@@ -893,16 +893,16 @@ impl ChatTextFilter<'_> {
         if chat_type == CHAT_MSG_FILTERED || chat_tag == tag::GM || viewer_is_gm {
             return false;
         }
-        self.filter.is_spam(self.switches.spam, text)
+        self.filter.is_spam(switches.spam, text)
     }
 
     /// Arm 2: mask the line if its type is in the reference's table (`0x49aa98`-`0x49aac2`); the
     /// CVar is the masker's own.
-    pub(crate) fn mask_chat(&self, chat_type: u8, text: &mut String) {
+    pub(crate) fn mask_chat(&self, switches: TextFilterSwitches, chat_type: u8, text: &mut String) {
         if !PROFANITY_MASKED_CHAT_TYPES.contains(&chat_type) {
             return;
         }
-        self.filter.mask(self.switches.profanity, text);
+        self.filter.mask(switches.profanity, text);
     }
 }
 
@@ -959,7 +959,7 @@ pub(crate) struct TextFilterLoad;
 
 /// The two switches' change callback, as the reference's `0x403570`/`0x4035b0` mirror
 /// `SStrToInt(newValue)` into a global.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut switches: ResMut<TextFilterSwitches>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, switches: &mut TextFilterSwitches) {
     match ev.key().as_str() {
         "profanityfilter" => switches.profanity = ev.flag(),
         "spamfilter" => switches.spam = ev.flag(),
@@ -969,7 +969,6 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut switches: ResMut<Te
 
 impl Plugin for TextFilterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         app.init_resource::<TextFilterSwitches>()
             .init_resource::<TextFilter>()
             .add_systems(

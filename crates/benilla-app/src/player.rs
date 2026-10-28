@@ -102,7 +102,6 @@ use camera_zoom::{apply_zoom_scroll, CAM_DIST_DEFAULT};
 // `follow` owns the motion.
 pub(crate) use follow::{FollowRequest, FollowState};
 // Click to Move: `crate::target`'s dispatchers start it and run the verb it owes on arrival.
-#[cfg(test)]
 pub(crate) use approach::on_cvar as approach_on_cvar;
 pub(crate) use approach::{
     can_auto_interact, cancel_move_action_on_ui_shutdown, Approach, ApproachVerb, AutoMove,
@@ -326,8 +325,6 @@ impl Plugin for PlayerPlugin {
                     .after(WorldFocusSet)
                     .in_set(crate::vm_pass::VmPass::Member),
             );
-        app.add_observer(camera::on_cvar);
-        app.add_observer(camera_dynamics::on_cvar);
         app.init_resource::<camera::LookConfig>();
         app.init_resource::<camera_zoom::ZoomLimit>();
         app.init_resource::<camera::FollowConfig>();

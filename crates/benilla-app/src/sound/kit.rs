@@ -1069,7 +1069,8 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (
                 pump_channels.in_set(benilla_world::schedule::WorldStage::Present),
-                apply_kit_debug,
+                // After the calls, whose callbacks write the volumes it reads.
+                apply_kit_debug.after(crate::vm_pass::VmPass::End),
                 evict_kit_cache,
             ),
         )

@@ -156,7 +156,7 @@ pub(crate) struct MinimapZoom {
 
 /// The app's mirror of the two zoom CVars, each on its own field: the record's integer as the
 /// reference's raw copy takes it into the zoom cell (`0x6d9013`), unclamped.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut zoom: ResMut<MinimapZoom>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, zoom: &mut MinimapZoom) {
     match ev.key().as_str() {
         "minimapzoom" => zoom.outdoor = zoom_index(&ev.new),
         "minimapinsidezoom" => zoom.inside = zoom_index(&ev.new),
@@ -978,7 +978,6 @@ impl Plugin for MinimapPlugin {
             app.net_handler(K::Connected, clear_quest_blip_on_world_entry)
                 .net_handler(K::Worldport, clear_quest_blip_on_world_entry);
         }
-        app.add_observer(on_cvar);
         app.init_resource::<MinimapWidget>()
             .init_resource::<MinimapZoom>()
             .init_resource::<MinimapTileCache>()

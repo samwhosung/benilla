@@ -331,7 +331,7 @@ pub(crate) struct SoundPlugin;
 
 /// The sound CVars' change callback: volumes clamp to `[0, 1]`, enables are `!= 0` as the
 /// reference parses them (`0x4574d0`: `setne al`).
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut sound: ResMut<SoundConfig>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, sound: &mut SoundConfig) {
     let v = ev.num();
     match ev.key().as_str() {
         "mastervolume" => sound.master = v.clamp(0.0, 1.0),
@@ -355,7 +355,6 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut sound: ResMut<Sound
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.add_observer(on_cvar);
         // `$WOW_NOSOUND` (a silent unattended run), `$WOW_CAPTURE` and a test build open no device
         // at all, so they never hold the audio hardware against a session someone is listening to.
         let silent = ["WOW_NOSOUND", "WOW_CAPTURE"]
@@ -416,9 +415,11 @@ impl Plugin for SoundPlugin {
             (
                 // After Input writes the pose and camera, before Present's consumers read it.
                 update_audio_listener.in_set(WorldStage::Stream),
-                toggle_mute,
-                apply_master_volume.after(toggle_mute),
-                apply_focus_gate,
+                // The volumes are CVar knobs a call's callback writes: the mute key's write
+                // before the calls, which read it, and the apply after them.
+                toggle_mute.before(crate::vm_pass::VmPass::Start),
+                (apply_master_volume.after(toggle_mute), apply_focus_gate)
+                    .after(crate::vm_pass::VmPass::End),
                 poll_mix_health,
             ),
         );

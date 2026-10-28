@@ -437,7 +437,12 @@ pub(crate) fn seat_text_measurer(script: &mut UiScript, atlas: &UiFontAtlas, sea
 /// errors. The quads are [`paint_script`]'s, after the camera that places the `WorldFrame`
 /// nameplates.
 pub(super) fn tick_script(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With the dial, `UIParent`'s scale in the VM, and `widescreen`, which picks the aspect the
+    // interface's screen is built for: CVar knobs the call host's callbacks write.
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, super::UiScaleCvar>,
+        Option<Res<'static, crate::video::Widescreen>>,
+    )>,
     window: Query<&Window, With<PrimaryWindow>>,
     // The paced frame step, unclamped, as 1.12.1 hands `OnUpdate` its frame time (`0x76b2c0`):
     // not `Time<Real>`, which pipelined rendering mis-splits, nor `Time<Virtual>`, which clamps a
@@ -453,22 +458,21 @@ pub(super) fn tick_script(
     mut last_seam: Local<f32>,
     // The `scale_factor` measures were last answered under; 0 until the first frame.
     mut last_dpi: Local<f32>,
-    // The dial, `UIParent`'s scale in the VM, and the automatic scale's last display.
-    (ui_scale, mut auto_cache): (
-        Res<super::UiScaleCvar>,
-        Option<ResMut<super::UiAutoScaleCache>>,
-    ),
+    // The automatic scale's last display.
+    mut auto_cache: Option<ResMut<super::UiAutoScaleCache>>,
     mut ui_cost: ResMut<super::UiFrameCost>,
     mut pass: ResMut<super::UiPassState>,
     // The loading screen, whose layer hides the interface's from the frame pass.
     loading: Option<Res<crate::loading_screen::LoadingScreen>>,
-    // `widescreen`, which picks the aspect the interface's screen is built for.
-    widescreen: Option<Res<crate::video::Widescreen>>,
     // The display size the display handler last ran for (`0x492e90`).
     mut last_display: Local<Option<(u32, u32)>>,
 ) {
     let covered = loading.is_some_and(|l| l.hides_interface());
-    hosted_vm.run(|script| {
+    let (ui_scale, widescreen) = {
+        let (scale, widescreen) = vm.own();
+        (scale.0, widescreen.as_deref().copied())
+    };
+    vm.run(|script| {
         pass.live = false;
         let Some(script) = script else {
             // No VM, no UI sampling a booth pane: a stranded pane would keep its camera rendering
@@ -484,7 +488,7 @@ pub(super) fn tick_script(
         };
         // The interface's screen: the window's, or 4:3 and stretched across it
         // ([`super::UiScreen`]).
-        let screen = super::UiScreen::of_window(window, widescreen.as_deref());
+        let screen = super::UiScreen::of_window(window, widescreen.as_ref());
         let h = screen.size.y;
         // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`;
         // the caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM
@@ -552,7 +556,7 @@ pub(super) fn tick_script(
                     let cache = auto_cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
                     applied = script.apply_ui_scale(display, cache);
                 }
-                let rescaled = script.set_ui_scale(ui_scale.0);
+                let rescaled = script.set_ui_scale(ui_scale);
                 // Any re-runs what the interface computed from the old `GetScreenHeight()`.
                 if resized || rescaled || applied {
                     super::manifest::on_screen_resized(script);
@@ -665,7 +669,8 @@ pub(super) fn tick_script(
 /// The UI pass's second half, after the camera and the plate driver: an incremental measure and
 /// `resolve` for what was written since the tick, the walk, and the conversion into [`UiQuads`].
 pub(super) fn paint_script(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With `widescreen`, a CVar knob the call host's callbacks write.
+    mut vm: crate::script_calls::VmWith<Option<Res<'static, crate::video::Widescreen>>>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut quads: ResMut<UiQuads>,
     world_assets: Option<ResMut<WorldAssets>>,
@@ -673,12 +678,11 @@ pub(super) fn paint_script(
     mut font_atlas: Option<ResMut<UiFontAtlas>>,
     // The booth seam both ways: the bakes regions sample, and the pane aspects published back.
     mut booths: crate::portrait::BoothBridge,
-    // Capture mode (the cursor icon quad), [`super::UiCostWanted`] and `widescreen`, tupled to
-    // stay inside Bevy's 16-parameter system limit.
+    // Capture mode (the cursor icon quad) and [`super::UiCostWanted`], tupled to stay inside
+    // Bevy's 16-parameter system limit.
     run: (
         Option<Res<crate::run_mode::CaptureMode>>,
         Res<super::UiCostWanted>,
-        Option<Res<crate::video::Widescreen>>,
     ),
     // The `<Minimap>` widget slot, parked for `minimap::emit_minimap` to fill later in the frame.
     mut parked_minimap: ResMut<crate::minimap::MinimapWidget>,
@@ -693,8 +697,9 @@ pub(super) fn paint_script(
 ) {
     let no_movies = super::movie::MovieScreen::default();
     let movies = movies.as_deref().unwrap_or(&no_movies);
-    hosted_vm.run(|script| {
-        let (capture, ui_cost_wanted, widescreen) = run;
+    let widescreen = vm.own().as_deref().copied();
+    vm.run(|script| {
+        let (capture, ui_cost_wanted) = run;
         // Stand down with the tick half, which already cleared the booth panes.
         if !pass.live {
             return;
@@ -706,7 +711,7 @@ pub(super) fn paint_script(
         let Ok(window) = window.single() else {
             return;
         };
-        let screen = super::UiScreen::of_window(window, widescreen.as_deref());
+        let screen = super::UiScreen::of_window(window, widescreen.as_ref());
         let Vec2 { x: w, y: h } = screen.size;
         let (s, dpi) = (pass.seam, pass.dpi);
         let (us_tick, us_resolve) = (pass.us_tick, pass.us_resolve);

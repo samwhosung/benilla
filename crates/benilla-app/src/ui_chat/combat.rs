@@ -172,9 +172,9 @@ impl CombatLogRanges {
 
 /// The combat log CVars' change callback: the eight display ranges and the periodic switch.
 pub(crate) fn on_cvar(
-    ev: On<crate::cvars::CvarChanged>,
-    mut ranges: ResMut<CombatLogRanges>,
-    mut periodic: ResMut<LogPeriodicSpells>,
+    ev: &crate::cvars::CvarChanged,
+    ranges: &mut CombatLogRanges,
+    periodic: &mut LogPeriodicSpells,
 ) {
     if ev.is(LOG_PERIODIC_CVAR) {
         periodic.0 = ev.flag();

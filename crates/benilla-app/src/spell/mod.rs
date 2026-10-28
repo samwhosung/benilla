@@ -93,7 +93,6 @@ impl Plugin for SpellPlugin {
             .init_resource::<targeting::UnitPick>()
             .init_resource::<targeting::GoPick>()
             .init_resource::<group_relation::GroupRoster>()
-            .add_observer(cast_target::on_cvar)
             .add_systems(
                 Update,
                 (

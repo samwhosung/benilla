@@ -111,9 +111,9 @@ fn fill_bitmap(bitmap: MovieBitmap, picture: &[u8], rows: u32, out: &mut Vec<u8>
 /// the frame's scaled aspect; a line per hundred frames and one at each movie's end with the glue
 /// screen it left up, the instrument a run's log reads the playback off.
 pub(super) fn upload_movie_pictures(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With the registry, whose callbacks run inside the calls that write it.
+    mut vm: crate::script_calls::VmWith<Option<Res<'static, crate::cvars::Cvars>>>,
     window: Query<&Window, With<PrimaryWindow>>,
-    cvars: Option<Res<crate::cvars::Cvars>>,
     mut screen: ResMut<MovieScreen>,
     mut images: ResMut<Assets<Image>>,
     mut scratch: Local<(Vec<u8>, Vec<u8>)>,
@@ -124,9 +124,9 @@ pub(super) fn upload_movie_pictures(
         .map_or(Vec2::ZERO, |w| Vec2::new(w.width(), w.height()));
     screen.scaled_aspect = crate::loading_screen::scaled_aspect(
         size,
-        crate::loading_screen::widescreen(cvars.as_deref()),
+        crate::loading_screen::widescreen(vm.own().as_deref()),
     );
-    hosted_vm.run(|script| {
+    vm.run(|script| {
         let pictures = script
             .as_deref()
             .map(|s| s.movie_pictures())

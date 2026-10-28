@@ -373,7 +373,8 @@ pub(super) fn plugin(app: &mut App) {
                     .before(watch_glue_music),
                 // No run condition: the theme plays into `InWorld`, and the entry load burst is
                 // the window the watch exists for.
-                hand_off_glue_music,
+                // After the calls, whose callbacks write the volumes it reads.
+                hand_off_glue_music.after(crate::vm_pass::VmPass::End),
                 watch_glue_music.after(hand_off_glue_music),
                 report_stream_voices,
             ),

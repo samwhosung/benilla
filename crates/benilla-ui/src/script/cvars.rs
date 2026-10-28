@@ -558,6 +558,22 @@ pub(super) fn write_cvar(model: &mut Model, name: &str, value: String) {
     store(model, &key, value);
 }
 
+/// Hand the writes a verb just queued to the host inside its call ([`super::ScriptCall::CvarWritten`]),
+/// as `CVar::Set` (`0x63df50`) runs the row's change callback inside the write (`0x63df7d`): the
+/// engine's knob has moved before the verb's next line. With no host open (a bare VM) the host's
+/// frame sync takes them; nothing queued sends nothing.
+pub(super) fn written(lua: &Lua) -> mlua::Result<()> {
+    let queued = !lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .cvar_changes
+        .is_empty();
+    if queued && super::host::open(lua) {
+        return super::calls::submit(lua, super::ScriptCall::CvarWritten);
+    }
+    Ok(())
+}
+
 /// `Couldn't find CVar named '%s'` (`0x842310`), the error `GetCVar`, `SetCVar` and
 /// `GetCVarDefault` raise with the name as `lua_tostring` gave it.
 fn unknown_cvar(name: &str) -> mlua::Error {
@@ -809,6 +825,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 store(&mut model, &key, value.clone());
             }
+            // The callback, inside the write and ahead of the token's event (`0x488ca8`).
+            written(lua)?;
             // A third argument that passes `lua_isstring` is the `CVAR_UPDATE` token, arg1, with
             // the value as arg2 (`0x488cad`-`0x488cd5`), fired on every such call, changed or not,
             // and inside it: `SignalEvent2` (`0x703f50`) walks the listeners in place. The 1.12

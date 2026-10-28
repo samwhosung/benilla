@@ -130,7 +130,6 @@ impl Plugin for UiChatPlugin {
         use crate::ui_script::SweepApp;
         net::register(app);
         add_chat_lane(app);
-        app.add_observer(combat::on_cvar);
         app.add_sweep_leg(
             crate::ui_script::SweepLeg::ChatLatch,
             feed::latch_on_leave_world,
@@ -145,8 +144,8 @@ impl Plugin for UiChatPlugin {
             .init_resource::<recruitment::GuildRecruitmentCascade>()
             .init_resource::<language::ChatLanguages>()
             .init_resource::<combat::CombatLogRanges>()
-            // `combat::on_cvar` writes this and the range set: a missing one panics on the first
-            // write, which only `scripts/smoke.sh` sees (the unit suites build their own worlds).
+            // `combat::on_cvar` writes this and the range set; the callbacks skip a row whose
+            // knob is missing ([`crate::cvars::CvarCallbacks`]), so its write would go nowhere.
             .init_resource::<combat::LogPeriodicSpells>()
             // These DBC loads must follow `AssetSet::Open`: before it there is no chain, and each
             // silently loads nothing.

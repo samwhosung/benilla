@@ -209,11 +209,11 @@ struct ViewTargets<'w, 's> {
 
 /// Drain the Lua queue into the rig, before [`super::control`] seats this frame's camera.
 fn drain_view_requests(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut cvars: ResMut<crate::cvars::Cvars>,
+    // With the registry, whose callbacks the call host runs inside the calls that write it.
+    mut vm: crate::script_calls::VmWith<crate::cvars::CvarSteps<'static>>,
     mut targets: ViewTargets,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut steps| {
         let Some(script) = script else {
             return;
         };
@@ -290,6 +290,9 @@ fn drain_view_requests(
         }
 
         // Mirror into the registry so the change reaches `config.toml`.
+        let Some(cvars) = steps.cvars() else {
+            return;
+        };
         for view in write_slots {
             // A reset writes the default string verbatim, so the diff-shaped file drops the key.
             let reset_to_default = targets.views.pose(view) == ViewPose::shipped(view);
@@ -306,6 +309,7 @@ fn drain_view_requests(
         if write_active {
             cvars.set(CVAR_ACTIVE_VIEW, &targets.views.current.to_string());
         }
+        steps.sync(Some(script));
     })
 }
 

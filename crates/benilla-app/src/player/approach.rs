@@ -548,14 +548,14 @@ pub(super) fn steer_approach(
     player.auto_forward = hold;
 }
 
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut approach: ResMut<Approach>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, approach: &mut Approach) {
     if ev.is("AutoInteract") {
         approach.enabled = ev.flag();
     }
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Approach>().add_observer(on_cvar);
+    app.init_resource::<Approach>();
 }
 
 #[cfg(test)]

@@ -538,7 +538,7 @@ const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 pub(crate) struct AutoSelfCast(pub(crate) bool);
 
 /// `autoSelfCast`'s change callback: a flag.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut auto: ResMut<AutoSelfCast>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, auto: &mut AutoSelfCast) {
     if ev.is("autoSelfCast") {
         auto.0 = ev.flag();
     }

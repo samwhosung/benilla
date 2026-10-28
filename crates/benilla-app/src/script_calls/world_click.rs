@@ -21,18 +21,25 @@ use super::{disjoint, ScriptCallHost, Signalled};
 /// ([`crate::target::ArmTracer`]), so an arm a binding or a handler makes picks inside its call
 /// (`ArmClick 0x514810` → `0x51482d` → `0x481f00`). The tracer reads the meshes, the rig palettes
 /// and the colliders, which no other host holds: the walk runs inside the records' exclusive
-/// dispatch, so they order against nothing.
+/// dispatch, so they order against nothing. Beside them `widescreen`, a CVar knob the host's
+/// callbacks write, which shapes the screen the records' pointer is read on.
 #[derive(SystemParam)]
 pub(crate) struct InputHost<'w, 's> {
-    set: disjoint::Pair<
-        'w,
-        's,
-        Option<crate::target::ArmTracer<'static, 'static>>,
-        Option<ScriptCallHost<'static, 'static>>,
-    >,
+    set: disjoint::Pair<'w, 's, InputSide, Option<ScriptCallHost<'static, 'static>>>,
 }
 
+/// What the input records' walk holds beside the host: the tracer and `widescreen`.
+type InputSide = (
+    Option<crate::target::ArmTracer<'static, 'static>>,
+    Option<bevy::prelude::Res<'static, crate::video::Widescreen>>,
+);
+
 impl InputHost<'_, '_> {
+    /// `widescreen` as it stands outside any call.
+    pub(crate) fn widescreen(&mut self) -> Option<crate::video::Widescreen> {
+        self.set.p0().1.as_deref().copied()
+    }
+
     /// Run `f` on `script` with the host and the tracer lent around all of it; with no host, `f`
     /// runs unlent.
     pub(crate) fn lend<R>(
@@ -61,7 +68,7 @@ impl CallHost for Tracing<'_, '_, '_> {
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
         if let ScriptCall::WorldClick(ClickCall::Arm(_)) = call {
             let at = script.click_press().at.map(Vec2::from);
-            let pick = self.0.set.p0().map(|mut tracer| tracer.trace(at));
+            let pick = self.0.set.p0().0.map(|mut tracer| tracer.trace(at));
             #[cfg(test)]
             self.0.set.end_lend();
             if let (Some(pick), Some(mut host)) = (pick, self.host()) {

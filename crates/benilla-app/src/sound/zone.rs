@@ -976,17 +976,17 @@ fn fade_out_ambience(zone: &mut ZoneAudio, fade_ms: u64) {
 /// The Lua music slot: this frame's queued verbs, the loop, the slider and the watch.
 /// Unconditional: the stream is the caller's, not the world soundscape's.
 fn lua_music(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With the volumes, a CVar knob the call host's callbacks write; the slot runs no Lua.
+    mut vm: crate::script_calls::VmWith<Res<'static, SoundConfig>>,
     mut zone: NonSendMut<ZoneAudio>,
     mut out: NonSendMut<SoundOutput>,
     assets: Option<Res<WorldAssets>>,
-    config: Res<SoundConfig>,
     // The clock `zone_audio` reads `next_track_at` against.
     time: Res<Time>,
     // Wall time for the stream watch.
     real: Res<Time<bevy::time::Real>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, config| {
         let zone = &mut *zone;
         let now = time.elapsed_secs_f64();
         let requests = script.map(|s| s.take_music()).unwrap_or_default();

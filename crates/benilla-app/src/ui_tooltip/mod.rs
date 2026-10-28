@@ -227,14 +227,15 @@ struct HoveredRelations {
 }
 
 pub(crate) fn drive_mouseover_tooltip(
-    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
+    // With `widescreen`, a CVar knob the call host's callbacks write, which seats the
+    // cursor-anchored GameObject plate on the interface's screen.
+    mut vm: crate::script_calls::VmWith<(
+        crate::target::RelationWorld<'static, 'static>,
+        Option<Res<'static, crate::video::Widescreen>>,
+    )>,
     hovered: Res<Hovered>,
     hovered_go: Res<HoveredObject>,
-    // Seats the cursor-anchored GameObject plate, on the interface's screen.
-    (window, widescreen): (
-        Query<&Window, With<PrimaryWindow>>,
-        Option<Res<crate::video::Widescreen>>,
-    ),
+    window: Query<&Window, With<PrimaryWindow>>,
     stores: Query<&ObjectStore>,
     // The stored GAMEOBJECT_STATE the lock lines' Action gate reads.
     anims: Query<&crate::go_anim::GoAnim>,
@@ -255,10 +256,10 @@ pub(crate) fn drive_mouseover_tooltip(
     // The meeting stone's area name (`0x5f6b49`).
     areas: Option<Res<crate::area::AreaTableRes>>,
 ) {
-    let hover_relations = {
-        let relations = vm.own();
+    let (hover_relations, widescreen) = {
+        let (relations, widescreen) = vm.own();
         let me = relations.me();
-        HoverRelations {
+        let hover_relations = HoverRelations {
             factions: relations.factions().cloned(),
             unit: hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
                 let store = stores.get(entity).ok()?;
@@ -269,7 +270,8 @@ pub(crate) fn drive_mouseover_tooltip(
                     player_reaction: player_reaction(&rel, &subject, me.as_ref()),
                 })
             }),
-        }
+        };
+        (hover_relations, widescreen.as_deref().copied())
     };
     vm.run(|script| {
         let Some(script) = script else {
@@ -422,7 +424,7 @@ pub(crate) fn drive_mouseover_tooltip(
                             .or_else(crate::target::hover_probe_point)
                             .map(|c| {
                                 let screen =
-                                    crate::ui_script::UiScreen::of_window(w, widescreen.as_deref());
+                                    crate::ui_script::UiScreen::of_window(w, widescreen.as_ref());
                                 let at = crate::ui_script::window_to_ui(screen, c);
                                 (at.x, at.y)
                             })

@@ -1914,6 +1914,13 @@ pub(crate) struct LoginNews<'w, 's> {
     notices: MessageReader<'w, 's, LoginGuardRefused>,
 }
 
+/// The realmlist and the engine-side CVar table, which the call host's CVar callbacks write
+/// inside the calls that write their rows.
+type GlueKnobs = (
+    Option<ResMut<'static, crate::realmlist::Realmlist>>,
+    Option<ResMut<'static, crate::cvars::Cvars>>,
+);
+
 /// What the manager asks of the rest of the app.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GlueAsks<'w> {
@@ -1927,8 +1934,6 @@ pub(crate) struct GlueAsks<'w> {
     /// the world entry's pick is its pending one.
     roster: Option<ResMut<'w, crate::glue_session::roster::Roster>>,
     pick: Option<Res<'w, crate::net::CharPick>>,
-    /// The engine-side CVar table `EnterWorld` writes and saves.
-    cvars: Option<ResMut<'w, crate::cvars::Cvars>>,
     /// What a new character's entry reads for its intro eye.
     eyes: crate::glue_session::roster::IntroEyes<'w>,
 }
@@ -1955,19 +1960,29 @@ pub(crate) fn read_agreements(cvars: &crate::cvars::Cvars) -> [NoticeState; 4] {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drive_glue_mgr(
     shared: NonSend<SharedGlueMgr>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With the realmlist and the engine-side CVar table `EnterWorld` writes and saves, whose
+    // callbacks the call host runs inside the calls that write them.
+    mut vm: crate::script_calls::VmWith<GlueKnobs>,
     mut news: LoginNews,
     mut asks: GlueAsks,
     tables: Option<Res<crate::glue_session::realm::RealmTables>>,
     run: Option<Res<RunModeRealm>>,
     env_pin: Option<Res<EnvPin>>,
-    mut realmlist: Option<ResMut<crate::realmlist::Realmlist>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     sources: super::glue_create::CreateSources,
     state: Option<Res<State<crate::client_state::ClientState>>>,
     time: Res<Time>,
 ) {
-    hosted_vm.run(|script| {
+    // The realmlist as the frame starts, and the typed value it refused as no address.
+    let (realmlist, mut refused) = {
+        let (realmlist, _) = vm.own();
+        let mut realmlist = realmlist;
+        let refused = realmlist.as_deref_mut().and_then(|r| r.take_refused());
+        (realmlist.as_deref().cloned(), refused)
+    };
+    let realmlist = realmlist.as_ref();
+    let mut last_character = None;
+    vm.run(|script| {
         let shared = shared.clone();
         let now_ms = time.elapsed().as_millis() as u32;
         let mut script = script.filter(|s| s.vm_kind() == VmKind::Glue);
@@ -1988,7 +2003,7 @@ pub(crate) fn drive_glue_mgr(
                     s,
                     news.addon_reply.as_deref().and_then(|r| r.0.as_deref()),
                     tables.as_deref(),
-                    realmlist.as_deref(),
+                    realmlist,
                 );
                 fresh_vm = true;
             }
@@ -2065,15 +2080,7 @@ pub(crate) fn drive_glue_mgr(
             }
             // `EnterWorld`'s `lastCharacterIndex` (`0x46b5fa`, `"%d"` of the selection) into the
             // engine's table, then `SaveConfig` (`0x46b6f6`).
-            if let Some(index) = mgr.last_character.take() {
-                if let Some(cvars) = asks.cvars.as_deref_mut() {
-                    cvars.set(
-                        crate::glue_session::roster::CVAR_LAST_CHARACTER,
-                        &index.to_string(),
-                    );
-                    cvars.save();
-                }
-            }
+            last_character = mgr.last_character.take();
         }
 
         // `SMSG_ADDON_INFO` read (`0x5b4260`): the index rebuilt from the reply (`0x51da70`), then
@@ -2123,7 +2130,7 @@ pub(crate) fn drive_glue_mgr(
             pump(
                 &shared,
                 script.as_deref_mut(),
-                realmlist.as_deref(),
+                realmlist,
                 now_ms,
                 &names,
                 asks.roster.as_deref_mut(),
@@ -2155,7 +2162,7 @@ pub(crate) fn drive_glue_mgr(
             pump(
                 &shared,
                 script.as_deref_mut(),
-                realmlist.as_deref(),
+                realmlist,
                 now_ms,
                 &names,
                 asks.roster.as_deref_mut(),
@@ -2188,7 +2195,7 @@ pub(crate) fn drive_glue_mgr(
         pump(
             &shared,
             script.as_deref_mut(),
-            realmlist.as_deref(),
+            realmlist,
             now_ms,
             &names,
             asks.roster.as_deref_mut(),
@@ -2198,7 +2205,7 @@ pub(crate) fn drive_glue_mgr(
             mgr.tick();
             // The realmlist control's typed value that was not an address reopens its dialog.
             if script.is_some() {
-                if let Some(typed) = realmlist.as_deref_mut().and_then(|r| r.take_refused()) {
+                if let Some(typed) = refused.take() {
                     mgr.outbox.push(Outgoing::Open {
                         which: "BENILLA_REALMLIST",
                         text: Some(Text::Raw(
@@ -2212,7 +2219,7 @@ pub(crate) fn drive_glue_mgr(
         pump(
             &shared,
             script.as_deref_mut(),
-            realmlist.as_deref(),
+            realmlist,
             now_ms,
             &names,
             asks.roster.as_deref_mut(),
@@ -2223,7 +2230,19 @@ pub(crate) fn drive_glue_mgr(
         }
         // The frame's asks, the verbs' calls since the last frame and the handlers' inside it.
         send_asks(&mut mgr, &mut asks);
-    })
+    });
+    let (mut realmlist, cvars) = vm.own();
+    // A refusal no glue VM was up to reopen its dialog for waits for one.
+    if let (Some(typed), Some(r)) = (refused, realmlist.as_deref_mut()) {
+        r.keep_refused(typed);
+    }
+    if let (Some(index), Some(mut cvars)) = (last_character, cvars) {
+        cvars.set(
+            crate::glue_session::roster::CVAR_LAST_CHARACTER,
+            &index.to_string(),
+        );
+        cvars.save();
+    }
 }
 
 /// Run what the manager has raised so far: into the glue VM when one stands, its slots seeded

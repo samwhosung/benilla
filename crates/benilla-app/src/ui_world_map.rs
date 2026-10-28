@@ -771,12 +771,13 @@ fn dev_map_jump(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut hosted_vm: crate::script_calls::HostedVm,
     data: Option<Res<WorldMapUiData>>,
     net: Res<crate::net::NetCommands>,
-    widescreen: Option<Res<crate::video::Widescreen>>,
+    // `widescreen` is a CVar knob, which the call host's callbacks write.
+    mut vm: crate::script_calls::VmWith<Option<Res<'static, crate::video::Widescreen>>>,
 ) {
-    hosted_vm.run(|script| {
+    let widescreen = vm.own().as_deref().copied();
+    vm.run(|script| {
         // A dev affordance compiled into every build, so gated at run time.
         if !crate::run_mode::dev_affordances() {
             return;
@@ -792,7 +793,7 @@ fn dev_map_jump(
             return;
         };
         // Window px (y-down) to the VM's y-up root units, as the pointer feed converts them.
-        let screen = crate::ui_script::UiScreen::of_window(window, widescreen.as_deref());
+        let screen = crate::ui_script::UiScreen::of_window(window, widescreen.as_ref());
         let at = crate::ui_script::window_to_ui(screen, cursor);
         let Some((u, v)) = script.world_map_uv_at(at.x, at.y) else {
             return;

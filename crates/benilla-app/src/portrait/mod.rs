@@ -749,7 +749,7 @@ impl Default for PaneRate {
 pub(crate) struct PortraitPlugin;
 
 /// `boothHalfRate`'s change callback.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut rate: ResMut<PaneRate>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, rate: &mut PaneRate) {
     if ev.is("boothHalfRate") {
         rate.half = ev.flag();
     }
@@ -763,7 +763,6 @@ impl Plugin for PortraitPlugin {
             .init_resource::<PortraitBakes>()
             .init_resource::<DisplayBakes>()
             .init_resource::<PaneRate>()
-            .add_observer(on_cvar)
             .init_resource::<PaneRequests>()
             .init_resource::<PaneDisplays>()
             .init_resource::<panes::PaneBooths>()
@@ -780,7 +779,14 @@ impl Plugin for PortraitPlugin {
             .init_resource::<BoothLight>()
             .add_systems(Startup, setup_booths)
             // The variant-cache reaper: booth twins die with their world source material.
-            .add_systems(Update, (light::reap_dead_variants, feed_gx_aspect))
+            // The aspect after the calls, whose `widescreen` callback writes the knob it reads.
+            .add_systems(
+                Update,
+                (
+                    light::reap_dead_variants,
+                    feed_gx_aspect.after(crate::vm_pass::VmPass::End),
+                ),
+            )
             // The test bake owns the booths when its env is set; the chain orders the shared
             // camera, booth and image access.
             .add_systems(

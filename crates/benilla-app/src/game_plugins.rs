@@ -379,25 +379,21 @@ pub(crate) mod schedule_tests {
             self.components.get(&id).map(String::as_str).unwrap_or("?")
         }
 
-        /// Whether what `a` queues has applied by the time `b` runs: a sync point of the build
-        /// lies on a path from `a` to `b`, so it runs after `a` and before `b`, and applies every
-        /// buffer of a system that ran before it. Reads a [`SyncPoints::Built`] census.
-        pub fn applies_before(&self, a: SystemKey, b: SystemKey) -> bool {
+        /// Whether the build runs `a` before `b`: a path of its order leads from `a` to `b`.
+        pub fn runs_before(&self, a: SystemKey, b: SystemKey) -> bool {
             let mut next: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
             for (x, y) in &self.built {
                 next.entry(*x).or_default().push(*y);
             }
-            // Each node at most twice: before a sync point and past one.
-            let mut seen: HashSet<(SystemKey, bool)> = HashSet::new();
-            let mut stack = vec![(a, false)];
-            while let Some((n, synced)) = stack.pop() {
+            let mut seen: HashSet<SystemKey> = HashSet::new();
+            let mut stack = vec![a];
+            while let Some(n) = stack.pop() {
                 for m in next.get(&n).into_iter().flatten() {
-                    let synced = synced || is_sync_point(self.name(*m));
-                    if *m == b && synced {
+                    if *m == b {
                         return true;
                     }
-                    if seen.insert((*m, synced)) {
-                        stack.push((*m, synced));
+                    if seen.insert(*m) {
+                        stack.push(*m);
                     }
                 }
             }
@@ -971,7 +967,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_731;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_575;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1084,8 +1080,10 @@ pub(crate) mod schedule_tests {
     /// (its commands fire the `gx*` CVar events whose observer writes the `VideoConfig` they read).
     /// Without those two edges the count is 57. Lowered to 54 when the click's dispatchers queued
     /// their window opens as unit edits, the call host applying the world click inside its call.
-    /// `WOW_SYNC_DUMP=1` lists each barrier's neighbours.
-    const UPDATE_SYNC_POINT_CEILING: usize = 54;
+    /// Lowered to 46 when the CVar callbacks ran in place, inside the call or the sync that takes
+    /// the write, where their events had waited for a barrier. `WOW_SYNC_DUMP=1` lists each
+    /// barrier's neighbours.
+    const UPDATE_SYNC_POINT_CEILING: usize = 46;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]

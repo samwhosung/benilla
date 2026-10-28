@@ -307,7 +307,13 @@ impl Plugin for WeatherPlugin {
         app.init_resource::<WeatherState>()
             // Registered where the command is owned.
             .add_message::<WeatherMessage>()
-            .add_systems(Update, weather_tick.in_set(WeatherTick));
+            // After the frame's script calls, whose `weatherDensity` callback writes it.
+            .add_systems(
+                Update,
+                weather_tick
+                    .in_set(WeatherTick)
+                    .after(crate::schedule::WorldStage::Present),
+            );
         precip::register(app);
     }
 }

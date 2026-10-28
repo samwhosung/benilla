@@ -371,7 +371,11 @@ pub(crate) fn plugin(app: &mut App) {
     // In `Update`, so this frame's `nearclip` write reaches this frame's projection, as `0x511bc0`
     // runs inside the world-frame driver; initialized here too for a harness with only this plugin.
     app.init_resource::<ViewDistance>()
-        .add_systems(Update, stamp_near_clip);
+        // After the frame's script calls, whose `nearclip` callback writes it.
+        .add_systems(
+            Update,
+            stamp_near_clip.after(crate::schedule::WorldStage::Present),
+        );
     app.add_systems(
         Update,
         publish_camera_pose

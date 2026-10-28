@@ -55,7 +55,6 @@ pub(crate) use gpu::{GpuMsShared, WgpuCensusShared};
 #[cfg(feature = "dev")]
 pub(crate) use hud::PerfHud;
 pub(crate) use journal::FpsJournalPlugin;
-#[cfg(test)]
 pub(crate) use journal::{on_cvar, FpsJournalSetting};
 #[cfg(feature = "dev")]
 pub(crate) use main_split::MainThreadSplit;

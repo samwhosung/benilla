@@ -284,9 +284,9 @@ pub(crate) struct AssistAttack(pub(crate) bool);
 
 /// The targeting rows' change callback: two flags.
 pub(crate) fn on_cvar(
-    ev: On<crate::cvars::CvarChanged>,
-    mut click: ResMut<ClickConfig>,
-    mut assist: ResMut<AssistAttack>,
+    ev: &crate::cvars::CvarChanged,
+    click: &mut ClickConfig,
+    assist: &mut AssistAttack,
 ) {
     match ev.key().as_str() {
         "deselectonclick" => click.deselect_on_click = ev.flag(),
@@ -300,7 +300,6 @@ pub(crate) struct TargetPlugin;
 
 impl Plugin for TargetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         // The update packet's field callbacks, a death's among them, after the net plugin's
         // update end, which writes their edges.
         crate::field_callbacks::register(app);

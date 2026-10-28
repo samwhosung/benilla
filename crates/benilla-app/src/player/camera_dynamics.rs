@@ -62,7 +62,7 @@ pub(crate) struct CameraOptions {
 /// Applies a camera option CVar change. An out-of-range smooth speed, tilt time or bob rate never
 /// arrives: the registry refuses it as the reference's `0x50b330` does
 /// ([`benilla_ui::script::CvarCheck`]), and a saved one stands without firing.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut opts: ResMut<CameraOptions>) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, opts: &mut CameraOptions) {
     let v = ev.num();
     match ev.key().as_str() {
         "camerapivot" => opts.pivot = v != 0.0,
