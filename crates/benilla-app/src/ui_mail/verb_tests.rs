@@ -351,7 +351,13 @@ fn the_list_defaults_the_paper_and_masks_the_subject() {
         }
     }
     world.insert_resource(darn_filter());
-    // The list as `GetNumStationeries` rebuilds it (`0x4ae202`), which the parse reads.
+    // The list as `GetNumStationeries` rebuilds it (`0x4ae202`) for a player in the world
+    // (`0x4ad9aa`), which the parse reads.
+    world.spawn((
+        crate::net::SelfPlayer,
+        crate::net::Guid(7),
+        crate::net::ObjectStore(Default::default()),
+    ));
     assert_eq!(h.eval::<i64>("return GetNumStationeries()"), 2);
     let world = h.app.world_mut();
     let mut none = entry(1, 0);

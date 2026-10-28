@@ -41,19 +41,23 @@ impl StationeryRebuild<'_, '_> {
         Some(&self.usable.as_deref()?.list)
     }
 
-    /// `0x4ad970`: the list rebuilt off the player's items now, none carried with no player.
+    /// `0x4ad970`: the list rebuilt off the player's items now. With no player it returns at once
+    /// (`0x4ad9aa`), the list and its count kept.
     pub(crate) fn rebuild(&mut self, items: &Items) {
         let (Some(usable), Some(catalog)) = (self.usable.as_deref_mut(), self.catalog.as_deref())
         else {
             return;
         };
-        let store = self
+        let Some(store) = self
             .objects
             .player()
             .and_then(|e| self.stores.get(e).ok())
-            .map(|s| &s.0);
+            .map(|s| &s.0)
+        else {
+            return;
+        };
         let objects = self.stores.item_objects(&self.objects);
-        usable.list = stationeries(catalog, store, &objects, items, self.icons.as_deref());
+        usable.list = stationeries(catalog, Some(store), &objects, items, self.icons.as_deref());
     }
 
     /// `GetNumStationeries`' rebuild (`0x4ae1f6`-`0x4ae202`): only while no paper's item is
@@ -106,5 +110,65 @@ pub(super) fn count_papers_on_enter(
             usable.awaited = missed;
         }
         paper.rebuild_unless_awaited(items);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{ObjectStore, SelfPlayer};
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// The rebuild with no player returns at once (`0x4ad9aa je 0x4ada85`), ahead of the count's
+    /// reset (`0x4ad9b8`): the list stands as last rebuilt.
+    #[test]
+    fn a_rebuild_with_no_player_keeps_the_list() {
+        const PAPER: u32 = 9_311;
+        const ITEM: u64 = 0x4000_0000_0000_0001;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut items = Items::default();
+        items.insert_template(PAPER, Some(crate::items::test_template("Plain Paper")));
+        app.init_resource::<crate::net::GuidIndex>()
+            .init_resource::<UsableStationery>()
+            .insert_resource(items)
+            .insert_resource(NetCommands(tx))
+            .insert_resource(Stationery(benilla_formats::StationeryCatalog::from_rows(
+                vec![benilla_formats::StationeryRow {
+                    id: 5,
+                    item: PAPER,
+                    texture: "PAPER".into(),
+                    flags: 0,
+                }],
+            )));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            ITEM,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, PAPER), (14, 1)]),
+            false,
+        );
+        let backpack = benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
+        let player = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                crate::net::Guid(7),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (backpack, ITEM as u32),
+                    (backpack + 1, (ITEM >> 32) as u32),
+                ])),
+            ))
+            .id();
+        let rebuilt = |app: &mut App| {
+            app.world_mut()
+                .run_system_once(|mut paper: StationeryRebuild, items: Res<Items>| {
+                    paper.rebuild(&items);
+                    paper.list().map_or(0, <[_]>::len)
+                })
+                .unwrap()
+        };
+        assert_eq!(rebuilt(&mut app), 1, "the carried paper");
+        app.world_mut().entity_mut(player).remove::<SelfPlayer>();
+        assert_eq!(rebuilt(&mut app), 1, "no player, the list kept");
     }
 }
