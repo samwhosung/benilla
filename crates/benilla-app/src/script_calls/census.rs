@@ -7,16 +7,15 @@
 //! packet too) is in order and sits on [`SENDS_IN_ORDER`], and a write counted after a signal sits
 //! on [`WRITES_AFTER`] when the reference writes it ahead of the signal.
 
-/// The call kinds that still send while a handler they signalled waits, each with its test:
-/// - `UseAction`: the bar's equip, whose cursor clear signals (`0x494bb6`) ahead of the
-///   `AutoEquipCursorItem` send (`a_bar_equip_sends_ahead_of_its_held_cursor_signals`).
-pub(crate) const SENDS_AHEAD: &[&str] = &["UseAction"];
-
 /// The call kinds the census counts that the reference orders the same way, each with its test:
 /// - `Item`: an accepted pending swap sends `CMSG_SWAP_INV_ITEM` (`0x5e0fdb`), then clears the
 ///   cursor (`0x5e0fe7`), so the clear's handlers run after the packet, as they do held
 ///   (`an_accepted_swap_sends_before_its_held_clear_signals`).
-pub(crate) const SENDS_IN_ORDER: &[&str] = &["Item"];
+/// - `UseAction`: the bar's equip signals `SetCursorItem`'s clear and put (`0x494bb6`, `0x494c54`)
+///   in place, then sends (`0x5e1757`) and clears the cursor (`0x5e1763`), so that clear's handlers
+///   run after the packet, as they do held
+///   (`a_bar_equip_signals_its_cursor_set_ahead_of_its_send`).
+pub(crate) const SENDS_IN_ORDER: &[&str] = &["Item", "UseAction"];
 
 /// The `kind:member` pairs that write state a held handler can read after the signal, where the
 /// reference writes it ahead of the signal; a turn's key is `turn@file:member`, its line left
@@ -37,20 +36,10 @@ pub(crate) const WRITES_AFTER: &[&str] = &[
 /// which the census cannot tell from a write, so [`writes_after`] leaves them out.
 const EPILOGUE: &[&str] = &["cast", "reports", "cast_views", "select", "cursor"];
 
-/// The census since the last take shows `kind` alone, which is on [`SENDS_AHEAD`]: once it shows
-/// nothing, `kind` is faithful, and leaves the list with the test that called this.
-pub(crate) fn shows_only(kind: &str) {
-    shows_only_on(kind, SENDS_AHEAD);
-}
-
-/// [`shows_only`] for a kind on [`SENDS_IN_ORDER`].
+/// The census since the last take shows `kind` alone, which is on [`SENDS_IN_ORDER`].
 pub(crate) fn shows_in_order(kind: &str) {
-    shows_only_on(kind, SENDS_IN_ORDER);
-}
-
-fn shows_only_on(kind: &str, list: &[&str]) {
     let counted = benilla_ui::script::census::take();
-    assert!(list.contains(&kind), "{kind} is not on the list");
+    assert!(SENDS_IN_ORDER.contains(&kind), "{kind} is not on the list");
     assert_eq!(
         counted.keys().map(String::as_str).collect::<Vec<_>>(),
         [kind],

@@ -19,7 +19,8 @@ pub(crate) use cast_lines::{CastFailLines, CastFailRedisplays};
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::{
-    attack_nearest_probe, drain_arrival_casts, use_action, ActionPress, AttackPress, UseOutcome,
+    attack_nearest_probe, drain_arrival_casts, finish_equip, use_action, ActionPress, AttackPress,
+    UseOutcome,
 };
 // The bar's sends and slot writes inside their calls.
 pub(crate) use drain::ActionBarSteps;

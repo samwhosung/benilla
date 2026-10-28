@@ -294,23 +294,44 @@ pub(crate) enum UseOutcome {
     /// A macro slot: its lines run inside the press (`0x4e6098 call 0x4f1460`), once the caller
     /// has the VM's host back, so the calls they make apply line by line.
     Macro(u32),
+    /// An item slot's equip, past `SetCursorItem` (`0x5e18c9`): the set's signals fire in place
+    /// (`0x494bb6`, `0x494c54`) before `AutoEquipCursorItem` goes on (`0x5e18d5`), so the caller
+    /// runs its signal point and then [`finish_equip`].
+    Equip,
 }
 
 /// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast or an item use, at the selection as the
-/// calls before it left it, or the Attack slot or a macro, which it hands back for the caller to
-/// run: the player's Attack, or the macro's lines (`0x4e6098 call 0x4f1460`).
+/// calls before it left it, or the Attack slot, a macro or an equip's second half, which it hands
+/// back for the caller to run: the player's Attack, the macro's lines (`0x4e6098 call 0x4f1460`)
+/// or [`finish_equip`] after the set's signals.
 pub(crate) fn use_action(
     p: &mut ActionPress,
     script: &mut UiScript,
     press: benilla_ui::script::ActionUse,
 ) -> UseOutcome {
+    with_bags(p, script, |p, script| press_slot(p, script, press))
+}
+
+/// `AutoEquipCursorItem` (`0x5e18d5`) on whatever the cursor holds after the equip's set and the
+/// listeners it signalled, then the send: the second half of an item slot's equip
+/// ([`UseOutcome::Equip`]).
+pub(crate) fn finish_equip(p: &mut ActionPress, script: &mut UiScript) {
+    with_bags(p, script, auto_equip_cursor);
+}
+
+/// Run `f` with the bags lent, when the press has them.
+fn with_bags<R>(
+    p: &mut ActionPress,
+    script: &mut UiScript,
+    f: impl FnOnce(&mut ActionPress, &mut UiScript) -> R,
+) -> R {
     let reads = p.bags.take();
-    let outcome = match reads.as_ref() {
-        Some(reads) => script.reading(&mut reads.with(None), |script| press_slot(p, script, press)),
-        None => press_slot(p, script, press),
+    let out = match reads.as_ref() {
+        Some(reads) => script.reading(&mut reads.with(None), |script| f(p, script)),
+        None => f(p, script),
     };
     p.bags = reads;
-    outcome
+    out
 }
 
 /// [`use_action`] with the bags lent.
@@ -325,7 +346,7 @@ fn press_slot(
         ui_errors,
         ladder,
         gate,
-        equip_sound,
+        equip_sound: _,
         requirements,
         bags: _,
     } = p;
@@ -431,50 +452,16 @@ fn press_slot(
                 // the bag click (`StartQuest`, `0x4fa3c4`), so a quest-starter equips.
                 debug!("ui_action: item action {action} auto-equip (wire {bag_index}/{slot0})");
                 // `0x4e602a` runs `0x5e1840`: the bar's item takes the cursor, its inner clear
-                // dropping and unlocking a held item, and goes out through `AutoEquipCursorItem`,
-                // which asks first for a bind-on-equip item and keeps it held. Nothing locks it,
-                // and a projectile's clear unlocks (`0x5e1763`).
+                // dropping and unlocking a held item. The set's signals run before
+                // `AutoEquipCursorItem` ([`finish_equip`]), which asks first for a bind-on-equip
+                // item and keeps it held. Nothing locks it, and a projectile's clear unlocks
+                // (`0x5e1763`).
                 requirements.seat(script);
-                match script.auto_equip_guid(guid, false) {
-                    // The item sent is the cursor's: the bar's own, or with no control (the set
-                    // refused) whatever was held (`0x5e18c9`).
-                    benilla_ui::script::AutoEquip::Sent { bag, slot, guid } => {
-                        if let Some((bag_index, wire_slot)) = crate::ui_items::wire_pos(bag, slot) {
-                            crate::ui_items::send_auto_equip(
-                                script,
-                                &ladder.objects,
-                                &ladder.items,
-                                &ladder.commands,
-                                bag_index,
-                                wire_slot,
-                                Some(guid),
-                            );
-                            // The set and the send's clear both land inside the call
-                            // (`0x494c4a`, `0x49520a`), so the pair plays here.
-                            if let Some(display_id) = ladder
-                                .objects
-                                .object(guid)
-                                .and_then(|o| o.object_entry())
-                                .and_then(|entry| ladder.items.template(entry, guid, Ask::Read))
-                                .map(|t| t.display_info_id)
-                            {
-                                equip_sound.write(crate::sound::AutoEquipSound { display_id });
-                            }
-                        }
-                    }
-                    benilla_ui::script::AutoEquip::Asked { bag, slot, guid } => gate.defer_equip(
-                        script,
-                        crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
-                    ),
-                    benilla_ui::script::AutoEquip::Waits { entry } => {
-                        gate.await_auto_equip(entry, &ladder.items, &ladder.commands);
-                    }
-                    // With no control the set refused and held ammo loads (`0x5e1486`).
-                    benilla_ui::script::AutoEquip::Ammo { entry } => {
-                        let _ = ladder.commands.0.send(ClientCommand::SetAmmo { entry });
-                    }
-                    benilla_ui::script::AutoEquip::Back | benilla_ui::script::AutoEquip::None => {}
-                }
+                return if script.put_on_cursor_for_equip(guid) {
+                    UseOutcome::Equip
+                } else {
+                    UseOutcome::Done
+                };
             } else {
                 // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers
                 // its quest, and the use runs the whole cast ladder. The wire's third byte is
@@ -525,6 +512,59 @@ fn press_slot(
         None => debug!("ui_action: UseAction({action}) on an empty slot"),
     }
     UseOutcome::Done
+}
+
+/// [`UseOutcome::Equip`]'s second half: `AutoEquipCursorItem` (`0x5e1480`) on the cursor as the
+/// set and its listeners left it, sent as the bar's equip sends.
+fn auto_equip_cursor(p: &mut ActionPress, script: &mut UiScript) {
+    let ActionPress {
+        ladder,
+        gate,
+        equip_sound,
+        requirements,
+        ..
+    } = p;
+    requirements.seat(script);
+    match script.auto_equip_cursor(false) {
+        // The item sent is the cursor's: the bar's own, or with no control (the set
+        // refused) whatever was held (`0x5e18c9`).
+        benilla_ui::script::AutoEquip::Sent { bag, slot, guid } => {
+            if let Some((bag_index, wire_slot)) = crate::ui_items::wire_pos(bag, slot) {
+                crate::ui_items::send_auto_equip(
+                    script,
+                    &ladder.objects,
+                    &ladder.items,
+                    &ladder.commands,
+                    bag_index,
+                    wire_slot,
+                    Some(guid),
+                );
+                // The set and the send's clear both land inside the call
+                // (`0x494c4a`, `0x49520a`), so the pair plays here.
+                if let Some(display_id) = ladder
+                    .objects
+                    .object(guid)
+                    .and_then(|o| o.object_entry())
+                    .and_then(|entry| ladder.items.template(entry, guid, Ask::Read))
+                    .map(|t| t.display_info_id)
+                {
+                    equip_sound.write(crate::sound::AutoEquipSound { display_id });
+                }
+            }
+        }
+        benilla_ui::script::AutoEquip::Asked { bag, slot, guid } => gate.defer_equip(
+            script,
+            crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
+        ),
+        benilla_ui::script::AutoEquip::Waits { entry } => {
+            gate.await_auto_equip(entry, &ladder.items, &ladder.commands);
+        }
+        // With no control the set refused and held ammo loads (`0x5e1486`).
+        benilla_ui::script::AutoEquip::Ammo { entry } => {
+            let _ = ladder.commands.0.send(ClientCommand::SetAmmo { entry });
+        }
+        benilla_ui::script::AutoEquip::Back | benilla_ui::script::AutoEquip::None => {}
+    }
 }
 
 /// The action bar's sends inside their calls ([`benilla_ui::script::ActionBarCall`]): the

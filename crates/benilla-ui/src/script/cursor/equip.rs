@@ -225,18 +225,32 @@ pub(crate) fn auto_equip_from(
     item: CursorItem,
     suppress: bool,
 ) -> mlua::Result<AutoEquip> {
-    // An item offered in the trade window shows `ERR_EQUIP_TRADE_ITEM` inside the verb and ends
-    // it before the set (`0x5e1897`-`0x5e18b3`, `0x4bfd20`).
+    if !put_for_equip(lua, item)? {
+        return Ok(AutoEquip::None);
+    }
+    Ok(auto_equip_on_cursor(lua, suppress))
+}
+
+/// The first half of `0x5e1840`: the trade window's refusal (`0x5e1897`-`0x5e18b3`, `0x4bfd20`),
+/// shown inside the verb, ends it before the set, and the set itself (`0x5e18c9`), whose signals
+/// all fire ahead of `AutoEquipCursorItem`. Returns whether `AutoEquipCursorItem` follows.
+pub(crate) fn put_for_equip(lua: &Lua, item: CursorItem) -> mlua::Result<bool> {
     let in_trade = lua
         .app_data_ref::<Model>()
         .expect("model app_data")
         .trade_holds(item.guid);
     if in_trade {
         crate::script::calls::display_error(lua, "ERR_EQUIP_TRADE_ITEM")?;
-        return Ok(AutoEquip::None);
+        return Ok(false);
     }
     set_cursor(lua, true, Setter::Item, |_| Some(CursorPayload::Item(item)));
-    Ok(verb(lua, |model| auto_equip_held(lua, model, suppress)))
+    Ok(true)
+}
+
+/// The second half of `0x5e1840`: `AutoEquipCursorItem(suppress)` (`0x5e18d5`) on whatever the
+/// cursor holds now, the signals of the set and of any listener between having run.
+pub(crate) fn auto_equip_on_cursor(lua: &Lua, suppress: bool) -> AutoEquip {
+    verb(lua, |model| auto_equip_held(lua, model, suppress))
 }
 
 impl crate::script::UiScript {
@@ -257,16 +271,19 @@ impl crate::script::UiScript {
         crate::script::item_calls::submit_item_calls(&self.lua)
     }
 
+    /// The item at Lua `(bag, slot)` as the cursor takes it; none for an empty or unresolved slot
+    /// (`0x5e18da`).
+    fn item_at(&self, bag: i64, slot: u32) -> Option<CursorItem> {
+        let model = self.model_ref();
+        crate::script::held::held_slot(&self.lua, &model, bag, slot)
+            .filter(|s| s.guid != 0)
+            .map(|s| s.cursor_item(bag, slot))
+    }
+
     /// `0x5e1840` on the item at Lua `(bag, slot)`: the bind-confirm accept re-issues it with
     /// `suppress` set (`0x5e1c23`). Nothing happens for an empty or unresolved slot (`0x5e18da`).
     pub fn auto_equip_slot(&mut self, bag: i64, slot: u32, suppress: bool) -> AutoEquip {
-        let item = {
-            let model = self.model_ref();
-            crate::script::held::held_slot(&self.lua, &model, bag, slot)
-                .filter(|s| s.guid != 0)
-                .map(|s| s.cursor_item(bag, slot))
-        };
-        let Some(item) = item else {
+        let Some(item) = self.item_at(bag, slot) else {
             return AutoEquip::None;
         };
         auto_equip_from(&self.lua, item, suppress).unwrap_or_else(|e| {
@@ -287,6 +304,31 @@ impl crate::script::UiScript {
             Some((bag, slot)) => self.auto_equip_slot(bag, slot, suppress),
             None => AutoEquip::None,
         }
+    }
+
+    /// The first half of `0x5e1840` on the bag item `guid` ([`put_for_equip`]), for the bar's
+    /// equip, whose set signals (`0x494bb6`, `0x494c54`) fire before the send. Returns whether
+    /// [`Self::auto_equip_cursor`] follows: an item the model does not hold is no `0x5e1840`
+    /// (`0x5e18da`), and the trade window's refusal ends it.
+    pub fn put_on_cursor_for_equip(&mut self, guid: u64) -> bool {
+        let at = {
+            let model = self.model_ref();
+            crate::script::held::find_guid(&self.lua, &model, guid)
+                .map(|(bag, slot, _)| (bag, slot))
+        };
+        let Some(item) = at.and_then(|(bag, slot)| self.item_at(bag, slot)) else {
+            return false;
+        };
+        put_for_equip(&self.lua, item).unwrap_or_else(|e| {
+            self.push_error(e);
+            false
+        })
+    }
+
+    /// The second half of `0x5e1840`: `AutoEquipCursorItem(suppress)` on whatever the cursor
+    /// holds now ([`auto_equip_on_cursor`]).
+    pub fn auto_equip_cursor(&mut self, suppress: bool) -> AutoEquip {
+        auto_equip_on_cursor(&self.lua, suppress)
     }
 }
 
