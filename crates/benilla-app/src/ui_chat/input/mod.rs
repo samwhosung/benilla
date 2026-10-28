@@ -101,7 +101,7 @@ pub(super) struct ChatOut<'w> {
     target: MessageWriter<'w, crate::target::TargetByNameRequest>,
     assist: MessageWriter<'w, crate::target::AssistRequest>,
     follow: MessageWriter<'w, crate::player::FollowRequest>,
-    /// `/partytest ping` seats a group member's ping through the wire arm's `seat`.
+    /// `/partytest ping` stores and signals a group member's ping as the wire's handler does.
     ping: ResMut<'w, crate::minimap::MinimapPing>,
     /// The red error line by GlobalStrings key. The system's only `UiErrorKeys` access: a second
     /// one panics on the first frame.
@@ -508,7 +508,10 @@ pub(super) fn drain_chat_input(
                             let w = benilla_assets::coords::bevy_to_wow(tf.translation());
                             // +x is north, -y is east.
                             let at = (w[0] + 24.75, w[1] - 24.75);
-                            chat_out.ping.seat(at, 0xF001);
+                            chat_out
+                                .ping
+                                .member(at, 0xF001, self_guid.0, Some(&group))
+                                .fire(script);
                             format!(
                                 "partytest: Alice pinged ({:.0}, {:.0}) — 35 yd NE, party1, 5 s",
                                 at.0, at.1

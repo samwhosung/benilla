@@ -82,12 +82,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the wire's error texts",
     ),
     (
-        Row::HostHeld,
-        "::minimap::ping::MinimapPing",
-        "the members' minimap pings, which `drive_minimap_ping` fires; our own `PingLocation`, \
-         acting in its call, holds the ping in the host",
-    ),
-    (
         Row::Queue,
         "::player::view_subject::FarSight",
         "the far-sight machine a handler's Lua runs through the host's buff cancel; every feed \
@@ -161,6 +155,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // waiting on it through the build's own wait, read as the tick runs.
     "::item_names::ItemNames",
     "::items::Items",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read, and quiet. A member's ping
+    // stores the point at its packet and signals on the notice lane (`0x4ee330`), our own
+    // `PingLocation` holds it in the host in its call, and only a new VM's seed reads it.
+    "::minimap::ping::MinimapPing",
     "::net::GuidIndex",
     // Read by the trainer's description getters through the host, and quiet.
     "::net::HomeBind",
@@ -308,8 +306,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
         "net::SelfGuid"]),
-    ("::minimap::ping::drive_minimap_ping", &["minimap::ping::MinimapPing",
-        "ui_party::GroupState"]),
     // The party and raid tokens read the members' stores, records and the roster's cells as of
     // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
     // the roster push is their no-host fallback, and every snapshot's names and relations read as

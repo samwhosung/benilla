@@ -178,3 +178,51 @@ fn the_game_clock_reads_at_the_call() {
         "the copy, seeded before any time"
     );
 }
+
+/// A group member's `MSG_MINIMAP_PING` (`0x5e41bd` → `0x4ee330`) stores the point and signals
+/// `MINIMAP_PING` with the pinger's token inside its handler, at its packet's place among the lines
+/// around it; two pings in one frame are two signals.
+#[test]
+fn a_members_ping_signals_at_its_packet() {
+    let mut c = client();
+    c.app
+        .world_mut()
+        .resource_mut::<crate::player::Player>()
+        .active = true;
+    c.app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"local f = CreateFrame("Frame") f:RegisterEvent("MINIMAP_PING")
+               f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. arg1) end)"#,
+        )
+        .unwrap();
+    c.frame(vec![]);
+    let ping = |x: f32| SessionEvent::MinimapPing {
+        guid: 0xDEAD,
+        x,
+        y: 0.0,
+    };
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![ping(10.0)],
+        vec![boar_says("b")],
+        vec![ping(20.0)],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            said("a"),
+            "MINIMAP_PING:player".into(),
+            said("b"),
+            "MINIMAP_PING:player".into(),
+        ]
+    );
+    assert_eq!(
+        c.app
+            .world()
+            .resource::<crate::minimap::MinimapPing>()
+            .point(),
+        (20.0, 0.0)
+    );
+}

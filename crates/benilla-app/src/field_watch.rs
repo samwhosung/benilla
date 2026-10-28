@@ -164,6 +164,10 @@ pub(crate) enum FieldNotice {
     /// `SMSG_PLAYER_SKINNED`'s handler `0x5e7d40`: `PLAYER_SKINNED` with the byte's truth
     /// (`0x5e7d57` → `0x48f412`).
     Skinned { free_repop: bool },
+    /// A group member's ping, `0x4ee330` from `MSG_MINIMAP_PING`'s handler (`0x5e41bd`): the
+    /// VM's statics store the point, then `MINIMAP_PING` with the token the packet resolved
+    /// (`0x4ee48d`).
+    MinimapPing(crate::minimap::MemberPing),
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired

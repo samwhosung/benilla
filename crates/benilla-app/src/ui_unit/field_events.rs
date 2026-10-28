@@ -584,6 +584,7 @@ pub(crate) fn fire(
             "PLAYER_SKINNED",
             vec![ScriptValue::Int(i64::from(free_repop))],
         ),
+        FieldNotice::MinimapPing(ping) => ping.fire(script),
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:

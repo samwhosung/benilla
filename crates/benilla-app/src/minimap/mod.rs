@@ -17,7 +17,7 @@ mod composite;
 mod interior;
 /// The minimap ping, engine-owned and pinned to a world point.
 mod ping;
-pub(crate) use ping::{MinimapPing, MinimapSteps};
+pub(crate) use ping::{MemberPing, MinimapPing, MinimapSteps};
 
 use std::collections::HashMap;
 
@@ -1024,17 +1024,11 @@ impl Plugin for MinimapPlugin {
                     feed_minimap_art
                         .in_set(crate::ui_script::UiDrain)
                         .before(UiQuadAppend),
-                    // Before the script tick, after the indoor push the radius reads. Gated on the
-                    // in-game UI: a member's ping in the login burst has no player to land on
-                    // (`0x4ee341`), so it is dropped, not signalled to the glue VM.
-                    ping::drive_minimap_ping
+                    // Before the script tick, after the indoor push the radius reads.
+                    ping::feed_minimap_player
                         .after(feed_minimap_inside)
                         .in_set(crate::ui_script::UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
-                    ping::drop_inbound_pings
-                        .after(ping::drive_minimap_ping)
-                        .in_set(crate::ui_script::UiFeed)
-                        .run_if(not(crate::ui_script::ingame_ui_up)),
                     // In the feed, off the hover the last walk left; after the world drive only so
                     // the two VM writers keep one order.
                     blips::drive_blip_tooltip

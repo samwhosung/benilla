@@ -7,16 +7,17 @@
 //!
 //! - In: the stock `Minimap_OnClick` calls `Minimap:PingLocation(dx, dy)`; the VM turns it into a
 //!   world point against the frame's own size and the zoom diameter. A group member's
-//!   `MSG_MINIMAP_PING` (raw world floats) applies through [`drive_minimap_ping`].
+//!   `MSG_MINIMAP_PING` (raw world floats) applies at its packet ([`on_minimap_ping`]), its
+//!   `MINIMAP_PING` on the notice lane.
 //! - Out: our own ping goes on the wire when grouped (relayed to the rest of the group only,
 //!   `GroupHandler.cpp:384-391`), inside its call ([`MinimapSteps`]).
 //!
 //! The reference keeps the world point in two statics nothing clears (`0xbc787c`/`0xbc7880`),
-//! across a `ReloadUI` too, so [`MinimapPing`] keeps the process's copy for each new VM. The stock
-//! `Minimap.lua` owns everything visible: it shows the `MiniMapPing` `<Model>`
-//! (`Interface\MiniMap\Ping\MinimapPing.mdx`, rendered by `crate::ui_models`), holds it 5 s and
-//! fades it 0.5 s (`MINIMAPPING_TIMER`, `MINIMAPPING_FADE_TIMER`). `WorldMapPing` is the same model
-//! on the world map.
+//! across a `ReloadUI` too, so [`MinimapPing`] keeps the process's copy, which a new VM is seeded
+//! with as it is built. The stock `Minimap.lua` owns everything visible: it shows the
+//! `MiniMapPing` `<Model>` (`Interface\MiniMap\Ping\MinimapPing.mdx`, rendered by
+//! `crate::ui_models`), holds it 5 s and fades it 0.5 s (`MINIMAPPING_TIMER`,
+//! `MINIMAPPING_FADE_TIMER`). `WorldMapPing` is the same model on the world map.
 //!
 //! Reaching a ping does not clear it: the reference's 10-yd `d² < 100` auto-clear belongs to the
 //! `SMSG_GOSSIP_POI` marker (`0x6d99aa`–`0x6d9a4c`).
@@ -28,71 +29,104 @@ use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 use crate::net::{ClientCommand, Guid, NetCommands, SelfPlayer};
 use crate::player::Player;
 
-/// The process's copy of the ping statics, and the members' pings not yet applied to a VM.
+/// The process's copy of the ping statics, which a new VM inherits.
 #[derive(Resource, Default)]
 pub(crate) struct MinimapPing {
-    /// The last ping's WoW `(x, y)`, which a new VM inherits; the statics start at zero.
+    /// The last ping's WoW `(x, y)`; the statics start at zero.
     world: (f32, f32),
-    /// Group members' pings since the last [`drive_minimap_ping`], with each sender's guid.
-    inbound: Vec<((f32, f32), u64)>,
 }
 
 impl MinimapPing {
-    /// A group member's ping, stored now and applied to the VM by the next [`drive_minimap_ping`].
-    pub(crate) fn seat(&mut self, world: (f32, f32), sender: u64) {
-        self.world = world;
-        self.inbound.push((world, sender));
+    /// The stored point, a new VM's seed.
+    pub(crate) fn point(&self) -> (f32, f32) {
+        self.world
+    }
+
+    /// `sender`'s ping at the world point `at` (`0x4ee330`): the point stored (`0x4ee366`,
+    /// `0x4ee373`), and the signal that follows, its token resolved against `group` as it stands,
+    /// `me` our own guid.
+    pub(crate) fn member(
+        &mut self,
+        at: (f32, f32),
+        sender: u64,
+        me: Option<u64>,
+        group: Option<&crate::ui_party::GroupState>,
+    ) -> MemberPing {
+        self.world = at;
+        MemberPing {
+            token: PingToken::of(sender, me, group),
+            x: at.0.to_bits(),
+            y: at.1.to_bits(),
+        }
     }
 }
 
-/// Push the player's position, seat a new VM's stored ping, and apply the members' pings, each
-/// signalling `MINIMAP_PING` with its sender's unit token. Runs before the script tick.
-pub(super) fn drive_minimap_ping(
-    // The ping, which the host's `PingLocation` writes too: taken before the VM runs.
-    mut hosted: crate::script_calls::disjoint::Pair<
-        ResMut<'static, MinimapPing>,
-        crate::script_calls::HostedVm<'static, 'static>,
-    >,
+/// The pinger's unit token (`0x4ee330`): ourselves, else the sender's party slot (`party%d`,
+/// `0x4ee412`), else its raid row (`raid%d`, `0x4ee41b`), each 1-based, the party scan first; a
+/// sender in neither leaves `player`, the buffer's first text (`0x4ee379`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PingToken {
+    Player,
+    Party(u8),
+    Raid(u8),
+}
+
+impl PingToken {
+    /// The token `sender` resolves to against `group` as it stands, `me` our own guid.
+    fn of(sender: u64, me: Option<u64>, group: Option<&crate::ui_party::GroupState>) -> Self {
+        if Some(sender) == me {
+            return Self::Player;
+        }
+        let Some(group) = group else {
+            return Self::Player;
+        };
+        if let Some(i) = group.party_slots().position(|m| m.guid == sender) {
+            Self::Party(i as u8 + 1)
+        } else if let Some(i) = group.raid_rows().position(|g| g == sender) {
+            Self::Raid(i as u8 + 1)
+        } else {
+            Self::Player
+        }
+    }
+
+    fn text(self) -> String {
+        match self {
+            Self::Player => "player".to_string(),
+            Self::Party(n) => format!("party{n}"),
+            Self::Raid(n) => format!("raid{n}"),
+        }
+    }
+}
+
+/// A group member's ping as the notice lane carries it: the token its packet resolved and the
+/// world point, the floats by their bits so the notice compares exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemberPing {
+    token: PingToken,
+    x: u32,
+    y: u32,
+}
+
+impl MemberPing {
+    /// `MINIMAP_PING` with the token and the point's offset from the player (`0x4ee48d`), and the
+    /// VM's statics storing the point; nothing with no player position pushed (`0x4ee35e`).
+    pub(crate) fn fire(self, script: &mut benilla_ui::script::UiScript) {
+        let world = (f32::from_bits(self.x), f32::from_bits(self.y));
+        script.apply_minimap_ping(world, &self.token.text());
+    }
+}
+
+/// Push the active player's position the ping methods read at the call (`0x4eecdf`, `0x4ef021`):
+/// the player object's own, which unit movement writes in frame time. Runs before the script tick.
+pub(super) fn feed_minimap_player(
+    mut hosted_vm: crate::script_calls::HostedVm,
     player: Res<Player>,
-    group: Res<crate::ui_party::GroupState>,
-    self_q: Query<&Guid, With<SelfPlayer>>,
-    mut seated: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    let (stored, inbound) = {
-        let mut ping = hosted.p0();
-        (ping.world, std::mem::take(&mut ping.inbound))
-    };
-    hosted.p1().run(|script| {
+    hosted_vm.run(|script| {
         let Some(script) = script else { return };
         let wow = bevy_to_wow(player.pos);
         script.set_minimap_player(player.active.then_some((wow[0], wow[1])));
-        let seated = seated.get(script);
-        if !*seated {
-            script.set_minimap_ping_point(stored);
-            *seated = true;
-        }
-        // The token (`0x4ee330`): ourselves, else the sender's party slot (`party%d`, `0x4ee412`),
-        // else its raid row (`raid%d`, `0x4ee41b`), the party scan first; a sender in neither
-        // leaves `player`.
-        let self_guid = self_q.iter().next().map(|g| g.0);
-        for (world, sender) in inbound {
-            let token = if Some(sender) == self_guid {
-                "player".to_string()
-            } else if let Some(i) = group.party_slots().position(|m| m.guid == sender) {
-                format!("party{}", i + 1)
-            } else if let Some(i) = group.raid_rows().position(|g| g == sender) {
-                format!("raid{}", i + 1)
-            } else {
-                "player".to_string()
-            };
-            script.apply_minimap_ping(world, &token);
-        }
     })
-}
-
-/// No in-game UI: a member's ping has no player object to land on, so it applies nowhere.
-pub(super) fn drop_inbound_pings(mut ping: ResMut<MinimapPing>) {
-    ping.inbound.clear();
 }
 
 /// Our own `PingLocation` inside its call ([`benilla_ui::script::MinimapCall`]).
@@ -145,10 +179,26 @@ pub(super) fn register(app: &mut App) {
     );
 }
 
-/// A group member's ping: raw world floats, stored now and announced by the next drive.
-fn on_minimap_ping(In(ev): In<benilla_protocol::SessionEvent>, mut ping: ResMut<MinimapPing>) {
-    if let benilla_protocol::SessionEvent::MinimapPing { guid, x, y } = ev {
-        ping.seat((x, y), guid);
+/// A group member's ping (`0x5e4185` → `0x5e41bd` → `0x4ee330`), with the active player held
+/// (`0x4ee341`-`0x4ee35e`): the point stored (`0x4ee366`, `0x4ee373`), the pinger's token
+/// resolved against the group as the packet finds it ([`MinimapPing::member`]), and `MINIMAP_PING`
+/// on the notice lane at the packet's place. Absent in a harness without the notice lane.
+fn on_minimap_ping(
+    In(ev): In<benilla_protocol::SessionEvent>,
+    mut ping: ResMut<MinimapPing>,
+    me: Query<&Guid, With<SelfPlayer>>,
+    group: Option<Res<crate::ui_party::GroupState>>,
+    lane: Option<ResMut<crate::field_watch::NoticeLane>>,
+) {
+    let benilla_protocol::SessionEvent::MinimapPing { guid, x, y } = ev else {
+        return;
+    };
+    let Some(me) = me.iter().next().map(|g| g.0) else {
+        return;
+    };
+    let signal = ping.member((x, y), guid, Some(me), group.as_deref());
+    if let Some(mut lane) = lane {
+        lane.write(crate::field_watch::FieldNotice::MinimapPing(signal));
     }
 }
 
@@ -157,8 +207,8 @@ mod tests {
     use super::*;
     use benilla_ui::script::UiScript;
 
-    /// The drive over a VM with a Minimap and a `MINIMAP_PING` listener, the player at WoW
-    /// (100, 200) and in a group.
+    /// The player-position push over a VM with a Minimap and a `MINIMAP_PING` listener, the player
+    /// at WoW (100, 200), in a group or not; the ping's handler and the notice lane beside it.
     fn ping_app(in_group: bool) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let mut app = App::new();
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -173,7 +223,9 @@ mod tests {
             .insert_resource(group)
             .insert_resource(player)
             .init_resource::<MinimapPing>()
-            .add_systems(Update, drive_minimap_ping);
+            .init_resource::<crate::field_watch::NoticeLane>()
+            .add_systems(Update, feed_minimap_player);
+        register(&mut app);
         let mut script = UiScript::new().unwrap();
         script.keep_calls();
         script
@@ -193,15 +245,49 @@ mod tests {
         app.world_mut().non_send_resource_mut::<UiScript>()
     }
 
-    /// A member's ping applies to the VM with its token at the next drive, and an unknown
-    /// sender's leaves `player` (`0x4ee330`); the getter answers it at once.
+    /// `sender`'s ping through its handler, then each notice it wrote fired on the VM.
+    fn pinged(app: &mut App, sender: u64, point: (f32, f32)) {
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![benilla_protocol::SessionEvent::MinimapPing {
+                guid: sender,
+                x: point.0,
+                y: point.1,
+            }],
+        );
+        let notices: Vec<_> = app
+            .world_mut()
+            .resource_mut::<crate::field_watch::NoticeLane>()
+            .drain()
+            .collect();
+        let mut s = script(app);
+        for notice in notices {
+            match notice {
+                crate::field_watch::FieldNotice::MinimapPing(p) => p.fire(&mut s),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    /// A member's ping stores the point and signals with its token at its packet, an unknown
+    /// sender's leaving `player` (`0x4ee330`); the getter answers it at once. With no player
+    /// object the handler stores and signals nothing (`0x4ee35e`).
     #[test]
     fn a_members_ping_signals_with_its_token_and_seats_the_statics() {
         let (mut app, _rx) = ping_app(true);
-        app.world_mut()
-            .resource_mut::<MinimapPing>()
-            .seat((100.0, 200.0 - 50.0), 0xDEAD);
         app.update();
+        pinged(&mut app, 0xDEAD, (100.0, 200.0 - 50.0));
+        assert_eq!(app.world().resource::<MinimapPing>().point(), (0.0, 0.0));
+        assert!(script(&mut app)
+            .eval::<Option<String>>("return seen[1]")
+            .unwrap()
+            .is_none());
+        app.world_mut().spawn((Guid(0x10), SelfPlayer));
+        pinged(&mut app, 0xDEAD, (100.0, 200.0 - 50.0));
+        assert_eq!(
+            app.world().resource::<MinimapPing>().point(),
+            (100.0, 150.0)
+        );
         let s = script(&mut app);
         assert_eq!(s.eval::<String>("return seen[1]").unwrap(), "player");
         let (x, y) = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
@@ -234,6 +320,7 @@ mod tests {
             group.members = vec![member(0xB1, 1), member(0xA1, 0), member(0xB2, 1)];
             group.rebuild_raid(ME);
         }
+        app.update();
         for (sender, want) in [
             (0xA1, "party1"),
             (0xB2, "raid3"),
@@ -241,10 +328,7 @@ mod tests {
             (ME, "player"),
             (0xDEAD, "player"),
         ] {
-            app.world_mut()
-                .resource_mut::<MinimapPing>()
-                .seat((100.0, 150.0), sender);
-            app.update();
+            pinged(&mut app, sender, (100.0, 150.0));
             let s = script(&mut app);
             assert_eq!(
                 s.eval::<String>("return seen[table.getn(seen)]").unwrap(),
@@ -255,9 +339,9 @@ mod tests {
     }
 
     /// Our own ping goes on the wire when grouped and only then, and becomes the process's copy,
-    /// which a new VM inherits as the reference's statics outlive a `ReloadUI`.
+    /// which a new VM is seeded with as the reference's statics outlive a `ReloadUI`.
     #[test]
-    fn our_ping_is_sent_when_grouped_and_outlives_the_vm() {
+    fn our_ping_is_sent_when_grouped_and_becomes_the_process_copy() {
         for grouped in [true, false] {
             let (mut app, rx) = ping_app(grouped);
             app.update();
@@ -275,22 +359,8 @@ mod tests {
             if let Some(ClientCommand::MinimapPing { x, y }) = sent.first() {
                 assert!((x - want.0).abs() < 1e-3 && (y - want.1).abs() < 1e-3);
             }
-
-            // A fresh VM: the drive seats the stored point before its first tick.
-            let fresh = UiScript::new().unwrap();
-            fresh
-                .run(r#"m = CreateFrame("Minimap", "Minimap")"#)
-                .unwrap();
-            app.insert_non_send_resource(fresh);
-            app.update();
-            let (x, _) = script(&mut app)
-                .eval::<(f64, f64)>("return m:GetPingPosition()")
-                .unwrap();
-            assert!(x.abs() < 1e-6, "the inherited point, due north: {x}");
-            let (_, y) = script(&mut app)
-                .eval::<(f64, f64)>("return m:GetPingPosition()")
-                .unwrap();
-            assert!((y - 0.5).abs() < 1e-6, "{y}");
+            let (x, y) = app.world().resource::<MinimapPing>().point();
+            assert!((x - want.0).abs() < 1e-3 && (y - want.1).abs() < 1e-3);
         }
     }
 

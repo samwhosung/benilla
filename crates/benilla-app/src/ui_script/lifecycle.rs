@@ -167,6 +167,10 @@ fn new_vm<E: std::fmt::Display>(
     }
     seed_vm_clock(world, &mut script);
     seed_game_time(world, &mut script);
+    // The ping's statics (`0xbc787c`, `0xbc7880`), which nothing clears, a `ReloadUI` included.
+    if let Some(ping) = world.get_resource::<crate::minimap::MinimapPing>() {
+        script.set_minimap_ping_point(ping.point());
+    }
     // The reference seeds `rand` with the clock before `WinMain` (`0x5b800b`). Deviation: a
     // capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce.
     if crate::run_mode::scenario_active() {
@@ -1537,6 +1541,31 @@ mod tests {
             script.run(&format!("BuyGuildCharter({name:?})")).unwrap();
             assert_eq!(script.take_petition_calls(), [want], "{name:?}");
         }
+    }
+
+    /// The ping's two statics (`0xbc787c`, `0xbc7880`) outlive the VM, so a new one answers the
+    /// stored point from its first line: due north of a player at the origin, half the zoom
+    /// diameter out.
+    #[test]
+    fn a_new_vm_inherits_the_stored_ping() {
+        let mut world = World::new();
+        world.init_resource::<crate::minimap::MinimapPing>();
+        let d = 2.0 * benilla_ui::widget::minimap_radius_yd(3, 3, false);
+        world.resource_mut::<crate::minimap::MinimapPing>().member(
+            (0.5 * d, 0.0),
+            0xDEAD,
+            None,
+            None,
+        );
+        let mut script = new_vm(&mut world, UiScript::new).expect("a VM");
+        script.set_minimap_player(Some((0.0, 0.0)));
+        script
+            .run(r#"m = CreateFrame("Minimap", "Minimap")"#)
+            .unwrap();
+        let (x, y) = script
+            .eval::<(f64, f64)>("return m:GetPingPosition()")
+            .unwrap();
+        assert!(x.abs() < 1e-6 && (y - 0.5).abs() < 1e-6, "{x} {y}");
     }
 
     /// The game clock is one object built at start-up with its time at -1 (`0x643300`, `0x642300`)
