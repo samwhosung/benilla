@@ -11,7 +11,6 @@ use benilla_protocol::messages::PetSpells;
 
 use crate::net::{GuidIndex, ObjectStore};
 use crate::spell::Cooldowns;
-use crate::ui_unit::UnitFeed;
 
 mod bar;
 #[cfg(test)]
@@ -32,7 +31,7 @@ pub(crate) use usable::actions_usable as pet_actions_usable;
 pub(crate) use drain::call_pet_off;
 pub(crate) use drain::{arm_pet_gcd, cast_pet_press, PetPress, PetStep};
 pub(crate) use steps::PetSteps;
-pub(crate) use unit::{feed_pet_unit, on_field_edge, pet_state, PetSources};
+pub(crate) use unit::on_field_edge;
 
 #[cfg(test)]
 mod call_tests;
@@ -152,15 +151,10 @@ impl Plugin for UiPetPlugin {
         app.init_resource::<PetBar>()
             .init_resource::<PetAttackLatch>()
             // `SMSG_PET_SPELLS` writes its `UNIT_PET` there; the unit plugin fires the lane.
-            .init_resource::<crate::field_watch::NoticeLane>()
-            .add_systems(
-                Update,
-                // The getters read the bar, its pet and its book at the call (`PetLive`), and every
-                // verb is a script call (`PetPress`, `PetSteps`).
-                feed_pet_unit
-                    .in_set(UnitFeed)
-                    .in_set(crate::ui_unit::field_events::FieldEventPushes),
-            );
+            // The getters read the bar, its pet and its book at the call (`PetLive`), the `"pet"`
+            // token its unit (`crate::ui_unit::live`), and every verb is a script call
+            // (`PetPress`, `PetSteps`).
+            .init_resource::<crate::field_watch::NoticeLane>();
     }
 }
 

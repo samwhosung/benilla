@@ -387,13 +387,10 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
         "net::SelfGuid"]),
-    // The party and raid tokens read the members' stores, records and the roster's cells as of
-    // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
-    // the roster push is their no-host fallback, and every snapshot's names and relations read as
-    // the frame left them.
+    // The group's push, the party and raid getters' no-host fallback: the roster's cells, its
+    // members' names and objects as the frame left them; the tokens read live at the call.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "net::reputations::Reputations", "spell::group_relation::GroupRoster",
-        "ui_guild::GuildState", "ui_party::GroupState"]),
+        "ui_party::GroupState"]),
     ("::tutorial::feed_tutorials", &["items::Items", "net::ObjectStore"]),
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
@@ -425,10 +422,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_macro::rebind_macro_spells", &["ui_action::ActionSlots", "ui_action::PlayerActions",
         "ui_pet::PetBar"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
-    // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); its name
-    // reads as the frame left it.
-    ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "ui_party::GroupState"]),
     ("::ui_cast::feed_cast_reports", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
         "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",
@@ -1818,13 +1811,9 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // `SetPetGuid`'s trainer refresh reads the open trainer, and its `PET_UI_CLOSE` the new
     // pet's object and ours, as the frame left them.
     ("field notices", &["net::GuidIndex", "net::ObjectStore", "ui_trainer::TrainerOpen"]),
-    // The views lane reads the stores, records and roster cells it rewinds as of each packet, and
-    // the reputations as the reputation lane replays them; the names, the relations' stores, the
-    // selection and the guild as the frame left them (#2217).
-    // The roster's cells and records it rewinds and seats while it builds; the rest as the frame
-    // left it.
-    ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "spell::group_relation::GroupRoster", "target::Selection", "ui_guild::GuildState",
+    // The views lane rewinds the stores, records and roster cells as of each packet for the
+    // tokens' live reads; it reads the index and the selection as the frame left them (#2217).
+    ("unit views", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
     ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_action::cast_lines::CastFailRedisplays"]),

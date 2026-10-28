@@ -309,31 +309,14 @@ fn client() -> Client {
     c
 }
 
-/// Wherever the frame's snapshots are current, every token form names the same unit live as off
-/// the snapshot: what the live resolver reads of the objects is what the snapshot's build read.
-/// A chain whose end no token pushes has no snapshot: with no host lent it reads nobody.
+/// Every token form names its unit live, as the resolver reads the objects and the group rows
+/// inside the call (`0x515970`): each base, a hop off each, the chains, a member out of view and
+/// the pet its record names, our own raid row and its pet, and nobody.
 #[test]
-fn every_token_form_names_the_same_unit_live_as_off_the_snapshot() {
+fn every_token_form_names_its_unit_live() {
     let mut c = client();
-    // The four tokens' copies, which no feed pushes in game, seated for the host-less answer.
-    crate::ui_unit::seat_tokens_once(c.app.world_mut());
-    let snapshot = c.answers(false);
     let live = c.answers(true);
-    assert_eq!(snapshot.len(), TOKENS.len());
-    let unpushed_chain = |line: &str| {
-        let (token, row) = line.split_once(' ').expect("a token and its row");
-        let chain = matches!(
-            benilla_ui::script::parse_unit_token(token),
-            benilla_ui::script::UnitTokenParse::Unit { hops, .. } if hops > 0
-        );
-        chain && row == "nil,0,0,nil,nil,nil,nil,nil,nil,nil"
-    };
-    let differ: Vec<(&String, &String)> = snapshot
-        .iter()
-        .zip(&live)
-        .filter(|(s, l)| s != l && !unpushed_chain(s))
-        .collect();
-    assert!(differ.is_empty(), "snapshot vs live: {differ:#?}");
+    assert_eq!(live.len(), TOKENS.len());
     // The fixture reaches every leg: each base, a hop off each, a three-hop chain, a member out
     // of view and the pet its record names, our own raid row and its pet, and nobody.
     for line in [

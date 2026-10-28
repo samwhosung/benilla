@@ -417,22 +417,21 @@ fn the_skinnable_line_takes_the_skill_colour_of_the_players_skinning() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A group member's record, found by guid on its own party or raid row whatever token shows it
-/// (`0x52a02b`), decides two lines (`0x52a6e2`-`0x52a72b`, `0x52a93e`-`0x52a995`): an offline one
-/// ends the tooltip after the level line with `PLAYER_OFFLINE`, in sight or not; one online but
-/// out of sight gets its area's name, white, in place of every status line; one in sight neither.
+/// A group member's record, which the host finds by guid whatever token shows the unit
+/// (`0x52a02b`) and carries on the unit's state, decides two lines (`0x52a6e2`-`0x52a72b`,
+/// `0x52a93e`-`0x52a995`): an offline one ends the tooltip after the level line with
+/// `PLAYER_OFFLINE`, in sight or not; one online but out of sight gets its area's name, white, in
+/// place of every status line; one in sight neither; the active player's own names no zone
+/// (`0x52a953`).
 #[test]
 fn a_group_members_record_reads_offline_or_its_zone_under_any_token() {
     let mut s = viewer_script(30, 0, Relations::default());
     s.run(r#"PLAYER_OFFLINE = "[OFFLINE]""#).unwrap();
-    let shown = |guid: u64, has_object: bool| UnitState {
+    let shown = |guid: u64, has_object: bool, online: bool| UnitState {
         guid,
         has_object,
         pvp: true,
         flags: 0x1000,
-        ..player_unit()
-    };
-    let row = |guid: u64, online: bool| UnitState {
         tooltip: UnitTooltipFacts {
             party: Some(PartyRecord {
                 online,
@@ -440,50 +439,22 @@ fn a_group_members_record_reads_offline_or_its_zone_under_any_token() {
             }),
             ..Default::default()
         },
-        ..shown(guid, false)
+        ..player_unit()
     };
-    let seat = |s: &mut UiScript, party: [u64; 4], raid: Vec<u64>| {
-        s.set_unit_guids(&UnitGuids {
-            player: ME,
-            party,
-            raid,
-            ..Default::default()
-        })
-    };
-    seat(&mut s, [UNIT, 0, 0, 0], vec![]);
     for (online, has_object, want) in [
         (false, false, "[OFFLINE]"),
         (false, true, "[OFFLINE]"),
         (true, false, "Elwynn Forest"),
         (true, true, "[PVP]"),
     ] {
-        s.set_unit("party1", Some(row(UNIT, online)));
-        s.set_unit("target", Some(shown(UNIT, has_object)));
+        s.set_unit("target", Some(shown(UNIT, has_object, online)));
         assert_eq!(
             lines(&s),
             ["[LEVEL_TYPE 20 [PLAYER]]", want],
             "online {online}, in sight {has_object}"
         );
     }
-    // A raid member off our party slots reads its raid row's record (`0x4bb0f0`).
-    s.set_unit("party1", None);
-    seat(&mut s, [0; 4], vec![UNIT, ME]);
-    s.set_unit("raid1", Some(row(UNIT, false)));
-    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]", "[OFFLINE]"]);
-    // Off the roster no record is found, whatever the shown snapshot carries.
-    seat(&mut s, [0; 4], vec![]);
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            has_object: true,
-            ..row(UNIT, false)
-        }),
-    );
-    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]", "[PVP]"]);
-    // The active player's own record names no zone (`0x52a953`).
-    seat(&mut s, [0; 4], vec![UNIT, ME]);
-    s.set_unit("raid2", Some(row(ME, true)));
-    s.set_unit("target", Some(shown(ME, false)));
+    s.set_unit("target", Some(shown(ME, false, true)));
     assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]"]);
     assert!(s.take_errors().is_empty());
 }

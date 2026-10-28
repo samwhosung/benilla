@@ -19,10 +19,13 @@ use benilla_ui::script::{
     UnitReach, UnitReachQuery, UnitRelations, UnitStateAnswer, UnitStateQuery,
 };
 
+use benilla_ui::script::UnitState;
+
 use crate::names::NameCache;
 use crate::net::{Guid, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{Candidacy, NameSearch, RelUnit, RelationWorld, Relations, UnitLookup};
+use crate::ui_party::GroupAsOf;
 
 /// What a unit's state reads beside its descriptor and the relation inputs: the tables, the name
 /// and creature caches, the roster's raid marks and the guild cache; each absent in a harness
@@ -33,6 +36,8 @@ pub(crate) struct StateSources<'w, 's> {
     names: Option<Res<'w, NameCache>>,
     group: Option<Res<'w, crate::ui_party::GroupState>>,
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
+    /// The area names a group record's zone reads (`0x67e460`).
+    areas: Option<Res<'w, crate::area::AreaTableRes>>,
     /// Every object by its guid, the units the by-name walk offers among them.
     objects: Query<'w, 's, (Entity, &'static Guid)>,
 }
@@ -197,11 +202,9 @@ impl UnitFeedLive<'_, '_> {
             .and_then(|i| i.0.get(&q.guid).copied());
         // The object lookup each getter makes after the resolver (`0x468460`).
         let Some(store) = self.stores.at(q.guid, entity) else {
-            let tables = src.tables.unit_names();
-            return Some(UnitStateAnswer::Unheld(super::unheld_state(
-                names, group, q.guid, tables,
-            )));
+            return Some(UnitStateAnswer::Unheld(self.unheld(q.guid, names, group)));
         };
+        let party = crate::ui_party::party_record(self.group_as_of(group), q.guid, self.areas());
         // A game object or an item exists for nobody (`0x515fee`) and is named apart.
         if !store.is_unit() {
             return None;
@@ -222,6 +225,7 @@ impl UnitFeedLive<'_, '_> {
             s.is_pvp_ffa = me
                 .as_ref()
                 .is_some_and(|me| super::pvp_free_for_all(&rel, me));
+            s.tooltip.party = party;
             return Some(UnitStateAnswer::Held(s));
         }
         let object = |guid: u64| {
@@ -248,7 +252,51 @@ impl UnitFeedLive<'_, '_> {
         let name = names
             .resolve_unit(q.guid, Some(store), Ask::Read)
             .map(str::to_string);
-        Some(UnitStateAnswer::Held(held.state_named(store, q.guid, name)))
+        let mut s = held.state_named(store, q.guid, name);
+        // The group record by guid, for every unit the tooltip shows (`0x52a02b`).
+        s.tooltip.party = party;
+        Some(UnitStateAnswer::Held(s))
+    }
+
+    /// The roster's cells and records as of here.
+    fn group_as_of<'a>(&'a self, group: &'a crate::ui_party::GroupState) -> GroupAsOf<'a> {
+        GroupAsOf {
+            cells: self.stores.roster(group),
+            records: self.stores.records(&group.stats),
+        }
+    }
+
+    fn areas(&self) -> Option<&benilla_formats::AreaTableCatalog> {
+        self.state.areas.as_deref().map(|a| &a.0)
+    }
+
+    /// A guid the object manager does not hold as of here, as the getters read it: the name cache
+    /// by guid and the raid mark ([`super::unheld_state`]); the member record by guid
+    /// (`0x496400`), else the pet record naming it (`0x496420`); existing while it is the active
+    /// player, the active player's pet, or a member or a member's pet of the roster
+    /// (`0x515ff8` → `0x491900`). A member reads the party's faction group, our own: a 1.12 party
+    /// is one faction, and no descriptor is held to read another from.
+    fn unheld(
+        &self,
+        guid: u64,
+        names: &NameCache,
+        group: &crate::ui_party::GroupState,
+    ) -> UnitState {
+        let as_of = self.group_as_of(group);
+        let mut s = super::unheld_state(names, group, guid, self.state.tables.unit_names());
+        let me = self.player().map(|(_, store)| store);
+        let me_guid = self.relations.me_guid();
+        s.exists = as_of.member_or_pet(guid, me_guid.map(|g| (g, me.map(|m| &m.0))), |g| {
+            self.held(g).map(|(_, store)| &store.0)
+        });
+        if let Some(record) = as_of.member_record(guid) {
+            crate::ui_party::seat_member_record(&mut s, record);
+            s.faction_group = me.and_then(|me| super::faction_group(me, self.relations.factions()));
+            s.tooltip.party = crate::ui_party::party_record(as_of, guid, self.areas());
+        } else if let Some((owner, record)) = as_of.pet_record(guid) {
+            crate::ui_party::seat_pet_record(&mut s, owner, record);
+        }
+        s
     }
 
     /// Whether `q` names a unit held as of here, with the legs a reader takes beside the object:
@@ -392,8 +440,8 @@ pub(crate) fn eval_lent_calls<T: benilla_ui::mlua::FromLuaMulti>(
     lend(world, chunk, false)
 }
 
-/// [`eval_lent_calls`] with the unit objects and the selection's and the interaction's globals
-/// read through the host too, as the resolver reads them in game.
+/// [`eval_lent_calls`] with the unit objects, the selection's and the interaction's globals and the
+/// group's rows read through the host too, as the resolver reads them in game.
 #[cfg(test)]
 pub(crate) fn eval_lent_objects<T: benilla_ui::mlua::FromLuaMulti>(
     world: &mut World,
@@ -402,12 +450,33 @@ pub(crate) fn eval_lent_objects<T: benilla_ui::mlua::FromLuaMulti>(
     lend(world, chunk, true)
 }
 
+/// `f` on the world's VM with [`eval_lent_objects`]'s host lent: an event a test fires reaches
+/// its handlers as a packet's would, their getters reading through the host.
+#[cfg(test)]
+pub(crate) fn with_lent_objects<R>(
+    world: &mut World,
+    f: impl FnOnce(&mut benilla_ui::script::UiScript) -> R,
+) -> R {
+    lend_with(world, true, f).0
+}
+
 #[cfg(test)]
 fn lend<T: benilla_ui::mlua::FromLuaMulti>(
     world: &mut World,
     chunk: &str,
     objects: bool,
 ) -> (T, Vec<benilla_ui::script::ScriptCall>) {
+    lend_with(world, objects, |s| {
+        s.eval::<T>(chunk).expect("the chunk runs")
+    })
+}
+
+#[cfg(test)]
+fn lend_with<R>(
+    world: &mut World,
+    objects: bool,
+    f: impl FnOnce(&mut benilla_ui::script::UiScript) -> R,
+) -> (R, Vec<benilla_ui::script::ScriptCall>) {
     use crate::script_calls::live::LiveFamily;
     use benilla_ui::script::{CallHost, CallTail, ScriptCall, UiScript};
     use bevy::ecs::system::SystemState;
@@ -416,6 +485,8 @@ fn lend<T: benilla_ui::mlua::FromLuaMulti>(
         UnitFeedLive<'w, 's>,
         crate::script_calls::live::UnitLive<'w, 's>,
         crate::target::SelectionLive<'w, 's>,
+        crate::ui_party::RosterLive<'w, 's>,
+        crate::names::NameLive<'w, 's>,
     );
 
     struct Host<'a, 'w, 's> {
@@ -457,7 +528,11 @@ fn lend<T: benilla_ui::mlua::FromLuaMulti>(
         }
 
         fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
-            self.live.0.answer(ask) || (self.objects && self.live.2.answer(ask))
+            self.live.0.answer(ask)
+                || (self.objects
+                    && (self.live.2.answer(ask)
+                        || self.live.3.answer(ask)
+                        || self.live.4.answer(ask)))
         }
     }
 
@@ -468,7 +543,7 @@ fn lend<T: benilla_ui::mlua::FromLuaMulti>(
         objects,
         calls: Vec::new(),
     };
-    let answer = script.hosted(&mut host, |s| s.eval::<T>(chunk).expect("the chunk runs"));
+    let answer = script.hosted(&mut host, f);
     let calls = host.calls;
     world.insert_non_send_resource(script);
     (answer, calls)

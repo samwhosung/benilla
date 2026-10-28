@@ -391,10 +391,9 @@ mod tests {
                 "UnitExists({token})"
             );
         }
-        // A group token reads its own push and nothing else: this world pushes none, so `raid1`
-        // answers nil though a chain ends on it. `target` reads the unit live, as a chain does,
-        // past a push of its own; with no host lent, the push answers.
-        assert_eq!(name(&mut app, "raid1"), None);
+        // A group token reads the unit its row names at the call, as a chain does. `target` reads
+        // the unit live too, past a push of its own; with no host lent, the push answers.
+        assert_eq!(name(&mut app, "raid1").as_deref(), Some("Alia"));
         assert_eq!(name(&mut app, "target").as_deref(), Some("Mob"));
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
@@ -580,6 +579,10 @@ mod tests {
         let mut entries: Vec<GroupMemberEntry> =
             [A, B, C, D].into_iter().map(group_entry).collect();
         entries[3].name = "Dara".into();
+        // The name the list's lookup asked for, answered (`0x4e8477`).
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(D, "Dara".into(), None);
         {
             let mut group = app.world_mut().resource_mut::<GroupState>();
             group.apply_list(GROUPTYPE_RAID, 0, entries, ME, None, Some(ME));

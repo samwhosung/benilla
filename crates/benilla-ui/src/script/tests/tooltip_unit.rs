@@ -767,23 +767,18 @@ fn world_hover_drive_and_health_watcher() {
                   "plate at the default corner, got " .. tostring(GameTooltip:GetRight()) .. "," .. tostring(GameTooltip:GetBottom()))"#,
     )
     .unwrap();
-    // A health push for the live token re-drives the bar without a rebuild.
+    // A push of the shown unit redraws nothing: the bar follows the object's health watch alone
+    // (`0x52a08d` → `0x529560`).
     let mut hurt = wolf();
     hurt.health = 12;
     s.set_unit("mouseover", Some(hurt));
+    s.run(r#"assert(GameTooltipStatusBar:GetValue() == 30, "a push redraws nothing")"#)
+        .unwrap();
+    // The watcher sets the range, re-firing the held 30, then the moved value.
+    s.tooltip_unit_health(wolf().guid, 12, 50);
     s.run(
-        r#"assert(GameTooltipStatusBar:GetValue() == 12, "the health watcher tracked the push")"#,
-    )
-    .unwrap();
-    // The watcher (`0x529560`) sets the range, re-firing the held 30, then the moved value; an
-    // unchanged push runs no watcher, and a maximum alone is not the watched field.
-    let mut same = wolf();
-    same.health = 12;
-    s.set_unit("mouseover", Some(same.clone()));
-    same.max_health = 60;
-    s.set_unit("mouseover", Some(same));
-    s.run(
-        r#"assert(table.getn(BarFires) == 3 and BarFires[2] == 30 and BarFires[3] == 12,
+        r#"assert(GameTooltipStatusBar:GetValue() == 12, "the health watcher")
+           assert(table.getn(BarFires) == 3 and BarFires[2] == 30 and BarFires[3] == 12,
                   "fired " .. table.getn(BarFires))"#,
     )
     .unwrap();
@@ -801,14 +796,8 @@ fn world_hover_drive_and_health_watcher() {
     "#,
     )
     .unwrap();
-    // The same unit pushed under another token still drives the bar.
-    let mut as_target = wolf();
-    as_target.health = 8;
-    s.set_unit("target", Some(as_target));
-    s.run(r#"assert(GameTooltipStatusBar:GetValue() == 8, "the watcher follows the guid")"#)
-        .unwrap();
-    // The object's own health watch, with no token pushed: the same seat, and another unit's
-    // health moves nothing.
+    // The object's own health watch, with no token naming it: the watcher follows the guid, and
+    // another unit's health moves nothing.
     s.tooltip_unit_health(wolf().guid, 5, 50);
     s.run(r#"assert(GameTooltipStatusBar:GetValue() == 5, "the object's health watch")"#)
         .unwrap();

@@ -180,10 +180,16 @@ fn target_unit_selects_a_party_member_out_of_range_by_guid() {
 }
 
 /// The call's own chunk reads the new target at once: a party member selected out of range reads as
-/// its guid does, the party row's (`0x515970`, `0x496400`), not the old target's snapshot.
+/// its guid does, its name off the name cache (`0x515970`, `0x5171eb`), not the old target's
+/// snapshot.
 #[test]
 fn the_chunk_that_selects_a_party_member_out_of_range_reads_them() {
     let mut f = grouped();
+    // The name the list's lookup asked for, answered (`0x4e8477`).
+    f.app
+        .world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(MEMBER, MEMBER_NAME.into(), None);
     let mut script = benilla_ui::script::UiScript::new().expect("a VM");
     script.set_unit_guids(&benilla_ui::script::UnitGuids {
         player: ME,
@@ -200,7 +206,6 @@ fn the_chunk_that_selects_a_party_member_out_of_range_reads_them() {
         ..Default::default()
     };
     script.set_unit("target", Some(unit(OLD, "Old", true)));
-    script.set_unit("party1", Some(unit(MEMBER, MEMBER_NAME, false)));
     f.app.world_mut().insert_non_send_resource(script);
     run(&mut f, r#"TargetUnit("party1") SEEN = UnitName("target")"#);
     let seen = crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {

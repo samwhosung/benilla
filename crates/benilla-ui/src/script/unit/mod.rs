@@ -379,7 +379,8 @@ impl super::UiScript {
 
     /// Push, or clear with `None`, the VM's copy of a token's unit, which the getters read with no
     /// host free to ask ([`UnitStateQuery`]); a `/reload`'s seat and the mouseover's hover push
-    /// it, and the group's and the pet's feeds.
+    /// it. Nothing redraws off a push: a tooltip's bar follows its unit's health watcher
+    /// (`0x52a08d` → `0x529560`).
     pub fn set_unit(&mut self, token: &str, state: Option<UnitState>) {
         {
             let mut model = self.model_mut();
@@ -413,8 +414,6 @@ impl super::UiScript {
                 }
             }
         }
-        // A push of the unit a tooltip shows re-drives its health bar, without a line rebuild.
-        super::tooltip_unit::on_unit_push(&self.lua, token);
     }
 
     /// Push, or clear with `None`, the snapshot of a unit a `target` chain can end on, by guid. A
@@ -590,12 +589,13 @@ pub(crate) fn check_unit_token(token: &Option<String>) -> mlua::Result<()> {
 }
 
 /// The state of the unit `token` names, as a getter reads it at the call: the guid the resolver
-/// names now ([`resolve::live_parsed`]: `0x515970` reads the objects inside the call), then that
-/// unit as the lent host reads it now ([`UnitStateQuery`]); a group token's or the pet's own push
-/// while it names the same unit; `None` for nobody. A host that declines, or
-/// none free to ask (a glue VM, or a call's apply under way), or a token that reads no object,
-/// reads the snapshots: the token's push while it names the same unit, else what the getters read
-/// for the guid ([`Model::unit_of_guid`]), else [`Model::snapshot_unit`].
+/// names now ([`resolve::live_parsed`]: `0x515970` reads the objects and the group rows inside the
+/// call), then that unit as the lent host reads it now ([`UnitStateQuery`]): its object, else the
+/// group's record of it (`0x496400`, `0x496420`), else what the name cache knows; `None` for
+/// nobody. A host that declines, or none free to ask (a glue VM, or a call's apply under way), or a
+/// token that reads no object, reads the snapshots: the token's push while it names the same unit,
+/// else what the getters read for the guid ([`Model::unit_of_guid`]), else
+/// [`Model::snapshot_unit`].
 pub(crate) fn view<'m>(lua: &Lua, model: &'m Model, token: &str) -> Option<Cow<'m, UnitState>> {
     view_as(lua, model, token, false)
 }
@@ -619,20 +619,10 @@ fn view_as<'m>(lua: &Lua, model: &'m Model, token: &str, thin: bool) -> Option<C
     let Some(live) = resolve::live_parsed(lua, &model.unit_guids, base, hops) else {
         return snapshot.map(Cow::Borrowed);
     };
-    // `"player"`, `"target"`, `"npc"`, `"mouseover"` and every chain read the unit live, as the
-    // getters read the object the resolver names (`0x515970`, then `0x468460`); the other tokens'
-    // pushes are their own families' feeds', which carry what the group rows and the pet bar add.
-    let reads_live = hops > 0
-        || matches!(
-            base,
-            UnitBase::Player | UnitBase::Target | UnitBase::Npc | UnitBase::Mouseover
-        );
+    // Every token reads the unit live, as the getters read the object the resolver names
+    // (`0x515970`, then `0x468460`), else the group's record of its guid (`0x496400`, `0x496420`).
     match (snapshot, live) {
-        (Some(pushed), guid)
-            if pushed.guid == guid.unwrap_or(0) && (guid.is_none() || !reads_live) =>
-        {
-            Some(Cow::Borrowed(pushed))
-        }
+        (Some(pushed), None) if pushed.guid == 0 => Some(Cow::Borrowed(pushed)),
         (_, None) => None,
         (snapshot, Some(guid)) => {
             let query = UnitStateQuery {
@@ -657,13 +647,8 @@ fn view_as<'m>(lua: &Lua, model: &'m Model, token: &str, thin: bool) -> Option<C
                 }
             }
             match super::live::ask(lua, &query) {
-                Some(UnitStateAnswer::Held(state)) => return Some(Cow::Owned(state)),
-                Some(UnitStateAnswer::Unheld(state)) => {
-                    let row = model.unit_guids.roster_token(guid);
-                    return Some(match row.and_then(|t| model.pushed_unit(&t)) {
-                        Some(pushed) => Cow::Borrowed(pushed),
-                        None => Cow::Owned(state),
-                    });
+                Some(UnitStateAnswer::Held(state) | UnitStateAnswer::Unheld(state)) => {
+                    return Some(Cow::Owned(state))
                 }
                 None => {}
             }

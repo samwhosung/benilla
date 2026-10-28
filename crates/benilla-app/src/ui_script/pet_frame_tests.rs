@@ -154,7 +154,7 @@ fn the_pet_frame_appears_on_a_summon_and_leaves_on_a_dismiss() {
         .unwrap();
     assert!(ok, "the summoned pet's name, health and power all draw");
 
-    // The dismiss, as `feed_pet_unit` sends it: the token clears, then `UNIT_PET`.
+    // The dismiss: the token clears, then `UNIT_PET`.
     s.set_unit("pet", None);
     s.fire_event("UNIT_PET", vec![ScriptValue::Str("player".into())]);
     assert!(!s.eval::<bool>("return PetFrame:IsVisible()").unwrap());

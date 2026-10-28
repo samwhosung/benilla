@@ -1991,7 +1991,7 @@ mod tests {
     /// and `SetPortraitTexture` draws only a token a slot bakes.
     #[test]
     fn every_party_pet_token_has_a_portrait_slot() {
-        for token in crate::ui_party::PARTY_PET_TOKENS {
+        for token in ["partypet1", "partypet2", "partypet3", "partypet4"] {
             assert!(SLOTS.contains(&token), "{token} has no slot");
         }
     }

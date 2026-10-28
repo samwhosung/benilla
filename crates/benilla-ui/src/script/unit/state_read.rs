@@ -25,8 +25,8 @@ pub enum UnitStateAnswer {
     Held(UnitState),
     /// The object manager holds nothing under the guid: what the client knows of it with no
     /// object, the name cache's record and the raid mark by guid (`0x5171eb`, `0x5182bc`,
-    /// `0x4bb4f1`). A roster member's own push, which carries its group record, stands before it
-    /// (`0x496400`, `0x496420`).
+    /// `0x4bb4f1`), the group's record of a member or a member's pet (`0x496400`, `0x496420`), and
+    /// whether the roster names it (`0x491900`).
     Unheld(UnitState),
 }
 

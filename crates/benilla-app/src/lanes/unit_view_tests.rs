@@ -299,17 +299,12 @@ fn each_unit_mana_listener_reads_its_own_packets_mana() {
     );
 }
 
-/// The lane's own count of the builds it made, the views it pushed and the stores it checked at
-/// its end, read and reset.
-fn lane_counts(app: &mut App) -> (usize, usize, usize) {
+/// The lane's own count of the stores it checked at its end, read and reset.
+fn lane_checks(app: &mut App) -> usize {
     let mut views = app
         .world_mut()
         .resource_mut::<crate::ui_unit::views::UnitViews>();
-    let counts = (views.builds, views.pushes, views.checked);
-    views.builds = 0;
-    views.pushes = 0;
-    views.checked = 0;
-    counts
+    std::mem::take(&mut views.checked)
 }
 
 /// The replay ends on the live stores: a frame of moved dwords, a re-create that clears a field,
@@ -325,7 +320,7 @@ fn the_replay_ends_on_the_live_stores() {
         .non_send_resource_mut::<UiScript>()
         .run(r#"function Look(event, unit) return UnitHealth("targettarget") end"#)
         .unwrap();
-    lane_counts(&mut app);
+    lane_checks(&mut app);
     let seen = frame(
         &mut app,
         vec![
@@ -356,7 +351,7 @@ fn the_replay_ends_on_the_live_stores() {
         "the target's target as each packet left it: gone between its release and its create"
     );
     assert_eq!(
-        lane_counts(&mut app).2,
+        lane_checks(&mut app),
         2,
         "the boar and we were rewound and checked"
     );
@@ -367,17 +362,17 @@ fn the_replay_ends_on_the_live_stores() {
     );
 }
 
-/// Two packets with no event between them are one gap: the drain applies both and builds the
-/// views once. A fall ahead of the first reads the frame's start, one between the second and the
-/// third reads after the second, and the last packet's views are the feed's own, built by none.
+/// Two packets with no event between them are one gap: the drain applies both at once. A fall
+/// ahead of the first reads the frame's start, one between the second and the third reads after
+/// the second, and the last reads the live stores.
 #[test]
-fn two_packets_with_no_event_between_make_one_build() {
+fn two_packets_with_no_event_between_are_one_gap() {
     let mut app = client();
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
         .run(r#"function Look(event, unit) return UnitHealth("targettarget") end"#)
         .unwrap();
-    lane_counts(&mut app);
+    lane_checks(&mut app);
     let seen = frame(
         &mut app,
         vec![
@@ -397,25 +392,6 @@ fn two_packets_with_no_event_between_make_one_build() {
             "UNIT_COMBAT:player:50"
         ]
     );
-    assert_eq!(
-        lane_counts(&mut app).0,
-        2,
-        "the frame's start and the one gap"
-    );
-}
-
-/// A frame whose events all follow its last write needs no older view than the feed's push:
-/// the lane builds and pushes nothing.
-#[test]
-fn a_frame_whose_events_follow_every_write_pushes_no_old_view() {
-    let mut app = client();
-    lane_counts(&mut app);
-    assert_eq!(
-        frame(&mut app, vec![values(WOLF, &health(70)), fall(1)]),
-        ["UNIT_HEALTH:target:70", "UNIT_COMBAT:player:100"]
-    );
-    let (builds, pushes, _) = lane_counts(&mut app);
-    assert_eq!((builds, pushes), (0, 0));
 }
 
 /// A store written past the log fails the rewind's check against the frame-start snapshot: here
@@ -444,7 +420,7 @@ fn a_write_the_log_missed_fails_the_rewind() {
 #[test]
 fn a_worldport_is_logged_as_the_stores_it_takes() {
     let mut app = client();
-    lane_counts(&mut app);
+    lane_checks(&mut app);
     app.world_mut()
         .resource_mut::<crate::ui_unit::views::UnitViews>()
         .starts_checked = 0;
@@ -499,34 +475,6 @@ fn a_drain_that_stops_early_leaves_no_rewound_store() {
     })
     .unwrap();
     assert_eq!(health, 70.0);
-}
-
-/// Updates to units no view reads, between events, build nothing: the lane rewinds only a unit a
-/// token can name, and a gap whose entries name none is no build.
-#[test]
-fn updates_to_units_no_view_reads_build_nothing() {
-    const FAR: [u64; 3] = [
-        0xF130_0000_0050_0001,
-        0xF130_0000_0050_0002,
-        0xF130_0000_0050_0003,
-    ];
-    let mut app = client();
-    let mob = |hp: u32| [(FIELD_UNIT_HEALTH, hp), (FIELD_UNIT_MAXHEALTH, 100)];
-    frame(
-        &mut app,
-        FAR.iter()
-            .map(|&g| created(g, EntityKind::Unit, &mob(100)))
-            .collect(),
-    );
-    lane_counts(&mut app);
-    let mut packets = vec![fall(1)];
-    for (i, &g) in FAR.iter().enumerate() {
-        packets.push(values(g, &health(90 - i as u32)));
-        packets.push(fall(1));
-    }
-    frame(&mut app, packets);
-    let (builds, pushes, _) = lane_counts(&mut app);
-    assert_eq!((builds, pushes), (0, 0));
 }
 
 /// Our own death signals `PLAYER_DEAD` inside its packet (`0x6046f0` at `0x6047a3`, then

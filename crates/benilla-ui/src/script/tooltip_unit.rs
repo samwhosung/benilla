@@ -236,18 +236,11 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
     let (unit, viewer, req, me) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
+        // The unit's state carries the group record by guid, which the build reads for every unit
+        // shown (`0x52a02b`).
         let unit = crate::script::unit::view(lua, &model, token)
             .map(std::borrow::Cow::into_owned)
             .filter(|u| u.exists && u.guid != 0);
-        // The group record by guid, for every unit shown (`0x52a02b`): its member row's.
-        let unit = unit.map(|mut u| {
-            u.tooltip.party = model
-                .unit_guids
-                .roster_token(u.guid)
-                .and_then(|t| model.pushed_unit(&t))
-                .and_then(|row| row.tooltip.party.clone());
-            u
-        });
         let viewer = unit.as_ref().and_then(|u| viewer(lua, &model, u));
         let req = crate::script::requirements::player_req(lua, &model);
         (unit, viewer, req, model.unit_guids.player)
@@ -424,22 +417,6 @@ fn seed_bar_at(lua: &Lua, h: FrameHandle, health: u32, max_health: u32) -> Optio
         super::statusbar::fire_engine_value_changed(lua, bar, value);
     }
     Some(bar)
-}
-
-/// A `set_unit` push of the unit a tooltip shows updates its health bar without rebuilding the
-/// lines, as the reference's HEALTH field watcher does: it is keyed on the unit's guid (`0x52a0a8`
-/// registers `0x529560` on `+0x368`/`+0x36c`), so a token that stops naming the unit, as
-/// `"mouseover"` does when the hover ends, leaves a fading plate's bar standing. It runs only
-/// when the health differs from the bytes it last saw (`0x4655bb`), not for a maximum alone.
-pub(super) fn on_unit_push(lua: &Lua, token: &str) {
-    let unit = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        let Some(unit) = model.pushed_unit(token).filter(|u| u.exists && u.guid != 0) else {
-            return;
-        };
-        (unit.guid, unit.health, unit.max_health)
-    };
-    on_unit_health(lua, unit.0, unit.1, unit.2);
 }
 
 /// The tooltips showing `guid`, whose health is now `health` of `max_health`: each whose bar last

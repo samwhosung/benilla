@@ -212,8 +212,9 @@ fn client() -> Client {
 }
 
 /// Wherever the frame's snapshots are current, every getter answers the same off the live object
-/// as off the snapshot, for every token: the object's fields the snapshot holds are the ones it
-/// reads ([`crate::ui_unit::unit_object`]), with nothing a token's own build changes after.
+/// as off the snapshot: the object's fields the snapshot holds are the ones it reads
+/// ([`crate::ui_unit::unit_object`]), with nothing a token's own build changes after. The group's
+/// and the pet's tokens have no snapshot, and every token names its unit live.
 #[test]
 fn every_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client();
@@ -231,14 +232,21 @@ fn every_getter_answers_the_same_live_as_off_the_snapshot() {
     assert_eq!(snapshot.len(), TOKENS.len() * GETTERS.len());
     for token in TOKENS {
         assert!(
-            snapshot
-                .iter()
+            live.iter()
                 .any(|l| l.starts_with(&format!("{token} UnitExists true,1"))),
-            "{token} names a unit: {snapshot:?}"
+            "{token} names a unit: {live:?}"
         );
     }
-    let differ: Vec<(&String, &String)> =
-        snapshot.iter().zip(&live).filter(|(s, l)| s != l).collect();
+    let seated = |line: &str| {
+        ["player ", "target ", "targettarget "]
+            .iter()
+            .any(|t| line.starts_with(t))
+    };
+    let differ: Vec<(&String, &String)> = snapshot
+        .iter()
+        .zip(&live)
+        .filter(|(s, l)| seated(s) && s != l)
+        .collect();
     assert!(differ.is_empty(), "snapshot vs live: {differ:?}");
 }
 

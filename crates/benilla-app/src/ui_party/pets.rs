@@ -1,225 +1,20 @@
 //! The group pets' unit tokens, `partypet1..4` and `raidpet1..40`: each member's pet as the
-//! per-token snapshot the `Unit*` getters read. [`super::feed`] drives it from the party feed's
-//! gate. Pushing fires nothing: `UNIT_PET` and the pets' own unit events are the descriptor's
-//! watches and the stats packet's record diff (`crate::field_watch`, `super::records`).
-//!
+//! `Unit*` getters read it at the call ([`crate::ui_unit::live`]). The resolver names the pet off
+//! the member's descriptor while it is held, else the member's record (`0x4e81d0`, `0x491960`).
 //! A pet the object manager holds is an ordinary live unit. One it does not hold is answered from
 //! the owner's roster record, the way the reference's getters fall through: the live descriptor,
 //! then the member record, then the pet record (`0x496420`). `UnitExists` answers 1 for it through
 //! the roster fallback (`0x491900`), which needs no object, and `UnitLevel`, `UnitIsDead` and
 //! `UnitIsGhost` have no pet leg, so they read as they do for a unit the client knows nothing of.
 
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
-
-use benilla_ui::script::{UiScript, UnitState};
-
-use crate::creature_type::CreatureTypeSources;
-use crate::names::NameCache;
-use crate::net::{GuidIndex, NetCommands, ObjectStore};
-use crate::ui_script::gate;
-
-use super::GroupState;
-use crate::query_cache::Ask;
-
-/// Which roster a pet token counts its owner in: the two resolve the pet's guid apart
-/// (`0x4e81d0` behind the owner's online bit, `0x491960` with none).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Roster {
-    Party,
-    Raid,
-}
-
-/// The name cache with the handle that asks it, one parameter of [`super::feed::feed_party`],
-/// which sits at Bevy's 16-parameter limit: a held pet's name is asked of the server once, as any
-/// held unit's is. It derefs to the cache.
-#[derive(SystemParam)]
-pub(crate) struct Names<'w> {
-    cache: Res<'w, NameCache>,
-    commands: Res<'w, NetCommands>,
-}
-
-impl std::ops::Deref for Names<'_> {
-    type Target = NameCache;
-
-    fn deref(&self) -> &NameCache {
-        &self.cache
-    }
-}
-
-impl Names<'_> {
-    /// The handle that asks the cache.
-    pub(super) fn commands(&self) -> &NetCommands {
-        &self.commands
-    }
-}
-
-/// What the pets' snapshots read: the object manager, the name cache and the creature-type
-/// resolver's sources.
-pub(super) struct Lookup<'a> {
-    /// The object manager's lookup (`0x468460`).
-    pub(super) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
-    pub(super) names: &'a NameCache,
-    pub(super) commands: &'a NetCommands,
-    pub(super) types: CreatureTypeSources<'a>,
-    /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
-    pub(super) catalog: Option<&'a benilla_formats::SpellCatalog>,
-    pub(super) study: crate::ui_unit::tooltip_facts::StudySources<'a>,
-    /// `UnitIsPVPFreeForAll` per held unit, the owner's flag a pet answers with (`0x606170`).
-    pub(super) ffa: &'a dyn Fn(u64) -> bool,
-}
-
-impl Lookup<'_> {
-    /// The held object's descriptor (`0x468460`).
-    pub(super) fn store(&self, guid: u64) -> Option<&ObjectStore> {
-        (self.object)(guid)
-    }
-}
-
-/// The guid `partypetN` or `raidpetN` names for `owner`, off its descriptor while held, else its
-/// record (see [`GroupState::party_pet_guid`], [`GroupState::raid_pet_guid`]).
-pub(super) fn pet_guid(
-    group: &GroupState,
-    owner: u64,
-    held: Option<&ObjectStore>,
-    roster: Roster,
-) -> Option<u64> {
-    let live = held.map(|s| &s.0);
-    match roster {
-        Roster::Party => group.party_pet_guid(owner, live),
-        Roster::Raid => group.raid_pet_guid(owner, live),
-    }
-}
-
-/// Whether a held pet of any group member has moved, for the party feed's gate. Every member is
-/// asked as a raid row, whose record leg has no online test: a superset of the party slots'.
-pub(super) fn store_changed(
-    index: &GuidIndex,
-    stores: &Query<&ObjectStore>,
-    group: &GroupState,
-    own: Option<(u64, &ObjectStore)>,
-    changed: &Query<(), Changed<ObjectStore>>,
-) -> bool {
-    let moved = |owner: u64, held: Option<&ObjectStore>| {
-        pet_guid(group, owner, held, Roster::Raid)
-            .and_then(|pet| index.0.get(&pet))
-            .is_some_and(|&e| changed.get(e).is_ok())
-    };
-    let store = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-    group.members.iter().any(|m| moved(m.guid, store(m.guid)))
-        // Our own pet is a raid row's only, a party's slots being the others'.
-        || (group.group_type == super::GROUPTYPE_RAID
-            && own.is_some_and(|(guid, store)| moved(guid, Some(store))))
-}
-
-/// One member's pet for its token: the snapshot the getters read, or `None` for an empty slot,
-/// `owner` 0, or a member with no pet the roster or the descriptor names
-/// ([`GroupState::party_pet_guid`], [`GroupState::raid_pet_guid`]).
-pub(super) fn member_pet(
-    look: &Lookup<'_>,
-    group: &GroupState,
-    owner: u64,
-    held: Option<&ObjectStore>,
-    roster: Roster,
-) -> Option<UnitState> {
-    if owner == 0 {
-        return None;
-    }
-    let guid = pet_guid(group, owner, held, roster)?;
-    let mut state = match look.store(guid) {
-        // A held pet is a live unit like any: every getter reads its descriptor (`0x468460`), and
-        // `UnitIsConnected` answers 1 for any object (`0x517daf`), as `snapshot` does. No
-        // reaction: the pet frame reads none, as the `"pet"` token's.
-        Some(store) => {
-            // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
-            // a name the cache holds nothing for, as one invalidated since, and a refused one waits
-            // for the next create.
-            let name = look
-                .names
-                .resolve_unit(guid, Some(store), Ask::New(look.commands))
-                .map(str::to_string);
-            let mut s =
-                crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types);
-            s.is_pvp_ffa = (look.ffa)(guid);
-            let object = |g: u64| look.store(g);
-            let sources = crate::ui_unit::tooltip_facts::TooltipSources {
-                names: look.names,
-                catalog: look.catalog,
-                object: &object,
-                study: look.study,
-            };
-            s.tooltip =
-                crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
-            s
-        }
-        None => record_state(
-            group,
-            guid,
-            owner,
-            group.roster_names_pet(owner, held.is_some()),
-        ),
-    };
-    // Judged by guid alone, with no object needed.
-    state.raid_target = group.raid_target_index(guid);
-    Some(state)
-}
-
-/// A pet with no object, off the pet record that names it (`0x496420`); with no record, a bare
-/// snapshot that carries only the guid.
-///
-/// The getters' record leg (`UnitHealth 0x5174d0`, `UnitHealthMax 0x5175b0`, `UnitMana 0x517670`,
-/// `UnitManaMax 0x5177e0`, `UnitPowerType 0x517940`) reads the pet block's `+0xdc`, `+0xde`,
-/// `+0xe0`, `+0xe2` and `+0xd8`, the two power figures divided as a live unit's. `UnitName`
-/// (`0x5171da`) reads the block's name buffer whole, so an unnamed pet is the empty string, not
-/// `UNKNOWNOBJECT`. `UnitIsConnected` is existence-only there (`0x517dfb`). `UnitLevel`,
-/// `UnitIsDead`, `UnitIsGhost` and `UnitIsDeadOrGhost` never look at a pet record: 0, nil, nil,
-/// nil, which the snapshot's defaults are.
-///
-/// The roster names the pet's owner with no object, on the terms it answers `UnitExists`: the
-/// party half of `UnitPlayerOrPetInParty` compares guids alone (`0x4e8fa0`).
-fn record_state(group: &GroupState, guid: u64, owner: u64, exists: bool) -> UnitState {
-    let record = group.pet_record(guid);
-    UnitState {
-        exists,
-        guid,
-        owner: if exists { owner } else { 0 },
-        name: record.map(|r| r.pet_name.clone().unwrap_or_default()),
-        health: record.map_or(0, |r| u32::from(r.pet_cur_hp.unwrap_or(0))),
-        max_health: record.map_or(0, |r| u32::from(r.pet_max_hp.unwrap_or(0))),
-        power_type: record.map_or(0, |r| r.shown_pet_power_type()),
-        power: record.map_or(0, |r| r.shown_pet_power()),
-        max_power: record.map_or(0, |r| r.shown_pet_max_power()),
-        is_connected: record.is_some(),
-        ..Default::default()
-    }
-}
-
-/// Every pet token's last pushed snapshot: `partypet1..4` and `raidpet1..40`.
-#[derive(Default)]
-pub(super) struct FedPets {
-    pub(super) party: [Option<UnitState>; 4],
-    pub(super) raid: Vec<Option<UnitState>>,
-}
-
-/// Push one pet token's snapshot when it moved.
-pub(super) fn feed_token(
-    script: &mut UiScript,
-    gate: &gate::Gate,
-    fed: &mut Option<UnitState>,
-    token: &str,
-    now: Option<UnitState>,
-) {
-    if *fed != now {
-        gate.audit("feed_party", "a group pet-token snapshot");
-        script.set_unit(token, now.clone());
-        *fed = now;
-    }
-}
-
 #[cfg(test)]
 pub(in crate::ui_party) mod tests {
-    use super::*;
-    use crate::net::{FieldChanged, Guid};
+    use benilla_ui::script::UiScript;
+    use bevy::prelude::*;
+
+    use crate::names::NameCache;
+    use crate::net::{FieldChanged, Guid, GuidIndex, NetCommands, ObjectStore};
+    use crate::ui_party::GroupState;
     use benilla_protocol::messages::{
         member_status, GroupMemberEntry, ObjectFields, PartyMemberStatsInfo,
     };
@@ -316,6 +111,14 @@ pub(in crate::ui_party) mod tests {
                 flags: 0,
             })
             .collect();
+        // The names the list's lookups asked for, answered (`0x4e8477`).
+        for i in 1..=n {
+            app.world_mut().resource_mut::<NameCache>().insert_player(
+                member(i),
+                format!("M{i}"),
+                None,
+            );
+        }
         let mut group = app.world_mut().resource_mut::<GroupState>();
         group.apply_list(0, 0, list, ME, None, Some(ME));
         for i in 1..=n {
@@ -362,9 +165,20 @@ pub(in crate::ui_party) mod tests {
         );
     }
 
-    /// Hold `guid` in the object manager.
+    /// Hold `guid` in the object manager, typed as a player or a unit by its guid, as its create
+    /// types it (`OBJECT_FIELD_TYPE`), unless `pairs` sets the type.
     pub(in crate::ui_party) fn stream(app: &mut App, guid: u64, pairs: &[(u16, u32)]) -> Entity {
-        let e = app.world_mut().spawn((Guid(guid), store(pairs))).id();
+        const OBJECT_TYPE: u16 = 2;
+        let mut pairs = pairs.to_vec();
+        if !pairs.iter().any(|&(i, _)| i == OBJECT_TYPE) {
+            let mask = if benilla_protocol::guid::is_player(guid) {
+                0x19
+            } else {
+                0x9
+            };
+            pairs.insert(0, (OBJECT_TYPE, mask));
+        }
+        let e = app.world_mut().spawn((Guid(guid), store(&pairs))).id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
             .0
@@ -393,28 +207,36 @@ pub(in crate::ui_party) mod tests {
             .collect()
     }
 
-    /// A number the VM answers, for the getters.
-    fn num(app: &mut App, code: &str) -> f64 {
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .eval(&format!("return {code}"))
-            .unwrap()
+    /// `code`'s answer with the host lent, as the getters read the tokens at the call.
+    pub(in crate::ui_party) fn lent<T: benilla_ui::mlua::FromLuaMulti>(
+        app: &mut App,
+        code: &str,
+    ) -> T {
+        crate::ui_unit::live::eval_lent_objects(app.world_mut(), &format!("return {code}")).0
     }
 
-    /// A string or nil the VM answers.
+    /// `PARTY_MEMBERS_CHANGED` fired again with the host lent: the stock frames read the group
+    /// at the call, and this harness's party lane fires with none, as a bare world lends none.
+    pub(in crate::ui_party) fn members_changed_lent(app: &mut App) {
+        crate::ui_unit::live::with_lent_objects(app.world_mut(), |s| {
+            s.fire_event("PARTY_MEMBERS_CHANGED", vec![]);
+            s.resolve();
+        });
+    }
+
+    /// A number the getters answer.
+    fn num(app: &mut App, code: &str) -> f64 {
+        lent(app, code)
+    }
+
+    /// A string or nil the getters answer.
     fn text(app: &mut App, code: &str) -> Option<String> {
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .eval(&format!("return {code}"))
-            .unwrap()
+        lent(app, code)
     }
 
     /// A predicate answers the number 1 or nil, never a boolean.
     pub(in crate::ui_party) fn flag(app: &mut App, code: &str) -> Option<f64> {
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .eval(&format!("return {code}"))
-            .unwrap()
+        lent(app, code)
     }
 
     /// A pet the object manager holds is a live unit: `UnitExists` and `UnitIsVisible` answer 1,
@@ -816,9 +638,16 @@ pub(in crate::ui_party) mod tests {
             "the stock default the pet frame gates on"
         );
         assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
+        // Our own object: a unit's event names its tokens only with the active player held
+        // (`0x515c89`).
+        let me = stream(&mut app, ME, &[]);
+        app.world_mut()
+            .entity_mut(me)
+            .insert(crate::net::SelfPlayer);
 
         party(&mut app, 1, true);
         frame(&mut app);
+        members_changed_lent(&mut app);
         assert_eq!(
             flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"),
             Some(1.0),
@@ -868,17 +697,16 @@ pub(in crate::ui_party) mod tests {
             Some(1.0),
             "the push alone"
         );
-        {
-            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        crate::ui_unit::live::with_lent_objects(app.world_mut(), |script| {
             script.set_unit_guids(&benilla_ui::script::UnitGuids {
                 player: ME,
                 party: [member(1), 0, 0, 0],
                 ..Default::default()
             });
             for notice in super::super::records::record_notices(member(1), &old, &new) {
-                crate::ui_unit::field_events::fire_unit_notice(&mut script, notice);
+                crate::ui_unit::field_events::fire_unit_notice(script, notice);
             }
-        }
+        });
         assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
         let errors = app.world().non_send_resource::<UiScript>().errors();
         assert!(errors.is_empty(), "script errors: {errors:?}");
@@ -988,9 +816,11 @@ pub(in crate::ui_party) mod tests {
             .spawn((
                 crate::net::SelfPlayer,
                 Guid(ME),
-                store(&[(BYTES_0, NIGHT_ELF), (BYTES_1, CAT_FORM << 16)]),
+                store(&[(2, 0x19), (BYTES_0, NIGHT_ELF), (BYTES_1, CAT_FORM << 16)]),
             ))
             .id();
+        // Our own object, held in the object manager as every other is.
+        app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
         stream(
             &mut app,
             member(1),

@@ -3,7 +3,7 @@
 //! (`0x4ba57b`), and once when the last pending name answers (`0x4bada6`), which signals
 //! `PARTY_MEMBERS_CHANGED` after it (`0x4badb0`).
 
-use super::super::pets::tests::{app, app_with, flag, frame, member, ME};
+use super::super::pets::tests::{app, app_with, flag, frame, lent, member, ME};
 use super::*;
 use benilla_ui::script::UiScript;
 
@@ -478,9 +478,14 @@ fn our_own_row_comes_with_the_list_and_our_arrival_fires_nothing() {
 #[test]
 fn in_a_later_group_we_are_the_last_raid_row() {
     let mut app = app();
-    app.world_mut()
-        .resource_mut::<NameCache>()
-        .insert_player(ME, "Me".into(), None);
+    // Our name, and the names the list's lookups asked for, answered (`0x4ba9c7`).
+    {
+        let mut names = app.world_mut().resource_mut::<NameCache>();
+        names.insert_player(ME, "Me".into(), None);
+        for i in 1..=3 {
+            names.insert_player(member(i), format!("M{i}"), None);
+        }
+    }
     let listed = |i: u64, subgroup: u8| GroupMemberEntry {
         name: format!("M{i}"),
         guid: member(i),
@@ -517,23 +522,17 @@ fn in_a_later_group_we_are_the_last_raid_row() {
     assert_eq!(row(4), ("Me".into(), 0.0, 3.0), "us, last, in group 3");
     for (token, want) in [("raid1", "M1"), ("raid2", "M2"), ("raid4", "Me")] {
         assert_eq!(
-            script
-                .eval::<String>(&format!("return UnitName({token:?})"))
-                .unwrap(),
+            lent::<String>(&mut app, &format!("UnitName({token:?})")),
             want,
             "{token}"
         );
     }
     assert_eq!(
-        script
-            .eval::<String>(r#"return UnitName("party1")"#)
-            .unwrap(),
+        lent::<String>(&mut app, r#"UnitName("party1")"#),
         "M2",
         "our subgroup's one member"
     );
-    assert!(script
-        .eval::<bool>(r#"return UnitName("party2") == nil"#)
-        .unwrap());
+    assert!(lent::<bool>(&mut app, r#"UnitName("party2") == nil"#));
 }
 
 /// A raid list that names nobody seats no row, ours included (`0x5e6e71`): the writer still

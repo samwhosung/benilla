@@ -124,8 +124,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          bar's states read, derived once after the frame's last pet spell list, where the \
          reference derives at each list's handler (`0x4bdae0` into \
          `DeriveUnresolvedBoundSpells` `0x4f0ce0`); the known spells are the handlers' alone"),
-    ("::ui_party::feed::feed_party", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_pet::unit::feed_pet_unit", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_session::feed_interact_npc", &["ui_session::InteractNpc"],
         "copies the interaction latch into the `npc` unit the token lookups read, where the \
          reference's `npc` is the latch itself (`0x515c00`), set inside the handlers through \

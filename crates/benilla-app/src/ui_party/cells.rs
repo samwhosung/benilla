@@ -170,19 +170,3 @@ impl GroupState {
         }
     }
 }
-
-impl GroupState {
-    /// Swap the roster cells with `other`: the views lane seats the cells as of its place while it
-    /// builds, and puts the live ones back.
-    pub(crate) fn swap_cells(&mut self, other: &mut RosterCells) {
-        std::mem::swap(&mut self.members, &mut other.members);
-        std::mem::swap(&mut self.own_flags, &mut other.own_flags);
-        std::mem::swap(&mut self.raid, &mut other.raid);
-        std::mem::swap(&mut self.slots_emptied, &mut other.slots_emptied);
-        std::mem::swap(&mut self.leader, &mut other.leader);
-        std::mem::swap(&mut self.leader_index, &mut other.leader_index);
-        std::mem::swap(&mut self.loot, &mut other.loot);
-        std::mem::swap(&mut self.loot_stored, &mut other.loot_stored);
-        std::mem::swap(&mut self.test, &mut other.test);
-    }
-}

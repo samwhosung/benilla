@@ -33,10 +33,11 @@ pub(crate) use feed::{
 };
 #[cfg(test)]
 pub(crate) use feed::{fire_party_lane, PartyLane};
-pub(crate) use feed::{GroupSources, PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS};
 pub(crate) use live::RosterLive;
-pub(crate) use pets::Roster;
-pub(crate) use records::{record_notices, roster_aura_slots_in};
+pub(crate) use records::{
+    party_record, record_notices, roster_aura_slots_in, seat_member_record, seat_pet_record,
+    GroupAsOf,
+};
 
 pub(crate) struct UiPartyPlugin;
 
@@ -59,10 +60,9 @@ impl Plugin for UiPartyPlugin {
             .add_systems(
                 Update,
                 (
-                    // Ahead of the field events, whose handlers read the group tokens.
-                    feed::feed_party
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
+                    // The group tokens read at the call (`crate::ui_unit::live`); the roster
+                    // push is the no-host fallback, and a fresh VM's catch-up is stamped here.
+                    feed::feed_party.in_set(UiFeed),
                     feed::drain_party.in_set(crate::ui_script::UiDrain),
                 ),
             );

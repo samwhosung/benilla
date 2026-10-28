@@ -820,6 +820,7 @@ fn a_held_pet_reads_connected_and_its_stock_power_bar_shows_its_power() {
     // type a hunter's pet runs on, at POWER1 + 2 and MAXPOWER1 + 2.
     const FOCUS: u32 = 2;
     let fields = [
+        (2, 0x9),
         (22, 72),
         (28, 100),
         (34, 60),
@@ -838,7 +839,9 @@ fn a_held_pet_reads_connected_and_its_stock_power_bar_shows_its_power() {
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::net::SelfGuid>()
         .init_resource::<crate::names::NameCache>()
-        .add_systems(Update, feed_pet_unit);
+        .init_resource::<crate::net::Reputations>()
+        .init_resource::<crate::ui_party::GroupState>()
+        .init_resource::<crate::ui_guild::GuildState>();
     let (tx, rx) = crossbeam_channel::unbounded();
     // Kept alive for the run: a dropped receiver would fail the name query.
     std::mem::forget(rx);
@@ -858,23 +861,26 @@ fn a_held_pet_reads_connected_and_its_stock_power_bar_shows_its_power() {
     app.insert_non_send_resource(script);
 
     app.update();
-    let mut script = app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>();
-    // The bar's `UNIT_PET` (`0x4bc84f`), which shows the frame on the snapshot just pushed.
-    script.fire_event(
-        "UNIT_PET",
-        vec![benilla_ui::script::ScriptValue::Str("player".into())],
-    );
-    script.resolve();
-    let (connected, shown, value, max, r, g, b) = script
-        .eval::<(Option<f64>, Option<f64>, f64, f64, f64, f64, f64)>(
-            "local _, max = PetFrameManaBar:GetMinMaxValues() \
-             local r, g, b = PetFrameManaBar:GetStatusBarColor() \
-             return UnitIsConnected('pet'), PetFrame:IsShown(), PetFrameManaBar:GetValue(), \
-                    max, r, g, b",
-        )
-        .unwrap();
+    // The bar's `UNIT_PET` (`0x4bc84f`), which shows the frame on the pet the getters read.
+    let (connected, shown, value, max, r, g, b) =
+        crate::ui_unit::live::with_lent_objects(app.world_mut(), |script| {
+            script.fire_event(
+                "UNIT_PET",
+                vec![benilla_ui::script::ScriptValue::Str("player".into())],
+            );
+            script.resolve();
+            script
+                .eval::<(Option<f64>, Option<f64>, f64, f64, f64, f64, f64)>(
+                    "local _, max = PetFrameManaBar:GetMinMaxValues() \
+                     local r, g, b = PetFrameManaBar:GetStatusBarColor() \
+                     return UnitIsConnected('pet'), PetFrame:IsShown(), \
+                            PetFrameManaBar:GetValue(), max, r, g, b",
+                )
+                .unwrap()
+        });
+    let script = app
+        .world()
+        .non_send_resource::<benilla_ui::script::UiScript>();
     assert_eq!(connected, Some(1.0), "a held pet is connected");
     assert_eq!(shown, Some(1.0), "the bar's UNIT_PET showed the frame");
     assert_eq!(
@@ -934,7 +940,9 @@ fn a_held_pet_names_its_templates_creature_type() {
             },
             ..Default::default()
         })
-        .add_systems(Update, feed_pet_unit);
+        .init_resource::<crate::net::Reputations>()
+        .init_resource::<crate::ui_party::GroupState>()
+        .init_resource::<crate::ui_guild::GuildState>();
     let (tx, rx) = crossbeam_channel::unbounded();
     // Kept alive for the run: a dropped receiver would fail the name query.
     std::mem::forget(rx);
@@ -944,10 +952,10 @@ fn a_held_pet_names_its_templates_creature_type() {
         .world_mut()
         .spawn((
             crate::net::Guid(PET),
-            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
-                OBJECT_FIELD_ENTRY,
-                IMP,
-            )])),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x9),
+                (OBJECT_FIELD_ENTRY, IMP),
+            ])),
         ))
         .id();
     app.world_mut()
@@ -957,86 +965,12 @@ fn a_held_pet_names_its_templates_creature_type() {
     app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
 
     app.update();
-    let answer = app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .eval::<Option<String>>("return UnitCreatureType('pet')")
-        .unwrap();
+    let answer = crate::ui_unit::live::eval_lent_objects::<Option<String>>(
+        app.world_mut(),
+        "return UnitCreatureType('pet')",
+    )
+    .0;
     assert_eq!(answer.as_deref(), Some("악마"));
-}
-
-/// `PET_ATTACK_START`/`STOP` are the flags watcher's (`crate::field_watch`, `0x5ff79f`): the pet
-/// feed fires neither, at first sight in combat or on either edge after.
-#[test]
-fn the_pet_feed_fires_no_attack_event() {
-    use bevy::prelude::*;
-    const ME: u64 = 0x77;
-    const PET: u64 = 0xF140_0000_0000_002A;
-    const FLAGS: u16 = 46;
-    const SUMMONEDBY: u16 = 12;
-
-    let mut app = App::new();
-    app.add_message::<crate::net::FieldChanged>()
-        .init_resource::<crate::net::GuidIndex>()
-        .insert_resource(crate::net::SelfGuid(Some(ME)))
-        .init_resource::<crate::names::NameCache>()
-        .insert_resource(PetBar {
-            spells: PetSpells {
-                pet_guid: PET,
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .add_systems(Update, feed_pet_unit);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    // Kept alive for the run: a dropped receiver would fail the name query.
-    std::mem::forget(rx);
-    app.insert_resource(NetCommands(tx));
-    let pet = app
-        .world_mut()
-        .spawn((
-            crate::net::Guid(PET),
-            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                (SUMMONEDBY, ME as u32),
-                (FLAGS, 0x800),
-            ])),
-        ))
-        .id();
-    app.world_mut()
-        .resource_mut::<crate::net::GuidIndex>()
-        .0
-        .insert(PET, pet);
-    let script = benilla_ui::script::UiScript::new().unwrap();
-    script
-        .run(
-            r#"
-            SEEN = {}
-            local f = CreateFrame("Frame")
-            f:RegisterEvent("PET_ATTACK_START")
-            f:RegisterEvent("PET_ATTACK_STOP")
-            f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
-        "#,
-        )
-        .unwrap();
-    app.insert_non_send_resource(script);
-
-    for flags in [0x800, 0, 0x800] {
-        app.world_mut()
-            .entity_mut(pet)
-            .get_mut::<ObjectStore>()
-            .unwrap()
-            .0
-            .merge(benilla_protocol::ObjectFields::from_pairs(&[(
-                FLAGS, flags,
-            )]));
-        app.update();
-        let mut script = app
-            .world_mut()
-            .non_send_resource_mut::<benilla_ui::script::UiScript>();
-        script.resolve();
-        let seen = script.eval::<Vec<String>>("return SEEN").unwrap();
-        assert!(seen.is_empty(), "flags {flags:#x}: {seen:?}");
-    }
 }
 
 /// The `"pet"` token names the pet's guid whether or not its object is held (`0x515a5e`-
@@ -1060,7 +994,9 @@ fn a_pet_with_no_object_exists_and_is_not_visible() {
             },
             ..Default::default()
         })
-        .add_systems(Update, feed_pet_unit);
+        .init_resource::<crate::net::Reputations>()
+        .init_resource::<crate::ui_party::GroupState>()
+        .init_resource::<crate::ui_guild::GuildState>();
     let (tx, rx) = crossbeam_channel::unbounded();
     // Kept alive for the run: a dropped receiver would fail the name query.
     std::mem::forget(rx);
@@ -1069,11 +1005,11 @@ fn a_pet_with_no_object_exists_and_is_not_visible() {
     app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
 
     app.update();
-    let (exists, visible) = app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .eval::<(Option<f64>, Option<f64>)>("return UnitExists('pet'), UnitIsVisible('pet')")
-        .unwrap();
+    let (exists, visible) = crate::ui_unit::live::eval_lent_objects::<(Option<f64>, Option<f64>)>(
+        app.world_mut(),
+        "return UnitExists('pet'), UnitIsVisible('pet')",
+    )
+    .0;
     assert_eq!(exists, Some(1.0), "the pet exists with no object");
     assert_eq!(visible, None, "and has none to see");
 
@@ -1085,11 +1021,11 @@ fn a_pet_with_no_object_exists_and_is_not_visible() {
             (2, 0x19),
         ])));
     app.update();
-    let exists = app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .eval::<Option<f64>>("return UnitExists('pet')")
-        .unwrap();
+    let exists = crate::ui_unit::live::eval_lent_objects::<Option<f64>>(
+        app.world_mut(),
+        "return UnitExists('pet')",
+    )
+    .0;
     assert_eq!(exists, None);
 }
 
@@ -1233,6 +1169,7 @@ fn summoning(app: &mut bevy::prelude::App, me: u64, pet: u64) {
     let e = app
         .world_mut()
         .spawn((
+            crate::net::SelfPlayer,
             crate::net::Guid(me),
             ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
                 (2, 0x19),

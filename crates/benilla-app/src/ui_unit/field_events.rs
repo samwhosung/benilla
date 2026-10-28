@@ -14,11 +14,9 @@ use benilla_ui::strings::Arg;
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
 
-/// The feeds that push what a field event's handlers read: the group's and the pet's tokens, the
-/// player's combat stats and
-/// inventory, the inspected unit's slots, the honor block and the watched faction. The lanes'
-/// drain runs after all of them, as the update handler writes every block of its packet before its
-/// notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
+/// The feeds that push what a field event's handlers read: the player's inventory and ammo. The
+/// lanes' drain runs after all of them, as the update handler writes every block of its packet
+/// before its notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
 
@@ -1431,13 +1429,8 @@ mod tests {
                 crate::ui_party::feed_party,
                 crate::lanes::fire_in_order,
             ),
-            crate::test_support::runs_before(
-                &mut headless,
-                crate::ui_pet::feed_pet_unit,
-                crate::lanes::fire_in_order,
-            ),
         ];
-        assert_eq!(ahead, [true; 3], "char, party, pet");
+        assert_eq!(ahead, [true; 2], "char, party");
     }
 
     /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)
