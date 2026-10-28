@@ -377,7 +377,7 @@ pub use item_stats::{
     item_usable, ItemRecipe, ItemSetQuery, ItemSetView, ItemSpellLine, ItemTemplateView,
     LiveItemSet, PlayerReqState, TaughtSpell,
 };
-pub use item_text::{ItemTextCall, ItemTextState};
+pub use item_text::{ItemTextCall, ItemTextCreator, ItemTextQuery, ItemTextState, ItemTextView};
 pub use layout_cache::{AnchorLayout, FrameLayout, LayoutPoint};
 pub use lock_check::{
     check_lock, LockCheck, LockOpener, LockOpeners, LockOpenersQuery, LockSlotView,

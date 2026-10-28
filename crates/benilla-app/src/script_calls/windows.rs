@@ -203,16 +203,31 @@ impl ScriptCallHost<'_, '_> {
 
     /// The reader's close core `0x4e32e0(0, 0)`, `CloseItemText()` itself (`0x4e3b70`): with an
     /// object read, the release on the cell (`0x4e3357`), the cell cleared (`0x4e3364`) and
-    /// `ITEM_TEXT_CLOSED` (`0x4e33a2`).
+    /// `ITEM_TEXT_CLOSED` (`0x4e33a2`). A listener of a read's signal closes that read alone: one a
+    /// later packet opened is not the cell it sees.
     pub(super) fn close_item_text(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         let Some(object) = self.appliers.item_text().object() else {
             return;
         };
         self.release_into(script, mark, object, Self::close_item_text);
         self.appliers.item_text().clear();
-        script.set_item_text(None);
         script.fire_event("ITEM_TEXT_CLOSED", vec![]);
         self.signalled(script, mark);
+    }
+
+    /// `ItemTextPrevPage()` (`0x4e3b50` → `0x4e3870`) or `ItemTextNextPage()` (`0x4e3b60` →
+    /// `0x4e38b0`) inside its call: the page moved and shown (`0x4e35b0`), whose
+    /// `ITEM_TEXT_READY` (`0x4e3860`) runs its listeners before the verb returns.
+    pub(super) fn turn_item_text(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut ReportMark,
+        delta: i32,
+    ) {
+        if self.appliers.item_text().turn(delta) {
+            script.fire_event("ITEM_TEXT_READY", vec![]);
+            self.signalled(script, mark);
+        }
     }
 
     /// The taxi map's close core `0x4dc0f0`: with a map open, the release (`0x4dc105`), the cell

@@ -523,6 +523,8 @@ mod item_live_tests;
 #[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod item_text_live_tests;
+#[cfg(test)]
 mod loot_live_tests;
 #[cfg(test)]
 mod mail_live_tests;

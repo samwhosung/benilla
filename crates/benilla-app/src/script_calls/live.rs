@@ -145,6 +145,9 @@ live_reads! {
         game_time: crate::net::GameTimeLive<'static>,
         /// The joined-channel slot array.
         channels: crate::ui_chat::edit::ChannelLive<'static>,
+        /// The reader's cells and its object's name, creator and material; absent in a harness
+        /// without the reader or the objects.
+        item_text: Option<crate::ui_item_text::ItemTextLive<'static, 'static>>,
         /// The spell and aura tooltip views, built at the setter's call; absent in a harness
         /// without the catalogs.
         tooltips: Option<crate::ui_tooltip::TooltipLive<'static, 'static>>,

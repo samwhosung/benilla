@@ -264,6 +264,10 @@ impl RecordAsks<'_, '_> {
             RecordAsk::MasterLootName(guid) => {
                 debug!("record ask: master-loot candidate {guid:#x} has no loot window here");
             }
+            // The reader's steps keep its wait ([`crate::ui_item_text::ItemTextSteps`]).
+            RecordAsk::ItemTextCreator(guid) => {
+                debug!("record ask: item text creator {guid:#x} has no reader here");
+            }
             RecordAsk::Mail { mail_id, lookup } => self.mail.look_up(&self.net, mail_id, lookup),
         }
     }

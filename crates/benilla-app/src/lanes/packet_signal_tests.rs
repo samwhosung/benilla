@@ -277,9 +277,10 @@ fn an_uncached_page_begins_at_its_answer() {
     assert_eq!(seen, [FELL, "ITEM_TEXT_BEGIN", FELL]);
 }
 
-/// The session's end drops the reads the item-text lane holds, as the other lanes' ends drop
-/// theirs; so does the leave-world sweep run ahead of the drain (a `/reload`'s), which closes the
-/// reader (`0x490abc` → `0x4e3240`).
+/// The session's end drops the signals the item-text lane holds, as the other lanes' ends drop
+/// theirs, and its shutdown's sweep closes the reader the packet opened; so does the leave-world
+/// sweep run ahead of the drain (a `/reload`'s), which closes the reader (`0x490abc` →
+/// `0x4e3240`).
 #[test]
 fn the_session_end_and_a_sweep_drop_the_item_text_lane() {
     let reader = |app: &App| {
@@ -292,6 +293,9 @@ fn the_session_end_and_a_sweep_drop_the_item_text_lane() {
     tablet(&mut app, true);
     let world = app.world_mut();
     crate::net::handlers::dispatch(world, page_text());
+    world
+        .resource_mut::<crate::ui_script::LeavingWorldArmed>()
+        .arm();
     world.init_resource::<crate::player::CameraControl>();
     world.run_schedule(OnExit(crate::client_state::ClientState::InWorld));
     crate::lanes::fire_in_order(world);

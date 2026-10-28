@@ -148,8 +148,6 @@ pub(crate) trait LatchedWindow: Resource + Sized {
 #[derive(Clone, Copy)]
 struct Entry {
     window: NpcWindow,
-    /// The window's own resource, which its cell and close core read.
-    resource: std::any::TypeId,
     cell: fn(&World) -> Option<u64>,
     dispatched: fn(&mut World),
 }
@@ -174,7 +172,6 @@ impl LatchApp for App {
         if windows.0.iter().all(|e| e.window != T::WINDOW) {
             windows.0.push(Entry {
                 window: T::WINDOW,
-                resource: std::any::TypeId::of::<T>(),
                 cell: |world| world.get_resource::<T>().and_then(T::cell),
                 dispatched: T::dispatched,
             });
@@ -182,14 +179,6 @@ impl LatchApp for App {
         }
         self
     }
-}
-
-/// What a register or a release reads: the latch, and each latched window's own resource, which
-/// its close of the holder reads.
-pub(crate) fn latch_reads(world: &World) -> Vec<std::any::TypeId> {
-    let mut reads = vec![std::any::TypeId::of::<InteractLatch>()];
-    reads.extend(entries(world).iter().map(|e| e.resource));
-    reads
 }
 
 fn entries(world: &World) -> Vec<Entry> {

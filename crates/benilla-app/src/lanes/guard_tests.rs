@@ -355,10 +355,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    ("::ui_item_text::feed_item_text", &["go_templates::GameObjectTemplates", "items::Countdowns",
-        "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts", "ui_mail::MailOpen",
-        "world_state::WorldStates"]),
     ("::ui_taxi::feed_on_taxi", &["net::ObjectStore"]),
     // The getters' item callbacks, kept inside their calls, are spent as the frame left them.
     ("::ui_tradeskill::feed_trade_skill", &["items::Countdowns", "items::Items", "net::GuidIndex",
@@ -410,6 +406,9 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // The character's language skills and word pools, which a page's show rewrites it by
+    // (`0x4e3856`); the skill and word loads write them.
+    "::ui_chat::language::ChatLanguages",
     // The usable stationery list, whose first paper the list parse gives a row with none
     // (`0x4ad565`); the paper callback's handler writes it, through its own `ResMut`.
     "::ui_mail::stationery::UsableStationery",
@@ -1748,16 +1747,6 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("loot", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
         "ui_loot::LootMoveStart", "ui_party::GroupState"]),
-    // The reader's open reads the object, its records and the text caches as the frame left them,
-    // past the answers still on its lane; its register closes whichever latched window holds the
-    // latch, reading that window's state as the frame left it.
-    ("item text", &["go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
-        "net::GuidIndex", "net::ObjectStore", "ui_auction::AuctionOpen", "ui_bank::BankOpen",
-        "ui_gossip::GossipState", "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts",
-        "ui_mail::MailOpen", "ui_merchant::MerchantOpen", "ui_petition::GuildRegistrarState",
-        "ui_quest::QuestGiver", "ui_session::latch::InteractLatch", "ui_stable::StableOpen",
-        "ui_tabard::TabardOpen", "ui_taxi::TaxiState", "ui_trade::TradeSession",
-        "ui_trainer::TrainerOpen"]),
     // A list's copy reads the stable, the creature cache and the pet as the frame left them; its
     // listeners read the stable through the host (#2217).
     ("stable", &["items::Countdowns", "names::NameCache", "net::GuidIndex", "net::ObjectStore",

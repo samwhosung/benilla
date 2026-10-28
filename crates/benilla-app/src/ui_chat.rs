@@ -161,7 +161,8 @@ impl Plugin for UiChatPlugin {
             )
             // The slash-command table needs the VM's globals and the emote catalog, both `Startup`.
             .add_systems(PostStartup, commands::build_slash_commands)
-            // The language gate's feeds, ahead of the chat lane that reads them.
+            // The language gate's feeds, ahead of the chat lane that reads them; with the frame's
+            // packets, ahead of the resumed pass, as a page turn's show reads them inside its call.
             .add_systems(
                 Update,
                 (
@@ -169,6 +170,8 @@ impl Plugin for UiChatPlugin {
                     language::feed_language_skills,
                     language::feed_default_language,
                 )
+                    .after(benilla_world::schedule::WorldStage::Net)
+                    .before(crate::vm_pass::VmPass::Resume)
                     .before(crate::lanes::UiLanes),
             )
             // After the drain, so the log files take the frame's lines in one order.

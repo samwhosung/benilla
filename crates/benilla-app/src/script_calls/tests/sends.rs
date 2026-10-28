@@ -652,17 +652,20 @@ fn ping_location_with_a_unit_spell_armed_pings() {
     assert_eq!(sent(&rx), ["ping 100 200", "roll 1"]);
 }
 
-/// A book of two pages read, the first shown: page 10, whose next is 11, not yet cached.
+/// A book of two pages read, the first shown: page 10, whose next is 11, not yet cached. The
+/// latch harness's book is a TEXT object of entry 1, whose first page is `data[0]`.
 fn book(app: &mut App) {
     use crate::ui_session::NpcWindow;
-    crate::ui_session::latch_tests::open(app, NpcWindow::ItemText, NPC);
+    let mut data = [0i32; 24];
+    data[0] = 10;
     let world = app.world_mut();
+    world
+        .resource_mut::<crate::go_templates::GameObjectTemplates>()
+        .insert(1, 9, "Book".into(), &data);
     world
         .resource_mut::<crate::ui_item_text::PageTexts>()
         .insert(10, "one".into(), 11);
-    world
-        .resource_mut::<crate::ui_item_text::ItemTextOpen>()
-        .show_page_for_test(10);
+    crate::ui_session::latch_tests::open(app, NpcWindow::ItemText, NPC);
 }
 
 /// `ItemTextNextPage()` (`0x4e3b60` → `0x4e38b0`) moves the page and shows it inside its call
@@ -677,14 +680,15 @@ fn item_text_next_page_asks_for_the_page_inside_its_call() {
 }
 
 /// `CloseItemText()` (`0x4e3b70` → `0x4e32e0(0, 0)`) closes inside its call: `ITEM_TEXT_CLOSED`
-/// runs its listeners there (`0x4e33a2`), so the chunk's next line reads it.
+/// runs its listeners there (`0x4e33a2`), so the chunk's next line reads it, twice, as the
+/// latched book's release closes it once more inside the core (`0x4e3357` → `0x493310`).
 #[test]
 fn close_item_text_signals_inside_its_call() {
     let (mut app, _rx) = client();
     book(&mut app);
     listen(&mut app, &["ITEM_TEXT_CLOSED"], "");
     let n: i64 = eval(&mut app, "CloseItemText() return N");
-    assert_eq!(n, 1);
+    assert_eq!(n, 2);
     assert_eq!(
         app.world()
             .resource::<crate::ui_item_text::ItemTextOpen>()

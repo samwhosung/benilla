@@ -362,6 +362,10 @@ pub enum RecordAsk {
     /// guid with the callback `0x4c2fb0`, kept once per call (dedupe flag 0, `0x4c2f61`), which
     /// signals `UPDATE_MASTER_LOOT_LIST` when the name lands found (`0x4c2fb6`-`0x4c2fbf`).
     MasterLootName(u64),
+    /// `ItemTextGetCreator` on a creator the name cache misses: the player-name cache by guid with
+    /// the callback `0x4e32b0` (`0x4e39b9`), kept once per call (dedupe flag 0), which opens the
+    /// reader again when the name lands found (`0x4e32b6`-`0x4e32d5`).
+    ItemTextCreator(u64),
     /// `GetSendMailItem` on an attachment whose record the mirror lacks, by its object's guid:
     /// for an object the engine holds (`0x468460`, `0x4ae5e1`), the item cache by the object's
     /// entry (`[[obj+0x8]+0xc]`, `0x4ae5e7`-`0x4ae5f2`) with guid 0 (`0x4ae5ec`-`0x4ae5ef`) and the

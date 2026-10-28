@@ -131,7 +131,7 @@ disjoint::disjoint_set! {
         worn: crate::ui_unit::WornDisplaySteps<'static, 'static>,
         gm_ticket: crate::ui_gm_ticket::GmTicketSteps<'static>,
         inspect: crate::ui_inspect::InspectSteps<'static, 'static>,
-        item_text: crate::ui_item_text::ItemTextSteps<'static>,
+        item_text: crate::ui_item_text::ItemTextSteps<'static, 'static>,
         aura: crate::ui_aura::AuraSteps<'static, 'static>,
         minimap: crate::minimap::MinimapSteps<'static>,
         pet_unlearn: crate::ui_dialog_verbs::PetUnlearnSteps<'static, 'static>,
@@ -889,7 +889,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Unserved(send) => appliers.gm_ticket().unserved(send),
             ScriptCall::Inspect(call) => tail = appliers.inspect().apply(script, call),
             ScriptCall::ItemText(ItemTextCall::Turn(delta)) => {
-                appliers.item_text().turn(script, delta);
+                self.turn_item_text(script, &mut at.mark, delta);
             }
             ScriptCall::ItemText(ItemTextCall::Close) => self.close_item_text(script, &mut at.mark),
             ScriptCall::Aura(AuraCall::Cancel(spell_id)) => {
@@ -911,6 +911,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::MasterLootName(guid)) => {
                 appliers.loot().wait_for_name(guid);
+            }
+            ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::ItemTextCreator(guid)) => {
+                appliers.item_text().wait_for_creator(guid);
             }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
