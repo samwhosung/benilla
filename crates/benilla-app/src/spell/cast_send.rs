@@ -755,8 +755,7 @@ fn send_spell_cast(
     // about the weapon.
     if let Some(d) = def.filter(|_| player_caster) {
         if let Some(store) = ctx.rel.self_store {
-            if !super::usable::equipped_item_fits(d, store, objects, items, &mut super::Unrecorded)
-            {
+            if !super::usable::equipped_item_fits(d, store, objects, items) {
                 let reason = super::usable::equipped_item_reason(d);
                 debug!("ui_action: cast {spell_id} refused locally — equipped item ({reason:#x})");
                 refuse!(CastFail::local(spell_id, reason));

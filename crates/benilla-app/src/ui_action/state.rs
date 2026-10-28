@@ -199,13 +199,7 @@ fn pet_book_state(leg: PetBookLeg) -> ActionState {
         ..Default::default()
     };
     if let (Some(player), Some(pet)) = (leg.player, leg.pet) {
-        let cost = usable::power_cost(
-            leg.d,
-            player,
-            leg.skills,
-            leg.mods,
-            &mut crate::spell::Unrecorded,
-        );
+        let cost = usable::power_cost(leg.d, player, leg.skills, leg.mods);
         let power_type = leg.d.power_type as i32;
         let power = if power_type < 0 {
             pet.0.unit_health()

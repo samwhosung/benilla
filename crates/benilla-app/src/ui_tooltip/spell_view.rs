@@ -9,7 +9,7 @@ use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects};
 use crate::query_cache::Ask;
 use crate::spell::usable;
-use crate::spell::{SpellLevel, Unrecorded};
+use crate::spell::SpellLevel;
 use crate::ui_action::Spells;
 use crate::ui_items::{find_item, ItemSearch};
 
@@ -94,20 +94,20 @@ pub(super) fn build_view(
     // quotients are both 0 or less is empty.
     let resolved_cost = match caster {
         ViewCaster::Player => vctx.store.map_or(d.mana_cost as i32, |s| {
-            usable::power_cost(d, s, skills, vctx.spell_mods, &mut Unrecorded)
+            usable::power_cost(d, s, skills, vctx.spell_mods)
         }),
         // Deviation: a pet view with no pet unit costs 0, an empty cell, where `0x6e3233`
         // returns -1 and the unsigned divide (`0x52e8dd`) prints it as "429496729 Rage", or
         // "4294967 Happiness" (divisors 10 and 1000 at `0x86f978`); benilla shows no such garbage
         // cost. For mana, focus and energy, divisor 1, -1 is an empty cell, as 0 is.
         ViewCaster::Pet(pet) => pet.map_or(0, |p| {
-            usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods, &mut Unrecorded)
+            usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods)
         }),
     };
     // The per-second term (`0x6e3300`, `0x52e8c5`), at the same selector's level.
     let per_second = match caster {
-        ViewCaster::Player => usable::per_second_cost(d, player_level, &mut Unrecorded),
-        ViewCaster::Pet(pet) => usable::per_second_cost(d, pet_level(pet), &mut Unrecorded),
+        ViewCaster::Player => usable::per_second_cost(d, player_level),
+        ViewCaster::Pet(pet) => usable::per_second_cost(d, pet_level(pet)),
     };
     // Both divided by the shared per-type divisor (`0x6e7130`), never a local `power_type == 1`
     // test, unsigned (`0x52e8dd`, `0x52e8f2`); the gates test the quotients, signed.
@@ -179,17 +179,11 @@ pub(super) fn build_view(
         let base = match caster {
             ViewCaster::Player => {
                 let player = vctx.store.map(|s| &s.0);
-                spells.cast_time_unclamped_ms(
-                    d,
-                    player,
-                    player_level,
-                    vctx.spell_mods,
-                    &mut Unrecorded,
-                )
+                spells.cast_time_unclamped_ms(d, player, player_level, vctx.spell_mods)
             }
             ViewCaster::Pet(pet) => {
                 let level = pet_level(pet);
-                spells.cast_time_unclamped_ms(d, pet, level, vctx.spell_mods, &mut Unrecorded)
+                spells.cast_time_unclamped_ms(d, pet, level, vctx.spell_mods)
             }
         };
         // `%.3g` templates: the seconds go over as a real.
@@ -267,9 +261,9 @@ pub(super) fn build_view(
     let chance = chance_line(d, vctx.store);
     // The unit selector passes the item test outright (`0x52f07f`).
     let item_met = matches!(caster, ViewCaster::Pet(_))
-        || vctx.store.is_none_or(|s| {
-            usable::equipped_item_fits(d, s, vctx.objects, vctx.items, &mut Unrecorded)
-        });
+        || vctx
+            .store
+            .is_none_or(|s| usable::equipped_item_fits(d, s, vctx.objects, vctx.items));
     // The tools (`SPELL_TOTEMS`, `0x854ec4`) and the reagents (`SPELL_REAGENTS`, `0x854e54`),
     // each the player does not carry red. One whose template has not streamed is absent, its
     // lookup asked with the tooltip as the answer's cookie (`0x52eda4`, `0x52f3f4`) and counted
@@ -441,9 +435,7 @@ fn expand(
     let skills = vctx.player_skills(spells);
     // The `$`-tokens' level (`0x5075f0` hands the selector to `0x6e3130`, `507645`-`50764a`).
     let level = |t: &benilla_formats::SpellDisplay| match caster {
-        ViewCaster::Player => {
-            crate::spell::player_spell_level(vctx.store, skills, t, &mut Unrecorded)
-        }
+        ViewCaster::Player => crate::spell::player_spell_level(vctx.store, skills, t),
         ViewCaster::Pet(pet) => t.skill_level(crate::spell::pet_skill_value(pet)),
     };
     // A cross-referenced spell's own family mask decides its modifiers.
@@ -458,17 +450,11 @@ fn expand(
         SpellLevel::Known(t.skill_level(crate::spell::pet_skill_value(pet)))
     };
     let power_cost = |t: &benilla_formats::SpellDisplay| match caster {
-        ViewCaster::Player => vctx.store.map_or(-1, |s| {
-            usable::power_cost(t, s, skills, vctx.spell_mods, &mut Unrecorded)
-        }),
+        ViewCaster::Player => vctx
+            .store
+            .map_or(-1, |s| usable::power_cost(t, s, skills, vctx.spell_mods)),
         ViewCaster::Pet(pet) => pet.map_or(-1, |p| {
-            usable::power_cost_at(
-                t,
-                p,
-                pet_level(t, Some(p)),
-                vctx.spell_mods,
-                &mut Unrecorded,
-            )
+            usable::power_cost_at(t, p, pet_level(t, Some(p)), vctx.spell_mods)
         }),
     };
     let power_per_second = |t: &benilla_formats::SpellDisplay| match caster {
@@ -477,9 +463,9 @@ fn expand(
                 me: vctx.store,
                 skills,
             };
-            usable::per_second_cost(t, level, &mut Unrecorded)
+            usable::per_second_cost(t, level)
         }
-        ViewCaster::Pet(pet) => usable::per_second_cost(t, pet_level(t, pet), &mut Unrecorded),
+        ViewCaster::Pet(pet) => usable::per_second_cost(t, pet_level(t, pet)),
     };
     let ctx = benilla_formats::TokenContext {
         durations: &spells.durations,

@@ -306,31 +306,16 @@ fn feed_craft(
                 durations: &spells.durations,
                 radii: &spells.radii,
                 ranges: Some(&spells.ranges),
-                level: &|d| {
-                    crate::spell::player_spell_level(
-                        Some(store),
-                        skills,
-                        d,
-                        &mut crate::spell::Unrecorded,
-                    )
-                },
+                level: &|d| crate::spell::player_spell_level(Some(store), skills, d),
                 lookup: &|id| spells.catalog.get(id),
                 mods: Some(&*spell_mods),
-                power_cost: &|d| {
-                    crate::spell::usable::power_cost(
-                        d,
-                        store,
-                        skills,
-                        &spell_mods,
-                        &mut crate::spell::Unrecorded,
-                    )
-                },
+                power_cost: &|d| crate::spell::usable::power_cost(d, store, skills, &spell_mods),
                 power_per_second: &|d| {
                     let level = crate::spell::SpellLevel::Player {
                         me: Some(store),
                         skills,
                     };
-                    crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+                    crate::spell::usable::per_second_cost(d, level)
                 },
                 unmodified_points: false,
                 gender: &|| store.0.unit_gender().unwrap_or(0),

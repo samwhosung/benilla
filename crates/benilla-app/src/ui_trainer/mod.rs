@@ -659,38 +659,29 @@ impl TrainerReads<'_, '_> {
             spells: Some(&spells.catalog),
             items: Some(items),
         };
-        let player_level = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::player_spell_level(store, skills, d, &mut crate::spell::Unrecorded)
-        };
+        let player_level =
+            |d: &benilla_formats::SpellDisplay| crate::spell::player_spell_level(store, skills, d);
         let pet_skill_level = |d: &benilla_formats::SpellDisplay| {
             d.skill_level(crate::spell::pet_skill_value(pet.map(|p| &p.0)))
         };
         // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the same caster's level and fields.
         let player_cost = |d: &benilla_formats::SpellDisplay| {
-            store.map_or(-1, |s| {
-                crate::spell::usable::power_cost(d, s, skills, mods, &mut crate::spell::Unrecorded)
-            })
+            store.map_or(-1, |s| crate::spell::usable::power_cost(d, s, skills, mods))
         };
         let player_per_second = |d: &benilla_formats::SpellDisplay| {
             let level = crate::spell::SpellLevel::Player { me: store, skills };
-            crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+            crate::spell::usable::per_second_cost(d, level)
         };
         let pet_level =
             |d: &benilla_formats::SpellDisplay| crate::spell::SpellLevel::Known(pet_skill_level(d));
         let pet_cost = |d: &benilla_formats::SpellDisplay| {
             pet.map_or(-1, |p| {
                 let level = pet_level(d);
-                crate::spell::usable::power_cost_at(
-                    d,
-                    &p.0,
-                    level,
-                    mods,
-                    &mut crate::spell::Unrecorded,
-                )
+                crate::spell::usable::power_cost_at(d, &p.0, level, mods)
             })
         };
         let pet_per_second = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::usable::per_second_cost(d, pet_level(d), &mut crate::spell::Unrecorded)
+            crate::spell::usable::per_second_cost(d, pet_level(d))
         };
         let ctx = TokenContext {
             durations: &spells.durations,

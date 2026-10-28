@@ -478,19 +478,9 @@ mod tests {
     /// (`0x6e3422`-`0x6e3456`): a 3 s cast reads 4.5 s at Curse of Tongues' 1.5, `fistp` rounds a
     /// half to even, a factor within 2^-22 of 1 keeps the time, and an ability, a trade skill, a
     /// time at or below zero and a caster not streamed are not scaled. A field never sent is the
-    /// descriptor's 0. The level and the speed are reported where they are read.
+    /// descriptor's 0.
     #[test]
     fn the_cast_time_takes_the_casters_cast_speed() {
-        use crate::spell::{SpellReads, UnitField};
-        #[derive(Default)]
-        struct Log(Vec<UnitField>);
-        impl SpellReads for Log {
-            fn unit(&mut self, field: UnitField) {
-                self.0.push(field);
-            }
-            fn item_search(&mut self, _: u32) {}
-            fn skill_line(&mut self, _: u32) {}
-        }
         let mut spells = crate::ui_action::Spells::empty_for_tests();
         let row = |base_ms, per_level_ms| benilla_formats::SpellCastTime {
             base_ms,
@@ -516,35 +506,25 @@ mod tests {
         };
         let time = |d: &SpellDisplay, speed: Option<f32>| {
             let caster = unit(speed);
-            let mut log = Log::default();
             let level = crate::spell::SpellLevel::Known(1);
-            let t = spells.cast_time_unclamped_ms(d, Some(&caster), level, &mods, &mut log);
-            (t, log.0)
+            spells.cast_time_unclamped_ms(d, Some(&caster), level, &mods)
         };
         let three = spell(1, 0);
-        assert_eq!(time(&three, Some(1.5)), (4500, vec![UnitField::CastSpeed]));
-        assert_eq!(time(&three, Some(1.0)).0, 3000);
-        assert_eq!(
-            time(&three, Some(1.0 + 1.0e-7)).0,
-            3000,
-            "within the epsilon"
-        );
-        assert_eq!(time(&three, None).0, 0, "the descriptor's 0");
+        assert_eq!(time(&three, Some(1.5)), 4500);
+        assert_eq!(time(&three, Some(1.0)), 3000);
+        assert_eq!(time(&three, Some(1.0 + 1.0e-7)), 3000, "within the epsilon");
+        assert_eq!(time(&three, None), 0, "the descriptor's 0");
         // 1001 × 0.5 = 500.5, to even.
-        assert_eq!(time(&spell(2, 0), Some(0.5)).0, 500);
-        assert_eq!(time(&spell(2, 0), Some(1.5)).0, 1502);
+        assert_eq!(time(&spell(2, 0), Some(0.5)), 500);
+        assert_eq!(time(&spell(2, 0), Some(1.5)), 1502);
         for attributes in [0x10, 0x20] {
-            assert_eq!(time(&spell(1, attributes), Some(1.5)), (3000, vec![]));
+            assert_eq!(time(&spell(1, attributes), Some(1.5)), 3000);
         }
-        assert_eq!(time(&spell(3, 0), Some(1.5)), (-1_000_000, vec![]));
-        assert_eq!(
-            time(&spell(4, 0), Some(1.0)),
-            (1100, vec![UnitField::CastSpeed])
-        );
-        let mut log = Log::default();
+        assert_eq!(time(&spell(3, 0), Some(1.5)), -1_000_000);
+        assert_eq!(time(&spell(4, 0), Some(1.0)), 1100);
         let level = crate::spell::SpellLevel::Known(60);
-        let unseen = spells.cast_time_unclamped_ms(&three, None, level, &mods, &mut log);
-        assert_eq!((unseen, log.0), (3000, vec![]), "no caster to read");
+        let unseen = spells.cast_time_unclamped_ms(&three, None, level, &mods);
+        assert_eq!(unseen, 3000, "no caster to read");
     }
 
     #[test]

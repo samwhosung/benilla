@@ -32,11 +32,7 @@ impl TokenCaster<'static> {
         level: &|_| 0,
         power_cost: &|_| -1,
         power_per_second: &|d| {
-            crate::spell::usable::per_second_cost(
-                d,
-                crate::spell::SpellLevel::Known(0),
-                &mut crate::spell::Unrecorded,
-            )
+            crate::spell::usable::per_second_cost(d, crate::spell::SpellLevel::Known(0))
         },
     };
 }
@@ -376,18 +372,14 @@ pub(super) fn item_set_live(
         spells: spells.map(|s| &s.catalog),
         items,
     };
-    let level = |d: &benilla_formats::SpellDisplay| {
-        crate::spell::player_spell_level(me, skills, d, &mut crate::spell::Unrecorded)
-    };
+    let level = |d: &benilla_formats::SpellDisplay| crate::spell::player_spell_level(me, skills, d);
     let power_cost = |d: &benilla_formats::SpellDisplay| match (me, spell_mods) {
-        (Some(s), Some(mods)) => {
-            crate::spell::usable::power_cost(d, s, skills, mods, &mut crate::spell::Unrecorded)
-        }
+        (Some(s), Some(mods)) => crate::spell::usable::power_cost(d, s, skills, mods),
         _ => -1,
     };
     let power_per_second = |d: &benilla_formats::SpellDisplay| {
         let level = crate::spell::SpellLevel::Player { me, skills };
-        crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+        crate::spell::usable::per_second_cost(d, level)
     };
     let caster = TokenCaster {
         level: &level,
@@ -597,23 +589,16 @@ pub(super) fn feed_item_stats(
             spells: spell_res.map(|s| &s.catalog),
             items: Some(&items),
         };
-        let level = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::player_spell_level(me, skills, d, &mut crate::spell::Unrecorded)
-        };
+        let level =
+            |d: &benilla_formats::SpellDisplay| crate::spell::player_spell_level(me, skills, d);
         let power_cost = |d: &benilla_formats::SpellDisplay| {
             me.map_or(-1, |s| {
-                crate::spell::usable::power_cost(
-                    d,
-                    s,
-                    skills,
-                    &spell_mods,
-                    &mut crate::spell::Unrecorded,
-                )
+                crate::spell::usable::power_cost(d, s, skills, &spell_mods)
             })
         };
         let power_per_second = |d: &benilla_formats::SpellDisplay| {
             let level = crate::spell::SpellLevel::Player { me, skills };
-            crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+            crate::spell::usable::per_second_cost(d, level)
         };
         let caster = TokenCaster {
             level: &level,

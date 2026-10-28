@@ -206,22 +206,20 @@ impl Spells {
     /// the caster's cast speed, with no clamp, so row 18's negative time survives. A missing row
     /// returns 0 before the modifier (`0x6e338a`). `caster` is the unit the speed is read off, the
     /// player or, for a pet spell, its charm else its summon (`0x6e33e8`-`0x6e3416`), `None` when
-    /// it is not streamed, which skips the multiply (`0x6e341d`). `reads` hears the level when the
-    /// row scales by it and the speed when it is read.
+    /// it is not streamed, which skips the multiply (`0x6e341d`).
     pub(crate) fn cast_time_unclamped_ms(
         &self,
         def: &benilla_formats::SpellDisplay,
         caster: Option<&benilla_protocol::ObjectFields>,
         level: crate::spell::SpellLevel,
         mods: &crate::spell::SpellModifiers,
-        reads: &mut dyn crate::spell::SpellReads,
     ) -> i32 {
         let Some(row) = self.cast_times.get(def.casting_time_index) else {
             return 0;
         };
         // The row's level, `0x6e3130`, read only by a row that scales by it.
         let caster_level = if row.reads_caster_level() {
-            level.read(def, reads)
+            level.read(def)
         } else {
             0
         };
@@ -233,7 +231,6 @@ impl Spells {
         else {
             return time;
         };
-        reads.unit(crate::spell::UnitField::CastSpeed);
         // A field never sent is the descriptor's 0, which casts in no time; vmangos sends 1.0 for
         // that reason (`Player.cpp:464-466`).
         let speed = caster.unit_mod_cast_speed().unwrap_or(0.0);
@@ -263,8 +260,7 @@ impl Spells {
         level: crate::spell::SpellLevel,
         mods: &crate::spell::SpellModifiers,
     ) -> u32 {
-        let time =
-            self.cast_time_unclamped_ms(def, caster, level, mods, &mut crate::spell::Unrecorded);
+        let time = self.cast_time_unclamped_ms(def, caster, level, mods);
         time.max(0) as u32
     }
 }

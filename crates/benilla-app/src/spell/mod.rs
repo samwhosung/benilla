@@ -19,11 +19,11 @@ mod drop_hold_tests;
 pub(crate) mod group_relation;
 mod inflight;
 pub(crate) mod known;
+pub(crate) mod level;
 mod mods;
 pub(crate) mod net;
 pub(crate) mod range_check;
 mod range_units;
-pub(crate) mod reads;
 mod report;
 pub(crate) mod targeting;
 pub(crate) mod usable;
@@ -44,11 +44,11 @@ pub(crate) use inflight::{
 // The command press's harness runs the self-cancel between its two systems.
 #[cfg(test)]
 pub(crate) use inflight::local_self_cancel;
+pub(crate) use level::SpellLevel;
 pub(crate) use mods::{CategoryPad, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS};
 #[cfg(test)]
 pub(crate) use mods::{OP_COOLDOWN, OP_RANGE};
 pub(crate) use range_units::{with_ranged_slot, RangeUnits, DEFAULT_REACH};
-pub(crate) use reads::{SpellLevel, SpellReads, UnitField, Unrecorded};
 pub(crate) use report::{
     CastCore, CastSlots, CursorCancel, Held, REASON_ERROR, REASON_TARGETS_DEAD,
 };
@@ -142,9 +142,6 @@ pub(crate) struct PlayerSkills<'a> {
 /// ranged (`0x5ec2db`, `0x5ec2aa`, `0x5ec25e`).
 const HAND_SLOTS: [u8; 3] = [15, 16, 17];
 
-/// The three hands as a [`SpellReads::item_search`] slot mask.
-const HAND_SLOT_MASK: u32 = 1 << 15 | 1 << 16 | 1 << 17;
-
 /// `Targets & 0x10` (`[rec+0x34]`), an item-targeted spell, which keeps its own skill
 /// (`0x5ea600`).
 const TARGETS_ITEM: u32 = 0x10;
@@ -193,12 +190,11 @@ fn virtual_weapon(
 /// of the first hand, main, off then ranged, whose weapon is class 2 of a subclass the mask holds
 /// and the weapon-skill table names (`0x5ea62f`-`0x5ea680`); every other spell, and one no hand
 /// fits, is itself. An item-targeted spell (`Targets & 0x10`), one that ignores weapon skill and a
-/// weapon-skill spell keep their own. `reads` hears the hands when the hands are read.
+/// weapon-skill spell keep their own.
 pub(crate) fn skill_spell(
     me: &benilla_protocol::ObjectFields,
     skills: PlayerSkills,
     d: &benilla_formats::SpellDisplay,
-    reads: &mut dyn SpellReads,
 ) -> u32 {
     if d.targets & TARGETS_ITEM != 0
         || d.attributes_ex2 & ATTR_EX2_IGNORE_WEAPON_SKILL != 0
@@ -208,7 +204,6 @@ pub(crate) fn skill_spell(
     {
         return d.id;
     }
-    reads.item_search(HAND_SLOT_MASK);
     (0..HAND_SLOTS.len())
         .find_map(|hand| {
             let (class, subclass) = virtual_weapon(me, skills.items, hand, false)?;
@@ -225,15 +220,14 @@ pub(crate) fn skill_spell(
 /// 5 (`0x6e3195`). The skill read is the total (`0x5ea520`) of the `SkillLineAbility` line of the
 /// spell [`skill_spell`] names (`0x5ea69b`-`0x5ea6d7`), capped at five times that spell's
 /// `maxLevel` when it has one (`0x5ea6dc`-`0x5ea6ea`); no player, no record or no line is 0
-/// (`0x5ea6f0`). `reads` hears the line and the hands.
+/// (`0x5ea6f0`).
 pub(crate) fn player_spell_level(
     me: Option<&crate::net::ObjectStore>,
     skills: PlayerSkills,
     d: &benilla_formats::SpellDisplay,
-    reads: &mut dyn SpellReads,
 ) -> u32 {
     let Some(store) = me else { return 0 };
-    let id = skill_spell(&store.0, skills, d, reads);
+    let id = skill_spell(&store.0, skills, d);
     let record = if id == d.id {
         Some(d)
     } else {
@@ -244,7 +238,6 @@ pub(crate) fn player_spell_level(
     let Some(line) = skills.lines.and_then(|c| c.spell_to_line(id, race, class)) else {
         return 0;
     };
-    reads.skill_line(line);
     record.skill_level(skill_line_value(me, line))
 }
 
@@ -389,7 +382,7 @@ mod tests {
                 lines: Some(&lines),
                 ..Default::default()
             };
-            player_spell_level(Some(&store), skills, &d, &mut Unrecorded)
+            player_spell_level(Some(&store), skills, &d)
         };
         assert_eq!(level(1), 10, "a human reads its own row's line, 50");
         assert_eq!(level(2), 20, "an orc reads its own, 100");
@@ -458,7 +451,7 @@ mod tests {
                 spells: Some(&catalog),
                 items: Some(&items),
             };
-            player_spell_level(Some(&store), skills, d, &mut Unrecorded)
+            player_spell_level(Some(&store), skills, d)
         };
         assert_eq!(
             level(1001, 0, 0, &strike()),
