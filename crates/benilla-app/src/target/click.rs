@@ -150,14 +150,19 @@ impl PlateSelect<'_, '_> {
     }
 }
 
-/// The left click's select (`0x481f60` action 1): select the press pick's unit or deselect on
-/// empty world, except on nothing (the sky) with a payload held (`0x492d30`); the terrain leg
-/// deselects regardless (`0x5e03bb`). With the targeting cursor up, the object it picks binds
-/// instead and a terrain click its word can bind binds, while the rest still deselect. The press
-/// pick, since the hover is empty through a camera drag, as in the reference's freelook. What its
-/// `SetSelection` owes after its signals, which the call signals in place, or `None` when it
-/// selected nothing.
 impl ClickSelect<'_, '_> {
+    /// Whether the router returns for a charmed player (`0x481f98`), ahead of every leg.
+    pub(crate) fn charmed(&self) -> bool {
+        self.seam.player_is_charmed()
+    }
+
+    /// The left click's select (`0x481f60` action 1): select the press pick's unit or deselect on
+    /// empty world, except on nothing (the sky) with a payload held (`0x492d30`); the terrain leg
+    /// deselects regardless (`0x5e03bb`). With the targeting cursor up, the object it picks binds
+    /// instead and a terrain click its word can bind binds, while the rest still deselect. The press
+    /// pick, since the hover is empty through a camera drag, as in the reference's freelook. What its
+    /// `SetSelection` owes after its signals, which the call signals in place, or `None` when it
+    /// selected nothing.
     pub(crate) fn select(
         &mut self,
         script: &benilla_ui::script::UiScript,
@@ -225,10 +230,6 @@ fn click_select(
 ) -> Option<crate::script_calls::EngineSelect> {
     let (hovered, occlusion) = (c.press.hovered, c.press.occlusion);
     if c.inspect.enabled {
-        return None;
-    }
-    // The click router returns for a charmed player before anything (`0x481f98`), greeting included.
-    if c.seam.player_is_charmed() {
         return None;
     }
     // With the cursor up, an object the press picked takes the object leg (`0x4925d0` →
@@ -1286,6 +1287,9 @@ pub(super) struct PayloadHeld(pub(super) bool);
 /// paid in place, with nobody to signal.
 #[cfg(test)]
 pub(super) fn select_on_click(mut c: ClickSelect, held: Option<Res<PayloadHeld>>) {
+    if c.charmed() {
+        return;
+    }
     if let Some(select) = click_select(&mut c, held.is_some_and(|h| h.0)) {
         select.owed.pay(&mut c.selection, &mut c.seam);
     }

@@ -381,8 +381,8 @@ pub(crate) fn trade_on_plate_click(
     })
 }
 
-/// The body click's trade leg (`0x4925d0`), on the press pick's unit: the router returns first for
-/// a charmed player (`0x481f98`), and the leg runs only with no spell awaiting a target
+/// The body click's trade leg (`0x4925d0`), on the press pick's unit, past the router's charmed
+/// return (`0x481f98`, in the click's call): the leg runs only with no spell awaiting a target
 /// (`0x492668`).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ClickTrade<'w, 's> {
@@ -400,7 +400,7 @@ impl ClickTrade<'_, '_> {
         let Some(me) = self.me.iter().next() else {
             return;
         };
-        if self.targeting.active() || self.inspect.enabled || me.0.unit_charmed_by().is_some() {
+        if self.targeting.active() || self.inspect.enabled {
             return;
         }
         let dead = me.0.is_dead_or_ghost();

@@ -57,9 +57,13 @@ impl ScriptCallHost<'_, '_> {
 
     /// Action 1 on the press pick: the object leg's trade and pet feed (`0x4925d0`, ahead of its
     /// greeting and `SetSelection` at `0x49280c`), the select or the deselect, signalled in place,
-    /// then the targeting cursor's terrain and object commits.
+    /// then the targeting cursor's terrain and object commits. A charmed player takes the nothing
+    /// leg with zero points (`0x481f98`, `0x48204e`): none of them.
     fn select_click(&mut self, script: &mut UiScript, at: &mut Signalled) {
         let mut legs = self.appliers.click();
+        if legs.select().is_some_and(|select| select.charmed()) {
+            return;
+        }
         if let Some(mut trade) = legs.trade() {
             trade.click(script);
         }

@@ -16,6 +16,8 @@ use crate::script_calls::with_hosted_vm;
 
 const ME: u64 = 0x10;
 const PET: u64 = 0xF140_0000_0700_002A;
+/// Another player, whom a click with the food held asks to trade.
+const OTHER: u64 = 0x11;
 /// Our Tough Jerky, backpack slot 1.
 const JERKY: u64 = 0x4000_0000_0000_0a02;
 const FEED_PET: u32 = 6991;
@@ -31,18 +33,27 @@ struct Feed {
 /// Us, alive or not, a hunter who knows Feed Pet, with Tough Jerky in the backpack and our pet
 /// streamed: created by us by a spell, and `pet_number` its `UNIT_FIELD_PETNUMBER`.
 fn client(alive: bool, pet_number: u32) -> Feed {
+    client_with(alive, pet_number, false)
+}
+
+/// [`client`], with someone charming us when `charmed` (`UNIT_FIELD_CHARMEDBY`), and [`OTHER`]
+/// streamed beside.
+fn client_with(alive: bool, pet_number: u32, charmed: bool) -> Feed {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();
-    let me = ObjectFields::from_pairs(&[
+    let mut mine = vec![
         (2, 0x19),
         (HEALTH, u32::from(alive) * 100),
         (28, 100),
         (532, JERKY as u32),
         (533, (JERKY >> 32) as u32),
-    ])
-    .into_created(ObjectType::Player);
+    ];
+    if charmed {
+        mine.extend([(10, 0x99), (11, 0)]);
+    }
+    let me = ObjectFields::from_pairs(&mine).into_created(ObjectType::Player);
     let me = world
         .spawn((
             crate::net::SelfPlayer,
@@ -71,6 +82,13 @@ fn client(alive: bool, pet_number: u32) -> Feed {
         .into_created(ObjectType::Unit),
     );
     world.entity_mut(pet).insert(Transform::default());
+    let other = crate::items::test_spawn_object(
+        world,
+        OTHER,
+        ObjectFields::from_pairs(&[(2, 0x19), (HEALTH, 100), (28, 100)])
+            .into_created(ObjectType::Player),
+    );
+    world.entity_mut(other).insert(Transform::default());
     crate::items::test_spawn_item(
         world,
         JERKY,
@@ -206,4 +224,71 @@ fn a_unit_with_no_pet_number_is_not_fed() {
     run(&mut f, "PickupContainerItem(0, 1) DropItemOnUnit('pet')");
     assert_eq!(casts(&f), Vec::<String>::new());
     assert!(matches!(held(&f), Some(CursorPayload::Item(_))));
+}
+
+/// A clean left click in the world on `guid`'s unit, through `CameraOrSelectOrMoveStop`'s call.
+fn world_click_on(f: &mut Feed, guid: u64) {
+    let world = f.app.world_mut();
+    let entity = world.resource::<crate::net::GuidIndex>().0[&guid];
+    world.resource_mut::<crate::target::PressPick>().hovered = crate::target::Hovered {
+        target: Some(entity),
+        guid: Some(guid),
+        distance: 5.0,
+        ..Default::default()
+    };
+    crate::target::release_click(world, benilla_ui::script::ClickMode::Select);
+}
+
+fn sent(f: &Feed) -> Vec<String> {
+    f.rx.try_iter().map(|c| format!("{c:?}")).collect()
+}
+
+fn selected(f: &Feed) -> Option<u64> {
+    f.app.world().resource::<crate::target::Selection>().guid
+}
+
+/// A left click with the food held feeds our pet (`0x4927e8`), and on another player asks to trade
+/// (`0x49278e`) and selects them (`0x49280c`).
+#[test]
+fn a_world_click_with_the_food_held_feeds_the_pet_and_asks_a_player_to_trade() {
+    let mut f = client_with(true, 55, false);
+    run(&mut f, "PickupContainerItem(0, 1)");
+    world_click_on(&mut f, PET);
+    assert_eq!(
+        casts(&f),
+        vec![format!(
+            "{:?}",
+            ClientCommand::CastSpellItem {
+                spell_id: FEED_PET,
+                item_guid: JERKY,
+            }
+        )]
+    );
+    run(&mut f, "PickupContainerItem(0, 1)");
+    world_click_on(&mut f, OTHER);
+    let sent = sent(&f);
+    assert!(
+        sent.contains(&format!(
+            "{:?}",
+            ClientCommand::InitiateTrade { target: OTHER }
+        )),
+        "the click asks to trade: {sent:?}"
+    );
+    assert_eq!(selected(&f), Some(OTHER));
+}
+
+/// A charmed player's left click takes the router's nothing leg (`0x481f98` → `0x48204e`): on our
+/// pet or another player with the food held, nothing is fed, traded or selected.
+#[test]
+fn a_charmed_players_world_click_feeds_trades_and_selects_nothing() {
+    let mut f = client_with(true, 55, true);
+    run(&mut f, "PickupContainerItem(0, 1)");
+    world_click_on(&mut f, PET);
+    world_click_on(&mut f, OTHER);
+    assert_eq!(sent(&f), Vec::<String>::new(), "nothing goes out");
+    assert!(
+        matches!(held(&f), Some(CursorPayload::Item(_))),
+        "the food is still held"
+    );
+    assert_eq!(selected(&f), Some(PET), "the target stands");
 }
