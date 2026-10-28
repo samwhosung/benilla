@@ -311,7 +311,7 @@ fn an_outbid_lines_listener_reads_the_rows_before_the_patch() {
         current_bid: 500,
         min_increment: 25,
         ..match page() {
-            SessionEvent::AuctionListResult { auctions, .. } => auctions[0].clone(),
+            SessionEvent::AuctionListResult { auctions, .. } => auctions[0],
             _ => unreachable!(),
         }
     };
