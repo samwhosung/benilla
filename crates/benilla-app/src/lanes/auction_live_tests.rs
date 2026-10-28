@@ -277,11 +277,16 @@ fn a_close_nested_in_a_parked_close_leaves_the_reopened_session() {
     let mut c = client();
     c.eval::<()>(true, STOCK_FRAME);
     c.frame(vec![vec![hello()], vec![hello()]]);
-    let seen = c.seen();
+    // The hide re-enters the first session's core, whose signal comes before its cell's clear
+    // (`0x4cd602`, `0x4cd613`), so it closes twice; then the second session shows.
     assert_eq!(
-        seen.last().map(String::as_str),
-        Some("AUCTION_HOUSE_SHOW:nil"),
-        "{seen:?}"
+        c.seen(),
+        [
+            "AUCTION_HOUSE_SHOW:nil",
+            "AUCTION_HOUSE_CLOSED:nil",
+            "AUCTION_HOUSE_CLOSED:nil",
+            "AUCTION_HOUSE_SHOW:nil",
+        ]
     );
     assert_eq!(
         c.app.world().resource::<AuctionOpen>().auctioneer,
@@ -369,5 +374,69 @@ fn an_outbid_lines_listener_reads_the_rows_before_the_patch() {
         ),
         "900",
         "and the row patched after it"
+    );
+}
+
+/// An outbid notice whose item's record is out shows no line in the handler (`0x4ccfcc`), so the
+/// pair and the patches run there (`0x4ccff3`, `0x4cd033`); the record's callback (`0x4cd190`)
+/// then shows the line alone.
+#[test]
+fn an_outbid_notice_waiting_on_its_item_patches_in_the_handler() {
+    let mut c = client();
+    let ours = AuctionListEntry {
+        bidder_guid: ME,
+        current_bid: 500,
+        min_increment: 25,
+        ..match page() {
+            SessionEvent::AuctionListResult { auctions, .. } => auctions[0],
+            _ => unreachable!(),
+        }
+    };
+    c.frame(vec![
+        vec![hello()],
+        vec![SessionEvent::AuctionBidderListResult {
+            auctions: vec![ours],
+            total_count: 1,
+        }],
+    ]);
+    c.seen();
+    let held = |c: &Client| {
+        let a = c.app.world().resource::<AuctionOpen>();
+        let e = &a.lists[benilla_ui::script::BIDDER].entries[0];
+        (a.outbid.clone(), e.current_bid, e.bidder_guid)
+    };
+    c.handle(vec![SessionEvent::AuctionBidderNotification(
+        AuctionBidderNotification {
+            house_id: 1,
+            auction_id: 7,
+            bidder_guid: 0x99,
+            bid_or_zero: 900,
+            out_bid: 45,
+            item_entry: SILK,
+            random_property_id: 0,
+        },
+    )]);
+    assert_eq!(
+        held(&c),
+        (vec![(1, 7)], 900, 0x99),
+        "kept and patched in the handler"
+    );
+    c.frame(vec![]);
+    assert!(
+        !c.seen().iter().any(|e| e.starts_with("CHAT_MSG_SYSTEM")),
+        "no line while the record is out"
+    );
+    c.frame(vec![vec![silk()]]);
+    assert_eq!(
+        c.seen()
+            .into_iter()
+            .filter(|e| e.starts_with("CHAT_MSG_SYSTEM"))
+            .collect::<Vec<_>>(),
+        ["CHAT_MSG_SYSTEM:You have been outbid on Silk Cloth."]
+    );
+    assert_eq!(
+        held(&c),
+        (vec![(1, 7)], 900, 0x99),
+        "the callback shows the line alone"
     );
 }

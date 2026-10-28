@@ -1001,15 +1001,14 @@ impl TrainerSteps<'_, '_> {
         self.open.as_deref().and_then(|o| o.trainer)
     }
 
-    /// The close core's clear of the cell (`0x4d747c`), and the VM's window with it: whether a
-    /// trainer was stored.
-    pub(crate) fn clear_trainer(&mut self, script: &mut UiScript) -> bool {
+    /// The close core's clear of the cell (`0x4d747c`), and the VM's window with it, when a
+    /// trainer is stored.
+    pub(crate) fn clear_trainer(&mut self, script: &mut UiScript) {
         let Some(open) = self.open.as_deref_mut().filter(|o| o.trainer.is_some()) else {
-            return false;
+            return;
         };
         open.clear();
         script.set_trainer(None);
-        true
     }
 }
 

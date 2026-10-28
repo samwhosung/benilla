@@ -12,9 +12,9 @@
 //! `*_CLOSED` fires twice; entered through `0x493310`, it finds the latch clear and fires once.
 //! Quest's core zeroes its cell before the release (`0x501201`), so it never re-enters.
 //!
-//! The cores fire their events into the VM as they run, so a close lands ahead of the open that
-//! caused it; a window's feed fires its opens and updates and starts over from closed after each
-//! core run ([`LatchCloses`]). A handler that calls its window's close verb, as stock
+//! A core run where its window's lane still holds an earlier item, its open among them, clears
+//! its cell at once and queues its signals behind that item, so a close never lands ahead of the
+//! open it closes; else it fires them into the VM as it runs. A handler that calls its window's close verb, as stock
 //! `HideUIPanel` → `OnHide` does, re-enters that core in the reference before the fire returns;
 //! every close verb runs its core inside its call, through the host ([`LatchSteps`]), so a core
 //! that fires before it clears its cell (trainer, bank, auction) is re-entered with the cell still

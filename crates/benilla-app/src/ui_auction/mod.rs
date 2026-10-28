@@ -554,10 +554,6 @@ pub(crate) fn open_auction(world: &mut World, auctioneer: u64, house_id: u32) {
 /// earlier step closes the session here and queues its VM half behind that step
 /// ([`net::close_waits`]), so it never undoes an open that has not yet shown.
 pub(crate) fn close_core(world: &mut World) {
-    if world.resource::<AuctionOpen>().closing_parked {
-        crate::ui_session::fire(world, reenter_parked_close);
-        return;
-    }
     let Some(auctioneer) = world.resource::<AuctionOpen>().auctioneer else {
         return;
     };
