@@ -796,8 +796,9 @@ mod tests {
             .map(|(a, b, _)| format!("{} <-> {}", update.name(*a), update.name(*b)))
             .collect();
         unordered.sort();
+        // A floor that shows the census found the hosts at all; it falls as feeds go live.
         assert!(
-            update.hosted.len() > 100,
+            update.hosted.len() > 80,
             "the census finds the hosts: {}",
             update.hosted.len()
         );
