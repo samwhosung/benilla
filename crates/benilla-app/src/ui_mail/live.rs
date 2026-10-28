@@ -1,10 +1,11 @@
 //! The mail getters' reads at the call, the call host's half of [`benilla_ui::script::MailBoxQuery`],
 //! [`benilla_ui::script::MailRowQuery`], [`benilla_ui::script::NewMailQuery`],
-//! [`benilla_ui::script::StationeryQuery`] and [`benilla_ui::script::PackageQuery`]: the mailbox
-//! cell `[0xb6ef88]` and the records as the session holds them, each row resolved off the caches
-//! as the reference's getters read them as they run (`0x4aebc0`, `0x4af110`, `0x4af360`,
-//! `0x4af5d0`), the pending-mail time `0x845eac` (`0x4afea0`), the usable stationery off the
-//! player's items as of the drain's place (`0x4ad970`) and `Package.dbc`'s rows.
+//! [`benilla_ui::script::StationeryQuery`], [`benilla_ui::script::StationeryTextureQuery`] and
+//! [`benilla_ui::script::PackageQuery`]: the mailbox cell `[0xb6ef88]` and the records as the
+//! session holds them, each row resolved off the caches as the reference's getters read them as
+//! they run (`0x4aebc0`, `0x4af110`, `0x4af360`, `0x4af5d0`), the pending-mail time `0x845eac`
+//! (`0x4afea0`), the usable stationery off the player's items as of the drain's place
+//! (`0x4ad970`), the Stationery store's textures by id (`0x4ae3f0`) and `Package.dbc`'s rows.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -12,6 +13,7 @@ use bevy::prelude::*;
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
     MailBox, MailBoxQuery, MailInboxRow, MailRowQuery, NewMailQuery, PackageQuery, StationeryQuery,
+    StationeryTextureQuery,
 };
 
 use super::{
@@ -132,6 +134,15 @@ impl crate::script_calls::live::LiveFamily for MailLive<'_, '_> {
             || ask.answer(|q: &MailRowQuery| self.row(q))
             || ask.answer(|_: &NewMailQuery| Some(self.pending.as_deref()?.has_new_mail()))
             || ask.answer(|_: &StationeryQuery| self.stationeries())
+            || ask.answer(|q: &StationeryTextureQuery| {
+                Some(
+                    self.stationery
+                        .as_deref()?
+                        .0
+                        .texture_of(q.id)
+                        .map(str::to_owned),
+                )
+            })
             || ask.answer(|_: &PackageQuery| {
                 Some(
                     self.packages

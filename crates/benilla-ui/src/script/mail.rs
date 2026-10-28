@@ -1,8 +1,8 @@
 //! The mail bindings. The getters read the mailbox cell, the inbox rows, the pending-mail time,
 //! the usable stationery and the packages through the lent host at the call ([`MailBoxQuery`],
-//! [`MailRowQuery`], [`NewMailQuery`], [`StationeryQuery`], [`PackageQuery`]), as the reference's
-//! read the session's records as they run (`0x4aeb90`, `0x4aebc0`, `0x4afea0`, `0x4ae1f0`,
-//! `0x4ae430`); the VM's own copy ([`super::UiScript::set_mail`] and its siblings) answers only
+//! [`MailRowQuery`], [`NewMailQuery`], [`StationeryQuery`], [`StationeryTextureQuery`],
+//! [`PackageQuery`]), as the reference's read the session's records as they run (`0x4aeb90`,
+//! `0x4aebc0`, `0x4afea0`, `0x4ae1f0`, `0x4ae3f0`, `0x4ae430`); the VM's own copy ([`super::UiScript::set_mail`] and its siblings) answers only
 //! with no host, which only a test sets. A getter's lookup that misses asks inside its call, with
 //! the callback that signals `MAIL_INBOX_UPDATE` when the record lands ([`MailLookup`]). Each verb
 //! past its guards hands the host its call ([`MailCall`]), which sends inside it. Indices are
@@ -253,6 +253,16 @@ pub struct StationeryQuery;
 
 impl LiveQuery for StationeryQuery {
     type Answer = Vec<StationeryView>;
+}
+
+/// The Stationery store's texture for `id` (`[row+0x8]`), indexed by id (`0xc0d710`): `None`
+/// for an id with no row.
+pub struct StationeryTextureQuery {
+    pub id: u32,
+}
+
+impl LiveQuery for StationeryTextureQuery {
+    type Answer = Option<String>;
 }
 
 /// `Package.dbc`'s rows, in file order (`0x4ae430`, `0x4ae450`).
@@ -1263,21 +1273,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetSelectedStationeryTexture()` (`0x4ae3f0`): nil for no selection or an unknown id.
+    // `GetSelectedStationeryTexture()` (`0x4ae3f0`): the selection (`0xb6efb4`) read in the
+    // Stationery store by id (`0xc0d710`, `0x4ae409`), whether or not the paper is usable now;
+    // nil for no selection, a negative id or one past the store's bound (`0x4ae3f5`-`0x4ae401`)
+    // and an id with no row (`0x4ae40c`). With no host, the VM's copy of the usable list.
     g.set(
         "GetSelectedStationeryTexture",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let id = model.mail_stationery;
-            let tex = (id != 0)
+            let tex = ((id as i32) > 0)
                 .then(|| {
-                    stationeries_now(lua, &model)
-                        .into_iter()
-                        .find(|r| r.id == id)
+                    ask(lua, &StationeryTextureQuery { id }).unwrap_or_else(|| {
+                        model
+                            .mail_stationeries
+                            .iter()
+                            .find(|r| r.id == id)
+                            .map(|r| r.texture.clone())
+                    })
                 })
                 .flatten();
             Ok(match tex {
-                Some(row) => Value::String(lua.create_string(&row.texture)?),
+                Some(texture) => Value::String(lua.create_string(&texture)?),
                 None => Value::Nil,
             })
         })?,

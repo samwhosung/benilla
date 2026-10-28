@@ -477,42 +477,54 @@ fn the_walk_away_close_fires_ahead_of_the_frames_pending_crossing() {
     assert_eq!(c.seen(), ["MAIL_CLOSED:nil", "UPDATE_PENDING_MAIL:nil"]);
 }
 
+/// An item object of ours, `guid` of `entry` stacked `stack`, created and seated in the
+/// backpack's first slot, its record left to the cache.
+fn carry(c: &mut Client, guid: u64, entry: u32, stack: u32) {
+    use benilla_protocol::field::FIELD_ITEM_STACK_COUNT;
+    use benilla_protocol::messages::ObjectType;
+    c.frame(vec![vec![SessionEvent::ItemCreate {
+        guid,
+        container: false,
+        fields: benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x3),
+            (3, entry),
+            (6, ME as u32),
+            (8, ME as u32),
+            (FIELD_ITEM_STACK_COUNT, stack),
+        ])
+        .into_created(ObjectType::Item),
+    }]]);
+    seat_in_backpack(c, guid);
+    c.frame(vec![]);
+}
+
+/// The backpack's first slot set to `guid`, 0 for empty, in our store with no packet.
+fn seat_in_backpack(c: &mut Client, guid: u64) {
+    use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+    let world = c.app.world_mut();
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    let slot = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
+    world
+        .get_mut::<crate::net::ObjectStore>(me)
+        .expect("our store")
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (slot, guid as u32),
+            (slot + 1, (guid >> 32) as u32),
+        ]));
+}
+
+const fn item_guid(low: u64) -> u64 {
+    (benilla_protocol::guid::HIGH_ITEM as u64) << 48 | low
+}
+
 /// `GetSendMailItem` on an attachment whose record the cache lacks answers the miss and keeps the
 /// callback `0x4ae710` (`0x4ae604`), one per call; the record's answer signals
 /// `MAIL_SEND_INFO_UPDATE` at its packet (`0x4ae71f`), and the getter then reads it.
 #[test]
 fn an_attachment_whose_record_lands_later_signals_the_send_info_update() {
-    use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_PLAYER_INV_SLOT_HEAD};
-    use benilla_protocol::messages::ObjectType;
-    const LINEN: u64 = (benilla_protocol::guid::HIGH_ITEM as u64) << 48 | 1;
     let mut c = client();
-    c.frame(vec![vec![SessionEvent::ItemCreate {
-        guid: LINEN,
-        container: false,
-        fields: benilla_protocol::ObjectFields::from_pairs(&[
-            (2, 0x3),
-            (3, WOOL),
-            (6, ME as u32),
-            (8, ME as u32),
-            (FIELD_ITEM_STACK_COUNT, 3),
-        ])
-        .into_created(ObjectType::Item),
-    }]]);
-    {
-        // The backpack's first slot holds it.
-        let world = c.app.world_mut();
-        let me = world.resource::<crate::net::GuidIndex>().0[&ME];
-        let slot = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
-        world
-            .get_mut::<crate::net::ObjectStore>(me)
-            .expect("our store")
-            .0
-            .merge(benilla_protocol::ObjectFields::from_pairs(&[
-                (slot, LINEN as u32),
-                (slot + 1, (LINEN >> 32) as u32),
-            ]));
-    }
-    c.frame(vec![]);
+    carry(&mut c, item_guid(1), WOOL, 3);
     c.eval::<()>(
         true,
         r#"Infos = 0
@@ -533,4 +545,52 @@ fn an_attachment_whose_record_lands_later_signals_the_send_info_update() {
     }]]);
     assert_eq!(c.eval::<i64>(true, "return Infos"), 1, "one per call");
     assert_eq!(c.eval::<String>(true, read), "Wool Cloth/3");
+}
+
+/// The store a carried paper's row, 5, names, and its item.
+const PAPER_ROW: u32 = 5;
+const PAPER: u32 = 9_311;
+
+/// The client carrying one paper whose record the cache holds, with the Stationery store of its
+/// one row, which only a carried paper makes usable.
+fn carrying_paper() -> Client {
+    let mut c = client();
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_mail::Stationery(
+        benilla_formats::StationeryCatalog::from_rows(vec![benilla_formats::StationeryRow {
+            id: PAPER_ROW,
+            item: PAPER,
+            texture: "PAPER".into(),
+            flags: 0,
+        }]),
+    ));
+    world
+        .resource_mut::<crate::items::Items>()
+        .insert_template(PAPER, Some(crate::items::test_template("Plain Paper")));
+    carry(&mut c, item_guid(1), PAPER, 1);
+    c
+}
+
+/// `GetSelectedStationeryTexture` reads the Stationery store by the selected id (`0xc0d710`,
+/// `[row+0x8]` at `0x4ae410`), not the usable list: a paper selected, then used up and gone from
+/// the rebuilt list, still answers its texture.
+#[test]
+fn a_selected_paper_no_longer_usable_still_answers_its_texture() {
+    let mut c = carrying_paper();
+    assert_eq!(
+        c.eval::<String>(
+            true,
+            "local n = GetNumStationeries() SelectStationery(1)              return n .. '/' .. tostring(GetSelectedStationeryTexture())"
+        ),
+        "1/PAPER"
+    );
+    seat_in_backpack(&mut c, 0);
+    c.frame(vec![]);
+    assert_eq!(
+        c.eval::<String>(
+            true,
+            "return GetNumStationeries() .. '/' .. tostring(GetSelectedStationeryTexture())"
+        ),
+        "0/PAPER"
+    );
 }

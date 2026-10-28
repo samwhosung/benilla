@@ -387,7 +387,7 @@ pub use macros::{
 pub use mail::{
     MailBox, MailBoxQuery, MailCall, MailInboxRow, MailInvoice, MailLookup, MailRowQuery,
     MailRowVerb, MailSendRequest, MailState, NewMailQuery, PackageQuery, PackageView,
-    StationeryQuery, StationeryView, MAIL_ROW_STRINGS,
+    StationeryQuery, StationeryTextureQuery, StationeryView, MAIL_ROW_STRINGS,
 };
 pub use measure::TextMeasure;
 pub use merchant::{
