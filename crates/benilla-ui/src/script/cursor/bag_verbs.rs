@@ -134,9 +134,10 @@ fn put_item(lua: &Lua, model: &mut Model, dest: Dest, vendor: VendorAtCall) -> b
         // (`0x4c7e9a`, `0x4c7ea5`).
         Some(CursorPayload::Merchant(_)) => {
             if let Some(entry) = vendor.held_entry {
-                model
-                    .merchant_drops
-                    .push(crate::script::MerchantCall::BuyIntoBag { bag_guid, entry });
+                model.merchant_call_in_verb(crate::script::MerchantCall::BuyIntoBag {
+                    bag_guid,
+                    entry,
+                });
             }
             clear_cursor(model);
             false
@@ -199,14 +200,12 @@ fn place_held(lua: &Lua, model: &mut Model, dest: Dest, held: CursorItem) -> boo
             None => return false,
         },
     };
-    model
-        .item_calls
-        .push(ItemCall::AutoStore(crate::script::BagAutoStore {
-            src_bag: held.bag,
-            src_slot: held.slot,
-            dst_bag,
-            count: held.count,
-        }));
+    model.item_call(ItemCall::AutoStore(crate::script::BagAutoStore {
+        src_bag: held.bag,
+        src_slot: held.slot,
+        dst_bag,
+        count: held.count,
+    }));
     // `ClearCursor(0,1)` past the send (`0x4c7e55`), locking nothing new.
     clear(model, Clear::KEEP_LOCK);
     true
@@ -309,8 +308,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let live = bag_slot(lua, live, "Invalid bag slot in PutItemInBag")?;
             let vendor = crate::script::merchant::at_call(lua);
             let answer = verb(lua, |model| put_item_in_bag(lua, model, live, vendor));
-            crate::script::item_calls::submit_item_calls(lua)?;
-            crate::script::merchant::submit_slot_buys(lua)?;
             consumed(answer)
         })?,
     )?;
@@ -319,8 +316,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let vendor = crate::script::merchant::at_call(lua);
             let answer = verb(lua, |model| put_item_in_backpack(lua, model, vendor));
-            crate::script::item_calls::submit_item_calls(lua)?;
-            crate::script::merchant::submit_slot_buys(lua)?;
             consumed(answer)
         })?,
     )?;

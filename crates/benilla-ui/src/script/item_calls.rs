@@ -1,10 +1,9 @@
 //! The engine half of the bag, cursor and paper-doll verbs, which the host applies inside each
 //! verb's call ([`ItemCall`]): the reference's bindings send their packets in their own bodies,
 //! so a chunk's item packets leave in call order with every other verb's, and its next line reads
-//! what the verb did. `AutoEquipCursorItem` and `SwapItem` hand theirs to the host in place, ahead
-//! of their clear's signals ([`super::Model::call_in_verb`]); the other steps file theirs on the
-//! model as they decide ([`super::Model::item_calls`]), and the binding hands them to the host as
-//! the segment ends ([`submit_item_calls`]).
+//! what the verb did. A verb's segment hands each call to the host in its place among the
+//! segment's signals as it decides ([`Model::item_call`]), so a send goes out ahead of the clear
+//! or the unlock that follows it in the reference, and their listeners hear it sent.
 
 use mlua::Lua;
 
@@ -61,19 +60,19 @@ pub enum ItemCall {
     BindOnUse { may_cast: bool },
 }
 
-/// Hand the host the item calls the verb's last segment filed, in the order filed, before the
-/// verb returns.
-pub(super) fn submit_item_calls(lua: &Lua) -> mlua::Result<()> {
-    let calls = std::mem::take(
-        &mut lua
-            .app_data_mut::<Model>()
-            .expect("model app_data")
-            .item_calls,
-    );
-    for call in calls {
-        super::calls::submit(lua, ScriptCall::Item(call))?;
+impl Model {
+    /// Hand `call` to the host in its place among the verb segment's signals
+    /// ([`Model::call_in_verb`]), as the reference's bindings send in their own bodies: ahead of
+    /// the clear or the unlock that follows the send.
+    pub(crate) fn item_call(&mut self, call: ItemCall) {
+        self.call_in_verb(ScriptCall::Item(call));
     }
-    Ok(())
+
+    /// [`Model::item_call`] for a held vendor row's drop: the buy (`0x5e1f30`) goes out ahead of
+    /// the drop's `ClearCursor` (`0x4c7954`, `0x4c7eb6`, `0x4f9f48`).
+    pub(crate) fn merchant_call_in_verb(&mut self, call: super::MerchantCall) {
+        self.call_in_verb(ScriptCall::Merchant(call));
+    }
 }
 
 /// Hand the host one item call now.

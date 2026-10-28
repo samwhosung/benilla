@@ -7,7 +7,7 @@ use mlua::Lua;
 
 use crate::script::container::ContainerMove;
 use crate::script::tick::verb;
-use crate::script::{ItemCall, Model, ScriptCall};
+use crate::script::{ItemCall, Model};
 
 use super::equip::{equip_question, EquipFacts, Question};
 use super::{clear, Clear, EQUIPMENT_BAG};
@@ -115,7 +115,7 @@ pub(crate) fn swap_items(
         Question::Send => (Swap::Sent(mv.clone()), ItemCall::Move(mv)),
     };
     if in_place {
-        model.call_in_verb(ScriptCall::Item(call));
+        model.item_call(call);
     }
     if let Swap::Sent(_) = swap {
         clear(model, Clear::KEEP_LOCK);

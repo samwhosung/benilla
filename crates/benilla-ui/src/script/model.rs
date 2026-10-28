@@ -5,7 +5,7 @@ use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 
 use super::{
     auction, backdrop, bank, camera_view, char_stats, chat_window, colorselect, container, craft,
-    cursor, death, gossip, guild, item_calls, item_text, loot, loot_roll, macros, mail, merchant,
+    cursor, death, gossip, guild, item_text, loot, loot_roll, macros, mail, merchant,
     parse_unit_token, party, petition, pvp, quest, quest_log, reputation, simplehtml, skills,
     slider, social, spellbook, stable, taxi, trade, tradeskill, trainer, weapon_enchant,
     ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest, PlayerReqState, RegionData,
@@ -691,9 +691,6 @@ pub(crate) struct Model {
     /// The world pick under the cursor (`[this+0x350]`): a world click drops no payload on an
     /// object, only an item on terrain, and anything over nothing.
     pub(crate) world_pick: cursor::WorldPick,
-    /// The item calls the verb segment running now filed, which its binding hands the host as the
-    /// segment ends ([`item_calls::submit_item_calls`]).
-    pub(crate) item_calls: Vec<item_calls::ItemCall>,
     /// Targeting wants an item (`0x6e6330`): a bag or paper-doll click becomes a pick.
     pub(crate) item_pick_armed: bool,
     /// Targeting wants a location (`0x6e6320`, the word's `0x60`): a minimap click casts at the
@@ -750,9 +747,6 @@ pub(crate) struct Model {
     pub(crate) merchant: Option<merchant::MerchantState>,
     /// The repair costs `SetInventoryItem` and `SetBagItem` return.
     pub(crate) repair_costs: merchant::RepairCosts,
-    /// The buys a drop verb made of a held vendor row, into a slot or a bag, handed to the host as
-    /// the verb returns ([`merchant::MerchantCall::BuyInSlot`], [`merchant::MerchantCall::BuyIntoBag`]).
-    pub(crate) merchant_drops: Vec<merchant::MerchantCall>,
     /// Repair mode (`InRepairMode`).
     pub(crate) repair_mode: bool,
 
@@ -1555,7 +1549,6 @@ impl Model {
             cursor: None,
             cursor_grid: false,
             world_pick: cursor::WorldPick::default(),
-            item_calls: Vec::new(),
             item_pick_armed: false,
             location_pick_armed: false,
             pending_wrap: None,
@@ -1576,7 +1569,6 @@ impl Model {
             gossip: None,
             merchant: None,
             repair_costs: Default::default(),
-            merchant_drops: Vec::new(),
             repair_mode: false,
             stable: Default::default(),
             bank: None,

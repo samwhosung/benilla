@@ -527,7 +527,7 @@ fn use_cleared(
     let known = s.item_class.is_some();
     let equip = (fork == UseFork::Equip).then(|| s.cursor_item(bag, slot));
     if model.repair_mode {
-        model.item_calls.push(ItemCall::Repair { bag, slot });
+        model.item_call(ItemCall::Repair { bag, slot });
         return None;
     }
     let arm = if bag == -1 || (5..=10).contains(&bag) {
@@ -645,7 +645,7 @@ fn pickup_container_item(
         // No eligibility test: the server refuses with an `ERR_CANT_WRAP_*` reason
         // (`SMSG_INVENTORY_CHANGE_FAILURE` 43-48), and a local gate would eat that error line.
         model.pending_wrap = None;
-        model.item_calls.push(ItemCall::Wrap {
+        model.item_call(ItemCall::Wrap {
             gift_bag: wrap.bag,
             gift_slot: wrap.slot,
             item_bag: bag,
@@ -681,7 +681,7 @@ fn pickup_container_item(
                 may_cast,
             });
         } else if occupied {
-            model.item_calls.push(ItemCall::Repair { bag, slot });
+            model.item_call(ItemCall::Repair { bag, slot });
         }
         return ContainerClick::Done;
     }
@@ -750,9 +750,7 @@ fn pickup_container_item(
         Some(CursorPayload::Merchant(_)) if !vendor.open => ContainerClick::Done,
         Some(CursorPayload::Merchant(_)) => {
             if let Some(entry) = vendor.held_entry {
-                model
-                    .merchant_drops
-                    .push(super::MerchantCall::BuyInSlot { bag, slot, entry });
+                model.merchant_call_in_verb(super::MerchantCall::BuyInSlot { bag, slot, entry });
             }
             cursor::clear_cursor(model);
             ContainerClick::Done
@@ -782,7 +780,7 @@ enum ContainerClick {
 
 /// Queue a split's placement (`0x5e1210`), which asks no question.
 fn queue_split(model: &mut super::Model, held: &CursorItem, dst_bag: i64, dst_slot: u32, n: u32) {
-    model.item_calls.push(ItemCall::Move(ContainerMove {
+    model.item_call(ItemCall::Move(ContainerMove {
         src_bag: held.bag,
         src_slot: held.slot,
         dst_bag,
@@ -1113,7 +1111,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let equip = super::tick::verb(lua, |model| {
                 use_cleared(lua, model, bag, slot, on_self, may_cast, vendor, &mut call)
             });
-            super::item_calls::submit_item_calls(lua)?;
             if let Some(call) = call {
                 super::calls::submit(lua, call)?;
             }
@@ -1153,7 +1150,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let click = super::tick::verb(lua, |model| {
                 pickup_container_item(lua, model, bag, slot, may_cast, vendor)
             });
-            super::item_calls::submit_item_calls(lua)?;
             match click {
                 ContainerClick::Done => {}
                 ContainerClick::Swapped => super::tick::verb(lua, |model| {
@@ -1164,7 +1160,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     super::calls::submit(lua, super::ScriptCall::PickItem(pick))?
                 }
             }
-            super::merchant::submit_slot_buys(lua)
+            Ok(())
         })?,
     )?;
 

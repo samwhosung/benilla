@@ -339,21 +339,6 @@ fn submit(lua: &Lua, call: MerchantCall) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Merchant(call))
 }
 
-/// Hand the host the buys the drop verb just made (`Model::merchant_drops`), before the verb
-/// returns, as the reference sends from the drop itself.
-pub(super) fn submit_slot_buys(lua: &Lua) -> mlua::Result<()> {
-    let buys = std::mem::take(
-        &mut lua
-            .app_data_mut::<Model>()
-            .expect("model app_data")
-            .merchant_drops,
-    );
-    for call in buys {
-        submit(lua, call)?;
-    }
-    Ok(())
-}
-
 /// 1 or nil, as the client pushes a usable flag (`pushnumber(1.0)` / `pushnil`).
 fn usable_value(usable: bool) -> Value {
     if usable {

@@ -513,6 +513,12 @@ fn heard_around(h: &mut Bags, setup: &str, verb: &str) -> Vec<&'static str> {
             ClientCommand::RandomRoll { .. } => Some("lock"),
             ClientCommand::AutoEquipItem { .. } => Some("equip"),
             ClientCommand::SwapInvItem { .. } => Some("swap"),
+            ClientCommand::DestroyItem { .. } => Some("destroy"),
+            ClientCommand::SplitItem { .. } => Some("split"),
+            ClientCommand::AutoStoreBagItem { .. } => Some("store"),
+            ClientCommand::SetAmmo { .. } => Some("ammo"),
+            ClientCommand::BuyItemInSlot { .. } => Some("buy"),
+            ClientCommand::WrapItem { .. } => Some("wrap"),
             ClientCommand::ItemQuery { .. } | ClientCommand::NameQuery { .. } => None,
             _ => Some("other"),
         })
@@ -563,6 +569,93 @@ fn each_cursor_equip_sends_ahead_of_its_clears_listeners() {
     ];
     for (setup, verb, wire) in cases {
         let mut h = Bags::new();
+        assert_eq!(heard_around(&mut h, setup, verb), wire, "{setup} {verb}");
+    }
+}
+
+/// Arrows in backpack slot 5 (wire 27), the projectile class the ammo slot loads by.
+fn with_arrows(h: &mut Bags) {
+    const ARROWS: u32 = 2512;
+    const R: u64 = 0x4000_0000_0000_0A05;
+    let world = h.app.world_mut();
+    let me = world
+        .query_filtered::<Entity, With<SelfPlayer>>()
+        .single(world)
+        .expect("us");
+    world
+        .get_mut::<ObjectStore>(me)
+        .expect("our store")
+        .0
+        .merge(ObjectFields::from_pairs(&[
+            (F_INV_SLOT_HEAD + 2 * 27, R as u32),
+            (F_INV_SLOT_HEAD + 2 * 27 + 1, (R >> 32) as u32),
+        ]));
+    test_spawn_item(
+        world,
+        R,
+        ObjectFields::from_pairs(&[(F_TYPE, 0x3), (FIELD_OBJECT_ENTRY, ARROWS), (14, 200)]),
+        false,
+    );
+    world.resource_mut::<Items>().insert_template(
+        ARROWS,
+        Some(ItemInfo {
+            class: crate::ui_items::ITEM_CLASS_PROJECTILE,
+            ..test_template("Rough Arrow")
+        }),
+    );
+}
+
+/// The other cursor verbs send in their bodies too, ahead of the clear or unlock that follows:
+/// `DeleteCursorItem` (`0x4898a3`, then `ClearCursor(1,1)` `0x4898af` and `LockItem` `0x4898bc`),
+/// the bag click's split (`0x4f9e43` into `0x5e1210`, then `0x4f9e4f`), the bag worker's store
+/// (`0x4c7e49` into `0x5e12e0`, then `0x4c7e55`), the ammo slot's load (`0x4c7440`, then
+/// `ClearCursor(1,1)` at `0x4c794d`), a vendor row's drop (`0x4f9f3c` into `0x5e1f30`, then
+/// `0x4f9f48`) and the gift wrap (`0x5ee0a5`, then the paper's unlock, `0x5ee0aa` into
+/// `0x5eded0`).
+#[test]
+fn each_cursor_send_goes_ahead_of_its_clears_listeners() {
+    let none = |_: &mut Bags| {};
+    // Armed with the host lent, so the paper resolves and its lock is real.
+    let wrap = |h: &mut Bags| {
+        with_hosted_vm(h.app.world_mut(), |s| s.expect("a VM").arm_gift_wrap(0, 6));
+    };
+    type Prep = fn(&mut Bags);
+    let cases: [(Prep, &str, &str, &[&str]); 6] = [
+        (
+            none,
+            "PickupContainerItem(0, 1)",
+            "DeleteCursorItem()",
+            &["destroy", "lock", "cursor", "lock"],
+        ),
+        (
+            none,
+            "SplitContainerItem(0, 3, 2)",
+            "PickupContainerItem(0, 9)",
+            &["split", "cursor"],
+        ),
+        (
+            none,
+            "PickupContainerItem(0, 1)",
+            "PutItemInBag(20)",
+            &["store", "cursor"],
+        ),
+        (
+            with_arrows,
+            "PickupContainerItem(0, 5)",
+            "PickupInventoryItem(0)",
+            &["ammo", "lock", "cursor"],
+        ),
+        (
+            Bags::open_vendor,
+            "PickupMerchantItem(1)",
+            "PickupContainerItem(0, 5)",
+            &["buy", "cursor"],
+        ),
+        (wrap, "", "PickupContainerItem(0, 1)", &["wrap", "lock"]),
+    ];
+    for (prep, setup, verb, wire) in cases {
+        let mut h = Bags::new();
+        prep(&mut h);
         assert_eq!(heard_around(&mut h, setup, verb), wire, "{setup} {verb}");
     }
 }

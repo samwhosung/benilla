@@ -23,8 +23,6 @@ pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     let may_cast = protected::gate(lua, Tag::CAST);
     let vendor = crate::script::merchant::at_call(lua);
     let click = verb(lua, |model| doll_click(lua, model, id, may_cast, vendor));
-    crate::script::item_calls::submit_item_calls(lua)?;
-    crate::script::merchant::submit_slot_buys(lua)?;
     Ok(match click {
         DollClick::Done(repaint) => repaint,
         DollClick::Swapped(occupant) => {
@@ -120,7 +118,7 @@ pub(super) fn doll_click(
                 may_cast,
             });
         } else if usable && (1..=19).contains(&id) {
-            model.item_calls.push(ItemCall::RepairWorn(id));
+            model.item_call(ItemCall::RepairWorn(id));
         }
         return DollClick::Done(false);
     }
@@ -203,13 +201,11 @@ pub(super) fn doll_click(
                 return DollClick::Done(false);
             };
             if entry == held.item_id {
-                model
-                    .merchant_drops
-                    .push(crate::script::MerchantCall::BuyInSlot {
-                        bag: EQUIPMENT_BAG,
-                        slot: id,
-                        entry,
-                    });
+                model.merchant_call_in_verb(crate::script::MerchantCall::BuyInSlot {
+                    bag: EQUIPMENT_BAG,
+                    slot: id,
+                    entry,
+                });
             }
             clear_cursor(model);
             DollClick::Done(true)
@@ -232,14 +228,14 @@ fn ammo_click(lua: &Lua, model: &mut Model) -> DollClick {
             let projectile = held.item_class == Some(ITEM_CLASS_PROJECTILE)
                 && super::equip::held_facts(lua, model, &held).is_some();
             if projectile {
-                model.item_calls.push(ItemCall::SetAmmo {
+                model.item_call(ItemCall::SetAmmo {
                     entry: held.item_id,
                 });
             } else {
                 auto_equip_cursor_item(lua, model);
             }
         }
-        Some(CursorPayload::Ammo(held)) => model.item_calls.push(ItemCall::SetAmmo {
+        Some(CursorPayload::Ammo(held)) => model.item_call(ItemCall::SetAmmo {
             entry: held.item_id,
         }),
         _ => {
@@ -354,7 +350,6 @@ pub(super) fn use_inventory_item(lua: &Lua, id: u32, on_self: bool) -> mlua::Res
     verb(lua, |model| {
         use_cleared(lua, model, id, on_self, may_cast, &mut call)
     });
-    crate::script::item_calls::submit_item_calls(lua)?;
     if let Some(call) = call {
         crate::script::calls::submit(lua, call)?;
     }
@@ -406,7 +401,7 @@ fn use_cleared(
         && crate::script::char_stats::own_inv_view(lua, model, id as usize)
             .is_some_and(|s| s.item_id != 0)
     {
-        model.item_calls.push(ItemCall::RepairWorn(id));
+        model.item_call(ItemCall::RepairWorn(id));
     }
 }
 

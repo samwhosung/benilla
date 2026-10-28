@@ -856,7 +856,7 @@ pub(crate) fn delete_cursor_item(lua: &Lua, model: &mut Model) -> Option<&'stati
     if equip::held_facts(lua, model, &item).is_some() && indestructible(model, &item) {
         return Some(CANT_BE_DESTROYED);
     }
-    model.item_calls.push(super::ItemCall::Destroy {
+    model.item_call(super::ItemCall::Destroy {
         bag: item.bag,
         slot: item.slot,
         count: item.count.unwrap_or(0),
@@ -1256,7 +1256,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(key) = super::tick::verb(lua, |model| delete_cursor_item(lua, model)) {
                 return super::calls::display_error(lua, key);
             }
-            super::item_calls::submit_item_calls(lua)
+            Ok(())
         })?,
     )?;
 
