@@ -1824,8 +1824,10 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // watcher's own store is the one its packet left, and the buff timers read the duration
     // packet's stamps through the call host. The drunk line's name is read through the host.
     // `SetPetGuid`'s trainer refresh reads the open trainer, and its `PET_UI_CLOSE` the new
-    // pet's object and ours, as the frame left them.
-    ("field notices", &["net::GuidIndex", "net::ObjectStore", "ui_trainer::TrainerOpen"]),
+    // pet's object and ours, as the frame left them. The explored watcher's landmark rebuild
+    // (`0x4a67a0`) reads the guard-directions marker and the world states.
+    ("field notices", &["net::GuidIndex", "net::ObjectStore", "poi_marker::PoiMarker",
+        "ui_trainer::TrainerOpen", "world_state::WorldStates"]),
     // The views lane rewinds the stores, records and roster cells as of each packet for the
     // tokens' live reads; it reads the index and the selection as the frame left them (#2217).
     ("unit views", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
@@ -2018,18 +2020,9 @@ pub(super) const QUEUED_FOR_THE_TICK: &[(&str, &str, &str)] = &[
         "set_world_map_landmark_sources",
         "rebuilds the landmark list once a frame off its inputs and queues `WORLD_MAP_UPDATE` on a \
          change, where the reference rebuilds and signals in `0x4a67a0` (`0x4a6ce4`) at each \
-         input's place: the explored bits' watcher (`0x4a6477`) in the update packet's notify \
-         pass, the gossip marker's set in its handler (`0x4e2840` → `0x6dac10`, `0x6dac93`) and \
-         its expiry in the minimap's frame update (`0x6d9411`)",
-    ),
-    (
-        "ui_world_map.rs::feed_world_map",
-        "set_world_map_explored",
-        "pushes the explored bits once a frame and queues `WORLD_MAP_UPDATE` on a change, where \
-         the reference's mirror watcher on the bytes (`0x4a6430` arms \
-         `ClntObjMgrSetObjectMirrorHandler(4, 0xe6c, player, 0x100, 0x4a6460)`) runs inside the \
-         update packet's notify pass and its `0x4a6477` → `0x4a67a0` signals there (`0x4a6ce4`): \
-         a callback on the field callbacks' lane",
+         input's place: the gossip marker's set in its handler (`0x4e2840` → `0x6dac10`, \
+         `0x6dac93`) and its expiry in the minimap's frame update (`0x6d9411`); the explored \
+         bits' watcher (`0x4a6477`) is a field notice of its own",
     ),
     (
         "ui_world_map.rs::feed_world_map",

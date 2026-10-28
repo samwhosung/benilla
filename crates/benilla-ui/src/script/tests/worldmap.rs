@@ -928,3 +928,64 @@ fn a_packet_rebuild_replaces_the_landmarks_and_queues_nothing() {
     s.tick(0.0);
     assert_eq!(s.eval::<i64>("return seen").unwrap(), 0);
 }
+
+/// The explored bytes' watcher (`0x4a6460` → `0x4a67a0`) takes the bits, rebuilds the landmark list
+/// they gate and signals `WORLD_MAP_UPDATE` in place (`0x4a6ce4`), once: a handler reads the new
+/// overlays and landmarks, and nothing is left queued for the tick. The read at the world enter
+/// stores the bits and signals nothing.
+#[test]
+fn the_explored_watcher_rebuilds_then_signals_once() {
+    let mut s = script();
+    push_catalog(&mut s);
+    s.set_world_loc_projector(Box::new(|(c, _, _), map, x, y| {
+        (c == 2 && map == 0).then_some((x, y))
+    }));
+    s.tick(0.01);
+    s.run("SetMapZoom(2, 1)").unwrap();
+    s.run(
+        r#"
+        seen = {}
+        f = CreateFrame("Frame")
+        f:RegisterEvent("WORLD_MAP_UPDATE")
+        f:SetScript("OnEvent", function()
+            table.insert(seen, GetNumMapOverlays() .. "/" .. GetNumMapLandmarks())
+        end)
+    "#,
+    )
+    .unwrap();
+    let source = |name: &str| WorldMapLandmarkSource {
+        name: name.into(),
+        description: String::new(),
+        map: 0,
+        pos: (0.3, 0.3),
+        icons: [Some(6); 3],
+    };
+    let bits = |word: usize, bit: u32| {
+        let mut explored = vec![0u32; 64];
+        explored[word] = 1 << bit;
+        explored
+    };
+    let seen = |s: &UiScript| s.eval::<String>("return table.concat(seen, ',')").unwrap();
+
+    // The world-enter read: Northshire (bit 125) shows at once, with no signal.
+    s.seed_world_map_explored(bits(3, 29));
+    s.tick(0.01);
+    assert_eq!(seen(&s), "");
+    assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 1);
+
+    // A packet reveals Goldshire (bit 124) beside it, and the sources the bits gate change: one
+    // signal, over both.
+    let mut both = bits(3, 29);
+    both[3] |= 1 << 28;
+    s.world_map_explored_changed(both, Some(vec![source("Goldshire Inn"), source("Abbey")]));
+    assert_eq!(seen(&s), "2/2");
+    // Sources the host does not have leave the list as it stands.
+    s.world_map_explored_changed(bits(3, 29), None);
+    assert_eq!(seen(&s), "2/2,1/2");
+    s.tick(0.01);
+    assert_eq!(
+        seen(&s),
+        "2/2,1/2",
+        "the signal is not queued to fire again on the tick"
+    );
+}

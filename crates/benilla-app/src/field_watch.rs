@@ -18,8 +18,8 @@
 //! type watchers `0x6041f0` and the player type watchers `0x5e2510` whose callbacks signal; the
 //! active player's `0x5de4b0`, rest-state, coinage and charmed-by watches registered in
 //! `0x5dd8a0`, its skill watches `0x5de180`, `0x5de450` and `0x5de470`, its ammunition watch
-//! `0x4c70b0`, and the weapon arms of the visible-item watch `0x5e2810`. The item watchers' and the
-//! inventory watcher's runs are [`crate::item_watch`]'s.
+//! `0x4c70b0`, its explored-bytes watch `0x4a6460`, and the weapon arms of the visible-item watch
+//! `0x5e2810`. The item watchers' and the inventory watcher's runs are [`crate::item_watch`]'s.
 
 use benilla_protocol::messages::{quest_slot_state, ObjectType, PLAYER_QUEST_LOG_SLOTS};
 use benilla_protocol::{ObjectFields, OwnerFallback};
@@ -164,6 +164,12 @@ pub(crate) enum FieldNotice {
     /// `SMSG_PLAYER_SKINNED`'s handler `0x5e7d40`: `PLAYER_SKINNED` with the byte's truth
     /// (`0x5e7d57` → `0x48f412`).
     Skinned { free_repop: bool },
+    /// The explored bytes' watcher `0x4a6460` on the active player (`PLAYER_EXPLORED_ZONES`, 0x100
+    /// bytes at the player section's `+0xe6c`, armed by `0x4a6430` in the world-enter cascade):
+    /// `0x4a6477` calls the map setter `0x4a67a0` over the map already shown. It reads the bytes
+    /// as the packet left them, rebuilds the overlays and the landmark list they gate and signals
+    /// `WORLD_MAP_UPDATE` (`0x4a6ce4`).
+    ExploredZones,
     /// A group member's ping, `0x4ee330` from `MSG_MINIMAP_PING`'s handler (`0x5e41bd`): the
     /// VM's statics store the point, then `MINIMAP_PING` with the token the packet resolved
     /// (`0x4ee48d`).
@@ -395,6 +401,11 @@ const QUEST_SLOT_BYTES: u16 = 12;
 /// The active player's point counters' watch `0x4c7000`, `PLAYER_CHARACTER_POINTS1` and `2` at
 /// the player section's `+0xe48`, 8 bytes, registered at world entry (`0x4c6fce`, `0x4c6fd8`).
 const CHARACTER_POINTS: (u16, u16) = (0xe48, 8);
+
+/// The active player's explored-bytes watch `0x4a6460`, `PLAYER_EXPLORED_ZONES_1` onward at the
+/// player section's `+0xe6c`, 0x100 bytes (64 dwords), armed by `ClntObjMgrSetObjectMirrorHandler(4,
+/// 0xe6c, player, 0x100, 0x4a6460)` in `0x4a6430`, from the world-enter cascade (`0x4908c0`).
+const EXPLORED_ZONES: (u16, u16) = (0xe6c, 0x100);
 
 /// The active player's ammunition watch `0x4c70b0`, `PLAYER_AMMO_ID` at the player section's
 /// `+0x102c`, registered at world entry (`0x4c6fea`, from `0x49097e`).
@@ -1104,6 +1115,10 @@ pub(crate) fn placed_values(
                     profession: delta(CHARACTER_POINTS.0 + 4),
                 },
             );
+        }
+        // `0x4a6460`: the map setter over the shown map, which signals `WORLD_MAP_UPDATE`.
+        if let Some(at) = at(PLAYER_SECTION, EXPLORED_ZONES, List::Object) {
+            pass.push(at, FieldNotice::ExploredZones);
         }
         // `0x4c70b0` sets the ammunition model (`0x4c70fc`, not built) and signals (`0x4c7110`).
         if let Some(at) = at(PLAYER_SECTION, AMMO_ID, List::Object) {

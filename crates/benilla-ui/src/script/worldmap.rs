@@ -560,7 +560,8 @@ impl super::UiScript {
         self.model_mut().worldmap.player_direct_area = direct_area;
     }
 
-    /// Pushes the discovery bitset; a change queues `WORLD_MAP_UPDATE` so an open map fills in.
+    /// Pushes the discovery bitset from outside a session (a capture's fixture, a test); a change
+    /// queues `WORLD_MAP_UPDATE` so an open map fills in.
     pub fn set_world_map_explored(&mut self, explored: Vec<u32>) {
         let mut model = self.model_mut();
         if model.worldmap.explored != explored {
@@ -569,6 +570,34 @@ impl super::UiScript {
                 .pending_events
                 .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
         }
+    }
+
+    /// Stores the discovery bitset without a signal: the world enter's read of the bytes the
+    /// watcher below has not run on. The reference reads them live whenever `0x4a67a0` builds
+    /// (`0x4a6bf4`), so a map first selected over a loaded player already sees them.
+    pub fn seed_world_map_explored(&mut self, explored: Vec<u32>) {
+        self.model_mut().worldmap.explored = explored;
+    }
+
+    /// The explored bytes' watcher (`0x4a6460` → `0x4a6477` → `0x4a67a0`, armed by `0x4a6430`) as
+    /// it runs in the update packet's notify pass. The setter re-selects the map it already shows:
+    /// the overlays follow the new bits, and the landmark list is rebuilt from `sources` when the
+    /// host has them, the bits gating its rows (`0x4a6890`-`0x4a68f3`). Then it signals
+    /// `WORLD_MAP_UPDATE` in place (`0x4a6ce4`), once, whether or not the shown art moved.
+    pub fn world_map_explored_changed(
+        &mut self,
+        explored: Vec<u32>,
+        sources: Option<Vec<WorldMapLandmarkSource>>,
+    ) {
+        {
+            let mut model = self.model_mut();
+            model.worldmap.explored = explored;
+            if let Some(sources) = sources {
+                model.worldmap.landmark_sources = sources;
+            }
+            model.worldmap.landmarks = build_landmarks(&model);
+        }
+        self.fire_event("WORLD_MAP_UPDATE", Vec::new());
     }
 
     /// Pushes the landmark sources and rebuilds the displayed map's list from them; a change to

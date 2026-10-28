@@ -5,7 +5,8 @@
 //!   `0x4a5d00` builds it, with the instance maps no continent owns beside it.
 //! - [`feed_world_map`], every frame: the player's selection (`0x4a6650`), the blips projected
 //!   onto the displayed map, and the landmark sources the setter `0x4a67a0` builds its list
-//!   from, pushed when they change.
+//!   from, pushed when they change. The explored bits are read once, silently, and kept by the
+//!   field notice of their watcher (`0x4a6460`).
 //! - [`dev_map_jump`]: Alt+click the map to go there.
 
 use bevy::prelude::*;
@@ -328,7 +329,9 @@ fn build_catalog_from_world(world: &World) -> Option<(Vec<WorldMapContinentView>
 
 /// The inputs the landmark sources are a pure function of. Besides a selection change, `0x4a67a0`
 /// rebuilds the list on these: a world-state push (`0x48fa0d`), a `PLAYER_EXPLORED_ZONES` change
-/// (`0x4a6477`, an UpdateFields callback on byte `0xe6c`) and the gossip marker's set and clear.
+/// (`0x4a6477`, an UpdateFields callback on byte `0xe6c`, which the field notice
+/// [`crate::field_watch::FieldNotice::ExploredZones`] has rebuilt at its place already) and the
+/// gossip marker's set and clear.
 #[derive(PartialEq, Eq)]
 struct LandmarkKey {
     map: u32,
@@ -505,7 +508,9 @@ fn install_world_loc_projector(script: &mut UiScript, data: &WorldMapUiData) {
 /// [`feed_world_map`]'s memos under one [`crate::ui_script::VmMemo`], so a new VM resets them all.
 #[derive(Default)]
 struct FeedMemos {
-    explored: Option<Vec<u32>>,
+    /// The player object whose explored bytes the engine has read once, silently: the watcher
+    /// (`0x4a6460`) keeps them after that ([`LandmarkReads::explored_zones_changed`]).
+    explored_read_for: Option<Entity>,
     /// The world-enter sync has run: the reference's `old == 0` gate.
     map_synced: bool,
     /// `GetWorldLocMapPosition`'s projection is installed over the current catalog.
@@ -518,32 +523,40 @@ pub(crate) struct LandmarkReads<'w, 's> {
     map: Option<Res<'w, CurrentMap>>,
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     areas: Option<Res<'w, crate::area::AreaTableRes>>,
-    poi_marker: Res<'w, crate::poi_marker::PoiMarker>,
+    poi_marker: Option<Res<'w, crate::poi_marker::PoiMarker>>,
     pois: Option<Res<'w, crate::area_poi::AreaPoiRes>>,
-    world_states: Res<'w, crate::world_state::WorldStates>,
+    world_states: Option<Res<'w, crate::world_state::WorldStates>>,
+}
+
+/// The 64 dwords of `PLAYER_EXPLORED_ZONES` as the store holds them.
+pub(crate) fn explored_of(fields: &benilla_protocol::ObjectFields) -> Vec<u32> {
+    (0..benilla_protocol::messages::PLAYER_EXPLORED_ZONES_SLOTS)
+        .map(|i| fields.player_explored_zone_slot(i))
+        .collect()
 }
 
 impl LandmarkReads<'_, '_> {
     /// The key the sources are rebuilt on, `None` without the map and the area table.
     fn key(&self) -> Option<LandmarkKey> {
-        let (map, _) = (self.map.as_deref()?, self.areas.as_deref()?);
-        let explored: Vec<u32> = self
+        let explored = self
             .self_q
             .iter()
             .next()
-            .map(|store| {
-                (0..benilla_protocol::messages::PLAYER_EXPLORED_ZONES_SLOTS)
-                    .map(|i| store.0.player_explored_zone_slot(i))
-                    .collect()
-            })
+            .map(|store| explored_of(&store.0))
             .unwrap_or_default();
-        let marker = self
-            .poi_marker
+        self.key_over(explored)
+    }
+
+    /// [`Self::key`] over `explored`, the bytes as a packet's notify pass left them.
+    fn key_over(&self, explored: Vec<u32>) -> Option<LandmarkKey> {
+        let (map, _) = (self.map.as_deref()?, self.areas.as_deref()?);
+        let (marker, states) = (self.poi_marker.as_deref()?, self.world_states.as_deref()?);
+        let marker = marker
             .on_map(map.0)
             .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
         Some(LandmarkKey {
             map: map.0,
-            states: self.world_states.generation(),
+            states: states.generation(),
             explored,
             marker,
         })
@@ -553,7 +566,11 @@ impl LandmarkReads<'_, '_> {
     /// `[0xc0e054]`), then the guard-directions marker, last (`0x4a69c7`): no gate and no icon
     /// substitution, only the near-zero skip.
     fn sources(&self, key: &LandmarkKey) -> Vec<WorldMapLandmarkSource> {
-        let Some(areas) = self.areas.as_deref() else {
+        let (Some(areas), Some(world_states), Some(marker)) = (
+            self.areas.as_deref(),
+            self.world_states.as_deref(),
+            self.poi_marker.as_deref(),
+        ) else {
             return Vec::new();
         };
         let mut sources: Vec<WorldMapLandmarkSource> = self
@@ -564,14 +581,8 @@ impl LandmarkReads<'_, '_> {
                     .rows()
                     .filter_map(|(_, poi)| {
                         let icons = LEVELS.map(|level| {
-                            landmark_gates_pass(
-                                poi,
-                                level,
-                                &areas.0,
-                                &key.explored,
-                                &self.world_states,
-                            )
-                            .then(|| landmark_texture_index(poi, level))
+                            landmark_gates_pass(poi, level, &areas.0, &key.explored, world_states)
+                                .then(|| landmark_texture_index(poi, level))
                         });
                         icons
                             .iter()
@@ -587,7 +598,7 @@ impl LandmarkReads<'_, '_> {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(poi) = self.poi_marker.on_map(key.map) {
+        if let Some(poi) = marker.on_map(key.map) {
             sources.push(WorldMapLandmarkSource {
                 name: poi.name.clone(),
                 description: poi.description.clone(),
@@ -597,6 +608,16 @@ impl LandmarkReads<'_, '_> {
             });
         }
         sources
+    }
+
+    /// The explored bytes' watcher (`0x4a6460` → `0x4a67a0`) over `explored`, the bytes as the
+    /// update packet left them: the engine takes them, rebuilds the landmark list they gate and
+    /// signals `WORLD_MAP_UPDATE` in place.
+    pub(crate) fn explored_zones_changed(&self, script: &mut UiScript, explored: Vec<u32>) {
+        let sources = self
+            .key_over(explored.clone())
+            .map(|key| self.sources(&key));
+        script.world_map_explored_changed(explored, sources);
     }
 
     /// A world-state packet's rebuild, made where its signal fires so the `WORLD_MAP_UPDATE` that
@@ -645,7 +666,7 @@ fn feed_world_map(
     player: Res<Player>,
     map: Option<Res<CurrentMap>>,
     world: benilla_world::world_point::WorldPoint,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    self_q: Query<(Entity, &ObjectStore), With<SelfPlayer>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     group: Res<crate::ui_party::GroupState>,
     guids: Res<crate::net::GuidIndex>,
@@ -657,22 +678,15 @@ fn feed_world_map(
         let (Some(script), Some(data), Some(map), Some(areas)) = (script, data, map, areas) else {
             return;
         };
-        // PLAYER_EXPLORED_ZONES, pushed on change; the setter queues WORLD_MAP_UPDATE for newly
-        // explored art.
-        let explored: Vec<u32> = self_q
-            .iter()
-            .next()
-            .map(|store| {
-                (0..benilla_protocol::messages::PLAYER_EXPLORED_ZONES_SLOTS)
-                    .map(|i| store.0.player_explored_zone_slot(i))
-                    .collect()
-            })
-            .unwrap_or_default();
-        {
+        // The bytes `0x4a6460` watches are read where the setter `0x4a67a0` builds over them
+        // (`0x4a6bf4`), so a map first built over a loaded player already sees them. Past that
+        // read the watcher's notice carries every change, signalling at its place in the update
+        // packet ([`LandmarkReads::explored_zones_changed`]); this read signals nothing.
+        if let Some((entity, store)) = self_q.iter().next() {
             let memo = memo.get(script);
-            if !explored.is_empty() && memo.explored.as_ref() != Some(&explored) {
-                memo.explored = Some(explored.clone());
-                script.set_world_map_explored(explored.clone());
+            if memo.explored_read_for != Some(entity) {
+                memo.explored_read_for = Some(entity);
+                script.seed_world_map_explored(explored_of(&store.0));
             }
         }
         let wow = bevy_to_wow(player.pos);

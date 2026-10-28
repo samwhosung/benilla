@@ -45,6 +45,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     marks: Option<ResMut<'w, crate::portrait::PortraitMarks>>,
     // The happiness watch's tables, which its run reads the bucket through.
     pet_stats: Option<Res<'w, crate::ui_pet_stats::PetStatTables>>,
+    // The explored watch's setter rebuilds the landmark list the bits gate.
+    landmarks: crate::ui_world_map::LandmarkReads<'w, 's>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -92,6 +94,20 @@ impl NoticeFiring<'_, '_> {
         }
         if let FieldNotice::Drunk { guid, old, new } = notice {
             drunk(script, &mut self.sink, guid, old, new);
+            return false;
+        }
+        if notice == FieldNotice::ExploredZones {
+            // The bytes as the watcher's packet left them, as the shapeshift offset reads the
+            // form byte.
+            let explored = self
+                .player
+                .iter()
+                .next()
+                .and_then(|e| self.views.get(e).ok())
+                .map(|store| crate::ui_world_map::explored_of(&store.0));
+            if let Some(explored) = explored {
+                self.landmarks.explored_zones_changed(script, explored);
+            }
             return false;
         }
         if notice == FieldNotice::SkillLines {
@@ -550,6 +566,7 @@ pub(crate) fn fire(
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
         // table, the spell catalog, the aura cache, the skill lines and the pet's stat tables.
         FieldNotice::QuestLog
+        | FieldNotice::ExploredZones
         | FieldNotice::Tutorial { .. }
         | FieldNotice::MirrorTimer(_)
         | FieldNotice::Drunk { .. }
