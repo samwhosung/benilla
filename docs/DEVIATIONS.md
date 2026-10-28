@@ -188,7 +188,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:659`](../crates/benilla-app/src/net/motion/spline.rs#L659))
 - A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:918`](../crates/benilla-app/src/net/objects/update.rs#L918))
 - The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:930`](../crates/benilla-app/src/net/objects/update.rs#L930))
-- On benilla's unattended reconnect, which the reference lacks, the world's VM survives the loss, so the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the surviving target frame lets the lost unit go. ([`src/net/session.rs:266`](../crates/benilla-app/src/net/session.rs#L266))
+- On benilla's unattended reconnect, which the reference lacks, the world's VM survives the loss, so the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the surviving target frame lets the lost unit go. ([`src/net/session.rs:283`](../crates/benilla-app/src/net/session.rs#L283))
 
 #### no_install
 
