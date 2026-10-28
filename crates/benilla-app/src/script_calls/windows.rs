@@ -239,9 +239,6 @@ impl ScriptCallHost<'_, '_> {
     /// `ITEM_TEXT_CLOSED` (`0x4e33a2`). A listener of a read's signal closes that read alone: one a
     /// later packet opened is not the cell it sees.
     pub(super) fn close_item_text(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        if parked(NpcWindow::ItemText) {
-            return;
-        }
         let Some(object) = self.appliers.item_text().object() else {
             return;
         };
