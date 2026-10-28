@@ -959,7 +959,10 @@ pub(crate) struct TextFilterLoad;
 
 /// The two switches' change callback, as the reference's `0x403570`/`0x4035b0` mirror
 /// `SStrToInt(newValue)` into a global.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, switches: &mut TextFilterSwitches) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut switches: bevy::prelude::Mut<'_, TextFilterSwitches>,
+) {
     match ev.key().as_str() {
         "profanityfilter" => switches.profanity = ev.flag(),
         "spamfilter" => switches.spam = ev.flag(),

@@ -953,7 +953,10 @@ pub(crate) struct LootCloseAtRest(pub(crate) bool);
 pub(crate) struct UiLootPlugin;
 
 /// Applies a loot CVar change.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, loot: &mut LootConfig) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut loot: bevy::prelude::Mut<'_, LootConfig>,
+) {
     match ev.key().as_str() {
         "autolootdefault" => loot.auto_loot = ev.flag(),
         "showlootspam" => loot.show_loot_spam = ev.flag(),

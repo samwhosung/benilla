@@ -972,7 +972,10 @@ pub(crate) mod net {
 pub(crate) struct UiGuildPlugin;
 
 /// `guildMemberNotify`'s change callback: conjunct 2 of the sign-on/sign-off line's condition.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, notify: &mut GuildMemberNotify) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut notify: bevy::prelude::Mut<'_, GuildMemberNotify>,
+) {
     if ev.is("guildMemberNotify") {
         notify.0 = ev.flag();
     }

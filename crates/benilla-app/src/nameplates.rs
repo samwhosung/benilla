@@ -775,7 +775,10 @@ pub(crate) struct NameplatesPlugin;
 struct NameAnchorTrace(bool);
 
 /// The overhead-name rows' change callback: the name trio, the guild line and the rank prefix.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, names: &mut NameConfig) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut names: bevy::prelude::Mut<'_, NameConfig>,
+) {
     match ev.key().as_str() {
         "unitnameplayer" => names.player = ev.flag(),
         "unitnamenpc" => names.npc = ev.flag(),

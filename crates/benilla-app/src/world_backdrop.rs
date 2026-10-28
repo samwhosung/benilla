@@ -251,7 +251,10 @@ pub(crate) struct WorldBackdropPlugin;
 
 /// Render scale's change callback, clamped to [`RENDER_SCALE_RANGE`]; the backdrop and the
 /// camera's factor follow together on the next frame.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, scale: &mut RenderScale) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut scale: bevy::prelude::Mut<'_, RenderScale>,
+) {
     if ev.is("renderScale") {
         scale.0 = ev
             .num()

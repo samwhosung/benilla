@@ -616,7 +616,10 @@ pub(crate) struct BubbleSet;
 pub(crate) struct ChatBubblePlugin;
 
 /// The two bubble CVars' change callback.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, bubbles: &mut BubbleConfig) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut bubbles: bevy::prelude::Mut<'_, BubbleConfig>,
+) {
     match ev.key().as_str() {
         "chatbubbles" => bubbles.all = ev.flag(),
         "chatbubblesparty" => bubbles.party = ev.flag(),

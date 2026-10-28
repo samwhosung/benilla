@@ -1,9 +1,10 @@
 //! Every row's change callback, the reference's function handed to `CVar::Register` (`0x63db90`)
 //! and called inside `CVar::Set` (`0x63df50`, at `0x63df7d`): one param holding each knob a
 //! callback writes ([`CvarCallbacks`]), so a write runs its callback wherever it is made. A Lua
-//! verb's write runs it inside the verb's call ([`CvarSteps`], as the call host's applier); the
-//! boot load, the frame's sync of the writes no call made and a dying VM's fold trigger
-//! [`CvarChanged`], which [`on_cvar_changed`] runs the same callbacks for.
+//! verb's write runs it inside the verb's call ([`CvarSteps`], as the call host's applier), and the
+//! frame's sync runs it for the writes no call made; the boot load and a dying VM's fold trigger
+//! [`CvarChanged`], which [`on_cvar_changed`] runs the same callbacks for. Each callback takes its
+//! knob as a [`Mut`], so only the arm that writes it marks it changed.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -49,82 +50,78 @@ impl CvarCallbacks<'_> {
     /// Run every callback on the move `ev`; a callback that writes the registry back (a second
     /// spelling's mirror, a console line) writes `cvars`.
     pub(crate) fn run(&mut self, ev: &CvarChanged, cvars: &mut Cvars) {
-        if let Some(k) = self.approach.as_deref_mut() {
-            crate::player::approach_on_cvar(ev, k);
+        if let Some(k) = self.approach.as_mut() {
+            crate::player::approach_on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.sound.as_deref_mut() {
-            crate::sound::on_cvar(ev, k);
+        if let Some(k) = self.sound.as_mut() {
+            crate::sound::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.ui_scale.as_deref_mut() {
-            crate::ui_script::on_cvar(ev, k);
+        if let Some(k) = self.ui_scale.as_mut() {
+            crate::ui_script::on_cvar(ev, k.reborrow());
         }
         if let Some(k) = self.video.as_mut() {
             k.on_cvar(ev, cvars);
         }
-        if let (Some(look), Some(zoom), Some(follow)) = (
-            self.look.as_deref_mut(),
-            self.zoom.as_deref_mut(),
-            self.follow.as_deref_mut(),
-        ) {
-            crate::player::camera::on_cvar(ev, look, zoom, follow);
-        }
-        if let Some(k) = self.camera_options.as_deref_mut() {
-            crate::player::camera_dynamics::on_cvar(ev, k);
-        }
-        if let (Some(click), Some(assist)) = (self.click.as_deref_mut(), self.assist.as_deref_mut())
+        if let (Some(look), Some(zoom), Some(follow)) =
+            (self.look.as_mut(), self.zoom.as_mut(), self.follow.as_mut())
         {
-            crate::target::on_cvar(ev, click, assist);
+            crate::player::camera::on_cvar(ev, look.reborrow(), zoom.reborrow(), follow.reborrow());
         }
-        if let Some(k) = self.self_cast.as_deref_mut() {
-            crate::spell::cast_target::on_cvar(ev, k);
+        if let Some(k) = self.camera_options.as_mut() {
+            crate::player::camera_dynamics::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.damage_text.as_deref_mut() {
-            crate::combat_text::on_cvar(ev, k);
+        if let (Some(click), Some(assist)) = (self.click.as_mut(), self.assist.as_mut()) {
+            crate::target::on_cvar(ev, click.reborrow(), assist.reborrow());
         }
-        if let (Some(ranges), Some(periodic)) = (
-            self.log_ranges.as_deref_mut(),
-            self.log_periodic.as_deref_mut(),
-        ) {
-            crate::ui_chat::combat::on_cvar(ev, ranges, periodic);
+        if let Some(k) = self.self_cast.as_mut() {
+            crate::spell::cast_target::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.loot.as_deref_mut() {
-            crate::ui_loot::on_cvar(ev, k);
+        if let Some(k) = self.damage_text.as_mut() {
+            crate::combat_text::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.names.as_deref_mut() {
-            crate::nameplates::on_cvar(ev, k);
+        if let (Some(ranges), Some(periodic)) =
+            (self.log_ranges.as_mut(), self.log_periodic.as_mut())
+        {
+            crate::ui_chat::combat::on_cvar(ev, ranges.reborrow(), periodic.reborrow());
         }
-        if let Some(k) = self.game_tip.as_deref_mut() {
-            crate::game_tip::on_cvar(ev, k);
+        if let Some(k) = self.loot.as_mut() {
+            crate::ui_loot::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.text_filter.as_deref_mut() {
-            crate::text_filter::on_cvar(ev, k);
+        if let Some(k) = self.names.as_mut() {
+            crate::nameplates::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.bubbles.as_deref_mut() {
-            crate::chat_bubble::on_cvar(ev, k);
+        if let Some(k) = self.game_tip.as_mut() {
+            crate::game_tip::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.guild_notify.as_deref_mut() {
-            crate::ui_guild::on_cvar(ev, k);
+        if let Some(k) = self.text_filter.as_mut() {
+            crate::text_filter::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.block_trades.as_deref_mut() {
-            crate::ui_trade::on_cvar(ev, k);
+        if let Some(k) = self.bubbles.as_mut() {
+            crate::chat_bubble::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.minimap_zoom.as_deref_mut() {
-            crate::minimap::on_cvar(ev, k);
+        if let Some(k) = self.guild_notify.as_mut() {
+            crate::ui_guild::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.pane_rate.as_deref_mut() {
-            crate::portrait::on_cvar(ev, k);
+        if let Some(k) = self.block_trades.as_mut() {
+            crate::ui_trade::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.fps_journal.as_deref_mut() {
-            crate::perf::on_cvar(ev, k);
+        if let Some(k) = self.minimap_zoom.as_mut() {
+            crate::minimap::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.realmlist.as_deref_mut() {
-            crate::realmlist::on_cvar(ev, k);
+        if let Some(k) = self.pane_rate.as_mut() {
+            crate::portrait::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.gamma.as_deref_mut() {
-            crate::ui_gamma::on_cvar(ev, k);
+        if let Some(k) = self.fps_journal.as_mut() {
+            crate::perf::on_cvar(ev, k.reborrow());
         }
-        if let Some(k) = self.render_scale.as_deref_mut() {
-            crate::world_backdrop::on_cvar(ev, k);
+        if let Some(k) = self.realmlist.as_mut() {
+            crate::realmlist::on_cvar(ev, k.reborrow());
+        }
+        if let Some(k) = self.gamma.as_mut() {
+            crate::ui_gamma::on_cvar(ev, k.reborrow());
+        }
+        if let Some(k) = self.render_scale.as_mut() {
+            crate::world_backdrop::on_cvar(ev, k.reborrow());
         }
     }
 }

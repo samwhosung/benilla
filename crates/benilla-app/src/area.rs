@@ -346,7 +346,11 @@ impl Plugin for AreaPlugin {
                 // frame's packets left it.
                 feed_zone_events
                     .after(crate::ui_script::UiTick)
-                    .after(benilla_world::terrain_stream::AreaAuthoritySet),
+                    .after(benilla_world::terrain_stream::AreaAuthoritySet)
+                    // And after the stream, the sound's listener and the hover, which read CVar
+                    // knobs (the clip and detail, the volumes, the rig) its handlers' calls write.
+                    .after(benilla_world::schedule::WorldStage::Stream)
+                    .after(crate::target::TargetUpdate),
             );
     }
 }

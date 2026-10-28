@@ -285,8 +285,8 @@ pub(crate) struct AssistAttack(pub(crate) bool);
 /// The targeting rows' change callback: two flags.
 pub(crate) fn on_cvar(
     ev: &crate::cvars::CvarChanged,
-    click: &mut ClickConfig,
-    assist: &mut AssistAttack,
+    mut click: bevy::prelude::Mut<'_, ClickConfig>,
+    mut assist: bevy::prelude::Mut<'_, AssistAttack>,
 ) {
     match ev.key().as_str() {
         "deselectonclick" => click.deselect_on_click = ev.flag(),

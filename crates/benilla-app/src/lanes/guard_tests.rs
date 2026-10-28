@@ -385,7 +385,10 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::reputations::Reputations", "spell::group_relation::GroupRoster",
-        "ui_action::PlayerActions", "ui_guild::GuildState", "video::Widescreen"]),
+        "ui_action::PlayerActions", "ui_guild::GuildState",
+        // `widescreen`, which seats the object plate on the interface's screen: a listener's
+        // `SetCVar` moves it inside its call, and the build reads it as the frame left it.
+        "video::Widescreen"]),
 
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
@@ -411,6 +414,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::UnitSpeeds", "net::game_time::ServerTime", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "player::state::OwnControlLost", "player::state::StandPending",
+        // `autoSelfCast`, which picks the unit the range check measures: a listener's `SetCVar`
+        // moves it inside its call, and the push reads it as the frame left it.
         "spell::cast_target::AutoSelfCast", "spell::cooldowns::Cooldowns",
         "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers", "target::Selection",
         "ui_action::ActionSlots",

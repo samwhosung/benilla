@@ -367,7 +367,10 @@ pub(crate) struct GameTipPlugin;
 
 /// The tip CVars' change callback. A hand-edited cursor lands verbatim; [`raise`] clamps it, as the
 /// reference does (`0x46b682`).
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, setting: &mut GameTipSetting) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut setting: bevy::prelude::Mut<'_, GameTipSetting>,
+) {
     match ev.key().as_str() {
         "showgametips" => setting.show = ev.flag(),
         "gametip" => setting.next = ev.num() as i64,

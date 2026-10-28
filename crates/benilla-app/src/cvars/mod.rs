@@ -72,13 +72,13 @@ impl CvarChanged {
         self.name.eq_ignore_ascii_case(name)
     }
 
-    /// The lowercased name, as observers' `match` arms spell it.
+    /// The lowercased name, as the callbacks' `match` arms spell it.
     pub(crate) fn key(&self) -> String {
         self.name.to_ascii_lowercase()
     }
 
     /// The new value as the record's float (`rec+0x24`, `SStrToFloat` at `0x63e130`): text that
-    /// is no number reads as 0, and a string row's observer reads [`Self::new`].
+    /// is no number reads as 0, and a string row's callback reads [`Self::new`].
     pub(crate) fn num(&self) -> f32 {
         record_float(&self.new)
     }
@@ -162,7 +162,7 @@ pub(crate) struct Cvars {
     /// A change since the last save; `last_change` drives the one-quiet-second debounce.
     dirty: bool,
     last_change: Option<Instant>,
-    /// Lines change callbacks and observers printed to the console (`0x63cb50`), which go to the
+    /// Lines the rows' checks and change callbacks printed to the console (`0x63cb50`), which go to the
     /// log, as the reference's go to a console screen nobody has open.
     console: Vec<String>,
     /// The CVars Lua's `RegisterCVar` created this process, the reference's `[0xb4e3c8]`: kept
@@ -436,10 +436,11 @@ impl Cvars {
     /// stage (`+0x38`). So the value reaches `GetCVar` and the save, and the knob at the next
     /// launch.
     ///
-    /// Deviation: for a row that is not latched the observers fire, where the reference runs no
-    /// callback here (`0x63dff0`, `0x63e010`), because a knob moves only through its
-    /// [`CvarChanged`] observer, which also stands in for the reference's direct reads of the
-    /// record; without it knob and value would disagree until the next write.
+    /// Deviation: for a row that is not latched the change callback runs, inside the call that
+    /// restored it, where the reference runs no callback here (`0x63dff0`, `0x63e010`), because a
+    /// knob moves only through its callback ([`callbacks::CvarCallbacks`]), which also stands in
+    /// for the reference's direct reads of the record; without it knob and value would disagree
+    /// until the next write.
     fn restore_from_vm(&mut self, name: &str, value: &str) -> SetOutcome {
         let Some(i) = self.slot(name) else {
             warn!("cvar {name}: not registered — restore ignored");
@@ -463,8 +464,8 @@ impl Cvars {
 
     /// Follow a value the engine already applied, for a second spelling of one knob
     /// (`WorldDetail`/`frillDensity`): the row moves, persists and reaches the mirror, but no
-    /// observer fires, since a full write would queue an event that lands a flush late and wins
-    /// stale. Returns whether the row moved.
+    /// callback runs, since a full write would run the other spelling's callback, which would
+    /// re-derive the knob from the mirrored, rounded value. Returns whether the row moved.
     pub(crate) fn mirror(&mut self, name: &str, value: &str) -> bool {
         let Some(i) = self.slot(name) else {
             warn!("cvar {name}: not registered — mirror ignored");
@@ -518,7 +519,7 @@ impl Cvars {
     }
 
     /// The session owns this row: it is never saved and the file's entry is left alone. `value` is
-    /// what it answers this session; `None` marks it without moving it. No observer fires: the knob
+    /// what it answers this session; `None` marks it without moving it. No callback runs: the knob
     /// already read the env.
     pub(crate) fn own_for_session(&mut self, name: &str, value: Option<&str>) {
         let key = name.to_ascii_lowercase();
@@ -588,7 +589,7 @@ impl Cvars {
             // value and its answer is not tested: the file is read before these rows are
             // registered (`0x402375`), and `CVar::Register` on the record it made calls the
             // callback and ignores the result (`0x63dc58`), so the value stands. A refusing
-            // callback applied nothing, so no observer fires for it.
+            // callback applied nothing, so its callback does not run for it.
             let applies = verdict.is_none_or(|verdict| {
                 self.console.extend(verdict.lines);
                 verdict.accept
@@ -675,7 +676,7 @@ impl Cvars {
         !self.console.is_empty()
     }
 
-    /// A line an observer prints to the console, such as `spellEffectLevel`'s "Spell effect level
+    /// A line a change callback prints to the console, such as `spellEffectLevel`'s "Spell effect level
     /// set to %d." (`0x689537`-`0x689554`); logged with the callbacks' at the next sync.
     pub(crate) fn print(&mut self, line: String) {
         self.console.push(line);
@@ -1638,8 +1639,32 @@ mod tests {
         assert!(res::<VideoConfig>(&app).maximize, "the commit applies it");
     }
 
+    /// A move marks only the knob its callback writes: the other callbacks see the event but take
+    /// their knobs mutably only in the arm that writes them.
     #[test]
-    fn the_observers_apply_every_arm() {
+    fn a_move_marks_only_the_knob_its_callback_writes() {
+        let mut app = cvar_app();
+        let click = |app: &App| {
+            app.world()
+                .get_resource_change_ticks::<crate::target::ClickConfig>()
+                .expect("the knob")
+                .changed
+        };
+        let sound = |app: &App| {
+            app.world()
+                .get_resource_change_ticks::<SoundConfig>()
+                .expect("the knob")
+                .changed
+        };
+        let (click_before, sound_before) = (click(&app), sound(&app));
+        app.world_mut().increment_change_tick();
+        apply(&mut app, "deselectOnClick", "0");
+        assert_ne!(click(&app), click_before, "its own knob moved");
+        assert_eq!(sound(&app), sound_before, "another knob stays unmarked");
+    }
+
+    #[test]
+    fn the_callbacks_apply_every_arm() {
         let mut app = cvar_app();
         apply(&mut app, "MusicVolume", "0.7");
         assert_eq!(res::<SoundConfig>(&app).music, 0.7);
@@ -2759,7 +2784,7 @@ mod tests {
         app
     }
 
-    /// A host write, its latch committed at once, and its observers run before this returns.
+    /// A host write, its latch committed at once, and its callbacks run before this returns.
     fn apply(app: &mut App, name: &str, value: &str) -> SetOutcome {
         let world = app.world_mut();
         let (outcome, events) = {
@@ -2834,8 +2859,8 @@ mod tests {
     }
 
     /// `ConsoleExec(line)` as the typed `/console` runs it: on a VM seeded from the app's registry,
-    /// its writes drained back and their observers run; the console lines the callbacks and the
-    /// observers printed.
+    /// its writes drained back and their callbacks run; the console lines the checks and the
+    /// callbacks printed.
     fn console_exec(app: &mut App, line: &str) -> Vec<String> {
         let world = app.world_mut();
         let mut script = UiScript::new().unwrap();
@@ -2896,7 +2921,7 @@ mod tests {
     }
 
     /// A reset of a latched row moves the record, not the device: `GetCVar` and the save take
-    /// it, no observer fires, and a stage it found stays staged and is what the file holds.
+    /// it, no callback runs, and a stage it found stays staged and is what the file holds.
     #[test]
     fn a_latched_reset_moves_the_value_and_not_the_window() {
         let mut app = cvar_app();
@@ -3033,7 +3058,7 @@ mod tests {
 
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
     /// and `accountName` (the reference's registered `""`, `0x882748`) and `gxApi` are empty until
-    /// the session or the login screen writes them; `gxResolution` and `realmList` pass their observers' parsers
+    /// the session or the login screen writes them; `gxResolution` and `realmList` pass their callbacks' parsers
     /// ([`crate::video::parse_resolution`], [`crate::realmlist::normalize`]).
     #[test]
     fn the_string_valued_cvars_are_the_realm_and_the_windowed_size() {
@@ -3521,7 +3546,7 @@ mod tests {
         }
         assert!(
             orphans.is_empty(),
-            "registered rows nothing in the source reads (an observer arm, a `cvars.get`, or a \
+            "registered rows nothing in the source reads (a callback's arm, a `cvars.get`, or a \
              `LUA_ONLY` entry with its stock reader): {orphans:?}"
         );
         for (name, _) in LUA_ONLY {

@@ -433,8 +433,8 @@ impl VideoKnobs<'_> {
             "weatherdensity" => weather.weather_density = v.trunc().clamp(0.0, 3.0) as u8,
             // Spell Detail (`0x689510`): `SStrToInt`, clamped to [0, 2] in the handler's own copy,
             // echoed, then the emission scalar 0.33, 0.66 or 1.0 through `0x7adfb0`, shared with
-            // `particleDensity`. The reference runs it on every write, an unchanged one included; an
-            // observer fires only on a change.
+            // `particleDensity`. The reference runs it on every write, an unchanged one included;
+            // ours runs only on a change.
             "spelleffectlevel" => {
                 spell_effect_level.0 = benilla_ui::script::s_str_to_int(&ev.new);
                 let level = spell_effect_level.0.clamp(0, 2);
@@ -1348,7 +1348,7 @@ mod tests {
             app.world().entity(win).get::<Window>().unwrap().mode,
             WindowMode::Windowed
         );
-        // The commit's observer write, then the restart the stock Okay asks for.
+        // The commit's callback write, then the restart the stock Okay asks for.
         app.world_mut().resource_mut::<VideoConfig>().maximize = true;
         app.world_mut().resource_mut::<GxRestarts>().0 += 1;
         app.update();

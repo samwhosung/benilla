@@ -749,7 +749,7 @@ impl Default for PaneRate {
 pub(crate) struct PortraitPlugin;
 
 /// `boothHalfRate`'s change callback.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, rate: &mut PaneRate) {
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, mut rate: bevy::prelude::Mut<'_, PaneRate>) {
     if ev.is("boothHalfRate") {
         rate.half = ev.flag();
     }
@@ -835,7 +835,9 @@ impl Plugin for PortraitPlugin {
                     // After the paint pass armed this frame's turns.
                     crate::ui_panes::feed_character_panes
                         .after(crate::ui_script::UiPaint)
-                        .before(panes::sync_panes),
+                        .before(panes::sync_panes)
+                        // Before the quads' appends, which read CVar knobs its calls write.
+                        .before(crate::ui_pass::UiQuadAppend),
                     // After the world's visuals (the display cache, the dressing room's
                     // assembly, the animation driver it shares the variation roll with), the
                     // window aspect and the portrait chain's booths.

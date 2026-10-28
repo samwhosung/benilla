@@ -73,9 +73,9 @@ pub(crate) const MOUSE_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.5..=1.5;
 /// The camera rows' change callback: the look, zoom and follow knobs.
 pub(crate) fn on_cvar(
     ev: &crate::cvars::CvarChanged,
-    look: &mut LookConfig,
-    zoom: &mut ZoomLimit,
-    follow: &mut FollowConfig,
+    mut look: bevy::prelude::Mut<'_, LookConfig>,
+    mut zoom: bevy::prelude::Mut<'_, ZoomLimit>,
+    mut follow: bevy::prelude::Mut<'_, FollowConfig>,
 ) {
     let v = ev.num();
     match ev.key().as_str() {

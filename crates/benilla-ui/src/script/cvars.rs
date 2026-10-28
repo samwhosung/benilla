@@ -825,7 +825,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 store(&mut model, &key, value.clone());
             }
-            // The callback, inside the write and ahead of the token's event (`0x488ca8`).
+            // The callback, inside the write (`CVar::Set` at `0x488ca8`), ahead of the token's
+            // event (`0x488cad`).
             written(lua)?;
             // A third argument that passes `lua_isstring` is the `CVAR_UPDATE` token, arg1, with
             // the value as arg2 (`0x488cad`-`0x488cd5`), fired on every such call, changed or not,

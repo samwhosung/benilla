@@ -467,7 +467,10 @@ fn melee_impact_text(
 pub(crate) struct CombatTextPlugin;
 
 /// The damage-text rows' change callback: three flags.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, gates: &mut DamageTextGates) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut gates: bevy::prelude::Mut<'_, DamageTextGates>,
+) {
     match ev.key().as_str() {
         "combatdamage" => gates.combat_damage = ev.flag(),
         "petmeleedamage" => gates.pet_melee = ev.flag(),

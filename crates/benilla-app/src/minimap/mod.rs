@@ -156,7 +156,10 @@ pub(crate) struct MinimapZoom {
 
 /// The app's mirror of the two zoom CVars, each on its own field: the record's integer as the
 /// reference's raw copy takes it into the zoom cell (`0x6d9013`), unclamped.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, zoom: &mut MinimapZoom) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut zoom: bevy::prelude::Mut<'_, MinimapZoom>,
+) {
     match ev.key().as_str() {
         "minimapzoom" => zoom.outdoor = zoom_index(&ev.new),
         "minimapinsidezoom" => zoom.inside = zoom_index(&ev.new),

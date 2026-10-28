@@ -105,6 +105,8 @@ pub(super) fn plugin(app: &mut App) {
             drive_movie_audio
                 .after(crate::ui_script::UiTick)
                 .after(super::toggle_mute)
-                .after(benilla_world::schedule::WorldStage::Stream),
+                .after(benilla_world::schedule::WorldStage::Stream)
+                // After the calls, whose callbacks write the volumes it opens under.
+                .after(crate::vm_pass::VmPass::End),
         );
 }

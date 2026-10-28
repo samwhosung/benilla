@@ -967,7 +967,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_575;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_467;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1073,11 +1073,11 @@ pub(crate) mod schedule_tests {
     /// on the dev build, whose schedule holds every system the player build does. Raised from 54
     /// when the frame's input records moved ahead of the net drain: what their handlers queue
     /// applies before the drain, as the reference's input acts inside its handlers; to 57 for the
-    /// input's CVar sync, whose observers must run before the look session reads their knobs; and
+    /// input's CVar sync, whose callbacks must run before the look session reads their knobs; and
     /// to 58 on the movie frame (#2398): `movie::upload_movie_pictures` runs after
     /// `video::apply_present_mode` and `video::apply_window_mode` and before `paint_script`, which
     /// puts the barrier between `video::drain_restart_gx` and those two applies on the paint's path
-    /// (its commands fire the `gx*` CVar events whose observer writes the `VideoConfig` they read).
+    /// (its commands fired the `gx*` CVar events whose callback writes the `VideoConfig` they read).
     /// Without those two edges the count is 57. Lowered to 54 when the click's dispatchers queued
     /// their window opens as unit edits, the call host applying the world click inside its call.
     /// Lowered to 46 when the CVar callbacks ran in place, inside the call or the sync that takes

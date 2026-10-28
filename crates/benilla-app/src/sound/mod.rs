@@ -331,7 +331,10 @@ pub(crate) struct SoundPlugin;
 
 /// The sound CVars' change callback: volumes clamp to `[0, 1]`, enables are `!= 0` as the
 /// reference parses them (`0x4574d0`: `setne al`).
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, sound: &mut SoundConfig) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut sound: bevy::prelude::Mut<'_, SoundConfig>,
+) {
     let v = ev.num();
     match ev.key().as_str() {
         "mastervolume" => sound.master = v.clamp(0.0, 1.0),

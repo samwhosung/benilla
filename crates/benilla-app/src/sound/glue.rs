@@ -370,6 +370,8 @@ pub(super) fn plugin(app: &mut App) {
                 // The stock screens' `PlayGlueMusic`/`StopGlueMusic` drive it.
                 drive_glue_music_requests
                     .after(crate::ui_script::glue_mgr::drive_glue_mgr)
+                    // After the calls, whose callbacks write the volumes it plays at.
+                    .after(crate::vm_pass::VmPass::End)
                     .before(watch_glue_music),
                 // No run condition: the theme plays into `InWorld`, and the entry load burst is
                 // the window the watch exists for.

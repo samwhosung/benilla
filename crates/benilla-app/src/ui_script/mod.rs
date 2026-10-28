@@ -420,7 +420,10 @@ pub(crate) fn window_to_ui(screen: UiScreen, cursor: Vec2) -> Vec2 {
 pub(crate) struct UiScriptPlugin;
 
 /// `uiScale`'s change callback: the dial's own `[0.5, 1.5]` clamp.
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, scale: &mut UiScaleCvar) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut scale: bevy::prelude::Mut<'_, UiScaleCvar>,
+) {
     if ev.is("uiScale") {
         scale.0 = ev.num().clamp(0.5, 1.5);
     }

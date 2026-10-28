@@ -4,7 +4,7 @@
 //! on a miss (`0x488be7`, `0x488c53`, `0x488d37`). So every such record the reference registers is
 //! registered here with its registered default, or an addon that sets one stops with an error.
 //!
-//! A row is inert: no observer reads it, `GetCVar` answers what was written, and it persists like
+//! A row is inert: no change callback reads it, `GetCVar` answers what was written, and it persists like
 //! any row, as a `[cvars]` entry in `benilla-config/config.toml` only while off its default. The
 //! flag bit1 rows are latched, as in the reference (a write is kept until a restart that never
 //! comes for the sound block, and `RestartGx` commits the `gx*` pair). A row whose callback

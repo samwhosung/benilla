@@ -602,7 +602,10 @@ fn cancel_trade_on_leave_world(commands: Res<NetCommands>) {
 pub(crate) struct UiTradePlugin;
 
 /// Mirrors the `BlockTrades` CVar into [`BlockTrades`].
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, block: &mut BlockTrades) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut block: bevy::prelude::Mut<'_, BlockTrades>,
+) {
     if ev.is("BlockTrades") {
         block.0 = ev.flag();
     }

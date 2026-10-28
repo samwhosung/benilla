@@ -267,7 +267,10 @@ fn use_gamma_ui_shaders(
 pub(crate) struct UiGammaPlugin;
 
 /// The `gamma` CVar's change callback, clamped to [`GAMMA_RANGE`].
-pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, gamma: &mut DisplayGamma) {
+pub(crate) fn on_cvar(
+    ev: &crate::cvars::CvarChanged,
+    mut gamma: bevy::prelude::Mut<'_, DisplayGamma>,
+) {
     if ev.is(benilla_ui::script::CVAR_GAMMA) {
         gamma.0 = ev.num().clamp(*GAMMA_RANGE.start(), *GAMMA_RANGE.end());
     }
