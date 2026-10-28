@@ -1098,18 +1098,18 @@ fn a_live_faction_template_change_recolours_the_target_plate() {
 /// its health watch, whose `UNIT_HEALTH("target")` the bar answers (`TargetFrame.lua:40`), and a
 /// retarget is `PLAYER_TARGET_CHANGED` alone (`0x493540` signals only that, `0x49389c`), on which
 /// the frame rereads the new unit whole. No unit event carries `"targettarget"`, though the token is
-/// pushed for the stock poll.
+/// read live for the stock poll.
 #[test]
 fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event() {
-    use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+    use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
     use crate::target::Selection;
     use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
     use benilla_protocol::messages::ObjectType;
     use benilla_protocol::ObjectFields;
-    use benilla_ui::script::UnitGuids;
     use bevy::prelude::*;
 
-    /// `UNIT_FIELD_TARGET`, absolute descriptor index.
+    /// `OBJECT_FIELD_TYPE` and `UNIT_FIELD_TARGET`, absolute descriptor indices.
+    const OBJECT_FIELD_TYPE: u16 = 2;
     const TARGET: u16 = 16;
     const ME: u64 = 0x77;
     const WOLF: u64 = 0xF130_0000_0044_0001;
@@ -1134,26 +1134,26 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
     )
     .unwrap();
 
-    let mut app = App::new();
-    app.init_resource::<Selection>()
-        .init_resource::<GuidIndex>()
-        .init_resource::<crate::names::NameCache>()
-        .init_resource::<crate::net::Reputations>()
-        .init_resource::<crate::ui_party::GroupState>()
-        .init_resource::<crate::ui_chat::ChatLog>()
-        .init_resource::<crate::sound::MessageSounds>()
-        .init_resource::<crate::ui_guild::GuildState>()
-        .insert_resource(NetCommands(crossbeam_channel::unbounded().0))
-        .insert_non_send_resource(s);
-    crate::ui_unit::add_token_seats(&mut app);
-    app.world_mut().spawn((
-        SelfPlayer,
-        Guid(ME),
-        ObjectStore(ObjectFields::from_pairs(&[]).into_created(ObjectType::Player)),
-    ));
+    // The whole client's world, driven by hand: the notices fire on their lane with the host lent,
+    // and every getter reads the objects through it, as in the app.
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    app.insert_non_send_resource(s);
+    let me = app
+        .world_mut()
+        .spawn((
+            SelfPlayer,
+            Guid(ME),
+            ObjectStore(
+                ObjectFields::from_pairs(&[(OBJECT_FIELD_TYPE, 0x19)])
+                    .into_created(ObjectType::Player),
+            ),
+        ))
+        .id();
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     let mob = |health: u32, max: u32, target: u64| {
         ObjectStore(
             ObjectFields::from_pairs(&[
+                (OBJECT_FIELD_TYPE, 0x9),
                 (FIELD_UNIT_HEALTH, health),
                 (FIELD_UNIT_MAXHEALTH, max),
                 (TARGET, target as u32),
@@ -1171,7 +1171,7 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
     app.world_mut()
         .resource_mut::<GuidIndex>()
         .0
-        .extend([(WOLF, wolf), (BOAR, boar)]);
+        .extend([(ME, me), (WOLF, wolf), (BOAR, boar)]);
 
     fn script(app: &mut App) -> Mut<'_, UiScript> {
         app.world_mut().non_send_resource_mut()
@@ -1190,37 +1190,32 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
         )
         .unwrap()
     };
-    // Target `guid` as the selection and the resolver's seat move together.
-    let select = |app: &mut App, entity: Entity, guid: u64, held: &[(u64, u64)]| {
+    // Target `guid`: the selection's global, which the getters read through the host.
+    let select = |app: &mut App, entity: Entity, guid: u64| {
         *app.world_mut().resource_mut::<Selection>() = Selection {
             target: Some(entity),
             guid: Some(guid),
             ..Default::default()
         };
-        script(app).set_unit_guids(&UnitGuids {
-            player: ME,
-            target: guid,
-            held: held.iter().copied().collect(),
-            ..Default::default()
+        // The select's own signal (`0x49389c`), with the host lent as the select fires it.
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").fire_event("PLAYER_TARGET_CHANGED", vec![]);
         });
-        app.update();
-        // The select's own signal (`0x49389c`), which no host carries in this harness, once the
-        // frame's pushes seat the target.
-        script(app).fire_event("PLAYER_TARGET_CHANGED", vec![]);
     };
 
-    select(&mut app, wolf, WOLF, &[(ME, 0), (WOLF, BOAR), (BOAR, ME)]);
+    select(&mut app, wolf, WOLF);
     assert!(
         seen(&mut app).is_empty(),
         "a first target fires no unit event"
     );
     assert_eq!(bar(&mut app), (100.0, 100.0));
     assert_eq!(
-        script(&mut app)
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| s
+            .expect("a VM")
             .eval::<Option<f64>>("return UnitHealth('targettarget')")
-            .unwrap(),
+            .unwrap()),
         Some(50.0),
-        "the hop is pushed for the poll"
+        "the hop reads live for the poll"
     );
 
     // A values block on the wolf: the object handler's merge and its watches, then a frame.
@@ -1251,7 +1246,7 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
     app.world_mut()
         .resource_mut::<crate::field_watch::NoticeLane>()
         .write_batch(notices);
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert_eq!(seen(&mut app), ["UNIT_HEALTH:target"]);
     assert_eq!(bar(&mut app), (60.0, 100.0), "the bar follows the event");
 
@@ -1283,11 +1278,11 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
     app.world_mut()
         .resource_mut::<crate::field_watch::NoticeLane>()
         .write_batch(notices);
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert!(seen(&mut app).is_empty(), "no targettarget unit event");
 
     // The retarget: `PLAYER_TARGET_CHANGED` alone, and the frame reads the boar whole.
-    select(&mut app, boar, BOAR, &[(ME, 0), (BOAR, ME)]);
+    select(&mut app, boar, BOAR);
     assert!(seen(&mut app).is_empty(), "a retarget fires no unit event");
     assert_eq!(bar(&mut app), (40.0, 80.0));
     let errors = script(&mut app).errors();
@@ -1302,13 +1297,12 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
 /// faction still fires: the handler tests nothing.
 #[test]
 fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
-    use crate::net::{FieldChanged, Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
+    use crate::net::{Guid, GuidIndex, ObjectStore, Reputations, SelfPlayer};
     use crate::target::{stormwind_fixture, Selection, HUMAN_WARRIOR};
     use benilla_protocol::field::{
         FIELD_UNIT_FACTIONTEMPLATE, FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH,
     };
     use benilla_protocol::ObjectFields;
-    use benilla_ui::script::UnitGuids;
     use bevy::prelude::*;
 
     /// `UNIT_FIELD_BYTES_0`, absolute descriptor index.
@@ -1340,39 +1334,28 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
     "#,
     )
     .unwrap();
-    // The resolver's inputs, as the resolver feed pushes them every frame.
-    s.set_unit_guids(&UnitGuids {
-        player: ME,
-        target: GUARD,
-        held: [(ME, 0), (GUARD, 0)].into(),
-        ..Default::default()
-    });
-
-    let mut app = App::new();
+    // The whole client's world, driven by hand: the notices fire on their lane with the host lent,
+    // and every getter reads the objects through it, as in the app.
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     app.insert_resource(reps)
         .insert_resource(factions)
-        .init_resource::<Selection>()
-        .init_resource::<crate::names::NameCache>()
-        .init_resource::<crate::ui_party::GroupState>()
-        .init_resource::<crate::ui_chat::ChatLog>()
-        .init_resource::<crate::sound::MessageSounds>()
-        .init_resource::<crate::ui_guild::GuildState>()
-        .insert_resource(NetCommands(crossbeam_channel::unbounded().0))
-        .add_message::<FieldChanged>()
         .insert_non_send_resource(s);
-    crate::ui_unit::add_token_seats(&mut app);
     // A human warrior player: the guard's standing leg needs the player's type, flag `0x8` and
     // template (`0x606576`-`0x6065b6`).
-    app.world_mut().spawn((
-        SelfPlayer,
-        Guid(ME),
-        ObjectStore(ObjectFields::from_pairs(&[
-            (2, 0x19), // OBJECT_FIELD_TYPE
-            (FIELD_UNIT_FACTIONTEMPLATE, 1),
-            (benilla_protocol::field::FIELD_UNIT_FLAGS, 0x8),
-            (BYTES_0, HUMAN_WARRIOR),
-        ])),
-    ));
+    let me = app
+        .world_mut()
+        .spawn((
+            SelfPlayer,
+            Guid(ME),
+            ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x19), // OBJECT_FIELD_TYPE
+                (FIELD_UNIT_FACTIONTEMPLATE, 1),
+                (benilla_protocol::field::FIELD_UNIT_FLAGS, 0x8),
+                (BYTES_0, HUMAN_WARRIOR),
+            ])),
+        ))
+        .id();
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     let guard = app
         .world_mut()
         .spawn((
@@ -1385,11 +1368,10 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
             ])),
         ))
         .id();
-    {
-        let mut selection = app.world_mut().resource_mut::<Selection>();
-        selection.target = Some(guard);
-        selection.guid = Some(GUARD);
-    }
+    app.world_mut()
+        .resource_mut::<GuidIndex>()
+        .0
+        .extend([(ME, me), (GUARD, guard)]);
 
     fn script(app: &mut App) -> Mut<'_, UiScript> {
         app.world_mut().non_send_resource_mut()
@@ -1422,10 +1404,18 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
         |c: [f32; 4]| c[0].abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6 && c[2].abs() < 1e-6;
     let is_red = |c: [f32; 4]| (c[0] - 1.0).abs() < 1e-6 && c[1].abs() < 1e-6 && c[2].abs() < 1e-6;
 
-    app.update();
-    // Our create's arrival, whose `PLAYER_ENTERING_WORLD` the target frame updates on.
+    // Our create's arrival, then the guard targeted: the select's `PLAYER_TARGET_CHANGED`
+    // (`0x49389c`), with the host lent as the select fires it.
     crate::ui_world_enter::push_arrival(app.world_mut());
     crate::ui_world_enter::fire_lane(app.world_mut());
+    {
+        let mut selection = app.world_mut().resource_mut::<Selection>();
+        selection.target = Some(guard);
+        selection.guid = Some(GUARD);
+    }
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM").fire_event("PLAYER_TARGET_CHANGED", vec![]);
+    });
     let _ = seen(&mut app);
     let before = plate(&mut app);
     assert!(
@@ -1433,16 +1423,16 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
         "a Friendly guard reads green, got {before:?}"
     );
 
-    // A standing moves: the questgiver and unit feeds wake, and no event fires.
+    // A standing moves: no notice, and no event fires.
     app.world_mut()
         .resource_mut::<Reputations>()
         .set_standing(63, 1);
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert!(seen(&mut app).is_empty(), "no table arrived");
 
     // A table naming another faction still fires: the handler tests nothing (`0x4d5a5e`).
     arrive(&mut app, vec![(faction + 1000, 0)]);
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert_eq!(
         seen(&mut app),
         ["player", "target"],
@@ -1455,21 +1445,21 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
 
     // The guard's faction forced to Hated: the plate follows `UNIT_FACTION`, not a retarget.
     arrive(&mut app, vec![(faction, 0)]);
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert_eq!(seen(&mut app), ["player", "target"]);
     let after = plate(&mut app);
     assert!(is_red(after), "forced Hated reads red, got {after:?}");
 
     // The same table sent again fires again, and the aura's removal (an empty table) repaints.
     arrive(&mut app, vec![(faction, 0)]);
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert_eq!(
         seen(&mut app),
         ["player", "target"],
         "a resend is an arrival"
     );
     arrive(&mut app, Vec::new());
-    app.update();
+    crate::lanes::fire_in_order(app.world_mut());
     assert_eq!(seen(&mut app), ["player", "target"]);
     let cleared = plate(&mut app);
     assert!(

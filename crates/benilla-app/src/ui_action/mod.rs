@@ -477,7 +477,6 @@ impl Plugin for UiActionPlugin {
                     // After the macros' bound spells, which a macro slot resolves through.
                     state::feed_action_state
                         .in_set(UnitFeed)
-                        .in_set(crate::ui_unit::WorldEnterSeats)
                         .after(crate::player::ControlRestore)
                         .after(crate::ui_macro::MacroBindings)
                         .after(feed::feed_actions),

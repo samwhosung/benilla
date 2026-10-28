@@ -34,13 +34,6 @@ pub(crate) use held::{traits_from_name_cache, unheld_state};
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitFeed;
 
-/// The feeds that seat a new VM with what the reference's caches hold across a `/reload`, ahead of
-/// the world-enter cascade whose handlers read it: the item records. The quest log's records are
-/// seated at the VM's load ([`crate::ui_quest_log::seed_quest_log`]). The reputation list is built by the cascade itself, off the lent
-/// host ([`benilla_ui::script::UiScript::fire_world_enter_tail`]).
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct WorldEnterSeats;
-
 /// One `UNIT_COMBAT` over a unit, the portrait hit indicator's feed. The emitter `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per token naming the unit, with no
 /// self-suppression and no CVar gate; `type` is the school on the melee and spell-damage paths, 0
@@ -1374,7 +1367,7 @@ pub(crate) fn seat_tokens_once(world: &mut World) {
 }
 
 /// The relation functions' seat, the four tokens' copies, then the field notices' events, for a
-/// test driving the stock unit frames off engine state, which lends no host.
+/// test whose reads run with no host lent.
 #[cfg(test)]
 pub(crate) fn add_token_seats(app: &mut App) {
     app.init_resource::<crate::field_watch::NoticeLane>()

@@ -310,17 +310,12 @@ impl super::super::UiScript {
         }
     }
 
-    /// Whether a selection call moved the `"target"` view since the last ask; the app's unit feed
-    /// then re-pushes `"target"` from the committed selection, which its memo no longer matches.
-    pub fn take_target_view_moved(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().target_view_moved)
-    }
-
     /// Seat the selection a script call just committed as `"target"` for the rest of its chunk,
     /// `None` for nothing selected: every selecting verb commits through `SetSelection 0x493540`
     /// before it returns, so `UnitName("target")` on the next line names the new unit. The view is
-    /// the unit's by-name snapshot, else a pushed snapshot of the same guid, else a bare held unit;
-    /// the next frame's unit feed replaces it with the committed selection's own push.
+    /// the unit's by-name snapshot, else a pushed snapshot of the same guid, else a bare held unit:
+    /// the VM's copy, which a getter reads with no host lent; with one, `"target"` reads the
+    /// committed selection live.
     ///
     /// A selection whose object is not held, a party member out of range, seats as its guid: the
     /// getters read it as they read any guid with no object ([`Model::snapshot_unit`]).
@@ -471,7 +466,7 @@ impl Model {
 
     /// The snapshot a held unit's `"target"` view seats with ([`UiScript::seat_selection`]): its
     /// by-name candidate's, else a token's or a chain end's push of the same guid, else the unit
-    /// as its guid alone (a unit whose name is not cached yet), which the next frame's feed fills.
+    /// as its guid alone (a unit whose name is not cached yet).
     ///
     /// [`UiScript::seat_selection`]: super::super::UiScript::seat_selection
     fn held_view(&self, guid: u64) -> UnitState {
@@ -505,13 +500,12 @@ impl Model {
         self.unit_guids.target = guid;
         self.unit_guids.held.remove(&guid);
         self.units_by_lower.remove("target");
-        self.target_view_moved = true;
     }
 
     /// Show a committed selection to the rest of its chunk: the resolver's target guid and the
     /// `"target"` snapshot, `None` for nothing selected.
     fn show_selection(&mut self, state: Option<UnitState>) {
-        // Already shown: the feed's own push stays, and the view has not moved.
+        // Already shown: the pushed copy stays.
         if state.as_ref().is_some_and(|s| {
             s.guid != 0 && s.guid == self.unit_guids.target && self.pushed_unit("target").is_some()
         }) {
@@ -526,7 +520,6 @@ impl Model {
                 self.units_by_lower.remove("target");
             }
         }
-        self.target_view_moved = true;
     }
 }
 

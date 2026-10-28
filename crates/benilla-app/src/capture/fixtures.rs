@@ -221,14 +221,17 @@ pub(super) fn seed_ui_fixture(
 
         match fixture {
             // Nothing to open: the loaded UI and `demo_unit_feed`'s player and target are the
-            // fixture. The combo dots read the active player's class (`0x51a1cc`), so
-            // `ui-combopoints` holds one: a level-12 rogue on the demo's health, at 45 energy.
+            // fixture. The combo dots read the active player's class (`0x51a1cc`) and its two
+            // combo fields against the selection (`0x51a1f3`-`0x51a20d`), so `ui-combopoints`
+            // holds a level-12 rogue on the demo's health, at 45 energy, with four points banked
+            // on the wolf it targets.
             UiFixture::Bare => {
                 if scenario.name == "ui-combopoints" {
                     const PLAYER_GUID: u64 = 0x51;
                     names.insert_player(PLAYER_GUID, "Benilla".into(), None);
                     commands.spawn((
                         crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                            (2, 0x19), // OBJECT_FIELD_TYPE: object, unit, player
                             (22, 72),  // UNIT_FIELD_HEALTH
                             (26, 45),  // UNIT_FIELD_POWER4, energy
                             (28, 100), // UNIT_FIELD_MAXHEALTH
@@ -236,10 +239,52 @@ pub(super) fn seed_ui_fixture(
                             (34, 12),  // UNIT_FIELD_LEVEL
                             // UNIT_FIELD_BYTES_0: night elf, rogue, male, energy
                             (36, 4 | (4 << 8) | (3 << 24)),
+                            // PLAYER_FIELD_COMBO_TARGET, the wolf
+                            (714, WOLF_GUID as u32),
+                            (715, (WOLF_GUID >> 32) as u32),
+                            // PLAYER_FIELD_BYTES byte 1: four combo points
+                            (1222, 4 << 8),
                         ])),
                         crate::net::SelfPlayer,
                         crate::net::Guid(PLAYER_GUID),
                     ));
+                    // The wolf, a level-3 beast on 30 of 50 health, held and selected; the
+                    // select's `PLAYER_TARGET_CHANGED` (`0x49389c`) shows the target frame and
+                    // its dots.
+                    names.insert_creature(
+                        WOLF_ENTRY,
+                        Some(crate::names::CreatureRecord {
+                            name: "Timber Wolf".into(),
+                            subname: None,
+                            creature_type: 1,
+                            pet_family: 0,
+                            rank: 0,
+                            type_flags: 0,
+                            pet_spell_list: 0,
+                            civilian: false,
+                            racial_leader: false,
+                            display_id: 0,
+                        }),
+                    );
+                    let wolf = commands
+                        .spawn((
+                            crate::net::Guid(WOLF_GUID),
+                            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(
+                                &[
+                                    (2, 0x9),           // OBJECT_FIELD_TYPE: object, unit
+                                    (3, WOLF_ENTRY),    // OBJECT_FIELD_ENTRY
+                                    (22, 30),           // UNIT_FIELD_HEALTH
+                                    (28, 50),           // UNIT_FIELD_MAXHEALTH
+                                    (34, 3),            // UNIT_FIELD_LEVEL
+                                    (35, WOLF_FACTION), // UNIT_FIELD_FACTIONTEMPLATE
+                                ],
+                            )),
+                        ))
+                        .id();
+                    index.0.insert(WOLF_GUID, wolf);
+                    selection.target = Some(wolf);
+                    selection.guid = Some(WOLF_GUID);
+                    commands.queue(signal_fixture_target);
                 }
             }
             // Holds the world-entry loading screen, tip and all, over the settled scene.

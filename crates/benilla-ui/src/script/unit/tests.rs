@@ -1019,7 +1019,7 @@ fn a_seated_selection_carries_its_target_of_target() {
 /// Every selecting verb commits through `SetSelection 0x493540` before it returns, and the host
 /// seats the selection it committed as `"target"` for the rest of the chunk: the unit's by-name
 /// snapshot, else a pushed snapshot of its guid, else the unit as its guid alone, and nothing for a
-/// deselect. Each seat tells the feed to re-push `"target"` from the committed selection.
+/// deselect.
 #[test]
 fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
     let mut s = UiScript::new().unwrap();
@@ -1034,7 +1034,6 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
     mate.health = 45;
     s.set_unit("party1", Some(mate));
     s.set_name_candidate(0x31, Some(candidate(0x31, "Red Affinity", 4.0)));
-    assert!(!s.take_target_view_moved());
     let health = |s: &UiScript| s.eval::<i64>("return UnitHealth('target')").unwrap();
 
     s.seat_selection(Some(alone(0x31)));
@@ -1048,7 +1047,6 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
         "the pick's whole snapshot, not only its name"
     );
     assert_eq!(s.model_ref().unit_guids.target, 0x31);
-    assert!(s.take_target_view_moved());
 
     s.seat_selection(Some(alone(0x22)));
     assert_eq!(
@@ -1070,11 +1068,10 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
         .eval::<bool>("return UnitExists('target') == nil")
         .unwrap());
     assert_eq!(s.model_ref().unit_guids.target, 0);
-    assert!(s.take_target_view_moved());
 }
 
-/// Seating the unit the feed's own `"target"` push already shows keeps that push (here, a health
-/// the candidate's does not share), and the view has not moved.
+/// Seating the unit the `"target"` copy already shows keeps that copy (here, a health the
+/// candidate's does not share).
 #[test]
 fn seating_the_shown_target_keeps_the_feeds_push() {
     let mut s = UiScript::new().unwrap();
@@ -1089,7 +1086,6 @@ fn seating_the_shown_target_keeps_the_feeds_push() {
     s.set_name_candidate(0x21, Some(candidate(0x21, "Old Mob", 1.0)));
     s.seat_selection(Some(alone(0x21)));
     assert_eq!(s.eval::<i64>("return UnitHealth('target')").unwrap(), 12);
-    assert!(!s.take_target_view_moved());
 }
 
 /// With no host to commit them, the selecting verbs move nothing: the VM never guesses a
@@ -1121,7 +1117,6 @@ fn a_selecting_verb_with_no_host_leaves_the_target_alone() {
         );
         assert_eq!(s.take_script_calls().len(), 1, "{lua}: kept for a host");
     }
-    assert!(!s.take_target_view_moved());
 }
 
 /// `0x516cf0` tests `UNIT_FIELD_CHARMEDBY` (fields 10-11) non-zero, not a `UNIT_FIELD_FLAGS` bit.

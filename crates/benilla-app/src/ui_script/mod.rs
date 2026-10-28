@@ -839,17 +839,10 @@ pub(crate) fn demo_unit_feed(
                 sex: 0,
                 // The tooltip's level line reads "Level 3 Beast".
                 creature_type_name: Some("Beast".into()),
-                // `GetComboPoints` reports only points banked on the current target's guid.
                 guid: DEMO_TARGET_GUID,
                 ..Default::default()
             }),
         );
-        // The combo dots need banked points, seeded only for `ui-combopoints`, whose fixture holds
-        // a rogue player.
-        if std::env::var("WOW_CAPTURE").as_deref() == Ok("ui-combopoints") {
-            script.set_combo_points(4, DEMO_TARGET_GUID);
-            script.fire_event("PLAYER_COMBO_POINTS", vec![]);
-        }
         if !*fired {
             // Battle-stance page slots (actions 73..); slot 80 is a consumable stack of 5, since
             // stock `ActionButton_UpdateCount` shows only a consumable's count

@@ -747,7 +747,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::Bare),
     },
-    // The fixture holds a rogue player and `demo_unit_feed` banks four points on the wolf, for this
+    // The fixture holds a rogue player with four points banked on the wolf it targets, for this
     // scenario only; the demo player is otherwise a warrior, which lights no dot.
     Scenario {
         name: "ui-combopoints",

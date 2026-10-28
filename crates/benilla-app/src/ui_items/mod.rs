@@ -1041,7 +1041,6 @@ impl Plugin for UiItemsPlugin {
                     // refused cast's item name reads the store it leaves.
                     feed_item_stats
                         .in_set(UnitFeed)
-                        .in_set(crate::ui_unit::WorldEnterSeats)
                         .before(crate::ui_cast::feed_cast_reports),
                     // The equip callbacks an item record's answer ran, drained with the Lua's
                     // asks, after the doll's feed has pushed what the answer changed.
