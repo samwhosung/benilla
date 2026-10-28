@@ -1,6 +1,7 @@
 //! The camera-view verbs from the reference's Lua table at `0x84f7a0`: `SetView`, `SaveView`,
 //! `ResetView`, `NextView`, `PrevView` and `FlipCameraYaw`. Each acts on engine state the VM does
-//! not hold, so each call queues a [`CameraViewRequest`] for the app's camera rig.
+//! not hold, so each hands its [`CameraViewRequest`] to the host, which seats it on the camera rig
+//! inside the call ([`super::ScriptCall::CameraView`]).
 //!
 //! The indexed verbs share one prologue and return silently, never reaching `luaL_error`
 //! (`0x6f4940`), on anything but a number that truncates to 1 to 5; `FlipCameraYaw` keeps its
@@ -9,8 +10,6 @@
 //! ends and never wrap (`0x50faa0`, `0x50fac0`).
 
 use mlua::{Lua, Value};
-
-use super::Model;
 
 /// The number of camera views, the rows of the reference's default-string table `0x84f488`.
 pub const CAMERA_VIEW_COUNT: u8 = 5;
@@ -33,11 +32,9 @@ pub enum CameraViewRequest {
     FlipYaw(f32),
 }
 
-impl super::UiScript {
-    /// Drain the camera-view intents queued since the last call.
-    pub fn take_camera_view_requests(&mut self) -> Vec<CameraViewRequest> {
-        std::mem::take(&mut self.model_mut().camera_view_requests)
-    }
+/// Hand `request` to the host inside the call.
+fn submit(lua: &Lua, request: CameraViewRequest) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::CameraView(request))
 }
 
 /// The indexed verbs' shared prologue: the internal index, or `None` for a silent return.
@@ -60,10 +57,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetView",
         lua.create_function(|lua, n: Value| {
             if let Some(view) = view_arg(lua, n) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .camera_view_requests
-                    .push(CameraViewRequest::Set(view));
+                return submit(lua, CameraViewRequest::Set(view));
             }
             Ok(())
         })?,
@@ -75,10 +69,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SaveView",
         lua.create_function(|lua, n: Value| {
             if let Some(view) = view_arg(lua, n) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .camera_view_requests
-                    .push(CameraViewRequest::Save(view));
+                return submit(lua, CameraViewRequest::Save(view));
             }
             Ok(())
         })?,
@@ -90,10 +81,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ResetView",
         lua.create_function(|lua, n: Value| {
             if let Some(view) = view_arg(lua, n) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .camera_view_requests
-                    .push(CameraViewRequest::Reset(view));
+                return submit(lua, CameraViewRequest::Reset(view));
             }
             Ok(())
         })?,
@@ -102,19 +90,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // NextView() and PrevView(), `0x50b680` and `0x50b690`: neither reads the Lua stack.
     g.set(
         "NextView",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.camera_view_requests.push(CameraViewRequest::Next);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, CameraViewRequest::Next))?,
     )?;
     g.set(
         "PrevView",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.camera_view_requests.push(CameraViewRequest::Prev);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, CameraViewRequest::Prev))?,
     )?;
 
     // FlipCameraYaw(degrees), `0x50b6a0`: adds `degrees × π/180` to the camera's yaw, fraction
@@ -123,10 +103,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "FlipCameraYaw",
         lua.create_function(|lua, degrees: Value| {
             if let Some(d) = lua.coerce_number(degrees).ok().flatten() {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .camera_view_requests
-                    .push(CameraViewRequest::FlipYaw(d as f32));
+                return submit(lua, CameraViewRequest::FlipYaw(d as f32));
             }
             Ok(())
         })?,

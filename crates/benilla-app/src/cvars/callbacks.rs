@@ -155,6 +155,18 @@ impl CvarSteps<'_> {
         self.cvars.as_deref_mut()
     }
 
+    /// Host writes an engine verb makes inside its call (`CVar::Set`, `0x63df50`), each through
+    /// its row's check and callback, then the VM's mirror synced, before the verb returns.
+    pub(crate) fn write(&mut self, script: &mut UiScript, writes: &[(&str, String)]) {
+        let Some(cvars) = self.cvars.as_deref_mut() else {
+            return;
+        };
+        for (name, value) in writes {
+            cvars.set(name, value);
+        }
+        self.sync(Some(script));
+    }
+
     /// Take the VM's queued writes into the registry, run each accepted move's callback, then hand
     /// the VM what the registry wrote (a host write, a callback's mirror of a second spelling).
     /// Read before taking, so a quiet sync never deref-muts the registry.

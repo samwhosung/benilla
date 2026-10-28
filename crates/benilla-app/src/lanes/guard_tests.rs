@@ -550,6 +550,8 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::NameCache",
     // The Video menu's list the host's multisample verbs read (`0x48c3e0`).
     "::view::MsaaFormats",
+    // A capture run, which parks the camera the view verbs would move.
+    "::run_mode::CaptureMode",
     "::ServerTime",
     "::GuidIndex",
     // The bag cache the open-container handler numbers its `BAG_OPEN`s from.

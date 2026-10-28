@@ -335,7 +335,12 @@ impl Plugin for CursorPlugin {
         app.add_systems(Startup, macos::setup.after(AssetSet::Open))
             .add_systems(
                 Update,
-                (read_glue_pointer, drive_displayed_cursor, macos::drive)
+                (
+                    read_glue_pointer,
+                    drive_displayed_cursor,
+                    // After every call, which may move the camera's rig whose look it shows.
+                    macos::drive.after(crate::vm_pass::VmPass::End),
+                )
                     .chain()
                     // After the tick: a FrameXML `SetCursor` made this frame is read here; and
                     // after the target chain, whose clicks, calls and selects end or raise the

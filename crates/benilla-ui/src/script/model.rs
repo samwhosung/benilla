@@ -4,12 +4,12 @@ use crate::layout::{LayoutInput, LayoutSolver, Rect};
 use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 
 use super::{
-    auction, backdrop, bank, camera_view, char_stats, chat_window, colorselect, container, craft,
-    cursor, death, gossip, guild, item_text, loot, loot_roll, macros, mail, merchant,
-    parse_unit_token, party, petition, pvp, quest, quest_log, reputation, simplehtml, skills,
-    slider, social, spellbook, stable, taxi, trade, tradeskill, trainer, weapon_enchant,
-    ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest, PlayerReqState, RegionData,
-    ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
+    auction, backdrop, bank, char_stats, chat_window, colorselect, container, craft, cursor, death,
+    gossip, guild, item_text, loot, loot_roll, macros, mail, merchant, parse_unit_token, party,
+    petition, pvp, quest, quest_log, reputation, simplehtml, skills, slider, social, spellbook,
+    stable, taxi, trade, tradeskill, trainer, weapon_enchant, ActionSlot, AuraState, FontObject,
+    ItemTemplateView, MusicRequest, PlayerReqState, RegionData, ScriptValue, SoundRequest,
+    UnitBase, UnitState, UnitTokenParse,
 };
 
 // ── The Rust-side model ──
@@ -493,9 +493,6 @@ pub(crate) struct Model {
     pub(crate) user_placed_changed: bool,
     /// The default chat language; `None` is no player, so `GetDefaultLanguage()` returns nothing.
     pub(crate) default_language: Option<String>,
-    /// `SetView`, `SaveView`, `ResetView`, `NextView`, `PrevView` and `FlipCameraYaw` calls; the
-    /// views reach Lua only as CVars, `cameraView` and `camera{Distance,Pitch,Yaw}{,A..D}`.
-    pub(crate) camera_view_requests: Vec<camera_view::CameraViewRequest>,
     /// The glue core's slots and request queue; empty in an in-game VM.
     pub(crate) glue: super::glue_core::GlueCore,
     /// `PLAYER_LOGIN`'s one-shot, the reference's `[0xb4e260]`: armed by the UI load, spent by
@@ -1467,7 +1464,6 @@ impl Model {
             logging_changed: false,
             user_placed_changed: false,
             default_language: None,
-            camera_view_requests: Vec::new(),
             glue: Default::default(),
             player_login_armed: false,
             honor: None,

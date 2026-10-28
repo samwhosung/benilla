@@ -198,119 +198,97 @@ fn load_saved_views(cvars: Res<crate::cvars::Cvars>, mut views: ResMut<CameraVie
     }
 }
 
-/// Everything one drained request may write.
+/// The camera-view verbs inside their calls ([`benilla_ui::script::ScriptCall::CameraView`]):
+/// `SetView` (`0x50b5b0` → `0x512e90`) seats the view and writes `cameraView` with `CVar::Set`
+/// (`0x512f17`), `SaveView` (`0x50b600` → `0x50fa30` → `0x50f990`) writes the three fields
+/// (`0x50fa09`), so the verb's next line reads them. Each absent in a harness without it.
 #[derive(bevy::ecs::system::SystemParam)]
-struct ViewTargets<'w, 's> {
-    views: ResMut<'w, CameraViews>,
-    rig: ResMut<'w, CameraControl>,
+pub(crate) struct ViewSteps<'w, 's> {
+    views: Option<ResMut<'w, CameraViews>>,
+    rig: Option<ResMut<'w, CameraControl>>,
     cam: Query<'w, 's, &'static mut FlyCam, With<WorldCamera>>,
-    player: Res<'w, Player>,
+    player: Option<Res<'w, Player>>,
+    /// Capture parks the camera itself; a view must not move it.
+    capture: Option<Res<'w, crate::run_mode::CaptureMode>>,
 }
 
-/// Drain the Lua queue into the rig, before [`super::control`] seats this frame's camera.
-fn drain_view_requests(
-    // With the registry, whose callbacks the call host runs inside the calls that write it.
-    mut vm: crate::script_calls::VmWith<crate::cvars::CvarSteps<'static>>,
-    mut targets: ViewTargets,
-) {
-    vm.turn(|script, mut steps| {
-        let Some(script) = script else {
-            return;
-        };
-        let requests = script.take_camera_view_requests();
-        if requests.is_empty() {
-            return;
+impl ViewSteps<'_, '_> {
+    /// Apply `request`, and the CVar writes it makes, `(name, value)` in order, for the registry
+    /// to take inside the same call.
+    pub(crate) fn apply(&mut self, request: CameraViewRequest) -> Vec<(&'static str, String)> {
+        let mut writes = Vec::new();
+        if self.capture.is_some() {
+            return writes;
         }
-        let Ok(mut cam) = targets.cam.single_mut() else {
-            return; // no camera: a silent drop, as the reference's `0x4818f0` miss
+        let (Some(views), Some(rig), Some(player)) = (
+            self.views.as_deref_mut(),
+            self.rig.as_deref_mut(),
+            self.player.as_deref(),
+        ) else {
+            return writes;
         };
-        let face_yaw = targets.player.facing();
-        // Written to the CVars after the batch: the slots a save or reset moved, and the live
-        // index.
-        let mut write_slots: Vec<usize> = Vec::new();
+        let Ok(mut cam) = self.cam.single_mut() else {
+            return writes; // no camera: a silent drop, as the reference's `0x4818f0` miss
+        };
+        let face_yaw = player.facing();
+        let mut write_slot = None;
         let mut write_active = false;
-
-        for request in requests {
-            match request {
-                CameraViewRequest::Set(n) => {
-                    write_active |= apply(
-                        &mut targets.views,
-                        &mut targets.rig,
-                        &mut cam,
-                        face_yaw,
-                        usize::from(n),
-                    );
+        match request {
+            CameraViewRequest::Set(n) => {
+                write_active = apply(views, rig, &mut cam, face_yaw, usize::from(n));
+            }
+            CameraViewRequest::Save(n) => {
+                let view = usize::from(n);
+                views.save(
+                    view,
+                    ViewPose {
+                        // The target zoom, not the collision-pulled arm (`cam+0x198`).
+                        distance: rig.target_distance,
+                        pitch: cam.pitch,
+                        yaw: wrap_pi(cam.yaw - face_yaw),
+                    },
+                );
+                write_slot = Some(view);
+            }
+            CameraViewRequest::Reset(n) => {
+                let view = usize::from(n);
+                if views.reset(view) {
+                    write_active = apply(views, rig, &mut cam, face_yaw, view);
                 }
-                CameraViewRequest::Save(n) => {
-                    let view = usize::from(n);
-                    targets.views.save(
-                        view,
-                        ViewPose {
-                            // The target zoom, not the collision-pulled arm (`cam+0x198`).
-                            distance: targets.rig.target_distance,
-                            pitch: cam.pitch,
-                            yaw: wrap_pi(cam.yaw - face_yaw),
-                        },
-                    );
-                    write_slots.push(view);
-                }
-                CameraViewRequest::Reset(n) => {
-                    let view = usize::from(n);
-                    if targets.views.reset(view) {
-                        apply(
-                            &mut targets.views,
-                            &mut targets.rig,
-                            &mut cam,
-                            face_yaw,
-                            view,
-                        );
-                    }
-                    write_slots.push(view);
-                }
-                CameraViewRequest::Next | CameraViewRequest::Prev => {
-                    let forward = request == CameraViewRequest::Next;
-                    if let Some(view) = targets.views.step(forward) {
-                        write_active |= apply(
-                            &mut targets.views,
-                            &mut targets.rig,
-                            &mut cam,
-                            face_yaw,
-                            view,
-                        );
-                    }
-                }
-                CameraViewRequest::FlipYaw(degrees) => {
-                    // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in
-                    // its own yaw field, added outside the follow channel (`0x50f7de`), so it
-                    // survives re-centring; the rig has one yaw, so auto-follow reels the flip back
-                    // in on Smart and Always.
-                    cam.yaw = wrap_pi(cam.yaw + degrees.to_radians());
+                write_slot = Some(view);
+            }
+            CameraViewRequest::Next | CameraViewRequest::Prev => {
+                let forward = request == CameraViewRequest::Next;
+                if let Some(view) = views.step(forward) {
+                    write_active = apply(views, rig, &mut cam, face_yaw, view);
                 }
             }
-        }
-
-        // Mirror into the registry so the change reaches `config.toml`.
-        let Some(cvars) = steps.cvars() else {
-            return;
-        };
-        for view in write_slots {
-            // A reset writes the default string verbatim, so the diff-shaped file drops the key.
-            let reset_to_default = targets.views.pose(view) == ViewPose::shipped(view);
-            let rendered = targets.views.pose(view).to_reference();
-            for field in 0..3 {
-                let value = if reset_to_default {
-                    VIEW_DEFAULTS[view][field]
-                } else {
-                    rendered[field].as_str()
-                };
-                cvars.set(VIEW_CVARS[view][field], value);
+            CameraViewRequest::FlipYaw(degrees) => {
+                // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in its
+                // own yaw field, added outside the follow channel (`0x50f7de`), so it survives
+                // re-centring; the rig has one yaw, so auto-follow reels the flip back in on Smart
+                // and Always.
+                cam.yaw = wrap_pi(cam.yaw + degrees.to_radians());
             }
         }
         if write_active {
-            cvars.set(CVAR_ACTIVE_VIEW, &targets.views.current.to_string());
+            writes.push((CVAR_ACTIVE_VIEW, views.current.to_string()));
         }
-        steps.sync(Some(script));
-    })
+        if let Some(view) = write_slot {
+            // A reset writes the default string verbatim, so the diff-shaped file drops the key.
+            let reset_to_default = views.pose(view) == ViewPose::shipped(view);
+            let rendered = views.pose(view).to_reference();
+            for field in 0..3 {
+                let value = if reset_to_default {
+                    VIEW_DEFAULTS[view][field].to_string()
+                } else {
+                    rendered[field].clone()
+                };
+                writes.push((VIEW_CVARS[view][field], value));
+            }
+        }
+        writes
+    }
 }
 
 /// Seat one view; the distance glides through `target_distance`. `true` when the live index moved.
@@ -331,21 +309,46 @@ fn apply(
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CameraViews>()
         // After the config load, so the persisted views are in before anything selects one.
-        .add_systems(Startup, load_saved_views.after(crate::cvars::CvarLoad))
-        .add_systems(
-            Update,
-            drain_view_requests
-                // After the Lua tick that queues them, before the control pass seats the pose.
-                .in_set(crate::ui_script::UiDrain)
-                .before(super::control)
-                // Capture parks the camera itself; a queued view must not move it.
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
-        );
+        .add_systems(Startup, load_saved_views.after(crate::cvars::CvarLoad));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `SetView` writes `cameraView` inside its call (`0x512f17`) and `SaveView` the view's three
+    /// fields (`0x50fa09`), so the chunk's next line reads both: view 4's distance is the rig's
+    /// target after the set, and the save stores it into view 3. Main drained the views after the
+    /// chunk and read the defaults.
+    #[test]
+    fn a_view_verbs_cvar_writes_read_on_the_chunks_next_line() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        app.update();
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        app.update();
+        app.update();
+        let cams = app
+            .world_mut()
+            .query_filtered::<(), (With<FlyCam>, With<WorldCamera>)>()
+            .iter(app.world())
+            .count();
+        assert_eq!(cams, 1, "the world camera");
+        let (active, distance): (String, String) =
+            crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+                s.expect("a VM").eval(
+                    "SetView(4) SaveView(3) return GetCVar('cameraView'), GetCVar('cameraDistanceB')",
+                )
+            })
+            .expect("the chunk runs");
+        assert_eq!(active, "3");
+        assert_eq!(distance, "13.880000");
+    }
 
     #[test]
     fn each_shipped_view_lands_its_recorded_pose() {

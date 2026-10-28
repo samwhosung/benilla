@@ -273,6 +273,10 @@ pub enum ScriptCall {
     /// the host takes the queued writes into its registry and runs their callbacks before the verb
     /// goes on ([`super::cvars::written`]).
     CvarWritten,
+    /// A camera-view verb ([`super::CameraViewRequest`]): `SetView`, `SaveView`, `ResetView`,
+    /// `NextView`, `PrevView` or `FlipCameraYaw`, seated on the camera inside the call, its CVar
+    /// writes with it (`0x512f17`, `0x50fa09`).
+    CameraView(super::CameraViewRequest),
     /// `FollowUnit` or `FollowByName` ([`super::FollowRequest`]): the start gate, its refusal's
     /// line or the follow armed and `AUTOFOLLOW_BEGIN` signalled, inside the call (`0x60fed0`).
     Follow(super::FollowRequest),

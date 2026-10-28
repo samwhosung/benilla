@@ -845,13 +845,15 @@ pub(crate) fn latch_world_mouse(
     press_consumed: Option<Res<crate::ui_script::PlayerUiPressConsumed>>,
     // Who each of the frame's press records went to, as the world frame's binding read it.
     presses: Option<Res<crate::ui_script::WorldPresses>>,
-    mut rig: ResMut<CameraControl>,
     cameras: Query<&Camera, With<FlyCam>>,
     window: Single<&Window, With<PrimaryWindow>>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With the rig, which the view verbs move inside their calls: written between the Lua the
+    // latch runs, never while the host is lent.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, CameraControl>>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
 ) {
-    hosted_vm.run(|mut script| {
+    let (mut script, set) = vm.parts();
+    {
         let calls = script
             .as_mut()
             .map(|s| s.take_look_calls())
@@ -859,6 +861,7 @@ pub(crate) fn latch_world_mouse(
         let Ok(camera) = cameras.single() else {
             return;
         };
+        let mut rig = set.p0();
         // A press's owner is its record's, as its binding read it, so the latch and the binding
         // agree; a press no record made (a test's plane) reads the frame's hover.
         let over_ui = pointer_over_ui.0 || press_consumed.is_some_and(|c| c.0);
@@ -885,15 +888,18 @@ pub(crate) fn latch_world_mouse(
         if buttons.just_released(MouseButton::Right) {
             wm.scripted = false;
             if let Some(script) = script.as_deref_mut() {
-                script.release_turn_or_action();
+                crate::script_calls::lent(script, set.p1().as_mut(), |s| {
+                    s.release_turn_or_action()
+                });
             }
+            rig = set.p0();
         }
         // The world enter behind the cover clears the whole word (`0x5144c0` → `0x514b70(-1, …)`),
         // the commands' primary bits with it. A window deactivate clears none of it (`0x5144a3
         // and eax,0xfffff00f` keeps the low bits): the session outlives the focus, and only the
         // OS cursor goes back ([`sync_look_focus`]).
         if cover.is_some_and(|c| c.covering()) {
-            wm.scripted = false;
+            rig.world_mouse.scripted = false;
             if let Some(script) = script.as_deref_mut() {
                 script.release_mouse_commands();
             }
@@ -902,7 +908,7 @@ pub(crate) fn latch_world_mouse(
         if let Some(script) = script {
             script.set_turn_or_action_held(rig.world_mouse.turn());
         }
-    })
+    }
 }
 
 /// The look calls the handlers of the frame's packets made, after the input's latch
@@ -912,10 +918,10 @@ pub(crate) fn latch_world_mouse(
 /// the same tick (category 5), and the next mouse message turns. The frame pass's `OnUpdate`
 /// runs after that tick, so its calls wait for the next frame's latch.
 pub(crate) fn apply_late_look_calls(
-    mut rig: ResMut<CameraControl>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // With the rig, which the view verbs move inside their calls; the drain runs no Lua.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, CameraControl>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut rig| {
         let Some(script) = script else {
             return;
         };

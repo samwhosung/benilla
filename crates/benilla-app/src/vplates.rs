@@ -362,11 +362,15 @@ struct PlateWorld<'w, 's> {
 /// [`PlateState`]s. Runs after the targeting chain, whose selection it reads.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_vplates(
-    mut vm: crate::script_calls::VmWith<PlateWorld<'static, 'static>>,
+    // With the camera rig, whose look the plates' mouse follows and which the view verbs move
+    // inside their calls.
+    mut vm: crate::script_calls::VmWith<(
+        PlateWorld<'static, 'static>,
+        Res<'static, crate::player::CameraControl>,
+    )>,
     mut plates: ResMut<VPlates>,
     mut plate_clicks: ResMut<PlateClicks>,
     mut flashes: ResMut<PlateFlashes>,
-    rig: Res<crate::player::CameraControl>,
     names: Res<NameCache>,
     spells: Option<Res<crate::ui_action::Spells>>,
     anchor_q: (
@@ -384,7 +388,7 @@ fn drive_vplates(
     // The plates' widgets change after the turn, with the host lent: each plate's `OnShow` and
     // `OnHide` run in place as the walk shows or hides it, so a call one makes applies inside its
     // verb.
-    let step = vm.turn(|script, world| {
+    let step = vm.turn(|script, (world, rig)| {
         plates.0.clear();
         bucket.clear();
         // Every early return retires the plates first, or the widgets stay on screen; the reference
