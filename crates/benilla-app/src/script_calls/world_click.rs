@@ -61,11 +61,7 @@ impl CallHost for Tracing<'_, '_, '_> {
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
         if let ScriptCall::WorldClick(ClickCall::Arm(_)) = call {
             let at = script.click_press().at.map(Vec2::from);
-            let pick = self
-                .0
-                .set
-                .p0()
-                .map(|mut tracer| tracer.trace(script.hovered_nameplate(), at));
+            let pick = self.0.set.p0().map(|mut tracer| tracer.trace(at));
             #[cfg(test)]
             self.0.set.end_lend();
             if let (Some(pick), Some(mut host)) = (pick, self.host()) {

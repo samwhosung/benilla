@@ -9,8 +9,9 @@
 //!
 //! The arm picks inside its call, whatever ran the command (a press's binding, a key's, a
 //! handler's): the input records' walk lends the call host with the pick's tracer ([`ArmTracer`]),
-//! which traces at the cursor of the record that runs ([`benilla_ui::script::ClickPress`]), the
-//! reference's stored cursor (`[frame+0xa0]+0x1118`, `0x481f1d`). An arm made under a host without
+//! which traces the world, never a plate over it, at the cursor of the record that runs
+//! ([`benilla_ui::script::ClickPress`]), the reference's stored cursor (`[frame+0xa0]+0x1118`,
+//! `0x481f1d`). An arm made under a host without
 //! the tracer (a signal point inside another call's apply, the stuck-latch sweep's up-half) is
 //! traced where the record's walk returns, and the steps after it wait for that trace and apply
 //! there, in order. What no mouse command dispatches runs where the frame's records end
@@ -182,45 +183,37 @@ impl ArmLeg<'_, '_> {
 
 crate::script_calls::disjoint::disjoint_set! {
     /// `PickObjectUnderCursor`'s trace (`0x481f00` → `PickAtCursor 0x481190` at `0x481f47`) as a
-    /// param: the targeting word published to the pick's readers (`0x481050`), the plate the
-    /// interface's walk left hovered, then the pick at the point. Each is lent alone: the pick
-    /// reads what the others write.
+    /// param: the targeting word published to the pick's readers (`0x481050`), then the pick at
+    /// the point. Each is lent alone: the pick reads what the words write.
     pub(crate) struct ArmTracer, ArmTracerState {
         words: crate::spell::targeting::PickWords<'static>,
-        plate: PlateSeed<'static>,
         pick: super::hover::PointPick<'static, 'static>,
     }
 }
 
-/// The plate hover the pick reads, seeded off the VM's walk.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct PlateSeed<'w> {
-    guids: Option<Res<'w, crate::net::GuidIndex>>,
-    hover: ResMut<'w, crate::vplates::PlateHover>,
-}
-
 impl ArmTracer<'_, '_> {
-    /// The pick at `at`, in window coordinates (the window's cursor or the probe's aim with none),
-    /// against the targeting word as it stands now and the plate the walk left hovered, `plate`'s.
-    pub(crate) fn trace(&mut self, plate: Option<u64>, at: Option<Vec2>) -> PressPick {
-        {
-            let mut seed = self.plate();
-            let guids = seed.guids.as_deref();
-            seed.hover.seed_guid(plate, guids);
-        }
-        self.pick_now(at)
+    /// The arm's pick at `at`, in window coordinates (the window's cursor or the probe's aim with
+    /// none), against the targeting word as it stands now: the world under the cursor, whatever
+    /// plate covers it ([`super::hover::PointPick::world_at`]).
+    pub(crate) fn trace(&mut self, at: Option<Vec2>) -> PressPick {
+        self.pick_with(at, false)
     }
 
-    /// The pick at `at` against the targeting word as it stands now and the plate hover as the
-    /// last seed left it.
-    fn pick_now(&mut self, at: Option<Vec2>) -> PressPick {
+    /// The pick at `at` against the targeting word as it stands now; with `plate`, a plate the
+    /// walk left hovered is its unit.
+    fn pick_with(&mut self, at: Option<Vec2>, plate: bool) -> PressPick {
         self.words().publish();
         // `WOW_PICK_COST=1` logs each pick's cost.
         static METER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let t0 = METER
             .get_or_init(|| std::env::var("WOW_PICK_COST").as_deref() == Ok("1"))
             .then(std::time::Instant::now);
-        let pick = self.pick().at(at);
+        let mut point = self.pick();
+        let pick = if plate {
+            point.at(at)
+        } else {
+            point.world_at(at)
+        };
         if let Some(t0) = t0 {
             info!("pick-cost: arm pick {} us", t0.elapsed().as_micros());
         }
@@ -228,9 +221,9 @@ impl ArmTracer<'_, '_> {
     }
 }
 
-/// The pick at `at`, for a trace off the call.
-fn trace_at(In(at): In<Option<Vec2>>, mut tracer: ArmTracer) -> PressPick {
-    tracer.pick_now(at)
+/// The pick at `at`, for a trace off the call; with `plate`, a plate hovered is its unit.
+fn trace_at(In((at, plate)): In<(Option<Vec2>, bool)>, mut tracer: ArmTracer) -> PressPick {
+    tracer.pick_with(at, plate)
 }
 
 /// Run a one-shot of the click on `world`, the unit edits it queued applied after.
@@ -240,18 +233,12 @@ fn run<M>(world: &mut World, system: impl IntoSystem<(), (), M> + 'static) {
     }
 }
 
-/// The pick at `at`, off the call.
-fn trace(world: &mut World, at: Option<Vec2>) -> Option<PressPick> {
-    world
-        .run_system_cached_with(trace_at, at)
-        .inspect_err(|err| debug!("world click: the pick did not run: {err}"))
-        .ok()
-}
-
-/// Trace the press's pick at `at` into [`PressPick`].
-fn latch(world: &mut World, at: Option<Vec2>) {
-    if let Some(pick) = trace(world, at) {
-        *world.resource_mut::<PressPick>() = pick;
+/// Trace the pick at `at` into [`PressPick`], off the call: an arm's, the world's alone, or with
+/// `plate` a plate's press, the plate's unit.
+fn latch(world: &mut World, at: Option<Vec2>, plate: bool) {
+    match world.run_system_cached_with(trace_at, (at, plate)) {
+        Ok(pick) => *world.resource_mut::<PressPick>() = pick,
+        Err(err) => debug!("world click: the pick did not run: {err}"),
     }
 }
 
@@ -325,7 +312,7 @@ pub(crate) fn world_steps(world: &mut World, record: &InputRecord) {
         .get_resource::<crate::vplates::PlateHover>()
         .is_some_and(|h| h.0.is_some());
     if matches!(press, Some(MouseButton::Left | MouseButton::Right)) && plate && !armed {
-        latch(world, record.at);
+        latch(world, record.at, true);
     }
 }
 
@@ -339,7 +326,7 @@ fn settle(world: &mut World, at: Option<Vec2>) {
             std::mem::take(&mut arm.untraced)
         });
         if untraced {
-            latch(world, at);
+            latch(world, at, false);
         }
         if !crate::script_calls::submit_waiting_clicks(world) {
             return;

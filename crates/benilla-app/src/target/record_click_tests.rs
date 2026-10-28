@@ -24,6 +24,8 @@ const ME: u64 = 0x10;
 /// A spell whose cursor wants a ground point.
 const BLIZZARD: u32 = 10;
 const MOB: u64 = 0xF130_0000_0031_0001;
+/// A second unit, off the camera's ray, whose plate a test lays over the mob.
+const PLATED: u64 = 0xF130_0000_0032_0002;
 
 /// Over the left half's button, which targets us on its `OnClick`.
 const ON_BUTTON: Vec2 = Vec2::new(100.0, 400.0);
@@ -167,6 +169,7 @@ fn client_bound(wtf: &str) -> App {
     for ev in crate::net::wire([
         created(ME, EntityKind::Player, ObjectType::Player, 0x19),
         created(MOB, EntityKind::Unit, ObjectType::Unit, 0x9),
+        created(PLATED, EntityKind::Unit, ObjectType::Unit, 0x9),
         SessionEvent::ObjectUpdateEnd,
     ]) {
         inbound.send(ev).unwrap();
@@ -450,6 +453,77 @@ fn a_key_bound_click_reads_its_target_on_the_next_line() {
         format!("{name};"),
         "the line after the stop read the mob"
     );
+}
+
+/// [`PLATED`]'s plate shown over [`ON_MOB`] and hovered there, as the walk and the plate hover's
+/// seed after the tick leave a still cursor on it.
+fn plate_over_mob(app: &mut App) {
+    use benilla_ui::script::{PlateGeometry, PlateState};
+    let state = PlateState {
+        key: PLATED,
+        // The plate hangs below its top centre; [`ON_MOB`] is (900, 168) in the root's y-up units.
+        top_centre: (900.0, 180.0),
+        health: 100.0,
+        max_health: 100.0,
+        bar_colour: [1.0, 0.0, 0.0],
+        name: "Plated".into(),
+        level: Some(1),
+        skull: false,
+        level_colour: [1.0, 1.0, 0.0],
+        raid_icon: None,
+        alpha: 255,
+        lit: false,
+        hovered: false,
+    };
+    let geometry = PlateGeometry {
+        width: 128.0,
+        height: 32.0,
+        bar_off_x: 4.0,
+        bar_off_y: 4.0,
+        bar_width: 103.0,
+        bar_height: 9.0,
+        level_off_x: 11.8,
+        level_off_y: 9.1,
+        skull_size: 12.8,
+        raid_size: 25.6,
+        name_height: 12.8,
+        level_height: 11.0,
+        shadow_offset: 1.0,
+    };
+    {
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script
+            .run(r#"NAMEPLATE_FONT = "Fonts\FRIZQT__.TTF" WorldFrame:SetAllPoints()"#)
+            .unwrap();
+        script.resolve();
+        script.sync_nameplates(geometry, &[state]);
+        script.resolve();
+        script.mouse_move(900.0, 168.0);
+        assert_eq!(
+            script.hovered_nameplate(),
+            Some(PLATED),
+            "the plate holds the hover"
+        );
+    }
+    use bevy::ecs::system::RunSystemOnce;
+    app.world_mut()
+        .run_system_once(crate::vplates::seed_plate_hover)
+        .unwrap();
+}
+
+/// A key's click picks the world under the cursor, never a plate over it: `PickAtCursor`
+/// (`0x481190`) traces the terrain and the world frame's drawn objects (`0x480df0`, `0x480a50`)
+/// and asks no interface frame. A plate takes only its own press (`0x7cb910`).
+#[test]
+fn a_key_bound_click_under_a_plate_selects_the_world_under_it() {
+    let mut app = client_with_f("PROBEKEYCLICK");
+    aim(&mut app);
+    move_to(&mut app, ON_MOB);
+    app.update();
+    plate_over_mob(&mut app);
+    press_f(&mut app);
+    app.update();
+    assert_eq!(target(&app), Some(MOB), "the key's click selected the mob");
 }
 
 /// A button over the mob whose `OnClick` runs `body`, and a recorder of `PLAYER_TARGET_CHANGED`.

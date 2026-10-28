@@ -95,12 +95,8 @@ impl PlateHover {
         script: Option<&benilla_ui::script::UiScript>,
         guids: Option<&crate::net::GuidIndex>,
     ) {
-        self.seed_guid(script.and_then(|s| s.hovered_nameplate()), guids);
-    }
-
-    /// The unit of the plate of `guid`, the one the walk left hovered.
-    pub(crate) fn seed_guid(&mut self, guid: Option<u64>, guids: Option<&crate::net::GuidIndex>) {
-        self.0 = guid
+        self.0 = script
+            .and_then(|s| s.hovered_nameplate())
             .zip(guids)
             .and_then(|(guid, guids)| guids.0.get(&guid).copied());
     }

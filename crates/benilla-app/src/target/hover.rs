@@ -978,6 +978,19 @@ impl PointPick<'_, '_> {
     /// The pick at `at`, in window coordinates; with none, at the window's cursor or the probe's
     /// aim. A plate under the pointer is its unit, as the hover's is: the plate took the press.
     pub(crate) fn at(&mut self, at: Option<Vec2>) -> super::PressPick {
+        let plate = self.plate_hover.0;
+        self.pick(at, plate)
+    }
+
+    /// `PickAtCursor`'s own pick at `at` (`0x481190`), as an arm makes it: the world alone. It
+    /// traces the terrain and the world frame's drawn objects (`0x480df0`, `0x480a50`) and asks no
+    /// interface frame, so a plate under the cursor is not its unit.
+    pub(crate) fn world_at(&mut self, at: Option<Vec2>) -> super::PressPick {
+        self.pick(at, None)
+    }
+
+    /// The pick at `at`, `plate` the plate whose unit it is.
+    fn pick(&mut self, at: Option<Vec2>, plate: Option<Entity>) -> super::PressPick {
         self.objects.refresh();
         let mut pick = super::PressPick::default();
         let Ok(window) = self.window.single() else {
@@ -992,7 +1005,7 @@ impl PointPick<'_, '_> {
                 if let Ok(ray) = cam.0.viewport_to_world(cam.1, cursor) {
                     pick.occlusion = self.trace.trace(ray);
                     let sticky = &mut *self.sticky;
-                    pick.hovered = match self.plate_hover.0 {
+                    pick.hovered = match plate {
                         Some(entity) => self.units.plate(entity, &mut sticky.unit),
                         None => self
                             .units
