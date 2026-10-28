@@ -80,7 +80,7 @@ impl crate::script_calls::live::LiveFamily for DialogLive<'_, '_> {
                 let (instance, maps) = (self.instance.as_ref()?, self.maps.as_deref());
                 let now = self.real.as_ref()?.elapsed().as_secs();
                 let party_dungeon = |m: u32| maps.is_some_and(|c| c.0.is_party_dungeon(m));
-                Some(instance.can_reset(self.map.as_ref().map(|m| m.0), &party_dungeon, now))
+                Some(instance.can_reset(&party_dungeon, now))
             })
     }
 }

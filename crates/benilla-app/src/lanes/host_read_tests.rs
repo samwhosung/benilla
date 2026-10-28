@@ -110,9 +110,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),
-    ("::ui_instance::track_instance_state", &["ui_instance::InstanceState"],
-        "latches the dungeon just left once the map the transfer lands on is known, which the \
-         reference latches inside the map load and the packet (`0x464ff0`, `0x49e6ac`)"),
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"],
         "fires and clears the signals the logout replies queue, which the session verbs read in \
          their calls, where the reference's handlers signal in place (`0x5aaef0`, `0x5aaf60`)"),

@@ -39,6 +39,7 @@ pub(super) fn register(app: &mut App) {
                 WorldportTimer::Sweep,
                 WorldportTimer::Objects,
                 WorldportTimer::Cooldowns,
+                WorldportTimer::Manager,
                 WorldportTimer::Rolls,
             )
                 .chain(),
@@ -415,18 +416,32 @@ struct Destination {
 
 /// The world loads posted and not yet run: `SMSG_NEW_WORLD` (`0x401b00`) reads its destination
 /// into globals and posts the executor `0x401bc0` as a timer at no delay (`0x401ba5`-`0x401bae`),
-/// which the next tick runs ahead of its packets (`0x420d0c`, `0x420d55`).
+/// which the next tick runs ahead of its packets (`0x420d0c`, `0x420d55`). Beside them, the maps
+/// whose objects' leg has run, each owed its new object manager (`0x401c22`).
 #[derive(Resource, Default)]
 pub(crate) struct PendingWorldports {
     posted: Vec<Destination>,
     /// How many loads the objects' leg has run, which the legs after it test ([`world_ported`]).
     ported: u32,
+    /// The maps of the loads whose objects' leg has run, owed their new manager.
+    loaded: Vec<u32>,
 }
 
 impl PendingWorldports {
     /// Whether a timer is posted, for the connection's leave to run only then.
     pub(crate) fn is_posted(&self) -> bool {
         !self.posted.is_empty()
+    }
+
+    /// Whether a load's objects are gone and its new manager not yet made, for the manager's leg
+    /// ([`WorldportTimer::Manager`]) to run only then.
+    pub(crate) fn has_loaded(&self) -> bool {
+        !self.loaded.is_empty()
+    }
+
+    /// The maps of the loads whose objects are gone, in their order, taken by the manager's leg.
+    pub(crate) fn take_loaded(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.loaded)
     }
 
     /// A load posted, as `SMSG_NEW_WORLD` posts it, for a harness with no objects' leg.
@@ -451,8 +466,8 @@ impl PendingWorldports {
 /// request), then the movement and missiles go (`0x401bde`, `0x401bf2`), then the object manager
 /// is destroyed (`0x401bf7`), whose walk (`0x467800`) frees the objects in creation order and
 /// reaches the local player's destructor and its leave-world sweep (`0x5dd543`) at the player's
-/// turn; then the cooldowns are freed (`0x401c17`) and the open loot rolls cancelled (`0x401c2c`),
-/// ahead of the map load. The sets order those legs in `PreUpdate`.
+/// turn; then the cooldowns are freed (`0x401c17`), the new object manager made (`0x401c22`) and
+/// the open loot rolls cancelled (`0x401c2c`), ahead of the map load. The sets order those legs in `PreUpdate`.
 ///
 /// The sweep runs ahead of the objects' leg, so what was created after the player (the target, a
 /// pet, an NPC) is alive when `PLAYER_LEAVING_WORLD` fires, as in the reference. What remains: the
@@ -468,6 +483,10 @@ pub(crate) enum WorldportTimer {
     Objects,
     /// `0x401c17`: `ClearItemAndSpellCooldowns`, for a load the objects' leg ran.
     Cooldowns,
+    /// `0x401c22`: the new object manager for the map loaded (`ClntObjMgrCreate` `0x464ff0`), whose
+    /// map-change latch (`0x46500e`) is `crate::ui_instance`'s, for each map the objects' leg ran
+    /// ([`PendingWorldports::take_loaded`]).
+    Manager,
     /// `0x401c2c`: `CancelAllLootRolls`, for a load the objects' leg ran; the map load
     /// (`0x401c5c`) follows.
     Rolls,
@@ -589,6 +608,7 @@ pub(crate) fn fire_worldport_timer(world: &mut World) {
 /// The posted world loads' objects leg, at the frame's start ([`WorldportTimer::Objects`]).
 fn world_load_timer(mut pending: ResMut<PendingWorldports>, mut load: WorldLoad) {
     for dest in std::mem::take(&mut pending.posted) {
+        pending.loaded.push(dest.map_id);
         load.objects_destroyed(dest, true);
         pending.ported = pending.ported.wrapping_add(1);
     }
