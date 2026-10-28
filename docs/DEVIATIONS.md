@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 251
+- [benilla-app](#benilla-app): 252
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -393,8 +393,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_loot_roll
 
-- A negative answer, or none within `TEMPLATE_HOLD_MAX_MS`, opens the frame unresolved, because a frame that never opens cannot even be passed on; the reference's callback fires on success only. ([`src/ui_loot_roll.rs:8`](../crates/benilla-app/src/ui_loot_roll.rs#L8))
-- The open count is the number of rolls announced and not closed. The reference keeps a counter that its server-close paths decrement for any roll whose closed byte is clear (`0x61b6f8`, `0x61bc17`), a deferred roll that never counted up included, so it under-counts and lets a fifth frame open; here a deferred roll's close changes nothing. ([`src/ui_loot_roll.rs:18`](../crates/benilla-app/src/ui_loot_roll.rs#L18))
+- A negative answer, or none within `TEMPLATE_HOLD_MAX_MS`, opens the frame unresolved, because a frame that never opens cannot even be passed on; the reference's callback fires on success only. ([`src/ui_loot_roll.rs:11`](../crates/benilla-app/src/ui_loot_roll.rs#L11))
+- The open count is the number of rolls announced and not closed. The reference keeps a counter that its server-close paths decrement for any roll whose closed byte is clear (`0x61b6f8`, `0x61bc17`), a deferred roll that never counted up included, so it under-counts and lets a fifth frame open; here a deferred roll's close changes nothing. ([`src/ui_loot_roll.rs:22`](../crates/benilla-app/src/ui_loot_roll.rs#L22))
+- A refused record or name closes the roll unspoken. In 1.12.1 the failure callbacks (`0x61bc80`, `0x61bd50`, `0x61b7d0`) free the record with no `CANCEL_LOOT_ROLL` and leave the open count unlowered, so its frame stays up, empty and dead, until a `/reload`, and holds one of the four frames, so a later fourth roll never shows; benilla closes the roll instead. ([`src/ui_loot_roll.rs:29`](../crates/benilla-app/src/ui_loot_roll.rs#L29))
 
 #### ui_macro
 
