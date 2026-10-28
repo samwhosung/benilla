@@ -407,7 +407,7 @@ fn flip_readiness() {
     ];
     let context = [
         (
-            "HOST_HELD_UNREAD (to read; a quiet entry stays)",
+            "HOST_HELD_UNREAD (read, each quiet; stays)",
             g::HOST_HELD_UNREAD.len(),
             String::new(),
         ),
