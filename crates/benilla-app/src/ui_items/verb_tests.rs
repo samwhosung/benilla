@@ -494,6 +494,79 @@ fn an_auto_equips_accept_reads_the_slot_as_it_stands() {
     );
 }
 
+/// What `verb` sent with a listener armed that rolls 1-100 on `CURSOR_UPDATE` and 2-100 on
+/// `ITEM_LOCK_CHANGED`, after `setup`: each command by its kind, a listener's roll by its event.
+fn heard_around(h: &mut Bags, setup: &str, verb: &str) -> Vec<&'static str> {
+    h.run(
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("CURSOR_UPDATE") f:RegisterEvent("ITEM_LOCK_CHANGED")
+        f:SetScript("OnEvent", function()
+            if ARMED then RandomRoll(event == "CURSOR_UPDATE" and 1 or 2, 100) end
+        end)"#,
+    );
+    h.run(setup);
+    let _ = h.sent();
+    h.run(&format!("ARMED = true {verb} ARMED = nil"));
+    h.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::RandomRoll { min: 1, .. } => Some("cursor"),
+            ClientCommand::RandomRoll { .. } => Some("lock"),
+            ClientCommand::AutoEquipItem { .. } => Some("equip"),
+            ClientCommand::SwapInvItem { .. } => Some("swap"),
+            ClientCommand::ItemQuery { .. } | ClientCommand::NameQuery { .. } => None,
+            _ => Some("other"),
+        })
+        .collect()
+}
+
+/// `AutoEquipCursorItem` sends (`0x5e1757`) before its clear (`0x5e1763`), and `SwapItem`
+/// (`0x5e0fdb`) before its own (`0x5e0fe7`), so the clear's listeners send after the equip:
+/// `AutoEquipCursorItem()`, `EquipCursorItem` on a slot the item fits (`0x489757`, then `LockItem`
+/// on the occupant, `0x489761`) and on one it does not (`0x4897a0`), the bag click's equip
+/// (`0x4fa3ff`, after its own clear `0x4fa198`, then `LockItem` `0x4fa418`), the bind-confirm
+/// accept (`0x5e1c23`, whose `SetCursorItem` drops the held item first, `0x494bb6`), and the bag
+/// click's whole-stack swap (`LockItem` `0x4f9e85`, `SwapItem` `0x4f9eac`, its own clear
+/// `0x4f9eb8`).
+#[test]
+fn each_cursor_equip_sends_ahead_of_its_clears_listeners() {
+    let cases: [(&str, &str, &[&str]); 6] = [
+        (
+            "PickupContainerItem(0, 4)",
+            "AutoEquipCursorItem()",
+            &["equip", "cursor"],
+        ),
+        (
+            "PickupContainerItem(0, 4)",
+            "EquipCursorItem(1)",
+            &["swap", "cursor", "lock"],
+        ),
+        (
+            "PickupContainerItem(0, 1)",
+            "EquipCursorItem(1)",
+            &["equip", "cursor"],
+        ),
+        (
+            "",
+            "UseContainerItem(0, 4)",
+            &["cursor", "cursor", "cursor", "equip", "cursor", "lock"],
+        ),
+        (
+            "UseContainerItem(0, 7)",
+            "EquipPendingItem(0)",
+            &["lock", "cursor", "cursor", "equip", "cursor"],
+        ),
+        (
+            "PickupContainerItem(0, 1)",
+            "PickupContainerItem(0, 2)",
+            &["lock", "swap", "cursor", "cursor"],
+        ),
+    ];
+    for (setup, verb, wire) in cases {
+        let mut h = Bags::new();
+        assert_eq!(heard_around(&mut h, setup, verb), wire, "{setup} {verb}");
+    }
+}
+
 /// An item action's press equips the item it finds in the bags (`0x4e602a` → `0x5e1840`), read
 /// with the host applying the press: with no helm worn, the helm in backpack slot 4 goes out from
 /// wire slot 26.

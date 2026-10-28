@@ -531,7 +531,6 @@ fn auto_equip_cursor(p: &mut ActionPress, script: &mut UiScript) {
         benilla_ui::script::AutoEquip::Sent { bag, slot, guid } => {
             if let Some((bag_index, wire_slot)) = crate::ui_items::wire_pos(bag, slot) {
                 crate::ui_items::send_auto_equip(
-                    script,
                     &ladder.objects,
                     &ladder.items,
                     &ladder.commands,

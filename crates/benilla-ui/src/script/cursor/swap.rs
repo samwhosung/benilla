@@ -7,7 +7,7 @@ use mlua::Lua;
 
 use crate::script::container::ContainerMove;
 use crate::script::tick::verb;
-use crate::script::{ItemCall, Model};
+use crate::script::{ItemCall, Model, ScriptCall};
 
 use super::equip::{equip_question, EquipFacts, Question};
 use super::{clear, Clear, EQUIPMENT_BAG};
@@ -87,34 +87,47 @@ fn other_end(lua: &Lua, model: &Model, mv: &ContainerMove) -> OtherEnd {
 }
 
 /// `SwapItem(mv, confirm)` (`0x5e0c40`): the question on the item the move would equip, unless
-/// `confirm` (the accept's re-issue, `0x5e1c46`) skips it; else the send and its clear.
-pub(crate) fn swap_items(lua: &Lua, model: &mut Model, mv: ContainerMove, confirm: bool) -> Swap {
+/// `confirm` (the accept's re-issue, `0x5e1c46`) skips it; else the send (`0x5e0fdb`) and its
+/// clear (`0x5e0fe7`). With `in_place` the send, the question or the wait goes to the host in its
+/// place ([`Model::call_in_verb`]), ahead of the clear's signals; else the host sends the move it
+/// gets back.
+pub(crate) fn swap_items(
+    lua: &Lua,
+    model: &mut Model,
+    mv: ContainerMove,
+    confirm: bool,
+    in_place: bool,
+) -> Swap {
     let question = match other_end(lua, model, &mv) {
         OtherEnd::NoBag => return Swap::NoBag(mv),
         OtherEnd::Unasked => Question::Send,
         OtherEnd::Item(item) => equip_question(lua, model, item, confirm),
     };
-    match question {
-        Question::Ask => Swap::Asked(mv),
-        Question::Wait(entry) => Swap::Waits { mv, entry },
-        Question::Send => {
-            clear(model, Clear::KEEP_LOCK);
-            Swap::Sent(mv)
-        }
+    let (swap, call) = match question {
+        Question::Ask => (Swap::Asked(mv.clone()), ItemCall::SwapAsk(mv)),
+        Question::Wait(entry) => (
+            Swap::Waits {
+                mv: mv.clone(),
+                entry,
+            },
+            ItemCall::SwapWait { mv, entry },
+        ),
+        Question::Send => (Swap::Sent(mv.clone()), ItemCall::Move(mv)),
+    };
+    if in_place {
+        model.call_in_verb(ScriptCall::Item(call));
     }
+    if let Swap::Sent(_) = swap {
+        clear(model, Clear::KEEP_LOCK);
+    }
+    swap
 }
 
-/// [`swap_items`] with the question asked, filing what it did for the host: the send
-/// ([`ItemCall::Move`]), the question ([`ItemCall::SwapAsk`]) or the wait
-/// ([`ItemCall::SwapWait`]).
+/// [`swap_items`] with the question asked, from a verb's segment: what it did goes to the host in
+/// its place, the send ([`ItemCall::Move`]) ahead of its clear's signals, or the question
+/// ([`ItemCall::SwapAsk`]) or the wait ([`ItemCall::SwapWait`]).
 pub(crate) fn swap_and_file(lua: &Lua, model: &mut Model, mv: ContainerMove) {
-    let call = match swap_items(lua, model, mv, false) {
-        Swap::Sent(mv) => ItemCall::Move(mv),
-        Swap::Asked(mv) => ItemCall::SwapAsk(mv),
-        Swap::Waits { mv, entry } => ItemCall::SwapWait { mv, entry },
-        Swap::NoBag(_) => return,
-    };
-    model.item_calls.push(call);
+    swap_items(lua, model, mv, false, true);
 }
 
 impl crate::script::UiScript {
@@ -122,7 +135,9 @@ impl crate::script::UiScript {
     /// set (`0x5e1c46`), so it sends and clears whatever the cursor holds then. The host sends
     /// what comes back.
     pub fn swap_items(&mut self, mv: ContainerMove, confirm: bool) -> Swap {
-        verb(&self.lua, |model| swap_items(&self.lua, model, mv, confirm))
+        verb(&self.lua, |model| {
+            swap_items(&self.lua, model, mv, confirm, false)
+        })
     }
 
     /// The callback `0x5e1020` for a move parked on its record: with the record found
@@ -130,7 +145,7 @@ impl crate::script::UiScript {
     /// or wait applied through the host. The host frees the parked entry after.
     pub fn replay_swap(&mut self, mv: ContainerMove) -> mlua::Result<()> {
         verb(&self.lua, |model| swap_and_file(&self.lua, model, mv));
-        crate::script::item_calls::submit_item_calls(&self.lua)
+        Ok(())
     }
 }
 

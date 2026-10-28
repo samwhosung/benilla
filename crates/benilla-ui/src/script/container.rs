@@ -574,48 +574,21 @@ fn use_cleared(
 }
 
 /// The equip arm (`0x4fa3b9`): `0x5e1840` puts the item on the cursor and runs
-/// `AutoEquipCursorItem` (`0x4fa3ff`), then the item locks unless it is a projectile
-/// (`0x4fa40b`, `0x4fa418`), whose clear unlocked it instead (`0x5e1711`). A bind-on-equip item
-/// sends nothing: it stays held and locked under the question.
-fn use_equip_arm(
-    lua: &Lua,
-    bag: i64,
-    slot: u32,
-    item: CursorItem,
-    on_self: bool,
-    may_cast: bool,
-) -> mlua::Result<()> {
+/// `AutoEquipCursorItem` (`0x4fa3ff`), which sends, asks or parks on the record in place, the send
+/// ahead of its clear; then the clicked item locks unless it is a projectile (`0x4fa406`-
+/// `0x4fa418`), whose clear unlocked it instead (`0x5e1711`). A bind-on-equip item sends nothing:
+/// it stays held and locked under the question. An item the verb refused (in the trade window)
+/// sends nothing, but still locks.
+fn use_equip_arm(lua: &Lua, item: CursorItem, on_self: bool, may_cast: bool) -> mlua::Result<()> {
     let guid = item.guid;
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
-    let step = cursor::equip::auto_equip_from(lua, item, false)?;
+    let sender = cursor::equip::Sender::Use { on_self, may_cast };
+    cursor::equip::auto_equip_from(lua, item, false, sender)?;
     super::tick::verb(lua, |model| {
         if !projectile {
             cursor::lock_item(model, guid);
         }
     });
-    // A record still in flight parks the equip on it (`0x5e160c`), which the use's own fork
-    // test reads cached, so only a view behind the cache reaches this.
-    if let cursor::equip::AutoEquip::Waits { entry } = step {
-        super::item_calls::submit(lua, super::ItemCall::AutoEquipWait { entry })?;
-    }
-    // An item the verb refused (in the trade window) sends nothing, but still locks (`0x4fa418`).
-    if matches!(
-        step,
-        cursor::equip::AutoEquip::Sent { .. } | cursor::equip::AutoEquip::Asked { .. }
-    ) {
-        super::calls::submit(
-            lua,
-            super::ScriptCall::UseContainerItem(ContainerUse {
-                bag,
-                slot,
-                guid,
-                arm: UseArm::Item(UseFork::Equip),
-                asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
-                on_self,
-                may_cast,
-            }),
-        )?;
-    }
     Ok(())
 }
 
@@ -1145,7 +1118,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::calls::submit(lua, call)?;
             }
             if let Some(item) = equip {
-                use_equip_arm(lua, bag, slot, item, on_self, may_cast)?;
+                use_equip_arm(lua, item, on_self, may_cast)?;
             }
             Ok(())
         })?,

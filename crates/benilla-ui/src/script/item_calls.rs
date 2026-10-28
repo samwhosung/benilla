@@ -1,9 +1,10 @@
 //! The engine half of the bag, cursor and paper-doll verbs, which the host applies inside each
 //! verb's call ([`ItemCall`]): the reference's bindings send their packets in their own bodies,
 //! so a chunk's item packets leave in call order with every other verb's, and its next line reads
-//! what the verb did. A verb's segment files its calls on the model as it decides
-//! ([`super::Model::item_calls`]), and the binding hands them to the host as the segment ends
-//! ([`submit_item_calls`]).
+//! what the verb did. `AutoEquipCursorItem` and `SwapItem` hand theirs to the host in place, ahead
+//! of their clear's signals ([`super::Model::call_in_verb`]); the other steps file theirs on the
+//! model as they decide ([`super::Model::item_calls`]), and the binding hands them to the host as
+//! the segment ends ([`submit_item_calls`]).
 
 use mlua::Lua;
 
@@ -183,14 +184,5 @@ impl super::UiScript {
     /// How many `ConfirmBindOnUse()` calls were kept.
     pub fn take_bind_on_use_confirms(&mut self) -> u32 {
         self.take_bind_on_use_casts().len() as u32
-    }
-}
-
-#[cfg(test)]
-impl super::UiScript {
-    /// Hand the host the item calls a model step filed outside its binding, as the binding would
-    /// as its segment ends ([`submit_item_calls`]).
-    pub(crate) fn submit_filed_item_calls(&mut self) {
-        submit_item_calls(&self.lua).expect("the filed item calls submit");
     }
 }

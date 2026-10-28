@@ -155,7 +155,7 @@ impl ItemSteps<'_, '_> {
                 };
                 let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
                 let guid = store.and_then(|s| slot_guid(&s.0, bag, slot0, objects));
-                send_auto_equip(script, objects, items, net, bag_index, wire_slot, guid);
+                send_auto_equip(objects, items, net, bag_index, wire_slot, guid);
             }
             // By entry, the stack staying in its bag; the call cleared the cursor.
             ItemCall::SetAmmo { entry } => {
@@ -274,26 +274,15 @@ fn answer_pending_equip(
         }
         // The accept re-issues the pick-up and auto-equip from the slot as it stands (`0x5e1c23`
         // into `0x5e1840`, `suppress` set): `SetCursorItem`'s clear drops and unlocks the held
-        // item, then the equip goes out. A slot emptied under the dialog sends nothing
-        // (`0x5e18da`).
+        // item, then the equip goes out ahead of its clear, handed to the host in its place
+        // among the signals held while this applies. A slot emptied under the dialog sends
+        // nothing (`0x5e18da`).
         PendingEquip::AutoEquip { bag, slot, .. } => {
-            let benilla_ui::script::AutoEquip::Sent { bag, slot, guid } =
+            let benilla_ui::script::AutoEquip::Sent { guid, .. } =
                 script.auto_equip_slot(bag, slot, true)
             else {
                 return;
             };
-            let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
-                return;
-            };
-            send_auto_equip(
-                script,
-                objects,
-                items,
-                net,
-                bag_index,
-                wire_slot,
-                Some(guid),
-            );
             // The re-issue's `SetCursorItem` and send clear play their pair inside the answer
             // (`0x494c4a`, `0x49520a`), after the held item's own clear.
             if let Some(display_id) = objects
@@ -310,7 +299,8 @@ fn answer_pending_equip(
 
 /// Apply the item calls and the container uses a harness's VM kept
 /// ([`UiScript::keep_calls`]), in call order, as the app's host applies each inside its verb;
-/// an open goes through the loot window's applier.
+/// an open goes through the loot window's applier. A call kept while one applies (a send the
+/// accept hands over in place) applies after, until none is kept.
 #[cfg(test)]
 pub(crate) fn apply_kept_calls(world: &mut World) {
     use benilla_ui::script::ScriptCall;
@@ -323,18 +313,25 @@ pub(crate) fn apply_kept_calls(world: &mut World) {
                 ItemSteps,
                 crate::ui_loot::LootSteps,
             )>| {
-                for call in script.take_script_calls() {
-                    match call {
-                        ScriptCall::UseContainerItem(call) => {
-                            if let Some(open) = set.p0().use_container_item(&mut script, call) {
-                                let _ = set.p2().open_item(&mut script, open);
+                loop {
+                    let calls = script.take_script_calls();
+                    if calls.is_empty() {
+                        break;
+                    }
+                    for call in calls {
+                        match call {
+                            ScriptCall::UseContainerItem(call) => {
+                                if let Some(open) = set.p0().use_container_item(&mut script, call)
+                                {
+                                    let _ = set.p2().open_item(&mut script, open);
+                                }
                             }
+                            ScriptCall::Item(ItemCall::BindOnUse { may_cast }) => {
+                                set.p0().confirm_bind_on_use(&mut script, may_cast);
+                            }
+                            ScriptCall::Item(call) => set.p1().apply(&mut script, call),
+                            _ => {}
                         }
-                        ScriptCall::Item(ItemCall::BindOnUse { may_cast }) => {
-                            set.p0().confirm_bind_on_use(&mut script, may_cast);
-                        }
-                        ScriptCall::Item(call) => set.p1().apply(&mut script, call),
-                        _ => {}
                     }
                 }
             },
@@ -348,12 +345,18 @@ pub(crate) fn apply_kept_item_calls(world: &mut World) {
     use benilla_ui::script::ScriptCall;
     use bevy::ecs::system::RunSystemOnce;
     world
-        .run_system_once(|mut script: NonSendMut<UiScript>, mut steps: ItemSteps| {
-            for call in script.take_script_calls() {
-                if let ScriptCall::Item(call) = call {
-                    steps.apply(&mut script, call);
+        .run_system_once(
+            |mut script: NonSendMut<UiScript>, mut steps: ItemSteps| loop {
+                let calls = script.take_script_calls();
+                if calls.is_empty() {
+                    break;
                 }
-            }
-        })
+                for call in calls {
+                    if let ScriptCall::Item(call) = call {
+                        steps.apply(&mut script, call);
+                    }
+                }
+            },
+        )
         .unwrap();
 }

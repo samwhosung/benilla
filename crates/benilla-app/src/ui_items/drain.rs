@@ -16,12 +16,11 @@ use crate::query_cache::Ask;
 
 /// The one auto-equip sender (`AutoEquipCursorItem`, `0x5e1480`, past its question). A
 /// projectile, the template class `0x5d9f30` reads (`0x5e16ff`, `0x5e1704`), loads by entry with
-/// `CMSG_SET_AMMO` and stays in its bag, and the arm's `ClearCursor(1,1)` unlocks it (`0x5e1711`,
-/// `0x5e1763`): an item the call's clear left locked, picked up before its template landed, is let
-/// go here. Anything else is `CMSG_AUTOEQUIP_ITEM`. The bind-on-equip question is the call's, not
-/// the sender's: the VM decided before this ran ([`benilla_ui::script::AutoEquip`]).
+/// `CMSG_SET_AMMO` and stays in its bag; the arm's `ClearCursor(1,1)` after the send unlocks it
+/// (`0x5e1711`, `0x5e1763`), which is the VM's. Anything else is `CMSG_AUTOEQUIP_ITEM`. The
+/// bind-on-equip question is the call's, not the sender's: the VM decided before this ran
+/// ([`benilla_ui::script::AutoEquip`]).
 pub(crate) fn send_auto_equip(
-    script: &mut UiScript,
     objects: &Objects,
     items: &Items,
     commands: &NetCommands,
@@ -33,14 +32,11 @@ pub(crate) fn send_auto_equip(
         let entry = objects.object(guid)?.object_entry()?;
         // The class getter only reads (`0x5d9f30`).
         let t = items.template(entry, guid, Ask::Read)?;
-        (t.class == ITEM_CLASS_PROJECTILE).then_some((guid, entry))
+        (t.class == ITEM_CLASS_PROJECTILE).then_some(entry)
     });
-    if let Some((guid, entry)) = ammo {
+    if let Some(entry) = ammo {
         debug!("ui_items: set ammo entry {entry} (wire {bag_index}/{slot})");
         let _ = commands.0.send(ClientCommand::SetAmmo { entry });
-        if script.item_locked(guid) {
-            script.unlock_item(guid);
-        }
     } else {
         debug!("ui_items: autoequip wire {bag_index}/{slot}");
         let _ = commands
@@ -248,7 +244,6 @@ impl ScriptItemUse<'_, '_> {
             // plays its pickup.
             (UseFork::Equip, Some(c)) => {
                 send_auto_equip(
-                    script,
                     &ladder.objects,
                     &ladder.items,
                     &ladder.commands,
