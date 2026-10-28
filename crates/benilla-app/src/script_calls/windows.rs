@@ -4,11 +4,18 @@
 //! window holds the latch (`0x493310`), its cell's clear, and its signal, whose listeners run
 //! where it is raised, before the core goes on. The other windows' cells hold no latched guid
 //! ([`crate::ui_session::LatchSteps::release`]), so the release re-enters only its own core.
+//!
+//! A core entered from the listeners of a close parked behind its window's lane
+//! ([`crate::ui_session::in_parked_close`]) runs the reference's re-entry of that close: the
+//! session it closed is gone already, so a core that clears its cell before it signals finds
+//! nothing, and one that signals first signals again, the live window, which a later open may
+//! have begun, left alone.
 
 use benilla_ui::script::UiScript;
 
 use super::ScriptCallHost;
 use crate::ui_cast::ReportMark;
+use crate::ui_session::{parked_close as parked, NpcWindow};
 
 impl ScriptCallHost<'_, '_> {
     /// A core's signal point (`SignalEvent`, `0x703e50`): the listeners of what it fired run
@@ -38,6 +45,9 @@ impl ScriptCallHost<'_, '_> {
     pub(super) fn close_bank(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         script.fire_event("BANKFRAME_CLOSED", vec![]);
         self.signalled(script, mark);
+        if parked(NpcWindow::Bank) {
+            return;
+        }
         let banker = self.appliers.bank().banker();
         if let Some(banker) = banker {
             self.release_into(script, mark, banker, Self::close_bank);
@@ -49,6 +59,11 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4d7459`), else `TRAINER_CLOSED` first (`0x4d7468`), the release on the cell as the
     /// listeners left it (`0x4d7474`), then the cell cleared (`0x4d747c`).
     pub(super) fn close_trainer(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if parked(NpcWindow::Trainer) {
+            script.fire_event("TRAINER_CLOSED", vec![]);
+            self.signalled(script, mark);
+            return;
+        }
         if self.appliers.trainer().trainer().is_none() {
             return;
         }
@@ -79,7 +94,7 @@ impl ScriptCallHost<'_, '_> {
     /// `0x4cd640`).
     pub(super) fn close_auction(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         // Inside a parked close's signal, the re-entry of the session it closes.
-        if self.appliers.auction().closing_parked() {
+        if parked(NpcWindow::Auction) {
             crate::ui_auction::reenter_parked_close(script);
             self.signalled(script, mark);
             return;
@@ -104,6 +119,9 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4e1fb8`), else the release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`) and
     /// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay.
     pub(super) fn close_gossip(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if parked(NpcWindow::Gossip) {
+            return;
+        }
         let Some(npc) = self.appliers.gossip().npc() else {
             return;
         };
@@ -119,6 +137,9 @@ impl ScriptCallHost<'_, '_> {
     /// next-mail-time query (`0x4acda8`, `0x4acdb1`).
     pub(super) fn close_mail(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
         script.reset_compose_tab_silently();
+        if parked(NpcWindow::Mail) {
+            return;
+        }
         let Some(mailbox) = self.appliers.mail().mailbox() else {
             return;
         };
@@ -133,6 +154,9 @@ impl ScriptCallHost<'_, '_> {
     /// cleared (`0x4fae0e`), `MERCHANT_CLOSED` (`0x4fae2c`), then a vendor row held on the cursor
     /// dropped (`0x4fae31`-`0x4fae4a`) and a Repair base mode back to Point (`0x4fae4f`-`0x4fae68`).
     pub(super) fn close_merchant(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if parked(NpcWindow::Merchant) {
+            return;
+        }
         let Some(vendor) = self.appliers.merchant().vendor() else {
             return;
         };
@@ -161,6 +185,9 @@ impl ScriptCallHost<'_, '_> {
     /// The stable's close core `0x4cae10`: with a master stored, the release (`0x4cae24`), the
     /// cell cleared (`0x4cae29`), then `PET_STABLE_CLOSED` (`0x4cae3a`).
     pub(super) fn close_stable(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if parked(NpcWindow::Stable) {
+            return;
+        }
         let Some(master) = self.appliers.stable().master() else {
             return;
         };
@@ -187,6 +214,15 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`,
     /// open or not (`0x4bf527`).
     pub(super) fn close_trade(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        // The re-entry finds the cell clear and sends the cancel again (`0x4bf527`), which the
+        // reference sends inside the handler, ahead of any later packet; once a later packet has
+        // begun another trade, that cancel would end the new one, so it stays unsent.
+        if parked(NpcWindow::Trade) {
+            if !self.appliers.trade().begun() {
+                self.appliers.trade().send_cancel();
+            }
+            return;
+        }
         if self.appliers.trade().run_trade_touches(script) {
             self.signalled(script, mark);
         }
@@ -206,6 +242,9 @@ impl ScriptCallHost<'_, '_> {
     /// `ITEM_TEXT_CLOSED` (`0x4e33a2`). A listener of a read's signal closes that read alone: one a
     /// later packet opened is not the cell it sees.
     pub(super) fn close_item_text(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if parked(NpcWindow::ItemText) {
+            return;
+        }
         let Some(object) = self.appliers.item_text().object() else {
             return;
         };
@@ -234,6 +273,9 @@ impl ScriptCallHost<'_, '_> {
     /// cleared (`0x4dc113`) and each slot's route freed (`0x4dc130`-`0x4dc145`), then
     /// `TAXIMAP_CLOSED` (`0x4dc15f`).
     pub(super) fn close_taxi(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+        if parked(NpcWindow::Taxi) {
+            return;
+        }
         let Some(flightmaster) = self.appliers.taxi().flightmaster() else {
             return;
         };

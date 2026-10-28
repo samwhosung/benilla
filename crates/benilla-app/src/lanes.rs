@@ -523,6 +523,8 @@ mod cast_live_tests;
 #[cfg(test)]
 mod chat_clock_live_tests;
 #[cfg(test)]
+mod close_parked_tests;
+#[cfg(test)]
 mod cooldown_live_tests;
 #[cfg(test)]
 mod dialog_live_tests;

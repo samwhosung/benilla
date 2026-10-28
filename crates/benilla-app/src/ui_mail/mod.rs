@@ -238,8 +238,8 @@ pub(crate) fn open_mailbox(world: &mut World, mailbox: u64) {
 /// and always (`0x4acd55` → `0x4acdc0(0)`), then, with a mailbox open, the latch release
 /// (`0x4acd85`), the cell cleared, `MAIL_CLOSED` (`0x4acda3`) and the tail (`0x4acda8`,
 /// `0x4acdb1`): after a read, or an arrival while open, the next-mail-time query, stamping "no
-/// mail". The latch and the cell close here; the reset, the signal and the tail wait behind what
-/// the lane still holds ([`lane::step`]), so they run whole at their place.
+/// mail". The latch, the cell and the tail run here; the reset and the signal wait behind what the
+/// lane still holds, or at a packet behind the earlier packets' signals ([`lane::step`]).
 pub(crate) fn close_core(world: &mut World) {
     let waits = lane::waits(world);
     lane::step(world, waits, MailEvent::Reset);

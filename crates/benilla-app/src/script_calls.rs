@@ -558,6 +558,10 @@ impl ScriptCallHost<'_, '_> {
     /// the cell cleared (`0x4f502b`) and `GUILD_REGISTRAR_CLOSED` (`0x4f503a`), its signal once
     /// per run of the core, as the call's tail.
     fn close_registrar(&mut self) -> Option<CallTail> {
+        // A parked close's re-entry finds its cell clear ([`crate::ui_session::parked_close`]).
+        if crate::ui_session::parked_close(crate::ui_session::NpcWindow::Registrar) {
+            return None;
+        }
         let npc = self.appliers.petition().registrar_npc()?;
         let reenters = self.appliers.latch().release(npc);
         self.appliers.petition().clear_registrar();
@@ -574,6 +578,10 @@ impl ScriptCallHost<'_, '_> {
     /// the latch, then the cell cleared (`0x4f58df`) and `CLOSE_TABARD_FRAME` (`0x4f58f8`), once
     /// per run of the core, as the call's tail, after the preview's undo (`0x4f58ce`).
     fn close_tabard(&mut self) -> Option<CallTail> {
+        // A parked close's re-entry finds its cell clear ([`crate::ui_session::parked_close`]).
+        if crate::ui_session::parked_close(crate::ui_session::NpcWindow::Tabard) {
+            return None;
+        }
         let vendor = self.appliers.tabard().vendor()?;
         let reenters = self.appliers.latch().release(vendor);
         self.appliers.tabard().clear_vendor();

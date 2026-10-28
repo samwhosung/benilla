@@ -127,7 +127,9 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: PetitionEvent) {
         }
         PetitionEvent::Parked { session, key } => {
             if script.session() == session {
-                script.run_parked(key);
+                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Registrar, || {
+                    script.run_parked(key)
+                });
             }
         }
     }

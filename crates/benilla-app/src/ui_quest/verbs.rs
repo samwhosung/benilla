@@ -55,6 +55,10 @@ impl QuestVerbs<'_, '_> {
     /// DECLINE (`0x501159`-`0x5011e0`); then the cell is zeroed (`0x501201`). The source, whose
     /// latch release (`0x50120d`) and `QUEST_FINISHED` (`0x501217`) the host runs next.
     fn teardown(&mut self, report: bool) -> Option<u64> {
+        // A parked close's re-entry finds its cell zero ([`crate::ui_session::parked_close`]).
+        if crate::ui_session::parked_close(crate::ui_session::NpcWindow::Quest) {
+            return None;
+        }
         let source = self.giver.as_deref().and_then(|g| g.npc)?;
         // The lookup resolves only a player (`0x50116a`, type mask `0x10`).
         let sharer = self

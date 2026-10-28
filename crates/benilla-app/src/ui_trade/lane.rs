@@ -8,8 +8,8 @@
 //! `0x4bf452`, `0x4bf487`, `0x4bf4ab`, `0x4bf4d6`); and the initiate's name callback
 //! (`0x5d40ca`). A handler queues its item here, stamped where it runs, and the getters its
 //! listeners call read the trade through the host ([`super::live`]). A close run while the lane
-//! holds an earlier item queues its VM half and its send here too ([`close_step`]), so it
-//! undoes the VM's open after the open has run.
+//! holds an earlier item, or at a packet, queues its VM half here too ([`close_step`]), so it
+//! undoes the VM's open after the open has run; its send goes out at once.
 
 use std::collections::VecDeque;
 
@@ -220,7 +220,9 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: TradeEvent) {
         }
         TradeEvent::Line(line) => show_line(script, sink, &line),
         TradeEvent::Unlock { .. } | TradeEvent::Done(_) | TradeEvent::Closed => {
-            close_vm(script, &event)
+            crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Trade, || {
+                close_vm(script, &event)
+            })
         }
         TradeEvent::Show { .. } | TradeEvent::Unaccept | TradeEvent::Cancel => {}
     }
@@ -346,11 +348,13 @@ pub(super) fn close_waits(world: &World) -> bool {
     crate::lanes::waits_behind(world.get_resource::<TradeLane>().and_then(TradeLane::head))
 }
 
-/// One step of a close: queued on the lane when the close `waits` ([`close_waits`]), so the VM
-/// undoes its open after the open has run and the cancel follows the open's own sends; else run
-/// now, its signals fired with the host lent.
+/// One step of a close: its VM half queued on the lane when the close `waits` ([`close_waits`]),
+/// so the VM undoes its open after the open has run, its listeners re-entering the close as the
+/// session it closed ([`crate::ui_session::in_parked_close`]); else run now, its signals fired with
+/// the host lent. A send goes out now either way, inside the handler as the reference's
+/// `CMSG_CANCEL_TRADE` does (`0x4bf527`), ahead of a later packet's `CMSG_BEGIN_TRADE`.
 pub(super) fn close_step(world: &mut World, waits: bool, event: TradeEvent) {
-    if waits {
+    if waits && send_of(&event).is_none() {
         if let Some(mut lane) = world.get_resource_mut::<TradeLane>() {
             lane.push(event);
             return;

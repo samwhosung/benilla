@@ -62,6 +62,46 @@ pub(crate) enum NpcWindow {
     Stable,
 }
 
+impl NpcWindow {
+    /// The window's bit among [`PARKED_CLOSES`].
+    const fn bit(self) -> u16 {
+        1 << self as u16
+    }
+}
+
+thread_local! {
+    /// The windows whose parked close is running its interface half on this thread
+    /// ([`in_parked_close`]).
+    static PARKED_CLOSES: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
+}
+
+/// Run `f`, the interface half of `window`'s close that a handler or a lane's earlier item held
+/// back ([`crate::lanes::behind`]): its signals, and the VM's view of the window, at the close's
+/// place on its lane. The engine half, the cell, the latch and the sends, ran where the close was
+/// entered, as the reference runs them inside the handler, so the live window may by now be a
+/// session a later open began. A close verb the half's listeners re-enter ([`parked_close`])
+/// therefore acts on the session this close closed, never on that newer one.
+pub(crate) fn in_parked_close<R>(window: NpcWindow, f: impl FnOnce() -> R) -> R {
+    struct Reset(u16);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PARKED_CLOSES.set(self.0);
+        }
+    }
+    let outer = PARKED_CLOSES.get();
+    let _reset = Reset(outer);
+    PARKED_CLOSES.set(outer | window.bit());
+    f()
+}
+
+/// Whether `window`'s parked close is running its interface half ([`in_parked_close`]): its close
+/// verb, re-entered from the half's listeners, runs only what the reference's re-entry runs at that
+/// point of the core against the session the close closed, its signals, and leaves the live
+/// session and the wire alone.
+pub(crate) fn parked_close(window: NpcWindow) -> bool {
+    PARKED_CLOSES.get() & window.bit() != 0
+}
+
 /// What the latch asks the latched NPC to say. The unit's kind and state gate it where it is
 /// played (`0x60c3b0`): a player, a game object or a book speaks nothing.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]

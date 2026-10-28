@@ -426,14 +426,19 @@ fn fire_house(In(until): In<crate::lanes::Until>, mut vm: HouseVm, mut sink: Mes
                 _ => None,
             };
             let closing = matches!(step, HouseStep::Closed);
-            vm.own().auction.closing_parked = closing;
-            vm.run(|script| {
-                if let Some(script) = script {
-                    apply_step(script, &mut sink, step);
-                }
-            });
+            let apply = || {
+                vm.run(|script| {
+                    if let Some(script) = script {
+                        apply_step(script, &mut sink, step);
+                    }
+                })
+            };
             if closing {
-                vm.own().auction.closing_parked = false;
+                // The session it closes is cleared, so a close core its listeners re-enter is that
+                // session's re-entry with its cell still set (`0x4cd602` before `0x4cd613`).
+                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Auction, apply);
+            } else {
+                apply();
             }
             if let Some(then) = then {
                 continue_after_line(&mut vm, then);

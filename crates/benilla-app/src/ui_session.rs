@@ -22,8 +22,9 @@ mod release;
 mod release_tests;
 
 pub(crate) use latch::{
-    dispatch, fire, queue, register, release, release_cell, release_latch, with_script,
-    InteractLatch, LatchApp, LatchSteps, LatchVocal, LatchedWindow, NpcWindow,
+    dispatch, fire, in_parked_close, parked_close, queue, register, release, release_cell,
+    release_latch, with_script, InteractLatch, LatchApp, LatchSteps, LatchVocal, LatchedWindow,
+    NpcWindow,
 };
 pub(crate) use release::{form_bars_interaction, on_field_edge};
 

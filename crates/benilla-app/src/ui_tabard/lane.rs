@@ -114,7 +114,11 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: TabardEvent) {
                 crate::ui_action::show_now(script, sink, "ui_tabard", line);
             }
         }
-        TabardEvent::Closed => close_vm(script),
+        TabardEvent::Closed => {
+            crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Tabard, || {
+                close_vm(script)
+            })
+        }
     }
 }
 

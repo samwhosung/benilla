@@ -127,7 +127,11 @@ fn fire(
                 crate::ui_action::show_now(script, sink, "ui_taxi", line);
             }
         }
-        TaxiEvent::Closed => script.fire_event("TAXIMAP_CLOSED", vec![]),
+        TaxiEvent::Closed => {
+            crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Taxi, || {
+                script.fire_event("TAXIMAP_CLOSED", vec![])
+            })
+        }
     }
 }
 

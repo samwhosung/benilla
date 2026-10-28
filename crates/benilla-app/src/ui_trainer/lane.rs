@@ -140,7 +140,9 @@ fn fire(vm: &mut TrainerVm, event: TrainerEvent) {
     if let TrainerEvent::Parked { session, key } = event {
         vm.run(|script| {
             if let Some(script) = script.filter(|s| s.session() == session) {
-                script.run_parked(key);
+                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Trainer, || {
+                    script.run_parked(key)
+                });
             }
         });
         return;

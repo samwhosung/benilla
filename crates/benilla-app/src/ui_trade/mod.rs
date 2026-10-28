@@ -545,8 +545,8 @@ pub(crate) fn reset_on_world_enter(
 /// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`
 /// (`0x4bf527` → `0x5d4310`), open or not. Entered while the partner holds the latch, the
 /// release's `0x493310` runs this once more inside it (`0x493365`), so a direct close fires
-/// `TRADE_CLOSED` twice and sends the cancel twice. The session closes here; the VM's half and the
-/// send wait behind what the lane still holds ([`lane::close_step`]).
+/// `TRADE_CLOSED` twice and sends the cancel twice. The session closes and the cancel goes out
+/// here; the VM's half waits behind what the lane still holds ([`lane::close_step`]).
 pub(crate) fn close_core(world: &mut World) {
     let waits = lane::close_waits(world);
     close_core_done(world, waits, false);

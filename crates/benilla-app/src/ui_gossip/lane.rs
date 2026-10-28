@@ -101,7 +101,9 @@ fn fire(script: &mut UiScript, event: GossipEvent) {
         GossipEvent::Show => script.fire_event("GOSSIP_SHOW", vec![]),
         GossipEvent::Parked { session, key } => {
             if script.session() == session {
-                script.run_parked(key);
+                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Gossip, || {
+                    script.run_parked(key)
+                });
             }
         }
     }

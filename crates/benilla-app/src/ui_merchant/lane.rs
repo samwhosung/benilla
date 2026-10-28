@@ -124,7 +124,9 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: MerchantEvent) {
         }
         MerchantEvent::Parked { session, key } => {
             if script.session() == session {
-                script.run_parked(key);
+                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Merchant, || {
+                    script.run_parked(key)
+                });
             }
         }
     }

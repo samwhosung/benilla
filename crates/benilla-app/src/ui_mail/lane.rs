@@ -6,8 +6,8 @@
 //! reply (`0x4ad605`), the arrival (`0x4ad66b`) and the world frame's step (`0x4adeba`). A handler
 //! queues its item here, stamped where it runs, and the getters its listeners call read the
 //! session through the host ([`super::live`]). An open or a close run while the lane holds an
-//! earlier item queues its VM half and its sends here too ([`step`]), so neither lands ahead of
-//! what the lane still holds.
+//! earlier item, or a close at a packet, queues its VM half here too ([`step`]), so neither lands
+//! ahead of what the lane still holds; a close's tail runs at once.
 
 use std::collections::VecDeque;
 
@@ -159,6 +159,11 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: MailEvent) {
         MailEvent::InboxUpdate => script.fire_event("MAIL_INBOX_UPDATE", vec![]),
         MailEvent::SendInfoUpdate => script.fire_event("MAIL_SEND_INFO_UPDATE", vec![]),
         MailEvent::Pending => script.fire_event("UPDATE_PENDING_MAIL", vec![]),
+        event @ (MailEvent::Reset | MailEvent::Closed) => {
+            crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Mail, || {
+                vm_step(script, &event)
+            })
+        }
         event => vm_step(script, &event),
     }
 }
@@ -188,11 +193,14 @@ pub(super) fn waits(world: &World) -> bool {
     crate::lanes::waits_behind(world.get_resource::<MailLane>().and_then(MailLane::head))
 }
 
-/// One step of an open or a close: queued on the lane when it `waits` ([`waits`]), so it runs
-/// whole after what the lane holds, its signals, its VM writes and its sends; else run now, its
-/// signals fired with the host lent.
+/// One step of an open or a close: its VM half queued on the lane when it `waits` ([`waits`]), so
+/// it runs after what the lane holds, a close's listeners re-entering it as the session it closed
+/// ([`crate::ui_session::in_parked_close`]); else run now, its signals fired with the host lent.
+/// A close's tail, the countdown's stamp and its query ([`MailEvent::Refresh`]), runs now either
+/// way, inside the handler as the reference's does (`0x4acda8`), so a later packet's arrival
+/// stamps over it.
 pub(super) fn step(world: &mut World, waits: bool, event: MailEvent) {
-    if waits {
+    if waits && event != MailEvent::Refresh {
         if let Some(mut lane) = world.get_resource_mut::<MailLane>() {
             lane.push(event);
             return;

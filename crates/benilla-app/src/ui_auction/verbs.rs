@@ -152,11 +152,6 @@ impl AuctionVerbs<'_, '_> {
         }
     }
 
-    /// Whether a parked close is firing its VM half ([`AuctionOpen::closing_parked`]).
-    pub(crate) fn closing_parked(&self) -> bool {
-        self.auction.as_deref().is_some_and(|a| a.closing_parked)
-    }
-
     /// The auctioneer's cell `[0xb725f8]`.
     pub(crate) fn auctioneer(&self) -> Option<u64> {
         self.auction.as_deref().and_then(|a| a.auctioneer)

@@ -174,11 +174,6 @@ pub(crate) struct AuctionOpen {
     /// The key stacks; neither [`Self::open`] nor [`Self::clear`] touches them.
     pub(crate) sorts: SortStacks,
     pub(crate) wire: AuctionWireLog,
-    /// A close parked behind the house lane is firing its VM half ([`net::HouseStep::Closed`]):
-    /// the session it closes is already cleared, so a close core its listeners re-enter is that
-    /// session's re-entry with its cell still set (`0x4cd602` before `0x4cd613`), not a close of
-    /// a session opened since.
-    pub(crate) closing_parked: bool,
 }
 
 /// How far past the tick a bid notice pushes a deadline at least (`0x15f90`, `0x4cc5a2`).
