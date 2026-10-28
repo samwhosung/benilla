@@ -302,8 +302,10 @@ fn an_arrival_after_a_mailbox_close_in_one_frame_leaves_mail_waiting() {
 fn a_bank_reopened_while_open_stays_open() {
     const BANKER: u64 = NPC;
     let _data = benilla_formats::wow_data_or_skip!();
+    // The bag kit: the window's `OnHide` closes the bank's bags (`CloseBag`) before it calls
+    // `CloseBankFrame()`.
     let mut c = client(
-        &[r"Interface\FrameXML\BankFrame.xml"],
+        crate::ui_script::test_ui::BAG_UI,
         &[(BANKER, EntityKind::Unit)],
     );
     c.frame(vec![vec![SessionEvent::ShowBank { banker: BANKER }]]);

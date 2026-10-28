@@ -674,7 +674,7 @@ pub(super) fn load_social_ui(s: &mut UiScript) {
 
 /// The files a test needs before it can open a bag window, in the production order, trimmed to what
 /// the bags reach for. Needs client data: open with `benilla_formats::wow_data_or_skip!()`.
-pub(super) const BAG_UI: &[&str] = &[
+pub(crate) const BAG_UI: &[&str] = &[
     // The stock strings: the bar's hovers pass them to `GameTooltip:SetText`, which raises on nil.
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
