@@ -677,7 +677,6 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 0);
     s.set_auction(state(vec![]));
-    s.set_auction_can_query(true);
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     let _ = s.take_auction_calls();
 
@@ -955,7 +954,6 @@ fn paging_shows_the_turners_only_at_the_end_of_the_list() {
         .unwrap());
 
     // Turning the page re-searches at the next offset rather than scrolling.
-    s.set_auction_can_query(true);
     let _ = s.take_auction_calls();
     s.run("BrowseNextPageButton:Click()").unwrap();
     let query = queries(&mut s).pop().expect("the turner re-queries");

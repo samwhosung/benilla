@@ -73,7 +73,7 @@ impl AuctionVerbs<'_, '_> {
         };
         match call {
             AuctionCall::Query(query) => {
-                send_query(auction, commands, time.elapsed_secs_f64(), script, query);
+                send_query(auction, commands, time.elapsed_secs_f64(), query);
             }
             // The binding returns with no auctioneer or a clear flag (`0x4cec8e`, `0x4cec97`),
             // and its sender tests the flag again (`0x4cd686`).
@@ -175,13 +175,7 @@ impl AuctionVerbs<'_, '_> {
 /// `QueryAuctionItems` past its arguments: with an auctioneer (`0x4ce99c`) and the throttle open
 /// (`0x4ce9a2`-`0x4ce9c0`), the packet, then the throttle armed five seconds out (`0x4cec42`-
 /// `0x4cec4c`), which `CanSendAuctionQuery` reads on the script's next line.
-fn send_query(
-    auction: &mut AuctionOpen,
-    commands: &NetCommands,
-    now: f64,
-    script: &mut UiScript,
-    q: AuctionQuery,
-) {
+fn send_query(auction: &mut AuctionOpen, commands: &NetCommands, now: f64, q: AuctionQuery) {
     let Some(auctioneer) = auction.auctioneer else {
         return;
     };
@@ -203,7 +197,6 @@ fn send_query(
     });
     auction.query_gate = Some(now + QUERY_THROTTLE_SECS);
     auction.wire.browse_sent += 1;
-    script.set_auction_can_query(false);
 }
 
 /// `PlaceAuctionBid` past its row: nothing with no player or no auctioneer (`0x4cf740`,

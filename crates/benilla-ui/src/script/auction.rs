@@ -468,11 +468,6 @@ impl super::UiScript {
         tick_ms(self.model_ref().now)
     }
 
-    /// Push `CanSendAuctionQuery()`'s answer, the app's query throttle.
-    pub fn set_auction_can_query(&mut self, can: bool) {
-        self.model_mut().auction_can_query = can;
-    }
-
     /// The auction calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_auction_calls(&mut self) -> Vec<AuctionCall> {
         self.take_calls_where(|call| match call {
@@ -1081,15 +1076,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CanSendAuctionQuery() → 1/nil; a throttled query is dropped silently.
+    // CanSendAuctionQuery() → 1/nil, the house's throttle read at the call; with no host lent
+    // there is none, so 1. A throttled query is dropped silently.
     g.set(
         "CanSendAuctionQuery",
         lua.create_function(|lua, ()| {
-            if let Some(can) = super::live::ask(lua, &AuctionCanQuery) {
-                return Ok(flag(can));
-            }
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.auction_can_query))
+            Ok(flag(
+                super::live::ask(lua, &AuctionCanQuery).unwrap_or(true),
+            ))
         })?,
     )?;
 

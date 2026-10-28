@@ -888,12 +888,11 @@ pub(crate) struct Model {
 
     /// The auction house's lists and session as the app last pushed them, `None` until this VM's
     /// first push, and the auction calls. `auction_selected` is each list's selected auction id, 0
-    /// for none (`0x4cfda0`/`0x4cfec0`); `auction_can_query` is the 5 s throttle.
+    /// for none (`0x4cfda0`/`0x4cfec0`).
     pub(crate) auction: Option<auction::AuctionState>,
     /// The Browse tab's class tree, seeded once per VM.
     pub(crate) auction_item_classes: Vec<auction::AuctionCategory>,
     pub(crate) auction_selected: [u32; 3],
-    pub(crate) auction_can_query: bool,
     /// The sell slot's item, resolved to its guid when `StartAuction` fires.
     pub(crate) auction_sell_item: Option<cursor::CursorItem>,
 
@@ -1634,7 +1633,6 @@ impl Model {
             auction: None,
             auction_item_classes: Vec::new(),
             auction_selected: [0; 3],
-            auction_can_query: true,
             auction_sell_item: None,
             trade: None,
             trade_partner: 0,
