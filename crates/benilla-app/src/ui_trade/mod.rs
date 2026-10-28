@@ -525,7 +525,6 @@ fn close_core_done(world: &mut World, waits: bool, done: bool) {
         lane::close_step(world, waits, TradeEvent::Done(done));
         crate::ui_session::release(world, partner);
         world.resource_mut::<TradeSession>().close_window();
-        crate::ui_session::note_closed(world, NpcWindow::Trade);
         lane::close_step(world, waits, TradeEvent::Closed);
     }
     lane::close_step(world, waits, TradeEvent::Cancel);

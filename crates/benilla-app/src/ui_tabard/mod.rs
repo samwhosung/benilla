@@ -105,7 +105,6 @@ pub(crate) fn close_core(world: &mut World) {
     let waits = lane::close_waits(world);
     crate::ui_session::release(world, vendor);
     world.resource_mut::<TabardOpen>().vendor = None;
-    crate::ui_session::note_closed(world, NpcWindow::Tabard);
     lane::close_step(world, waits);
 }
 

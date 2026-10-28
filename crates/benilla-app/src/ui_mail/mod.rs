@@ -246,7 +246,6 @@ pub(crate) fn close_core(world: &mut World) {
     };
     crate::ui_session::release(world, mailbox);
     world.resource_mut::<MailOpen>().clear();
-    crate::ui_session::note_closed(world, NpcWindow::Mail);
     lane::step(world, waits, MailEvent::Closed);
     lane::step(world, waits, MailEvent::Refresh);
 }

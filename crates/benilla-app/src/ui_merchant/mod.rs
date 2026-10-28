@@ -445,7 +445,6 @@ pub(crate) fn close_core(world: &mut World) {
     lane::behind_lane(world, |world| {
         crate::ui_session::release(world, vendor);
         world.resource_mut::<MerchantOpen>().clear();
-        crate::ui_session::note_closed(world, NpcWindow::Merchant);
         crate::ui_session::fire(world, |script| {
             script.fire_event("MERCHANT_CLOSED", vec![]);
             close_tail(script);

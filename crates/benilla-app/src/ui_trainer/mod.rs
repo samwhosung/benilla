@@ -888,7 +888,6 @@ pub(crate) fn close_core(world: &mut World) {
         }
         if world.resource::<TrainerOpen>().trainer.is_some() {
             world.resource_mut::<TrainerOpen>().clear();
-            crate::ui_session::note_closed(world, NpcWindow::Trainer);
         }
     });
     match ran {

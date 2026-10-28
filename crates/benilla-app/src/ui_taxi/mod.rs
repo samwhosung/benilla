@@ -97,7 +97,6 @@ pub(crate) fn close_core(world: &mut World) {
             slot.chain.clear();
         }
     }
-    crate::ui_session::note_closed(world, NpcWindow::Taxi);
     lane::close_signal(world, waits);
 }
 

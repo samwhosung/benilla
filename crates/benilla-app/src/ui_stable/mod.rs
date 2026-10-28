@@ -107,7 +107,6 @@ pub(crate) fn close_core(world: &mut World) {
         };
         crate::ui_session::release(world, npc);
         world.resource_mut::<StableOpen>().close_cell();
-        crate::ui_session::note_closed(world, NpcWindow::Stable);
         crate::ui_session::fire(world, |script| {
             script.fire_event("PET_STABLE_CLOSED", vec![]);
         });

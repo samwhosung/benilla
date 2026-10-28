@@ -548,15 +548,10 @@ impl ScriptCallHost<'_, '_> {
     /// the cell cleared (`0x4f502b`) and `GUILD_REGISTRAR_CLOSED` (`0x4f503a`), its signal once
     /// per run of the core, as the call's tail.
     fn close_registrar(&mut self) -> Option<CallTail> {
-        use crate::ui_session::NpcWindow;
         let npc = self.appliers.petition().registrar_npc()?;
         let reenters = self.appliers.latch().release(npc);
         self.appliers.petition().clear_registrar();
         let runs = 1 + usize::from(reenters);
-        let latch = self.appliers.latch();
-        for _ in 0..runs {
-            latch.note_closed(NpcWindow::Registrar);
-        }
         Some(Box::new(move |script: &mut UiScript| {
             for _ in 0..runs {
                 script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
@@ -569,15 +564,10 @@ impl ScriptCallHost<'_, '_> {
     /// the latch, then the cell cleared (`0x4f58df`) and `CLOSE_TABARD_FRAME` (`0x4f58f8`), once
     /// per run of the core, as the call's tail, after the preview's undo (`0x4f58ce`).
     fn close_tabard(&mut self) -> Option<CallTail> {
-        use crate::ui_session::NpcWindow;
         let vendor = self.appliers.tabard().vendor()?;
         let reenters = self.appliers.latch().release(vendor);
         self.appliers.tabard().clear_vendor();
         let runs = 1 + usize::from(reenters);
-        let latch = self.appliers.latch();
-        for _ in 0..runs {
-            latch.note_closed(NpcWindow::Tabard);
-        }
         Some(Box::new(move |script: &mut UiScript| {
             script.end_tabard_preview();
             for _ in 0..runs {

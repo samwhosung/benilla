@@ -565,7 +565,6 @@ pub(crate) fn close_core(world: &mut World) {
         crate::ui_session::release(world, auctioneer);
         if world.resource::<AuctionOpen>().auctioneer.is_some() {
             world.resource_mut::<AuctionOpen>().clear();
-            crate::ui_session::note_closed(world, NpcWindow::Auction);
         }
         if let Some(mut lane) = world.get_resource_mut::<HouseLane>() {
             lane.push(net::HouseStep::Closed);
@@ -580,7 +579,6 @@ pub(crate) fn close_core(world: &mut World) {
     }
     if world.resource::<AuctionOpen>().auctioneer.is_some() {
         world.resource_mut::<AuctionOpen>().clear();
-        crate::ui_session::note_closed(world, NpcWindow::Auction);
         crate::ui_session::with_script(world, UiScript::close_auction_session);
     }
     crate::ui_session::fire(world, |script| script.clear_auction_sell_item());

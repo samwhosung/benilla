@@ -231,7 +231,6 @@ pub(crate) fn close_core(world: &mut World) {
     };
     crate::ui_session::release(world, object);
     world.resource_mut::<ItemTextOpen>().pending = None;
-    crate::ui_session::note_closed(world, NpcWindow::ItemText);
     crate::ui_session::fire(world, |script| {
         script.set_item_text(None);
         script.fire_event("ITEM_TEXT_CLOSED", vec![]);

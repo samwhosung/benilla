@@ -138,11 +138,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "::ui_session::latch::LatchCloses",
-        "the close counts each window's core adds to, which every latched window's feed compares",
-    ),
-    (
-        Row::Queue,
         "::ui_quest_share::QuestShare",
         "the quest share",
     ),
@@ -451,7 +446,6 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
     // The far-sight machine the call host's buff cancel runs (`0x6e70ad`).
     "::player::view_subject::FarSight",
     "::tutorial::Tutorials",
-    "::ui_session::latch::LatchCloses",
     "::ui_logout::SessionPosts",
     // The gestures a chat line or a world click's greeting plays, which `drive_gestures` takes.
     "::creature_anim::gesture::GestureQueue",

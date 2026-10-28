@@ -132,7 +132,6 @@ pub(crate) fn close_core(world: &mut World) {
         };
         crate::ui_session::release(world, npc);
         world.resource_mut::<GuildRegistrarState>().clear();
-        crate::ui_session::note_closed(world, NpcWindow::Registrar);
         crate::ui_session::fire(world, |script| {
             script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
         });

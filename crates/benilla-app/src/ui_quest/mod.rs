@@ -491,7 +491,6 @@ pub(crate) fn close_core(world: &mut World, report: bool) {
     }
     lane::behind_lane(world, |world| {
         world.resource_mut::<QuestGiver>().clear();
-        crate::ui_session::note_closed(world, NpcWindow::Quest);
         crate::ui_session::release(world, giver);
         crate::ui_session::fire(world, |script| {
             script.fire_event("QUEST_FINISHED", vec![]);

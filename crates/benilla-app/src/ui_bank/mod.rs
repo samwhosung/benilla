@@ -73,7 +73,6 @@ pub(crate) fn close_core(world: &mut World) {
         }
         if world.resource::<BankOpen>().is_open() {
             world.resource_mut::<BankOpen>().clear();
-            crate::ui_session::note_closed(world, NpcWindow::Bank);
             crate::ui_session::with_script(world, |script| script.set_bank(None));
         }
     });
