@@ -216,6 +216,33 @@ fn the_arrival_fires_between_the_packets_around_its_create() {
     );
 }
 
+/// The cascade's lists call `0x4e7f00` (`0x4909e7`) recounts the looking-for-group types and
+/// rebuilds the quest list, each signalling `UPDATE_LFG_TYPES` (`0x4e8b0e`, `0x4e8c70`): twice,
+/// after the quest log's rebuild (`0x4909a1`), ahead of the skill list's (`0x4909f1`).
+#[test]
+fn the_cascade_signals_the_lfg_types_twice_between_its_neighbours() {
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "QUEST_LOG_UPDATE",
+                "UPDATE_LFG_TYPES", "SKILL_LINES_CHANGED"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() table.insert(Seen, event) end)"#,
+    );
+    c.frame(vec![vec![me()]]);
+    assert_eq!(
+        c.seen(),
+        [
+            "PLAYER_ENTERING_WORLD",
+            "QUEST_LOG_UPDATE",
+            "UPDATE_LFG_TYPES",
+            "UPDATE_LFG_TYPES",
+            "SKILL_LINES_CHANGED",
+        ]
+    );
+}
+
 /// A player.
 const ALICE: u64 = 0x31;
 

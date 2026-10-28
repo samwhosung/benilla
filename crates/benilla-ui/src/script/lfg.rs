@@ -10,7 +10,8 @@
 //! entries are the first `count` of its sorted list, so a row of the wrong side can show where a
 //! right one is cut, as in the reference. Each recount and rebuild signals `UPDATE_LFG_TYPES`
 //! (`0x4e8b0e`, `0x4e8c70`): the app fires it at a level change and at each quest slot that moved
-//! (`field_watch` in benilla-app).
+//! (`field_watch` in benilla-app), and the world-enter cascade twice
+//! ([`super::UiScript::fire_world_enter_rebuilds`]).
 
 use mlua::{Lua, MultiValue, Value};
 

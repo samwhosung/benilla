@@ -179,9 +179,14 @@ impl super::UiScript {
         self.close_world_enter();
     }
 
-    /// The reputation rebuild (`0x4909d3`) and the skill list's (`0x4909f1` → `0x4d2c90`).
+    /// The reputation rebuild (`0x4909d3`), the looking-for-group lists' (`0x4909e7` → `0x4e7f00`)
+    /// and the skill list's (`0x4909f1` → `0x4d2c90`). The lists' call is the type recount, which
+    /// signals `UPDATE_LFG_TYPES` (`0x4e89c0`, `0x4e8b0e`), then the quest list's rebuild, which
+    /// signals it again (`0x4e8be0`, `0x4e8c70`).
     pub fn fire_world_enter_rebuilds(&mut self) {
         self.reputation_enter_world();
+        self.fire_event("UPDATE_LFG_TYPES", Vec::new());
+        self.fire_event("UPDATE_LFG_TYPES", Vec::new());
         self.rebuild_skills();
     }
 
