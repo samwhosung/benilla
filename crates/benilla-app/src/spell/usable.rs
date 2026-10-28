@@ -95,18 +95,6 @@ fn needs_equipped_item(d: &SpellDisplay) -> bool {
         && d.targets & TARGET_FLAG_ITEM == 0
 }
 
-/// The equipment slots [`equipped_item_fits`] reads for `d`, a bit each: none unless it searches,
-/// else the slots its hand restriction leaves and both hands, which the disarm ladder reads
-/// whatever the restriction (`0x5f0c69`, `0x5f0c91`).
-#[cfg(test)]
-pub(crate) fn worn_slots_read(d: &SpellDisplay) -> u32 {
-    if needs_equipped_item(d) {
-        (hand_mask(d) | HANDS) & EQUIPMENT_MASK
-    } else {
-        0
-    }
-}
-
 /// The main and off hand, the two slots the disarm ladder tells apart.
 const HANDS: u32 =
     1 << crate::items::EQUIPMENT_SLOT_MAINHAND | 1 << crate::items::EQUIPMENT_SLOT_OFFHAND;
@@ -265,18 +253,6 @@ impl SlotItem {
             } => c == class && subclass_mask & (1 << sub) != 0,
         }
     }
-}
-
-/// Equipment slot `slot`'s [`SlotItem`] from the cached records, without an ask.
-pub(crate) fn slot_item_cached(
-    store: &ObjectStore,
-    slot: u8,
-    objects: &Objects,
-    items: &Items,
-) -> SlotItem {
-    SlotItem::of(store.0.player_inv_slot(slot).unwrap_or(0), |guid| {
-        worn_item_cached(guid, objects, items)
-    })
 }
 
 /// The equipped-item refusal reason, keyed on `AttributesEx3` alone (`0x6e40e0` at

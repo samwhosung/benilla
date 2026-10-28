@@ -269,7 +269,7 @@ fn right_press(world: &mut World) {
     );
     run(world, crate::ui_items::clear_wrap_on_right_press);
     run(world, crate::ui_merchant::end_repair_mode_on_right_press);
-    run(world, crate::spell::targeting::feed_targeting_to_vm);
+    run(world, crate::spell::targeting::feed_targeting_to_input);
 }
 
 /// A right press, stopped ahead of its binding (`0x483c93`): the world frame's hook

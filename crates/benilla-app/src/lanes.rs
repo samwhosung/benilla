@@ -563,6 +563,8 @@ mod tests;
 #[cfg(test)]
 mod token_live_tests;
 #[cfg(test)]
+mod tooltip_live_tests;
+#[cfg(test)]
 mod trade_live_tests;
 #[cfg(test)]
 mod trainer_live_tests;

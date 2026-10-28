@@ -4190,7 +4190,7 @@ mod tests {
         let feed = |f: &mut Frame| {
             let world = f.app.world_mut();
             world
-                .run_system_once(crate::spell::targeting::feed_targeting_to_vm)
+                .run_system_once(crate::spell::targeting::feed_targeting_to_input)
                 .unwrap();
             world
                 .run_system_once(crate::ui_cast::signal_reports)

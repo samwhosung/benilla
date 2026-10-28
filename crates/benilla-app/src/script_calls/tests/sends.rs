@@ -614,7 +614,7 @@ fn arm_ground_spell(app: &mut App, spell: u32, word: u16) {
         .resource_mut::<crate::spell::targeting::SpellTargeting>()
         .enter(spell, crate::spell::CastCommit::Spell, word);
     app.world_mut()
-        .run_system_cached(crate::spell::targeting::feed_targeting_to_vm)
+        .run_system_cached(crate::spell::targeting::feed_targeting_to_input)
         .unwrap();
 }
 

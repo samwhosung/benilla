@@ -126,6 +126,15 @@ pub struct SpellBookState {
     pub slots: Vec<SpellSlotView>,
 }
 
+/// Whether the targeting word clears against the unit held under the guid, its range included, as
+/// `SpellCanTargetObject` (`0x6e6460`, checkRange 1) judges it at the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpellCanTargetQuery(pub u64);
+
+impl LiveQuery for SpellCanTargetQuery {
+    type Answer = bool;
+}
+
 /// The player's book slot, 0-based, as it stands: `0xb700f0`'s spell and its record, read at the
 /// call (`0x4b3fe0`, `0x4b3f50`, `0x4b44e0`, `0x4b3600`); `None` past the book.
 #[derive(Clone, Copy, Debug)]
@@ -844,7 +853,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // SpellCanTargetUnit("unit") (`0x6e6d00`): the argument is a string or a number (`0x6e6d0e`,
     // else `Usage:`), resolved through `0x515970` (`0x6e6d3a`), which raises for a token it does
     // not know; a token naming nobody answers nil (`0x6e6d43`), and a guid asks `0x6e6460`'s unit
-    // leg whether the standing word clears against it, answering 1 or nil.
+    // leg, with the range, whether the standing word clears against it at the call
+    // ([`SpellCanTargetQuery`]), answering 1 or nil.
     g.set(
         "SpellCanTargetUnit",
         lua.create_function(|lua, unit: Value| {
@@ -853,9 +863,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 unit,
                 r#"Usage: SpellCanTargetUnit("unit")"#,
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let can = crate::script::unit::guid_of(lua, &model, &token)?
-                .is_some_and(|guid| model.spell_targetable_units.contains(&guid));
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                crate::script::unit::guid_of(lua, &model, &token)?
+            };
+            let can = guid.is_some_and(|guid| {
+                ask(lua, &SpellCanTargetQuery(guid)).unwrap_or_else(|| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    model.spell_targetable_units.contains(&guid)
+                })
+            });
             Ok(flag(can))
         })?,
     )?;

@@ -236,14 +236,6 @@ fn tracking_hover_renders_gold_name_over_white_description() {
             ..Default::default()
         },
     );
-    assert_eq!(
-        s.aura_tooltip_subjects(),
-        vec![AuraKey {
-            spell_id: 2580,
-            level: 1,
-            stack: 1
-        }]
-    );
     s.set_aura_tooltip(
         AuraKey {
             spell_id: 2580,
@@ -1613,93 +1605,6 @@ fn firebolt() -> SpellTooltipView {
         description: "Deals 7 to 10 Fire damage to a target.".into(),
         ..Default::default()
     }
-}
-
-/// Craft item subjects name no spell, so they are left out; the auras are the aura builder's
-/// subjects, by spell, level and stack.
-#[test]
-fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
-    let mut s = script();
-    let reward = |spell_id| {
-        Some(QuestRewardSpell {
-            spell_id,
-            ..Default::default()
-        })
-    };
-    s.set_quest(Some(QuestState {
-        panel: QuestPanel::Reward,
-        reward_spell: reward(133),
-        ..QuestState::default()
-    }));
-    let mut record = crate::script::quest_log::fixture::record("Q", 1, 12, "Elwynn Forest");
-    record.reward_spell = reward(116);
-    crate::script::quest_log::fixture::seat(
-        &mut s,
-        &[(7, record, crate::script::quest_log::fixture::slot(7, 0, 0))],
-    );
-    s.set_craft(Some(CraftState {
-        name: "Beast Training".into(),
-        display_line: Some("Beast Training".into()),
-        rank: 0,
-        max_rank: 0,
-        craft_type: 1,
-        recipes: vec![
-            craft_recipe(24599, "Bite", CraftTooltip::Spell(17253)),
-            craft_recipe(7421, "Runed Copper Rod", CraftTooltip::Item(6218)),
-        ],
-    }));
-    let aura = |spell_id, level, count| AuraState {
-        spell_id,
-        level,
-        count,
-        ..Default::default()
-    };
-    s.set_player_auras(vec![aura(1459, 60, 1), aura(11597, 30, 5)]);
-    // The pet's, the target-of-target's and party1's lists, by guid; party1's from its roster
-    // record, level 0 and stack 1.
-    s.set_unit_auras(0xF140_0000_0000_0077, Some(vec![aura(172, 20, 1)].into()));
-    s.set_unit_auras(0x21, Some(vec![aura(589, 60, 1)].into()));
-    s.set_unit_auras(0x22, Some(vec![aura(8921, 0, 1)].into()));
-    // The units the tokens reach: the pet, party1, and the target holding the target-of-target.
-    s.set_unit_guids(&UnitGuids {
-        pet: 0xF140_0000_0000_0077,
-        target: 0x20,
-        party: [0x22, 0, 0, 0],
-        held: [(0x20, 0x21), (0x21, 0)].into_iter().collect(),
-        ..Default::default()
-    });
-    s.set_tracking(Some(TrackingState {
-        spell_id: 2580,
-        name: Some("Find Minerals".into()),
-        icon: None,
-        cancelable: true,
-    }));
-
-    let mut subjects = s.spell_tooltip_subjects();
-    subjects.sort_unstable();
-    assert_eq!(
-        subjects,
-        vec![116, 133, 17253],
-        "the auras are the aura builder's"
-    );
-    // Each aura by the builder's arguments: its level and stack, the tracking spell's 1 and 1.
-    let mut auras: Vec<_> = s
-        .aura_tooltip_subjects()
-        .into_iter()
-        .map(|k| (k.spell_id, k.level, k.stack))
-        .collect();
-    auras.sort_unstable();
-    assert_eq!(
-        auras,
-        vec![
-            (172, 20, 1),
-            (589, 60, 1),
-            (1459, 60, 1),
-            (2580, 1, 1),
-            (8921, 0, 1),
-            (11597, 30, 5)
-        ]
-    );
 }
 
 /// The builder's unit selector picks the view built against the pet: `SetPetAction` passes it

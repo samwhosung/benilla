@@ -414,15 +414,6 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(t) = talent_at(lua, &model, tab, i) else {
                     return Ok(());
                 };
-                // From the ask-once spell store; a miss shows on the next hover.
-                let next_desc = (t.next_spell != 0)
-                    .then(|| {
-                        model
-                            .spell_tooltips
-                            .get(&t.next_spell)
-                            .map(|v| v.description.clone())
-                    })
-                    .flatten();
                 (
                     t.display_spell,
                     (t.rank, t.max_rank),
@@ -432,11 +423,15 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         rank_line: None,
                         reqs: Vec::new(),
                         next_spell: t.next_spell,
-                        next_desc,
+                        next_desc: None,
                         learn: t.learnable,
                     },
                 )
             };
+            // The next rank's description, built at the call through the lent host, else off the
+            // store, where a miss shows on the next hover.
+            lines.next_desc = super::tooltip_spell::spell_view_peek(lua, lines.next_spell, false)
+                .map(|v| v.description);
             // `TOOLTIP_TALENT_RANK`, "Rank %d/%d" (`0x854a2c`, pushed at `0x52b213`); an
             // install without it shows no rank line. A GlobalStrings read runs an `_G` `__index`
             // (`0x703bf0`), which may call any verb, so it is made once the Model is released.

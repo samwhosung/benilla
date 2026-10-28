@@ -108,10 +108,11 @@ pub(super) fn doll_click(
                 | CursorPayload::Ammo(_)
         )
     );
-    if !placing && (model.item_pick_armed || model.repair_mode) {
+    let item_pick = super::targeting_wants(lua, model).item;
+    if !placing && (item_pick || model.repair_mode) {
         let usable = crate::script::char_stats::own_inv_view(lua, model, id as usize)
             .is_some_and(|s| s.item_id != 0 && !item_locked(model, s.guid));
-        if usable && model.item_pick_armed {
+        if usable && item_pick {
             return DollClick::Pick(super::ItemPick {
                 bag: EQUIPMENT_BAG,
                 slot: id,

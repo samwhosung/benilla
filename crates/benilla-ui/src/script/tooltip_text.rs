@@ -1,4 +1,4 @@
-//! A tooltip line's text as the host prepares it ahead of a hover: literal pieces and
+//! A tooltip line's text as the host prepares it: literal pieces and
 //! `GlobalStrings.lua` templates by key, each template read when the tooltip renders, as the
 //! builders read `_G` at every call through `FrameScript_GetText 0x703bf0`. A string rewritten
 //! after the host prepared the line reaches the next render.

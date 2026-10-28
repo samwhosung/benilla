@@ -6,7 +6,9 @@
 //!
 //! - [`super::guard_tests::READS_FRAME_FINAL`], held here to its count: the feeds that push a
 //!   view of what a handler writes, which a getter reads in place of the live state. A family's
-//!   getters going live ([`crate::script_calls::live`]) drops its feed's row.
+//!   getters going live ([`crate::script_calls::live`]) drops its feed's row; a hover's build the
+//!   reference too makes outside every packet is
+//!   [`super::guard_tests::BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE`]'s, which stays.
 //! - [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]: the systems after the dispatch and ahead of the drain
 //!   that write what the host's live reads read, or push a view the drain waits for, where the
 //!   reference writes inside a packet. A listener fired inside the dispatch would read each as the
@@ -37,8 +39,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 34;
-const FRAME_FINAL_INPUTS: usize = 181;
+const FRAME_FINAL_FEEDS: usize = 30;
+const FRAME_FINAL_INPUTS: usize = 143;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -52,11 +54,12 @@ const FRAME_FINAL_INPUTS: usize = 181;
 /// access does not show; `exclusive` a system whose access Bevy does not report.
 #[rustfmt::skip]
 const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
-    ("::net::motion::remote::extrapolate_remote_units", &["Transform"],
+    ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
+        "Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::spell::group_relation::publish_group_roster", &["spell::group_relation::GroupRoster"],
         "copies the group's roster, which the relation reads take, once the packets are in"),
-    ("::transport::compose_riders", &["Transform"],
+    ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::ui_action::feed::feed_actions", &["ui_action::PlayerActions"],
         "clears the bar's re-resolve flag; the known spells the book and the talents read are \
@@ -88,8 +91,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         &["ui_talent_wipe::TalentWipeState"],
         "closes the respec question once the player leaves service range, which \
          `CheckTalentMasterDist` reports; the reference tests the range at the call (`0x5df980`)"),
-    ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Items"],
-        "writes the item cache as it builds the spell tooltips"),
     ("::ui_unit::feed_units", &["UiScript"], "a field event's listeners read its push"),
 ];
 
@@ -100,16 +101,26 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
 /// held to its systems' access by the same test.
 #[rustfmt::skip]
 const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
-    ("::net::motion::facing::drive_display_facing", &["Transform"],
+    ("::net::motion::facing::drive_display_facing", &["Commands net::motion::remote::RemoteMotion",
+        "Commands net::motion::spline::Spline", "Transform"],
         "turns the units' models toward their facing; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
     ("::net::motion::spline::ground_clamp_creatures", &["Transform"],
         "settles the creatures on the ground; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
-    ("::net::motion::spline::sample_splines", &["Transform"],
+    ("::net::motion::remote::drain_pending_moves", &["Commands net::motion::spline::Spline",
+        "net::motion::remote::RemoteMotion"],
+        "fires the relayed moves queued past their arrival in the movement tick (event 5's \
+         `0x616800` → `0x615b10` → `0x616620` → `0x615c30`), frame time, which the reference \
+         runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::motion::spline::sample_splines", &["Commands net::motion::spline::Spline",
+        "Transform"],
         "moves the units along their splines; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
-    ("::transport::ground_deck_riders", &["Transform"],
+    ("::player::camera_saved::load_camera_pose", &["player::state::Player"],
+        "restores the camera's saved pitch from benilla's own file once the roster names the \
+         character; no getter reads the pitch"),
+    ("::transport::ground_deck_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "settles the riders on their decks; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
     ("::transport::tick_transports", &["Transform"],
@@ -414,6 +425,11 @@ fn flip_readiness() {
         (
             "AFTER_THE_PACKETS_IN_THE_REFERENCE (stays)",
             AFTER_THE_PACKETS_IN_THE_REFERENCE.len(),
+            String::new(),
+        ),
+        (
+            "BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE (stays)",
+            g::BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE.len(),
             String::new(),
         ),
     ];

@@ -1114,25 +1114,50 @@ impl super::UiScript {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // The targeting cursor's item pick and the enchant confirms
 // ─────────────────────────────────────────────────────────────────────────────────────────────
+/// The targeting word's two halves the VM tests as the lent host reads them at the call: its
+/// item half (`TargetingWantsItem`, `0x6e6330`) and its location half (`SpellTargetWantsLocation`,
+/// `0x6e6320`), each a test of the word itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetingWantsQuery;
+
+/// [`TargetingWantsQuery`]'s answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TargetingWants {
+    pub item: bool,
+    pub location: bool,
+}
+
+impl super::live::LiveQuery for TargetingWantsQuery {
+    type Answer = TargetingWants;
+}
+
+/// The word's halves at the call ([`TargetingWantsQuery`]), else as the app last pushed them.
+pub(crate) fn targeting_wants(lua: &Lua, model: &Model) -> TargetingWants {
+    super::live::ask(lua, &TargetingWantsQuery).unwrap_or(TargetingWants {
+        item: model.item_pick_armed,
+        location: model.location_pick_armed,
+    })
+}
+
 impl super::UiScript {
     /// Arm or disarm the targeting cursor's item half (`TargetingWantsItem`, `0x6e6330`): while
     /// armed, a bag or paper-doll click hands its `(bag, slot)` to the host as a pick instead of
     /// picking up, as the reference's two pickups do (`0x4f9b30` at `0x4f9c54`, `0x4c7300` at
-    /// `0x4c76df`).
+    /// `0x4c76df`). What the VM reads with no host to ask ([`TargetingWantsQuery`]).
     pub fn set_item_pick_armed(&mut self, armed: bool) {
         self.model_mut().item_pick_armed = armed;
     }
 
     /// Arm or disarm the targeting cursor's location half (`SpellTargetWantsLocation`,
     /// `0x6e6320`, the word's `0x60`): while armed, `Minimap:PingLocation` hands its point to the
-    /// host as a ground cast instead of pinging (`0x4eee74`).
+    /// host as a ground cast instead of pinging (`0x4eee74`). What the VM reads with no host to
+    /// ask ([`TargetingWantsQuery`]).
     pub fn set_location_pick_armed(&mut self, armed: bool) {
         self.model_mut().location_pick_armed = armed;
     }
 
-    /// Push the guids of the units for which the armed word's unit checks all pass.
-    /// `SpellCanTargetUnit` resolves its token to a guid, as `0x515970` does, and asks this set,
-    /// so a chain such as `"party1target"` reads the unit it ends on.
+    /// Push the guids of the units for which the armed word's unit checks all pass, which
+    /// `SpellCanTargetUnit` reads with no host to ask ([`super::SpellCanTargetQuery`]).
     pub fn set_spell_targetable_units(&mut self, guids: impl IntoIterator<Item = u64>) {
         self.model_mut().spell_targetable_units = guids.into_iter().collect();
     }

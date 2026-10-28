@@ -888,7 +888,7 @@ fn service_description_expands_against_the_pet_for_a_learn_pet_row() {
 }
 
 /// The `$z` token: the bind point's area name (`AreaTable.dbc`), and the `HOME_INN` text where no
-/// bind point has arrived (`0x507f3a`), as the item and tooltip feeds' `$z` behaves.
+/// bind point has arrived (`0x507f3a`), as the item and spell tooltips' `$z` behaves.
 #[test]
 fn service_description_expands_z_to_the_bind_area() {
     let d = SpellDisplay {
@@ -1948,7 +1948,6 @@ fn feed_app(spells: SpellCatalog, lines: SkillLineCatalog) -> App {
     let mut app = App::new();
     app.insert_resource(NetCommands(tx))
         .init_resource::<TrainerOpen>()
-        .init_resource::<TrainerTooltipSubjects>()
         .init_resource::<PlayerActions>()
         .init_resource::<Items>()
         .init_resource::<NameCache>()

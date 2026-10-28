@@ -320,8 +320,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::minimap::ping::drive_minimap_ping", &["minimap::ping::MinimapPing",
         "ui_party::GroupState"]),
     ("::minimap::feed_game_time", &["net::game_time::ServerTime"]),
-    ("::minimap::blips::drive_blip_tooltip", &["items::Countdowns", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore"]),
     // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
     // XP pair, the rest state, the combo points, the bar toggles and the worn display read the
     // live store, and every snapshot its names, relations, selection and group, as the frame left
@@ -340,15 +338,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
     ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
-    ("::ui_tooltip::drive_mouseover_tooltip", &["go_anim::GoAnim",
-        "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
-        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "net::reputations::Reputations", "ui_action::PlayerActions", "ui_guild::GuildState"]),
-    ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Countdowns", "items::Items",
-        "net::GuidIndex", "net::HomeBind", "net::ObjectStore", "net::UnitSpeeds",
-        "net::motion::modes::UnitMoveModes", "net::motion::remote::RemoteMotion",
-        "net::reputations::Reputations", "spell::mods::SpellModifiers",
-        "ui_action::PlayerActions", "ui_pet::PetBar"]),
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
@@ -364,11 +353,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "player::state::OwnControlLost", "player::state::StandPending", "spell::cooldowns::Cooldowns",
         "spell::mods::SpellModifiers", "target::Selection", "ui_action::ActionSlots",
         "ui_action::PlayerActions", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
-    // The ranged-slot item scales a ranged spell's range, read as the frame left it (#2217).
-    ("::spell::targeting::feed_targeting_to_vm", &["items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
-        "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
-        "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState"]),
     // The resolver's guids, pushed before the drain and read with the host lent too: the
     // mouseover, the group rows past a token's own, the pet records and every row of the field
     // events' fan-out, which the `UNIT_HAPPINESS` gate reads. The aura getters walk each unit
@@ -417,6 +401,27 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::feed::played_time_bridge", &["net::PlayedTimeAnswer"]),
+];
+
+/// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
+/// every packet, held to their inputs the same way, with why: a hover's build, which runs in a
+/// frame update of the paint pass (`CSimpleTop::OnLayerUpdate` `0x765650`) or at a mouse move
+/// (`0x7660d0`), never inside a handler, so a listener fired inside the dispatch reads what the
+/// last build left, as 1.12.1's does. They stay after the flip; the getters that read the state
+/// they read read it live.
+#[rustfmt::skip]
+pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
+    ("::minimap::blips::drive_blip_tooltip", &["items::Countdowns", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore"],
+        "the minimap's probe `0x4eb0c0`, its slot `0x3c`, which the hover pick calls at a mouse \
+         move and at the paint pass's repeat pick (`0x7660d0`, from `0x765650`)"),
+    ("::ui_tooltip::drive_mouseover_tooltip", &["go_anim::GoAnim",
+        "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::reputations::Reputations", "ui_action::PlayerActions", "ui_guild::GuildState"],
+        "the world frame's update `0x481790`, a frame update of the paint pass, picks and \
+         publishes the hover (`0x4828d0` → `0x482090` → `0x492890`); the `\"mouseover\"` \
+         getters read the unit live"),
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
@@ -1673,8 +1678,13 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
         return;
     }
     let row = |system: &str| {
+        let built = BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE
+            .iter()
+            .map(|(s, inputs, _)| (*s, *inputs));
         READS_FRAME_FINAL
             .iter()
+            .copied()
+            .chain(built)
             .find(|(s, _)| format!("::{system}").ends_with(s))
     };
     let mut wrong: Vec<String> = pushes
@@ -1694,20 +1704,26 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
         })
         .collect();
     wrong.sort();
+    let built = BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE
+        .iter()
+        .map(|(s, inputs, _)| (*s, *inputs));
     let stale: Vec<&str> = READS_FRAME_FINAL
         .iter()
+        .copied()
+        .chain(built)
         .filter(|(s, _)| {
             !pushes
                 .keys()
                 .any(|system| format!("::{system}").ends_with(s))
         })
-        .map(|(s, _)| *s)
+        .map(|(s, _)| s)
         .collect();
     assert!(
         wrong.is_empty(),
         "these feeds push views off state a handler writes, read as the frame left it: version \
          what they read through the views lane, or give each its row in READS_FRAME_FINAL as it \
-         stands:\n  {}",
+         stands, or in BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE for a build the reference too \
+         makes outside every packet:\n  {}",
         wrong.join("\n  ")
     );
     assert!(stale.is_empty(), "stale rows: {stale:?}");

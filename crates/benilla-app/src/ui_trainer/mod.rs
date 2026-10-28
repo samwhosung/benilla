@@ -15,8 +15,8 @@ use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    TrainerAbilityReq, TrainerService, TrainerServiceLive, TrainerSkillReq, TrainerState,
-    TrainerTooltip, UiScript, TRAINER_GROUP_KNOWN,
+    TrainerAbilityReq, TrainerService, TrainerServiceLive, TrainerSkillReq, TrainerState, UiScript,
+    TRAINER_GROUP_KNOWN,
 };
 
 use crate::entities::ItemDisplays;
@@ -165,41 +165,6 @@ pub(crate) fn ask_item_record(items: &Items, commands: &NetCommands, entry: u32,
     }
 }
 
-/// The spells the last list's services show as tooltips, which the spell-tooltip feed pushes, the
-/// list's handler writing them so a list is hoverable in its frame: a pet-learn service's view is
-/// built against the pet (the builder's unit selector, `0x533a7f`).
-#[derive(Resource, Default, PartialEq)]
-pub(crate) struct TrainerTooltipSubjects {
-    pub(crate) player: Vec<u32>,
-    pub(crate) pet: Vec<u32>,
-}
-
-impl TrainerTooltipSubjects {
-    /// The subjects of `services`' tooltips, each spell once.
-    fn of(services: &[TrainerSpell], spells: &SpellCatalog) -> Self {
-        let mut subjects = Self::default();
-        for wire in services {
-            if let TrainerTooltip::Spell {
-                spell_id,
-                alt_caster,
-            } = service_tooltip(wire.spell, spells)
-            {
-                let list = if alt_caster {
-                    &mut subjects.pet
-                } else {
-                    &mut subjects.player
-                };
-                list.push(spell_id);
-            }
-        }
-        for list in [&mut subjects.player, &mut subjects.pet] {
-            list.sort_unstable();
-            list.dedup();
-        }
-        subjects
-    }
-}
-
 mod lane;
 mod live;
 mod net;
@@ -212,7 +177,6 @@ impl Plugin for UiTrainerPlugin {
         net::register(app);
         lane::add_trainer_lane(app);
         app.init_resource::<TrainerOpen>()
-            .init_resource::<TrainerTooltipSubjects>()
             .add_latched_window::<TrainerOpen>()
             // `0x490ad5` → `0x4d7400` → `0x4d7440(0)`, the core.
             .add_sweep_leg(SweepLeg::Trainer, close_core);
@@ -636,7 +600,7 @@ fn pet_view<'a>(
 
 /// The resources a service description's `$`-tokens read beside the caster's descriptor: the
 /// spell-modifier tables and the bind point `$z` names, the same two reads the item and spell
-/// tooltip feeds make.
+/// tooltips make.
 #[derive(SystemParam)]
 pub(crate) struct DescriptionReads<'w> {
     spell_mods: Option<Res<'w, crate::spell::SpellModifiers>>,
@@ -969,7 +933,7 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
 /// `SMSG_TRAINER_LIST`'s open, `0x4d7440(trainer)`: the open trainer's own list re-lists in place
 /// (`0x4d7459`); a zero guid is the close core (`0x4d7461`), after which the list builds on the
 /// zero cell; any other registers on the latch (`0x4d74ce`), then the cell (`0x4d74d5`). The
-/// builder's `TRAINER_SHOW` (`0x4d7b73`) goes on the lane, with the rows' tooltip subjects.
+/// builder's `TRAINER_SHOW` (`0x4d7b73`) goes on the lane.
 pub(crate) fn open_trainer(
     world: &mut World,
     trainer: u64,
@@ -982,19 +946,9 @@ pub(crate) fn open_trainer(
     } else if world.resource::<TrainerOpen>().trainer != Some(trainer) {
         crate::ui_session::register(world, trainer);
     }
-    let subjects = world
-        .get_resource::<Spells>()
-        .map(|spells| TrainerTooltipSubjects::of(&services, &spells.catalog));
     world
         .resource_mut::<TrainerOpen>()
         .open(trainer, trainer_type, services, greeting);
-    if let (Some(subjects), Some(mut held)) =
-        (subjects, world.get_resource_mut::<TrainerTooltipSubjects>())
-    {
-        if *held != subjects {
-            *held = subjects;
-        }
-    }
     if let Some(mut lane) = world.get_resource_mut::<TrainerLane>() {
         lane.push(TrainerEvent::Show);
     }

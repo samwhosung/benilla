@@ -803,31 +803,4 @@ mod tests {
             assert_eq!(info(&mut app, token), want, "GetGuildInfo({token})");
         }
     }
-
-    /// The targeting feed reads the resolver inputs the resolver's feed pushes in the same frame,
-    /// so the declared order puts the feed after it: read off the schedule graph.
-    #[test]
-    fn the_targeting_feed_runs_after_the_resolver_feed_it_reads() {
-        use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
-
-        let mut app = headless_client();
-        let c = census(&mut app, Update, SyncPoints::Declared);
-        if !c.systems.values().any(|s| s.name.contains("benilla_app::")) {
-            eprintln!("skipped: this build carries no type names");
-            return;
-        }
-        let one = |suffix: &str| {
-            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
-            match (hits.next(), hits.next()) {
-                (Some((k, _)), None) => *k,
-                _ => panic!("exactly one system named `…{suffix}` in Update"),
-            }
-        };
-        let guids = one("::ui_aura::feed_unit_guids");
-        let feed = "::targeting::feed_targeting_to_vm";
-        assert!(
-            c.dependencies.contains(&(guids, one(feed))),
-            "{feed} is declared after feed_unit_guids"
-        );
-    }
 }

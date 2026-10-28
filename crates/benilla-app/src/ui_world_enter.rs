@@ -364,8 +364,8 @@ fn replay_book(world: &mut World) {
 }
 
 /// `0x6e6ca0` at the arrival's end (`0x5debcc`): the spell modifiers' class family, `ChrClasses`
-/// field 15 of our class, byte 1 of `UNIT_FIELD_BYTES_0`. Written only on a move, as the tooltip
-/// feed diffs the tables whenever they are marked changed.
+/// field 15 of our class, byte 1 of `UNIT_FIELD_BYTES_0`. Written only on a move, as the
+/// item-tooltip feed rebuilds whenever the tables are marked changed.
 fn class_family(
     me: Query<&ObjectStore, With<SelfPlayer>>,
     mods: Option<ResMut<crate::spell::SpellModifiers>>,

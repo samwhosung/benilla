@@ -1,16 +1,15 @@
-//! The spell-view cell tests, against the real 5875 data, and the feed's place in the schedule.
+//! The spell-view cell tests, against the real 5875 data, and the world mouseover's.
 
-use super::spell_feed::{build_aura_view, build_view, feed_spell_tooltips, ViewCaster, ViewCtx};
+use super::spell_view::{build_aura_view, build_view, ViewCaster, ViewCtx};
 use super::*;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::ui_action::{real_spells, PlayerActions, Spells};
 use benilla_ui::script::UiScript;
 
-/// The view alone, read through the shipped strings, for the cell tests; the feed keeps what it
-/// read beside it.
-fn spell_tooltip_view(spell_id: u32, spells: &Spells, vctx: &mut ViewCtx) -> Option<Shown> {
-    build_view(spell_id, spells, vctx).map(|(view, _)| Shown::of(&view))
+/// The view, read through the shipped strings, for the cell tests.
+fn spell_tooltip_view(spell_id: u32, spells: &Spells, vctx: &ViewCtx) -> Option<Shown> {
+    build_view(spell_id, spells, vctx).map(|view| Shown::of(&view))
 }
 
 thread_local! {
@@ -148,7 +147,7 @@ impl TestCtx {
             ),
             attack_target: None,
             objects,
-            items: &mut self.items,
+            items: &self.items,
             commands: &self.commands,
             sub_classes,
             skill_lines: self.skill_lines.as_ref(),
@@ -199,20 +198,16 @@ fn a_pet_view_scales_sacrifice_by_the_pets_level() {
         let v = spell_tooltip_view(
             7812,
             &spells,
-            &mut t.pet_ctx(&objects, Some(&player), Some(&pet)),
+            &t.pet_ctx(&objects, Some(&player), Some(&pet)),
         )
         .expect("Sacrifice view");
         absorb(v, n);
     }
-    let v = spell_tooltip_view(
-        7812,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&player)),
-    )
-    .expect("Sacrifice view");
+    let v = spell_tooltip_view(7812, &spells, &t.ctx_for(&objects, 0, None, Some(&player)))
+        .expect("Sacrifice view");
     absorb(v, 305);
     // No pet unit reads level 0 (`0x6e31a4`), which floors at the rank's base.
-    let v = spell_tooltip_view(7812, &spells, &mut t.pet_ctx(&objects, Some(&player), None))
+    let v = spell_tooltip_view(7812, &spells, &t.pet_ctx(&objects, Some(&player), None))
         .expect("Sacrifice view");
     absorb(v, 305);
 }
@@ -229,16 +224,12 @@ fn a_pet_view_scales_blood_pact_by_the_pets_level() {
     let v = spell_tooltip_view(
         6307,
         &spells,
-        &mut t.pet_ctx(&objects, Some(&player), Some(&pet)),
+        &t.pet_ctx(&objects, Some(&player), Some(&pet)),
     )
     .expect("Blood Pact view");
     assert!(v.description.contains("Stamina by 3."), "{}", v.description);
-    let v = spell_tooltip_view(
-        6307,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&player)),
-    )
-    .expect("Blood Pact view");
+    let v = spell_tooltip_view(6307, &spells, &t.ctx_for(&objects, 0, None, Some(&player)))
+        .expect("Blood Pact view");
     assert!(v.description.contains("Stamina by 2."), "{}", v.description);
 }
 
@@ -256,18 +247,14 @@ fn a_pet_view_costs_seduction_from_the_pets_base_mana() {
     let v = spell_tooltip_view(
         6358,
         &spells,
-        &mut t.pet_ctx(&objects, Some(&player), Some(&pet)),
+        &t.pet_ctx(&objects, Some(&player), Some(&pet)),
     )
     .expect("Seduction view");
     assert_eq!(v.cost.as_deref(), Some("449 Mana"));
-    let v = spell_tooltip_view(
-        6358,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&player)),
-    )
-    .expect("Seduction view");
+    let v = spell_tooltip_view(6358, &spells, &t.ctx_for(&objects, 0, None, Some(&player)))
+        .expect("Seduction view");
     assert_eq!(v.cost.as_deref(), Some("329 Mana"), "the player's own view");
-    let v = spell_tooltip_view(6358, &spells, &mut t.pet_ctx(&objects, Some(&player), None))
+    let v = spell_tooltip_view(6358, &spells, &t.pet_ctx(&objects, Some(&player), None))
         .expect("Seduction view");
     assert_eq!(v.cost, None);
 }
@@ -292,7 +279,7 @@ fn a_female_players_spell_tooltips_take_the_second_gender_form() {
     };
     let (her, him) = (player(1), player(0));
     let mut text = |id: u32, store: &ObjectStore| {
-        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(store)))
+        spell_tooltip_view(id, &spells, &t.ctx_for(&objects, 0, None, Some(store)))
             .unwrap_or_else(|| panic!("spell {id} view"))
             .description
     };
@@ -307,13 +294,9 @@ fn a_female_players_spell_tooltips_take_the_second_gender_form() {
     // The branch looks the active player up (`0x508189`-`0x5081a4`): a pet view reads the
     // player's gender, never the pet's.
     let pet = unit(20, 0);
-    let pets = spell_tooltip_view(
-        587,
-        &spells,
-        &mut t.pet_ctx(&objects, Some(&her), Some(&pet)),
-    )
-    .expect("Conjure Food view")
-    .description;
+    let pets = spell_tooltip_view(587, &spells, &t.pet_ctx(&objects, Some(&her), Some(&pet)))
+        .expect("Conjure Food view")
+        .description;
     assert!(pets.contains("the mage and her allies"), "{pets}");
 }
 
@@ -325,7 +308,7 @@ fn aura_text(spell_id: u32, level: u8, stack: u8, spells: &Spells, vctx: &ViewCt
         level,
         stack,
     };
-    let (view, _) = build_aura_view(key, spells, vctx).expect("an aura view");
+    let view = build_aura_view(key, spells, vctx).expect("an aura view");
     view.description
         .text(benilla_ui::strings::Strings::Host(&shipped))
 }
@@ -396,12 +379,8 @@ fn battle_shout_description_scales_by_the_skill_level() {
             (FIELD_PLAYER_SKILL_INFO_1_1, line),
             (FIELD_PLAYER_SKILL_INFO_1_1 + 1, skill | 300 << 16),
         ]));
-        let view = spell_tooltip_view(
-            6673,
-            &spells,
-            &mut t.ctx_for(&objects, 0, None, Some(&store)),
-        )
-        .expect("Battle Shout view");
+        let view = spell_tooltip_view(6673, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+            .expect("Battle Shout view");
         assert!(
             view.description.contains(&format!("by {ap}.")),
             "level {level}, skill {skill}: {}",
@@ -428,25 +407,17 @@ fn the_cast_cell_takes_the_casters_cast_speed() {
     let player = |speed| ObjectStore(unit(speed));
     let at = |t: &mut TestCtx, speed| {
         let store = player(speed);
-        spell_tooltip_view(
-            133,
-            &spells,
-            &mut t.ctx_for(&objects, 0, None, Some(&store)),
-        )
-        .expect("Fireball view")
-        .cast_time
+        spell_tooltip_view(133, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+            .expect("Fireball view")
+            .cast_time
     };
     assert_eq!(at(&mut t, Some(1.0)).as_deref(), Some("1.5 sec cast"));
     assert_eq!(at(&mut t, Some(1.5)).as_deref(), Some("2.25 sec cast"));
     assert_eq!(at(&mut t, None).as_deref(), Some("Instant cast"));
     let me = player(Some(1.0));
     let pet = unit(Some(2.0));
-    let v = spell_tooltip_view(
-        133,
-        &spells,
-        &mut t.pet_ctx(&objects, Some(&me), Some(&pet)),
-    )
-    .expect("Fireball view");
+    let v = spell_tooltip_view(133, &spells, &t.pet_ctx(&objects, Some(&me), Some(&pet)))
+        .expect("Fireball view");
     assert_eq!(
         v.cast_time.as_deref(),
         Some("3 sec cast"),
@@ -472,7 +443,7 @@ fn fireball_view_on_real_data() {
     let mut t = TestCtx::new();
     let mut objs = no_objects();
     let objects = objs.get();
-    let v = spell_tooltip_view(133, &spells, &mut t.ctx(&objects, 0, None)).expect("Fireball view");
+    let v = spell_tooltip_view(133, &spells, &t.ctx(&objects, 0, None)).expect("Fireball view");
     assert_eq!(v.name, "Fireball");
     assert_eq!(v.rank.as_deref(), Some("Rank 1"));
     assert_eq!(v.cost.as_deref(), Some("30 Mana"));
@@ -502,7 +473,7 @@ fn fireball_view_on_real_data() {
 
     // Charge rank 1 (100): range row 95 = {8, 25}, a cooldown only in the category column
     // (15000), and the Stances form line (0x10000 is form 17).
-    let v = spell_tooltip_view(100, &spells, &mut t.ctx(&objects, 0, None)).expect("Charge view");
+    let v = spell_tooltip_view(100, &spells, &t.ctx(&objects, 0, None)).expect("Charge view");
     assert_eq!(v.name, "Charge");
     assert_eq!(v.rank.as_deref(), Some("Rank 1"));
     assert_eq!(v.cost, None, "Charge costs nothing (it generates rage)");
@@ -516,7 +487,7 @@ fn fireball_view_on_real_data() {
         v.description,
         "Charge an enemy, generate 9 rage, and stun it for 1 sec.  Cannot be used in combat."
     );
-    let v = spell_tooltip_view(100, &spells, &mut t.ctx(&objects, 17, None)).expect("Charge view");
+    let v = spell_tooltip_view(100, &spells, &t.ctx(&objects, 17, None)).expect("Charge view");
     assert!(v.form_met, "form 17 = Battle Stance satisfies the mask");
 
     // A permissive Stances mask (`AttributesEx2` bit 19) prints no line, though its forms have
@@ -533,7 +504,7 @@ fn fireball_view_on_real_data() {
             d.form_mask_is_permissive(),
             "{name} carries AttributesEx2 b19"
         );
-        let v = spell_tooltip_view(id, &spells, &mut t.ctx(&objects, 0, None)).expect(name);
+        let v = spell_tooltip_view(id, &spells, &t.ctx(&objects, 0, None)).expect(name);
         assert_eq!(v.requires_form, None, "{name} demands no form");
     }
 }
@@ -556,14 +527,14 @@ fn improved_devotion_aura_updates_the_description_but_not_the_aura_text() {
     let mut t = TestCtx::new();
     let mut objs = no_objects();
     let objects = objs.get();
-    let base = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    let base = spell_tooltip_view(465, &spells, &t.ctx(&objects, 0, None)).unwrap();
     assert!(base.description.contains("55 additional armor"));
     let base_aura = aura_text(465, 0, 1, &spells, &t.ctx(&objects, 0, None));
     assert!(base_aura.contains("55"), "{base_aura}");
 
     t.spell_mods.set_class_family(devotion.spell_family);
     t.spell_mods.set(false, bit, 8, 25);
-    let improved = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    let improved = spell_tooltip_view(465, &spells, &t.ctx(&objects, 0, None)).unwrap();
     assert!(improved.description.contains("68 additional armor"));
     let improved_aura = aura_text(465, 0, 1, &spells, &t.ctx(&objects, 0, None));
     assert_eq!(improved_aura, base_aura);
@@ -586,14 +557,14 @@ fn improved_fire_blast_shortens_the_cooldown_cell() {
     let mut t = TestCtx::new();
     let mut objs = no_objects();
     let objects = objs.get();
-    let base = spell_tooltip_view(2136, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    let base = spell_tooltip_view(2136, &spells, &t.ctx(&objects, 0, None)).unwrap();
     assert_eq!(base.cooldown.as_deref(), Some("8 sec cooldown"));
     assert_eq!(base.recovery_ms, 8_000);
 
     t.spell_mods.set_class_family(fire_blast.spell_family);
     t.spell_mods
         .set(true, bit, crate::spell::OP_COOLDOWN, -1_500);
-    let improved = spell_tooltip_view(2136, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    let improved = spell_tooltip_view(2136, &spells, &t.ctx(&objects, 0, None)).unwrap();
     assert_eq!(improved.cooldown.as_deref(), Some("6.5 sec cooldown"));
     assert_eq!(improved.recovery_ms, 6_500, "the modified column, in ms");
 }
@@ -630,7 +601,7 @@ fn the_cast_cell_takes_op_10_unclamped() {
         let mut t = TestCtx::new();
         t.spell_mods.set_class_family(4);
         t.spell_mods.set(true, 0, crate::spell::OP_CAST_TIME, flat);
-        spell_tooltip_view(900_001, &spells, &mut t.ctx(&objects, 0, None))
+        spell_tooltip_view(900_001, &spells, &t.ctx(&objects, 0, None))
             .unwrap()
             .cast_time
     };
@@ -666,22 +637,14 @@ fn cost_and_cast_cells_on_real_data() {
     ]));
 
     // Bloodrage (2687): 20% of base health; bare "Instant" on a non-mana type.
-    let v = spell_tooltip_view(
-        2687,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Bloodrage view");
+    let v = spell_tooltip_view(2687, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Bloodrage view");
     assert_eq!(v.cost.as_deref(), Some("337 Health"), "20% of 1689");
     assert_eq!(v.cast_time.as_deref(), Some("Instant"));
 
     // Life Tap (1454): the 5875 data has no cost columns for any rank, so the cell is empty.
-    let v = spell_tooltip_view(
-        1454,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Life Tap view");
+    let v = spell_tooltip_view(1454, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Life Tap view");
     assert_eq!(v.cost, None, "1.12 Life Tap has no cost cell");
     assert_eq!(
         v.cast_time.as_deref(),
@@ -690,61 +653,40 @@ fn cost_and_cast_cells_on_real_data() {
     );
 
     // Health Funnel (755): the `_PER_TIME` form in health, and a channeled cast cell.
-    let v = spell_tooltip_view(
-        755,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Health Funnel view");
+    let v = spell_tooltip_view(755, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Health Funnel view");
     assert_eq!(v.cost.as_deref(), Some("11 Health, plus 5 per sec"));
     assert_eq!(v.cast_time.as_deref(), Some("Channeled"));
 
     // Judgement (20271): 6% of base mana resolves to a flat number; a DBC-only view has only
     // the flat cost, none here.
-    let v = spell_tooltip_view(
-        20271,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Judgement view");
+    let v = spell_tooltip_view(20271, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Judgement view");
     assert_eq!(v.cost.as_deref(), Some("60 Mana"), "6% of base mana 1000");
-    let v =
-        spell_tooltip_view(20271, &spells, &mut t.ctx(&objects, 0, None)).expect("Judgement view");
+    let v = spell_tooltip_view(20271, &spells, &t.ctx(&objects, 0, None)).expect("Judgement view");
     assert_eq!(v.cost, None, "a DBC-only view cannot resolve a pct cost");
 
     // Heroic Strike (78): rage is wire 150 ÷ 10, and "Next melee" is the cast cell.
-    let v = spell_tooltip_view(78, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+    let v = spell_tooltip_view(78, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
         .expect("Heroic Strike view");
     assert_eq!(v.cost.as_deref(), Some("15 Rage"));
     assert_eq!(v.cast_time.as_deref(), Some("Next melee"));
 
     // Throw (2764) and Auto Shot (75) read "Attack speed" off `Attributes & 0x2` alone; Attack
     // (6603), `Effect[0]` ATTACK, omits the line (`0x52eb3c`).
-    let v = spell_tooltip_view(
-        2764,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Throw view");
+    let v = spell_tooltip_view(2764, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Throw view");
     assert_eq!(v.cast_time.as_deref(), Some("Attack speed"));
-    let v = spell_tooltip_view(75, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+    let v = spell_tooltip_view(75, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
         .expect("Auto Shot view");
     assert_eq!(v.cast_time.as_deref(), Some("Attack speed"));
-    let v = spell_tooltip_view(
-        6603,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Attack view");
+    let v = spell_tooltip_view(6603, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Attack view");
     assert_eq!(v.cast_time, None, "ATTACK Effect[0] omits the line");
 
     // Mind Flay (15407): a channeled mana spell.
-    let v = spell_tooltip_view(
-        15407,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Mind Flay view");
+    let v = spell_tooltip_view(15407, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Mind Flay view");
     assert_eq!(v.cost.as_deref(), Some("45 Mana"));
     assert_eq!(v.cast_time.as_deref(), Some("Channeled"));
 }
@@ -795,7 +737,7 @@ fn the_cost_cell_tests_the_divided_values() {
         900_012, 7,
     )]));
     let mut cost = |id| {
-        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+        spell_tooltip_view(id, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
             .unwrap()
             .cost
     };
@@ -834,13 +776,7 @@ fn the_reputation_line_reads_the_players_standing() {
         let mut slots = vec![(0u8, 0i32); 64];
         slots[index] = (0, wire);
         t.reputations = crate::net::Reputations::from_slots(slots);
-        let (view, deps) = build_view(
-            6994,
-            &spells,
-            &mut t.ctx_for(&objects, 0, None, Some(&store)),
-        )
-        .unwrap();
-        assert!(deps.reputation && deps.gender, "{deps:?}");
+        let view = build_view(6994, &spells, &t.ctx_for(&objects, 0, None, Some(&store))).unwrap();
         view.requires_reputation
     };
     assert_eq!(
@@ -912,16 +848,8 @@ fn the_per_level_terms_read_the_skill_not_the_level() {
     t.skill_lines = Some(benilla_formats::SkillLineCatalog::from_spell_lines([(
         900_020, 7,
     )]));
-    let (_, deps) = build_view(
-        900_020,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .unwrap();
-    assert_eq!(deps.skill_lines, [7], "the line, the one read");
-    let mut lines = |id| {
-        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store))).unwrap()
-    };
+    let mut lines =
+        |id| spell_tooltip_view(id, &spells, &t.ctx_for(&objects, 0, None, Some(&store))).unwrap();
     let scaled = lines(900_020);
     // 10 + (15 - 5) × 3, plus 1 + (15 - 5) per second; 1000 + (15 - 5) × 100 ms.
     assert_eq!(scaled.cost.as_deref(), Some("40 Mana, plus 11 per sec"));
@@ -957,12 +885,8 @@ fn range_cell_on_real_data() {
     let d = spells.catalog.get(1752).expect("Sinister Strike 1752");
     assert_eq!(d.range_index, 2, "the melee row");
     assert!(spells.ranges.get(2).expect("row 2").is_melee());
-    let v = spell_tooltip_view(
-        1752,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Sinister Strike view");
+    let v = spell_tooltip_view(1752, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("5 yd range"));
 
     // A 4.0 reach: 4.0 + 4.0 + 1.3333334 = 9.333, rounded to 9.
@@ -970,17 +894,13 @@ fn range_cell_on_real_data() {
         130u16,
         4.0f32.to_bits(),
     )]));
-    let v = spell_tooltip_view(1752, &spells, &mut t.ctx_for(&objects, 0, None, Some(&big)))
+    let v = spell_tooltip_view(1752, &spells, &t.ctx_for(&objects, 0, None, Some(&big)))
         .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("9 yd range"));
 
     // The second reach is the auto-attack target's: 1.5 + 4.0 + 1.3333334 = 6.833, rounded to 7.
-    let v = spell_tooltip_view(
-        1752,
-        &spells,
-        &mut t.ctx_engaged(&objects, Some(&store), 4.0),
-    )
-    .expect("Sinister Strike view");
+    let v = spell_tooltip_view(1752, &spells, &t.ctx_engaged(&objects, Some(&store), 4.0))
+        .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("7 yd range"));
 
     // Both units running: the moving bonus goes on the floor, 5.0 + 2.6667 = 7.667, rounded to 8.
@@ -996,62 +916,46 @@ fn range_cell_on_real_data() {
     let mut ctx = t.ctx_for(&objects, 0, None, Some(&store));
     ctx.range_caster = runner;
     ctx.attack_target = Some(runner);
-    let v = spell_tooltip_view(1752, &spells, &mut ctx).expect("Sinister Strike view");
+    let v = spell_tooltip_view(1752, &spells, &ctx).expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("8 yd range"));
     // One of them standing, or no auto-attack target to read: the floor.
     ctx.attack_target = Some(benilla_formats::RangeUnit::still(1.5));
-    let v = spell_tooltip_view(1752, &spells, &mut ctx).expect("Sinister Strike view");
+    let v = spell_tooltip_view(1752, &spells, &ctx).expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("5 yd range"));
     ctx.attack_target = None;
-    let v = spell_tooltip_view(1752, &spells, &mut ctx).expect("Sinister Strike view");
+    let v = spell_tooltip_view(1752, &spells, &ctx).expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("5 yd range"));
     // The ranged arm passes no target, so the bonus never reaches an authored row: Fireball's 35.
     ctx.attack_target = Some(runner);
-    let v = spell_tooltip_view(133, &spells, &mut ctx).expect("Fireball view");
+    let v = spell_tooltip_view(133, &spells, &ctx).expect("Fireball view");
     assert_eq!(v.range.as_deref(), Some("35 yd range"));
 
     // An authored row: Fireball's 0-35.
-    let v = spell_tooltip_view(
-        133,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Fireball view");
+    let v = spell_tooltip_view(133, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Fireball view");
     assert_eq!(v.range.as_deref(), Some("35 yd range"));
 
     // The tooltip passes a null target (`0x52e9c2`), so the auto-attack target pads no ranged row:
     // Fireball still reads its 35 while you swing at a 1.5-reach unit, and Charge its 8-25.
-    let v = spell_tooltip_view(
-        133,
-        &spells,
-        &mut t.ctx_engaged(&objects, Some(&store), 1.5),
-    )
-    .expect("Fireball view");
+    let v = spell_tooltip_view(133, &spells, &t.ctx_engaged(&objects, Some(&store), 1.5))
+        .expect("Fireball view");
     assert_eq!(v.range.as_deref(), Some("35 yd range"));
-    let v = spell_tooltip_view(
-        100,
-        &spells,
-        &mut t.ctx_engaged(&objects, Some(&store), 1.5),
-    )
-    .expect("Charge view");
+    let v = spell_tooltip_view(100, &spells, &t.ctx_engaged(&objects, Some(&store), 1.5))
+        .expect("Charge view");
     assert_eq!(v.range.as_deref(), Some("8-25 yd range"));
 
     // An authored pair, `"%d-%d"`: Charge's 8-25, which the reach does not change.
-    let v = spell_tooltip_view(100, &spells, &mut t.ctx_for(&objects, 0, None, Some(&big)))
+    let v = spell_tooltip_view(100, &spells, &t.ctx_for(&objects, 0, None, Some(&big)))
         .expect("Charge view");
     assert_eq!(v.range.as_deref(), Some("8-25 yd range"));
 
     // No cell: Heroic Strike (78)'s on-next-swing attributes skip it before the resolver, and
     // Bloodrage (2687)'s self row resolves max 0.
-    let v = spell_tooltip_view(78, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+    let v = spell_tooltip_view(78, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
         .expect("Heroic Strike view");
     assert_eq!(v.range, None, "Attributes & 0x404 → no range cell");
-    let v = spell_tooltip_view(
-        2687,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Bloodrage view");
+    let v = spell_tooltip_view(2687, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Bloodrage view");
     assert_eq!(v.range, None, "the self row resolves max 0");
 }
 
@@ -1095,10 +999,10 @@ fn the_power_tokens_print_the_cost_cells_numbers() {
     t.skill_lines = Some(benilla_formats::SkillLineCatalog::from_spell_lines([(
         900_030, 7,
     )]));
-    let (view, deps) = build_view(
+    let view = build_view(
         900_030,
         &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
+        &t.ctx_for(&objects, 0, None, Some(&store)),
     )
     .unwrap();
     // 10 + (15 - 5) × 3 and 1 + (15 - 5).
@@ -1106,20 +1010,13 @@ fn the_power_tokens_print_the_cost_cells_numbers() {
         Shown::of(&view).description,
         "Drains 40 mana, then 11 per second."
     );
-    assert_eq!(deps.skill_lines, [7]);
-    let v = spell_tooltip_view(
-        900_030,
-        &spells,
-        &mut t.pet_ctx(&objects, Some(&store), None),
-    )
-    .unwrap();
+    let v = spell_tooltip_view(900_030, &spells, &t.pet_ctx(&objects, Some(&store), None)).unwrap();
     // No pet: no cost to read, and level 0 for the per-second term, 1 + (0 - 5).
     assert_eq!(v.description, "Drains -1 mana, then -4 per second.");
 }
 
-/// A weapon spell's view scales by the wielded weapon's skill (`0x5ea5d0` in `0x5ea690`) and
-/// records what that read: the hands, which a weapon swap moves, and the weapon's line, not the
-/// spell's own.
+/// A weapon spell's view scales by the wielded weapon's skill (`0x5ea5d0` in `0x5ea690`), the
+/// weapon's line, not the spell's own.
 #[test]
 fn a_weapon_spells_view_reads_the_wielded_weapons_skill() {
     // The cells fill the install's `GlobalStrings.lua`.
@@ -1182,22 +1079,20 @@ fn a_weapon_spells_view_reads_the_wielded_weapons_skill() {
             ..crate::items::test_template("Sword")
         }),
     );
-    let (view, deps) = build_view(
+    let view = build_view(
         900_040,
         &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
+        &t.ctx_for(&objects, 0, None, Some(&store)),
     )
     .unwrap();
     // 10 + (60 - 1) × 1.
     assert_eq!(Shown::of(&view).description, "Deals 69 damage.");
-    assert_eq!(deps.skill_lines, [43], "the weapon's line, not the spell's");
-    assert_eq!(deps.worn & 0x38000, 0x38000, "the three hands");
 }
 
 /// The range cell scales a ranged-slot spell's max by the player's ranged-slot item (`0x6e36aa`-
 /// `0x6e373a`) and drops a max of 0 (`0x52e9e2`-`0x52e9f0`): Arcane Shot (3044, `Attributes &
-/// 0x2`, row 114) reads "8-35 yd range" with a bow's 100 and nothing with Egan's Blaster's 0, and
-/// records the read; Fireball (133), without the bit, keeps its 35 and records none.
+/// 0x2`, row 114) reads "8-35 yd range" with a bow's 100 and nothing with Egan's Blaster's 0;
+/// Fireball (133), without the bit, keeps its 35.
 #[test]
 fn the_range_cell_scales_a_ranged_spell_by_the_ranged_slot_item() {
     let Some(spells) = real_spells() else { return };
@@ -1213,16 +1108,14 @@ fn the_range_cell_scales_a_ranged_spell_by_the_ranged_slot_item() {
     let view = |t: &mut TestCtx, id, range_mod| {
         let mut ctx = t.ctx_for(&objects, 0, None, Some(&store));
         ctx.range_caster = holding(range_mod);
-        build_view(id, &spells, &mut ctx).expect("a view")
+        build_view(id, &spells, &ctx).expect("a view")
     };
-    let (bow, deps) = view(&mut t, 3044, 100.0);
+    let bow = view(&mut t, 3044, 100.0);
     assert_eq!(Shown::of(&bow).range.as_deref(), Some("8-35 yd range"));
-    assert!(deps.ranged_slot, "the cell read the ranged slot");
-    let (blaster, _) = view(&mut t, 3044, 0.0);
+    let blaster = view(&mut t, 3044, 0.0);
     assert_eq!(Shown::of(&blaster).range, None, "a max of 0 has no cell");
-    let (fireball, deps) = view(&mut t, 133, 0.0);
+    let fireball = view(&mut t, 133, 0.0);
     assert_eq!(Shown::of(&fireball).range.as_deref(), Some("35 yd range"));
-    assert!(!deps.ranged_slot);
 }
 
 /// The required-item, chance-to-X and reagents lines on the real data.
@@ -1251,7 +1144,7 @@ fn the_required_item_chance_and_reagent_lines_on_real_data() {
     let v = spell_tooltip_view(
         5019,
         &spells,
-        &mut t.ctx_for(&objects, 0, Some(&subs), Some(&store)),
+        &t.ctx_for(&objects, 0, Some(&subs), Some(&store)),
     )
     .expect("Shoot view");
     assert_eq!(v.requires_item.as_deref(), Some("Requires Wands"));
@@ -1263,7 +1156,7 @@ fn the_required_item_chance_and_reagent_lines_on_real_data() {
     let v = spell_tooltip_view(
         3127,
         &spells,
-        &mut t.ctx_for(&objects, 0, Some(&subs), Some(&store)),
+        &t.ctx_for(&objects, 0, Some(&subs), Some(&store)),
     )
     .expect("Parry view");
     assert_eq!(v.requires_item.as_deref(), Some("Requires Melee Weapon"));
@@ -1273,7 +1166,7 @@ fn the_required_item_chance_and_reagent_lines_on_real_data() {
     let d = spells.catalog.get(6603).expect("Attack 6603");
     assert_eq!(d.effects[0], 78, "SPELL_EFFECT_ATTACK");
     assert!(!d.passive, "6603 carries Attributes 0x10, not 0x40");
-    let v = spell_tooltip_view(6603, &spells, &mut t.ctx(&objects, 0, None)).expect("Attack view");
+    let v = spell_tooltip_view(6603, &spells, &t.ctx(&objects, 0, None)).expect("Attack view");
     assert_eq!(v.cast_time, None, "the law's Effect[0] gate");
     // The chance line `Effect[0]` selects (`0x52f5b1`): ATTACK skips the passive gate. No
     // descriptor, no line; the wire's values are already percents.
@@ -1283,51 +1176,35 @@ fn the_required_item_chance_and_reagent_lines_on_real_data() {
         (1109u16, 2.62f32.to_bits()), // PLAYER_CRIT_PERCENTAGE
         (1107u16, 5.5f32.to_bits()),  // PLAYER_DODGE_PERCENTAGE
     ]));
-    let v = spell_tooltip_view(
-        6603,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&rated)),
-    )
-    .expect("Attack view");
+    let v = spell_tooltip_view(6603, &spells, &t.ctx_for(&objects, 0, None, Some(&rated)))
+        .expect("Attack view");
     assert_eq!(v.chance.as_deref(), Some("2.62% chance to crit"));
     // Dodge (81) is passive and reads its own field.
     let dodge = spells.catalog.get(81).expect("Dodge 81");
     assert_eq!(dodge.effects[0], 20, "SPELL_EFFECT_DODGE");
     assert!(dodge.passive, "81 carries Attributes 0x40");
-    let v = spell_tooltip_view(81, &spells, &mut t.ctx_for(&objects, 0, None, Some(&rated)))
+    let v = spell_tooltip_view(81, &spells, &t.ctx_for(&objects, 0, None, Some(&rated)))
         .expect("Dodge view");
     assert_eq!(v.chance.as_deref(), Some("5.50% chance to dodge"));
     // None of the four effects: no line.
-    let v = spell_tooltip_view(
-        133,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&rated)),
-    )
-    .expect("Fireball view");
+    let v = spell_tooltip_view(133, &spells, &t.ctx_for(&objects, 0, None, Some(&rated)))
+        .expect("Fireball view");
     assert_eq!(v.chance, None);
 
     // 3. Slow Fall (130): "Reagents: Light Feather", red while unowned; the name comes from the
     // item cache, seeded here as the server would.
     let d = spells.catalog.get(130).expect("Slow Fall 130");
     assert_eq!(d.reagents[0], (17056, 1), "Light Feather ×1");
-    let v = spell_tooltip_view(
-        130,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Slow Fall view");
+    let v = spell_tooltip_view(130, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Slow Fall view");
     assert_eq!(
         v.reagents, None,
         "the template hasn't landed: the line waits rather than printing an id"
     );
     t.items
         .insert_template(17056, Some(crate::items::test_template("Light Feather")));
-    let v = spell_tooltip_view(
-        130,
-        &spells,
-        &mut t.ctx_for(&objects, 0, None, Some(&store)),
-    )
-    .expect("Slow Fall view");
+    let v = spell_tooltip_view(130, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
+        .expect("Slow Fall view");
     assert_eq!(
         v.reagents.as_deref(),
         Some("Reagents: |cffff2020Light Feather|r"),
@@ -1349,7 +1226,7 @@ fn the_tools_and_drain_all_lines_on_real_data() {
     let d = spells.catalog.get(3599).expect("Searing Totem 3599");
     assert_eq!(d.totems, [5176, 0], "the Fire Totem tool");
     let view = |t: &mut TestCtx, id| {
-        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+        spell_tooltip_view(id, &spells, &t.ctx_for(&objects, 0, None, Some(&store)))
             .expect("a view")
     };
     assert_eq!(
@@ -1654,276 +1531,6 @@ fn the_mouseover_token_clears_when_no_unit_is_hovered() {
     }
 }
 
-/// The pet bar, Beast Training and target-of-target hovers are whole on the first hover.
-#[test]
-fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
-    use benilla_ui::script::{
-        AuraState, CraftDifficulty, CraftRecipe, CraftState, CraftTooltip, PetActionView,
-    };
-    let spell = |name: &str, description: &str| benilla_formats::SpellDisplay {
-        name: name.into(),
-        description: Some(description.into()),
-        ..Default::default()
-    };
-    let catalog = std::collections::HashMap::from([
-        (3110, spell("Firebolt", "Deals Fire damage.")),
-        (17253, spell("Bite", "Bite the enemy.")),
-        // The aura builder reads the aura text alone (`0x52f929`).
-        (
-            589,
-            benilla_formats::SpellDisplay {
-                aura_description: Some("Shadow damage over time.".into()),
-                ..spell("Shadow Word: Pain", "Not the aura's text.")
-            },
-        ),
-    ]);
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    let mut app = App::new();
-    app.insert_resource(Spells {
-        catalog: benilla_formats::SpellCatalog::from_displays(catalog),
-        ..Spells::empty_for_tests()
-    })
-    .insert_resource(NetCommands(tx))
-    .init_resource::<Items>()
-    .init_resource::<crate::net::GuidIndex>()
-    .init_resource::<crate::spell::SpellModifiers>()
-    .add_systems(Update, feed_spell_tooltips);
-    // Firebolt on the pet's bar, the word the feed reads its subject off.
-    let mut bar = crate::ui_pet::PetBar::default();
-    bar.spells.pet_guid = 0x2A;
-    bar.spells.bar[0] = benilla_protocol::messages::PetActionEntry::from(
-        3110 | (u32::from(benilla_protocol::messages::PET_ACT_ENABLED) << 24),
-    );
-    app.insert_resource(bar);
-
-    let mut script = UiScript::new().unwrap();
-    crate::ui_script::test_ui::load_tooltip_template(&script);
-    script.set_pet_actions(
-        true,
-        true,
-        true,
-        vec![PetActionView {
-            name: Some("Firebolt".into()),
-            spell_id: Some(3110),
-            ..Default::default()
-        }],
-    );
-    script.set_craft(Some(CraftState {
-        name: "Beast Training".into(),
-        display_line: Some("Beast Training".into()),
-        rank: 0,
-        max_rank: 0,
-        craft_type: 1,
-        recipes: vec![CraftRecipe {
-            spell_id: 24599,
-            tooltip: CraftTooltip::Spell(17253),
-            name: "Bite".into(),
-            sub_name: String::new(),
-            difficulty: CraftDifficulty::Optimal,
-            num_available: 1,
-            icon: None,
-            description: None,
-            needs_item_target: false,
-            reagents: vec![],
-            tools: vec![],
-            spell_level: 0,
-            group: 0,
-            skill_line: None,
-            training_point_cost: 0,
-            required_level: 0,
-            tools_pending: Vec::new(),
-        }],
-    }));
-    // We target a mob that targets party1, whose list the VM holds by guid.
-    const ME: u64 = 0x10;
-    const MOB: u64 = 0xF130_0000_0000_0001;
-    const TOT: u64 = 0x21;
-    script.set_unit_guids(&benilla_ui::script::UnitGuids {
-        player: ME,
-        target: MOB,
-        party: [TOT, 0, 0, 0],
-        held: std::collections::HashMap::from([(ME, MOB), (MOB, TOT), (TOT, 0)]),
-        ..Default::default()
-    });
-    script.set_unit_auras(
-        TOT,
-        Some(
-            vec![AuraState {
-                spell_id: 589,
-                name: Some("Shadow Word: Pain".into()),
-                ..Default::default()
-            }]
-            .into(),
-        ),
-    );
-    app.insert_non_send_resource(script);
-    app.update();
-
-    let script = app.world().non_send_resource::<UiScript>();
-    script
-        .run(
-            r#"
-            local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
-            local function lines()
-                local t = {}
-                for i = 1, TT:NumLines() do t[i] = getglobal("TTTextLeft" .. i):GetText() end
-                return table.concat(t, " | ")
-            end
-            TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetPetAction(1); PET = lines()
-            TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetCraftSpell(1); CRAFT = lines()
-            TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetUnitDebuff("targettarget", 1); TOT = lines()
-            "#,
-        )
-        .unwrap();
-    assert_eq!(
-        script.eval::<String>("return PET").unwrap(),
-        "Firebolt | Deals Fire damage."
-    );
-    assert_eq!(
-        script.eval::<String>("return CRAFT").unwrap(),
-        "Bite | Bite the enemy."
-    );
-    assert_eq!(
-        script.eval::<String>("return TOT").unwrap(),
-        "Shadow Word: Pain | Shadow damage over time."
-    );
-}
-
-/// The feed builds the pet's bar and book against the pet (the charm, else the summon), keeps the
-/// player's book on the player, and rebuilds only the pet views when the pet's level moves.
-#[test]
-fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level() {
-    use benilla_protocol::ObjectFields;
-    use benilla_ui::script::{PetActionView, PetBookState, SpellBookState, SpellSlotView};
-    const ME: u64 = 0x10;
-    const IMP: u64 = 0xF140_0000_0000_0077;
-    // `$s1` is 10 plus 1 a level, uncapped: the player, in no line of its own, reads 10.
-    let pact = benilla_formats::SpellDisplay {
-        id: 6307,
-        name: "Blood Pact".into(),
-        description: Some("Stamina by $s1.".into()),
-        effect_base_points: [9, 0, 0],
-        effect_base_dice: [1, 0, 0],
-        effect_die_sides: [1, 0, 0],
-        effect_real_points_per_level: [1.0, 0.0, 0.0],
-        ..Default::default()
-    };
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    let mut app = App::new();
-    app.insert_resource(Spells {
-        catalog: benilla_formats::SpellCatalog::from_displays([(6307, pact)].into()),
-        ..Spells::empty_for_tests()
-    })
-    .insert_resource(NetCommands(tx))
-    .init_resource::<Items>()
-    .init_resource::<crate::net::GuidIndex>()
-    .init_resource::<crate::spell::SpellModifiers>()
-    .add_systems(Update, feed_spell_tooltips);
-    // The player summons the imp (`UNIT_FIELD_SUMMON`, 8-9).
-    let me = app
-        .world_mut()
-        .spawn((
-            SelfPlayer,
-            ObjectStore(ObjectFields::from_pairs(&[
-                (8, IMP as u32),
-                (9, (IMP >> 32) as u32),
-                (34, 60),
-            ])),
-        ))
-        .id();
-    let imp = app
-        .world_mut()
-        .spawn(ObjectStore(ObjectFields::from_pairs(&[(34, 14)])))
-        .id();
-    let mut index = app.world_mut().resource_mut::<crate::net::GuidIndex>();
-    index.0.insert(ME, me);
-    index.0.insert(IMP, imp);
-    // Blood Pact on the imp's bar and in its book, the words the feed reads its subjects off.
-    let word = benilla_protocol::messages::PetActionEntry::from(
-        6307 | (u32::from(benilla_protocol::messages::PET_ACT_ENABLED) << 24),
-    );
-    let mut bar = crate::ui_pet::PetBar::default();
-    bar.spells.pet_guid = IMP;
-    bar.spells.bar[0] = word;
-    bar.spells.spells = vec![word];
-    app.insert_resource(bar);
-
-    let mut script = UiScript::new().unwrap();
-    crate::ui_script::test_ui::load_tooltip_template(&script);
-    script.set_pet_actions(
-        true,
-        true,
-        true,
-        vec![PetActionView {
-            name: Some("Blood Pact".into()),
-            spell_id: Some(6307),
-            ..Default::default()
-        }],
-    );
-    let slot = SpellSlotView {
-        spell_id: 6307,
-        name: "Blood Pact".into(),
-        ..Default::default()
-    };
-    script.set_pet_book(PetBookState {
-        token: Some("DEMON".into()),
-        slots: vec![slot.clone()],
-    });
-    script.set_spellbook(SpellBookState {
-        tabs: Vec::new(),
-        slots: vec![slot],
-    });
-    script
-        .run(
-            r#"
-            local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
-            function DESC(set) TT:SetOwner(B, "ANCHOR_RIGHT"); set(); return TTTextLeft2:GetText() end
-            "#,
-        )
-        .unwrap();
-    app.insert_non_send_resource(script);
-    // The feed runs over the pet bar and book; the player's book's view is an ask on its hover.
-    app.update();
-    let descs = |app: &mut App| {
-        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-        let d = script
-            .eval::<(String, String, Option<String>)>(
-                r#"return DESC(function() TT:SetPetAction(1) end),
-                    DESC(function() TT:SetSpell(1, "pet") end),
-                    DESC(function() TT:SetSpell(1, "spell") end)"#,
-            )
-            .unwrap();
-        assert!(script.take_errors().is_empty());
-        d
-    };
-    let _ = descs(&mut app);
-    app.update();
-    assert_eq!(
-        descs(&mut app),
-        (
-            "Stamina by 24.".to_string(),
-            "Stamina by 24.".to_string(),
-            Some("Stamina by 10.".to_string())
-        ),
-        "a level-14 imp's bar and book, and the player's own book"
-    );
-    // The imp dings: its views rebuild; the player's does not move.
-    app.world_mut()
-        .entity_mut(imp)
-        .insert(ObjectStore(ObjectFields::from_pairs(&[(34, 15)])));
-    app.update();
-    assert_eq!(
-        descs(&mut app),
-        (
-            "Stamina by 25.".to_string(),
-            "Stamina by 25.".to_string(),
-            Some("Stamina by 10.".to_string())
-        )
-    );
-}
-
 /// The build looks the hovered unit's name up with a callback (`GetUnitName`, `0x609210`, from
 /// `0x529fe0`) once per hover; the frames under that hover read. A refused name is asked again by
 /// the next hover onto the unit, once, and by no frame.
@@ -1956,61 +1563,4 @@ fn a_refused_hover_name_is_asked_again_by_the_next_hover_only() {
         hover_unit(&mut app, boar, PLAYER);
     }
     assert!(crate::query_cache::queries(&rx).is_empty());
-}
-
-/// The questgiver panel's reward spell, which its getters read through the host, is pushed ahead
-/// of a hover like the VM's own subjects: the first `SetQuestRewardSpell` shows its whole view.
-#[test]
-fn the_feed_pushes_the_questgiver_panels_reward_spell_before_a_hover() {
-    let spell = benilla_formats::SpellDisplay {
-        name: "Firebolt".into(),
-        description: Some("Deals Fire damage.".into()),
-        ..Default::default()
-    };
-    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    app.insert_resource(NetCommands(tx));
-    app.insert_resource(Spells {
-        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
-            3110, spell,
-        )])),
-        ..Spells::empty_for_tests()
-    });
-    app.world_mut()
-        .resource_mut::<crate::ui_quest::QuestGiver>()
-        .open(
-            0x42,
-            crate::ui_quest::QuestView::Detail(benilla_protocol::messages::QuestDetails {
-                npc: 0x42,
-                quest_id: 1,
-                title: "Fire".into(),
-                details: String::new(),
-                objectives: String::new(),
-                auto_finish: 0,
-                choices: Vec::new(),
-                rewards: Vec::new(),
-                money: 0,
-                reward_spell: 3110,
-            }),
-        );
-    let script = UiScript::new().unwrap();
-    crate::ui_script::test_ui::load_tooltip_template(&script);
-    app.insert_non_send_resource(script);
-    app.world_mut()
-        .run_system_cached(feed_spell_tooltips)
-        .expect("the feed runs");
-    let lines = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
-        s.expect("a VM").eval::<String>(
-            r#"
-            local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0)
-            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
-            TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetQuestRewardSpell()
-            local t = {}
-            for i = 1, TT:NumLines() do t[i] = getglobal("TTTextLeft" .. i):GetText() end
-            return table.concat(t, " | ")
-            "#,
-        )
-    })
-    .unwrap();
-    assert_eq!(lines, "Firebolt | Deals Fire damage.");
 }

@@ -293,7 +293,7 @@ pub use cursor::swap::Swap;
 pub use cursor::{
     CursorAction, CursorAmmo, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney,
     CursorPayload, CursorPetAction, CursorSpell, CursorStablePet, EnchantAnswer, EnchantConfirm,
-    HeldCursor, ItemPick, WorldPick, EQUIPMENT_BAG,
+    HeldCursor, ItemPick, TargetingWants, TargetingWantsQuery, WorldPick, EQUIPMENT_BAG,
 };
 pub use cvar_checks::{
     check_anisotropic, check_dist_cull, check_error_filter, check_error_level_max,
@@ -455,7 +455,7 @@ pub use social_read::{SocialAnswer, SocialRead};
 pub use sound::{MusicRequest, SoundRequest};
 pub use spellbook::{
     resolve_spell_in_books, BookNow, BookSlot, BookSpell, BookTabs, NamedSpell, PetBookState,
-    SpellBookState, SpellSlotView, SpellTabName, SpellTabView,
+    SpellBookState, SpellCanTargetQuery, SpellSlotView, SpellTabName, SpellTabView,
 };
 pub use stable::{
     StableCall, StableIntent, StablePetSlot, StableQuery, StableState, StableView, NUM_STABLE_SLOTS,
@@ -468,9 +468,9 @@ pub use talent::{
 pub use taxi::{
     TaxiCall, TaxiMapHead, TaxiMapQuery, TaxiNodeQuery, TaxiNodeType, TaxiUiNode, TaxiUiState,
 };
-pub use tooltip_aura::{AuraKey, AuraTooltipView};
+pub use tooltip_aura::{AuraKey, AuraTooltipView, AuraViewQuery};
 pub use tooltip_item::SpellCastUiQuery;
-pub use tooltip_spell::{ReputationRequirement, SpellTooltipView};
+pub use tooltip_spell::{ReputationRequirement, SpellTooltipView, SpellViewQuery};
 pub use tooltip_text::{KeyedArg, TextPart, TooltipText};
 pub use trade::{
     TradeCall, TradeMoney, TradeMoneyQuery, TradeOpenItem, TradeSideState, TradeSlotItem,

@@ -4,8 +4,9 @@
 //! level and stack count; and, on `SetPlayerBuff` alone, the gold time-remaining line.
 //!
 //! The app resolves each aura into an [`AuraTooltipView`] keyed by spell, level and stack
-//! ([`AuraKey`]), pushed ahead of a hover for every aura the VM holds; a miss records the key and
-//! waits, as a spell view's does ([`super::tooltip_spell`]).
+//! ([`AuraKey`]), built at the setter's call through the lent host ([`AuraViewQuery`]), as the
+//! reference builds it at the call (`0x52f880`); with no host to ask, off the store, where a miss
+//! records the key and waits, as a spell view's does ([`super::tooltip_spell`]).
 
 use mlua::{Lua, Table, Value};
 
@@ -51,9 +52,19 @@ pub struct AuraTooltipView {
     pub description: TooltipText,
 }
 
+/// An aura's view built at the call, as the aura builder `0x52f880` builds it at each setter's. The
+/// host declines a spell with no record, and the setter reads the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuraViewQuery(pub AuraKey);
+
+impl super::live::LiveQuery for AuraViewQuery {
+    type Answer = AuraTooltipView;
+}
+
 impl super::UiScript {
     /// Store or replace an aura's view, answering its ask: a tooltip waiting on it re-renders
-    /// now, a frame after its hover, where the reference builds it at the call (`0x52f880`).
+    /// now. The store is what a setter reads with no host to build the view at the call
+    /// ([`AuraViewQuery`]).
     pub fn set_aura_tooltip(&mut self, key: AuraKey, view: AuraTooltipView) {
         let waiting: Vec<FrameHandle> = {
             let mut model = self.model_mut();
@@ -81,50 +92,6 @@ impl super::UiScript {
     pub fn take_aura_tooltip_asks(&mut self) -> Vec<AuraKey> {
         self.model_mut().aura_tooltip_asks.drain().collect()
     }
-
-    /// The keys the setters can ask for: the player's buff cache, every unit a token can name
-    /// ([`super::UnitGuids`]), each read as `SetUnitBuff` reads it, through the lent host when one
-    /// is free ([`super::aura::read_auras_of`]), and the tracking spell at level 1 and stack 1.
-    /// The app pushes their views ahead of a hover.
-    pub fn aura_tooltip_subjects(&self) -> Vec<AuraKey> {
-        let key = |(spell_id, level, stack)| AuraKey {
-            spell_id,
-            level,
-            stack,
-        };
-        let (mut keys, units) = {
-            let model = self.model_ref();
-            let mut keys: Vec<AuraKey> = model
-                .player_auras
-                .iter()
-                .map(|a| key(super::aura::AuraRead::key(a)))
-                .collect();
-            keys.extend(model.tracking.iter().map(|t| tracking_key(t.spell_id)));
-            let g = &model.unit_guids;
-            let units: std::collections::BTreeSet<u64> = [g.player, g.pet, g.target, g.mouseover]
-                .into_iter()
-                .chain([g.npc])
-                .chain(g.party)
-                .chain(g.party_pets)
-                .chain(g.raid.iter().chain(&g.raid_pets).copied())
-                .chain(g.held.keys().copied())
-                .filter(|&guid| guid != 0)
-                .collect();
-            (keys, units)
-        };
-        for guid in units {
-            super::aura::read_auras_of(&self.lua, Some(guid), |list| {
-                if let Some(list) = list {
-                    list.find(&mut |a| {
-                        keys.push(key(super::aura::AuraRead::key(a)));
-                        false
-                    });
-                }
-            });
-        }
-        keys.retain(|k| k.spell_id != 0);
-        keys
-    }
 }
 
 /// `SetTrackingSpell`'s call: level 1, stack 1 (`0x532cde`-`0x532ce2`).
@@ -136,8 +103,14 @@ fn tracking_key(spell_id: u32) -> AuraKey {
     }
 }
 
-/// Look up an aura's view; a miss records the ask.
+/// An aura's view built at the call through the lent host ([`AuraViewQuery`]), else off the store,
+/// where a miss records the ask.
 fn aura_view_of(lua: &Lua, key: AuraKey) -> Option<AuraTooltipView> {
+    if key.spell_id != 0 {
+        if let Some(v) = super::live::ask(lua, &AuraViewQuery(key)) {
+            return Some(v);
+        }
+    }
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let v = model.aura_tooltips.get(&key).cloned();
     if v.is_none() && key.spell_id != 0 {

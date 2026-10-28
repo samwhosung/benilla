@@ -676,9 +676,10 @@ fn pickup_container_item(
                 | CursorPayload::Ammo(_)
         )
     );
-    if !placing && (model.item_pick_armed || model.repair_mode) {
+    let item_pick = cursor::targeting_wants(lua, model).item;
+    if !placing && (item_pick || model.repair_mode) {
         let occupied = here.as_ref().is_some_and(|s| s.item_id != 0);
-        if occupied && model.item_pick_armed {
+        if occupied && item_pick {
             return ContainerClick::Pick(cursor::ItemPick {
                 bag,
                 slot,

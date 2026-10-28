@@ -115,6 +115,7 @@ impl Reputations {
     }
 
     /// Every slot's `(flags, standing)`, slot 0 first.
+    #[cfg(test)]
     pub(crate) fn slots(&self) -> impl Iterator<Item = (u8, i32)> + '_ {
         (0..FACTION_LIST_LEN).map(|i| self.slot(i))
     }

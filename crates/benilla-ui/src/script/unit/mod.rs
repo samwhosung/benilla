@@ -589,8 +589,8 @@ pub(crate) fn check_unit_token(token: &Option<String>) -> mlua::Result<()> {
 
 /// The state of the unit `token` names, as a getter reads it at the call: the guid the resolver
 /// names now ([`resolve::live_parsed`]: `0x515970` reads the objects inside the call), then that
-/// unit as the lent host reads it now ([`UnitStateQuery`]); a group token's, the pet's or the
-/// mouseover's own push while it names the same unit; `None` for nobody. A host that declines, or
+/// unit as the lent host reads it now ([`UnitStateQuery`]); a group token's or the pet's own push
+/// while it names the same unit; `None` for nobody. A host that declines, or
 /// none free to ask (a glue VM, or a call's apply under way), or a token that reads no object,
 /// reads the snapshots: the token's push while it names the same unit, else what the getters read
 /// for the guid ([`Model::unit_of_guid`]), else [`Model::snapshot_unit`].
@@ -617,10 +617,14 @@ fn view_as<'m>(lua: &Lua, model: &'m Model, token: &str, thin: bool) -> Option<C
     let Some(live) = resolve::live_parsed(lua, &model.unit_guids, base, hops) else {
         return snapshot.map(Cow::Borrowed);
     };
-    // `"player"`, `"target"`, `"npc"` and every chain read the unit live; the other tokens' pushes
-    // are their own families' feeds', which carry what the group rows and the pet bar add.
-    let reads_live =
-        hops > 0 || matches!(base, UnitBase::Player | UnitBase::Target | UnitBase::Npc);
+    // `"player"`, `"target"`, `"npc"`, `"mouseover"` and every chain read the unit live, as the
+    // getters read the object the resolver names (`0x515970`, then `0x468460`); the other tokens'
+    // pushes are their own families' feeds', which carry what the group rows and the pet bar add.
+    let reads_live = hops > 0
+        || matches!(
+            base,
+            UnitBase::Player | UnitBase::Target | UnitBase::Npc | UnitBase::Mouseover
+        );
     match (snapshot, live) {
         (Some(pushed), guid)
             if pushed.guid == guid.unwrap_or(0) && (guid.is_none() || !reads_live) =>

@@ -44,9 +44,7 @@ pub(crate) use inflight::{
 // The command press's harness runs the self-cancel between its two systems.
 #[cfg(test)]
 pub(crate) use inflight::local_self_cancel;
-pub(crate) use mods::{
-    CategoryPad, ModsDiff, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS,
-};
+pub(crate) use mods::{CategoryPad, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS};
 #[cfg(test)]
 pub(crate) use mods::{OP_COOLDOWN, OP_RANGE};
 pub(crate) use range_units::{with_ranged_slot, RangeUnits, DEFAULT_REACH};
@@ -109,13 +107,6 @@ impl Plugin for SpellPlugin {
                     targeting::feed_targeting_to_input
                         .in_set(crate::ui_script::UiInputViews)
                         .run_if(crate::ui_script::ingame_ui_up),
-                    // And after the packets and the clicks, for the handlers and the tick. After
-                    // the resolver's feed, whose inputs list the units the hover verdict is asked
-                    // for.
-                    targeting::feed_targeting_to_vm
-                        .in_set(UnitFeed)
-                        .after(LocalCancel)
-                        .after(crate::ui_aura::UnitGuidPush),
                     // Readers of the word, which the local cancel can clear.
                     (
                         targeting::publish_picks_self,
@@ -126,7 +117,7 @@ impl Plugin for SpellPlugin {
                         .in_set(UiFeed)
                         .after(LocalCancel),
                     // The party slots and raid roster the party and raid words read, before
-                    // the feed's targeting push asks them.
+                    // the unit feed asks them.
                     group_relation::publish_group_roster
                         .in_set(UiFeed)
                         .before(UnitFeed),
@@ -330,28 +321,6 @@ pub(crate) fn skill_snapshot(me: Option<&crate::net::ObjectStore>) -> SkillSnaps
     })
 }
 
-/// The skill lines whose value differs between two snapshots: a line with no slot reads 0
-/// ([`skill_line_value`]), and the first slot of a line is the one read.
-pub(crate) fn changed_skill_lines(prev: &SkillSnapshot, now: &SkillSnapshot) -> Vec<u32> {
-    let by_line = |snapshot: &SkillSnapshot| {
-        let mut lines = std::collections::HashMap::new();
-        for &(line, value) in snapshot.iter().filter(|(line, _)| *line != 0) {
-            lines.entry(u32::from(line)).or_insert(value);
-        }
-        lines
-    };
-    let (prev, now) = (by_line(prev), by_line(now));
-    let value =
-        |lines: &std::collections::HashMap<u32, u32>, line| lines.get(&line).copied().unwrap_or(0);
-    prev.keys()
-        .chain(now.keys())
-        .copied()
-        .filter(|&line| value(&prev, line) != value(&now, line))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,37 +335,6 @@ mod tests {
             temp_bonus,
             perm_bonus,
         }
-    }
-
-    /// A line's change is its value's, wherever its slot sits: a moved slot is no change, a line
-    /// gained or lost is one, and a slot at 0 is a line at 0.
-    #[test]
-    fn the_changed_lines_are_those_whose_value_moved() {
-        let snapshot = |slots: &[(u16, u32)]| -> SkillSnapshot {
-            let mut s = [(0, 0); benilla_protocol::messages::PLAYER_SKILL_SLOTS as usize];
-            s[..slots.len()].copy_from_slice(slots);
-            s
-        };
-        let base = snapshot(&[(43, 100), (44, 50), (54, 0)]);
-        assert!(changed_skill_lines(&base, &base).is_empty());
-        assert!(
-            changed_skill_lines(&base, &snapshot(&[(54, 0), (44, 50), (43, 100)])).is_empty(),
-            "a reordered slot table changes no line"
-        );
-        assert_eq!(
-            changed_skill_lines(&base, &snapshot(&[(43, 101), (44, 50)])),
-            [43]
-        );
-        assert_eq!(
-            changed_skill_lines(&base, &snapshot(&[(43, 100), (44, 50), (95, 1)])),
-            [95],
-            "a gained line, and the slot at 0 that went away is no change"
-        );
-        assert_eq!(
-            changed_skill_lines(&base, &snapshot(&[(43, 100)])),
-            [44],
-            "a lost line reads 0"
-        );
     }
 
     /// The high bonus half counts only over a positive value, and unsigned; the low half is

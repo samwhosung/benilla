@@ -5,14 +5,12 @@
 //! description, gold. The aura builder `0x52f880` is [`super::tooltip_aura`]'s.
 //!
 //! The app resolves each spell into a [`SpellTooltipView`] (`$`-tokens, cast, range and duration
-//! data, each `GlobalStrings.lua` template by key, read at the render), kept in an ask-once store
-//! by spell id and pushed ahead of a hover: one store for the
-//! views built against the player and one for those built against its pet, which the builder's
-//! unit selector asks for. A miss records the id; a `set_spell_by_id` miss also waits, and the
-//! app's answer re-renders that tooltip a frame after the hover. That frame is a known difference
-//! from the reference, which builds every spell tooltip at the call (`0x52e610`); a spell no
-//! pushed set names, such as an `enchant:` link's, always meets it. A talent miss shows its view on
-//! the next hover. An aura view's miss waits the same way.
+//! data, each `GlobalStrings.lua` template by key, read at the render), built at the setter's call
+//! through the lent host ([`SpellViewQuery`]), as the reference builds every spell tooltip at the
+//! call (`0x52e610`). With no host to ask, the views come from an ask-once store by spell id, one
+//! for the views built against the player and one for those built against its pet, which the
+//! builder's unit selector asks for: a miss records the id and waits, and a push of the view
+//! re-renders that tooltip. An aura view's miss waits the same way.
 
 use mlua::{Lua, Table, Value};
 
@@ -100,10 +98,23 @@ pub struct ReputationRequirement {
     pub female: bool,
 }
 
+/// A spell's view built at the call, as the builder `0x52e610` builds it at each setter's: against
+/// the player, or with `pet`, the builder's unit selector (`0x6e3130`), against its pet. The host
+/// declines a spell with no record, and the getter reads the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpellViewQuery {
+    pub spell_id: u32,
+    pub pet: bool,
+}
+
+impl super::live::LiveQuery for SpellViewQuery {
+    type Answer = SpellTooltipView;
+}
+
 impl super::UiScript {
     /// Store or replace a spell's view built against the player, answering its ask: a tooltip
-    /// waiting on it re-renders now, a frame after its hover, where the reference builds it whole
-    /// at the call (`0x52e610`).
+    /// waiting on it re-renders now. The store is what a setter reads with no host to build the
+    /// view at the call ([`SpellViewQuery`]).
     pub fn set_spell_tooltip(&mut self, spell_id: u32, view: SpellTooltipView) {
         self.store_spell_view(false, spell_id, view);
     }
@@ -142,42 +153,6 @@ impl super::UiScript {
     /// Drain the spell ids the renderers asked the pet's store for and it lacked.
     pub fn take_pet_spell_tooltip_asks(&mut self) -> Vec<u32> {
         self.model_mut().pet_spell_tooltip_asks.drain().collect()
-    }
-
-    /// The spells whose player view a hover reads from the VM's own state rather than the
-    /// player's book: the questgiver panel's reward spell, read through the lent host
-    /// ([`super::quest::state`]), each log entry's and the open craft's spell subjects. The app
-    /// pushes their views ahead of a hover; the auras' views are [`Self::aura_tooltip_subjects`].
-    pub fn spell_tooltip_subjects(&self) -> Vec<u32> {
-        let panel = super::quest::state(self.lua()).and_then(|q| q.reward_spell);
-        let model = self.model_ref();
-        let rewards = panel
-            .iter()
-            .chain(
-                model
-                    .quest_log
-                    .entries
-                    .iter()
-                    .filter(|e| !e.is_header)
-                    .filter_map(|e| {
-                        model
-                            .quest_store
-                            .records
-                            .get(&e.quest_id)?
-                            .reward_spell
-                            .as_ref()
-                    }),
-            )
-            .map(|s| s.spell_id);
-        let craft = model
-            .craft
-            .iter()
-            .flat_map(|c| &c.recipes)
-            .filter_map(|r| match r.tooltip {
-                CraftTooltip::Spell(id) => Some(id),
-                CraftTooltip::Item(_) => None,
-            });
-        rewards.chain(craft).filter(|&id| id != 0).collect()
     }
 }
 
@@ -327,13 +302,16 @@ fn spell_store(
     }
 }
 
-/// Look up a spell's view built against the player, or with `alt_caster` against its pet; a miss
-/// records the ask.
+/// A spell's view built against the player, or with `alt_caster` against its pet, at the call
+/// through the lent host ([`SpellViewQuery`]), else off the store, where a miss records the ask.
 pub(super) fn spell_view_of(
     lua: &Lua,
     spell_id: u32,
     alt_caster: bool,
 ) -> Option<SpellTooltipView> {
+    if let Some(v) = built_at_the_call(lua, spell_id, alt_caster) {
+        return Some(v);
+    }
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let (views, asks) = spell_store(&mut model, alt_caster);
     let v = views.get(&spell_id).cloned();
@@ -341,6 +319,28 @@ pub(super) fn spell_view_of(
         asks.insert(spell_id);
     }
     v
+}
+
+/// [`spell_view_of`] recording no ask: the view built at the call, else the store's.
+pub(super) fn spell_view_peek(
+    lua: &Lua,
+    spell_id: u32,
+    alt_caster: bool,
+) -> Option<SpellTooltipView> {
+    built_at_the_call(lua, spell_id, alt_caster).or_else(|| {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        spell_store(&mut model, alt_caster)
+            .0
+            .get(&spell_id)
+            .cloned()
+    })
+}
+
+/// The view the lent host builds at the call ([`SpellViewQuery`]); spell 0 asks nothing.
+fn built_at_the_call(lua: &Lua, spell_id: u32, pet: bool) -> Option<SpellTooltipView> {
+    (spell_id != 0)
+        .then(|| super::live::ask(lua, &SpellViewQuery { spell_id, pet }))
+        .flatten()
 }
 
 /// The talent lines [`render_spell`] interleaves (`TOOLTIP_TALENT_RANK 0x854a2c`,

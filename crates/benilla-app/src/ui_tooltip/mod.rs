@@ -4,8 +4,7 @@
 //! [`go_is_nearest`] as the click router does. The pick stands for the WorldFrame's own update
 //! (`0x481790`), which picks only while the WorldFrame holds the hover (`0x4817ae`); the loss when
 //! the cursor moves onto a window is published by the WorldFrame's leave in the UI's walk, before
-//! the window's `OnEnter`. The spell views are built and pushed ahead of a hover by
-//! [`spell_feed`].
+//! the window's `OnEnter`. The spell views are built at the setter's call ([`live`]).
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -18,15 +17,14 @@ use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
-use crate::ui_script::UiFeed;
 use crate::ui_unit::{
     enrich_unit, player_reaction, snapshot, unit_reaction, SnapshotTables, UnitFeed,
 };
 
-mod spell_deps;
-mod spell_feed;
-use spell_feed::feed_spell_tooltips;
-pub(crate) use spell_feed::tooltip_text;
+mod live;
+mod spell_view;
+pub(crate) use live::TooltipLive;
+pub(crate) use spell_view::tooltip_text;
 
 pub struct UiTooltipPlugin;
 
@@ -39,15 +37,9 @@ impl Plugin for UiTooltipPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (
-                drive_mouseover_tooltip
-                    .in_set(UnitFeed)
-                    .in_set(MouseoverPublish),
-                // Outside `UnitFeed`, so it takes that set's gate.
-                feed_spell_tooltips
-                    .in_set(UiFeed)
-                    .run_if(crate::ui_script::ingame_ui_up),
-            ),
+            drive_mouseover_tooltip
+                .in_set(UnitFeed)
+                .in_set(MouseoverPublish),
         );
     }
 }
@@ -540,12 +532,6 @@ pub(crate) fn drive_mouseover_tooltip(
     })
 }
 
-#[cfg(test)]
-mod bench;
-#[cfg(test)]
-mod deps_tests;
-#[cfg(test)]
-mod feed_tests;
 #[cfg(test)]
 mod go_lock_tests;
 #[cfg(test)]
