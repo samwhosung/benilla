@@ -53,6 +53,13 @@ enum Pending {
     CombatEdge { entered: bool },
     /// A decoded `SMSG_MESSAGECHAT`; the player types wait on the sender's name.
     Wire { msg: ChatMessage, tries: u16 },
+    /// A wire line the display latch queued past its name and its expansion (`0x49db5c`): its
+    /// text the expanded one the queue call takes (`[ebp-0xa0c]` → `0x49db8c`), its sender's name
+    /// the one looked up at its packet. The latch's drain shows it (`0x49d230`).
+    Composed {
+        msg: ChatMessage,
+        name: Option<String>,
+    },
     /// A channel notice with guids to name (`b_guid` is a kick's or ban's actor, 0 when absent).
     Notice {
         notice: u8,
@@ -743,6 +750,7 @@ impl ChatLog {
             .map(|q| &q.item)
             .map(|p| match p {
                 Pending::Wire { .. } => "wire",
+                Pending::Composed { .. } => "composed",
                 Pending::Notice { .. } => "notice",
                 Pending::ModeChange { .. } => "mode change",
                 Pending::Addon { .. } => "addon",
@@ -1386,10 +1394,11 @@ const UNIT_FLAG_PREVENT_ANIM: u32 = 0x2000_0000;
 
 /// Whether the speaker's flags suppress the chat talk gesture. Only the handler's own copy of
 /// the selector tests the bit (`0x49d7f7`, the one `0xa0` test of `0x20000000` in the image),
-/// which runs when the sender's name is already cached (`tries == 0`); a line held for the name
-/// query gestures from the deferred copies (`0x49cf2b`, `0x49d3bb`), which do not.
-pub(super) fn gesture_prevented(tries: u16, speaker_flags: Option<u32>) -> bool {
-    tries == 0 && speaker_flags.is_some_and(|f| f & UNIT_FLAG_PREVENT_ANIM != 0)
+/// which runs when the sender's name is already cached (`immediate`); a line held for the name
+/// query or the display latch gestures from the deferred copies (`0x49cf2b`, `0x49d3bb`), which
+/// do not.
+pub(super) fn gesture_prevented(immediate: bool, speaker_flags: Option<u32>) -> bool {
+    immediate && speaker_flags.is_some_and(|f| f & UNIT_FLAG_PREVENT_ANIM != 0)
 }
 
 /// What the chat lane's firing reads besides the VM and the log: the windows, the names, the
@@ -1543,7 +1552,7 @@ fn fire_one(
     // A channel line's record, read as the composer reads it (`0x49aa1e`-`0x49aa48`) before
     // the line's Lua runs.
     let record = match &item {
-        Pending::Wire { msg, .. } => msg
+        Pending::Wire { msg, .. } | Pending::Composed { msg, .. } => msg
             .channel
             .as_deref()
             .and_then(|name| set.p0().stamp_of(name)),
@@ -1644,84 +1653,137 @@ fn fire_one(
             | Pending::Notice { .. }
             | Pending::ModeChange { .. }
             | Pending::Release { .. } => {}
-            Pending::Wire { msg, tries } => {
-                let kind = kind_of_wire(msg.chat_type);
-                if kind.is_none() {
-                    warn!(
-                        "chat: unmodeled wire type {:#04x} dropped: {:?}",
-                        msg.chat_type, msg.text
-                    );
-                    return None;
-                }
-                // A monster line carries its name inline; a player line resolves its guid.
-                let name = match &msg.sender_name {
-                    Some(n) => Some(n.clone()),
-                    None if needs_name(msg.chat_type) && msg.sender_guid != 0 => names
-                        .resolve_player(msg.sender_guid, Ask::at(tries == 0, commands))
-                        .map(str::to_string),
-                    _ => None,
+            item @ (Pending::Wire { .. } | Pending::Composed { .. }) => {
+                // The speaker's talk or laugh gesture, its object read where it plays.
+                let gesture_of = |chat_type: u8, text: &str, guid: u64, immediate: bool| {
+                    let speaker_flags = guids
+                        .0
+                        .get(&guid)
+                        .and_then(|e| stores.get(*e).ok())
+                        .map(|s| s.0.unit_flags());
+                    crate::creature_anim::select_gesture(chat_type, text, |n| {
+                        script
+                            .lua()
+                            .globals()
+                            .get::<String>(format!("LAUGH_WORD{n}"))
+                            .ok()
+                    })
+                    .filter(|_| !gesture_prevented(immediate, speaker_flags))
                 };
-                if name.is_none()
-                    && needs_name(msg.chat_type)
-                    && msg.sender_guid != 0
-                    && tries < NAME_MAX_TRIES
-                {
-                    return Some(Pending::Wire { msg, tries });
-                }
+                let (msg, name, plain) = match item {
+                    Pending::Composed { msg, name } => {
+                        // The latch's drain gestures again, on the queued text, its speaker read
+                        // there (`0x49d306`, `0x49d3bb`), with no anim-prevent test.
+                        if let Some(gesture) =
+                            gesture_of(msg.chat_type, &msg.text, msg.sender_guid, false)
+                        {
+                            speaker.gestures.push(msg.sender_guid, gesture);
+                        }
+                        let plain = msg.text.clone();
+                        (msg, name, plain)
+                    }
+                    Pending::Wire { msg, tries } => {
+                        let kind = kind_of_wire(msg.chat_type);
+                        if kind.is_none() {
+                            warn!(
+                                "chat: unmodeled wire type {:#04x} dropped: {:?}",
+                                msg.chat_type, msg.text
+                            );
+                            return None;
+                        }
+                        // A monster line carries its name inline; a player line resolves its guid.
+                        let name = match &msg.sender_name {
+                            Some(n) => Some(n.clone()),
+                            None if needs_name(msg.chat_type) && msg.sender_guid != 0 => names
+                                .resolve_player(msg.sender_guid, Ask::at(tries == 0, commands))
+                                .map(str::to_string),
+                            _ => None,
+                        };
+                        if name.is_none()
+                            && needs_name(msg.chat_type)
+                            && msg.sender_guid != 0
+                            && tries < NAME_MAX_TRIES
+                        {
+                            return Some(Pending::Wire { msg, tries });
+                        }
+                        // `$`-macros expand for the monster, boss and BG system types only, against
+                        // [`macro_subject_guid`]. A failed expansion (`0x49dac2`-`0x49db1e`, `0x49d9c9`)
+                        // with a zero subject or a known name drops the line, and one with an unknown name
+                        // holds it until the name's answer, whose failure shows the raw text.
+                        let expanded = if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) {
+                            let subject_guid = macro_subject_guid(&msg);
+                            let subject = crate::npc_text::subject_for_guid(
+                                subject_guid,
+                                guids,
+                                stores,
+                                names,
+                                Ask::at(tries == 0, commands),
+                                unit_names.get(),
+                                || script.unknown_object_text(),
+                            );
+                            let (text, clean) = crate::npc_text::substitute_checked(
+                                &msg.text,
+                                &crate::npc_text::MacroContext {
+                                    subject: subject.as_ref(),
+                                    states,
+                                },
+                            );
+                            // The player-name cache's record, valid (`0x49daea`, `0x49daf1`).
+                            let named = names.resolve_player(subject_guid, Ask::Read).is_some();
+                            if clean {
+                                Some(text)
+                            } else if subject_guid == 0 || (named && tries == 0) {
+                                debug!(
+                                    "chat: dropping unexpandable [{:#04x}] {:?} (subject \
+                                     {subject_guid:#x})",
+                                    msg.chat_type, msg.text
+                                );
+                                return None; // the reference prints no line
+                            } else if !named {
+                                // `subject_for_guid` sent the name query: the line waits for the name
+                                // however long it takes, as the name cache's callback list holds it
+                                // (`0x55f080`), and shows nothing before.
+                                return Some(Pending::Wire { msg, tries });
+                            } else {
+                                // The name's answer re-expands it, and a failure there shows the raw
+                                // text (`0x49cf70`, `0x49cf82`).
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        // The speaker's gesture, at its packet past the name (`0x49d7d0`-`0x49d8ae`),
+                        // ahead of the latch and the line function's filters: the selector reads
+                        // the raw type and the wire text, not the garbled one, so a Horde `lol`
+                        // laughs for every observer. The packet alone refuses a speaker that
+                        // cannot animate (`0x49d7f7`); a line that waited on its name gestures in
+                        // the answer's callback, past its own latch test (`0x49ce3c`, `0x49cf2b`).
+                        let latched = log.latched_at(at);
+                        if tries == 0 || !latched {
+                            if let Some(gesture) =
+                                gesture_of(msg.chat_type, &msg.text, msg.sender_guid, tries == 0)
+                            {
+                                speaker.gestures.push(msg.sender_guid, gesture);
+                            }
+                        }
+                        let plain = expanded.unwrap_or_else(|| msg.text.clone());
+                        // The display latch, past the name and the expansion (`0x49db5c`): the
+                        // line is queued with its expanded text (`0x49db8c`) for the cascade's
+                        // release.
+                        if latched {
+                            let msg = ChatMessage { text: plain, ..msg };
+                            return Some(Pending::Latched(Box::new(Pending::Composed {
+                                msg,
+                                name,
+                            })));
+                        }
+                        (msg, name, plain)
+                    }
+                    _ => unreachable!("matched as a wire line"),
+                };
+                let kind = kind_of_wire(msg.chat_type);
                 // The base name; `stamp_channel` adds arg4's number and arg7-arg9 below.
                 let channel_base = msg.channel.clone().unwrap_or_default();
-                // `$`-macros expand for the monster, boss and BG system types only, against
-                // [`macro_subject_guid`]. A failed expansion (`0x49dac2`-`0x49db1e`, `0x49d9c9`)
-                // with a zero subject or a known name drops the line, and one with an unknown name
-                // holds it until the name's answer, whose failure shows the raw text.
-                let expanded = if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) {
-                    let subject_guid = macro_subject_guid(&msg);
-                    let subject = crate::npc_text::subject_for_guid(
-                        subject_guid,
-                        guids,
-                        stores,
-                        names,
-                        Ask::at(tries == 0, commands),
-                        unit_names.get(),
-                        || script.unknown_object_text(),
-                    );
-                    let (text, clean) = crate::npc_text::substitute_checked(
-                        &msg.text,
-                        &crate::npc_text::MacroContext {
-                            subject: subject.as_ref(),
-                            states,
-                        },
-                    );
-                    // The player-name cache's record, valid (`0x49daea`, `0x49daf1`).
-                    let named = names.resolve_player(subject_guid, Ask::Read).is_some();
-                    if clean {
-                        Some(text)
-                    } else if subject_guid == 0 || (named && tries == 0) {
-                        debug!(
-                            "chat: dropping unexpandable [{:#04x}] {:?} (subject \
-                             {subject_guid:#x})",
-                            msg.chat_type, msg.text
-                        );
-                        return None; // the reference prints no line
-                    } else if !named {
-                        // `subject_for_guid` sent the name query: the line waits for the name
-                        // however long it takes, as the name cache's callback list holds it
-                        // (`0x55f080`), and shows nothing before.
-                        return Some(Pending::Wire { msg, tries });
-                    } else {
-                        // The name's answer re-expands it, and a failure there shows the raw
-                        // text (`0x49cf70`, `0x49cf82`).
-                        None
-                    }
-                } else {
-                    None
-                };
-                // The display latch, past the name and the expansion (`0x49db5c`): the line is
-                // queued (`0x49db8c`) for the cascade's release.
-                if log.latched_at(at) {
-                    return Some(Pending::Latched(Box::new(Pending::Wire { msg, tries })));
-                }
-                let plain = expanded.unwrap_or_else(|| msg.text.clone());
                 // The language gate: the garble writes the one buffer the line, `arg1` and the
                 // bubble read, as `0x49a870` fills `[ebp-0xd0c]` once (`0x49a9f0` copy,
                 // `0x49aa7c` garble) and never reads the wire text again.
@@ -1771,27 +1833,6 @@ fn fire_one(
                     speaker
                         .bubbles
                         .push(&speaker.bubble_cfg, msg.sender_guid, kind, &text);
-                }
-                // The gesture reads the raw type and `plain`, not the garbled text: the
-                // selector is in the parser (`0x49d560`, `0x49d820`-`0x49d8ae`) on the buffer
-                // `0x49dbc2` hands `0x49a870`, so a Horde `lol` laughs for every observer. The
-                // immediate path alone refuses a speaker that cannot animate (`0x49d7f7`).
-                let speaker_flags = guids
-                    .0
-                    .get(&msg.sender_guid)
-                    .and_then(|e| stores.get(*e).ok())
-                    .map(|s| s.0.unit_flags());
-                if let Some(gesture) =
-                    crate::creature_anim::select_gesture(msg.chat_type, &plain, |n| {
-                        script
-                            .lua()
-                            .globals()
-                            .get::<String>(format!("LAUGH_WORD{n}"))
-                            .ok()
-                    })
-                    .filter(|_| !gesture_prevented(tries, speaker_flags))
-                {
-                    speaker.gestures.push(msg.sender_guid, gesture);
                 }
             }
             Pending::Addon {
@@ -1963,10 +2004,15 @@ fn fire_one(
                 target,
                 tries,
             } => {
-                // Both names, looked up as the packet's (`0x49dc59`): the performer's, and ours
-                // for the "is the target me?" test.
+                // The performer's name, looked up as the packet's (`0x49dc59`); a named emote
+                // under the display latch is held apart and never shown (`0x49dc7f` →
+                // `0x49dc95`, `0x49d165`), whatever our own name's state.
                 let ask = Ask::at(tries == 0, commands);
                 let performer_name = names.resolve_player(performer, ask).map(str::to_string);
+                if performer_name.is_some() && log.latched_at(at) {
+                    return None;
+                }
+                // Ours, for the "is the target me?" test.
                 let your_name = self_guid
                     .0
                     .and_then(|g| names.resolve_player(g, ask).map(str::to_string));
@@ -1977,11 +2023,6 @@ fn fire_one(
                         target,
                         tries,
                     });
-                }
-                // A named emote under the display latch is held apart and never shown
-                // (`0x49dc7f` → `0x49dc95`, `0x49d165`).
-                if performer_name.is_some() && log.latched_at(at) {
-                    return None;
                 }
                 // No performer name, no line (not "Unknown"): the reference bails when its
                 // player-only name cache misses (`0x49b28c`); the animation rode

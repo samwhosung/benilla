@@ -154,10 +154,11 @@ pub(crate) struct MerchantRecordAnswers<'w> {
 }
 
 impl MerchantRecordAnswers<'_> {
-    /// Our create's merchant reset, in its packet ([`super::MerchantOpen::reset_world_state`]).
-    pub(crate) fn reset_world_state(&mut self) {
+    /// Our create's merchant reset, owed from its packet
+    /// ([`super::MerchantOpen::settle_world_reset`]).
+    pub(crate) fn owe_world_reset(&mut self) {
         if let Some(open) = self.open.as_mut() {
-            open.reset_world_state();
+            open.world_reset.owe();
         }
     }
 

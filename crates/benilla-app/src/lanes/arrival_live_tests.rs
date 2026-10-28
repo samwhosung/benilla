@@ -430,10 +430,18 @@ fn world_sounds(c: &mut Client) -> Vec<String> {
 
 /// The cascade's silent resets (`0x4909ab`, `0x4909b0`, `0x4909b5`, `0x490a0a`): what the
 /// windows' closes leave, the trainer's services, the vendor's rows and the stable's slots, goes
-/// at our create, inside its packet.
+/// at their cascade place, after its `PLAYER_ENTERING_WORLD`, whose listener still reads what the
+/// stable's close left (`0x4cae10` keeps the count, `0x4caab0` zeroes it).
 #[test]
 fn the_cascade_resets_what_the_closes_leave() {
-    let mut c = client("Seen = {}");
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_ENTERING_WORLD")
+        f:SetScript("OnEvent", function()
+            table.insert(Seen, event .. ":" .. GetNumStableSlots())
+        end)"#,
+    );
     let world = c.app.world_mut();
     world
         .resource_mut::<crate::ui_trainer::TrainerOpen>()
@@ -462,7 +470,12 @@ fn the_cascade_resets_what_the_closes_leave() {
     world
         .resource_mut::<crate::ui_stable::StableOpen>()
         .num_stable_slots = 2;
-    crate::net::handlers::dispatch(world, vec![me(), SessionEvent::ObjectUpdateEnd]);
+    c.frame(vec![vec![me()]]);
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_ENTERING_WORLD:2"],
+        "read before the reset"
+    );
     let world = c.app.world();
     assert!(world
         .resource::<crate::ui_trainer::TrainerOpen>()
@@ -524,11 +537,12 @@ fn a_ghosts_corpse_query_goes_out_in_its_cascade_place() {
     );
 }
 
-/// The leave-world sweep sets the display latch inside the worldport's packet (`0x490a9e`): in
-/// one frame, a system line before the worldport shows at once, and one after it is held to the
-/// next world entry's release, after its `PLAYER_ENTERING_WORLD`.
+/// `SMSG_NEW_WORLD` posts the object teardown as a 1 ms timer (`0x401ba5`), and the teardown's
+/// leave-world sweep sets the display latch (`0x467700` → `0x5dd543` → `0x490a9e`). A tick runs
+/// its timers before its packets, so the lines of the worldport's own tick show, those of the
+/// next are held to the next world entry's release, after its `PLAYER_ENTERING_WORLD`.
 #[test]
-fn a_worldport_latches_the_lines_after_it_only() {
+fn a_worldport_latches_the_lines_of_the_next_frame() {
     let mut c = client(
         r#"Seen = {}
         local f = CreateFrame("Frame")
@@ -561,13 +575,15 @@ fn a_worldport_latches_the_lines_after_it_only() {
     ]);
     assert_eq!(
         c.seen(),
-        ["CHAT_MSG_SYSTEM:before"],
-        "the line after the port held"
+        ["CHAT_MSG_SYSTEM:before", "CHAT_MSG_SYSTEM:after"],
+        "the port's own frame shows its lines"
     );
+    c.frame(vec![vec![system("next")]]);
+    assert_eq!(c.seen(), Vec::<String>::new(), "the next frame's line held");
     c.frame(vec![vec![me()]]);
     assert_eq!(
         c.seen(),
-        ["PLAYER_ENTERING_WORLD:nil", "CHAT_MSG_SYSTEM:after"]
+        ["PLAYER_ENTERING_WORLD:nil", "CHAT_MSG_SYSTEM:next"]
     );
 }
 
@@ -619,4 +635,83 @@ fn the_trainer_reset_keeps_the_collapsed_lines() {
         0,
         "the selection goes"
     );
+}
+
+/// A list after our create in the same frame outlives the cascade's reset, which the reference
+/// ran inside the create's packet, ahead of the list's.
+#[test]
+fn a_list_after_the_create_outlives_the_cascades_reset() {
+    let mut c = client("Seen = {}");
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_stable::StableOpen>()
+        .num_stable_slots = 2;
+    c.frame(vec![
+        vec![me()],
+        vec![SessionEvent::ListStabledPets {
+            npc: 0x99,
+            num_stable_slots: 1,
+            pets: vec![],
+        }],
+    ]);
+    assert_eq!(
+        c.app
+            .world()
+            .resource::<crate::ui_stable::StableOpen>()
+            .num_stable_slots,
+        1
+    );
+}
+
+/// The text emote's latch test runs once its performer's name is known (`0x49dc7f`), whatever
+/// ours: a named performer's emote under the latch is dropped while our own name is unknown.
+#[test]
+fn a_latched_emote_drops_on_its_performers_name_alone() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let emotes = benilla_formats::load_emote_text_catalog(&mut chain).expect("emote texts");
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "CHAT_MSG_TEXT_EMOTE"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. tostring(arg1)) end)"#,
+    );
+    c.app.insert_resource(crate::ui_chat::EmoteTexts(emotes));
+    c.frame(vec![vec![named(ALICE, "Alice")]]);
+    c.frame(vec![vec![SessionEvent::TextEmote {
+        guid: ALICE,
+        text_emote: 101,
+        target_name: String::new(),
+    }]]);
+    c.frame(vec![vec![me()]]);
+    c.frame(vec![vec![named(ME, "Me")]]);
+    c.frame(vec![]);
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_ENTERING_WORLD:nil"],
+        "the emote never shows"
+    );
+}
+
+/// The cascade's corpse step zeroes the range latch (`0x491f7b` → `0x4920f0(0)`): a set latch
+/// signals `CORPSE_OUT_OF_RANGE` there, inside the arrival, after `PLAYER_ENTERING_WORLD`, once.
+#[test]
+fn the_cascades_corpse_step_signals_the_range_latch_out() {
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "CORPSE_OUT_OF_RANGE"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() table.insert(Seen, event) end)"#,
+    );
+    c.app
+        .world_mut()
+        .resource_mut::<crate::death::DeathFeedState>()
+        .latch_corpse_in_range_for_test();
+    c.frame(vec![vec![me()]]);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD", "CORPSE_OUT_OF_RANGE"]);
 }

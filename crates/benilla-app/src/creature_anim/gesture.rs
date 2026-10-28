@@ -58,6 +58,12 @@ impl GestureQueue {
         std::mem::take(&mut *self.queue())
     }
 
+    /// [`GestureQueue::take`], for a test that runs no driver.
+    #[cfg(test)]
+    pub(crate) fn take_for_test(&self) -> Vec<(u64, Gesture)> {
+        self.take()
+    }
+
     fn queue(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Gesture)>> {
         self.0
             .lock()

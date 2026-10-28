@@ -60,15 +60,15 @@ pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64) {
             actions.form_edits = Some(Vec::new());
         }
     }
-    // The cascade's silent window resets (`0x4909ab`, `0x4909b0`, `0x4909b5`, `0x490a0a`), in
-    // the packet as the reference runs them ([`crate::ui_world_enter::reset_windows`]).
-    sc.trainer.reset_world_state();
-    sc.merchant.reset_world_state();
+    // The cascade's silent window resets (`0x4909ab`, `0x4909b0`, `0x4909b5`, `0x490a0a`), owed
+    // from here ([`crate::ui_world_enter::OwedReset`]).
+    sc.trainer.owe_world_reset();
+    sc.merchant.owe_world_reset();
     if let Some(trade) = sc.trade.as_mut() {
-        trade.reset_world_tables();
+        trade.world_reset.owe();
     }
     if let Some(stable) = arrival.stable.as_mut() {
-        stable.clear();
+        stable.world_reset.owe();
     }
 }
 

@@ -122,8 +122,22 @@ impl DeathNet {
 pub(crate) struct DeathFeedState {
     /// World-scoped: the last `(guid, dead, ghost)` the self body showed.
     mirror: Option<(u64, bool, bool)>,
+    /// World-scoped: the corpse-range latch `[0xb4e324]`, the last verdict signalled
+    /// (`0x4920f0`), which the cascade's corpse step zeroes into whichever VM is live.
+    corpse_range: Option<CorpseRange>,
+    /// A fresh reclaim delay re-fires the range events, as the 1.12 client does (`0x4962d0`),
+    /// so RECOVER_CORPSE re-shows with the new delay.
+    reclaim_generation: u32,
     /// VM-scoped: the announce latches.
     vm: crate::ui_script::VmMemo<DeathAnnounced>,
+}
+
+impl DeathFeedState {
+    /// The corpse-range latch set, as a ghost in range of its corpse left it.
+    #[cfg(test)]
+    pub(crate) fn latch_corpse_in_range_for_test(&mut self) {
+        self.corpse_range = Some(CorpseRange::In);
+    }
 }
 
 /// What the live VM has been told. A fresh VM's first sight of the body is no edge: a `/reload`'s
@@ -133,11 +147,6 @@ pub(crate) struct DeathFeedState {
 struct DeathAnnounced {
     /// The last `(guid, dead, ghost)` this VM was given an event for.
     last: Option<(u64, bool, bool)>,
-    /// The last corpse-range verdict announced.
-    corpse_range: Option<CorpseRange>,
-    /// A fresh reclaim delay re-fires the range events, as the 1.12 client does (`0x4962d0`),
-    /// so RECOVER_CORPSE re-shows with the new delay.
-    reclaim_generation: u32,
     /// Held back while a player caster's name is still resolving.
     offer_generation: u32,
     /// The offer whose caster's name was looked up as its packet's (`0x5e7c82`, callback
@@ -347,21 +356,21 @@ pub(crate) fn feed_death(
         } else {
             None
         };
-        if memo.reclaim_generation != death_net.reclaim_generation {
-            memo.reclaim_generation = death_net.reclaim_generation;
-            memo.corpse_range = None; // re-announce whatever holds now
+        if feed.reclaim_generation != death_net.reclaim_generation {
+            feed.reclaim_generation = death_net.reclaim_generation;
+            feed.corpse_range = None; // re-announce whatever holds now
         }
-        if range != memo.corpse_range {
+        if range != feed.corpse_range {
             match range {
                 Some(CorpseRange::In) => script.fire_event("CORPSE_IN_RANGE", vec![]),
                 Some(CorpseRange::InInstance) => script.fire_event("CORPSE_IN_INSTANCE", vec![]),
                 // Leaving range and the ghost state ending both fire the one hide event.
-                Some(CorpseRange::Out) | None if memo.corpse_range.is_some() => {
+                Some(CorpseRange::Out) | None if feed.corpse_range.is_some() => {
                     script.fire_event("CORPSE_OUT_OF_RANGE", vec![]);
                 }
                 _ => {}
             }
-            memo.corpse_range = range;
+            feed.corpse_range = range;
         }
     })
 }
@@ -437,17 +446,38 @@ fn send_repop_request(store: &benilla_protocol::ObjectFields, net: &NetCommands)
     }
 }
 
+/// The corpse cache and the range latch, beside the host.
+type CorpseStores = (
+    Option<ResMut<'static, DeathNet>>,
+    Option<ResMut<'static, DeathFeedState>>,
+);
+
 /// `QueryCorpse 0x491f50` in the world-enter cascade (`0x490a28`), after its other sends: the
-/// corpse cache reset (`0x491f74` → `0x492010(-1, …)`), then, for a ghost (`PLAYER_FLAGS` bit 4,
-/// `0x491fad`), `MSG_CORPSE_QUERY` (`0x491fb2`). The flags watcher's release and revive asks are
-/// [`feed_death`]'s.
+/// corpse cache reset (`0x491f74` → `0x492010(-1, …)`), the range latch zeroed (`0x491f7b` →
+/// `0x4920f0(0)`), which signals `CORPSE_OUT_OF_RANGE` from a set latch, then, for a ghost
+/// (`PLAYER_FLAGS` bit 4, `0x491fad`), `MSG_CORPSE_QUERY` (`0x491fb2`). The flags watcher's
+/// release and revive asks are [`feed_death`]'s.
 pub(crate) fn query_corpse_on_world_enter(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    death_net: Option<ResMut<DeathNet>>,
+    mut vm: crate::script_calls::VmWith<CorpseStores>,
     net: Res<NetCommands>,
 ) {
+    let (death_net, feed) = vm.own();
     if let Some(mut death_net) = death_net {
         death_net.corpse = None;
+    }
+    let was_in = feed.is_some_and(|mut feed| {
+        matches!(
+            feed.corpse_range.take(),
+            Some(CorpseRange::In | CorpseRange::InInstance)
+        )
+    });
+    if was_in {
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.fire_event("CORPSE_OUT_OF_RANGE", vec![]);
+            }
+        });
     }
     if self_q.single().is_ok_and(|store| store.0.player_is_ghost()) {
         let _ = net.0.send(ClientCommand::CorpseQuery);
@@ -1470,7 +1500,7 @@ mod tests {
         app.add_message::<crate::net::DisconnectedMessage>()
             .insert_resource(DeathFeedState {
                 mirror: Some((0x1234, true, true)),
-                vm: crate::ui_script::VmMemo::default(),
+                ..Default::default()
             });
 
         // No session edge: the memory stands.

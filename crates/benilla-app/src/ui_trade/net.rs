@@ -31,6 +31,7 @@ fn on_trade_status(
     let SessionEvent::TradeStatus { status } = ev else {
         return;
     };
+    trade.settle_world_reset();
     bevy::log::info!(target: "trade", "SMSG_TRADE_STATUS {status:?}");
     if let TradeStatus::BeginTrade { partner } = status {
         super::answer_request(partner, &mut trade, &mut lane, &reads);
@@ -74,6 +75,7 @@ fn on_trade_status_extended(
     mut lane: ResMut<TradeLane>,
 ) {
     if let SessionEvent::TradeStatusExtended { state } = ev {
+        trade.settle_world_reset();
         trade_status_extended(&state, &mut trade, &mut lane);
     }
 }

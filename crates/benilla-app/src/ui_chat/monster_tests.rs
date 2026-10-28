@@ -281,3 +281,56 @@ fn a_held_subject_whose_name_is_missing_expands_as_unknown() {
         ["CHAT_MSG_MONSTER_SAY:Hail, Unknown."]
     );
 }
+
+/// The display latch queues a monster line with the text its packet expanded (`[ebp-0xa0c]` →
+/// `0x49db8c`): the release shows the name the subject had there, not the one it has now.
+#[test]
+fn a_latched_line_keeps_the_text_its_packet_expanded() {
+    let mut app = client();
+    app.world().resource::<super::ChatLog>().latch();
+    assert!(heard(&mut app, monster(CHAT_MSG_MONSTER_SAY, FRIEND, "Die, $n.")).is_empty());
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(FRIEND, "Stranger".into(), None);
+    app.world_mut()
+        .run_system_cached(super::release_display)
+        .unwrap();
+    crate::lanes::fire_in_order(app.world_mut());
+    let s = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>();
+    assert_eq!(
+        s.eval::<Vec<String>>("return Heard").unwrap(),
+        ["CHAT_MSG_MONSTER_SAY:Die, Friend."]
+    );
+}
+
+/// A player's yell gestures at its packet, ahead of the display latch (`0x49d7d0`-`0x49d8ae`,
+/// before `0x49db5c`), and again at the latch's drain (`0x49d3bb`).
+#[test]
+fn a_latched_yell_gestures_at_its_packet_and_at_the_release() {
+    use crate::creature_anim::{Gesture, GestureQueue};
+    let mut app = client();
+    app.world().resource::<super::ChatLog>().latch();
+    let yell = ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_YELL,
+        sender_guid: FRIEND,
+        sender_name: None,
+        ..monster(CHAT_MSG_MONSTER_YELL, 0, "For the Alliance")
+    };
+    assert!(heard(&mut app, yell).is_empty(), "held");
+    assert_eq!(
+        app.world().resource::<GestureQueue>().take_for_test(),
+        [(FRIEND, Gesture::Shout)],
+        "at the packet"
+    );
+    app.world_mut()
+        .run_system_cached(super::release_display)
+        .unwrap();
+    crate::lanes::fire_in_order(app.world_mut());
+    assert_eq!(
+        app.world().resource::<GestureQueue>().take_for_test(),
+        [(FRIEND, Gesture::Shout)],
+        "at the release"
+    );
+}

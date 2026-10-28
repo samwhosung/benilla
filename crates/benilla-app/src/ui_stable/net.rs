@@ -94,6 +94,7 @@ fn stable_result(
     net_commands: &NetCommands,
 ) {
     use benilla_protocol::messages::stable_result as code;
+    stable_open.settle_world_reset();
     // Before the guid test, as `0x4cacf3` precedes `0x4cad05`: the count moves even with no
     // stable open.
     if result == code::SUCCESS_BUY_SLOT {

@@ -45,10 +45,13 @@ pub(crate) struct MerchantOpen {
     /// counts one (`0x4faf23`), each answer one down (`0x4fb0f9`), and a list starts it at 0
     /// (`0x4fad88`).
     pub(crate) pending: u32,
+    /// The cascade's reset, owed from its item's push ([`MerchantOpen::settle_world_reset`]).
+    pub(crate) world_reset: crate::ui_world_enter::OwedReset,
 }
 
 impl MerchantOpen {
     pub(crate) fn open(&mut self, vendor: u64, items: Vec<VendorItem>) {
+        self.settle_world_reset();
         self.vendor = Some(vendor);
         self.listed = Some(vendor);
         self.items = items;
@@ -96,6 +99,7 @@ impl MerchantOpen {
         self.clear();
         self.listed = None;
         self.items.clear();
+        self.world_reset = Default::default();
     }
 }
 
@@ -439,15 +443,25 @@ impl MerchantOpen {
     /// The world-enter cascade's merchant reset (`0x4909b0` → `0x4fac50`), which signals nothing:
     /// the vendor and its rows zeroed (`0x4fac61`-`0x4fac7a`), the list cache's guid kept. The
     /// buy-back watch it registers (`0x4fac8d`) is the field watchers' standing one, and the list
-    /// it rebuilds (`0x4fafd0`) is read off the player's fields at each call.
-    pub(crate) fn reset_world_state(&mut self) {
-        self.vendor = None;
-        self.items.clear();
+    /// it rebuilds (`0x4fafd0`) is read off the player's fields at each call. Owed from the
+    /// cascade's push, it runs at the cascade's place or ahead of a later packet's write
+    /// ([`crate::ui_world_enter::OwedReset`]).
+    pub(crate) fn settle_world_reset(&mut self) {
+        if self.world_reset.take() {
+            self.vendor = None;
+            self.items.clear();
+        }
     }
 }
 
-/// The merchant reset's VM half in the cascade's place: the VM's vendor.
-pub(crate) fn reset_vm_on_world_enter(mut vm: crate::script_calls::HostedVm) {
+/// The merchant reset in the cascade's place, unless a later packet ran it first: the engine's
+/// vendor and rows, then the VM's vendor.
+pub(crate) fn reset_on_world_enter(
+    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, MerchantOpen>>>,
+) {
+    if let Some(mut open) = vm.own() {
+        open.settle_world_reset();
+    }
     vm.run(|script| {
         if let Some(script) = script {
             script.set_merchant(None);

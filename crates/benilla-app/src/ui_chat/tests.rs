@@ -1978,7 +1978,7 @@ fn a_speaker_that_cannot_animate_queues_no_talk_gesture() {
     let laugh_words = |n: u32| (n == 1).then(|| "lol".to_string());
     let speak = |tries: u16, flags: Option<u32>| {
         select_gesture(CHAT_MSG_SAY, "lol", laugh_words)
-            .filter(|_| !gesture_prevented(tries, flags))
+            .filter(|_| !gesture_prevented(tries == 0, flags))
             .into_iter()
             .count()
     };

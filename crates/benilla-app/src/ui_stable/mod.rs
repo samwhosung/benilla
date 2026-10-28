@@ -55,10 +55,13 @@ pub(crate) struct StableOpen {
     pub(crate) pets: Vec<StabledPet>,
     /// One step per list, which the VM's copy carries ([`benilla_ui::script::StableQuery`]).
     pub(crate) list: u64,
+    /// The cascade's reset, owed from its item's push ([`StableOpen::settle_world_reset`]).
+    pub(crate) world_reset: crate::ui_world_enter::OwedReset,
 }
 
 impl StableOpen {
     pub(crate) fn open(&mut self, npc: u64, num_stable_slots: u8, pets: Vec<StabledPet>) {
+        self.settle_world_reset();
         self.npc = Some(npc);
         self.num_stable_slots = num_stable_slots;
         self.pets = pets;
@@ -66,11 +69,21 @@ impl StableOpen {
     }
 
     /// The world-enter cascade's reset (`0x490a0a` → `0x4caab0`): no master, no slot bought, no
-    /// pet.
+    /// pet; the session's end runs it too.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
         self.num_stable_slots = 0;
         self.pets.clear();
+        self.world_reset = Default::default();
+    }
+
+    /// The cascade's reset, owed from its push, at its place or ahead of a later stable packet
+    /// ([`crate::ui_world_enter::OwedReset`]); the close keeps the count (`0x4cae10`), so a getter
+    /// before it reads what the close left.
+    pub(crate) fn settle_world_reset(&mut self) {
+        if self.world_reset.take() {
+            self.clear();
+        }
     }
 
     /// The close core's clear of the cell (`0x4cae29`); the rows and the count stay.
@@ -112,6 +125,14 @@ pub(crate) fn close_core(world: &mut World) {
             script.fire_event("PET_STABLE_CLOSED", vec![]);
         });
     });
+}
+
+/// The stable's reset in the cascade's place (`0x490a0a` → `0x4caab0`), unless a later stable
+/// packet ran it first.
+pub(crate) fn reset_on_world_enter(open: Option<ResMut<StableOpen>>) {
+    if let Some(mut open) = open {
+        open.settle_world_reset();
+    }
 }
 
 /// `MSG_LIST_STABLED_PETS`'s open, `0x4cadc0`: the open stable master's own list re-lists in place

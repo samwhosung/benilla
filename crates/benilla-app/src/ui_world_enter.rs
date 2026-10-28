@@ -29,22 +29,40 @@ use bevy::prelude::*;
 use crate::lanes::{Stamp, Until};
 use crate::net::{Guid, ObjectStore, SelfPlayer};
 
-/// The cascade's silent window resets' engine half (`0x4909ab`, `0x4909b0`, `0x4909b5`,
-/// `0x490a0a`), as a `/reload` pushes its cascade; our create runs the same in its packet
-/// (`crate::net::objects`' arrival), so a later packet's window in the same frame is not reset, as
-/// the reference runs them inside the create's packet.
-pub(crate) fn reset_windows(world: &mut World) {
+/// A window's silent reset in the cascade (`0x4909ab`, `0x4909b0`, `0x4909b5`, `0x490a0a`), owed
+/// from where its item was pushed. The reference runs it inside our create's packet, after the
+/// cascade's login events, so a getter there reads what the close left; and before the packets
+/// after it, so a later list survives it. It lands at its cascade place, or ahead of a later
+/// packet's write to its window's records, whichever comes first.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct OwedReset(bool);
+
+impl OwedReset {
+    /// The reset owed, from the item's push.
+    pub(crate) fn owe(&mut self) {
+        self.0 = true;
+    }
+
+    /// Whether the reset was owed, now settled.
+    pub(crate) fn take(&mut self) -> bool {
+        std::mem::take(&mut self.0)
+    }
+}
+
+/// The cascade's silent window resets owed, as our create (`crate::net::objects`' arrival) and a
+/// `/reload` push its item ([`OwedReset`]).
+pub(crate) fn owe_window_resets(world: &mut World) {
     if let Some(mut trainer) = world.get_resource_mut::<crate::ui_trainer::TrainerOpen>() {
-        trainer.reset_world_state();
+        trainer.world_reset.owe();
     }
     if let Some(mut merchant) = world.get_resource_mut::<crate::ui_merchant::MerchantOpen>() {
-        merchant.reset_world_state();
+        merchant.world_reset.owe();
     }
     if let Some(mut trade) = world.get_resource_mut::<crate::ui_trade::TradeSession>() {
-        trade.reset_world_tables();
+        trade.world_reset.owe();
     }
     if let Some(mut stable) = world.get_resource_mut::<crate::ui_stable::StableOpen>() {
-        stable.clear();
+        stable.world_reset.owe();
     }
 }
 
@@ -192,10 +210,10 @@ fn cascade(world: &mut World) {
         })
     });
     // `0x4909ab`, `0x4909b0`, `0x4909b5`: the trainer's, the merchant's and the trade's resets,
-    // which signal nothing; their engine half ran where the item was pushed ([`reset_windows`]).
-    leg(world, crate::ui_trainer::reset_vm_on_world_enter);
-    leg(world, crate::ui_merchant::reset_vm_on_world_enter);
-    leg(world, crate::ui_trade::reset_vm_on_world_enter);
+    // which signal nothing, each owed since the item's push ([`OwedReset`]).
+    leg(world, crate::ui_trainer::reset_on_world_enter);
+    leg(world, crate::ui_merchant::reset_on_world_enter);
+    leg(world, crate::ui_trade::reset_on_world_enter);
     // `0x4909bf`, `0x4909c4`: the profession windows' resets.
     leg(world, crate::ui_tradeskill::reset_crafts_on_world_enter);
     // `0x4909c9` → `0x4bc6f0`: the pet's.
@@ -216,7 +234,8 @@ fn cascade(world: &mut World) {
     leg(world, crate::ui_battlefield::reset_on_world_enter);
     // `0x490a05` → `0x4cc280`: the auction reset.
     leg(world, crate::ui_auction::reset_auction_on_world_enter);
-    // `0x490a0a` → `0x4caab0`: the stable's, all engine, run where the item was pushed.
+    // `0x490a0a` → `0x4caab0`: the stable's, all engine.
+    leg(world, crate::ui_stable::reset_on_world_enter);
     // `0x490a14` → `0x4c9f40`: the meeting stone's.
     leg(world, crate::ui_dialog_verbs::meeting_stone_enter_world);
     // `0x490a28` → `0x491f50`: the corpse cache reset, and a ghost's `MSG_CORPSE_QUERY`.
@@ -480,9 +499,10 @@ fn reads(world: &mut World) -> FilteredAccessSet {
         system_access(world, crate::ui_battlefield::reset_on_world_enter),
         system_access(world, crate::ui_auction::reset_auction_on_world_enter),
         system_access(world, crate::ui_dialog_verbs::meeting_stone_enter_world),
-        system_access(world, crate::ui_trainer::reset_vm_on_world_enter),
-        system_access(world, crate::ui_merchant::reset_vm_on_world_enter),
-        system_access(world, crate::ui_trade::reset_vm_on_world_enter),
+        system_access(world, crate::ui_trainer::reset_on_world_enter),
+        system_access(world, crate::ui_merchant::reset_on_world_enter),
+        system_access(world, crate::ui_trade::reset_on_world_enter),
+        system_access(world, crate::ui_stable::reset_on_world_enter),
         system_access(world, crate::death::query_corpse_on_world_enter),
         system_access(world, crate::death::repop_on_world_enter),
         system_access(world, crate::ui_logout::set_in_world),

@@ -1116,7 +1116,7 @@ pub(crate) fn run_pending_reload(world: &mut World) {
         if let Some(mut lane) = world.get_resource_mut::<crate::ui_world_enter::ArrivalLane>() {
             lane.push(crate::ui_world_enter::Entry::Reload);
         }
-        crate::ui_world_enter::reset_windows(world);
+        crate::ui_world_enter::owe_window_resets(world);
         // Its release of every command (`0x49093c` → `0x5144c0`): the shutdown's leave cleared
         // the once-per-world latch (`0x490c20`, `0x490a8d`), so the cascade runs whole. The new
         // VM's mouse commands start clear; the look session's channels and the armed click go.

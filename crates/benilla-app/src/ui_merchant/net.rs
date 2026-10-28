@@ -43,6 +43,7 @@ fn on_buy_result(
     else {
         return;
     };
+    merchant.settle_world_reset();
     // Another vendor than the list cache's returns at once (`0x5dcf26`).
     if merchant.listed != Some(vendor) {
         return;
@@ -105,6 +106,7 @@ fn vendor_buy_failed(
     lane: &mut MerchantLane,
 ) {
     debug!("net: buy failed (entry {item_entry}, reason {reason})");
+    merchant.settle_world_reset();
     if reason == benilla_protocol::messages::buy_result::ITEM_ALREADY_SOLD
         && merchant.listed == Some(vendor)
     {
