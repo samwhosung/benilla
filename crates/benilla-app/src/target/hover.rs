@@ -564,13 +564,46 @@ fn selectable_pick(entity: Entity, roots: &PickRoots, self_guid: Option<u64>) ->
     super::relations::is_selectable(store, self_guid)
 }
 
-/// The GameObject picker's state as one [`SystemParam`]: the pick-set cache and the stream edges
-/// that rebuild it, and the probe's locals.
+/// The GameObject parts the world pick may hit, which [`track_go_pick_parts`] keeps and every
+/// picker reads: the hover, a press's pick and an arm's.
+#[derive(Resource, Default)]
+pub(crate) struct GoPickable(bevy::platform::collections::HashSet<Entity>);
+
+/// Keep [`GoPickable`], rebuilt only on GameObject-part stream edges (a type id never changes after
+/// create), once a frame ahead of the frame's input records, so every pick that frame reads it.
+/// A part despawned between edges misses at the caster.
+///
+/// Transports (TRANSPORT 11, MAP_OBJECT 14, MO_TRANSPORT 15) never join: the reference's model
+/// resolver `0x5f80e0` gives them no pick geometry and their interaction predicates are constant
+/// false, so a ship's hull never swallows the pick of an NPC on deck.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn track_go_pick_parts(
+    added: Query<(), Added<GoPickPart>>,
+    mut removed: RemovedComponents<GoPickPart>,
+    go_parts: Query<Entity, With<GoPickPart>>,
+    cards: Query<&BillboardCard>,
+    guids: Query<&Guid>,
+    child_of: Query<&ChildOf>,
+    stores: Query<&ObjectStore>,
+    mut pickable: ResMut<GoPickable>,
+) {
+    if removed.read().next().is_none() && added.is_empty() {
+        return;
+    }
+    let resolve_net = |e: Entity| net_entity_of(e, &cards, &guids, &child_of);
+    pickable.0.clear();
+    pickable.0.extend(go_parts.iter().filter(|&e| {
+        // Through the hit's own resolver, so a card and its mesh siblings agree.
+        !stores
+            .get(resolve_net(e))
+            .is_ok_and(|s| matches!(s.0.gameobject_type_id(), 11 | 14 | 15))
+    }));
+}
+
+/// The GameObject picker's state as one [`SystemParam`]: the pick set, and the probe's locals.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct GoPickSet<'w, 's> {
-    added: Query<'w, 's, (), Added<GoPickPart>>,
-    removed: RemovedComponents<'w, 's, GoPickPart>,
-    cache: Local<'s, bevy::platform::collections::HashSet<Entity>>,
+    pickable: Res<'w, GoPickable>,
     /// Every billboard card, for [`net_entity_of`]'s first hop.
     cards: Query<'w, 's, &'static BillboardCard>,
     /// The headless probe's frame ([`super::hover_probe`]) and say-once report, idle in a player
@@ -629,7 +662,6 @@ impl GoGateInputs<'_> {
 /// The GameObject pick's inputs, as one [`SystemParam`] the hover and the press share.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct ObjectPicker<'w, 's> {
-    go_parts: Query<'w, 's, Entity, With<GoPickPart>>,
     child_of: Query<'w, 's, &'static ChildOf>,
     guids: Query<'w, 's, &'static Guid>,
     stores: Query<'w, 's, &'static ObjectStore>,
@@ -642,31 +674,6 @@ pub(super) struct ObjectPicker<'w, 's> {
 }
 
 impl ObjectPicker<'_, '_> {
-    /// The pick set, rebuilt only on GameObject-part stream edges (a type id never changes after
-    /// create). Maintained before any early return: an `Added` edge shows only on its own frame,
-    /// so a rebuild behind the cursor gates would drop parts streamed in while the pointer sat on
-    /// UI. A part despawned between edges misses at the caster.
-    ///
-    /// Transports (TRANSPORT 11, MAP_OBJECT 14, MO_TRANSPORT 15) never join: the reference's model
-    /// resolver `0x5f80e0` gives them no pick geometry and their interaction predicates are
-    /// constant false, so a ship's hull never swallows the pick of an NPC on deck.
-    pub(super) fn refresh(&mut self) {
-        let cache = &mut self.cache;
-        if cache.removed.read().next().is_none() && cache.added.is_empty() {
-            return;
-        }
-        let (cards, guids, child_of) = (&cache.cards, &self.guids, &self.child_of);
-        let resolve_net = |e: Entity| net_entity_of(e, cards, guids, child_of);
-        cache.cache.clear();
-        cache.cache.extend(self.go_parts.iter().filter(|&e| {
-            // Through the hit's own resolver, so a card and its mesh siblings agree.
-            !self
-                .stores
-                .get(resolve_net(e))
-                .is_ok_and(|s| matches!(s.0.gameobject_type_id(), 11 | 14 | 15))
-        }));
-    }
-
     /// The probe's aim and whether it is armed, for a cursorless window.
     pub(super) fn probe_aim(&self) -> (bool, Option<Vec2>) {
         (self.cache.probe.armed(), self.cache.probe.now())
@@ -703,7 +710,7 @@ impl ObjectPicker<'_, '_> {
             ..
         } = self;
         let probing = cache.probe.armed();
-        let pickable = &cache.cache;
+        let pickable = &cache.pickable.0;
         let cards = &cache.cards;
         let resolve_net = |e: Entity| net_entity_of(e, cards, guids, child_of);
         if pickable.is_empty() {
@@ -925,7 +932,6 @@ pub(super) fn update_hovered_object(
     mut picker: ObjectPicker,
     mut sticky: ResMut<StickyPicks>,
 ) {
-    picker.refresh();
     hovered.target = None;
     hovered.guid = None;
     hovered.distance = f32::MAX;
@@ -991,7 +997,6 @@ impl PointPick<'_, '_> {
 
     /// The pick at `at`, `plate` the plate whose unit it is.
     fn pick(&mut self, at: Option<Vec2>, plate: Option<Entity>) -> super::PressPick {
-        self.objects.refresh();
         let mut pick = super::PressPick::default();
         let Ok(window) = self.window.single() else {
             return pick;
@@ -1542,6 +1547,7 @@ mod tests {
     /// Us, a human away from the ray, the faction tables, and the units a case puts on it.
     fn unit_pick_world() -> World {
         let mut world = pick_world();
+        world.init_resource::<GoPickable>();
         world.insert_resource(fx::factions());
         world.init_resource::<crate::spell::SpellTargeting>();
         world.spawn((
@@ -1842,6 +1848,9 @@ mod tests {
     /// The press's pick at `at` ([`PointPick`]).
     fn press_at(world: &mut World, at: Vec2) -> crate::target::PressPick {
         world
+            .run_system_cached(track_go_pick_parts)
+            .expect("the pick set keeps");
+        world
             .run_system_cached_with(
                 |In(at): In<Option<Vec2>>, mut pick: PointPick| pick.at(at),
                 Some(at),
@@ -1982,6 +1991,9 @@ mod tests {
             .run_system_cached(crate::spell::targeting::publish_go_pick)
             .expect("the word publishes");
         world
+            .run_system_cached(track_go_pick_parts)
+            .expect("the pick set keeps");
+        world
             .run_system_cached(update_hovered_object)
             .expect("the pick runs");
         world.resource::<HoveredObject>().target
@@ -2079,6 +2091,9 @@ mod tests {
             world
                 .run_system_cached(crate::spell::targeting::publish_go_pick)
                 .expect("the word publishes");
+            world
+                .run_system_cached(track_go_pick_parts)
+                .expect("the pick set keeps");
             world
                 .run_system_cached(update_hovered_object)
                 .expect("the pick runs");

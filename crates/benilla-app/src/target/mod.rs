@@ -315,6 +315,14 @@ impl Plugin for TargetPlugin {
             .init_resource::<PressPick>()
             .init_resource::<ClickArm>()
             .init_resource::<hover::StickyPicks>()
+            .init_resource::<hover::GoPickable>()
+            // The GameObject pick set, kept ahead of the frame's input records and the hover.
+            .add_systems(
+                Update,
+                hover::track_go_pick_parts
+                    .before(crate::ui_script::UiInput)
+                    .before(hover::update_hovered_object),
+            )
             .init_resource::<WorldCursor>()
             .init_resource::<cursor_mode::AttackFork>()
             .init_resource::<CombatFlash>()

@@ -119,6 +119,10 @@ fn client_bound(wtf: &str) -> App {
                     CameraOrSelectOrMoveStart();
                     CameraOrSelectOrMoveStop();
                 </Binding>
+                <Binding name="PROBEKEYACTION">
+                    TurnOrActionStart();
+                    TurnOrActionStop();
+                </Binding>
                 <Binding name="PROBEKEYREAD">
                     CameraOrSelectOrMoveStart();
                     CameraOrSelectOrMoveStop();
@@ -453,6 +457,101 @@ fn a_key_bound_click_reads_its_target_on_the_next_line() {
         format!("{name};"),
         "the line after the stop read the mob"
     );
+}
+
+/// A chest, beside us.
+const CHEST: u64 = 0xF110_0000_0000_00D4;
+/// Over the world, where the chest's pick box stands.
+const ON_CHEST: Vec2 = Vec2::new(700.0, 600.0);
+
+/// A chest (type 3) where we stand, its drawn pick box on the camera's ray through [`ON_CHEST`],
+/// five yards out, then `frames` frames run, so its part's stream edge is behind the click.
+fn chest(app: &mut App, frames: usize) -> Entity {
+    let world = app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    let (tf, gt) = (
+        *world.get::<Transform>(me).expect("our body"),
+        *world.get::<GlobalTransform>(me).expect("our body"),
+    );
+    let store = crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (2, 0x21),
+        (21, 3),
+    ]));
+    let chest = world
+        .spawn((
+            crate::net::Guid(CHEST),
+            crate::net::NetEntity {
+                kind: EntityKind::GameObject,
+                display_id: None,
+                scale: 1.0,
+            },
+            tf,
+            gt,
+            store,
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(CHEST, chest);
+    let mut q = world.query_filtered::<(&Camera, &GlobalTransform), With<WorldCamera>>();
+    let (camera, cam_tf) = q.single(world).expect("the world camera");
+    let ray = camera
+        .viewport_to_world(cam_tf, ON_CHEST)
+        .expect("the camera projects");
+    let at = ray.origin + *ray.direction * 5.0;
+    world.spawn((
+        ChildOf(chest),
+        benilla_world::interact::GoPickPart,
+        benilla_world::interact::PickBox,
+        Aabb::from_min_max(Vec3::splat(-0.5), Vec3::splat(0.5)),
+        GlobalTransform::from_translation(at),
+        ViewVisibility::HIDDEN,
+    ));
+    for _ in 0..frames {
+        app.update();
+    }
+    // Drawn this frame: the box's visibility, which the frame's end resets headless.
+    let world = app.world_mut();
+    let mut parts =
+        world.query_filtered::<&mut ViewVisibility, With<benilla_world::interact::GoPickPart>>();
+    use bevy::camera::visibility::SetViewVisibility;
+    for mut vis in parts.iter_mut(world) {
+        vis.set_visible();
+    }
+    chest
+}
+
+/// Whether the client sent the chest's use.
+fn used_chest(app: &App) -> bool {
+    app.world()
+        .resource::<Sent>()
+        .0
+        .try_iter()
+        .any(|c| matches!(c, crate::net::ClientCommand::GameObjUse { guid: CHEST }))
+}
+
+/// A right click on a chest whose model streamed in frames ago uses it: the press's pick reads
+/// the GameObject pick set every frame keeps, not one only a pick's own run rebuilds.
+#[test]
+fn a_right_click_uses_a_chest_streamed_in_frames_ago() {
+    let mut app = client("CAMERAORSELECTORMOVE");
+    aim(&mut app);
+    chest(&mut app, 3);
+    right_click_at(&mut app, ON_CHEST);
+    app.update();
+    assert!(used_chest(&app), "the click used the chest");
+}
+
+/// A key's `TurnOrActionStart`/`Stop` over a chest whose model streamed in frames ago uses it,
+/// the arm's in-call pick reading the same set.
+#[test]
+fn a_key_bound_action_uses_a_chest_streamed_in_frames_ago() {
+    let mut app = client_with_f("PROBEKEYACTION");
+    aim(&mut app);
+    move_to(&mut app, ON_CHEST);
+    app.update();
+    chest(&mut app, 3);
+    press_f(&mut app);
+    app.update();
+    assert!(used_chest(&app), "the key's click used the chest");
 }
 
 /// [`PLATED`]'s plate shown over [`ON_MOB`] and hovered there, as the walk and the plate hover's
