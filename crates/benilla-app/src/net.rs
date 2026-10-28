@@ -33,7 +33,7 @@ mod reputations;
 mod session;
 #[cfg(test)]
 pub(crate) use session::fire_worldport_timer;
-pub(crate) use session::{PendingWorldports, WorldportTimer};
+pub(crate) use session::{world_ported, PendingWorldports, WorldportTimer};
 mod world;
 
 pub(crate) use reputations::Reputations;

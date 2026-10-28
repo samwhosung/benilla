@@ -752,6 +752,90 @@ fn a_worldport_alone_leaves_in_the_next_frame() {
     assert_eq!(c.seen(), Vec::<String>::new());
 }
 
+const ROLL_SPY: &str = r#"Seen = {}
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({"START_LOOT_ROLL", "CANCEL_LOOT_ROLL"}) do f:RegisterEvent(e) end
+    f:SetScript("OnEvent", function()
+        table.insert(Seen, event .. ":" .. tostring(arg1))
+    end)"#;
+
+/// A group loot roll for an item the cache holds, so its frame opens in the frame it arrives.
+fn roll_start() -> SessionEvent {
+    const ROLLED: u32 = 19_019;
+    SessionEvent::LootStartRoll(benilla_protocol::messages::LootStartRoll {
+        looted_target: 0xF130_0000_0000_0042,
+        item_slot: 0,
+        item_id: ROLLED,
+        random_property_id: 0,
+        suffix_factor: 0,
+        countdown_ms: 60_000,
+    })
+}
+
+/// The client with a roll open for the spy's frame.
+fn client_with_open_roll() -> Client {
+    let mut c = client(ROLL_SPY);
+    c.app
+        .world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(19_019, Some(crate::items::test_template("Sulfuras")));
+    c.frame(vec![vec![me()]]);
+    c.frame(vec![vec![roll_start()]]);
+    assert_eq!(c.seen(), ["START_LOOT_ROLL:1"]);
+    c
+}
+
+/// The world load's body calls `CancelAllLootRolls` (`0x401c2c`), after the objects' walk and
+/// before the map load: each open roll signals `CANCEL_LOOT_ROLL` and is freed, in the tick the
+/// timer runs, and `PLAYER_LEAVING_WORLD` (the walk's) came before it.
+#[test]
+fn a_worldport_cancels_the_open_loot_rolls_in_the_next_frame() {
+    let mut c = client_with_open_roll();
+    c.frame(vec![vec![port()]]);
+    assert_eq!(
+        c.seen(),
+        Vec::<String>::new(),
+        "the port's own tick cancels nothing"
+    );
+    assert!(c
+        .app
+        .world()
+        .resource::<crate::ui_loot_roll::LootRolls>()
+        .holds(1));
+    c.frame(vec![]);
+    assert_eq!(
+        c.seen(),
+        ["CANCEL_LOOT_ROLL:1"],
+        "once, in the timer's tick"
+    );
+    assert!(!c
+        .app
+        .world()
+        .resource::<crate::ui_loot_roll::LootRolls>()
+        .holds(1));
+    c.frame(vec![]);
+    assert_eq!(c.seen(), Vec::<String>::new(), "once per port");
+}
+
+/// A teleport inside the map (`MSG_MOVE_TELEPORT`) runs no world load, so the roll stands.
+#[test]
+fn a_same_map_teleport_leaves_the_loot_rolls() {
+    let mut c = client_with_open_roll();
+    c.frame(vec![vec![SessionEvent::Teleport {
+        guid: ME,
+        counter: 1,
+        position: [1.0, 2.0, 3.0],
+        orientation: 0.0,
+    }]]);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), Vec::<String>::new());
+    assert!(c
+        .app
+        .world()
+        .resource::<crate::ui_loot_roll::LootRolls>()
+        .holds(1));
+}
+
 /// The cascade's trainer reset zeroes the guid, the selection and the total (`0x4d73e0`), and not
 /// the expanded mask (`0xb73a24`): the VM's collapsed lines stay for the next list to reset.
 #[test]

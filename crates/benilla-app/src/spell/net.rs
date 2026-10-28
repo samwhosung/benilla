@@ -52,7 +52,24 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ChannelStart, on_channel)
         .net_handler(K::ChannelUpdate, on_channel)
         .net_handler(K::AuraDuration, on_aura_duration)
-        .net_handler(K::SpellModifier, on_spell_modifier);
+        .net_handler(K::SpellModifier, on_spell_modifier)
+        .add_systems(
+            PreUpdate,
+            free_cooldowns_on_worldport
+                .in_set(crate::net::WorldportTimer::Cooldowns)
+                .run_if(crate::net::world_ported),
+        );
+}
+
+/// `ClearItemAndSpellCooldowns` (`0x6e9ad0`), the world load's call at `0x401c17`: both history
+/// lists emptied and the item cooldown table freed. It signals nothing (`0x6e1880` only unlinks and
+/// frees), so no bar hears it until the next flush.
+fn free_cooldowns_on_worldport(
+    mut player: ResMut<Cooldowns>,
+    mut pet: ResMut<crate::ui_pet::PetBar>,
+) {
+    player.free_all();
+    pet.cooldowns.free_all();
 }
 
 /// The cast lifecycle's state and catalogs, which every handler here folds its packet into,

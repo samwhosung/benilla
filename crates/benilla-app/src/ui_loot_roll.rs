@@ -248,6 +248,17 @@ impl LootRolls {
         }
     }
 
+    /// `CancelAllLootRolls` (`0x61b290`), then `FreeAllLootRolls` (`0x61b240`): every roll neither
+    /// deferred (the node's queued byte `+0x39`) nor closed queues its `CANCEL_LOOT_ROLL`, oldest
+    /// first, announced or not; then every roll is gone and the open count is zero.
+    pub(crate) fn cancel_all(&mut self) {
+        for r in self.active.drain(..) {
+            if r.phase != Phase::Deferred {
+                self.cancelled.push(r.roll_id);
+            }
+        }
+    }
+
     /// Session teardown: no `CANCEL_LOOT_ROLL`, as the UI goes down with the session.
     pub(crate) fn clear(&mut self) {
         self.active.clear();
@@ -341,12 +352,26 @@ pub(crate) struct UiLootRollPlugin;
 impl Plugin for UiLootRollPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<LootRolls>().add_systems(
-            Update,
-            // The feed after the packets shows a new roll the same frame, before the tick.
-            feed_loot_rolls.in_set(UiFeed),
-        );
+        app.init_resource::<LootRolls>()
+            .add_systems(
+                Update,
+                // The feed after the packets shows a new roll the same frame, before the tick.
+                feed_loot_rolls.in_set(UiFeed),
+            )
+            .add_systems(
+                PreUpdate,
+                // The world load's call at `0x401c2c`; the feed fires the cancels.
+                cancel_rolls_on_worldport
+                    .in_set(crate::net::WorldportTimer::Rolls)
+                    .run_if(crate::net::world_ported),
+            );
     }
+}
+
+/// The world load's `CancelAllLootRolls` (`0x401c2c`): the rolls queue their cancels and go; the
+/// feed fires them this frame, after the leg's earlier effects, as its other events fire.
+fn cancel_rolls_on_worldport(mut rolls: ResMut<LootRolls>) {
+    rolls.cancel_all();
 }
 
 /// Pick and fill an announcement: the key's template from the install's strings
@@ -1426,6 +1451,30 @@ mod tests {
         let rolls = app.world().resource::<LootRolls>();
         assert_eq!(rolls.open_count(), 4);
         assert_eq!(rolls.active[4].phase, Phase::Deferred);
+    }
+
+    /// `CancelAllLootRolls` (`0x61b290`) signals every roll neither queued nor closed, oldest
+    /// first, and `0x61b240` frees them all and zeroes the open count: the deferred fifth is freed
+    /// with no cancel, and a roll opened after starts empty on a fresh id.
+    #[test]
+    fn cancel_all_cancels_the_open_rolls_and_frees_every_one() {
+        let (mut app, _rx) = queued_app(5);
+        assert_eq!(starts(&mut app).len(), 4);
+        app.world_mut().resource_mut::<LootRolls>().cancel_all();
+        app.update();
+        assert_eq!(
+            events(&mut app),
+            ["S1", "S2", "S3", "S4", "C1", "C2", "C3", "C4"],
+            "the deferred fifth has no frame to cancel"
+        );
+        let rolls = app.world().resource::<LootRolls>();
+        assert!(rolls.active.is_empty());
+        assert_eq!(rolls.open_count(), 0);
+        app.world_mut()
+            .resource_mut::<LootRolls>()
+            .start(start(0xAA, 9, ROLLED));
+        app.update();
+        assert_eq!(events(&mut app).last().map(String::as_str), Some("S6"));
     }
 
     /// Every close calls `0x61b760`: our vote (`0x61bf46`), a win (`0x61bc6b`) and all-passed

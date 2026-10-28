@@ -502,3 +502,128 @@ fn the_pet_book_and_a_pet_bound_slot_read_the_pets_list_inside_their_packet() {
     // The book sorts Bite ahead of Growl.
     assert_eq!(c.seen(&["PET"]), ["PET:0:3:0", "PET:4:3:4"]);
 }
+
+/// A cross-map `SMSG_NEW_WORLD` in a frame, as the cross-map one carries `needs_ack`.
+fn port() -> SessionEvent {
+    SessionEvent::Worldport {
+        map_id: 1,
+        position: [0.0; 3],
+        orientation: 0.0,
+        needs_ack: true,
+    }
+}
+
+/// Frost Nova's and Blink's action slots and the potion's bag slot, as `GetActionCooldown` and
+/// `GetContainerItemCooldown` read the lists through the lent host: the durations in seconds.
+fn running(c: &mut Client) -> (f64, f64, f64) {
+    c.eval(
+        true,
+        "local _, a = GetActionCooldown(1) local _, b = GetActionCooldown(2) \
+         local _, p = GetContainerItemCooldown(0, 1) return a, b, p",
+    )
+}
+
+/// The records both lists hold: the player's, then the pet's.
+fn held(c: &Client) -> (usize, usize) {
+    let world = c.app.world();
+    (
+        world.resource::<crate::spell::Cooldowns>().record_count(),
+        world
+            .resource::<crate::ui_pet::PetBar>()
+            .cooldowns
+            .record_count(),
+    )
+}
+
+/// Frost Nova on 10 s, the potion on the client's 30 s, and Blink on the pet's list.
+fn running_lists() -> Client {
+    let mut c = client();
+    c.frame(vec![
+        vec![spell_cooldown(FROST_NOVA, 10_000)],
+        vec![SessionEvent::ItemCooldown {
+            item_guid: POTION_GUID,
+            spell_id: POTION_SPELL,
+        }],
+    ]);
+    let spells = spells();
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_pet::PetBar>()
+        .cooldowns
+        .apply_spell_cooldowns(
+            [(BLINK, 15_000, spells.catalog.get(BLINK))],
+            &crate::spell::SpellModifiers::default(),
+            crate::spell::CategoryPad::Skip,
+            std::time::Instant::now(),
+        );
+    // The pet record's flush fires with the frame's lanes.
+    c.frame(vec![]);
+    c.seen(&[]);
+    assert_eq!(running(&mut c), (10.0, 0.0, 30.0));
+    assert_eq!(
+        held(&c),
+        (2, 1),
+        "Frost Nova's and the potion's, and Blink's"
+    );
+    c
+}
+
+/// The world load's body calls `ClearItemAndSpellCooldowns` (`0x401c17` → `0x6e9ad0`), in the tick
+/// the timer runs: both history lists emptied and the item cooldowns freed, with no flush, so no
+/// cooldown event fires. The server's `SMSG_INITIAL_SPELLS` after it then seeds only what it lists.
+#[test]
+fn a_worldport_empties_the_cooldowns_and_the_resend_seeds_only_what_it_lists() {
+    let mut c = running_lists();
+    c.frame(vec![vec![port()]]);
+    assert_eq!(held(&c), (2, 1), "the port's own tick clears nothing");
+    c.frame(vec![]);
+    // The potion goes with the objects, so its getter reads cold whatever its record does: the
+    // lists are read by their records.
+    assert_eq!(
+        held(&c),
+        (0, 0),
+        "the timer's tick empties both lists, the item cooldown with them"
+    );
+    assert_eq!(running(&mut c), (0.0, 0.0, 0.0));
+    assert_eq!(
+        c.seen(&[
+            "ACTIONBAR_UPDATE_COOLDOWN",
+            "SPELL_UPDATE_COOLDOWN",
+            "BAG_UPDATE_COOLDOWN"
+        ]),
+        Vec::<String>::new(),
+        "the clear signals nothing"
+    );
+    c.frame(vec![vec![SessionEvent::SpellBook {
+        spell_ids: vec![FROST_NOVA, BLINK],
+        cooldowns: vec![benilla_protocol::messages::SpellCooldown {
+            spell_id: BLINK as u16,
+            item_id: 0,
+            category: 0,
+            spell_cd_ms: 20_000,
+            category_cd_ms: 0,
+        }],
+    }]]);
+    let (nova, blink, _) = running(&mut c);
+    assert_eq!(
+        (nova, blink, held(&c).0),
+        (0.0, 20.0, 1),
+        "Blink alone, as the resend lists it"
+    );
+}
+
+/// A teleport inside the map (`MSG_MOVE_TELEPORT`) runs no world load: both lists stand.
+#[test]
+fn a_same_map_teleport_leaves_the_cooldowns() {
+    let mut c = running_lists();
+    let before = held(&c);
+    c.frame(vec![vec![SessionEvent::Teleport {
+        guid: ME,
+        counter: 1,
+        position: [1.0, 2.0, 3.0],
+        orientation: 0.0,
+    }]]);
+    c.frame(vec![]);
+    assert_eq!(running(&mut c), (10.0, 0.0, 30.0));
+    assert_eq!(held(&c), before);
+}

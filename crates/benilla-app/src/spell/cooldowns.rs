@@ -702,6 +702,14 @@ impl Cooldowns {
         self.clear_records();
     }
 
+    /// `ClearItemAndSpellCooldowns` (`0x6e9ad0`) on this list, a worldport's (`0x401c17`): the item
+    /// cooldown table's nodes freed and the history emptied, flushing nothing. The pet's list is
+    /// emptied by the same call (`0x6e9b48` runs the history clear on both lists).
+    pub(crate) fn free_all(&mut self) {
+        self.pending_items.clear();
+        self.clear_records();
+    }
+
     /// Session end ([`crate::net::session::disconnected`]): `SMSG_INITIAL_SPELLS` re-sends every
     /// running cooldown at world entry and [`Self::seed_initial`] appends, so a surviving record
     /// would outlive the fresh one.
