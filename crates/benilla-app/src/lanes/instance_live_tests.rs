@@ -60,3 +60,46 @@ fn the_dungeon_latch_is_written_at_the_ports_load() {
         "the next tick's start made the new manager"
     );
 }
+
+/// The world entry with the pick's map: `ClientInitializeGame` makes the manager for the
+/// character list's map (`0x4015f3`), so a character logged out inside a dungeon and seated at its
+/// exit by `SMSG_LOGIN_VERIFY_WORLD`, another map, has left it (`0x401e36`-`0x401ea4`).
+#[test]
+fn a_login_inside_a_dungeon_latches_it_at_the_world_entry() {
+    let mut app = client();
+    app.insert_resource(benilla_assets::MapCatalogRes(
+        benilla_formats::MapCatalog::from_rows([
+            (AZEROTH, "Azeroth", 0),
+            (DEADMINES, "DeadminesInstance", 0),
+        ])
+        .with_instance_types([(DEADMINES, 1)]),
+    ));
+    const ME: u64 = 0x7;
+    let row = benilla_protocol::Character {
+        map: DEADMINES,
+        ..crate::glue_session::roster::test_character(ME, "Me")
+    };
+    app.insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+        vec![row],
+        ME,
+    ));
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![
+            SessionEvent::Connected {
+                self_guid: ME,
+                name: "Me".into(),
+                billing: Default::default(),
+                tutorial_flags: None,
+                addon_info: None,
+            },
+            SessionEvent::UpdateInstanceOwnership { owns: true },
+        ],
+    );
+    assert!(
+        !can_reset(&mut app),
+        "the world entry stands in the dungeon"
+    );
+    crate::net::handlers::dispatch(app.world_mut(), vec![port(AZEROTH, false)]);
+    assert!(can_reset(&mut app), "seated at its exit, another map");
+}

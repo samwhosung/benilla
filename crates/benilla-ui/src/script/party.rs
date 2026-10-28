@@ -179,30 +179,34 @@ impl super::UiScript {
     /// Push the roster snapshot, replacing it, and run `SMSG_GROUP_LIST`'s ready-check leg over the
     /// new roster. The app fires the `PARTY_*` events.
     pub fn set_party(&mut self, state: PartyState) {
-        // The ready-check leg (`0x4ba5f0`, from the `0x7d` handler): a member who left drops their
-        // pending flag with their row. The check force-closes (`0x4bacb4`) only with a deadline
-        // armed (`0x4bac5a`), a member gone (the count at `0x4ba825`, tested at `0x4bac62`), us
-        // as the leader (`0x4bac6d`) and no row both pending and online (`0x4bac90`-`0x4bacac`):
-        // a push of the same roster, a reload's seed among them, closes nothing.
+        self.model_mut().party = state;
+    }
+
+    /// The raid rebuild's ready-check leg, at its end inside the group list's handler
+    /// (`0x4ba5f0`, from the `0x7d` handler), over the rows as they stand at the call: a member
+    /// who left drops their pending flag with their row. The check force-closes (`0x4bacb4`) only
+    /// with a deadline armed (`0x4bac5a`), a member `gone` (the count at `0x4ba825`, tested at
+    /// `0x4bac62`), us as the leader (`0x4bac6d`) and no row both pending and online
+    /// (`0x4bac90`-`0x4bacac`).
+    pub fn raid_roster_rebuilt(&mut self, gone: bool) {
         let lua = self.lua();
+        if self.model_ref().ready_check.deadline.is_none() {
+            return;
+        }
+        let rows = live_raid_rows(lua);
+        let cells = {
+            let model = self.model_ref();
+            roster_read::cells(lua, &model.party)
+        };
         let close = {
             let mut model = self.model_mut();
-            let left = model
-                .party
-                .raid
-                .iter()
-                .any(|m| !state.raid.iter().any(|n| n.guid == m.guid));
-            model.party = state;
-            if model.ready_check.deadline.is_some() {
-                let roster: Vec<u64> = model.party.raid.iter().map(|m| m.guid).collect();
-                model.ready_check.unanswered.retain(|g| roster.contains(g));
-                let own = model.party.own_guid;
-                left && own != 0
-                    && own == model.party.leader_guid
-                    && !ready_check_pending_online(&model, &model.party.raid)
-            } else {
-                false
-            }
+            model
+                .ready_check
+                .unanswered
+                .retain(|g| rows.iter().any(|m| m.guid == *g));
+            gone && cells.own_guid != 0
+                && cells.own_guid == cells.leader_guid
+                && !ready_check_pending_online(&model, &rows)
         };
         if close {
             ready_check_force_close(lua);
@@ -1245,6 +1249,45 @@ mod tests {
             raid,
             ..Default::default()
         }
+    }
+
+    /// The ready check's close is the raid rebuild's (`0x4bac5a`-`0x4bacb9`), not a roster
+    /// push's: with a member gone it closes for the leader once no row is pending and online, and
+    /// a member who left drops their pending flag with their row.
+    #[test]
+    fn the_raid_rebuild_closes_the_ready_check_once_no_pending_member_is_left() {
+        const ME: u64 = 0x1;
+        let mut s = vm();
+        let roster = |guids: &[u64]| PartyState {
+            raid: guids.iter().map(|&g| raider(&format!("R{g}"), g)).collect(),
+            own_guid: ME,
+            leader_guid: ME,
+            ..Default::default()
+        };
+        s.set_party(roster(&[ME, 0x2, 0x3]));
+        s.seed_ready_check(crate::script::party::ReadyCheckState {
+            deadline: Some(1.0e9),
+            unanswered: vec![0x2],
+            lines: Vec::new(),
+        });
+        let open = |s: &mut UiScript| s.take_ready_check().deadline.is_some();
+        let reseed = |s: &mut UiScript, state: crate::script::party::ReadyCheckState| {
+            s.seed_ready_check(state)
+        };
+        s.set_party(roster(&[ME, 0x2]));
+        let held = s.take_ready_check();
+        assert!(held.deadline.is_some(), "a push closes nothing");
+        reseed(&mut s, held);
+        s.raid_roster_rebuilt(true);
+        let held = s.take_ready_check();
+        assert!(
+            held.deadline.is_some(),
+            "the pending member is still online"
+        );
+        reseed(&mut s, held);
+        s.set_party(roster(&[ME]));
+        s.raid_roster_rebuilt(true);
+        assert!(!open(&mut s), "the pending member left with their row");
     }
 
     /// Every return site in `0x4bb560` is `mov eax,9`, the miss arm `0x4bb7b9` included.
@@ -2596,7 +2639,7 @@ mod tests {
     }
 
     #[test]
-    fn a_roster_change_with_nobody_left_pending_closes_the_check() {
+    fn a_rebuild_with_nobody_left_pending_closes_the_check() {
         let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
@@ -2607,6 +2650,7 @@ mod tests {
         without_bob.raid.retain(|m| m.guid != 0xB0B);
         without_bob.members.retain(|m| m.guid != 0xB0B);
         s.set_party(without_bob);
+        s.raid_roster_rebuilt(true);
         assert_eq!(
             s.take_ready_check_lines(),
             vec!["No players are AFK".to_string()]
@@ -2750,9 +2794,9 @@ mod tests {
         assert!(s.take_errors().is_empty());
     }
 
-    /// The roster push and the request echo reach the same force-close.
+    /// The raid rebuild and the request echo reach the same force-close.
     #[test]
-    fn the_force_close_from_a_roster_push_and_from_the_echo_reads_with_the_model_free() {
+    fn the_force_close_from_a_rebuild_and_from_the_echo_reads_with_the_model_free() {
         let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
@@ -2764,6 +2808,7 @@ mod tests {
         without_bob.raid.retain(|m| m.guid != 0xB0B);
         without_bob.members.retain(|m| m.guid != 0xB0B);
         s.set_party(without_bob);
+        s.raid_roster_rebuilt(true);
         assert_eq!(
             s.take_ready_check_lines(),
             vec!["No players are AFK".to_string()]
@@ -2907,11 +2952,11 @@ mod tests {
         assert!(s.take_ready_check_lines().is_empty());
     }
 
-    /// The group list's ready-check leg force-closes the check (`0x4bacb4`) only for the leader,
+    /// The raid rebuild's ready-check leg force-closes the check (`0x4bacb4`) only for the leader,
     /// and only when a member left (`0x4bac62`) and no row is both pending and online
-    /// (`0x4bac90`): a push of the same roster, a reload's seed among them, keeps it running.
+    /// (`0x4bac90`): a rebuild of the same roster keeps it running.
     #[test]
-    fn a_roster_push_closes_the_check_only_for_the_leader_when_a_member_left() {
+    fn a_rebuild_closes_the_check_only_for_the_leader_when_a_member_left() {
         let mut s = vm();
         let party = raid_we_lead(&s);
         let without_bob = |p: &PartyState| PartyState {
@@ -2919,7 +2964,7 @@ mod tests {
             ..p.clone()
         };
 
-        // Another's check: no push closes it, a member leaving included.
+        // Another's check: no rebuild closes it, a member leaving included.
         let theirs = PartyState {
             leader_guid: 0xA11CE,
             ..party.clone()
@@ -2928,7 +2973,9 @@ mod tests {
         s.set_now(100.0);
         s.ready_check_request(false);
         s.set_party(without_bob(&theirs));
+        s.raid_roster_rebuilt(true);
         s.set_party(theirs.clone());
+        s.raid_roster_rebuilt(false);
         s.run("ConfirmReadyCheck(1)").unwrap();
         assert_eq!(
             s.take_party_requests(),
@@ -2947,9 +2994,12 @@ mod tests {
         let mut alice_off = party.clone();
         alice_off.raid[1].online = false;
         s.set_party(alice_off.clone());
+        s.raid_roster_rebuilt(false);
         s.set_party(alice_off.clone());
+        s.raid_roster_rebuilt(false);
         assert!(s.take_ready_check_lines().is_empty(), "nobody left");
         s.set_party(without_bob(&alice_off));
+        s.raid_roster_rebuilt(true);
         assert_eq!(
             s.take_ready_check_lines(),
             ["The following players are AFK: Alice"],

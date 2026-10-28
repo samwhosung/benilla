@@ -242,12 +242,31 @@ pub(crate) mod net {
             .net_handler(K::UpdateLastInstance, on_packet)
             .net_handler(K::UpdateInstanceOwnership, on_packet)
             .net_handler(K::LoggedOut, on_logged_out)
+            .net_handler(K::Connected, on_world_entry)
             .net_handler(K::Worldport, on_world_loaded_in_place);
     }
 
-    /// `SMSG_LOGIN_VERIFY_WORLD` runs the world load in place (`0x401de0` → `0x401ea4`, and the
-    /// login's `0x401570` → `0x4015f3`): the new manager's latch at the packet, after the session's
-    /// teardown. `SMSG_NEW_WORLD`'s load is a timer, whose manager leg latches
+    /// The pick's world entry: `ClientInitializeGame` (`0x401570`, from `0x46c236`) makes the
+    /// object manager for the map the character list's row names (`0x4015f3`), whose create
+    /// latches the map left.
+    fn on_world_entry(
+        In(ev): In<SessionEvent>,
+        roster: Option<Res<crate::glue_session::roster::Roster>>,
+        mut manager: super::ManagerCreate,
+    ) {
+        let SessionEvent::Connected { self_guid, .. } = ev else {
+            return;
+        };
+        let map = roster.and_then(|r| r.chars.iter().find(|c| c.guid == self_guid).map(|c| c.map));
+        if let Some(map) = map {
+            manager.created(map);
+        }
+    }
+
+    /// `SMSG_LOGIN_VERIFY_WORLD` runs the world load in place only for a map other than the
+    /// manager's (`0x401e36`-`0x401e41`, then `0x401ea4` → `0x401bc0`): the new manager's latch at
+    /// the packet; for the world entry's own map the latch's own compare stores nothing
+    /// (`0x495d17`). `SMSG_NEW_WORLD`'s load is a timer, whose manager leg latches
     /// ([`super::latch_loaded_worlds`]).
     fn on_world_loaded_in_place(In(ev): In<SessionEvent>, mut manager: super::ManagerCreate) {
         if let SessionEvent::Worldport {

@@ -21,12 +21,17 @@ const TEMPLATE: u16 = 35;
 
 /// `SMSG_GROUP_LIST` for a party of us, leading, and [`MATE`].
 fn party_list() -> SessionEvent {
+    party_of(MATE)
+}
+
+/// `SMSG_GROUP_LIST` for a party of us, leading, and `member`.
+fn party_of(member: u64) -> SessionEvent {
     SessionEvent::GroupList {
         group_type: 0,
         own_flags: 0,
         members: vec![GroupMemberEntry {
-            name: "Brisca".into(),
-            guid: MATE,
+            name: String::new(),
+            guid: member,
             status: member_status::ONLINE,
             flags: 0,
         }],
@@ -37,7 +42,8 @@ fn party_list() -> SessionEvent {
 
 /// The relation a `PARTY_MEMBERS_CHANGED` listener reads off a list that seats an enemy-faction
 /// player is the party's: the active player toward a party member is friendly (`0x6062b0`), which
-/// the list's own party slots answer, not the slots of the frame before.
+/// the list's own party slots answer, not the slots of the frame before nor of a later list in
+/// the same frame that seats another member, out of view, in the slot.
 #[test]
 fn a_group_list_listener_reads_the_roster_its_list_wrote() {
     let mut app = client();
@@ -65,16 +71,27 @@ fn a_group_list_listener_reads_the_roster_its_list_wrote() {
             local f = CreateFrame("Frame")
             f:RegisterEvent("PARTY_MEMBERS_CHANGED")
             f:SetScript("OnEvent", function()
-                table.insert(Seen, event .. ":" .. tostring(UnitReaction("player", "party1")))
+                table.insert(Seen, "reaction:" .. tostring(UnitReaction("player", "party1")))
             end)
             "#,
         )
         .unwrap();
-    let seen = frame(&mut app, vec![party_list()]);
-    assert!(!seen.is_empty(), "the list signals");
+    let seen = frame(&mut app, vec![party_list(), party_of(ALIA)]);
+    let seen: Vec<_> = seen.iter().filter(|s| s.starts_with("reaction:")).collect();
+    let friendly = seen
+        .iter()
+        .take_while(|s| s.as_str() == "reaction:5")
+        .count();
     assert!(
-        seen.iter().all(|s| s == "PARTY_MEMBERS_CHANGED:5"),
-        "friendly to its new party member at every signal: {seen:?}"
+        friendly > 0,
+        "the first list's listeners, friendly: {seen:?}"
+    );
+    assert!(
+        friendly < seen.len()
+            && seen[friendly..]
+                .iter()
+                .all(|s| s.as_str() == "reaction:nil"),
+        "then the second list's, whose member is out of view: {seen:?}"
     );
 }
 
@@ -288,5 +305,187 @@ fn a_pet_update_listener_reads_pet_as_its_packet_left_it() {
             "pet UNIT_HEALTH 70:100",
             "pet UNIT_HEALTH 15:40"
         ]
+    );
+}
+
+/// A getter's read of a member whose name the cache lacks asks the server inside the call, once
+/// while the ask is pending: `UnitName` of a member with no object reads the cache by guid with a
+/// callback (`0x5171eb`, `0x517290`), and the tooltip's name of a held one is `GetUnitName`'s
+/// (`0x609210`, its player cache asked at `0x60925e`). The list asked each name it seated
+/// (`0x4e8477`); a server's `SMSG_INVALIDATE_PLAYER` drops it again (`0x555600`).
+#[test]
+fn a_members_uncached_name_is_asked_once_by_the_getter() {
+    let mut app = client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let asked = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
+        rx.try_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::NameQuery { guid } if *guid == MATE))
+            .count()
+    };
+    let forget = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<crate::names::NameCache>()
+            .invalidate_player(MATE);
+    };
+    frame(&mut app, vec![party_list()]);
+    assert_eq!(asked(&rx), 1, "the list's lookup");
+    forget(&mut app);
+    let run = |app: &mut App, chunk: &str| {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").run(chunk).unwrap()
+        })
+    };
+    run(&mut app, r#"UnitName("party1") UnitName("party1")"#);
+    assert_eq!(asked(&rx), 1, "the member with no object, once");
+
+    frame(
+        &mut app,
+        vec![created(
+            MATE,
+            EntityKind::Player,
+            &[(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)],
+        )],
+    );
+    let _ = asked(&rx);
+    forget(&mut app);
+    crate::ui_script::test_ui::load_tooltip_template(app.world().non_send_resource::<UiScript>());
+    run(
+        &mut app,
+        r#"
+        Tip = CreateFrame("GameTooltip", "Tip", nil, "TestTooltipTemplate")
+        Tip:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+        Tip:SetUnit("party1")
+        Tip:SetUnit("party1")
+        "#,
+    );
+    assert_eq!(asked(&rx), 1, "the held member's tooltip, once");
+}
+
+/// The unit tooltip finds the group record by guid for whatever token shows the unit (`0x52a02b`,
+/// through `0x496400`): a raid member off our party slots reads its raid row's record, so an
+/// offline one ends on `PLAYER_OFFLINE` (`0x52a6e2`-`0x52a72b`); off the roster the record a
+/// member left behind is found by no row, and the tooltip reads none.
+#[test]
+fn the_tooltip_reads_a_raid_rows_record_and_none_off_the_roster() {
+    let mut app = client();
+    let raid = |rows: &[(u64, u8)]| SessionEvent::GroupList {
+        group_type: crate::ui_party::GROUPTYPE_RAID,
+        own_flags: 0,
+        members: rows
+            .iter()
+            .map(|&(guid, subgroup)| GroupMemberEntry {
+                name: String::new(),
+                guid,
+                status: member_status::OFFLINE,
+                flags: subgroup,
+            })
+            .collect(),
+        leader: ME,
+        loot: None,
+    };
+    frame(
+        &mut app,
+        vec![
+            raid(&[(MATE, 1), (ALIA, 1)]),
+            created(
+                MATE,
+                EntityKind::Player,
+                &[
+                    (FIELD_UNIT_HEALTH, 100),
+                    (FIELD_UNIT_MAXHEALTH, 100),
+                    (FIELD_UNIT_FLAGS, PC),
+                ],
+            ),
+            SessionEvent::PartyMemberStats {
+                guid: MATE,
+                full: true,
+                info: Box::new(PartyMemberStatsInfo {
+                    status: Some(member_status::OFFLINE),
+                    ..Default::default()
+                }),
+            },
+        ],
+    );
+    let world = app.world_mut();
+    crate::ui_script::test_ui::load_tooltip_template(world.non_send_resource::<UiScript>());
+    let lines = |app: &mut App| -> Vec<String> {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM")
+                .eval(
+                    r#"
+                    PLAYER_OFFLINE = "[OFFLINE]"
+                    Tip = Tip or CreateFrame("GameTooltip", "Tip", nil, "TestTooltipTemplate")
+                    Tip:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+                    Tip:SetUnit("raid1")
+                    local out = {}
+                    for i = 2, 30 do
+                        local line = getglobal("TipTextLeft" .. i)
+                        if not line or not line:GetText() then break end
+                        table.insert(out, line:GetText())
+                    end
+                    return out
+                    "#,
+                )
+                .unwrap()
+        })
+    };
+    assert!(
+        lines(&mut app).iter().any(|l| l == "[OFFLINE]"),
+        "the raid row's record"
+    );
+    // MATE leaves, and a late stats packet stores a record no row names: the held unit is shown
+    // as itself.
+    frame(
+        &mut app,
+        vec![
+            raid(&[(ALIA, 1), (BRAM, 1)]),
+            SessionEvent::PartyMemberStats {
+                guid: MATE,
+                full: true,
+                info: Box::new(PartyMemberStatsInfo {
+                    status: Some(member_status::OFFLINE),
+                    ..Default::default()
+                }),
+            },
+        ],
+    );
+    *app.world_mut().resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: app
+            .world()
+            .resource::<crate::net::GuidIndex>()
+            .0
+            .get(&MATE)
+            .copied(),
+        guid: Some(MATE),
+        ..Default::default()
+    };
+    let off = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM")
+            .eval::<Vec<String>>(
+                r#"
+                Tip:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+                Tip:SetUnit("target")
+                local out = {}
+                for i = 2, 30 do
+                    local line = getglobal("TipTextLeft" .. i)
+                    if not line or not line:GetText() then break end
+                    table.insert(out, line:GetText())
+                end
+                return out
+                "#,
+            )
+            .unwrap()
+    });
+    assert!(
+        app.world()
+            .resource::<crate::ui_party::GroupState>()
+            .stats
+            .contains_key(&MATE),
+        "the late record is stored"
+    );
+    assert!(
+        !off.iter().any(|l| l == "[OFFLINE]"),
+        "off the roster: {off:?}"
     );
 }

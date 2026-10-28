@@ -216,12 +216,10 @@ fn a_token_without_a_hop_still_reads_its_own_push() {
     ));
 }
 
-/// A chain end with no object answers as its group row's own token does, which carries the
-/// records the getters read without the object (`0x496400`, `0x496420`) and the roster's
-/// `UnitExists` (`0x491900`); a held end reads its own snapshot, and an end off the roster its
-/// own entry.
+/// With no host lent, a held chain end reads its own snapshot, and an end with no object the app's
+/// no-object entry, on the roster or off it.
 #[test]
-fn an_unheld_end_on_the_roster_reads_its_rows_push() {
+fn an_unheld_chain_end_reads_its_no_object_entry() {
     let mut s = world();
     let row = UnitState {
         exists: true,
@@ -242,24 +240,13 @@ fn an_unheld_end_on_the_roster_reads_its_rows_push() {
         &s,
         r#"return UnitIsVisible("targettarget") == 1"#
     ));
-    // Out of view: the app's no-object entry loses to the row's push.
+    // Out of view: the app's no-object entry; the group's records of it are the host's to read
+    // (`0x496400`), which a VM with none lent has not.
     s.set_unit_by_guid(P1, Some(cached(P1, "Cached")));
-    assert_eq!(eval::<i64>(&s, r#"return UnitHealth("targettarget")"#), 640);
     assert_eq!(
         eval::<String>(&s, r#"return UnitName("targettarget")"#),
-        "Pia"
+        "Cached"
     );
-    assert!(eval::<bool>(
-        &s,
-        r#"return UnitExists("targettarget") == 1"#
-    ));
-    assert!(eval::<bool>(
-        &s,
-        r#"return UnitIsVisible("targettarget") == nil"#
-    ));
-    // So does no entry at all.
-    s.set_unit_by_guid(P1, None);
-    assert_eq!(eval::<i64>(&s, r#"return UnitHealth("targettarget")"#), 640);
     // `BOSS` targets `GONE`, off the roster: its own entry, a name and no unit.
     s.set_unit_by_guid(GONE, Some(cached(GONE, "Gone")));
     assert_eq!(

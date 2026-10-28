@@ -57,6 +57,14 @@ impl GroupRoster {
         }
     }
 
+    /// The two tables as `cells` hold them, the roster as of a packet's place.
+    pub(crate) fn of_cells(cells: crate::ui_party::Cells<'_>) -> Self {
+        Self {
+            party: cells.party_slots().map(|m| m.guid).collect(),
+            raid: cells.raid_rows().collect(),
+        }
+    }
+
     /// `0x4918e0`: [`Self::in_party`], or a nonzero guid in the raid roster (`4918ee`).
     fn in_group(&self, me: Option<u64>, guid: u64) -> bool {
         self.in_party(me, guid) || guid != 0 && self.raid.contains(&guid)

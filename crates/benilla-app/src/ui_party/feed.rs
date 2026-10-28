@@ -211,6 +211,10 @@ fn fire_signal(
             return;
         }
         GroupSignal::ReadyCheck => ("READY_CHECK", vec![]),
+        GroupSignal::RaidRebuilt { gone } => {
+            script.raid_roster_rebuilt(gone);
+            return;
+        }
         GroupSignal::ReadyCheckAnswer { guid, ready } => {
             script.ready_check_answered(guid, ready);
             return;

@@ -1248,9 +1248,9 @@ impl Model {
     /// What the getters read for `guid`, the unit a token names at the call where its own push
     /// names another (the resolver's guid, then each getter's lookup, `0x468460`): while it is
     /// `held`, a chain end's snapshot, else a token's push of it, else its by-name candidate's,
-    /// else the unit as its guid alone; with no object, the group row naming it, whose push
-    /// carries its records (`0x496400`, `0x496420`), else the app's no-object entry, else its guid
-    /// alone, whose name the name cache answers (`0x5171eb`).
+    /// else the unit as its guid alone; with no object, the app's no-object entry, else its guid
+    /// alone, whose name the name cache answers (`0x5171eb`). The group's records of it are the
+    /// host's to read (`0x496400`, `0x496420`).
     pub(crate) fn unit_of_guid(&self, guid: u64, held: bool) -> std::borrow::Cow<'_, UnitState> {
         use std::borrow::Cow;
         let found = if held {
@@ -1267,10 +1267,7 @@ impl Model {
                 })
                 .or_else(|| self.name_candidates.get(&guid).map(|c| &c.state))
         } else {
-            self.unit_guids
-                .roster_token(guid)
-                .and_then(|t| self.pushed_unit(&t))
-                .or_else(|| self.units_by_guid.get(&guid))
+            self.units_by_guid.get(&guid)
         };
         match found {
             Some(u) => Cow::Borrowed(u),
@@ -1298,24 +1295,15 @@ impl Model {
     /// The unit a token with a `target` hop and no push of its own names, or `target` itself while
     /// the selection's object is not held (the app pushes `"target"` for a held one): the
     /// resolver's guid (`0x515970`, which the getters call before their own object lookup,
-    /// `0x468460`), then what each getter reads for that guid. A held unit's snapshot first; with
-    /// no object, the group row naming the guid, whose own token's push carries its records
-    /// (`0x496400`, `0x496420`) and the roster's `UnitExists` (`0x491900`), so a party member out
-    /// of range shows on the target frame; off the roster, the app's no-object entry, a name from
-    /// the name cache (`0x5171eb`) and nothing more. Any other token without a hop is the app's to
-    /// push, base by base, and reads nothing here.
+    /// `0x468460`), then what each getter reads for that guid: a held unit's snapshot, else the
+    /// app's no-object entry, a name from the name cache (`0x5171eb`) and nothing more. A group
+    /// member's records are the host's to read (`0x496400`, `0x496420`). Any other token without
+    /// a hop is the app's to push, base by base, and reads nothing here.
     fn chained_unit(&self, token: &str) -> Option<&UnitState> {
         match parse_unit_token(token) {
             UnitTokenParse::Unit { base, hops } if hops > 0 || base == UnitBase::Target => {
                 let guid = self.unit_guids.resolve_unit(base, hops)?;
-                match self.units_by_guid.get(&guid) {
-                    Some(held) if held.has_object => Some(held),
-                    unheld => self
-                        .unit_guids
-                        .roster_token(guid)
-                        .and_then(|t| self.pushed_unit(&t))
-                        .or(unheld),
-                }
+                self.units_by_guid.get(&guid)
             }
             _ => None,
         }

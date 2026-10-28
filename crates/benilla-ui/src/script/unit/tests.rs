@@ -998,14 +998,6 @@ fn a_seated_selection_carries_its_target_of_target() {
     }));
     assert_eq!(tot(&s).as_deref(), Some("Blue Whelp"), "a held hop");
 
-    s.seat_selection(Some(crate::script::SeatedSelection {
-        guid: 0x31,
-        held: true,
-        target: 0x22,
-        target_held: false,
-    }));
-    assert_eq!(tot(&s).as_deref(), Some("Bob"), "an unheld groupmate");
-
     s.seat_selection(Some(alone(0x32)));
     assert!(s
         .eval::<bool>("return UnitExists('targettarget') == nil")

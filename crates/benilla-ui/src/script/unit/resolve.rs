@@ -641,9 +641,8 @@ impl UnitGuids {
     }
 
     /// The base token of the first group row naming `guid`, as a member or its pet, or `None`
-    /// off the roster: party rows 1 to 4, then raid rows. These are the units a getter answers
-    /// from a record when it holds no object (the party record, then the raid's, `0x496400`, then
-    /// the pet record, `0x496420`), so a chain ending on one reads what its own token reads.
+    /// off the roster: party rows 1 to 4, then raid rows, off the pushed rows; the no-host
+    /// fallback of the roster's member-or-pet test (`0x491900`).
     pub(crate) fn roster_token(&self, guid: u64) -> Option<String> {
         if guid == 0 {
             return None;

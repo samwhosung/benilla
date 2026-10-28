@@ -24,6 +24,7 @@ use benilla_ui::script::UnitState;
 use crate::names::NameCache;
 use crate::net::{Guid, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
+use crate::spell::group_relation::GroupRoster;
 use crate::target::{Candidacy, NameSearch, RelUnit, RelationWorld, Relations, UnitLookup};
 use crate::ui_party::GroupAsOf;
 
@@ -38,6 +39,8 @@ pub(crate) struct StateSources<'w, 's> {
     guild: Option<Res<'w, crate::ui_guild::GuildState>>,
     /// The area names a group record's zone reads (`0x67e460`).
     areas: Option<Res<'w, crate::area::AreaTableRes>>,
+    /// Where a name the cache lacks is asked.
+    commands: Option<Res<'w, crate::net::NetCommands>>,
     /// Every object by its guid, the units the by-name walk offers among them.
     objects: Query<'w, 's, (Entity, &'static Guid)>,
 }
@@ -81,14 +84,24 @@ impl UnitFeedLive<'_, '_> {
         Some((entity, store))
     }
 
-    /// The relation functions over the units as of here.
-    fn rel(&self) -> Relations<'_> {
+    /// The relation functions over the units as of here, the group's two tables `roster`
+    /// ([`Self::roster`]).
+    fn rel<'a>(&'a self, roster: Option<&'a GroupRoster>) -> Relations<'a> {
         Relations {
             factions: self.relations.factions(),
             reputations: self.relations.reputations(),
             me: self.relations.me_guid(),
-            roster: self.relations.roster(),
+            roster,
             units: self,
+        }
+    }
+
+    /// The party slots and the raid roster `0x4e7f70` and `0x4baee0` read, as of here: the cells
+    /// the views lane rewinds to each packet's place, else the copy the handlers wrote.
+    fn roster(&self) -> Option<GroupRoster> {
+        match self.state.group.as_deref() {
+            Some(group) => Some(GroupRoster::of_cells(self.stores.roster(group))),
+            None => self.relations.roster().cloned(),
         }
     }
 
@@ -105,7 +118,7 @@ impl UnitFeedLive<'_, '_> {
         let me_at = self.position(self.player()?.0)?;
         let unit = self.relations.unit_of(guid, store);
         Some(super::held::reach_between(
-            &self.rel(),
+            &self.rel(self.roster().as_ref()),
             Some(&unit),
             self.me().as_ref(),
             at,
@@ -209,7 +222,8 @@ impl UnitFeedLive<'_, '_> {
         if !store.is_unit() {
             return None;
         }
-        let rel = self.rel();
+        let roster = self.roster();
+        let rel = self.rel(roster.as_ref());
         let me = self.me();
         if q.player {
             let mut s = super::player_snapshot(
@@ -248,9 +262,11 @@ impl UnitFeedLive<'_, '_> {
             },
             guild,
         };
-        // The name as the cache holds it: `UnitName` asks a miss inside its own call.
+        // The name `GetUnitName` reads (`0x609210`), a miss asked inside the call with its callback
+        // (the player cache `0x60925e`, the pet's `0x6092c7`), once while the ask is pending.
+        let ask = src.commands.as_deref().map_or(Ask::Read, Ask::New);
         let name = names
-            .resolve_unit(q.guid, Some(store), Ask::Read)
+            .resolve_unit(q.guid, Some(store), ask)
             .map(str::to_string);
         let mut s = held.state_named(store, q.guid, name);
         // The group record by guid, for every unit the tooltip shows (`0x52a02b`).
@@ -319,7 +335,7 @@ impl UnitFeedLive<'_, '_> {
             0
         } else {
             let unit = self.relations.unit_of(q.guid, store);
-            super::unit_reaction(&self.rel(), &unit, self.me().as_ref())
+            super::unit_reaction(&self.rel(self.roster().as_ref()), &unit, self.me().as_ref())
         };
         Some(UnitHeld::Held {
             is_player: q.player || benilla_protocol::guid::is_player(q.guid),
@@ -336,7 +352,8 @@ impl UnitFeedLive<'_, '_> {
             return Some(LiveCandidates::default());
         };
         let origin = self.position(me_entity);
-        let (rel, me) = (self.rel(), self.me());
+        let roster = self.roster();
+        let (rel, me) = (self.rel(roster.as_ref()), self.me());
         let held = origin
             .into_iter()
             .flat_map(|origin| {
@@ -387,26 +404,27 @@ impl UnitRelations for UnitFeedLive<'_, '_> {
 
     fn reaction(&self, a: u64, b: u64) -> Option<u8> {
         let (a, b) = self.pair(a, b)?;
-        Some(self.rel().reaction(&a, &b))
+        Some(self.rel(self.roster().as_ref()).reaction(&a, &b))
     }
 
     fn can_attack(&self, a: u64, b: u64) -> Option<bool> {
         let (a, b) = self.pair(a, b)?;
-        Some(self.rel().can_attack(&a, &b))
+        Some(self.rel(self.roster().as_ref()).can_attack(&a, &b))
     }
 
     fn can_assist(&self, a: u64, b: u64) -> Option<bool> {
         let (a, b) = self.pair(a, b)?;
-        Some(self.rel().can_assist(&a, &b))
+        Some(self.rel(self.roster().as_ref()).can_assist(&a, &b))
     }
 
     fn can_cooperate(&self, a: u64, b: u64) -> Option<bool> {
         let (a, b) = self.pair(a, b)?;
-        Some(self.rel().can_cooperate(&a, &b))
+        Some(self.rel(self.roster().as_ref()).can_cooperate(&a, &b))
     }
 
     fn is_pvp(&self, guid: u64) -> Option<bool> {
-        Some(self.rel().is_pvp(&self.unit(guid)?))
+        let unit = self.unit(guid)?;
+        Some(self.rel(self.roster().as_ref()).is_pvp(&unit))
     }
 }
 
