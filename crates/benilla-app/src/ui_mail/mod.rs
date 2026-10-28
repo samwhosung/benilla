@@ -262,7 +262,7 @@ pub(crate) fn close_core(world: &mut World) {
 pub(crate) fn close_mail_on_leave_world(
     mut vm: VmWith<(
         ResMut<'static, MailOpen>,
-        Option<ResMut<'static, UsableStationery>>,
+        Option<Res<'static, crate::items::Items>>,
     )>,
 ) {
     vm.run(|script| {
@@ -270,10 +270,10 @@ pub(crate) fn close_mail_on_leave_world(
             script.reset_compose_tab_silently();
         }
     });
-    let (mut mail, usable) = vm.own();
+    let (mut mail, items) = vm.own();
     mail.clear();
-    if let Some(mut usable) = usable {
-        usable.cancel_waits();
+    if let Some(items) = items {
+        UsableStationery::cancel_waits(&items);
     }
 }
 

@@ -1,8 +1,6 @@
 //! The per-frame feeds into the VM: the item-tooltip views every window reads; and the one bag
 //! slot's derivation the container getters read at the call ([`resolve_slot`], [`super::bags`]).
 
-use std::collections::HashSet;
-
 use bevy::prelude::*;
 
 use benilla_protocol::ItemInfo;
@@ -529,14 +527,19 @@ impl RecordViews<'_, '_> {
         self.caster.0.is_changed()
     }
 
-    /// The view of each of `ids` the cache holds, as the getters read it, with whether it reads
-    /// the player beyond the record (its `$`-tokens or its standing label).
+    /// Whether `t`'s view reads the player beyond the record: its `$`-tokens, or the standing
+    /// label, which reads the gender.
+    fn reads_player(&self, t: &ItemInfo) -> bool {
+        item_has_mod_tokens(t, self.spells.as_deref()) || t.required_rep_faction != 0
+    }
+
+    /// The view of each of `ids` the cache holds, as the getters read it.
     fn build(
         &self,
         items: &Items,
         script: &UiScript,
         ids: impl IntoIterator<Item = u32>,
-    ) -> Vec<(u32, benilla_ui::script::ItemTemplateView, bool)> {
+    ) -> Vec<(u32, benilla_ui::script::ItemTemplateView)> {
         let me = self.caster.1.single().ok();
         let gender = token_reads(me).1;
         let home_area = self.home_area();
@@ -577,8 +580,6 @@ impl RecordViews<'_, '_> {
         ids.into_iter()
             .filter_map(|id| {
                 let t = items.template(id, 0, Ask::Read)?;
-                // The standing label reads the gender too.
-                let reads_player = item_has_mod_tokens(t, spell_res) || t.required_rep_faction != 0;
                 let view = template_view(
                     t,
                     spell_res,
@@ -589,7 +590,7 @@ impl RecordViews<'_, '_> {
                     &|| gender,
                     strings,
                 );
-                Some((id, view, reads_player))
+                Some((id, view))
             })
             .collect()
     }
@@ -598,31 +599,29 @@ impl RecordViews<'_, '_> {
 /// `ItemCacheReceive` (`0x55bdb0`) stores the answer in its node (`0x55bef6`, the valid byte at
 /// `0x55befb`) before it runs a callback (`0x55bf39`), so a callback that reads the cache reads
 /// the record: the VM's copy of the record lands here, at its packet, ahead of the callbacks
-/// ([`crate::net::objects`]), and a refusal of a held one drops it. The item-tooltip feed pushes
-/// it again as it follows the cache's changes ([`feed_item_stats`]).
+/// ([`crate::net::objects`]), and a refusal of a held one drops it. The change is the VM's then,
+/// which the item-tooltip feed does not push again ([`Items::vm_took`]).
 pub(crate) fn push_answered_record(
     In(entry): In<u32>,
-    mut vm: crate::script_calls::VmWith<(Res<'static, Items>, RecordViews<'static, 'static>)>,
+    mut vm: crate::script_calls::VmWith<(ResMut<'static, Items>, RecordViews<'static, 'static>)>,
 ) {
-    vm.turn(|script, (items, views)| {
+    vm.turn(|script, (mut items, views)| {
         let Some(script) = script else {
             return;
         };
         match views.build(&items, script, [entry]).pop() {
-            Some((id, view, _)) => script.set_item_template(id, view),
-            None if !items.template_answered(entry) => {}
+            Some((id, view)) => script.set_item_template(id, view),
+            None if !items.template_answered(entry) => return,
             None => script.drop_item_template(entry),
         }
+        items.vm_took(entry);
     });
 }
 
-/// The callbacks the VM keeps on the found record of `entry`, run by its answer's handler after
-/// the app's for the entry ([`crate::net::objects`]), each for a found record only (`0x4e0838`,
-/// `0x52e551`, `0x52f826`): the quest log's `QUEST_LOG_UPDATE` for each lookup that missed it
-/// (`0x4e0830`, `0x4e083a`), held and parked at this place, then the tooltips' rebuilds on the
-/// item lane, where any waits on it. The reference runs one list in the order the lookups
-/// registered (`0x55bf12`, `0x55bf30`); these are the VM's, kept apart from the app's.
-pub(crate) fn answer_vm_waits(world: &mut World, entry: u32) {
+/// The quest log's callback (`0x4e0830`) on a found record, at its place in the entry's list
+/// ([`crate::net::objects`]): a `QUEST_LOG_UPDATE` for each record the VM's lookups missed
+/// (`0x4e083a`, [`UiScript::flush_quest_log_refires`]), held and parked at this place.
+pub(crate) fn quest_log_answered(world: &mut World) {
     fn flush(mut vm: crate::script_calls::HostedVm) {
         vm.run(|script| {
             if let Some(script) = script {
@@ -633,17 +632,16 @@ pub(crate) fn answer_vm_waits(world: &mut World, entry: u32) {
     let mut parked = crate::field_callbacks::Parked::new(world);
     parked.leg(world, |world| {
         if let Err(err) = crate::script_calls::run_cached(world, flush) {
-            debug!("ui_items: the quest log's record callbacks did not run: {err}");
+            debug!("ui_items: the quest log's record callback did not run: {err}");
         }
     });
-    drop(parked);
-    let waits = world
-        .get_non_send_resource::<UiScript>()
-        .is_some_and(|vm| vm.tooltips_wait_on(entry));
-    if let (true, Some(mut lane)) = (
-        waits,
-        world.get_resource_mut::<crate::item_lane::ItemLane>(),
-    ) {
+}
+
+/// The tooltips' callbacks (`0x52e530`, `0x52f820`) on a found record, at its place in the
+/// entry's list ([`crate::net::objects`]): the rebuilds run on the item lane there
+/// ([`UiScript::answer_item_tooltips`]).
+pub(crate) fn tooltips_answered(world: &mut World, entry: u32) {
+    if let Some(mut lane) = world.get_resource_mut::<crate::item_lane::ItemLane>() {
         lane.push(crate::item_watch::Run {
             notice: Some(crate::item_watch::ItemNotice::TooltipRecord { entry }),
             ..Default::default()
@@ -662,8 +660,6 @@ pub(super) fn feed_item_stats(
     mut pending: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
     // The record changes this VM has taken in ([`Items::changed_since`]).
     mut cursor: Local<crate::ui_script::VmMemo<u64>>,
-    // The views built from the player beyond the template, rebuilt when what they read moves.
-    mut reads_player: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
     mut last_home: Local<crate::ui_script::VmMemo<Option<String>>>,
     mut last_reads: Local<crate::ui_script::VmMemo<Option<TokenReads>>>,
 ) {
@@ -677,7 +673,6 @@ pub(super) fn feed_item_stats(
             pending.extend(items.cached_template_ids());
             *cursor = items.change_count();
         }
-        let reads_player = reads_player.get(script);
         let last_home = last_home.get(script);
         // The `$`-tokens follow the player's skills and gender.
         let reads = views.token_reads();
@@ -719,8 +714,16 @@ pub(super) fn feed_item_stats(
                 .into_iter()
                 .filter(|&id| items.template(id, 0, Ask::Read).is_some()),
         );
+        // The views built from the player beyond the template, built again when what they read
+        // moves.
         if views.mods_changed() || reads_changed {
-            pending.extend(reads_player.iter().copied());
+            pending.extend(
+                items
+                    .template_store()
+                    .iter()
+                    .filter(|(_, t)| views.reads_player(t))
+                    .map(|(&id, _)| id),
+            );
         }
         if pending.is_empty() {
             return;
@@ -733,13 +736,8 @@ pub(super) fn feed_item_stats(
         // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs
         // mutably.
         let built = views.build(&items, script, ready);
-        for (id, view, reads) in built {
+        for (id, view) in built {
             pending.remove(&id);
-            if reads {
-                reads_player.insert(id);
-            } else {
-                reads_player.remove(&id);
-            }
             script.set_item_template(id, view);
         }
         // The quest log's item callbacks (`0x4e0830`) on the records the push carried, once each.

@@ -48,7 +48,6 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::CooldownCheat, on_cooldown_packet)
         .net_handler(K::ItemCooldown, on_item_cooldown)
         .net_handler(K::InventoryFailure, on_inventory_refusal)
-        .net_handler(K::ItemTemplate, on_item_record)
         .net_handler(K::ChannelStart, on_channel)
         .net_handler(K::ChannelUpdate, on_channel)
         .net_handler(K::AuraDuration, on_aura_duration)
@@ -528,14 +527,17 @@ fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
     }
 }
 
-/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE`, the item cache's callbacks of the cooldown list: a held
-/// item cooldown's `0x6e8830`.
-fn on_item_record(In(ev): In<SessionEvent>, mut l: Lifecycle) {
-    if let SessionEvent::ItemTemplate { entry, info } = ev {
-        let spells = l.spells.as_deref();
-        l.cooldowns
-            .item_record_landed(entry, info.as_deref(), |id| spells?.catalog.get(id));
-    }
+/// A held item cooldown's callback `0x6e8830` on the answer for `entry`, in its place among the
+/// entry's callbacks ([`crate::items::RecordCallback::ItemCooldown`]).
+pub(crate) fn item_cooldown_answered(
+    In(entry): In<u32>,
+    items: Res<crate::items::Items>,
+    spells: Option<Res<Spells>>,
+    mut cooldowns: ResMut<Cooldowns>,
+) {
+    let spells = spells.as_deref();
+    let record = items.template(entry, 0, Ask::Read);
+    cooldowns.item_record_landed(entry, record, |id| spells?.catalog.get(id));
 }
 
 /// `SMSG_INVENTORY_CHANGE_FAILURE`'s cast leg (`0x5e3a45`-`0x5e3ab3`): a refusal whose first item
@@ -1648,6 +1650,7 @@ fn item_go_cooldown(
     let Some(record) = items.template(entry, item, Ask::Event(net)) else {
         let on_hold = display.cooldown_on_event();
         cooldowns.pend_item(entry, spell_id, now, on_hold);
+        items.wait(entry, crate::items::RecordCallback::ItemCooldown);
         return true;
     };
     match record.spells.iter().find(|b| b.spell_id == spell_id) {

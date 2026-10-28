@@ -74,7 +74,7 @@ pub(crate) enum ItemNotice {
     TradeRecord { entry: u32 },
     /// A record landed that tooltips wait on: the item tooltips' callback `0x52e530` rebuilds
     /// each from what it keeps, and the spell tooltips' `0x52f820` counts its answers down
-    /// ([`crate::ui_items::feed::answer_vm_waits`]), for a found record only
+    /// ([`crate::ui_items::feed::tooltips_answered`]), for a found record only
     /// (`0x52e551`, `0x52f826`). It concerns no item of ours.
     TooltipRecord { entry: u32 },
 }

@@ -725,6 +725,9 @@ fn note_build(lua: &Lua, h: FrameHandle, spell_id: u32, misses: &[u32]) {
             waits.push(entry);
         }
     }
+    model.tooltip_record_asks.extend_from_slice(misses);
+    drop(model);
+    super::tooltip_item::build::ask_tooltip_records(lua);
 }
 
 /// `CGTooltip::OnSpellItemAnswer` (`0x52f820`) for every item record pushed since the last tick,

@@ -481,10 +481,11 @@ pub(crate) struct Items {
     /// [`Items::template_answered_unknown`] and asked again by the next event's lookup
     /// ([`QueryCache::refuse`]); it is never kept as a record.
     templates: QueryCache<u32, ItemInfo>,
-    /// Each entry's last record change: the change count it landed or went at, and whether it is
-    /// held now. Read, never drained, by whoever follows the records ([`Self::changed_since`]):
-    /// the item-tooltip feed pushes a landed record unprompted and drops a removed one.
-    changes: std::collections::HashMap<u32, (u64, bool)>,
+    /// Each entry's last record change: the change count it landed or went at, whether it is held
+    /// now, and whether the VM's copy took it at its answer ([`Self::vm_took`]). Read, never
+    /// drained, by whoever follows the records ([`Self::changed_since`]): the item-tooltip feed
+    /// pushes a landed record unprompted and drops a removed one.
+    changes: std::collections::HashMap<u32, (u64, bool, bool)>,
     /// How many record changes [`Self::changes`] has seen.
     change_count: u64,
     /// The reference's `PlayerPendingItemExpiration` list (`0x5ebd40`, at `CGPlayer_C + 0x1cc8`):
@@ -547,6 +548,16 @@ pub(crate) enum RecordCallback {
     /// The sell slot item's, asked by `CalculateAuctionDeposit` and `GetAuctionSellItemInfo`
     /// (`0x4ce25e`, `0x4ce5e3` with `0x4ce2f0`), one per call.
     AuctionSellItem,
+    /// A paper's item the world-enter init missed (`0x4acbba` with `0x4acbf0`), one per row.
+    Stationery,
+    /// A spell go's item cooldown held for its record (`0x6e84c2` with `0x6e8830`), one per go.
+    ItemCooldown,
+    /// The quest log's leaderboard and reward getters (`0x4e05e0`, `0x4e0bb3`, `0x4e0da3` with
+    /// `0x4e0830`), one per entry as the VM keeps its waits.
+    QuestLog,
+    /// A tooltip build's miss (`0x52e530`, `0x52f820`), one per entry as the VM keeps each
+    /// tooltip's wait.
+    Tooltip,
     /// A group loot roll's or one of its lines', by the wait's serial: a start's (`0x61b40e` with
     /// `0x61b460`), an announcement's (`0x61c047` with `0x61c4b0`), a result's (`0x61b96a` with
     /// `0x61bd50`) or an all-passed's (`0x61b5c0` with `0x61b7d0`).
@@ -564,6 +575,14 @@ impl Items {
     /// A lookup of `entry` that missed registered `callback`.
     pub(crate) fn wait(&self, entry: u32, callback: RecordCallback) {
         self.callbacks.lock_recover().push((entry, callback));
+    }
+
+    /// [`Self::wait`] with the dedupe flag set (`0x55bbb3`): no second `callback` on `entry`.
+    pub(crate) fn wait_once(&self, entry: u32, callback: RecordCallback) {
+        let mut callbacks = self.callbacks.lock_recover();
+        if !callbacks.contains(&(entry, callback)) {
+            callbacks.push((entry, callback));
+        }
     }
 
     /// The answer for `entry` landed, or refused it: the callbacks waiting on it, in the order
@@ -706,7 +725,14 @@ impl Items {
     /// `entry`'s record landed (`held`) or went.
     fn note_change(&mut self, entry: u32, held: bool) {
         self.change_count += 1;
-        self.changes.insert(entry, (self.change_count, held));
+        self.changes.insert(entry, (self.change_count, held, false));
+    }
+
+    /// The VM's copy took `entry`'s last change at its answer, so the feed need not push it again.
+    pub(crate) fn vm_took(&mut self, entry: u32) {
+        if let Some(change) = self.changes.get_mut(&entry) {
+            change.2 = true;
+        }
     }
 
     /// How many record changes have been made: a reader's cursor for [`Self::changed_since`].
@@ -714,12 +740,13 @@ impl Items {
         self.change_count
     }
 
-    /// Each entry whose record landed or went after change `count`, with whether it is held now.
+    /// Each entry whose record landed or went after change `count` and that the VM's copy did not
+    /// take at its answer, with whether it is held now.
     pub(crate) fn changed_since(&self, count: u64) -> impl Iterator<Item = (u32, bool)> + '_ {
         self.changes
             .iter()
-            .filter(move |(_, &(at, _))| at > count)
-            .map(|(&entry, &(_, held))| (entry, held))
+            .filter(move |(_, &(at, _, took))| at > count && !took)
+            .map(|(&entry, &(_, held, _))| (entry, held))
     }
 
     /// The template store, the one [`crate::wdb`] saves.

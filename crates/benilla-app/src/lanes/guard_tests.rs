@@ -138,11 +138,14 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (
         Row::HostHeld,
         "::items::Items",
-        "the record answers' callbacks: `replay_equip_records` runs the equip replays in the \
-         drain (`0x5e1020`: `AutoEquipCursorItem` again, a parked swap) and `feed_item_stats` \
-         fires the quest log's `QUEST_LOG_UPDATE` (`0x4e0830`) off the records it pushes, where \
-         the reference runs both in `ItemCacheReceive` `0x55bdb0`, inside the response's handler \
-         (`0x555140`, `0x555160`)",
+        "the record answers' callbacks still run off the frame's records rather than in the \
+         answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the action bar's \
+         item cooldown records' (`0x6e2f70`) in its feed, its slot records' (`0x4e5b80`) \
+         asked as a slot first shows, the craft and profession lists' \
+         (`0x4f7710`, `0x4fdc30`, `0x4fc8e0`) in `feed_craft` and `feed_trade_skill`, the \
+         dress-up's (`0x504ba0`), the cast failure's redisplay (`0x6e29b0`, `0x6e2a90`), the \
+         equipment display's (`0x5ed880`), and the lock-key tooltip's (`0x52ad10`), which \
+         `drive_mouseover_tooltip` rebuilds each frame",
     ),
     (
         Row::HostHeld,
@@ -310,8 +313,6 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // pending time in the world frame's update, as `0x4ade60` does after the packets.
     "::ui_mail::MailOpen",
     "::ui_mail::pending::MailPending",
-    // Read through the host by the stationery getters, and quiet: its rebuilds signal nothing.
-    "::ui_mail::stationery::UsableStationery",
     // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read, and quiet. A new pet's
     // `SMSG_PET_SPELLS` lowers it inside `SetPet` (`0x4bc8ce`), whose `PET_BAR_UPDATE` (`0x4bc90c`)
     // fires on the notice lane; `IsPetAttackActive` and the bar's getters read it through the host,
@@ -489,7 +490,8 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // make live (#2168), its row in `BETWEEN_THE_DISPATCH_AND_THE_DRAIN`.
     "::ui_chat::language::ChatLanguages",
     // The usable stationery list, whose first paper the list parse gives a row with none
-    // (`0x4ad565`); the paper callback's handler writes it, through its own `ResMut`.
+    // (`0x4ad565`); the paper callback writes it in the item answer's list, through its own
+    // `ResMut`.
     "::ui_mail::stationery::UsableStationery",
     // `ItemBagFamily.dbc`, which the inventory refusal's handler names a bag's family by
     // (`0x5ede00`).

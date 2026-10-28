@@ -207,13 +207,20 @@ fn a_quest_log_update_off_an_item_answer_fires_between_its_neighbours() {
             "#,
         )
         .unwrap();
-        // The read misses the pelt's record and holds the callback.
-        let kind: String = s
-            .eval("local _, kind = GetQuestLogLeaderBoard(1, 2) return kind")
-            .unwrap();
-        assert_eq!(kind, "item");
-        s.run("Seen = {}").unwrap();
     }
+    // Our quest log's first slot holds the quest, as the getter reads it at the call.
+    let slot = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
+    frame(&mut app, vec![values(ME, &[(slot, 50)])]);
+    // The read, with the host lent, misses the pelt's record and registers the callback.
+    let kind: String = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        let s = s.expect("a VM");
+        let kind = s
+            .eval("local _, kind = GetQuestLogLeaderBoard(1, 2) return kind")
+            .expect("the chunk runs");
+        s.run("Seen = {}").expect("the chunk runs");
+        kind
+    });
+    assert_eq!(kind, "item");
     let answer = SessionEvent::ItemTemplate {
         entry: PELT,
         info: Some(Box::new(crate::items::test_template("Wolf Pelt"))),
@@ -285,4 +292,102 @@ fn a_spell_tooltip_rebuilds_at_its_reagents_answer() {
         frame(&mut app, vec![fall(5), answer, fall(6)]),
         [FELL, "lines 1", FELL, "lines 2"]
     );
+}
+
+/// Two swaps parked on one record (`0x5e0dbe`) replay in table order inside the answer's handler
+/// (`0x5e1087`-`0x5e10ed`): each `SwapItem` sends in its body (`0x5e0fdb`) ahead of its clear
+/// (`0x5e0fe7`), so the second's send waits on no signal of the first's, and both go out ahead
+/// of the next packet's.
+#[test]
+fn two_parked_swaps_on_one_record_both_send_before_a_later_packets_handler_send() {
+    use bevy::ecs::system::RunSystemOnce;
+    let (mut app, sent) = holding_client();
+    let to = |dst_slot: u32| benilla_ui::script::ContainerMove {
+        src_bag: 0,
+        src_slot: 1,
+        dst_bag: benilla_ui::script::EQUIPMENT_BAG,
+        dst_slot,
+        count: None,
+    };
+    let moves = [to(1), to(1)];
+    // The helm held, so the first replay's clear signals `CURSOR_UPDATE` ahead of the second.
+    hosted(&mut app, "PickupContainerItem(0, 1)");
+    app.world_mut()
+        .run_system_once(
+            move |mut gate: crate::ui_bind_confirm::BindGate,
+                  items: Res<crate::items::Items>,
+                  net: Res<crate::net::NetCommands>| {
+                for mv in &moves {
+                    gate.park_swap(mv, HELM_ENTRY, &items, &net);
+                }
+            },
+        )
+        .unwrap();
+    frame(&mut app, vec![helm_record(), our_duel()]);
+    assert_eq!(equips_and_duels(&sent), ["Swap", "Swap", "DuelAccepted"]);
+}
+
+/// A refusal destroys the record's node (`0x55bed2`), so an equip on that entry looks it up
+/// afresh: it waits and asks again, its callback held for the next answer, never run at once on
+/// a record that is not there.
+#[test]
+fn an_equip_on_a_refused_record_asks_again_and_waits() {
+    let (mut app, sent) = holding_client();
+    hosted(&mut app, "PickupContainerItem(0, 1) AutoEquipCursorItem()");
+    let refusal = SessionEvent::ItemTemplate {
+        entry: HELM_ENTRY,
+        info: None,
+    };
+    frame(&mut app, vec![refusal]);
+    sent.try_iter().for_each(drop);
+    hosted(&mut app, "AutoEquipCursorItem()");
+    let asked = sent.try_iter().any(|c| {
+        matches!(
+            c,
+            ClientCommand::ItemQuery {
+                entry: HELM_ENTRY,
+                ..
+            }
+        )
+    });
+    assert!(asked, "the record is asked again");
+    let items = app.world().resource::<crate::items::Items>();
+    assert!(items.take_vm_callbacks().is_empty(), "nothing runs at once");
+    assert_eq!(
+        app.world_mut()
+            .resource_mut::<crate::items::Items>()
+            .take_waiters(HELM_ENTRY, crate::items::RecordCallback::AutoEquip),
+        1,
+        "the callback waits for the next answer"
+    );
+}
+
+/// A bind-on-equip record's answer replays `AutoEquipCursorItem` inside its handler, which asks
+/// the question (`0x5e163b`, `0x5e16c6`): `AUTOEQUIP_BIND_CONFIRM` fires at the answer's place,
+/// between the falls of the packets around it, and nothing is sent.
+#[test]
+fn a_bind_on_equip_replay_asks_at_its_answers_place() {
+    let (mut app, sent) = holding_client();
+    hosted(&mut app, "PickupContainerItem(0, 1) AutoEquipCursorItem()");
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("AUTOEQUIP_BIND_CONFIRM")
+            f:SetScript("OnEvent", function() table.insert(Seen, event .. " " .. arg1) end)
+            "#,
+        )
+        .unwrap();
+    let mut t = crate::items::test_template("Bound Helm");
+    (t.class, t.inventory_type, t.bonding) = (4, 1, benilla_ui::script::BIND_WHEN_EQUIPPED);
+    let answer = SessionEvent::ItemTemplate {
+        entry: HELM_ENTRY,
+        info: Some(Box::new(t)),
+    };
+    assert_eq!(
+        frame(&mut app, vec![fall(5), answer, fall(6)]),
+        [FELL, "AUTOEQUIP_BIND_CONFIRM 0", FELL]
+    );
+    assert!(equips_and_duels(&sent).is_empty(), "nothing sent");
 }

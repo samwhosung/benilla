@@ -973,6 +973,9 @@ pub(crate) struct Model {
     pub(crate) item_cache_waits: HashMap<FrameHandle, Vec<super::tooltip_item::build::CacheWait>>,
     /// The misses of the item build under way, handed to its tooltip as it ends.
     pub(crate) item_cache_misses: Vec<super::tooltip_item::build::CacheWait>,
+    /// The item records a tooltip kept a wait on since the last ask, each asked of the item cache
+    /// with the tooltips' callback ([`super::ItemCallback::Tooltip`]) once the borrow drops.
+    pub(crate) tooltip_record_asks: Vec<u32>,
     /// The quest-log groups' `(ZoneOrSort, name)`, sorted by `0x4de8f0` (`0xbb7040`): a row's
     /// group ordinal is its place here.
     pub(crate) quest_log_headers: Vec<(i32, String)>,
@@ -1651,6 +1654,7 @@ impl Model {
             item_builds: HashMap::new(),
             item_cache_waits: HashMap::new(),
             item_cache_misses: Vec::new(),
+            tooltip_record_asks: Vec::new(),
             quest_log_headers: Vec::new(),
             quest_store: Default::default(),
             quest_log_collapsed: HashSet::new(),

@@ -156,9 +156,9 @@ struct HostSlot {
     /// The deferred stretches running now ([`UiScript::defer`]): while any is, every handler fired
     /// is held and nothing that waits runs, a lend's included.
     defer: Cell<u32>,
-    /// A deferred stretch whose leading calls go through ([`UiScript::defer_calls_through`]): the
-    /// waiting count it began at, while nothing has waited since.
-    through: Cell<Option<usize>>,
+    /// A deferred stretch split as a close's engine and interface halves ([`UiScript::defer_split`]):
+    /// its own calls apply at once while its signals and writes wait.
+    split: Cell<bool>,
     /// The live reads a host's apply lends while it calls into the VM's own steps with the host
     /// out ([`UiScript::reading`]): what a getter's question asks when no host is in the slot.
     /// The same invariant as `host`: valid and unaliased while set.
@@ -357,24 +357,23 @@ pub(crate) fn holding(lua: &Lua) -> bool {
     (slot.hold.get() && slot.host.get().is_none()) || slot.defer.get() > 0
 }
 
-/// Whether a verb's call made now goes through the lent host at once inside a deferred stretch
-/// ([`UiScript::defer_calls_through`]): the host is in the slot and nothing has waited since the
-/// stretch began, `waiting` the count waiting now.
-pub(crate) fn calls_through(lua: &Lua, waiting: usize) -> bool {
+/// Whether a call made now applies at once through the lent host inside a split stretch
+/// ([`UiScript::defer_split`]): the host is in the slot, not out applying another call.
+pub(crate) fn splitting(lua: &Lua) -> bool {
     let slot = slot(lua);
-    slot.host.get().is_some() && slot.through.get() == Some(waiting)
+    slot.host.get().is_some() && slot.split.get()
 }
 
-/// A deferred stretch, while it lives ([`UiScript::defer`]), with the leading calls' mark of the
-/// stretch around it, put back as it ends.
-pub struct Deferring(Lua, Option<usize>);
+/// A deferred stretch, while it lives ([`UiScript::defer`]), with whether the stretch around it
+/// was split, put back as it ends.
+pub struct Deferring(Lua, bool);
 
 impl Drop for Deferring {
     fn drop(&mut self) {
         let slot = slot(&self.0);
         slot.defer.set(slot.defer.get() - 1);
         slot.open.set(slot.open.get() - 1);
-        slot.through.set(self.1);
+        slot.split.set(self.1);
     }
 }
 
@@ -389,21 +388,20 @@ impl UiScript {
             let slot = slot(&lua);
             slot.defer.set(slot.defer.get() + 1);
             slot.open.set(slot.open.get() + 1);
-            // A stretch nested in one whose calls go through parks its calls with the rest.
-            slot.through.take()
+            // A stretch nested in a split one parks its calls with the rest.
+            slot.split.replace(false)
         };
         Deferring(lua, outer)
     }
 
-    /// [`Self::defer`] for an engine callback whose first step is the engine's own: while nothing
-    /// has waited since it began, a verb's calls ahead of its first signal or write apply at once
-    /// through the lent host, as the reference's callback sends inside its handler
-    /// (`AutoEquipCursorItem` from `0x5e17a0`, `0x5e1757`); what they and the rest signal waits,
-    /// to be parked ([`Self::park_since`]).
-    pub fn defer_calls_through(&self) -> Deferring {
-        let mark = self.waiting_mark();
+    /// [`Self::defer`] split as a close's engine and interface halves: every call the stretch's own
+    /// Lua and verbs make applies at once through the lent host, as the reference's engine
+    /// callback sends inside its handler (`AutoEquipCursorItem` from `0x5e17a0`, `0x5e1757`; a
+    /// swap's `0x5e0fdb` ahead of its clear `0x5e0fe7`), while every signal and write waits, to be
+    /// parked ([`Self::park_since`]). What a call's apply signals waits with the rest.
+    pub fn defer_split(&self) -> Deferring {
         let guard = self.defer();
-        slot(&guard.0).through.set(Some(mark));
+        slot(&guard.0).split.set(true);
         guard
     }
 

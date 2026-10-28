@@ -213,12 +213,13 @@ impl BindGate<'_> {
 }
 
 /// The lookup's miss (`0x55ba30`): ask the record with the callback, which its answer runs. A
-/// record the cache already answered, which the VM's copy of the cache had not caught up with (a
-/// new VM's seat, a cache file's load), runs it as the frame's drain comes rather than wait for an
-/// answer that has come ([`replay_equip_records`]).
+/// record the cache holds, which the VM's copy had not caught up with (a new VM's seat, a cache
+/// file's load), runs it as the frame's drain comes rather than wait for an answer that has come
+/// ([`replay_equip_records`]). A refused entry holds no record, its node destroyed with the
+/// refusal (`0x55bed2`), so its lookup waits and asks again.
 fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetCommands) {
-    if items.template_answered(entry) {
-        items.run_with_vm(entry, callback, items.template_known(entry));
+    if items.template(entry, 0, Ask::Read).is_some() {
+        items.run_with_vm(entry, callback, true);
         return;
     }
     items.wait(entry, callback);
@@ -264,7 +265,7 @@ fn replay(vm: &mut ReplayVm, entry: u32, callback: RecordCallback, found: bool) 
 /// ([`crate::net::objects`]), once the VM's copy holds the record
 /// ([`crate::ui_items::feed::push_answered_record`]): its send goes out at the packet, ahead of
 /// a later packet's, and what it signals is parked at the packet's place among the frame's events
-/// ([`crate::field_callbacks::Parked::calls_through`]).
+/// ([`crate::field_callbacks::Parked::split`]).
 pub(crate) fn replay_at_answer(
     world: &mut World,
     entry: u32,
@@ -274,7 +275,7 @@ pub(crate) fn replay_at_answer(
     fn run(In((entry, callback, found)): In<(u32, RecordCallback, bool)>, mut vm: ReplayVm) {
         replay(&mut vm, entry, callback, found);
     }
-    let mut parked = crate::field_callbacks::Parked::calls_through(world);
+    let mut parked = crate::field_callbacks::Parked::split(world);
     parked.leg(world, |world| {
         if let Err(err) = world.run_system_cached_with(run, (entry, callback, found)) {
             debug!("ui_bind_confirm: the equip callback did not run: {err}");

@@ -52,8 +52,6 @@ pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     update::register(app);
     app.net_handler(K::ItemTemplate, on_item_answer)
-        // Next, so the stationery rebuild reads the record the cache now holds.
-        .net_handler(K::ItemTemplate, on_paper_record)
         .net_handler(K::ItemTime, on_item)
         .net_handler(K::ItemEnchantTime, on_item)
         .net_handler(K::MoveTimeSkipped, on_move_time_skipped)
@@ -188,15 +186,14 @@ fn item_watch<'a, 'w, 's>(
     }
 }
 
-/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE`'s stationery callbacks (`0x4acbf0`), a record or a refusal,
-/// registered right after [`on_item`] so the rebuild they may run (`0x4acbf8`) reads the record
-/// [`on_item`] just cached ([`crate::ui_mail::StationeryRebuild::answered`]).
-fn on_paper_record(
-    In(ev): In<SessionEvent>,
+/// A paper row's callback (`0x4acbf0`) on the answer for `entry`, a record or a refusal: it
+/// counts one down, the last rebuilding the list off the record now cached (`0x4acbf8`).
+fn paper_answered(
+    In(entry): In<u32>,
     paper: Option<crate::ui_mail::StationeryRebuild>,
     items: Res<Items>,
 ) {
-    if let (SessionEvent::ItemTemplate { entry, .. }, Some(mut paper)) = (ev, paper) {
+    if let Some(mut paper) = paper {
         paper.answered(entry, &items);
     }
 }
@@ -228,14 +225,19 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
             Cb::Swap | Cb::AutoEquip => {
                 crate::ui_bind_confirm::replay_at_answer(world, entry, callback, answered)
             }
+            Cb::ItemCooldown => {
+                run_answer_step(world, crate::spell::net::item_cooldown_answered, entry)
+            }
+            Cb::Stationery => run_answer_step(world, paper_answered, entry),
+            // `QUEST_LOG_UPDATE` for a ready record only (`0x4e0838`), held and parked here.
+            Cb::QuestLog if answered => crate::ui_items::feed::quest_log_answered(world),
+            // The tooltips' rebuilds for a found record only (`0x52e551`, `0x52f826`).
+            Cb::Tooltip if answered => crate::ui_items::feed::tooltips_answered(world, entry),
+            Cb::QuestLog | Cb::Tooltip => {}
             _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
         }
     }
     run_answer_step(world, run_answer_tail, entry);
-    // The callbacks the VM keeps, which run for a found record only.
-    if answered {
-        crate::ui_items::feed::answer_vm_waits(world, entry);
-    }
 }
 
 /// Run one step of an answer's callbacks as a one-shot, its unit edits applied as it returns; a
@@ -310,7 +312,12 @@ fn run_record_callback(
                 id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
             }),
         Cb::Trade | Cb::Ammo => {}
-        Cb::Swap | Cb::AutoEquip => {}
+        Cb::Swap
+        | Cb::AutoEquip
+        | Cb::ItemCooldown
+        | Cb::Stationery
+        | Cb::QuestLog
+        | Cb::Tooltip => {}
         // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
         Cb::Merchant => sc.merchant.row_answered(),
         Cb::Buyback => sc.merchant.buyback_answered(),

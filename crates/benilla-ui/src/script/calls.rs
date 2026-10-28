@@ -423,6 +423,11 @@ pub enum ItemCallback {
     /// `GetBuybackItemInfo` (`0x4fb40c`), whose callback `0x4fb570` signals `MERCHANT_UPDATE`; its
     /// query's guid is 0 (`0x4fb3f0`-`0x4fb3f7`).
     Buyback,
+    /// A tooltip build's miss, with the tooltip as the cookie: the item tooltip's `0x52e530`
+    /// (`0x52b722`, `0x52bf60`, `0x52dc27`, `0x535f53`, `0x5361ee`) or the spell tooltip's
+    /// reagent `0x52f820` (`0x52eda4`, `0x52f3f4`), whose answer rebuilds the tooltips the VM
+    /// keeps waiting on it.
+    Tooltip,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,
@@ -716,6 +721,11 @@ pub(crate) fn submit(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
     if model.call_depth >= MAX_NESTING {
         return Err(mlua::Error::runtime(TOO_DEEP));
     }
+    if super::host::splitting(lua) {
+        drop(model);
+        apply_now(lua, call);
+        return Ok(());
+    }
     let seq = model.queue_call(call);
     model.call_raises.awaited.push(seq);
     drop(model);
@@ -861,40 +871,40 @@ pub(super) fn settle(lua: &Lua, script: &mut UiScript) {
     }
 }
 
-/// A held segment's calls ahead of its first signal or write, applied at once through the lent
-/// host inside a deferred stretch whose leading calls go through ([`super::host::calls_through`]),
-/// each with its tail; the rest, to be held. What a call's apply signals waits, and the next call
-/// goes through only while nothing does, so nothing applies ahead of a signal raised before it.
-pub(crate) fn apply_leading_calls(
+/// A held segment's calls inside a split stretch ([`super::host::splitting`]), each applied at
+/// once through the lent host in its order, the rest returned to be held in theirs.
+pub(crate) fn apply_split_calls(
     lua: &Lua,
-    mut raised: Vec<super::tick::Raised>,
+    raised: Vec<super::tick::Raised>,
 ) -> Vec<super::tick::Raised> {
     use super::tick::Raised;
-    let through = |lua: &Lua| {
-        let waiting = lua
-            .app_data_ref::<Model>()
-            .expect("model app_data")
-            .script_calls
-            .len();
-        super::host::calls_through(lua, waiting)
-    };
-    while matches!(raised.first(), Some(Raised::Call(_))) && through(lua) {
-        let Raised::Call(call) = raised.remove(0) else {
-            break;
-        };
-        let outer = swap_raising(lua, None);
-        let mut script = UiScript::reentrant(lua);
-        let tail = super::host::with_host(lua, |host| host.apply(&mut script, *call)).flatten();
-        if let Some(tail) = tail {
-            tail(&mut script);
-        }
-        if let Some(message) = swap_raising(lua, outer) {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .record_lua_error(&mlua::Error::runtime(message));
+    if !super::host::splitting(lua) || !raised.iter().any(|r| matches!(r, Raised::Call(_))) {
+        return raised;
+    }
+    let mut rest = Vec::with_capacity(raised.len());
+    for r in raised {
+        match r {
+            Raised::Call(call) if super::host::splitting(lua) => apply_now(lua, *call),
+            other => rest.push(other),
         }
     }
-    raised
+    rest
+}
+
+/// Apply `call` through the lent host at once, with its tail, inside a split stretch: what it
+/// signals waits; what it raises is the script's error.
+fn apply_now(lua: &Lua, call: ScriptCall) {
+    let outer = swap_raising(lua, None);
+    let mut script = UiScript::reentrant(lua);
+    let tail = super::host::with_host(lua, |host| host.apply(&mut script, call)).flatten();
+    if let Some(tail) = tail {
+        tail(&mut script);
+    }
+    if let Some(message) = swap_raising(lua, outer) {
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .record_lua_error(&mlua::Error::runtime(message));
+    }
 }
 
 /// Put `calls` back at the front of the queue, ahead of any queued since.

@@ -188,9 +188,25 @@ impl RecordAsks<'_, '_> {
                             );
                         }
                     }
-                    // The VM keeps the callback: the cache only asks.
+                    // The VM counts the landing; the callback, one per entry as the VM keeps its
+                    // waits, signals at its place in the entry's list.
                     ItemCallback::QuestLog => {
-                        let _ = items.template(entry, owner, Ask::Event(&self.net));
+                        if items
+                            .template(entry, owner, Ask::Event(&self.net))
+                            .is_none()
+                        {
+                            items.wait_once(entry, crate::items::RecordCallback::QuestLog);
+                        }
+                    }
+                    // The VM keeps each tooltip's wait; the callback, one per entry, rebuilds them
+                    // at its place in the entry's list.
+                    ItemCallback::Tooltip => {
+                        if items
+                            .template(entry, owner, Ask::Event(&self.net))
+                            .is_none()
+                        {
+                            items.wait_once(entry, crate::items::RecordCallback::Tooltip);
+                        }
                     }
                     // A miss registers the callback and counts the window's wait (`0x4faf1a`,
                     // `0x4faf23`).

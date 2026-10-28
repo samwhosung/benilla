@@ -21,9 +21,6 @@ use crate::query_cache::Ask;
 pub(crate) struct UsableStationery {
     list: Vec<StationeryView>,
     awaited: Vec<u32>,
-    /// The leave-world step cancelled the waits' callbacks (`0x4acc15`-`0x4acc2d`) and left the
-    /// count set: an answer counts nothing down until the next init.
-    cancelled: bool,
 }
 
 impl UsableStationery {
@@ -34,8 +31,8 @@ impl UsableStationery {
 
     /// The leave-world step's cancel (`0x4acc00`): each paper's callback `0x4acbf0` goes
     /// (`0x55c0c0` at `0x4acc2d`), and the count stays as it stands.
-    pub(crate) fn cancel_waits(&mut self) {
-        self.cancelled = true;
+    pub(crate) fn cancel_waits(items: &Items) {
+        items.cancel_waits(crate::items::RecordCallback::Stationery);
     }
 }
 
@@ -84,15 +81,17 @@ impl StationeryRebuild<'_, '_> {
         }
     }
 
-    /// `entry`'s answer, a record or a refusal: each awaited row's callback counts it down
-    /// (`0x4acbf0`), and the one that reaches zero rebuilds the list (`0x4acbf8`).
+    /// One awaited row's callback on `entry`'s answer, a record or a refusal (`0x4acbf0`): it
+    /// counts one down, and the one that reaches zero rebuilds the list (`0x4acbf8`).
     pub(crate) fn answered(&mut self, entry: u32, items: &Items) {
-        let Some(usable) = self.usable.as_deref_mut().filter(|u| !u.cancelled) else {
+        let Some(usable) = self.usable.as_deref_mut() else {
             return;
         };
-        let before = usable.awaited.len();
-        usable.awaited.retain(|&e| e != entry);
-        if usable.awaited.len() < before && usable.awaited.is_empty() {
+        let Some(at) = usable.awaited.iter().position(|&e| e == entry) else {
+            return;
+        };
+        usable.awaited.remove(at);
+        if usable.awaited.is_empty() {
             self.rebuild(items);
         }
     }
@@ -117,10 +116,12 @@ pub(crate) fn count_papers_on_enter(
         .filter(|row| items.template(row.item, 0, Ask::Event(&commands)).is_none())
         .map(|row| row.item)
         .collect();
+    for &entry in &missed {
+        items.wait(entry, crate::items::RecordCallback::Stationery);
+    }
     if let Some(mut paper) = paper {
         if let Some(usable) = paper.usable.as_deref_mut() {
             usable.awaited = missed;
-            usable.cancelled = false;
         }
         paper.rebuild_unless_awaited(items);
     }

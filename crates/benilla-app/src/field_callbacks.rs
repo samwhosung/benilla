@@ -99,10 +99,10 @@ impl Parked {
         Self(crate::script_calls::defer_vm(world))
     }
 
-    /// [`Self::new`] for a callback whose leading calls are the engine's own, applied at once
-    /// through the lent host ([`crate::script_calls::defer_vm_calls_through`]).
-    pub(crate) fn calls_through(world: &World) -> Self {
-        Self(crate::script_calls::defer_vm_calls_through(world))
+    /// [`Self::new`] split as a close's halves: the legs' calls apply at once through the lent
+    /// host, their signals and writes park ([`crate::script_calls::defer_vm_split`]).
+    pub(crate) fn split(world: &World) -> Self {
+        Self(crate::script_calls::defer_vm_split(world))
     }
 
     /// Run `leg`, then park what it signalled.

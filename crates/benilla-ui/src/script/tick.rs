@@ -177,7 +177,7 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         (out, model.verb_events.take().unwrap_or_default())
     };
     if super::host::holding(lua) {
-        let raised = super::calls::apply_leading_calls(lua, raised);
+        let raised = super::calls::apply_split_calls(lua, raised);
         if raised.iter().any(|r| {
             matches!(
                 r,
@@ -415,14 +415,6 @@ impl super::UiScript {
         for e in super::tooltip_spell::answer_spell_items(&self.lua, None) {
             self.push_error(e);
         }
-    }
-
-    /// Whether a tooltip waits on the item record of `entry`: an item tooltip's build that missed
-    /// it (`0x52e530`'s cookie) or a spell tooltip's reagent (`0x52f820`'s).
-    pub fn tooltips_wait_on(&self, entry: u32) -> bool {
-        let model = self.model_ref();
-        model.spell_item_waits.values().any(|w| w.contains(&entry))
-            || super::tooltip_item::build::waits_on(&model, entry)
     }
 
     /// The tooltips' callbacks on the item record cache's answer for `entry`, found, run at its
