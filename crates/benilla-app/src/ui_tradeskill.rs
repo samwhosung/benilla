@@ -21,7 +21,6 @@ use benilla_ui::script::{
     TradeSkillDifficulty, TradeSkillReagent, TradeSkillRecipe, TradeSkillState, UiScript,
 };
 
-use crate::creature_anim::{CastEvent, CastEventKind};
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
@@ -100,7 +99,9 @@ pub(crate) struct UiTradeSkillPlugin;
 
 impl Plugin for UiTradeSkillPlugin {
     fn build(&self, app: &mut App) {
-        app.net_handler(SessionEventKind::Disconnected, on_session_end);
+        app.net_handler(SessionEventKind::Disconnected, on_session_end)
+            // After the spell's own go handler, whose steps come first (`0x6e81e7`).
+            .net_handler(SessionEventKind::SpellGo, on_spell_go);
         register_rebuild_triggers(app);
         app.add_sweep_leg(SweepLeg::TradeSkill, cancel_trade_skill_waits);
         app.init_resource::<TradeSkillOpens>()
@@ -111,13 +112,11 @@ impl Plugin for UiTradeSkillPlugin {
             .add_systems(
                 Update,
                 (
-                    // Opens before the feed, so an opener shows the window this frame; the
-                    // drain after the input pass, so a Create click casts this frame.
+                    // Opens before the feed, so an opener shows the window this frame.
                     open_trade_skill
                         .before(feed_trade_skill)
                         .in_set(crate::ui_script::UiFeed),
                     feed_trade_skill.in_set(UnitFeed),
-                    drain_trade_skill.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -808,45 +807,73 @@ pub(crate) fn landed(waits: &mut Vec<u32>, items: &Items) -> u32 {
     landed
 }
 
-/// Feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill` arms it and casts inside
-/// its call ([`TradeSkillSteps`]), each GO recasts what the hook answers, and a failure disarms it.
-fn drain_trade_skill(
+/// `HandleSpellGo`'s call to the repeat hook `OnTradeSkillCastDone` (`0x4fd7b0` at `0x6e81e7`),
+/// after the go's own steps: for a go whose first guid (`0x6e81b6`) and caster unit (`0x6e81d3`)
+/// are the active player, an item's cast's first guid being the item, and with neither flag
+/// `0x41` (`0x6e81de`). The hook counts the armed spell down and casts it again inside the
+/// packet, so the recast goes out ahead of a later packet's send; its `UPDATE_TRADESKILL_RECAST`
+/// is parked at this packet's place ([`crate::field_callbacks::Parked`]).
+fn on_spell_go(In(ev): In<SessionEvent>, world: &mut World) {
+    let SessionEvent::SpellGo {
+        caster,
+        spell_id,
+        cast_flags,
+        item_caster,
+        unit_caster,
+        ..
+    } = ev
+    else {
+        return;
+    };
+    let me = world
+        .get_resource::<crate::net::SelfGuid>()
+        .and_then(|g| g.0);
+    if !hook_runs(me, caster, item_caster, unit_caster, cast_flags) {
+        return;
+    }
+    let mut parked = crate::field_callbacks::Parked::new(world);
+    parked.leg(world, |world| {
+        if let Err(err) = world.run_system_cached_with(repeat_at_go, spell_id) {
+            debug!("ui_tradeskill: the repeat hook did not run: {err}");
+        }
+        crate::creature_anim::apply_unit_edits(world);
+    });
+}
+
+/// Whether a go runs the repeat hook (`0x6e81b6`-`0x6e81de`).
+fn hook_runs(
+    me: Option<u64>,
+    caster: u64,
+    item_caster: Option<u64>,
+    unit_caster: u64,
+    cast_flags: u16,
+) -> bool {
+    me.is_some_and(|me| caster == me && item_caster.is_none() && unit_caster == me)
+        && cast_flags & 0x41 == 0
+}
+
+/// `0x4fd7b0` on our go of `spell_id`: the count down, the recast (`0x4fd7d7`) and its signal
+/// (`0x4fd7dc`), or the disarm ([`UiScript::trade_skill_spell_go`]).
+fn repeat_at_go(
+    In(spell_id): In<u32>,
     mut vm: crate::script_calls::VmWith<(
-        MessageReader<'static, 'static, CastEvent>,
         cast_target::CastTargeting<'static, 'static>,
         CastLadder<'static, 'static>,
     )>,
 ) {
-    let edges = vm.turn(|script, (mut cast_events, _, ladder)| {
-        if script.is_none() {
-            return Vec::new();
+    vm.turn(|script, (targeting, mut ladder)| {
+        let Some(script) = script else {
+            return;
+        };
+        if let Some(spell_id) = script.trade_skill_spell_go(spell_id) {
+            debug!(
+                "ui_tradeskill: recast {spell_id} ({} left)",
+                script.trade_skill_repeat().1
+            );
+            ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
+            script.trade_skill_recast_sent();
         }
-        let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
-        cast_events
-            .read()
-            .filter(|ev| Some(ev.entity) == self_entity)
-            .copied()
-            .collect::<Vec<_>>()
     });
-
-    // Each edge is its own packet's hook (`0x6e81d3` → `0x4fd7b0`), whose signal's handlers run
-    // before the next packet counts down: a turn each.
-    for ev in edges {
-        vm.turn(|script, (_, targeting, mut ladder)| {
-            let Some(script) = script else {
-                return;
-            };
-            if let Some(spell_id) = repeat_edge(script, &ev) {
-                debug!(
-                    "ui_tradeskill: recast {spell_id} ({} left)",
-                    script.trade_skill_repeat().1
-                );
-                // The recast, then its signal (`0x4fd7d7`, `0x4fd7dc`).
-                ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
-                script.trade_skill_recast_sent();
-            }
-        });
-    }
 }
 
 /// The profession window's verbs inside their calls ([`crate::script_calls::ScriptCallHost`]).
@@ -874,22 +901,6 @@ pub(crate) fn do_trade_skill(cast: &mut crate::spell::ScriptCast, spell_id: u32,
     debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
     let ctx = cast.targeting.context();
     cast.ladder.send(spell_id, &ctx, CastCommit::Spell);
-}
-
-/// One of our own cast edges into the VM's repeat: every GO whose first guid is the player, not
-/// an item, and without flag `0x41` runs the hook (`0x6e81d3`-`0x6e81de` → `0x4fd7b0`), and a
-/// failure disarms the armed spell (`0x6e1a3c`). Returns the spell to recast.
-fn repeat_edge(script: &mut UiScript, ev: &CastEvent) -> Option<u32> {
-    match ev.kind {
-        CastEventKind::Go if !ev.item_cast && ev.cast_flags & 0x41 == 0 => {
-            script.trade_skill_spell_go(ev.spell_id)
-        }
-        CastEventKind::Fail => {
-            script.trade_skill_cast_failed(ev.spell_id);
-            None
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -1816,34 +1827,34 @@ mod tests {
             (2963, 3),
             "row 2, under its header"
         );
-        let go_from = |cast_flags, item_cast| CastEvent {
-            entity: Entity::PLACEHOLDER,
-            spell_id: 2963,
-            kind: CastEventKind::Go,
-            cast_flags,
-            item_cast,
-            seq: 0,
-        };
-        let go = |cast_flags| go_from(cast_flags, false);
-        assert_eq!(repeat_edge(&mut script, &go(0x01)), None, "flag 0x01");
-        assert_eq!(repeat_edge(&mut script, &go(0x40)), None, "flag 0x40");
-        assert_eq!(
-            repeat_edge(&mut script, &go_from(0, true)),
-            None,
-            "an item's GO"
+        // The go's gates (`0x6e81b6`-`0x6e81de`): our own first guid and caster unit, no item,
+        // neither flag `0x41`.
+        const ME: u64 = 0x77;
+        assert!(hook_runs(Some(ME), ME, None, ME, 0x20));
+        assert!(!hook_runs(Some(ME), ME, None, ME, 0x01), "flag 0x01");
+        assert!(!hook_runs(Some(ME), ME, None, ME, 0x40), "flag 0x40");
+        assert!(
+            !hook_runs(Some(ME), ME, Some(0x4000), ME, 0),
+            "an item's go"
         );
+        assert!(
+            !hook_runs(Some(ME), ME, None, 0x88, 0),
+            "another caster unit"
+        );
+        assert!(!hook_runs(Some(ME), 0x88, None, 0x88, 0), "another's go");
+        assert!(!hook_runs(None, ME, None, ME, 0), "no active player");
         assert_eq!(script.trade_skill_repeat(), (2963, 3), "none counted");
-        // The drain's order: the recast, then its signal (`0x4fd7d7`, `0x4fd7dc`).
-        let edge = |script: &mut UiScript, ev: &CastEvent| {
-            let recast = repeat_edge(script, ev);
+        // The hook's order: the recast, then its signal (`0x4fd7d7`, `0x4fd7dc`).
+        let edge = |script: &mut UiScript| {
+            let recast = script.trade_skill_spell_go(2963);
             if recast.is_some() {
                 script.trade_skill_recast_sent();
             }
             recast
         };
-        assert_eq!(edge(&mut script, &go(0x20)), Some(2963));
-        assert_eq!(edge(&mut script, &go(0)), Some(2963));
-        assert_eq!(edge(&mut script, &go(0)), None);
+        assert_eq!(edge(&mut script), Some(2963));
+        assert_eq!(edge(&mut script), Some(2963));
+        assert_eq!(edge(&mut script), None);
         assert_eq!(
             script.eval::<i64>("return RECASTS").unwrap(),
             3,
@@ -1913,11 +1924,75 @@ mod tests {
         (app, rx)
     }
 
-    fn drain(app: &mut App) {
-        use bevy::ecs::system::RunSystemOnce;
-        app.world_mut()
-            .run_system_once(drain_trade_skill)
-            .expect("the drain runs");
+    /// Our own go of `spell_id`, its result first, as vmangos sends a craft's.
+    fn our_go(spell_id: u32) -> [benilla_protocol::SessionEvent; 2] {
+        const ME: u64 = 0x77;
+        [
+            benilla_protocol::SessionEvent::CastResult {
+                spell_id,
+                success: true,
+                reason: None,
+                arg: None,
+            },
+            benilla_protocol::SessionEvent::SpellGo {
+                caster: ME,
+                spell_id,
+                cast_flags: 0,
+                hits: Vec::new(),
+                misses: Vec::new(),
+                target: None,
+                go_target: None,
+                target_mask: 0,
+                source: None,
+                dest: None,
+                ammo_display_id: None,
+                item_caster: None,
+                unit_caster: ME,
+            },
+        ]
+    }
+
+    /// One frame of `packets`, dispatched and fired.
+    fn frame(app: &mut App, packets: Vec<benilla_protocol::SessionEvent>) {
+        crate::net::handlers::dispatch(app.world_mut(), packets);
+        crate::lanes::fire_in_order(app.world_mut());
+    }
+
+    /// The craft casts our [`headless_tailor`] sent, in order.
+    fn casts(rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>) -> Vec<&'static str> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::CastSpell { spell_id: 2963, .. } => Some("Cast"),
+                crate::net::ClientCommand::DuelAccepted { .. } => Some("DuelAccepted"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// "Create All": the go's hook casts the next craft inside its packet (`0x4fd7d7`, called at
+    /// `0x6e81e7`), so the recast goes out ahead of a later packet's send, here the accept a
+    /// duel request of our own sends at once (`0x4d4a12`).
+    #[test]
+    fn a_create_all_casts_its_next_one_at_the_go() {
+        let (mut app, rx) = headless_tailor();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run("DoTradeSkill(2, 3)")
+        })
+        .unwrap();
+        assert_eq!(casts(&rx), ["Cast"], "the first craft, in the call");
+        let mut packets = our_go(2963).to_vec();
+        packets.push(benilla_protocol::SessionEvent::DuelRequested {
+            arbiter: 0xF110_0000_0000_0055,
+            challenger: 0x77,
+        });
+        frame(&mut app, packets);
+        assert_eq!(casts(&rx), ["Cast", "DuelAccepted"]);
+        assert_eq!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .trade_skill_repeat(),
+            (2963, 2)
+        );
     }
 
     /// `DoTradeSkill` reads the held list, not the open marker (`0x5002e1`), and casts
@@ -1930,7 +2005,6 @@ mod tests {
                 .run("CloseTradeSkill() DoTradeSkill(2, 1)")
         })
         .unwrap();
-        drain(&mut app);
         assert!(
             rx.try_iter().any(|c| matches!(
                 c,
@@ -1940,11 +2014,12 @@ mod tests {
         );
     }
 
-    /// Each of our cast edges is its own `SMSG_SPELL_GO` in the reference, whose hook (`0x4fd7b0`)
-    /// counts down (`0x4fd7ca`) and signals `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`) before the next
-    /// packet is read, so two edges drained in one pass show their handlers 2, then 1.
+    /// Each of our gos runs its hook (`0x4fd7b0`), which counts down (`0x4fd7ca`) and signals
+    /// `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`) inside its packet, so each go's handlers read the
+    /// count it left: 3 at the arm, then 2 and 1. Two gos of one frame park both signals on the
+    /// lane, which reads the count as the frame left it until the lanes fire per packet.
     #[test]
-    fn each_recasts_handlers_read_the_count_its_edge_left() {
+    fn each_recasts_handlers_read_the_count_its_go_left() {
         let (mut app, _rx) = headless_tailor();
         crate::script_calls::with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").run(
                 "SEEN = '' local f = CreateFrame('Frame') \
@@ -1953,22 +2028,9 @@ mod tests {
                  SelectTradeSkill(2) DoTradeSkill(2, 3)",
             ))
             .unwrap();
-        let me = app
-            .world_mut()
-            .query_filtered::<Entity, With<SelfPlayer>>()
-            .single(app.world())
-            .unwrap();
-        for seq in 0..2 {
-            app.world_mut().write_message(CastEvent {
-                entity: me,
-                spell_id: 2963,
-                kind: CastEventKind::Go,
-                cast_flags: 0,
-                item_cast: false,
-                seq,
-            });
+        for _ in 0..2 {
+            frame(&mut app, our_go(2963).to_vec());
         }
-        drain(&mut app);
         let script = app.world().non_send_resource::<UiScript>();
         assert_eq!(script.trade_skill_repeat(), (2963, 1));
         assert_eq!(script.eval::<String>("return SEEN").unwrap(), "3 2 1 ");
@@ -1985,7 +2047,6 @@ mod tests {
             vm.expect("a VM").run("DoTradeSkill(2, 3)")
         })
         .unwrap();
-        drain(&mut app);
         let repeat = |app: &App| {
             app.world()
                 .non_send_resource::<UiScript>()
