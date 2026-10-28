@@ -1000,6 +1000,201 @@ fn build(sources: Vec<Src>) -> Scan {
     }
 }
 
+/// A call from benilla-app's shipped code of a benilla-ui method that queues an event on the
+/// host's lane ([`host_queue_methods`]): the event fires at the next tick, behind every lane.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct QueueWriter {
+    /// The calling function, as `path::fn`: `crates/benilla-app/src/f.rs::feed`.
+    pub writer: String,
+    /// The benilla-ui method it calls.
+    pub method: String,
+    /// Where the call sits.
+    pub at: String,
+}
+
+/// The byte ranges of `src`'s `verb(…)` calls, whose events fire before the verb returns
+/// (`benilla_ui::script::tick::verb`): a raise inside one does not queue.
+fn verb_ranges(src: &Src) -> Vec<(usize, usize)> {
+    let (code, lit) = (src.code.as_bytes(), &src.lit);
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(p) = src.code[from..].find("verb(") {
+        let at = from + p;
+        from = at + "verb(".len();
+        if (at > 0 && is_ident(code[at - 1])) || lit[at] {
+            continue;
+        }
+        out.push((at, close_of(code, lit, from)));
+    }
+    out
+}
+
+/// Every call `name(` in `src` within `range`, outside `skip`, as `(position, name, qualifier)`:
+/// the qualifier is the path segment before `::name`, or `.` for a method call, or empty.
+fn calls_in(
+    src: &Src,
+    range: (usize, usize),
+    skip: &[(usize, usize)],
+) -> Vec<(usize, String, String)> {
+    let (code, lit) = (src.code.as_bytes(), &src.lit);
+    let mut out = Vec::new();
+    let mut k = range.0;
+    while k < range.1.min(code.len()) {
+        if lit[k] || !is_ident(code[k]) || (k > 0 && is_ident(code[k - 1])) {
+            k += 1;
+            continue;
+        }
+        let end = (k..code.len())
+            .find(|&e| !is_ident(code[e]))
+            .unwrap_or(code.len());
+        let name = &src.code[k..end];
+        let after = src.code[end..].trim_start();
+        let before = src.code[..k].trim_end();
+        let is_fn = before.ends_with("fn")
+            && !before[..before.len() - 2].ends_with(|c: char| c.is_alphanumeric() || c == '_');
+        if after.starts_with('(') && !is_fn && !skip.iter().any(|&(a, b)| a <= k && k <= b) {
+            let qualifier = if before.ends_with('.') {
+                ".".to_string()
+            } else if let Some(path) = before.strip_suffix("::") {
+                path.rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            };
+            out.push((k, name.to_string(), qualifier));
+        }
+        k = end;
+    }
+    out
+}
+
+/// The `pub fn`s of benilla-ui that queue an event on the host's lane
+/// (`Model::pending_events`), which fires at the next tick: each that pushes onto it, calls
+/// `queue_event`, or raises (`Model::raise`) outside a `verb(…)` segment, or calls a function
+/// of its own file that does. A call is followed by name only within its file: followed across
+/// the crate, `load`, `tick` or `drain` would name every function so called, and every caller of
+/// each would queue. So a raise reached across modules, such as a held cursor write made again
+/// outside a segment (`cursor::write`), is not seen here.
+fn host_queue_methods(scan: &Scan) -> BTreeSet<String> {
+    let ui: Vec<&Src> = scan
+        .sources
+        .iter()
+        .filter(|s| s.path.starts_with("crates/benilla-ui/src/"))
+        .collect();
+    let defs: Vec<Vec<Def>> = ui.iter().map(|s| defs_of(s)).collect();
+    // Each def by its file and place, with its calls outside verb segments and whether it queues
+    // itself.
+    struct Node {
+        file: usize,
+        def: usize,
+        calls: Vec<(String, String)>,
+        queues: bool,
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    for (f, (src, ds)) in ui.iter().zip(&defs).enumerate() {
+        let verbs = verb_ranges(src);
+        let pushes: Vec<usize> = pushes(src, "pending_events")
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect();
+        for (i, d) in ds.iter().enumerate() {
+            // A sink is not its own caller.
+            if d.name == "raise" || d.name == "queue_event" {
+                continue;
+            }
+            let body = (d.start + 3, d.end);
+            let calls = calls_in(src, body, &verbs);
+            let outside = |at: usize| {
+                body.0 <= at && at < body.1 && !verbs.iter().any(|&(a, b)| a <= at && at <= b)
+            };
+            let queues = pushes.iter().any(|&at| outside(at))
+                || calls
+                    .iter()
+                    .any(|(_, n, q)| n == "queue_event" || (n == "raise" && q == "."));
+            nodes.push(Node {
+                file: f,
+                def: i,
+                calls: calls.into_iter().map(|(_, n, q)| (n, q)).collect(),
+                queues,
+            });
+        }
+    }
+    let mut queuing: BTreeSet<(usize, usize)> = nodes
+        .iter()
+        .filter(|n| n.queues)
+        .map(|n| (n.file, n.def))
+        .collect();
+    loop {
+        let names: Vec<(usize, &str)> = queuing
+            .iter()
+            .map(|&(f, i)| (f, defs[f][i].name.as_str()))
+            .collect();
+        let grew: Vec<(usize, usize)> = nodes
+            .iter()
+            .filter(|n| !queuing.contains(&(n.file, n.def)))
+            .filter(|n| {
+                n.calls.iter().any(|(name, q)| {
+                    names.iter().any(|&(g, callee)| {
+                        callee == name && g == n.file && (q.is_empty() || q == "." || q == "self")
+                    })
+                })
+            })
+            .map(|n| (n.file, n.def))
+            .collect();
+        if grew.is_empty() {
+            break;
+        }
+        queuing.extend(grew);
+    }
+    queuing
+        .iter()
+        .filter(|&&(f, i)| {
+            let src = ui[f];
+            src.code[..defs[f][i].start].trim_end().ends_with("pub")
+        })
+        .map(|&(f, i)| defs[f][i].name.clone())
+        .collect()
+}
+
+/// Every call from benilla-app's shipped code of a [`host_queue_methods`] method, by its calling
+/// function.
+pub(crate) fn host_queue_writers() -> Vec<QueueWriter> {
+    queue_writers_of(scan())
+}
+
+fn queue_writers_of(s: &Scan) -> Vec<QueueWriter> {
+    let methods = host_queue_methods(s);
+    let mut out = Vec::new();
+    for src in s
+        .sources
+        .iter()
+        .filter(|s| s.path.starts_with("crates/benilla-app/src/"))
+    {
+        let ds = defs_of(src);
+        for (at, name, q) in calls_in(src, (0, src.code.len()), &[]) {
+            if q != "." || !methods.contains(&name) {
+                continue;
+            }
+            let Some(writer) = ds
+                .iter()
+                .filter(|d| d.start <= at && at < d.end)
+                .min_by_key(|d| d.end - d.start)
+            else {
+                continue;
+            };
+            out.push(QueueWriter {
+                writer: format!("{}::{}", src.path, writer.name),
+                method: name,
+                at: format!("{}:{}", src.path, line_of(&src.code, at)),
+            });
+        }
+    }
+    out.sort();
+    out
+}
+
 #[test]
 fn the_firing_functions_are_found_by_their_signature() {
     let s = scan();
@@ -1241,4 +1436,48 @@ fn a_forwarder_the_scan_cannot_trace_is_unaccounted() {
     let mut names = names_of(&s);
     names.sort();
     assert_eq!(names, ["H_ONE", "H_TWO"]);
+}
+
+/// A feed's call of a setter that queues for the tick is a writer, through a helper of the
+/// setter's own file; a raise inside a verb segment and a crate-private setter are not.
+#[test]
+fn a_call_of_a_queueing_setter_is_a_writer() {
+    let ui = r#"
+impl UiScript {
+    pub fn set_thing(&mut self) {
+        push_it(&mut self.model_mut());
+    }
+    pub fn in_place(&mut self) {
+        super::tick::verb(&self.lua, |model| model.raise("A_B", Vec::new()));
+    }
+    pub(crate) fn inner(&mut self) {
+        self.model_mut().pending_events.push(("X_Y".to_string(), Vec::new()));
+    }
+}
+fn push_it(model: &mut Model) {
+    model.raise("C_D", Vec::new());
+}
+"#;
+    let app = r#"
+fn feed(script: &mut UiScript) {
+    script.set_thing();
+    script.in_place();
+    script.inner();
+}
+"#;
+    let s = scan_of(&[
+        ("crates/benilla-ui/src/script/m.rs", ui),
+        ("crates/benilla-app/src/f.rs", app),
+    ]);
+    let found: Vec<(String, String)> = queue_writers_of(&s)
+        .into_iter()
+        .map(|w| (w.writer, w.method))
+        .collect();
+    assert_eq!(
+        found,
+        [(
+            "crates/benilla-app/src/f.rs::feed".to_string(),
+            "set_thing".to_string()
+        )]
+    );
 }

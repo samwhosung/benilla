@@ -462,7 +462,7 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
 /// as a read: the error keys a refusal pushes, the tutorial banks a watcher fires, the close
 /// counts a window's core adds to and what a session verb posts. The lanes and the host's two
 /// other sinks (the message sounds and the unit edits, which raise no event) are not queues here.
-const FILLED_THROUGH_A_READ: &[&str] = &[
+pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     // The account-data sections, which the download's handler stores through `&self`.
     "::account_data::AccountData",
     "::ui_action::errors::UiErrorKeys",
@@ -475,18 +475,20 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 ];
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
-/// consults, none of them a queue a feed takes. A new one fails until it is placed here or in
+/// consults, none of them a queue a feed takes. A system between the dispatch and the drain that
+/// writes one has its row in `host_read_tests`'s lists, as a feed that rewrites what a handler
+/// reads would hand it the frame before's. A new one fails until it is placed here or in
 /// [`FILLED_THROUGH_A_READ`]. The list is kept by hand: an entry a handler in fact fills through a
 /// shared reference leaves that queue out of [`handler_queues`], so a feed that takes it and fires
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
-const READ_ONLY_TO_HANDLERS: &[&str] = &[
+pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The character's language skills and word pools, which a page's show rewrites it by
     // (`0x4e3856`). Not read-only in substance: `feed_language_skills` recomputes the skills
     // every frame, after the dispatch, from the skill lines the handlers write, where the
     // reference reads the skill live at the show (`0x4e3837` → `GetIndexedSpellSkill`). A show
     // inside a packet reads them as the last frame left them: a frame-final read the flip must
-    // make live (#2168), which no list here measures, a handler's read of a feed's output.
+    // make live (#2168), its row in `BETWEEN_THE_DISPATCH_AND_THE_DRAIN`.
     "::ui_chat::language::ChatLanguages",
     // The usable stationery list, whose first paper the list parse gives a row with none
     // (`0x4ad565`); the paper callback's handler writes it, through its own `ResMut`.
@@ -668,7 +670,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 39] {
+pub(super) fn lane_types() -> [TypeId; 39] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -827,7 +829,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 39] {
 }
 
 /// Whether `id` names a `Messages<T>` buffer, which a reader takes from through a read.
-fn is_messages(world: &World, id: ComponentId) -> bool {
+pub(super) fn is_messages(world: &World, id: ComponentId) -> bool {
     name(world, id).contains("Messages<")
 }
 
@@ -838,7 +840,7 @@ pub(super) fn name(world: &World, id: ComponentId) -> String {
         .map_or_else(|| "?".to_string(), |n| n.to_string())
 }
 
-fn ends_with_any(name: &str, rows: &[&str]) -> bool {
+pub(super) fn ends_with_any(name: &str, rows: &[&str]) -> bool {
     rows.iter().any(|s| name.ends_with(s))
 }
 
@@ -1971,4 +1973,117 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
          give each its row in LANE_READS_FRAME_FINAL as it stands:\n  {}",
         wrong.join("\n  ")
     );
+}
+
+/// The calls that queue an event on the VM's own lane for its next tick
+/// ([`crate::ui_script::fire_scan::host_queue_writers`]), by a suffix of the calling function's
+/// `path::fn` and the method it calls, with why. The tick fires that lane after the drain, behind
+/// every packet's events, whichever system or lane the call ran in, so no call is exempt; where
+/// the reference signals the event in place, inside the packet or the input that caused it, the
+/// row is remaining work. The flip leaves their order as it is: each fires behind every packet
+/// before it and after it. A new call fails until it has its row, and a row whose call is gone
+/// fails as stale.
+pub(super) const QUEUED_FOR_THE_TICK: &[(&str, &str, &str)] = &[
+    (
+        "capture/fixtures.rs::seed_ui_fixture",
+        "set_world_map_explored",
+        "a capture's fixture, dev tooling outside any session: no packet raises it",
+    ),
+    (
+        "capture/probe_service.rs::service_probe",
+        "take_cursor_item_for_sale",
+        "a probe's scripted sale, dev tooling outside any session",
+    ),
+    (
+        "target/click.rs::talk",
+        "take_cursor_item_for_sale",
+        "the vendor arm's sale clears the cursor outside a verb segment, so its `CURSOR_UPDATE` \
+         waits for the tick, where the interact ladder's `ClearCursor(0, 1)` signals inside the \
+         click (`0x5df5d0`, `0x5df5fc` → `0x495190`), ahead of the packets (I2, #1988)",
+    ),
+    (
+        "ui_world_map.rs::feed_landmarks",
+        "set_world_map_landmark_sources",
+        "rebuilds the landmark list once a frame off its inputs and queues `WORLD_MAP_UPDATE` on a \
+         change, where the reference rebuilds and signals in `0x4a67a0` (`0x4a6ce4`) at each \
+         input's place: the explored bits' watcher (`0x4a6477`) in the update packet's notify \
+         pass, the gossip marker's set in its handler (`0x4e2840` → `0x6dac10`, `0x6dac93`) and \
+         its expiry in the minimap's frame update (`0x6d9411`)",
+    ),
+    (
+        "ui_world_map.rs::feed_world_map",
+        "set_world_map_explored",
+        "pushes the explored bits once a frame and queues `WORLD_MAP_UPDATE` on a change, where \
+         the reference's mirror watcher on the bytes (`0x4a6430` arms \
+         `ClntObjMgrSetObjectMirrorHandler(4, 0xe6c, player, 0x100, 0x4a6460)`) runs inside the \
+         update packet's notify pass and its `0x4a6477` → `0x4a67a0` signals there (`0x4a6ce4`): \
+         a callback on the field callbacks' lane",
+    ),
+    (
+        "ui_world_map.rs::feed_world_map",
+        "sync_world_map_to_player_zone",
+        "the first world enter's selection, queued for the next tick (the module's deviation), \
+         where the zone updater selects (`0x4947ac` → `0x4a6650` → `0x4a67a0`) and signals in \
+         place (`0x4a6ce4`)",
+    ),
+    (
+        "ui_world_map.rs::install_world_loc_projector",
+        "set_world_loc_projector",
+        "installs benilla's own projection at a VM's first frame, whose first landmark list \
+         queues `WORLD_MAP_UPDATE`; no reference fact, as the reference projects inside \
+         `0x4a67a0`",
+    ),
+    (
+        "ui_world_map.rs::seed_world_map_catalog",
+        "set_world_map_catalog",
+        "the catalog's push at the interface load, ahead of the session's packets; its \
+         `WORLD_MAP_UPDATE` is benilla's own, as the reference's build (`0x4a5d00`, from \
+         `0x48f5d1`) signals nothing",
+    ),
+    (
+        "ui_world_map.rs::seed_world_map_catalog",
+        "set_world_map_direct_areas",
+        "the instance maps' push beside the catalog, from the same walk (`0x4a5d00`); its \
+         `WORLD_MAP_UPDATE` is benilla's own",
+    ),
+];
+
+/// Every call that queues an event on the VM's lane for its next tick has its row in
+/// [`QUEUED_FOR_THE_TICK`], so a feed that raises off state it compares cannot hide behind the
+/// tick.
+#[test]
+fn every_call_that_queues_for_the_tick_is_listed() {
+    let writers = crate::ui_script::fire_scan::host_queue_writers();
+    let row = |w: &crate::ui_script::fire_scan::QueueWriter| {
+        QUEUED_FOR_THE_TICK
+            .iter()
+            .find(|(f, m, _)| w.writer.ends_with(&format!("/{f}")) && w.method == *m)
+    };
+    let unlisted: Vec<String> = writers
+        .iter()
+        .filter(|w| row(w).is_none())
+        .map(|w| format!("{} calls {} at {}", w.writer, w.method, w.at))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "these queue an event for the VM's next tick, behind every packet's: signal it in place, \
+         or give the call its row in QUEUED_FOR_THE_TICK:\n  {}",
+        unlisted.join("\n  ")
+    );
+    let stale: Vec<String> = QUEUED_FOR_THE_TICK
+        .iter()
+        .filter(|(f, m, _)| {
+            !writers
+                .iter()
+                .any(|w| w.writer.ends_with(&format!("/{f}")) && w.method == *m)
+        })
+        .map(|(f, m, _)| format!("{f} {m}"))
+        .collect();
+    assert!(stale.is_empty(), "stale rows: {stale:?}");
+    let empty: Vec<&str> = QUEUED_FOR_THE_TICK
+        .iter()
+        .filter(|(_, _, why)| why.is_empty())
+        .map(|(f, _, _)| *f)
+        .collect();
+    assert!(empty.is_empty(), "rows with no reason: {empty:?}");
 }

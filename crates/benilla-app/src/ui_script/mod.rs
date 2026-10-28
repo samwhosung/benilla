@@ -1139,7 +1139,7 @@ mod surface_gate;
 
 /// The reader of every fire site, for the event gates.
 #[cfg(test)]
-mod fire_scan;
+pub(crate) mod fire_scan;
 
 /// The event argument-shape gate: every fire site against `reference/event_args.tsv`.
 #[cfg(test)]
