@@ -537,4 +537,6 @@ mod go_lock_tests;
 #[cfg(test)]
 mod hover_order_tests;
 #[cfg(test)]
+mod live_tests;
+#[cfg(test)]
 mod tests;

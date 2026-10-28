@@ -272,8 +272,10 @@ pub(super) fn build_view(
         });
     // The tools (`SPELL_TOTEMS`, `0x854ec4`) and the reagents (`SPELL_REAGENTS`, `0x854e54`),
     // each the player does not carry red. One whose template has not streamed is absent, its
-    // lookup asked; the reference looks each up with a callback (`0x52eda4`, `0x52f3f4`).
-    let item_line = |head: &str, items: &mut dyn Iterator<Item = (u32, u32)>| {
+    // lookup asked with the tooltip as the answer's cookie (`0x52eda4`, `0x52f3f4`) and counted
+    // among the view's misses, whose last answer builds the tooltip again (`0x52f820`).
+    let mut item_misses: Vec<u32> = Vec::new();
+    let mut item_line = |head: &str, items: &mut dyn Iterator<Item = (u32, u32)>| {
         let mut parts: Vec<String> = Vec::new();
         let mut met = true;
         for (entry, count) in items.filter(|&(e, _)| e != 0) {
@@ -282,6 +284,7 @@ pub(super) fn build_view(
                 .template(entry, 0, Ask::Event(vctx.commands))
                 .map(|t| t.name.clone())
             else {
+                item_misses.push(entry);
                 continue;
             };
             // `"%s (%d)"` above one (`0x854b30`, `0x52f461`); a tool has no count.
@@ -312,6 +315,10 @@ pub(super) fn build_view(
         &mut d.totems.iter().map(|&entry| (entry, 1)),
     );
     let (reagents, reagents_met) = item_line("SPELL_REAGENTS", &mut d.reagents.iter().copied());
+    // The unit selector skips both lookups (`0x52ed50`, `0x52f398`), so a pet view misses none.
+    if matches!(caster, ViewCaster::Pet(_)) {
+        item_misses.clear();
+    }
     // The drain-all line (`0x52f697`): `AttributesEx` bit `0x2`, keyed by power type.
     let use_all = (d.attributes_ex & ATTR_EX_USE_ALL_POWER != 0).then(|| {
         TooltipText::copied(match d.power_type {
@@ -348,6 +355,7 @@ pub(super) fn build_view(
         reagents_met,
         use_all,
         description,
+        item_misses,
     })
 }
 

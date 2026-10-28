@@ -314,6 +314,17 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
 #[rustfmt::skip]
 pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::player::net::feed_player_skinned", &["player::net::SkinnedFeed"]),
+    // The hover's pick runs outside every packet (`0x481790` → `0x4828d0` → `0x482090` →
+    // `0x492e70` → `0x492890`), but its plate is rebuilt inside them, each rebuild the whole
+    // builder over every input here: the unit's by the name-query callback `0x5fb840`, the
+    // creature cache callback `0x604660` and `OnEntryChanged` `0x604600` (each through `0x491a00`,
+    // `0x4919d0` → `0x529fe0`) and the unit-flags watcher (`0x5ff7be`); the game object's by its
+    // lock key's cache callback `0x52ad10`; the corpse's by its owner's name callback `0x52afe0`.
+    ("::ui_tooltip::drive_mouseover_tooltip", &["go_anim::GoAnim",
+        "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::reputations::Reputations", "ui_action::PlayerActions", "ui_guild::GuildState"]),
+
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
         "net::SelfGuid"]),
@@ -404,24 +415,16 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
-/// every packet, held to their inputs the same way, with why: a hover's build, which runs in a
-/// frame update of the paint pass (`CSimpleTop::OnLayerUpdate` `0x765650`) or at a mouse move
-/// (`0x7660d0`), never inside a handler, so a listener fired inside the dispatch reads what the
-/// last build left, as 1.12.1's does. They stay after the flip; the getters that read the state
-/// they read read it live.
+/// every packet, held to their inputs the same way, with why: a hover's build that runs at a mouse
+/// move (`0x7660d0`) or the paint pass's repeat pick (`CSimpleTop::OnLayerUpdate` `0x765650`) and
+/// that no cache callback rebuilds inside a handler, so a listener fired inside the dispatch reads
+/// what the last build left, as 1.12.1's does. They stay after the flip.
 #[rustfmt::skip]
 pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
     ("::minimap::blips::drive_blip_tooltip", &["items::Countdowns", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore"],
         "the minimap's probe `0x4eb0c0`, its slot `0x3c`, which the hover pick calls at a mouse \
          move and at the paint pass's repeat pick (`0x7660d0`, from `0x765650`)"),
-    ("::ui_tooltip::drive_mouseover_tooltip", &["go_anim::GoAnim",
-        "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
-        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "net::reputations::Reputations", "ui_action::PlayerActions", "ui_guild::GuildState"],
-        "the world frame's update `0x481790`, a frame update of the paint pass, picks and \
-         publishes the hover (`0x4828d0` → `0x482090` → `0x492890`); the `\"mouseover\"` \
-         getters read the unit live"),
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows

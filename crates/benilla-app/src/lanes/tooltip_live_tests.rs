@@ -27,6 +27,7 @@ const HUMAN_MAGE: u32 = 1 | (8 << 8);
 /// it.
 const LISTENER: &str = r#"
     MANA_COST = "%d Mana"
+    SPELL_REAGENTS = "Reagents: "
     Costs = {}
     local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
     CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
@@ -170,4 +171,58 @@ fn the_mouseover_getters_read_the_hovered_unit_at_the_call() {
             .expect("the chunk runs");
     let pushed: Option<i64> = crate::script_calls::eval_in_vm(app.world(), read);
     assert_eq!((live, pushed), (Some(3), None));
+}
+
+/// A reagent the item cache misses at the build is asked with the tooltip as its cookie and
+/// counted (`0x52f3f4`, `0x52f3ff`); its answer builds the spell again from the kept id
+/// (`0x52f820` → `0x52e610`), so the shown tooltip gains the line with no new hover.
+#[test]
+fn a_reagents_answer_rebuilds_the_shown_spell_tooltip() {
+    /// Arcane Powder.
+    const POWDER: u32 = 17020;
+    let mut app = client();
+    let mut reagents = [(0, 0); 8];
+    reagents[0] = (POWDER, 1);
+    let frostbolt = SpellDisplay {
+        id: FROSTBOLT,
+        name: "Frostbolt".into(),
+        reagents,
+        ..Default::default()
+    };
+    app.world_mut()
+        .resource_mut::<crate::ui_action::Spells>()
+        .catalog = SpellCatalog::from_displays(HashMap::from([(FROSTBOLT, frostbolt)]));
+    let lines = r#"
+        local t = {}
+        for i = 1, TT:NumLines() do t[i] = getglobal("TTTextLeft" .. i):GetText() end
+        return table.concat(t, " | ")
+    "#;
+    let hosted = |app: &mut App, chunk: &str| -> String {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| s.expect("a VM").eval(chunk))
+            .expect("the chunk runs")
+    };
+    hosted(
+        &mut app,
+        r#"TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetSpell(1, "spell"); return """#,
+    );
+    assert_eq!(hosted(&mut app, lines), "Frostbolt", "the name unknown");
+    // The record lands, in the app's cache and the VM's copy.
+    app.world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(POWDER, Some(crate::items::test_template("Arcane Powder")));
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_item_template(
+            POWDER,
+            benilla_ui::script::ItemTemplateView {
+                name: "Arcane Powder".into(),
+                ..Default::default()
+            },
+        );
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| s.expect("a VM").tick(0.01));
+    assert_eq!(
+        hosted(&mut app, lines),
+        "Frostbolt | Reagents: |cffff2020Arcane Powder|r",
+        "none carried, so red"
+    );
 }
