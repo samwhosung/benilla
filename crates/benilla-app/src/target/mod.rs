@@ -16,8 +16,8 @@ pub(crate) use crate::script_calls::{
     error_lines, record_error_lines, release_click, take_error_lines,
 };
 pub(crate) use arm::{
-    begin_records, plate_clicks_first, run_world_clicks, trace_press, world_steps, ClickArm,
-    ClickLegs, WorldClickLegs,
+    begin_records, plate_clicks_first, right_press_hook, run_world_clicks, world_steps, ArmTracer,
+    ClickArm, ClickLegs, WorldClickLegs,
 };
 mod by_name;
 // `pub(crate)` for the chest live probe, which drives the mouse's own `click::resolve_go_action`.

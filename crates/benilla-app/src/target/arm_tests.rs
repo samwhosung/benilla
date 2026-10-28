@@ -31,7 +31,7 @@ fn a_right_press_in_the_world_ends_repair_mode_and_a_wrap_and_one_on_the_ui_does
             })));
         }
         world.insert_non_send_resource(script);
-        trace_press(&mut world, MouseButton::Right, None, over_ui);
+        right_press_hook(&mut world, over_ui);
         let script = world.non_send_resource::<UiScript>();
         (script.repair_mode(), script.gift_wrap_armed().is_some())
     };

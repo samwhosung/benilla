@@ -97,9 +97,16 @@ pub(crate) fn publish_corpse_pick(
     targeting: Res<super::SpellTargeting>,
     mut pick: ResMut<CorpsePick>,
 ) {
-    let now = targeting.0.as_ref().map(|t| t.word);
-    if pick.0 != now {
-        pick.0 = now;
+    pick.publish(&targeting);
+}
+
+impl CorpsePick {
+    /// The word `targeting` stands at.
+    pub(crate) fn publish(&mut self, targeting: &super::SpellTargeting) {
+        let now = targeting.0.as_ref().map(|t| t.word);
+        if self.0 != now {
+            self.0 = now;
+        }
     }
 }
 

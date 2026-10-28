@@ -85,10 +85,25 @@ pub(crate) fn seed_plate_hover(
     guids: Option<Res<crate::net::GuidIndex>>,
     mut hover: ResMut<PlateHover>,
 ) {
-    hover.0 = script
-        .and_then(|s| s.hovered_nameplate())
-        .zip(guids)
-        .and_then(|(guid, guids)| guids.0.get(&guid).copied());
+    hover.seed(script.as_deref(), guids.as_deref());
+}
+
+impl PlateHover {
+    /// The unit of the plate `script`'s walk left hovered.
+    pub(crate) fn seed(
+        &mut self,
+        script: Option<&benilla_ui::script::UiScript>,
+        guids: Option<&crate::net::GuidIndex>,
+    ) {
+        self.seed_guid(script.and_then(|s| s.hovered_nameplate()), guids);
+    }
+
+    /// The unit of the plate of `guid`, the one the walk left hovered.
+    pub(crate) fn seed_guid(&mut self, guid: Option<u64>, guids: Option<&crate::net::GuidIndex>) {
+        self.0 = guid
+            .zip(guids)
+            .and_then(|(guid, guids)| guids.0.get(&guid).copied());
+    }
 }
 
 /// Completed plate clicks, physical or an addon's `plate:Click`, waiting for the targeting chain:

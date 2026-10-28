@@ -131,12 +131,19 @@ pub(crate) struct UnitPick {
 /// Publish [`UnitPick`] in the feed, after the packets and the clicks, beside
 /// [`super::PicksSelf`].
 pub(crate) fn publish_unit_pick(targeting: Res<SpellTargeting>, mut pick: ResMut<UnitPick>) {
-    let flags = targeting
-        .0
-        .as_ref()
-        .map(|targeting| PickFlags::of(targeting.word));
-    if pick.flags != flags {
-        pick.flags = flags;
+    pick.publish(&targeting);
+}
+
+impl UnitPick {
+    /// The flags of the word `targeting` stands at.
+    pub(crate) fn publish(&mut self, targeting: &SpellTargeting) {
+        let flags = targeting
+            .0
+            .as_ref()
+            .map(|targeting| PickFlags::of(targeting.word));
+        if self.flags != flags {
+            self.flags = flags;
+        }
     }
 }
 
@@ -160,13 +167,20 @@ pub(crate) struct GoPickWord {
 
 /// Publish [`GoPick`] in the feed, beside [`UnitPick`].
 pub(crate) fn publish_go_pick(targeting: Res<SpellTargeting>, mut pick: ResMut<GoPick>) {
-    let now = targeting.0.as_ref().map(|t| GoPickWord {
-        word: t.word,
-        spell_id: t.spell_id,
-        item: t.commit.item_guid(),
-    });
-    if pick.0 != now {
-        pick.0 = now;
+    pick.publish(&targeting);
+}
+
+impl GoPick {
+    /// The word `targeting` stands at, its spell and its cast item.
+    pub(crate) fn publish(&mut self, targeting: &SpellTargeting) {
+        let now = targeting.0.as_ref().map(|t| GoPickWord {
+            word: t.word,
+            spell_id: t.spell_id,
+            item: t.commit.item_guid(),
+        });
+        if self.0 != now {
+            self.0 = now;
+        }
     }
 }
 

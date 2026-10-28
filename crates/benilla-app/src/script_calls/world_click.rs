@@ -3,18 +3,154 @@
 //! 0x514b70` → `DispatchWorldClick 0x481f60`), whose legs all run before the command returns:
 //! the router calls each leg directly (`0x481fd3`, `0x481fff`, `0x482042`), each leg its select or
 //! its dispatcher (`0x492d05`, `0x492d18`), and `SetSelection` signals its listeners in place. What
-//! a leg leaves to a packet or to a walk's arrival is not the call's.
+//! a leg leaves to a packet or to a walk's arrival is not the call's. The arm's pick needs the
+//! world's geometry, which only the input records' walk lends beside the host ([`InputHost`]):
+//! the mouse commands pass the movement gate only inside an input event (`0x494a50`, tag 0), and
+//! the walk is where the input events run.
 //!
 //! [`ScriptCall::WorldClick`]: benilla_ui::script::ScriptCall::WorldClick
 
-use benilla_ui::script::{ClickCall, ClickMode, UiScript};
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::Vec2;
 
-use super::{ScriptCallHost, Signalled};
+use benilla_ui::script::{CallHost, CallTail, ClickCall, ClickMode, ScriptCall, UiScript};
+
+use super::{disjoint, ScriptCallHost, Signalled};
+
+/// The call host the input records' walk lends, with the world click's tracer beside it
+/// ([`crate::target::ArmTracer`]), so an arm a binding or a handler makes picks inside its call
+/// (`ArmClick 0x514810` → `0x51482d` → `0x481f00`). The tracer reads the meshes, the rig palettes
+/// and the colliders, which no other host holds: the walk runs inside the records' exclusive
+/// dispatch, so they order against nothing.
+#[derive(SystemParam)]
+pub(crate) struct InputHost<'w, 's> {
+    set: disjoint::Pair<
+        'w,
+        's,
+        Option<crate::target::ArmTracer<'static, 'static>>,
+        Option<ScriptCallHost<'static, 'static>>,
+    >,
+}
+
+impl InputHost<'_, '_> {
+    /// Run `f` on `script` with the host and the tracer lent around all of it; with no host, `f`
+    /// runs unlent.
+    pub(crate) fn lend<R>(
+        &mut self,
+        script: &mut UiScript,
+        f: impl FnOnce(&mut UiScript) -> R,
+    ) -> R {
+        if self.set.p1().is_none() {
+            return f(script);
+        }
+        script.hosted(&mut Tracing(self), f)
+    }
+}
+
+/// [`InputHost`] as the VM holds it: each call to the host, which an arm's call precedes with
+/// its pick at the cursor of the record that runs ([`benilla_ui::script::ClickPress`]).
+struct Tracing<'a, 'w, 's>(&'a mut InputHost<'w, 's>);
+
+impl Tracing<'_, '_, '_> {
+    fn host(&mut self) -> Option<ScriptCallHost<'_, '_>> {
+        self.0.set.p1()
+    }
+}
+
+impl CallHost for Tracing<'_, '_, '_> {
+    fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+        if let ScriptCall::WorldClick(ClickCall::Arm(_)) = call {
+            let at = script.click_press().at.map(Vec2::from);
+            let pick = self
+                .0
+                .set
+                .p0()
+                .map(|mut tracer| tracer.trace(script.hovered_nameplate(), at));
+            #[cfg(test)]
+            self.0.set.end_lend();
+            if let (Some(pick), Some(mut host)) = (pick, self.host()) {
+                if let Some(mut arm) = host.appliers.click().arm() {
+                    arm.traced(pick);
+                }
+            }
+        }
+        self.host()?.apply(script, call)
+    }
+
+    fn read_item(
+        &mut self,
+        key: benilla_ui::script::ItemKey,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::ItemRead),
+    ) -> bool {
+        self.host().is_some_and(|mut h| h.read_item(key, read))
+    }
+
+    fn read_unit_object(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitObjectRead),
+    ) -> bool {
+        self.host()
+            .is_some_and(|mut h| h.read_unit_object(guid, read))
+    }
+
+    fn read_unit_tokens(
+        &mut self,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitTokenObjects),
+    ) -> bool {
+        self.host().is_some_and(|mut h| h.read_unit_tokens(read))
+    }
+
+    fn read_unit_identity(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitIdentityRead),
+    ) -> bool {
+        self.host()
+            .is_some_and(|mut h| h.read_unit_identity(guid, read))
+    }
+
+    fn read_unit_stats(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(
+            &dyn benilla_ui::script::UnitObjectRead,
+            &dyn benilla_ui::script::CombatRead,
+        ),
+    ) -> bool {
+        self.host()
+            .is_some_and(|mut h| h.read_unit_stats(guid, read))
+    }
+
+    fn read_own_stats(
+        &mut self,
+        read: &mut dyn FnMut(Option<&dyn benilla_ui::script::CombatRead>),
+    ) -> bool {
+        self.host().is_some_and(|mut h| h.read_own_stats(read))
+    }
+
+    fn read_self(&mut self, read: &mut dyn FnMut(&dyn benilla_ui::script::SelfRead)) -> bool {
+        self.host().is_some_and(|mut h| h.read_self(read))
+    }
+
+    fn read_unit_auras(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(Option<&dyn benilla_ui::script::AuraListRead>),
+    ) -> bool {
+        self.host()
+            .is_some_and(|mut h| h.read_unit_auras(guid, read))
+    }
+
+    fn read_live(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        self.host().is_some_and(|mut h| h.read_live(ask))
+    }
+}
 
 impl ScriptCallHost<'_, '_> {
     /// One step of the world click, inside the mouse command's call: unless it waits for an arm's
-    /// pick, which the record's world steps trace ([`crate::target::world_steps`]). A leg whose
-    /// state a harness lacks does nothing.
+    /// pick, which the record's world steps trace ([`crate::target::world_steps`]) when no tracer
+    /// was lent ([`InputHost`]). A leg whose state a harness lacks does nothing.
     pub(super) fn world_click(
         &mut self,
         script: &mut UiScript,

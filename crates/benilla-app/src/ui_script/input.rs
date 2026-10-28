@@ -111,9 +111,9 @@ impl WorldWheelSlot for WorldSlot<'_, '_> {
 
 /// Where the frame's walk of its records stands: whether it began, the next record, the point the
 /// hover was last walked at, the record it stopped after for that record's world steps
-/// ([`crate::target::world_steps`]), and a mouse press it stopped ahead of the binding of, for the
-/// world frame's press ([`crate::target::trace_press`]): the press's record and whether a frame
-/// took it.
+/// ([`crate::target::world_steps`]), and a right press it stopped ahead of the binding of, for the
+/// world frame's hook ([`crate::target::right_press_hook`]): the press's record and whether a
+/// frame took it.
 #[derive(Resource, Default)]
 pub(crate) struct RecordWalk {
     begun: bool,
@@ -131,8 +131,8 @@ pub(crate) struct RecordWalk {
 /// walk stops after each button record and after any record whose binding made a click step, and
 /// goes on once the world's steps are done; what no command dispatched runs where the records end
 /// ([`crate::target::run_world_clicks`]).
-/// A mouse press stops ahead of its binding as well, for the world frame's hook and the press's
-/// pick, and goes on at the binding.
+/// A right press stops ahead of its binding as well, for the world frame's hook, and goes on at
+/// the binding.
 ///
 /// The input records' world mouse ([`crate::player::WorldMouse`]) follows: the look session, which
 /// adds the armed click's travel, and the command tick.
@@ -167,18 +167,8 @@ fn dispatch(world: &mut World, feed: &mut Option<bevy::ecs::system::SystemId>, l
         crate::creature_anim::apply_unit_edits(world);
         let mut walk = world.resource_mut::<RecordWalk>();
         if std::mem::take(&mut walk.hook_due) {
-            let (i, over_ui) = walk.hooked.unwrap_or_default();
-            let press = world
-                .resource::<super::InputRecords>()
-                .iter()
-                .nth(i)
-                .and_then(|r| match r.record {
-                    super::Record::Button { button, .. } => Some((button, r.at)),
-                    _ => None,
-                });
-            if let Some((button, at)) = press {
-                crate::target::trace_press(world, button, at, over_ui);
-            }
+            let (_, over_ui) = walk.hooked.unwrap_or_default();
+            crate::target::right_press_hook(world, over_ui);
             continue;
         }
         let Some(record) = walk.stopped.take() else {
@@ -224,8 +214,8 @@ pub(super) fn feed_ui_input(
     // The characters the active layout makes, which name a key for a keyboard frame.
     layout: Res<crate::bindings::LayoutNames>,
     // Lent to the VM for the pass, so a click's, a key's or a binding's script calls apply in the
-    // call.
-    mut host: Option<crate::script_calls::ScriptCallHost>,
+    // call, the world click's arm picking inside it.
+    mut host: crate::script_calls::InputHost,
     mut world_frame: crate::bindings::WorldFrameBindings,
     mut walk: ResMut<RecordWalk>,
 ) {
@@ -297,9 +287,7 @@ pub(super) fn feed_ui_input(
                     }
                 };
                 match script {
-                    Some(mut script) => {
-                        crate::script_calls::lent(&mut script, host.as_mut(), |s| legs(Some(s)))
-                    }
+                    Some(mut script) => host.lend(&mut script, |s| legs(Some(s))),
                     None => legs(None),
                 }
             }
@@ -356,6 +344,9 @@ pub(super) fn feed_ui_input(
             script.set_modifiers(mods.shift, mods.ctrl, mods.alt);
             script.set_alt_down(mods.alt);
             let at = ui_point(r.at);
+            // The cursor an arm the record's walk or binding makes picks at: the last mouse event's
+            // (`[frame+0xa0]+0x1118`, `0x481f1d`), the record's own.
+            script.set_click_press(click_press(r, false));
             // The hover the record meets is the cursor's when it was queued: the moves before it
             // are records of their own (category 0xc, `0x7660d0`).
             if let Some(at) = at {
@@ -459,25 +450,23 @@ pub(super) fn feed_ui_input(
                     };
                 }
             }
-            // A mouse press the world frame may take stops here for its pick and a right press's
-            // hook, which run ahead of the binding (`0x483c62`, `0x483c93`). A right press the
-            // world input hook ate (`0x492b50`) never reaches the world frame, in a look session
-            // or not.
-            let (press, right) = match r.record {
+            // A right press the world frame may take stops here for its hook, which runs ahead of
+            // the binding (`0x483c62`, `0x483c93`). A right press the world input hook ate
+            // (`0x492b50`) never reaches the world frame, in a look session or not.
+            let right = matches!(
+                r.record,
                 super::Record::Button {
-                    button,
+                    button: MouseButton::Right,
                     state: ButtonState::Pressed,
-                } => (true, button == MouseButton::Right),
-                _ => (false, false),
-            };
-            if in_world && press && resumed.is_none() && !(right && script.press_hooked()) {
+                }
+            );
+            if in_world && right && resumed.is_none() && !script.press_hooked() {
                 walk.next = i;
                 walk.hooked = Some((i, over_ui));
                 walk.hook_due = true;
                 return;
             }
-            // The world frame, last in the walk, inside the same record: an arm its binding makes
-            // picks at the record's point.
+            // The world frame, last in the walk, inside the same record.
             if in_world && leg {
                 script.set_click_press(click_press(r, click_consumed.0));
                 world_frame_leg(
@@ -488,7 +477,6 @@ pub(super) fn feed_ui_input(
                     over_ui,
                     &layout,
                 );
-                script.set_click_press(ClickPress::default());
             }
             // The world's steps of a button record, or of one whose binding made a click step,
             // run before the next record: the walk returns to its driver here.
@@ -503,6 +491,7 @@ pub(super) fn feed_ui_input(
                 walk.stopped = Some(r.clone());
             }
         }
+        script.set_click_press(ClickPress::default());
         // The modifiers as the frame's records leave them, which the tick's scripts read, and the
         // keyboard's owner as they leave it, which the frame's later readers take.
         script.set_modifiers(plane.shift, plane.ctrl, plane.alt);
@@ -527,7 +516,7 @@ pub(super) fn feed_ui_input(
             warn!("ui_script(input): {err}");
         }
     };
-    crate::script_calls::lent(&mut script, host.as_mut(), feed);
+    host.lend(&mut script, feed);
 }
 
 /// The press `r` hands the mouse commands its binding runs: its point, and whether the frame's

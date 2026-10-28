@@ -30,9 +30,9 @@ mod engine;
 pub(crate) mod live;
 mod windows;
 mod world_click;
-pub(crate) use world_click::submit_waiting_clicks;
 #[cfg(test)]
 pub(crate) use world_click::{error_lines, record_error_lines, release_click, take_error_lines};
+pub(crate) use world_click::{submit_waiting_clicks, InputHost};
 
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
 /// runs its local apply's leave (`0x5f0790`), the loot close (`0x48f200` at `0x5f07d5`) then the

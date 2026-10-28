@@ -162,21 +162,22 @@ pub(crate) struct InputState {
     primaries: u8,
     /// The world click steps made with no host to apply them, since the app last drained them.
     clicks: Vec<ClickCall>,
-    /// The press of the record whose binding runs now, which an arm made in it picks at.
+    /// The record whose walk or binding runs now, which an arm made in it picks at.
     press: ClickPress,
     /// A world click step was made since the app last asked ([`UiScript::take_click_stepped`]).
     stepped: bool,
 }
 
-/// The press of the input record whose binding runs the mouse commands, as the app's walk hands it
-/// over before the binding: where `ArmClick`'s pick (`0x481f00`) traces, and whether the press is
-/// one the world's select may not arm on.
+/// The input record whose walk or binding runs the mouse commands, as the app's walk hands it over
+/// before them: where `ArmClick`'s pick (`0x481f00`) traces, the cursor the record's mouse event
+/// left (`[frame+0xa0]+0x1118`, `0x481f1d`), and whether the press is one the world's select may
+/// not arm on.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ClickPress {
     /// The record's cursor in window coordinates; `None` for a call no record made, which picks
     /// at the window's cursor.
     pub at: Option<[f32; 2]>,
-    /// A left press the cursor's payload took for its drop, which arms no select.
+    /// A left press the cursor's payload took for its drop, which arms no select from its binding.
     pub eaten: bool,
 }
 
@@ -261,13 +262,13 @@ impl UiScript {
         std::mem::take(&mut self.model_mut().input.stepped)
     }
 
-    /// Hand over the press of the record whose binding runs next ([`ClickPress`]), or the default
-    /// once it has run.
+    /// Hand over the record whose walk or binding runs next ([`ClickPress`]), or the default once
+    /// the records have run.
     pub fn set_click_press(&mut self, press: ClickPress) {
         self.model_mut().input.press = press;
     }
 
-    /// The press of the record whose binding runs now ([`Self::set_click_press`]).
+    /// The record whose walk or binding runs now ([`Self::set_click_press`]).
     pub fn click_press(&self) -> ClickPress {
         self.model_ref().input.press
     }
