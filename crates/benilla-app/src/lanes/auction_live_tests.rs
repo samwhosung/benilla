@@ -5,7 +5,9 @@
 //! a page's update (`0x4cca10`) and a close's `AUCTION_HOUSE_CLOSED` (`0x4cd602`).
 
 use benilla_protocol::field::FIELD_UNIT_HEALTH;
-use benilla_protocol::messages::{AuctionListEntry, AuctionOwnerNotification};
+use benilla_protocol::messages::{
+    AuctionBidderNotification, AuctionListEntry, AuctionOwnerNotification,
+};
 use benilla_protocol::{EntityKind, SessionEvent};
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
@@ -294,5 +296,78 @@ fn a_close_nested_in_a_parked_close_leaves_the_reopened_session() {
             .try_iter()
             .any(|cmd| matches!(cmd, crate::net::ClientCommand::AuctionListItems { .. })),
         "a verb reaches the session"
+    );
+}
+
+/// An outbid notice whose item is cached shows its line first (`0x4ccfd5`), and only then keeps
+/// the pair (`0x4ccff3`) and patches the rows (`0x4cd033`): the line's listener reads our bid as
+/// the high one, and its bidder request sends no new pair.
+#[test]
+fn an_outbid_lines_listener_reads_the_rows_before_the_patch() {
+    let mut c = client();
+    c.frame(vec![vec![silk()]]);
+    let ours = AuctionListEntry {
+        bidder_guid: ME,
+        current_bid: 500,
+        min_increment: 25,
+        ..match page() {
+            SessionEvent::AuctionListResult { auctions, .. } => auctions[0].clone(),
+            _ => unreachable!(),
+        }
+    };
+    c.frame(vec![
+        vec![hello()],
+        vec![SessionEvent::AuctionBidderListResult {
+            auctions: vec![ours],
+            total_count: 1,
+        }],
+    ]);
+    c.eval::<()>(
+        true,
+        r#"
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_SYSTEM")
+        g:SetScript("OnEvent", function()
+            local _,_,_,_,_,_,_,_,_,bid,high = GetAuctionItemInfo("bidder", 1)
+            Read = tostring(bid) .. "/" .. tostring(high)
+            GetBidderAuctionItems(0)
+        end)
+        "#,
+    );
+    let _ = c.sent.try_iter().count();
+    c.frame(vec![vec![SessionEvent::AuctionBidderNotification(
+        AuctionBidderNotification {
+            house_id: 1,
+            auction_id: 7,
+            bidder_guid: 0x99,
+            bid_or_zero: 900,
+            out_bid: 45,
+            item_entry: SILK,
+            random_property_id: 0,
+        },
+    )]]);
+    assert_eq!(c.eval::<String>(false, "return Read"), "500/1");
+    let asked: Vec<Vec<u32>> = c
+        .sent
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            crate::net::ClientCommand::AuctionListBidderItems { auction_ids, .. } => {
+                Some(auction_ids)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [Vec::<u32>::new()],
+        "the pair is kept after the line"
+    );
+    assert_eq!(
+        c.eval::<String>(
+            true,
+            "local _,_,_,_,_,_,_,_,_,bid = GetAuctionItemInfo('bidder', 1) return tostring(bid)"
+        ),
+        "900",
+        "and the row patched after it"
     );
 }

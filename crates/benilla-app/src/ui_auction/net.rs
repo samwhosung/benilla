@@ -251,15 +251,31 @@ impl HouseLane {
 /// patched row's bid; a removal; a page and whether its tail runs. A request or the wave goes out
 /// here, in its place among the handler's steps.
 fn settle(vm: &mut HouseVm) {
-    let effects = std::mem::take(&mut vm.own().auction.effects);
+    loop {
+        let effects = std::mem::take(&mut vm.own().auction.effects);
+        if effects.is_empty() {
+            return;
+        }
+        settle_effects(vm, effects);
+    }
+}
+
+/// [`settle`]'s one pass. A line whose handler goes on past it and that waits on its item's
+/// record shows nothing now (`0x4ccfcc`), so the rest runs here, its effects settled in the next
+/// pass.
+fn settle_effects(vm: &mut HouseVm, effects: Vec<HouseEffect>) {
     for effect in effects {
         match effect {
-            HouseEffect::Line(msg) => show_line(&mut vm.own(), msg),
-            HouseEffect::LineThen(msg, then) => vm.own().lane.push(HouseStep::Line {
-                msg,
-                fill: None,
-                then: Some(then),
-            }),
+            HouseEffect::Line(msg) => {
+                show_line(&mut vm.own(), msg, None);
+            }
+            HouseEffect::LineThen(msg, then) => {
+                let mut h = vm.own();
+                if !show_line(&mut h, msg, Some(then)) {
+                    let wire = h.wire.view();
+                    after_line(then, &mut h.auction, wire);
+                }
+            }
             HouseEffect::Edit { list, auction_id } => {
                 let mut h = vm.own();
                 if let Some(step) = patch_step(&h, list, auction_id) {
@@ -330,13 +346,14 @@ fn land_page(vm: &mut HouseVm, list: usize) {
 
 /// A line readied onto the house lane, its item's name filled as the cache holds it; one whose
 /// item is not cached waits on the record, asked with the callback `0x4cd190` (`0x4ccf6e`,
-/// `0x4cd3eb`, `0x4cd4ef`), and shows when it lands ([`message_answered`]).
-fn show_line(h: &mut House, msg: AuctionMessage) {
+/// `0x4cd3eb`, `0x4cd4ef`), and shows when it lands ([`message_answered`]). Whether it was
+/// readied, with the rest of its handler past it.
+fn show_line(h: &mut House, msg: AuctionMessage, then: Option<AfterLine>) -> bool {
     let fill = match msg.item {
         None => None,
         Some(entry) => {
             let Some(items) = h.items.as_deref() else {
-                return;
+                return false;
             };
             match items.template(entry, 0, Ask::Read) {
                 Some(t) => Some(t.name.clone()),
@@ -346,16 +363,13 @@ fn show_line(h: &mut House, msg: AuctionMessage) {
                     }
                     items.wait(entry, crate::items::RecordCallback::AuctionMessage);
                     h.auction.messages.push(msg);
-                    return;
+                    return false;
                 }
             }
         }
     };
-    h.lane.push(HouseStep::Line {
-        msg,
-        fill,
-        then: None,
-    });
+    h.lane.push(HouseStep::Line { msg, fill, then });
+    true
 }
 
 /// The callback `0x4cd190` on the record of `entry`, run inside the answer's handler: the oldest
@@ -617,8 +631,8 @@ fn on_bidder_list_result(In(ev): In<SessionEvent>, mut vm: HouseVm) {
 
 fn on_bidder_notification(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionBidderNotification(n) = ev {
-        handle(&mut vm, |auction, wire| {
-            auction_bidder_notification(&n, auction, wire);
+        handle(&mut vm, |auction, _| {
+            auction_bidder_notification(&n, auction);
         });
     }
 }
@@ -820,6 +834,21 @@ fn after_line(then: AfterLine, auction: &mut AuctionOpen, wire: Wire) {
             auction_id,
             increment,
         } => bid_placed(auction_id, increment, auction, wire),
+        AfterLine::Outbid {
+            house_id,
+            auction_id,
+            bid,
+            increment,
+            bidder,
+        } => {
+            let patch = RowPatch {
+                bid,
+                increment: Some(increment),
+                bidder,
+                floor_at: Some(wire.now),
+            };
+            outbid(house_id, auction_id, patch, auction);
+        }
     }
 }
 
@@ -872,38 +901,44 @@ fn command_error_key(error: u32, inventory_result: u32) -> Option<&'static str> 
 
 /// `SMSG_AUCTION_BIDDER_NOTIFICATION` (`0x4cced0`): a zero `bid_or_zero` means we won, else we
 /// were outbid.
-fn auction_bidder_notification(
-    notice: &AuctionBidderNotification,
-    auction: &mut AuctionOpen,
-    wire: Wire,
-) {
+fn auction_bidder_notification(notice: &AuctionBidderNotification, auction: &mut AuctionOpen) {
     let won = notice.bid_or_zero == 0;
-    auction.line(AuctionMessage::chat_item(
+    let msg = AuctionMessage::chat_item(
         if won {
             "ERR_AUCTION_WON_S"
         } else {
             "ERR_AUCTION_OUTBID_S"
         },
         notice.item_entry,
-    ));
+    );
     // Won: the auction removed from the lists (`0x4cd173`).
     if won {
+        auction.line(msg);
         auction.remove_auction(notice.auction_id);
         return;
     }
-    // Outbid: the pair kept whatever the house (`0x4ccff3`); in the open house the bidder and
-    // browse rows take the bid, the increment, the new bidder and the 90 s floor
-    // (`0x4cd033`-`0x4cd132`). A closed window's house is 0, which no notice names.
-    auction.outbid_append(notice.house_id, notice.auction_id);
-    if notice.house_id == auction.house_id {
-        let patch = RowPatch {
+    // Outbid: past its line ([`outbid`]).
+    auction.line_then(
+        msg,
+        AfterLine::Outbid {
+            house_id: notice.house_id,
+            auction_id: notice.auction_id,
             bid: notice.bid_or_zero,
-            increment: Some(notice.out_bid),
+            increment: notice.out_bid,
             bidder: notice.bidder_guid,
-            floor_at: Some(wire.now),
-        };
-        auction.patch_row(BIDDER, notice.auction_id, &patch);
-        auction.patch_row(LIST, notice.auction_id, &patch);
+        },
+    );
+}
+
+/// An outbid notice past its line: the pair kept whatever the house (`0x4ccff3`); in the house
+/// open then (`0x4ccff8`, `0x4ccffe`) the bidder and browse rows take the bid, the increment, the
+/// new bidder and the 90 s floor (`0x4cd033`-`0x4cd132`). A closed window's house is 0, which no
+/// notice names.
+fn outbid(house_id: u32, auction_id: u32, patch: RowPatch, auction: &mut AuctionOpen) {
+    auction.outbid_append(house_id, auction_id);
+    if house_id == auction.house_id {
+        auction.patch_row(BIDDER, auction_id, &patch);
+        auction.patch_row(LIST, auction_id, &patch);
     }
 }
 
@@ -1185,16 +1220,15 @@ mod tests {
 
     #[test]
     fn a_zero_bid_field_means_you_won() {
-        let rig = Rig::new();
         let mut a = AuctionOpen::default();
-        auction_bidder_notification(&bidder(0), &mut a, rig.wire());
+        auction_bidder_notification(&bidder(0), &mut a);
         assert_eq!(
             keys(&a),
             vec![("ERR_AUCTION_WON_S", MsgKind::Chat, Some(2589))]
         );
 
         let mut a = AuctionOpen::default();
-        auction_bidder_notification(&bidder(9_000), &mut a, rig.wire());
+        auction_bidder_notification(&bidder(9_000), &mut a);
         assert_eq!(
             keys(&a),
             vec![("ERR_AUCTION_OUTBID_S", MsgKind::Chat, Some(2589))]
@@ -1476,7 +1510,7 @@ mod tests {
         };
         let e = AuctionCommandTail::Empty;
         remove(&|a| auction_command_result(7, auction_action::REMOVED, 0, &e, a));
-        remove(&|a| auction_bidder_notification(&bidder(0), a, rig.wire()));
+        remove(&|a| auction_bidder_notification(&bidder(0), a));
         remove(&|a| auction_owner_notification(&owner(0, 10_000), a, rig.wire()));
         remove(&|a| auction_owner_notification(&owner(0, 0), a, rig.wire()));
         remove(&|a| auction_removed_notification(7, 2589, a));
@@ -1485,13 +1519,16 @@ mod tests {
 
     /// Outbid (`0x4ccfed`-`0x4cd132`): the pair kept whatever the house (`0x4ccff3`); in the open
     /// house the bidder and browse rows take the notice's bid, increment and bidder and the 90 s
-    /// floor; another house patches nothing.
+    /// floor, each past the line (`0x4ccfd5`); another house patches nothing.
     #[test]
     fn an_outbid_notice_keeps_the_pair_and_patches_the_open_houses_rows() {
         let rig = Rig::new();
         let mut a = house();
         a.lists[BIDDER].entries[0].time_left_ms = 1_000;
-        auction_bidder_notification(&bidder(9_000), &mut a, rig.wire());
+        auction_bidder_notification(&bidder(9_000), &mut a);
+        assert!(a.outbid.is_empty(), "nothing kept ahead of the line");
+        assert_eq!(row(&a, BIDDER, 7).unwrap().current_bid, 0, "nor patched");
+        rest(&mut a, &rig);
         assert_eq!(a.outbid, [(1, 7)]);
         for list in [BIDDER, LIST] {
             let e = row(&a, list, 7).unwrap();
@@ -1506,7 +1543,8 @@ mod tests {
         let mut a = house();
         let mut other = bidder(9_000);
         other.house_id = 6;
-        auction_bidder_notification(&other, &mut a, rig.wire());
+        auction_bidder_notification(&other, &mut a);
+        rest(&mut a, &rig);
         assert_eq!(a.outbid, [(6, 7)]);
         assert_eq!(row(&a, LIST, 7).unwrap().current_bid, 0);
         assert!(rig.sent().is_empty());

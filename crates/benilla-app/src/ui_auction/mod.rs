@@ -235,6 +235,15 @@ pub(crate) enum AfterLine {
         auction_id: u32,
         increment: Option<u32>,
     },
+    /// An outbid notice's (`0x4ccfed`-`0x4cd143`): the pair kept, and in the house then open the
+    /// bidder and browse rows patched with the notice's bid, increment and bidder.
+    Outbid {
+        house_id: u32,
+        auction_id: u32,
+        bid: u32,
+        increment: u32,
+        bidder: u64,
+    },
 }
 
 /// A message an auction handler shows (`0x496720`): a refusal on the red `UIErrorsFrame`, or one of
