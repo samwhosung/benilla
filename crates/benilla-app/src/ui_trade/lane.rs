@@ -351,10 +351,17 @@ pub(super) fn close_waits(world: &World) -> bool {
 /// One step of a close: its VM half queued on the lane when the close `waits` ([`close_waits`]),
 /// so the VM undoes its open after the open has run, its listeners re-entering the close as the
 /// session it closed ([`crate::ui_session::in_parked_close`]); else run now, its signals fired with
-/// the host lent. A send goes out now either way, inside the handler as the reference's
-/// `CMSG_CANCEL_TRADE` does (`0x4bf527`), ahead of a later packet's `CMSG_BEGIN_TRADE`.
+/// the host lent. A send goes out now, inside the handler as the reference's `CMSG_CANCEL_TRADE`
+/// does (`0x4bf527`), ahead of a later packet's `CMSG_BEGIN_TRADE`; only an open still on the
+/// lane holds it back, as that open's own placement sends there (`0x4bf652`-`0x4bf6fa`) and the
+/// cancel follows them.
 pub(super) fn close_step(world: &mut World, waits: bool, event: TradeEvent) {
-    if waits && send_of(&event).is_none() {
+    let opening = world.get_resource::<TradeLane>().is_some_and(|lane| {
+        lane.events
+            .iter()
+            .any(|(_, e)| matches!(e, TradeEvent::Show { .. }))
+    });
+    if waits && (send_of(&event).is_none() || opening) {
         if let Some(mut lane) = world.get_resource_mut::<TradeLane>() {
             lane.push(event);
             return;

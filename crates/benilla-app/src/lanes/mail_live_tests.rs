@@ -398,8 +398,9 @@ fn the_notice_callbacks_signal_at_their_answers() {
 }
 
 /// The list's tail is on the lane when the mailbox is used and a bank opens over it, all with no
-/// frame between: the open's show and the close's reset, signal and refresh wait behind the list,
-/// so they fire whole at their place, the refresh's query with them, and leave the window shut.
+/// frame between: the open's show and the close's reset and signal wait behind the list, and fire
+/// at their place; the close's refresh, its query and its stamp, is the handler's own
+/// (`0x4acda8`), so it goes out there; the window is left shut.
 #[test]
 fn a_one_frame_open_then_close_leaves_no_stale_state() {
     let mut c = client();
@@ -412,8 +413,8 @@ fn a_one_frame_open_then_close_leaves_no_stale_state() {
     c.handle(vec![SessionEvent::ShowBank { banker: BANKER }]);
     assert!(c.seen().is_empty(), "nothing fired ahead of the list");
     assert!(
-        !c.sent().iter().any(|s| s.starts_with("QueryNextMailTime")),
-        "the close's query waits with its signal"
+        c.sent().iter().any(|s| s.starts_with("QueryNextMailTime")),
+        "the close's query goes out inside the handler"
     );
     assert_eq!(c.app.world().resource::<MailOpen>().mailbox, None);
     c.frame(vec![]);
@@ -431,7 +432,8 @@ fn a_one_frame_open_then_close_leaves_no_stale_state() {
             .iter()
             .filter(|s| s.starts_with("QueryNextMailTime"))
             .count(),
-        1
+        0,
+        "the one query went out at the handler"
     );
     // The rows outlive the close, and no verb finds a mailbox, through the host or the VM's copy.
     assert_eq!(c.eval::<i64>(true, "return GetInboxNumItems()"), 1);
