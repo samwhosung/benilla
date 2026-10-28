@@ -193,7 +193,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), the parked swaps'
             // (`0x5e1020`) and auto-equips' (`0x5e17a0`), the vendor rows' (`0x4fada0`,
             // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`), the questgiver rows'
-            // (`0x5018c0`) and the mail rows' and notices' (`0x4af0a0`, `0x4ad010`).
+            // (`0x5018c0`), the mail rows' and notices' (`0x4af0a0`, `0x4ad010`) and the auction
+            // notices' lines (`0x4cd190`).
             let callbacks = sc.items.take_callbacks(entry);
             for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
@@ -269,6 +270,15 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         }
                     }
                     Cb::Mail => {}
+                    // An auction notice's line, shown with the name or, for a refusal, dropped
+                    // (`0x4cd190`).
+                    Cb::AuctionMessage => {
+                        if let (Some(auction), Some(house)) =
+                            (sc.auction.as_mut(), sc.house.as_mut())
+                        {
+                            crate::ui_auction::message_answered(auction, house, &sc.items, entry);
+                        }
+                    }
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one

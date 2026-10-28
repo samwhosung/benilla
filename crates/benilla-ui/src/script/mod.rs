@@ -17,6 +17,7 @@ mod action;
 mod action_bar_toggles;
 mod addon_message;
 mod auction;
+mod auction_live;
 mod aura;
 mod backdrop;
 mod bank;
@@ -244,6 +245,7 @@ pub use auction::{
     AuctionStartRequest, AuctionState, AuctionSubCategory, BidVerdict, BIDDER, LIST, OWNER,
     SORT_KEYS,
 };
+pub use auction_live::{AuctionCanQuery, AuctionDepositRate, AuctionRowQuery};
 pub use aura::{
     AuraCall, AuraListRead, AuraRead, AuraState, PlayerBuffExpiry, TrackingState, UnitAuraList,
 };

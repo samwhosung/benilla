@@ -1,5 +1,5 @@
 //! The three lists end to end, their sort, their time left and their life across the window: the
-//! wire's results through the handlers, the feed and the drain to the VM's getters, as the window
+//! wire's results through the handlers and the drain to the VM's getters, as the window
 //! reads them.
 
 use benilla_protocol::messages::{
@@ -94,21 +94,33 @@ impl House {
         self.app.insert_non_send_resource(script);
     }
 
+    /// The item's record answered, with what its answer's handler runs for the house: each page
+    /// that waited on it and now waits on nothing runs its tail (`0x4cca10`), then the drain.
     fn item(&mut self, entry: u32, name: &str, level: u32, quality: u32) {
         let mut t = crate::items::test_template(name);
         t.required_level = level;
         t.quality = quality;
-        self.app
-            .world_mut()
+        let world = self.app.world_mut();
+        world
             .resource_mut::<Items>()
             .insert_template(entry, Some(t));
+        world.resource_scope(|world, mut auction: Mut<super::AuctionOpen>| {
+            world.resource_scope(|world, mut lane: Mut<super::HouseLane>| {
+                super::record_answered(&mut auction, &mut lane, world.resource::<Items>(), entry);
+            });
+        });
+        super::net::fire_house_lane(world);
     }
 
+    /// The player's name answered, with what its answer's handler runs for the house: each list
+    /// whose read waited on it hears its update (`0x4cf290`), then the drain.
     fn name(&mut self, guid: u64, name: &str) {
-        self.app
-            .world_mut()
+        let world = self.app.world_mut();
+        world
             .resource_mut::<NameCache>()
             .insert_player(guid, name.into(), None);
+        world.resource_mut::<super::HouseLane>().name_landed(guid);
+        super::net::fire_house_lane(world);
     }
 
     /// The packet, the frame's feeds, then the house lane's steps, as the lanes' drain follows the
@@ -265,9 +277,15 @@ impl House {
     }
 }
 
-/// The call host's auction applier alone, lent by [`House::lua`]: this world has no other
-/// engine half.
-struct AuctionHost<'a, 'w, 's>(&'a mut super::AuctionVerbs<'w, 's>);
+/// The auction verbs and the auction getters' live reads, the call host's two auction halves.
+type AuctionHalves = (
+    super::AuctionVerbs<'static, 'static>,
+    super::AuctionLive<'static, 'static>,
+);
+
+/// The call host's auction halves alone, lent by [`House::lua`]: this world has no other engine
+/// half.
+struct AuctionHost<'a, 'w, 's>(&'a mut ParamSet<'w, 's, AuctionHalves>);
 
 impl benilla_ui::script::CallHost for AuctionHost<'_, '_, '_> {
     fn apply(
@@ -277,9 +295,9 @@ impl benilla_ui::script::CallHost for AuctionHost<'_, '_, '_> {
     ) -> Option<benilla_ui::script::CallTail> {
         use benilla_ui::script::{RecordAsk, ScriptCall};
         match call {
-            ScriptCall::Auction(call) => self.0.apply(script, call),
+            ScriptCall::Auction(call) => self.0.p0().apply(script, call),
             ScriptCall::RecordAsk(RecordAsk::AuctionName { guid, list }) => {
-                self.0.wait_for_name(guid, list);
+                self.0.p0().wait_for_name(guid, list);
             }
             _ => {}
         }
@@ -287,19 +305,24 @@ impl benilla_ui::script::CallHost for AuctionHost<'_, '_, '_> {
     }
 
     fn read_live(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
-        ask.answer(|q: &benilla_ui::script::PlayerNameQuery| Some(self.0.player_name(q.0)))
+        use crate::script_calls::live::LiveFamily;
+        ask.answer(|q: &benilla_ui::script::PlayerNameQuery| Some(self.0.p0().player_name(q.0)))
+            || self.0.p1().answer(ask)
     }
 }
 
-/// `chunk` on the world's VM with the auction verbs' host lent ([`AuctionHost`]), as a call
-/// inside a frame runs: its getters' name lookups ask and wait inside their calls.
+/// `chunk` on the world's VM with the auction halves of the host lent ([`AuctionHost`]), as a call
+/// inside a frame runs: its getters read the house and the caches, and their name lookups ask and
+/// wait inside their calls.
 pub(super) fn hosted_eval<T: benilla_ui::mlua::FromLuaMulti>(world: &mut World, chunk: &str) -> T {
-    let mut state =
-        bevy::ecs::system::SystemState::<(NonSendMut<UiScript>, super::AuctionVerbs)>::new(world);
+    let mut state = bevy::ecs::system::SystemState::<(
+        NonSendMut<UiScript>,
+        ParamSet<'static, 'static, AuctionHalves>,
+    )>::new(world);
     let out = {
-        let (mut script, mut verbs) = state.get_mut(world);
+        let (mut script, mut halves) = state.get_mut(world);
         script
-            .hosted(&mut AuctionHost(&mut verbs), |s| s.eval::<T>(chunk))
+            .hosted(&mut AuctionHost(&mut halves), |s| s.eval::<T>(chunk))
             .unwrap_or_else(|e| panic!("{chunk}: {e}"))
     };
     state.apply(world);

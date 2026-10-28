@@ -224,6 +224,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::target::Selection",
     "::ui_action::PlayerActions",
     "::ui_action::LearnedAbilities",
+    // Read through the host by the auction getters, and quiet: the hello's show, the lines, the
+    // patches, the removals and the pages fire on the house lane at their handlers.
     "::ui_auction::AuctionOpen",
     // Read through the host by the bank getters, and quiet: its events fire on the bank lane at
     // their handlers, and `PurchaseSlot` and `CloseBankFrame` hold it in their calls.
@@ -405,8 +407,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    ("::ui_auction::feed_auction", &["items::Items", "names::NameCache",
-        "ui_auction::AuctionOpen"]),
     ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"]),
     ("::ui_mail::send_query_next_mail_time_on_enter", &["items::Items", "ui_mail::MailOpen",
         "ui_mail::pending::MailPending"]),
@@ -467,6 +467,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // `ItemBagFamily.dbc`, which the inventory refusal's handler names a bag's family by
     // (`0x5ede00`).
     "::ui_items::ItemBagFamilies",
+    // `AuctionHouse.dbc`, whose deposit rate the hello's show hands the VM.
+    "::ui_auction::AuctionHouses",
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.

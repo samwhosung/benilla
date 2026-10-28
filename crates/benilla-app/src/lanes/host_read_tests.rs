@@ -37,8 +37,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 39;
-const FRAME_FINAL_INPUTS: usize = 204;
+const FRAME_FINAL_FEEDS: usize = 38;
+const FRAME_FINAL_INPUTS: usize = 201;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -67,6 +67,10 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          writes the list as it walks the slots"),
     ("::ui_action::unlearn::clear_unlearned_slots", &["ui_action::PlayerActions"],
         "drains the unlearned spells the bar clears; the known spells are the handlers' alone"),
+    ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"],
+        "empties the lists, the throttle and the session at the world-enter cascade \
+         (`0x490a05` → `0x4cc280`), which the reference runs inside our own player's create \
+         (`0x4908c0`)"),
     ("::ui_battlefield::reset_on_world_enter", &["ui_battlefield::Battlefield"],
         "clears the list and the notices waiting on names at the world-enter cascade \
          (`0x4a9db0`), which the reference runs inside our own player's create (`0x4908c0`)"),

@@ -137,6 +137,8 @@ live_reads! {
         trade: crate::ui_trade::TradeLive<'static>,
         /// The mailbox cell, its rows, the pending-mail time, the stationery and the packages.
         mail: crate::ui_mail::MailLive<'static, 'static>,
+        /// The auction rows' records, the browse throttle and the house's deposit rate.
+        auction: crate::ui_auction::AuctionLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

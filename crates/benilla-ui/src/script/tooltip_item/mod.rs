@@ -1017,23 +1017,20 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 binding_abi::string_arg(lua, kind, r#"Usage: SetAuctionItem("type", index)"#)?;
             let index =
                 binding_abi::index_arg(lua, index, r#"Usage: SetAuctionItem("type", index)"#)?;
-            let (item_id, roll, name, charges) = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                let Some(auction) = &model.auction else {
-                    return Ok(Value::Nil);
-                };
-                let Some(list) = super::auction::list_index_of(&kind) else {
-                    return Ok(Value::Nil);
-                };
-                // `ftol(n) - 1` compared unsigned (`0x535933`, `0x535944`): 0 names no row.
-                match index
-                    .checked_sub(1)
-                    .and_then(|i| auction.lists[list].rows.get(i))
-                {
-                    Some(r) => (r.item_id, r.random_property_id, r.name.clone(), r.charges),
-                    None => (0, 0, None, -1),
-                }
+            let held = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.auction.is_some()
             };
+            let Some(list) = super::auction::list_index_of(&kind).filter(|_| held) else {
+                return Ok(Value::Nil);
+            };
+            // `ftol(n) - 1` compared unsigned (`0x535933`, `0x535944`): 0 names no row. The
+            // record is read at the call, as the getters read it.
+            let (item_id, roll, name, charges) =
+                match super::auction_live::live_row_at(lua, list, index) {
+                    Some(r) => (r.item_id, r.random_property_id, r.name, r.charges),
+                    None => (0, 0, None, -1),
+                };
             if item_id == 0 {
                 return Ok(Value::Nil);
             }

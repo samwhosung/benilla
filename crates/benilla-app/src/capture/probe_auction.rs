@@ -64,8 +64,8 @@ const RECOVER_TIMEOUT_SECS: f64 = 12.0;
 /// The owner list re-ask cadence, spaced because the server drops an in-flight second request.
 const OWNER_REASK_SECS: f64 = 3.0;
 const OWNER_TIMEOUT_SECS: f64 = 20.0;
-/// How long a UI event may trail its wire state: `feed_auction` fires it, unordered with this
-/// probe.
+/// How long a UI event may trail its wire state: the house lane fires it in the drain,
+/// unordered with this probe.
 const EVENT_GRACE_SECS: f64 = 1.5;
 /// How long the sell slot has to empty after the listing is away.
 const SELL_SLOT_GRACE_SECS: f64 = 3.0;
@@ -623,11 +623,9 @@ fn auction_probe(
                 } else if now - since > EVENT_GRACE_SECS {
                     error!(
                         "PROBE_AUCTION: FAIL (3b list-event) — the result landed but \
-                         AUCTION_ITEM_LIST_UPDATE never fired within {EVENT_GRACE_SECS}s: \
-                         `feed_auction` fires the list events only when the pushed snapshot \
-                         DIFFERS, so a result that changes nothing (an empty house, a repeated \
-                         search) is silent — and the Browse pane only clears `isSearching` on that \
-                         event"
+                         AUCTION_ITEM_LIST_UPDATE never fired within {EVENT_GRACE_SECS}s: every \
+                         result owes its sort tail's event (`0x4cd8b0`), an empty or repeated \
+                         one too, and the Browse pane only clears `isSearching` on that event"
                     );
                     probe.fails += 1;
                 } else {

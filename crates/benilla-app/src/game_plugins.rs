@@ -1677,8 +1677,8 @@ pub(crate) mod schedule_tests {
     /// `BankFrame.lua:127-128`, …), which the reference seats before the show: the packet's handler
     /// writes `[0xb4e2d0]` (`0x4e26fa` → `0x4e1fe9` → `0x4930d0`) and only then fires
     /// `GOSSIP_SHOW` (`0x4e27df`). Here the latch reaches the token through `feed_interact_npc` and
-    /// `feed_units`, so each window's feed runs after both, or a show whose text is cached fires in
-    /// the same frame as the open with the token unset. Read off the declared graph.
+    /// `feed_units`, so `feed_units` runs after the first; each window's show fires on its lane in
+    /// the drain, after every feed ([`crate::lanes`]). Read off the declared graph.
     #[test]
     fn every_latched_windows_show_reads_the_token_its_latch_seated() {
         let mut app = headless_client();
@@ -1715,15 +1715,6 @@ pub(crate) mod schedule_tests {
         assert!(
             after(one("::ui_session::feed_interact_npc")).contains(&units),
             "feed_units runs after feed_interact_npc, which publishes the latch it names \"npc\" by"
-        );
-        let seated = after(units);
-        let stale: Vec<&str> = ["::ui_auction::feed_auction"]
-            .into_iter()
-            .filter(|feed| !seated.contains(&one(feed)))
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "these windows' shows can read \"npc\" before feed_units seats it: {stale:?}"
         );
     }
 
