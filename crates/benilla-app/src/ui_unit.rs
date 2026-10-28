@@ -64,7 +64,7 @@ impl Plugin for UiUnitPlugin {
         field_events::add_notice_lane(app);
         views::add_unit_views_lane(app);
         // At the frame's start, so a worldport's leaving edge precedes everything the next frame's
-        // packets raise, the entering edge `feed_units` raises for the new world among them.
+        // packets raise, the entering edge of the new world among them.
         crate::ui_script::add_worldport_sweep(app);
         app.configure_sets(
             Update,
