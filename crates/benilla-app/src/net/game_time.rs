@@ -452,6 +452,23 @@ fn format_time(time: &WowTime) -> String {
 #[derive(Resource, Default)]
 pub(crate) struct ServerTime(pub(crate) GameTime);
 
+/// The game clock as `GetGameTime` reads it at the call (`0x515ee0`): its hour and minute as they
+/// stand, so a listener reads what its packet's time message left. Absent in a harness without the
+/// clock.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct GameTimeLive<'w> {
+    clock: Option<Res<'w, ServerTime>>,
+}
+
+impl crate::script_calls::live::LiveFamily for GameTimeLive<'_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &benilla_ui::script::GameTimeQuery| {
+            let clock = &self.clock.as_deref()?.0;
+            Some((clock.hour(), clock.minute()))
+        })
+    }
+}
+
 /// The clock's per-frame systems. In the net stage, after the drain that may have set the clock:
 /// the lighting resolve runs after it and reads this frame's clock. The frame advance runs only
 /// in the world: the reference registers it with `ClientInitializeGame` at world entry

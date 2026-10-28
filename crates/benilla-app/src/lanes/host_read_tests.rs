@@ -39,8 +39,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 25;
-const FRAME_FINAL_INPUTS: usize = 134;
+const FRAME_FINAL_FEEDS: usize = 24;
+const FRAME_FINAL_INPUTS: usize = 133;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -112,6 +112,10 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
         "fires the relayed moves queued past their arrival in the movement tick (event 5's \
          `0x616800` → `0x615b10` → `0x616620` → `0x615c30`), frame time, which the reference \
          runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::game_time::tick_game_time", &["net::game_time::ServerTime"],
+        "steps the game clock by the frame time, the category 5 handler `0x401ec0` → `0x6c5d50` \
+         → `0x6435a0`, which the reference runs after the packets (`0x420d63` after \
+         `0x420d55`)"),
     ("::net::motion::spline::sample_splines", &["Commands net::motion::spline::Spline",
         "Transform"],
         "moves the units along their splines; unit movement is \

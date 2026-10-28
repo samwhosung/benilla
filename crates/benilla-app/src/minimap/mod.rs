@@ -964,25 +964,6 @@ fn feed_minimap_player_facing(mut hosted_vm: crate::script_calls::HostedVm, play
     })
 }
 
-/// Push the game clock `GetGameTime()` answers when its hour or minute changes, the API's own
-/// resolution: the clock's fields as they stand (`0x515ee0`), -1, -1 while it is unset.
-fn feed_game_time(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    time: Res<crate::net::ServerTime>,
-    mut last: Local<crate::ui_script::VmMemo<Option<(i32, i32)>>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else { return };
-        let last = last.get(script);
-        let now = (time.0.hour(), time.0.minute());
-        if *last == Some(now) {
-            return;
-        }
-        *last = Some(now);
-        script.set_game_time(now.0, now.1);
-    })
-}
-
 /// The app half of the `<Minimap>` widget. The zone label feed is `crate::area`'s: the reference
 /// fires `MINIMAP_ZONE_CHANGED` from the same area-update pass as the `ZONE_CHANGED` family
 /// (`0x494970` beside `0x494780`).
@@ -1054,8 +1035,6 @@ impl Plugin for MinimapPlugin {
                         .after(ping::drive_minimap_ping)
                         .in_set(crate::ui_script::UiFeed)
                         .run_if(not(crate::ui_script::ingame_ui_up)),
-                    // Before the script tick, so GameTimeFrame reads this frame's minute.
-                    feed_game_time.in_set(crate::ui_script::UiFeed),
                     // In the feed, off the hover the last walk left; after the world drive only so
                     // the two VM writers keep one order.
                     blips::drive_blip_tooltip

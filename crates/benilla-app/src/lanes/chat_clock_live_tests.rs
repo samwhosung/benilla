@@ -41,6 +41,12 @@ impl Client {
         }
     }
 
+    /// `packets` run through their handlers with no frame: the world as the handlers leave it.
+    fn handle(&mut self, packets: Vec<SessionEvent>) {
+        crate::net::handlers::dispatch(self.app.world_mut(), packets);
+        self.app.world_mut().flush();
+    }
+
     /// What the spy heard since the last call.
     fn seen(&mut self) -> Vec<String> {
         self.eval(false, "local s = Seen Seen = {} return s")
@@ -143,4 +149,32 @@ fn the_played_time_and_the_skin_signal_at_their_packets() {
     );
     c.frame(vec![]);
     assert!(c.seen().is_empty(), "nothing fires after");
+}
+
+/// `SMSG_GAMETIME_SET` naming `hour:minute`, the date unset.
+fn time_set(hour: i32, minute: i32) -> SessionEvent {
+    SessionEvent::GameTimeSet {
+        time: benilla_protocol::WowTime {
+            minute,
+            hour,
+            ..benilla_protocol::WowTime::UNSET
+        },
+    }
+}
+
+/// `GetGameTime` reads the clock object at the call (`0x515ee0`): each time message is read through
+/// the host with no frame after it, where the VM's copy keeps the seed it was built with.
+#[test]
+fn the_game_clock_reads_at_the_call() {
+    let mut c = client();
+    const READ: &str = "return GetGameTime()";
+    c.handle(vec![time_set(10, 30)]);
+    assert_eq!(c.eval::<(i64, i64)>(true, READ), (10, 30));
+    c.handle(vec![time_set(11, 45)]);
+    assert_eq!(c.eval::<(i64, i64)>(true, READ), (11, 45));
+    assert_eq!(
+        c.eval::<(i64, i64)>(false, READ),
+        (-1, -1),
+        "the copy, seeded before any time"
+    );
 }

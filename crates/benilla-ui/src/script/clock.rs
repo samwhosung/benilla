@@ -1,12 +1,21 @@
-//! The two clocks Lua reads: `GetTime()`, the session seconds [`UiScript::tick`] advances, and
-//! `GetGameTime()`, the game clock the host pushes. Both live in the [`Model`], out of an addon's
-//! reach, as the reference's live in the client.
+//! The two clocks Lua reads: `GetTime()`, the session seconds [`UiScript::tick`] advances, in the
+//! [`Model`], out of an addon's reach, and `GetGameTime()`, the game clock the host answers at the
+//! call ([`GameTimeQuery`]), as the reference's getter reads the clock object.
 //!
 //! [`UiScript::tick`]: super::UiScript::tick
 
 use mlua::Lua;
 
+use super::live::{ask, LiveQuery};
 use super::Model;
+
+/// The question `GetGameTime` (`0x515ee0`) asks at the call: the game clock's hour `[0xce853c]` and
+/// minute `[0xce8538]`, as the clock holds them, -1 for a field it has not set.
+pub struct GameTimeQuery;
+
+impl LiveQuery for GameTimeQuery {
+    type Answer = (i32, i32);
+}
 
 impl super::UiScript {
     /// The current `GetTime()` value in seconds; the app stamps absolute expiries with it, such as
@@ -24,9 +33,9 @@ impl super::UiScript {
         self.model_mut().now = secs;
     }
 
-    /// Push the game clock `GetGameTime()` answers, `(hour, minute)`; -1, -1 until the first push.
-    /// The clock holds either as the server sent it, so a field is -1 when unset and may run past
-    /// a day's end (an hour to 30, a minute to 62).
+    /// Seat the game clock `GetGameTime()` answers with no host to ask, `(hour, minute)`, as a new
+    /// VM's seed; -1, -1 until the first. The clock holds either as the server sent it, so a field
+    /// is -1 when unset and may run past a day's end (an hour to 30, a minute to 62).
     pub fn set_game_time(&mut self, hour: i32, minute: i32) {
         self.model_mut().game_time = Some((hour, minute));
     }
@@ -57,16 +66,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // and the `elapsed` handed to OnUpdate agree, as FrameXML (CastingBarFrame and kin) assumes.
     g.set("GetTime", lua.create_function(|lua, ()| Ok(now(lua)))?)?;
     // GetGameTime() (`0x515ee0`): two numbers, the hour `[0xce853c]` then the minute `[0xce8538]`,
-    // the clock the server's time messages set; minute resolution, no seconds. Read unguarded, so
-    // before the server sets the clock it answers the -1 its constructor stores in both fields
-    // (`0x642300`, called at `0x643308`).
+    // the clock the server's time messages set, read at the call through the host; minute
+    // resolution, no seconds. Read unguarded, so before the server sets the clock it answers the -1
+    // its constructor stores in both fields (`0x642300`, called at `0x643308`). With no host to
+    // ask, the copy a new VM was seeded with.
     g.set(
         "GetGameTime",
         lua.create_function(|lua, ()| {
-            let clock = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .game_time;
+            let clock = ask(lua, &GameTimeQuery).or_else(|| {
+                lua.app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .game_time
+            });
             Ok(clock.map_or((-1.0, -1.0), |(hour, minute)| {
                 (f64::from(hour), f64::from(minute))
             }))

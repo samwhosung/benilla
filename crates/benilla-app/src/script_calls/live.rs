@@ -141,6 +141,8 @@ live_reads! {
         auction: crate::ui_auction::AuctionLive<'static, 'static>,
         /// The loot window's cells, its rows' records and the master-loot candidates' names.
         loot: crate::ui_loot::LootLive<'static, 'static>,
+        /// The game clock's hour and minute.
+        game_time: crate::net::GameTimeLive<'static>,
         /// The spell and aura tooltip views, built at the setter's call; absent in a harness
         /// without the catalogs.
         tooltips: Option<crate::ui_tooltip::TooltipLive<'static, 'static>>,

@@ -41,7 +41,7 @@ pub(crate) use reputations::Reputations;
 pub(crate) use apply::apply_net_updates;
 #[cfg(test)]
 pub(crate) use game_time::GameTime;
-pub(crate) use game_time::{clock_tick, ServerTime};
+pub(crate) use game_time::{clock_tick, GameTimeLive, ServerTime};
 pub(crate) use handlers::NetHandlerApp;
 
 pub(crate) use io::LoginRequest;

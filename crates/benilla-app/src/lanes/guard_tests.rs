@@ -170,6 +170,7 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read by the quest log getters through the host (`QuestClock`), and quiet: the time
     // response's `QUEST_LOG_UPDATE` fires on the quest log lane.
     "::net::ServerWallClock",
+    // Read through the host by `GetGameTime` (`0x515ee0`), and quiet: no event signals the clock.
     "::net::game_time::ServerTime",
     // Read, and quiet: the control packet's handler and our own create's arrival signal its
     // changes on the notice lane in place (`0x4958e0`), and the action bar's diff of it is
@@ -309,7 +310,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::SelfGuid"]),
     ("::minimap::ping::drive_minimap_ping", &["minimap::ping::MinimapPing",
         "ui_party::GroupState"]),
-    ("::minimap::feed_game_time", &["net::game_time::ServerTime"]),
     // The party and raid tokens read the members' stores, records and the roster's cells as of
     // the drain's place (`ui_unit::views`), and the group getters read the cells through the host;
     // the roster push is their no-host fallback, and every snapshot's names and relations read as
