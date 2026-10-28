@@ -61,6 +61,12 @@ const FRAME_FINAL_INPUTS: usize = 112;
 /// access does not show; `exclusive` a system whose access Bevy does not report.
 #[rustfmt::skip]
 const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
+    ("::player::camera_saved::load_camera_pose", &["player::camera::CameraControl",
+        "player::camera::FlyCam", "player::state::Player"],
+        "restores the rig's distances and the camera's pitch from the per-character file once the \
+         roster names the character, which `SaveView` reads inside its call (`0x50fa30`); the \
+         reference reads the file as the world frame constructs its camera at the interface load \
+         (`0x481b4e` → `0x50c0e0`, `LoadSettings 0x50c5a0` at `0x50c3ea`), before any listener"),
     ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
         "Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
@@ -165,9 +171,6 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
         "Transform"],
         "moves the units along their splines; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
-    ("::player::camera_saved::load_camera_pose", &["player::state::Player"],
-        "benilla's own reason, no reference fact: it restores the camera pitch from benilla's own \
-         per-character file once the roster names the character, and no getter reads the pitch"),
     ("::transport::ground_deck_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "settles the riders on their decks; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
