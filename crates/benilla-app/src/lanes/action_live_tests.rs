@@ -238,7 +238,7 @@ fn client() -> Client {
                 .buttons
                 .insert(slot, ActionButton { slot, action, kind });
         }
-        slots.dirty = true;
+        slots.touch();
     }
     // The sword: entry, stack 1, durability 30 of 40, so the worn walk counts it.
     crate::items::test_spawn_item(
@@ -537,7 +537,7 @@ fn action_getter_cost() {
                 },
             );
         }
-        slots.dirty = true;
+        slots.touch();
     }
     c.frame(vec![]);
     let mut times = Vec::new();

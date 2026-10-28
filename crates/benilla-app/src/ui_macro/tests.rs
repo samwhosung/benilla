@@ -333,9 +333,28 @@ fn rebind_app(script: UiScript) -> bevy::prelude::App {
         .init_resource::<crate::ui_action::ActionSlots>()
         .init_resource::<super::MacroBoundSpells>()
         .init_resource::<crate::ui_pet::PetBar>()
+        .init_resource::<crate::items::Items>()
+        .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<crate::field_watch::NoticeLane>()
+        .insert_resource(crate::net::NetCommands(crossbeam_channel::unbounded().0))
         .insert_non_send_resource(script)
         .add_systems(Update, super::rebind_macro_spells);
     app
+}
+
+/// `SMSG_SUPERCEDED_SPELL`'s walk of the bar (`0x5e6356` into `0x4e5e60`), as its handler runs it
+/// ([`crate::ui_action::SpellSlots::replace_spell`]).
+fn supersede(app: &mut bevy::prelude::App, old: u32, new: u32) {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+    app.world_mut()
+        .run_system_once(
+            move |mut bar: crate::ui_action::SpellSlots,
+                  mut lane: ResMut<crate::field_watch::NoticeLane>| {
+                bar.replace_spell(old, new, None, &mut lane)
+            },
+        )
+        .expect("the supersede's bar leg runs");
 }
 
 fn book_slot(spell_id: u32, name: &str) -> benilla_ui::script::SpellSlotView {
@@ -674,7 +693,6 @@ fn learn(app: &mut bevy::prelude::App, slots: Vec<benilla_ui::script::SpellSlotV
         .world_mut()
         .resource_mut::<crate::ui_action::PlayerActions>();
     actions.spells.extend(ids);
-    actions.dirty = true;
 }
 
 /// `0x4efe00` has four callers (`0x4f0cbd`, `0x4f0d11`, `0x4f123c`, `0x4f1313`): a learned spell
@@ -807,59 +825,17 @@ fn a_superseded_rank_rewrites_the_cached_spell_of_a_macro_on_the_bar() {
     );
 
     learn(&mut app, vec![book_slot(205, "Frostbolt")]);
-    app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
-        .superseded
-        .push((116, 205));
+    supersede(&mut app, 116, 205);
+    assert_eq!(
+        (bound_of(&app, 1), bound_of(&app, 2)),
+        (BoundSpell::Spell(205), BoundSpell::Spell(116)),
+        "at the packet, in the VM's records and the bar's copy"
+    );
     app.update();
     assert_eq!(
         (bound_of(&app, 1), bound_of(&app, 2)),
         (BoundSpell::Spell(205), BoundSpell::Spell(116))
     );
-}
-
-/// A supersede waits for the VM: the pairs are applied by the first pass that runs, not dropped by
-/// the passes that cannot.
-#[test]
-fn a_supersede_with_no_vm_yet_is_kept_for_the_first_pass() {
-    use super::run::BoundSpell;
-    use benilla_protocol::messages::{ActionButton, ACTION_KIND_MACRO};
-    let mut script = UiScript::new().unwrap();
-    script.set_spellbook(benilla_ui::script::SpellBookState {
-        tabs: Vec::new(),
-        slots: vec![book_slot(116, "Frostbolt")],
-    });
-    script.set_macros(MacroState::from_scopes(
-        vec![macro_view("Bar", "/cast Frostbolt")],
-        Vec::new(),
-    ));
-    let mut app = rebind_app(script);
-    app.world_mut()
-        .resource_mut::<crate::ui_action::ActionSlots>()
-        .buttons
-        .insert(
-            4,
-            ActionButton {
-                slot: 4,
-                action: 1,
-                kind: ACTION_KIND_MACRO,
-            },
-        );
-    app.update();
-    assert_eq!(bound_of(&app, 1), BoundSpell::Spell(116));
-
-    let script = app
-        .world_mut()
-        .remove_non_send_resource::<UiScript>()
-        .unwrap();
-    app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
-        .superseded
-        .push((116, 205));
-    app.update();
-    app.world_mut().insert_non_send_resource(script);
-    app.update();
-    assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
 }
 
 /// `EditMacroRecord` derives the record inside the call (`0x4f1313`), against the book as it
@@ -909,10 +885,7 @@ fn an_edit_derives_against_the_book_at_its_call() {
             tabs: Vec::new(),
             slots: vec![ranked(205, "Rank 2")],
         });
-    app.world_mut()
-        .resource_mut::<crate::ui_action::PlayerActions>()
-        .superseded
-        .push((116, 205));
+    supersede(&mut app, 116, 205);
     app.update();
     assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
 }

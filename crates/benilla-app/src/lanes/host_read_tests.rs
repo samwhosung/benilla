@@ -72,26 +72,10 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-    ("::ui_action::feed::feed_actions", &["ui_action::ActionSlots", "ui_action::PlayerActions"],
-        "clears the book's and the bar's re-resolve flags; the known spells the book and the \
-         talents read are the learn handlers' alone"),
-    ("::ui_action::ranks::normalize_action_ranks", &["ui_action::ActionSlots"],
-        "re-points the bar's spell slots at their chain's top rank on a book or bar change (its \
-         `Deviation:`), which the reference re-points inside the supersede's handler \
-         (`ReplaceActionSpell` `0x4e5e60`)"),
-    ("::ui_action::track_learned_abilities", &["ui_action::LearnedAbilities"],
-        "rebuilds the learned-ability latches the world click's cursor reads in its call off the \
-         book, which the reference stores at the learn (`0x4b25e0`, `SetFeedPetSpell` `0x6ea1d0` \
-         from `0x5e9e49`) and clears at the unlearn (`0x4b2c50`), inside the spell packets"),
     ("::ui_action::state::feed_action_state", &["spell::cooldowns::Cooldowns",
         "ui_action::state::ActionStateMemory"],
         "keeps the frame's `GetTime` clock the cooldown reads map each start through, and \
          writes the list as it walks the slots"),
-    ("::ui_action::unlearn::clear_unlearned_slots", &["ui_action::ActionSlots",
-        "ui_action::PlayerActions"],
-        "drains the unlearned spells and clears their bar slots, which the reference clears \
-         inside the unlearn's handler (`ClearSpellSlots` `0x4e5e20` from `0x5ea253`); the known \
-         spells are the handlers' alone"),
     ("::ui_cast::feed_cast_reports", &["ui_action::cast_lines::CastFailRedisplays"],
         "holds the refusals that wait on their item's record, which it tests to queue the cast \
          lane's retry behind the frame's packets, where the reference shows each in the record's \
@@ -124,12 +108,10 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          character's buttons off benilla's older numbering through the bar verbs, a move with no \
          reference fact; the reference runs the reader inside the account-data settle \
          (`0x5afaca`, `0x5afd19`)"),
-    ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions",
-        "ui_macro::MacroBoundSpells"],
-        "drains the superseded ranks the bar's macros take and copies out the bound spells the \
-         bar's states read, derived once after the frame's last pet spell list, where the \
-         reference derives at each list's handler (`0x4bdae0` into \
-         `DeriveUnresolvedBoundSpells` `0x4f0ce0`); the known spells are the handlers' alone"),
+    ("::ui_macro::rebind_macro_spells", &["ui_macro::MacroBoundSpells"],
+        "copies out the bound spells the bar's states read, derived once after the frame's last \
+         pet spell list, where the reference derives at each list's handler (`0x4bdae0` into \
+         `DeriveUnresolvedBoundSpells` `0x4f0ce0`)"),
     ("::ui_session::feed_interact_npc", &["ui_session::InteractNpc"],
         "copies the interaction latch into the `npc` unit the token lookups read, where the \
          reference's `npc` is the latch itself (`0x515c00`), set inside the handlers through \

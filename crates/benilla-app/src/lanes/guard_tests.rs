@@ -151,15 +151,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_action::PlayerActions",
-        "the book's unlearn and supersede queues and its known set, which `clear_unlearned_slots` \
-         clears the bar off with its sends (`0x4e5e20` from `0x5ea253`), `rebind_macro_spells` \
-         rewrites the bar's macros off (`0x4e5ec4`) and `feed_actions` signals \
-         `ACTIONBAR_SLOT_CHANGED` from, where the reference does each inside the spell packet's \
-         handler",
-    ),
-    (
-        Row::HostHeld,
         "::ui_merchant::MerchantOpen",
         "the vendor's cell, whose open `tutorial::watch_windows` turns into the Vendors tutorial \
          `feed_tutorials` fires, where the list's handler triggers it (`0x4fad32`)",
@@ -261,10 +252,19 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // getters' `"target"` reads it through the host (`0x515a86`); the feeds that read it push
     // views.
     "::target::Selection",
-    // Quiet: the world click's and `DropItemOnUnit`'s latches, read in their calls; no feed fires
-    // off them. `track_learned_abilities` rebuilds them in the feed off the book, where the
-    // reference writes them at the learn.
+    // Quiet: the world click's and `DropItemOnUnit`'s latches, read in their calls, which the
+    // learn, unlearn and supersede handlers write at their packet (`0x4b262c`, `0x5e9e49`,
+    // `0x4b2c83`); no feed fires off them.
     "::ui_action::LearnedAbilities",
+    // Quiet: the known spells and the book's lists, which the learn, unlearn and supersede handlers
+    // write at their packet beside the bar's clears and replaces, whose signals go on the notice
+    // lane there (`0x5ea253`, `0x5e6356`); the feeds that read it push views (`READS_FRAME_FINAL`)
+    // or rebuild the action state's reactive list, and none fires off it.
+    "::ui_action::PlayerActions",
+    // Quiet: the macros' bound spells, which the supersede's handler rewrites at its packet
+    // (`0x4e5ec4`) and `rebind_macro_spells` copies out of the VM; the action-state feed walks the
+    // bar's macro slots through them, whose usable edge is `fire_action_events`'s row.
+    "::ui_macro::MacroBoundSpells",
     // Read through the host by the auction getters, and quiet: the hello's show, the lines, the
     // patches, the removals and the pages fire on the house lane at their handlers.
     "::ui_auction::AuctionOpen",
@@ -405,8 +405,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
     ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "ui_action::ActionSlots", "ui_action::PlayerActions",
-        "ui_action::errors::MountErrors",
+        "net::ObjectStore", "ui_action::ActionSlots", "ui_action::errors::MountErrors",
         "ui_action::errors::PetTameFailures", "ui_action::errors::UiErrorTexts"]),
     ("::ui_action::state::feed_action_state", &["Transform",
         "creature_anim::sheath::CommittedSheath", "items::Countdowns", "items::Items",
@@ -418,8 +417,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         // moves it inside its call, and the push reads it as the frame left it.
         "spell::cast_target::AutoSelfCast", "spell::cooldowns::Cooldowns",
         "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers", "target::Selection",
-        "ui_action::ActionSlots",
-        "ui_action::PlayerActions", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
+        "ui_action::ActionSlots", "ui_action::PlayerActions", "ui_action::state::ActionStateMemory",
+        "ui_macro::MacroBoundSpells", "ui_pet::PetBar"]),
     // The resolver's guids, pushed before the drain and read with the host lent too: the
     // mouseover, the group rows past a token's own, the pet records and every row of the field
     // events' fan-out, which the `UNIT_HAPPINESS` gate reads. The aura getters walk each unit
@@ -427,9 +426,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_aura::feed_unit_guids", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
     // The pet book's sorts, which each pet spell list counts and the derivation follows
-    // (`0x4bdae0`): the frame's lists derive once, after the last.
-    ("::ui_macro::rebind_macro_spells", &["ui_action::ActionSlots", "ui_action::PlayerActions",
-        "ui_pet::PetBar"]),
+    // (`0x4bdae0`): the frame's lists derive once, after the last, and the records copy out over
+    // the bar's copy a supersede's handler rewrote.
+    ("::ui_macro::rebind_macro_spells", &["ui_macro::MacroBoundSpells", "ui_pet::PetBar"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
     ("::ui_cast::feed_cast_reports", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
@@ -1813,12 +1812,13 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
     // Our arrival's legs read and reset what later packets of its frame write, as the frame left
     // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
-    // death stores its death state reads and its corpse ask resets, the class family it sets, and
-    // the connection the clock resync asks through.
+    // death stores its death state reads and its corpse ask resets, the class family it sets, the
+    // connection the clock resync asks through, and the bar's copy of the macros' bound spells
+    // its derivation copies out over.
     ("arrival", &["chat_bubble::BubbleConfig", "death::DeathNet", "net::NetStatus",
         "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_battlefield::Battlefield",
-        "ui_dialog_verbs::MeetingStone"]),
+        "ui_dialog_verbs::MeetingStone", "ui_macro::MacroBoundSpells"]),
     // The watchers' callbacks: the quest log's slots, the skill line's race and class and the
     // bonus bar's form off our live descriptor, as the frame left them (#2217); the aura
     // watcher's own store is the one its packet left, and the buff timers read the duration

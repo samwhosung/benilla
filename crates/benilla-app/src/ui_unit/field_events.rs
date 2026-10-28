@@ -314,6 +314,23 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
             }
             continue;
         }
+        if let FieldNotice::ActionSlotChanged { action } = notice {
+            let ((), moved) = crate::lanes::firing(stamp, || {
+                vm.engine_slot_written();
+                vm.run(|script| {
+                    if let Some(script) = script {
+                        script.fire_event(
+                            "ACTIONBAR_SLOT_CHANGED",
+                            vec![ScriptValue::Int(i64::from(action))],
+                        );
+                    }
+                })
+            });
+            if moved {
+                break;
+            }
+            continue;
+        }
         let trainer = match &notice {
             FieldNotice::PetGuidSet { changed: true, .. } => {
                 crate::ui_trainer::open_pet_trainer(vm.own().as_deref())
@@ -560,9 +577,10 @@ pub(crate) fn fire(
                 script.fire_event("PLAYER_CONTROL_LOST", vec![]);
             }
         }
-        // Caught by [`fire_lane`] before it reaches here: the refresh runs on the host's action
-        // states ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
-        FieldNotice::UsableRefresh => {}
+        // Caught by [`fire_lane`] before it reaches here: the refresh and the slot write's pair
+        // run on the host's action states
+        // ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
+        FieldNotice::UsableRefresh | FieldNotice::ActionSlotChanged { .. } => {}
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
         // table, the spell catalog, the aura cache, the skill lines and the pet's stat tables.
         FieldNotice::QuestLog

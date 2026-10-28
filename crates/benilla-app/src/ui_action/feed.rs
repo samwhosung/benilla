@@ -21,8 +21,8 @@ use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use super::errors::mount_result_key;
 use super::weapon_icon::{auto_attack_icon, substitutes_weapon_icon};
 use super::{
-    show_messages, ui_error_text, ActionSlots, MessageSink, MountErrors, PetTameFailures,
-    PlayerActions, Shown, Spells, UiError, UiErrorKeys, UiErrorTexts,
+    show_messages, ui_error_text, ActionSlots, MessageSink, MountErrors, PetTameFailures, Shown,
+    Spells, UiError, UiErrorKeys, UiErrorTexts,
 };
 
 /// An item action's icon when its template has not answered or its display id has no
@@ -50,18 +50,17 @@ pub(super) struct FeedMemory {
     resolved: bool,
     /// The [`Items::template_epoch`] of the last resolve; an advance re-resolves.
     template_epoch: u64,
+    /// The bar's [`ActionSlots::generation`] at the last resolve; a write since re-resolves.
+    slots_generation: u64,
     /// The macro-table generation of the last resolve: a macro edit changes a bar icon while
     /// touching neither the action table nor any item template.
     macro_generation: u64,
 }
 
 pub(super) fn feed_actions(
-    // The book and the bar the identity resolve reads, which the host's action presses also
-    // read and its bar verbs write.
-    mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, PlayerActions>,
-        ResMut<'static, ActionSlots>,
-    )>,
+    // The bar the identity resolve reads, which the host's action presses also read and its bar
+    // verbs write.
+    mut vm: crate::script_calls::VmWith<Res<'static, ActionSlots>>,
     mut mount_errors: ResMut<MountErrors>,
     mut pet_tame_failures: ResMut<PetTameFailures>,
     // The by-key and resolved-text queues and the cover that holds the latter, as one parameter,
@@ -159,7 +158,7 @@ pub(super) fn feed_actions(
 
     // The identity resolve reads the bar, which a press the host applies reads too: an engine
     // turn, whose slot changes signal once it has pushed them all.
-    let signals: Vec<u32> = vm.turn(|script, (mut actions, mut slots)| {
+    let signals: Vec<u32> = vm.turn(|script, slots| {
         let Some(script) = script else {
             return Vec::new();
         };
@@ -173,13 +172,11 @@ pub(super) fn feed_actions(
         let macro_generation = script.macros_generation();
         let macros_moved = macro_generation != memory.macro_generation;
         if !memory.resolved
-            || actions.dirty
-            || slots.dirty
+            || slots.generation() != memory.slots_generation
             || template_epoch != memory.template_epoch
             || macros_moved
         {
-            actions.dirty = false;
-            slots.dirty = false;
+            memory.slots_generation = slots.generation();
             memory.resolved = true;
             memory.template_epoch = template_epoch;
             memory.macro_generation = macro_generation;
@@ -263,7 +260,8 @@ pub(super) fn feed_actions(
             // verb's write (`PickupAction`, `PlaceAction`, an addon's from a handler this frame) is
             // never rolled back by a resolve of a store it has not reached; it fires
             // `ACTIONBAR_SLOT_CHANGED` only when what it pushes differs visibly from what the VM
-            // shows, so resolving the slot a verb stored is no change. The item's ON_USE spell is
+            // shows, so resolving the slot a verb or a spell packet's handler stored
+            // ([`super::spell_slots`]) is no change. The item's ON_USE spell is
             // pushed but never signalled: the place leaves it to this re-feed, and no handler
             // paints it. A macro slot whose word stands is signalled by `EditMacro` alone, inside
             // its call (`0x4f1329` into `0x4e5cc0`), and reads its macro's icon and name live, so

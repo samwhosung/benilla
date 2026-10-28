@@ -150,7 +150,7 @@ fn client() -> Client {
                 kind: ACTION_KIND_SPELL,
             },
         );
-        slots.dirty = true;
+        slots.touch();
     }
     let mut c = Client { app, inbound, sent };
     c.frame(vec![vec![created(

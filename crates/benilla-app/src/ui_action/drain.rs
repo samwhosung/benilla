@@ -582,6 +582,6 @@ impl ActionBarSteps<'_> {
                 },
             );
         }
-        slots.dirty = true;
+        slots.touch();
     }
 }

@@ -81,6 +81,8 @@ pub(crate) struct Lifecycle<'w> {
     spells: Option<Res<'w, Spells>>,
     net: Res<'w, NetCommands>,
     actions: ResMut<'w, PlayerActions>,
+    /// The registrar's and the learn's latches, which the book's handlers write at their packet.
+    learned: ResMut<'w, crate::ui_action::LearnedAbilities>,
     reports: ResMut<'w, CastReports>,
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     pending: ResMut<'w, PendingCast>,
@@ -117,8 +119,10 @@ pub(crate) struct Scene<'w, 's> {
     edits: Res<'w, crate::creature_anim::UnitEdits>,
 }
 
-/// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
-fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
+/// `SMSG_INITIAL_SPELLS`, once at login, into the known spells and the learn latches, the book's
+/// reset first (`0x4b2439`, `0x4b243f`) and then each spell in wire order, as the arrival learns
+/// them (`0x5dea8b`-`0x5deab9`); then the bar's ranks ([`crate::ui_action::normalize_ranks`]).
+fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene, mut bar: LoginRanks) {
     if let SessionEvent::SpellBook {
         spell_ids,
         cooldowns,
@@ -126,6 +130,11 @@ fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
     {
         let player = active_player(&l.self_guid, &l.index, &sc.stores);
         let pad = crate::spell::CategoryPad::for_list(false, player);
+        l.learned.book_reset();
+        for &spell_id in &spell_ids {
+            l.learned.registered(spell_id, l.spells.as_deref());
+            l.learned.learned(spell_id, l.spells.as_deref());
+        }
         spell_book(
             spell_ids,
             cooldowns,
@@ -133,6 +142,28 @@ fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
             &mut l.cooldowns,
             (l.spells.as_deref(), &sc.items, &l.spell_mods, pad),
         );
+        bar.normalize(&l.actions, &l.net);
+    }
+}
+
+/// The bar and the rank chains the login's rank pass reads ([`crate::ui_action::normalize_ranks`],
+/// its `Deviation:`).
+#[derive(SystemParam)]
+pub(crate) struct LoginRanks<'w> {
+    slots: ResMut<'w, crate::ui_action::ActionSlots>,
+    skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
+}
+
+impl LoginRanks<'_> {
+    fn normalize(&mut self, actions: &PlayerActions, net: &NetCommands) {
+        if let Some(lines) = self.skill_lines.as_deref() {
+            crate::ui_action::normalize_ranks(
+                &mut self.slots,
+                &actions.spells,
+                &lines.catalog,
+                net,
+            );
+        }
     }
 }
 
@@ -149,9 +180,17 @@ fn active_player<'a>(
         .and_then(|&e| stores.get(e).ok())
 }
 
-fn on_action_buttons(In(ev): In<SessionEvent>, mut slots: ResMut<crate::ui_action::ActionSlots>) {
+/// `SMSG_ACTION_BUTTONS`, then the bar's ranks against the book
+/// ([`crate::ui_action::normalize_ranks`]).
+fn on_action_buttons(
+    In(ev): In<SessionEvent>,
+    mut bar: LoginRanks,
+    actions: Res<PlayerActions>,
+    net: Res<NetCommands>,
+) {
     if let SessionEvent::ActionButtons { buttons } = ev {
-        action_buttons(buttons, &mut slots);
+        action_buttons(buttons, &mut bar.slots);
+        bar.normalize(&actions, &net);
     }
 }
 
@@ -165,6 +204,8 @@ fn on_spell_learned(
 ) {
     if let SessionEvent::SpellLearned { spell_id } = ev {
         learned_spell(spell_id, &mut l.actions, l.spells.as_deref(), &errors);
+        l.learned.registered(spell_id, l.spells.as_deref());
+        l.learned.learned(spell_id, l.spells.as_deref());
         book.entered(
             spell_id,
             Learned::Fresh,
@@ -174,16 +215,21 @@ fn on_spell_learned(
     }
 }
 
-/// The unlearn, whose removal signals at the packet (`0x5ea24c` → `0x4b2e4e`, `0x4b2f3f`).
+/// The unlearn, `UnlearnSpell 0x5e9fe0` in its order: the book's removal, which clears the learn
+/// latches holding the spell and signals at the packet (`0x5ea24c` → `0x4b2c83`, `0x4b2e4e`,
+/// `0x4b2f3f`), then the bar's clear of every slot standing for it (`0x5ea253`), whose signals
+/// follow. A spell with no record unlearns nothing (`0x5ea02a`).
 fn on_spell_removed(
     In(ev): In<SessionEvent>,
     mut l: Lifecycle,
     errors: Res<UiErrorKeys>,
     mut book: BookSignals,
+    mut bar: crate::ui_action::SpellSlots,
 ) {
     if let SessionEvent::SpellRemoved { spell_id } = ev {
         let was_known = l.actions.spells.contains(&spell_id);
         removed_spell(spell_id, &mut l.actions, l.spells.as_deref(), &errors);
+        l.learned.unregistered(spell_id);
         book.left(
             spell_id,
             was_known,
@@ -191,22 +237,36 @@ fn on_spell_removed(
             &mut l.actions,
             l.spells.as_deref(),
         );
+        if has_record(spell_id, l.spells.as_deref()) {
+            bar.clear_spell(spell_id, book.lane());
+        }
     }
 }
 
-/// The rank-up, whose book pair signals at the packet: the old rank's removal (`0x4b2f5b` →
-/// `0x4b2f3f`), then the new one's live add (`0x4b2f68` → `0x4b2b5a`).
+/// Whether `Spell.dbc` holds `spell_id`, without which `UnlearnSpell` returns at once
+/// (`0x5ea02a`).
+fn has_record(spell_id: u32, spells: Option<&Spells>) -> bool {
+    spells.is_some_and(|s| s.catalog.get(spell_id).is_some())
+}
+
+/// The rank-up, `0x5e6330` in its order: the bar's replace first (`0x5e6356` into
+/// `ReplaceActionSpell 0x4e5e60`), then the book pair, which signals at the packet: the old rank's
+/// removal (`0x4b2f5b` → `0x4b2f3f`), then the new one's live add (`0x4b2f68` → `0x4b2b5a`). With
+/// our player held, its unlearn of the old rank (`0x5e6392`) then clears what still stands for it
+/// (`0x5ea253`), and its learn of the new one (`0x5e63a4`) takes the learn's latch.
 fn on_spell_superceded(
     In(ev): In<SessionEvent>,
     mut l: Lifecycle,
     errors: Res<UiErrorKeys>,
     mut book: BookSignals,
+    mut bar: crate::ui_action::SpellSlots,
 ) {
     if let SessionEvent::SpellSuperceded {
         old_spell_id,
         new_spell_id,
     } = ev
     {
+        bar.replace_spell(old_spell_id, new_spell_id, l.spells.as_deref(), book.lane());
         let was_known = l.actions.spells.contains(&old_spell_id);
         superceded_spell(
             old_spell_id,
@@ -215,6 +275,9 @@ fn on_spell_superceded(
             l.spells.as_deref(),
             &errors,
         );
+        // The book pair's unlearn and registration (`0x4b2f50`), then the player's own unlearn.
+        l.learned.unregistered(old_spell_id);
+        l.learned.registered(new_spell_id, l.spells.as_deref());
         book.left(
             old_spell_id,
             was_known,
@@ -228,6 +291,13 @@ fn on_spell_superceded(
             &mut l.actions,
             l.spells.as_deref(),
         );
+        if bar.player_held() {
+            l.learned.unregistered(old_spell_id);
+            if has_record(old_spell_id, l.spells.as_deref()) {
+                bar.clear_spell(old_spell_id, book.lane());
+            }
+            l.learned.learned(new_spell_id, l.spells.as_deref());
+        }
     }
 }
 
@@ -721,7 +791,6 @@ fn spell_book(
         actions.spells.insert(spell_id);
         list_learn(spell_id, actions, spells);
     }
-    actions.dirty = true;
     let now = Instant::now();
     for cd in &initial_cooldowns {
         let spell_id = u32::from(cd.spell_id);
@@ -739,7 +808,7 @@ fn spell_book(
 fn action_buttons(buttons: Vec<ActionButton>, slots: &mut crate::ui_action::ActionSlots) {
     debug!("net: action bar — {} occupied slots", buttons.len());
     slots.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
-    slots.dirty = true;
+    slots.touch();
 }
 
 /// `SMSG_LEARNED_SPELL`: the spell joins the known spells, which the book reads (learning never
@@ -752,9 +821,7 @@ fn learned_spell(
     errors: &UiErrorKeys,
 ) {
     debug!("net: learned spell {spell_id}");
-    if actions.spells.insert(spell_id) {
-        actions.dirty = true;
-    }
+    actions.spells.insert(spell_id);
     list_learn(spell_id, actions, spells);
     register_in_book(spell_id, spells, actions);
     announce_learn(spell_id, spells, errors);
@@ -886,9 +953,8 @@ fn announce_learn(spell_id: u32, spells: Option<&Spells>, errors: &UiErrorKeys) 
 
 /// `SMSG_REMOVED_SPELL`: the spell leaves the book. A talent wipe arrives as these (vmangos
 /// `ResetTalents` calls `RemoveSpell` on every rank, each sending `SendSpellRemoved`), and
-/// [`crate::ui_talent`] derives rank from the book. The feeds diff `spells`, and
-/// [`crate::ui_action::LearnedAbilities`] re-derives from it (the reference's unlearn write site,
-/// `0x4b2c50`); a bar button naming the spell is left as is.
+/// [`crate::ui_talent`] derives rank from the book. The handler clears the learn latches and the
+/// bar slots standing for it ([`on_spell_removed`]).
 ///
 /// It announces "You have unlearned %s." under
 /// [`benilla_formats::SpellDisplay::announces_unlearn`]'s gates: `RemoveSpell 0x5e9fe0`'s block at
@@ -901,15 +967,8 @@ fn removed_spell(
     errors: &UiErrorKeys,
 ) {
     debug!("net: removed spell {spell_id}");
-    if actions.spells.remove(&spell_id) {
-        actions.dirty = true;
-    }
+    actions.spells.remove(&spell_id);
     list_unlearn(spell_id, actions);
-    // `UnlearnSpell 0x5e9fe0` does nothing for a spell with no record (`0x5ea02a`); otherwise it
-    // clears the bar slots that stand for the spell (`0x5ea253`), which the bar's queue makes.
-    if spells.is_some_and(|s| s.catalog.get(spell_id).is_some()) {
-        actions.unlearned.push(spell_id);
-    }
     // `0x5ea24c`: every unlearn runs `0x4b2c50`.
     unlist_opener(spell_id, actions);
     announce_unlearn(spell_id, spells, errors);
@@ -928,9 +987,9 @@ fn announce_unlearn(spell_id: u32, spells: Option<&Spells>, errors: &UiErrorKeys
     errors.push(UiError::s("ERR_SPELL_UNLEARNED_S", display.name.clone()));
 }
 
-/// `SMSG_SUPERCEDED_SPELL`: the new rank replaces the old in the book. The bar follows from the
-/// book in `ui_action::ranks`, not from here: vmangos sends no fresh `SMSG_ACTION_BUTTONS`
-/// (`Player::learnSpell`), and suppresses this packet while the character loads (`IsInWorld()`).
+/// `SMSG_SUPERCEDED_SPELL`: the new rank replaces the old in the book; the handler moves the bar
+/// ([`on_spell_superceded`]). vmangos sends no fresh `SMSG_ACTION_BUTTONS` (`Player::learnSpell`),
+/// and suppresses this packet while the character loads (`IsInWorld()`).
 fn superceded_spell(
     old_spell_id: u32,
     new_spell_id: u32,
@@ -945,8 +1004,6 @@ fn superceded_spell(
     list_unlearn(old_spell_id, actions);
     actions.spells.insert(new_spell_id);
     list_learn(new_spell_id, actions, spells);
-    actions.superseded.push((old_spell_id, new_spell_id));
-    actions.dirty = true;
     // `0x4b2f50` unlists the old rank and registers the new one at the tail; the player's own
     // unlearn of the old rank (`0x5e6392` → `0x5ea24c`) then runs the removal once more, and its
     // learn of the new one (`0x5e63a4`) skips the registrar (`0x5e9c5a`).
@@ -957,12 +1014,6 @@ fn superceded_spell(
     // unlearn `0x4b2c50`, which prints nothing, then the registrar `0x4b25b0` with `edx = 1`
     // (`0x4b2f61`).
     announce_learn(new_spell_id, spells, errors);
-    // That unlearn (`UnlearnSpell(old, 1)`, `0x5e6392` into `0x5e9fe0`) then clears every bar slot
-    // still standing for the old rank (`0x5ea253`), an item's on-use spell included; a spell with
-    // no record unlearns nothing (`0x5ea02a`).
-    if spells.is_some_and(|s| s.catalog.get(old_spell_id).is_some()) {
-        actions.unlearned.push(old_spell_id);
-    }
 }
 
 /// The server's verdict on our cast (`SMSG_CAST_RESULT`, `HandleCastResult 0x6e7330`).
@@ -2008,12 +2059,6 @@ mod tests {
         let errors = UiErrorKeys::default();
         superceded_spell(78, 284, &mut actions, Some(&spells), &errors);
 
-        assert_eq!(
-            actions.unlearned,
-            [78],
-            "the handler's `UnlearnSpell(old, 1)` clears what still stands for the old rank \
-             (`0x5e6392` into `0x5e9fe0`, `0x5ea253`)"
-        );
         assert_eq!(errors.len(), 1, "one line for a rank-up, not two");
         assert_eq!(errors.snapshot()[0].key, "ERR_LEARN_ABILITY_S");
         assert_eq!(errors.snapshot()[0].arg_s(), Some("Heroic Strike (Rank 2)"));
@@ -2044,20 +2089,13 @@ mod tests {
         let mut actions = PlayerActions::default();
         let errors = UiErrorKeys::default();
         learned_spell(6603, &mut actions, None, &errors);
-        assert!(actions.spells.contains(&6603));
-        assert!(actions.dirty, "a new spell dirties the feed");
-
-        actions.dirty = false;
         learned_spell(6603, &mut actions, None, &errors);
-        assert!(
-            !actions.dirty,
-            "re-learning a known spell is a no-op (insert returns false)"
-        );
+        assert_eq!(actions.spells.iter().copied().collect::<Vec<_>>(), [6603]);
     }
 
-    /// A rank-up moves the book and marks the store dirty; the bar follows in `ui_action::ranks`.
+    /// A rank-up moves the book; the handler moves the bar ([`on_spell_superceded`]).
     #[test]
-    fn superceded_spell_swaps_the_book_and_leaves_the_bar_to_the_rank_pass() {
+    fn superceded_spell_swaps_the_book() {
         let mut actions = PlayerActions::default();
         actions.spells.insert(78); // Heroic Strike rank 1, known
 
@@ -2070,10 +2108,6 @@ mod tests {
         assert!(
             actions.spells.contains(&284),
             "the new rank enters the book"
-        );
-        assert!(
-            actions.dirty,
-            "the bar follows from the book, and `dirty` is what makes it follow"
         );
     }
 
@@ -3703,21 +3737,20 @@ mod tests {
         );
     }
 
-    /// `SMSG_REMOVED_SPELL` shrinks the book and dirties the feeds only on a real removal: a talent
-    /// wipe sends removals for every rank of the class tree, learned or not.
+    /// `SMSG_REMOVED_SPELL` shrinks the book, and a removal of a spell never known leaves it: a
+    /// talent wipe sends removals for every rank of the class tree, learned or not.
     #[test]
-    fn a_removal_shrinks_the_book_and_dirties_the_feeds() {
+    fn a_removal_shrinks_the_book() {
         let mut actions = PlayerActions::default();
         actions.spells.extend([14522, 14788, 14789]);
 
         let errors = UiErrorKeys::default();
         removed_spell(14788, &mut actions, None, &errors);
-        assert!(!actions.spells.contains(&14788));
-        assert!(actions.dirty);
-
-        actions.dirty = false;
         removed_spell(14788, &mut actions, None, &errors);
-        assert!(!actions.dirty, "a spell we never knew is not a repaint");
+        assert_eq!(
+            actions.spells.iter().copied().collect::<Vec<_>>(),
+            [14522, 14789]
+        );
     }
 
     /// The unlearn line carries the bare name, with no rank, and each of its gates silences it.

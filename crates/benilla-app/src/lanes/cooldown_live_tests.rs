@@ -168,7 +168,7 @@ fn client() -> Client {
                 .buttons
                 .insert(slot, ActionButton { slot, action, kind });
         }
-        slots.dirty = true;
+        slots.touch();
     }
     crate::items::test_spawn_item(
         world,
@@ -463,7 +463,7 @@ fn the_pet_book_and_a_pet_bound_slot_read_the_pets_list_inside_their_packet() {
                 kind: ACTION_KIND_MACRO,
             },
         );
-        slots.dirty = true;
+        slots.touch();
     }
     c.frame(vec![]);
     c.frame(vec![]);

@@ -591,6 +591,8 @@ mod selection_live_tests;
 #[cfg(test)]
 mod social_live_tests;
 #[cfg(test)]
+mod spell_slot_live_tests;
+#[cfg(test)]
 mod stable_live_tests;
 #[cfg(test)]
 mod stance_live_tests;

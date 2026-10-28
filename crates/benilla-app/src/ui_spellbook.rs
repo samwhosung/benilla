@@ -89,6 +89,12 @@ pub(crate) enum Learned {
 }
 
 impl BookSignals<'_, '_> {
+    /// The lane the book's signals go on, which the bar's legs of the same packet share
+    /// ([`crate::ui_action::SpellSlots`]), so the two keep the handler's order.
+    pub(crate) fn lane(&mut self) -> &mut NoticeLane {
+        &mut self.lane
+    }
+
     /// `0x4b25b0`'s tail for `spell_id`, now among `actions`' known spells. First its language
     /// leg's `LANGUAGE_LIST_CHANGED` for a spell whose first effect is `SPELL_EFFECT_LANGUAGE`
     /// (`0x4b2641`-`0x4b2659`, live or not), then the form list's leg on the stored list

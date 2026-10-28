@@ -126,6 +126,10 @@ pub(crate) enum FieldNotice {
     /// The maximum's and the permanent bonus's watch `0x5de450`: the profession list's rebuild
     /// (`0x5de457`), then the skill list's (`0x5de45c`).
     SkillMax,
+    /// A spell packet's slot write, `0x4e58e0` from the unlearn's or the supersede's walk of the
+    /// bar ([`crate::ui_action::SpellSlots`]): the slot's usable pair recomputed (`0x4e5903`),
+    /// then `ACTIONBAR_SLOT_CHANGED` with the 1-based `action` (`0x4e5998`).
+    ActionSlotChanged { action: u32 },
     /// `0x4b25b0`'s live tail for a learned spell that entered the book: `LEARNED_SPELL_IN_TAB`
     /// (510) with its tab's 1-based place (`0x4b2b92`).
     LearnedInTab { tab: i64 },

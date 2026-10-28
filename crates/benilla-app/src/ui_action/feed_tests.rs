@@ -37,7 +37,7 @@ fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand
         },
     );
     // As `SMSG_ACTION_BUTTONS` sets it; the feed's first pass clears it.
-    slots.dirty = true;
+    slots.touch();
 
     let displays = HashMap::from([(
         JERKY_DISPLAY,
@@ -258,7 +258,9 @@ fn a_verbs_bar_write_survives_a_resolve_of_the_stale_store() {
         ))
         .unwrap();
     // The store has not seen the move; something else asks for a resolve.
-    app.world_mut().resource_mut::<PlayerActions>().dirty = true;
+    app.world_mut()
+        .resource_mut::<crate::ui_action::ActionSlots>()
+        .touch();
     app.update();
     let late: Vec<i64> = script(&mut app).eval("return SLOT_EVENTS").unwrap();
     assert!(late.is_empty(), "the stale store fired {late:?}");
@@ -386,7 +388,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
             kind: ACTION_KIND_MACRO,
         },
     );
-    slots.dirty = true;
+    slots.touch();
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
         .init_resource::<Items>()
@@ -427,12 +429,19 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         "the MACRO's own icon"
     );
 
+    let bar = |app: &App| {
+        app.world()
+            .resource::<crate::ui_action::ActionSlots>()
+            .generation()
+    };
+    let before = bar(&app);
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
         .run("EditMacro(1, nil, 1)")
         .unwrap();
-    assert!(
-        !app.world().resource::<PlayerActions>().dirty,
+    assert_eq!(
+        bar(&app),
+        before,
         "the precondition: the bar table is UNtouched by a macro edit"
     );
 
@@ -1095,7 +1104,7 @@ fn the_feed_signals_no_macro_slot_of_its_own() {
             },
         );
     }
-    slots.dirty = true;
+    slots.touch();
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
         .init_resource::<Items>()

@@ -55,13 +55,10 @@ impl Plugin for UiMacroPlugin {
                     rebind_macro_spells
                         .in_set(crate::ui_unit::UnitFeed)
                         .in_set(MacroBindings),
-                    // In-world only: the per-character file needs the character. Ahead of the
-                    // rank pass, which rewrites the bar's words too, as the one-time move of a
-                    // character's old buttons does.
+                    // In-world only: the per-character file needs the character.
                     load_macros
                         .in_set(crate::ui_script::UiFeed)
-                        .in_set(InWorldGated)
-                        .before(crate::ui_action::normalize_action_ranks),
+                        .in_set(InWorldGated),
                     // Every frame, in or out of world, so a `/logout` never strands an edit; after
                     // the script tick that dirtied the table.
                     save_dirty_macros.in_set(crate::ui_script::UiDrain),
@@ -296,56 +293,32 @@ struct BindingsSeen {
 ///   last, off the book the pet book's feed pushed.
 ///
 /// A learned spell derives nothing, so a `/cast` of a spell not yet known stays -1 until its macro
-/// is edited, loaded again or the player arrives again. A superseded rank rewrites the cached
-/// spell of each macro on the bar that holds the old one (`0x4e5e60`'s macro arm, `0x4e5ec4`),
-/// derived from nothing. A derivation reads the book as it stands through the call host, and the
-/// engine's records are copied out for the action bar.
-#[allow(clippy::type_complexity)] // the bar, the records and the pet book's sorts, as one param
+/// is edited, loaded again or the player arrives again. A superseded rank's rewrite of the cached
+/// spells of the bar's macros (`0x4e5e60`'s macro arm, `0x4e5ec4`) is the supersede's handler's
+/// ([`crate::ui_action::SpellSlots`]). A derivation reads the book as it stands through the call
+/// host, and the engine's records are copied out for the action bar.
 fn rebind_macro_spells(
-    // The bar, whose supersede queue this drains, and the records, which the call host's presses
-    // and usable refresh read, so turns around the derivation, which runs with the host lent.
+    // The records, which the call host's presses and usable refresh read, and the pet book's
+    // sorts, so turns around the derivation, which runs with the host lent.
     mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, crate::ui_action::PlayerActions>,
-        Res<'static, crate::ui_action::ActionSlots>,
         ResMut<'static, MacroBoundSpells>,
         Option<Res<'static, crate::ui_pet::PetBar>>,
     )>,
     mut seen: Local<crate::ui_script::VmMemo<BindingsSeen>>,
 ) {
-    let derive = vm.turn(|script, (mut actions, slots, _, pet_bar)| {
-        // With no VM the supersede pairs wait for the first pass that can apply them.
+    let derive = vm.turn(|script, (_, pet_bar)| {
         let script = script?;
         let seen = seen.get(script);
         let generation = script.macros_generation();
         let book_sorts = pet_bar.map_or(0, |b| b.book_sorts);
         let table_moved = seen.macros != Some(generation);
         let pet_moved = seen.pet_book != Some(book_sorts);
-        if !table_moved && !pet_moved && actions.superseded.is_empty() {
+        if !table_moved && !pet_moved {
             return None;
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(book_sorts);
         let every = script.take_macro_derives().loaded;
-
-        // The queue empties without marking the bar changed: the supersede marked it already.
-        let superseded = std::mem::take(&mut actions.bypass_change_detection().superseded);
-        if !superseded.is_empty() {
-            // The macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
-            let on_bar: std::collections::HashSet<u32> = slots
-                .buttons
-                .values()
-                .filter_map(|b| benilla_ui::script::macro_slot_id(b.kind, b.action))
-                .collect();
-            let mut records = script.macro_bindings();
-            for (_, b) in records.iter_mut().filter(|(id, _)| on_bar.contains(id)) {
-                for &(old, new) in &superseded {
-                    if b.spell == old as i32 {
-                        b.spell = new as i32;
-                    }
-                }
-            }
-            script.set_macro_bindings(records);
-        }
         Some((every, pet_moved))
     });
     let Some((every, pet_moved)) = derive else {
@@ -357,7 +330,7 @@ fn rebind_macro_spells(
             script.derive_macro_bindings(|_, b| every || (pet_moved && b.follows_the_pet_book()));
         }
     });
-    vm.turn(|script, (_, _, mut bound, _)| {
+    vm.turn(|script, (mut bound, _)| {
         if let Some(script) = script {
             copy_bound(script, &mut bound);
         }
@@ -383,7 +356,7 @@ pub(crate) fn derive_on_arrival(
 }
 
 /// The VM's derived records, copied out for the action bar when they moved.
-fn copy_bound(script: &UiScript, bound: &mut MacroBoundSpells) {
+pub(crate) fn copy_bound(script: &UiScript, bound: &mut MacroBoundSpells) {
     let records = script.macro_bindings();
     let fresh: std::collections::HashMap<u32, Bound> = script
         .macros()
