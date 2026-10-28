@@ -27,8 +27,11 @@ impl UiScript {
     /// on it: both ZoneText frames write `PVPInfoTextString` on one event, and the last one wins.
     ///
     /// The walk steps by the next listener saved before each handler runs (`0x703ee8`), so a
-    /// handler that unregisters itself does not skip its successor. Deviation: a handler that
-    /// unregisters the saved next ends the dispatch, because the reference then reads a freed node.
+    /// handler that unregisters itself does not skip its successor, and one that unregisters a
+    /// listener further on unlinks it before the walk gets there. A handler that unregisters the
+    /// saved next leaves the walk on a node whose links the unlink zeroed (`0x70559d`, `0x7055a3`)
+    /// and whose free keeps its object (`0x645eb0`): that listener runs once more, then the walk
+    /// ends, and the listeners after it miss the event.
     pub fn fire_event(&mut self, event: &str, args: Vec<ScriptValue>) {
         fire_event_into(&self.lua, event, args);
     }
@@ -328,18 +331,12 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
     }
     while let Some(h) = at {
         let mut model = model_mut();
-        // A saved next that the previous handler unregistered ends the walk.
-        let Some(pos) = model
-            .event_to_frames
-            .get(event)
-            .and_then(|l| l.iter().position(|&x| x == h))
-        else {
-            break;
-        };
-        let next = model
-            .event_to_frames
-            .get(event)
-            .and_then(|l| l.get(pos + 1).copied());
+        // The successor is read before the handler runs (`0x703ee8`). A saved next the previous
+        // handler unregistered still runs, and its zeroed link ends the walk.
+        let next = model.event_to_frames.get(event).and_then(|l| {
+            let pos = l.iter().position(|&x| x == h)?;
+            l.get(pos + 1).copied()
+        });
         let id = model.frame_id(h);
         drop(model);
         if let Err(e) = event::fire_event_handler(lua, id, &args) {

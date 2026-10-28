@@ -269,59 +269,116 @@ fn a_self_unregistering_handler_does_not_rob_its_successor() {
     assert_eq!(log, vec!["WalkA", "WalkB", "WalkC", "WalkA", "WalkC"]);
 }
 
-/// Unregistering the walk's saved next ends the dispatch, as the reference frees that node and
-/// walks into its zeroed links; a frame registered mid-dispatch tail-appends and is still visited.
-#[test]
-fn mid_dispatch_removal_of_the_next_stops_and_append_is_visited() {
-    let mut s = script();
-    s.run(
+/// Fire `event` to listeners `names`, in that order, each logging its name and then running
+/// `bodies[name]` if it has one, and return the log.
+fn walk_log(
+    s: &mut crate::script::UiScript,
+    event: &str,
+    names: &[&str],
+    bodies: &str,
+) -> Vec<String> {
+    let names = names
+        .iter()
+        .map(|n| format!("{n:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    s.run(&format!(
         r#"
-        log = {}
-        local function reg(n, body)
+        log = {{}}
+        local bodies = {bodies}
+        for _, name in ipairs({{{names}}}) do
+            local n = name
             local f = CreateFrame("Frame", n)
-            f:RegisterEvent("PLAYER_LOGOUT")
-            f:SetScript("OnEvent", function() table.insert(log, n); if body then body() end end)
-            return f
+            f:RegisterEvent("{event}")
+            f:SetScript("OnEvent", function()
+                table.insert(log, n)
+                if bodies[n] then bodies[n]() end
+            end)
         end
-        reg("NxA", function()
-            NxB:UnregisterEvent("PLAYER_LOGOUT")   -- kill the walk's saved next
-        end)
-        reg("NxB")
-        reg("NxC")
-    "#,
-    )
+    "#
+    ))
     .unwrap();
+    s.fire_event(event, vec![]);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+    s.eval("return log").unwrap()
+}
+
+/// A handler that unregisters the walk's saved next (`0x703ee8`) leaves the walk on that node,
+/// whose links the unlink zeroed (`0x70559d`, `0x7055a3`) and whose free keeps its object
+/// (`0x645eb0`): it runs once more, then the zero link ends the walk.
+#[test]
+fn unregistering_the_saved_next_runs_it_once_and_ends_the_walk() {
+    let mut s = script();
+    let log = walk_log(
+        &mut s,
+        "PLAYER_LOGOUT",
+        &["NxA", "NxB", "NxC"],
+        r#"{ NxA = function() NxB:UnregisterEvent("PLAYER_LOGOUT") end }"#,
+    );
+    assert_eq!(
+        log,
+        vec!["NxA", "NxB"],
+        "B runs once more, C misses the event"
+    );
+    // The unregistration stands: the next signal reaches A and C only.
+    s.run("log = {}").unwrap();
     s.fire_event("PLAYER_LOGOUT", vec![]);
     let log: Vec<String> = s.eval("return log").unwrap();
-    assert_eq!(
-        log,
-        vec!["NxA"],
-        "removing the saved next ends the dispatch"
-    );
+    assert_eq!(log, vec!["NxA", "NxC"]);
+}
 
-    s.run(
-        r#"
-        log = {}
-        local function reg(n, body)
-            local f = CreateFrame("Frame", n)
-            f:RegisterEvent("PLAYER_ALIVE")
-            f:SetScript("OnEvent", function() table.insert(log, n); if body then body() end end)
-        end
-        reg("ApA", function()
-            local f = CreateFrame("Frame", "ApLate")
-            f:RegisterEvent("PLAYER_ALIVE")
-            f:SetScript("OnEvent", function() table.insert(log, "ApLate") end)
-        end)
-        reg("ApB")
-    "#,
-    )
-    .unwrap();
-    s.fire_event("PLAYER_ALIVE", vec![]);
-    let log: Vec<String> = s.eval("return log").unwrap();
-    assert_eq!(
-        log,
-        vec!["ApA", "ApB", "ApLate"],
-        "a tail-append during dispatch is still visited this dispatch"
+/// A handler that unregisters itself still reaches its successor, read before it ran
+/// (`0x703ee8`), even when it unregisters that successor too: the successor runs once more.
+#[test]
+fn a_self_unregistering_handler_reaches_the_next_it_also_unregistered() {
+    let mut s = script();
+    let log = walk_log(
+        &mut s,
+        "PLAYER_ALIVE",
+        &["SnA", "SnB", "SnC"],
+        r#"{ SnA = function() SnA:UnregisterEvent("PLAYER_ALIVE") SnB:UnregisterEvent("PLAYER_ALIVE") end }"#,
+    );
+    assert_eq!(log, vec!["SnA", "SnB"]);
+}
+
+/// A handler that unregisters a listener further on unlinks it (`0x705570`) before the walk reads
+/// its predecessor's link (`0x703ee8`), so the walk passes over it to the one after.
+#[test]
+fn unregistering_a_listener_further_on_skips_only_it() {
+    let mut s = script();
+    let log = walk_log(
+        &mut s,
+        "PLAYER_ALIVE",
+        &["FoA", "FoB", "FoC", "FoD"],
+        r#"{ FoA = function() FoC:UnregisterEvent("PLAYER_ALIVE") end }"#,
+    );
+    assert_eq!(log, vec!["FoA", "FoB", "FoD"]);
+}
+
+/// A frame registered during the signal tail-appends (`0x7052d0`) and is reached, unless the
+/// running listener is the last: its successor was read as the list's end (`0x703ee8`).
+#[test]
+fn a_frame_registered_mid_dispatch_is_reached_unless_the_last_registered_it() {
+    let mut s = script();
+    let late = |name: &str, event: &str| {
+        format!(
+            r#"function()
+                local f = CreateFrame("Frame", "{name}")
+                f:RegisterEvent("{event}")
+                f:SetScript("OnEvent", function() table.insert(log, "{name}") end)
+            end"#
+        )
+    };
+    let bodies = format!("{{ ApA = {} }}", late("ApLate", "PLAYER_ALIVE"));
+    let log = walk_log(&mut s, "PLAYER_ALIVE", &["ApA", "ApB"], &bodies);
+    assert_eq!(log, vec!["ApA", "ApB", "ApLate"]);
+
+    let bodies = format!("{{ LsB = {} }}", late("LsLate", "PLAYER_LOGOUT"));
+    let log = walk_log(&mut s, "PLAYER_LOGOUT", &["LsA", "LsB"], &bodies);
+    assert_eq!(log, vec!["LsA", "LsB"]);
+    assert!(
+        s.eval::<bool>("return LsLate ~= nil").unwrap(),
+        "the late frame was made"
     );
 }
 
