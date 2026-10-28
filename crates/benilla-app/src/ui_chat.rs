@@ -178,11 +178,6 @@ impl Plugin for UiChatPlugin {
                     .in_set(crate::lanes::UiLanes)
                     .after(crate::lanes::fire_in_order),
             )
-            // Before the drain, so a broadcast lands on the frame it decodes.
-            .add_systems(
-                Update,
-                broadcast::feed_broadcasts.in_set(crate::ui_script::UiFeed),
-            )
             // The last-input stamp `[0xcf0bc8]`, ungated and ahead of the UI pass: the reference
             // stamps raw input before dispatch, so a key the chat box swallows still counts.
             .add_systems(Update, idle::stamp_input.before(UiInput))

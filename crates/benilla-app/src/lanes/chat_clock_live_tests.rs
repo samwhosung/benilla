@@ -226,3 +226,68 @@ fn a_members_ping_signals_at_its_packet() {
         (20.0, 0.0)
     );
 }
+
+/// Spy on `events` too, each heard as its name and first argument.
+fn spy_on(c: &mut Client, events: &[&str]) {
+    let list: Vec<String> = events.iter().map(|e| format!("{e:?}")).collect();
+    c.app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(&format!(
+            r#"local f = CreateFrame("Frame")
+               for _, e in ipairs({{{}}}) do f:RegisterEvent(e) end
+               f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. arg1) end)"#,
+            list.join(", ")
+        ))
+        .unwrap();
+}
+
+/// The world broadcasts print inside their handlers (`0x49de30`, `0x5e4a09`, `0x4019a0`), each
+/// line at its packet's place among the lines around it: a defence message once per defence
+/// channel joined (`0x49dd94`), the chat restriction and a transfer abort as system lines.
+#[test]
+fn the_world_broadcasts_print_at_their_packets() {
+    let mut c = client();
+    spy_on(&mut c, &["CHAT_MSG_SYSTEM", "CHAT_MSG_CHANNEL"]);
+    c.app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"ERR_CHAT_RESTRICTED = "restricted" TRANSFER_ABORT_MAX_PLAYERS = "full""#)
+        .unwrap();
+    let world_defense =
+        benilla_formats::ChatChannelsCatalog::from_rows(vec![benilla_formats::ChatChannelRow {
+            id: 23,
+            flags: 0x1_0004,
+            pattern: "WorldDefense".into(),
+            shortcut: "WorldDefense".into(),
+        }]);
+    c.app.insert_resource(crate::ui_chat::ChannelState {
+        joined: vec![crate::ui_chat::edit::ChannelSlot::confirmed("WorldDefense", 23).into()],
+        channels: world_defense,
+        ..Default::default()
+    });
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![SessionEvent::DefenseMessage {
+            zone_id: 40,
+            text: "under attack".into(),
+        }],
+        vec![boar_says("b")],
+        vec![SessionEvent::ChatRestricted],
+        vec![boar_says("c")],
+        vec![SessionEvent::TransferAborted { reason: 1 }],
+        vec![boar_says("d")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            said("a"),
+            "CHAT_MSG_CHANNEL:under attack".into(),
+            said("b"),
+            "CHAT_MSG_SYSTEM:restricted".into(),
+            said("c"),
+            "CHAT_MSG_SYSTEM:full".into(),
+            said("d"),
+        ]
+    );
+}

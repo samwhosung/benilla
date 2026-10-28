@@ -372,7 +372,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_pet::PetBar"]),
     ("::ui_loot_roll::feed_loot_rolls", &["items::Items", "names::NameCache", "net::SelfGuid",
         "ui_loot_roll::LootRolls"]),
-    ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
 ];
 

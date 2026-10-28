@@ -138,6 +138,9 @@ enum Pending {
     /// A ready line the display latch holds (`0x49cae0`): a defence broadcast's (`0x49dcc0`,
     /// `0x49de30`) or the billing warning's (`0x49577a`).
     Display(ChatEvent),
+    /// A world broadcast at its packet's place, resolved into its lines where it fires
+    /// ([`super::broadcast::resolve`]).
+    Broadcast(super::broadcast::Broadcast),
     /// An item the display latch holds, past its name lookup (`0x49db5c`, `0x49ce3c`): it does not
     /// age, and fires once the world-enter cascade's release clears the latch (`0x4989c0`).
     Latched(Box<Pending>),
@@ -261,9 +264,7 @@ pub(super) fn text_emote_event(
 }
 
 /// The chat lane ([`crate::lanes`]): the items the handlers and feeds queue, each stamped as it is
-/// pushed, which [`fire_chat`] fires in stamp order among the other lanes. World broadcasts wait
-/// apart, as their resolve needs more than the lane's firing can hold at Bevy's `SystemParam`
-/// limit; `feed_broadcasts` resolves them onto the lane earlier in the same frame.
+/// pushed, which [`fire_chat`] fires in stamp order among the other lanes.
 ///
 /// An append-only sink shared through `&self`: a system that lends the call host appends here
 /// while a call the host applies inside its Lua appends a refusal's line too, as the reference's
@@ -283,7 +284,6 @@ struct ChatQueue {
     held_count: u64,
     /// How many player-name answers `pending` holds, so a line looks for a later one only then.
     answers: usize,
-    broadcasts: Vec<super::broadcast::Broadcast>,
     /// The display latch `[0x8435fc]`, as the place it was set: a line fired at or after it is
     /// held, not shown ([`Pending::Latched`]), until the world-enter cascade's release
     /// (`0x4989c0`).
@@ -482,19 +482,9 @@ impl ChatLog {
 }
 
 impl ChatLog {
-    /// Queue one world broadcast for [`super::broadcast::feed_broadcasts`]'s resolve pass.
+    /// Queue one world broadcast at its packet's place, resolved where it fires.
     pub(crate) fn push_broadcast(&self, b: super::broadcast::Broadcast) {
-        self.q().broadcasts.push(b);
-    }
-
-    /// How many broadcasts are waiting, the drain's early-out.
-    pub(crate) fn broadcasts_pending(&self) -> usize {
-        self.q().broadcasts.len()
-    }
-
-    /// Take the parked broadcasts, leaving the queue empty.
-    pub(crate) fn take_broadcasts(&self) -> Vec<super::broadcast::Broadcast> {
-        std::mem::take(&mut self.q().broadcasts)
+        self.q().push(Pending::Broadcast(b));
     }
 }
 
@@ -767,6 +757,7 @@ impl ChatLog {
                 Pending::Combat(_) => "combat",
                 Pending::Event(_) => "event",
                 Pending::Display(_) => "display",
+                Pending::Broadcast(_) => "broadcast",
                 Pending::Latched(_) => "latched",
                 Pending::Tee { .. } => "tee",
                 Pending::Release { .. } => "release",
@@ -1426,6 +1417,8 @@ pub(super) struct ChatReads<'w, 's> {
     unit_names: crate::ui_unit::NameTables<'w>,
     // The spam and profanity filters, which run in the reference's display function `0x49a870`.
     text_filter: crate::text_filter::ChatTextFilter<'w>,
+    // The catalogs and the zone a world broadcast resolves against.
+    broadcasts: super::broadcast::BroadcastReads<'w>,
 }
 
 /// The chat lane's firing: the VM, the slots the channel notices write between their Lua and the
@@ -1532,6 +1525,21 @@ fn fire_one(
     {
         return Some(item);
     }
+    // A broadcast's lines, each fired here at its packet's place; a defence line the latch holds
+    // waits as a held line.
+    if let Pending::Broadcast(b) = item {
+        let lines = super::broadcast::resolve(&b, script, &set.p0(), &reads.broadcasts);
+        for line in lines {
+            let line = match line {
+                super::broadcast::BroadcastLine::Display(e) => Pending::Display(e),
+                super::broadcast::BroadcastLine::Event(e) => Pending::Event(e),
+            };
+            if let Some(waits) = fire_one(reads, log, script, set, line, at) {
+                log.hold(waits);
+            }
+        }
+        return None;
+    }
     let ChatReads {
         windows,
         names,
@@ -1547,6 +1555,7 @@ fn fire_one(
         gameobjects,
         unit_names,
         text_filter,
+        broadcasts: _,
     } = reads;
     let windows: &mut ChatWindows = windows;
     // A channel line's record, read as the composer reads it (`0x49aa1e`-`0x49aa48`) before
@@ -1649,6 +1658,7 @@ fn fire_one(
             // Delivered above.
             Pending::Event(_)
             | Pending::Display(_)
+            | Pending::Broadcast(_)
             | Pending::Latched(_)
             | Pending::Notice { .. }
             | Pending::ModeChange { .. }

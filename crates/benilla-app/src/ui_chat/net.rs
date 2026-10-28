@@ -61,8 +61,8 @@ fn on_whisper_refusal(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     }
 }
 
-/// The four world broadcasts and a transfer abort's line, parked for [`super::broadcast`]'s
-/// resolve pass.
+/// The four world broadcasts and a transfer abort's line, on the chat lane at the packet's place,
+/// resolved where they fire ([`super::broadcast`]).
 fn on_broadcast(In(ev): In<SessionEvent>, chat_log: Res<ChatLog>) {
     let b = match ev {
         SessionEvent::ZoneUnderAttack { area_id } => Broadcast::ZoneUnderAttack { area_id },
@@ -376,19 +376,16 @@ mod tests {
         assert_eq!(world.resource::<ChatLog>().pending_len(), 0);
     }
 
-    /// `SMSG_TRANSFER_ABORTED` reaches chat: its reason is parked for the line the resolve pass
-    /// reads from the VM (`0x4019a0`).
+    /// `SMSG_TRANSFER_ABORTED` reaches chat: its reason goes on the chat lane at the packet, for
+    /// the line its firing reads from the VM (`0x4019a0`).
     #[test]
-    fn a_transfer_abort_is_parked_for_its_line() {
+    fn a_transfer_abort_is_queued_for_its_line() {
         let mut world = World::new();
         world.insert_resource(ChatLog::default());
         world
             .run_system_once_with(on_broadcast, SessionEvent::TransferAborted { reason: 5 })
             .unwrap();
-        assert_eq!(
-            world.resource_mut::<ChatLog>().take_broadcasts(),
-            [Broadcast::TransferAborted { reason: 5 }]
-        );
+        assert_eq!(world.resource::<ChatLog>().pending_kinds(), ["broadcast"]);
     }
 
     /// An addon line rides an ordinary lane; only its `language` keeps it out of the window.

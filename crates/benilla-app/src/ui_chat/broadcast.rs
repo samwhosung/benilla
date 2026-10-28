@@ -1,5 +1,6 @@
-//! The world broadcasts that print in chat, resolved from their wire ids once the catalogs, the
-//! joined channels and the player's zone are at hand, a pass before the chat drain.
+//! The world broadcasts that print in chat: each queued on the chat lane at its packet, and resolved
+//! from its wire ids against the VM's strings, the catalogs, the joined channels and the player's
+//! zone where it fires, at the packet's place.
 //!
 //! The two defense broadcasts (handlers `0x49dcc0`, `0x49de30`) print as senderless
 //! `CHAT_MSG_CHANNEL` lines in language 0, once per joined channel whose `ChatChannels.dbc` row
@@ -14,7 +15,7 @@
 //! `SMSG_SERVER_MESSAGE` is one `CHAT_MSG_SYSTEM` line (`0x49e047`). `SMSG_CHAT_RESTRICTED`
 //! carries nothing and is `DisplayError` 451 (`0x5e4a09`, `0x496720`), `ERR_CHAT_RESTRICTED`, a
 //! chat row, not a red toast (`0x496822`, `0x484cac`); vmangos never sends it.
-//! `SMSG_TRANSFER_ABORTED` waits here too, its line a `GlobalStrings` text by reason
+//! `SMSG_TRANSFER_ABORTED` goes the same way, its line a `GlobalStrings` text by reason
 //! ([`transfer_abort_line`]).
 
 use bevy::prelude::*;
@@ -26,13 +27,12 @@ use crate::area::AreaTableRes;
 
 use super::edit::ChannelState;
 use super::event::{ChatEvent, ChatEventKind};
-use super::feed::ChatLog;
 
 /// `ServerMessages.dbc`, read once at startup: the shutdown and restart sentences.
 #[derive(Resource)]
 pub(crate) struct ServerMessages(pub(crate) ServerMessagesCatalog);
 
-/// One parked world broadcast, as the wire sent it, awaiting the catalogs and the channel walk.
+/// One world broadcast as the wire sent it, on the chat lane until it fires ([`resolve`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Broadcast {
     /// `SMSG_ZONE_UNDER_ATTACK`: the attacked area's `AreaTable.dbc` id.
@@ -102,91 +102,99 @@ fn parent_zone(areas: &AreaTableRes, id: u32) -> Option<u32> {
     Some(if row.zone_id == 0 { id } else { row.zone_id })
 }
 
-/// Resolve the parked broadcasts into chat events, a feed ahead of the lanes' drain
-/// ([`crate::lanes`]), so each lands the frame it decodes.
-pub(super) fn feed_broadcasts(
-    log: Res<ChatLog>,
-    // The slots beside the VM: the lines are queued, so this runs no Lua.
-    mut vm: crate::script_calls::VmWith<Res<'static, ChannelState>>,
-    areas: Option<Res<AreaTableRes>>,
-    messages: Option<Res<ServerMessages>>,
-    world: benilla_world::world_point::WorldPoint,
-) {
-    vm.turn(|script, channels| {
-        if log.broadcasts_pending() == 0 {
-            return;
+/// What a broadcast's resolve reads beside the VM and the joined channels: the area and message
+/// catalogs and the area under the player.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct BroadcastReads<'w> {
+    areas: Option<Res<'w, AreaTableRes>>,
+    messages: Option<Res<'w, ServerMessages>>,
+    area: benilla_world::world_point::AreaUnderfoot<'w>,
+}
+
+/// One line a broadcast prints.
+pub(super) enum BroadcastLine {
+    /// A ready line the display latch holds (`0x49cae0`): a defence broadcast's.
+    Display(ChatEvent),
+    /// A system line shown at once.
+    Event(ChatEvent),
+}
+
+/// The lines `item` prints, in its handler's order, resolved where it fires on the chat lane, as
+/// the handlers compose them (`0x49dcc0`, `0x49de30`, `0x49e047`, `0x5e4a09`, `0x4019a0`): the
+/// format strings off the VM, so with none it prints nothing.
+pub(super) fn resolve(
+    item: &Broadcast,
+    script: &benilla_ui::script::UiScript,
+    channels: &ChannelState,
+    reads: &BroadcastReads,
+) -> Vec<BroadcastLine> {
+    let BroadcastReads {
+        areas,
+        messages,
+        area,
+    } = reads;
+    // The player's zone, the reference's `[0xb6e5d0]`; `top_zone` is the single-hop parent on
+    // 5875 data.
+    let player_zone = areas
+        .as_ref()
+        .and_then(|a| area.area().and_then(|leaf| a.0.top_zone(leaf)));
+    match item {
+        Broadcast::ZoneUnderAttack { area_id } => {
+            // No catalog, template or row: with no name there is no line.
+            let Some((areas, fmt)) = areas
+                .as_ref()
+                .zip(super::combat::global_string(script, "ZONE_UNDER_ATTACK"))
+            else {
+                return Vec::new();
+            };
+            let (Some(name), Some(zone)) = (areas.0.name(*area_id), parent_zone(areas, *area_id))
+            else {
+                debug!("chat: ZONE_UNDER_ATTACK for unknown area {area_id}");
+                return Vec::new();
+            };
+            let text = zone_under_attack_line(&fmt, name);
+            channel_lines(channels, zone, player_zone, &text)
         }
-        // The format string lives in the VM, so the queue waits for one; it clears at session end.
-        let Some(script) = script else { return };
-        // The player's zone, the reference's `[0xb6e5d0]`; `top_zone` is the single-hop parent on
-        // 5875 data.
-        let player_zone = areas
-            .as_ref()
-            .and_then(|a| world.area().and_then(|leaf| a.0.top_zone(leaf)));
-        for item in log.take_broadcasts() {
-            match item {
-                Broadcast::ZoneUnderAttack { area_id } => {
-                    // No catalog, template or row: with no name there is no line.
-                    let Some((areas, fmt)) = areas
-                        .as_ref()
-                        .zip(super::combat::global_string(script, "ZONE_UNDER_ATTACK"))
-                    else {
-                        continue;
-                    };
-                    let (Some(name), Some(zone)) =
-                        (areas.0.name(area_id), parent_zone(areas, area_id))
-                    else {
-                        debug!("chat: ZONE_UNDER_ATTACK for unknown area {area_id}");
-                        continue;
-                    };
-                    let text = zone_under_attack_line(&fmt, name);
-                    push_channel_lines(&log, &channels, zone, player_zone, &text);
-                }
-                Broadcast::Defense { zone_id, text } => {
-                    // The wire text stands on its own, so an unresolvable zone only costs the
-                    // remap.
-                    let zone = areas
-                        .as_ref()
-                        .and_then(|a| parent_zone(a, zone_id))
-                        .unwrap_or(zone_id);
-                    push_channel_lines(&log, &channels, zone, player_zone, &text);
-                }
-                Broadcast::ChatRestricted => {
-                    // Its row is a chat row (tested below), so it is written as a system line here.
-                    // Deviation: a missing global prints nothing, where the reference prints an
-                    // empty line (`0x703c02`), because benilla's other `DisplayError` routes do the
-                    // same.
-                    if let Some(text) = super::combat::global_string(script, "ERR_CHAT_RESTRICTED")
-                    {
-                        log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
-                    }
-                }
-                Broadcast::TransferAborted { reason } => {
-                    let get = |key: &str| {
-                        script
-                            .lua()
-                            .globals()
-                            .get::<Option<String>>(key)
-                            .ok()
-                            .flatten()
-                    };
-                    if let Some(text) = transfer_abort_line(reason, get) {
-                        log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
-                    }
-                }
-                Broadcast::Server { message_type, text } => {
-                    let Some(messages) = messages.as_ref() else {
-                        debug!("chat: SMSG_SERVER_MESSAGE {message_type} dropped: no catalog");
-                        continue;
-                    };
-                    log.push_event(ChatEvent::text_only(
-                        ChatEventKind::System,
-                        messages.0.compose(message_type, &text),
-                    ));
-                }
-            }
+        Broadcast::Defense { zone_id, text } => {
+            // The wire text stands on its own, so an unresolvable zone only costs the remap.
+            let zone = areas
+                .as_ref()
+                .and_then(|a| parent_zone(a, *zone_id))
+                .unwrap_or(*zone_id);
+            channel_lines(channels, zone, player_zone, text)
         }
-    })
+        // Its row is a chat row (tested below), so it is written as a system line here.
+        // Deviation: a missing global prints nothing, where the reference prints an empty line
+        // (`0x703c02`), because benilla's other `DisplayError` routes do the same.
+        Broadcast::ChatRestricted => super::combat::global_string(script, "ERR_CHAT_RESTRICTED")
+            .map(|text| BroadcastLine::Event(ChatEvent::text_only(ChatEventKind::System, text)))
+            .into_iter()
+            .collect(),
+        Broadcast::TransferAborted { reason } => {
+            let get = |key: &str| {
+                script
+                    .lua()
+                    .globals()
+                    .get::<Option<String>>(key)
+                    .ok()
+                    .flatten()
+            };
+            transfer_abort_line(*reason, get)
+                .map(|text| BroadcastLine::Event(ChatEvent::text_only(ChatEventKind::System, text)))
+                .into_iter()
+                .collect()
+        }
+        Broadcast::Server { message_type, text } => {
+            let Some(messages) = messages.as_ref() else {
+                debug!("chat: SMSG_SERVER_MESSAGE {message_type} dropped: no catalog");
+                return Vec::new();
+            };
+            vec![BroadcastLine::Event(ChatEvent::text_only(
+                ChatEventKind::System,
+                messages.0.compose(*message_type, text),
+            ))]
+        }
+    }
 }
 
 /// `SMSG_TRANSFER_ABORTED`'s system line (`0x4019a0`): reasons 1, 2, 3 and 5 name a string by the
@@ -210,21 +218,23 @@ pub(crate) fn transfer_abort_line(
 /// One `CHAT_MSG_CHANNEL` line per defense channel reached, with no sender or language: the
 /// handlers push NULL for both (`0x49ddf5`/`0x49ddf7`), hence the bare colon of
 /// `[LocalDefense] : text`. The display latch holds them, as it holds a chat line.
-fn push_channel_lines(
-    log: &ChatLog,
+fn channel_lines(
     channels: &ChannelState,
     zone: u32,
     player_zone: Option<u32>,
     text: &str,
-) {
-    for channel in defense_targets(channels, zone, player_zone) {
-        log.push_display(ChatEvent {
-            kind: Some(ChatEventKind::Channel),
-            text: text.to_string(),
-            channel,
-            ..Default::default()
-        });
-    }
+) -> Vec<BroadcastLine> {
+    defense_targets(channels, zone, player_zone)
+        .into_iter()
+        .map(|channel| {
+            BroadcastLine::Display(ChatEvent {
+                kind: Some(ChatEventKind::Channel),
+                text: text.to_string(),
+                channel,
+                ..Default::default()
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
