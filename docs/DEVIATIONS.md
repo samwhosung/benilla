@@ -427,7 +427,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_quest
 
-- The row one past a full pool is read from the cells after it (`0xbe07e0` and `0xbe0828` for the available pool, `0xbdf010` for the active one), which benilla does not copy, so that select sends nothing and only sets the latch the send would. ([`src/ui_quest/verbs.rs:111`](../crates/benilla-app/src/ui_quest/verbs.rs#L111))
+- The row one past a full pool is read from the cells after it (`0xbe07e0` and `0xbe0828` for the available pool, `0xbdf010` for the active one), which benilla does not copy, so that select sends nothing and only sets the latch the send would. ([`src/ui_quest/verbs.rs:115`](../crates/benilla-app/src/ui_quest/verbs.rs#L115))
 
 #### ui_quest_share
 
@@ -470,8 +470,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_talent_wipe
 
-- Vmangos answers a reset with nothing to reset by asking again with a zero guid (`SkillHandler.cpp:52`), which the 1.12 client takes as its Accept and answers, looping; this drops a zero-guid question, because it means there is nothing to ask. ([`src/ui_talent_wipe.rs:16`](../crates/benilla-app/src/ui_talent_wipe.rs#L16))
-- The reference never clears its latch (`0xc4d7a0`); this does once the answer is sent, because the reference's dialog is gone by then and a second Accept would reset twice. ([`src/ui_talent_wipe.rs:110`](../crates/benilla-app/src/ui_talent_wipe.rs#L110))
+- Vmangos answers a reset with nothing to reset by asking again with a zero guid (`SkillHandler.cpp:52`), which the 1.12 client takes as its Accept and answers, looping; this drops a zero-guid question, because it means there is nothing to ask. ([`src/ui_talent_wipe.rs:17`](../crates/benilla-app/src/ui_talent_wipe.rs#L17))
+- The reference never clears its latch (`0xc4d7a0`); this does once the answer is sent, because the reference's dialog is gone by then and a second Accept would reset twice. ([`src/ui_talent_wipe.rs:103`](../crates/benilla-app/src/ui_talent_wipe.rs#L103))
 
 #### ui_text
 
