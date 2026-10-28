@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 29
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 136
+- [benilla-ui](#benilla-ui): 135
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -816,7 +816,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - With `#` and one byte of room, `_store_number` writes no digit and its reversal swaps before it tests (`0x413ab3`), trading the last byte written for the stale byte after it in the caller's buffer, which then ends the client's answer; here the output is kept. ([`src/script/stdlib.rs:688`](../crates/benilla-ui/src/script/stdlib.rs#L688))
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:122`](../crates/benilla-ui/src/script/tabard.rs#L122))
 - Returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API, and copying a stack-top leak would copy a bug. ([`src/script/taxi.rs:238`](../crates/benilla-ui/src/script/taxi.rs#L238))
-- A handler that unregisters the saved next ends the dispatch, because the reference then reads a freed node. ([`src/script/tick.rs:30`](../crates/benilla-ui/src/script/tick.rs#L30))
 - `0x530a52` lays it out at once; getters resolve first, so only OnSizeChanged fires later. ([`src/script/tooltip/size.rs:180`](../crates/benilla-ui/src/script/tooltip/size.rs#L180))
 - The reference anchors a Font object through its +0x24 with no type test (`0x5313c9`), undefined; benilla raises the owner line. ([`src/script/tooltip/verbs.rs:51`](../crates/benilla-ui/src/script/tooltip/verbs.rs#L51))
 - No time line follows, where the reference's rides the record's `+0xc` (`0x532bdf`), a byte an empty record keeps from its history. 0 after `ClearBuffRecord 0x4e4490` prints a lone "0 seconds remaining" (`0x4e447e`); else it is whatever the last occupant left, as `ResetBuffCache 0x4e40c0` and the compaction's tail reset (`0x4e4237`) call `0x4e44b0` with slot -1, which writes `+0x0` and `+0x4` alone (`0x4e44bc`-`0x4e44c0`). ([`src/script/tooltip_aura.rs:265`](../crates/benilla-ui/src/script/tooltip_aura.rs#L265))
