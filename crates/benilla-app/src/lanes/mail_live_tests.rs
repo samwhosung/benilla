@@ -547,6 +547,37 @@ fn an_attachment_whose_record_lands_later_signals_the_send_info_update() {
     assert_eq!(c.eval::<String>(true, read), "Wool Cloth/3");
 }
 
+/// The attachment's lookup sits behind its object's (`0x468460`, `0x4ae5e1`): with the object
+/// gone, `GetSendMailItem` asks for no record, where with it held a refused record is asked
+/// again.
+#[test]
+fn an_attachment_whose_object_is_gone_asks_no_record() {
+    let mut c = client();
+    carry(&mut c, item_guid(1), WOOL, 3);
+    c.eval::<()>(true, "PickupContainerItem(0, 1) ClickSendMailItemButton()");
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: WOOL,
+        info: None,
+    }]]);
+    c.sent();
+    let asks = |c: &mut Client| {
+        c.eval::<()>(true, "GetSendMailItem()");
+        c.sent()
+            .iter()
+            .filter(|s| s.starts_with("ItemQuery"))
+            .count()
+    };
+    assert_eq!(asks(&mut c), 1, "a held object's refused record is asked");
+    // Gone, then its record refused again, so a lookup would send.
+    c.frame(vec![vec![SessionEvent::ObjectDestroyed(item_guid(1))]]);
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: WOOL,
+        info: None,
+    }]]);
+    c.sent();
+    assert_eq!(asks(&mut c), 0, "a gone object asks nothing");
+}
+
 /// The store a carried paper's row, 5, names, and its item.
 const PAPER_ROW: u32 = 5;
 const PAPER: u32 = 9_311;

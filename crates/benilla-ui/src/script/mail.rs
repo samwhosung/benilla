@@ -1129,14 +1129,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         let name = (!name.is_empty()).then_some(name);
                         (name, it.texture.clone(), t.inventory_type, t.quality)
                     });
-                    (it.guid, it.item_id, count, snapshot)
+                    (it.guid, count, snapshot)
                 })
             };
             // The attached object and its record as the call runs: its stack (`0x4ae68e`) and its
             // record's fields.
             let item = match held {
                 None => None,
-                Some((guid, entry, count, snapshot)) => {
+                Some((guid, count, snapshot)) => {
                     let read = read_live(lua, Some(ItemKey::Object(guid)), |item| {
                         let name = item.name();
                         let quality = item.quality();
@@ -1145,17 +1145,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     })
                     .unwrap_or_else(|| snapshot.map(|(n, t, i, q)| (n, t, i, q, count)));
                     // The record's lookup misses with nothing to read (`0x4ae60e`), and keeps the
-                    // callback `0x4ae710` (`0x4ae5f5`, `0x4ae604`), whose found answer signals
-                    // `MAIL_SEND_INFO_UPDATE` (`0x4ae71f`), one per call; the guid is 0.
+                    // callback `0x4ae710` for an object the engine holds
+                    // ([`super::RecordAsk::SendMailItem`]).
                     if read.is_none() {
-                        super::calls::ask(
-                            lua,
-                            super::RecordAsk::Item {
-                                entry,
-                                owner: 0,
-                                callback: super::ItemCallback::SendMail,
-                            },
-                        )?;
+                        super::calls::ask(lua, super::RecordAsk::SendMailItem(guid))?;
                     }
                     read
                 }

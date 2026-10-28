@@ -351,6 +351,13 @@ pub enum RecordAsk {
     /// cache misses: the player-name cache by guid, with the list's callback (`0x4cf290`,
     /// `0x4cf2b0`, `0x4cf2d0`), kept once per name and list (`0x55f080`'s dedupe flag 1).
     AuctionName { guid: u64, list: usize },
+    /// `GetSendMailItem` on an attachment whose record the mirror lacks, by its object's guid:
+    /// for an object the engine holds (`0x468460`, `0x4ae5e1`), the item cache by the object's
+    /// entry (`[[obj+0x8]+0xc]`, `0x4ae5e7`-`0x4ae5f2`) with guid 0 (`0x4ae5ec`-`0x4ae5ef`) and the
+    /// callback `0x4ae710` (`0x4ae604`), kept once per call, which signals
+    /// `MAIL_SEND_INFO_UPDATE` for a found record (`0x4ae716`-`0x4ae71f`). A gone object asks
+    /// nothing.
+    SendMailItem(u64),
     /// A mail getter's lookups on the row of `mail_id` that the mirror lacks a record for, each
     /// with the callback that signals `MAIL_INBOX_UPDATE` for a found record, kept once per call
     /// (dedupe flag 0): the session holds the keys ([`super::MailLookup`]).
@@ -394,9 +401,6 @@ pub enum ItemCallback {
     /// `GetBuybackItemInfo` (`0x4fb40c`), whose callback `0x4fb570` signals `MERCHANT_UPDATE`; its
     /// query's guid is 0 (`0x4fb3f0`-`0x4fb3f7`).
     Buyback,
-    /// `GetSendMailItem` (`0x4ae604`), whose callback `0x4ae710` signals `MAIL_SEND_INFO_UPDATE`
-    /// for a found record (`0x4ae716`-`0x4ae71f`); its query's guid is 0 (`0x4ae5ec`-`0x4ae5ef`).
-    SendMail,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,

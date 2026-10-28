@@ -106,6 +106,15 @@ impl RecordAsks<'_, '_> {
                     petitions.tooltip_view(id, item, names, Ask::Event(&self.net));
                 }
             }
+            // The attachment's object first (`0x4ae5e1`), then its entry's record with guid 0.
+            RecordAsk::SendMailItem(guid) => {
+                let entry = self.objects.object(guid).and_then(|f| f.object_entry());
+                if let (Some(items), Some(entry)) = (self.items.as_deref(), entry) {
+                    if items.template(entry, 0, Ask::Event(&self.net)).is_none() {
+                        items.wait(entry, crate::items::RecordCallback::SendMail);
+                    }
+                }
+            }
             RecordAsk::BattlefieldName(guid) => {
                 if let (Some(names), Some(state)) =
                     (self.names.as_deref(), self.battlefield.as_deref_mut())
@@ -190,14 +199,6 @@ impl RecordAsks<'_, '_> {
                             .is_none()
                         {
                             items.wait(entry, crate::items::RecordCallback::Buyback);
-                        }
-                    }
-                    ItemCallback::SendMail => {
-                        if items
-                            .template(entry, owner, Ask::Event(&self.net))
-                            .is_none()
-                        {
-                            items.wait(entry, crate::items::RecordCallback::SendMail);
                         }
                     }
                 }
