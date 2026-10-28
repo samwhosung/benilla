@@ -975,6 +975,7 @@ mod tests {
             [ItemCall::AutoEquip {
                 bag: 0,
                 slot: 2,
+                ammo: None,
                 picked: false
             }]
         );

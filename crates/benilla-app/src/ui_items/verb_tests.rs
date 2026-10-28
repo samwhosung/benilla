@@ -518,6 +518,9 @@ fn heard_around(h: &mut Bags, setup: &str, verb: &str) -> Vec<&'static str> {
             ClientCommand::SetAmmo { .. } => Some("ammo"),
             ClientCommand::BuyItemInSlot { .. } => Some("buy"),
             ClientCommand::WrapItem { .. } => Some("wrap"),
+            ClientCommand::AutoBankItem { .. } => Some("deposit"),
+            ClientCommand::AutoStoreBankItem { .. } => Some("withdraw"),
+            ClientCommand::SellItem { .. } => Some("sell"),
             ClientCommand::ItemQuery { .. } | ClientCommand::NameQuery { .. } => None,
             _ => Some("other"),
         })
@@ -602,6 +605,78 @@ fn with_arrows(h: &mut Bags) {
             ..test_template("Rough Arrow")
         }),
     );
+}
+
+/// A banker open, as the app holds it and the bank feed mirrors it to the VM, with linen in the
+/// bank's slot 1 (the player's slot 39).
+fn with_bank(h: &mut Bags) {
+    const L: u64 = 0x4000_0000_0000_0A30;
+    let world = h.app.world_mut();
+    world
+        .resource_mut::<crate::ui_bank::BankOpen>()
+        .open(0xF130_0000_0000_0043);
+    let me = world
+        .query_filtered::<Entity, With<SelfPlayer>>()
+        .single(world)
+        .expect("us");
+    world
+        .get_mut::<ObjectStore>(me)
+        .expect("our store")
+        .0
+        .merge(ObjectFields::from_pairs(&[
+            (F_INV_SLOT_HEAD + 2 * 39, L as u32),
+            (F_INV_SLOT_HEAD + 2 * 39 + 1, (L >> 32) as u32),
+        ]));
+    test_spawn_item(
+        world,
+        L,
+        ObjectFields::from_pairs(&[(F_TYPE, 0x3), (FIELD_OBJECT_ENTRY, LINEN), (14, 1)]),
+        false,
+    );
+    world
+        .non_send_resource_mut::<UiScript>()
+        .set_bank(Some(benilla_ui::script::BankState::default()));
+}
+
+/// Past `UseContainerItem`'s own clear (`0x4fa198`), its withdraw, deposit and sale send first
+/// (`0x4fa305` into `0x5e18f0`,
+/// `0x4fa33e` into `0x5e19e0`, `0x4fa378` into `0x5e1d50`) and lock after (`LockItem` at
+/// `0x4fa312`, `0x4fa34b`, `0x4fa37f`); `PickupMerchantItem`'s sale sends (`0x4fb7a7`) ahead of
+/// its `ClearCursor(0,1)` (`0x4fb7b3`).
+#[test]
+fn each_bank_and_vendor_send_goes_ahead_of_its_signals() {
+    type Prep = fn(&mut Bags);
+    let cases: [(Prep, &str, &str, &[&str]); 4] = [
+        (
+            with_bank,
+            "",
+            "UseContainerItem(-1, 1)",
+            &["cursor", "withdraw", "lock"],
+        ),
+        (
+            with_bank,
+            "",
+            "UseContainerItem(0, 1)",
+            &["cursor", "deposit", "lock"],
+        ),
+        (
+            Bags::open_vendor,
+            "",
+            "UseContainerItem(0, 1)",
+            &["cursor", "sell", "lock"],
+        ),
+        (
+            Bags::open_vendor,
+            "PickupContainerItem(0, 1)",
+            "PickupMerchantItem(0)",
+            &["sell", "cursor"],
+        ),
+    ];
+    for (prep, setup, verb, wire) in cases {
+        let mut h = Bags::new();
+        prep(&mut h);
+        assert_eq!(heard_around(&mut h, setup, verb), wire, "{setup} {verb}");
+    }
 }
 
 /// The other cursor verbs send in their bodies too, ahead of the clear or unlock that follows:

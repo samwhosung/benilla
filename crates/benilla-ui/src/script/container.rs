@@ -505,8 +505,10 @@ fn custom_cursor(model: &mut super::Model, name: &str) -> bool {
 /// its lock here, in the call, so a later call reads it as the reference's does: the withdraw and
 /// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the open (`0x5edcd9`) and the wrap
 /// paper (`0x5edea0`). The equip arm is not done here: it returns its item, which the call puts on
-/// the cursor ([`use_equip_arm`]). The host sends each arm, from the call left in `call`, and the
-/// repair from the model's [`ItemCall::Repair`].
+/// the cursor ([`use_equip_arm`]). The withdraw, deposit and sale send first (`0x4fa305`,
+/// `0x4fa33e`, `0x4fa378`), their call handed to the host in place ahead of the lock's signal; the
+/// host sends the item arms from the call left in `call`, and the repair from its
+/// [`ItemCall::Repair`].
 fn use_cleared(
     lua: &Lua,
     model: &mut super::Model,
@@ -553,18 +555,25 @@ fn use_cleared(
             return None;
         }
     }
-    *call = Some(super::ScriptCall::UseContainerItem(ContainerUse {
+    let use_call = super::ScriptCall::UseContainerItem(ContainerUse {
         bag,
         slot,
         guid,
         arm,
         on_self,
         may_cast,
-    }));
+    });
     match arm {
-        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell => cursor::lock_item(model, guid),
-        UseArm::Item(UseFork::WrapPaper) => arm_gift_wrap(model, bag, slot, guid),
-        UseArm::Item(_) => {}
+        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell => {
+            model.call_in_verb(use_call);
+            cursor::lock_item(model, guid);
+        }
+        UseArm::Item(fork) => {
+            *call = Some(use_call);
+            if fork == UseFork::WrapPaper {
+                arm_gift_wrap(model, bag, slot, guid);
+            }
+        }
     }
     None
 }
@@ -3016,6 +3025,7 @@ mod tests {
                 [ScriptCall::Item(crate::script::ItemCall::AutoEquip {
                     bag: 0,
                     slot: 1,
+                    ammo: None,
                     picked: true
                 })]
             ),

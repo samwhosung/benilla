@@ -151,14 +151,19 @@ impl ItemSteps<'_, '_> {
             // on the cursor in the same call, `SetCursorItem`'s pickup (`0x494c4a`) and the clear's
             // put-down (`0x49520a`) both land inside it, so the frame's cursor-sound diff sees
             // nothing and the pair plays here.
-            ItemCall::AutoEquip { bag, slot, picked } => {
+            ItemCall::AutoEquip {
+                bag,
+                slot,
+                ammo,
+                picked,
+            } => {
                 let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
                     debug!("ui_items: autoequip ({bag}, {slot}) out of range — ignored");
                     return;
                 };
                 let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
                 let guid = store.and_then(|s| slot_guid(&s.0, bag, slot0, objects));
-                send_auto_equip(objects, items, net, bag_index, wire_slot, guid);
+                send_auto_equip(net, bag_index, wire_slot, ammo);
                 let display_id = guid.filter(|_| picked).and_then(|guid| {
                     let entry = objects.object(guid)?.object_entry()?;
                     Some(items.template(entry, guid, Ask::Read)?.display_info_id)

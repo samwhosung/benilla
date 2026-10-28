@@ -295,8 +295,11 @@ pub(crate) enum UseOutcome {
     Macro(u32),
     /// An item slot's equip, past `SetCursorItem` (`0x5e18c9`): the set's signals fire in place
     /// (`0x494bb6`, `0x494c54`) before `AutoEquipCursorItem` goes on (`0x5e18d5`), so the caller
-    /// runs its signal point and then [`finish_equip`].
-    Equip,
+    /// runs its signal point and then [`finish_equip`], with whether the set put the item on
+    /// (with no control it returns before, `0x494b8d` → `0x494c59`).
+    Equip {
+        picked: bool,
+    },
 }
 
 /// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast or an item use, at the selection as the
@@ -313,9 +316,9 @@ pub(crate) fn use_action(
 
 /// `AutoEquipCursorItem` (`0x5e18d5`) on whatever the cursor holds after the equip's set and the
 /// listeners it signalled, then the send: the second half of an item slot's equip
-/// ([`UseOutcome::Equip`]).
-pub(crate) fn finish_equip(p: &mut ActionPress, script: &mut UiScript) {
-    with_bags(p, script, auto_equip_cursor);
+/// ([`UseOutcome::Equip`]); `picked`, whether the set put the item on.
+pub(crate) fn finish_equip(p: &mut ActionPress, script: &mut UiScript, picked: bool) {
+    with_bags(p, script, |p, script| auto_equip_cursor(p, script, picked));
 }
 
 /// Run `f` with the bags lent, when the press has them.
@@ -455,10 +458,9 @@ fn press_slot(
                 // item and keeps it held. Nothing locks it, and a projectile's clear unlocks
                 // (`0x5e1763`).
                 requirements.seat(script);
-                return if script.put_on_cursor_for_equip(guid) {
-                    UseOutcome::Equip
-                } else {
-                    UseOutcome::Done
+                return match script.put_on_cursor_for_equip(guid) {
+                    Some(picked) => UseOutcome::Equip { picked },
+                    None => UseOutcome::Done,
                 };
             } else {
                 // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers
@@ -515,9 +517,9 @@ fn press_slot(
 /// [`UseOutcome::Equip`]'s second half: `AutoEquipCursorItem` (`0x5e1480`) on the cursor as the
 /// set and its listeners left it, its send, question or wait handed over in place, so it applies
 /// as the call settles, ahead of its clear's signals.
-fn auto_equip_cursor(p: &mut ActionPress, script: &mut UiScript) {
+fn auto_equip_cursor(p: &mut ActionPress, script: &mut UiScript, picked: bool) {
     p.requirements.seat(script);
-    script.auto_equip_cursor(false);
+    script.auto_equip_cursor(false, picked);
 }
 
 /// The action bar's sends inside their calls ([`benilla_ui::script::ActionBarCall`]): the

@@ -8,32 +8,16 @@ use bevy::prelude::*;
 use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
 use benilla_ui::script::{ContainerUse, UiScript, UseArm, UseFork, EQUIPMENT_BAG};
 
-use crate::items::Items;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 
-use super::{slot_guid, wire_pos, ITEM_CLASS_PROJECTILE};
+use super::{slot_guid, wire_pos};
 use crate::query_cache::Ask;
 
-/// The one auto-equip sender (`AutoEquipCursorItem`, `0x5e1480`, past its question). A
-/// projectile, the template class `0x5d9f30` reads (`0x5e16ff`, `0x5e1704`), loads by entry with
-/// `CMSG_SET_AMMO` and stays in its bag; the arm's `ClearCursor(1,1)` after the send unlocks it
-/// (`0x5e1711`, `0x5e1763`), which is the VM's. Anything else is `CMSG_AUTOEQUIP_ITEM`. The
-/// bind-on-equip question is the call's, not the sender's: the VM decided before this ran
-/// ([`benilla_ui::script::AutoEquip`]).
-pub(crate) fn send_auto_equip(
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-    bag_index: u8,
-    slot: u8,
-    guid: Option<u64>,
-) {
-    let ammo = guid.and_then(|guid| {
-        let entry = objects.object(guid)?.object_entry()?;
-        // The class getter only reads (`0x5d9f30`).
-        let t = items.template(entry, guid, Ask::Read)?;
-        (t.class == ITEM_CLASS_PROJECTILE).then_some(entry)
-    });
+/// The one auto-equip sender (`AutoEquipCursorItem`, `0x5e1480`, past its question): a projectile,
+/// as the VM decided by its cached record (`0x5e16ff`, `0x5e1704`), loads by its `ammo` entry
+/// with `CMSG_SET_AMMO` and stays in its bag; anything else is `CMSG_AUTOEQUIP_ITEM`. The question
+/// and the clear are the VM's too ([`benilla_ui::script::AutoEquip`]).
+pub(crate) fn send_auto_equip(commands: &NetCommands, bag_index: u8, slot: u8, ammo: Option<u32>) {
     if let Some(entry) = ammo {
         debug!("ui_items: set ammo entry {entry} (wire {bag_index}/{slot})");
         let _ = commands.0.send(ClientCommand::SetAmmo { entry });
@@ -150,9 +134,9 @@ impl ScriptItemUse<'_, '_> {
             ..
         } = call;
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
-        // The slot must still hold the item the call resolved (`0x4fa1a6`). The reference sends
-        // inside the call, so nothing moves between; here the frame may have applied a move since,
-        // and then the arm goes out for nothing and its lock is let go.
+        // The slot must still hold the item the call resolved (`0x4fa1a6`), else nothing goes out.
+        // The call applies inside its verb, the bank and sale arms ahead of their lock, so no
+        // move lands between and there is no lock to let go.
         let still_there = slot0.is_some_and(|s0| {
             self_q
                 .iter()
@@ -163,9 +147,6 @@ impl ScriptItemUse<'_, '_> {
         let pos = wire_pos(bag, slot);
         let (Some((bag_index, wire_slot)), true) = (pos, still_there) else {
             debug!("ui_items: UseContainerItem({bag}, {slot}) no longer holds {item_guid:#x}");
-            if arm_locked(arm) {
-                script.unlock_item(item_guid);
-            }
             return None;
         };
         let fork = match arm {
@@ -188,8 +169,7 @@ impl ScriptItemUse<'_, '_> {
             // The whole stack sells (`CMSG_SELL_ITEM`, count 0).
             UseArm::Sell => {
                 let Some(vendor) = merchant.vendor else {
-                    debug!("ui_items: sale of {item_guid:#x} with no vendor open — let go");
-                    script.unlock_item(item_guid);
+                    debug!("ui_items: sale of {item_guid:#x} with no vendor open — not sent");
                     return None;
                 };
                 debug!("ui_items: sell lua bag {bag} slot {slot} (item {item_guid:#x})");
@@ -302,10 +282,7 @@ impl ScriptItemUse<'_, '_> {
             // cache since the call read it.
             (fork, clicked) => {
                 if fork != UseFork::Plain {
-                    debug!("ui_items: {fork:?} on {item_guid:#x} with no template — let go");
-                    if arm_locked(arm) {
-                        script.unlock_item(item_guid);
-                    }
+                    debug!("ui_items: {fork:?} on {item_guid:#x} with no template — not sent");
                     return None;
                 }
                 debug!("ui_items: use item (lua bag {bag} → wire {bag_index}/{wire_slot})");
@@ -370,12 +347,6 @@ impl ScriptItemUse<'_, '_> {
         );
         ladder.permit(outer);
     }
-}
-
-/// Whether the call took a lock for `arm`, which a send that never goes out lets go. A projectile's
-/// equip unlocked instead; letting it go again only signals again.
-fn arm_locked(arm: UseArm) -> bool {
-    matches!(arm, UseArm::Withdraw | UseArm::Deposit | UseArm::Sell)
 }
 
 /// The clicked item's send data, read as the call applies.
@@ -523,7 +494,9 @@ fn harness_vm() -> UiScript {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ITEM_CLASS_PROJECTILE;
     use super::*;
+    use crate::items::Items;
     use benilla_protocol::messages::{ItemInfo, ObjectFields, ITEM_FLAG_LOOTABLE};
 
     /// Small Barnacled Clam.
@@ -1507,6 +1480,7 @@ mod tests {
 #[cfg(test)]
 mod bind_confirm_tests {
     use super::*;
+    use crate::items::Items;
     use benilla_protocol::messages::{ItemInfo, ObjectFields};
     use benilla_ui::script::{ContainerSlot, ContainerState};
 

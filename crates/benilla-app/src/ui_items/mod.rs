@@ -870,7 +870,9 @@ pub(super) fn item_link(item_id: u32, name: &str, quality: u32) -> String {
     item_link_full(item_id, 0, 0, 0, name, quality)
 }
 
-/// `ITEM_CLASS_PROJECTILE`, the template class `UseContainerItem` leaves unlocked (`0x4fa40b`).
+/// `ITEM_CLASS_PROJECTILE`, the template class a test's arrows carry; the VM decides by it
+/// (`0x5e1704`, `0x4fa40b`).
+#[cfg(test)]
 pub(super) const ITEM_CLASS_PROJECTILE: u32 = 6;
 
 /// The `InventoryType` → live-API equip slots map (wire `EQUIPMENT_SLOT_*` + 1, bag icons

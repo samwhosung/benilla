@@ -39,10 +39,17 @@ pub enum ItemCall {
     /// A repair-cursor click on a worn item, its 1-based doll slot (`0x4c7714`, `0x4c79c4`).
     RepairWorn(u32),
     /// `AutoEquipCursorItem`'s send past its question (`0x5e1480`): the item from Lua
-    /// `(bag, slot)`. `picked`: `0x5e1840` put it on the cursor in the same call (the bag's
+    /// `(bag, slot)`. `ammo`: the item is a projectile of that entry by its cached record
+    /// (`0x5e16ff`, `0x5e1704`), which loads with `CMSG_SET_AMMO` (`0x5e170c`-`0x5e1725`) in place of
+    /// `CMSG_AUTOEQUIP_ITEM`. `picked`: `0x5e1840` put it on the cursor in the same call (the bag's
     /// right-click, the bar's equip, the bind-confirm accept), so its pickup and the send's
     /// put-down both land inside the call (`0x494c4a`, `0x49520a`) and play with the send.
-    AutoEquip { bag: i64, slot: u32, picked: bool },
+    AutoEquip {
+        bag: i64,
+        slot: u32,
+        ammo: Option<u32>,
+        picked: bool,
+    },
     /// `AutoEquipCursorItem`'s bind question (`0x5e16c6`): the record and its event, filed with
     /// the item held.
     EquipAsk { bag: i64, slot: u32, guid: u64 },

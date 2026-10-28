@@ -709,10 +709,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     }
                     // `SetCursorItem`'s signals (`0x494bb6`, `0x494c54`) run their listeners
                     // before `AutoEquipCursorItem` goes on (`0x5e18d5`), and its send.
-                    crate::ui_action::UseOutcome::Equip => {
+                    crate::ui_action::UseOutcome::Equip { picked } => {
                         self.at_point(script, &mut at.mark);
                         self.listened(&mut at);
-                        crate::ui_action::finish_equip(&mut self.appliers.action(), script);
+                        crate::ui_action::finish_equip(&mut self.appliers.action(), script, picked);
                     }
                     crate::ui_action::UseOutcome::Done => {}
                 }

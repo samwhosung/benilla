@@ -547,21 +547,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row(lua, &model, row0 as usize).map(|it| (row0, it))
             });
-            // The sell fork comes first, before the argument is read. Its clear is the sale's, not
-            // `ClearCursor`: `CURSOR_UPDATE` fires and the source slot stays greyed until the
-            // server's inventory update (`0x494b60`). Every other leg reads the row, then clears.
+            // The sell fork comes first, before the argument is read: the sale goes out
+            // (`0x4fb7a7`), handed over in place, then its clear, `ClearCursor(0,1)` (`0x4fb7b3`),
+            // whose `CURSOR_UPDATE` follows the packet; the source slot stays greyed until the
+            // server's inventory update. Every other leg reads the row, then clears.
             let grab = super::tick::verb(lua, |model| {
-                match crate::script::cursor::take_cursor_item_for_sale(model) {
-                    Some(item) => Err(MerchantCall::Sell {
-                        item_guid: item.guid,
-                        count: item.count.unwrap_or(0) as u8,
-                    }),
-                    None => Ok(merchant_grab(model, grab_row)),
+                let held = match &model.cursor {
+                    Some(crate::script::cursor::CursorPayload::Item(item)) => Some(item.clone()),
+                    _ => None,
+                };
+                match held {
+                    Some(item) => {
+                        model.merchant_call_in_verb(MerchantCall::Sell {
+                            item_guid: item.guid,
+                            count: item.count.unwrap_or(0) as u8,
+                        });
+                        crate::script::cursor::take_cursor_item_for_sale(model);
+                        None
+                    }
+                    None => Some(merchant_grab(model, grab_row)),
                 }
             });
-            let grab = match grab {
-                Ok(grab) => grab,
-                Err(sale) => return submit(lua, sale),
+            let Some(grab) = grab else {
+                return Ok(());
             };
 
             // Every other leg clears with the real `ClearCursor(1,1)` (`0x4fb82d`/`0x4fb83f` on a
