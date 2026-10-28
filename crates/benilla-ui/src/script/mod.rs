@@ -267,7 +267,10 @@ pub use binder::BinderCall;
 pub use binding_abi::{ftol, record_float, s_str_to_float, s_str_to_int};
 pub use calls::{spell_owner, ItemCallback, NearestMode, QueuedCall, RecordAsk, ScriptCall};
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
-pub use channel::{ChannelCommand, JoinedChannel, RecruitmentPlan, ZoneChannelRow};
+pub use channel::{
+    channel_send_target, ChannelCommand, JoinedChannel, JoinedChannelsQuery, RecruitmentPlan,
+    ZoneChannelRow,
+};
 pub use char_stats::{
     weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, BANK_BAG_SLOT_COUNT,
     INVENTORY_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,

@@ -171,6 +171,11 @@ fn new_vm<E: std::fmt::Display>(
     if let Some(ping) = world.get_resource::<crate::minimap::MinimapPing>() {
         script.set_minimap_ping_point(ping.point());
     }
+    // The joined-channel slots, the copy the lookups read with no host lent, so a `/reload`'s
+    // load reads `GetChannelName` as the slot array stands.
+    if let Some(channels) = world.get_resource::<crate::ui_chat::ChannelState>() {
+        channels.mirror_into(&mut script);
+    }
     // The reference seeds `rand` with the clock before `WinMain` (`0x5b800b`). Deviation: a
     // capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce.
     if crate::run_mode::scenario_active() {

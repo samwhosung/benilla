@@ -1,11 +1,31 @@
 //! The chat-channel globals: the joined-channel lookups, the join, leave and management verbs the
 //! host applies inside their calls ([`super::ScriptCall::Channel`]), and the guild-recruitment
 //! auto-join latch. `GetChannelName` (`0x4a05e0`) looks up by 1-based slot or by name and returns
-//! three values: the slot (`CHAT_MSG_*` arg8), the name and `instanceID` (arg10).
+//! three values: the slot (`CHAT_MSG_*` arg8), the name and `instanceID` (arg10). The lookups read
+//! the slot array at the call through the host ([`JoinedChannelsQuery`]).
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::live::{ask, LiveQuery};
 use super::Model;
+
+/// The question the slot lookups ask at the call: the joined-channel slot array as it stands, in
+/// join order, `None` for a freed slot (`0x49be50`, `0x49be90`, `0x49bf30`).
+pub struct JoinedChannelsQuery;
+
+impl LiveQuery for JoinedChannelsQuery {
+    type Answer = Vec<Option<JoinedChannel>>;
+}
+
+/// The slot array now: the host's, else the VM's copy (a new VM's seed and the app's mirror).
+pub(crate) fn joined(lua: &Lua) -> Vec<Option<JoinedChannel>> {
+    ask(lua, &JoinedChannelsQuery).unwrap_or_else(|| {
+        lua.app_data_ref::<Model>()
+            .expect("model app_data")
+            .joined_channels
+            .clone()
+    })
+}
 
 /// One `ChatChannels.dbc` row for the channel verbs: the id, the Shortcut a typed name is matched
 /// against case-folded, the name composed for the player's zone (`None` while the zone text is
@@ -238,9 +258,8 @@ fn submit(lua: &Lua, cmd: ChannelCommand) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Channel(cmd))
 }
 
-fn slot_of(model: &Model, name: &str) -> Option<usize> {
-    model
-        .joined_channels
+fn slot_of(joined: &[Option<JoinedChannel>], name: &str) -> Option<usize> {
+    joined
         .iter()
         .position(|c| {
             c.as_ref()
@@ -254,13 +273,12 @@ fn slot_of(model: &Model, name: &str) -> Option<usize> {
 /// leave zeroed (`0x49bf52`, `0x49bbd0`), or a slot not in state 0 (`0x49bf5c`-`0x49bf68`) is
 /// `None`, so a left channel's number answers "not joined" while every channel above it keeps
 /// its own.
-pub(crate) fn confirmed_channel(model: &Model, n: i64) -> Option<&JoinedChannel> {
+pub(crate) fn confirmed_channel(
+    joined: &[Option<JoinedChannel>],
+    n: i64,
+) -> Option<&JoinedChannel> {
     let i = usize::try_from(n).ok()?.checked_sub(1)?;
-    model
-        .joined_channels
-        .get(i)?
-        .as_ref()
-        .filter(|c| c.confirmed)
+    joined.get(i)?.as_ref().filter(|c| c.confirmed)
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -328,16 +346,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetChannelName",
         lua.create_function(|lua, key: Value| {
             let number = super::binding_abi::is_number(lua, key.clone());
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let joined = joined(lua);
             let found = match (number, &key) {
                 (Some(n), _) => {
                     let n = i64::from(super::binding_abi::ftol(n));
-                    confirmed_channel(&model, n).map(|c| (n, c.name.clone()))
+                    confirmed_channel(&joined, n).map(|c| (n, c.name.clone()))
                 }
                 (None, Value::String(s)) => {
                     let name = s.to_str()?;
-                    slot_of(&model, &name).and_then(|n| {
-                        let slot = model.joined_channels[n - 1].as_ref()?;
+                    slot_of(&joined, &name).and_then(|n| {
+                        let slot = joined[n - 1].as_ref()?;
                         Some((n as i64, slot.name.clone()))
                     })
                 }
@@ -370,9 +388,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetChannelList",
         lua.create_function(|lua, ()| {
+            let joined = joined(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let mut out = Vec::with_capacity(model.joined_channels.len() * 2);
-            for (i, slot) in model.joined_channels.iter().enumerate() {
+            let mut out = Vec::with_capacity(joined.len() * 2);
+            for (i, slot) in joined.iter().enumerate() {
                 let Some(slot) = slot.as_ref().filter(|c| c.confirmed) else {
                     continue;
                 };
@@ -511,13 +530,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 _ => return Err(mlua::Error::runtime(r#"Usage: LeaveChannelByName("name")"#)),
             };
             let number = super::binding_abi::s_str_to_int(&key);
+            let joined = joined(lua);
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 // A number naming no confirmed slot names nothing (`0x49e880`), and the app ends
                 // the leave there (`0x49ee8a`).
                 let named = match number {
                     0 => Some(key.clone()),
-                    n => confirmed_channel(&model, i64::from(n)).map(|c| c.name.clone()),
+                    n => confirmed_channel(&joined, i64::from(n)).map(|c| c.name.clone()),
                 };
                 let resets = named.is_some_and(|named| {
                     model.zone_channel_catalog.iter().any(|r| {
@@ -675,19 +695,21 @@ impl From<&str> for JoinedChannel {
 }
 
 impl super::UiScript {
-    /// Mirror the app's joined channels in join order, `None` for a freed slot; the app pushes it
-    /// after every step that writes a slot's name or state.
+    /// Mirror the app's joined channels in join order, `None` for a freed slot, the copy a lookup
+    /// reads with no host to ask: a new VM's seed, and the app's push after every step that writes
+    /// a slot's name or state.
     pub fn set_joined_channels(&mut self, joined: Vec<Option<JoinedChannel>>) {
         self.model_mut().joined_channels = joined;
     }
+}
 
-    /// `SendChatMessage`'s channel target (`0x49f4d9`-`0x49f4ea`): `SStrToInt` (`0x64ac60`)
-    /// straight into `0x49be50`, with no name leg, so only a number naming a confirmed slot
-    /// answers, with that slot's name; anything else, a name included, is `None`.
-    pub fn channel_send_target(&self, target: &str) -> Option<String> {
-        let n = super::binding_abi::s_str_to_int(target);
-        confirmed_channel(&self.model_ref(), i64::from(n)).map(|c| c.name.clone())
-    }
+/// `SendChatMessage`'s channel target (`0x49f4d9`-`0x49f4ea`) in `joined`, the slot array as it
+/// stands: `SStrToInt` (`0x64ac60`) straight into `0x49be50`, with no name leg, so only a number
+/// naming a confirmed slot answers, with that slot's name; anything else, a name included, is
+/// `None`.
+pub fn channel_send_target(joined: &[Option<JoinedChannel>], target: &str) -> Option<String> {
+    let n = super::binding_abi::s_str_to_int(target);
+    confirmed_channel(joined, i64::from(n)).map(|c| c.name.clone())
 }
 
 #[cfg(test)]

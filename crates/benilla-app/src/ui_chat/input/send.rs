@@ -148,13 +148,18 @@ impl ChatSender<'_, '_> {
                 return;
             }
         }
-        // A channel target is a slot number, sent as that slot's name; with no such slot the call
-        // ends here (`0x49f4ea`).
+        // A channel target is a slot number, sent as that slot's name, read off the slot array
+        // at the call; with no such slot the call ends here (`0x49f4ea`).
         if kind == SendType::Channel {
+            let joined = self
+                .channels
+                .as_deref()
+                .map(|c| c.names())
+                .unwrap_or_default();
             let name = send
                 .target
                 .as_deref()
-                .and_then(|t| script.channel_send_target(t));
+                .and_then(|t| benilla_ui::script::channel_send_target(&joined, t));
             if name.is_none() {
                 debug!(
                     "chat: SendChatMessage names no joined channel {:?}; not sent",

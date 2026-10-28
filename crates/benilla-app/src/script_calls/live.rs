@@ -143,6 +143,8 @@ live_reads! {
         loot: crate::ui_loot::LootLive<'static, 'static>,
         /// The game clock's hour and minute.
         game_time: crate::net::GameTimeLive<'static>,
+        /// The joined-channel slot array.
+        channels: crate::ui_chat::edit::ChannelLive<'static>,
         /// The spell and aura tooltip views, built at the setter's call; absent in a harness
         /// without the catalogs.
         tooltips: Option<crate::ui_tooltip::TooltipLive<'static, 'static>>,

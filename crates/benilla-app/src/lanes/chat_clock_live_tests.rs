@@ -291,3 +291,30 @@ fn the_world_broadcasts_print_at_their_packets() {
         ]
     );
 }
+
+/// The channel lookups read the slot array at the call (`0x49be50`, `0x49bf30`): a VM built with
+/// no copy of the slots answers them through the host at once, with no frame to seed it.
+#[test]
+fn the_channel_lookups_read_the_slots_at_the_call() {
+    let mut c = client();
+    c.app.insert_resource(crate::ui_chat::ChannelState {
+        joined: vec![
+            crate::ui_chat::edit::ChannelSlot::confirmed("General - Elwynn Forest", 1).into(),
+            crate::ui_chat::edit::ChannelSlot::confirmed("MyChan", 0).into(),
+        ],
+        ..Default::default()
+    });
+    c.app
+        .insert_non_send_resource(UiScript::new().expect("a VM"));
+    const READ: &str = "local _, a = GetChannelName(2) return a, (GetChannelName('MyChan')), \
+        table.getn({GetChannelList()})";
+    assert_eq!(
+        c.eval::<(Option<String>, i64, i64)>(true, READ),
+        (Some("MyChan".into()), 2, 4)
+    );
+    assert_eq!(
+        c.eval::<(Option<String>, i64, i64)>(false, READ),
+        (None, 0, 0),
+        "the copy holds none"
+    );
+}

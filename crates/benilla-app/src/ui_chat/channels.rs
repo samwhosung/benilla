@@ -86,22 +86,6 @@ fn end_channel_session(
     }
 }
 
-/// Seed a fresh VM's joined-channel mirror, which is otherwise pushed only on a join or a leave, so
-/// a `/reload` would leave `GetChannelName` and `/N` empty until the next one.
-pub(super) fn seed_channels(
-    mut vm: crate::script_calls::VmWith<Res<'static, ChannelState>>,
-    mut seeded: Local<crate::ui_script::VmMemo<bool>>,
-) {
-    vm.turn(|script, channels| {
-        let Some(script) = script else {
-            return;
-        };
-        if seeded.claim(script) {
-            channels.mirror_into(script);
-        }
-    })
-}
-
 /// The session-end edge: a confirmed `/logout` back to the glue screens (`OnExit(InWorld)`).
 pub(super) fn end_session_channels(
     mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,

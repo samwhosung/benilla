@@ -683,6 +683,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 key,
                 r#"Usage: RemoveChatWindowChannel(index, "channel")"#,
             )?;
+            let joined = super::channel::joined(lua);
             let key = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let n = crate::script::binding_abi::s_str_to_int(&key);
@@ -691,7 +692,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // a pending slot's number removes nothing (`0x4a12c9`); a zero keeps the string
                 // raw, untrimmed, for the case-insensitive compares (`0x4a1315`, `0x4a1359`).
                 let key = if n != 0 {
-                    match super::channel::confirmed_channel(&model, i64::from(n)) {
+                    match super::channel::confirmed_channel(&joined, i64::from(n)) {
                         Some(c) => c.name.clone(),
                         None => return Ok(()),
                     }

@@ -373,9 +373,9 @@ impl ChannelState {
         self.slot(name).map(|s| s.state)
     }
 
-    /// The slots for the VM's mirror, holes kept so `/N` addresses the right channel, each with
-    /// its id and whether it is in state 0, which the by-number lookups `0x49be50` and `0x49bf30`
-    /// and the lists require.
+    /// The slots as the lookups read them, holes kept so `/N` addresses the right channel, each
+    /// with its id and whether it is in state 0, which the by-number lookups `0x49be50` and
+    /// `0x49bf30` and the lists require.
     pub(crate) fn names(&self) -> Vec<Option<benilla_ui::script::JoinedChannel>> {
         self.joined
             .iter()
@@ -389,9 +389,10 @@ impl ChannelState {
             .collect()
     }
 
-    /// Push the slots into the VM's mirror, which `SendChatMessage`'s channel target and the
-    /// channel verbs read where the reference reads the slot array itself. Every step that writes
-    /// a slot's name or state ends with this, so the mirror never lags the slot it copies.
+    /// Push the slots into the VM's mirror, which the channel lookups read with no host to ask;
+    /// with one lent they read the slot array itself, as the reference does
+    /// ([`ChannelLive`]). Every step that writes a slot's name or state ends with this, so the
+    /// mirror never lags the slot it copies.
     pub(crate) fn mirror_into(&self, script: &mut benilla_ui::script::UiScript) {
         script.set_joined_channels(self.names());
     }
@@ -510,5 +511,21 @@ impl ChannelStamp {
         event.channel_number = self.number;
         event.instance = self.instance;
         event.channel = format!("{}. {}", self.number, event.channel_base);
+    }
+}
+
+/// The slot array as the channel lookups read it at the call (`0x49be50`, `0x49be90`,
+/// `0x49bf30`), so a listener reads the slots its packet's notice left. Absent in a harness without
+/// chat.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ChannelLive<'w> {
+    channels: Option<Res<'w, ChannelState>>,
+}
+
+impl crate::script_calls::live::LiveFamily for ChannelLive<'_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &benilla_ui::script::JoinedChannelsQuery| {
+            self.channels.as_deref().map(ChannelState::names)
+        })
     }
 }
