@@ -89,3 +89,15 @@ jobs:
       - name: name the test a crash took down
         if: failure()
         run: cargo test --workspace --no-fail-fast -- --test-threads=1
+      # The player binary links with the main thread's stack its build script asks for: MSVC's own
+      # 1 MB overflows at the login screen. Read from the PE header (PE32+: optional header +72).
+      - name: player stack
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cargo build -p benilla --no-default-features
+          $b = [IO.File]::ReadAllBytes("target\debug\benilla.exe")
+          $pe = [BitConverter]::ToInt32($b, 0x3c)
+          $reserve = [BitConverter]::ToUInt64($b, $pe + 24 + 72)
+          "SizeOfStackReserve: $reserve"
+          if ($reserve -lt 8MB) { exit 1 }
