@@ -71,9 +71,10 @@ impl LiveQuery for HasKeyQuery {
 /// The slot `(bag, slot)` as a container binding finds it now, through the bag lookup's and
 /// `GetItemInSlot`'s bank gates ([`Model::bank_bag_shut`], [`Model::vault_shut`]): the host's,
 /// else the VM's copy.
-// Deviation: the backpack is bounded by its own 16 slots, where `0x4f990f` bounds bag 0 by
-// the player list's count (0x71), a reference bug that lets the backpack index read other
-// containers.
+// Deviation: the backpack, the bank and the keyring are each bounded by their own slots, where
+// `0x4f990f` bounds them only by the player list's count (0x71) from their bases (the bank at
+// `+0x27`, `0x4f98ae`; the keyring at `+0x51`, `0x4f98c0`), a reference bug that lets their index
+// read the next container's slots.
 pub(crate) fn bag_slot(lua: &Lua, model: &Model, bag: i64, slot: u32) -> Option<ContainerSlot> {
     if model.vault_shut(bag) || model.bank_bag_shut(bag) {
         return None;
