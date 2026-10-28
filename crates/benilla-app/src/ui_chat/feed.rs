@@ -2200,30 +2200,3 @@ fn needs_name(chat_type: u8) -> bool {
             | m::CHAT_MSG_BATTLEGROUND_LEADER
     )
 }
-
-/// `/played`'s answer for scripts: `SMSG_PLAYED_TIME` fires `TIME_PLAYED_MSG(total, level)`
-/// (`0x4018df`), which the stock `ChatFrame_OnEvent` prints as the `TIME_PLAYED_TOTAL` and
-/// `TIME_PLAYED_LEVEL` lines (`ChatFrame.lua:1279`), the answer's one printer. The ask,
-/// `RequestTimePlayed()`, sends inside its call ([`super::ChatSender::request_time_played`]).
-pub(crate) fn played_time_bridge(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    answer: Option<ResMut<crate::net::PlayedTimeAnswer>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let Some(mut answer) = answer else {
-            return;
-        };
-        if let Some((total, level)) = answer.0.take() {
-            script.fire_event(
-                "TIME_PLAYED_MSG",
-                vec![
-                    benilla_ui::script::ScriptValue::Int(i64::from(total)),
-                    benilla_ui::script::ScriptValue::Int(i64::from(level)),
-                ],
-            );
-        }
-    })
-}

@@ -89,16 +89,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "::net::PlayedTimeAnswer",
-        "the played-time answer",
-    ),
-    (
-        Row::Queue,
-        "::player::net::SkinnedFeed",
-        "the skinned state",
-    ),
-    (
-        Row::Queue,
         "::player::view_subject::FarSight",
         "the far-sight machine a handler's Lua runs through the host's buff cancel; every feed \
          that lends the host reads it, and none fires from it",
@@ -303,7 +293,6 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
 /// a row whose feed or inputs moved fails until it matches.
 #[rustfmt::skip]
 pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
-    ("::player::net::feed_player_skinned", &["player::net::SkinnedFeed"]),
     // The hover's pick runs outside every packet (`0x481790` → `0x4828d0` → `0x482090` →
     // `0x492e70` → `0x492890`), but its plate is rebuilt inside them, each rebuild the whole
     // builder over every input here: the unit's by the name-query callback `0x5fb840`, the
@@ -389,7 +378,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_loot_roll::LootRolls"]),
     ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
-    ("::ui_chat::feed::played_time_bridge", &["net::PlayedTimeAnswer"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside

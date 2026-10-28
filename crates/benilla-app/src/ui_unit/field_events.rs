@@ -569,6 +569,21 @@ pub(crate) fn fire(
         // Run at its place by the packet's handler ([`crate::net::objects`]), its signal written
         // there.
         FieldNotice::AreaSpiritHealerClear | FieldNotice::QuestAccepted { .. } => {}
+        // `%d%d` (`0x4018d5`): the two counts as numbers, which `ChatFrame_DisplayTimePlayed`
+        // prints (`ChatFrame.lua:1279`).
+        FieldNotice::PlayedTime { total, level } => script.fire_event(
+            "TIME_PLAYED_MSG",
+            vec![
+                ScriptValue::Int(i64::from(total)),
+                ScriptValue::Int(i64::from(level)),
+            ],
+        ),
+        // `%d` (`0x48f408`): the stock `UIParent.lua` hides the resurrect offers and prints
+        // `DEATH_CORPSE_SKINNED`.
+        FieldNotice::Skinned { free_repop } => script.fire_event(
+            "PLAYER_SKINNED",
+            vec![ScriptValue::Int(i64::from(free_repop))],
+        ),
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:

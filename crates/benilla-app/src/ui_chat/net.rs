@@ -7,7 +7,7 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
 use super::{Broadcast, ChatLog};
-use crate::net::{ClientCommand, NetCommands, NetHandlerApp, PlayedTimeAnswer, ServerSaidMessage};
+use crate::net::{ClientCommand, NetCommands, NetHandlerApp, ServerSaidMessage};
 use crate::ui_action::{UiErrorKeys, UiErrorTexts};
 use crate::ui_social::SocialState;
 
@@ -85,13 +85,13 @@ fn on_toast(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorTexts>) {
     }
 }
 
-/// Fill the mailbox `feed::played_time_bridge` fires as `TIME_PLAYED_MSG`, the handler's one
-/// event (`0x4018df`): the reference prints nothing to chat itself (its lines go to the console,
-/// `0x401878`-`0x4018c8`), and the stock `ChatFrame_DisplayTimePlayed` prints the answer
-/// (`ChatFrame.lua:1279`).
-fn on_played_time(In(ev): In<SessionEvent>, mut answer: ResMut<PlayedTimeAnswer>) {
-    if let SessionEvent::PlayedTime { total, level } = ev {
-        answer.0 = Some((total, level));
+/// `SMSG_PLAYED_TIME` (`0x401850`): `TIME_PLAYED_MSG` at the packet, on the notice lane
+/// (`0x4018df`), the handler's one event. The reference prints nothing to chat itself (its lines go
+/// to the console, `0x401878`-`0x4018c8`), and the stock `ChatFrame_DisplayTimePlayed` prints the
+/// answer (`ChatFrame.lua:1279`). Absent in a harness without the notice lane.
+fn on_played_time(In(ev): In<SessionEvent>, lane: Option<ResMut<crate::field_watch::NoticeLane>>) {
+    if let (SessionEvent::PlayedTime { total, level }, Some(mut lane)) = (ev, lane) {
+        lane.write(crate::field_watch::FieldNotice::PlayedTime { total, level });
     }
 }
 
@@ -345,14 +345,15 @@ mod tests {
         }
     }
 
-    /// `SMSG_PLAYED_TIME` (`0x401850`) fills the mailbox `TIME_PLAYED_MSG` fires from (`0x4018df`)
-    /// and prints nothing to chat itself: its own lines go to the console (`0x401878`-`0x4018c8`),
-    /// and the stock `ChatFrame_DisplayTimePlayed` is the answer's one printer.
+    /// `SMSG_PLAYED_TIME` (`0x401850`) puts `TIME_PLAYED_MSG` on the notice lane (`0x4018df`) and
+    /// prints nothing to chat itself: its own lines go to the console (`0x401878`-`0x4018c8`), and
+    /// the stock `ChatFrame_DisplayTimePlayed` is the answer's one printer.
     #[test]
     fn the_played_time_answer_prints_no_chat_line_of_its_own() {
+        use crate::field_watch::{FieldNotice, NoticeLane};
         let mut world = World::new();
         world.insert_resource(ChatLog::default());
-        world.init_resource::<PlayedTimeAnswer>();
+        world.init_resource::<NoticeLane>();
         world
             .run_system_once_with(
                 on_played_time,
@@ -363,8 +364,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            world.resource::<PlayedTimeAnswer>().0,
-            Some((360_000, 7_200))
+            world
+                .resource_mut::<NoticeLane>()
+                .drain()
+                .collect::<Vec<_>>(),
+            [FieldNotice::PlayedTime {
+                total: 360_000,
+                level: 7_200
+            }]
         );
         assert_eq!(world.resource::<ChatLog>().pending_len(), 0);
     }

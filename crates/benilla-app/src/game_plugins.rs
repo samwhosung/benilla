@@ -1826,9 +1826,6 @@ pub(crate) mod schedule_tests {
         ("ui_char.rs", "feed_char", Because::FilledByVm,
          "its take is the ammo getters' hits, which only a getter's call leaves, and a frameless VM \
           calls none; the doll's own pushes ride `VmMemo`s"),
-        ("ui_chat/feed.rs", "played_time_bridge", Because::FilledByVm,
-         "the answer it takes follows `RequestTimePlayed()`, Lua's own ask, which a frameless VM \
-          never makes"),
         ("ui_follow.rs", "feed_follow", Because::MemoLatched,
          "`feed.vm: VmMemo<FollowFeedMemo>`; a fresh VM re-fires BEGIN for a follow in progress"),
         ("ui_guild/lane.rs", "fire_guild", Because::Deliberate,

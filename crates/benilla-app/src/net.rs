@@ -97,7 +97,6 @@ impl Plugin for NetPlugin {
             .init_resource::<ServerWallClock>()
             .init_resource::<Reputations>()
             .init_resource::<HomeBind>()
-            .init_resource::<PlayedTimeAnswer>()
             .init_resource::<Proficiencies>()
             .init_resource::<crate::names::NameCache>()
             .init_resource::<crate::go_templates::GameObjectTemplates>()
@@ -853,11 +852,6 @@ pub(crate) fn send_query_time(
 /// token names.
 #[derive(Resource, Default)]
 pub(crate) struct HomeBind(pub(crate) Option<u32>);
-
-/// The undelivered `/played` answer (`SMSG_PLAYED_TIME`): total seconds and seconds this level.
-/// One slot: the server sends one reply per request.
-#[derive(Resource, Default)]
-pub(crate) struct PlayedTimeAnswer(pub(crate) Option<(u32, u32)>);
 
 /// Equip proficiencies (`SMSG_SET_PROFICIENCY`): item class (2 weapon, 4 armor) to a subclass
 /// bitmask, the client's `0xc4d4a0[class]` store.

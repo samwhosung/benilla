@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiInput;
 
 #[cfg(test)]
 mod ace_gate_tests;
@@ -191,8 +191,6 @@ impl Plugin for UiChatPlugin {
                 Update,
                 channels::seed_channels.in_set(crate::ui_script::UiFeed),
             )
-            // `SMSG_PLAYED_TIME` -> `TIME_PLAYED_MSG`.
-            .add_systems(Update, feed::played_time_bridge.in_set(UiFeed))
             .add_systems(
                 Update,
                 (
