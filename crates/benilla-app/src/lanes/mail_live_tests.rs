@@ -695,6 +695,36 @@ fn a_paper_picked_up_between_rebuilds_changes_nothing_until_the_next() {
     assert_eq!(c.eval::<String>(true, read), "1/Free Paper");
 }
 
+/// Each `GetSendMailItem` call before the record answers keeps its own callback `0x4ae710`
+/// (dedupe flag 0, `0x4ae5ea`), while the cache sends the one query in flight: two calls, one
+/// query, two `MAIL_SEND_INFO_UPDATE` at the answer (`0x4ae71f`).
+#[test]
+fn two_attachment_reads_before_the_answer_send_one_query_and_two_updates() {
+    let mut c = client();
+    carry(&mut c, item_guid(1), WOOL, 3);
+    c.eval::<()>(
+        true,
+        r#"Infos = 0
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("MAIL_SEND_INFO_UPDATE")
+        f:SetScript("OnEvent", function() Infos = Infos + 1 end)
+        PickupContainerItem(0, 1) ClickSendMailItemButton() Infos = 0"#,
+    );
+    c.sent();
+    c.eval::<()>(true, "GetSendMailItem() GetSendMailItem()");
+    let queries = c
+        .sent()
+        .into_iter()
+        .filter(|s| s.starts_with("ItemQuery"))
+        .count();
+    assert_eq!(queries, 1, "one query in flight");
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: WOOL,
+        info: Some(Box::new(crate::items::test_template("Wool Cloth"))),
+    }]]);
+    assert_eq!(c.eval::<i64>(true, "return Infos"), 2, "one per call");
+}
+
 /// The leave-world step cancels each paper's callback and leaves the count set
 /// (`0x4acc15`-`0x4acc2d`): a late answer neither counts down nor rebuilds, and
 /// `GetNumStationeries` rebuilds nothing while the count stands, until the next world-enter init
