@@ -549,7 +549,7 @@ fn an_attachment_whose_record_lands_later_signals_the_send_info_update() {
 
 /// The attachment's lookup sits behind its object's (`0x468460`, `0x4ae5e1`): with the object
 /// gone, `GetSendMailItem` asks for no record, where with it held a refused record is asked
-/// again.
+/// again. The destroy itself asks once, for the bar's recount.
 #[test]
 fn an_attachment_whose_object_is_gone_asks_no_record() {
     let mut c = client();
@@ -568,13 +568,29 @@ fn an_attachment_whose_object_is_gone_asks_no_record() {
             .count()
     };
     assert_eq!(asks(&mut c), 1, "a held object's refused record is asked");
-    // Gone, then its record refused again, so a lookup would send.
-    c.frame(vec![vec![SessionEvent::ObjectDestroyed(item_guid(1))]]);
     c.frame(vec![vec![SessionEvent::ItemTemplate {
         entry: WOOL,
         info: None,
     }]]);
-    c.sent();
+    // The destroy's own ask: our item's deactivate recounts the bar for its entry
+    // (`0x5d8798` → `0x4e5c70`), whose count looks the record up with guid 0 (`0x4e6d78`).
+    c.frame(vec![vec![SessionEvent::ObjectDestroyed(item_guid(1))]]);
+    assert_eq!(
+        c.sent(),
+        [format!(
+            "{:?}",
+            ClientCommand::ItemQuery {
+                entry: WOOL,
+                guid: 0
+            }
+        )]
+    );
+    // Refused again, so a lookup would send.
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: WOOL,
+        info: None,
+    }]]);
+    assert!(c.sent().is_empty());
     assert_eq!(asks(&mut c), 0, "a gone object asks nothing");
 }
 
