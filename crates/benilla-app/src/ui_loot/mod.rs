@@ -47,15 +47,14 @@ const BIND_CONFIRM_MIN_QUALITY: u32 = 2;
 /// The coin row's quality, 0, so its text is grey: `0x4c23a0`'s coin guard returns 0 at
 /// `0x4c23de`, and `LootFrame_Update` has no coin case (`LootFrame.lua:81-85`).
 const COIN_QUALITY: u32 = 0;
-/// Frames a push waits for its item template before it is dropped, about 2 s at 60 fps.
-const RECEIVE_MAX_TRIES: u16 = 120;
 /// The slots `OnItemPush` treats as the keyring (`0x491bc3`/`0x491bc8`, 0x51..=0x70): the
 /// descriptor's full 32 positions, wider than the 16 vmangos uses from `KEYRING_SLOT_START` 81.
 const PUSH_KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 81..=112;
 
 /// A push, on the lane at its packet or waiting on its item template. `OnItemPush 0x491a60` defers
 /// both of its outputs the same way: on a cache miss (`0x491a93`) it re-enters from the cache
-/// callback `0x491ee0`, at the answer ([`LootState::push_answered`]).
+/// callback `0x491ee0`, at the answer, and a refused answer frees it (`0x491eea`-`0x491efb` →
+/// `SMemFree 0x646430`) ([`LootState::push_answered`]), so every wait ends at its answer.
 #[derive(Clone, Debug)]
 struct PendingReceive {
     /// Crafted or conjured: "You create: …".
@@ -71,8 +70,6 @@ struct PendingReceive {
     container: i64,
     /// Another group member's push, by guid; `None` for the active player's own.
     owner: Option<u64>,
-    /// The frames it has waited on its template.
-    tries: u16,
 }
 
 /// `ITEM_PUSH`'s `arg1`, the reference's selector at `0x491bb5`-`0x491bd6`: a wire bag other than
@@ -109,6 +106,11 @@ struct Window {
     /// The wire `loot_type`, the cell `0xb71bbc` (`0x4c2740`) a close leaves: fishing for
     /// `IsFishingLoot()`, and a disenchant window with rows left survives a close.
     loot_type: u8,
+    /// The candidate array `0xc4dc38` as the last `SMSG_LOOT_MASTER_LIST` placed it
+    /// ([`place_candidates`]), its one writer (`0x61c562`-`0x61c637`). It is no cell of the
+    /// window: no response or close touches it, so each response carries it over, and it rides
+    /// here so a step's listeners read it as their packet left it.
+    master_candidates: Vec<Option<u64>>,
 }
 
 /// A clicked row resolved: the coin pile, or an item at its wire loot slot.
@@ -328,10 +330,6 @@ pub(crate) struct LootState {
     /// Deviation: it is the display row, where the reference's is the item index plus one
     /// (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for.
     pending_bind_confirm: Option<u32>,
-    /// The candidate array `0xc4dc38` as the last `SMSG_LOOT_MASTER_LIST` placed it
-    /// ([`place_candidates`]), its one writer (`0x61c562`-`0x61c637`): no response or close
-    /// touches it, so it serves every window until the next list.
-    master_candidates: Vec<Option<u64>>,
     /// The candidates `GetMasterLootCandidate` looked up and the name cache missed, each a
     /// registration of the callback `0x4c2fb0` (dedupe flag 0, `0x4c2f61`), spent by the name's
     /// answer ([`Self::name_answered`]).
@@ -356,6 +354,10 @@ pub(crate) struct LootState {
     /// What the loot steps owe once their signals' handlers have run, innermost last
     /// ([`calls::Then`]).
     then: Vec<calls::Then>,
+    /// The source of the window a step fires on, while a later packet's handler has closed that
+    /// session: its release and latch went at that packet, its signals are queued behind
+    /// ([`LootState::take_queued_close`]).
+    closed_since: Option<u64>,
 }
 
 impl LootState {
@@ -386,6 +388,7 @@ impl LootState {
             items,
             taken: Vec::new(),
             loot_type, // `0x4c1dd6`
+            master_candidates: std::mem::take(&mut self.window.master_candidates),
         };
         self.pending_bind_confirm = None; // `0x4c1df5`
         self.sweep_owed = false;
@@ -468,6 +471,51 @@ impl LootState {
             .flatten()
     }
 
+    /// Whether the session a step's window `at` shows open is open still where the step fires:
+    /// the replaced session's cells' ([`Cells::open`]), else the live window's.
+    fn session_open(&self, at: &Window) -> bool {
+        let replaced = self.steps.iter().find_map(|(_, s)| match s {
+            Step::Opened { prior, .. } => Some(prior.open),
+            _ => None,
+        });
+        at.source.is_some() && replaced.unwrap_or(self.window.source == at.source)
+    }
+
+    /// The window a step fires on is of a session a later packet's handler closed.
+    fn window_closed_since(&self) -> bool {
+        self.closed_since.is_some() && self.closed_since == self.window.source
+    }
+
+    /// A close a call makes on a step's window whose session a later packet's handler closed
+    /// ([`Self::closed_since`]): the reference made it here, before that packet arrived, whose
+    /// close then found no window (`0x48f23f`). So it takes that close's unlocks and `LOOT_CLOSED`
+    /// off the lane, queued ahead of the next response; whether they were still there, else they
+    /// have signalled and this close finds no window either.
+    fn take_queued_close(&mut self, source: u64) -> bool {
+        let end = self
+            .steps
+            .iter()
+            .position(|(_, s)| matches!(s, Step::Opened { .. }))
+            .unwrap_or(self.steps.len());
+        let Some(at) = self
+            .steps
+            .iter()
+            .take(end)
+            .position(|(_, s)| matches!(s, Step::Closed(_)))
+        else {
+            return false;
+        };
+        self.steps.remove(at);
+        let unlocks = at.checked_sub(1).filter(|&u| {
+            matches!(&self.steps[u].1, Step::Unlocks(us, _)
+                if !us.is_empty() && us.iter().all(|&(g, _)| g == source))
+        });
+        if let Some(u) = unlocks {
+            self.steps.remove(u);
+        }
+        true
+    }
+
     /// Whether a later response's copier is queued: the steps ahead of it ran on the cells their
     /// session left, as each packet's dispatch ran them before the next arrived.
     fn replaced(&self) -> bool {
@@ -486,14 +534,14 @@ impl LootState {
         }
     }
 
-    /// A push's record answered (`0x491ee0`): the first push waiting on `entry` runs, once its
-    /// record is held.
+    /// A push's record answered (`0x491ee0`): the first push waiting on `entry` runs with its
+    /// record held, and a refusal frees it unrun (`0x491ee8`, `0x491efb` → `SMemFree 0x646430`).
     pub(crate) fn push_answered(&mut self, items: &Items, entry: u32) {
-        if items.template(entry, 0, Ask::Read).is_none() {
+        let Some(at) = self.waiting.iter().position(|r| r.entry == entry) else {
             return;
-        }
-        if let Some(at) = self.waiting.iter().position(|r| r.entry == entry) {
-            let r = self.waiting.remove(at);
+        };
+        let r = self.waiting.remove(at);
+        if items.template(entry, 0, Ask::Read).is_some() {
             self.queue(Step::Push(r, self.window.clone()));
         }
     }
@@ -502,7 +550,7 @@ impl LootState {
     /// the roster as the packet finds it ([`place_candidates`]). It signals nothing: the one
     /// `UPDATE_MASTER_LOOT_LIST` is a name lookup's callback (`0x4c2fb0`).
     pub(crate) fn set_master_candidates(&mut self, candidates: &[u64], group: &GroupState) {
-        self.master_candidates = place_candidates(candidates, group);
+        self.window.master_candidates = place_candidates(candidates, group);
     }
 
     /// `0x61c660(index)`: the candidate at a 0-based index of the array, `None` for a zero slot or
@@ -511,7 +559,7 @@ impl LootState {
         if index >= MASTER_LOOT_CANDIDATE_SLOTS {
             return None;
         }
-        self.master_candidates.get(index).copied().flatten()
+        self.window.master_candidates.get(index).copied().flatten()
     }
 
     /// `GetMasterLootCandidate`'s lookup on a name the cache misses: its callback `0x4c2fb0`
@@ -594,7 +642,6 @@ impl LootState {
             in_chat: p.show_in_chat,
             container: push_container(p.bag_slot, p.item_slot),
             owner,
-            tries: 0,
         };
         if held {
             self.queue(Step::Push(r, self.window.clone()));
@@ -1081,15 +1128,10 @@ fn drain_receives(
     owner: &dyn Fn(u64) -> Option<Option<String>>,
 ) -> Vec<PendingReceive> {
     let mut still = Vec::new();
-    for mut r in pending {
-        // The push's lookup with the callback `0x491ee0` (`0x491b05`); its retries read.
-        let ask = if r.tries == 0 {
-            Ask::Event(commands)
-        } else {
-            Ask::Read
-        };
+    for r in pending {
+        // The push's lookup with the callback `0x491ee0` (`0x491b05`).
         let resolved = items
-            .template(r.entry, 0, ask)
+            .template(r.entry, 0, Ask::Event(commands))
             .map(|t| (t.name.clone(), t.quality, t.display_info_id));
         match resolved {
             Some((name, quality, _)) if r.owner.is_some() => {
@@ -1147,11 +1189,10 @@ fn drain_receives(
                     ));
                 }
             }
+            // A record dropped since it was held (`0x491a93`): its callback waits on the answer.
             None => {
-                r.tries += 1;
-                if r.tries < RECEIVE_MAX_TRIES {
-                    still.push(r);
-                }
+                items.wait(r.entry, crate::items::RecordCallback::Push);
+                still.push(r);
             }
         }
     }
@@ -1423,6 +1464,8 @@ fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
 /// The live window and the clock's mark, set aside while a step runs on the cells it left.
 struct Live {
     window: Window,
+    /// [`LootState::closed_since`] as it stood, for a step inside another's turn.
+    closed_since: Option<u64>,
     mark: crate::lanes::Mark,
     /// The replaced session's other cells were swapped in ([`exchange_replaced_cells`]).
     cells: bool,
@@ -1439,7 +1482,9 @@ fn swap_in_cells<X: bevy::ecs::system::SystemParam + 'static>(
 ) -> Live {
     let (mut s, _) = vm.own();
     let source = cells.source;
+    let closed = source.filter(|_| !s.loot.session_open(&cells));
     Live {
+        closed_since: std::mem::replace(&mut s.loot.closed_since, closed),
         window: std::mem::replace(&mut s.loot.window, cells),
         mark: crate::lanes::mark(),
         cells: exchange_replaced_cells(&mut s),
@@ -1465,9 +1510,9 @@ fn exchange_replaced_cells(s: &mut LootSteps) -> bool {
 
 /// Put the live cells back. For a session a later response replaced, the later copier rewrote
 /// every cell (`0x4c1dc2` on), so what the step's handlers changed in them goes, with the steps
-/// their calls queued; for a step on that session's own window (`own`), whether its turn left the
-/// window open is kept for the copier's teardown ([`Cells::open`]), a listener's `CloseLoot`
-/// having closed it there. For the live session, the window the later packets left comes back,
+/// their calls queued; for a step on that session's own window (`own`), a close its turn made, a
+/// listener's `CloseLoot` or the emptied window's, is kept for the copier's teardown
+/// ([`Cells::open`]). For the live session, the window the later packets left comes back,
 /// and a close the turn made, the one change a listener's call makes to the window, stands on it.
 fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
     vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
@@ -1477,15 +1522,21 @@ fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
     let (mut s, _) = vm.own();
     let open = s.loot.window.source.is_some();
     s.loot.window = live.window;
+    s.loot.closed_since = live.closed_since;
     if !live.cells {
+        if live.source.is_some() && s.loot.window.source != live.source {
+            // A close since took the session, its teardown's flag clear (`0x4c1d95`) after
+            // anything the turn's sweep set (`0x4c221e`).
+            s.loot.coin_line_shown = false;
+        }
         if live.source.is_some() && !open && s.loot.window.source == live.source {
             s.loot.window.source = None;
         }
         return;
     }
-    if own {
+    if own && live.source.is_some() && !open {
         if let Some(prior) = s.loot.replaced_cells() {
-            prior.open = open;
+            prior.open = false;
         }
     }
     exchange_replaced_cells(&mut s);
@@ -1495,7 +1546,8 @@ fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
 /// A response's end, once its window is filled: the copier's end ([`LootSteps::copier_end`]) and
 /// what its signals owe, then the response's tail (`0x5ebc3a`-`0x5ebc51`): a window opened while
 /// we move (`moving`, [`LootMoveStart`]) takes the move-start close in the same handler, so it
-/// never paints.
+/// never paints. A session a later packet's handler has closed ([`LootState::closed_since`]) was
+/// released there, so its end sends nothing after that release: no sweep and no second close.
 fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
     vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
     moving: bool,
@@ -1506,7 +1558,7 @@ fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
         }
     });
     run_then(vm);
-    if !moving {
+    if !moving || vm.own().0.loot.window_closed_since() {
         return;
     }
     vm.turn(|script, (mut steps, _)| {

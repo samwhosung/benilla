@@ -438,3 +438,50 @@ fn a_roster_member_the_name_cache_lacks_reads_nil_until_its_name_lands() {
         "Thrall"
     );
 }
+
+/// The candidate array as a step's packet left it: a `LOOT_OPENED` listener ran inside its
+/// response (`0x4c1ee1`), before a later list packet in the frame cleared and refilled the array
+/// (`0x61c567`), so it reads the list that came before its response.
+#[test]
+fn a_later_list_in_the_frame_does_not_show_through_to_an_earlier_step() {
+    const GARROSH: u64 = 0x23;
+    let mut c = client();
+    let name = |guid, name: &str| SessionEvent::PlayerName {
+        guid,
+        name: name.into(),
+        race: 2,
+        gender: 0,
+        class: 1,
+    };
+    c.frame(vec![
+        vec![name(THRALL, "Thrall")],
+        vec![name(GARROSH, "Garrosh")],
+    ]);
+    c.eval::<()>(
+        true,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_OPENED")
+        f:SetScript("OnEvent", function() CANDIDATE = GetMasterLootCandidate(1) end)"#,
+    );
+    c.ask_loot(CORPSE);
+    c.frame(vec![
+        vec![SessionEvent::LootMasterList {
+            candidates: vec![THRALL],
+        }],
+        vec![SessionEvent::LootResponse {
+            guid: CORPSE,
+            loot_type: loot_type::CORPSE,
+            gold: 0,
+            items: vec![row(0, LINEN, slot_type::MASTER)],
+        }],
+        vec![SessionEvent::LootMasterList {
+            candidates: vec![GARROSH],
+        }],
+    ]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil"]);
+    assert_eq!(c.eval::<String>(false, "return CANDIDATE"), "Thrall");
+    assert_eq!(
+        c.eval::<String>(true, "return GetMasterLootCandidate(1)"),
+        "Garrosh"
+    );
+}

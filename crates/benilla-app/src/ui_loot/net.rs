@@ -1725,12 +1725,11 @@ mod tests {
         );
     }
 
-    /// A copier waiting on a record ends at the answer (`0x4c2afc`), inside the item answer's
-    /// handler (`0x55bdb0`), ahead of a release in the same frame: its sweep runs on the window as
-    /// that answer found it, still open, so it stores the row (`0x4c2b1d` → `0x4c1fa0`) and signals
-    /// `LOOT_OPENED` with the row left (`0x4c2240`), and the release's close comes after.
+    /// A copier waiting on a record ends at the answer (`0x4c2afc`), ahead of a release in the
+    /// same frame: its sweep belongs to its own window while it is open, so a window the release
+    /// closed since sweeps nothing and signals `LOOT_OPENED` as an unswept end does.
     #[test]
-    fn a_sweep_owed_at_the_answer_runs_on_the_window_the_answer_found() {
+    fn a_sweep_owed_to_a_window_closed_since_sends_nothing() {
         const LINEN: u32 = 2589;
         let mut app = App::new();
         let rx = seat_tabbed(app.world_mut());
@@ -1788,10 +1787,7 @@ mod tests {
         rx.try_iter().for_each(drop);
         app.update();
         let sent: Vec<_> = rx.try_iter().collect();
-        assert!(
-            matches!(sent[..], [ClientCommand::AutostoreLootItem { slot: 0 }]),
-            "{sent:?}"
-        );
+        assert!(sent.is_empty(), "{sent:?}");
         let opens = app
             .world_mut()
             .non_send_resource_mut::<benilla_ui::script::UiScript>()

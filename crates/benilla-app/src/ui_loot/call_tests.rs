@@ -466,6 +466,36 @@ fn the_last_rows_removal_closes_before_its_push() {
     assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:1,LOOT_CLOSED,ITEM_PUSH");
 }
 
+/// A `LOOT_SLOT_CLEARED` listener that closes the window on the last row's removal closes it once:
+/// the reference runs the listener's close first (`0x4c1f77`), and the removal's own then finds
+/// no window (`0x4c1f7f` → `0x4c1f8d` → `0x48f23f`). The removal's release went at its packet, so
+/// the listener's close takes that close's signals in place: one release, the lockbox's two
+/// unlocks and one `LOOT_CLOSED`, all inside the listener's call.
+#[test]
+fn a_listeners_close_on_the_last_rows_removal_closes_once() {
+    let mut l = client();
+    open(&mut l, LOCKBOX, 1, 0, vec![row(0, LINEN)]);
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_SLOT_CLEARED")
+        f:SetScript("OnEvent", function() CloseLoot() end)"#,
+    );
+    let _ = (seen(&mut l), sent(&l));
+    packets(&mut l, vec![SessionEvent::LootRemoved { slot: 0 }]);
+    feed(&mut l);
+    assert_eq!(
+        seen(&mut l),
+        "LOOT_SLOT_CLEARED:1,ITEM_LOCK_CHANGED,ITEM_LOCK_CHANGED,LOOT_CLOSED"
+    );
+    assert!(matches!(
+        sent(&l)[..],
+        [ClientCommand::LootRelease { guid: LOCKBOX }]
+    ));
+    assert_eq!(l.app.world().resource::<LootState>().source(), None);
+    assert_eq!(l.app.world().resource::<LootLatch>().0, None);
+}
+
 /// With the byte the interaction stored set (`0x5df468`), the copier sweeps first (`0x4c1ec7`,
 /// `0x4c1ed3` → `0x4c1fa0`): the stores and the bind confirm, then `LOOT_OPENED` while anything is
 /// left (`0x4c2240`), sent rows included; an empty window closes with release instead
@@ -1264,4 +1294,35 @@ fn an_item_push_after_the_response_reads_the_window_open() {
     );
     feed(&mut l);
     assert_eq!(order(&mut l), "OPENED,PUSH10");
+}
+
+/// A push whose record the cache lacks waits on its answer (`0x491a93` → `0x491ee0`), and a
+/// refused answer frees it unrun (`0x491ee8`, `0x491efb` → `SMemFree 0x646430`): no line and no
+/// `ITEM_PUSH`, then or at a later answer for the entry.
+#[test]
+fn a_push_whose_record_is_refused_is_dropped() {
+    const UNCACHED: u32 = 40_000;
+    let mut l = client();
+    let _ = seen(&mut l);
+    packets(&mut l, vec![SessionEvent::ItemPushResult(pushed(UNCACHED))]);
+    feed(&mut l);
+    assert_eq!(l.app.world().resource::<LootState>().waiting.len(), 1);
+    packets(
+        &mut l,
+        vec![SessionEvent::ItemTemplate {
+            entry: UNCACHED,
+            info: None,
+        }],
+    );
+    feed(&mut l);
+    assert!(l.app.world().resource::<LootState>().waiting.is_empty());
+    packets(
+        &mut l,
+        vec![SessionEvent::ItemTemplate {
+            entry: UNCACHED,
+            info: Some(Box::new(crate::items::test_template("Silk Cloth"))),
+        }],
+    );
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "");
 }

@@ -258,7 +258,21 @@ impl LootSteps<'_, '_> {
     /// the release and the teardown. The line, which a call signals as it returns, comes before
     /// the unlocks ([`Then::Unlocks`]), and those before the window goes ([`Then::Announce`]).
     pub(super) fn end_window(&mut self, script: &mut UiScript, failed: bool) {
-        if self.loot.source().is_none() {
+        let Some(source) = self.loot.source() else {
+            return;
+        };
+        if self.loot.window_closed_since() {
+            // Its release went at the later packet: the close's signals alone, if still owed.
+            if !self.loot.take_queued_close(source) {
+                return;
+            }
+            if failed {
+                self.errors.push(UiError::key("ERR_LOOT_NO_UI"));
+            }
+            self.loot.unlock_item_source(source);
+            self.loot.unlock_item_source(source);
+            self.loot.then.push(Then::Announce);
+            self.loot.then.push(Then::Unlocks);
             return;
         }
         if self.loot.disenchant_hold(&self.objects) {
@@ -316,9 +330,9 @@ impl LootSteps<'_, '_> {
     /// sweep while the auto-loot byte is set (`0x4c1ed3`, `0x4c2b29`), else `LOOT_OPENED`. With
     /// `autoLootDefault` on, a pickpocket or disenchant window, which no interaction stores the
     /// byte for, stores it here from the Shift held now ([`LootConfig`]'s deviation). The
-    /// reference ends the copier inside its packet, its window open; a close the lane fires
-    /// behind it has already taken the window, which leaves nothing to sweep, so the end clears
-    /// the byte as the sweep's would (`0x4c2219`) and signals `LOOT_OPENED`.
+    /// reference ends the copier inside its packet, its window open; a close a later packet's
+    /// handler made has already released the window, which leaves nothing to sweep, so the end
+    /// clears the byte as the sweep's would (`0x4c2219`) and signals `LOOT_OPENED`.
     pub(super) fn copier_end(&mut self, script: &mut UiScript) {
         if self.cfg.auto_loot
             && matches!(
@@ -328,7 +342,8 @@ impl LootSteps<'_, '_> {
         {
             self.byte.0 = interaction_byte(&self.cfg, script.shift_key_down());
         }
-        if self.byte.0 && self.loot.window.source.is_some() {
+        let open = self.loot.window.source.is_some() && !self.loot.window_closed_since();
+        if self.byte.0 && open {
             self.sweep(script, false);
         } else {
             self.byte.0 = false;
