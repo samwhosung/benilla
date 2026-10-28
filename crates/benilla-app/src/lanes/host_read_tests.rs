@@ -44,7 +44,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
 const FRAME_FINAL_FEEDS: usize = 19;
-const FRAME_FINAL_INPUTS: usize = 115;
+const FRAME_FINAL_INPUTS: usize = 118;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -64,8 +64,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
         "Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-    ("::spell::group_relation::publish_group_roster", &["spell::group_relation::GroupRoster"],
-        "copies the group's roster, which the relation reads take, once the packets are in"),
     ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::ui_action::feed::feed_actions", &["ui_action::ActionSlots", "ui_action::PlayerActions"],

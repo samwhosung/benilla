@@ -3,10 +3,10 @@
 //! (`6e5cf1`-`6e5d2f`) `0x606d20(caster, unit)` and `CanAssist`, and the world pick's party leg
 //! (`480686`, `4806b8`) asks `0x606c20`.
 //!
-//! - [`GroupRoster`]: the guids the reference's two tables hold, and [`publish_group_roster`],
-//!   which copies them out of `GroupState` in the feed, after the packets that write it, so no
-//!   cast or hover system reads that resource and orders against the drains that write it; the
-//!   frame's input records read the copy the last frame's feed made.
+//! - [`GroupRoster`]: the guids the reference's two tables hold, copied out of `GroupState` by the
+//!   group packets' handlers as each writes them ([`publish_group_roster`]), so a listener inside
+//!   the packet reads the tables it left, and no cast or hover system reads `GroupState` and orders
+//!   against the drains that write it.
 //! - [`GroupInputs`]: what a [`TargetRelations`] carries beside its stores for the two
 //!   predicates, and [`TargetRelations::in_party`] and [`TargetRelations::in_group`], which ask
 //!   them.
@@ -48,31 +48,40 @@ impl GroupRoster {
         }
     }
 
+    /// The two tables as `group` holds them: the party slots [`Self::party_of`] and the raid
+    /// roster's rows `raidN` reads ([`raid_row_guids`]).
+    pub(crate) fn of(group: &GroupState) -> Self {
+        Self {
+            raid: raid_row_guids(group),
+            ..Self::party_of(group)
+        }
+    }
+
     /// `0x4918e0`: [`Self::in_party`], or a nonzero guid in the raid roster (`4918ee`).
     fn in_group(&self, me: Option<u64>, guid: u64) -> bool {
         self.in_party(me, guid) || guid != 0 && self.raid.contains(&guid)
     }
 }
 
-/// Publish [`GroupRoster`] in the feed, beside the pick's other published inputs. The
-/// party slots are the ones `partyN` reads (`GroupState::party_slots`), none after a leave or a
-/// kick (`slots_emptied`, `0x4e84a0`); the raid roster is the rows `raidN` reads
-/// ([`raid_row_guids`]).
-pub(crate) fn publish_group_roster(
-    group: Option<Res<GroupState>>,
-    mut roster: ResMut<GroupRoster>,
-) {
-    let Some(group) = group else { return };
-    if !group.is_changed() {
-        return;
+/// Copy the two tables out of `group` into `roster` where a group packet's handler wrote them: the
+/// reference's handlers write the tables themselves (the party slots in `0x4e82d0` and
+/// `0x4e84a0`, the raid rows in `0x4ba5f0`), so what a listener inside the packet reads, and the
+/// next input record, is the packet's. Unchanged tables are not written, so the readers' change
+/// gates stay shut.
+pub(crate) fn publish_group_roster(group: &GroupState, roster: Option<&mut ResMut<GroupRoster>>) {
+    let Some(roster) = roster else { return };
+    let now = GroupRoster::of(group);
+    if **roster != now {
+        **roster = now;
     }
-    let now = GroupRoster {
-        raid: raid_row_guids(&group),
-        ..GroupRoster::party_of(&group)
-    };
-    if *roster != now {
-        *roster = now;
-    }
+}
+
+/// [`publish_group_roster`] off the world's `GroupState`, for a test that writes the group in place
+/// of a packet.
+#[cfg(test)]
+pub(crate) fn publish_in(world: &mut World) {
+    let now = GroupRoster::of(world.resource::<GroupState>());
+    world.insert_resource(now);
 }
 
 /// What the two predicates read beside a [`TargetRelations`]' stores.
@@ -202,7 +211,6 @@ mod tests {
     use crate::spell::targeting::corpse_fixture as fx;
     use benilla_formats::SpellDisplay;
     use benilla_protocol::messages::GroupMemberEntry;
-    use bevy::ecs::system::RunSystemOnce;
 
     const ME: u64 = 1;
     const MEMBER: u64 = 2;
@@ -713,9 +721,7 @@ mod tests {
     #[test]
     fn the_roster_publishes_the_slots_and_rows_the_reference_holds() {
         let publish = |world: &mut World| {
-            world
-                .run_system_once(publish_group_roster)
-                .expect("the roster publishes");
+            publish_in(world);
             std::mem::take(&mut *world.resource_mut::<GroupRoster>())
         };
         let mut world = World::new();

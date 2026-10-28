@@ -1119,6 +1119,7 @@ pub(crate) fn drain_party(
     mut group: ResMut<GroupState>,
     mut edits: ResMut<super::calls::GroupEdits>,
     self_q: Query<&Guid, With<SelfPlayer>>,
+    mut roster: Option<ResMut<crate::spell::group_relation::GroupRoster>>,
 ) {
     // What the feed has fired goes ([`super::SignalLog`]). Not a change the feed's gate should
     // open on.
@@ -1129,6 +1130,8 @@ pub(crate) fn drain_party(
             super::calls::SandboxEcho::Request(request) => {
                 let echoed = test_apply_local(&mut group, &request, self_guid);
                 debug_assert!(echoed, "only a sandboxed call is echoed: {request:?}");
+                // The tables the relation reads take, as the list the echo stands for writes them.
+                crate::spell::group_relation::publish_group_roster(&group, roster.as_mut());
             }
             super::calls::SandboxEcho::RaidTarget { icon, guid } => {
                 echo_raid_target(&mut group, icon, guid);

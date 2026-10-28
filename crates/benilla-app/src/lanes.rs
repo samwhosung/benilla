@@ -533,6 +533,8 @@ mod duration_live_tests;
 #[cfg(test)]
 mod gossip_live_tests;
 #[cfg(test)]
+mod group_live_tests;
+#[cfg(test)]
 mod group_view_tests;
 #[cfg(test)]
 mod guard_tests;

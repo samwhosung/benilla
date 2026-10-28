@@ -324,7 +324,7 @@ impl PickChecks<'_, '_> {
 mod tests {
     use super::*;
     use crate::net::{GuidIndex, Reputations};
-    use crate::spell::group_relation::publish_group_roster;
+    use crate::spell::group_relation::publish_in;
     use crate::spell::targeting::corpse_fixture as fx;
     use benilla_protocol::messages::GroupMemberEntry;
     use benilla_protocol::ObjectFields;
@@ -624,7 +624,7 @@ mod tests {
             });
     }
 
-    /// The pick under `word` and the roster as it stands, published as a frame does.
+    /// The pick under `word` and the roster as it stands, published as a group packet does.
     fn asked(world: &mut World, word: u16, entity: Entity) -> bool {
         world.resource_mut::<SpellTargeting>().enter(
             fx::RESURRECTION,
@@ -634,9 +634,7 @@ mod tests {
         world
             .run_system_once(publish_unit_pick)
             .expect("the word publishes");
-        world
-            .run_system_once(publish_group_roster)
-            .expect("the roster publishes");
+        publish_in(world);
         world
             .run_system_once(move |checks: PickChecks, stores: Query<&ObjectStore>| {
                 checks.admits_unit(entity, stores.get(entity).ok())

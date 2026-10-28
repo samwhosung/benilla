@@ -1403,7 +1403,7 @@ mod tests {
     /// The party word (target 35) and the raid word (target 57) over the same three surfaces: the
     /// press through [`crate::spell::cast_target::CastTargeting`], the click through
     /// `SpellTargetUnit` and the hover verdict through `SpellCanTargetUnit`, each fed the group
-    /// as `GroupState` holds it and the frame publishes it. A party member, and a pet that
+    /// as `GroupState` holds it and a group packet publishes it. A party member, and a pet that
     /// answers to one, take both words; a raid member outside the party only the raid word; a
     /// friendly player in no group, a friendly creature and a member we cannot assist neither;
     /// the caster both.
@@ -1412,7 +1412,7 @@ mod tests {
         use crate::spell::cast_target::{
             cast_target_mask, resolve_cast_target, CastCandidates, CastTargeting, CastWireTarget,
         };
-        use crate::spell::group_relation::{fixture as gf, publish_group_roster, GroupRoster};
+        use crate::spell::group_relation::{fixture as gf, publish_in, GroupRoster};
         use crate::spell::targeting::corpse_fixture as fx;
         use benilla_formats::SpellDisplay;
         use benilla_protocol::messages::GroupMemberEntry;
@@ -1576,9 +1576,7 @@ mod tests {
                         }
                     }
                 }
-                world
-                    .run_system_once(publish_group_roster)
-                    .expect("the roster publishes");
+                publish_in(&mut world);
                 world.resource_mut::<crate::target::Selection>().target = Some(entity);
                 world.resource_mut::<crate::target::Selection>().guid = Some(guid);
 

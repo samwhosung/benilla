@@ -8,7 +8,6 @@
 use bevy::prelude::*;
 
 use crate::ui_script::UiFeed;
-use crate::ui_unit::UnitFeed;
 
 mod bind_gates;
 mod cast_send;
@@ -116,11 +115,6 @@ impl Plugin for SpellPlugin {
                     )
                         .in_set(UiFeed)
                         .after(LocalCancel),
-                    // The party slots and raid roster the party and raid words read, before
-                    // the unit feed asks them.
-                    group_relation::publish_group_roster
-                        .in_set(UiFeed)
-                        .before(UnitFeed),
                 ),
             );
         net::register(app);

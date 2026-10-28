@@ -215,6 +215,9 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: our own guid, which the login's handlers set and everything reads; the arrival's
     // signals are the arrival lane's, and no feed fires off its change.
     "::net::SelfGuid",
+    // Written by the group handlers at their packets, read through the host by the relation
+    // getters (`0x4e7f70` inside `0x6061e0`), and quiet: no feed fires off it.
+    "::spell::group_relation::GroupRoster",
     // Read by the quest log getters through the host (`QuestClock`), and quiet: the time
     // response's `QUEST_LOG_UPDATE` fires on the quest log lane, and `send_query_time`'s hourly
     // resync is a timer.
@@ -378,7 +381,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_tooltip::drive_mouseover_tooltip", &["go_anim::GoAnim",
         "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "net::reputations::Reputations", "ui_action::PlayerActions", "ui_guild::GuildState"]),
+        "net::reputations::Reputations", "spell::group_relation::GroupRoster",
+        "ui_action::PlayerActions", "ui_guild::GuildState"]),
 
     ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
@@ -388,8 +392,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // the roster push is their no-host fallback, and every snapshot's names and relations read as
     // the frame left them.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "net::reputations::Reputations", "ui_guild::GuildState",
-        "ui_party::GroupState"]),
+        "net::SelfGuid", "net::reputations::Reputations", "spell::group_relation::GroupRoster",
+        "ui_guild::GuildState", "ui_party::GroupState"]),
     ("::tutorial::feed_tutorials", &["items::Items", "net::ObjectStore"]),
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
@@ -407,7 +411,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::UnitSpeeds", "net::game_time::ServerTime", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "player::state::OwnControlLost", "player::state::StandPending", "spell::cooldowns::Cooldowns",
-        "spell::mods::SpellModifiers", "target::Selection", "ui_action::ActionSlots",
+        "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers", "target::Selection",
+        "ui_action::ActionSlots",
         "ui_action::PlayerActions", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
     // The resolver's guids, pushed before the drain and read with the host lent too: the
     // mouseover, the group rows past a token's own, the pet records and every row of the field
@@ -1819,7 +1824,8 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The roster's cells and records it rewinds and seats while it builds; the rest as the frame
     // left it.
     ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "target::Selection", "ui_guild::GuildState", "ui_party::GroupState"]),
+        "spell::group_relation::GroupRoster", "target::Selection", "ui_guild::GuildState",
+        "ui_party::GroupState"]),
     ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_action::cast_lines::CastFailRedisplays"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",

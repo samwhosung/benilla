@@ -527,8 +527,7 @@ impl Plugin for QuestMarkersPlugin {
         app.add_systems(
             Update,
             (
-                // After the roster publish, whose party slots the questgivers' reactions read.
-                query_statuses.after(crate::spell::group_relation::publish_group_roster),
+                query_statuses,
                 sync_markers,
                 build_markers,
                 pose_markers,
@@ -536,8 +535,7 @@ impl Plugin for QuestMarkersPlugin {
             )
                 .chain()
                 .after(benilla_world::schedule::WorldStage::Net)
-                // After the VM pass: the markers read the group roster its feeds publish, and a
-                // script call reads no marker's transform.
+                // After the VM pass: a script call reads no marker's transform.
                 .after(crate::vm_pass::VmPass::End),
         )
         .add_systems(

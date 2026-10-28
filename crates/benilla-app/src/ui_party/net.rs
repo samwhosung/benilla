@@ -163,6 +163,8 @@ struct RosterTeardown<'w, 's> {
     deselect: Option<ResMut<'w, crate::target::OwedSelects>>,
     /// What each packet changed, for the views a listener reads ([`crate::ui_unit::views`]).
     log: Option<ResMut<'w, crate::ui_unit::views::ViewLog>>,
+    /// The party slots and raid rows the relation reads take, written where the packet wrote them.
+    roster: Option<ResMut<'w, crate::spell::group_relation::GroupRoster>>,
 }
 
 impl RosterTeardown<'_, '_> {
@@ -175,9 +177,10 @@ impl RosterTeardown<'_, '_> {
         Some((group.stats.clone(), group.cells().to_owned()))
     }
 
-    /// The packet's end: the records and cells it changed against `before` logged, then its
-    /// teardowns.
+    /// The packet's end: the records and cells it changed against `before` logged, the tables the
+    /// relation reads take copied, then its teardowns.
     fn run(&mut self, group: &mut GroupState, before: Option<Found>) {
+        crate::spell::group_relation::publish_group_roster(group, self.roster.as_mut());
         if let (Some(log), Some((records, cells))) = (self.log.as_deref_mut(), before) {
             log.records(&records, &group.stats);
             if group.cells() != cells.cells() {
@@ -295,11 +298,13 @@ fn on_session_end(
     In(_): In<SessionEvent>,
     mut group: ResMut<GroupState>,
     log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
+    mut roster: Option<ResMut<crate::spell::group_relation::GroupRoster>>,
 ) {
     let before = log
         .is_some()
         .then(|| (group.stats.clone(), group.cells().to_owned()));
     group.clear_session();
+    crate::spell::group_relation::publish_group_roster(&group, roster.as_mut());
     if let (Some(mut log), Some((records, cells))) = (log, before) {
         log.records(&records, &group.stats);
         if group.cells() != cells.cells() {
