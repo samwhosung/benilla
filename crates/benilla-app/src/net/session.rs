@@ -36,8 +36,8 @@ pub(super) fn register(app: &mut App) {
             PreUpdate,
             (
                 WorldportTimer::Connection.after(crate::ui_script::run_pending_reload),
-                WorldportTimer::Objects,
                 WorldportTimer::Sweep,
+                WorldportTimer::Objects,
             )
                 .chain(),
         )
@@ -422,22 +422,43 @@ impl PendingWorldports {
     pub(crate) fn is_posted(&self) -> bool {
         !self.0.is_empty()
     }
+
+    /// A load posted, as `SMSG_NEW_WORLD` posts it, for a harness with no objects' leg.
+    #[cfg(test)]
+    pub(crate) fn post_for_test(&mut self) {
+        self.0.push(Destination {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+        });
+    }
+
+    /// The posted loads taken, as the objects' leg takes them.
+    #[cfg(test)]
+    pub(crate) fn take_for_test(&mut self) {
+        self.0.clear();
+    }
 }
 
 /// The executor `0x401bc0`'s body, one unit at the next tick's start, in the order of its calls:
 /// the connection leaves the world (`0x401bd4` → `0x5aae70(0)`, `LOGOUT_CANCEL` for a pending
 /// request), then the movement and missiles go (`0x401bde`, `0x401bf2`), then the object manager
-/// is destroyed (`0x401bf7`), whose walk reaches the local player's destructor and its leave-world
-/// sweep (`0x5dd543`). The sets order those legs in `PreUpdate`; the connection's is
-/// `crate::ui_logout::leave_world`, the sweep's `crate::ui_script::sweep_on_worldport`.
+/// is destroyed (`0x401bf7`), whose walk (`0x467800`) frees the objects in creation order and
+/// reaches the local player's destructor and its leave-world sweep (`0x5dd543`) at the player's
+/// turn. The sets order those legs in `PreUpdate`.
+///
+/// The sweep runs ahead of the objects' leg, so what was created after the player (the target, a
+/// pet, an NPC) is alive when `PLAYER_LEAVING_WORLD` fires, as in the reference. What remains: the
+/// objects created before the player (its items, say) are gone by then in the reference, and
+/// benilla keeps no creation order, so they are alive there too.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum WorldportTimer {
-    /// `0x401bd4`.
+    /// `0x401bd4`: `crate::ui_logout::leave_world`.
     Connection,
-    /// `0x401bf7`'s walk of the objects, short of the local player's sweep.
-    Objects,
-    /// `0x5dd543`.
+    /// `0x5dd543`: `crate::ui_script::sweep_on_worldport`, for a load posted.
     Sweep,
+    /// `0x401bf7`'s walk of the objects: [`world_load_timer`].
+    Objects,
 }
 
 /// What the world load needs from the bridge.

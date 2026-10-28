@@ -3040,8 +3040,7 @@ mod tests {
     #[test]
     fn a_cross_map_worldport_fires_leaving_world_and_the_login_map_does_not() {
         let mut app = App::new();
-        app.add_message::<crate::net::WorldportMessage>()
-            .init_world_leave_sweep();
+        app.init_world_leave_sweep();
         crate::ui_script::add_worldport_sweep(&mut app);
         app.insert_non_send_resource(UiScript::new().expect("VM"));
         app.world_mut()
@@ -3059,12 +3058,18 @@ mod tests {
                 .eval::<i64>("return Left")
                 .unwrap()
         };
-        let port = |needs_ack: bool| crate::net::WorldportMessage {
-            map_id: 1,
-            position: [0.0; 3],
-            orientation: 0.0,
-            needs_ack,
-            transport_entry: None,
+        // The initial-login map posts no load; a cross-map port posts one, which the objects'
+        // leg (absent here) takes after the frame.
+        let port = |app: &mut App, needs_ack: bool| {
+            if needs_ack {
+                app.world_mut()
+                    .resource_mut::<crate::net::PendingWorldports>()
+                    .post_for_test();
+            }
+            app.update();
+            app.world_mut()
+                .resource_mut::<crate::net::PendingWorldports>()
+                .take_for_test();
         };
 
         let arm = |app: &mut App| {
@@ -3075,12 +3080,10 @@ mod tests {
 
         // A world began: the reference arms the latch from the local player's create.
         arm(&mut app);
-        app.world_mut().write_message(port(false));
-        app.update();
+        port(&mut app, false);
         assert_eq!(left(&mut app), 0, "the initial-login map is an arrival");
 
-        app.world_mut().write_message(port(true));
-        app.update();
+        port(&mut app, true);
         assert_eq!(left(&mut app), 1, "a cross-map port leaves a world");
 
         app.update();
@@ -3092,8 +3095,7 @@ mod tests {
 
         // Once per world: the port above spent the latch and no new avatar re-armed it, so a
         // second departure (a quit on the loading screen) fires nothing, as in the reference.
-        app.world_mut().write_message(port(true));
-        app.update();
+        port(&mut app, true);
         assert_eq!(
             left(&mut app),
             1,
@@ -3102,8 +3104,7 @@ mod tests {
 
         // Re-armed, as the new world's create does: the next departure is its own.
         arm(&mut app);
-        app.world_mut().write_message(port(true));
-        app.update();
+        port(&mut app, true);
         assert_eq!(left(&mut app), 2, "the next world's departure fires again");
     }
 }

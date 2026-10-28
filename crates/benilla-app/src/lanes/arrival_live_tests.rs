@@ -693,6 +693,51 @@ fn a_worldports_teardown_runs_at_the_next_ticks_start() {
     assert_eq!(c.seen(), Vec::<String>::new(), "once per port");
 }
 
+/// The leave-world sweep runs inside the object manager's walk at the local player's turn
+/// (`0x467800` → `0x5dd543`), so an object created after the player is alive when
+/// `PLAYER_LEAVING_WORLD` fires: the target still exists there, and is gone after the walk.
+#[test]
+fn a_worldports_leave_sees_the_target_created_after_the_player() {
+    const NPC: u64 = 0xF130_0000_0000_0042;
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_LEAVING_WORLD")
+        f:SetScript("OnEvent", function()
+            table.insert(Seen, event .. ":" .. tostring(UnitExists("target")))
+        end)"#,
+    );
+    c.frame(vec![
+        vec![me()],
+        vec![created(
+            NPC,
+            EntityKind::Unit,
+            &[(FIELD_UNIT_HEALTH, 50), (FIELD_UNIT_MAXHEALTH, 50)],
+        )],
+    ]);
+    let world = c.app.world_mut();
+    let npc = world.resource::<crate::net::GuidIndex>().0[&NPC];
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(npc),
+        guid: Some(NPC),
+        ..Default::default()
+    };
+    c.frame(vec![]);
+    c.seen();
+    c.frame(vec![vec![port()]]);
+    assert_eq!(c.seen(), Vec::<String>::new());
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["PLAYER_LEAVING_WORLD:1"], "the target stands");
+    assert!(
+        !c.app
+            .world()
+            .resource::<crate::net::GuidIndex>()
+            .0
+            .contains_key(&NPC),
+        "and goes with the walk"
+    );
+}
+
 /// A worldport alone in its frame: nothing fires in it, the leave fires once in the next.
 #[test]
 fn a_worldport_alone_leaves_in_the_next_frame() {

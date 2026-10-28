@@ -1641,7 +1641,6 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<MeetingStone>()
             .insert_resource(NetCommands(tx))
-            .add_message::<crate::net::WorldportMessage>()
             .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world);
         crate::ui_script::add_worldport_sweep(&mut app);
         app.world_mut()
@@ -1674,14 +1673,17 @@ mod tests {
         app.world().resource::<MeetingStone>().text
     }
 
-    fn stone_port(needs_ack: bool) -> crate::net::WorldportMessage {
-        crate::net::WorldportMessage {
-            map_id: 1,
-            position: [0.0; 3],
-            orientation: 0.0,
-            needs_ack,
-            transport_entry: None,
+    /// A frame with a load posted when `needs_ack`, which the objects' leg (absent here) takes.
+    fn stone_port(app: &mut App, needs_ack: bool) {
+        if needs_ack {
+            app.world_mut()
+                .resource_mut::<crate::net::PendingWorldports>()
+                .post_for_test();
         }
+        app.update();
+        app.world_mut()
+            .resource_mut::<crate::net::PendingWorldports>()
+            .take_for_test();
     }
 
     /// Each world-enter cascade (`0x490a14` → `0x4c9f40`) resets the text to the bare `UNKNOWN`
@@ -1724,12 +1726,10 @@ mod tests {
         enter(&mut app);
         answered(&mut app, 1519);
 
-        app.world_mut().write_message(stone_port(false));
-        app.update();
+        stone_port(&mut app, false);
         assert_eq!(stone_text(&app), StoneText::Built, "an arrival keeps it");
 
-        app.world_mut().write_message(stone_port(true));
-        app.update();
+        stone_port(&mut app, true);
         assert_eq!(
             stone_text(&app),
             StoneText::None,
