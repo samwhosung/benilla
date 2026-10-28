@@ -109,16 +109,7 @@ impl Plugin for UiTradeSkillPlugin {
             .init_resource::<TradeSkillItemWaits>()
             .init_resource::<TradeSkillRepeatCarry>()
             .add_systems(Startup, load_spell_focus.after(AssetSet::Open))
-            .add_systems(
-                Update,
-                (
-                    // Opens before the feed, so an opener shows the window this frame.
-                    open_trade_skill
-                        .before(feed_trade_skill)
-                        .in_set(crate::ui_script::UiFeed),
-                    feed_trade_skill.in_set(UnitFeed),
-                ),
-            );
+            .add_systems(Update, feed_trade_skill.in_set(UnitFeed));
     }
 }
 
@@ -149,57 +140,6 @@ fn load_spell_focus(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
             "ui_tradeskill: SpellFocusObject.dbc failed to load — the Requires line drops the \
              focus name: {e:#}"
         ),
-    }
-}
-
-/// Toggle the book for each intercepted opener (`0x4fc910`, `0x4f6000`): its line is the opener's
-/// `SkillLineAbility` row (3908 Tailoring is line 197), the client's `SkillLineRecIndex_Find`
-/// (`0x6de040`). The open line's opener closes it (`0x4fc918`), the open craft type's its window
-/// (`0x4f6006`); any other opens.
-fn open_trade_skill(
-    mut opens: ResMut<TradeSkillOpens>,
-    mut open: ResMut<TradeSkillOpen>,
-    mut craft_open: ResMut<crate::ui_craft::CraftOpen>,
-    skill_lines: Option<Res<SkillLines>>,
-    spells: Option<Res<Spells>>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-) {
-    let (race, class) = self_store.single().map_or((0, 0), |s| s.race_class());
-    for spell_id in opens.0.drain(..) {
-        let Some(skill_lines) = skill_lines.as_deref() else {
-            warn!("ui_tradeskill: opener {spell_id} before SkillLineAbility loaded — dropped");
-            continue;
-        };
-        let Some(line) = skill_lines.catalog.spell_to_line(spell_id, race, class) else {
-            warn!("ui_tradeskill: opener {spell_id} has no SkillLineAbility row — dropped");
-            continue;
-        };
-        // `0x6e4bd7`: a nonzero `EffectMiscValue[0]` opens the CraftFrame (Enchanting 3, Beast
-        // Training 1), zero the TradeSkillFrame. The value is the craft type the client keeps at
-        // `0xbdcfb8`, which the Craft window filters and sorts on.
-        let craft_type = spells
-            .as_deref()
-            .and_then(|s| s.catalog.get(spell_id))
-            .and_then(|d| u32::try_from(d.effect_misc_value[0]).ok())
-            .unwrap_or(0);
-        if craft_type != 0 {
-            if craft_open.line.is_some() && craft_open.craft_type == craft_type {
-                debug!("ui_tradeskill: opener {spell_id} closes the CraftFrame");
-                craft_open.line = None;
-            } else {
-                debug!(
-                    "ui_tradeskill: opener {spell_id} opens the CraftFrame (line {line}, craft type {craft_type})"
-                );
-                craft_open.line = Some(line);
-                craft_open.craft_type = craft_type;
-            }
-        } else if open.line == Some(line) {
-            debug!("ui_tradeskill: opener {spell_id} closes skill line {line}");
-            open.line = None;
-        } else {
-            debug!("ui_tradeskill: opener {spell_id} opens skill line {line}");
-            open.line = Some(line);
-        }
     }
 }
 
@@ -600,28 +540,130 @@ fn on_pet_spells(In(ev): In<SessionEvent>, mut lists: ListTriggers) {
     }
 }
 
-/// Build the book: the known recipes of the open line, banded against the current rank.
+/// What the book's build reads (`0x4fca20`): the player's known recipes, the catalogs, the
+/// player object, the bags, the item cache and the cooldowns.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TradeSkillReads<'w, 's> {
+    actions: Res<'w, PlayerActions>,
+    spells: Option<Res<'w, Spells>>,
+    skill_lines: Option<Res<'w, SkillLines>>,
+    focus: Option<Res<'w, SpellFocus>>,
+    icons: Option<Res<'w, ItemDisplays>>,
+    subclasses: Option<Res<'w, crate::ui_items::ItemSubClasses>>,
+    self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    objects: Objects<'w, 's>,
+    items: Res<'w, Items>,
+    commands: Res<'w, NetCommands>,
+    cooldowns: Res<'w, crate::spell::Cooldowns>,
+}
+
+impl TradeSkillReads<'_, '_> {
+    /// The book of `line`: its known recipes, banded against the current rank, their products'
+    /// records looked up as `asks` says, the cooldowns mapped through `clock`; `None` while a
+    /// catalog or our player is missing.
+    pub(crate) fn state(
+        &self,
+        line: u32,
+        asks: bool,
+        clock: &crate::ui_script::UiClock,
+    ) -> Option<TradeSkillState> {
+        let ask = Ask::at(asks, &self.commands);
+        let spells = self.spells.as_deref()?;
+        let skill_lines = self.skill_lines.as_deref()?;
+        let store = self.self_store.single().ok()?;
+        let rank = skill_value(store, line);
+        let (line_rank, max_rank) = skill_rank(store, line);
+        let (race, class) = store.race_class();
+        let line_name = skill_lines
+            .catalog
+            .line(line)
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| format!("Skill {line}"));
+        let now = (clock.anchor, clock.ui_now);
+        // The line's list in learn order (`0x5e9d72`), which the build walks (`0x4fcbb7`).
+        let recipes: Vec<TradeSkillRecipe> = self
+            .actions
+            .profession_order
+            .iter()
+            .filter(|&&s| {
+                spells
+                    .catalog
+                    .get(s)
+                    .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
+                    && skill_lines.catalog.spell_to_line(s, race, class) == Some(line)
+            })
+            .filter_map(|&s| {
+                resolve_recipe(
+                    s,
+                    rank,
+                    spells,
+                    skill_lines,
+                    self.focus.as_deref(),
+                    self.icons.as_deref(),
+                    self.subclasses.as_deref(),
+                    store,
+                    &self.objects,
+                    &self.items,
+                    ask,
+                    &self.cooldowns,
+                    now,
+                )
+            })
+            .collect();
+        // No sort here: the engine orders the book (`0x4fd180`).
+        Some(TradeSkillState {
+            line,
+            line_name,
+            rank: line_rank,
+            max_rank,
+            recipes,
+        })
+    }
+
+    /// The opener's line (`SkillLineRecIndex_Find` `0x6de040` at `0x6e4bf3`) and its craft type,
+    /// `EffectMiscValue[0]` (`0x6e4bd7`), which routes a nonzero type to the Craft window
+    /// (Enchanting 3, Beast Training 1) and zero to this one (3908 Tailoring is line 197).
+    fn opener(&self, spell_id: u32) -> Option<(u32, u32)> {
+        let (race, class) = self.self_store.single().map_or((0, 0), |s| s.race_class());
+        let Some(skill_lines) = self.skill_lines.as_deref() else {
+            warn!("ui_tradeskill: opener {spell_id} before SkillLineAbility loaded — dropped");
+            return None;
+        };
+        let Some(line) = skill_lines.catalog.spell_to_line(spell_id, race, class) else {
+            warn!("ui_tradeskill: opener {spell_id} has no SkillLineAbility row — dropped");
+            return None;
+        };
+        let craft_type = self
+            .spells
+            .as_deref()
+            .and_then(|s| s.catalog.get(spell_id))
+            .and_then(|d| u32::try_from(d.effect_misc_value[0]).ok())
+            .unwrap_or(0);
+        // The profession window takes only a line with a `SkillLine` row (`0x6e4c03`-`0x6e4c1a`,
+        // again at `0x4fc939`-`0x4fc94a`).
+        if craft_type == 0 && skill_lines.catalog.line(line).is_none() {
+            warn!("ui_tradeskill: opener {spell_id}'s line {line} has no SkillLine row — dropped");
+            return None;
+        }
+        Some((line, craft_type))
+    }
+}
+
+/// Keep the VM's book as the engine holds it, silently: a `/reload`'s new VM takes the open line's
+/// list with no event, as its world-enter init left it, and the getters read the state at their
+/// call. The open and the closes signal in their calls ([`TradeSkillSteps`]); the rebuilds signal
+/// at their packets.
 fn feed_trade_skill(
     mut vm: crate::script_calls::VmWith<(
-        Res<'static, crate::spell::Cooldowns>,
+        TradeSkillReads<'static, 'static>,
         Res<'static, TradeSkillOpen>,
         ResMut<'static, TradeSkillItemWaits>,
     )>,
-    actions: Res<PlayerActions>,
-    spells: Option<Res<Spells>>,
-    skill_lines: Option<Res<SkillLines>>,
-    focus: Option<Res<SpellFocus>>,
-    icons: Option<Res<ItemDisplays>>,
-    subclasses: Option<Res<crate::ui_items::ItemSubClasses>>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    objects: Objects,
-    items: Res<Items>,
-    commands: Res<NetCommands>,
     clock: Res<crate::ui_script::UiClock>,
     mut memo: Local<crate::ui_script::VmMemo<TradeMemo>>,
     mut engine: Local<TradeEngine>,
 ) {
-    vm.feed(|script, (cooldowns, open, mut waits), fires| {
+    vm.feed(|script, (reads, open, mut waits), fires| {
         let Some(script) = script else {
             return;
         };
@@ -629,79 +671,19 @@ fn feed_trade_skill(
         // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
         // window's show; the rebuilds between read, as the getters' lookups stand for the stock
         // frame's calls (`0x4fdba8`), which the asks below make.
-        let ask = Ask::at(memo.state.is_none() || open.is_changed(), &commands);
-        let fresh = (|| -> Option<TradeSkillState> {
-            let line = open.line?;
-            let spells = spells.as_deref()?;
-            let skill_lines = skill_lines.as_deref()?;
-            let store = self_store.single().ok()?;
-            let rank = skill_value(store, line);
-            let (line_rank, max_rank) = skill_rank(store, line);
-            let (race, class) = store.race_class();
-            let line_name = skill_lines
-                .catalog
-                .line(line)
-                .map(|l| l.name.clone())
-                .unwrap_or_else(|| format!("Skill {line}"));
-            let now = (clock.anchor, clock.ui_now);
-            // The line's list in learn order (`0x5e9d72`), which the build walks (`0x4fcbb7`).
-            let recipes: Vec<TradeSkillRecipe> = actions
-                .profession_order
-                .iter()
-                .filter(|&&s| {
-                    spells
-                        .catalog
-                        .get(s)
-                        .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
-                        && skill_lines.catalog.spell_to_line(s, race, class) == Some(line)
-                })
-                .filter_map(|&s| {
-                    resolve_recipe(
-                        s,
-                        rank,
-                        spells,
-                        skill_lines,
-                        focus.as_deref(),
-                        icons.as_deref(),
-                        subclasses.as_deref(),
-                        store,
-                        &objects,
-                        &items,
-                        ask,
-                        &cooldowns,
-                        now,
-                    )
-                })
-                .collect();
-            // No sort here: the engine orders the book (`0x4fd180`).
-            Some(TradeSkillState {
-                line,
-                line_name,
-                rank: line_rank,
-                max_rank,
-                recipes,
-            })
-        })();
-
+        let fresh = open
+            .line
+            .and_then(|line| reads.state(line, memo.state.is_none() || open.is_changed(), &clock));
         // The line stays open while a frame cannot resolve its book (a worldport's purge of our
         // own player): only a close ends it (`0x4fc870`, `0x4fc920`).
         let fresh = match fresh {
             None if open.line.is_some() => memo.state.clone(),
             f => f,
         };
-        // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
-        // (`0x4fc884`).
-        let closed_in_place = !script.trade_skill_open();
         // The getters' item callbacks, kept inside their calls ([`ask_item_record`]); each record
         // that landed rebuilds (`0x4fdc30` → `0x4fdc3c`), and a refusal runs it with status 0,
         // which does nothing (`0x4fdc38`).
-        let arrivals = landed(&mut waits.0, &items);
-        // An open is the open line's change, which a `/reload` keeps (`[0xbde040]`): the new VM
-        // takes the list with no event, as its world-enter init left it.
-        let opened = fresh.as_ref().is_some_and(|f| engine.shown != Some(f.line));
-        if fresh.is_some() || open.line.is_none() {
-            engine.shown = fresh.as_ref().map(|f| f.line);
-        }
+        let arrivals = landed(&mut waits.0, &reads.items);
         // Every push is silent: the rebuilds signal, and the getters read the state at their call.
         if fresh != memo.state {
             script.set_trade_skill(fresh.clone());
@@ -712,25 +694,6 @@ fn feed_trade_skill(
                     std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
                 }));
             }
-        }
-        match (&memo.state, &fresh) {
-            (_, Some(f)) if opened => {
-                debug!(
-                    "ui_tradeskill: window opens — {} recipe(s), first group {:?}",
-                    f.recipes.len(),
-                    f.recipes.first().and_then(|r| r.group.clone())
-                );
-                // The open's build signals the update when nothing is pending (`0x4fc985` →
-                // `0x4fd164`), then the show while the list holds a row (`0x4fc98a`-`0x4fc999`).
-                if script.trade_skill_open_build() {
-                    fires.post("TRADE_SKILL_UPDATE", vec![]);
-                }
-                if script.trade_skill_full_count() > 0 {
-                    fires.post("TRADE_SKILL_SHOW", vec![]);
-                }
-            }
-            (Some(_), None) if !closed_in_place => fires.post("TRADE_SKILL_CLOSE", vec![]),
-            _ => {}
         }
         // Each landed record's rebuild signals the update; the packets' fire on their lane.
         if fresh.is_some() {
@@ -745,7 +708,7 @@ fn feed_trade_skill(
         engine
             .build_waits
             .extend(script.take_trade_skill_build_waits());
-        let built = landed(&mut engine.build_waits, &items);
+        let built = landed(&mut engine.build_waits, &reads.items);
         for _ in 0..built {
             if script.trade_skill_record_landed()
                 && script.rebuild_trade_skill_with(true, &mut |_| {})
@@ -767,9 +730,6 @@ struct TradeMemo {
 /// What [`feed_trade_skill`] keeps across VMs, as the engine does across a `/reload`.
 #[derive(Default)]
 struct TradeEngine {
-    /// The line whose open it signalled; a frame that finds no line open clears it, so the next
-    /// session's first open signals again.
-    shown: Option<u32>,
     /// The product records the builds' callbacks wait on, one per miss (`0x4fc8e0`).
     build_waits: Vec<u32>,
 }
@@ -876,14 +836,22 @@ fn repeat_at_go(
     });
 }
 
-/// The profession window's verbs inside their calls ([`crate::script_calls::ScriptCallHost`]).
+/// The profession windows' verbs and opens inside their calls
+/// ([`crate::script_calls::ScriptCallHost`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct TradeSkillSteps<'w> {
-    /// Absent in a world with no profession window, which drops the close.
+pub(crate) struct TradeSkillSteps<'w, 's> {
+    /// Absent in a world with no profession window, which drops the close and the opens.
     open: Option<ResMut<'w, TradeSkillOpen>>,
+    /// The openers the call's casts intercepted (`0x6e4bd7`).
+    opens: Option<ResMut<'w, TradeSkillOpens>>,
+    craft_open: Option<ResMut<'w, crate::ui_craft::CraftOpen>>,
+    reads: Option<TradeSkillReads<'w, 's>>,
+    craft: Option<crate::ui_craft::CraftReads<'w, 's>>,
+    /// The tick's clock pair, as the host reads it.
+    clock: Option<Res<'w, crate::ui_script::HostClock>>,
 }
 
-impl TradeSkillSteps<'_> {
+impl TradeSkillSteps<'_, '_> {
     /// `CloseTradeSkill()` (`0x4fd7f0` → `0x4fc870`): the open marker `[0xbde040]` zeroed, no
     /// packet.
     pub(crate) fn close(&mut self) {
@@ -891,6 +859,96 @@ impl TradeSkillSteps<'_> {
             debug!("ui_tradeskill: client-side close (no packet)");
             open.line = None;
         }
+    }
+
+    /// Each opener a cast of this call intercepted, toggled as the cast does (`0x6e4c22` →
+    /// `ToggleTradeSkill 0x4fc910`, `0x6e4c34` → `ToggleCraftWindow 0x4f6000`): its window opened
+    /// and built, or closed, and its events raised for the call's next signal point. Whether any
+    /// was raised.
+    pub(crate) fn toggle_opens(&mut self, script: &mut UiScript) -> bool {
+        let Some(spells) = self.opens.as_deref_mut().map(|o| std::mem::take(&mut o.0)) else {
+            return false;
+        };
+        let mut raised = false;
+        for spell_id in spells {
+            let Some((line, craft_type)) = self.reads.as_ref().and_then(|r| r.opener(spell_id))
+            else {
+                continue;
+            };
+            raised |= match craft_type {
+                0 => self.toggle_trade_skill(script, line),
+                _ => self.toggle_craft(script, line, craft_type),
+            };
+        }
+        raised
+    }
+
+    /// `0x4fc910`: the pending requests cancelled (`0x4fc913`); the open line closes with
+    /// `TRADE_SKILL_CLOSE` (`0x4fc918`-`0x4fc930`); any other is stored and built with flag 1
+    /// (`0x4fc985`), its products looked up, whose build signals `TRADE_SKILL_UPDATE` when nothing
+    /// is pending, then `TRADE_SKILL_SHOW` while the list holds a row (`0x4fc98a`-`0x4fc99f`).
+    fn toggle_trade_skill(&mut self, script: &mut UiScript, line: u32) -> bool {
+        let (Some(open), Some(reads)) = (self.open.as_deref_mut(), self.reads.as_ref()) else {
+            return false;
+        };
+        script.trade_skill_cancel_waits();
+        if open.line == Some(line) {
+            debug!("ui_tradeskill: the opener closes skill line {line}");
+            open.line = None;
+            script.set_trade_skill(None);
+            script.fire_event("TRADE_SKILL_CLOSE", vec![]);
+            return true;
+        }
+        debug!("ui_tradeskill: the opener opens skill line {line}");
+        open.line = Some(line);
+        let clock = self.clock.as_deref().map(|c| &c.0);
+        let fresh = match clock {
+            Some(clock) => reads.state(line, true, clock),
+            None => reads.state(line, true, &crate::ui_script::UiClock::default()),
+        };
+        let (update, show) = script.open_trade_skill(fresh);
+        if update {
+            script.fire_event("TRADE_SKILL_UPDATE", vec![]);
+        }
+        if show {
+            script.fire_event("TRADE_SKILL_SHOW", vec![]);
+        }
+        update || show
+    }
+
+    /// `0x4f6000`: the open type closes with `CRAFT_CLOSE` (`0x4f6006`-`0x4f6017`); any other is
+    /// stored, the selection and the folds reset and the list built (`0x4f601c`-`0x4f6036`),
+    /// whose tail signals `CRAFT_UPDATE` (`0x4f661a`), then `CRAFT_SHOW` (`0x4f6040`).
+    pub(crate) fn toggle_craft(
+        &mut self,
+        script: &mut UiScript,
+        line: u32,
+        craft_type: u32,
+    ) -> bool {
+        let Some(open) = self.craft_open.as_deref_mut() else {
+            return false;
+        };
+        if open.line.is_some() && open.craft_type == craft_type {
+            debug!("ui_tradeskill: the opener closes the CraftFrame");
+            open.line = None;
+            script.set_craft(None);
+            script.fire_event("CRAFT_CLOSE", vec![]);
+            return true;
+        }
+        debug!("ui_tradeskill: the opener opens the CraftFrame (line {line}, type {craft_type})");
+        (open.line, open.craft_type) = (Some(line), craft_type);
+        // With no list to build (`0x4f60e3`, `0x4f6109`), the build leaves before its signal.
+        if let Some(fresh) = self
+            .craft
+            .as_ref()
+            .and_then(|c| c.state(script, line, craft_type))
+        {
+            script.set_craft(Some(fresh));
+            script.craft_opened();
+            script.fire_event("CRAFT_UPDATE", vec![]);
+        }
+        script.fire_event("CRAFT_SHOW", vec![]);
+        true
     }
 }
 
@@ -1206,9 +1264,21 @@ mod tests {
         assert_eq!(read(39, 40), (0, false), "the bank is outside mask 0");
     }
 
+    /// The book of `line` toggled as an opener's cast toggles it (`0x4fc910`), its signals fired.
+    fn toggle_line(app: &mut App, line: u32) {
+        use bevy::ecs::system::RunSystemOnce;
+        app.world_mut()
+            .run_system_once(
+                move |mut steps: TradeSkillSteps, mut script: NonSendMut<UiScript>| {
+                    steps.toggle_trade_skill(&mut script, line);
+                },
+            )
+            .expect("the toggle runs");
+    }
+
     /// `CloseTradeSkill` signals `TRADE_SKILL_CLOSE` in the verb (`0x4fc884`), so the feed that
-    /// finds the book closed a frame later signals no second close; a close the VM did not make
-    /// still signals from the feed.
+    /// finds the book closed a frame later signals no second close; the opener's toggle signals
+    /// its own (`0x4fc930`).
     #[test]
     fn a_verbs_close_is_signalled_once() {
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -1244,22 +1314,23 @@ mod tests {
                 .unwrap()
         };
 
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        toggle_line(&mut app, 197);
         app.update();
         crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
             vm.expect("a VM").run("CloseTradeSkill()")
         })
         .unwrap();
         assert_eq!(closes(&app), 1, "the verb's own signal");
+        // The host's half, which this harness has none of.
         app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
         app.update();
         assert_eq!(closes(&app), 1, "no second signal from the feed");
 
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        toggle_line(&mut app, 197);
         app.update();
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
+        toggle_line(&mut app, 197);
         app.update();
-        assert_eq!(closes(&app), 2, "a close from outside the VM still signals");
+        assert_eq!(closes(&app), 2, "the opener's close signals in its toggle");
     }
 
     /// The open runs the build with flag 1 (`0x4fc985` → `0x4fca20`), whose tail signals
@@ -1325,7 +1396,7 @@ mod tests {
                 .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
                 .unwrap()
         };
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        toggle_line(&mut app, 197);
         assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE", "TRADE_SKILL_SHOW"]);
         let d = mooncloth();
         app.world_mut()
@@ -1472,7 +1543,7 @@ mod tests {
                 .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
                 .unwrap()
         };
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        toggle_line(&mut app, 197);
         assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
         assert!(heard(&mut app).is_empty());
         app.world_mut().resource_mut::<Items>().insert_template(
@@ -1653,7 +1724,7 @@ mod tests {
                 .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
                 .unwrap()
         };
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        toggle_line(&mut app, 197);
         assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE", "TRADE_SKILL_SHOW"]);
         let dispatch =
             |app: &mut App, events| crate::net::handlers::dispatch(app.world_mut(), events);
@@ -2149,7 +2220,8 @@ mod tests {
             }],
         );
 
-        assert_eq!(app.world().resource::<TradeSkillOpen>().line, None);
+        // The host's half, which this harness has none of.
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
     }
 
     /// The Bolt of Silk Cloth book behind the Tailoring opener 3908, its product's record in
@@ -2202,13 +2274,32 @@ mod tests {
                 catalog: benilla_formats::SkillLineCatalog::from_abilities([
                     (3839, sla),
                     (3908, sla),
-                ]),
+                ])
+                .with_line_names([(197, "Tailoring")]),
             });
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
         app.insert_non_send_resource(listening());
-        app.add_systems(Update, (open_trade_skill, feed_trade_skill).chain());
+        app.add_systems(Update, feed_trade_skill);
         app
+    }
+
+    /// The Tailoring opener cast, toggling the book as the cast does ([`TradeSkillSteps`]), then
+    /// one frame, and what the VM heard in both.
+    fn cast_opener(app: &mut App) -> Vec<String> {
+        use bevy::ecs::system::RunSystemOnce;
+        app.world_mut()
+            .resource_mut::<TradeSkillOpens>()
+            .0
+            .push(3908);
+        app.world_mut()
+            .run_system_once(
+                |mut steps: TradeSkillSteps, mut script: NonSendMut<UiScript>| {
+                    steps.toggle_opens(&mut script);
+                },
+            )
+            .expect("the toggle runs");
+        heard(app)
     }
 
     /// A VM that records the book's three events.
@@ -2250,11 +2341,7 @@ mod tests {
     #[test]
     fn a_reload_keeps_the_book_open_unshown_until_a_rebuild() {
         let mut app = silk_book();
-        app.world_mut()
-            .resource_mut::<TradeSkillOpens>()
-            .0
-            .push(3908);
-        assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
+        assert_eq!(cast_opener(&mut app), ["TRADE_SKILL_SHOW"]);
         reload(&mut app);
         assert!(heard(&mut app).is_empty(), "no update, no show");
         let script = app.world().non_send_resource::<UiScript>();
@@ -2262,7 +2349,7 @@ mod tests {
             script
                 .eval::<(i64, String)>("return GetNumTradeSkills(), (GetTradeSkillLine())")
                 .unwrap(),
-            (0, "Skill 197".into())
+            (0, "Tailoring".into())
         );
         app.world_mut().resource_mut::<Items>().insert_template(
             4305,
@@ -2284,16 +2371,11 @@ mod tests {
     #[test]
     fn an_opener_of_the_open_line_closes_the_book() {
         let mut app = silk_book();
-        let open = |app: &mut App| {
-            app.world_mut()
-                .resource_mut::<TradeSkillOpens>()
-                .0
-                .push(3908);
-            heard(app)
-        };
+        let open = cast_opener;
         assert_eq!(open(&mut app), ["TRADE_SKILL_SHOW"]);
         assert_eq!(open(&mut app), ["TRADE_SKILL_CLOSE"]);
-        assert_eq!(app.world().resource::<TradeSkillOpen>().line, None);
+        // The host's half, which this harness has none of.
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
         assert_eq!(open(&mut app), ["TRADE_SKILL_SHOW"]);
         reload(&mut app);
         assert!(heard(&mut app).is_empty());
@@ -2307,11 +2389,7 @@ mod tests {
     #[test]
     fn a_frame_without_our_player_keeps_the_book_open() {
         let mut app = silk_book();
-        app.world_mut()
-            .resource_mut::<TradeSkillOpens>()
-            .0
-            .push(3908);
-        assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
+        assert_eq!(cast_opener(&mut app), ["TRADE_SKILL_SHOW"]);
         let me = app
             .world_mut()
             .query_filtered::<Entity, With<SelfPlayer>>()

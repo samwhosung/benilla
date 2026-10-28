@@ -120,10 +120,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "spends the profession getters' record waits as their records land and rebuilds the \
          list, where the reference runs each callback (`OnTradeSkillItemRecord` `0x4fdc30`) in \
          `ItemCacheReceive` `0x55bdb0`, inside the answer's handler (`0x555140`, `0x555160`)"),
-    ("::ui_tradeskill::open_trade_skill", &["ui_craft::CraftOpen", "ui_tradeskill::TradeSkillOpen",
-        "ui_tradeskill::TradeSkillOpens"],
-        "opens the profession windows a cast intercepted (`0x6e4bd7`), which the reference opens \
-         inside the cast (`ToggleTradeSkill` `0x4fc910`, `ToggleCraftWindow` `0x4f6000`)"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

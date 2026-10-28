@@ -262,6 +262,21 @@ impl super::UiScript {
         complete
     }
 
+    /// `ToggleTradeSkill`'s open of a line (`0x4fc952`-`0x4fc999`): the window marked open over
+    /// `state`, the line's list as the build reads it (`None` keeps what the VM holds, as a build
+    /// that finds no player makes nothing, `0x4fcb1b`), a new line resetting the filters, folds
+    /// and selection ([`Self::set_trade_skill`]), then the build with flag 1. Whether its
+    /// `TRADE_SKILL_UPDATE` follows (nothing pending, `0x4fd164`), and whether
+    /// `TRADE_SKILL_SHOW` does (a row in the list, `0x4fc98a`).
+    pub fn open_trade_skill(&mut self, state: Option<TradeSkillState>) -> (bool, bool) {
+        match state {
+            Some(s) => self.set_trade_skill(Some(s)),
+            None => self.model_mut().trade_skill_open = true,
+        }
+        let update = self.trade_skill_open_build();
+        (update, self.trade_skill_full_count() > 0)
+    }
+
     /// The open's build (`0x4fc985` → `0x4fca20(1)`) over the list the push made: its products'
     /// records in flight counted and waited on as any build's. Whether its update follows.
     pub fn trade_skill_open_build(&mut self) -> bool {
