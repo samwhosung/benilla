@@ -311,3 +311,90 @@ fn a_letters_missing_author_shows_at_the_names_answer() {
     assert_eq!(names(&rx), 1);
     assert!(frame(&mut app, vec![name("")]).is_empty());
 }
+
+/// A TEXT object read before its template lands keeps the reader's cell with no page to read
+/// (`0x5f5900` reads 0, `0x4e341d`); the template's answer runs its handler's record callback,
+/// which opens the reader again (`0x5f59d0` → `0x5f5a17`), so the book begins and shows at the
+/// answer's place.
+#[test]
+fn a_text_objects_book_read_before_its_template_opens_when_it_lands() {
+    const PLAQUE: u64 = 0xF110_0000_4321_0001;
+    let mut app = client();
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ui_item_text::PageTexts>()
+        .insert(358, "Page one.".into(), 0);
+    crate::items::test_spawn_object(
+        world,
+        PLAQUE,
+        crate::go_templates::test_typed_fields(4321, 9),
+    );
+    spy(&mut app, &[], false);
+    crate::ui_item_text::read_now(app.world_mut(), PLAQUE);
+    assert_eq!(reader(&app), Some(PLAQUE), "the cell stays with no page");
+    assert!(frame(&mut app, vec![]).is_empty());
+    let mut data = [0i32; 24];
+    data[0] = 358;
+    let template = SessionEvent::GameObjectInfo {
+        entry: 4321,
+        type_id: 9,
+        display_id: 0,
+        name: "Plaque".into(),
+        data,
+    };
+    let seen = frame(&mut app, vec![fall(5), template, fall(5)]);
+    assert_eq!(
+        seen,
+        [
+            FELL,
+            "ITEM_TEXT_BEGIN",
+            "ITEM_TEXT_READY:Page one./nil/1",
+            FELL
+        ]
+    );
+}
+
+/// The reader's answers read the record their packet filed: each kind's cache handler runs ahead
+/// of the reader's, whatever the plugin order, as the reference's receive files the record before
+/// its callbacks run (`0x55bdb0`, `0x55f426`).
+#[test]
+fn the_caches_file_each_answer_ahead_of_the_readers_handler() {
+    use benilla_protocol::SessionEventKind as K;
+    let app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    let table = app
+        .world()
+        .resource::<crate::net::handlers::NetHandlers>()
+        .census();
+    for (kind, filer, reader) in [
+        (
+            K::MailItemText,
+            "ui_mail::net::on_mail_item_text",
+            "ui_item_text::net::on_item_text",
+        ),
+        (
+            K::ItemTemplate,
+            "net::objects::on_item",
+            "ui_item_text::net::on_item_template",
+        ),
+        (
+            K::GameObjectInfo,
+            "net::objects::on_gameobject_info",
+            "ui_item_text::net::on_object_template",
+        ),
+        (
+            K::PlayerName,
+            "names::net::on_player_name",
+            "ui_item_text::net::on_player_name",
+        ),
+    ] {
+        let order: Vec<&str> = table[&kind]
+            .iter()
+            .map(|name| name.trim_start_matches("benilla_app::"))
+            .collect();
+        let at = |name: &str| order.iter().position(|n| *n == name);
+        assert!(
+            matches!((at(filer), at(reader)), (Some(f), Some(r)) if f < r),
+            "{kind:?}: {order:?}"
+        );
+    }
+}

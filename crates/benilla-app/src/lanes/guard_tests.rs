@@ -407,7 +407,11 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The character's language skills and word pools, which a page's show rewrites it by
-    // (`0x4e3856`); the skill and word loads write them.
+    // (`0x4e3856`). Not read-only in substance: `feed_language_skills` recomputes the skills
+    // every frame, after the dispatch, from the skill lines the handlers write, where the
+    // reference reads the skill live at the show (`0x4e3837` → `GetIndexedSpellSkill`). A show
+    // inside a packet reads them as the last frame left them: a frame-final read the flip must
+    // make live (#2168), which no list here measures, a handler's read of a feed's output.
     "::ui_chat::language::ChatLanguages",
     // The usable stationery list, whose first paper the list parse gives a row with none
     // (`0x4ad565`); the paper callback's handler writes it, through its own `ResMut`.

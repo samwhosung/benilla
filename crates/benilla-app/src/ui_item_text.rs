@@ -167,6 +167,10 @@ enum Wait {
     /// An item's template, which its page id is read off with the callback (`0x4e33e5` →
     /// `CGItem_C::GetPageTextId 0x5d9e10`).
     Template(u32),
+    /// A TEXT object's template, still in flight from its create: its pageID column reads 0
+    /// (`0x5f5900`), and its handler's record callback opens the reader again when the record
+    /// lands for the object in the cell (`TextHandlerOnRecordArrived 0x5f59d0` → `0x5f5a17`).
+    ObjectTemplate(u32),
 }
 
 #[derive(Resource, Default)]
@@ -441,11 +445,19 @@ fn open_tail(world: &mut World, place: Place) {
     }
 }
 
-/// The record `0x4e3280` waited on landed (an answer's packet, `place`): the reader that waits on
-/// it opens again. Deviation: a reader the latch holds shows its page again instead, where the
-/// reference's open again re-registers it, whose `0x4930d0` closes the reader itself first
-/// (`0x49310a` → `0x493310` → `0x4e32e0(0, 0)`) and leaves the show nothing to show
-/// (`0x4e35de`): a turn to a page not yet cached, or a creator's name landing, would close the book.
+/// What the open or the show waited on landed (an answer's packet, `place`): its callback
+/// (`0x4e3280`, `0x4e32b0`, `0x5f59d0`) opens the reader again (`0x4e32e0(guid, 1)`), as the
+/// reference does; an open still waiting finishes there ([`open_tail`]).
+///
+/// Deviation: for a reader the latch already holds, the reference's open again re-registers it
+/// (`0x4e349a` → `0x4930d0` → `0x49310a` → `0x493310` → `0x49338e` `0x4e32e0(0, 0)`), which resets
+/// the reader and signals `ITEM_TEXT_CLOSED` (`0x4e339d`); the `ITEM_TEXT_BEGIN` after it never
+/// shows the frame again, and the show finds the cell cleared, so `ITEM_TEXT_READY` never fires
+/// (`0x4e35de`). In 1.12.1 a turn to a page not yet cached closes the book, which stays closed, and
+/// a letter whose author's name is not cached shows without its From line, then closes when the
+/// name lands. `0x4930d0`'s same-target test (`0x4930eb`-`0x4930f3`) only skips a unit's greeting,
+/// so this is a bug. benilla keeps the book open and shows it again ([`show_at`]): the page or the
+/// From line appears when it lands.
 fn answered(world: &mut World, wait: Wait, place: Place) {
     let Some(sess) = world
         .resource_mut::<ItemTextOpen>()
@@ -494,7 +506,7 @@ fn show(
 /// (any type, `0x4e33c3`), which gone clears the cell and ends the open (`0x4e33d0`); its first
 /// page (`vtbl+0x74`), an item's off its template, which in flight is waited on; then the record
 /// the session starts at, a page chain's shown page (`0x4e345c`) or a letter's body, which not at
-/// hand is waited on. A page chain with no page is dropped (`0x4e341d`). With the record at hand,
+/// hand is waited on. A page chain with no page keeps its cell and stops (`0x4e341d`). With the record at hand,
 /// the session is marked latched for the register that follows; its object and serial.
 fn look_up_text(mut open: ResMut<ItemTextOpen>, reads: ItemTextShow) -> Option<(u64, u64)> {
     let sess = open.pending.as_mut()?;
@@ -508,8 +520,8 @@ fn look_up_text(mut open: ResMut<ItemTextOpen>, reads: ItemTextShow) -> Option<(
             open.pending = None;
             return None;
         }
-        Head::Waits(entry) => {
-            sess.awaiting = Some(Wait::Template(entry));
+        Head::Waits(wait) => {
+            sess.awaiting = Some(wait);
             return None;
         }
         Head::Page(head) => head,
@@ -517,8 +529,7 @@ fn look_up_text(mut open: ResMut<ItemTextOpen>, reads: ItemTextShow) -> Option<(
     let record = match &mut sess.source {
         ReadSource::Pages { list, page } => {
             if head == 0 {
-                debug!("item text: {object:#x} has no page to read — closing");
-                open.pending = None;
+                debug!("item text: {object:#x} has no page to read");
                 return None;
             }
             store_entry(list, 0, head);
@@ -715,6 +726,7 @@ mod net {
             )
             .net_handler(SessionEventKind::MailItemText, on_item_text)
             .net_handler(SessionEventKind::ItemTemplate, on_item_template)
+            .net_handler(SessionEventKind::GameObjectInfo, on_object_template)
             .net_handler(SessionEventKind::PlayerName, on_player_name)
             .net_handler(SessionEventKind::ReadItemOk, on_read_item)
             .net_handler(SessionEventKind::ReadItemFailed, on_read_item);
@@ -761,6 +773,15 @@ mod net {
         } = ev
         {
             super::answered(world, Wait::Template(entry), Place::Packet);
+        }
+    }
+
+    /// `SMSG_GAMEOBJECT_QUERY_RESPONSE`, filed by the object handler ahead of this: a TEXT
+    /// object's handler opens the reader again when the record lands for the object in the cell
+    /// (`0x5f59d0` → `0x5f5a17`).
+    fn on_object_template(In(ev): In<SessionEvent>, world: &mut World) {
+        if let SessionEvent::GameObjectInfo { entry, .. } = ev {
+            super::answered(world, Wait::ObjectTemplate(entry), Place::Packet);
         }
     }
 
@@ -887,13 +908,17 @@ pub(crate) fn object_material(
     materials: Option<&PageMaterials>,
 ) -> Option<String> {
     let name = |id: u32| materials.and_then(|m| m.0.name(id)).map(str::to_string);
-    if benilla_protocol::guid::is_gameobject(guid) {
-        let fields = objects.object(guid)?;
+    let fields = objects.object(guid)?;
+    // The descriptor's type mask decides (`0x50227b`-`0x5022b5`, `0x4e3a38`-`0x4e3a73`): an item
+    // first, then a GameObject, anything else none.
+    if fields.is_item() {
+        let t = items.template(fields.object_entry()?, guid, Ask::Read)?;
+        return name(t.page_material);
+    }
+    if is_gameobject(fields) {
         return name(go_templates.of(fields)?.page_material(fields));
     }
-    let entry = objects.object(guid)?.object_entry()?;
-    let t = items.template(entry, guid, Ask::Read)?;
-    name(t.page_material)
+    None
 }
 
 /// The object's [`Readable`], item or GameObject alike, its records only read; `None` with no
@@ -919,6 +944,9 @@ fn readable(
     })
 }
 
+/// `GAMEOBJECT_TYPE_TEXT`, whose handler reopens the reader when its record lands (`0x5f59d0`).
+const GO_TYPE_TEXT: i32 = 9;
+
 /// Whether the object is a GameObject (type mask `0x20`), whose virtuals the reader calls; the
 /// object's own descriptor says, not its guid.
 fn is_gameobject(fields: &benilla_protocol::ObjectFields) -> bool {
@@ -929,8 +957,9 @@ fn is_gameobject(fields: &benilla_protocol::ObjectFields) -> bool {
 enum Head {
     /// No object (`0x4e33ce`).
     Gone,
-    /// An item whose template is in flight, asked with the callback (`0x5d9e10`).
-    Waits(u32),
+    /// An item whose template is in flight, asked with the callback (`0x5d9e10`), or a TEXT
+    /// object's, whose handler reopens at its arrival (`0x5f59d0`): no page yet.
+    Waits(Wait),
     /// The page id, 0 for none (a letter, a template with no page).
     Page(u32),
 }
@@ -970,19 +999,21 @@ impl ItemTextShow<'_, '_> {
         let Some(fields) = self.objects.object(guid) else {
             return Head::Gone;
         };
-        if is_gameobject(fields) {
-            return Head::Page(
-                self.go_templates
-                    .of(fields)
-                    .map_or(0, |go| go.page_id(fields)),
-            );
-        }
         let Some(entry) = fields.object_entry() else {
             return Head::Page(0);
         };
+        if is_gameobject(fields) {
+            return match self.go_templates.of(fields) {
+                Some(go) => Head::Page(go.page_id(fields)),
+                None if fields.gameobject_type_id() == GO_TYPE_TEXT => {
+                    Head::Waits(Wait::ObjectTemplate(entry))
+                }
+                None => Head::Page(0),
+            };
+        }
         match self.items.template(entry, guid, ask) {
             Some(t) => Head::Page(t.page_text),
-            None => Head::Waits(entry),
+            None => Head::Waits(Wait::Template(entry)),
         }
     }
 
