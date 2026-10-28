@@ -834,13 +834,12 @@ fn sync_tiles(
                 Without<TilePerspectiveCamera>,
             ),
         >,
-        // The meshes and the rig palettes, which the call host's press pick reads.
-        TileAssets<'static>,
-        TileRender<'static>,
     )>,
     mut commands: Commands,
     mut state: NonSendMut<TileState>,
     mut bridge: ResMut<UiModelTiles>,
+    mut assets: TileAssets,
+    mut render: TileRender,
     mut parts: Query<
         (&mut MeshTag, &mut Visibility),
         (
@@ -851,55 +850,54 @@ fn sync_tiles(
     >,
     mut emitters: Query<&mut ParticleEmitter>,
 ) {
-    vm.turn(
-        |script, (mut cams, mut pane_cams, mut roots, mut assets, mut render)| {
-            state.frame += 1;
-            let frame = state.frame;
-            let Some(script) = script else {
-                // No VM: the edge retired the tiles; composite nothing and leave no camera live.
-                bridge.cells.clear();
-                set_camera_active(&mut cams, false);
-                for (mut cam, _, _, _, _) in &mut pane_cams {
-                    cam.is_active = false;
-                }
-                return;
-            };
+    vm.turn(|script, (mut cams, mut pane_cams, mut roots)| {
+        state.frame += 1;
+        let frame = state.frame;
+        let Some(script) = script else {
+            // No VM: the edge retired the tiles; composite nothing and leave no camera live.
+            bridge.cells.clear();
+            set_camera_active(&mut cams, false);
+            for (mut cam, _, _, _, _) in &mut pane_cams {
+                cam.is_active = false;
+            }
+            return;
+        };
 
-            // ── 1. Facts: answered now if the file is resident, else when it lands ───────────────────
-            for want in state.answer_facts(script) {
+        // ── 1. Facts: answered now if the file is resident, else when it lands ───────────────────
+        for want in state.answer_facts(script) {
+            if trace_on() {
+                info!(
+                    "tile-trace: facts for {} wanted — loading the file",
+                    want.key
+                );
+            }
+            let url = facts_url(&want);
+            let handle = assets.asset_server.load::<M2Model>(url);
+            state.pending_facts.insert(want.key, handle);
+        }
+        let landed: Vec<(String, Handle<M2Model>)> = state
+            .pending_facts
+            .iter()
+            .filter(|(_, h)| assets.m2s.contains(*h))
+            .map(|(k, h)| (k.clone(), h.clone()))
+            .collect();
+        for (key, handle) in landed {
+            let Some(model) = assets.m2s.get(&handle) else {
+                continue; // not readable yet: it stays in `pending_facts`
+            };
+            let facts = facts_of(model);
+            script.set_model_facts(&key, facts.clone());
+            state.pending_facts.remove(&key);
+            state.loaded.insert(key, (handle, facts));
+        }
+
+        // ── 2. The paint list, and one tile per pane on it ──────────────────────────────────
+        let panes: Vec<ModelPaneFrame> = script.visible_model_panes();
+        let mut live: Vec<(FrameHandle, TileRequest, ModelPaneFrame)> = Vec::new();
+        for pane in panes {
+            let Some(req) = bridge.requests.get(&pane.handle) else {
                 if trace_on() {
                     info!(
-                        "tile-trace: facts for {} wanted — loading the file",
-                        want.key
-                    );
-                }
-                let url = facts_url(&want);
-                let handle = assets.asset_server.load::<M2Model>(url);
-                state.pending_facts.insert(want.key, handle);
-            }
-            let landed: Vec<(String, Handle<M2Model>)> = state
-                .pending_facts
-                .iter()
-                .filter(|(_, h)| assets.m2s.contains(*h))
-                .map(|(k, h)| (k.clone(), h.clone()))
-                .collect();
-            for (key, handle) in landed {
-                let Some(model) = assets.m2s.get(&handle) else {
-                    continue; // not readable yet: it stays in `pending_facts`
-                };
-                let facts = facts_of(model);
-                script.set_model_facts(&key, facts.clone());
-                state.pending_facts.remove(&key);
-                state.loaded.insert(key, (handle, facts));
-            }
-
-            // ── 2. The paint list, and one tile per pane on it ──────────────────────────────────
-            let panes: Vec<ModelPaneFrame> = script.visible_model_panes();
-            let mut live: Vec<(FrameHandle, TileRequest, ModelPaneFrame)> = Vec::new();
-            for pane in panes {
-                let Some(req) = bridge.requests.get(&pane.handle) else {
-                    if trace_on() {
-                        info!(
                         "tile-trace: pane {:?} {} (under {}) on the paint list, not extracted yet",
                         pane.handle,
                         script.frame_name(pane.handle).unwrap_or_default(),
@@ -907,297 +905,296 @@ fn sync_tiles(
                             .target_owner_name(benilla_ui::order::ZTarget::Frame(pane.handle))
                             .unwrap_or_default()
                     );
-                    }
-                    continue; // not extracted yet: next frame
-                };
-                if req.size_px.x == 0 || req.size_px.y == 0 {
-                    if trace_on() {
-                        info!(
-                            "tile-trace: {} pane {:?} has a zero rect",
-                            req.path, pane.handle
-                        );
-                    }
-                    continue;
                 }
-                live.push((pane.handle, req.clone(), pane));
+                continue; // not extracted yet: next frame
+            };
+            if req.size_px.x == 0 || req.size_px.y == 0 {
+                if trace_on() {
+                    info!(
+                        "tile-trace: {} pane {:?} has a zero rect",
+                        req.path, pane.handle
+                    );
+                }
+                continue;
             }
-            // Cells go in the engine's registry (creation) order, so a pane keeps its cell.
-            let _ = &live;
+            live.push((pane.handle, req.clone(), pane));
+        }
+        // Cells go in the engine's registry (creation) order, so a pane keeps its cell.
+        let _ = &live;
 
-            // ── 2a. Which light rig, and which perspective slot ─────────────────────────────────
-            let light_slots: Vec<usize> = live
-                .iter()
-                .map(|(_, req, _)| {
-                    // The pane's file, once it is resident: its own lights join the scene.
-                    let file_lights = state
-                        .loaded
-                        .get(&benilla_ui::widget::model_key(&req.path))
-                        .and_then(|(handle, _)| assets.m2s.get(handle))
-                        .map_or(&[][..], |model| &model.lights[..]);
-                    render.rig.slot_for(
-                        TileScene::of_pane(req, file_lights),
-                        &render.device,
-                        &render.queue,
-                        &mut render.mirrors,
-                        &mut render.anim_mirrors,
-                    )
-                })
-                .collect();
-            // Held slots stay put so no tile rebuilds for its layer; a pane past the pool draws
-            // nothing.
-            let mut taken = [false; UI_MODEL_CAM_LAYERS];
-            let mut cam_slots: Vec<Option<usize>> = live
-                .iter()
-                .map(|(h, req, _)| {
-                    let held = state.tiles.get(h).and_then(|t| t.cam_slot);
-                    match (req.camera.is_some(), held) {
-                        (true, Some(slot)) if !taken[slot] => {
-                            taken[slot] = true;
-                            Some(slot)
-                        }
-                        (true, _) => None,
-                        (false, _) => None,
+        // ── 2a. Which light rig, and which perspective slot ─────────────────────────────────
+        let light_slots: Vec<usize> = live
+            .iter()
+            .map(|(_, req, _)| {
+                // The pane's file, once it is resident: its own lights join the scene.
+                let file_lights = state
+                    .loaded
+                    .get(&benilla_ui::widget::model_key(&req.path))
+                    .and_then(|(handle, _)| assets.m2s.get(handle))
+                    .map_or(&[][..], |model| &model.lights[..]);
+                render.rig.slot_for(
+                    TileScene::of_pane(req, file_lights),
+                    &render.device,
+                    &render.queue,
+                    &mut render.mirrors,
+                    &mut render.anim_mirrors,
+                )
+            })
+            .collect();
+        // Held slots stay put so no tile rebuilds for its layer; a pane past the pool draws
+        // nothing.
+        let mut taken = [false; UI_MODEL_CAM_LAYERS];
+        let mut cam_slots: Vec<Option<usize>> = live
+            .iter()
+            .map(|(h, req, _)| {
+                let held = state.tiles.get(h).and_then(|t| t.cam_slot);
+                match (req.camera.is_some(), held) {
+                    (true, Some(slot)) if !taken[slot] => {
+                        taken[slot] = true;
+                        Some(slot)
                     }
-                })
-                .collect();
-            for (i, (_, req, _)) in live.iter().enumerate() {
-                if req.camera.is_none() || cam_slots[i].is_some() {
-                    continue;
+                    (true, _) => None,
+                    (false, _) => None,
                 }
-                cam_slots[i] = taken.iter().position(|&t| !t).inspect(|&slot| {
-                    taken[slot] = true;
-                });
+            })
+            .collect();
+        for (i, (_, req, _)) in live.iter().enumerate() {
+            if req.camera.is_none() || cam_slots[i].is_some() {
+                continue;
             }
+            cam_slots[i] = taken.iter().position(|&t| !t).inspect(|&slot| {
+                taken[slot] = true;
+            });
+        }
 
-            for (i, (handle, req, _)) in live.iter().enumerate() {
-                let key = benilla_ui::widget::model_key(&req.path);
-                let Some(m2) = state.loaded.get(&key).map(|(h, _)| h.clone()) else {
-                    if trace_on() {
-                        info!("tile-trace: {} facts not landed (key {key})", req.path);
-                    }
-                    continue; // facts not landed: the engine would not have listed it
-                };
-                let (light_slot, cam_slot) = (light_slots[i], cam_slots[i]);
-                let stale = state.tiles.get(handle).is_some_and(|t| {
-                    t.key != key
-                        || t.icon != req.icon
-                        || t.light_slot != light_slot
-                        || t.cam_slot != cam_slot
-                });
-                if stale {
-                    if let Some(t) = state.tiles.remove(handle) {
-                        t.retire(&mut commands, &mut render.table);
-                    }
+        for (i, (handle, req, _)) in live.iter().enumerate() {
+            let key = benilla_ui::widget::model_key(&req.path);
+            let Some(m2) = state.loaded.get(&key).map(|(h, _)| h.clone()) else {
+                if trace_on() {
+                    info!("tile-trace: {} facts not landed (key {key})", req.path);
                 }
-                let layer = tile_layer(&render.rig, cam_slot);
-                let tile = state.tiles.entry(*handle).or_insert_with(|| Tile {
-                    root: commands
-                        .spawn((
-                            Transform::IDENTITY,
-                            Visibility::Hidden,
-                            layer.clone(),
-                            TileRoot,
-                        ))
-                        .id(),
-                    key: key.clone(),
-                    icon: req.icon.clone(),
-                    m2: m2.clone(),
-                    built: false,
-                    light_slot,
-                    cam_slot,
-                    clips: HashMap::new(),
-                    armed: None,
-                    clip_slot: None,
-                    alpha_parts: Vec::new(),
-                    uv_parts: Vec::new(),
-                    emitters: Vec::new(),
-                    last_seen: frame,
-                    parked: false,
-                });
-                tile.last_seen = frame;
-                if !tile.built {
-                    if let Some(model) = assets.m2s.get(&tile.m2) {
-                        let icon_tex = req.icon.as_deref().and_then(|p| {
-                            assets
-                                .world
-                                .as_mut()
-                                .and_then(|w| w.sprite_texture(p, &mut assets.images))
-                        });
-                        if let Some(built) = build_tile(
-                            &mut commands,
-                            tile.root,
-                            model,
-                            &tile.m2,
-                            icon_tex,
-                            &mut assets.forms,
-                            &mut assets.meshes,
-                            &mut render,
-                            light_slot,
-                            &layer,
-                        ) {
-                            // At debug, by pane: five cooldowns build five tiles, and one longer
-                            // than the linger rebuilds at combat rate.
-                            debug!(
-                                "ui_models: tile built for {} on pane {} — {} parts, {} emitters, \
+                continue; // facts not landed: the engine would not have listed it
+            };
+            let (light_slot, cam_slot) = (light_slots[i], cam_slots[i]);
+            let stale = state.tiles.get(handle).is_some_and(|t| {
+                t.key != key
+                    || t.icon != req.icon
+                    || t.light_slot != light_slot
+                    || t.cam_slot != cam_slot
+            });
+            if stale {
+                if let Some(t) = state.tiles.remove(handle) {
+                    t.retire(&mut commands, &mut render.table);
+                }
+            }
+            let layer = tile_layer(&render.rig, cam_slot);
+            let tile = state.tiles.entry(*handle).or_insert_with(|| Tile {
+                root: commands
+                    .spawn((
+                        Transform::IDENTITY,
+                        Visibility::Hidden,
+                        layer.clone(),
+                        TileRoot,
+                    ))
+                    .id(),
+                key: key.clone(),
+                icon: req.icon.clone(),
+                m2: m2.clone(),
+                built: false,
+                light_slot,
+                cam_slot,
+                clips: HashMap::new(),
+                armed: None,
+                clip_slot: None,
+                alpha_parts: Vec::new(),
+                uv_parts: Vec::new(),
+                emitters: Vec::new(),
+                last_seen: frame,
+                parked: false,
+            });
+            tile.last_seen = frame;
+            if !tile.built {
+                if let Some(model) = assets.m2s.get(&tile.m2) {
+                    let icon_tex = req.icon.as_deref().and_then(|p| {
+                        assets
+                            .world
+                            .as_mut()
+                            .and_then(|w| w.sprite_texture(p, &mut assets.images))
+                    });
+                    if let Some(built) = build_tile(
+                        &mut commands,
+                        tile.root,
+                        model,
+                        &tile.m2,
+                        icon_tex,
+                        &mut assets.forms,
+                        &mut assets.meshes,
+                        &mut render,
+                        light_slot,
+                        &layer,
+                    ) {
+                        // At debug, by pane: five cooldowns build five tiles, and one longer
+                        // than the linger rebuilds at combat rate.
+                        debug!(
+                            "ui_models: tile built for {} on pane {} — {} parts, {} emitters, \
                              {} animated alphas",
-                                req.path,
-                                script.frame_name(*handle).unwrap_or_default(),
-                                model.submeshes.len(),
-                                built.emitters.len(),
-                                built.alpha_parts.len()
-                            );
-                            if trace_on() {
-                                for (i, p) in built.uv_parts.iter().enumerate() {
-                                    info!(
+                            req.path,
+                            script.frame_name(*handle).unwrap_or_default(),
+                            model.submeshes.len(),
+                            built.emitters.len(),
+                            built.alpha_parts.len()
+                        );
+                        if trace_on() {
+                            for (i, p) in built.uv_parts.iter().enumerate() {
+                                info!(
                                     "tile-trace: {} uv part {i}: trans slot {:?} affine slot {:?}",
                                     req.path,
                                     p.trans.map(|(s, _)| s),
                                     p.affine
                                 );
-                                }
                             }
-                            tile.clips = built.clips;
-                            tile.clip_slot = built.clip_slot;
-                            tile.alpha_parts = built.alpha_parts;
-                            tile.uv_parts = built.uv_parts;
-                            tile.emitters = built.emitters;
-                            tile.built = true;
-                        } else if trace_on() {
-                            info!("tile-trace: {} waiting on materials", req.path);
                         }
+                        tile.clips = built.clips;
+                        tile.clip_slot = built.clip_slot;
+                        tile.alpha_parts = built.alpha_parts;
+                        tile.uv_parts = built.uv_parts;
+                        tile.emitters = built.emitters;
+                        tile.built = true;
                     } else if trace_on() {
-                        info!("tile-trace: {} asset not resident", req.path);
+                        info!("tile-trace: {} waiting on materials", req.path);
                     }
+                } else if trace_on() {
+                    info!("tile-trace: {} asset not resident", req.path);
                 }
             }
+        }
 
-            // ── 3. Retire tiles that left the paint list long ago ───────────────────────────────
-            let dead: Vec<FrameHandle> = state
-                .tiles
-                .iter()
-                .filter(|(_, t)| frame.saturating_sub(t.last_seen) > TILE_LINGER_FRAMES)
-                .map(|(h, _)| *h)
-                .collect();
-            for h in dead {
-                if let Some(t) = state.tiles.remove(&h) {
-                    t.retire(&mut commands, &mut render.table);
-                }
-                bridge.requests.remove(&h);
+        // ── 3. Retire tiles that left the paint list long ago ───────────────────────────────
+        let dead: Vec<FrameHandle> = state
+            .tiles
+            .iter()
+            .filter(|(_, t)| frame.saturating_sub(t.last_seen) > TILE_LINGER_FRAMES)
+            .map(|(h, _)| *h)
+            .collect();
+        for h in dead {
+            if let Some(t) = state.tiles.remove(&h) {
+                t.retire(&mut commands, &mut render.table);
             }
+            bridge.requests.remove(&h);
+        }
 
-            // ── 4. Pack the atlas ───────────────────────────────────────────────────────────────
-            let drawing: Vec<&(FrameHandle, TileRequest, ModelPaneFrame)> = live
-                .iter()
-                .filter(|(h, r, _)| {
-                    state.tiles.get(h).is_some_and(|t| {
-                        // A perspective pane with no free camera draws nothing: the orthographic
-                        // ladder would draw it far too large.
-                        t.built && !(r.camera.is_some() && t.cam_slot.is_none())
-                    })
+        // ── 4. Pack the atlas ───────────────────────────────────────────────────────────────
+        let drawing: Vec<&(FrameHandle, TileRequest, ModelPaneFrame)> = live
+            .iter()
+            .filter(|(h, r, _)| {
+                state.tiles.get(h).is_some_and(|t| {
+                    // A perspective pane with no free camera draws nothing: the orthographic
+                    // ladder would draw it far too large.
+                    t.built && !(r.camera.is_some() && t.cam_slot.is_none())
                 })
-                .collect();
-            let sizes: Vec<UVec2> = drawing.iter().map(|(_, r, _)| r.size_px).collect();
-            let (cells, atlas_size) = pack(&sizes);
-            if atlas_size != bridge.atlas_size || bridge.atlas.is_none() {
-                if atlas_size.x > 0 {
-                    let image = assets
-                        .images
-                        .add(new_target_image_sized(atlas_size.x, atlas_size.y));
-                    for (_, mut target, mut proj, mut tf) in &mut cams {
-                        *target = RenderTarget::Image(image.clone().into());
-                        (*tf, *proj) = ortho_camera(atlas_size.as_vec2());
-                    }
-                    bridge.atlas = Some(image);
+            })
+            .collect();
+        let sizes: Vec<UVec2> = drawing.iter().map(|(_, r, _)| r.size_px).collect();
+        let (cells, atlas_size) = pack(&sizes);
+        if atlas_size != bridge.atlas_size || bridge.atlas.is_none() {
+            if atlas_size.x > 0 {
+                let image = assets
+                    .images
+                    .add(new_target_image_sized(atlas_size.x, atlas_size.y));
+                for (_, mut target, mut proj, mut tf) in &mut cams {
+                    *target = RenderTarget::Image(image.clone().into());
+                    (*tf, *proj) = ortho_camera(atlas_size.as_vec2());
                 }
-                bridge.atlas_size = atlas_size;
+                bridge.atlas = Some(image);
             }
-            bridge.cells.clear();
-            let atlas_h = atlas_size.y as f32;
+            bridge.atlas_size = atlas_size;
+        }
+        bridge.cells.clear();
+        let atlas_h = atlas_size.y as f32;
 
-            // ── 5. Place every drawing tile: cell, unit ladder, facing, play head ───────────────
-            // Split the borrow: a tile is written while the residency map is read.
-            let state = &mut *state;
-            let mut aimed = [false; UI_MODEL_CAM_LAYERS];
-            for (i, (handle, req, pane)) in drawing.iter().enumerate() {
-                let Some(cell) = cells.get(i).copied() else {
-                    continue; // did not fit the capped atlas
-                };
-                let Some(tile) = state.tiles.get_mut(handle) else {
-                    continue;
-                };
-                bridge.cells.insert(*handle, cell);
-                let Ok((mut tf, mut vis, player, scene_clock)) = roots.get_mut(tile.root) else {
-                    continue;
-                };
+        // ── 5. Place every drawing tile: cell, unit ladder, facing, play head ───────────────
+        // Split the borrow: a tile is written while the residency map is read.
+        let state = &mut *state;
+        let mut aimed = [false; UI_MODEL_CAM_LAYERS];
+        for (i, (handle, req, pane)) in drawing.iter().enumerate() {
+            let Some(cell) = cells.get(i).copied() else {
+                continue; // did not fit the capped atlas
+            };
+            let Some(tile) = state.tiles.get_mut(handle) else {
+                continue;
+            };
+            bridge.cells.insert(*handle, cell);
+            let Ok((mut tf, mut vis, player, scene_clock)) = roots.get_mut(tile.root) else {
+                continue;
+            };
 
-                let (armed, cursor_s, seq_slot) = match pane.play {
-                    Some(ph) => {
-                        let slot = tile.clips.get(&ph.anim_id).map(|&(_, s)| s);
-                        (Some(ph.anim_id), ph.cursor_ms as f32 / 1000.0, slot)
+            let (armed, cursor_s, seq_slot) = match pane.play {
+                Some(ph) => {
+                    let slot = tile.clips.get(&ph.anim_id).map(|&(_, s)| s);
+                    (Some(ph.anim_id), ph.cursor_ms as f32 / 1000.0, slot)
+                }
+                None => (None, 0.0, None),
+            };
+
+            // ── The leg ────────────────────────────────────────────────────────────────────
+            // Perspective (`0x7ac640`): the file's camera frames the pane from this tile's camera,
+            // viewport the cell, and the eye and target ride the model's root (`0x718960`). The
+            // camera is the one installed from its own file, frozen once the pane holds another
+            // ([`pane_camera_rig`]). Orthographic: one model unit is `1280 · modelScale ·
+            // layoutScale` FrameXML units.
+            // Camera tracks read the file's absolute timeline and the play head is a cursor in the
+            // armed band, so the band's start is added.
+            let file_ms = seq_slot
+                .and_then(|slot| assets.m2s.get(&tile.m2)?.sequences.get(slot))
+                .map_or(0, |seq| seq.start_ms)
+                + pane.play.map_or(0, |ph| ph.cursor_ms);
+            let aspect = req.size_px.x as f32 / req.size_px.y.max(1) as f32;
+            let perspective = tile
+                .cam_slot
+                .zip(req.camera.as_ref())
+                .and_then(|(slot, c)| {
+                    let live = || {
+                        let (src, _) = state.loaded.get(&benilla_ui::widget::model_key(&c.file))?;
+                        let cam = assets.m2s.get(src)?.cameras.get(c.index as usize)?;
+                        Some(cam.at(file_ms))
+                    };
+                    let mut frozen = state.frozen.remove(handle);
+                    let rig = pane_camera_rig(c, &tile.key, &mut frozen, live, req, aspect);
+                    if let Some(f) = frozen {
+                        state.frozen.insert(*handle, f);
                     }
-                    None => (None, 0.0, None),
-                };
-
-                // ── The leg ────────────────────────────────────────────────────────────────────
-                // Perspective (`0x7ac640`): the file's camera frames the pane from this tile's camera,
-                // viewport the cell, and the eye and target ride the model's root (`0x718960`). The
-                // camera is the one installed from its own file, frozen once the pane holds another
-                // ([`pane_camera_rig`]). Orthographic: one model unit is `1280 · modelScale ·
-                // layoutScale` FrameXML units.
-                // Camera tracks read the file's absolute timeline and the play head is a cursor in the
-                // armed band, so the band's start is added.
-                let file_ms = seq_slot
-                    .and_then(|slot| assets.m2s.get(&tile.m2)?.sequences.get(slot))
-                    .map_or(0, |seq| seq.start_ms)
-                    + pane.play.map_or(0, |ph| ph.cursor_ms);
-                let aspect = req.size_px.x as f32 / req.size_px.y.max(1) as f32;
-                let perspective = tile
-                    .cam_slot
-                    .zip(req.camera.as_ref())
-                    .and_then(|(slot, c)| {
-                        let live = || {
-                            let (src, _) =
-                                state.loaded.get(&benilla_ui::widget::model_key(&c.file))?;
-                            let cam = assets.m2s.get(src)?.cameras.get(c.index as usize)?;
-                            Some(cam.at(file_ms))
-                        };
-                        let mut frozen = state.frozen.remove(handle);
-                        let rig = pane_camera_rig(c, &tile.key, &mut frozen, live, req, aspect);
-                        if let Some(f) = frozen {
-                            state.frozen.insert(*handle, f);
-                        }
-                        Some((slot, rig?))
+                    Some((slot, rig?))
+                });
+            let mut leg_trace = String::from("ortho");
+            if let Some((slot, (leg, record))) = perspective {
+                *tf = leg.root;
+                *vis = Visibility::Visible;
+                for (mut c, mut target_ref, mut proj, mut ctf, marker) in &mut pane_cams {
+                    if marker.slot != slot {
+                        continue;
+                    }
+                    // The target first, and active only with one: the default target is the
+                    // window, so an active camera without the atlas would draw over the game.
+                    let Some(atlas) = bridge.atlas.clone() else {
+                        continue;
+                    };
+                    *target_ref = RenderTarget::Image(atlas.into());
+                    aimed[slot] = true;
+                    c.is_active = true;
+                    c.viewport = Some(bevy::camera::Viewport {
+                        physical_position: cell.origin,
+                        physical_size: cell.size,
+                        depth: 0.0..1.0,
                     });
-                let mut leg_trace = String::from("ortho");
-                if let Some((slot, (leg, record))) = perspective {
-                    *tf = leg.root;
-                    *vis = Visibility::Visible;
-                    for (mut c, mut target_ref, mut proj, mut ctf, marker) in &mut pane_cams {
-                        if marker.slot != slot {
-                            continue;
-                        }
-                        // The target first, and active only with one: the default target is the
-                        // window, so an active camera without the atlas would draw over the game.
-                        let Some(atlas) = bridge.atlas.clone() else {
-                            continue;
-                        };
-                        *target_ref = RenderTarget::Image(atlas.into());
-                        aimed[slot] = true;
-                        c.is_active = true;
-                        c.viewport = Some(bevy::camera::Viewport {
-                            physical_position: cell.origin,
-                            physical_size: cell.size,
-                            depth: 0.0..1.0,
-                        });
-                        *proj = Projection::custom(leg.projection.clone());
-                        *ctf = leg.camera;
-                    }
-                    if trace_on() {
-                        use bevy::camera::CameraProjection;
-                        let m = leg.projection.get_clip_from_view();
-                        let eye = leg.camera.translation;
-                        let fwd = leg.camera.forward().as_vec3();
-                        leg_trace = format!(
+                    *proj = Projection::custom(leg.projection.clone());
+                    *ctf = leg.camera;
+                }
+                if trace_on() {
+                    use bevy::camera::CameraProjection;
+                    let m = leg.projection.get_clip_from_view();
+                    let eye = leg.camera.translation;
+                    let fwd = leg.camera.forward().as_vec3();
+                    leg_trace = format!(
                         "persp[cam {:?} slot {slot} t={file_ms}ms] fov={:.5} aspect={aspect:.4} \
                          near={:.4} far={:.3} eye={:.3},{:.3},{:.3} fwd={:.3},{:.3},{:.3} \
                          root(s={:.4} pos={:?}) m00={:.4} m11={:.4}",
@@ -1216,102 +1213,102 @@ fn sync_tiles(
                         m.x_axis.x,
                         m.y_axis.y,
                     );
-                    }
-                } else {
-                    let cell_bl = Vec2::new(
-                        cell.origin.x as f32,
-                        atlas_h - (cell.origin.y + cell.size.y) as f32,
-                    );
-                    *tf = ortho_root(
-                        cell_bl,
-                        req.position,
-                        req.pos_px_per_unit,
-                        req.facing,
-                        req.px_per_unit,
-                    );
-                    *vis = Visibility::Visible;
                 }
-                if let Some(mut player) = player {
-                    if tile.armed != armed {
-                        player.stop_all();
-                        if let Some((node, _)) = armed.and_then(|id| tile.clips.get(&id)) {
-                            player.play(*node).pause();
-                        }
-                        tile.armed = armed;
-                    }
+            } else {
+                let cell_bl = Vec2::new(
+                    cell.origin.x as f32,
+                    atlas_h - (cell.origin.y + cell.size.y) as f32,
+                );
+                *tf = ortho_root(
+                    cell_bl,
+                    req.position,
+                    req.pos_px_per_unit,
+                    req.facing,
+                    req.px_per_unit,
+                );
+                *vis = Visibility::Visible;
+            }
+            if let Some(mut player) = player {
+                if tile.armed != armed {
+                    player.stop_all();
                     if let Some((node, _)) = armed.and_then(|id| tile.clips.get(&id)) {
-                        if let Some(active) = player.animation_mut(*node) {
-                            active.seek_to(cursor_s);
-                        }
+                        player.play(*node).pause();
+                    }
+                    tile.armed = armed;
+                }
+                if let Some((node, _)) = armed.and_then(|id| tile.clips.get(&id)) {
+                    if let Some(active) = player.animation_mut(*node) {
+                        active.seek_to(cursor_s);
                     }
                 }
-                // The file slot the material tracks read: the armed clip's, or, when the armed id keys
-                // no bone (the cooldown), the file's first sequence with that id.
-                let seq_slot = seq_slot.or_else(|| {
-                    let id = armed?;
-                    let facts_slot = assets
-                        .m2s
-                        .get(&tile.m2)?
-                        .sequences
-                        .iter()
-                        .find(|s| s.anim_id == id)
-                        .map(|s| s.seq_index);
-                    facts_slot
-                });
-                let gseq_s = pane.clock_ms as f64 / 1000.0;
-                // The bone global sequences read the pane's clock too: the kernel's cursor,
-                // `[[model+0x2c]+0xc] − [model+0x68]` (`0x714260`), is the owning scene's clock minus
-                // the attach snapshot, and a `<Model>` owns a private `CM2Scene` (`CSimpleModel+0x314`)
-                // that only its `OnUpdate` advances (`0x76d7f0`). So the ping's 4833 ms spinner resumes
-                // where the last ping stopped; the drive anchors on its first tick, the attach.
-                if let Some(mut clock) = scene_clock.filter(|c| c.0 != gseq_s) {
-                    clock.0 = gseq_s;
-                }
-                let light_trace = if trace_on() {
-                    let sc = &render.rig.lights[tile.light_slot].scene;
-                    format!(
-                        "slot{} enabled={} omni={} fog={:?}",
-                        tile.light_slot, sc.light.enabled, sc.light.omni, sc.fog
-                    )
-                } else {
-                    String::new()
-                };
-                let mut trace_alphas: Vec<f32> = Vec::new();
-                for part in &tile.alpha_parts {
-                    let a = part.anim.sample(seq_slot, cursor_s, gseq_s);
-                    if trace_on() {
-                        trace_alphas.push(a);
-                    }
-                    if let Ok((mut tag, mut pvis)) = parts.get_mut(part.entity) {
-                        // The `A ≤ 0` cull (`0x707b3a`): a batch keyed off in this sequence is skipped.
-                        let want = if a > 0.0 {
-                            Visibility::Inherited
-                        } else {
-                            Visibility::Hidden
-                        };
-                        if *pvis != want {
-                            *pvis = want;
-                        }
-                        let bits = benilla_world::mesh_tag::with_alpha(tag.0, a);
-                        if tag.0 != bits {
-                            tag.0 = bits;
-                        }
-                    }
-                }
-                for part in &tile.uv_parts {
-                    part.write_rows(&mut render.table, seq_slot, cursor_s, gseq_s);
-                }
+            }
+            // The file slot the material tracks read: the armed clip's, or, when the armed id keys
+            // no bone (the cooldown), the file's first sequence with that id.
+            let seq_slot = seq_slot.or_else(|| {
+                let id = armed?;
+                let facts_slot = assets
+                    .m2s
+                    .get(&tile.m2)?
+                    .sequences
+                    .iter()
+                    .find(|s| s.anim_id == id)
+                    .map(|s| s.seq_index);
+                facts_slot
+            });
+            let gseq_s = pane.clock_ms as f64 / 1000.0;
+            // The bone global sequences read the pane's clock too: the kernel's cursor,
+            // `[[model+0x2c]+0xc] − [model+0x68]` (`0x714260`), is the owning scene's clock minus
+            // the attach snapshot, and a `<Model>` owns a private `CM2Scene` (`CSimpleModel+0x314`)
+            // that only its `OnUpdate` advances (`0x76d7f0`). So the ping's 4833 ms spinner resumes
+            // where the last ping stopped; the drive anchors on its first tick, the attach.
+            if let Some(mut clock) = scene_clock.filter(|c| c.0 != gseq_s) {
+                clock.0 = gseq_s;
+            }
+            let light_trace = if trace_on() {
+                let sc = &render.rig.lights[tile.light_slot].scene;
+                format!(
+                    "slot{} enabled={} omni={} fog={:?}",
+                    tile.light_slot, sc.light.enabled, sc.light.omni, sc.fog
+                )
+            } else {
+                String::new()
+            };
+            let mut trace_alphas: Vec<f32> = Vec::new();
+            for part in &tile.alpha_parts {
+                let a = part.anim.sample(seq_slot, cursor_s, gseq_s);
                 if trace_on() {
-                    let rows: Vec<String> = tile
-                        .uv_parts
-                        .iter()
-                        .map(|p| {
-                            let t = p.trans.map(|(s, _)| render.table.row(s));
-                            let a = p.affine.map(|s| render.table.row(s));
-                            format!("t={t:?} a={a:?}")
-                        })
-                        .collect();
-                    info!(
+                    trace_alphas.push(a);
+                }
+                if let Ok((mut tag, mut pvis)) = parts.get_mut(part.entity) {
+                    // The `A ≤ 0` cull (`0x707b3a`): a batch keyed off in this sequence is skipped.
+                    let want = if a > 0.0 {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    };
+                    if *pvis != want {
+                        *pvis = want;
+                    }
+                    let bits = benilla_world::mesh_tag::with_alpha(tag.0, a);
+                    if tag.0 != bits {
+                        tag.0 = bits;
+                    }
+                }
+            }
+            for part in &tile.uv_parts {
+                part.write_rows(&mut render.table, seq_slot, cursor_s, gseq_s);
+            }
+            if trace_on() {
+                let rows: Vec<String> = tile
+                    .uv_parts
+                    .iter()
+                    .map(|p| {
+                        let t = p.trans.map(|(s, _)| render.table.row(s));
+                        let a = p.affine.map(|s| render.table.row(s));
+                        format!("t={t:?} a={a:?}")
+                    })
+                    .collect();
+                info!(
                     "tile-trace: {} {} leg={} cell=({},{} {}x{}) px/unit={:.2} pos_px/unit={:.2} \
                      armed={:?} cursor={:.3}s slot={:?} clock={}ms light={light_trace} alphas={:?} \
                      rows=[{}]",
@@ -1331,86 +1328,85 @@ fn sync_tiles(
                     trace_alphas,
                     rows.join(", ")
                 );
-                }
-                // A particle's half-extent is in eye space: the ortho leg's is the cell's pixels at
-                // `768·√(a²+1)` FrameXML units per model unit (`0x7b2a50`); the perspective leg's is
-                // 1.0.
-                let star = if tile.cam_slot.is_some() && req.camera.is_some() {
-                    1.0
-                } else {
-                    req.star_px_per_unit
-                };
-                // The cell the cloud may draw in, or it spills into its packed neighbour;
-                // `Cell::origin` is atlas texels, top-left, the framebuffer coordinate the fragment
-                // tests.
-                let clip = Vec4::new(
-                    cell.origin.x as f32,
-                    cell.origin.y as f32,
-                    (cell.origin.x + cell.size.x) as f32,
-                    (cell.origin.y + cell.size.y) as f32,
-                );
-                // The mesh half of the clip: the tile's row, read through `anim_slots.w`.
-                if let Some(slot) = tile.clip_slot {
-                    render.table.set(slot, clip.to_array());
-                }
-                for &e in &tile.emitters {
-                    if let Ok(mut em) = emitters.get_mut(e) {
-                        em.set_size_scale(star);
-                        em.set_clip(Some(clip));
-                    }
-                }
             }
-            // ── 6. Park what is not drawing; thaw what is ──────────────────────────────────────
-            // Drawing means holding a cell. Hiding the root stops neither the emitters nor the bone
-            // global sequences, so `AnimParked` holds the rig and the freeze holds each emitter.
-            for (handle, tile) in state.tiles.iter_mut() {
-                let park = !draws_this_frame(&bridge, handle);
-                // Compared, not edge-triggered off `tile.parked`: a tile can be built already parked,
-                // and an emitter is born thawed. Reading through `Deref` touches no change tick.
-                for &e in &tile.emitters {
-                    if let Ok(mut em) = emitters.get_mut(e) {
-                        if em.is_frozen() != park {
-                            em.set_frozen(park);
-                        }
-                    }
-                }
-                if tile.parked == park {
-                    continue;
-                }
-                tile.parked = park;
-                if trace_on() {
-                    info!(
-                        "tile-trace: tile {:?} {} — {} emitters",
-                        handle,
-                        if park { "PARKED" } else { "thawed" },
-                        tile.emitters.len()
-                    );
-                }
-                if park {
-                    if let Ok((_, mut vis, _, _)) = roots.get_mut(tile.root) {
-                        *vis = Visibility::Hidden;
-                    }
-                    commands.entity(tile.root).insert(AnimParked);
-                } else {
-                    // Removed in `Update`, ahead of `AnimationSystems` in `PostUpdate`, so the first
-                    // thawed frame evaluates the pose before anything reads it.
-                    commands.entity(tile.root).remove::<AnimParked>();
-                }
-            }
-            for (mut cam, _, _, _, marker) in &mut pane_cams {
-                let want = aimed[marker.slot];
-                if cam.is_active != want {
-                    cam.is_active = want;
-                }
-            }
-            // The orthographic camera clears the atlas for all, so it stays on while anything is
-            // packed.
-            set_camera_active(
-                &mut cams,
-                !bridge.cells.is_empty() && bridge.atlas.is_some(),
+            // A particle's half-extent is in eye space: the ortho leg's is the cell's pixels at
+            // `768·√(a²+1)` FrameXML units per model unit (`0x7b2a50`); the perspective leg's is
+            // 1.0.
+            let star = if tile.cam_slot.is_some() && req.camera.is_some() {
+                1.0
+            } else {
+                req.star_px_per_unit
+            };
+            // The cell the cloud may draw in, or it spills into its packed neighbour;
+            // `Cell::origin` is atlas texels, top-left, the framebuffer coordinate the fragment
+            // tests.
+            let clip = Vec4::new(
+                cell.origin.x as f32,
+                cell.origin.y as f32,
+                (cell.origin.x + cell.size.x) as f32,
+                (cell.origin.y + cell.size.y) as f32,
             );
-        },
-    )
+            // The mesh half of the clip: the tile's row, read through `anim_slots.w`.
+            if let Some(slot) = tile.clip_slot {
+                render.table.set(slot, clip.to_array());
+            }
+            for &e in &tile.emitters {
+                if let Ok(mut em) = emitters.get_mut(e) {
+                    em.set_size_scale(star);
+                    em.set_clip(Some(clip));
+                }
+            }
+        }
+        // ── 6. Park what is not drawing; thaw what is ──────────────────────────────────────
+        // Drawing means holding a cell. Hiding the root stops neither the emitters nor the bone
+        // global sequences, so `AnimParked` holds the rig and the freeze holds each emitter.
+        for (handle, tile) in state.tiles.iter_mut() {
+            let park = !draws_this_frame(&bridge, handle);
+            // Compared, not edge-triggered off `tile.parked`: a tile can be built already parked,
+            // and an emitter is born thawed. Reading through `Deref` touches no change tick.
+            for &e in &tile.emitters {
+                if let Ok(mut em) = emitters.get_mut(e) {
+                    if em.is_frozen() != park {
+                        em.set_frozen(park);
+                    }
+                }
+            }
+            if tile.parked == park {
+                continue;
+            }
+            tile.parked = park;
+            if trace_on() {
+                info!(
+                    "tile-trace: tile {:?} {} — {} emitters",
+                    handle,
+                    if park { "PARKED" } else { "thawed" },
+                    tile.emitters.len()
+                );
+            }
+            if park {
+                if let Ok((_, mut vis, _, _)) = roots.get_mut(tile.root) {
+                    *vis = Visibility::Hidden;
+                }
+                commands.entity(tile.root).insert(AnimParked);
+            } else {
+                // Removed in `Update`, ahead of `AnimationSystems` in `PostUpdate`, so the first
+                // thawed frame evaluates the pose before anything reads it.
+                commands.entity(tile.root).remove::<AnimParked>();
+            }
+        }
+        for (mut cam, _, _, _, marker) in &mut pane_cams {
+            let want = aimed[marker.slot];
+            if cam.is_active != want {
+                cam.is_active = want;
+            }
+        }
+        // The orthographic camera clears the atlas for all, so it stays on while anything is
+        // packed.
+        set_camera_active(
+            &mut cams,
+            !bridge.cells.is_empty() && bridge.atlas.is_some(),
+        );
+    })
 }
 
 /// The orthographic leg's root in camera space, pixels, `y` up: the pane's bottom-left `origin`
