@@ -1,7 +1,10 @@
-//! The loot-window bindings: the app pushes the window ([`UiScript::set_loot`]), a coin row first
-//! while the money cell is set, and the verbs over it are script calls ([`LootCall`]) the host
-//! applies inside them, as the reference's are done when they return. `slot` is 1-based; the app
-//! maps a row to the money or the item's wire slot, which Lua never sees.
+//! The loot-window bindings: the getters read the window's cells through the lent host at the call
+//! ([`LootWindowQuery`], [`LootSlotQuery`], [`MasterLootCandidateQuery`]), as the reference's read
+//! `0xb71b48`, `0xb71ba0`, `0xb71bbc`, the row array `0xb71968` and the candidate array `0xc4dc38`
+//! as they run, a coin row first while the money cell is set; the VM's own copy
+//! ([`UiScript::set_loot`]) answers only with no host to ask. The verbs over it are script calls
+//! ([`LootCall`]) the host applies inside them, as the reference's are done when they return.
+//! `slot` is 1-based; the app maps a row to the money or the item's wire slot, which Lua never sees.
 //!
 //! The take dispatcher `0x4c2790(slot, confirm)` has two arms. The take itself, `confirm` 0, is the
 //! row click of [`crate::widget::FrameKind::LootButton`] (`0x4c1820`), made after its `<OnClick>`
@@ -11,7 +14,8 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::{self, bool_or_default, flag};
-use super::{Model, ScriptCall};
+use super::live::{ask, LiveQuery};
+use super::{Model, RecordAsk, ScriptCall};
 
 /// A loot verb the host applies inside its call ([`ScriptCall::Loot`]), its rows 1-based.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +89,8 @@ pub struct LootRow {
     pub random_property_id: u32,
 }
 
-/// One open loot window, pushed whole by the app; `None` means no loot is open.
+/// One open loot window, the VM's own copy that the getters read with no host to ask; `None`
+/// means no loot is open.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LootState {
     /// The fixed slot list, the coin row first while [`Self::has_money`]. A looted slot becomes
@@ -103,6 +108,74 @@ pub struct LootState {
     /// corpse, not a chest, a bobber or an item. `SetLootPortrait` bakes it under the token
     /// [`LOOT_PORTRAIT_UNIT`].
     pub source_unit: bool,
+}
+
+/// The window's cells as the getters read them at the call: whether a source is held
+/// (`0xb71b48`), the count (`0x4c2260`), the type cell (`0xb71bbc`, which outlives the window) and
+/// whether the source resolves as a unit object (`0x468460`, typemask 8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LootWindow {
+    pub open: bool,
+    pub count: usize,
+    pub loot_type: u8,
+    pub source_unit: bool,
+}
+
+/// The question: [`LootWindow`] now.
+pub struct LootWindowQuery;
+
+impl LiveQuery for LootWindowQuery {
+    type Answer = LootWindow;
+}
+
+/// One display row, 0-based `slot` of the fixed layout, coin row first while the money cell is
+/// set, as the row accessors read it at the call (`0x4c22a0`-`0x4c2670`), every cache only read:
+/// `None` with no window or past the end, `Some(None)` for a cleared row.
+pub struct LootSlotQuery {
+    pub slot: usize,
+}
+
+impl LiveQuery for LootSlotQuery {
+    type Answer = Option<Option<LootRow>>;
+}
+
+/// The candidate array's 0-based `index` (`0x61c660`), named off the name cache at the call
+/// (`0x4c2f70`).
+pub struct MasterLootCandidateQuery {
+    pub index: usize,
+}
+
+/// A candidate slot as `GetMasterLootCandidate` reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MasterLootCandidate {
+    /// A zero guid, or an index past the array (`0x4c2f5f`).
+    Nobody,
+    /// A cached name.
+    Named(String),
+    /// A guid the name cache misses: nil, and the lookup's callback `0x4c2fb0` registered
+    /// ([`RecordAsk::MasterLootName`]).
+    Unnamed(u64),
+}
+
+impl LiveQuery for MasterLootCandidateQuery {
+    type Answer = MasterLootCandidate;
+}
+
+/// The window now: the host's answer, else the VM's copy.
+fn window_now(lua: &Lua, model: &Model) -> LootWindow {
+    ask(lua, &LootWindowQuery).unwrap_or_else(|| LootWindow {
+        open: model.loot.is_some(),
+        count: model.loot.as_ref().map_or(0, LootState::count),
+        loot_type: model.loot_type,
+        source_unit: model.loot.as_ref().is_some_and(|l| l.source_unit),
+    })
+}
+
+/// The display row at a 1-based `slot` now: the host's answer, else the VM's copy. Slot 0 is none.
+pub(super) fn slot_now(lua: &Lua, model: &Model, slot: usize) -> Option<Option<LootRow>> {
+    let n = slot.checked_sub(1)?;
+    ask(lua, &LootSlotQuery { slot: n })
+        .unwrap_or_else(|| model.loot.as_ref().and_then(|l| l.rows.get(n)).cloned())
 }
 
 /// The portrait key `SetLootPortrait` binds a texture to, which the app bakes from the loot
@@ -124,13 +197,14 @@ impl LootState {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open loot.
+    /// Set (or clear, with `None`) the VM's own copy of the open loot, which the getters read only
+    /// with no host lent.
     pub fn set_loot(&mut self, state: Option<LootState>) {
         self.model_mut().loot = state;
     }
 
-    /// The loot type cell (`0xb71bbc`), which the copier stores (`0x4c1dd6`) and no close clears:
-    /// `IsFishingLoot` reads it, window or not.
+    /// The VM's own copy of the loot type cell (`0xb71bbc`), which the copier stores (`0x4c1dd6`)
+    /// and no close clears: `IsFishingLoot` reads it, window or not, with no host lent.
     pub fn set_loot_type(&mut self, loot_type: u8) {
         self.model_mut().loot_type = loot_type;
     }
@@ -148,11 +222,6 @@ impl super::UiScript {
     /// what `OpenItem` passes `SetAutoLoot` (`0x5edca7`), read inside its `UseContainerItem` call.
     pub fn shift_key_down(&self) -> bool {
         self.model_ref().modifiers.0
-    }
-
-    /// The loot the VM shows now, as the last push or a call left it.
-    pub fn shown_loot(&self) -> Option<LootState> {
-        self.model_ref().loot.clone()
     }
 
     /// Make [`LootCall::Resume`] down to `depth`, for the host's tail to a loot call whose signal's
@@ -205,8 +274,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetLootPortrait",
         lua.create_function(|lua, texture: Value| {
             let rh = super::region::this_texture(lua, &texture)?;
+            let unit = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let window = window_now(lua, &model);
+                window.open && window.source_unit
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if !model.loot.as_ref().is_some_and(|l| l.source_unit) {
+            if !unit {
                 super::region::clear_texture(&mut model, rh);
                 return Ok(Value::Nil);
             }
@@ -224,7 +298,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumLootItems",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.loot.as_ref().map_or(0, LootState::count) as i64)
+            Ok(window_now(lua, &model).count as i64)
         })?,
     )?;
 
@@ -240,11 +314,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `Some(Some(row))` live, `Some(None)` cleared, `None` no such slot.
             let slot_state = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .loot
-                    .as_ref()
-                    .and_then(|l| slot.checked_sub(1).and_then(|n| l.rows.get(n)))
-                    .cloned()
+                slot_now(lua, &model, slot)
             };
             let Some(Some(row)) = slot_state else {
                 let cleared = slot_state.is_some();
@@ -286,11 +356,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let slot = binding_abi::index_arg(lua, slot, "Usage: GetLootSlotLink(slot)")?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .loot
-                    .as_ref()
-                    .and_then(|l| slot.checked_sub(1).and_then(|n| l.rows.get(n)))
-                    .and_then(|r| r.as_ref()?.link.clone())
+                slot_now(lua, &model, slot).and_then(|r| r?.link)
             };
             match link {
                 Some(link) => Ok(Value::String(lua.create_string(&link)?)),
@@ -306,8 +372,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let slot = binding_abi::index_arg(lua, slot, "Usage: LootSlotIsItem(slot)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(
-                slot.checked_sub(1)
-                    .and_then(|n| model.loot.as_ref()?.rows.get(n)?.as_ref())
+                slot_now(lua, &model, slot)
+                    .flatten()
                     .is_some_and(|r| !r.is_coin),
             ))
         })?,
@@ -320,8 +386,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let slot = binding_abi::index_arg(lua, slot, "Usage: LootSlotIsCoin(slot)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(
-                slot.checked_sub(1)
-                    .and_then(|n| model.loot.as_ref()?.rows.get(n)?.as_ref())
+                slot_now(lua, &model, slot)
+                    .flatten()
                     .is_some_and(|r| r.is_coin),
             ))
         })?,
@@ -332,7 +398,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // `0x4c2740` reads the type cell unguarded: a close leaves it.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.loot_type == FISHING))
+            Ok(flag(window_now(lua, &model).loot_type == FISHING))
         })?,
     )?;
 
@@ -383,23 +449,34 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetMasterLootCandidate(index): nil, never an error, out of range or on an empty slot, since
     // `GroupLootDropDown_Initialize` probes slots 1-5 in a party and 1-40 in a raid and reads nil
-    // as nobody (`LootFrame.lua:168-232`).
+    // as nobody (`LootFrame.lua:168-232`). The array is the list packet's, window or not
+    // (`0x61c660`); a name the cache misses answers nil and registers the callback that signals
+    // `UPDATE_MASTER_LOOT_LIST` when it lands (`0x4c2f65`-`0x4c2f91`).
     g.set(
         "GetMasterLootCandidate",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetMasterLootCandidate(index)` (`0x848094`, `0x4c2f27`).
             let index =
                 binding_abi::index_arg32(lua, index, "Usage: GetMasterLootCandidate(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let name = index.checked_sub(1).and_then(|i| {
-                model
-                    .loot
-                    .as_ref()?
-                    .master_candidates
-                    .get(i as usize)?
-                    .clone()
-            });
-            Ok(name)
+            let Some(i) = index.checked_sub(1) else {
+                return Ok(None);
+            };
+            let live = ask(lua, &MasterLootCandidateQuery { index: i as usize });
+            match live {
+                Some(MasterLootCandidate::Named(name)) => Ok(Some(name)),
+                Some(MasterLootCandidate::Unnamed(guid)) => {
+                    super::calls::ask(lua, RecordAsk::MasterLootName(guid))?;
+                    Ok(None)
+                }
+                Some(MasterLootCandidate::Nobody) => Ok(None),
+                None => {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    Ok(model
+                        .loot
+                        .as_ref()
+                        .and_then(|l| l.master_candidates.get(i as usize)?.clone()))
+                }
+            }
         })?,
     )?;
 

@@ -909,6 +909,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::AuctionName { guid, list }) => {
                 appliers.auction().wait_for_name(guid, list);
             }
+            ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::MasterLootName(guid)) => {
+                appliers.loot().wait_for_name(guid);
+            }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(script, ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
         }

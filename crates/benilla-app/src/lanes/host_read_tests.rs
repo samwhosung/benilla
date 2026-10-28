@@ -37,8 +37,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 35;
-const FRAME_FINAL_INPUTS: usize = 190;
+const FRAME_FINAL_FEEDS: usize = 34;
+const FRAME_FINAL_INPUTS: usize = 181;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -126,6 +126,9 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
     ("::ui_mail::step_pending_mail", &["ui_mail::pending::MailPending"],
         "steps the pending-mail time in the world frame's update (its slot `0x38`, `0x4818d0` → \
          `0x4ade60`), which the frame pass runs after the packets (`0x420d6a` after `0x420d55`)"),
+    ("::ui_loot::drop_loot_steps", &["ui_loot::LootState"],
+        "drops the loot lane's window signals, its pushes kept, run only while no in-game \
+         interface is up, so no listener exists"),
     ("::ui_mail::lane::drop_mail_events", &["ui_mail::pending::MailPending"],
         "drops the mail lane, a parked close's tail with its query kept, run only while no \
          in-game interface is up, so no listener exists"),

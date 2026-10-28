@@ -351,6 +351,10 @@ pub enum RecordAsk {
     /// cache misses: the player-name cache by guid, with the list's callback (`0x4cf290`,
     /// `0x4cf2b0`, `0x4cf2d0`), kept once per name and list (`0x55f080`'s dedupe flag 1).
     AuctionName { guid: u64, list: usize },
+    /// `GetMasterLootCandidate` on a candidate the name cache misses: the player-name cache by
+    /// guid with the callback `0x4c2fb0`, kept once per call (dedupe flag 0, `0x4c2f61`), which
+    /// signals `UPDATE_MASTER_LOOT_LIST` when the name lands found (`0x4c2fb6`-`0x4c2fbf`).
+    MasterLootName(u64),
     /// `GetSendMailItem` on an attachment whose record the mirror lacks, by its object's guid:
     /// for an object the engine holds (`0x468460`, `0x4ae5e1`), the item cache by the object's
     /// entry (`[[obj+0x8]+0xc]`, `0x4ae5e7`-`0x4ae5f2`) with guid 0 (`0x4ae5ec`-`0x4ae5ef`) and the

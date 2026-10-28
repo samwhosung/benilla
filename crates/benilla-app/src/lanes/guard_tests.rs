@@ -407,9 +407,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore", "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_craft::CraftItemWaits", "ui_craft::CraftOpen",
         "ui_pet::PetBar"]),
-    ("::ui_loot::feed_loot", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
-        "ui_loot::LootState", "ui_party::GroupState"]),
     ("::ui_loot_roll::feed_loot_rolls", &["items::Items", "names::NameCache", "net::SelfGuid",
         "ui_loot_roll::LootRolls"]),
     ("::ui_quest::lines::feed_quest_lines", &["items::Items", "ui_quest::lines::QuestLines",
@@ -1767,8 +1764,9 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::ObjectStore", "ui_trade::TradeSession"]),
     ("auction house", &["items::Items", "names::NameCache", "net::SelfGuid",
         "ui_auction::AuctionOpen"]),
-    // The master-loot candidates placed and named off the raid roster's subgroups as the frame
-    // left it, not as the push's packet did (`0x61c550`, #2217).
+    // The sweep's party and raid test (`0x4c2030`, `0x4c203d`), the pushes' owners and their
+    // names, the source's object and the records a copier and a push read, as the frame left them
+    // (#2217); the getters read the window each step's packet left through the host.
     ("loot", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
         "ui_loot::LootMoveStart", "ui_party::GroupState"]),

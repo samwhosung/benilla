@@ -85,9 +85,10 @@ fn legs_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
 
 /// Open every window a leg closes.
 fn open_everything(world: &mut World) {
-    world
-        .resource_mut::<crate::ui_loot::LootState>()
-        .open(CORPSE, 1, 0, Vec::new());
+    // Its `LOOT_OPENED` long fired, so the leg finds no open still queued on the loot lane.
+    let mut loot = world.resource_mut::<crate::ui_loot::LootState>();
+    loot.open(CORPSE, 1, 0, Vec::new());
+    loot.signals_fired();
     world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
     world
         .resource_mut::<crate::ui_item_text::ItemTextOpen>()

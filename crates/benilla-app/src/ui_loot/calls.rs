@@ -12,7 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::{
-    bind_confirm_required, close_interaction_in_place, show, unlock_closed_source, AutoLootByte,
+    bind_confirm_required, close_interaction_in_place, unlock_closed_source, AutoLootByte,
     DeadUnitDeselect, LootAction, LootConfig, LootLatch, LootState,
 };
 use crate::items::Items;
@@ -54,8 +54,8 @@ pub(super) enum Then {
     /// A close's two unlocks (`0x48f2bd`, `0x4c1d36`), after the line its flag shows
     /// (`0x48f27b`).
     Unlocks,
-    /// A close's teardown after its unlocks' signals: the window goes and `LOOT_CLOSED`
-    /// (`0x4c1dac`).
+    /// A close's teardown after its unlocks' signals: the source zeroed and `LOOT_CLOSED`
+    /// (`0x4c1da0`, `0x4c1dac`).
     Announce,
     /// A close's last step after its window went: a dead unit's deselect (`0x48f369`).
     Deselect(u64),
@@ -78,6 +78,8 @@ pub(crate) struct LootSteps<'w, 's> {
     group: Res<'w, GroupState>,
     pickup: MessageWriter<'w, crate::sound::LootPickupSound>,
     errors: Res<'w, UiErrorKeys>,
+    /// The name cache a candidate's lookup asks; absent in a harness without it.
+    names: Option<Res<'w, crate::names::NameCache>>,
     chat: Res<'w, crate::ui_chat::ChatLog>,
     cfg: Res<'w, LootConfig>,
 }
@@ -88,6 +90,17 @@ impl LootSteps<'_, '_> {
     pub(crate) fn close_for_stand(&mut self) {
         let closed = super::close_on_move_start(&mut self.loot, &mut self.latch, &self.net);
         self.dead.after_close(closed);
+    }
+
+    /// `GetMasterLootCandidate`'s lookup inside its call
+    /// ([`benilla_ui::script::RecordAsk::MasterLootName`]): the name cache asks a miss, and the
+    /// callback `0x4c2fb0` waits on the name, once per call (`0x4c2f61`). The getter makes it only on
+    /// a miss, having read the cache first ([`benilla_ui::script::MasterLootCandidateQuery`]).
+    pub(crate) fn wait_for_name(&mut self, guid: u64) {
+        if let Some(names) = self.names.as_deref() {
+            let _ = names.resolve_player(guid, crate::query_cache::Ask::Event(&self.net));
+        }
+        self.loot.wait_for_name(guid);
     }
 
     /// Apply `call` inside its verb. What its signals' listeners leave it to do runs in its tail,
@@ -176,14 +189,6 @@ impl LootSteps<'_, '_> {
                 // The money cell to -1 (`0x4c2858`) and `LOOT_SLOT_CLEARED` 1 (`0x4c2862`), whose
                 // listeners read the coin row gone.
                 self.loot.take_coin();
-                if let Some(mut shown) = script.shown_loot() {
-                    if shown.has_money {
-                        if let Some(coin) = shown.rows.first_mut() {
-                            *coin = None;
-                        }
-                    }
-                    script.set_loot(Some(shown));
-                }
                 script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(1)]);
                 self.loot.then.push(Then::CloseIfEmpty);
             }
@@ -272,9 +277,14 @@ impl LootSteps<'_, '_> {
         self.loot.then.push(Then::Unlocks);
     }
 
-    /// `0x4c2940`: nothing with no window (`0x4c2953`) or for a row that is no master row
-    /// (`0x4c298e`); else `CMSG_LOOT_MASTER_GIVE` with the row's wire slot and the candidate.
+    /// `GiveMasterLoot` (`0x4c2fd0`): the candidate at the 1-based index of the list packet's
+    /// array (`0x61c660`), nothing for a zero one (`0x4c3021`); then `0x4c2940`: nothing with no
+    /// window (`0x4c2953`) or for a row that is no master row (`0x4c298e`); else
+    /// `CMSG_LOOT_MASTER_GIVE` with the row's wire slot and the candidate.
     fn give_master(&mut self, slot: u32, candidate: u32) {
+        let target = candidate
+            .checked_sub(1)
+            .and_then(|i| self.loot.master_candidate(i as usize));
         let window = &self.loot.window;
         let Some(guid) = window.source else {
             return;
@@ -286,10 +296,7 @@ impl LootSteps<'_, '_> {
                 ..
             }),
             Some(target),
-        ) = (
-            window.action_at(slot),
-            window.master_candidate(candidate, &self.group),
-        )
+        ) = (window.action_at(slot), target)
         else {
             debug!("ui_loot: GiveMasterLoot({slot}, {candidate}) unresolvable — ignored");
             return;
@@ -424,7 +431,7 @@ impl LootSteps<'_, '_> {
                 }
             }
             Then::Unlocks => unlock_closed_source(script, &mut self.loot, &self.objects),
-            Then::Announce => show(script, None),
+            Then::Announce => self.loot.tear_down_here(script),
             Then::Deselect(source) => self.dead.deselect(source),
             Then::OpenItem(open) => self.send_open_item(script, open),
         }

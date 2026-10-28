@@ -816,13 +816,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // `is-number` else the client's `Invalid loot slot in SetInventoryItem`, its text
             // naming the other method (`0x855310`, `0x533528`).
             let slot = binding_abi::index_arg(lua, slot, "Invalid loot slot in SetInventoryItem")?;
+            // The row as the window holds it at the call (`0x533551`, `0x4c22a0`).
             let row = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .loot
-                    .as_ref()
-                    .and_then(|l| slot.checked_sub(1).and_then(|n| l.rows.get(n)))
-                    .and_then(|r| r.clone())
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                super::loot::slot_now(lua, &model, slot)
+                    .flatten()
                     .filter(|r| !r.is_coin && r.item_id != 0)
             };
             let Some(row) = row else {

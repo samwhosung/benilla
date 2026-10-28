@@ -552,6 +552,8 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     }
     let mut loot = crate::ui_loot::LootState::default();
     loot.open(CLAM, 1, 0, Vec::new());
+    // Its `LOOT_OPENED` long fired, so the leg finds no open still queued on the loot lane.
+    loot.signals_fired();
     world.insert_resource(loot);
     // The clam's own object, `OBJECT_FIELD_TYPE` object and item, which the close looks up
     // (`0x48f29e`) before its unlock.

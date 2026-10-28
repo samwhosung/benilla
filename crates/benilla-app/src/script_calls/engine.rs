@@ -244,6 +244,10 @@ impl RecordAsks<'_, '_> {
             RecordAsk::AuctionName { guid, list } => {
                 debug!("record ask: auction name {guid:#x} for list {list} has no house here");
             }
+            // The loot steps keep its wait ([`crate::ui_loot::LootSteps::wait_for_name`]).
+            RecordAsk::MasterLootName(guid) => {
+                debug!("record ask: master-loot candidate {guid:#x} has no loot window here");
+            }
             RecordAsk::Mail { mail_id, lookup } => self.mail.look_up(&self.net, mail_id, lookup),
         }
     }

@@ -19,6 +19,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::LootClearMoney, on_clear_money)
         .net_handler(K::LootReleaseResponse, on_release_response)
         .net_handler(K::LootMasterList, on_master_list)
+        .net_handler(K::PlayerName, on_player_name)
         .net_handler(K::FishNotHooked, on_fish_verdict)
         .net_handler(K::FishEscaped, on_fish_verdict)
         .net_handler(K::ItemPushResult, on_item_push_result)
@@ -228,9 +229,21 @@ fn on_release_response(
     }
 }
 
-fn on_master_list(In(ev): In<SessionEvent>, mut loot: ResMut<LootState>) {
+fn on_master_list(
+    In(ev): In<SessionEvent>,
+    mut loot: ResMut<LootState>,
+    group: Res<crate::ui_party::GroupState>,
+) {
     if let SessionEvent::LootMasterList { candidates } = ev {
-        loot_master_list(candidates, &mut loot);
+        loot_master_list(&candidates, &mut loot, &group);
+    }
+}
+
+/// The name answer runs the candidate lookups' callbacks waiting on the guid, after the cache
+/// filed it (`0x55f426`-`0x55f452`); an empty name is the answer for an unknown guid.
+fn on_player_name(In(ev): In<SessionEvent>, mut loot: ResMut<LootState>) {
+    if let SessionEvent::PlayerName { guid, name, .. } = ev {
+        loot.name_answered(guid, !name.is_empty());
     }
 }
 
@@ -445,10 +458,11 @@ fn loot_release_response(
     super::close_interaction(loot, latch, None)
 }
 
-/// `SMSG_LOOT_MASTER_LIST`, staged: it lands just ahead of the response it belongs to.
-fn loot_master_list(candidates: Vec<u64>, loot: &mut LootState) {
+/// `SMSG_LOOT_MASTER_LIST` (`0x61c550`): the candidate array, placed off the roster as this packet
+/// finds it. vmangos sends it just ahead of the response it belongs to (`Player.cpp:8080`).
+fn loot_master_list(candidates: &[u64], loot: &mut LootState, group: &crate::ui_party::GroupState) {
     debug!("net: master-loot candidates: {} eligible", candidates.len());
-    loot.set_master_candidates(candidates);
+    loot.set_master_candidates(candidates, group);
 }
 
 /// `OnItemPush 0x491a60`'s arm (`0x491b56`/`0x491b61`): only our own push animates and its own
@@ -1711,11 +1725,12 @@ mod tests {
         );
     }
 
-    /// A copier waiting on a record ends at the answer (`0x4c2afc`), ahead of a release in the
-    /// same frame: its sweep belongs to its own window while it is open, so a window the release
-    /// closed since sweeps nothing and signals `LOOT_OPENED` as an unswept end does.
+    /// A copier waiting on a record ends at the answer (`0x4c2afc`), inside the item answer's
+    /// handler (`0x55bdb0`), ahead of a release in the same frame: its sweep runs on the window as
+    /// that answer found it, still open, so it stores the row (`0x4c2b1d` → `0x4c1fa0`) and signals
+    /// `LOOT_OPENED` with the row left (`0x4c2240`), and the release's close comes after.
     #[test]
-    fn a_sweep_owed_to_a_window_closed_since_sends_nothing() {
+    fn a_sweep_owed_at_the_answer_runs_on_the_window_the_answer_found() {
         const LINEN: u32 = 2589;
         let mut app = App::new();
         let rx = seat_tabbed(app.world_mut());
@@ -1773,7 +1788,10 @@ mod tests {
         rx.try_iter().for_each(drop);
         app.update();
         let sent: Vec<_> = rx.try_iter().collect();
-        assert!(sent.is_empty(), "{sent:?}");
+        assert!(
+            matches!(sent[..], [ClientCommand::AutostoreLootItem { slot: 0 }]),
+            "{sent:?}"
+        );
         let opens = app
             .world_mut()
             .non_send_resource_mut::<benilla_ui::script::UiScript>()

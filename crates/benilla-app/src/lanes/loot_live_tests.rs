@@ -1,0 +1,374 @@
+//! The loot getters as a listener reads them, and the loot window's events at their packets. The
+//! getters read the window's cells and rows at the call (`0x4c2260`, `0x4c22a0`-`0x4c2670`,
+//! `0x4c2740`) and the candidate array the list packet placed (`0x61c660`); the events fire inside
+//! the handler that raises them: the copier's end (`0x4c1ee1`), a removal's (`0x4c1f77`,
+//! `0x4c276f`), a close's teardown (`0x4c1dac`) and a candidate name's callback (`0x4c2fba`), and a
+//! close the leave-world sweep makes waits behind what the lane still holds.
+
+use benilla_protocol::field::FIELD_UNIT_HEALTH;
+use benilla_protocol::messages::{loot_type, slot_type, ItemInfo, LootItem};
+use benilla_protocol::{EntityKind, SessionEvent};
+use benilla_ui::script::UiScript;
+use bevy::prelude::*;
+use crossbeam_channel::{Receiver, Sender};
+
+use super::unit_view_tests::{created, wire_packets};
+use crate::net::ClientCommand;
+use crate::ui_loot::{LootLatch, LootState};
+
+const ME: u64 = 0x7;
+const THRALL: u64 = 0x22;
+const CORPSE: u64 = 0xF130_0000_0000_00AB;
+const SECOND: u64 = 0xF130_0000_0000_00AC;
+const LINEN: u32 = 2589;
+const WOOL: u32 = 2592;
+
+/// The whole client, headless, in the world.
+struct Client {
+    app: App,
+    inbound: Sender<SessionEvent>,
+    sent: Receiver<ClientCommand>,
+}
+
+impl Client {
+    /// One frame of the client's, with `packets` in the inbound channel, each one packet.
+    fn frame(&mut self, packets: Vec<Vec<SessionEvent>>) {
+        for ev in wire_packets(packets) {
+            self.inbound.send(ev).expect("the inbound channel");
+        }
+        self.app.update();
+    }
+
+    /// `chunk`'s answer through the lent host when `live`, else off the VM's copy alone.
+    fn eval<T: benilla_ui::mlua::FromLuaMulti>(&mut self, live: bool, chunk: &str) -> T {
+        if live {
+            crate::script_calls::with_hosted_vm(self.app.world_mut(), |s| {
+                s.expect("a VM").eval::<T>(chunk).expect("runs")
+            })
+        } else {
+            crate::script_calls::eval_in_vm(self.app.world(), chunk)
+        }
+    }
+
+    /// What the spy heard since the last call.
+    fn seen(&mut self) -> Vec<String> {
+        self.eval(false, "local s = Seen Seen = {} return s")
+    }
+
+    /// What went on the wire since the last call, as debug text.
+    fn sent(&mut self) -> Vec<String> {
+        self.sent.try_iter().map(|c| format!("{c:?}")).collect()
+    }
+
+    /// `packets` run through their handlers with no frame: the world as the handlers leave it.
+    fn handle(&mut self, packets: Vec<SessionEvent>) {
+        crate::net::handlers::dispatch(self.app.world_mut(), packets);
+        self.app.world_mut().flush();
+    }
+
+    /// Our `CMSG_LOOT` on `guid`, which arms the latch the response is admitted by (`0x5df253`).
+    fn ask_loot(&mut self, guid: u64) {
+        self.app.world_mut().resource_mut::<LootLatch>().0 = Some(guid);
+    }
+}
+
+/// The client in the world beside two corpses, the cloths' records held, and a spy whose line for
+/// each loot event and monster line carries its name and first argument.
+fn client() -> Client {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+        bevy::ecs::error::ignore,
+    ));
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let (inbound, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetEvents::for_test(rx));
+    app.update();
+    let script = UiScript::new().expect("a VM");
+    script
+        .run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED",
+                    "UPDATE_MASTER_LOOT_LIST", "CHAT_MSG_MONSTER_SAY"}) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. tostring(arg1))
+            end)
+            "#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+    benilla_world::world_point::init_world_point_resources(app.world_mut());
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    {
+        let mut items = app.world_mut().resource_mut::<crate::items::Items>();
+        for (entry, name) in [(LINEN, "Linen Cloth"), (WOOL, "Wool Cloth")] {
+            items.insert_template(
+                entry,
+                Some(ItemInfo {
+                    quality: 1,
+                    ..crate::items::test_template(name)
+                }),
+            );
+        }
+    }
+    let mut c = Client { app, inbound, sent };
+    c.frame(vec![vec![
+        created(ME, EntityKind::Player, &[(FIELD_UNIT_HEALTH, 100)]),
+        created(CORPSE, EntityKind::Unit, &[(FIELD_UNIT_HEALTH, 0)]),
+        created(SECOND, EntityKind::Unit, &[(FIELD_UNIT_HEALTH, 0)]),
+    ]]);
+    c.frame(vec![]);
+    c.seen();
+    c.sent();
+    c
+}
+
+fn row(slot: u8, entry: u32, kind: u8) -> LootItem {
+    LootItem {
+        slot,
+        item_id: entry,
+        count: 1,
+        display_info_id: 0,
+        random_property_id: 0,
+        slot_type: kind,
+    }
+}
+
+/// `guid`'s loot: `gold` copper and one row of each entry, in wire slots from 0.
+fn response(guid: u64, gold: u32, entries: &[u32]) -> SessionEvent {
+    SessionEvent::LootResponse {
+        guid,
+        loot_type: loot_type::CORPSE,
+        gold,
+        items: entries
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| row(i as u8, e, slot_type::ALLOW_LOOT))
+            .collect(),
+    }
+}
+
+/// A monster's line, which shows inside its own packet's handler on the chat lane.
+fn boar_says(text: &str) -> SessionEvent {
+    SessionEvent::Chat(benilla_protocol::messages::ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_MONSTER_SAY,
+        language: 0,
+        sender_guid: 0xF130_0000_0045_0003,
+        target_guid: 0,
+        sender_name: Some("Boar".into()),
+        channel: None,
+        text: text.into(),
+        chat_tag: 0,
+    })
+}
+
+/// The window as its getters read it: the count, then each row's name, `-` for a gap.
+const READ: &str = "local n = GetNumLootItems() local s = tostring(n) \
+    for i = 1, n do local _, name = GetLootSlotInfo(i) \
+    s = s .. '/' .. (LootSlotIsItem(i) and name or (LootSlotIsCoin(i) and 'coin' or '-')) end \
+    return s";
+
+/// A response and a removal land with no frame between: the getters read the session at the call,
+/// the removal's gap included, with no push; with no host the VM's copy, which nothing pushes,
+/// holds none.
+#[test]
+fn the_loot_getters_read_the_session_at_the_call() {
+    let mut c = client();
+    c.ask_loot(CORPSE);
+    c.handle(vec![response(CORPSE, 5, &[LINEN, WOOL])]);
+    assert_eq!(
+        c.eval::<String>(true, READ),
+        "3/coin/Linen Cloth/Wool Cloth"
+    );
+    c.handle(vec![SessionEvent::LootRemoved { slot: 0 }]);
+    assert_eq!(c.eval::<String>(true, READ), "3/coin/-/Wool Cloth");
+    assert!(!c.eval::<bool>(true, "return IsFishingLoot() == 1"));
+    assert_eq!(
+        c.eval::<String>(false, READ),
+        "0",
+        "the VM's copy holds nothing"
+    );
+}
+
+/// Each loot event fires at its packet's place among a chat line's of the packets around it: the
+/// copier's end, a row's and the coin's removals, and the release's close.
+#[test]
+fn the_loot_events_fire_at_their_packets() {
+    let mut c = client();
+    c.ask_loot(CORPSE);
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![response(CORPSE, 5, &[LINEN, WOOL])],
+        vec![boar_says("b")],
+        vec![SessionEvent::LootRemoved { slot: 1 }],
+        vec![boar_says("c")],
+        vec![SessionEvent::LootClearMoney],
+        vec![boar_says("d")],
+        vec![SessionEvent::LootReleaseResponse {
+            guid: CORPSE,
+            result: 1,
+        }],
+        vec![boar_says("e")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "LOOT_OPENED:nil",
+            "CHAT_MSG_MONSTER_SAY:b",
+            "LOOT_SLOT_CLEARED:3",
+            "CHAT_MSG_MONSTER_SAY:c",
+            "LOOT_SLOT_CLEARED:1",
+            "CHAT_MSG_MONSTER_SAY:d",
+            "LOOT_CLOSED:nil",
+            "CHAT_MSG_MONSTER_SAY:e",
+        ]
+    );
+    c.frame(vec![]);
+    assert!(c.seen().is_empty(), "nothing fires after");
+}
+
+/// The list packet places the candidates and signals nothing (`0x61c550`); a candidate the name
+/// cache misses answers nil and asks, and its answer signals `UPDATE_MASTER_LOOT_LIST` at its own
+/// packet (`0x4c2f70`, `0x4c2fba`), once per call that missed; an unknown name signals nothing.
+#[test]
+fn a_candidates_name_signals_the_update_at_its_answer() {
+    let mut c = client();
+    c.ask_loot(CORPSE);
+    c.frame(vec![
+        vec![SessionEvent::LootMasterList {
+            candidates: vec![THRALL],
+        }],
+        vec![SessionEvent::LootResponse {
+            guid: CORPSE,
+            loot_type: loot_type::CORPSE,
+            gold: 0,
+            items: vec![row(0, LINEN, slot_type::MASTER)],
+        }],
+    ]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil"], "the list signals nothing");
+    c.sent();
+    assert!(c.eval::<bool>(true, "return GetMasterLootCandidate(1) == nil"));
+    assert!(c.eval::<bool>(true, "return GetMasterLootCandidate(2) == nil"));
+    assert!(
+        c.sent().iter().any(|s| s.contains(&format!("{THRALL}"))),
+        "the miss asks the name"
+    );
+    c.eval::<()>(true, "GetMasterLootCandidate(1)");
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![SessionEvent::PlayerName {
+            guid: THRALL,
+            name: "Thrall".into(),
+            race: 2,
+            gender: 0,
+            class: 1,
+        }],
+        vec![boar_says("b")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "UPDATE_MASTER_LOOT_LIST:nil",
+            "UPDATE_MASTER_LOOT_LIST:nil",
+            "CHAT_MSG_MONSTER_SAY:b",
+        ],
+        "one callback per call that missed"
+    );
+    assert_eq!(
+        c.eval::<String>(true, "return GetMasterLootCandidate(1)"),
+        "Thrall"
+    );
+    c.frame(vec![vec![SessionEvent::PlayerName {
+        guid: THRALL,
+        name: "Thrall".into(),
+        race: 2,
+        gender: 0,
+        class: 1,
+    }]]);
+    assert!(
+        c.seen().is_empty(),
+        "an answer nothing waits on signals nothing"
+    );
+}
+
+/// A window and the leave-world sweep's close with no frame between: the close shuts the session
+/// at once and its `LOOT_CLOSED` waits behind the open on the lane, so the two fire in order and
+/// leave the window shut, read through the host or after.
+#[test]
+fn a_one_frame_open_then_close_leaves_no_stale_state() {
+    let mut c = client();
+    c.ask_loot(CORPSE);
+    c.handle(vec![response(CORPSE, 0, &[LINEN])]);
+    crate::ui_script::sweep_test::sweep_in_place(&mut c.app);
+    assert!(c.seen().is_empty(), "nothing fired ahead of the open");
+    assert!(
+        c.sent()
+            .iter()
+            .any(|s| s.starts_with("LootRelease") && s.contains(&format!("{CORPSE}"))),
+        "the release goes out at the close"
+    );
+    assert_eq!(c.app.world().resource::<LootState>().source(), None);
+    assert_eq!(c.app.world().resource::<LootLatch>().0, None);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil", "LOOT_CLOSED:nil"]);
+    assert_eq!(c.eval::<i64>(true, "return GetNumLootItems()"), 0);
+    c.frame(vec![]);
+    c.frame(vec![]);
+    assert!(c.seen().is_empty(), "nothing fires after");
+
+    // A release in the open's frame does the same at its packet.
+    c.ask_loot(CORPSE);
+    c.frame(vec![vec![
+        response(CORPSE, 0, &[LINEN]),
+        SessionEvent::LootReleaseResponse {
+            guid: CORPSE,
+            result: 1,
+        },
+    ]]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil", "LOOT_CLOSED:nil"]);
+    assert_eq!(c.eval::<i64>(true, "return GetNumLootItems()"), 0);
+    c.frame(vec![]);
+    assert!(c.seen().is_empty(), "nothing fires after");
+}
+
+/// Two corpses looted in one frame, each response admitted by its own `CMSG_LOOT`'s latch: the
+/// first's `LOOT_OPENED` listeners read the first's rows, the second's copier ends it with
+/// `LOOT_CLOSED` (`0x4c1dac`), its own listeners read its rows, and the window ends as the
+/// second's.
+#[test]
+fn a_second_corpse_in_the_frame_ends_with_its_loot() {
+    let mut c = client();
+    c.eval::<()>(
+        true,
+        &format!(
+            "Rows = {{}} local read = loadstring({READ:?}) local f = CreateFrame('Frame') \
+             f:RegisterEvent('LOOT_OPENED') \
+             f:SetScript('OnEvent', function() table.insert(Rows, read()) end)"
+        ),
+    );
+    c.ask_loot(CORPSE);
+    c.handle(vec![response(CORPSE, 0, &[LINEN])]);
+    c.ask_loot(SECOND);
+    c.handle(vec![response(SECOND, 0, &[WOOL, LINEN])]);
+    c.frame(vec![]);
+    assert_eq!(
+        c.seen(),
+        ["LOOT_OPENED:nil", "LOOT_CLOSED:nil", "LOOT_OPENED:nil"]
+    );
+    assert_eq!(
+        c.eval::<String>(true, "return table.concat(Rows, '|')"),
+        "1/Linen Cloth|2/Wool Cloth/Linen Cloth",
+        "each open's listeners read its own window"
+    );
+    assert_eq!(c.eval::<String>(true, READ), "2/Wool Cloth/Linen Cloth");
+    assert_eq!(c.app.world().resource::<LootState>().source(), Some(SECOND));
+    c.frame(vec![]);
+    assert!(c.seen().is_empty(), "nothing fires after");
+}
