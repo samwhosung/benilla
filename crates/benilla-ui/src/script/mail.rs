@@ -2,10 +2,11 @@
 //! the usable stationery and the packages through the lent host at the call ([`MailBoxQuery`],
 //! [`MailRowQuery`], [`NewMailQuery`], [`StationeryQuery`], [`StationeryTextureQuery`],
 //! [`PackageQuery`]), as the reference's read the session's records as they run (`0x4aeb90`,
-//! `0x4aebc0`, `0x4afea0`, `0x4ae1f0`, `0x4ae3f0`, `0x4ae430`); the VM's own copy ([`super::UiScript::set_mail`] and its siblings) answers only
-//! with no host, which only a test sets. A getter's lookup that misses asks inside its call, with
-//! the callback that signals `MAIL_INBOX_UPDATE` when the record lands ([`MailLookup`]). Each verb
-//! past its guards hands the host its call ([`MailCall`]), which sends inside it. Indices are
+//! `0x4aebc0`, `0x4afea0`, `0x4ae1f0`, `0x4ae3f0`, `0x4ae430`); the VM's own copy
+//! ([`super::UiScript::set_mail`] and its siblings) answers only with no host, which only a test
+//! sets. A getter's lookup that misses asks inside its call, with the callback that signals
+//! `MAIL_INBOX_UPDATE` when the record lands ([`MailLookup`]). Each verb past its guards hands the
+//! host its call ([`MailCall`]), which sends inside it. Indices are
 //! 1-based, as `MailFrame.lua` uses them.
 
 use mlua::{Lua, MultiValue, Value};

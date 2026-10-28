@@ -69,8 +69,9 @@ fn on_object_answer(
 /// templates and GlobalStrings an auction notice's subject is written from, and the profanity
 /// mask it runs on each subject.
 #[derive(bevy::ecs::system::SystemParam)]
-struct ListReads<'w, 's> {
-    paper: super::StationeryRebuild<'w, 's>,
+struct ListReads<'w> {
+    stationery: Option<Res<'w, super::Stationery>>,
+    usable: Option<Res<'w, super::UsableStationery>>,
     items: Res<'w, crate::items::Items>,
     filter: Option<Res<'w, crate::text_filter::TextFilter>>,
     switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
@@ -88,7 +89,12 @@ fn on_mail_list(
 ) {
     if let SessionEvent::MailList { mails } = ev {
         // The usable list's first paper as last rebuilt (`[[0xb6ee30]]`, `0x4ad559`-`0x4ad56d`).
-        let first_paper = reads.paper.list().and_then(|l| l.first()).map(|v| v.id);
+        let first_paper = reads
+            .stationery
+            .as_ref()
+            .and(reads.usable.as_deref())
+            .and_then(|u| u.list().first())
+            .map(|v| v.id);
         let enabled = reads.switches.as_deref().is_some_and(|s| s.profanity);
         let get_text = |key: &str| {
             reads

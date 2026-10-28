@@ -627,7 +627,7 @@ fn a_selected_paper_no_longer_usable_still_answers_its_texture() {
     assert_eq!(
         c.eval::<String>(
             true,
-            "local n = GetNumStationeries() SelectStationery(1)              return n .. '/' .. tostring(GetSelectedStationeryTexture())"
+            "local n = GetNumStationeries() SelectStationery(1) return n .. '/' .. tostring(GetSelectedStationeryTexture())"
         ),
         "1/PAPER"
     );

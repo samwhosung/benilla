@@ -460,6 +460,9 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // The usable stationery list, whose first paper the list parse gives a row with none
+    // (`0x4ad565`); the paper callback's handler writes it, through its own `ResMut`.
+    "::ui_mail::stationery::UsableStationery",
     // `ItemBagFamily.dbc`, which the inventory refusal's handler names a bag's family by
     // (`0x5ede00`).
     "::ui_items::ItemBagFamilies",

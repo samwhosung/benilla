@@ -27,6 +27,11 @@ pub(crate) struct UsableStationery {
 }
 
 impl UsableStationery {
+    /// The list as last rebuilt.
+    pub(crate) fn list(&self) -> &[StationeryView] {
+        &self.list
+    }
+
     /// The leave-world step's cancel (`0x4acc00`): each paper's callback `0x4acbf0` goes
     /// (`0x55c0c0` at `0x4acc2d`), and the count stays as it stands.
     pub(crate) fn cancel_waits(&mut self) {
