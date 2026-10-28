@@ -21,6 +21,17 @@ use crate::query_cache::Ask;
 pub(crate) struct UsableStationery {
     list: Vec<StationeryView>,
     awaited: Vec<u32>,
+    /// The leave-world step cancelled the waits' callbacks (`0x4acc15`-`0x4acc2d`) and left the
+    /// count set: an answer counts nothing down until the next init.
+    cancelled: bool,
+}
+
+impl UsableStationery {
+    /// The leave-world step's cancel (`0x4acc00`): each paper's callback `0x4acbf0` goes
+    /// (`0x55c0c0` at `0x4acc2d`), and the count stays as it stands.
+    pub(crate) fn cancel_waits(&mut self) {
+        self.cancelled = true;
+    }
 }
 
 /// The list and what its rebuild reads: the store, the item records and icons, and the player's
@@ -71,7 +82,7 @@ impl StationeryRebuild<'_, '_> {
     /// `entry`'s answer, a record or a refusal: each awaited row's callback counts it down
     /// (`0x4acbf0`), and the one that reaches zero rebuilds the list (`0x4acbf8`).
     pub(crate) fn answered(&mut self, entry: u32, items: &Items) {
-        let Some(usable) = self.usable.as_deref_mut() else {
+        let Some(usable) = self.usable.as_deref_mut().filter(|u| !u.cancelled) else {
             return;
         };
         let before = usable.awaited.len();
@@ -108,6 +119,7 @@ pub(super) fn count_papers_on_enter(
     if let Some(mut paper) = paper {
         if let Some(usable) = paper.usable.as_deref_mut() {
             usable.awaited = missed;
+            usable.cancelled = false;
         }
         paper.rebuild_unless_awaited(items);
     }

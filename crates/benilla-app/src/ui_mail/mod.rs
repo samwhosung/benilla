@@ -257,14 +257,24 @@ pub(crate) fn close_core(world: &mut World) {
 /// attachment's lock in the VM the sweep runs in (`0x4acdd6`); then the mailbox is forgotten with
 /// no `MAIL_CLOSED`, no interaction release and no refresh (`0x4acd5f`-`0x4acd6b`), the `cl`
 /// arm the close button's `0x4acd71` skips to. The latch still names the mailbox, which the
-/// sweep's interaction close then finds no window for.
-pub(crate) fn close_mail_on_leave_world(mut vm: VmWith<ResMut<'static, MailOpen>>) {
+/// sweep's interaction close then finds no window for. Then each paper's wait is cancelled
+/// (`0x4acc15`-`0x4acc2d`).
+pub(crate) fn close_mail_on_leave_world(
+    mut vm: VmWith<(
+        ResMut<'static, MailOpen>,
+        Option<ResMut<'static, UsableStationery>>,
+    )>,
+) {
     vm.run(|script| {
         if let Some(script) = script {
             script.reset_compose_tab_silently();
         }
     });
-    vm.own().clear();
+    let (mut mail, usable) = vm.own();
+    mail.clear();
+    if let Some(mut usable) = usable {
+        usable.cancel_waits();
+    }
 }
 
 pub(crate) struct UiMailPlugin;

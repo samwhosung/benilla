@@ -694,3 +694,52 @@ fn a_paper_picked_up_between_rebuilds_changes_nothing_until_the_next() {
     assert_eq!(c.eval::<String>(true, first), "Plain Paper");
     assert_eq!(c.eval::<String>(true, read), "1/Free Paper");
 }
+
+/// The leave-world step cancels each paper's callback and leaves the count set
+/// (`0x4acc15`-`0x4acc2d`): a late answer neither counts down nor rebuilds, and
+/// `GetNumStationeries` rebuilds nothing while the count stands, until the next world-enter init
+/// starts it over.
+#[test]
+fn leaving_the_world_cancels_the_paper_waits() {
+    use bevy::ecs::system::RunSystemOnce;
+    const FREE: u32 = 9_312;
+    let mut c = client();
+    c.app
+        .world_mut()
+        .insert_resource(crate::ui_mail::Stationery(
+            benilla_formats::StationeryCatalog::from_rows(vec![benilla_formats::StationeryRow {
+                id: 6,
+                item: FREE,
+                texture: "FREE".into(),
+                flags: 1,
+            }]),
+        ));
+    c.app
+        .world_mut()
+        .write_message(crate::net::WorldEnterCascadeMessage);
+    c.frame(vec![]);
+    c.app
+        .world_mut()
+        .run_system_once(crate::ui_mail::close_mail_on_leave_world)
+        .expect("the sweep leg runs");
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: FREE,
+        info: Some(Box::new(crate::items::test_template("Free Paper"))),
+    }]]);
+    let read = "local first = tostring(GetStationeryInfo(1)) \
+        return first .. '/' .. GetNumStationeries()";
+    assert_eq!(
+        c.eval::<String>(true, read),
+        "nil/0",
+        "the late answer counts nothing"
+    );
+    c.app
+        .world_mut()
+        .write_message(crate::net::WorldEnterCascadeMessage);
+    c.frame(vec![]);
+    assert_eq!(
+        c.eval::<String>(true, read),
+        "Free Paper/1",
+        "the next init starts over"
+    );
+}
