@@ -308,10 +308,19 @@ fn a_records_answer_and_the_buyback_watch_signal_at_their_packets() {
 }
 
 /// A refusal's `MERCHANT_UPDATE` fires inside its walk, while the dying node stands: a listener's
-/// getter that asks the row again links its callback to the node and sends nothing, and the
-/// node's destroy frees it uncalled (`0x55bea8`, `0x55bed2`). A later call asks again.
+/// getter that asks the row again links its callback to the node and sends nothing. Raised by the
+/// last callback, the walk ends there and the node's destroy frees it uncalled (`0x55be9c`,
+/// `0x55bed2`); raised by one with a next, the walk reaches it, and its run with status 0 signals
+/// again, whose re-ask is then the last's. A later call asks again.
 #[test]
-fn a_getter_inside_a_refusals_walk_asks_nothing_and_keeps_nothing() {
+fn a_getter_inside_a_refusals_walk_asks_nothing() {
+    refusal_walk(false);
+    refusal_walk(true);
+}
+
+/// [`a_getter_inside_a_refusals_walk_asks_nothing`], with a trade getter's wait after the row's
+/// when `behind`.
+fn refusal_walk(behind: bool) {
     let mut c = client();
     c.handle(vec![list(vec![row(1, UNCACHED)])]);
     c.frame(vec![]);
@@ -326,11 +335,22 @@ fn a_getter_inside_a_refusals_walk_asks_nothing_and_keeps_nothing() {
         "#,
     );
     assert_eq!(c.item_queries(), 1);
+    if behind {
+        c.app
+            .world()
+            .resource::<crate::items::Items>()
+            .wait_for_trade_record(UNCACHED);
+    }
     c.frame(vec![vec![SessionEvent::ItemTemplate {
         entry: UNCACHED,
         info: None,
     }]]);
-    assert_eq!(c.seen(), ["MERCHANT_UPDATE:nil"]);
+    let updates: &[&str] = if behind {
+        &["MERCHANT_UPDATE:nil", "MERCHANT_UPDATE:nil"]
+    } else {
+        &["MERCHANT_UPDATE:nil"]
+    };
+    assert_eq!(c.seen(), updates, "the re-ask's run signals when reached");
     assert_eq!(c.eval::<String>(false, "return ReAsked"), "none");
     assert_eq!(c.item_queries(), 0, "nothing sent inside the walk");
     let waits = c

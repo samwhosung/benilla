@@ -690,7 +690,7 @@ pub(super) fn lane_types() -> [TypeId; 39] {
         // The list rebuilds a learn, an unlearn or a pet's spells owe, stamped at their packets.
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         // The field callbacks' lane: the signals each callback's legs parked, stamped under its
-        // edge.
+        // edge, and the refused records' walks gone on behind their signals.
         TypeId::of::<crate::field_callbacks::FieldCallbacks>(),
         // The release lane: the signals each selection teardown parked, stamped under its release.
         TypeId::of::<crate::target::Releases>(),

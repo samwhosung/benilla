@@ -204,7 +204,8 @@ fn paper_answered(
 /// registered, in the order they asked (`0x55ba30` links each at the head with the dedupe flag 0,
 /// and `0x55bf12`-`0x55bf39` walk from the tail), each in place: what a callback signals fires at
 /// this packet's place among the frame's other packets, and what it sends goes out ahead of a
-/// later packet's. A refusal is asked again by the next create or entry change of that entry.
+/// later packet's. A refusal walks the callbacks its own add as [`crate::items::Items`]'s walk says,
+/// and is asked again by the next create or entry change of that entry.
 fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
     let SessionEvent::ItemTemplate { entry, info } = ev else {
         return;
@@ -216,10 +217,63 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
         return;
     };
     items.insert_template(entry, info);
-    let walk = (!answered).then(|| items.begin_refusal_walk(entry));
     let callbacks = items.take_callbacks(entry);
     run_answer_step(world, crate::ui_items::feed::push_answered_record, entry);
-    for callback in callbacks {
+    if answered {
+        for callback in callbacks {
+            run_callback(world, entry, callback, true);
+        }
+        run_answer_step(world, run_answer_tail, entry);
+    } else {
+        walk_refusal(world, entry, callbacks, true);
+    }
+}
+
+/// A refusal's walk of `list` for `entry`, and with `tail` the callbacks run after the list; when
+/// a listener of what it signalled may add to it, the walk goes on behind those signals
+/// ([`continue_refusal_walk`]).
+fn walk_refusal(
+    world: &mut World,
+    entry: u32,
+    list: Vec<crate::items::RecordCallback>,
+    tail: bool,
+) {
+    let Some(items) = world.get_resource::<Items>() else {
+        return;
+    };
+    items.begin_refusal_walk(entry, list);
+    let from = items.walk_began();
+    while let Some(callback) = world.resource::<Items>().next_walk_step() {
+        run_callback(world, entry, callback, false);
+    }
+    if tail {
+        run_answer_step(world, run_answer_tail, entry);
+    }
+    if let (true, Some(from)) = (world.resource::<Items>().end_refusal_walk(), from) {
+        crate::field_callbacks::walk_on(world, entry, from);
+    }
+}
+
+/// The walk of `entry` that began at `from`, gone on behind its signals: what their listeners
+/// added, walked with status 0 in the order added.
+pub(crate) fn continue_refusal_walk(world: &mut World, entry: u32, from: crate::lanes::Mark) {
+    let Some(items) = world.get_resource::<Items>() else {
+        return;
+    };
+    let list = items.take_walk_tail(entry, from);
+    if !list.is_empty() {
+        walk_refusal(world, entry, list, false);
+    }
+}
+
+/// One callback of an answer's list, for a record (`answered`) or a refusal.
+fn run_callback(
+    world: &mut World,
+    entry: u32,
+    callback: crate::items::RecordCallback,
+    answered: bool,
+) {
+    {
         use crate::items::RecordCallback as Cb;
         match callback {
             // The equip callbacks run with the VM, their sends inside them.
@@ -237,10 +291,6 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
             Cb::QuestLog | Cb::Tooltip => {}
             _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
         }
-    }
-    run_answer_step(world, run_answer_tail, entry);
-    if let (Some(from), Some(items)) = (walk, world.get_resource::<Items>()) {
-        items.end_refusal_walk(entry, from);
     }
 }
 

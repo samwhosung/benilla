@@ -16,7 +16,7 @@
 //! among what the packets raised. The Lua a callback's cores signal is held as it runs and parked
 //! behind it on this module's lane ([`Parked`]), at a stamp taken as it ends. The item cache's
 //! answer parks its VM callbacks here too ([`crate::net::objects`]): the equip replays and the
-//! quest log's `QUEST_LOG_UPDATE`.
+//! quest log's `QUEST_LOG_UPDATE`; and a refused record's walk goes on here behind its signals.
 
 use std::collections::VecDeque;
 
@@ -28,10 +28,28 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use crate::lanes::{Stamp, Until};
 use crate::net::{AuraFieldsChanged, FieldChanged, NetHandlerApp};
 
-/// The Lua the callbacks' legs signalled, parked in the VM, each with its stamp and the VM's
-/// session and key, for the field callbacks' lane.
+/// The Lua the callbacks' legs signalled, parked in the VM, each with its stamp, for the field
+/// callbacks' lane.
 #[derive(Resource, Default)]
-pub(crate) struct FieldCallbacks(VecDeque<(Stamp, u64, u64)>);
+pub(crate) struct FieldCallbacks(VecDeque<(Stamp, Item)>);
+
+/// One item of the lane.
+#[derive(Clone, Copy)]
+pub(crate) enum Item {
+    /// A leg's signals, under the VM's session and key.
+    Parked(u64, u64),
+    /// A refused record's walk, gone on behind its signals
+    /// ([`crate::net::continue_refusal_walk`]).
+    Walk(u32, crate::lanes::Mark),
+}
+
+/// Queue the walk of `entry` that began at `from` to go on behind what it has signalled so far.
+pub(crate) fn walk_on(world: &mut World, entry: u32, from: crate::lanes::Mark) {
+    let at = crate::lanes::stamp();
+    if let Some(mut lane) = world.get_resource_mut::<FieldCallbacks>() {
+        lane.0.push_back((at, Item::Walk(entry, from)));
+    }
+}
 
 /// The VM's end, a reload's or the session's: what the callbacks parked goes with it.
 pub(crate) fn drop_parked(world: &mut World) {
@@ -114,7 +132,7 @@ impl Parked {
         if let Some((session, key)) = crate::script_calls::park_since(world, *mark) {
             let at = crate::lanes::stamp();
             if let Some(mut lane) = world.get_resource_mut::<FieldCallbacks>() {
-                lane.0.push_back((at, session, key));
+                lane.0.push_back((at, Item::Parked(session, key)));
             }
         }
     }
@@ -126,26 +144,28 @@ fn peek_parked(world: &World) -> Option<Stamp> {
         .get_resource::<FieldCallbacks>()?
         .0
         .front()
-        .map(|(at, ..)| *at)
+        .map(|(at, _)| *at)
 }
 
-/// Each leg's signals `until` admits, run as the firing of their stamp with the host lent; the
-/// lane stops after one whose firing stamped anything, so what it pushed fires next. It reads
-/// nothing beside the host and its own lane.
+/// Each item `until` admits, run as the firing of its stamp: a leg's signals with the host lent,
+/// or a walk's next callbacks. The lane stops after one whose firing stamped anything, so what it
+/// pushed fires next.
 fn fire_parked(In(until): In<Until>, world: &mut World) {
     loop {
-        let Some((at, session, key)) = world
+        let Some((at, item)) = world
             .resource::<FieldCallbacks>()
             .0
             .front()
             .copied()
-            .filter(|(at, ..)| until.admits(*at))
+            .filter(|(at, _)| until.admits(*at))
         else {
             return;
         };
         world.resource_mut::<FieldCallbacks>().0.pop_front();
-        let ((), moved) =
-            crate::lanes::firing(at, || crate::script_calls::run_parked(world, session, key));
+        let ((), moved) = crate::lanes::firing(at, || match item {
+            Item::Parked(session, key) => crate::script_calls::run_parked(world, session, key),
+            Item::Walk(entry, from) => crate::net::continue_refusal_walk(world, entry, from),
+        });
         if moved {
             return;
         }
@@ -160,7 +180,7 @@ pub(crate) fn fire_parked_lane(world: &mut World) {
         .resource::<FieldCallbacks>()
         .0
         .front()
-        .is_some_and(|(at, ..)| Until::all().admits(*at))
+        .is_some_and(|(at, _)| Until::all().admits(*at))
     {
         world
             .run_system_cached_with(fire_parked, Until::all())

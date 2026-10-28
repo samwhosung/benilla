@@ -125,7 +125,7 @@ pub(crate) fn firing_now() -> Option<Stamp> {
 pub(crate) fn firing_between(from: Mark, to: Mark) -> bool {
     FIRING
         .get()
-        .is_some_and(|s| (from.0..to.0).contains(&s.first()))
+        .is_some_and(|s| s.path().iter().any(|n| (from.0..to.0).contains(n)))
 }
 
 thread_local! {
