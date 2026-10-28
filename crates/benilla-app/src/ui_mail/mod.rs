@@ -282,9 +282,11 @@ impl Plugin for UiMailPlugin {
                 Update,
                 (
                     // In the frame time, after the input records and the packets, as the world
-                    // frame's update steps it (`0x4818d0`), with the in-game interface up.
+                    // frame's update steps it (`0x4818d0`), behind its walk-away watch
+                    // (`0x4818c0`) and that close's flush, with the in-game interface up.
                     step_pending_mail
                         .after(benilla_world::schedule::WorldStage::Net)
+                        .after(crate::ui_session::watch_interaction_range)
                         .before(UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
                     // The cascade's order: the time query, this, then the battlefield status.

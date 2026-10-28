@@ -15,6 +15,7 @@ use benilla_protocol::SessionEventKind;
 use benilla_world::schedule::WorldStage;
 
 mod latch;
+pub(crate) use latch::watch_interaction_range;
 #[cfg(test)]
 pub(crate) mod latch_tests;
 mod release;

@@ -86,7 +86,6 @@ impl MailVerbs<'_> {
                 return;
             }
             MailCall::ReadBody {
-                index: _,
                 mail_id,
                 text_id,
                 body,

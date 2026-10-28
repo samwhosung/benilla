@@ -184,7 +184,6 @@ pub enum MailCall {
     /// (`0x4af1bf`), and `body`, the row's expanded text as the call reads it, masked (`0x4af203`),
     /// the answer [`super::UiScript::answer_inbox_body`] leaves for the call.
     ReadBody {
-        index: u32,
         mail_id: u32,
         text_id: u32,
         body: Option<String>,
@@ -676,7 +675,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 submit(
                     lua,
                     MailCall::ReadBody {
-                        index,
                         mail_id: r.mail_id,
                         text_id: r.item_text_id,
                         body,

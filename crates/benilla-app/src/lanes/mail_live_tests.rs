@@ -459,3 +459,20 @@ fn the_pending_mail_crossing_fires_behind_the_frames_packets() {
     assert_eq!(crossing, Some(2), "after both lines, once: {seen:?}");
     assert_eq!(c.eval::<i64>(true, "return HasNewMail()"), 1);
 }
+
+/// A frame whose walk-away watch closes the mailbox and whose step crosses the countdown fires the
+/// close first: the world frame's update runs the watch (`0x4818c0` → `0x493305`) before the step
+/// (`0x4818d0` → `0x4adeba`).
+#[test]
+fn the_walk_away_close_fires_ahead_of_the_frames_pending_crossing() {
+    let mut c = client();
+    c.app
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+    c.handle(vec![SessionEvent::ReceivedMail { seconds: 0.001 }]);
+    c.open_mailbox();
+    assert_eq!(c.seen(), ["MAIL_SHOW:nil"]);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["MAIL_CLOSED:nil", "UPDATE_PENDING_MAIL:nil"]);
+}
