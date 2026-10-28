@@ -727,12 +727,12 @@ fn note_build(lua: &Lua, h: FrameHandle, spell_id: u32, misses: &[u32]) {
     }
 }
 
-/// `CGTooltip::OnSpellItemAnswer` (`0x52f820`) for every item record pushed since the last tick:
-/// each answer a tooltip waits on takes one off its count (`0x52f838`), and once none is owed
-/// (`0x52f847`) a tooltip still keeping a spell (`0x52f849`) builds it again fresh, with every
-/// other argument 0 (`0x52f862`), and sizes it (`0x52f867`). A refused record never answers
-/// (`0x52f826`).
-pub(super) fn answer_spell_items(lua: &Lua) -> Vec<mlua::Error> {
+/// `CGTooltip::OnSpellItemAnswer` (`0x52f820`) for every item record pushed since the last tick,
+/// or with `only`, for that entry's answer alone, at its packet: each answer a tooltip waits on
+/// takes one off its count (`0x52f838`), and once none is owed (`0x52f847`) a tooltip still
+/// keeping a spell (`0x52f849`) builds it again fresh, with every other argument 0 (`0x52f862`),
+/// and sizes it (`0x52f867`). A refused record never answers (`0x52f826`).
+pub(super) fn answer_spell_items(lua: &Lua, only: Option<u32>) -> Vec<mlua::Error> {
     let answered: Vec<(FrameHandle, usize)> = {
         let mut guard = lua.app_data_mut::<Model>().expect("model app_data");
         let model = &mut *guard;
@@ -746,7 +746,9 @@ pub(super) fn answer_spell_items(lua: &Lua) -> Vec<mlua::Error> {
                 continue;
             };
             let before = waits.len();
-            waits.retain(|entry| !model.item_templates.contains_key(entry));
+            waits.retain(|entry| {
+                !(only.is_none_or(|e| e == *entry) && model.item_templates.contains_key(entry))
+            });
             if !waits.is_empty() {
                 model.spell_item_waits.insert(h, waits.clone());
             }

@@ -72,6 +72,11 @@ pub(crate) enum ItemNotice {
     /// with no dedupe (`0x4c017f`, `0x4c0582`), so an answer writes one notice per call, after the
     /// notices of the handlers that registered earlier. It concerns no item of ours.
     TradeRecord { entry: u32 },
+    /// A record landed that tooltips wait on: the item tooltips' callback `0x52e530` rebuilds
+    /// each from what it keeps, and the spell tooltips' `0x52f820` counts its answers down
+    /// ([`crate::ui_items::feed::answer_vm_waits`]), for a found record only
+    /// (`0x52e551`, `0x52f826`). It concerns no item of ours.
+    TooltipRecord { entry: u32 },
 }
 
 /// What a notice asks of the trade's own column (`0x4bfb10`, `0x4bfb60`).
@@ -341,7 +346,7 @@ impl ItemNotice {
             Self::Seat { old, new } => old.iter().chain(new.iter()).copied().collect(),
             Self::Bag { entries } => entries.clone(),
             Self::Visible { old, new } => vec![*old, *new],
-            Self::TradeRecord { .. } => Vec::new(),
+            Self::TradeRecord { .. } | Self::TooltipRecord { .. } => Vec::new(),
         }
     }
 

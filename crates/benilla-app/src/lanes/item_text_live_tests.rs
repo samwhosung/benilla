@@ -373,7 +373,7 @@ fn the_caches_file_each_answer_ahead_of_the_readers_handler() {
         ),
         (
             K::ItemTemplate,
-            "net::objects::on_item",
+            "net::objects::on_item_answer",
             "ui_item_text::net::on_item_template",
         ),
         (

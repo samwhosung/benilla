@@ -573,6 +573,8 @@ mod quest_log_live_tests;
 #[cfg(test)]
 mod quiet_tests;
 #[cfg(test)]
+mod record_callback_tests;
+#[cfg(test)]
 mod reputation_live_tests;
 #[cfg(test)]
 mod requirement_live_tests;

@@ -153,6 +153,32 @@ fn a_trade_targets_key_answer_adds_its_locked_with_line_without_a_rehover() {
     assert!(s.take_errors().is_empty());
 }
 
+/// An answer at its packet runs the callbacks kept on its own key alone (`0x55bdb0` walks the
+/// node it decoded, `0x55bf12`): another entry's answer leaves the key's wait standing, though the
+/// VM's copy already holds the key, and the key's own rebuilds the tooltip.
+#[test]
+fn an_answer_rebuilds_only_the_tooltips_waiting_on_its_entry() {
+    let mut s = fixture();
+    s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetTradeTargetItem(1)")
+        .unwrap();
+    s.set_item_template(
+        KEY,
+        ItemTemplateView {
+            name: "Skeleton Key".into(),
+            quality: 1,
+            ..Default::default()
+        },
+    );
+    s.answer_item_tooltips(BAR);
+    assert_eq!(lines(&mut s, "TT"), ["Lockbox", "[LOCKED]"]);
+    s.answer_item_tooltips(KEY);
+    assert_eq!(
+        lines(&mut s, "TT"),
+        ["Lockbox", "[LOCKED]", "[LOCKED_WITH_ITEM Skeleton Key]"]
+    );
+    assert!(s.take_errors().is_empty());
+}
+
 /// The maker's name answers the name cache (`0x52e1f4`): each build that misses it asks the app,
 /// the bag slot's view carries it once the app re-pushes it, and the tooltip that lacked it
 /// rebuilds with the line.

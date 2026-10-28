@@ -1269,6 +1269,16 @@ pub(crate) fn defer_vm(world: &World) -> Option<(benilla_ui::script::Deferring, 
         .map(|vm| (vm.defer(), vm.waiting_mark()))
 }
 
+/// [`defer_vm`] whose leading calls go through the lent host at once
+/// ([`UiScript::defer_calls_through`]).
+pub(crate) fn defer_vm_calls_through(
+    world: &World,
+) -> Option<(benilla_ui::script::Deferring, usize)> {
+    world
+        .get_non_send_resource::<UiScript>()
+        .map(|vm| (vm.defer_calls_through(), vm.waiting_mark()))
+}
+
 /// Park what the world's VM has held since `mark` ([`UiScript::park_since`]); the VM's session
 /// and the key, `None` with nothing held or no VM.
 pub(crate) fn park_since(world: &mut World, mark: usize) -> Option<(u64, u64)> {

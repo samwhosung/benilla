@@ -384,10 +384,19 @@ pub(super) fn sell_amount(
     i64::from(amount)
 }
 
-/// `CGTooltip::OnCacheAnswer` (`0x52e530`) for every answer pushed since the last tick: each
-/// callback node an answer settles rebuilds its tooltip from the inputs it keeps then, so two
-/// answers are two rebuilds. A tooltip that keeps none takes the answer and stays as it is.
-pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
+/// Whether an item tooltip's build waits on the item record of `entry`.
+pub(in crate::script) fn waits_on(model: &Model, entry: u32) -> bool {
+    model
+        .item_cache_waits
+        .values()
+        .any(|w| w.contains(&CacheWait::Template(entry)))
+}
+
+/// `CGTooltip::OnCacheAnswer` (`0x52e530`) for every answer pushed since the last tick, or with
+/// `only`, for the item record cache's answer of that entry alone, at its packet: each callback
+/// node an answer settles rebuilds its tooltip from the inputs it keeps then, so two answers are
+/// two rebuilds. A tooltip that keeps none takes the answer and stays as it is.
+pub(in crate::script) fn answer_item_caches(lua: &Lua, only: Option<u32>) -> Vec<mlua::Error> {
     let due: Vec<(u32, FrameHandle, usize)> = {
         let mut guard = lua.app_data_mut::<Model>().expect("model app_data");
         let model = &mut *guard;
@@ -402,7 +411,8 @@ pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
                 continue;
             };
             let before = waits.len();
-            waits.retain(|w| !w.answered(lua, model, &mut sets));
+            let settles = |w: &CacheWait| only.is_none_or(|e| *w == CacheWait::Template(e));
+            waits.retain(|w| !(settles(w) && w.answered(lua, model, &mut sets)));
             let answers = before - waits.len();
             if !waits.is_empty() {
                 model.item_cache_waits.insert(h, waits);

@@ -1042,8 +1042,8 @@ impl Plugin for UiItemsPlugin {
                     feed_item_stats
                         .in_set(UnitFeed)
                         .before(crate::ui_cast::feed_cast_reports),
-                    // The equip callbacks an item record's answer ran, drained with the Lua's
-                    // asks, after the doll's feed has pushed what the answer changed.
+                    // The equip callbacks a lookup ran on a record the VM's copy lacked, after
+                    // the record feed has pushed it; an answer runs its own at its packet.
                     crate::ui_bind_confirm::replay_equip_records.in_set(crate::ui_script::UiDrain),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),

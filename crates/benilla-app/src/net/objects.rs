@@ -51,7 +51,7 @@ fn gameobject_anim_event(
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     update::register(app);
-    app.net_handler(K::ItemTemplate, on_item)
+    app.net_handler(K::ItemTemplate, on_item_answer)
         // Next, so the stationery rebuild reads the record the cache now holds.
         .net_handler(K::ItemTemplate, on_paper_record)
         .net_handler(K::ItemTime, on_item)
@@ -201,156 +201,198 @@ fn on_paper_record(
     }
 }
 
-/// Items past their create block: `SMSG_ITEM_QUERY_SINGLE_RESPONSE`, whose refusal the next
-/// create or entry change of that entry asks again; and the lifetime and enchant countdowns,
-/// written into the item's own [`crate::items::Countdowns`].
-fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
-    match ev {
-        SessionEvent::ItemTemplate { entry, info } => {
-            let info = info.map(|b| *b);
-            debug!("net: item template {entry} → {info:?}");
-            let answered = info.is_some();
-            sc.items.insert_template(entry, info);
-            // The callbacks the lookups that missed registered, in the order they asked
-            // (`0x55ba30`, the dedupe flag 0): each item's set-up (`0x5d8390`) and entry change's
-            // (`0x5d96b0`), the loot window's rows (`0x4c2ac0`) and pushes (`0x491ee0`), the trade
-            // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), the parked swaps'
-            // (`0x5e1020`) and auto-equips' (`0x5e17a0`), the vendor rows' (`0x4fada0`,
-            // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`), the questgiver rows'
-            // (`0x5018c0`), the turn-in's reward lines' (`0x5dc7b0`), the mail rows' and notices'
-            // (`0x4af0a0`, `0x4ad010`), the mail attachment's (`0x4ae710`) and the auction
-            // notices' lines (`0x4cd190`), and the group loot rolls' and their lines'
-            // (`0x61b460`, `0x61c4b0`, `0x61bd50`, `0x61b7d0`).
-            let callbacks = sc.items.take_callbacks(entry);
-            for callback in callbacks {
-                use crate::items::RecordCallback as Cb;
-                match callback {
-                    // A refusal finishes no set-up (its found byte is clear, `0x5d83b8`) and runs
-                    // no entry change (`0x5d96bb`).
-                    Cb::SetUp(_) | Cb::Entry(_) if !answered => {}
-                    Cb::SetUp(guid) => {
-                        let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
-                            .set_up_run(guid, entry, &sc.bag_cache);
-                        if run.notice.is_some() {
-                            replay_enchant_times(
-                                &mut sc.items,
-                                &mut sc.countdowns,
-                                &sc.index,
-                                guid,
-                            );
-                        }
-                        sc.item_lane.push(run);
-                    }
-                    Cb::Entry(guid) => {
-                        let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
-                            .entry_run(guid, entry, &sc.bag_cache);
-                        sc.item_lane.push(run);
-                    }
-                    // A refusal releases a row ([`crate::ui_loot`]'s deviation).
-                    Cb::LootRow => {
-                        if let Some(loot) = sc.loot.as_mut() {
-                            loot.row_answered(&sc.items);
-                        }
-                    }
-                    Cb::Push => {
-                        if let Some(loot) = sc.loot.as_mut() {
-                            loot.push_answered(&sc.items, entry);
-                        }
-                    }
-                    // The trade and the ammo getters' callbacks run for a ready record only
-                    // (`0x4c0343`, `0x4c84f6`).
-                    Cb::Trade if answered => sc.item_lane.push(crate::item_watch::Run {
-                        notice: Some(crate::item_watch::ItemNotice::TradeRecord { entry }),
-                        ..Default::default()
-                    }),
-                    Cb::Ammo if answered => {
-                        sc.field_notices
-                            .write(crate::field_watch::FieldNotice::Player {
-                                id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
-                            })
-                    }
-                    Cb::Trade | Cb::Ammo => {}
-                    // The equip callbacks run with the VM, after the feeds push the answer
-                    // ([`crate::ui_bind_confirm::replay_equip_records`]).
-                    Cb::Swap | Cb::AutoEquip => sc.items.run_with_vm(entry, callback, answered),
-                    // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
-                    Cb::Merchant => sc.merchant.row_answered(),
-                    Cb::Buyback => sc.merchant.buyback_answered(),
-                    // The trainer getters' run the state pass for a ready record only (`0x4d9146`,
-                    // `0x4d9db6`).
-                    Cb::Trainer if answered => sc.trainer.owed(),
-                    Cb::Trainer => {}
-                    // `QUEST_ITEM_UPDATE` for a ready record only (`0x5018d6`, `0x5018f5`,
-                    // `0x501903`), whatever the window shows then.
-                    Cb::Quest if answered => {
-                        if let Some(lane) = sc.quest_giver.as_mut() {
-                            lane.push(crate::ui_quest::QuestGiverEvent::ItemUpdate);
-                        }
-                    }
-                    Cb::Quest => {}
-                    // The turn-in's reward line, shown with a ready record (`0x5dc7b0`).
-                    Cb::QuestReward => {
-                        if let (Some(lines), Some(lane)) =
-                            (sc.quest_lines.as_mut(), sc.quest_giver.as_mut())
-                        {
-                            lines.item_answered(entry, &sc.items, lane);
-                        }
-                    }
-                    // `MAIL_INBOX_UPDATE` for a ready record only (`0x4af0a6`, `0x4ad016`); the
-                    // notice's subject reads the record as its row resolves.
-                    Cb::Mail if answered => {
-                        if let Some(lane) = sc.mail.as_mut() {
-                            lane.push(crate::ui_mail::MailEvent::InboxUpdate);
-                        }
-                    }
-                    Cb::Mail => {}
-                    // An auction notice's line, shown with the name or, for a refusal, dropped
-                    // (`0x4cd190`).
-                    Cb::AuctionMessage => {
-                        if let (Some(auction), Some(house)) =
-                            (sc.auction.as_mut(), sc.house.as_mut())
-                        {
-                            crate::ui_auction::message_answered(auction, house, &sc.items, entry);
-                        }
-                    }
-                    // `MAIL_SEND_INFO_UPDATE` for a ready record only (`0x4ae716`, `0x4ae71f`).
-                    Cb::SendMail if answered => {
-                        if let Some(lane) = sc.mail.as_mut() {
-                            lane.push(crate::ui_mail::MailEvent::SendInfoUpdate);
-                        }
-                    }
-                    Cb::SendMail => {}
-                    // `NEW_AUCTION_UPDATE` for a ready record only (`0x4ce2f6`-`0x4ce2ff`).
-                    Cb::AuctionSellItem if answered => {
-                        if let Some(house) = sc.house.as_mut() {
-                            crate::ui_auction::sell_item_answered(house);
-                        }
-                    }
-                    Cb::AuctionSellItem => {}
-                    // A roll's or its line's, for a record and a refusal alike: the start's opens
-                    // the roll (`0x61b460` → `0x61b430`), a line's goes on to its name or is shown
-                    // (`0x61c4b0`, `0x61bd50`, `0x61b7d0`).
-                    Cb::LootRoll(wait) => sc.loot_rolls.item_answered(
-                        wait,
-                        answered,
-                        &sc.items,
-                        &sc.names,
-                        &sc.net,
-                        sc.self_guid.0,
-                    ),
-                }
+/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE` as `ItemCacheReceive` (`0x55bdb0`, from the handler
+/// `0x555140`) runs it: the record stored, or the refusal taken, and the VM's copy with it
+/// ([`crate::ui_items::feed::push_answered_record`]), then every callback the lookups that missed
+/// registered, in the order they asked (`0x55ba30` links each at the head with the dedupe flag 0,
+/// and `0x55bf12`-`0x55bf39` walk from the tail), each in place: what a callback signals fires at
+/// this packet's place among the frame's other packets, and what it sends goes out ahead of a
+/// later packet's. A refusal is asked again by the next create or entry change of that entry.
+fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
+    let SessionEvent::ItemTemplate { entry, info } = ev else {
+        return;
+    };
+    let info = info.map(|b| *b);
+    debug!("net: item template {entry} → {info:?}");
+    let answered = info.is_some();
+    let Some(mut items) = world.get_resource_mut::<Items>() else {
+        return;
+    };
+    items.insert_template(entry, info);
+    let callbacks = items.take_callbacks(entry);
+    run_answer_step(world, crate::ui_items::feed::push_answered_record, entry);
+    for callback in callbacks {
+        use crate::items::RecordCallback as Cb;
+        match callback {
+            // The equip callbacks run with the VM, their sends inside them.
+            Cb::Swap | Cb::AutoEquip => {
+                crate::ui_bind_confirm::replay_at_answer(world, entry, callback, answered)
             }
-            // The combat log's callback for its held lines (`0x6294b0`), which writes each one
-            // whose item the cache now holds.
-            if let Some(chat) = &sc.chat {
-                chat.answer_landed(crate::ui_chat::Answer::Item(entry));
+            _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
+        }
+    }
+    run_answer_step(world, run_answer_tail, entry);
+    // The callbacks the VM keeps, which run for a found record only.
+    if answered {
+        crate::ui_items::feed::answer_vm_waits(world, entry);
+    }
+}
+
+/// Run one step of an answer's callbacks as a one-shot, its unit edits applied as it returns; a
+/// harness without its state runs nothing.
+fn run_answer_step<T: 'static, M>(
+    world: &mut World,
+    step: impl IntoSystem<In<T>, (), M> + 'static,
+    input: T,
+) {
+    if let Err(err) = world.run_system_cached_with(step, input) {
+        debug!("net: an item answer's callback did not run: {err}");
+    }
+    crate::creature_anim::apply_unit_edits(world);
+}
+
+/// One callback an item lookup registered, for the answer of `entry`, a record (`answered`) or a
+/// refusal: each item's set-up (`0x5d8390`) and entry change's (`0x5d96b0`), the loot window's rows
+/// (`0x4c2ac0`) and pushes (`0x491ee0`), the trade getters' (`0x4c0340`), the ammo getters'
+/// (`0x4c84f0`), the vendor rows' (`0x4fada0`, `0x4fb570`), the trainer rows' (`0x4d9140`,
+/// `0x4d9db0`), the questgiver rows' (`0x5018c0`), the turn-in's reward lines' (`0x5dc7b0`), the
+/// mail rows' and notices' (`0x4af0a0`, `0x4ad010`), the mail attachment's (`0x4ae710`) and the
+/// auction notices' lines (`0x4cd190`). The equip callbacks are the VM's
+/// ([`crate::ui_bind_confirm::replay_at_answer`]).
+fn run_record_callback(
+    In((entry, callback, answered)): In<(u32, crate::items::RecordCallback, bool)>,
+    mut sc: Scene,
+) {
+    use crate::items::RecordCallback as Cb;
+    match callback {
+        // A refusal finishes no set-up (its found byte is clear, `0x5d83b8`) and runs
+        // no entry change (`0x5d96bb`).
+        Cb::SetUp(_) | Cb::Entry(_) if !answered => {}
+        Cb::SetUp(guid) => {
+            let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).set_up_run(
+                guid,
+                entry,
+                &sc.bag_cache,
+            );
+            if run.notice.is_some() {
+                replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
             }
-            // The auction lists' callbacks (`0x4cc9bf`, `0x4ccbff`, `0x4cce4f`), a record or a
-            // refusal: a page that now waits on nothing runs its tail.
-            if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
-                crate::ui_auction::record_answered(auction, house, &sc.items, entry);
+            sc.item_lane.push(run);
+        }
+        Cb::Entry(guid) => {
+            let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).entry_run(
+                guid,
+                entry,
+                &sc.bag_cache,
+            );
+            sc.item_lane.push(run);
+        }
+        // A refusal releases a row ([`crate::ui_loot`]'s deviation).
+        Cb::LootRow => {
+            if let Some(loot) = sc.loot.as_mut() {
+                loot.row_answered(&sc.items);
             }
         }
+        Cb::Push => {
+            if let Some(loot) = sc.loot.as_mut() {
+                loot.push_answered(&sc.items, entry);
+            }
+        }
+        // The trade and the ammo getters' callbacks run for a ready record only
+        // (`0x4c0343`, `0x4c84f6`).
+        Cb::Trade if answered => sc.item_lane.push(crate::item_watch::Run {
+            notice: Some(crate::item_watch::ItemNotice::TradeRecord { entry }),
+            ..Default::default()
+        }),
+        Cb::Ammo if answered => sc
+            .field_notices
+            .write(crate::field_watch::FieldNotice::Player {
+                id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+            }),
+        Cb::Trade | Cb::Ammo => {}
+        Cb::Swap | Cb::AutoEquip => {}
+        // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
+        Cb::Merchant => sc.merchant.row_answered(),
+        Cb::Buyback => sc.merchant.buyback_answered(),
+        // The trainer getters' run the state pass for a ready record only (`0x4d9146`,
+        // `0x4d9db6`).
+        Cb::Trainer if answered => sc.trainer.owed(),
+        Cb::Trainer => {}
+        // `QUEST_ITEM_UPDATE` for a ready record only (`0x5018d6`, `0x5018f5`,
+        // `0x501903`), whatever the window shows then.
+        Cb::Quest if answered => {
+            if let Some(lane) = sc.quest_giver.as_mut() {
+                lane.push(crate::ui_quest::QuestGiverEvent::ItemUpdate);
+            }
+        }
+        Cb::Quest => {}
+        // The turn-in's reward line, shown with a ready record (`0x5dc7b0`).
+        Cb::QuestReward => {
+            if let (Some(lines), Some(lane)) = (sc.quest_lines.as_mut(), sc.quest_giver.as_mut()) {
+                lines.item_answered(entry, &sc.items, lane);
+            }
+        }
+        // `MAIL_INBOX_UPDATE` for a ready record only (`0x4af0a6`, `0x4ad016`); the
+        // notice's subject reads the record as its row resolves.
+        Cb::Mail if answered => {
+            if let Some(lane) = sc.mail.as_mut() {
+                lane.push(crate::ui_mail::MailEvent::InboxUpdate);
+            }
+        }
+        Cb::Mail => {}
+        // An auction notice's line, shown with the name or, for a refusal, dropped
+        // (`0x4cd190`).
+        Cb::AuctionMessage => {
+            if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
+                crate::ui_auction::message_answered(auction, house, &sc.items, entry);
+            }
+        }
+        // `MAIL_SEND_INFO_UPDATE` for a ready record only (`0x4ae716`, `0x4ae71f`).
+        Cb::SendMail if answered => {
+            if let Some(lane) = sc.mail.as_mut() {
+                lane.push(crate::ui_mail::MailEvent::SendInfoUpdate);
+            }
+        }
+        Cb::SendMail => {}
+        // `NEW_AUCTION_UPDATE` for a ready record only (`0x4ce2f6`-`0x4ce2ff`).
+        Cb::AuctionSellItem if answered => {
+            if let Some(house) = sc.house.as_mut() {
+                crate::ui_auction::sell_item_answered(house);
+            }
+        }
+        Cb::AuctionSellItem => {}
+        // A roll's or its line's, for a record and a refusal alike: the start's opens the roll
+        // (`0x61b460` → `0x61b430`), a line's goes on to its name or is shown (`0x61c4b0`,
+        // `0x61bd50`, `0x61b7d0`).
+        Cb::LootRoll(wait) => sc.loot_rolls.item_answered(
+            wait,
+            answered,
+            &sc.items,
+            &sc.names,
+            &sc.net,
+            sc.self_guid.0,
+        ),
+    }
+}
+
+/// The answer's callbacks registered outside the lookups' list, run after it.
+fn run_answer_tail(In(entry): In<u32>, mut sc: Scene) {
+    // The combat log's callback for its held lines (`0x6294b0`), which writes each one
+    // whose item the cache now holds.
+    if let Some(chat) = &sc.chat {
+        chat.answer_landed(crate::ui_chat::Answer::Item(entry));
+    }
+    // The auction lists' callbacks (`0x4cc9bf`, `0x4ccbff`, `0x4cce4f`), a record or a
+    // refusal: a page that now waits on nothing runs its tail.
+    if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
+        crate::ui_auction::record_answered(auction, house, &sc.items, entry);
+    }
+}
+
+/// Items past their create block: the lifetime and enchant countdowns, written into the item's
+/// own [`crate::items::Countdowns`].
+fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
+    match ev {
         // `0x5e4f30`'s two arms share the item lookup (`0x468460`, `TYPEMASK_ITEM`) and differ on
         // a miss.
         SessionEvent::ItemTime { item_guid, seconds } => {

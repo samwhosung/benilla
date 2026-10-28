@@ -177,6 +177,7 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         (out, model.verb_events.take().unwrap_or_default())
     };
     if super::host::holding(lua) {
+        let raised = super::calls::apply_leading_calls(lua, raised);
         if raised.iter().any(|r| {
             matches!(
                 r,
@@ -408,10 +409,32 @@ impl super::UiScript {
         for (event, args) in pending {
             self.fire_event(&event, args);
         }
-        for e in super::tooltip_item::build::answer_item_caches(&self.lua) {
+        for e in super::tooltip_item::build::answer_item_caches(&self.lua, None) {
             self.push_error(e);
         }
-        for e in super::tooltip_spell::answer_spell_items(&self.lua) {
+        for e in super::tooltip_spell::answer_spell_items(&self.lua, None) {
+            self.push_error(e);
+        }
+    }
+
+    /// Whether a tooltip waits on the item record of `entry`: an item tooltip's build that missed
+    /// it (`0x52e530`'s cookie) or a spell tooltip's reagent (`0x52f820`'s).
+    pub fn tooltips_wait_on(&self, entry: u32) -> bool {
+        let model = self.model_ref();
+        model.spell_item_waits.values().any(|w| w.contains(&entry))
+            || super::tooltip_item::build::waits_on(&model, entry)
+    }
+
+    /// The tooltips' callbacks on the item record cache's answer for `entry`, found, run at its
+    /// packet's place once the VM's copy holds the record ([`Self::set_item_template`];
+    /// `ItemCacheReceive` `0x55bdb0`, `0x55bf39`): each item tooltip waiting on it rebuilds
+    /// (`0x52e530`), then each spell tooltip counts it down (`0x52f820`). The tick answers what
+    /// landed with no answer's packet: a new VM's seat, a cache file's load, another cache.
+    pub fn answer_item_tooltips(&mut self, entry: u32) {
+        for e in super::tooltip_item::build::answer_item_caches(&self.lua, Some(entry)) {
+            self.push_error(e);
+        }
+        for e in super::tooltip_spell::answer_spell_items(&self.lua, Some(entry)) {
             self.push_error(e);
         }
     }

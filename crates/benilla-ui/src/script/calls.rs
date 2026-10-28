@@ -861,6 +861,42 @@ pub(super) fn settle(lua: &Lua, script: &mut UiScript) {
     }
 }
 
+/// A held segment's calls ahead of its first signal or write, applied at once through the lent
+/// host inside a deferred stretch whose leading calls go through ([`super::host::calls_through`]),
+/// each with its tail; the rest, to be held. What a call's apply signals waits, and the next call
+/// goes through only while nothing does, so nothing applies ahead of a signal raised before it.
+pub(crate) fn apply_leading_calls(
+    lua: &Lua,
+    mut raised: Vec<super::tick::Raised>,
+) -> Vec<super::tick::Raised> {
+    use super::tick::Raised;
+    let through = |lua: &Lua| {
+        let waiting = lua
+            .app_data_ref::<Model>()
+            .expect("model app_data")
+            .script_calls
+            .len();
+        super::host::calls_through(lua, waiting)
+    };
+    while matches!(raised.first(), Some(Raised::Call(_))) && through(lua) {
+        let Raised::Call(call) = raised.remove(0) else {
+            break;
+        };
+        let outer = swap_raising(lua, None);
+        let mut script = UiScript::reentrant(lua);
+        let tail = super::host::with_host(lua, |host| host.apply(&mut script, *call)).flatten();
+        if let Some(tail) = tail {
+            tail(&mut script);
+        }
+        if let Some(message) = swap_raising(lua, outer) {
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .record_lua_error(&mlua::Error::runtime(message));
+        }
+    }
+    raised
+}
+
 /// Put `calls` back at the front of the queue, ahead of any queued since.
 fn requeue(lua: &Lua, calls: impl IntoIterator<Item = Waiting>) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");

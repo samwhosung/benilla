@@ -497,8 +497,9 @@ pub(crate) struct Items {
     /// dedupe for the dedupe flag 0, `dbcache/callbacks#callback-order`). A getter registers one
     /// from a lookup, so the list is locked like the in-flight asks and registering takes `&self`.
     callbacks: std::sync::Mutex<Vec<(u32, RecordCallback)>>,
-    /// The callbacks an answer ran that need the VM, `(entry, callback, found)` in the order
-    /// they ran: the equip replays ([`crate::ui_bind_confirm::replay_equip_records`]).
+    /// The equip callbacks a lookup ran on a record the cache held and the VM's copy lacked,
+    /// `(entry, callback, found)` in the order they ran
+    /// ([`crate::ui_bind_confirm::replay_equip_records`]).
     vm_callbacks: std::sync::Mutex<Vec<(u32, RecordCallback, bool)>>,
 }
 
@@ -586,7 +587,8 @@ impl Items {
         self.callbacks.lock_recover().retain(|&(_, cb)| cb != kind);
     }
 
-    /// Run `callback` for the record of `entry`, answered (`found`) or refused, with the VM.
+    /// Run `callback` for the record of `entry`, answered (`found`) or refused, with the VM, as
+    /// the frame's drain comes.
     pub(crate) fn run_with_vm(&self, entry: u32, callback: RecordCallback, found: bool) {
         self.vm_callbacks
             .lock_recover()

@@ -14,7 +14,9 @@
 //!
 //! What a callback pushes onto a lane is stamped under its edge, so it fires where the watcher ran
 //! among what the packets raised. The Lua a callback's cores signal is held as it runs and parked
-//! behind it on this module's lane ([`Parked`]), at a stamp taken as it ends.
+//! behind it on this module's lane ([`Parked`]), at a stamp taken as it ends. The item cache's
+//! answer parks its VM callbacks here too ([`crate::net::objects`]): the equip replays and the
+//! quest log's `QUEST_LOG_UPDATE`.
 
 use std::collections::VecDeque;
 
@@ -95,6 +97,12 @@ pub(crate) struct Parked(Option<(benilla_ui::script::Deferring, usize)>);
 impl Parked {
     pub(crate) fn new(world: &World) -> Self {
         Self(crate::script_calls::defer_vm(world))
+    }
+
+    /// [`Self::new`] for a callback whose leading calls are the engine's own, applied at once
+    /// through the lent host ([`crate::script_calls::defer_vm_calls_through`]).
+    pub(crate) fn calls_through(world: &World) -> Self {
+        Self(crate::script_calls::defer_vm_calls_through(world))
     }
 
     /// Run `leg`, then park what it signalled.
