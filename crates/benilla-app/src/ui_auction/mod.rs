@@ -38,7 +38,7 @@ mod net;
 mod verbs;
 
 pub(crate) use live::AuctionLive;
-pub(crate) use net::{message_answered, record_answered, HouseLane};
+pub(crate) use net::{message_answered, record_answered, sell_item_answered, HouseLane};
 pub(crate) use verbs::AuctionVerbs;
 
 #[cfg(test)]

@@ -115,6 +115,16 @@ impl RecordAsks<'_, '_> {
                     }
                 }
             }
+            // The sell item's object first (`0x4ce24e`, `0x4ce5cf`), then its entry's record with
+            // the object's guid (`0x4ce263`, `0x4ce5e8`).
+            RecordAsk::AuctionSellItem(guid) => {
+                let entry = self.objects.object(guid).and_then(|f| f.object_entry());
+                if let (Some(items), Some(entry)) = (self.items.as_deref(), entry) {
+                    if items.template(entry, guid, Ask::Event(&self.net)).is_none() {
+                        items.wait(entry, crate::items::RecordCallback::AuctionSellItem);
+                    }
+                }
+            }
             RecordAsk::BattlefieldName(guid) => {
                 if let (Some(names), Some(state)) =
                     (self.names.as_deref(), self.battlefield.as_deref_mut())

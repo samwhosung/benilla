@@ -53,6 +53,11 @@ impl Client {
         self.eval(false, "local s = Seen Seen = {} return s")
     }
 
+    /// What went on the wire since the last call, as debug text.
+    fn sent(&mut self) -> Vec<String> {
+        self.sent.try_iter().map(|c| format!("{c:?}")).collect()
+    }
+
     /// `packets` run through their handlers with no frame: the world as the handlers leave it.
     fn handle(&mut self, packets: Vec<SessionEvent>) {
         crate::net::handlers::dispatch(self.app.world_mut(), packets);
@@ -439,4 +444,144 @@ fn an_outbid_notice_waiting_on_its_item_patches_in_the_handler() {
         (vec![(1, 7)], 900, 0x99),
         "the callback shows the line alone"
     );
+}
+
+const WOOL: u32 = 2592;
+
+const fn item_guid(low: u64) -> u64 {
+    (benilla_protocol::guid::HIGH_ITEM as u64) << 48 | low
+}
+
+/// The house open on `AuctionHouse.dbc`'s row 1 (15% deposit), and an item object of ours, `guid`
+/// of `WOOL` stacked 3, seated in the backpack's first slot with its record left to the cache and
+/// taken into the sell slot, a counter on `NEW_AUCTION_UPDATE` (`Infos`) started from there.
+fn sell_wool(guid: u64) -> Client {
+    use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_PLAYER_INV_SLOT_HEAD};
+    use benilla_protocol::messages::ObjectType;
+    let mut c = client();
+    c.app.insert_resource(crate::ui_auction::AuctionHouses(
+        benilla_formats::AuctionHouseCatalog::from_houses(std::collections::HashMap::from([(
+            1,
+            benilla_formats::AuctionHouseInfo {
+                faction: 12,
+                deposit_percent: 15,
+                cut_percent: 5,
+                name: "Stormwind Auction House".into(),
+            },
+        )])),
+    ));
+    c.frame(vec![vec![hello()]]);
+    c.frame(vec![vec![SessionEvent::ItemCreate {
+        guid,
+        container: false,
+        fields: benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x3),
+            (3, WOOL),
+            (6, ME as u32),
+            (8, ME as u32),
+            (FIELD_ITEM_STACK_COUNT, 3),
+        ])
+        .into_created(ObjectType::Item),
+    }]]);
+    let world = c.app.world_mut();
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    let slot = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
+    world
+        .get_mut::<crate::net::ObjectStore>(me)
+        .expect("our store")
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (slot, guid as u32),
+            (slot + 1, (guid >> 32) as u32),
+        ]));
+    c.frame(vec![]);
+    c.eval::<()>(
+        true,
+        r#"Infos = 0
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("NEW_AUCTION_UPDATE")
+        f:SetScript("OnEvent", function() Infos = Infos + 1 end)
+        PickupContainerItem(0, 1) ClickAuctionSellItemButton() Infos = 0"#,
+    );
+    c.sent();
+    c
+}
+
+fn wool_record() -> SessionEvent {
+    let mut record = crate::items::test_template("Wool Cloth");
+    (record.sell_price, record.inventory_type, record.quality) = (25, 4, 2);
+    SessionEvent::ItemTemplate {
+        entry: WOOL,
+        info: Some(Box::new(record)),
+    }
+}
+
+const SELL_INFO: &str = "local n, _, c, q, _, p = GetAuctionSellItemInfo() \
+    return tostring(n) .. '/' .. c .. '/' .. q .. '/' .. p";
+const DEPOSIT: &str = "return CalculateAuctionDeposit(120)";
+
+/// `CalculateAuctionDeposit` and `GetAuctionSellItemInfo` on a sell slot item whose record the
+/// cache lacks answer the miss (`0x4ce2ca`, `0x4ce726`) and keep the callback `0x4ce2f0` with the
+/// item's guid (`0x4ce25e`, `0x4ce5e3`), one per call, which signals `NEW_AUCTION_UPDATE` at the
+/// record's packet (`0x4ce2fa`); the getters then answer its price and the deposit on it.
+#[test]
+fn a_sell_item_whose_record_lands_later_signals_the_new_auction_update() {
+    let guid = item_guid(1);
+    let mut c = sell_wool(guid);
+    assert_eq!(c.eval::<String>(true, SELL_INFO), "nil/1/-1/0", "no record");
+    assert_eq!(c.eval::<i64>(true, DEPOSIT), 0);
+    let queries: Vec<String> = c
+        .sent()
+        .into_iter()
+        .filter(|s| s.starts_with("ItemQuery"))
+        .collect();
+    assert_eq!(
+        queries,
+        [format!(
+            "{:?}",
+            crate::net::ClientCommand::ItemQuery { entry: WOOL, guid }
+        )],
+        "one query in flight, with the item's guid"
+    );
+    c.frame(vec![vec![wool_record()]]);
+    assert_eq!(c.eval::<i64>(true, "return Infos"), 2, "one per call");
+    assert_eq!(c.eval::<String>(true, SELL_INFO), "Wool Cloth/3/2/75");
+    // 15 percent of 75 copper.
+    assert_eq!(c.eval::<i64>(true, DEPOSIT), 11);
+    assert_eq!(
+        c.eval::<i64>(true, "return Infos"),
+        2,
+        "a found record asks nothing"
+    );
+}
+
+/// The lookup sits behind the item's object (`0x4ce24e`, `0x4ce5cf`): with it held, a refused
+/// record is asked again by each getter; with it gone, neither asks.
+#[test]
+fn a_sell_item_whose_object_is_gone_asks_no_record() {
+    let guid = item_guid(1);
+    let mut c = sell_wool(guid);
+    let refuse = |c: &mut Client| {
+        c.frame(vec![vec![SessionEvent::ItemTemplate {
+            entry: WOOL,
+            info: None,
+        }]]);
+        c.sent();
+    };
+    let asks = |c: &mut Client| {
+        c.eval::<()>(
+            true,
+            "GetAuctionSellItemInfo() CalculateAuctionDeposit(120)",
+        );
+        c.sent()
+            .iter()
+            .filter(|s| s.starts_with("ItemQuery"))
+            .count()
+    };
+    refuse(&mut c);
+    assert_eq!(asks(&mut c), 1, "a held object's refused record is asked");
+    refuse(&mut c);
+    c.frame(vec![vec![SessionEvent::ObjectDestroyed(guid)]]);
+    refuse(&mut c);
+    assert_eq!(asks(&mut c), 0, "a gone object asks nothing");
 }

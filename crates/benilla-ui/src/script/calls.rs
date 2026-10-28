@@ -358,6 +358,13 @@ pub enum RecordAsk {
     /// `MAIL_SEND_INFO_UPDATE` for a found record (`0x4ae716`-`0x4ae71f`). A gone object asks
     /// nothing.
     SendMailItem(u64),
+    /// `CalculateAuctionDeposit` and `GetAuctionSellItemInfo` on a sell slot item whose record the
+    /// mirror lacks, by its object's guid: for an object the engine holds (`0x468460`, `0x4ce24e`,
+    /// `0x4ce5cf`), the item cache by the object's entry (`[[obj+0x8]+0xc]`) with the object's own
+    /// guid (`0x4ce263`, `0x4ce5e8`) and the callback `0x4ce2f0` (`0x4ce25e`, `0x4ce5e3`), kept once
+    /// per call, which signals `NEW_AUCTION_UPDATE` for a found record (`0x4ce2fa`-`0x4ce2ff`). A
+    /// gone object asks nothing.
+    AuctionSellItem(u64),
     /// A mail getter's lookups on the row of `mail_id` that the mirror lacks a record for, each
     /// with the callback that signals `MAIL_INBOX_UPDATE` for a found record, kept once per call
     /// (dedupe flag 0): the session holds the keys ([`super::MailLookup`]).

@@ -193,6 +193,10 @@ impl ItemRead for LiveItem<'_> {
             .filter(|&(_, max)| max > 0)
     }
 
+    fn sell_price(&self) -> Option<u32> {
+        self.template.map(|t| t.sell_price)
+    }
+
     fn info(&self) -> Option<benilla_ui::script::ItemInfoFields> {
         let t = self.template?;
         Some(benilla_ui::script::ItemInfoFields {

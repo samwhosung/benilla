@@ -56,6 +56,8 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
             .collect(),
         }),
     );
+    // The record is cached, or the getter answers the miss (`0x4ce5f9`).
+    s.set_item_template(2589, benilla_ui::script::ItemTemplateView::default());
     let name: Option<String> = s
         .eval(
             "PickupContainerItem(0, 1) ClickAuctionSellItemButton() \

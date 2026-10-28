@@ -58,6 +58,11 @@ pub trait ItemRead {
     /// The record carries PageText, or the object a letter's `ITEM_FIELD_ITEM_TEXT_ID`
     /// (`0x4f97ba`-`0x4f97cf`).
     fn readable(&self) -> bool;
+    /// The record's vendor price (`[rec+0x28]`); `None` while uncached and for a snapshot that
+    /// holds none.
+    fn sell_price(&self) -> Option<u32> {
+        None
+    }
     /// `GetItemInfo`'s record fields past the name and the quality, `None` while uncached: the
     /// required level, the stack size (`+0x60`), and the `ItemClass.dbc` and `ItemSubClass.dbc`
     /// names (`0x48e070`, `0x48e311`).
@@ -157,6 +162,9 @@ impl ItemRead for super::ItemTemplateView {
     }
     fn readable(&self) -> bool {
         false
+    }
+    fn sell_price(&self) -> Option<u32> {
+        Some(self.sell_price)
     }
     fn info(&self) -> Option<ItemInfoFields> {
         Some(ItemInfoFields {

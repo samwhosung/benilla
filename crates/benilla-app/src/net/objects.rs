@@ -301,6 +301,13 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         }
                     }
                     Cb::SendMail => {}
+                    // `NEW_AUCTION_UPDATE` for a ready record only (`0x4ce2f6`-`0x4ce2ff`).
+                    Cb::AuctionSellItem if answered => {
+                        if let Some(house) = sc.house.as_mut() {
+                            crate::ui_auction::sell_item_answered(house);
+                        }
+                    }
+                    Cb::AuctionSellItem => {}
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one

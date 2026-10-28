@@ -540,6 +540,9 @@ pub(crate) enum RecordCallback {
     AuctionMessage,
     /// The attachment's, asked by `GetSendMailItem` (`0x4ae604` with `0x4ae710`), one per call.
     SendMail,
+    /// The sell slot item's, asked by `CalculateAuctionDeposit` and `GetAuctionSellItemInfo`
+    /// (`0x4ce25e`, `0x4ce5e3` with `0x4ce2f0`), one per call.
+    AuctionSellItem,
 }
 
 impl Items {

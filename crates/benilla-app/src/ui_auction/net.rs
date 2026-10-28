@@ -158,6 +158,8 @@ pub(crate) enum HouseStep {
     Tail(usize),
     /// A list's update alone, where a name its getter missed landed (`0x4cf290`).
     Update(usize),
+    /// `NEW_AUCTION_UPDATE`, where the record a sell slot getter missed landed (`0x4ce2f0`).
+    SellItemUpdate,
     /// A list result's page, and its sort tail when every item was known
     /// ([`UiScript::set_auction_list`], [`UiScript::sort_auction_list`]).
     Page {
@@ -394,6 +396,12 @@ pub(crate) fn message_answered(
     }
 }
 
+/// The callback `0x4ce2f0` on a found record, run inside the answer's handler: the sell slot's
+/// `NEW_AUCTION_UPDATE` (`0x4ce2fa`-`0x4ce2ff`).
+pub(crate) fn sell_item_answered(lane: &mut HouseLane) {
+    lane.push(HouseStep::SellItemUpdate);
+}
+
 /// Whether a close starting now waits behind the house lane ([`crate::lanes::waits_behind`]): the
 /// open it closes, or any earlier step, has not fired yet.
 pub(super) fn close_waits(world: &World) -> bool {
@@ -532,6 +540,7 @@ fn apply_step(script: &mut benilla_ui::script::UiScript, sink: &mut MessageSink,
         } => script.patch_auction_row(list, page, auction_id, bid),
         HouseStep::Remove { auction_id, pages } => script.remove_auction_from(auction_id, pages),
         HouseStep::Tail(list) => script.sort_auction_list(list),
+        HouseStep::SellItemUpdate => script.fire_event("NEW_AUCTION_UPDATE", vec![]),
         // Literal names: `reference_ui`'s producer test finds fire sites by literal.
         HouseStep::Update(list) => match list {
             LIST => script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]),

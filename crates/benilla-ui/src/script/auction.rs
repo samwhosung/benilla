@@ -14,6 +14,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::auction_live::{deposit_rate, live_row_at, refresh_live, row_at, AuctionCanQuery};
 use super::binding_abi::{self, flag};
 use super::cursor;
+use super::item_read::{read_live, ItemKey};
 use super::Model;
 use crate::auction_sort::{floor_level, sort_column, AuctionSortStack};
 
@@ -755,27 +756,87 @@ fn list_offset(lua: &Lua, page: Option<Value>) -> u32 {
 
 /// The sell slot's `(name, texture, count, quality, canUse, stackValue)`, `stackValue` being the
 /// vendor price times the stack: the base of the suggested opening price and the deposit.
-fn sell_item_info(
-    lua: &Lua,
-    model: &Model,
-) -> Option<(String, Option<String>, u32, i64, bool, u32)> {
-    let it = model.auction_sell_item.as_ref()?;
+type SellInfo = (String, Option<String>, u32, i64, bool, u32);
+
+/// What the sell slot answers the two getters.
+enum SellSlot {
+    /// No item (`0x4ce21d`, `0x4ce599`).
+    Empty,
+    /// An item whose record the item cache lacks, by its object's guid: both getters answer as for
+    /// an empty slot (`0x4ce274`, `0x4ce5f9`), after asking for the record
+    /// ([`super::RecordAsk::AuctionSellItem`]).
+    Unrecorded(u64),
+    Held(SellInfo),
+}
+
+/// The sell slot as the getters read it: the item's name, icon, quality and price off its object
+/// and record through the lent host (`0x4ce60f`, `0x4ce641`, `0x4ce68e`, `0x4ce703`), else off the
+/// VM's copy, which only a snapshot without a host answers.
+fn sell_item_info(lua: &Lua, model: &Model) -> SellSlot {
+    let Some(it) = model.auction_sell_item.as_ref() else {
+        return SellSlot::Empty;
+    };
+    // The name, icon, quality and vendor price; `None` while the record is uncached.
+    type Record = (String, Option<String>, i64, u32);
+    let live = read_live(
+        lua,
+        Some(ItemKey::Object(it.guid)),
+        |item| -> Option<Record> {
+            let price = item.sell_price()?;
+            // An item that cannot be equipped reads quality -1 (`0x4ce691`-`0x4ce69d`).
+            let quality = match item.inventory_type() {
+                0 => -1,
+                _ => item.quality().map_or(-1, i64::from),
+            };
+            Some((
+                item.name().unwrap_or_default(),
+                item.texture(),
+                quality,
+                price,
+            ))
+        },
+    );
+    let record = live.unwrap_or_else(|| {
+        let template = model.item_templates.get(&it.item_id)?;
+        Some((
+            cursor::item_link_name(it.link.as_deref()),
+            it.texture.clone(),
+            it.quality.map_or(-1, i64::from),
+            template.sell_price,
+        ))
+    });
+    let Some((name, texture, quality, sell_price)) = record else {
+        return SellSlot::Unrecorded(it.guid);
+    };
     // The real stack size, not the split-carry field: the deposit is per stack.
     let count = cursor::held_count(lua, model, it);
-    let template = model.item_templates.get(&it.item_id);
-    let name = cursor::item_link_name(it.link.as_deref());
-    let quality = it.quality.map_or(-1, i64::from);
-    let sell_price = template.map_or(0, |v| v.sell_price);
     let can_use = super::item_stats::item_usable_by_id(lua, model, it.item_id);
     // The price is a 32-bit `imul` in both readers (`0x4ce295`, `0x4ce703`).
-    Some((
+    SellSlot::Held((
         name,
-        it.texture.clone(),
+        texture,
         count,
         quality,
         can_use,
         sell_price.wrapping_mul(count),
     ))
+}
+
+/// [`sell_item_info`] with the borrow of the model ended and the record asked for when the slot's
+/// item lacks it, inside the call.
+fn sell_slot(lua: &Lua) -> mlua::Result<Option<SellInfo>> {
+    let slot = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        sell_item_info(lua, &model)
+    };
+    Ok(match slot {
+        SellSlot::Empty => None,
+        SellSlot::Unrecorded(guid) => {
+            super::calls::ask(lua, super::RecordAsk::AuctionSellItem(guid))?;
+            None
+        }
+        SellSlot::Held(info) => Some(info),
+    })
 }
 
 /// The reference client's deposit, `0x644bc0(rate, stackValue, minutes)`: 0 for a run time off the
@@ -1393,23 +1454,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `0x4ce1d9`); the run time is `_ftol`'s 32 bits (`0x4ce28d`).
             let minutes =
                 binding_abi::index_arg32(lua, minutes, "Usage: CalculateAuctionDeposit(runTime)")?;
+            // No house, no lookup (`0x4ce1f7`-`0x4ce217`); then the slot's guid, its object and its
+            // record, the last asking (`0x4ce21d`-`0x4ce25e`).
+            let house = lua
+                .app_data_ref::<Model>()
+                .is_some_and(|m| m.auction.is_some());
+            if !house {
+                return Ok(0);
+            }
             let rate = deposit_rate(lua);
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let stack_value = sell_item_info(lua, &model).map_or(0, |(_, _, _, _, _, v)| v);
+            let stack_value = sell_slot(lua)?.map_or(0, |(_, _, _, _, _, v)| v);
             Ok(i64::from(deposit_for(rate, stack_value, minutes)))
         })?,
     )?;
 
     // GetAuctionSellItemInfo() → name, texture, count, quality, canUse, price: six values always.
-    // An empty slot answers count 1 and quality -1: the stock Lua reads `count > 1` unguarded.
+    // An empty slot, a gone object and a missing record (`0x4ce726`) answer count 1 and quality -1:
+    // the stock Lua reads `count > 1` unguarded.
     g.set(
         "GetAuctionSellItemInfo",
         lua.create_function(|lua, ()| {
-            let info = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                sell_item_info(lua, &model)
-            };
-            let Some((name, texture, count, quality, can_use, price)) = info else {
+            let Some((name, texture, count, quality, can_use, price)) = sell_slot(lua)? else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
                     Value::Nil,
@@ -1860,6 +1925,8 @@ mod tests {
                 slots,
             }),
         );
+        // The record is cached, or the getter answers the miss (`0x4ce5f9`).
+        s.set_item_template(2589, crate::script::ItemTemplateView::default());
         // Picked up whole: `count: None` means the whole stack, not one.
         {
             let mut model = s.model_mut();
