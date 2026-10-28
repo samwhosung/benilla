@@ -635,12 +635,6 @@ pub(crate) struct CastEvent {
     pub(crate) entity: Entity,
     pub(crate) spell_id: u32,
     pub(crate) kind: CastEventKind,
-    /// `SMSG_SPELL_GO`'s cast flags, 0 on every other edge: the tradeskill repeat's hook skips a
-    /// GO with `0x41` set (`0x6e81de`, vmangos `Spell.h:54`).
-    pub(crate) cast_flags: u16,
-    /// `SMSG_SPELL_GO`'s first guid is an item, not the caster: the tradeskill repeat's hook runs
-    /// only when that guid is the player (`0x6e81d3`-`0x6e81dc`).
-    pub(crate) item_cast: bool,
     /// `PlaySeq` stamp, carried to the kit's `EmoteAnim`.
     pub(crate) seq: u64,
 }

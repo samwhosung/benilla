@@ -402,8 +402,6 @@ fn cast_event(world: &mut World, entity: Entity, spell_id: u32, kind: CastEventK
             entity,
             spell_id,
             kind,
-            cast_flags: 0,
-            item_cast: false,
             seq,
         });
     }
