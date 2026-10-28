@@ -306,6 +306,25 @@ impl super::UiScript {
         }
     }
 
+    /// The world-enter cascade's trainer reset (`0x4909ab` → `0x4d73e0`): the guid, the selection
+    /// and the total zeroed (`0x4d73e2`-`0x4d73f1`), so no row reads; the group headers, the
+    /// visible count, the filters and the expanded mask (`0xb73a14`-`0xb73a24`) are not its, and
+    /// stay for the next list to reset.
+    pub fn reset_trainer_world_state(&mut self) {
+        let mut model = self.model_mut();
+        model.trainer = None;
+        model.trainer_selection = None;
+        model.trainer_rows.clear();
+    }
+
+    /// The collapsed skill lines, for a test of what keeps them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn trainer_collapsed_for_test(&self) -> Vec<u32> {
+        let mut lines: Vec<u32> = self.model_mut().trainer_collapsed.iter().copied().collect();
+        lines.sort_unstable();
+        lines
+    }
+
     /// Reset what each `SMSG_TRAINER_LIST` resets in the reference (`0x4d7560`): the filter to mask
     /// 3, or 5 at a mount trainer (`0x4d75d9`), the collapse set and the selection. Call it per
     /// packet, never per snapshot: the repaint path `0x4d7d40` touches none of the three.

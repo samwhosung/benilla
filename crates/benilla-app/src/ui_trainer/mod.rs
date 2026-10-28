@@ -923,11 +923,12 @@ impl TrainerOpen {
     }
 }
 
-/// The trainer reset's VM half in the cascade's place: the VM's rows and selection.
+/// The trainer reset's VM half in the cascade's place: the VM's rows and selection, its collapsed
+/// lines kept ([`UiScript::reset_trainer_world_state`]).
 pub(crate) fn reset_vm_on_world_enter(mut vm: crate::script_calls::HostedVm) {
     vm.run(|script| {
         if let Some(script) = script {
-            script.set_trainer(None);
+            script.reset_trainer_world_state();
         }
     });
 }

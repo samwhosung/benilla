@@ -523,3 +523,100 @@ fn a_ghosts_corpse_query_goes_out_in_its_cascade_place() {
         ]
     );
 }
+
+/// The leave-world sweep sets the display latch inside the worldport's packet (`0x490a9e`): in
+/// one frame, a system line before the worldport shows at once, and one after it is held to the
+/// next world entry's release, after its `PLAYER_ENTERING_WORLD`.
+#[test]
+fn a_worldport_latches_the_lines_after_it_only() {
+    let mut c = client(
+        r#"Seen = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "CHAT_MSG_SYSTEM"}) do f:RegisterEvent(e) end
+        f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. tostring(arg1)) end)"#,
+    );
+    let system = |text: &str| {
+        SessionEvent::Chat(ChatMessage {
+            chat_type: CHAT_MSG_SYSTEM,
+            language: 0,
+            sender_guid: 0,
+            target_guid: 0,
+            sender_name: None,
+            channel: None,
+            text: text.into(),
+            chat_tag: 0,
+        })
+    };
+    c.frame(vec![vec![me()]]);
+    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD:nil"]);
+    c.frame(vec![
+        vec![system("before")],
+        vec![SessionEvent::Worldport {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: true,
+        }],
+        vec![system("after")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["CHAT_MSG_SYSTEM:before"],
+        "the line after the port held"
+    );
+    c.frame(vec![vec![me()]]);
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_ENTERING_WORLD:nil", "CHAT_MSG_SYSTEM:after"]
+    );
+}
+
+/// The cascade's trainer reset zeroes the guid, the selection and the total (`0x4d73e0`), and not
+/// the expanded mask (`0xb73a24`): the VM's collapsed lines stay for the next list to reset.
+#[test]
+fn the_trainer_reset_keeps_the_collapsed_lines() {
+    let mut c = client("Seen = {}");
+    c.frame(vec![vec![me()]]);
+    {
+        let world = c.app.world_mut();
+        let mut s = world.non_send_resource_mut::<UiScript>();
+        let service = |spell_id: u32, name: &str, group_key: u32, group: &str| {
+            benilla_ui::script::TrainerService {
+                spell_id,
+                name: Some(name.into()),
+                category: benilla_ui::script::TrainerServiceCategory::Available,
+                group_key,
+                group_name: group.into(),
+                ..Default::default()
+            }
+        };
+        s.set_trainer(Some(benilla_ui::script::TrainerState {
+            guid: 0x42,
+            services: vec![
+                service(78, "Heroic Strike", 26, "Arms"),
+                service(285, "Bloodrage", 256, "Fury"),
+            ],
+            ..Default::default()
+        }));
+        s.run("CollapseTrainerSkillLine(1) SelectTrainerService(2)")
+            .unwrap();
+    }
+    let collapsed = c
+        .app
+        .world()
+        .non_send_resource::<UiScript>()
+        .trainer_collapsed_for_test();
+    assert!(!collapsed.is_empty(), "a line collapsed");
+    c.app
+        .world_mut()
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
+    c.frame(vec![]);
+    let s = c.app.world().non_send_resource::<UiScript>();
+    assert_eq!(s.trainer_collapsed_for_test(), collapsed, "the mask stays");
+    assert_eq!(
+        s.eval::<i64>("return GetTrainerSelectionIndex()").unwrap(),
+        0,
+        "the selection goes"
+    );
+}

@@ -30,7 +30,20 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ChannelNotify, on_channel_notify)
         .net_handler(K::RandomRoll, on_random_roll)
         .net_handler(K::Connected, latch_on_connect)
+        .net_handler(K::Worldport, latch_on_worldport)
         .net_handler(K::Disconnected, on_session_end);
+}
+
+/// A cross-map worldport's leave-world sweep sets the display latch inside its packet
+/// (`0x5dd543` → `0x490a9e` → `0x498a10`): the lines of the packets after it are held, those
+/// before it shown. The sweep's own leg runs after the frame's packets and finds it set.
+fn latch_on_worldport(In(ev): In<SessionEvent>, log: Res<ChatLog>) {
+    if let SessionEvent::Worldport {
+        needs_ack: true, ..
+    } = ev
+    {
+        log.latch();
+    }
 }
 
 /// The world session's start finds the display latch set (`[0x8435fc]` is 1 from start-up, and

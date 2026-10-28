@@ -277,9 +277,10 @@ struct ChatQueue {
     /// How many player-name answers `pending` holds, so a line looks for a later one only then.
     answers: usize,
     broadcasts: Vec<super::broadcast::Broadcast>,
-    /// The display latch `[0x8435fc]`: while set the wire's chat lines are held, not shown
-    /// ([`Pending::latched`]), until the world-enter cascade's release (`0x4989c0`).
-    latched: bool,
+    /// The display latch `[0x8435fc]`, as the place it was set: a line fired at or after it is
+    /// held, not shown ([`Pending::Latched`]), until the world-enter cascade's release
+    /// (`0x4989c0`).
+    latched: Option<crate::lanes::Mark>,
 }
 
 /// One item in the lane, with its stamp ([`crate::lanes::stamp`]).
@@ -338,16 +339,20 @@ impl ChatLog {
         *self.q() = ChatQueue::default();
     }
 
-    /// Set the display latch `[0x8435fc]`, as the world session's start finds it (1 from start-up)
-    /// and the leave-world sweep sets it (`0x490a9e` → `0x498a10`): the wire's lines are held from
-    /// here until the world-enter cascade's release ([`release_display`]).
+    /// Set the display latch `[0x8435fc]` here, as the world session's start finds it (1 from
+    /// start-up) and the leave-world sweep sets it (`0x490a9e` → `0x498a10`): the lines fired from
+    /// here on are held until the world-enter cascade's release ([`release_display`]). A latch
+    /// already set keeps its place.
     pub(crate) fn latch(&self) {
-        self.q().latched = true;
+        let mut q = self.q();
+        if q.latched.is_none() {
+            q.latched = Some(crate::lanes::mark());
+        }
     }
 
-    /// Whether the display latch holds the wire's lines.
-    pub(crate) fn latched(&self) -> bool {
-        self.q().latched
+    /// Whether the display latch holds a line fired at `at`: set at or before its place.
+    pub(crate) fn latched_at(&self, at: crate::lanes::Stamp) -> bool {
+        self.q().latched.is_some_and(|m| at.since(m))
     }
 
     /// The lane's head, for the drain ([`crate::lanes`]).
@@ -1506,7 +1511,7 @@ fn fire_one(
     // A held item waits, unaged, for the cascade's release; once the latch is clear it runs as
     // it came in, its names now cached.
     let item = match item {
-        Pending::Latched(inner) if log.latched() => return Some(Pending::Latched(inner)),
+        Pending::Latched(inner) if log.latched_at(at) => return Some(Pending::Latched(inner)),
         Pending::Latched(inner) => *inner,
         item => item,
     };
@@ -1550,7 +1555,7 @@ fn fire_one(
             deliver_hosted(script, set, windows, &mut event);
             None
         }
-        Pending::Display(event) if log.latched() => {
+        Pending::Display(event) if log.latched_at(at) => {
             return Some(Pending::Latched(Box::new(Pending::Display(event))));
         }
         Pending::Display(mut event) => {
@@ -1713,7 +1718,7 @@ fn fire_one(
                 };
                 // The display latch, past the name and the expansion (`0x49db5c`): the line is
                 // queued (`0x49db8c`) for the cascade's release.
-                if log.latched() {
+                if log.latched_at(at) {
                     return Some(Pending::Latched(Box::new(Pending::Wire { msg, tries })));
                 }
                 let plain = expanded.unwrap_or_else(|| msg.text.clone());
@@ -1810,7 +1815,7 @@ fn fire_one(
                 }
                 // The display latch, past the name (`0x49ce3c`, the addon test downstream at
                 // `0x49dbcb`).
-                if log.latched() {
+                if log.latched_at(at) {
                     return Some(Pending::Latched(Box::new(Pending::Addon {
                         prefix,
                         message,
@@ -1975,7 +1980,7 @@ fn fire_one(
                 }
                 // A named emote under the display latch is held apart and never shown
                 // (`0x49dc7f` → `0x49dc95`, `0x49d165`).
-                if performer_name.is_some() && log.latched() {
+                if performer_name.is_some() && log.latched_at(at) {
                     return None;
                 }
                 // No performer name, no line (not "Unknown"): the reference bails when its
@@ -2101,7 +2106,7 @@ pub(super) fn fire_chat(In(until): In<crate::lanes::Until>, mut firing: ChatFiri
 /// mirror's reseed beside it is [`super::away`]'s. With no VM the latch clears and the lines wait.
 pub(crate) fn release_display(mut firing: ChatFiring) {
     let ChatFiring { vm, log, reads } = &mut firing;
-    log.q().latched = false;
+    log.q().latched = None;
     let (Some(script), set) = vm.parts() else {
         return;
     };
