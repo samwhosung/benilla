@@ -272,13 +272,13 @@ pub(crate) fn arm_leaving_world_on_self_create(
 ///
 /// `SMSG_NEW_WORLD` (`0x401b00`) posts the teardown `0x401bc0` as a timer at no delay
 /// (`0x401ba5`-`0x401bae`), and a tick runs its timers before the window input and the packets
-/// (`0x420d0c`, `0x420d23`, `0x420d55`). So the sweep runs at the start of the frame after the
-/// port's, in `PreUpdate` ahead of the input pass and the net drain, and `PLAYER_LEAVING_WORLD`
-/// follows every event the port's own frame raised, the lanes' drain among them. It follows a
-/// `/reload` the port's frame asked for ([`super::run_pending_reload`]), which the reference ran
-/// inside its call, and it precedes the new world's create, which the server sends after the
-/// teardown's acknowledgement. The system reads the port's message from its own cursor, so a
-/// port is swept once however many frames the message lives.
+/// (`0x420d0c`, `0x420d23`, `0x420d55`). So the sweep is the last leg of the teardown, run at the
+/// start of the frame after the port's, in `PreUpdate` ahead of the input pass and the net drain
+/// (`crate::net::WorldportTimer`), and `PLAYER_LEAVING_WORLD` follows every event the port's own
+/// frame raised, the lanes' drain among them. It precedes the new world's create, which the
+/// server sends after the teardown's acknowledgement. The system reads the port's message, which
+/// the objects' leg writes, from its own cursor, so a port is swept once however many frames the
+/// message lives.
 pub(crate) fn sweep_on_worldport(
     world: &mut World,
     mut seen: Local<MessageCursor<crate::net::WorldportMessage>>,
@@ -298,7 +298,7 @@ pub(crate) fn sweep_on_worldport(
 pub(crate) fn add_worldport_sweep(app: &mut App) -> &mut App {
     app.add_systems(
         PreUpdate,
-        sweep_on_worldport.after(super::run_pending_reload),
+        sweep_on_worldport.in_set(crate::net::WorldportTimer::Sweep),
     )
 }
 

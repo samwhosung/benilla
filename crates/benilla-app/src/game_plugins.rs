@@ -1859,6 +1859,8 @@ pub(crate) mod schedule_tests {
          "a lane's firing, run only by the drain: `drop_list_rebuilds`, gated on the interface being down, empties the lane the frame its items land, so none fires into a later VM"),
         ("ui_trade/lane.rs", "open", Because::Deliberate,
          "no system: the trade lane's firing calls it for the open's item, inside the drain, which runs only with the interface up; `drop_trade_events`, gated on the interface being down, empties the lane the frame its items land"),
+        ("ui_logout.rs", "leave_world", Because::Deliberate,
+         "runs only with a world load posted, which `SMSG_NEW_WORLD` posts: the world session's packets wait for the entry load (`net::apply::InboundHold`), so none is posted before the interface is up"),
         ("ui_logout.rs", "set_in_world", Because::Deliberate,
          "no system: the arrival lane's firing runs it as the arrival's last leg, inside the drain, which runs only with the interface up; `drop_arrivals` empties the lane at the session's end"),
         ("ui_world_enter.rs", "control_rose", Because::Deliberate,

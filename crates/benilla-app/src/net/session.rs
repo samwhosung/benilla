@@ -29,6 +29,24 @@ use benilla_world::frame_pace::FrameStep;
 /// Registers the session handlers.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
+    // The posted world load's legs run at the frame's start in the executor's order, after a
+    // `/reload` the last frame asked for, which the reference ran inside its call.
+    app.init_resource::<PendingWorldports>()
+        .configure_sets(
+            PreUpdate,
+            (
+                WorldportTimer::Connection.after(crate::ui_script::run_pending_reload),
+                WorldportTimer::Objects,
+                WorldportTimer::Sweep,
+            )
+                .chain(),
+        )
+        .add_systems(
+            PreUpdate,
+            world_load_timer
+                .in_set(WorldportTimer::Objects)
+                .run_if(|pending: Res<PendingWorldports>| pending.is_posted()),
+        );
     app.net_handler(K::LoginStage, on_login_edge)
         .net_handler(K::WorldAuthenticated, on_login_edge)
         .net_handler(K::RosterFailed, on_login_edge)
@@ -70,7 +88,6 @@ pub(super) fn register(app: &mut App) {
 #[derive(SystemParam)]
 pub(crate) struct Edges<'w> {
     teleports: MessageWriter<'w, TeleportMessage>,
-    worldports: MessageWriter<'w, WorldportMessage>,
     char_lists: MessageWriter<'w, CharListMessage>,
     realm_lists: MessageWriter<'w, RealmListMessage>,
     char_actions: MessageWriter<'w, CharActionResultMessage>,
@@ -386,48 +403,91 @@ fn on_client_control(
     }
 }
 
-fn on_worldport(
-    In(ev): In<SessionEvent>,
-    mut e: Edges,
-    mut b: Bridge,
-    mut group: ResMut<crate::ui_party::GroupState>,
-    script: Option<NonSend<benilla_ui::script::UiScript>>,
-    mut released: ResMut<super::objects::Released>,
-    view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
-    player: Option<Res<crate::player::Player>>,
-    selection: Option<ResMut<crate::target::Selection>>,
-    place: crate::ui_party::net::SnapshotPlace,
-    transforms: Query<&Transform>,
-) {
-    if let SessionEvent::Worldport {
-        map_id,
-        position,
-        orientation,
-        needs_ack,
-    } = ev
-    {
+/// A `SMSG_NEW_WORLD`'s destination, held for its timer.
+#[derive(Clone, Copy, Debug)]
+struct Destination {
+    map_id: u32,
+    position: [f32; 3],
+    orientation: f32,
+}
+
+/// The world loads posted and not yet run: `SMSG_NEW_WORLD` (`0x401b00`) reads its destination
+/// into globals and posts the executor `0x401bc0` as a timer at no delay (`0x401ba5`-`0x401bae`),
+/// which the next tick runs ahead of its packets (`0x420d0c`, `0x420d55`).
+#[derive(Resource, Default)]
+pub(crate) struct PendingWorldports(Vec<Destination>);
+
+impl PendingWorldports {
+    /// Whether a timer is posted, for the connection's leave to run only then.
+    pub(crate) fn is_posted(&self) -> bool {
+        !self.0.is_empty()
+    }
+}
+
+/// The executor `0x401bc0`'s body, one unit at the next tick's start, in the order of its calls:
+/// the connection leaves the world (`0x401bd4` → `0x5aae70(0)`, `LOGOUT_CANCEL` for a pending
+/// request), then the movement and missiles go (`0x401bde`, `0x401bf2`), then the object manager
+/// is destroyed (`0x401bf7`), whose walk reaches the local player's destructor and its leave-world
+/// sweep (`0x5dd543`). The sets order those legs in `PreUpdate`; the connection's is
+/// `crate::ui_logout::leave_world`, the sweep's `crate::ui_script::sweep_on_worldport`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WorldportTimer {
+    /// `0x401bd4`.
+    Connection,
+    /// `0x401bf7`'s walk of the objects, short of the local player's sweep.
+    Objects,
+    /// `0x5dd543`.
+    Sweep,
+}
+
+/// What the world load needs from the bridge.
+#[derive(SystemParam)]
+pub(crate) struct WorldLoad<'w, 's> {
+    transfer: ResMut<'w, PendingTransfer>,
+    worldports: MessageWriter<'w, WorldportMessage>,
+    b: Bridge<'w, 's>,
+    group: ResMut<'w, crate::ui_party::GroupState>,
+    script: Option<NonSend<'w, benilla_ui::script::UiScript>>,
+    released: ResMut<'w, super::objects::Released>,
+    view_log: Option<ResMut<'w, crate::ui_unit::views::ViewLog>>,
+    player: Option<Res<'w, crate::player::Player>>,
+    selection: Option<ResMut<'w, crate::target::Selection>>,
+    place: crate::ui_party::net::SnapshotPlace<'w, 's>,
+    transforms: Query<'w, 's, &'static Transform>,
+}
+
+impl WorldLoad<'_, '_> {
+    /// The objects' destruction (`0x467700` → `0x467800`) and the destination handed to the app.
+    fn objects_destroyed(&mut self, dest: Destination, needs_ack: bool) {
+        let Destination {
+            map_id,
+            position,
+            orientation,
+        } = dest;
+        let b = &mut self.b;
         // Every streamed roster member is about to be freed, and each one's destructor runs the
         // roster hook (`0x5dd6a0` → `0x4e85d0` mode 0).
-        let before = view_log.as_ref().map(|_| group.stats.clone());
+        let before = self.view_log.as_ref().map(|_| self.group.stats.clone());
         crate::ui_party::net::roster_deactivated(
-            &mut group,
+            &mut self.group,
             &b.index,
             &b.stores,
-            &place,
-            &|e| transforms.get(e).ok().copied(),
+            &self.place,
+            &|e| self.transforms.get(e).ok().copied(),
             &b.names,
-            script.as_deref(),
+            self.script.as_deref(),
             &b.net,
         );
-        let mut view_log = view_log;
-        if let (Some(log), Some(before)) = (view_log.as_deref_mut(), before) {
-            log.records(&before, &group.stats);
+        if let (Some(log), Some(before)) = (self.view_log.as_deref_mut(), before) {
+            log.records(&before, &self.group.stats);
         }
-        log_teardown(view_log, &b);
+        if let Some(log) = self.view_log.as_deref_mut() {
+            log.torn_down(&b.index, |e| b.stores.get(e).ok());
+        }
         // The transfer frees every object with no release (`0x467700` → `0x467800`): the selection
         // keeps its guid, its object gone, until the arrival's `SelectTarget(0)` (`0x490927`)
         // clears it (the unit feed's world-enter turn).
-        if let Some(mut selection) = selection {
+        if let Some(selection) = self.selection.as_deref_mut() {
             selection.target = None;
             selection.lit = None;
         }
@@ -438,10 +498,10 @@ fn on_worldport(
             needs_ack,
             &mut b.commands,
             &mut b.index,
-            &mut e.transfer,
+            &mut self.transfer,
             &b.transports,
-            player.as_ref().and_then(|p| p.ride_entity()),
-            &mut e.worldports,
+            self.player.as_ref().and_then(|p| p.ride_entity()),
+            &mut self.worldports,
         );
         // The world load destroys every object (`0x401bf7` → `0x467700` → `0x467800`), our own
         // player too, whose destructor zeroes the active mover it names (`0x5fb650`).
@@ -449,7 +509,54 @@ fn on_worldport(
             mover.forget_unless_held(&b.index);
         }
         // Loading a new world frees the released objects with the live ones (`0x467700`).
-        released.clear();
+        self.released.clear();
+    }
+}
+
+/// `SMSG_NEW_WORLD` (`0x401b00`) only posts the load: its body runs as a timer at the next tick's
+/// start ([`WorldportTimer`], [`world_load_timer`]), so what the port's own tick raised still sees
+/// the old world and an open logout request. `SMSG_LOGIN_VERIFY_WORLD` for another map
+/// (`0x401de0` → `0x401ea4`) calls the executor in place, with no ack owed.
+fn on_worldport(
+    In(ev): In<SessionEvent>,
+    mut pending: ResMut<PendingWorldports>,
+    mut load: WorldLoad,
+) {
+    if let SessionEvent::Worldport {
+        map_id,
+        position,
+        orientation,
+        needs_ack,
+    } = ev
+    {
+        let dest = Destination {
+            map_id,
+            position,
+            orientation,
+        };
+        if needs_ack {
+            pending.0.push(dest);
+        } else {
+            load.objects_destroyed(dest, false);
+        }
+    }
+}
+
+/// The posted world loads' objects leg once, for a test that dispatches a port and reads what the
+/// timer does.
+#[cfg(test)]
+pub(crate) fn fire_worldport_timer(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(world_load_timer)
+        .expect("the world load runs");
+    world.flush();
+}
+
+/// The posted world loads' objects leg, at the frame's start ([`WorldportTimer::Objects`]).
+fn world_load_timer(mut pending: ResMut<PendingWorldports>, mut load: WorldLoad) {
+    for dest in std::mem::take(&mut pending.0) {
+        load.objects_destroyed(dest, true);
     }
 }
 
@@ -1461,7 +1568,7 @@ mod worldport_tests {
                 needs_ack: true,
             }],
         );
-        world.flush();
+        fire_worldport_timer(world);
         let alive = |world: &World, guid: u64, e: Entity| {
             world.resource::<GuidIndex>().0.contains_key(&guid) && world.get_entity(e).is_ok()
         };
@@ -1501,7 +1608,7 @@ mod worldport_tests {
                 needs_ack: true,
             }],
         );
-        world.flush();
+        fire_worldport_timer(world);
         let fresh = std::time::Instant::now();
         let create = SessionEvent::ObjectCreate {
             guid: RIDDEN,

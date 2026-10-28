@@ -645,18 +645,27 @@ const LEAVE_SPY: &str = r#"Seen = {}
                         "LOGOUT_CANCEL"}) do
         f:RegisterEvent(e)
     end
-    f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. tostring(arg1)) end)"#;
+    f:SetScript("OnEvent", function()
+        local line = event .. ":" .. tostring(arg1)
+        if event == "CHAT_MSG_SYSTEM" then line = line .. ":" .. tostring(UnitExists("player")) end
+        table.insert(Seen, line)
+    end)"#;
 
 /// The teardown timer `SMSG_NEW_WORLD` posts at no delay (`0x401bac`) runs at the next tick's
-/// start, ahead of its packets (`core/loop`, "What one tick runs"): the leave-world sweep
-/// (`0x401bf7` → `0x467700` → `0x5dd543` → `0x490a9e`) signals `PLAYER_LEAVING_WORLD` after every
-/// event the worldport's own tick raised, the lines of the packets on either side of it among
-/// them, and before the next tick's packets.
+/// start, ahead of its packets (`core/loop`, "What one tick runs"), and its body is one unit
+/// (`0x401bc0`): the connection leaves the world (`0x401bd4`, `LOGOUT_CANCEL` for a pending
+/// request), the objects are destroyed (`0x401bf7`) and the local player's destructor sweeps
+/// (`0x5dd543` → `0x490a9e`), so `PLAYER_LEAVING_WORLD` follows every event the worldport's own
+/// tick raised, the lines of the packets on either side of it among them, all of which still read
+/// the old world and its pending logout.
 #[test]
-fn a_worldports_leave_fires_at_the_next_ticks_start() {
+fn a_worldports_teardown_runs_at_the_next_ticks_start() {
     let mut c = client(LEAVE_SPY);
     c.frame(vec![vec![me()]]);
     assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD:nil"]);
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |vm| {
+        vm.expect("a VM").run("Logout()").expect("the verb runs")
+    });
     c.frame(vec![
         vec![system_line("before")],
         vec![port()],
@@ -664,13 +673,20 @@ fn a_worldports_leave_fires_at_the_next_ticks_start() {
     ]);
     assert_eq!(
         c.seen(),
-        ["CHAT_MSG_SYSTEM:before", "CHAT_MSG_SYSTEM:after"],
-        "the port's own tick raised them, ahead of the teardown"
+        ["CHAT_MSG_SYSTEM:before:1", "CHAT_MSG_SYSTEM:after:1"],
+        "the port's own tick raised them, over the old world and its open logout"
+    );
+    assert!(
+        c.app
+            .world()
+            .resource::<crate::ui_logout::LogoutState>()
+            .pending(),
+        "the request stands"
     );
     c.frame(vec![vec![system_line("next")]]);
     assert_eq!(
         c.seen(),
-        ["PLAYER_LEAVING_WORLD:nil"],
+        ["LOGOUT_CANCEL:nil", "PLAYER_LEAVING_WORLD:nil"],
         "the next tick's timer runs first, and its line waits for the next world entry"
     );
     c.frame(vec![]);
@@ -689,22 +705,6 @@ fn a_worldport_alone_leaves_in_the_next_frame() {
     assert_eq!(c.seen(), ["PLAYER_LEAVING_WORLD:nil"]);
     c.frame(vec![]);
     assert_eq!(c.seen(), Vec::<String>::new());
-}
-
-/// The timer's body calls the connection out of the world first (`0x401bd4` → `0x5aae70(0)`,
-/// which signals `LOGOUT_CANCEL` for a pending request) and destroys the old world after
-/// (`0x401bf7`): the cancel reaches the sweep's leave in that order.
-#[test]
-fn a_worldports_logout_cancel_precedes_its_leave() {
-    let mut c = client(LEAVE_SPY);
-    c.frame(vec![vec![me()]]);
-    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD:nil"]);
-    crate::script_calls::with_hosted_vm(c.app.world_mut(), |vm| {
-        vm.expect("a VM").run("Logout()").expect("the verb runs")
-    });
-    c.frame(vec![vec![port()]]);
-    c.frame(vec![]);
-    assert_eq!(c.seen(), ["LOGOUT_CANCEL:nil", "PLAYER_LEAVING_WORLD:nil"]);
 }
 
 /// The cascade's trainer reset zeroes the guid, the selection and the total (`0x4d73e0`), and not

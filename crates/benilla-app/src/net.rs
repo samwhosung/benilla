@@ -31,6 +31,9 @@ pub(crate) use objects::Listed;
 pub(crate) use objects::{release_unheld, ReleasePending};
 mod reputations;
 mod session;
+#[cfg(test)]
+pub(crate) use session::fire_worldport_timer;
+pub(crate) use session::{PendingWorldports, WorldportTimer};
 mod world;
 
 pub(crate) use reputations::Reputations;
