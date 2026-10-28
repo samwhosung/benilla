@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 249
+- [benilla-app](#benilla-app): 250
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -513,6 +513,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### wdb
 
 - The files are `benilla-config/cache/<realm>/<store>.bin` through `crate::local_state`, not `WDB/` in the install, which is read-only; they are per realm, because another server may hold another template under the same key; and a store is written ten seconds after an answer lands as well as at exit, so a crash costs only re-asking. ([`src/wdb.rs:38`](../crates/benilla-app/src/wdb.rs#L38))
+- The reference keeps a saved store's ask "pending" for the rest of the process (`0x555740` clears only the stores built with persistence off), so a query a lost link dropped is never sent again until restart; benilla's reconnect asks it again. ([`src/wdb.rs:344`](../crates/benilla-app/src/wdb.rs#L344))
 
 #### world_console
 
