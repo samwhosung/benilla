@@ -486,7 +486,10 @@ mod tests {
             (stamped.len(), heard)
         };
         let (items, heard) = shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(items, 2, "the line, then the close's parked signals");
+        assert_eq!(
+            items, 1,
+            "the line, with the close's signals parked on the gossip lane"
+        );
         assert_eq!(heard, "UI_ERROR_MESSAGE(no paths) GOSSIP_CLOSED(nil) ");
         assert_eq!(app.world().resource::<TaxiState>().cell(), None);
         assert_eq!(

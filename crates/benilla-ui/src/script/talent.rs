@@ -189,7 +189,8 @@ impl LiveQuery for CharacterPoints {
     type Answer = (u32, u32);
 }
 
-/// Whether a trainer's respec question is latched and in range (`0x5df980` with a zero guid).
+/// Whether a trainer's respec question is latched and its trainer in range at the call
+/// (`0x48d194` → `0x5dfb10`).
 #[derive(Clone, Copy, Debug)]
 pub struct TalentMasterPending;
 
@@ -365,8 +366,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // CheckTalentMasterDist(): polled by that dialog's OnUpdate, nil hides it. The reference
-    // re-runs its interact-range test on the latched trainer (`0x5df980`, `d² <= [0xc4c28c]`);
-    // no packet either way.
+    // runs its interact-range test on the latched trainer at the call (`0x48d170` → `0x5dfb10`,
+    // `d² <= [0xc4c28c]`); no packet either way.
     g.set(
         "CheckTalentMasterDist",
         lua.create_function(|lua, ()| {

@@ -65,23 +65,13 @@ fn listed_nodes<'a>(
         .collect()
 }
 
-/// A handler's `DisplayError` line (`0x496720`) and then the gossip menu's close (`0x4e1fa0` with
-/// a zero guid), both on the taxi lane at the handler's place: the close's signals wait parked
-/// behind the line, at a stamp taken as it ends.
+/// A handler's `DisplayError` line (`0x496720`) on the taxi lane at the handler's place, then the
+/// gossip menu's close (`0x4e1fa0` with a zero guid), whose signals the core parks on the gossip
+/// lane after it ([`crate::lanes::waits_behind`]).
 fn line_then_gossip_close(world: &mut World, key: &'static str) {
     world.resource_mut::<TaxiLane>().push(TaxiEvent::Line(key));
-    if !world.contains_resource::<crate::ui_gossip::GossipState>() {
-        return;
-    }
-    let deferring = crate::script_calls::defer_vm(world);
-    crate::ui_gossip::close_core(world);
-    let Some((_held, mark)) = &deferring else {
-        return;
-    };
-    if let Some((session, key)) = crate::script_calls::park_since(world, *mark) {
-        world
-            .resource_mut::<TaxiLane>()
-            .push(TaxiEvent::Parked { session, key });
+    if world.contains_resource::<crate::ui_gossip::GossipState>() {
+        crate::ui_gossip::close_core(world);
     }
 }
 

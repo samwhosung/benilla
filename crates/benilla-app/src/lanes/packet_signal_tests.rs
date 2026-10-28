@@ -252,6 +252,41 @@ fn a_game_objects_page_text_begins_at_its_packet() {
     );
 }
 
+/// A gossip menu's register closes the latched reader inside its handler (`0x4e26e0` →
+/// `0x4930d0` → `0x493310` → `0x4e32e0(0, 0)`), so `ITEM_TEXT_CLOSED` (`0x4e33a2`) fires at the
+/// menu's place among the frame's packets, though the reader's lane holds nothing then.
+#[test]
+fn a_register_at_a_packet_closes_the_reader_at_its_place() {
+    const NPC: u64 = 0xF130_0000_0000_0043;
+    let mut app = client();
+    tablet(&mut app, true);
+    frame(
+        &mut app,
+        vec![SessionEvent::GameObjectPageText { guid: TABLET }],
+    );
+    spy(&mut app, &["ITEM_TEXT_CLOSED"]);
+    let seen = frame(
+        &mut app,
+        vec![
+            fall(5),
+            SessionEvent::GossipMenu {
+                npc: NPC,
+                text_id: 7,
+                options: Vec::new(),
+                quests: Vec::new(),
+            },
+            fall(5),
+        ],
+    );
+    assert_eq!(seen, [FELL, "ITEM_TEXT_CLOSED", FELL]);
+    assert_eq!(
+        app.world()
+            .resource::<crate::ui_item_text::ItemTextOpen>()
+            .object(),
+        None
+    );
+}
+
 /// With the first page not cached the open asks for it and returns (`0x4e348b` → `0x4e35a0`); the
 /// page's answer runs the callback `0x4e3280`, which opens again (`0x4e32a5`), so
 /// `ITEM_TEXT_BEGIN` fires at the answer's place.

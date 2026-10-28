@@ -348,6 +348,99 @@ fn the_unlearn_question_drops_past_the_range_gate() {
     );
 }
 
+/// Walking away from an innkeeper, a pet trainer or a talent trainer with its question open closes
+/// nothing: no engine path clears the latches (`0xc4d7c0`, `0xc4d7b0`, `0xc4d7a0`, written only
+/// at `0x5dfe64`, `0x5dfc41`, `0x5dfa21`), and each poll tests the latched NPC's range at the
+/// call (`0x5dff50`, `0x5dfd30`, `0x5dfb10`), so the stock `OnUpdate` hides the dialog
+/// (`StaticPopup.lua:1297`, `1313`, `1329`). Out of range the Accept sends nothing; back in range
+/// the poll holds again and the Accept answers the latched NPC (`0x5dfdc0`, `0x5dfba0`, `0x5df980`
+/// with a zero guid).
+#[test]
+fn walking_away_keeps_the_service_latches_and_the_polls_test_the_range() {
+    use crate::net::ClientCommand as C;
+    let mut c = client();
+    c.frame(vec![
+        vec![SessionEvent::BinderConfirm { binder: NPC }],
+        vec![SessionEvent::PetUnlearnConfirm {
+            trainer: NPC,
+            cost: 0,
+        }],
+        vec![SessionEvent::TalentWipeConfirm {
+            trainer: NPC,
+            cost: 0,
+        }],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CONFIRM_BINDER:your inn",
+            "CONFIRM_PET_UNLEARN:0",
+            "CONFIRM_TALENT_WIPE:0"
+        ]
+    );
+    const POLLS: &str =
+        "return CheckBinderDist(), CheckPetUntrainerDist(), CheckTalentMasterDist()";
+    type Polls = (Option<i64>, Option<i64>, Option<i64>);
+    assert_eq!(c.eval::<Polls>(true, POLLS), (Some(1), Some(1), Some(1)));
+    let latched = |c: &Client| {
+        let w = c.app.world();
+        (
+            w.resource::<crate::ui_binder::BinderState>().pending(),
+            w.resource::<crate::ui_dialog_verbs::PetUnlearnState>()
+                .pending(),
+            w.resource::<crate::ui_talent_wipe::TalentWipeState>()
+                .pending(),
+        )
+    };
+    let place = |c: &mut Client, x: f32| {
+        let npc = c.app.world().resource::<crate::net::GuidIndex>().0[&NPC];
+        c.app
+            .world_mut()
+            .get_mut::<Transform>(npc)
+            .unwrap()
+            .translation
+            .x = x;
+    };
+    let accept = |c: &mut Client| -> Vec<String> {
+        let _: () = c.eval(
+            true,
+            "ConfirmBinder() ConfirmPetUnlearn() ConfirmTalentWipe()",
+        );
+        c._sent
+            .try_iter()
+            .filter(|s| {
+                matches!(
+                    s,
+                    C::BinderActivate { .. } | C::PetUnlearn { .. } | C::TalentWipeConfirm { .. }
+                )
+            })
+            .map(|s| format!("{s:?}"))
+            .collect()
+    };
+
+    place(&mut c, 6.0);
+    c.frame(vec![]);
+    assert_eq!(
+        latched(&c),
+        (Some(NPC), Some(NPC), Some(NPC)),
+        "nothing closes"
+    );
+    assert_eq!(c.eval::<Polls>(true, POLLS), (None, None, None));
+    assert!(accept(&mut c).is_empty(), "out of range, no Accept sends");
+
+    place(&mut c, 5.0);
+    c.frame(vec![]);
+    assert_eq!(c.eval::<Polls>(true, POLLS), (Some(1), Some(1), Some(1)));
+    assert_eq!(
+        accept(&mut c),
+        [
+            format!("{:?}", C::BinderActivate { binder: NPC }),
+            format!("{:?}", C::PetUnlearn { trainer: NPC }),
+            format!("{:?}", C::TalentWipeConfirm { trainer: NPC }),
+        ]
+    );
+}
+
 /// A world-enter cascade and a `0x295` in one frame: the reset is the create's, ahead of the
 /// frame's later packets, so the rebuild stands (`0x4908c0` inside `0x5dea50`, then `0x4ca385`).
 #[test]

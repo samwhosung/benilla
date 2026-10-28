@@ -116,7 +116,7 @@ live_reads! {
         /// The taxi map's slots and fares.
         taxi: crate::ui_taxi::TaxiLive<'static, 'static>,
         /// The dialogs' latches, clocks, meeting stone, summon and instance terms.
-        dialogs: crate::ui_dialog_verbs::DialogLive<'static>,
+        dialogs: crate::ui_dialog_verbs::DialogLive<'static, 'static>,
         /// The trainer rows' icons, descriptions and ability tests.
         trainer: crate::ui_trainer::TrainerLive<'static, 'static>,
         /// The tabard designer's guild record and save latch.

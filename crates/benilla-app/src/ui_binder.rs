@@ -11,10 +11,10 @@
 //! `SMSG_BINDER_CONFIRM` arm `0x5e4aa2`: an innkeeper in range (`0x5dfe3c`) is latched and the
 //! event fires inside it, here on the dialogs' lane at the packet's place; out of range nothing.
 //!
-//! `CheckBinderDist()` tests `d² <= [0xc4c28c]` (`5.55555534362793²`), the same constant and
-//! inclusive bound as [`crate::target::SERVICE_RANGE_SQ`], so the question is an [`NpcSession`]
-//! closed by [`crate::ui_session::close_npc_session_out_of_range`]; an unstreamed guid reads as
-//! gone, so a disconnect needs no teardown.
+//! `CheckBinderDist()` tests the latched innkeeper's range at the call (`0x48d234` →
+//! `0x5dff50`, `d² <= [0xc4c28c]`, [`crate::ui_dialog_verbs::DialogReach`]) and nothing closes
+//! the question, so walking away hides the dialog through its own `OnUpdate`; an unstreamed guid
+//! reads as gone, so a disconnect needs no teardown.
 //!
 //! Deviation: the reference never clears its latched guid (`0xc4d7c0`), so a second
 //! `ConfirmBinder()` in range re-sends the activate; this drops the guid on `SMSG_PLAYERBOUND`,
@@ -24,7 +24,6 @@ use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
 use crate::net::{ClientCommand, NetCommands};
-use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The innkeeper's pending bind question; everything the dialog reads rides the event's argument.
 #[derive(Resource, Default)]
@@ -44,21 +43,9 @@ impl BinderState {
         self.npc
     }
 
-    /// Retracts the question: the range guard's close, and `SMSG_PLAYERBOUND`'s.
+    /// Retracts the question: `SMSG_PLAYERBOUND`'s.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
-    }
-}
-
-/// The range guard closes the question without a packet, as declining does, when the player
-/// leaves service range or the innkeeper despawns; that close is what `CheckBinderDist()` reports.
-impl NpcSession for BinderState {
-    fn npc(&self) -> Option<u64> {
-        self.npc
-    }
-
-    fn close(&mut self) {
-        self.clear();
     }
 }
 
@@ -114,21 +101,28 @@ pub(crate) fn ask_binder(In(npc): In<u64>, mut ask: BinderAsk) {
 
 /// `ConfirmBinder()` inside its call ([`benilla_ui::script::BinderCall`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct BinderSteps<'w> {
+pub(crate) struct BinderSteps<'w, 's> {
     binder: Option<Res<'w, BinderState>>,
+    reach: crate::ui_dialog_verbs::DialogReach<'w, 's>,
     net: Res<'w, NetCommands>,
 }
 
-impl BinderSteps<'_> {
-    /// `0x5dfdc0(0)`: `CMSG_BINDER_ACTIVATE` while a question is pending; with no guid latched
-    /// the reference finds no unit and sends nothing (`0x5dfdfe`).
+impl BinderSteps<'_, '_> {
+    /// `0x5dfdc0(0)`: `CMSG_BINDER_ACTIVATE` with the latched innkeeper while its unit is held in
+    /// range at the call (`0x5dfdf5`, `0x5dfe4d`); with no guid latched, no unit or out of range
+    /// the reference sends nothing (`0x5dfdfe`).
     pub(crate) fn confirm(&self) {
-        if let Some(npc) = self.binder.as_deref().and_then(BinderState::pending) {
-            let _ = self
-                .net
-                .0
-                .send(ClientCommand::BinderActivate { binder: npc });
+        let Some(npc) = self.binder.as_deref().and_then(BinderState::pending) else {
+            return;
+        };
+        if !self.reach.holds(npc) {
+            debug!("ui_binder: innkeeper {npc:#x} missing or out of range at the confirm");
+            return;
         }
+        let _ = self
+            .net
+            .0
+            .send(ClientCommand::BinderActivate { binder: npc });
     }
 }
 
@@ -202,22 +196,14 @@ pub(crate) mod net {
     }
 }
 
-/// The innkeeper bind flow: the range guard, the dialog's feed, and its answer.
+/// The innkeeper bind flow: the question's packet, the dialog's lane, and its answer.
 pub(crate) struct UiBinderPlugin;
 
 impl Plugin for UiBinderPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         crate::ui_dialog_verbs::add_dialog_lane(app);
-        app.init_resource::<BinderState>().add_systems(
-            Update,
-            // Range-close after the drain that despawns the NPC and ahead of the pass's resume,
-            // so walking away hides the dialog the same frame: `CheckBinderDist` and
-            // `ConfirmBinder`'s call read the question.
-            close_npc_session_out_of_range::<BinderState>
-                .after(benilla_world::schedule::WorldStage::Net)
-                .before(crate::vm_pass::VmPass::Resume),
-        );
+        app.init_resource::<BinderState>();
     }
 }
 
@@ -275,13 +261,5 @@ mod tests {
             crate::ui_action::ui_error_text(&msg, &g).as_deref(),
             Some("Dolanaar is now your home.")
         );
-    }
-
-    #[test]
-    fn closing_retracts_the_guid() {
-        let mut binder = BinderState::default();
-        binder.ask(0x2a);
-        binder.close();
-        assert_eq!(binder.pending(), None);
     }
 }

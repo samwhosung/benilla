@@ -1,5 +1,5 @@
-//! The innkeeper bind confirm, the stock `CONFIRM_BINDER` popup, driven as `ui_binder`'s feed
-//! and the app's NPC range guard drive it.
+//! The innkeeper bind confirm, the stock `CONFIRM_BINDER` popup, driven as `ui_binder`'s event
+//! and its `CheckBinderDist()` range poll drive it.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 

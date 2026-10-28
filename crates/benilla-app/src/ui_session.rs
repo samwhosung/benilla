@@ -1,6 +1,5 @@
 //! The NPC interaction: the latch every NPC window registers on and closes through ([`latch`]),
-//! the `"npc"` unit it publishes ([`InteractNpc`]), and the range guard of the questions that keep
-//! a guid of their own ([`NpcSession`]).
+//! and the `"npc"` unit it publishes ([`InteractNpc`]).
 //!
 //! The reference's watchdog is `0x493230`, run every frame from `CGWorldFrame`'s layer update. The
 //! NPC range is the cursor's own 50/9 yd service gate ([`SERVICE_RANGE_SQ`], 5.5556 yd centre to
@@ -8,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use crate::net::{GuidIndex, NetHandlerApp, SelfPlayer};
+use crate::net::{GuidIndex, NetHandlerApp};
 use crate::target::SERVICE_RANGE_SQ;
 use crate::ui_script::SweepApp;
 use benilla_protocol::SessionEventKind;
@@ -74,17 +73,6 @@ impl Plugin for UiSessionPlugin {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct NpcWindowFeed;
 
-/// A question bound to a live NPC with a guid of its own, not the latch: the binder and
-/// talent-wipe questions and the pet trainer's, as the reference re-runs its interact-range test
-/// against each one's latched guid. Each registers [`close_npc_session_out_of_range::<T>`] ahead
-/// of its feed.
-pub(crate) trait NpcSession: Resource {
-    /// The bound NPC's guid; `None` when nothing is open.
-    fn npc(&self) -> Option<u64>;
-    /// The client-side close, with no packet.
-    fn close(&mut self);
-}
-
 /// The walk-away leash, set by the latched object's type, not the window: the reference's
 /// `0x4930d0` stores the opener's range and overwrites it for an object with the PLAYER typemask
 /// bit (`0x493156`). Thirteen of the client's fourteen arming sites push 50/9 yd
@@ -100,29 +88,6 @@ fn leash_sq(npc: u64) -> f32 {
 
 /// `14.0²`, the leash for a session latched onto a player.
 const PLAYER_LEASH_SQ: f32 = 196.0;
-
-/// Close `T`'s open question when the player leaves the leash or the NPC despawns.
-pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
-    mut session: ResMut<T>,
-    index: Res<GuidIndex>,
-    self_q: Query<&Transform, With<SelfPlayer>>,
-    transforms: Query<&Transform>,
-) {
-    let Some(npc) = session.npc() else { return };
-    let Some(self_tf) = self_q.iter().next() else {
-        return;
-    };
-    // Centre to centre with no bounding radii, and `dist² <= leash²` keeps: the reference's
-    // compare (`0x4932f2`, `0x4932fe`).
-    let out = match index.0.get(&npc).and_then(|e| transforms.get(*e).ok()) {
-        Some(tf) => tf.translation.distance_squared(self_tf.translation) > leash_sq(npc),
-        None => true, // the NPC despawned out from under the question
-    };
-    if out {
-        debug!("ui_session: NPC {npc:#x} out of range/gone — client-side close");
-        session.close();
-    }
-}
 
 /// The `"npc"` unit: the latched object's world entity and guid, read by the portrait booth as it
 /// reads [`crate::target::Selection`] for `"target"`.
@@ -152,7 +117,7 @@ pub(crate) fn feed_interact_npc(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::NetCommands;
+    use crate::net::{NetCommands, SelfPlayer};
     use crate::ui_merchant::MerchantOpen;
 
     /// A `HIGHGUID_UNIT` guid: a bare `0x42` would be a player's (`guid::is_player`) and get the
@@ -359,78 +324,6 @@ mod tests {
             app.world().resource::<InteractNpc>().0,
             Some(partner),
             "the trade partner's own portrait"
-        );
-    }
-
-    /// Every `NpcSession` implementor in the app's sources must be in [`feed_interact_npc`]'s
-    /// chain or on the exclusion list with a reason; one missing renders a black portrait disc.
-    #[test]
-    fn every_npc_session_is_portrait_bound_or_explicitly_excluded() {
-        use std::path::Path;
-
-        /// Sessions that do not own the `"npc"` portrait token, each with its reason.
-        const EXCLUDED: &[(&str, &str)] = &[
-            // Reached from an open gossip menu, which stays open behind it holding the latch;
-            // unlike the registrar's, the server does not close it first.
-            ("TalentWipeState", "rides the still-open gossip session"),
-            ("BinderState", "rides the still-open gossip session"),
-            // The pet trainer's question, reached the same way.
-            ("PetUnlearnState", "rides the still-open gossip session"),
-        ];
-
-        // The chain's own source says what is wired.
-        // Line endings normalised first: the end of the function is found on `\n`.
-        let this_file = include_str!("ui_session.rs").replace("\r\n", "\n");
-        let chain = this_file
-            .split_once("pub(crate) fn feed_interact_npc")
-            .expect("feed_interact_npc")
-            .1
-            .split_once("\n}\n")
-            .expect("end of feed_interact_npc")
-            .0;
-
-        let mut missing = Vec::new();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).expect("read_dir") {
-                let path = entry.expect("dir entry").path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "rs") {
-                    continue;
-                }
-                // This file defines the trait and no session, but its own text spells the pattern.
-                if path.file_name().is_some_and(|f| f == "ui_session.rs") {
-                    continue;
-                }
-                let src = std::fs::read_to_string(&path).expect("read source");
-                for (_, rest) in src
-                    .match_indices("impl NpcSession for ")
-                    .map(|(i, _)| (i, &src[i + "impl NpcSession for ".len()..]))
-                {
-                    let ty: String = rest
-                        .chars()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_')
-                        .collect();
-                    if ty.is_empty() || EXCLUDED.iter().any(|(name, _)| *name == ty) {
-                        continue;
-                    }
-                    // Wired means the chain's text names the type, as its `Res<...>` parameter
-                    // does; a comment naming it counts too.
-                    if !chain.contains(&ty) {
-                        missing.push(format!("{ty} (in {})", path.display()));
-                    }
-                }
-            }
-        }
-        assert!(
-            missing.is_empty(),
-            "these NpcSession windows own no `\"npc\"` portrait and are not on the exclusion \
-             list, so each renders a BLACK DISC where the NPC's face goes — wire them into \
-             `feed_interact_npc`'s chain, or add them to EXCLUDED with a reason: {missing:#?}"
         );
     }
 

@@ -123,6 +123,23 @@ pub(crate) fn firing_now() -> Option<Stamp> {
 thread_local! {
     /// A close core is running held behind a lane: what a core it re-enters signals is its.
     static BEHIND: Cell<bool> = const { Cell::new(false) };
+    /// The net dispatch is running the frame's packet handlers on this thread ([`at_packets`]).
+    static AT_PACKETS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `f` as the dispatch of the frame's packets, each handler whole in wire order: a close core
+/// a handler runs with no item firing takes its place on its lane there ([`waits_behind`]), so its
+/// signals fire after every earlier packet's and ahead of every later one's, as the reference's
+/// fire inside the handler that closes (`0x537ae5`, `0x703e50`).
+pub(crate) fn at_packets<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            AT_PACKETS.set(self.0);
+        }
+    }
+    let _reset = Reset(AT_PACKETS.replace(true));
+    f()
 }
 
 /// Where [`behind`] ran its core.
@@ -136,11 +153,11 @@ pub(crate) enum Behind {
     Nested,
 }
 
-/// Run a close `core` behind a lane whose head is `head`: at once unless the lane holds an item
-/// stamped before the item firing now (any item, with none firing), else with the world's VM held,
-/// what it signalled parked under a key `park` queues on the lane, so a close never fires ahead of
-/// the open it closes. A core it re-enters, as a release re-enters its close (`0x493310`), runs
-/// inside the hold.
+/// Run a close `core` behind a lane whose head is `head`: at once unless it waits
+/// ([`waits_behind`]), else with the world's VM held, what it signalled parked under a key `park`
+/// queues on the lane, so a close never fires ahead of the open it closes, nor ahead of an earlier
+/// packet's signals when a handler runs it. A core it re-enters, as a release re-enters its close
+/// (`0x493310`), runs inside the hold.
 pub(crate) fn behind(
     world: &mut World,
     head: Option<Stamp>,
@@ -167,11 +184,16 @@ pub(crate) fn behind(
     Behind::Parked
 }
 
-/// Whether a close run now must wait behind a lane whose head is `head`: the lane holds an item
-/// stamped before the item firing now (any item, with none firing), and no other core's hold
-/// already takes what it signals ([`behind`]).
+/// Whether a close run now must wait behind a lane whose head is `head`, as no other core's hold
+/// already takes what it signals ([`behind`]): with an item firing, the lane holds one stamped
+/// before it; with none, a packet handler runs it ([`at_packets`]), whose place is the lane's
+/// next stamp, or the lane holds any item.
 pub(crate) fn waits_behind(head: Option<Stamp>) -> bool {
-    !BEHIND.get() && head.is_some_and(|head| firing_now().is_none_or(|now| head < now))
+    !BEHIND.get()
+        && match firing_now() {
+            Some(now) => head.is_some_and(|head| head < now),
+            None => AT_PACKETS.get() || head.is_some(),
+        }
 }
 
 /// Run `f` as the firing of the item stamped `at`, so what it pushes nests under the item; with

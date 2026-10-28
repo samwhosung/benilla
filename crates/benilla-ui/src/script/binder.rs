@@ -44,8 +44,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CheckBinderDist()`, polled by the dialog's OnUpdate: 1 or nil (`0x48d210`), the latch read
-    // at the call (`0x5dff50`).
+    // `CheckBinderDist()`, polled by the dialog's OnUpdate: 1 or nil (`0x48d210`), the latched
+    // innkeeper's range tested at the call (`0x5dff50`).
     g.set(
         "CheckBinderDist",
         lua.create_function(|lua, ()| {

@@ -2,7 +2,8 @@
 //! [`benilla_ui::script::TalentTabs`] and its kin: the class's tabs and talents off the catalog,
 //! each rank off the known spells as they stand (`0x4f3200`, `0x60c740`, `0x60c8d0`), and the two point
 //! counters off the active player's store as of the drain's place (`+0xe48`, `0x519463`); and the
-//! respec question's latch, which `CheckTalentMasterDist` reads (`0x5df980`).
+//! respec question's latch, whose trainer's range `CheckTalentMasterDist` tests at the call
+//! (`0x5dfb10`).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -24,6 +25,8 @@ pub(crate) struct TalentLive<'w, 's> {
     stores: crate::ui_unit::views::ViewStores<'w, 's>,
     /// The respec question's latch; absent in a world with no trainer flow.
     wipe: Option<Res<'w, crate::ui_talent_wipe::TalentWipeState>>,
+    /// The latched trainer's range, which the poll tests on each call.
+    reach: crate::ui_dialog_verbs::DialogReach<'w, 's>,
 }
 
 /// What a talent answer reads: the catalogs, the known spells, the race and class and the points.
@@ -108,7 +111,8 @@ impl crate::script_calls::live::LiveFamily for TalentLive<'_, '_> {
             )))
         }) || ask.answer(|_: &CharacterPoints| Some(self.points()))
             || ask.answer(|_: &TalentMasterPending| {
-                Some(self.wipe.as_ref().is_some_and(|w| w.pending().is_some()))
+                let npc = self.wipe.as_ref().and_then(|w| w.pending());
+                Some(npc.is_some_and(|npc| self.reach.polled(npc)))
             })
     }
 }

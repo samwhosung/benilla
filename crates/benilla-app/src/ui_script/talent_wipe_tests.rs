@@ -1,5 +1,5 @@
-//! The stock respec confirm, `CONFIRM_TALENT_WIPE`, driven as `ui_talent_wipe`'s feed and the
-//! app's NPC range guard drive it.
+//! The stock respec confirm, `CONFIRM_TALENT_WIPE`, driven as `ui_talent_wipe`'s event and its
+//! `CheckTalentMasterDist()` range poll drive it.
 
 use benilla_ui::script::{ScriptValue, TalentCall, UiScript};
 

@@ -87,7 +87,7 @@ disjoint::disjoint_set! {
         death: crate::death::DeathSteps<'static, 'static>,
         duel: crate::ui_duel::DuelSteps<'static>,
         loot_roll: crate::ui_loot_roll::LootRollSteps<'static>,
-        binder: crate::ui_binder::BinderSteps<'static>,
+        binder: crate::ui_binder::BinderSteps<'static, 'static>,
         summon: crate::ui_summon::SummonSteps<'static>,
         meeting_stone: crate::ui_dialog_verbs::MeetingStoneSteps<'static>,
         instance: crate::ui_instance::InstanceSteps<'static>,

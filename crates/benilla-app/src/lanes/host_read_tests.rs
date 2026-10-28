@@ -82,18 +82,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          alone"),
     ("::ui_party::feed::feed_party", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_pet::unit::feed_pet_unit", &["UiScript"], "a field event's listeners read its push"),
-    ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",
-        &["ui_binder::BinderState"],
-        "closes the bind question once the player leaves service range, which \
-         `CheckBinderDist` reports; the reference tests the range at the call (`0x5dff50`)"),
-    ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_dialog_verbs::PetUnlearnState>",
-        &["ui_dialog_verbs::PetUnlearnState"],
-        "closes the unlearn question once the player leaves service range, which \
-         `CheckPetUntrainerDist` reports; the reference tests the range at the call (`0x5dfd30`)"),
-    ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_talent_wipe::TalentWipeState>",
-        &["ui_talent_wipe::TalentWipeState"],
-        "closes the respec question once the player leaves service range, which \
-         `CheckTalentMasterDist` reports; the reference tests the range at the call (`0x5df980`)"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

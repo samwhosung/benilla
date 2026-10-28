@@ -14,8 +14,9 @@ const TRAINER: u64 = 0xF130_0000_0000_0042;
 /// `PLAYER_FIELD_COINAGE`.
 const COINAGE: u16 = 1176;
 
-/// The whole client, headless, the player holding `money` copper and a trainer's respec question
-/// latched at 1000, its VM seated with one tab: talent 100 at rank 2 of 5, talent 101 at 5 of 5.
+/// The whole client, headless, the player holding `money` copper and a trainer 1 yd away whose
+/// respec question is latched at 1000, its VM seated with one tab: talent 100 at rank 2 of 5,
+/// talent 101 at 5 of 5.
 fn client(money: u32) -> (App, Receiver<ClientCommand>) {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -26,9 +27,12 @@ fn client(money: u32) -> (App, Receiver<ClientCommand>) {
             SelfPlayer,
             Guid(ME),
             ObjectStore(ObjectFields::from_pairs(&[(2, 0x19), (COINAGE, money)])),
+            Transform::default(),
         ))
         .id();
     world.resource_mut::<GuidIndex>().0.insert(ME, me);
+    let trainer = world.spawn(Transform::from_xyz(1.0, 0.0, 0.0)).id();
+    world.resource_mut::<GuidIndex>().0.insert(TRAINER, trainer);
     world.insert_resource(crate::net::SelfGuid(Some(ME)));
     world
         .resource_mut::<crate::ui_talent_wipe::TalentWipeState>()

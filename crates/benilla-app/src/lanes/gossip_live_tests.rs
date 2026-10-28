@@ -411,3 +411,28 @@ fn stock_gossip_frame_stays_visible_through_a_first_visit_submenu() {
         "an in-place repaint"
     );
 }
+
+/// `SMSG_GOSSIP_COMPLETE` closes the menu inside its handler (`0x4e1fa0` with a zero guid), whose
+/// release re-enters it (`0x4e1fc5` → `0x493310`): both `GOSSIP_CLOSED`s fire at the packet's
+/// place, after an earlier packet's chat line and ahead of a later one's, though the gossip lane
+/// holds nothing when the handler runs.
+#[test]
+fn a_server_close_fires_at_its_packet() {
+    let mut c = client();
+    c.frame(vec![vec![greeting(7, "Hello")], vec![menu(7, "Browse")]]);
+    assert_eq!(c.seen(), ["GOSSIP_SHOW:nil"]);
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![SessionEvent::GossipComplete],
+        vec![boar_says("b")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "GOSSIP_CLOSED:nil",
+            "GOSSIP_CLOSED:nil",
+            "CHAT_MSG_MONSTER_SAY:b",
+        ]
+    );
+}

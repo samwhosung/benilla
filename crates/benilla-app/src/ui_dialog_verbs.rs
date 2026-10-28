@@ -11,9 +11,17 @@ mod live;
 pub(crate) use lane::{add_dialog_lane, DialogLane, DialogSignal};
 pub(crate) use live::DialogLive;
 
-/// The service dialogs' arrival gate, inline in `0x5dfdc0` and `0x5dfba0`: the NPC's unit looked up
-/// (`0x5dfdf5`, `0x5dfbde`) and held within `d² <= [0xc4c28c]` of the player (`0x5dfe3c`,
-/// `0x5dfc2d`, `je`: equality and a NaN pass); with no unit or out of range the dialog drops.
+/// The service dialogs' range to the NPC, read at the call. The question and the Accept test it
+/// inline in `0x5df980`, `0x5dfba0` and `0x5dfdc0`: the NPC's unit looked up (`0x5df9b5`,
+/// `0x5dfbd5`, `0x5dfdf5`) and held within `d² <= [0xc4c28c]` of the player (`0x5dfa0d`,
+/// `0x5dfc2d`, `0x5dfe4d`, `je`: equality and a NaN pass); with no unit or out of range the call
+/// does nothing ([`Self::holds`]). The interface's polls `CheckTalentMasterDist`,
+/// `CheckPetUntrainerDist` and `CheckBinderDist` (`0x48d194`, `0x48d1e4`, `0x48d234`) call the
+/// same test on the latched guid (`0x5dfb10`, `0x5dfd30`, `0x5dff50`), whose `jp` fails a NaN
+/// ([`Self::polled`]). No engine path clears the three latches (`0xc4d7a0`, `0xc4d7b0`,
+/// `0xc4d7c0`, written only at `0x5dfa21`, `0x5dfc41`, `0x5dfe64`), and none tests their range
+/// outside these calls: walking away hides the dialog through the stock `OnUpdate`
+/// (`StaticPopup.lua:1297`, `1313`, `1329`).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct DialogReach<'w, 's> {
     index: Res<'w, crate::net::GuidIndex>,
@@ -22,15 +30,28 @@ pub(crate) struct DialogReach<'w, 's> {
 }
 
 impl DialogReach<'_, '_> {
-    /// Whether `npc` passes the gate.
+    /// `npc`'s squared distance from the player, `None` with no unit for it or no player.
+    fn dist_sq(&self, npc: u64) -> Option<f32> {
+        let at = self
+            .index
+            .0
+            .get(&npc)
+            .and_then(|&e| self.units.get(e).ok())?;
+        let me = self.me.iter().next()?;
+        Some(at.translation.distance_squared(me.translation))
+    }
+
+    /// Whether `npc` passes the question's and the Accept's gate, where a NaN passes.
     pub(crate) fn holds(&self, npc: u64) -> bool {
-        let at = self.index.0.get(&npc).and_then(|&e| self.units.get(e).ok());
-        at.zip(self.me.iter().next()).is_some_and(|(at, me)| {
-            at.translation
-                .distance_squared(me.translation)
-                .partial_cmp(&crate::target::SERVICE_RANGE_SQ)
-                != Some(std::cmp::Ordering::Greater)
+        self.dist_sq(npc).is_some_and(|d| {
+            d.partial_cmp(&crate::target::SERVICE_RANGE_SQ) != Some(std::cmp::Ordering::Greater)
         })
+    }
+
+    /// Whether `npc` passes the interface's poll, where a NaN fails.
+    pub(crate) fn polled(&self, npc: u64) -> bool {
+        self.dist_sq(npc)
+            .is_some_and(|d| d <= crate::target::SERVICE_RANGE_SQ)
     }
 }
 
@@ -48,7 +69,6 @@ use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_party::GroupState;
 use crate::ui_script::{SweepApp, SweepLeg, UiTick};
-use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The pet trainer's pending question: the latch (`0xc4d7b0/b4`) and the cost (`0xc4d7b8`).
 #[derive(Resource, Default)]
@@ -66,16 +86,6 @@ impl PetUnlearnState {
 
     pub(crate) fn pending(&self) -> Option<u64> {
         self.npc
-    }
-}
-
-impl NpcSession for PetUnlearnState {
-    fn npc(&self) -> Option<u64> {
-        self.npc
-    }
-    fn close(&mut self) {
-        self.npc = None;
-        self.cost = 0;
     }
 }
 
@@ -707,19 +717,18 @@ fn area_spirit_healer_leave_world(mut spirit: ResMut<AreaSpiritHealer>) {
 pub(crate) struct PetUnlearnSteps<'w, 's> {
     /// Absent in a harness without the pet trainer's latch.
     pet: Option<Res<'w, PetUnlearnState>>,
-    me: Query<'w, 's, (&'static ObjectStore, &'static Transform), With<SelfPlayer>>,
-    index: Res<'w, crate::net::GuidIndex>,
-    units: Query<'w, 's, &'static Transform>,
+    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    reach: DialogReach<'w, 's>,
     net: Res<'w, NetCommands>,
     sink: crate::ui_action::MessageSink<'w>,
 }
 
 impl PetUnlearnSteps<'_, '_> {
     /// `PetUnlearnDialog(0, 0)` (`0x5dfba0`) on the remembered trainer (`[0xc4d7b0]`): the trainer
-    /// looked up (`0x5dfbd5`) and tested within the interaction range at the call (`0x5dfc1c`,
-    /// `d² <= [0xc4c28c]`), else nothing, the trainer still remembered; then a cost above the
-    /// player's money shows `ERR_NOT_ENOUGH_MONEY` (`0x5dfca3`) and sends nothing, and otherwise
-    /// `CMSG_PET_UNLEARN` goes to the trainer (`0x2F0`).
+    /// looked up (`0x5dfbd5`) and tested within the interaction range at the call
+    /// ([`DialogReach::holds`], `0x5dfc2d`), else nothing, the trainer still remembered; then a
+    /// cost above the player's money shows `ERR_NOT_ENOUGH_MONEY` (`0x5dfca3`) and sends nothing,
+    /// and otherwise `CMSG_PET_UNLEARN` goes to the trainer (`0x2F0`).
     pub(crate) fn confirm(&mut self, script: &mut UiScript) {
         let Some((npc, cost)) = self
             .pet
@@ -728,19 +737,15 @@ impl PetUnlearnSteps<'_, '_> {
         else {
             return;
         };
-        let Some(trainer) = self.index.0.get(&npc).and_then(|&e| self.units.get(e).ok()) else {
-            return;
-        };
-        let me = self.me.single().ok();
-        let in_range = me.is_some_and(|(_, at)| {
-            at.translation.distance_squared(trainer.translation) <= crate::target::SERVICE_RANGE_SQ
-        });
-        if !in_range {
-            debug!("pet unlearn: trainer {npc:#x} out of range at the confirm — nothing sent");
+        if !self.reach.holds(npc) {
+            debug!("pet unlearn: trainer {npc:#x} missing or out of range at the confirm");
             return;
         }
-        let money = me
-            .and_then(|(store, _)| store.0.player_money())
+        let money = self
+            .me
+            .single()
+            .ok()
+            .and_then(|store| store.0.player_money())
             .unwrap_or(0);
         if cost > money {
             let input = script.input_events();
@@ -1047,12 +1052,6 @@ impl Plugin for UiDialogVerbsPlugin {
             .add_systems(
                 Update,
                 (
-                    // In the frame time, after the drain that despawns the NPC and before the pass
-                    // resumes: `CheckPetUntrainerDist` and `ConfirmPetUnlearn`'s call read the
-                    // latch.
-                    close_npc_session_out_of_range::<PetUnlearnState>
-                        .after(benilla_world::schedule::WorldStage::Net)
-                        .before(crate::vm_pass::VmPass::Resume),
                     // After the mouse pick, the reference's order: `CGWorldFrame`'s OnUpdate picks
                     // at `0x48184a`, then polls at `0x4818ca`. Gating is safe: the poll is
                     // level-triggered and re-derives the cache every frame.
@@ -2013,16 +2012,6 @@ mod tests {
             Some("Looking for more for Unknown"),
             "no row names it UNKNOWN"
         );
-    }
-
-    #[test]
-    fn the_pet_question_latches_and_closes_like_the_talent_wipe() {
-        let mut pet = PetUnlearnState::default();
-        pet.ask(0x2b, 10_000);
-        assert_eq!(pet.pending(), Some(0x2b));
-        pet.close();
-        assert_eq!(pet.pending(), None);
-        assert_eq!(pet.cost, 0);
     }
 
     #[test]

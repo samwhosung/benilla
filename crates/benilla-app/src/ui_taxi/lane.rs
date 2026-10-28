@@ -26,9 +26,6 @@ pub(crate) enum TaxiEvent {
     /// The close core's `TAXIMAP_CLOSED` (`0x4dc15f`), queued by a close that follows the open
     /// still on this lane.
     Closed,
-    /// What a core the handler ran signalled, parked in the VM of the session under the key
-    /// ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
 }
 
 /// The taxi lane's queue.
@@ -131,11 +128,6 @@ fn fire(
             }
         }
         TaxiEvent::Closed => script.fire_event("TAXIMAP_CLOSED", vec![]),
-        TaxiEvent::Parked { session, key } => {
-            if script.session() == session {
-                script.run_parked(key);
-            }
-        }
     }
 }
 

@@ -27,7 +27,6 @@ use crate::net::{ChatKind, ClientCommand, Guid, HomeBind, NetCommands, NetEntity
 use crate::player::Player;
 use crate::ui_binder::BinderState;
 use crate::ui_gossip::GossipState;
-use crate::ui_session::NpcSession;
 
 /// Innkeeper Keldamyr's spawn (vmangos `creature` guid 46343), the `.go xyz` target.
 const INNKEEPER_AT: [f32; 3] = [9802.21, 982.608, 1313.98];
@@ -337,7 +336,7 @@ fn binder_probe(
                     probe.phase = Phase::Done;
                     return;
                 };
-                let pending = binder.npc() == Some(innkeeper);
+                let pending = binder.pending() == Some(innkeeper);
                 let fired = events_len(script) > events_baseline;
                 let area = last_event(script);
                 if pending && fired && !area.is_empty() {
@@ -358,7 +357,7 @@ fn binder_probe(
                          {innkeeper:#x}), CONFIRM_BINDER fired={fired}, arg1={area:?}. A packet \
                          with no parse arm at all falls through to ServerPacket::Other — that is \
                          what this reading looks like.",
-                        binder.npc()
+                        binder.pending()
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;

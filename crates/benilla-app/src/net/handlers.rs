@@ -210,17 +210,19 @@ pub(crate) fn dispatch(world: &mut World, events: Vec<SessionEvent>) {
     for hook in &hooks.0 {
         (hook.begin)(world);
     }
-    for ev in events {
-        if hooks.0.is_empty() {
+    crate::lanes::at_packets(|| {
+        for ev in events {
+            if hooks.0.is_empty() {
+                handlers.run(world, ev);
+                continue;
+            }
+            let at = crate::lanes::stamp();
             handlers.run(world, ev);
-            continue;
+            for hook in &hooks.0 {
+                (hook.end)(world, at);
+            }
         }
-        let at = crate::lanes::stamp();
-        handlers.run(world, ev);
-        for hook in &hooks.0 {
-            (hook.end)(world, at);
-        }
-    }
+    });
     world.insert_resource(handlers);
 }
 
