@@ -394,6 +394,9 @@ pub enum ItemCallback {
     /// `GetBuybackItemInfo` (`0x4fb40c`), whose callback `0x4fb570` signals `MERCHANT_UPDATE`; its
     /// query's guid is 0 (`0x4fb3f0`-`0x4fb3f7`).
     Buyback,
+    /// `GetSendMailItem` (`0x4ae604`), whose callback `0x4ae710` signals `MAIL_SEND_INFO_UPDATE`
+    /// for a found record (`0x4ae716`-`0x4ae71f`); its query's guid is 0 (`0x4ae5ec`-`0x4ae5ef`).
+    SendMail,
 }
 
 /// Make `ask` inside the getter's call. A getter never raises for its lookup: with no host lent,

@@ -2,12 +2,12 @@
 //! list, and the pending-mail step signal, each fired at its packet's place among the other lanes'
 //! items ([`crate::lanes`]). In the reference each signals inside itself: the list parse's tail
 //! (`0x4ad5c3`-`0x4ad5d6`), the result handler's arms and tail (`0x4ad050`, `0x4ad15f`), the
-//! callbacks (`0x4ad010`, `0x4af080`, `0x4af0a0`, `0x4af340`, `0x4af5b0`), the time reply
-//! (`0x4ad605`), the arrival (`0x4ad66b`) and the world frame's step (`0x4adeba`). A handler queues
-//! its item here, stamped where it runs, and the getters its listeners call read the session
-//! through the host ([`super::live`]). An open or a close run while the lane holds an earlier item
-//! queues its VM half and its sends here too ([`step`]), so neither lands ahead of what the lane
-//! still holds.
+//! callbacks (`0x4ad010`, `0x4ae710`, `0x4af080`, `0x4af0a0`, `0x4af340`, `0x4af5b0`), the time
+//! reply (`0x4ad605`), the arrival (`0x4ad66b`) and the world frame's step (`0x4adeba`). A handler
+//! queues its item here, stamped where it runs, and the getters its listeners call read the
+//! session through the host ([`super::live`]). An open or a close run while the lane holds an
+//! earlier item queues its VM half and its sends here too ([`step`]), so neither lands ahead of
+//! what the lane still holds.
 
 use std::collections::VecDeque;
 
@@ -32,6 +32,9 @@ pub(crate) enum MailEvent {
     /// A record callback's `MAIL_INBOX_UPDATE` for a found record (`0x4ad02a`, `0x4af08f`,
     /// `0x4af0af`, `0x4af34f`, `0x4af5bf`).
     InboxUpdate,
+    /// The attachment's record callback's `MAIL_SEND_INFO_UPDATE` for a found record
+    /// (`0x4ae71f`).
+    SendInfoUpdate,
     /// `UPDATE_PENDING_MAIL` (`0x4ad605`, `0x4ad66b`, `0x4adeba`).
     Pending,
     /// The open core's compose reset with its events and `MAIL_SHOW` (`0x4acd38`, `0x4acd42`).
@@ -154,6 +157,7 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: MailEvent) {
             });
         }
         MailEvent::InboxUpdate => script.fire_event("MAIL_INBOX_UPDATE", vec![]),
+        MailEvent::SendInfoUpdate => script.fire_event("MAIL_SEND_INFO_UPDATE", vec![]),
         MailEvent::Pending => script.fire_event("UPDATE_PENDING_MAIL", vec![]),
         event => vm_step(script, &event),
     }

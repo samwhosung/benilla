@@ -538,6 +538,8 @@ pub(crate) enum RecordCallback {
     /// An auction notice's line whose item was not cached (`0x4ccf6e`, `0x4cd3eb`, `0x4cd4ef` with
     /// `0x4cd190`), one per line.
     AuctionMessage,
+    /// The attachment's, asked by `GetSendMailItem` (`0x4ae604` with `0x4ae710`), one per call.
+    SendMail,
 }
 
 impl Items {

@@ -1104,7 +1104,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // Off the snapshot, a whole-stack pickup records no count, so the size comes from the
             // source slot.
-            // The template's lookup (`0x4ae604`) misses with nothing to read (`0x4ae60e`).
             let held = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.mail_send_item.clone().map(|it| {
@@ -1115,26 +1114,43 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         let name = (!name.is_empty()).then_some(name);
                         (name, it.texture.clone(), t.inventory_type, t.quality)
                     });
-                    (it.guid, count, snapshot)
+                    (it.guid, it.item_id, count, snapshot)
                 })
             };
             // The attached object and its record as the call runs: its stack (`0x4ae68e`) and its
             // record's fields.
-            let item = held.and_then(|(guid, count, snapshot)| {
-                let read = read_live(lua, Some(ItemKey::Object(guid)), |item| {
-                    let name = item.name();
-                    let quality = item.quality();
-                    let count = item.stack_count().unwrap_or(count);
-                    quality.map(|q| (name, item.texture(), item.inventory_type(), q, count))
-                })
-                .unwrap_or_else(|| snapshot.map(|(n, t, i, q)| (n, t, i, q, count)));
-                read.map(|(name, texture, inventory_type, quality, count)| {
-                    let quality = match inventory_type {
-                        0 => -1,
-                        _ => i64::from(quality),
-                    };
-                    (name, texture, count, quality)
-                })
+            let item = match held {
+                None => None,
+                Some((guid, entry, count, snapshot)) => {
+                    let read = read_live(lua, Some(ItemKey::Object(guid)), |item| {
+                        let name = item.name();
+                        let quality = item.quality();
+                        let count = item.stack_count().unwrap_or(count);
+                        quality.map(|q| (name, item.texture(), item.inventory_type(), q, count))
+                    })
+                    .unwrap_or_else(|| snapshot.map(|(n, t, i, q)| (n, t, i, q, count)));
+                    // The record's lookup misses with nothing to read (`0x4ae60e`), and keeps the
+                    // callback `0x4ae710` (`0x4ae5f5`, `0x4ae604`), whose found answer signals
+                    // `MAIL_SEND_INFO_UPDATE` (`0x4ae71f`), one per call; the guid is 0.
+                    if read.is_none() {
+                        super::calls::ask(
+                            lua,
+                            super::RecordAsk::Item {
+                                entry,
+                                owner: 0,
+                                callback: super::ItemCallback::SendMail,
+                            },
+                        )?;
+                    }
+                    read
+                }
+            };
+            let item = item.map(|(name, texture, inventory_type, quality, count)| {
+                let quality = match inventory_type {
+                    0 => -1,
+                    _ => i64::from(quality),
+                };
+                (name, texture, count, quality)
             });
             let Some((name, texture, count, quality)) = item else {
                 return Ok(MultiValue::from_vec(vec![

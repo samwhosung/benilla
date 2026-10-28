@@ -476,3 +476,61 @@ fn the_walk_away_close_fires_ahead_of_the_frames_pending_crossing() {
     c.frame(vec![]);
     assert_eq!(c.seen(), ["MAIL_CLOSED:nil", "UPDATE_PENDING_MAIL:nil"]);
 }
+
+/// `GetSendMailItem` on an attachment whose record the cache lacks answers the miss and keeps the
+/// callback `0x4ae710` (`0x4ae604`), one per call; the record's answer signals
+/// `MAIL_SEND_INFO_UPDATE` at its packet (`0x4ae71f`), and the getter then reads it.
+#[test]
+fn an_attachment_whose_record_lands_later_signals_the_send_info_update() {
+    use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_PLAYER_INV_SLOT_HEAD};
+    use benilla_protocol::messages::ObjectType;
+    const LINEN: u64 = (benilla_protocol::guid::HIGH_ITEM as u64) << 48 | 1;
+    let mut c = client();
+    c.frame(vec![vec![SessionEvent::ItemCreate {
+        guid: LINEN,
+        container: false,
+        fields: benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x3),
+            (3, WOOL),
+            (6, ME as u32),
+            (8, ME as u32),
+            (FIELD_ITEM_STACK_COUNT, 3),
+        ])
+        .into_created(ObjectType::Item),
+    }]]);
+    {
+        // The backpack's first slot holds it.
+        let world = c.app.world_mut();
+        let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+        let slot = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
+        world
+            .get_mut::<crate::net::ObjectStore>(me)
+            .expect("our store")
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[
+                (slot, LINEN as u32),
+                (slot + 1, (LINEN >> 32) as u32),
+            ]));
+    }
+    c.frame(vec![]);
+    c.eval::<()>(
+        true,
+        r#"Infos = 0
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("MAIL_SEND_INFO_UPDATE")
+        f:SetScript("OnEvent", function() Infos = Infos + 1 end)
+        PickupContainerItem(0, 1) ClickSendMailItemButton() Infos = 0"#,
+    );
+    let read = "local n, _, c = GetSendMailItem() return tostring(n) .. '/' .. c";
+    assert_eq!(
+        c.eval::<String>(true, read),
+        "nil/0",
+        "the record is missing"
+    );
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: WOOL,
+        info: Some(Box::new(crate::items::test_template("Wool Cloth"))),
+    }]]);
+    assert_eq!(c.eval::<i64>(true, "return Infos"), 1, "one per call");
+    assert_eq!(c.eval::<String>(true, read), "Wool Cloth/3");
+}

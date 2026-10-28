@@ -192,6 +192,14 @@ impl RecordAsks<'_, '_> {
                             items.wait(entry, crate::items::RecordCallback::Buyback);
                         }
                     }
+                    ItemCallback::SendMail => {
+                        if items
+                            .template(entry, owner, Ask::Event(&self.net))
+                            .is_none()
+                        {
+                            items.wait(entry, crate::items::RecordCallback::SendMail);
+                        }
+                    }
                 }
             }
             RecordAsk::QuestCreature(entry) => {

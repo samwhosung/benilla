@@ -193,8 +193,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), the parked swaps'
             // (`0x5e1020`) and auto-equips' (`0x5e17a0`), the vendor rows' (`0x4fada0`,
             // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`), the questgiver rows'
-            // (`0x5018c0`), the mail rows' and notices' (`0x4af0a0`, `0x4ad010`) and the auction
-            // notices' lines (`0x4cd190`).
+            // (`0x5018c0`), the mail rows' and notices' (`0x4af0a0`, `0x4ad010`), the mail
+            // attachment's (`0x4ae710`) and the auction notices' lines (`0x4cd190`).
             let callbacks = sc.items.take_callbacks(entry);
             for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
@@ -279,6 +279,13 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                             crate::ui_auction::message_answered(auction, house, &sc.items, entry);
                         }
                     }
+                    // `MAIL_SEND_INFO_UPDATE` for a ready record only (`0x4ae716`, `0x4ae71f`).
+                    Cb::SendMail if answered => {
+                        if let Some(lane) = sc.mail.as_mut() {
+                            lane.push(crate::ui_mail::MailEvent::SendInfoUpdate);
+                        }
+                    }
+                    Cb::SendMail => {}
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one
