@@ -502,6 +502,16 @@ pub(crate) struct Items {
     /// `(entry, callback, found)` in the order they ran
     /// ([`crate::ui_bind_confirm::replay_equip_records`]).
     vm_callbacks: std::sync::Mutex<Vec<(u32, RecordCallback, bool)>>,
+    /// The refusals' walks: the entry walked now, and each walk of this drain with the marks
+    /// around it, which the signals it raised fire under ([`Self::in_refusal_walk`]).
+    walks: std::sync::Mutex<RefusalWalks>,
+}
+
+/// [`Items::walks`].
+#[derive(Default)]
+struct RefusalWalks {
+    now: Option<u32>,
+    done: Vec<(u32, crate::lanes::Mark, crate::lanes::Mark)>,
 }
 
 /// A callback an item record's lookup registered, which the record's answer runs.
@@ -574,11 +584,17 @@ impl Items {
 
     /// A lookup of `entry` that missed registered `callback`.
     pub(crate) fn wait(&self, entry: u32, callback: RecordCallback) {
+        if self.in_refusal_walk(entry) {
+            return;
+        }
         self.callbacks.lock_recover().push((entry, callback));
     }
 
     /// [`Self::wait`] with the dedupe flag set (`0x55bbb3`): no second `callback` on `entry`.
     pub(crate) fn wait_once(&self, entry: u32, callback: RecordCallback) {
+        if self.in_refusal_walk(entry) {
+            return;
+        }
         let mut callbacks = self.callbacks.lock_recover();
         if !callbacks.contains(&(entry, callback)) {
             callbacks.push((entry, callback));
@@ -598,6 +614,39 @@ impl Items {
             !hit
         });
         taken
+    }
+
+    /// A refusal of `entry` begins running its callbacks with status 0 (`0x55bea8`): its node
+    /// stands until the walk ends ([`Self::in_refusal_walk`]). Returns the mark the walk began at.
+    pub(crate) fn begin_refusal_walk(&mut self, entry: u32) -> crate::lanes::Mark {
+        self.walks.get_mut().unwrap_or_else(|e| e.into_inner()).now = Some(entry);
+        crate::lanes::mark()
+    }
+
+    /// The walk [`Self::begin_refusal_walk`] began at `from` ended, and the node went (`0x55bed2`).
+    pub(crate) fn end_refusal_walk(&self, entry: u32, from: crate::lanes::Mark) {
+        let mut walks = self.walks.lock_recover();
+        walks.now = None;
+        walks.done.push((entry, from, crate::lanes::mark()));
+    }
+
+    /// The drain fired what the walks raised. Locked, so the drain's end leaves the records'
+    /// change detection alone.
+    pub(crate) fn end_refusal_walks(&self) {
+        self.walks.lock_recover().done.clear();
+    }
+
+    /// Whether a lookup of `entry` now runs inside its refusal's walk: in a callback, or in a
+    /// listener of a signal one raised. The reference's lookup finds the dying node with no
+    /// record, so it sends nothing and links its callback there (`0x556aa0`), and the node's
+    /// destroy frees it uncalled (`0x55bed2`): a lookup there asks nothing and keeps nothing.
+    fn in_refusal_walk(&self, entry: u32) -> bool {
+        let walks = self.walks.lock_recover();
+        walks.now == Some(entry)
+            || walks
+                .done
+                .iter()
+                .any(|&(e, from, to)| e == entry && crate::lanes::firing_between(from, to))
     }
 
     /// Drop every waiting callback of `kind`, as a cancel by callback drops its registrations
@@ -671,6 +720,9 @@ impl Items {
     /// The template for `entry` if known, read as `ask` says; an ask goes once while in flight
     /// (`guid` rides along, `0` for template-only). A refused entry is also `None`.
     pub(crate) fn template(&self, entry: u32, guid: u64, ask: Ask<'_>) -> Option<&ItemInfo> {
+        if !matches!(ask, Ask::Read) && self.in_refusal_walk(entry) {
+            return None;
+        }
         self.templates.read(entry, ask, |commands| {
             Self::send_template(entry, guid, commands)
         })

@@ -96,6 +96,11 @@ pub(crate) fn add_item_lane(app: &mut App) {
             fire_item_runs,
             None,
         )
+        .add_drain_end(|world| {
+            if let Some(items) = world.get_resource::<crate::items::Items>() {
+                items.end_refusal_walks();
+            }
+        })
         .add_systems(
             Update,
             drop_item_runs

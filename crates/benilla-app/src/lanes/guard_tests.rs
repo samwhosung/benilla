@@ -145,7 +145,9 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          (`0x4f7710`, `0x4fdc30`, `0x4fc8e0`) in `feed_craft` and `feed_trade_skill`, the \
          dress-up's (`0x504ba0`), the cast failure's redisplay (`0x6e29b0`, `0x6e2a90`), the \
          equipment display's (`0x5ed880`), and the lock-key tooltip's (`0x52ad10`), which \
-         `drive_mouseover_tooltip` rebuilds each frame",
+         `drive_mouseover_tooltip` rebuilds each frame; and the combat log's (`0x6294b0`) and the \
+         auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which `run_answer_tail` runs after \
+         the answer's list rather than in it",
     ),
     (
         Row::HostHeld,

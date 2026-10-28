@@ -307,6 +307,42 @@ fn a_records_answer_and_the_buyback_watch_signal_at_their_packets() {
     );
 }
 
+/// A refusal's `MERCHANT_UPDATE` fires inside its walk, while the dying node stands: a listener's
+/// getter that asks the row again links its callback to the node and sends nothing, and the
+/// node's destroy frees it uncalled (`0x55bea8`, `0x55bed2`). A later call asks again.
+#[test]
+fn a_getter_inside_a_refusals_walk_asks_nothing_and_keeps_nothing() {
+    let mut c = client();
+    c.handle(vec![list(vec![row(1, UNCACHED)])]);
+    c.frame(vec![]);
+    c.seen();
+    c.eval::<()>(
+        true,
+        r#"
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("MERCHANT_UPDATE")
+        f:SetScript("OnEvent", function() ReAsked = (GetMerchantItemInfo(1)) or "none" end)
+        GetMerchantItemInfo(1)
+        "#,
+    );
+    assert_eq!(c.item_queries(), 1);
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: UNCACHED,
+        info: None,
+    }]]);
+    assert_eq!(c.seen(), ["MERCHANT_UPDATE:nil"]);
+    assert_eq!(c.eval::<String>(false, "return ReAsked"), "none");
+    assert_eq!(c.item_queries(), 0, "nothing sent inside the walk");
+    let waits = c
+        .app
+        .world_mut()
+        .resource_mut::<crate::items::Items>()
+        .take_waiters(UNCACHED, crate::items::RecordCallback::Merchant);
+    assert_eq!(waits, 0, "nothing kept");
+    c.eval::<()>(true, "GetMerchantItemInfo(1)");
+    assert_eq!(c.item_queries(), 1, "a later call asks again");
+}
+
 /// The item queries sent since the last call, as their bodies go out.
 fn query_bodies(c: &mut Client) -> Vec<Vec<u8>> {
     crate::query_cache::queries(&c.sent)

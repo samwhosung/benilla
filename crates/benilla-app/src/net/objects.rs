@@ -216,6 +216,7 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
         return;
     };
     items.insert_template(entry, info);
+    let walk = (!answered).then(|| items.begin_refusal_walk(entry));
     let callbacks = items.take_callbacks(entry);
     run_answer_step(world, crate::ui_items::feed::push_answered_record, entry);
     for callback in callbacks {
@@ -238,6 +239,9 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
         }
     }
     run_answer_step(world, run_answer_tail, entry);
+    if let (Some(from), Some(items)) = (walk, world.get_resource::<Items>()) {
+        items.end_refusal_walk(entry, from);
+    }
 }
 
 /// Run one step of an answer's callbacks as a one-shot, its unit edits applied as it returns; a

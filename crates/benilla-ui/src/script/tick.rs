@@ -178,14 +178,7 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
     };
     if super::host::holding(lua) {
         let raised = super::calls::apply_split_calls(lua, raised);
-        if raised.iter().any(|r| {
-            matches!(
-                r,
-                Raised::Event(..) | Raised::Lock { .. } | Raised::CursorWrite(_) | Raised::Call(_)
-            )
-        }) {
-            super::calls::hold(lua, super::calls::Held::Segment(raised));
-        }
+        super::calls::hold_segment(lua, raised);
         return out;
     }
     // The body's lock changes are rolled back, then replayed in place as the absolute writes they

@@ -872,7 +872,9 @@ pub(super) fn settle(lua: &Lua, script: &mut UiScript) {
 }
 
 /// A held segment's calls inside a split stretch ([`super::host::splitting`]), each applied at
-/// once through the lent host in its order, the rest returned to be held in theirs.
+/// once through the lent host in its order: what the segment raised ahead of a call is held as
+/// its own segment first, so what the call's apply signals waits behind it; the rest is returned
+/// to be held.
 pub(crate) fn apply_split_calls(
     lua: &Lua,
     raised: Vec<super::tick::Raised>,
@@ -882,13 +884,42 @@ pub(crate) fn apply_split_calls(
         return raised;
     }
     let mut rest = Vec::with_capacity(raised.len());
+    // Cursor views open in `rest`: a segment is cut only where none is, so each view stays with
+    // its end.
+    let mut views = 0usize;
     for r in raised {
         match r {
-            Raised::Call(call) if super::host::splitting(lua) => apply_now(lua, *call),
-            other => rest.push(other),
+            Raised::Call(call) if super::host::splitting(lua) => {
+                if views == 0 {
+                    hold_segment(lua, std::mem::take(&mut rest));
+                }
+                apply_now(lua, *call);
+            }
+            other => {
+                match other {
+                    Raised::CursorView(_) => views += 1,
+                    Raised::EndCursorView => views = views.saturating_sub(1),
+                    _ => {}
+                }
+                rest.push(other);
+            }
         }
     }
     rest
+}
+
+/// Hold `raised` for the host as one segment ([`Held::Segment`]) when it holds anything a
+/// listener or a later read sees: an event, a lock or cursor write, or a call.
+pub(crate) fn hold_segment(lua: &Lua, raised: Vec<super::tick::Raised>) {
+    use super::tick::Raised;
+    if raised.iter().any(|r| {
+        matches!(
+            r,
+            Raised::Event(..) | Raised::Lock { .. } | Raised::CursorWrite(_) | Raised::Call(_)
+        )
+    }) {
+        hold(lua, Held::Segment(raised));
+    }
 }
 
 /// Apply `call` through the lent host at once, with its tail, inside a split stretch: what it
@@ -2020,6 +2051,46 @@ mod tests {
         assert!(s.item_locked(LOCKED), "the lock made again");
         assert!(s.cursor_payload().is_none(), "the clear made again");
         assert_eq!(global::<String>(&s, "SEEN"), "nil");
+    }
+
+    /// A host whose every call signals `PLAYER_TARGET_CHANGED`.
+    struct Signalling(Vec<ScriptCall>);
+
+    impl CallHost for Signalling {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            self.0.push(call);
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            None
+        }
+    }
+
+    /// In a split stretch, a verb that signals and then makes a call applies the call at once,
+    /// and what was raised before it waits ahead of what its apply signals.
+    #[test]
+    fn a_split_stretch_keeps_a_signal_ahead_of_a_later_calls_signals() {
+        let mut s = UiScript::new().unwrap();
+        on(&s, "LOOT_OPENED", r#"ORDER = (ORDER or "") .. "opened ""#);
+        on(
+            &s,
+            "PLAYER_TARGET_CHANGED",
+            r#"ORDER = (ORDER or "") .. "applied ""#,
+        );
+        let mut host = Signalling(Vec::new());
+        let lua = s.lua().clone();
+        let mark = s.waiting_mark();
+        let deferring = s.defer_split();
+        s.hosted(&mut host, |_| {
+            super::super::tick::verb(&lua, |model| {
+                model.raise("LOOT_OPENED", vec![]);
+                model.call_in_verb(ScriptCall::ClearTarget);
+            })
+        });
+        assert_eq!(host.0, vec![ScriptCall::ClearTarget], "applied at once");
+        assert_eq!(global::<Option<String>>(&s, "ORDER"), None, "held");
+        let key = s.park_since(mark).expect("parked");
+        drop(deferring);
+        s.hosted(&mut host, |s| s.run_parked(key));
+        assert_eq!(global::<String>(&s, "ORDER"), "opened applied ");
     }
 
     /// The deferral's guard ends with a panic that unwinds through it: nothing is held after.
