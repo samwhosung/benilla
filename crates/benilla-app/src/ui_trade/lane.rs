@@ -61,6 +61,17 @@ pub(crate) enum TradeEvent {
     Closed,
     /// The close core's `CMSG_CANCEL_TRADE` (`0x4bf527` → `0x5d4310`).
     Cancel,
+    /// A request's answer from the ladder (`0x4bf720`): `CMSG_BEGIN_TRADE`, `CMSG_BUSY_TRADE` or
+    /// `CMSG_IGNORE_TRADE`, held behind a close still parked on the lane ([`TradeLane::answer`]).
+    Answer(Answer),
+}
+
+/// A request's answer ([`TradeEvent::Answer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Answer {
+    Begin,
+    Busy,
+    Ignore,
 }
 
 /// The trade lane's queue.
@@ -79,6 +90,23 @@ impl TradeLane {
 
     fn head(&self) -> Option<Stamp> {
         self.events.front().map(|(s, _)| *s)
+    }
+
+    /// Send a request's answer (`0x4bf720`): now, or behind a close's signals still parked here,
+    /// whose listeners' `CloseTrade` sends its cancel inside the close in the reference
+    /// (`0x4bf4fb` → `0x4bf527`), ahead of the next packet's answer.
+    pub(crate) fn answer(&mut self, commands: &NetCommands, answer: Answer) {
+        let closing = self.events.iter().any(|(_, e)| {
+            matches!(
+                e,
+                TradeEvent::Closed | TradeEvent::Done(_) | TradeEvent::Unlock { .. }
+            )
+        });
+        if closing {
+            self.push(TradeEvent::Answer(answer));
+        } else if let Some(command) = send_of(&TradeEvent::Answer(answer)) {
+            let _ = commands.0.send(command);
+        }
     }
 
     /// What the queued items signal, in order, taking them.
@@ -126,6 +154,9 @@ fn send_of(event: &TradeEvent) -> Option<ClientCommand> {
     match event {
         TradeEvent::Unaccept => Some(ClientCommand::UnacceptTrade),
         TradeEvent::Cancel => Some(ClientCommand::CancelTrade),
+        TradeEvent::Answer(Answer::Begin) => Some(ClientCommand::BeginTrade),
+        TradeEvent::Answer(Answer::Busy) => Some(ClientCommand::BusyTrade),
+        TradeEvent::Answer(Answer::Ignore) => Some(ClientCommand::IgnoreTrade),
         _ => None,
     }
 }
@@ -157,7 +188,7 @@ fn fire_trade(
         };
         let ((), moved) = crate::lanes::firing(at, || match event {
             TradeEvent::Show { partner, purse } => open(&mut vm, &leg, partner, purse),
-            TradeEvent::Unaccept | TradeEvent::Cancel => {
+            TradeEvent::Unaccept | TradeEvent::Cancel | TradeEvent::Answer(_) => {
                 if let Some(command) = send_of(&event) {
                     let _ = leg.commands.0.send(command);
                 }
@@ -224,7 +255,10 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: TradeEvent) {
                 close_vm(script, &event)
             })
         }
-        TradeEvent::Show { .. } | TradeEvent::Unaccept | TradeEvent::Cancel => {}
+        TradeEvent::Show { .. }
+        | TradeEvent::Unaccept
+        | TradeEvent::Cancel
+        | TradeEvent::Answer(_) => {}
     }
 }
 

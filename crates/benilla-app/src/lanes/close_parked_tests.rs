@@ -216,13 +216,9 @@ fn a_second_npcs_menu_takes_the_option() {
     );
 }
 
-/// A cancelled trade and a new request in one frame: the cancel's close sends `CMSG_CANCEL_TRADE`
-/// inside its handler (`0x4bf527`), ahead of the ladder's `CMSG_BEGIN_TRADE` for the next
-/// (`0x4bf7ee`); the stock `OnHide`'s `CloseTrade()` (`TradeFrame.lua:145`) re-enters it after a
-/// trade has begun, and sends nothing that would end the new one.
-#[test]
-fn a_cancel_and_a_new_request_send_in_their_order() {
-    let _data = benilla_formats::wow_data_or_skip!();
+/// A frame's `CANCELED` then a new request, over Bob's open trade, latched as the interaction
+/// unless `latched` is false: the trade commands sent, and the `TRADE_CLOSED`s heard.
+fn cancel_then_request(latched: bool) -> (Vec<String>, i64) {
     let mut c = client(
         &[
             r"Interface\FrameXML\MoneyInputFrame.lua",
@@ -237,27 +233,57 @@ fn a_cancel_and_a_new_request_send_in_their_order() {
         vec![status(TradeStatus::OpenWindow)],
     ]);
     assert!(visible(&mut c, "TradeFrame"));
+    let _: () = c.eval(
+        "Closes = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRADE_CLOSED') \
+         f:SetScript('OnEvent', function() Closes = Closes + 1 end)",
+    );
+    if !latched {
+        c.app
+            .world_mut()
+            .resource_mut::<crate::ui_session::InteractLatch>()
+            .latch_for_test(OTHER);
+    }
     c.sent();
     c.frame(vec![
         vec![status(TradeStatus::Canceled)],
         vec![status(TradeStatus::BeginTrade { partner: CAROL })],
     ]);
-    let trade: Vec<String> = c
+    assert!(!visible(&mut c, "TradeFrame"));
+    let trade = c
         .sent()
         .into_iter()
         .filter(|s| s.contains("Trade"))
         .collect();
-    // The status arm enters the core with the partner latched, so its release runs it once more
-    // inside it (`0x493365`): two cancels, both inside the handler.
-    assert_eq!(
-        trade,
-        [
-            format!("{:?}", ClientCommand::CancelTrade),
-            format!("{:?}", ClientCommand::CancelTrade),
-            format!("{:?}", ClientCommand::BeginTrade),
-        ]
-    );
-    assert!(!visible(&mut c, "TradeFrame"));
+    (trade, c.eval("return Closes"))
+}
+
+/// The status arm enters the close core `0x4bf4e0(0, 0)` with Bob latched: its release re-enters
+/// the core (`0x493310` → `0x493365`) with the partner still set, whose own release finds the
+/// latch zeroed (`0x49334b`); it clears the partner, signals `TRADE_CLOSED`, whose stock `OnHide`
+/// calls `CloseTrade()` (`TradeFrame.lua:145`, `0x4bfdc0` → `0x4bf4e0`) and sends a cancel, then
+/// sends its own (`0x4bf527`); the outer run signals again and sends the third. Every core call
+/// sends (`0x4bf4fb`), all inside the handler, ahead of the next packet's `CMSG_BEGIN_TRADE`
+/// (`0x4bf7ee`).
+#[test]
+fn a_latched_cancel_sends_three_cancels_before_the_next_begin() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let (sent, closes) = cancel_then_request(true);
+    let cancel = format!("{:?}", ClientCommand::CancelTrade);
+    let begin = format!("{:?}", ClientCommand::BeginTrade);
+    assert_eq!(sent, [cancel.clone(), cancel.clone(), cancel, begin]);
+    assert_eq!(closes, 2);
+}
+
+/// With another unit latched the release re-enters nothing: one `TRADE_CLOSED`, whose `OnHide`'s
+/// `CloseTrade()` sends a cancel, and the core's own.
+#[test]
+fn an_unlatched_cancel_sends_two_cancels() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let (sent, closes) = cancel_then_request(false);
+    let cancel = format!("{:?}", ClientCommand::CancelTrade);
+    let begin = format!("{:?}", ClientCommand::BeginTrade);
+    assert_eq!(sent, [cancel.clone(), cancel, begin]);
+    assert_eq!(closes, 1);
 }
 
 /// The mailbox's close inside a later handler (a register's, `0x493310` → `0x4acd50`) runs its

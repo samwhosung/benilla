@@ -700,7 +700,7 @@ pub(crate) fn answer_request(
         .is_some_and(|s| s.is_ignored(initiator))
     {
         info!(target: "trade", "BEGIN_TRADE from an ignored {initiator:#x}; sending CMSG_IGNORE_TRADE");
-        let _ = commands.0.send(ClientCommand::IgnoreTrade);
+        lane.answer(commands, lane::Answer::Ignore);
         return;
     }
     // Leg 3: the initiator is no streamed player (`0x468460` with mask 0x10, `0x4bf779`), which
@@ -722,7 +722,7 @@ pub(crate) fn answer_request(
             .is_some_and(|a| a.auctioneer.is_some());
     if busy {
         info!(target: "trade", "BEGIN_TRADE from {initiator:#x} refused silently; sending CMSG_BUSY_TRADE");
-        let _ = commands.0.send(ClientCommand::BusyTrade);
+        lane.answer(commands, lane::Answer::Busy);
         return;
     }
     // Leg 8, Block Trades (`0x4bf7bc`-`0x4bf7cb`), the one leg that names the initiator: busy,
@@ -730,7 +730,7 @@ pub(crate) fn answer_request(
     // chat line.
     if reads.block_trades.as_deref().is_some_and(|b| b.0) {
         info!(target: "trade", "BEGIN_TRADE from {initiator:#x} refused by BlockTrades; sending CMSG_BUSY_TRADE");
-        let _ = commands.0.send(ClientCommand::BusyTrade);
+        lane.answer(commands, lane::Answer::Busy);
         let name = reads.unit_name(initiator).unwrap_or(FillArg::UnknownObject);
         lane.push(TradeEvent::Line(UiError::args(
             "ERR_TRADE_BLOCKED_S",
@@ -741,7 +741,7 @@ pub(crate) fn answer_request(
     // Nothing refuses it: accept, the bottom of the ladder (`0x4bf7ee` → `0x5d40e0`).
     info!(target: "trade", "BEGIN_TRADE from {initiator:#x} accepted; sending CMSG_BEGIN_TRADE");
     trade.begin(initiator);
-    let _ = commands.0.send(ClientCommand::BeginTrade);
+    lane.answer(commands, lane::Answer::Begin);
 }
 
 /// The initiates' name callbacks a player-name answer runs, a record or a refusal, after the cache

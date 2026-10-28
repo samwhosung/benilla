@@ -160,12 +160,6 @@ impl TradeSteps<'_, '_> {
     }
 
     /// The close core's last step, `CMSG_CANCEL_TRADE` open or not (`0x4bf527` → `0x5d4310`).
-    /// Whether a trade is begun: a partner set at our initiate or the ladder's accept, the window
-    /// open or not.
-    pub(crate) fn begun(&self) -> bool {
-        self.trade.as_deref().is_some_and(|t| t.partner.is_some())
-    }
-
     pub(crate) fn send_cancel(&mut self) {
         let _ = self.net.0.send(ClientCommand::CancelTrade);
     }

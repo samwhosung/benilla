@@ -214,13 +214,10 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`,
     /// open or not (`0x4bf527`).
     pub(super) fn close_trade(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        // The re-entry finds the cell clear and sends the cancel again (`0x4bf527`), which the
-        // reference sends inside the handler, ahead of any later packet; once a later packet has
-        // begun another trade, that cancel would end the new one, so it stays unsent.
+        // The re-entry finds the partner clear and still sends its cancel (`0x4bf4fb` →
+        // `0x4bf527`); a later packet's `CMSG_BEGIN_TRADE` waits behind this close on the lane.
         if parked(NpcWindow::Trade) {
-            if !self.appliers.trade().begun() {
-                self.appliers.trade().send_cancel();
-            }
+            self.appliers.trade().send_cancel();
             return;
         }
         if self.appliers.trade().run_trade_touches(script) {

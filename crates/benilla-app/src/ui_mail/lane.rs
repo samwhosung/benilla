@@ -198,7 +198,9 @@ pub(super) fn waits(world: &World) -> bool {
 /// ([`crate::ui_session::in_parked_close`]); else run now, its signals fired with the host lent.
 /// A close's tail, the countdown's stamp and its query ([`MailEvent::Refresh`]), runs now either
 /// way, inside the handler as the reference's does (`0x4acda8`), so a later packet's arrival
-/// stamps over it.
+/// stamps over it. The reference reads the flag after `MAIL_CLOSED`'s listeners, so a
+/// `MarkMailRead` among them (`0x4adda6`) is read in the same close; read ahead of them here, it
+/// waits for the next close. Both orders hold once the lanes fire inside the dispatch.
 pub(super) fn step(world: &mut World, waits: bool, event: MailEvent) {
     if waits && event != MailEvent::Refresh {
         if let Some(mut lane) = world.get_resource_mut::<MailLane>() {
