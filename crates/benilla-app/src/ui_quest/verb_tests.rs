@@ -334,9 +334,6 @@ fn the_escort_confirm_is_on_the_wire_before_the_next_line() {
                 },
             )],
         );
-        world
-            .run_system_cached(crate::ui_quest_share::feed_quest_share)
-            .expect("the feed runs");
     }
     c.sent();
     c.run("ConfirmAcceptQuest() RandomRoll(1, 100)").unwrap();

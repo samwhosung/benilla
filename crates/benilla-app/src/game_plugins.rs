@@ -1934,8 +1934,6 @@ pub(crate) mod schedule_tests {
          "`MacroFiles.identity` is a `VmMemo`, so a new session re-reads the files and re-fires UPDATE_MACROS; also `InWorldGated`"),
         ("ui_panes.rs", "feed_character_panes", Because::FilledByVm,
          "the answers answer the VM's own build requests and arms on panes it listed; a frameless VM lists none, and an answer for another VM's rows is dropped"),
-        ("ui_quest_share.rs", "feed_quest_share", Because::PlayerRoundTrip,
-         "a verdict answers our own push and a confirm follows a party member's escort accept, both held until the name resolves (the confirm is another player's act: coincidence-only residual)"),
         ("ui_script/glue_mgr.rs", "drive_glue_mgr", Because::Deliberate,
          "it acts only on a glue-kind VM (`script.filter(vm_kind() == Glue)`, documented at the fire sites), never the entry VM the window leaves frameless; news that arrives with no glue VM is held in `AddonInfoReply` for the next one"),
         ("ui_script/extract/mod.rs", "paint_script", Because::Deliberate,

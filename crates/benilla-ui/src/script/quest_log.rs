@@ -125,7 +125,8 @@ pub struct QuestRecordView {
     /// `+0x5c` x 6): the counts stop at the first unset one and the getters index the slots.
     pub rewards: Vec<(u32, u32)>,
     pub choices: Vec<(u32, u32)>,
-    /// `GetQuestLogQuestText`'s two returns, the macros expanded.
+    /// `GetQuestLogQuestText`'s two returns as the wire sent them, their `$` macros expanded at
+    /// the call ([`super::QuestText`]).
     pub description: String,
     pub objectives_text: String,
     pub reward_spell: Option<QuestRewardSpell>,
@@ -188,30 +189,33 @@ pub(crate) struct QuestLogStore {
     pending: u32,
     /// The rebuild's callbacks (`0x4de8b0`) per awaited quest, one per rebuild that missed it.
     record_waits: HashMap<u32, u32>,
-    /// The quests the rebuild missed, for the app to ask.
+    /// The quests the rebuild missed, asked inside the call that ran it ([`ask_owed`]), or held
+    /// for a harness with no host to take.
     record_asks: Vec<u32>,
-    /// The item and creature records a verb missed and that have not landed.
+    /// The item records a verb missed and that have not landed.
     item_waits: HashSet<u32>,
-    creature_waits: HashSet<u32>,
     /// The item and creature lookups the verb being called missed, which it asks inside its call
     /// once its read of the model ends ([`ask_lookups`]).
     item_asks: Vec<u32>,
     creature_asks: Vec<u32>,
     /// The GameObject templates the leaderboard missed, asked inside its call.
     object_asks: Vec<u32>,
-    /// The creature cache (`0xc0e354`) as far as the leaderboard asked it.
-    creature_names: HashMap<u32, String>,
+    /// The creature names a harness with no host seats: the leaderboard reads the creature cache
+    /// through the host (`0xc0e354`, [`quest_live::creature_name`]), which keeps the waits.
+    pub(super) creature_names: HashMap<u32, String>,
     /// The held count of each item a log quest needs (`0x622130(inventory, item, 8)`).
     pub(super) held: HashMap<u32, u32>,
-    /// Missed records that landed, each one `QUEST_LOG_UPDATE` at the next flush.
+    /// Missed item records that landed, each one `QUEST_LOG_UPDATE` at the next flush.
     due: u32,
-    /// Whether the active player is in the world: without one the rebuild returns before its
-    /// signal (`0x4de568`-`0x4de572`).
-    player: bool,
+    /// Whether the active player is in the world, as a harness with no host seats it: without
+    /// one the rebuild returns before its signal (`0x4de568`-`0x4de572`). The host answers it
+    /// ([`quest_live::player`]).
+    pub(super) player: bool,
     /// The quests whose row holds the expiry latch (`[row+0xc]`, `0x4df50d`), cleared with the
     /// rows by every rebuild (`0x4de5e2`).
     latched: HashSet<u32>,
-    /// The quest-giver refreshes (`0x5eb070`) the latch asked for since the app last drained.
+    /// The quest-giver refreshes (`0x5eb070`) the latch owes, asked inside the call that latched
+    /// ([`ask_owed`]) or taken by the handler that latched with no host lent.
     giver_refreshes: u32,
 }
 
@@ -239,7 +243,7 @@ fn rebuild(lua: &Lua, model: &mut Model) -> bool {
     // The slots as the descriptor holds them here (`0x4de63c`), where the list is built; kept
     // whether it builds or waits on a record, for the readers of the copy.
     model.quest_store.slots = quest_live::slots(lua, model);
-    if model.quest_store.pending != 0 || !model.quest_store.player {
+    if model.quest_store.pending != 0 || !quest_live::player(lua, model) {
         return false;
     }
     // The selection is a quest id (`0xbb7480`) no rebuild writes.
@@ -356,9 +360,10 @@ fn latch_expiry(lua: &Lua, model: &mut Model, quest_id: u32, slot: u8) -> bool {
         owe_turn_in_tutorial(model);
         return false;
     }
+    let player = quest_live::player(lua, model);
     let store = &mut model.quest_store;
     store.latched.insert(quest_id);
-    if store.player {
+    if player {
         store.giver_refreshes += 1;
     }
     true
@@ -513,7 +518,7 @@ fn turn_in_passes(
     record: &QuestRecordView,
     slot: &QuestSlotView,
 ) -> bool {
-    if !model.quest_store.player || slot.state & SLOT_FAILED != 0 {
+    if !quest_live::player(lua, model) || slot.state & SLOT_FAILED != 0 {
         return false;
     }
     let any_objective = record
@@ -644,26 +649,36 @@ impl Model {
             }
         }
     }
+}
 
-    /// A creature's name with the callback `0x4e07d0` (`0x4e0461`), or on a miss the ask, once,
-    /// and the entry held as awaited.
-    fn quest_creature_lookup(&mut self, entry: u32) -> Option<String> {
-        let store = &mut self.quest_store;
-        match store.creature_names.get(&entry) {
-            Some(name) => Some(name.clone()),
-            None => {
-                if store.creature_waits.insert(entry) {
-                    store.creature_asks.push(entry);
-                }
-                None
-            }
-        }
+/// What a rebuild or a latch owes the host, asked inside the call that ran it with the host lent:
+/// each quest record the rebuild missed, with the callback `0x4de8b0` (`0x4de65f`), and each
+/// latch's quest-giver refresh (`0x4df531`). With no host lent they wait in the model, for a
+/// harness or the handler that latched to take.
+fn ask_owed(lua: &Lua) {
+    if !super::host::open(lua) {
+        return;
+    }
+    let (records, refreshes) = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let store = &mut model.quest_store;
+        (
+            std::mem::take(&mut store.record_asks),
+            std::mem::take(&mut store.giver_refreshes),
+        )
+    };
+    // A getter's lookup never raises ([`super::calls::ask`]).
+    for quest_id in records {
+        let _ = super::calls::ask(lua, super::RecordAsk::QuestRecord(quest_id));
+    }
+    for _ in 0..refreshes {
+        let _ = super::calls::ask(lua, super::RecordAsk::QuestGiverStatuses);
     }
 }
 
 /// The lookups the verb's read missed, asked inside its call: each item with the callback
-/// `0x4e0830` (`0x4e05d1`, `0x4e0b9e`), each creature with `0x4e07d0` (`0x4e044c`), whose waits
-/// the VM keeps.
+/// `0x4e0830` (`0x4e05d1`, `0x4e0b9e`), whose waits the VM keeps, and each creature with
+/// `0x4e07d0` (`0x4e044c`) and object with `0x4e0800`, whose waits the host keeps.
 fn ask_lookups(lua: &Lua) -> mlua::Result<()> {
     let (items, creatures, objects) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -879,9 +894,16 @@ fn line_parts(lua: &Lua, model: &mut Model, index: usize, line: usize) -> Option
                 kind,
             ));
         }
-        let name = model
-            .quest_creature_lookup(o.creature_or_go)
-            .unwrap_or_else(|| NAME_PLACEHOLDER.into());
+        // The creature cache with the callback `0x4e07d0` (`0x4e0461`), read through the host; a
+        // miss asks inside the call, once per entry, and wears the placeholder until it lands.
+        let entry = o.creature_or_go;
+        let name = quest_live::creature_name(lua, model, entry).unwrap_or_else(|| {
+            let asks = &mut model.quest_store.creature_asks;
+            if !asks.contains(&entry) {
+                asks.push(entry);
+            }
+            NAME_PLACEHOLDER.into()
+        });
         Some(LineParts::count(
             "QUEST_MONSTERS_KILLED",
             name,
@@ -1011,23 +1033,28 @@ impl super::UiScript {
         else {
             return false;
         };
-        if is_header {
+        let latched = if is_header {
             // `0x4df50d`, then the givers' refresh with a player (`0x4df531`).
-            let store = &mut model.quest_store;
-            if store.player {
-                store.giver_refreshes += 1;
+            if quest_live::player(&self.lua, &model) {
+                model.quest_store.giver_refreshes += 1;
             }
-            return true;
-        }
-        latch_expiry(&self.lua, &mut model, quest_id, slot)
+            true
+        } else {
+            latch_expiry(&self.lua, &mut model, quest_id, slot)
+        };
+        drop(model);
+        ask_owed(&self.lua);
+        latched
     }
 
-    /// The quest-giver refreshes the latch asked for (`0x4df531`) since the last drain.
+    /// The quest-giver refreshes a latch run with no host lent owed (`0x4df531`), for the caller
+    /// to send.
     pub fn take_quest_giver_refreshes(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().quest_store.giver_refreshes)
     }
 
-    /// Whether the active player is in the world, which the rebuild needs (`0x4de568`).
+    /// Whether the active player is in the world, which the rebuild needs (`0x4de568`), for a
+    /// harness with no host to answer it ([`super::QuestPlayer`]).
     pub fn set_quest_log_player(&mut self, present: bool) {
         self.model_mut().quest_store.player = present;
     }
@@ -1049,6 +1076,7 @@ impl super::UiScript {
     /// rebuild and its `QUEST_LOG_UPDATE`.
     pub fn quest_log_changed(&mut self) {
         let ran = rebuild(&self.lua, &mut self.model_mut());
+        ask_owed(&self.lua);
         if ran {
             self.fire_event("QUEST_LOG_UPDATE", Vec::new());
         }
@@ -1070,6 +1098,7 @@ impl super::UiScript {
             model.quest_store.pending = 0;
             rebuild(&self.lua, &mut model)
         };
+        ask_owed(&self.lua);
         if ran {
             self.fire_event("QUEST_LOG_UPDATE", Vec::new());
         }
@@ -1104,14 +1133,14 @@ impl super::UiScript {
                 store.pending = store.pending.saturating_sub(1);
                 store.pending == 0 && rebuild(&self.lua, &mut model)
             };
+            ask_owed(&self.lua);
             if ran {
                 self.fire_event("QUEST_LOG_UPDATE", Vec::new());
             }
         }
     }
 
-    /// A record held again with nothing waiting on it: a new VM's seat, or text whose macros
-    /// changed.
+    /// A record held with nothing waiting on it: a new VM's seat, before its load runs any file.
     pub fn seed_quest_record(&mut self, quest_id: u32, record: QuestRecordView) {
         self.model_mut()
             .quest_store
@@ -1128,7 +1157,7 @@ impl super::UiScript {
         model.quest_store.record_waits.remove(&quest_id);
     }
 
-    /// The quests the rebuild missed since the last drain: the app asks each.
+    /// The quests a rebuild run with no host lent missed, for a harness to ask.
     pub fn take_quest_record_asks(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().quest_store.record_asks)
     }
@@ -1169,37 +1198,20 @@ impl super::UiScript {
         })
     }
 
-    /// The creature entries the leaderboard waits on, which the app ends with a refusal
-    /// ([`Self::refuse_quest_creature`]).
-    pub fn quest_creature_waits(&self) -> Vec<u32> {
-        self.model_ref()
-            .quest_store
-            .creature_waits
-            .iter()
-            .copied()
-            .collect()
-    }
-
-    /// A creature's name landed: held, and each callback the leaderboard left on it is due
-    /// (`0x4e07d0` signals `QUEST_LOG_UPDATE` on a ready record, `0x4e07ea`).
+    /// A creature's name, for a harness with no host to read the creature cache through.
     pub fn set_quest_creature_name(&mut self, entry: u32, name: String) {
-        let mut model = self.model_mut();
-        let store = &mut model.quest_store;
-        store.creature_names.insert(entry, name);
-        store.due += u32::from(store.creature_waits.remove(&entry));
+        self.model_mut()
+            .quest_store
+            .creature_names
+            .insert(entry, name);
     }
 
-    /// The server refused a creature: its callbacks run with status 0 and only log (`0x4e07dc`).
-    pub fn refuse_quest_creature(&mut self, entry: u32) {
-        self.model_mut().quest_store.creature_waits.remove(&entry);
-    }
-
-    /// Fire one `QUEST_LOG_UPDATE` for each missed record that landed, after the frame's landings,
-    /// so a handler that walks the log reads every one of them.
+    /// Fire one `QUEST_LOG_UPDATE` for each missed item record that landed, after the push that
+    /// carried the frame's records, so a handler that walks the log reads every one of them.
     // Deviation: one signal per missed record, where the reference runs every callback of every
-    // miss as its record lands (creatures in `0x556e20` at `0x556f91`, items at `0x55bea8` and
-    // `0x55bf39` in `0x55bdb0`, from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a
-    // walking handler over k first-seen records.
+    // miss as its record lands (items at `0x55bea8` and `0x55bf39` in `0x55bdb0`, from
+    // `0x555140`; `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records.
+    // The creatures' and the objects' callbacks are the host's, one per record too.
     pub fn flush_quest_log_refires(&mut self) {
         let due = std::mem::take(&mut self.model_mut().quest_store.due);
         for _ in 0..due {
@@ -1346,7 +1358,7 @@ fn live_seconds_left(lua: &Lua, model: &Model, row: &QuestLogRow) -> Option<i64>
 fn abandon_items(lua: &Lua, model: &Model) -> Vec<String> {
     let store = &model.quest_store;
     let mark = model.quest_log_abandon_mark;
-    if !store.player {
+    if !quest_live::player(lua, model) {
         return Vec::new();
     }
     let Some(record) = (mark != 0).then(|| store.records.get(&mark)).flatten() else {
@@ -1514,14 +1526,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetQuestLogQuestText",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            // Two nils when the record is not held (`0x4dffdb`).
-            let Some(r) = model.selected_quest_record() else {
-                return Ok((Value::Nil, Value::Nil));
+            let (details, objectives) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                // Two nils when the record is not held (`0x4dffdb`).
+                let Some(r) = model.selected_quest_record() else {
+                    return Ok((Value::Nil, Value::Nil));
+                };
+                (r.description.clone(), r.objectives_text.clone())
             };
+            // Each expanded for the player at the call (`0x4dff89`, `0x4dffae`).
+            let (details, objectives) = quest_live::text(lua, &details, &objectives);
             Ok((
-                Value::String(lua.create_string(&r.description)?),
-                Value::String(lua.create_string(&r.objectives_text)?),
+                Value::String(lua.create_string(&details)?),
+                Value::String(lua.create_string(&objectives)?),
             ))
         })?,
     )?;
@@ -1762,7 +1779,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .quest_row(model.quest_log_selection as usize)
                 .filter(|r| !r.is_header);
             Ok(flag(
-                model.quest_store.player
+                quest_live::player(lua, &model)
                     && (selected_slot(lua, &model)
                         .is_some_and(|slot| slot.state & SLOT_FAILED != 0)
                         || selected.is_some_and(|r| model.quest_store.is_latched(r.quest_id))),
@@ -1888,7 +1905,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let rows: Vec<(u32, u8)> = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                if !model.quest_store.player {
+                if !quest_live::player(lua, &model) {
                     return Ok(MultiValue::new());
                 }
                 model
@@ -1926,6 +1943,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .get(&quest_id)
                         .map(|r| r.title.clone())
                 };
+                // The latch's quest-giver refresh, inside its call (`0x4df531`).
+                ask_owed(lua);
                 // The line is shown inside the walk, before the signal (`0x4e1529`, `0x4e1559`).
                 let template = lua
                     .globals()
@@ -1956,7 +1975,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // Nil without a player (`0x4e165f`).
             let index = t
                 .checked_sub(1)
-                .filter(|_| model.quest_store.player)
+                .filter(|_| quest_live::player(lua, &model))
                 .and_then(|n| {
                     model
                         .quest_log
@@ -1984,7 +2003,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let synced = quest_live::clock(lua, &model).server.is_some();
             let left = selected_slot(lua, &model)
-                .filter(|_| model.quest_store.player && synced)
+                .filter(|_| quest_live::player(lua, &model) && synced)
                 .and_then(|slot| seconds_left(&slot, countdown_now(lua, &model)));
             Ok(match left {
                 // Clamped where the lists drop the row, as in the reference.
@@ -3891,8 +3910,9 @@ mod tests {
         assert!(heard::take(&s).is_empty());
     }
 
-    /// Two reads of each line in flight ask once and signal once per record as it lands, where
-    /// the reference's lookups hold a callback a call (`0x4e05c9`).
+    /// Two reads of each line in flight: the item asks once and signals once as it lands, where
+    /// the reference's lookups hold a callback a call (`0x4e05c9`); the creature is asked in each
+    /// call that misses it, its wait the host's, and its name read through the host.
     #[test]
     fn each_missed_record_signals_once_however_many_calls_missed_it() {
         let mut s = UiScript::new().unwrap();
@@ -3914,7 +3934,7 @@ mod tests {
             );
         }
         assert_eq!(s.take_item_stat_asks(), vec![900]);
-        assert_eq!(s.take_quest_creature_asks(), vec![40], "asked once");
+        assert_eq!(s.take_quest_creature_asks(), vec![40, 40], "one per call");
         s.set_item_template(
             900,
             ItemTemplateView {
@@ -3922,38 +3942,32 @@ mod tests {
                 ..Default::default()
             },
         );
-        s.set_quest_creature_name(40, "Young Wolf".into());
         s.flush_quest_log_refires();
-        assert_eq!(heard::take(&s).len(), 2);
+        assert_eq!(heard::take(&s).len(), 1);
+        s.set_quest_creature_name(40, "Young Wolf".into());
         assert_eq!(
             s.eval::<String>("return (GetQuestLogLeaderBoard(1, 2))")
                 .unwrap(),
             "Young Wolf slain: 1/3"
         );
+        assert!(
+            s.take_quest_creature_asks().is_empty(),
+            "a hit asks nothing"
+        );
         s.flush_quest_log_refires();
         assert!(heard::take(&s).is_empty(), "a hit holds nothing");
-        // A refused creature's callbacks only log (`0x4e07dc`).
-        let mut other = record("Bears", 1, 12, "Elwynn Forest");
-        other.objectives[0] = kill(41, 3);
-        seat(&mut s, &[(51, other, slot(51, 0, 0))]);
-        heard::take(&s);
-        s.run("GetQuestLogLeaderBoard(1, 2)").unwrap();
-        s.refuse_quest_creature(41);
-        s.set_quest_creature_name(41, "Bear".into());
-        s.flush_quest_log_refires();
-        assert!(heard::take(&s).is_empty());
     }
 
-    /// A handler that walks every line at each `QUEST_LOG_UPDATE` over three creatures in flight:
-    /// the count is one per landed record whether the three land in one frame or in three.
+    /// A handler that walks every line at each `QUEST_LOG_UPDATE` over three items in flight: the
+    /// count is one per landed record whether the three land in one frame or in three.
     #[test]
     fn the_landing_count_does_not_depend_on_how_the_landings_fall_in_frames() {
         let run = |frames: &[&[u32]]| {
             let mut s = UiScript::new().unwrap();
             let quests: Vec<_> = (0..3u32)
                 .map(|i| {
-                    let mut r = record(&format!("Hunt {i}"), 1, 12, "Elwynn Forest");
-                    r.objectives[0] = kill(40 + i, 3);
+                    let mut r = record(&format!("Pelts {i}"), 1, 12, "Elwynn Forest");
+                    r.objectives[0] = collect(900 + i, 3);
                     (50 + i, r, slot(50 + i, 0, 0))
                 })
                 .collect();
@@ -3967,15 +3981,21 @@ mod tests {
             .unwrap();
             for landings in frames {
                 for &entry in *landings {
-                    s.set_quest_creature_name(entry, format!("Beast {entry}"));
+                    s.set_item_template(
+                        entry,
+                        ItemTemplateView {
+                            name: format!("Pelt {entry}"),
+                            ..Default::default()
+                        },
+                    );
                 }
                 s.flush_quest_log_refires();
             }
             s.eval::<i64>("return WALKS").unwrap()
         };
-        assert_eq!(run(&[&[40, 41, 42]]), 3);
-        assert_eq!(run(&[&[40], &[41], &[42]]), 3);
-        assert_eq!(run(&[&[42, 40], &[], &[41]]), 3);
+        assert_eq!(run(&[&[900, 901, 902]]), 3);
+        assert_eq!(run(&[&[900], &[901], &[902]]), 3);
+        assert_eq!(run(&[&[902, 900], &[], &[901]]), 3);
     }
 
     /// `0x4df7b0`: an item of ours that a listed quest needs fires once; one no quest needs fires

@@ -209,8 +209,8 @@ impl QuestCells {
 }
 
 /// The quest-giver refreshes the quest log's expiry latch owes (`0x4df531`), counted apart from
-/// the window so the log's feed writes nothing the questgiver getters read; the markers fold it
-/// into their re-ask epoch.
+/// the window, inside the call or the handler that latched; the markers fold it into their re-ask
+/// epoch.
 #[derive(Resource, Default)]
 pub(crate) struct LatchRefreshes(pub(crate) u32);
 
@@ -410,7 +410,7 @@ pub(crate) fn questgiver_failed_key(reason: u32) -> &'static str {
 }
 
 mod lane;
-mod lines;
+pub(crate) mod lines;
 mod live;
 mod net;
 #[cfg(test)]

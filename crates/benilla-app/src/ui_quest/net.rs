@@ -9,6 +9,8 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
 use super::{QuestGiver, QuestGiverLane, QuestLine, QuestLines};
+use crate::field_watch::NoticeLane;
+use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::query_cache::Ask;
 use crate::ui_action::UiError;
@@ -80,12 +82,15 @@ fn on_offer(In(ev): In<SessionEvent>, mut commands: Commands) {
 /// The turn-in's tail (`0x5dc6d0`-`0x5dc6e9`): `0x501130(next, 0)`, where `next` is whether the
 /// quest's cached record names a quest that follows (`+0x24`). A chain's next step leaves the
 /// panel up, for the server's next panel; a miss or a last step closes it.
+#[allow(clippy::too_many_arguments)] // the turn-in's inputs, each a store it reads or writes
 fn on_complete(
     In(ev): In<SessionEvent>,
     mut quest: ResMut<QuestGiver>,
     mut lane: ResMut<QuestGiverLane>,
     mut lines: ResMut<QuestLines>,
+    mut notices: ResMut<NoticeLane>,
     quest_log: Res<QuestLog>,
+    items: Res<Items>,
     net_commands: Res<NetCommands>,
     mut commands: Commands,
 ) {
@@ -94,7 +99,15 @@ fn on_complete(
         let chained = quest_log
             .template(c.quest_id, Ask::Event(&net_commands))
             .is_some_and(|t| t.next_quest_in_chain != 0);
-        quest_complete(c, &mut quest, &mut lines);
+        let mut raise = super::lines::Raise {
+            quest_log: &quest_log,
+            items: &items,
+            commands: &net_commands,
+            lane: &mut lane,
+            notices: &mut notices,
+            lines: &mut lines,
+        };
+        quest_complete(c, &mut quest, &mut |line| raise.line(line));
         lane.push_lines(&mut quest);
         if !chained {
             crate::ui_session::queue(&mut commands, close_without_report);
@@ -126,19 +139,16 @@ fn on_objectives_complete(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver
     }
 }
 
-fn on_failed(
-    In(ev): In<SessionEvent>,
-    mut quest: ResMut<QuestGiver>,
-    mut lane: ResMut<QuestGiverLane>,
-    quest_log: Res<QuestLog>,
-    self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-) {
-    if let SessionEvent::QuestFailed { quest_id, timed } = ev {
-        let store = self_q.iter().next().map(|s| &s.0);
-        quest_failed(quest_id, timed, store, script, &quest_log, &mut quest);
-        lane.push_lines(&mut quest);
-    }
+/// Exclusive, as the timer arm's latch reads the player, its slots and its standings through the
+/// host inside the handler (`0x4df550`), where its quest-giver refresh asks (`0x4df531`).
+fn on_failed(In(ev): In<SessionEvent>, world: &mut World) {
+    let SessionEvent::QuestFailed { quest_id, timed } = ev else {
+        return;
+    };
+    quest_failed(world, quest_id, timed);
+    world.resource_scope(|world, mut lane: Mut<QuestGiverLane>| {
+        lane.push_lines(&mut world.resource_mut::<QuestGiver>());
+    });
 }
 
 fn on_log_full(
@@ -310,10 +320,10 @@ fn quest_offer(world: &mut World, o: QuestOfferReward) {
     super::open_panel(world, o.npc, crate::ui_quest::QuestView::Reward(o));
 }
 
-/// `SMSG_QUESTGIVER_QUEST_COMPLETE` (`0x5dc400`): the turn-in's chat lines, in the reference's
-/// order; the window then closes through the core. The XP, money and items themselves arrive by `UPDATE_OBJECT`
-/// and `ITEM_PUSH_RESULT`.
-fn quest_complete(c: QuestComplete, quest: &mut QuestGiver, lines: &mut QuestLines) {
+/// `SMSG_QUESTGIVER_QUEST_COMPLETE` (`0x5dc400`): the turn-in's chat lines, each raised in the
+/// reference's order; the window then closes through the core. The XP, money and items themselves
+/// arrive by `UPDATE_OBJECT` and `ITEM_PUSH_RESULT`.
+fn quest_complete(c: QuestComplete, quest: &mut QuestGiver, raise: &mut dyn FnMut(QuestLine)) {
     // The reference plays the `QUESTCOMPLETED` fanfare on this packet.
     quest.completed_fanfare = true;
     debug!(
@@ -323,19 +333,19 @@ fn quest_complete(c: QuestComplete, quest: &mut QuestGiver, lines: &mut QuestLin
         c.money,
         c.items.len()
     );
-    lines.push(QuestLine::Completed(c.quest_id));
+    raise(QuestLine::Completed(c.quest_id));
     if c.xp != 0 {
-        lines.push(QuestLine::Experience(c.xp));
+        raise(QuestLine::Experience(c.xp));
     }
     // A signed test (`0x5dc50b`).
     if (c.money as i32) > 0 {
-        lines.push(QuestLine::Money(c.money));
+        raise(QuestLine::Money(c.money));
     }
     for &(item, _count) in &c.items {
-        lines.push(QuestLine::Item(item));
+        raise(QuestLine::Item(item));
     }
     if quest.chosen_reward != 0 {
-        lines.push(QuestLine::Item(std::mem::take(&mut quest.chosen_reward)));
+        raise(QuestLine::Item(std::mem::take(&mut quest.chosen_reward)));
     }
     // A turn-in can move every giver's marker, so the reference re-asks from here.
     quest.bump_reask();
@@ -367,35 +377,39 @@ fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
 /// `0x8b`) in chat, named by the quest's title, unless the quest was already done: its row
 /// latched or its slot failed (`0x5e5c16`-`0x5e5c81`), as read before the timer arm latches the
 /// row (`0x4df550`, `0x5e5cd9`). Nothing shows without a cached template (`0x5e5ca0`).
-fn quest_failed(
-    quest_id: u32,
-    timed: bool,
-    store: Option<&benilla_protocol::ObjectFields>,
-    mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    quest_log: &QuestLog,
-    quest: &mut QuestGiver,
-) {
+fn quest_failed(world: &mut World, quest_id: u32, timed: bool) {
     use benilla_protocol::messages::{quest_slot_state, PLAYER_QUEST_LOG_SLOTS};
     debug!("net: quest {quest_id} failed (timed: {timed})");
-    let latched = script
-        .as_ref()
+    let latched = world
+        .get_non_send_resource::<benilla_ui::script::UiScript>()
         .is_some_and(|s| s.quest_log_latched(quest_id));
-    let failed = store.is_some_and(|store| {
-        (0..PLAYER_QUEST_LOG_SLOTS)
-            .filter_map(|slot| store.player_quest_log(slot))
-            .any(|s| s.quest_id == quest_id && s.state & quest_slot_state::FAIL != 0)
-    });
-    // Only the timed arm latches (`0x5e5cd9`), and the latch's quest-giver refresh (`0x4df531`)
-    // reaches the givers through the feed; the plain arm (`0x5e5cde`) asks no giver again.
+    let failed = world
+        .query_filtered::<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>()
+        .iter(world)
+        .next()
+        .is_some_and(|store| {
+            (0..PLAYER_QUEST_LOG_SLOTS)
+                .filter_map(|slot| store.0.player_quest_log(slot))
+                .any(|s| s.quest_id == quest_id && s.state & quest_slot_state::FAIL != 0)
+        });
+    // Only the timed arm latches (`0x5e5cd9`), its quest-giver refresh (`0x4df531`) asked inside
+    // it; the plain arm (`0x5e5cde`) asks no giver again.
     if timed {
-        if let Some(script) = script.as_mut() {
-            script.quest_log_latch_quest(quest_id);
-        }
+        crate::script_calls::with_hosted_vm(world, |script| {
+            if let Some(script) = script {
+                script.quest_log_latch_quest(quest_id);
+            }
+        });
     }
+    let title = world
+        .resource::<QuestLog>()
+        .template(quest_id, Ask::Read)
+        .map(|t| t.title.clone());
+    let mut quest = world.resource_mut::<QuestGiver>();
     // Read without a callback (`0x5e5ca0`).
-    match quest_log.template(quest_id, Ask::Read) {
-        Some(t) if !(latched || failed) => {
-            quest.push_message(UiError::s("ERR_QUEST_FAILED_S", t.title.clone()));
+    match title {
+        Some(title) if !(latched || failed) => {
+            quest.push_message(UiError::s("ERR_QUEST_FAILED_S", title));
         }
         Some(_) => {}
         None => {
@@ -573,7 +587,7 @@ mod tests {
             chosen_reward: 2_047,
             ..Default::default()
         };
-        let mut lines = QuestLines::default();
+        let mut lines = Vec::new();
         quest_complete(
             QuestComplete {
                 quest_id: 7,
@@ -582,10 +596,10 @@ mod tests {
                 items: vec![(6_529, 1), (159, 5)],
             },
             &mut giver,
-            &mut lines,
+            &mut |l| lines.push(l),
         );
         assert_eq!(
-            lines.queued(),
+            lines,
             [
                 QuestLine::Completed(7),
                 QuestLine::Experience(450),
@@ -598,7 +612,7 @@ mod tests {
         assert_eq!(giver.chosen_reward, 0, "the turn-in zeroes the latch");
 
         // No XP (a capped level) and no money: only the completion line.
-        let mut lines = QuestLines::default();
+        let mut lines = Vec::new();
         quest_complete(
             QuestComplete {
                 quest_id: 7,
@@ -607,9 +621,9 @@ mod tests {
                 items: vec![],
             },
             &mut giver,
-            &mut lines,
+            &mut |l| lines.push(l),
         );
-        assert_eq!(lines.queued(), [QuestLine::Completed(7)]);
+        assert_eq!(lines, [QuestLine::Completed(7)]);
     }
 
     fn open_detail(quest_id: u32) -> QuestGiver {
@@ -669,6 +683,8 @@ mod tests {
             let (mut world, rx) = quest_world();
             world.init_resource::<QuestLog>();
             world.init_resource::<QuestLines>();
+            world.init_resource::<Items>();
+            world.init_resource::<NoticeLane>();
             world.init_resource::<crate::ui_session::InteractLatch>();
             quest_detail(&mut world, detail(SHARER, 200));
             assert!(world.resource::<QuestGiver>().is_open());
@@ -705,6 +721,8 @@ mod tests {
         for (next, open) in [(201, true), (0, false)] {
             let (mut world, _rx) = quest_world();
             world.init_resource::<QuestLines>();
+            world.init_resource::<Items>();
+            world.init_resource::<NoticeLane>();
             world.init_resource::<crate::ui_session::InteractLatch>();
             let mut log = QuestLog::default();
             log.insert_template(crate::ui_quest::lines::test_template(200, "Step", next));

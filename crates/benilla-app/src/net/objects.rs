@@ -134,6 +134,9 @@ pub(crate) struct Scene<'w, 's> {
     quest_giver: Option<ResMut<'w, crate::ui_quest::QuestGiverLane>>,
     // The quest log's leaderboard's object waits' `QUEST_LOG_UPDATE`.
     quest_log: Option<ResMut<'w, crate::ui_quest_log::QuestLog>>,
+    /// The quest chat lines waiting on a record, and the notices an elite accept's tutorial
+    /// fires on ([`crate::ui_quest::lines`]).
+    quest_lines: Option<ResMut<'w, crate::ui_quest::QuestLines>>,
     // The mail rows' and notices' callbacks' `MAIL_INBOX_UPDATE`.
     mail: Option<ResMut<'w, crate::ui_mail::MailLane>>,
     pass: ResMut<'w, update::UpdatePass>,
@@ -212,8 +215,9 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), the parked swaps'
             // (`0x5e1020`) and auto-equips' (`0x5e17a0`), the vendor rows' (`0x4fada0`,
             // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`), the questgiver rows'
-            // (`0x5018c0`), the mail rows' and notices' (`0x4af0a0`, `0x4ad010`), the mail
-            // attachment's (`0x4ae710`) and the auction notices' lines (`0x4cd190`).
+            // (`0x5018c0`), the turn-in's reward lines' (`0x5dc7b0`), the mail rows' and notices'
+            // (`0x4af0a0`, `0x4ad010`), the mail attachment's (`0x4ae710`) and the auction
+            // notices' lines (`0x4cd190`).
             let callbacks = sc.items.take_callbacks(entry);
             for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
@@ -281,6 +285,14 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         }
                     }
                     Cb::Quest => {}
+                    // The turn-in's reward line, shown with a ready record (`0x5dc7b0`).
+                    Cb::QuestReward => {
+                        if let (Some(lines), Some(lane)) =
+                            (sc.quest_lines.as_mut(), sc.quest_giver.as_mut())
+                        {
+                            lines.item_answered(entry, &sc.items, lane);
+                        }
+                    }
                     // `MAIL_INBOX_UPDATE` for a ready record only (`0x4af0a6`, `0x4ad016`); the
                     // notice's subject reads the record as its row resolves.
                     Cb::Mail if answered => {
@@ -503,7 +515,7 @@ fn on_gameobject_info(In(ev): In<SessionEvent>, mut sc: Scene) {
         // The leaderboard's callback `0x4e0800` signals for a landed record (`0x4e081a`).
         if sc.go_templates.take_quest_wait(entry) {
             if let Some(log) = sc.quest_log.as_mut() {
-                log.ready(crate::ui_quest_log::QuestEvent::ObjectNamed);
+                log.ready(crate::ui_quest_log::QuestEvent::Named);
             }
         }
     }

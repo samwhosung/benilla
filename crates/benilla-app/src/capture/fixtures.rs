@@ -106,6 +106,8 @@ pub(super) fn seed_ui_fixture(
             ResMut<'static, crate::loading_screen::LoadingScreen>,
             ResMut<'static, crate::ui_gossip::GossipState>,
             ResMut<'static, crate::ui_quest::QuestGiver>,
+            // The quest cache, which the host's rebuild lookups ask too.
+            ResMut<'static, crate::ui_quest_log::QuestLog>,
         ),
         // The tooltip fixture's set row and its members' names, read by the set block's host.
         (
@@ -116,7 +118,6 @@ pub(super) fn seed_ui_fixture(
     mut ctx: ResMut<CaptureCtx>,
     mut commands: Commands,
     progress: Res<WorldLoadProgress>,
-    mut quest_log: ResMut<crate::ui_quest_log::QuestLog>,
     icons: Option<Res<crate::entities::ItemDisplays>>,
 ) {
     let icons = icons.as_deref();
@@ -126,7 +127,7 @@ pub(super) fn seed_ui_fixture(
     vm.turn(|script, parts| {
         let (mut loot, mut names, mut selection, mut player, store, rest, set_parts) = parts;
         let (mut item_sets, mut item_names) = set_parts;
-        let (mut actions, mut exit, mut loading, mut gossip, mut quest) = rest;
+        let (mut actions, mut exit, mut loading, mut gossip, mut quest, mut quest_log) = rest;
         let (mut items, mut index, mut home_bind) = store;
         // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
         let Some(scenario) = ctx.scenario else {
@@ -651,8 +652,9 @@ pub(super) fn seed_ui_fixture(
             }
             UiFixture::QuestLog => {
                 // The log reads the self player's PLAYER_QUEST_LOG slots, so a synthetic self
-                // player carries two and `feed_quest_log` runs the real chain. A slot is id, packed
-                // 6-bit counters plus a state byte, and timer, from field 198.
+                // player carries two and the rebuild asks the cache for their records through the
+                // host, the real chain. A slot is id, packed 6-bit counters plus a state byte, and
+                // timer, from field 198.
                 use benilla_protocol::messages::{ObjectFields, QuestObjective, QuestTemplate};
                 const KOBOLD_ENTRY: u32 = 90_002;
                 names.insert_creature(

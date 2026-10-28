@@ -1,16 +1,19 @@
 //! The quest chat lines the reference raises from its packet and field handlers: the accept line
-//! from the quest-slot watcher, with an elite quest's tutorial, and the turn-in's completion,
-//! experience, money and item lines. A line whose quest or item record is not cached waits for it,
-//! as the reference's cache callbacks (`0x5ddeb0`, `0x5dc710`, `0x5dc7b0`) print on the record's
-//! arrival.
+//! from the quest-slot watcher (`0x5ddd80`), with an elite quest's tutorial, and the turn-in's
+//! completion, experience, money and item lines (`0x5dc400`). Each shows on the questgiver lane
+//! where its handler runs ([`QuestGiverLane`]); a line whose quest or item record is not cached
+//! waits for it, as the reference's cache callbacks (`0x5ddeb0`, `0x5dc710`, `0x5dc7b0`) print on
+//! the record's arrival, inside its answer's handler.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
+use super::{QuestGiverEvent, QuestGiverLane};
+use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp};
 use crate::query_cache::Ask;
-use crate::ui_action::{show_messages, ui_error_text, FillArg, MessageSink, Shown, UiError};
+use crate::ui_action::UiError;
 use crate::ui_quest_log::QuestLog;
 
 /// One quest chat line, raised in order.
@@ -29,162 +32,148 @@ pub(crate) enum QuestLine {
     Item(u32),
 }
 
-/// The lines raised and not yet shown, and how many of them, from the front, a feed has read: the
-/// rest were raised since, each by a handler that looked its record up with a callback.
+/// The lines whose record is in flight, in the order raised, each waiting for its record's
+/// answer.
 #[derive(Resource, Default)]
-pub(crate) struct QuestLines(Vec<QuestLine>, usize);
+pub(crate) struct QuestLines(Vec<QuestLine>);
 
 impl QuestLines {
-    pub(crate) fn push(&mut self, line: QuestLine) {
-        self.0.push(line);
-    }
-
     #[cfg(test)]
     pub(crate) fn queued(&self) -> &[QuestLine] {
         &self.0
     }
 }
 
-/// What a line resolves to this frame.
-enum Resolved {
-    Show(UiError),
-    /// The accept line of a quest whose `Type` is 1, Elite: the line, then tutorial `0x28`
-    /// (`0x5dde6b`-`0x5dde7d`, the callback's `0x5ddf02`-`0x5ddf14`).
-    ShowElite(UiError),
-    /// Its record is still in flight.
-    Wait,
-    /// The server does not know the quest or item, or the line has nothing to say.
-    Drop,
+/// What raises a line: the caches it looks its record up in, the questgiver lane it shows on and
+/// the notice lane an elite quest's tutorial fires on.
+pub(crate) struct Raise<'a> {
+    pub(crate) quest_log: &'a QuestLog,
+    pub(crate) items: &'a Items,
+    pub(crate) commands: &'a NetCommands,
+    pub(crate) lane: &'a mut QuestGiverLane,
+    pub(crate) notices: &'a mut NoticeLane,
+    pub(crate) lines: &'a mut QuestLines,
+}
+
+impl Raise<'_> {
+    /// `line` at its handler: its record looked up with a callback (`0x562a40`, `0x55ba30`), the
+    /// line shown now when the record is cached, else held for the record's answer.
+    pub(crate) fn line(&mut self, line: QuestLine) {
+        let ask = Ask::Event(self.commands);
+        match line {
+            QuestLine::Accepted(id) | QuestLine::Completed(id) => {
+                match self.quest_log.template(id, ask) {
+                    Some(t) => show_quest_line(line, t, self.lane, self.notices),
+                    None => self.lines.0.push(line),
+                }
+            }
+            QuestLine::Experience(xp) => self.lane.push(QuestGiverEvent::Line(UiError::args(
+                "ERR_QUEST_REWARD_EXP_I",
+                vec![crate::ui_action::FillArg::D(i64::from(xp))],
+            ))),
+            QuestLine::Money(copper) => self.lane.push(QuestGiverEvent::RewardMoney(copper)),
+            // The name is `0x5d8b00`'s with no random property, the link `0x52adb0`'s.
+            QuestLine::Item(entry) => match self.items.template(entry, 0, ask) {
+                Some(t) => self.lane.push(QuestGiverEvent::Line(item_line(entry, t))),
+                None => {
+                    self.items
+                        .wait(entry, crate::items::RecordCallback::QuestReward);
+                    self.lines.0.push(line);
+                }
+            },
+        }
+    }
+}
+
+/// A quest-record line shown with its record `t`: the accept line, then tutorial `0x28` for a
+/// quest whose `Type` is 1, Elite (`0x5dde6b`-`0x5dde7d`, the callback's `0x5ddf02`-`0x5ddf14`);
+/// the completion line unless the quest names a next one in its chain (`0x5dc4d7`).
+fn show_quest_line(
+    line: QuestLine,
+    t: &benilla_protocol::messages::QuestTemplate,
+    lane: &mut QuestGiverLane,
+    notices: &mut NoticeLane,
+) {
+    match line {
+        QuestLine::Accepted(_) => {
+            lane.push(QuestGiverEvent::Line(UiError::s(
+                "ERR_QUEST_ACCEPTED_S",
+                t.title.clone(),
+            )));
+            // `QuestInfo.dbc`'s 1 is Elite (`[record+0x10]`, `0x5dde6b`).
+            if t.quest_type == 1 {
+                notices.write(FieldNotice::Tutorial {
+                    id: crate::tutorial::id::ELITE_QUESTS,
+                });
+            }
+        }
+        QuestLine::Completed(_) if t.next_quest_in_chain == 0 => lane.push(QuestGiverEvent::Line(
+            UiError::s("ERR_QUEST_COMPLETE_S", t.title.clone()),
+        )),
+        _ => {}
+    }
+}
+
+/// `ERR_QUEST_REWARD_ITEM_S` with the item's link.
+fn item_line(entry: u32, t: &benilla_protocol::ItemInfo) -> UiError {
+    UiError::s(
+        "ERR_QUEST_REWARD_ITEM_S",
+        crate::ui_items::item_link(entry, &t.name, t.quality),
+    )
+}
+
+impl QuestLines {
+    /// The item cache's answer for `entry` runs the first reward line waiting on it (`0x5dc7b0`):
+    /// shown with a ready record, dropped with a refusal (`0x5dc7b9`).
+    pub(crate) fn item_answered(&mut self, entry: u32, items: &Items, lane: &mut QuestGiverLane) {
+        let Some(at) = self.0.iter().position(|&l| l == QuestLine::Item(entry)) else {
+            return;
+        };
+        self.0.remove(at);
+        if let Some(t) = items.template(entry, 0, Ask::Read) {
+            lane.push(QuestGiverEvent::Line(item_line(entry, t)));
+        }
+    }
 }
 
 pub(super) fn register(app: &mut App) {
     app.init_resource::<QuestLines>()
-        .net_handler(SessionEventKind::Disconnected, on_session_end)
-        .add_systems(
-            Update,
-            feed_quest_lines
-                .in_set(crate::ui_unit::UnitFeed)
-                .after(crate::ui_quest_log::feed_quest_log),
-        );
+        .net_handler(SessionEventKind::QuestTemplate, on_template)
+        .net_handler(SessionEventKind::Disconnected, on_session_end);
 }
 
-/// The waiting lines die with the socket, as the record caches do.
+/// The quest cache's answer runs the accept and completion lines waiting on it, in the order
+/// raised (`0x5ddeb0`, `0x5dc710`); a refusal shows none (`0x5ddec6`, `0x5dc719`).
+fn on_template(
+    In(ev): In<SessionEvent>,
+    mut lines: ResMut<QuestLines>,
+    mut lane: ResMut<QuestGiverLane>,
+    mut notices: ResMut<NoticeLane>,
+) {
+    let SessionEvent::QuestTemplate(t) = ev else {
+        return;
+    };
+    let mine = |l: &QuestLine| matches!(l, QuestLine::Accepted(id) | QuestLine::Completed(id) if *id == t.quest_id);
+    let (waiting, rest): (Vec<QuestLine>, Vec<QuestLine>) =
+        std::mem::take(&mut lines.0).into_iter().partition(mine);
+    lines.0 = rest;
+    if t.title.is_empty() {
+        return;
+    }
+    for line in waiting {
+        show_quest_line(line, &t, &mut lane, &mut notices);
+    }
+}
+
+/// The waiting lines die with the socket, as the record caches' asks do.
 fn on_session_end(In(_): In<SessionEvent>, mut lines: ResMut<QuestLines>) {
     lines.0.clear();
-    lines.1 = 0;
-}
-
-/// Show every line whose record is here, in the order raised; the rest wait.
-fn feed_quest_lines(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut lines: ResMut<QuestLines>,
-    quest_log: Res<QuestLog>,
-    items: Res<Items>,
-    commands: Res<NetCommands>,
-    mut sink: MessageSink,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        if lines.0.is_empty() {
-            return;
-        }
-        let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
-        let mut shown = Vec::new();
-        let mut elite = 0;
-        // A line's first read is its handler's lookup with a callback; a waiting line asks no more.
-        let mut read = 0;
-        let fed = lines.1;
-        lines.0.retain(|&line| {
-            let ask = Ask::at(read >= fed, &commands);
-            read += 1;
-            match resolve(line, &quest_log, &items, ask, &get) {
-                Resolved::Show(msg) => {
-                    if let Some(text) = ui_error_text(&msg, &get) {
-                        shown.push(Shown::keyed(msg.key, text));
-                    }
-                    false
-                }
-                Resolved::ShowElite(msg) => {
-                    if let Some(text) = ui_error_text(&msg, &get) {
-                        shown.push(Shown::keyed(msg.key, text));
-                    }
-                    elite += 1;
-                    false
-                }
-                Resolved::Wait => true,
-                Resolved::Drop => false,
-            }
-        });
-        lines.1 = lines.0.len();
-        show_messages(script, &mut sink, "ui_quest", shown);
-        for _ in 0..elite {
-            script.queue_tutorial_trigger(crate::tutorial::id::ELITE_QUESTS);
-        }
-    })
-}
-
-fn resolve(
-    line: QuestLine,
-    quest_log: &QuestLog,
-    items: &Items,
-    ask: Ask<'_>,
-    get: &dyn Fn(&str) -> Option<String>,
-) -> Resolved {
-    match line {
-        QuestLine::Accepted(id) => match quest(id, quest_log, ask) {
-            // `QuestInfo.dbc`'s 1 is Elite (`[record+0x10]`, `0x5dde6b`).
-            Ok(t) if t.quest_type == 1 => {
-                Resolved::ShowElite(UiError::s("ERR_QUEST_ACCEPTED_S", t.title.clone()))
-            }
-            Ok(t) => Resolved::Show(UiError::s("ERR_QUEST_ACCEPTED_S", t.title.clone())),
-            Err(r) => r,
-        },
-        QuestLine::Completed(id) => match quest(id, quest_log, ask) {
-            Ok(t) if t.next_quest_in_chain == 0 => {
-                Resolved::Show(UiError::s("ERR_QUEST_COMPLETE_S", t.title.clone()))
-            }
-            Ok(_) => Resolved::Drop,
-            Err(r) => r,
-        },
-        QuestLine::Experience(xp) => Resolved::Show(UiError::args(
-            "ERR_QUEST_REWARD_EXP_I",
-            vec![FillArg::D(i64::from(xp))],
-        )),
-        QuestLine::Money(copper) => Resolved::Show(UiError::s(
-            "ERR_QUEST_REWARD_MONEY_S",
-            coin_text(copper, &|k| get(k).unwrap_or_default()),
-        )),
-        // The name is `0x5d8b00`'s with no random property, the link `0x52adb0`'s.
-        QuestLine::Item(entry) => match items.template(entry, 0, ask) {
-            Some(t) => Resolved::Show(UiError::s(
-                "ERR_QUEST_REWARD_ITEM_S",
-                crate::ui_items::item_link(entry, &t.name, t.quality),
-            )),
-            None if items.template_answered_unknown(entry) => Resolved::Drop,
-            None => Resolved::Wait,
-        },
-    }
-}
-
-/// The quest's record, or what its line does without one.
-fn quest<'a>(
-    id: u32,
-    quest_log: &'a QuestLog,
-    ask: Ask<'_>,
-) -> Result<&'a benilla_protocol::messages::QuestTemplate, Resolved> {
-    match quest_log.template(id, ask) {
-        Some(t) => Ok(t),
-        None if quest_log.template_answered_unknown(id) => Err(Resolved::Drop),
-        None => Err(Resolved::Wait),
-    }
 }
 
 /// The turn-in's coin string (`0x5dc511`-`0x5dc5fd`): each paid denomination as `"%d %s"` with
 /// its `GOLD`, `SILVER` or `COPPER` global, gold first. The reference's separator test yields
 /// `", , "` with a zero middle coin; this joins only the paid ones, with `", "`.
-fn coin_text(copper: u32, get: &dyn Fn(&str) -> String) -> String {
+pub(super) fn coin_text(copper: u32, get: &dyn Fn(&str) -> String) -> String {
     // `0x6c6260`'s split by 10000, 100 and 1.
     let (g, s, c) = (copper / 10000, copper / 100 % 100, copper % 100);
     [(g, "GOLD"), (s, "SILVER"), (c, "COPPER")]
@@ -243,81 +232,97 @@ pub(crate) fn test_template(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use benilla_ui::script::UiScript;
 
     use crate::net::ClientCommand;
 
     use super::test_template as template;
 
-    /// The feed alone, over a VM holding the stock enUS templates.
+    /// The lines' handlers alone, over the caches and the lanes.
     fn app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
-            .init_resource::<QuestLines>()
             .init_resource::<QuestLog>()
             .init_resource::<Items>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_systems(Update, feed_quest_lines);
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                r#"
-                ERR_QUEST_ACCEPTED_S = "Quest accepted: %s"
-                ERR_QUEST_COMPLETE_S = "%s completed."
-                ERR_QUEST_REWARD_EXP_I = "Experience gained: %d."
-                ERR_QUEST_REWARD_MONEY_S = "Received %s."
-                ERR_QUEST_REWARD_ITEM_S = "Received item: %s."
-                GOLD = "Gold"; SILVER = "Silver"; COPPER = "Copper"
-                "#,
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
+            .init_resource::<QuestGiverLane>()
+            .init_resource::<NoticeLane>();
+        register(&mut app);
         (app, rx)
     }
 
-    fn chat(app: &App) -> Vec<String> {
-        app.world()
-            .resource::<crate::ui_chat::ChatLog>()
-            .pending_lines()
+    /// Raise `lines` as a handler raises them.
+    fn raise(world: &mut World, lines: &[QuestLine]) {
+        world.resource_scope(|world, mut waiting: Mut<QuestLines>| {
+            world.resource_scope(|world, mut lane: Mut<QuestGiverLane>| {
+                world.resource_scope(|world, mut notices: Mut<NoticeLane>| {
+                    let mut raise = Raise {
+                        quest_log: world.resource::<QuestLog>(),
+                        items: world.resource::<Items>(),
+                        commands: world.resource::<NetCommands>(),
+                        lane: &mut lane,
+                        notices: &mut notices,
+                        lines: &mut waiting,
+                    };
+                    for &line in lines {
+                        raise.line(line);
+                    }
+                });
+            });
+        });
     }
 
+    fn shown(world: &mut World) -> Vec<QuestGiverEvent> {
+        world.resource_mut::<QuestGiverLane>().take()
+    }
+
+    fn line(key: &'static str, arg: &str) -> QuestGiverEvent {
+        QuestGiverEvent::Line(UiError::s(key, arg))
+    }
+
+    /// Each line goes on the questgiver lane inside its handler when its record is cached, in the
+    /// order raised (`0x5dc400`); a line whose record is in flight asks for it and shows inside the
+    /// record's answer (`0x5dc710`, `0x5dc7b0`), the rest not waiting on it.
     #[test]
     fn each_line_shows_as_its_record_lands_and_the_rest_keep_their_order() {
         let (mut app, rx) = app();
-        {
-            let world = app.world_mut();
-            world
-                .resource_mut::<QuestLog>()
-                .insert_template(template(783, "A Threat Within", 0));
-            world
-                .resource_mut::<Items>()
-                .insert_template(2_580, Some(crate::items::test_template("Linen Cloth")));
-            let mut lines = world.resource_mut::<QuestLines>();
-            for line in [
+        let world = app.world_mut();
+        world
+            .resource_mut::<QuestLog>()
+            .insert_template(template(783, "A Threat Within", 0));
+        world
+            .resource_mut::<Items>()
+            .insert_template(2_580, Some(crate::items::test_template("Linen Cloth")));
+        let before = crate::lanes::stamp();
+        raise(
+            world,
+            &[
                 QuestLine::Accepted(783),
                 QuestLine::Completed(7),
                 QuestLine::Experience(450),
                 QuestLine::Money(1_025),
                 QuestLine::Item(2_580),
                 QuestLine::Item(6_529),
-            ] {
-                lines.push(line);
-            }
-        }
-        app.update();
+            ],
+        );
+        let stamped = world.resource::<QuestGiverLane>().stamped();
+        assert!(stamped.iter().all(|(at, _)| before < *at), "{stamped:?}");
         assert_eq!(
-            chat(&app),
+            shown(world),
             [
-                "Quest accepted: A Threat Within",
-                "Experience gained: 450.",
-                "Received 10 Silver, 25 Copper.",
-                "Received item: |cffffffff|Hitem:2580:0:0:0|h[Linen Cloth]|h|r.",
+                line("ERR_QUEST_ACCEPTED_S", "A Threat Within"),
+                QuestGiverEvent::Line(UiError::args(
+                    "ERR_QUEST_REWARD_EXP_I",
+                    vec![crate::ui_action::FillArg::D(450)],
+                )),
+                QuestGiverEvent::RewardMoney(1_025),
+                line(
+                    "ERR_QUEST_REWARD_ITEM_S",
+                    "|cffffffff|Hitem:2580:0:0:0|h[Linen Cloth]|h|r"
+                ),
             ]
         );
         assert_eq!(
-            app.world().resource::<QuestLines>().queued(),
+            world.resource::<QuestLines>().queued(),
             [QuestLine::Completed(7), QuestLine::Item(6_529)],
             "the uncached quest and item wait"
         );
@@ -327,79 +332,71 @@ mod tests {
                 .any(|c| matches!(c, ClientCommand::QuestQuery { quest: 7 })),
             "the waiting quest's record is asked: {sent:?}"
         );
-        assert!(
-            app.world()
-                .resource::<crate::sound::MessageSounds>()
-                .queued()
-                .iter()
-                .any(|r| r.key == "ERR_QUEST_ACCEPTED_S"),
-            "the accept line's row carries its sound"
+        assert_eq!(
+            world.resource_mut::<Items>().take_callbacks(6_529),
+            [crate::items::RecordCallback::QuestReward]
         );
 
-        {
-            let world = app.world_mut();
-            world
-                .resource_mut::<QuestLog>()
-                .insert_template(template(7, "Kobold Camp Cleanup", 0));
-            world
-                .resource_mut::<Items>()
-                .insert_template(6_529, Some(crate::items::test_template("Shiny Bauble")));
-        }
-        app.update();
-        assert_eq!(
-            chat(&app)[4..],
-            [
-                "Kobold Camp Cleanup completed.",
-                "Received item: |cffffffff|Hitem:6529:0:0:0|h[Shiny Bauble]|h|r.",
-            ]
+        crate::net::handlers::dispatch(
+            world,
+            vec![SessionEvent::QuestTemplate(Box::new(template(
+                7,
+                "Kobold Camp Cleanup",
+                0,
+            )))],
         );
-        assert!(app.world().resource::<QuestLines>().queued().is_empty());
+        assert_eq!(
+            shown(world),
+            [line("ERR_QUEST_COMPLETE_S", "Kobold Camp Cleanup")]
+        );
+        world
+            .resource_mut::<Items>()
+            .insert_template(6_529, Some(crate::items::test_template("Shiny Bauble")));
+        world.resource_scope(|world, mut lines: Mut<QuestLines>| {
+            let items = world.resource::<Items>();
+            let mut lane = QuestGiverLane::default();
+            lines.item_answered(6_529, items, &mut lane);
+            assert_eq!(
+                lane.take(),
+                [line(
+                    "ERR_QUEST_REWARD_ITEM_S",
+                    "|cffffffff|Hitem:6529:0:0:0|h[Shiny Bauble]|h|r"
+                )]
+            );
+        });
+        assert!(world.resource::<QuestLines>().queued().is_empty());
     }
 
-    /// `0x5dc4d7`: a quest that names a next quest in its chain completes silently. A reward item
-    /// refused before the turn-in is asked again by the turn-in's lookup with a callback
-    /// (`0x5dc647`), and its line goes when the refusal answers that ask.
+    /// `0x5dc4d7`: a quest that names a next quest in its chain completes silently; a refused
+    /// record shows nothing at its answer (`0x5dc719`, `0x5dc7b9`).
     #[test]
-    fn a_chained_quest_and_an_unknown_record_show_nothing() {
-        let (mut app, rx) = app();
-        {
-            let world = app.world_mut();
-            world
-                .resource_mut::<QuestLog>()
-                .insert_template(template(783, "A Threat Within", 7));
-            let (tx, _) = crossbeam_channel::unbounded();
-            world
-                .resource::<Items>()
-                .template(9_999, 0, Ask::New(&crate::net::NetCommands(tx)));
-            world.resource_mut::<Items>().insert_template(9_999, None);
-            let mut lines = world.resource_mut::<QuestLines>();
-            lines.push(QuestLine::Completed(783));
-            lines.push(QuestLine::Item(9_999));
-        }
-        app.update();
-        assert!(chat(&app).is_empty());
-        assert!(matches!(
-            crate::query_cache::queries(&rx)[..],
-            [ClientCommand::ItemQuery { entry: 9_999, .. }]
-        ));
-        assert_eq!(
-            app.world().resource::<QuestLines>().queued(),
-            [QuestLine::Item(9_999)],
-            "the item line waits on the new ask"
+    fn a_chained_quest_and_a_refused_record_show_nothing() {
+        let (mut app, _rx) = app();
+        let world = app.world_mut();
+        world
+            .resource_mut::<QuestLog>()
+            .insert_template(template(783, "A Threat Within", 7));
+        raise(
+            world,
+            &[
+                QuestLine::Completed(783),
+                QuestLine::Completed(8),
+                QuestLine::Item(9_999),
+            ],
         );
-        for _ in 0..600 {
-            app.update();
-        }
-        assert!(
-            crate::query_cache::queries(&rx).is_empty(),
-            "a waiting line asks no more"
+        assert!(shown(world).is_empty());
+        crate::net::handlers::dispatch(
+            world,
+            vec![SessionEvent::QuestTemplate(Box::new(template(8, "", 0)))],
         );
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(9_999, None);
-        app.update();
-        assert!(chat(&app).is_empty());
-        assert!(app.world().resource::<QuestLines>().queued().is_empty());
+        world.resource_mut::<Items>().insert_template(9_999, None);
+        world.resource_scope(|world, mut lines: Mut<QuestLines>| {
+            let mut lane = QuestGiverLane::default();
+            lines.item_answered(9_999, world.resource::<Items>(), &mut lane);
+            assert!(lane.take().is_empty());
+        });
+        assert!(shown(world).is_empty());
+        assert!(world.resource::<QuestLines>().queued().is_empty());
     }
 
     fn words(key: &str) -> String {
@@ -430,44 +427,45 @@ mod tests {
     #[test]
     fn an_elite_quests_accept_line_triggers_the_elite_quests_tutorial() {
         let (mut app, _rx) = app();
-        let mut elite = template(783, "A Threat Within", 0);
-        elite.quest_type = 1;
-        app.world_mut()
-            .resource_mut::<QuestLog>()
-            .insert_template(elite);
-        app.world_mut()
-            .resource_mut::<QuestLines>()
-            .push(QuestLine::Accepted(783));
-        app.update();
-        let triggers = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .take_tutorial_triggers()
+        let world = app.world_mut();
+        let tutorials = |world: &mut World| -> Vec<(crate::lanes::Stamp, FieldNotice)> {
+            world.resource_mut::<NoticeLane>().drain_stamped().collect()
         };
-        assert_eq!(triggers(&mut app), [0x28]);
+        let elite = FieldNotice::Tutorial {
+            id: crate::tutorial::id::ELITE_QUESTS,
+        };
+        let mut t = template(783, "A Threat Within", 0);
+        t.quest_type = 1;
+        world.resource_mut::<QuestLog>().insert_template(t);
+        raise(world, &[QuestLine::Accepted(783)]);
+        let lane = world.resource_mut::<QuestGiverLane>().stamped();
+        let notices = tutorials(world);
+        assert!(
+            matches!((lane.as_slice(), notices.as_slice()),
+                ([(line_at, _)], [(at, n)]) if line_at < at && *n == elite),
+            "the line, then the tutorial: {lane:?} {notices:?}"
+        );
+        shown(world);
 
-        app.world_mut()
-            .resource_mut::<QuestLines>()
-            .push(QuestLine::Accepted(7));
-        app.update();
-        assert!(triggers(&mut app).is_empty(), "the record is in flight");
+        raise(world, &[QuestLine::Accepted(7)]);
+        assert!(tutorials(world).is_empty(), "the record is in flight");
         let mut late = template(7, "Kobold Camp Cleanup", 0);
         late.quest_type = 1;
-        app.world_mut()
-            .resource_mut::<QuestLog>()
-            .insert_template(late);
-        app.update();
-        assert_eq!(triggers(&mut app), [0x28], "on the record's landing");
+        crate::net::handlers::dispatch(world, vec![SessionEvent::QuestTemplate(Box::new(late))]);
+        assert_eq!(
+            tutorials(world)
+                .into_iter()
+                .map(|(_, n)| n)
+                .collect::<Vec<_>>(),
+            [elite],
+            "on the record's landing"
+        );
+        shown(world);
 
         let mut plain = template(8, "Wolves", 0);
         plain.quest_type = 81;
-        app.world_mut()
-            .resource_mut::<QuestLog>()
-            .insert_template(plain);
-        app.world_mut()
-            .resource_mut::<QuestLines>()
-            .push(QuestLine::Accepted(8));
-        app.update();
-        assert!(triggers(&mut app).is_empty(), "type 81 is no elite quest");
+        world.resource_mut::<QuestLog>().insert_template(plain);
+        raise(world, &[QuestLine::Accepted(8)]);
+        assert!(tutorials(world).is_empty(), "type 81 is no elite quest");
     }
 }

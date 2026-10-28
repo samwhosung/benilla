@@ -912,7 +912,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::MasterLootName(guid)) => {
                 appliers.loot().wait_for_name(guid);
             }
-            ScriptCall::RecordAsk(ask) => appliers.asks().apply(script, ask),
+            ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
         }
         self.settle_selection(script, &mut at, owed);

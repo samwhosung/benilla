@@ -62,6 +62,9 @@ pub(crate) struct RecordAsks<'w, 's> {
     ammo_hits: Option<ResMut<'w, crate::ui_char::AmmoRecordHits>>,
     cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
+    /// The quest cache the rebuild's lookups ask, and the leaderboard's creature waits.
+    quest_log: Option<ResMut<'w, crate::ui_quest_log::QuestLog>>,
+    latch_refreshes: Option<ResMut<'w, crate::ui_quest::LatchRefreshes>>,
     craft: Option<ResMut<'w, crate::ui_craft::CraftItemWaits>>,
     trade_skill: Option<ResMut<'w, crate::ui_tradeskill::TradeSkillItemWaits>>,
     merchant: Option<ResMut<'w, crate::ui_merchant::MerchantOpen>>,
@@ -77,8 +80,8 @@ pub(crate) struct RecordAsks<'w, 's> {
 }
 
 impl RecordAsks<'_, '_> {
-    /// `ask` inside its getter, whose VM a hit the mirror lacked is told.
-    pub(crate) fn apply(&mut self, script: &mut UiScript, ask: RecordAsk) {
+    /// `ask` inside its getter.
+    pub(crate) fn apply(&mut self, ask: RecordAsk) {
         use crate::query_cache::Ask;
         match ask {
             RecordAsk::PlayerName(guid) | RecordAsk::ItemBuildName(guid) => {
@@ -214,8 +217,21 @@ impl RecordAsks<'_, '_> {
                 }
             }
             RecordAsk::QuestCreature(entry) => {
-                if let Some(names) = self.names.as_deref() {
-                    crate::ui_quest_log::ask_quest_creature(names, &self.net, script, entry);
+                if let (Some(names), Some(log)) =
+                    (self.names.as_deref(), self.quest_log.as_deref_mut())
+                {
+                    log.ask_creature(names, &self.net, entry);
+                }
+            }
+            RecordAsk::QuestRecord(quest_id) => {
+                if let Some(log) = self.quest_log.as_deref_mut() {
+                    log.ask_record(&self.net, quest_id);
+                }
+            }
+            // The sweep `0x5eb070`: every giver's status asked again.
+            RecordAsk::QuestGiverStatuses => {
+                if let Some(latch) = self.latch_refreshes.as_deref_mut() {
+                    latch.0 = latch.0.wrapping_add(1);
                 }
             }
             RecordAsk::QuestObject(entry) => {

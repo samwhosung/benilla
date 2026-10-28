@@ -73,9 +73,60 @@ impl LiveQuery for QuestObjectName {
     type Answer = String;
 }
 
+/// A creature's name as the creature cache holds it (`0xc0e354`), which the leaderboard reads
+/// with the callback `0x4e07d0` (`0x4e0461`); declined while the record is not cached.
+#[derive(Clone, Copy, Debug)]
+pub struct QuestCreatureName(pub u32);
+
+impl LiveQuery for QuestCreatureName {
+    type Answer = String;
+}
+
+/// Whether the active player is in the world, which the rebuild, the latch's quest-giver refresh
+/// and the timers need (`0x4de568`, `0x4df531`, `0x4e1417`); declined while none is held.
+#[derive(Clone, Copy, Debug)]
+pub struct QuestPlayer;
+
+impl LiveQuery for QuestPlayer {
+    type Answer = bool;
+}
+
+/// `GetQuestLogQuestText`'s two texts as the record holds them, each to be expanded for the
+/// player at the call (`ExpandServerText 0x506f70`, `0x4dff89`, `0x4dffae`): the `$` macros
+/// against the active player and the world states as they stand there.
+#[derive(Clone, Debug)]
+pub struct QuestText {
+    pub details: String,
+    pub objectives: String,
+}
+
+impl LiveQuery for QuestText {
+    type Answer = (String, String);
+}
+
 /// `entry`'s object name now, `None` with no host or none cached: the VM keeps no copy.
 pub(super) fn object_name(lua: &Lua, entry: u32) -> Option<String> {
     ask(lua, &QuestObjectName(entry))
+}
+
+/// `entry`'s creature name now: the host's, else the VM's copy, which only a harness holds.
+pub(super) fn creature_name(lua: &Lua, model: &Model, entry: u32) -> Option<String> {
+    ask(lua, &QuestCreatureName(entry))
+        .or_else(|| model.quest_store.creature_names.get(&entry).cloned())
+}
+
+/// Whether the active player is in the world now: the host's, else the VM's copy.
+pub(super) fn player(lua: &Lua, model: &Model) -> bool {
+    ask(lua, &QuestPlayer).unwrap_or(model.quest_store.player)
+}
+
+/// The two texts expanded for the player now, else as the record holds them.
+pub(super) fn text(lua: &Lua, details: &str, objectives: &str) -> (String, String) {
+    let query = QuestText {
+        details: details.to_string(),
+        objectives: objectives.to_string(),
+    };
+    ask(lua, &query).unwrap_or((query.details, query.objectives))
 }
 
 /// The quest slots now: the host's, else the VM's copy.

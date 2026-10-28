@@ -666,6 +666,8 @@ pub(super) fn feed_item_stats(
         for (id, view) in views {
             script.set_item_template(id, view);
         }
+        // The quest log's item callbacks (`0x4e0830`) on the records the push carried, once each.
+        script.flush_quest_log_refires();
     })
 }
 

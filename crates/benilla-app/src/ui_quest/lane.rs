@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{QuestPanel, UiScript};
+use benilla_ui::script::{QuestPanel, ScriptValue, UiScript};
 
 use crate::lanes::{LaneApp, Stamp, Until};
 use crate::ui_action::{MessageSink, UiError};
@@ -22,8 +22,13 @@ pub(crate) enum QuestGiverEvent {
     Panel(QuestPanel, u64),
     /// `QUEST_ITEM_UPDATE`, one per `GetQuestItemInfo` callback whose record landed (`0x5018c0`).
     ItemUpdate,
-    /// A refusal's or a failure's message line.
+    /// A refusal's, a failure's, a share's or a quest chat line ([`super::lines`]).
     Line(UiError),
+    /// The turn-in's `ERR_QUEST_REWARD_MONEY_S`, its coin string worded off the VM's globals
+    /// (`0x5dc511`-`0x5dc609`).
+    RewardMoney(u32),
+    /// `QUEST_ACCEPT_CONFIRM` with the member's name and the quest's title (`0x5019fe`).
+    AcceptConfirm { name: String, title: String },
     /// The turn-in's `QUESTCOMPLETED` fanfare.
     Fanfare,
     /// What a close core run outside a call signalled while this lane held items, parked in the
@@ -136,25 +141,36 @@ fn fire_quest_giver(
     }
 }
 
-/// One item's signal; no event carries an argument (`0x703e50`).
+/// One item's signal: a panel's event carries no argument (`0x703e50`).
 fn fire(script: &mut UiScript, sink: &mut MessageSink, event: QuestGiverEvent) {
     match event {
         QuestGiverEvent::Panel(panel, _) => script.fire_event(super::panel_event(panel), vec![]),
         QuestGiverEvent::ItemUpdate => script.fire_event("QUEST_ITEM_UPDATE", vec![]),
-        // Shown, and spoken, as its message row says, inside the handler that adds it.
-        QuestGiverEvent::Line(msg) => {
+        QuestGiverEvent::Line(msg) => show(script, sink, msg),
+        QuestGiverEvent::RewardMoney(copper) => {
             let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-            if let Some(text) = crate::ui_action::ui_error_text(&msg, &get) {
-                let shown = crate::ui_action::Shown::keyed(msg.key, text);
-                crate::ui_action::show_now(script, sink, "ui_quest", shown);
-            }
+            let coins = super::lines::coin_text(copper, &|key| get(key).unwrap_or_default());
+            show(script, sink, UiError::s("ERR_QUEST_REWARD_MONEY_S", coins));
         }
+        QuestGiverEvent::AcceptConfirm { name, title } => script.fire_event(
+            "QUEST_ACCEPT_CONFIRM",
+            vec![ScriptValue::Str(name), ScriptValue::Str(title)],
+        ),
         QuestGiverEvent::Fanfare => script.queue_sound_kit("QUESTCOMPLETED"),
         QuestGiverEvent::Parked { session, key } => {
             if script.session() == session {
                 script.run_parked(key);
             }
         }
+    }
+}
+
+/// A line shown, and spoken, as its message row says, inside the handler that adds it.
+fn show(script: &mut UiScript, sink: &mut MessageSink, msg: UiError) {
+    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+    if let Some(text) = crate::ui_action::ui_error_text(&msg, &get) {
+        let shown = crate::ui_action::Shown::keyed(msg.key, text);
+        crate::ui_action::show_now(script, sink, "ui_quest", shown);
     }
 }
 

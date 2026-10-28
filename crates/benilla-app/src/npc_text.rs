@@ -197,8 +197,19 @@ pub(crate) fn player_identity(
     unit_names: UnitNames<'_>,
 ) -> Option<Subject> {
     let (store, guid) = self_q.iter().next()?;
+    player_subject(guid.0, store, names, unit_names)
+}
+
+/// The self player `guid` as a macro [`Subject`] off `store`, its descriptor as the caller reads
+/// it, once its name is known.
+pub(crate) fn player_subject(
+    guid: u64,
+    store: &ObjectStore,
+    names: &NameCache,
+    unit_names: UnitNames<'_>,
+) -> Option<Subject> {
     Some(Subject {
-        name: names.resolve_player(guid.0, Ask::Read)?.to_string(),
+        name: names.resolve_player(guid, Ask::Read)?.to_string(),
         race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
         class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
         gender: store.0.unit_gender().unwrap_or(0),

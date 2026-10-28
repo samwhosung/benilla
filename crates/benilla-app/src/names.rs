@@ -70,9 +70,6 @@ pub(crate) struct NameCache {
     /// Bumped by every landed answer, a refusal that took a record away and the pet-rename
     /// eviction, never by an ask: the gated feeds re-run when it moves.
     generation: u64,
-    /// The creature entries in the order their records landed, for a reader that keeps its own
-    /// place ([`Self::creatures_landed_since`]); a `u32` a landing, never trimmed.
-    creature_landings: Vec<u32>,
 }
 
 /// One cached creature template head.
@@ -353,7 +350,6 @@ impl NameCache {
         let moved = match record {
             Some(record) => {
                 self.creatures.insert(entry, record);
-                self.creature_landings.push(entry);
                 true
             }
             None => self.creatures.refuse(entry) == Refused::Record,
@@ -363,26 +359,10 @@ impl NameCache {
         }
     }
 
-    /// The creature entries that landed after a reader's place `seen`, and its new place.
-    pub(crate) fn creatures_landed_since(&self, seen: usize) -> (&[u32], usize) {
-        let landed = self.creature_landings.get(seen..).unwrap_or_default();
-        (landed, self.creature_landings.len())
-    }
-
-    /// Every cached creature's entry and name.
-    pub(crate) fn creature_names(&self) -> impl Iterator<Item = (u32, &str)> {
-        self.creatures.iter().map(|(&e, r)| (e, r.name.as_str()))
-    }
-
     /// Whether the server refused the player's name, an empty name answered for the guid, and
     /// nothing has asked for it since.
     pub(crate) fn player_answered_unknown(&self, guid: u64) -> bool {
         self.players.answered_unknown(guid)
-    }
-
-    /// Whether the server refused `entry` and nothing has asked for it since.
-    pub(crate) fn creature_answered_unknown(&self, entry: u32) -> bool {
-        self.creatures.answered_unknown(entry)
     }
 
     /// The cached subname, the title line under a creature's name.

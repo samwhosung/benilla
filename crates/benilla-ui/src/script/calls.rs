@@ -319,9 +319,16 @@ pub enum RecordAsk {
         owner: u64,
         callback: ItemCallback,
     },
-    /// The quest log's leaderboard on a creature objective whose name the mirror lacks: the
-    /// creature cache, with the callback `0x4e07d0`, whose wait the VM keeps (`0x4e044c`).
+    /// The quest log's leaderboard on a creature objective whose name the cache lacks: the
+    /// creature cache, with the callback `0x4e07d0`, which signals `QUEST_LOG_UPDATE` when the
+    /// record lands (`0x4e044c`, `0x4e07ea`); the host keeps the wait.
     QuestCreature(u32),
+    /// The quest log's rebuild on a slot whose quest record the mirror lacks: the quest cache,
+    /// with the callback `0x4de8b0` (`0x4de65f`-`0x4de679`), whose wait the VM keeps.
+    QuestRecord(u32),
+    /// The expiry latch's quest-giver refresh (`0x4df531` → `0x5eb070`): every giver's status
+    /// asked again.
+    QuestGiverStatuses,
     /// The quest log's leaderboard on a GameObject objective with no text whose template the
     /// cache lacks: the object cache by the id less its top bit, with the callback `0x4e0800`,
     /// which signals `QUEST_LOG_UPDATE` when the record lands (`0x4e0387`-`0x4e039c`, `0x4e081a`).

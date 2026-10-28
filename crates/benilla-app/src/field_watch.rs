@@ -21,7 +21,7 @@
 //! `0x4c70b0`, and the weapon arms of the visible-item watch `0x5e2810`. The item watchers' and the
 //! inventory watcher's runs are [`crate::item_watch`]'s.
 
-use benilla_protocol::messages::{ObjectType, PLAYER_QUEST_LOG_SLOTS};
+use benilla_protocol::messages::{quest_slot_state, ObjectType, PLAYER_QUEST_LOG_SLOTS};
 use benilla_protocol::{ObjectFields, OwnerFallback};
 use bevy::prelude::*;
 
@@ -60,6 +60,12 @@ pub(crate) enum FieldNotice {
     /// A callback's `FrameScript_SignalEvent(id)` (`0x703e50`): the event with no arguments, for
     /// every listener, whatever unit raised it.
     Global { id: u16 },
+    /// The quest-slot watcher `0x5ddd80` on one of the active player's twenty quest-log entries,
+    /// registered in `0x5dd8a0`, for a slot that gained `quest_id`: a new id over none, or the
+    /// same id with its failed bit cleared (`0x5dde17`-`0x5dde34`). The update packet's handler
+    /// shows its accept line at its place ([`crate::ui_quest::lines`]), so this never reaches the
+    /// lane.
+    QuestAccepted { quest_id: u32 },
     /// The quest log's watcher `0x4de4d0` on the active player, registered at world entry on the
     /// 0xf0 bytes at the player section's `+0x28` (`0x4de43b`-`0x4de456`): the rebuild and its
     /// `QUEST_LOG_UPDATE`.
@@ -210,6 +216,7 @@ impl NoticeLane {
     }
 
     /// The notices waiting, in order.
+    #[cfg(test)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &FieldNotice> {
         self.0.iter().map(|(_, n)| n)
     }
@@ -1002,19 +1009,33 @@ pub(crate) fn placed_values(
             pass.push(at, FieldNotice::Global { id });
         }
         // The slot watchers `0x5ddd80`, one 12-byte watch a quest slot (`0x5dd974`-`0x5dd99e`),
-        // registered on the active player's arrival (`0x5dd8a0`): each run ends in the quest-list
-        // rebuild `0x4e8be0` (`0x5dde98`), which signals `UPDATE_LFG_TYPES` (`0x4e8c70`). One run
-        // per slot that moved, ahead of the log's own watcher below.
+        // registered on the active player's arrival (`0x5dd8a0`), ahead of the log's own watcher
+        // below. Each compares its slot against the copy its packet's write took (`0x5dde14`,
+        // `[ebx+0x10]`), the id and the state byte (`+0x7`): a quest gained shows its accept line
+        // (`0x5dde66`); then the run ends in the quest-list rebuild `0x4e8be0` (`0x5dde98`), which
+        // signals `UPDATE_LFG_TYPES` (`0x4e8c70`). One run per slot that moved.
         for slot in 0..u16::from(PLAYER_QUEST_LOG_SLOTS) {
             let slot_watch = (
                 QUEST_LOG_WATCH.0 + QUEST_SLOT_BYTES * slot,
                 QUEST_SLOT_BYTES,
             );
-            if let Some((fired, _, list)) = at(PLAYER_SECTION, slot_watch, List::Object) {
-                let first = PLAYER_SECTION + QUEST_LOG_WATCH.0 / 4;
-                let id = id::UPDATE_LFG_TYPES;
-                pass.push((fired, first, list), FieldNotice::Global { id });
+            let Some((fired, _, list)) = at(PLAYER_SECTION, slot_watch, List::Object) else {
+                continue;
+            };
+            let place = (fired, PLAYER_SECTION + QUEST_LOG_WATCH.0 / 4, list);
+            if let Some(now) = fields.player_quest_log(slot as u8) {
+                let id_field = PLAYER_SECTION + slot_watch.0 / 4;
+                let was = |field: u16, now: u32| block.edge(field).map_or(now, |(old, _)| old);
+                let (id, was_id) = (now.quest_id, was(id_field, now.quest_id));
+                let fail = now.state & quest_slot_state::FAIL != 0;
+                let was_state = was(id_field + 1, u32::from(now.state) << 24) >> 24;
+                let was_fail = was_state as u8 & quest_slot_state::FAIL != 0;
+                if id != 0 && (was_id == 0 || (was_id == id && !fail && was_fail)) {
+                    pass.push(place, FieldNotice::QuestAccepted { quest_id: id });
+                }
             }
+            let id = id::UPDATE_LFG_TYPES;
+            pass.push(place, FieldNotice::Global { id });
         }
         // Registered at world entry (`0x4de430`), after the bridge's watch on the same range and
         // the slot watchers.
@@ -1225,6 +1246,71 @@ mod tests {
     /// The field of player-section byte `offset`.
     fn pf(offset: u16) -> u16 {
         PLAYER_SECTION + offset / 4
+    }
+
+    /// The quest-slot watcher `0x5ddd80`, one 12-byte watch a slot (`0x5dd990`), against the copy
+    /// (`0x5dde14`): a quest in a slot that held none, or the same quest with its failed bit
+    /// cleared (`0x5dde17`-`0x5dde34`); a kept quest, a kept failure, a slot swapping quests and a
+    /// cleared slot announce nothing. It runs ahead of the log's watcher, which world entry
+    /// registered after it (`0x4de430`), its line ahead of its rebuild's `UPDATE_LFG_TYPES`.
+    #[test]
+    fn the_quest_slot_watcher_announces_a_filled_slot_and_a_cleared_failure_only() {
+        let accepted = |notices: &[FieldNotice]| -> Vec<u32> {
+            notices
+                .iter()
+                .filter_map(|n| match n {
+                    FieldNotice::QuestAccepted { quest_id } => Some(*quest_id),
+                    _ => None,
+                })
+                .collect()
+        };
+        let slot = |k: u16| pf(0x28 + 12 * k);
+        let failed = 2u32 << 24;
+        let mut me = player();
+        let prior = [
+            (slot(1), 7),
+            (slot(2), 8),
+            (slot(2) + 1, failed),
+            (slot(3), 9),
+            (slot(3) + 1, failed),
+            (slot(4), 10),
+            (slot(5), 11),
+        ];
+        assert_eq!(
+            accepted(&block(&mut me, Some(ME), ME, &prior)),
+            [7, 8, 9, 10, 11]
+        );
+        let now = [
+            (slot(0), 783),
+            (slot(2) + 1, 0),
+            (slot(3) + 1, failed | 1),
+            (slot(4), 12),
+            (slot(5), 0),
+        ];
+        assert_eq!(accepted(&block(&mut me, Some(ME), ME, &now)), [783, 8]);
+        let lfg = FieldNotice::Global {
+            id: id::UPDATE_LFG_TYPES,
+        };
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(slot(0), 0)]),
+            [
+                bridge(ME, id::UNIT_QUEST_LOG_CHANGED),
+                lfg,
+                FieldNotice::QuestLog
+            ],
+            "a cleared slot"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(slot(0), 50)]),
+            [
+                bridge(ME, id::UNIT_QUEST_LOG_CHANGED),
+                FieldNotice::QuestAccepted { quest_id: 50 },
+                lfg,
+                FieldNotice::QuestLog
+            ]
+        );
+        let mut other = player();
+        assert!(accepted(&block(&mut other, Some(ME), OTHER, &[(slot(0), 50)])).is_empty());
     }
 
     /// The bridge's event id names the field `id + 6`; each moved field is one notice, in field
@@ -1846,8 +1932,9 @@ mod tests {
 
     /// The active player's log carries the quest log's own watcher (`0x4de430`, registered after
     /// the bridge's on the same 0xf0 bytes): one run a block, however many slots moved, and none
-    /// for an equal rewrite. Each slot that moved also runs its own watcher `0x5ddd80`, whose
-    /// quest-list rebuild signals `UPDATE_LFG_TYPES` (`0x5dde98` → `0x4e8c70`), ahead of the log's.
+    /// for an equal rewrite. Each slot that moved also runs its own watcher `0x5ddd80`: a quest
+    /// gained shows its accept line, then its quest-list rebuild signals `UPDATE_LFG_TYPES`
+    /// (`0x5dde98` → `0x4e8c70`), ahead of the log's.
     #[test]
     fn the_active_players_quest_log_watcher_runs_once_per_block() {
         let mut me = player();
@@ -1864,7 +1951,15 @@ mod tests {
                 ME,
                 &[(198, 5), (199, 3), (201, 7), (257, 1)]
             ),
-            [bridge(ME, 522), lfg, FieldNotice::QuestLog, lfg, lfg]
+            [
+                bridge(ME, 522),
+                FieldNotice::QuestAccepted { quest_id: 5 },
+                lfg,
+                FieldNotice::QuestLog,
+                FieldNotice::QuestAccepted { quest_id: 7 },
+                lfg,
+                lfg,
+            ]
         );
         assert!(block(&mut me, Some(ME), ME, &[(198, 5), (201, 7)]).is_empty());
     }
@@ -1880,7 +1975,12 @@ mod tests {
         let mut me = player();
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(198, 5), (199, 3), (200, 9)]),
-            [bridge(ME, 522), lfg, FieldNotice::QuestLog]
+            [
+                bridge(ME, 522),
+                FieldNotice::QuestAccepted { quest_id: 5 },
+                lfg,
+                FieldNotice::QuestLog
+            ]
         );
         // The slot's counter word alone is a change of the slot.
         assert_eq!(

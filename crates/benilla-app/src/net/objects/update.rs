@@ -1131,6 +1131,26 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     }
                 }
             }
+            // The quest-slot watcher's accept line (`0x5dde4f`-`0x5dde7d`), at its place.
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::QuestAccepted {
+                quest_id,
+            }) => {
+                if let (Some(quest_log), Some(lane), Some(lines)) = (
+                    sc.quest_log.as_deref(),
+                    sc.quest_giver.as_deref_mut(),
+                    sc.quest_lines.as_deref_mut(),
+                ) {
+                    crate::ui_quest::lines::Raise {
+                        quest_log,
+                        items: &sc.items,
+                        commands: &sc.net,
+                        lane,
+                        notices: &mut sc.field_notices,
+                        lines,
+                    }
+                    .line(crate::ui_quest::QuestLine::Accepted(quest_id));
+                }
+            }
             crate::field_watch::Step::Notice(n) => sc.field_notices.write(n),
             crate::field_watch::Step::Item(run) => sc.item_lane.push(run),
         }

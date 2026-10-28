@@ -425,7 +425,8 @@ pub use quest::{
     QuestState,
 };
 pub use quest_live::{
-    QuestClock, QuestClockRead, QuestCoinage, QuestHeld, QuestObjectName, QuestSlots, QuestStanding,
+    QuestClock, QuestClockRead, QuestCoinage, QuestCreatureName, QuestHeld, QuestObjectName,
+    QuestPlayer, QuestSlots, QuestStanding, QuestText,
 };
 pub use quest_log::{
     QuestBlip, QuestLogCarry, QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS,

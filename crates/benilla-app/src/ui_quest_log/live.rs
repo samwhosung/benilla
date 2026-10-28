@@ -2,18 +2,22 @@
 //! [`benilla_ui::script::QuestSlots`] and its kin: the player's slots and coinage off the store
 //! as of the drain's place (`0x4dfa41`, `0x4e01df`, `0x4df70b`), the held count of an item with
 //! each item found as of there (`0x622130`), a faction's standing off the reputation slots as
-//! the reputation lane replays them (`0x4d6370`) and the clock the countdowns read.
+//! the reputation lane replays them (`0x4d6370`), the clock the countdowns read, whether the
+//! player is held (`0x4de568`), a creature's and an object's name off their caches (`0xc0e354`,
+//! `0xc0e318`), and the quest text's `$` macros expanded against the player as of there and the
+//! world states (`0x506f70`, `0x4dff89`).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
-    QuestClock, QuestClockRead, QuestCoinage, QuestHeld, QuestObjectName, QuestSlots,
-    QuestStanding, SelfRead,
+    QuestClock, QuestClockRead, QuestCoinage, QuestCreatureName, QuestHeld, QuestObjectName,
+    QuestPlayer, QuestSlots, QuestStanding, QuestText, SelfRead,
 };
 
 use crate::net::{Reputations, ServerWallClock};
+use crate::query_cache::Ask;
 use crate::target::Factions;
 use crate::ui_items::{count_of, InventoryScope};
 
@@ -26,6 +30,10 @@ pub(crate) struct QuestLogLive<'w, 's> {
     factions: Option<Res<'w, Factions>>,
     clock: Option<Res<'w, ServerWallClock>>,
     go_templates: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
+    names: Option<Res<'w, crate::names::NameCache>>,
+    me: Option<Res<'w, crate::net::SelfGuid>>,
+    states: Option<Res<'w, crate::world_state::WorldStates>>,
+    unit_names: crate::ui_unit::NameTables<'w>,
 }
 
 impl QuestLogLive<'_, '_> {
@@ -46,6 +54,25 @@ impl QuestLogLive<'_, '_> {
             store.0.unit_race().unwrap_or(0),
             store.0.unit_class().unwrap_or(0),
             faction,
+        ))
+    }
+
+    /// `details` and `objectives` expanded as `ExpandServerText` expands them (`0x506f70`): against
+    /// the player as of here, named off the name cache read without a callback (`0x506fd4`), and
+    /// the world states. `None` without the cache or the states, where the record's text answers.
+    fn text(&self, q: &QuestText) -> Option<(String, String)> {
+        let (names, states) = (self.names.as_deref()?, self.states.as_deref()?);
+        let guid = self.me.as_deref().and_then(|me| me.0);
+        let subject = guid.zip(self.player()).and_then(|(guid, store)| {
+            crate::npc_text::player_subject(guid, store, names, self.unit_names.get())
+        });
+        let macros = crate::npc_text::MacroContext {
+            subject: subject.as_ref(),
+            states,
+        };
+        Some((
+            crate::npc_text::substitute(&q.details, &macros),
+            crate::npc_text::substitute(&q.objectives, &macros),
         ))
     }
 
@@ -80,5 +107,11 @@ impl crate::script_calls::live::LiveFamily for QuestLogLive<'_, '_> {
             || ask.answer(|q: &QuestObjectName| {
                 Some(self.go_templates.as_deref()?.name(q.0)?.to_string())
             })
+            || ask.answer(|q: &QuestCreatureName| {
+                let names = self.names.as_deref()?;
+                Some(names.resolve_creature(q.0, 0, Ask::Read)?.to_string())
+            })
+            || ask.answer(|_: &QuestPlayer| self.player().map(|_| true))
+            || ask.answer(|q: &QuestText| self.text(q))
     }
 }

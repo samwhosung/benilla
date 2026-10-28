@@ -37,8 +37,8 @@ pub(crate) use held::{traits_from_name_cache, unheld_state};
 pub(crate) struct UnitFeed;
 
 /// The feeds that seat a new VM with what the reference's caches hold across a `/reload`, ahead of
-/// the world-enter cascade whose handlers read it: the quest log's records, slots and creature
-/// names, and the item records. The reputation list is built by the cascade itself, off the lent
+/// the world-enter cascade whose handlers read it: the item records. The quest log's records are
+/// seated at the VM's load ([`crate::ui_quest_log::seed_quest_log`]). The reputation list is built by the cascade itself, off the lent
 /// host ([`benilla_ui::script::UiScript::fire_world_enter_tail`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct WorldEnterSeats;
@@ -2531,8 +2531,9 @@ mod tests {
         }
     }
 
-    /// The world-enter cascade's handlers read the quest log's seat and the item records, which a
-    /// new VM is given by their feeds: both are declared before the unit feed that fires it.
+    /// The world-enter cascade's handlers read the item records, which a new VM is given by their
+    /// feed: it is declared before the unit feed that fires it. The quest log's records are
+    /// seated at the VM's load.
     #[test]
     fn the_world_entry_runs_after_the_seats_it_reads() {
         use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
@@ -2551,12 +2552,11 @@ mod tests {
             }
         };
         let units = one("::ui_unit::feed_units");
-        for seat in ["::ui_quest_log::feed_quest_log", "::feed::feed_item_stats"] {
-            assert!(
-                c.dependencies.contains(&(one(seat), units)),
-                "feed_units is declared after {seat}"
-            );
-        }
+        assert!(
+            c.dependencies
+                .contains(&(one("::feed::feed_item_stats"), units)),
+            "feed_units is declared after feed_item_stats"
+        );
     }
 
     /// `UnitRace` and `UnitClass` push the table's name at the install's locale column beside the

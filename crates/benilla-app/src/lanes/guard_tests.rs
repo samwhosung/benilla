@@ -129,16 +129,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          waits on",
     ),
     (
-        Row::Queue,
-        "::ui_quest_share::QuestShare",
-        "the quest share",
-    ),
-    (
-        Row::Queue,
-        "::ui_quest::lines::QuestLines",
-        "the quest lines",
-    ),
-    (
         Row::HostHeld,
         "::death::DeathNet",
         "the death stores, which `feed_death` fires the offers and the corpse range from; the death verbs, acting in their calls, hold them in the host",
@@ -404,11 +394,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_pet::PetBar"]),
     ("::ui_loot_roll::feed_loot_rolls", &["items::Items", "names::NameCache", "net::SelfGuid",
         "ui_loot_roll::LootRolls"]),
-    ("::ui_quest::lines::feed_quest_lines", &["items::Items", "ui_quest::lines::QuestLines",
-        "ui_quest_log::QuestLog"]),
-    ("::ui_quest_log::feed_quest_log", &["names::NameCache", "net::ObjectStore",
-        "ui_quest::lines::QuestLines", "ui_quest_log::QuestLog", "world_state::WorldStates"]),
-    ("::ui_quest_share::feed_quest_share", &["names::NameCache", "ui_quest_share::QuestShare"]),
     ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
     ("::ui_chat::feed::played_time_bridge", &["net::PlayedTimeAnswer"]),
@@ -1774,9 +1759,6 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // left it.
     ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "target::Selection", "ui_guild::GuildState", "ui_party::GroupState"]),
-    // A landing's record expands its text's macros against the player's name and the world states
-    // as the frame left them, as the quest log's feed expands the held ones (#2217).
-    ("quest events", &["names::NameCache", "net::ObjectStore", "world_state::WorldStates"]),
     ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_action::cast_lines::CastFailRedisplays"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
