@@ -610,6 +610,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_script::InspectMode",
     "bevy_input::button_input::ButtonInput<bevy_input::keyboard::KeyCode>",
     "bevy_input::mouse::AccumulatedMouseMotion",
+    // The frame a quest-share line starts its bounded wait for a name at.
+    "bevy_diagnostic::frame_count_diagnostics_plugin::FrameCount",
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.

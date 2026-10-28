@@ -8,10 +8,11 @@
 //! questgiver lane at their packet ([`crate::ui_quest::QuestGiverLane`]); the stock popup's Yes
 //! calls `ConfirmAcceptQuest()` (`UIParent.lua:353`) and No sends nothing.
 //!
-//! Deviation: a member's name not yet cached is asked for, and its line or confirm waits for the
-//! name's answer, shown at the answer's packet, where the reference reads its name cache
-//! (`0xc0e228` via `0x55f080`) with a null callback and drops the message on a miss, because
-//! benilla's cache may not hold a party member yet.
+//! Deviation: a member's name not yet cached holds its verdict line for a bounded retry, shown at
+//! the name's answer within [`NAME_WAIT_FRAMES`] and dropped after, and holds the escort confirm
+//! with no bound until the name answers or another confirm replaces it, where the reference reads
+//! its name cache (`0xc0e228` via `0x55f080`) with a null callback and drops the message on a
+//! miss, because benilla's cache may not hold a party member yet.
 
 use benilla_protocol::messages::{QuestConfirmAccept, QuestShareMsg};
 use bevy::prelude::*;
@@ -19,18 +20,32 @@ use bevy::prelude::*;
 use crate::ui_action::UiError;
 use crate::ui_quest::{QuestGiverEvent, QuestGiverLane};
 
+/// Frames a held verdict line waits for its name: a name query is one round trip, and a guid
+/// the server will not name would otherwise hold its line all session.
+const NAME_WAIT_FRAMES: u32 = 120;
+
 /// The share's waits on names: the verdicts on quests we pushed, and the escort confirm we owe an
-/// answer.
+/// answer, each line with the frame its packet came in.
 #[derive(Resource, Default)]
 pub(crate) struct QuestShare {
     /// `MSG_QUEST_PUSH_RESULT` lines whose member is not named yet, by member, in arrival order.
-    verdicts: Vec<(u64, &'static str)>,
-    /// The confirm whose sender is not named yet; a second replaces the first, as the server
-    /// keeps one latch.
+    verdicts: Vec<(u64, &'static str, u32)>,
+    /// The confirm whose sender is not named yet, held with no bound; a second replaces the first,
+    /// as the server keeps one latch.
     pending_confirm: Option<QuestConfirmAccept>,
 }
 
+/// Whether what came in at frame `at` still waits at frame `now`.
+fn waiting(at: u32, now: u32) -> bool {
+    now.wrapping_sub(at) < NAME_WAIT_FRAMES
+}
+
 impl QuestShare {
+    /// Drops the lines that have waited out their bound.
+    fn expire(&mut self, now: u32) {
+        self.verdicts.retain(|&(_, _, at)| waiting(at, now));
+    }
+
     /// On disconnect: the server's latch went with the session.
     pub(crate) fn clear_session(&mut self) {
         self.verdicts.clear();
@@ -65,6 +80,8 @@ mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
+    use bevy::diagnostic::FrameCount;
+
     use super::{verdict_message, QuestShare};
     use crate::names::NameCache;
     use crate::net::{NetCommands, NetHandlerApp};
@@ -79,11 +96,12 @@ mod net {
             .net_handler(K::Disconnected, on_session_end);
     }
 
-    /// The name cache, read as the module's deviation asks it.
+    /// The name cache, read as the module's deviation asks it, and the frame a wait starts at.
     #[derive(bevy::ecs::system::SystemParam)]
     pub(super) struct Names<'w> {
         names: Res<'w, NameCache>,
         commands: Res<'w, NetCommands>,
+        frame: Res<'w, FrameCount>,
     }
 
     impl Names<'_> {
@@ -126,14 +144,15 @@ mod net {
     }
 
     /// The name cache's answer for a member a line or the confirm waits on: shown at the
-    /// answer's packet with the name, dropped with a refusal.
+    /// answer's packet with the name, a line only inside its bound; dropped with a refusal.
     fn on_player_name(
         In(ev): In<SessionEvent>,
+        frame: Res<FrameCount>,
         mut share: ResMut<QuestShare>,
         mut lane: ResMut<QuestGiverLane>,
     ) {
         if let SessionEvent::PlayerName { guid, name, .. } = ev {
-            share.name_answered(guid, &name, &mut lane);
+            share.name_answered(guid, &name, frame.0, &mut lane);
         }
     }
 
@@ -156,9 +175,10 @@ mod net {
             debug!("net: unmapped push verdict {} — no line", msg.0);
             return;
         };
+        share.expire(names.frame.0);
         match names.name(member) {
             Some(name) => super::show_verdict(key, name, lane),
-            None => share.verdicts.push((member, key)),
+            None => share.verdicts.push((member, key, names.frame.0)),
         }
     }
 
@@ -190,21 +210,19 @@ fn show_confirm(name: String, title: String, lane: &mut QuestGiverLane) {
 }
 
 impl QuestShare {
-    /// The name cache answered `guid` with `name`, empty for a refusal: what waited on it shows
-    /// in arrival order, or goes.
-    fn name_answered(&mut self, guid: u64, name: &str, lane: &mut QuestGiverLane) {
+    /// The name cache answered `guid` with `name` at frame `now`, empty for a refusal: what
+    /// waited on it shows in arrival order, or goes; a line that waited out its bound is gone.
+    fn name_answered(&mut self, guid: u64, name: &str, now: u32, lane: &mut QuestGiverLane) {
+        self.expire(now);
         let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.verdicts)
             .into_iter()
-            .partition(|&(member, _)| member == guid);
+            .partition(|&(member, _, _)| member == guid);
         self.verdicts = rest;
-        let confirm = self
-            .pending_confirm
-            .take_if(|c| c.sender == guid)
-            .filter(|_| !name.is_empty());
+        let confirm = self.pending_confirm.take_if(|c| c.sender == guid);
         if name.is_empty() {
             return;
         }
-        for (_, key) in mine {
+        for (_, key, _) in mine {
             show_verdict(key, name.to_string(), lane);
         }
         if let Some(c) = confirm {
@@ -227,6 +245,7 @@ impl Plugin for QuestSharePlugin {
 mod tests {
     use super::*;
     use benilla_protocol::SessionEvent;
+    use bevy::diagnostic::FrameCount;
 
     fn push(member: u64, msg: QuestShareMsg) -> SessionEvent {
         SessionEvent::QuestPushResult { member, msg }
@@ -253,6 +272,7 @@ mod tests {
             .init_resource::<crate::names::NameCache>()
             .init_resource::<QuestGiverLane>()
             .init_resource::<crate::ui_quest::QuestGiver>()
+            .init_resource::<FrameCount>()
             .init_resource::<QuestShare>();
         net::register(&mut app);
         let world = app.world_mut();
@@ -316,6 +336,59 @@ mod tests {
             crate::query_cache::queries(&rx).len(),
             1,
             "the next packet asks again"
+        );
+    }
+
+    /// A line whose name answers inside the bound shows, and one answered at the bound shows
+    /// nothing; the confirm has no bound and fires at its name's answer however late (the
+    /// module's deviation).
+    #[test]
+    fn a_line_answered_after_the_wait_shows_nothing_and_a_confirm_still_fires() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(crate::net::NetCommands(tx))
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<QuestGiverLane>()
+            .init_resource::<crate::ui_quest::QuestGiver>()
+            .init_resource::<FrameCount>()
+            .init_resource::<QuestShare>();
+        net::register(&mut app);
+        let world = app.world_mut();
+        let taken = |world: &mut World| world.resource_mut::<QuestGiverLane>().take();
+        let at = |world: &mut World, frame: u32| world.resource_mut::<FrameCount>().0 = frame;
+        let confirm = |sender| {
+            SessionEvent::QuestConfirmAccept(QuestConfirmAccept {
+                quest_id: 5,
+                title: "Escort".into(),
+                sender,
+            })
+        };
+
+        at(world, 10);
+        crate::net::handlers::dispatch(world, vec![push(0xa, QuestShareMsg::BUSY), confirm(0xa)]);
+        at(world, 10 + NAME_WAIT_FRAMES - 1);
+        crate::net::handlers::dispatch(world, vec![named(0xa, "Pal")]);
+        assert_eq!(
+            taken(world).len(),
+            2,
+            "the last frame of the wait shows both"
+        );
+
+        at(world, 200);
+        crate::net::handlers::dispatch(world, vec![push(0xb, QuestShareMsg::BUSY), confirm(0xb)]);
+        at(world, 200 + NAME_WAIT_FRAMES);
+        crate::net::handlers::dispatch(world, vec![named(0xb, "Late")]);
+        assert_eq!(
+            taken(world),
+            [QuestGiverEvent::AcceptConfirm {
+                name: "Late".into(),
+                title: "Escort".into()
+            }],
+            "the line after its wait shows nothing; the confirm still fires"
+        );
+        assert!(
+            world.resource::<QuestShare>().verdicts.is_empty(),
+            "no line is held past the bound"
         );
     }
 

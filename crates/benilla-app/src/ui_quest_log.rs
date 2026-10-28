@@ -1267,7 +1267,7 @@ mod tests {
         }
 
         /// A VM logging the quest events, with the format keys the lines fill, keeping its
-        /// getters' lookups for [`ask_kept_lookups`].
+        /// getters' lookups for [`rig_host`].
         fn vm() -> UiScript {
             let mut script = UiScript::new().unwrap();
             script.keep_calls();

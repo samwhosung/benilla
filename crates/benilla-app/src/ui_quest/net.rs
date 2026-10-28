@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(
             fail(true),
             (1, true, epoch, 1),
-            "0x197 prints, read before its latch, whose refresh the feed carries"
+            "0x197 prints, read before its latch, which raises its giver refresh at the packet"
         );
         assert_eq!(
             fail(true),
