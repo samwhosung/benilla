@@ -551,6 +551,8 @@ mod item_text_live_tests;
 #[cfg(test)]
 mod loot_live_tests;
 #[cfg(test)]
+mod loot_roll_live_tests;
+#[cfg(test)]
 mod mail_live_tests;
 #[cfg(test)]
 mod merchant_live_tests;

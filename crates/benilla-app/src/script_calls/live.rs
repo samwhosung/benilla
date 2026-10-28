@@ -141,6 +141,8 @@ live_reads! {
         auction: crate::ui_auction::AuctionLive<'static, 'static>,
         /// The loot window's cells, its rows' records and the master-loot candidates' names.
         loot: crate::ui_loot::LootLive<'static, 'static>,
+        /// The listed group loot rolls, their items' records and the clock their bars read.
+        loot_rolls: crate::ui_loot_roll::LootRollLive<'static>,
         /// The game clock's hour and minute.
         game_time: crate::net::GameTimeLive<'static>,
         /// The joined-channel slot array.

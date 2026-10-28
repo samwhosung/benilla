@@ -386,7 +386,7 @@ pub use loot::{
     LootCall, LootRow, LootSlotQuery, LootState, LootWindow, LootWindowQuery, MasterLootCandidate,
     MasterLootCandidateQuery, LOOT_PORTRAIT_UNIT,
 };
-pub use loot_roll::{LootRollCall, LootRollEntry, LootRollsState};
+pub use loot_roll::{LootRollCall, LootRollEntry, LootRollQuery, LootRollsState};
 pub use macros::{
     macro_lines, MacroBinding, MacroDerives, MacroState, MacroView, CHARACTER_ID_BASE, MAX_MACROS,
     MAX_MACRO_BODY, MAX_MACRO_NAME,

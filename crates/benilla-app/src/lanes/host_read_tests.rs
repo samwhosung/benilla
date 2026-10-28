@@ -39,8 +39,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 20;
-const FRAME_FINAL_INPUTS: usize = 119;
+const FRAME_FINAL_FEEDS: usize = 19;
+const FRAME_FINAL_INPUTS: usize = 115;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -134,6 +134,9 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
     ("::ui_loot::drop_loot_steps", &["ui_loot::LootState"],
         "drops the loot lane's window signals, its pushes kept, run only while no in-game \
          interface is up, so no listener exists"),
+    ("::ui_loot_roll::lane::drop_roll_events", &["ui_loot_roll::LootRolls"],
+        "drops the rolls' lane, run only while no in-game interface is up, so no listener \
+         exists"),
     ("::ui_mail::lane::drop_mail_events", &["ui_mail::pending::MailPending"],
         "drops the mail lane, a parked close's tail with its query kept, run only while no \
          in-game interface is up, so no listener exists"),

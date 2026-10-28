@@ -226,8 +226,8 @@ pub enum ScriptCall {
     Death(super::DeathAction),
     /// A duel verb ([`super::DuelRequest`]): its packet or the duel spell's cast inside the call.
     Duel(super::DuelRequest),
-    /// A group loot vote ([`super::LootRollCall`]): its packet and the engine's close inside the
-    /// call, ahead of `CANCEL_LOOT_ROLL`.
+    /// A group loot vote ([`super::LootRollCall`]): its packet inside the call, ahead of
+    /// `CANCEL_LOOT_ROLL`, and the engine's close after it.
     LootRoll(super::LootRollCall),
     /// The innkeeper's Accept ([`super::BinderCall`]): its packet inside the call.
     Binder(super::BinderCall),

@@ -126,6 +126,8 @@ pub(crate) struct Scene<'w, 's> {
     house: Option<ResMut<'w, crate::ui_auction::HouseLane>>,
     // The loot window's rows and the pushes that wait on an item's record.
     loot: Option<ResMut<'w, crate::ui_loot::LootState>>,
+    // The group loot rolls and their lines that wait on an item's record.
+    loot_rolls: crate::ui_loot_roll::RollRecordAnswers<'w>,
     // The vendor window's row and buy-back callbacks.
     merchant: crate::ui_merchant::MerchantRecordAnswers<'w>,
     // The state pass the trainer's watches and item callbacks run (`0x4d7d40`).
@@ -217,7 +219,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // `0x4fb570`), the trainer rows' (`0x4d9140`, `0x4d9db0`), the questgiver rows'
             // (`0x5018c0`), the turn-in's reward lines' (`0x5dc7b0`), the mail rows' and notices'
             // (`0x4af0a0`, `0x4ad010`), the mail attachment's (`0x4ae710`) and the auction
-            // notices' lines (`0x4cd190`).
+            // notices' lines (`0x4cd190`), and the group loot rolls' and their lines'
+            // (`0x61b460`, `0x61c4b0`, `0x61bd50`, `0x61b7d0`).
             let callbacks = sc.items.take_callbacks(entry);
             for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
@@ -324,6 +327,17 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         }
                     }
                     Cb::AuctionSellItem => {}
+                    // A roll's or its line's, for a record and a refusal alike: the start's opens
+                    // the roll (`0x61b460` → `0x61b430`), a line's goes on to its name or is shown
+                    // (`0x61c4b0`, `0x61bd50`, `0x61b7d0`).
+                    Cb::LootRoll(wait) => sc.loot_rolls.item_answered(
+                        wait,
+                        answered,
+                        &sc.items,
+                        &sc.names,
+                        &sc.net,
+                        sc.self_guid.0,
+                    ),
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one

@@ -1,6 +1,9 @@
-//! The group loot roll feed: `SMSG_LOOT_START_ROLL`, `SMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL_WON` and
+//! The group loot rolls: `SMSG_LOOT_START_ROLL`, `SMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL_WON` and
 //! `SMSG_LOOT_ALL_PASSED` become the stock `GroupLootFrame`'s events and the roll chat lines, and
-//! its `RollOnLoot` votes go back out as `CMSG_LOOT_ROLL`.
+//! its `RollOnLoot` votes go back out as `CMSG_LOOT_ROLL`. The getters read the list as they run
+//! ([`live`]), and every signal goes on the rolls' lane where the reference raises it
+//! ([`lane`]): in the packet's handler, or in the item or name answer's that runs the callback a
+//! lookup registered.
 //!
 //! A fresh roll's `START_LOOT_ROLL` waits for its item template, as in the reference: `0x61b310`
 //! ends in the cache lookup `0x55ba30`, whose hit fires the event at once (`0x61b430`) and whose
@@ -11,14 +14,21 @@
 //!
 //! At most [`MAX_OPEN`] rolls are open at once (`0x61b430` tests `[0xc4dda8]` against 4). A roll
 //! whose template is in finds the slots full and waits, deferred, in arrival order; every close
-//! (our vote `0x61bf46`, a win `0x61bc6b`, all-passed `0x61b74c`) walks the list oldest first and
-//! opens deferred rolls while a slot is free (`0x61b760`). Stock `GroupLootFrame_OpenNewFrame` has
-//! four frames and drops a fifth silently, so an unqueued fifth could never be voted.
+//! (our vote `0x61bf46`, a win `0x61bc6b`, all-passed `0x61b74c`) walks the list oldest first
+//! (`0x61b310` links each record at the tail, `0x61b384`) and opens deferred rolls while a slot is
+//! free (`0x61b760`). Stock `GroupLootFrame_OpenNewFrame` has four frames and drops a fifth
+//! silently, so an unqueued fifth could never be voted.
 //!
 //! Deviation: the open count is the number of rolls announced and not closed. The reference keeps
 //! a counter that its server-close paths decrement for any roll whose closed byte is clear
 //! (`0x61b6f8`, `0x61bc17`), a deferred roll that never counted up included, so it under-counts
 //! and lets a fifth frame open; here a deferred roll's close changes nothing.
+//!
+//! A result's line, its `CANCEL_LOOT_ROLL` and the promotion after it wait for the result's item
+//! record and, for a win, the winner's name (`0x61b96a` → `0x61b9a0` → `0x61b9bf` → `0x61b9e0`,
+//! `0x61b5c0` → `0x61b640`); until then the roll stays listed. Deviation: a refused record or name
+//! closes the roll unspoken, where the reference's failure callbacks (`0x61bc80`, `0x61bd50`,
+//! `0x61b7d0`) free the record with neither, leaving its frame open on a roll no getter finds.
 //!
 //! A promoted roll's `arg2` is still the wire's countdown (`0x61b430` and `0x61b79a` push
 //! `node+0x3c`, which nothing rewrites); only the bar is short, as `GetLootRollTimeLeft` counts
@@ -26,29 +36,29 @@
 //!
 //! `rollID` is a client-local serial; the wire addresses a roll by `(lootedTarget, itemSlot)`. Our
 //! own vote closes our frame at once, as `RollOnLoot` (`0x61bdf0`) sends the CMSG and fires
-//! `CANCEL_LOOT_ROLL` in one call. On a bind-on-pickup roll, Need or Greed only raises
-//! `CONFIRM_LOOT_ROLL` and `ConfirmLootRoll` sends, the reference's C `RollOnLoot` gate; Pass is
-//! never gated.
+//! `CANCEL_LOOT_ROLL` in one call; the closed roll stays listed until its result. On a
+//! bind-on-pickup roll, Need or Greed only raises `CONFIRM_LOOT_ROLL` and `ConfirmLootRoll` sends,
+//! the reference's C `RollOnLoot` gate; Pass is never gated.
+
+use std::collections::VecDeque;
+use std::time::Duration;
 
 use benilla_protocol::messages::{roll_vote, LootAllPassed, LootRoll, LootRollWon, LootStartRoll};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use benilla_ui::script::{LootRollEntry, LootRollsState, ScriptValue};
+use benilla_ui::script::LootRollEntry;
 
 use crate::entities::ItemDisplays;
-use crate::items::Items;
+use crate::items::{Items, RecordCallback, RollCatalogs};
+use crate::lanes::{LaneApp, Stamp};
 use crate::names::NameCache;
-use crate::net::{ClientCommand, NetCommands, SelfGuid};
+use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
-use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
-use crate::ui_script::UiFeed;
-
-/// Frames a pending line retries its names before dropping: a refused name never resolves.
-const LINE_MAX_TRIES: u16 = 120;
 
 /// How long a fresh roll waits for its item template before `START_LOOT_ROLL` fires anyway: wall
 /// clock, not frames, as the wait comes out of the roll's own minute.
-const TEMPLATE_HOLD_MAX_MS: u32 = 2_000;
+const TEMPLATE_HOLD_MAX_MS: u64 = 2_000;
 
 /// `item_template.bonding` bind on pickup (vmangos `ItemPrototype.h` `ItemBondingType`); only 1
 /// gets `GroupLootFrame_OnShow`'s gold backdrop.
@@ -60,19 +70,18 @@ const MAX_OPEN: usize = 4;
 /// Where a roll stands between its packet and its frame.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
-    /// Its item template is not in, so `0x61b430` has not run on it.
-    Waiting,
+    /// Its item template is not in, so `0x61b430` has not run on it: the lookup's callback
+    /// `0x61b460` waits under the serial.
+    Waiting(u32),
     /// `0x61b430` found four open: the node's queued byte `+0x39`, the oldest promoted first.
     Deferred,
-    /// Counted among the open, its `START_LOOT_ROLL` not yet fired.
-    Starting,
-    /// `START_LOOT_ROLL` has gone out.
+    /// `START_LOOT_ROLL` has gone onto the lane.
     Open,
 }
 
-/// One group loot roll currently open on our screen.
+/// One group loot roll the engine lists (`0xc4dc00`).
 struct ActiveRoll {
-    /// The id Lua addresses the roll by.
+    /// The id Lua addresses the roll by (`+0x8`).
     roll_id: u32,
     looted_target: u64,
     item_slot: u32,
@@ -80,47 +89,183 @@ struct ActiveRoll {
     /// The drop's random-suffix roll: the reference's `SetLootRollItem` (`0x5364a0`) copies it
     /// into the tooltip's `+0x424` with no item object, so it is the hover's only enchant source.
     random_property_id: u32,
-    /// The wire's `countdownTime`, kept whole: `START_LOOT_ROLL`'s `arg2` and the bar's maximum.
+    /// The wire's `countdownTime`, kept whole: `START_LOOT_ROLL`'s `arg2` (`+0x3c`).
     countdown_ms: u32,
-    /// Milliseconds left, saturating at 0; the server's resolution closes the roll, not the tick.
-    remaining_ms: u32,
-    /// How long the roll has waited for its item template.
-    held_ms: u32,
+    /// The clock at the packet; the expiry `+0x28` is it plus the countdown (`0x61b404`).
+    arrived: Duration,
     phase: Phase,
-    /// The start packet's lookup of the item, with the callback `0x61b460` (`0x61b40e`), is made:
-    /// the frames after only read, as the getters do (`0x4c30d2`).
-    asked: bool,
+    /// The closed byte `+0x3a`, which our vote sets (`0x61bf32`); the roll stays listed.
+    closed: bool,
 }
 
-/// One queued chat announcement, awaiting the names it needs.
-struct PendingLine {
-    line: RollLine,
-    tries: u16,
+impl ActiveRoll {
+    /// Counted at `[0xc4dda8]`: announced and not closed.
+    fn counted(&self) -> bool {
+        self.phase == Phase::Open && !self.closed
+    }
+
+    /// The roll as `GetLootRollItemInfo`, `GetLootRollItemLink` and `GetLootRollTimeLeft` read it
+    /// at the call (`0x4c3050`, `0x4c31f0`, `0x4c32d0`): the item looked up with no callback
+    /// (`0x4c30d2`), its fields `None` or `false` until the template answers, and the expiry less
+    /// the clock (`0x4c331c`).
+    fn entry(
+        &self,
+        items: &Items,
+        icons: Option<&ItemDisplays>,
+        catalogs: RollCatalogs,
+        now: Duration,
+    ) -> LootRollEntry {
+        let t = items.template(self.item_id, 0, Ask::Read);
+        let texture = t
+            .and_then(|t| icons?.catalog.get(t.display_info_id))
+            .and_then(|d| d.icon.clone());
+        let expires = self.arrived + Duration::from_millis(u64::from(self.countdown_ms));
+        LootRollEntry {
+            roll_id: self.roll_id,
+            name: t.map(|t| catalogs.name(&t.name, self.random_property_id)),
+            texture,
+            quality: t.map(|t| t.quality),
+            bind_on_pickup: t.is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP),
+            time_left_ms: expires.saturating_sub(now).as_millis() as u32,
+            item_id: self.item_id,
+            random_property_id: self.random_property_id,
+            // `GetLootRollItemLink`, the chat lines' link; `None` until the template answers.
+            link: t.map(|t| {
+                crate::ui_items::item_link_full(
+                    self.item_id,
+                    0,
+                    self.random_property_id,
+                    0,
+                    &catalogs.name(&t.name, self.random_property_id),
+                    t.quality,
+                )
+            }),
+            closed: self.closed,
+        }
+    }
 }
 
-/// Which announcement a [`PendingLine`] renders.
+/// Which announcement a line renders.
+#[derive(Clone, Copy, Debug)]
 enum RollLine {
     Announce(LootRoll),
     Won(LootRollWon),
     AllPassed(LootAllPassed),
 }
 
-/// Every group loot roll open on our screen; cleared on disconnect.
+impl RollLine {
+    /// The line's item: every line embeds its link, so its record comes first.
+    fn item_id(&self) -> u32 {
+        match self {
+            Self::Announce(p) => p.item_id,
+            Self::Won(p) => p.item_id,
+            Self::AllPassed(p) => p.item_id,
+        }
+    }
+
+    /// The roller or the winner, whose name a line asks after its record.
+    fn who(&self) -> Option<u64> {
+        match self {
+            Self::Announce(p) => Some(p.roller),
+            Self::Won(p) => Some(p.winner),
+            Self::AllPassed(_) => None,
+        }
+    }
+
+    /// The roll a result closes once its line is shown.
+    fn closes(&self) -> Option<(u64, u32)> {
+        match self {
+            Self::Announce(_) => None,
+            Self::Won(p) => Some((p.looted_target, p.item_slot)),
+            Self::AllPassed(p) => Some((p.looted_target, p.item_slot)),
+        }
+    }
+}
+
+/// What a line's lookup waits on: the item record's callback under its serial, or the name's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineWait {
+    Item(u32),
+    Name(u64),
+}
+
+/// One announcement whose record or name is in flight.
+struct PendingLine {
+    line: RollLine,
+    wait: LineWait,
+}
+
+/// A line composed where its last lookup landed, its text read from the strings as it fires.
+#[derive(Clone, Debug)]
+pub(crate) struct ReadyLine {
+    line: RollLine,
+    name: Option<String>,
+    is_self: bool,
+    item: RollItem,
+    /// `showLootSpam` as the composer read it (`0x61ba3a`, `0x61bafe`).
+    detailed: bool,
+}
+
+/// What a lane item signals.
+#[derive(Clone, Debug)]
+pub(crate) enum RollEvent {
+    /// `START_LOOT_ROLL(rollID, countdown)` (`0x61b452`, `0x61b7ac`).
+    Start { roll_id: u32, countdown_ms: u32 },
+    /// `CANCEL_LOOT_ROLL(rollID)` (`0x61b2c7`, `0x61b6f3`, `0x61bc12`).
+    Cancel(u32),
+    /// A roll line, added to chat as type 24 (`0x61c38c`, `0x61bbf8`, `0x61b6d9`).
+    Line(ReadyLine),
+}
+
+/// Every group loot roll the engine lists, the lines whose lookups are in flight, and the rolls'
+/// lane; cleared on disconnect.
 #[derive(Resource, Default)]
 pub(crate) struct LootRolls {
+    /// Oldest first, as the list walks (`0x61b2a0`, `0x61b780`).
     active: Vec<ActiveRoll>,
     /// Never reused within a session, so a late packet for a closed roll cannot hit a fresh one.
     next_id: u32,
+    /// The serial of the next item-record wait ([`RecordCallback::LootRoll`]).
+    next_wait: u32,
     pending: Vec<PendingLine>,
-    /// Closed rolls, one `CANCEL_LOOT_ROLL` each.
-    cancelled: Vec<u32>,
+    /// The lane: each signal stamped where it was raised.
+    events: VecDeque<(Stamp, RollEvent)>,
+}
+
+/// What a roll's or a line's lookups read and ask through.
+pub(crate) struct RollLookups<'a> {
+    pub(crate) items: &'a Items,
+    pub(crate) names: &'a NameCache,
+    pub(crate) net: &'a NetCommands,
+    pub(crate) self_guid: Option<u64>,
+    pub(crate) catalogs: RollCatalogs<'a>,
+    /// `showLootSpam` (`0xb4e2bc`), read as each line is composed (`0x61c0b9`, `0x61ba3a`,
+    /// `0x61bafe`).
+    pub(crate) detailed: bool,
 }
 
 impl LootRolls {
-    /// `SMSG_LOOT_START_ROLL`: list the roll under a fresh id. A duplicate `(looted_target,
-    /// item_slot)` is ignored, as vmangos can re-send every active roll on reconnect
-    /// (`Group::SendLootStartRollsForPlayer`, under `SendLootRollUponReconnect`).
-    pub(crate) fn start(&mut self, p: LootStartRoll) {
+    /// Queue `event` stamped now, behind everything stamped before it.
+    fn push(&mut self, event: RollEvent) {
+        let stamp = crate::lanes::stamp();
+        let at = self.events.partition_point(|(s, _)| *s < stamp);
+        self.events.insert(at, (stamp, event));
+    }
+
+    fn head(&self) -> Option<Stamp> {
+        self.events.front().map(|(s, _)| *s)
+    }
+
+    fn wait_serial(&mut self) -> u32 {
+        self.next_wait = self.next_wait.wrapping_add(1);
+        self.next_wait
+    }
+
+    /// `SMSG_LOOT_START_ROLL` (`0x61b310`): list the roll under a fresh id, then look its item up
+    /// with the callback `0x61b460` (`0x61b40e`), a hit opening it at once (`0x61b41c`). A duplicate
+    /// `(looted_target, item_slot)` is ignored, as vmangos can re-send every active roll on
+    /// reconnect (`Group::SendLootStartRollsForPlayer`, under `SendLootRollUponReconnect`).
+    pub(crate) fn start(&mut self, p: LootStartRoll, now: Duration, look: &RollLookups) {
         if self
             .active
             .iter()
@@ -133,42 +278,53 @@ impl LootRolls {
             return;
         }
         self.next_id += 1;
-        let roll_id = self.next_id;
+        let wait = self.wait_serial();
         self.active.push(ActiveRoll {
-            roll_id,
+            roll_id: self.next_id,
             looted_target: p.looted_target,
             item_slot: p.item_slot,
             item_id: p.item_id,
             random_property_id: p.random_property_id,
             countdown_ms: p.countdown_ms,
-            remaining_ms: p.countdown_ms,
-            held_ms: 0,
-            phase: Phase::Waiting,
-            asked: false,
+            arrived: now,
+            phase: Phase::Waiting(wait),
+            closed: false,
         });
-    }
-
-    /// Rolls counted open (`[0xc4dda8]`): announced, or about to be, and not closed.
-    fn open_count(&self) -> usize {
-        self.active
-            .iter()
-            .filter(|r| matches!(r.phase, Phase::Starting | Phase::Open))
-            .count()
-    }
-
-    /// `0x61b430` on every waiting roll `ready` accepts, oldest first: a free slot opens it, else
-    /// it is deferred. `ready` is the template's arrival, which runs it (`0x61b460`).
-    fn reach_ready(&mut self, mut ready: impl FnMut(&ActiveRoll) -> bool) {
-        for i in 0..self.active.len() {
-            if self.active[i].phase != Phase::Waiting || !ready(&self.active[i]) {
-                continue;
-            }
-            self.active[i].phase = if self.open_count() < MAX_OPEN {
-                Phase::Starting
-            } else {
-                Phase::Deferred
-            };
+        if look
+            .items
+            .template(p.item_id, 0, Ask::Event(look.net))
+            .is_some()
+        {
+            self.reach(self.active.len() - 1);
+        } else {
+            look.items.wait(p.item_id, RecordCallback::LootRoll(wait));
         }
+    }
+
+    /// Rolls counted open (`[0xc4dda8]`).
+    fn open_count(&self) -> usize {
+        self.active.iter().filter(|r| r.counted()).count()
+    }
+
+    /// `0x61b430` on roll `i`: a free slot opens it with its `START_LOOT_ROLL`, else it is
+    /// deferred (`0x61b45b`).
+    fn reach(&mut self, i: usize) {
+        if self.open_count() < MAX_OPEN {
+            self.open(i);
+        } else {
+            self.active[i].phase = Phase::Deferred;
+        }
+    }
+
+    fn open(&mut self, i: usize) {
+        let r = &mut self.active[i];
+        r.phase = Phase::Open;
+        let (roll_id, countdown_ms) = (r.roll_id, r.countdown_ms);
+        debug!("ui_loot_roll: roll {roll_id} opened ({countdown_ms} ms)");
+        self.push(RollEvent::Start {
+            roll_id,
+            countdown_ms,
+        });
     }
 
     /// `0x61b760`: while a slot is free, open the oldest deferred roll. Run after every close.
@@ -178,83 +334,237 @@ impl LootRolls {
                 return;
             }
             if self.active[i].phase == Phase::Deferred {
-                self.active[i].phase = Phase::Starting;
+                self.open(i);
             }
         }
     }
 
-    /// `SMSG_LOOT_ROLL`: queue the chat line.
-    pub(crate) fn announce(&mut self, p: LootRoll) {
-        self.pending.push(PendingLine {
-            line: RollLine::Announce(p),
-            tries: 0,
-        });
+    /// The module doc's deviation: every roll still waiting on its template past the hold opens
+    /// unresolved.
+    fn expire_holds(&mut self, now: Duration) {
+        for i in 0..self.active.len() {
+            let r = &self.active[i];
+            if matches!(r.phase, Phase::Waiting(_))
+                && now.saturating_sub(r.arrived) >= Duration::from_millis(TEMPLATE_HOLD_MAX_MS)
+            {
+                debug!(
+                    "ui_loot_roll: roll {} opening unresolved (template hold expired)",
+                    r.roll_id
+                );
+                self.reach(i);
+            }
+        }
     }
 
-    /// `SMSG_LOOT_ROLL_WON`: queue the line and close the frame.
-    pub(crate) fn won(&mut self, p: LootRollWon) {
-        self.pending.push(PendingLine {
-            line: RollLine::Won(p),
-            tries: 0,
-        });
-        self.close(p.looted_target, p.item_slot);
+    /// `SMSG_LOOT_ROLL` (`0x61bfa0`): the line, its record and the roller's name looked up first.
+    pub(crate) fn announce(&mut self, p: LootRoll, look: &RollLookups) {
+        self.look_up(RollLine::Announce(p), look);
     }
 
-    /// `SMSG_LOOT_ALL_PASSED`: queue the line and close the frame; the item stays lootable.
-    pub(crate) fn all_passed(&mut self, p: LootAllPassed) {
-        self.pending.push(PendingLine {
-            line: RollLine::AllPassed(p),
-            tries: 0,
-        });
-        self.close(p.looted_target, p.item_slot);
+    /// `SMSG_LOOT_ROLL_WON` (`0x61b870`): the line, then the roll's close.
+    pub(crate) fn won(&mut self, p: LootRollWon, look: &RollLookups) {
+        self.look_up(RollLine::Won(p), look);
     }
 
-    /// Drop the roll if we still hold it and queue its `CANCEL_LOOT_ROLL`, announced or not: the
-    /// reference's `0x61b9e0` and `0x61b640` check only the node's closed byte `+0x3a`.
-    fn close(&mut self, looted_target: u64, item_slot: u32) {
+    /// `SMSG_LOOT_ALL_PASSED` (`0x61b500`): the line, then the roll's close; the item stays
+    /// lootable.
+    pub(crate) fn all_passed(&mut self, p: LootAllPassed, look: &RollLookups) {
+        self.look_up(RollLine::AllPassed(p), look);
+    }
+
+    /// A line's record lookup with its callback (`0x61c047`, `0x61b96a`, `0x61b5c0`): a hit goes
+    /// on to the name, a miss waits for the answer.
+    fn look_up(&mut self, line: RollLine, look: &RollLookups) {
+        let entry = line.item_id();
+        if look
+            .items
+            .template(entry, 0, Ask::Event(look.net))
+            .is_some()
+        {
+            self.name_stage(line, look);
+        } else {
+            let wait = self.wait_serial();
+            look.items.wait(entry, RecordCallback::LootRoll(wait));
+            self.pending.push(PendingLine {
+                line,
+                wait: LineWait::Item(wait),
+            });
+        }
+    }
+
+    /// The name lookup with its callback (`0x61c08e`, `0x61b9bf`): every third-person line needs a
+    /// name, and so does our own dice line (no self form); all-passed none.
+    fn name_stage(&mut self, line: RollLine, look: &RollLookups) {
+        let is_self = line.who().is_some() && line.who() == look.self_guid;
+        let needs_name = match &line {
+            RollLine::Announce(p) => is_dice(p) || !is_self,
+            RollLine::Won(_) => !is_self,
+            RollLine::AllPassed(_) => false,
+        };
+        match line.who() {
+            Some(guid) if needs_name => {
+                match look.names.resolve_player(guid, Ask::Event(look.net)) {
+                    Some(name) => {
+                        let name = name.to_string();
+                        self.show(line, Some(name), look);
+                    }
+                    None => self.pending.push(PendingLine {
+                        line,
+                        wait: LineWait::Name(guid),
+                    }),
+                }
+            }
+            _ => self.show(line, None, look),
+        }
+    }
+
+    /// The line's composer (`0x61c0b0`, `0x61b9e0`, `0x61b640`): its line onto the lane, then a
+    /// result's close. With `showLootSpam` at 0 a vote or dice line is dropped (`0x61c0b9`).
+    fn show(&mut self, line: RollLine, name: Option<String>, look: &RollLookups) {
+        let Some(t) = look.items.template(line.item_id(), 0, Ask::Read) else {
+            return self.refuse(line);
+        };
+        let (random_property_id, suffix_factor) = match &line {
+            RollLine::Announce(p) => (p.random_property_id, p.suffix_factor),
+            RollLine::Won(p) => (p.random_property_id, p.suffix_factor),
+            RollLine::AllPassed(p) => (p.random_property_id, p.suffix_factor),
+        };
+        // The link names the rolled drop, suffix included, as the roll frame does.
+        let item = RollItem {
+            quality: t.quality,
+            item_id: line.item_id(),
+            random_property_id,
+            suffix_factor,
+            name: look.catalogs.name(&t.name, random_property_id),
+        };
+        if look.detailed || !matches!(line, RollLine::Announce(_)) {
+            self.push(RollEvent::Line(ReadyLine {
+                line,
+                name,
+                is_self: line.who().is_some() && line.who() == look.self_guid,
+                item,
+                detailed: look.detailed,
+            }));
+        }
+        if let Some((guid, slot)) = line.closes() {
+            self.close(guid, slot);
+        }
+    }
+
+    /// A refused record or name: a vote or dice line is dropped, and a result closes its roll
+    /// unspoken (the module doc's deviation).
+    fn refuse(&mut self, line: RollLine) {
+        if let Some((guid, slot)) = line.closes() {
+            self.close(guid, slot);
+        }
+    }
+
+    /// An item record's answer for the wait `wait`, found or refused: a waiting roll reaches
+    /// `0x61b430` (`0x61b4ee`; a refusal too, the module doc's deviation), a line goes on to its
+    /// name (`0x61c4b0` → `0x61c070`, `0x61bd50` → `0x61b9a0`) or is shown (`0x61b7d0` →
+    /// `0x61b640`).
+    pub(crate) fn item_answered(&mut self, wait: u32, found: bool, look: &RollLookups) {
         if let Some(i) = self
             .active
             .iter()
-            .position(|r| r.looted_target == looted_target && r.item_slot == item_slot)
+            .position(|r| r.phase == Phase::Waiting(wait))
         {
-            let r = self.active.remove(i);
-            self.cancelled.push(r.roll_id);
+            if !found {
+                debug!(
+                    "ui_loot_roll: roll {} opening unresolved (the server does not know the entry)",
+                    self.active[i].roll_id
+                );
+            }
+            return self.reach(i);
+        }
+        let Some(i) = self
+            .pending
+            .iter()
+            .position(|p| p.wait == LineWait::Item(wait))
+        else {
+            return;
+        };
+        let line = self.pending.remove(i).line;
+        if found {
+            self.name_stage(line, look);
+        } else {
+            self.refuse(line);
+        }
+    }
+
+    /// The player-name answer for `guid`, an empty name a refusal: the lines waiting on it, in the
+    /// order they asked, shown (`0x61c3e0`, `0x61bc80`).
+    pub(crate) fn name_answered(&mut self, guid: u64, name: &str, look: &RollLookups) {
+        while let Some(i) = self
+            .pending
+            .iter()
+            .position(|p| p.wait == LineWait::Name(guid))
+        {
+            let line = self.pending.remove(i).line;
+            if name.is_empty() {
+                self.refuse(line);
+            } else {
+                self.show(line, Some(name.to_string()), look);
+            }
+        }
+    }
+
+    /// The result's close (`0x61b6de`-`0x61b74c`, `0x61bbfd`-`0x61bc6b`): a listed roll not yet
+    /// closed signals its `CANCEL_LOOT_ROLL`, announced or not, as the closed byte `+0x3a` alone
+    /// gates it; the roll is freed, and the oldest deferred roll promoted.
+    fn close(&mut self, looted_target: u64, item_slot: u32) {
+        let Some(i) = self
+            .active
+            .iter()
+            .position(|r| r.looted_target == looted_target && r.item_slot == item_slot)
+        else {
+            return;
+        };
+        let r = self.active.remove(i);
+        if !r.closed {
+            debug!("ui_loot_roll: roll {} cancelled", r.roll_id);
+            self.push(RollEvent::Cancel(r.roll_id));
+        }
+        self.promote();
+    }
+
+    /// Whether roll `roll_id` is listed and not closed.
+    #[cfg(test)]
+    pub(crate) fn holds(&self, roll_id: u32) -> bool {
+        self.active
+            .iter()
+            .any(|r| r.roll_id == roll_id && !r.closed)
+    }
+
+    /// The listed, unclosed roll `roll_id`'s wire identity, the vote's send (`0x61bede`-
+    /// `0x61bef1`); `None` for a stale click (`0x61be3f`).
+    fn vote(&self, roll_id: u32) -> Option<(u64, u32)> {
+        self.active
+            .iter()
+            .find(|r| r.roll_id == roll_id && !r.closed)
+            .map(|r| (r.looted_target, r.item_slot))
+    }
+
+    /// The vote's tail after its `CANCEL_LOOT_ROLL`: the closed byte (`0x61bf32`), and the oldest
+    /// deferred roll promoted (`0x61bf46`); the roll stays listed.
+    fn close_voted(&mut self, roll_id: u32) {
+        if let Some(r) = self
+            .active
+            .iter_mut()
+            .find(|r| r.roll_id == roll_id && !r.closed)
+        {
+            r.closed = true;
             self.promote();
         }
     }
 
-    /// Whether roll `roll_id` is still listed.
-    #[cfg(test)]
-    pub(crate) fn holds(&self, roll_id: u32) -> bool {
-        self.active.iter().any(|r| r.roll_id == roll_id)
-    }
-
-    /// Our own vote: drop the roll and return its wire identity; `None` for a stale click. The
-    /// vote's `CANCEL_LOOT_ROLL` fired in the verb, so none is queued here.
-    fn vote(&mut self, roll_id: u32) -> Option<(u64, u32)> {
-        let i = self.active.iter().position(|r| r.roll_id == roll_id)?;
-        let r = self.active.remove(i);
-        self.promote();
-        Some((r.looted_target, r.item_slot))
-    }
-
-    /// Tick every open roll's bar down, and the template hold of every waiting roll up.
-    fn tick(&mut self, delta_ms: u32) {
-        for r in &mut self.active {
-            r.remaining_ms = r.remaining_ms.saturating_sub(delta_ms);
-            if r.phase == Phase::Waiting {
-                r.held_ms = r.held_ms.saturating_add(delta_ms);
-            }
-        }
-    }
-
     /// `CancelAllLootRolls` (`0x61b290`), then `FreeAllLootRolls` (`0x61b240`): every roll neither
-    /// deferred (the node's queued byte `+0x39`) nor closed queues its `CANCEL_LOOT_ROLL`, oldest
+    /// deferred (the node's queued byte `+0x39`) nor closed signals its `CANCEL_LOOT_ROLL`, oldest
     /// first, announced or not; then every roll is gone and the open count is zero.
     pub(crate) fn cancel_all(&mut self) {
-        for r in self.active.drain(..) {
-            if r.phase != Phase::Deferred {
-                self.cancelled.push(r.roll_id);
+        for r in std::mem::take(&mut self.active) {
+            if r.phase != Phase::Deferred && !r.closed {
+                self.push(RollEvent::Cancel(r.roll_id));
             }
         }
     }
@@ -263,17 +573,16 @@ impl LootRolls {
     pub(crate) fn clear(&mut self) {
         self.active.clear();
         self.pending.clear();
-        self.cancelled.clear();
+        self.events.clear();
     }
 }
 
 /// The group rolls' packet handlers.
 mod net {
-    use benilla_protocol::messages::{LootAllPassed, LootRoll, LootRollWon, LootStartRoll};
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
-    use super::LootRolls;
+    use super::{LootRolls, RollReads};
     use crate::net::NetHandlerApp;
 
     /// Register the roll handlers, called from [`super::UiLootRollPlugin`].
@@ -283,6 +592,7 @@ mod net {
             .net_handler(K::LootRoll, on_packet)
             .net_handler(K::LootRollWon, on_packet)
             .net_handler(K::LootAllPassed, on_packet)
+            .net_handler(K::PlayerName, on_player_name)
             .net_handler(K::Disconnected, on_session_end);
     }
 
@@ -290,60 +600,119 @@ mod net {
         In(ev): In<SessionEvent>,
         mut rolls: ResMut<LootRolls>,
         loot: Option<ResMut<crate::ui_loot::LootState>>,
+        reads: RollReads,
     ) {
+        let look = reads.lookups();
         match ev {
-            SessionEvent::LootStartRoll(p) => loot_start_roll(p, &mut rolls),
-            SessionEvent::LootRoll(p) => loot_roll(p, &mut rolls),
+            SessionEvent::LootStartRoll(p) => {
+                debug!(
+                    "net: loot roll opened on item {} ({:#x} slot {}), {} ms",
+                    p.item_id, p.looted_target, p.item_slot, p.countdown_ms
+                );
+                rolls.start(p, reads.time.elapsed(), &look);
+            }
+            SessionEvent::LootRoll(p) => {
+                debug!(
+                    "net: loot roll announce — roller {:#x} number {} type {}",
+                    p.roller, p.roll_number, p.roll_type
+                );
+                rolls.announce(p, &look);
+            }
             SessionEvent::LootRollWon(p) => {
+                debug!(
+                    "net: loot roll won by {:#x} with {} (type {})",
+                    p.winner, p.roll_number, p.roll_type
+                );
+                rolls.won(p, &look);
                 resolved(loot, p.looted_target, p.item_slot);
-                loot_roll_won(p, &mut rolls);
             }
             SessionEvent::LootAllPassed(p) => {
+                debug!("net: loot roll — everyone passed on item {}", p.item_id);
+                rolls.all_passed(p, &look);
                 resolved(loot, p.looted_target, p.item_slot);
-                loot_all_passed(p, &mut rolls);
             }
             _ => {}
         }
     }
 
-    /// The window's row stops waiting on the roll (`ClearLootRollState 0x5ebcf0`).
+    /// The window's row stops waiting on the roll (`ClearLootRollState 0x5ebcf0`), after the
+    /// result's line when its record was in (`0x61b987`, `0x61b5dd`).
     fn resolved(loot: Option<ResMut<crate::ui_loot::LootState>>, guid: u64, slot: u32) {
         if let (Some(mut loot), Ok(slot)) = (loot, u8::try_from(slot)) {
             loot.roll_resolved(guid, slot);
         }
     }
 
+    /// The name answer runs the line lookups' callbacks waiting on the guid (`0x61c3e0`,
+    /// `0x61bc80`); an empty name is the answer for an unknown guid.
+    fn on_player_name(In(ev): In<SessionEvent>, mut rolls: ResMut<LootRolls>, reads: RollReads) {
+        if let SessionEvent::PlayerName { guid, name, .. } = ev {
+            rolls.name_answered(guid, &name, &reads.lookups());
+        }
+    }
+
     fn on_session_end(In(_): In<SessionEvent>, mut rolls: ResMut<LootRolls>) {
         rolls.clear();
     }
+}
 
-    fn loot_start_roll(p: LootStartRoll, rolls: &mut LootRolls) {
-        debug!(
-            "net: loot roll opened on item {} ({:#x} slot {}), {} ms",
-            p.item_id, p.looted_target, p.item_slot, p.countdown_ms
-        );
-        rolls.start(p);
+/// What the roll handlers look up through, and the clock a start reads.
+#[derive(SystemParam)]
+pub(crate) struct RollReads<'w> {
+    items: Res<'w, Items>,
+    names: Res<'w, NameCache>,
+    net: Res<'w, NetCommands>,
+    self_guid: Res<'w, crate::net::SelfGuid>,
+    config: Option<Res<'w, crate::ui_loot::LootConfig>>,
+    catalogs: crate::items::Rolls<'w>,
+    time: Res<'w, Time>,
+}
+
+impl RollReads<'_> {
+    fn lookups(&self) -> RollLookups<'_> {
+        RollLookups {
+            items: &self.items,
+            names: &self.names,
+            net: &self.net,
+            self_guid: self.self_guid.0,
+            catalogs: self.catalogs.get(),
+            detailed: self.config.as_ref().is_none_or(|c| c.show_loot_spam),
+        }
     }
+}
 
-    fn loot_roll(p: LootRoll, rolls: &mut LootRolls) {
-        debug!(
-            "net: loot roll announce — roller {:#x} number {} type {}",
-            p.roller, p.roll_number, p.roll_type
-        );
-        rolls.announce(p);
-    }
+/// The rolls' half of the item answer's callbacks ([`crate::net::objects`]): the answer's handler
+/// holds the records, the names and the socket.
+#[derive(SystemParam)]
+pub(crate) struct RollRecordAnswers<'w> {
+    rolls: Option<ResMut<'w, LootRolls>>,
+    config: Option<Res<'w, crate::ui_loot::LootConfig>>,
+    catalogs: crate::items::Rolls<'w>,
+}
 
-    fn loot_roll_won(p: LootRollWon, rolls: &mut LootRolls) {
-        debug!(
-            "net: loot roll won by {:#x} with {} (type {})",
-            p.winner, p.roll_number, p.roll_type
-        );
-        rolls.won(p);
-    }
-
-    fn loot_all_passed(p: LootAllPassed, rolls: &mut LootRolls) {
-        debug!("net: loot roll — everyone passed on item {}", p.item_id);
-        rolls.all_passed(p);
+impl RollRecordAnswers<'_> {
+    /// [`LootRolls::item_answered`].
+    pub(crate) fn item_answered(
+        &mut self,
+        wait: u32,
+        found: bool,
+        items: &Items,
+        names: &NameCache,
+        net: &NetCommands,
+        self_guid: Option<u64>,
+    ) {
+        let Some(rolls) = self.rolls.as_mut() else {
+            return;
+        };
+        let look = RollLookups {
+            items,
+            names,
+            net,
+            self_guid,
+            catalogs: self.catalogs.get(),
+            detailed: self.config.as_ref().is_none_or(|c| c.show_loot_spam),
+        };
+        rolls.item_answered(wait, found, &look);
     }
 }
 
@@ -353,23 +722,46 @@ impl Plugin for UiLootRollPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.init_resource::<LootRolls>()
+            .add_lane(
+                "loot rolls",
+                |world| world.get_resource::<LootRolls>()?.head(),
+                lane::fire_rolls,
+                None,
+            )
             .add_systems(
                 Update,
-                // The feed after the packets shows a new roll the same frame, before the tick.
-                feed_loot_rolls.in_set(UiFeed),
+                lane::drop_roll_events
+                    .in_set(crate::ui_script::UiFeed)
+                    .run_if(not(crate::ui_script::ingame_ui_up)),
             )
             .add_systems(
                 PreUpdate,
-                // The world load's call at `0x401c2c`; the feed fires the cancels.
-                cancel_rolls_on_worldport
-                    .in_set(crate::net::WorldportTimer::Rolls)
-                    .run_if(crate::net::world_ported),
+                (
+                    // The world load's call at `0x401c2c`; the lane fires the cancels.
+                    cancel_rolls_on_worldport
+                        .in_set(crate::net::WorldportTimer::Rolls)
+                        .run_if(crate::net::world_ported),
+                    // Ahead of the frame's packets: a deadline is no packet's.
+                    expire_roll_holds,
+                ),
             );
     }
 }
 
-/// The world load's `CancelAllLootRolls` (`0x401c2c`): the rolls queue their cancels and go; the
-/// feed fires them this frame, after the leg's earlier effects, as its other events fire.
+/// The module doc's deviation: a template the server has not answered within the hold opens its
+/// roll on the wall clock, at the frame's start, ahead of its packets: a deadline is no packet's.
+fn expire_roll_holds(mut rolls: ResMut<LootRolls>, time: Res<Time>) {
+    if rolls
+        .active
+        .iter()
+        .any(|r| matches!(r.phase, Phase::Waiting(_)))
+    {
+        rolls.expire_holds(time.elapsed());
+    }
+}
+
+/// The world load's `CancelAllLootRolls` (`0x401c2c`): the rolls signal their cancels and go, at
+/// the leg's place after its earlier effects.
 fn cancel_rolls_on_worldport(mut rolls: ResMut<LootRolls>) {
     rolls.cancel_all();
 }
@@ -479,6 +871,7 @@ fn is_dice(p: &LootRoll) -> bool {
 /// escape (`0x52ad90`, at `0x61c116`), the item id, 0, the roll's two property words (`+0x20`,
 /// then `+0x24`, `0x61c16e`-`0x61c171`), the item's
 /// name with its suffix (`0x5d8b00`, at `0x61c13f`) and the `|r` reset (`0x844538`).
+#[derive(Clone, Debug)]
 struct RollItem {
     quality: u32,
     item_id: u32,
@@ -487,253 +880,144 @@ struct RollItem {
     name: String,
 }
 
-/// Render one queued announcement: `Some(None)` for no line, `None` while a name it needs is in
-/// flight.
-fn render(
-    line: &RollLine,
-    self_guid: Option<u64>,
-    items: &Items,
-    names: &NameCache,
-    ask: Ask<'_>,
-    rolls: crate::items::RollCatalogs,
-    detailed: bool,
-    get: &dyn Fn(&str) -> Option<String>,
-) -> Option<Option<String>> {
-    // Every line embeds the item link, so the template comes first.
-    let (looted_item, roll, suffix_factor, roller) = match line {
-        RollLine::Announce(p) => (
-            p.item_id,
-            p.random_property_id,
-            p.suffix_factor,
-            Some(p.roller),
-        ),
-        RollLine::Won(p) => (
-            p.item_id,
-            p.random_property_id,
-            p.suffix_factor,
-            Some(p.winner),
-        ),
-        RollLine::AllPassed(p) => (p.item_id, p.random_property_id, p.suffix_factor, None),
-    };
-    let t = items.template(looted_item, 0, ask)?;
-    // The link names the rolled drop, suffix included, as the roll frame does.
-    let item = RollItem {
-        quality: t.quality,
-        item_id: looted_item,
-        random_property_id: roll,
-        suffix_factor,
-        name: rolls.name(&t.name.clone(), roll),
-    };
+/// The rolls' lane: what the roll handlers, the item and name answers' callbacks, the world
+/// load and the vote's tail signal, each fired at its place among the other lanes' items
+/// ([`crate::lanes`]). In the reference each signals inside itself (`0x61b430`, `0x61b760`,
+/// `0x61b290`, the line composers' chat adds); the getters its listeners call read the list
+/// through the host ([`super::live`]).
+mod lane {
+    use bevy::prelude::*;
 
-    let is_self = roller.is_some() && roller == self_guid;
+    use super::{format_line, LootRolls, ReadyLine, RollEvent};
+    use crate::lanes::Until;
+    use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
+    use benilla_ui::script::{ScriptValue, UiScript};
 
-    // Every third-person line needs a name, and so does our own dice line (no self form).
-    let needs_name = match line {
-        RollLine::Announce(p) => is_dice(p) || !is_self,
-        RollLine::Won(_) => !is_self,
-        RollLine::AllPassed(_) => false,
-    };
-    let name = match roller {
-        Some(g) if needs_name => Some(names.resolve_player(g, ask)?.to_string()),
-        _ => None,
-    };
-
-    Some(format_line(
-        line,
-        name.as_deref(),
-        is_self,
-        &item,
-        detailed,
-        get,
-    ))
-}
-
-/// Post the queued announcements as `CHAT_MSG_LOOT` lines, as the reference does.
-fn drain_lines(
-    rolls: &mut LootRolls,
-    self_guid: Option<u64>,
-    items: &Items,
-    names: &NameCache,
-    commands: &NetCommands,
-    chat: &ChatLog,
-    catalogs: crate::items::RollCatalogs,
-    detailed: bool,
-    get: &dyn Fn(&str) -> Option<String>,
-) {
-    let pending = std::mem::take(&mut rolls.pending);
-    let mut still = Vec::new();
-    for mut p in pending {
-        // Detail off drops vote and dice lines here, never through `render`'s retrying `None`.
-        if !detailed && matches!(p.line, RollLine::Announce(_)) {
-            continue;
+    /// The lane's firing: each item the drain admits, signalled with the host lent. It stops after
+    /// an item whose firing stamped anything, so what that pushed fires next.
+    pub(super) fn fire_rolls(
+        In(until): In<Until>,
+        mut vm: crate::script_calls::VmWith<ResMut<'static, LootRolls>>,
+        chat: Res<ChatLog>,
+    ) {
+        if !vm.run(|script| script.is_some()) {
+            return;
         }
-        // The packet's lookups pass callbacks (`0x61c047`, `0x61c08e`, `0x61b96a`, `0x61b5c0`):
-        // a line's first render asks as they do, and its retries ask only what the cache holds
-        // nothing for. So the roller's name, if still unasked, goes at the first render after the
-        // item lands, where the item's answer asks it (`0x61c4b0` → `0x61c53e` → `0x61c070`,
-        // `0x61c08e`).
-        let ask = Ask::at(p.tries == 0, commands);
-        match render(
-            &p.line, self_guid, items, names, ask, catalogs, detailed, get,
-        ) {
-            Some(Some(text)) => chat.push_event(ChatEvent::text_only(ChatEventKind::Loot, text)),
-            Some(None) => {}
-            None => {
-                p.tries += 1;
-                if p.tries < LINE_MAX_TRIES {
-                    still.push(p);
+        while let Some(at) = vm.own().head().filter(|&s| until.admits(s)) {
+            let Some((_, event)) = vm.own().events.pop_front() else {
+                return;
+            };
+            let ((), moved) = crate::lanes::firing(at, || {
+                vm.run(|script| {
+                    if let Some(script) = script {
+                        fire(script, &chat, event);
+                    }
+                })
+            });
+            if moved {
+                return;
+            }
+        }
+    }
+
+    fn fire(script: &mut UiScript, chat: &ChatLog, event: RollEvent) {
+        match event {
+            RollEvent::Start {
+                roll_id,
+                countdown_ms,
+            } => script.fire_event(
+                "START_LOOT_ROLL",
+                vec![
+                    ScriptValue::Int(i64::from(roll_id)),
+                    ScriptValue::Int(i64::from(countdown_ms)),
+                ],
+            ),
+            RollEvent::Cancel(roll_id) => script.fire_event(
+                "CANCEL_LOOT_ROLL",
+                vec![ScriptValue::Int(i64::from(roll_id))],
+            ),
+            // Added to chat inside the composer, as `0x49a870` shows it.
+            RollEvent::Line(line) => {
+                if let Some(text) = text(script, &line) {
+                    chat.show_now(script, &ChatEvent::text_only(ChatEventKind::Loot, text));
                 }
             }
         }
     }
-    rolls.pending = still;
-}
 
-/// The Lua-facing snapshot; its template fields are `None` or `false` until the template answers.
-fn snapshot(
-    rolls: &LootRolls,
-    items: &Items,
-    icons: Option<&ItemDisplays>,
-    catalogs: crate::items::RollCatalogs,
-) -> LootRollsState {
-    let entries = rolls
-        .active
-        .iter()
-        .map(|r| {
-            let t = items.template(r.item_id, 0, Ask::Read);
-            let texture = t
-                .and_then(|t| icons?.catalog.get(t.display_info_id))
-                .and_then(|d| d.icon.clone());
-            LootRollEntry {
-                roll_id: r.roll_id,
-                name: t.map(|t| catalogs.name(&t.name, r.random_property_id)),
-                texture,
-                quality: t.map(|t| t.quality),
-                bind_on_pickup: t.is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP),
-                time_left_ms: r.remaining_ms,
-                item_id: r.item_id,
-                random_property_id: r.random_property_id,
-                // `GetLootRollItemLink`, the chat lines' link; `None` until the template answers.
-                link: t.map(|t| {
-                    crate::ui_items::item_link_full(
-                        r.item_id,
-                        0,
-                        r.random_property_id,
-                        0,
-                        &catalogs.name(&t.name, r.random_property_id),
-                        t.quality,
-                    )
-                }),
-            }
-        })
-        .collect();
-    LootRollsState { rolls: entries }
-}
-
-/// Tick the open rolls, push them into the VM, fire their events and post their chat lines.
-fn feed_loot_rolls(
-    // The rolls, which a vote's call closes: the events their handlers vote from go out once the
-    // pushes are in.
-    mut vm: crate::script_calls::VmWith<ResMut<'static, LootRolls>>,
-    items: Res<Items>,
-    names: Res<NameCache>,
-    icons: Option<Res<ItemDisplays>>,
-    commands: Res<NetCommands>,
-    self_guid: Res<SelfGuid>,
-    chat: Res<ChatLog>,
-    time: Res<Time>,
-    mut last: Local<crate::ui_script::VmMemo<LootRollsState>>,
-    props: Option<Res<crate::items::RandomProperties>>,
-    enchants: Option<Res<crate::items::Enchants>>,
-    // `showLootSpam`, read as each line is composed, as the reference's composers read it
-    // (`0x61ba3a`, `0x61bafe`, `0x61c0b9`).
-    loot: Res<crate::ui_loot::LootConfig>,
-) {
-    vm.feed(|script, mut rolls, fires| {
-        rolls.tick(time.delta().as_millis() as u32);
-
-        let Some(script) = script else {
-            return;
-        };
-        let last = last.get(script);
-        let catalogs = crate::items::RollCatalogs {
-            props: props.as_deref(),
-            enchants: enchants.as_deref(),
-        };
-        drain_lines(
-            &mut rolls,
-            self_guid.0,
-            &items,
-            &names,
-            &commands,
-            &chat,
-            catalogs,
-            loot.show_loot_spam,
+    /// The line's template read through `FrameScript_GetText` (`0x703bf0`), filled.
+    fn text(script: &UiScript, l: &ReadyLine) -> Option<String> {
+        format_line(
+            &l.line,
+            l.name.as_deref(),
+            l.is_self,
+            &l.item,
+            l.detailed,
             &|key| benilla_ui::strings::global(script.lua(), key),
-        );
+        )
+    }
 
-        for r in rolls.active.iter_mut().filter(|r| !r.asked) {
-            items.template(r.item_id, 0, Ask::Event(&commands));
-            r.asked = true;
-        }
-        // The snapshot goes in before the events: a `GroupLootFrame`'s `OnShow` reads its item from
-        // it.
-        let fresh = snapshot(&rolls, &items, icons.as_deref(), catalogs);
-        if fresh != *last {
-            script.set_loot_rolls(fresh.clone());
-            *last = fresh;
-        }
-
-        // The hold: a fresh roll reaches `0x61b430` once its template is in the snapshot above, and
-        // takes a free slot or is deferred.
-        rolls.reach_ready(|r| {
-            if items.template(r.item_id, 0, Ask::Read).is_none() {
-                // The module doc's deviation: an entry the server does not know, or an expired
-                // hold.
-                let unknown = items.template_answered_unknown(r.item_id);
-                if !unknown && r.held_ms < TEMPLATE_HOLD_MAX_MS {
-                    return false;
-                }
-                debug!(
-                    "ui_loot_roll: roll {} opening unresolved ({})",
-                    r.roll_id,
-                    if unknown {
-                        "the server does not know the entry"
-                    } else {
-                        "template hold expired"
-                    }
-                );
-            }
-            true
-        });
-        // Closes first: a promoted roll's frame needs the closed one's free, or the stock
-        // four-frame `GroupLootFrame_OpenNewFrame` drops it.
-        for roll_id in std::mem::take(&mut rolls.cancelled) {
-            debug!("ui_loot_roll: roll {roll_id} cancelled");
-            fires.post("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(roll_id as i64)]);
-        }
-        for r in &mut rolls.active {
-            if r.phase != Phase::Starting {
-                continue;
-            }
-            r.phase = Phase::Open;
-            debug!(
-                "ui_loot_roll: roll {} opened ({} ms, held {} ms)",
-                r.roll_id, r.countdown_ms, r.held_ms
-            );
-            fires.post(
-                "START_LOOT_ROLL",
-                vec![
-                    ScriptValue::Int(r.roll_id as i64),
-                    ScriptValue::Int(r.countdown_ms as i64),
-                ],
-            );
-        }
-    })
+    /// The lane's drop while no in-game interface is up to hear it: a signal is for the interface
+    /// that was up.
+    pub(super) fn drop_roll_events(mut rolls: ResMut<LootRolls>) {
+        rolls.events.clear();
+    }
 }
 
-/// The vote inside its call ([`benilla_ui::script::LootRollCall`]).
-#[derive(bevy::ecs::system::SystemParam)]
+/// The roll getters' reads at the call, the call host's half of
+/// [`benilla_ui::script::LootRollQuery`].
+mod live {
+    use bevy::ecs::system::SystemParam;
+    use bevy::prelude::*;
+
+    use benilla_ui::script::live::LiveAsk;
+    use benilla_ui::script::LootRollQuery;
+
+    use super::LootRolls;
+    use crate::entities::ItemDisplays;
+    use crate::items::Items;
+
+    /// What the roll getters read as they run: the list (`0xc4dc00`, by id through `0x61b2e0`),
+    /// the item records, their icons and the clock; absent in a harness without them, where they
+    /// read the VM's copy.
+    #[derive(SystemParam)]
+    pub(crate) struct LootRollLive<'w> {
+        rolls: Option<Res<'w, LootRolls>>,
+        items: Option<Res<'w, Items>>,
+        icons: Option<Res<'w, ItemDisplays>>,
+        catalogs: crate::items::Rolls<'w>,
+        time: Option<Res<'w, Time>>,
+    }
+
+    impl LootRollLive<'_> {
+        fn roll(&self, roll_id: u32) -> Option<Option<benilla_ui::script::LootRollEntry>> {
+            let (rolls, items, time) = (
+                self.rolls.as_deref()?,
+                self.items.as_deref()?,
+                self.time.as_deref()?,
+            );
+            Some(rolls.active.iter().find(|r| r.roll_id == roll_id).map(|r| {
+                r.entry(
+                    items,
+                    self.icons.as_deref(),
+                    self.catalogs.get(),
+                    time.elapsed(),
+                )
+            }))
+        }
+    }
+
+    impl crate::script_calls::live::LiveFamily for LootRollLive<'_> {
+        fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
+            ask.answer(|q: &LootRollQuery| self.roll(q.roll_id))
+        }
+    }
+}
+
+pub(crate) use live::LootRollLive;
+
+/// The vote inside its calls ([`benilla_ui::script::LootRollCall`]).
+#[derive(SystemParam)]
 pub(crate) struct LootRollSteps<'w> {
     /// Absent in a world with no group loot, which drops the votes.
     rolls: Option<ResMut<'w, LootRolls>>,
@@ -741,11 +1025,11 @@ pub(crate) struct LootRollSteps<'w> {
 }
 
 impl LootRollSteps<'_> {
-    /// `0x61bdf0` past its gate: `CMSG_LOOT_ROLL` with the roll's wire identity (`0x61bf18`), and
-    /// the roll closed with the next one promoted (`0x61bf32`-`0x61bf46`); the VM signals the
-    /// vote's `CANCEL_LOOT_ROLL` after this returns (`0x61bf2a`). A stale id is dropped.
+    /// `0x61bdf0` past its gate: `CMSG_LOOT_ROLL` with the roll's wire identity (`0x61bf10`); the
+    /// VM signals the vote's `CANCEL_LOOT_ROLL` after this returns (`0x61bf2a`). A stale id is
+    /// dropped.
     pub(crate) fn vote(&mut self, roll_id: u32, roll_type: u8) {
-        match self.rolls.as_deref_mut().and_then(|r| r.vote(roll_id)) {
+        match self.rolls.as_deref().and_then(|r| r.vote(roll_id)) {
             Some((looted_target, item_slot)) => {
                 debug!("ui_loot_roll: vote {roll_type} on roll {roll_id}");
                 let _ = self.net.0.send(ClientCommand::LootRoll {
@@ -755,6 +1039,14 @@ impl LootRollSteps<'_> {
                 });
             }
             None => debug!("ui_loot_roll: RollOnLoot({roll_id}) — no such roll, ignored"),
+        }
+    }
+
+    /// The vote's tail after its `CANCEL_LOOT_ROLL` (`0x61bf32`-`0x61bf46`): the roll closed and
+    /// the oldest deferred one promoted, its `START_LOOT_ROLL` onto the lane.
+    pub(crate) fn close(&mut self, roll_id: u32) {
+        if let Some(rolls) = self.rolls.as_deref_mut() {
+            rolls.close_voted(roll_id);
         }
     }
 }
@@ -1039,375 +1331,73 @@ mod tests {
         );
     }
 
-    #[test]
-    fn start_lists_the_roll_with_monotonic_ids_and_announces_nothing() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        r.start(start(0xAA, 1, 4306));
-        assert_eq!(r.active.len(), 2);
-        assert_eq!(r.active[0].roll_id, 1);
-        assert_eq!(r.active[1].roll_id, 2);
-        // The countdown stays whole, as `START_LOOT_ROLL`'s `arg2`; the announce waits.
-        for roll in &r.active {
-            assert_eq!(roll.countdown_ms, 60_000);
-            assert_eq!(roll.remaining_ms, 60_000);
-            assert!(
-                roll.phase == Phase::Waiting,
-                "the packet does not announce — the template does"
-            );
-            assert_eq!(roll.held_ms, 0);
-        }
-    }
-
-    /// vmangos can re-send every active roll on reconnect (`SendLootStartRollsForPlayer`).
-    #[test]
-    fn duplicate_start_is_ignored() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        r.start(start(0xAA, 0, 17182));
-        assert_eq!(r.active.len(), 1);
-        assert_eq!(r.next_id, 1, "and the duplicate burns no id");
-    }
-
-    #[test]
-    fn resolution_closes_the_matching_roll_only() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        r.start(start(0xAA, 1, 4306));
-
-        r.won(LootRollWon {
-            looted_target: 0xAA,
-            item_slot: 0,
-            item_id: 17182,
-            random_property_id: 0,
-            suffix_factor: 0,
-            winner: 1,
-            roll_number: 84,
-            roll_type: roll_vote::NEED,
-        });
-        assert_eq!(r.cancelled, vec![1]);
-        assert_eq!(r.active.len(), 1);
-        assert_eq!(r.active[0].item_slot, 1);
-
-        r.all_passed(LootAllPassed {
-            looted_target: 0xAA,
-            item_slot: 1,
-            item_id: 4306,
-            random_property_id: 0,
-            suffix_factor: 0,
-        });
-        assert_eq!(r.cancelled, vec![1, 2]);
-        assert!(r.active.is_empty());
-        assert_eq!(r.pending.len(), 2);
-    }
-
-    #[test]
-    fn resolution_for_a_closed_roll_is_idempotent() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        let won = LootRollWon {
-            looted_target: 0xAA,
-            item_slot: 0,
-            item_id: 17182,
-            random_property_id: 0,
-            suffix_factor: 0,
-            winner: 1,
-            roll_number: 84,
-            roll_type: roll_vote::NEED,
-        };
-        r.won(won);
-        r.won(won);
-        assert_eq!(r.cancelled, vec![1], "only the first close cancels");
-    }
-
-    #[test]
-    fn our_vote_closes_the_frame_and_yields_the_wire_identity() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 3, 17182));
-        assert_eq!(r.vote(1), Some((0xAA, 3)));
-        assert!(r.active.is_empty(), "the frame closes client-predicted");
-        assert!(r.cancelled.is_empty(), "the verb signalled its own cancel");
-        assert_eq!(r.vote(1), None);
-        assert_eq!(r.vote(99), None);
-    }
-
-    #[test]
-    fn tick_saturates_without_dropping_the_roll() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        r.tick(20_000);
-        assert_eq!(r.active[0].remaining_ms, 40_000);
-        r.tick(999_999);
-        assert_eq!(r.active[0].remaining_ms, 0);
-        assert_eq!(r.active.len(), 1, "the server closes it, not the tick");
-    }
-
-    #[test]
-    fn tick_ages_the_hold_only_while_the_roll_is_waiting() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        r.tick(500);
-        r.tick(250);
-        assert_eq!(r.active[0].held_ms, 750);
-        r.active[0].phase = Phase::Open;
-        r.tick(1_000);
-        assert_eq!(r.active[0].held_ms, 750, "the hold is over");
-        assert_eq!(r.active[0].remaining_ms, 60_000 - 1_750, "the bar is not");
-    }
-
-    #[test]
-    fn ids_are_never_reused() {
-        let mut r = LootRolls::default();
-        r.start(start(0xAA, 0, 17182));
-        r.vote(1);
-        r.start(start(0xBB, 0, 4306));
-        assert_eq!(r.active[0].roll_id, 2);
-    }
-
-    // ── The template hold ──
-    // Driven through a real schedule: the snapshot memo is a `Local`, and `run_system_once` would
-    // hand every pass a fresh one, reading each as a first push.
+    // ── The list, its lookups and its lane ──
 
     const ROLLED: u32 = 17182;
+    const WINNER: u64 = 0x51;
 
-    /// A `feed_loot_rolls` app whose listener records what `GetLootRollItemInfo` answers as
-    /// `START_LOOT_ROLL` fires: the call stock `GroupLootFrame_OnShow` makes.
-    fn hold_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.init_resource::<LootRolls>()
-            .init_resource::<Items>()
-            .init_resource::<NameCache>()
-            .init_resource::<SelfGuid>()
-            .init_resource::<ChatLog>()
-            .init_resource::<crate::ui_loot::LootConfig>()
-            // `Time::default()` has a zero delta, so the hold only ages where a test says it does.
-            .init_resource::<Time>()
-            .insert_resource(NetCommands(tx))
-            .add_systems(Update, feed_loot_rolls);
-
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                "STARTS = {}\n\
-                 local f = CreateFrame(\"Frame\")\n\
-                 f:RegisterEvent(\"START_LOOT_ROLL\")\n\
-                 f:SetScript(\"OnEvent\", function()\n\
-                   local _, name = GetLootRollItemInfo(arg1)\n\
-                   tinsert(STARTS, arg1 .. \":\" .. arg2 .. \":\" .. (name or \"<blank>\"))\n\
-                 end)\n\
-                 EVENTS = {}\n\
-                 local g = CreateFrame(\"Frame\")\n\
-                 g:RegisterEvent(\"START_LOOT_ROLL\")\n\
-                 g:RegisterEvent(\"CANCEL_LOOT_ROLL\")\n\
-                 g:SetScript(\"OnEvent\", function()\n\
-                   tinsert(EVENTS, (event == \"START_LOOT_ROLL\" and \"S\" or \"C\") .. arg1)\n\
-                 end)",
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        (app, rx)
+    /// The records, the names and the socket a roll's lookups go through.
+    struct Fixture {
+        items: Items,
+        names: NameCache,
+        net: NetCommands,
+        rx: crossbeam_channel::Receiver<ClientCommand>,
+        detailed: bool,
     }
 
-    /// The start packet looks its item up with the callback `0x61b460` (`0x61b40e`); the frames
-    /// its roll waits through read, as `GetLootRollItemInfo` does (`0x4c30d2`). A refused item is
-    /// asked by no frame after it, only by the next start.
-    #[test]
-    fn a_refused_roll_item_is_asked_by_the_next_start_never_by_a_frame() {
-        let (mut app, rx) = hold_app();
-        let begin = |app: &mut App, slot: u32| {
-            app.world_mut()
-                .resource_mut::<LootRolls>()
-                .start(start(0x42, slot, ROLLED));
-            app.update();
-        };
-        begin(&mut app, 0);
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(ROLLED, None);
-        for _ in 0..600 {
-            app.update();
+    impl Fixture {
+        /// [`ROLLED`] cached as Sulfuras and [`WINNER`] named Bob, unless `cold`.
+        fn new(cold: bool) -> Self {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let mut f = Self {
+                items: Items::default(),
+                names: NameCache::default(),
+                net: NetCommands(tx),
+                rx,
+                detailed: true,
+            };
+            if !cold {
+                f.items
+                    .insert_template(ROLLED, Some(crate::items::test_template("Sulfuras")));
+                f.names.insert_player(WINNER, "Bob".into(), None);
+            }
+            f
         }
-        assert!(
-            crate::query_cache::queries(&rx).is_empty(),
-            "no frame asks a refusal"
-        );
-        begin(&mut app, 1);
-        assert_eq!(
-            crate::query_cache::queries(&rx).len(),
-            1,
-            "the next start asks again"
-        );
-    }
 
-    /// `rollID:rollTime:name` for each `START_LOOT_ROLL` seen so far, in order.
-    fn starts(app: &mut App) -> Vec<String> {
-        let script = app.world_mut().non_send_resource_mut::<UiScript>();
-        let n = script.eval::<i64>("return getn(STARTS)").unwrap();
-        (1..=n)
-            .map(|i| {
-                script
-                    .eval::<String>(&format!("return STARTS[{i}]"))
-                    .unwrap()
-            })
-            .collect()
-    }
+        fn look(&self) -> RollLookups<'_> {
+            RollLookups {
+                items: &self.items,
+                names: &self.names,
+                net: &self.net,
+                self_guid: Some(0x7),
+                catalogs: RollCatalogs::NONE,
+                detailed: self.detailed,
+            }
+        }
 
-    /// Every roll event seen so far, in firing order: `S<id>` a start, `C<id>` a cancel.
-    fn events(app: &mut App) -> Vec<String> {
-        let script = app.world_mut().non_send_resource_mut::<UiScript>();
-        let n = script.eval::<i64>("return getn(EVENTS)").unwrap();
-        (1..=n)
-            .map(|i| {
-                script
-                    .eval::<String>(&format!("return EVENTS[{i}]"))
-                    .unwrap()
-            })
-            .collect()
-    }
-
-    fn advance(app: &mut App, ms: u64) {
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(std::time::Duration::from_millis(ms));
-    }
-
-    fn sent(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<ClientCommand> {
-        rx.try_iter().collect()
-    }
-
-    /// `0x61b310` ends in `0x55ba30(node+0x1c, node+0x10, callback 0x61b460, node, 0)`: a hit fires
-    /// at once (`0x61b430`), a miss asks and fires on arrival. The negative answer releases the
-    /// roll too, the module doc's deviation.
-    #[test]
-    fn the_roll_waits_for_its_item_template() {
-        for (answer, painted) in [
-            (Some(crate::items::test_template("Sulfuras")), "Sulfuras"),
-            (None, "<blank>"),
-        ] {
-            let (mut app, rx) = hold_app();
-            app.world_mut()
-                .resource_mut::<LootRolls>()
-                .start(start(0xAA, 0, ROLLED));
-
-            // Pass one: the template is unknown, so nothing announces and the ask goes out.
-            app.update();
-            assert!(
-                starts(&mut app).is_empty(),
-                "no START_LOOT_ROLL while the template is pending"
+        /// The record of `entry` answers, found or refused, and runs the rolls' callbacks waiting
+        /// on it in their order.
+        fn answer(&mut self, rolls: &mut LootRolls, entry: u32, found: bool) {
+            self.items.insert_template(
+                entry,
+                found.then(|| crate::items::test_template("Sulfuras")),
             );
-            assert!(
-                sent(&rx).iter().any(
-                    |c| matches!(c, ClientCommand::ItemQuery { entry, .. } if *entry == ROLLED)
-                ),
-                "and the template was asked for"
-            );
-            // The hold is not a one-shot.
-            app.update();
-            assert!(starts(&mut app).is_empty());
+            for cb in self.items.take_callbacks(entry) {
+                if let RecordCallback::LootRoll(wait) = cb {
+                    rolls.item_answered(wait, found, &self.look());
+                }
+            }
+        }
 
-            // The answer lands: one announce, the wire's countdown as `arg2`, the name readable.
-            app.world_mut()
-                .resource_mut::<Items>()
-                .insert_template(ROLLED, answer.clone());
-            app.update();
-            assert_eq!(starts(&mut app), vec![format!("1:60000:{painted}")]);
-            app.update();
-            assert_eq!(starts(&mut app).len(), 1, "and only once");
+        fn sent(&self) -> Vec<ClientCommand> {
+            self.rx.try_iter().collect()
         }
     }
 
-    /// `0x61b310`'s hit path: the roll announces on the pass the packet lands.
-    #[test]
-    fn a_cached_template_announces_the_same_pass() {
-        let (mut app, _rx) = hold_app();
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(ROLLED, Some(crate::items::test_template("Sulfuras")));
-        app.world_mut()
-            .resource_mut::<LootRolls>()
-            .start(start(0xAA, 0, ROLLED));
-        app.update();
-        assert_eq!(starts(&mut app), vec!["1:60000:Sulfuras".to_string()]);
-    }
-
-    /// The module doc's deviation: an unanswered template opens the frame at the deadline.
-    #[test]
-    fn an_unanswered_template_opens_the_roll_at_the_deadline() {
-        let (mut app, _rx) = hold_app();
-        app.world_mut()
-            .resource_mut::<LootRolls>()
-            .start(start(0xAA, 0, ROLLED));
-
-        // Two steps to one millisecond short of the budget: still holding.
-        for _ in 0..2 {
-            advance(&mut app, (TEMPLATE_HOLD_MAX_MS / 2 - 1) as u64);
-            app.update();
-        }
-        assert!(
-            starts(&mut app).is_empty(),
-            "still holding at {} ms",
-            TEMPLATE_HOLD_MAX_MS - 2
-        );
-
-        // The step that crosses it opens the frame, blank but votable.
-        advance(&mut app, 2);
-        app.update();
-        assert_eq!(starts(&mut app), vec!["1:60000:<blank>".to_string()]);
-        advance(&mut app, TEMPLATE_HOLD_MAX_MS as u64);
-        app.update();
-        assert_eq!(starts(&mut app).len(), 1, "and only once");
-    }
-
-    /// A held roll's `CANCEL_LOOT_ROLL` still goes out, as `0x61b9e0` checks only the node's
-    /// closed byte; the stock Lua matches no frame to it.
-    #[test]
-    fn a_roll_resolved_while_held_never_announces() {
-        let (mut app, _rx) = hold_app();
-        app.world_mut()
-            .resource_mut::<LootRolls>()
-            .start(start(0xAA, 0, ROLLED));
-        app.update();
-        assert!(starts(&mut app).is_empty());
-
-        app.world_mut()
-            .resource_mut::<LootRolls>()
-            .all_passed(LootAllPassed {
-                looted_target: 0xAA,
-                item_slot: 0,
-                item_id: ROLLED,
-                random_property_id: 0,
-                suffix_factor: 0,
-            });
-        // Even once the template lands, the roll it belonged to is gone.
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(ROLLED, Some(crate::items::test_template("Sulfuras")));
-        app.update();
-        app.update();
-        assert!(
-            starts(&mut app).is_empty(),
-            "a roll that closed while held opens no frame"
-        );
-    }
-
-    // ── The four-roll queue (`0x61b430`, `0x61b760`) ──
-
-    /// An app with the template cached and `n` rolls (ids 1..=n, slot id-1, countdown 60 s + id)
-    /// started, run one pass.
-    fn queued_app(n: u32) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
-        let (mut app, rx) = hold_app();
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(ROLLED, Some(crate::items::test_template("Sulfuras")));
-        for slot in 0..n {
-            let mut p = start(0xAA, slot, ROLLED);
-            p.countdown_ms = 60_000 + slot + 1;
-            app.world_mut().resource_mut::<LootRolls>().start(p);
-        }
-        app.update();
-        (app, rx)
+    fn at(slot: u32) -> LootStartRoll {
+        let mut p = start(0xAA, slot, ROLLED);
+        p.countdown_ms = 60_000 + slot + 1;
+        p
     }
 
     fn won_at(slot: u32) -> LootRollWon {
@@ -1417,7 +1407,7 @@ mod tests {
             item_id: ROLLED,
             random_property_id: 0,
             suffix_factor: 0,
-            winner: 1,
+            winner: WINNER,
             roll_number: 84,
             roll_type: roll_vote::NEED,
         }
@@ -1433,178 +1423,374 @@ mod tests {
         }
     }
 
-    fn ids(starts: &[String]) -> Vec<&str> {
-        starts
-            .iter()
-            .map(|s| s.split(':').next().unwrap())
+    /// The lane taken, in order: `S<id>:<arg2>` a start, `C<id>` a cancel, `L:<key>` a line.
+    fn lane(rolls: &mut LootRolls) -> Vec<String> {
+        rolls
+            .events
+            .drain(..)
+            .map(|(_, e)| match e {
+                RollEvent::Start {
+                    roll_id,
+                    countdown_ms,
+                } => format!("S{roll_id}:{countdown_ms}"),
+                RollEvent::Cancel(roll_id) => format!("C{roll_id}"),
+                RollEvent::Line(l) => format!(
+                    "L:{}{}",
+                    format_line(
+                        &l.line,
+                        l.name.as_deref(),
+                        l.is_self,
+                        &l.item,
+                        l.detailed,
+                        &|k| Some(k.to_string()),
+                    )
+                    .unwrap_or_default(),
+                    l.name.unwrap_or_default()
+                ),
+            })
             .collect()
     }
 
-    /// `0x61b430` opens a roll only while `[0xc4dda8] < 4`; the fifth is marked queued and fires
-    /// nothing, however many passes go by.
-    #[test]
-    fn five_rolls_announce_four() {
-        let (mut app, _rx) = queued_app(5);
-        assert_eq!(ids(&starts(&mut app)), ["1", "2", "3", "4"]);
-        app.update();
-        assert_eq!(starts(&mut app).len(), 4, "the fifth keeps waiting");
-        let rolls = app.world().resource::<LootRolls>();
-        assert_eq!(rolls.open_count(), 4);
-        assert_eq!(rolls.active[4].phase, Phase::Deferred);
+    /// `n` rolls started on a cached record, ids 1..=n, slot id-1, countdown 60 s + id.
+    fn opened(f: &Fixture, n: u32) -> LootRolls {
+        let mut r = LootRolls::default();
+        for slot in 0..n {
+            r.start(at(slot), Duration::ZERO, &f.look());
+        }
+        r
     }
 
-    /// `CancelAllLootRolls` (`0x61b290`) signals every roll neither queued nor closed, oldest
-    /// first, and `0x61b240` frees them all and zeroes the open count: the deferred fifth is freed
-    /// with no cancel, and a roll opened after starts empty on a fresh id.
+    /// `0x61b310` lists the roll under the next serial and looks its item up with the callback
+    /// `0x61b460`; a miss asks and opens nothing.
     #[test]
-    fn cancel_all_cancels_the_open_rolls_and_frees_every_one() {
-        let (mut app, _rx) = queued_app(5);
-        assert_eq!(starts(&mut app).len(), 4);
-        app.world_mut().resource_mut::<LootRolls>().cancel_all();
-        app.update();
+    fn a_start_lists_the_roll_and_waits_for_its_record() {
+        let f = Fixture::new(true);
+        let mut r = LootRolls::default();
+        r.start(start(0xAA, 0, ROLLED), Duration::ZERO, &f.look());
+        r.start(start(0xAA, 1, 4306), Duration::ZERO, &f.look());
         assert_eq!(
-            events(&mut app),
-            ["S1", "S2", "S3", "S4", "C1", "C2", "C3", "C4"],
-            "the deferred fifth has no frame to cancel"
+            r.active.iter().map(|r| r.roll_id).collect::<Vec<_>>(),
+            [1, 2]
         );
-        let rolls = app.world().resource::<LootRolls>();
-        assert!(rolls.active.is_empty());
-        assert_eq!(rolls.open_count(), 0);
-        app.world_mut()
-            .resource_mut::<LootRolls>()
-            .start(start(0xAA, 9, ROLLED));
-        app.update();
-        assert_eq!(events(&mut app).last().map(String::as_str), Some("S6"));
+        assert!(r
+            .active
+            .iter()
+            .all(|r| matches!(r.phase, Phase::Waiting(_))));
+        assert!(lane(&mut r).is_empty(), "the packet does not announce");
+        assert_eq!(crate::query_cache::queries(&f.rx).len(), 2);
     }
 
-    /// Every close calls `0x61b760`: our vote (`0x61bf46`), a win (`0x61bc6b`) and all-passed
-    /// (`0x61b74c`) each open the oldest deferred roll, after the closed one's `CANCEL`.
+    /// `0x61b310`'s hit path: the roll opens inside its packet (`0x61b41c`).
     #[test]
-    fn every_close_path_promotes_the_oldest_deferred_roll() {
-        type Close = fn(&mut LootRolls);
-        let closers: [(&str, Close); 3] = [
-            ("vote", |r| {
-                assert!(r.vote(2).is_some());
-            }),
-            ("won", |r| r.won(won_at(1))),
-            ("all passed", |r| r.all_passed(passed_at(1))),
-        ];
-        for (name, close) in closers {
-            let (mut app, _rx) = queued_app(6);
-            assert_eq!(starts(&mut app).len(), 4, "{name}");
-            close(&mut app.world_mut().resource_mut::<LootRolls>());
-            app.update();
-            // The oldest deferred is roll 5, not 6, with its own wire countdown.
-            assert_eq!(
-                starts(&mut app).last().map(String::as_str),
-                Some("5:60005:Sulfuras"),
-                "{name}"
-            );
-            assert_eq!(starts(&mut app).len(), 5, "{name}: one slot, one promotion");
-            if name != "vote" {
-                // The closed frame is freed before the promoted one asks for a frame.
-                let ev = events(&mut app);
-                let c = ev.iter().position(|e| e == "C2").unwrap();
-                let s = ev.iter().position(|e| e == "S5").unwrap();
-                assert!(c < s, "{name}: {ev:?}");
-            }
+    fn a_cached_record_opens_the_roll_at_its_packet() {
+        let f = Fixture::new(false);
+        let mut r = LootRolls::default();
+        r.start(start(0xAA, 0, ROLLED), Duration::ZERO, &f.look());
+        assert_eq!(lane(&mut r), ["S1:60000"]);
+    }
+
+    /// vmangos can re-send every active roll on reconnect (`SendLootStartRollsForPlayer`).
+    #[test]
+    fn duplicate_start_is_ignored() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 1);
+        r.start(at(0), Duration::ZERO, &f.look());
+        assert_eq!(r.active.len(), 1);
+        assert_eq!(r.next_id, 1, "and the duplicate burns no id");
+    }
+
+    /// The record's answer runs the start's callback (`0x61b460` → `0x61b430`); a refusal opens it
+    /// too, unresolved (the module doc's deviation), and once only.
+    #[test]
+    fn the_records_answer_opens_a_waiting_roll() {
+        for found in [true, false] {
+            let mut f = Fixture::new(true);
+            let mut r = LootRolls::default();
+            r.start(start(0xAA, 0, ROLLED), Duration::ZERO, &f.look());
+            f.answer(&mut r, ROLLED, found);
+            assert_eq!(lane(&mut r), ["S1:60000"], "found {found}");
+            f.answer(&mut r, ROLLED, found);
+            assert!(lane(&mut r).is_empty(), "found {found}: and only once");
         }
     }
 
-    /// The promoted roll fires the wire's countdown, whole, though its bar has run down since the
-    /// packet (`0x61b79a` pushes `node+0x3c`).
+    /// The module doc's deviation: a record unanswered past the hold opens the roll, and its late
+    /// answer opens nothing more.
     #[test]
-    fn a_promoted_roll_fires_the_wire_countdown() {
-        let (mut app, _rx) = queued_app(5);
-        advance(&mut app, 30_000);
-        app.update();
-        advance(&mut app, 0);
-        app.world_mut()
-            .resource_mut::<LootRolls>()
-            .all_passed(passed_at(0));
-        app.update();
+    fn an_unanswered_record_opens_the_roll_at_the_deadline() {
+        let mut f = Fixture::new(true);
+        let mut r = LootRolls::default();
+        r.start(start(0xAA, 0, ROLLED), Duration::ZERO, &f.look());
+        r.expire_holds(Duration::from_millis(TEMPLATE_HOLD_MAX_MS - 1));
+        assert!(lane(&mut r).is_empty(), "still holding");
+        r.expire_holds(Duration::from_millis(TEMPLATE_HOLD_MAX_MS));
+        assert_eq!(lane(&mut r), ["S1:60000"]);
+        f.answer(&mut r, ROLLED, true);
+        r.expire_holds(Duration::from_secs(9));
+        assert!(lane(&mut r).is_empty());
+    }
+
+    /// A result's line, then its roll's `CANCEL_LOOT_ROLL` (`0x61bbf8`, `0x61bc12`; `0x61b6d9`,
+    /// `0x61b6f3`), each for the matching roll only.
+    #[test]
+    fn a_result_shows_its_line_then_cancels_the_matching_roll() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 2);
+        lane(&mut r);
+        r.won(won_at(0), &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_WONBob", "C1"]);
+        assert_eq!(r.active.len(), 1);
+        r.all_passed(passed_at(1), &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_ALL_PASSED", "C2"]);
+        assert!(r.active.is_empty());
+        r.won(won_at(0), &f.look());
         assert_eq!(
-            starts(&mut app).last().map(String::as_str),
-            Some("5:60005:Sulfuras")
+            lane(&mut r),
+            ["L:LOOT_ROLL_WONBob"],
+            "a roll no longer listed cancels nothing"
         );
-        let rolls = app.world().resource::<LootRolls>();
-        let fifth = rolls.active.iter().find(|r| r.roll_id == 5).unwrap();
+    }
+
+    /// `0x61b96a` → `0x61b9a0` → `0x61b9bf`: the win's line, its cancel and the promotion wait for
+    /// the record and then the winner's name, the roll listed meanwhile. The record's answer runs
+    /// the start's callback and then the line's, in the order they asked (`0x61b460`, then
+    /// `0x61bd50`), and the name's answer shows the line (`0x61bc80`).
+    #[test]
+    fn a_win_waits_for_its_record_and_the_winners_name() {
+        let mut f = Fixture::new(true);
+        let mut r = LootRolls::default();
+        r.start(at(0), Duration::ZERO, &f.look());
+        r.won(won_at(0), &f.look());
+        assert!(lane(&mut r).is_empty());
+        f.sent();
+        f.answer(&mut r, ROLLED, true);
+        assert_eq!(lane(&mut r), ["S1:60001"], "the name is asked next");
+        assert!(f
+            .sent()
+            .iter()
+            .any(|c| matches!(c, ClientCommand::NameQuery { guid } if *guid == WINNER)));
+        assert!(r.holds(1), "listed while its line waits");
+        r.name_answered(0x99, "Other", &f.look());
+        assert!(lane(&mut r).is_empty());
+        r.name_answered(WINNER, "Bob", &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_WONBob", "C1"]);
+        assert!(!r.holds(1));
+    }
+
+    /// The module doc's deviation: a refused record or winner's name closes the roll unspoken.
+    #[test]
+    fn a_refused_record_or_name_closes_the_roll_unspoken() {
+        let mut f = Fixture::new(true);
+        let mut r = LootRolls::default();
+        r.start(at(0), Duration::ZERO, &f.look());
+        r.start(at(1), Duration::ZERO, &f.look());
+        f.answer(&mut r, ROLLED, true);
+        lane(&mut r);
+        r.won(won_at(0), &f.look());
+        r.name_answered(WINNER, "", &f.look());
+        assert_eq!(lane(&mut r), ["C1"]);
+        r.all_passed(passed_at(1), &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_ALL_PASSED", "C2"]);
+        let mut f = Fixture::new(true);
+        let mut r = LootRolls::default();
+        r.start(at(0), Duration::ZERO, &f.look());
+        r.won(won_at(0), &f.look());
+        f.answer(&mut r, ROLLED, false);
+        assert_eq!(lane(&mut r), ["S1:60001", "C1"]);
+    }
+
+    /// With `showLootSpam` at 0 a vote line is looked up and dropped at its composer
+    /// (`0x61c0b9`); a win still speaks, its `_NO_SPAM_` form.
+    #[test]
+    fn detail_off_drops_the_vote_lines_at_their_composer() {
+        let mut f = Fixture::new(true);
+        f.detailed = false;
+        let mut r = LootRolls::default();
+        r.announce(announce(WINNER, 0, 0), &f.look());
         assert_eq!(
-            fifth.remaining_ms,
-            60_005 - 30_000,
-            "the bar counts from the packet"
+            crate::query_cache::queries(&f.rx).len(),
+            1,
+            "its record is asked"
         );
+        f.answer(&mut r, ROLLED, true);
+        r.name_answered(WINNER, "Bob", &f.look());
+        assert!(lane(&mut r).is_empty());
+        assert!(r.pending.is_empty());
+        f.names.insert_player(WINNER, "Bob".into(), None);
+        r.won(won_at(0), &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_WON_NO_SPAM_NEEDBob"]);
+    }
+
+    /// Our vote's tail closes the roll (`0x61bf32`), which stays listed, its getters answering,
+    /// and votes again on nothing; its result then signals no cancel.
+    #[test]
+    fn a_voted_roll_stays_listed_until_its_result() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 1);
+        lane(&mut r);
+        assert_eq!(r.vote(1), Some((0xAA, 0)));
+        r.close_voted(1);
+        assert_eq!(r.vote(1), None);
+        assert_eq!(r.vote(99), None);
+        assert_eq!(r.active.len(), 1);
+        let e = r.active[0].entry(&f.items, None, RollCatalogs::NONE, Duration::from_secs(1));
+        assert!(e.closed);
+        assert_eq!(e.time_left_ms, 60_001 - 1_000);
+        r.won(won_at(0), &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_WONBob"]);
+        assert!(r.active.is_empty());
+    }
+
+    #[test]
+    fn ids_are_never_reused() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 1);
+        r.won(won_at(0), &f.look());
+        r.start(at(1), Duration::ZERO, &f.look());
+        assert_eq!(r.active[0].roll_id, 2);
+    }
+
+    // ── The four-roll queue (`0x61b430`, `0x61b760`) ──
+
+    /// `0x61b430` opens a roll only while `[0xc4dda8] < 4`; the fifth is marked queued and fires
+    /// nothing.
+    #[test]
+    fn five_rolls_announce_four() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 5);
+        assert_eq!(
+            lane(&mut r),
+            ["S1:60001", "S2:60002", "S3:60003", "S4:60004"]
+        );
+        assert_eq!(r.open_count(), 4);
+        assert_eq!(r.active[4].phase, Phase::Deferred);
+    }
+
+    /// `CancelAllLootRolls` (`0x61b290`) signals every roll neither queued nor closed, oldest
+    /// first, and `0x61b240` frees them all: the deferred fifth and a voted roll go with no
+    /// cancel, and a roll started after opens on a fresh id.
+    #[test]
+    fn cancel_all_cancels_the_open_rolls_and_frees_every_one() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 5);
+        r.close_voted(2);
+        lane(&mut r);
+        r.cancel_all();
+        assert_eq!(lane(&mut r), ["C1", "C3", "C4", "C5"]);
+        assert!(r.active.is_empty());
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 5);
+        lane(&mut r);
+        r.cancel_all();
+        assert_eq!(
+            lane(&mut r),
+            ["C1", "C2", "C3", "C4"],
+            "the deferred fifth has no frame to cancel"
+        );
+        r.start(at(9), Duration::ZERO, &f.look());
+        assert_eq!(lane(&mut r), ["S6:60010"]);
+    }
+
+    /// Every close calls `0x61b760`: our vote (`0x61bf46`), a win (`0x61bc6b`) and all-passed
+    /// (`0x61b74c`) each open the oldest deferred roll, with its own wire countdown, after the
+    /// closed one's `CANCEL`.
+    #[test]
+    fn every_close_path_promotes_the_oldest_deferred_roll() {
+        type Close = fn(&mut LootRolls, &RollLookups);
+        let closers: [(&str, Close, &[&str]); 3] = [
+            ("vote", |r, _| r.close_voted(2), &["S5:60005"]),
+            (
+                "won",
+                |r, look| r.won(won_at(1), look),
+                &["L:LOOT_ROLL_WONBob", "C2", "S5:60005"],
+            ),
+            (
+                "all passed",
+                |r, look| r.all_passed(passed_at(1), look),
+                &["L:LOOT_ROLL_ALL_PASSED", "C2", "S5:60005"],
+            ),
+        ];
+        for (name, close, expect) in closers {
+            let f = Fixture::new(false);
+            let mut r = opened(&f, 6);
+            lane(&mut r);
+            close(&mut r, &f.look());
+            assert_eq!(lane(&mut r), expect, "{name}");
+        }
     }
 
     /// Queued rolls open oldest first, one per freed slot.
     #[test]
     fn deferred_rolls_open_oldest_first() {
-        let (mut app, _rx) = queued_app(6);
-        app.world_mut().resource_mut::<LootRolls>().won(won_at(3));
-        app.update();
-        assert_eq!(ids(&starts(&mut app)), ["1", "2", "3", "4", "5"]);
-        app.world_mut().resource_mut::<LootRolls>().won(won_at(0));
-        app.update();
-        assert_eq!(ids(&starts(&mut app)), ["1", "2", "3", "4", "5", "6"]);
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 6);
+        lane(&mut r);
+        r.won(won_at(3), &f.look());
+        assert_eq!(lane(&mut r).last().map(String::as_str), Some("S5:60005"));
+        r.won(won_at(0), &f.look());
+        assert_eq!(lane(&mut r).last().map(String::as_str), Some("S6:60006"));
     }
 
     /// A deferred roll never counted up, so closing it frees nothing: the reference's
     /// `0x61b6f8`/`0x61bc17` decrement anyway and let a fifth frame open (the module doc's
-    /// deviation). It still sends its `CANCEL_LOOT_ROLL`.
+    /// deviation). It still signals its `CANCEL_LOOT_ROLL`.
     #[test]
     fn closing_a_deferred_roll_leaves_the_count_right() {
-        let (mut app, _rx) = queued_app(5);
+        let f = Fixture::new(false);
+        type Close = fn(&mut LootRolls, &RollLookups);
         for close in [
-            (|r: &mut LootRolls| r.all_passed(passed_at(4))) as fn(&mut LootRolls),
-            |r| r.won(won_at(4)),
+            (|r, look| r.all_passed(passed_at(4), look)) as Close,
+            |r, look| r.won(won_at(4), look),
+            |r, _| r.close_voted(5),
         ] {
-            let (mut app, _rx) = queued_app(5);
-            close(&mut app.world_mut().resource_mut::<LootRolls>());
-            app.update();
-            assert_eq!(app.world().resource::<LootRolls>().open_count(), 4);
-            assert_eq!(events(&mut app).last().map(String::as_str), Some("C5"));
-            // A new roll finds four open and waits.
-            app.world_mut()
-                .resource_mut::<LootRolls>()
-                .start(start(0xAA, 9, ROLLED));
-            app.update();
-            assert_eq!(starts(&mut app).len(), 4, "the sixth packet opens nothing");
+            let mut r = opened(&f, 5);
+            lane(&mut r);
+            close(&mut r, &f.look());
+            assert_eq!(r.open_count(), 4);
+            r.start(at(9), Duration::ZERO, &f.look());
+            assert!(
+                !lane(&mut r).iter().any(|e| e.starts_with('S')),
+                "the sixth packet opens nothing"
+            );
         }
-        // And a vote on a deferred roll (an addon's `RollOnLoot`) changes no count either.
-        let r = &mut *app.world_mut().resource_mut::<LootRolls>();
-        assert!(r.vote(5).is_some());
-        assert_eq!(r.open_count(), 4);
     }
 
-    /// `0x61b430` runs when the template is in, not at the packet: a roll still waiting holds no
+    /// `0x61b430` runs when the record is in, not at the packet: a roll still waiting holds no
     /// slot, so rolls behind it open ahead of it; once in, it queues behind four open.
     #[test]
     fn a_waiting_roll_holds_no_slot() {
-        let (mut app, _rx) = hold_app();
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(ROLLED, Some(crate::items::test_template("Sulfuras")));
-        let mut first = start(0xAA, 0, 4306);
+        let mut f = Fixture::new(false);
+        let mut r = LootRolls::default();
+        let mut first = start(0xAA, 9, 4306);
         first.countdown_ms = 70_000;
-        app.world_mut().resource_mut::<LootRolls>().start(first);
+        r.start(first, Duration::ZERO, &f.look());
         for slot in 1..=4 {
-            app.world_mut()
-                .resource_mut::<LootRolls>()
-                .start(start(0xAA, slot, ROLLED));
+            r.start(at(slot), Duration::ZERO, &f.look());
         }
-        app.update();
-        assert_eq!(ids(&starts(&mut app)), ["2", "3", "4", "5"]);
-
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(4306, Some(crate::items::test_template("Tin Bar")));
-        app.update();
-        assert_eq!(starts(&mut app).len(), 4, "four are open: it queues");
-        app.world_mut().resource_mut::<LootRolls>().won(won_at(1));
-        app.update();
         assert_eq!(
-            starts(&mut app).last().map(String::as_str),
-            Some("1:70000:Tin Bar")
+            lane(&mut r),
+            ["S2:60002", "S3:60003", "S4:60004", "S5:60005"]
         );
+        f.answer(&mut r, 4306, true);
+        assert!(lane(&mut r).is_empty(), "four are open: it queues");
+        r.won(won_at(1), &f.look());
+        assert_eq!(lane(&mut r), ["L:LOOT_ROLL_WONBob", "C2", "S1:70000"]);
+    }
+
+    /// The getters read the expiry less the clock at the call (`0x4c331c`), and a promoted roll's
+    /// bar counts from its packet, its `arg2` the wire's countdown whole (`0x61b79a`).
+    #[test]
+    fn a_promoted_roll_reads_its_bar_from_the_packet() {
+        let f = Fixture::new(false);
+        let mut r = opened(&f, 5);
+        lane(&mut r);
+        r.all_passed(passed_at(0), &f.look());
+        assert_eq!(lane(&mut r).last().map(String::as_str), Some("S5:60005"));
+        let fifth = r.active.iter().find(|r| r.roll_id == 5).unwrap();
+        let e = fifth.entry(&f.items, None, RollCatalogs::NONE, Duration::from_secs(30));
+        assert_eq!(e.time_left_ms, 60_005 - 30_000);
+        assert_eq!(e.name.as_deref(), Some("Sulfuras"));
+        let late = fifth.entry(&f.items, None, RollCatalogs::NONE, Duration::from_secs(99));
+        assert_eq!(late.time_left_ms, 0);
     }
 }

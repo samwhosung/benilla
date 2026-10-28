@@ -124,11 +124,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::ui_loot_roll::LootRolls",
-        "the open rolls, which `feed_loot_rolls` fires from; the votes, acting in their calls, hold them in the host",
-    ),
-    (
-        Row::HostHeld,
         "::ui_tradeskill::TradeSkillOpen",
         "the profession window's line, which `feed_trade_skill` fires from; `CloseTradeSkill`, acting in its call, holds it in the host",
     ),
@@ -448,8 +443,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore", "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_craft::CraftItemWaits", "ui_craft::CraftOpen",
         "ui_pet::PetBar"]),
-    ("::ui_loot_roll::feed_loot_rolls", &["items::Items", "names::NameCache", "net::SelfGuid",
-        "ui_loot_roll::LootRolls"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
@@ -675,7 +668,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 38] {
+fn lane_types() -> [TypeId; 39] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -700,6 +693,8 @@ fn lane_types() -> [TypeId; 38] {
         TypeId::of::<crate::target::OwedSelects>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
+        // The rolls' lane: the roll packets' and their lookups' callbacks' signals and lines.
+        TypeId::of::<crate::ui_loot_roll::LootRolls>(),
         // The cooldown lanes: the player's list and the pet's, which log their writes and flushes
         // at their places.
         TypeId::of::<crate::spell::Cooldowns>(),
@@ -754,7 +749,7 @@ fn lane_types() -> [TypeId; 38] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 38] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 39] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -786,6 +781,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 38] {
             "item text",
             TypeId::of::<crate::ui_item_text::ItemTextLane>(),
         ),
+        ("loot rolls", TypeId::of::<crate::ui_loot_roll::LootRolls>()),
         ("cooldowns", TypeId::of::<crate::spell::Cooldowns>()),
         ("pet cooldowns", TypeId::of::<crate::ui_pet::PetBar>()),
         ("reputation", TypeId::of::<crate::net::Reputations>()),
@@ -998,6 +994,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "item watchers",
             "list rebuilds",
             "loot",
+            "loot rolls",
             "mail",
             "merchant",
             "owed selects",

@@ -1834,8 +1834,6 @@ pub(crate) mod schedule_tests {
          "both packets answer the `CMSG_LOGOUT_REQUEST`/cancel the game menu sent"),
         ("ui_loot/mod.rs", "drain_loot", Because::Deliberate,
          "its takes of `LootMoveStart` and `LootCloseAtRest` close on the engine's side and publish nothing to the VM, whose `LOOT_CLOSED` is the loot lane's; the at-rest sweep signals only on a disenchant window, which the interface's own cast opens"),
-        ("ui_loot_roll.rs", "feed_loot_rolls", Because::PlayerRoundTrip,
-         "a roll exists only after a group member loots under group loot; leftovers are cleared at socket teardown (another player's act: coincidence-only residual)"),
         ("ui_macro/mod.rs", "load_macros", Because::MemoLatched,
          "`MacroFiles.identity` is a `VmMemo`, so a new session re-reads the files and re-fires UPDATE_MACROS; also `InWorldGated`"),
         ("ui_panes.rs", "feed_character_panes", Because::FilledByVm,

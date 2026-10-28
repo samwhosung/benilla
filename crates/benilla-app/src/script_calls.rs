@@ -875,6 +875,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::LootRoll(LootRollCall::Vote { roll_id, roll_type }) => {
                 appliers.loot_roll().vote(roll_id, roll_type);
             }
+            ScriptCall::LootRoll(LootRollCall::Close { roll_id }) => {
+                appliers.loot_roll().close(roll_id);
+            }
             ScriptCall::Binder(BinderCall::Confirm) => appliers.binder().confirm(),
             ScriptCall::Summon(SummonCall::Confirm) => appliers.summon().confirm(),
             ScriptCall::MeetingStone(MeetingStoneCall::Cancel) => {

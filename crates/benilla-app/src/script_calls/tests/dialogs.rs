@@ -4,7 +4,7 @@
 
 use benilla_protocol::messages::{BattlefieldList, BattlefieldStatus, LootStartRoll};
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{LootRollEntry, LootRollsState, UiScript, UnitGuids};
+use benilla_ui::script::{UiScript, UnitGuids};
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -544,30 +544,31 @@ fn start_duel_casts_inside_its_call() {
 }
 
 /// The vote `0x61bdf0` inside `RollOnLoot`'s and `ConfirmLootRoll`'s calls: `CMSG_LOOT_ROLL`
-/// first (`0x61bf18`), then `CANCEL_LOOT_ROLL` (`0x61bf2a`), whose listeners run before the
-/// chunk's next line; the roll is gone from the engine's list before the call returns
-/// (`0x61bf32`).
+/// first (`0x61bf10`), then `CANCEL_LOOT_ROLL` (`0x61bf2a`), whose listeners run before the
+/// chunk's next line; the roll is closed before the call returns (`0x61bf32`). The gate reads the
+/// engine's roll and its item's record through the host (`0x61be67`, `0x61be70`).
 #[test]
 fn a_loot_vote_sends_ahead_of_its_cancel_inside_its_call() {
-    for (verb, bind_on_pickup) in [("RollOnLoot", false), ("ConfirmLootRoll", true)] {
+    for (verb, bonding) in [("RollOnLoot", 0), ("ConfirmLootRoll", 1)] {
         let (mut app, rx) = client();
+        let mut record = crate::items::test_template("Sulfuras");
+        record.bonding = bonding;
         app.world_mut()
-            .resource_mut::<crate::ui_loot_roll::LootRolls>()
-            .start(LootStartRoll {
-                looted_target: 0x77,
-                item_slot: 2,
-                item_id: 1,
-                random_property_id: 0,
-                suffix_factor: 0,
-                countdown_ms: 60_000,
-            });
-        vm(&mut app).set_loot_rolls(LootRollsState {
-            rolls: vec![LootRollEntry {
-                roll_id: 1,
-                bind_on_pickup,
-                ..Default::default()
-            }],
-        });
+            .resource_mut::<crate::items::Items>()
+            .insert_template(1, Some(record));
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![benilla_protocol::SessionEvent::LootStartRoll(
+                LootStartRoll {
+                    looted_target: 0x77,
+                    item_slot: 2,
+                    item_id: 1,
+                    random_property_id: 0,
+                    suffix_factor: 0,
+                    countdown_ms: 60_000,
+                },
+            )],
+        );
         listen(&mut app, &["CANCEL_LOOT_ROLL"], "RandomRoll(9, 9)");
         eval::<()>(&mut app, &format!("{verb}(1, 2) RandomRoll(1, 2)"));
         assert_eq!(sent(&rx), ["loot roll 2", "roll 9", "roll 1"], "{verb}");
@@ -577,6 +578,24 @@ fn a_loot_vote_sends_ahead_of_its_cancel_inside_its_call() {
                 .holds(1),
             "{verb}: the roll closed inside the call"
         );
+        // A bind-on-pickup Need, unconfirmed, only asks (`0x61be8b`).
+        if bonding == 1 {
+            crate::net::handlers::dispatch(
+                app.world_mut(),
+                vec![benilla_protocol::SessionEvent::LootStartRoll(
+                    LootStartRoll {
+                        looted_target: 0x77,
+                        item_slot: 3,
+                        item_id: 1,
+                        random_property_id: 0,
+                        suffix_factor: 0,
+                        countdown_ms: 60_000,
+                    },
+                )],
+            );
+            eval::<()>(&mut app, "RollOnLoot(2, 1)");
+            assert!(sent(&rx).is_empty(), "the confirm sends nothing");
+        }
     }
 }
 

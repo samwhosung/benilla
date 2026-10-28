@@ -546,6 +546,10 @@ pub(crate) enum RecordCallback {
     /// The sell slot item's, asked by `CalculateAuctionDeposit` and `GetAuctionSellItemInfo`
     /// (`0x4ce25e`, `0x4ce5e3` with `0x4ce2f0`), one per call.
     AuctionSellItem,
+    /// A group loot roll's or one of its lines', by the wait's serial: a start's (`0x61b40e` with
+    /// `0x61b460`), an announcement's (`0x61c047` with `0x61c4b0`), a result's (`0x61b96a` with
+    /// `0x61bd50`) or an all-passed's (`0x61b5c0` with `0x61b7d0`).
+    LootRoll(u32),
 }
 
 impl Items {

@@ -106,6 +106,7 @@ fn rolls() -> LootRollsState {
                 item_id: 17182,
                 link: Some(STAFF_LINK.into()),
                 random_property_id: 0,
+                closed: false,
             },
             LootRollEntry {
                 roll_id: 8,
@@ -117,6 +118,7 @@ fn rolls() -> LootRollsState {
                 item_id: 25,
                 link: Some(SWORD_LINK.into()),
                 random_property_id: 0,
+                closed: false,
             },
             // No template yet: name, texture, quality and link (which embeds the name) are nil.
             LootRollEntry {
@@ -129,6 +131,7 @@ fn rolls() -> LootRollsState {
                 item_id: 4306,
                 link: None,
                 random_property_id: 0,
+                closed: false,
             },
         ],
     }
@@ -404,7 +407,7 @@ fn in_flight_roll_opens_without_a_name_or_icon() {
 
 /// The stock popup paints only in `OnShow`, so a `START_LOOT_ROLL` that beats its roll to the model
 /// stays blank. On a cache miss the reference fires it from the item-template arrival callback
-/// (`0x61b460`, armed by `0x61b310`), and `feed_loot_rolls` holds it the same way.
+/// (`0x61b460`, armed by `0x61b310`), and the roll handlers hold it the same way.
 #[test]
 fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
     let _data = benilla_formats::wow_data_or_skip!();
