@@ -537,10 +537,11 @@ fn a_ghosts_corpse_query_goes_out_in_its_cascade_place() {
     );
 }
 
-/// `SMSG_NEW_WORLD` posts the object teardown as a 1 ms timer (`0x401ba5`), and the teardown's
-/// leave-world sweep sets the display latch (`0x467700` → `0x5dd543` → `0x490a9e`). A tick runs
-/// its timers before its packets, so the lines of the worldport's own tick show, those of the
-/// next are held to the next world entry's release, after its `PLAYER_ENTERING_WORLD`.
+/// `SMSG_NEW_WORLD` posts the object teardown as a timer at no delay (`0x401bac`), argument 1,
+/// and the teardown's leave-world sweep sets the display latch (`0x467700` → `0x5dd543` →
+/// `0x490a9e`). A tick runs its timers before its packets, so the lines of the worldport's own
+/// tick show, those of the next are held to the next world entry's release, after its
+/// `PLAYER_ENTERING_WORLD`.
 #[test]
 fn a_worldport_latches_the_lines_of_the_next_frame() {
     let mut c = client(
