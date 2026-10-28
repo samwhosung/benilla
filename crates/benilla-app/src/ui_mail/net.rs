@@ -24,6 +24,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::CreatureName, on_creature_name)
         .net_handler(K::GameObjectInfo, on_object_answer)
         .net_handler(K::GameObjectUnknown, on_object_answer)
+        .net_handler(K::ItemTemplate, on_paper_record)
         .net_handler(K::Disconnected, on_session_end);
 }
 
@@ -65,19 +66,25 @@ fn on_object_answer(
     mail.answered(MailWait::Object(entry), found, &mut lane);
 }
 
+/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE` for a paper's item the init awaits, a record or a refusal
+/// ([`super::StationeryRebuild::answered`]). It runs after the item cache's own handler, which the
+/// net plugin registers ahead of the windows, so the rebuild reads the record just landed.
+fn on_paper_record(
+    In(ev): In<SessionEvent>,
+    paper: Option<super::StationeryRebuild>,
+    items: Res<crate::items::Items>,
+) {
+    if let (SessionEvent::ItemTemplate { entry, .. }, Some(mut paper)) = (ev, paper) {
+        paper.answered(entry, &items);
+    }
+}
+
 /// What the list handler reads beside the session: the papers it defaults a row to, the item
 /// templates and GlobalStrings an auction notice's subject is written from, and the profanity
 /// mask it runs on each subject.
 #[derive(bevy::ecs::system::SystemParam)]
 struct ListReads<'w, 's> {
-    stationery: Option<Res<'w, super::Stationery>>,
-    self_q: Query<
-        'w,
-        's,
-        (&'static crate::net::ObjectStore, &'static crate::net::Guid),
-        With<crate::net::SelfPlayer>,
-    >,
-    objects: crate::net::Objects<'w, 's>,
+    paper: super::StationeryRebuild<'w, 's>,
     items: Res<'w, crate::items::Items>,
     filter: Option<Res<'w, crate::text_filter::TextFilter>>,
     switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
@@ -94,13 +101,8 @@ fn on_mail_list(
     reads: ListReads,
 ) {
     if let SessionEvent::MailList { mails } = ev {
-        // The usable list's first paper (`[[0xb6ee30]]`, `0x4ad565`-`0x4ad56d`).
-        let store = reads.self_q.iter().next().map(|(s, _)| &s.0);
-        let first_paper = reads.stationery.as_deref().and_then(|catalog| {
-            super::stationeries(catalog, store, &reads.objects, &reads.items, None)
-                .first()
-                .map(|v| v.id)
-        });
+        // The usable list's first paper as last rebuilt (`[[0xb6ee30]]`, `0x4ad559`-`0x4ad56d`).
+        let first_paper = reads.paper.list().and_then(|l| l.first()).map(|v| v.id);
         let enabled = reads.switches.as_deref().is_some_and(|s| s.profanity);
         let get_text = |key: &str| {
             reads

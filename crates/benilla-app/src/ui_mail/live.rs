@@ -4,8 +4,8 @@
 //! [`benilla_ui::script::PackageQuery`]: the mailbox cell `[0xb6ef88]` and the records as the
 //! session holds them, each row resolved off the caches as the reference's getters read them as
 //! they run (`0x4aebc0`, `0x4af110`, `0x4af360`, `0x4af5d0`), the pending-mail time `0x845eac`
-//! (`0x4afea0`), the usable stationery off the player's items as of the drain's place
-//! (`0x4ad970`), the Stationery store's textures by id (`0x4ae3f0`) and `Package.dbc`'s rows.
+//! (`0x4afea0`), the usable stationery list as last rebuilt (`0x4ad970`), the Stationery store's
+//! textures by id (`0x4ae3f0`) and `Package.dbc`'s rows.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -13,12 +13,12 @@ use bevy::prelude::*;
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
     MailBox, MailBoxQuery, MailInboxRow, MailRowQuery, NewMailQuery, PackageQuery, StationeryQuery,
-    StationeryTextureQuery,
+    StationeryTextureQuery, StationeryView,
 };
 
 use super::{
-    package_view, resolve_row, stationeries, MailOpen, MailPending, MailTemplates, Packages,
-    RowCatalogs, Stationery,
+    package_view, resolve_row, MailOpen, MailPending, MailTemplates, Packages, RowCatalogs,
+    Stationery,
 };
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -49,8 +49,8 @@ pub(crate) struct MailLive<'w, 's> {
         (&'static crate::net::ObjectStore, &'static crate::net::Guid),
         With<crate::net::SelfPlayer>,
     >,
-    objects: crate::net::Objects<'w, 's>,
-    stores: crate::ui_unit::views::ViewStores<'w, 's>,
+    /// The usable stationery list as last rebuilt, and its rebuild's reads.
+    paper: super::StationeryRebuild<'w, 's>,
 }
 
 impl MailLive<'_, '_> {
@@ -108,23 +108,14 @@ impl MailLive<'_, '_> {
         )))
     }
 
-    /// The usable stationery, the player's items read as of the drain's place, none carried with
-    /// no player; `None` with no catalog to read.
-    fn stationeries(&self) -> Option<Vec<benilla_ui::script::StationeryView>> {
-        let (items, catalog) = (self.items.as_deref()?, self.stationery.as_deref()?);
-        let store = self
-            .objects
-            .player()
-            .and_then(|e| self.stores.get(e).ok())
-            .map(|s| &s.0);
-        let objects = self.stores.item_objects(&self.objects);
-        Some(stationeries(
-            catalog,
-            store,
-            &objects,
-            items,
-            self.icons.as_deref(),
-        ))
+    /// The usable stationery list as last rebuilt, rebuilt first for `GetNumStationeries` while no
+    /// paper's item is awaited (`0x4ae1f6`-`0x4ae202`), its reads the player's items as of the
+    /// drain's place; `None` with no store to build it from.
+    fn stationeries(&mut self, q: &StationeryQuery) -> Option<Vec<StationeryView>> {
+        if q.rebuild {
+            self.paper.rebuild_unless_awaited(self.items.as_deref()?);
+        }
+        Some(self.paper.list()?.to_vec())
     }
 }
 
@@ -133,7 +124,7 @@ impl crate::script_calls::live::LiveFamily for MailLive<'_, '_> {
         ask.answer(|_: &MailBoxQuery| self.mailbox())
             || ask.answer(|q: &MailRowQuery| self.row(q))
             || ask.answer(|_: &NewMailQuery| Some(self.pending.as_deref()?.has_new_mail()))
-            || ask.answer(|_: &StationeryQuery| self.stationeries())
+            || ask.answer(|q: &StationeryQuery| self.stationeries(q))
             || ask.answer(|q: &StationeryTextureQuery| {
                 Some(
                     self.stationery

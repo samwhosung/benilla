@@ -248,8 +248,12 @@ impl LiveQuery for NewMailQuery {
     type Answer = bool;
 }
 
-/// The usable stationery list (`0x4ad970`), in the picker's order, as of the call.
-pub struct StationeryQuery;
+/// The usable stationery list as its last rebuild left it (`0x4ad970`), in the picker's order.
+/// `rebuild` rebuilds it first while no paper's item is awaited, as `GetNumStationeries` does
+/// (`0x4ae1f6`-`0x4ae202`); every other reader takes it as it stands.
+pub struct StationeryQuery {
+    pub rebuild: bool,
+}
 
 impl LiveQuery for StationeryQuery {
     type Answer = Vec<StationeryView>;
@@ -314,9 +318,10 @@ pub(super) fn row_now(lua: &Lua, model: &Model, index: usize) -> Option<MailInbo
     }
 }
 
-/// The usable stationery now: the host's answer, else the VM's copy.
-fn stationeries_now(lua: &Lua, model: &Model) -> Vec<StationeryView> {
-    ask(lua, &StationeryQuery).unwrap_or_else(|| model.mail_stationeries.clone())
+/// The usable stationery as last rebuilt, first rebuilt when `rebuild` ([`StationeryQuery`]): the
+/// host's answer, else the VM's copy.
+fn stationeries_now(lua: &Lua, model: &Model, rebuild: bool) -> Vec<StationeryView> {
+    ask(lua, &StationeryQuery { rebuild }).unwrap_or_else(|| model.mail_stationeries.clone())
 }
 
 /// The packages: the host's answer, else the VM's copy.
@@ -470,7 +475,7 @@ fn mail_ready(lua: &Lua, model: &Model) -> bool {
 fn send_price(lua: &Lua, model: &Model) -> u32 {
     let paper = (model.mail_stationery != 0)
         .then(|| {
-            stationeries_now(lua, model)
+            stationeries_now(lua, model, false)
                 .into_iter()
                 .find(|r| r.id == model.mail_stationery)
         })
@@ -1204,15 +1209,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The stationery family ──
-    // The reference rebuilds the list (`0x4ad970`) in `GetNumStationeries` (`0x4ae1f0`) while no
-    // paper's record is awaited, and at the last one's answer (`0x4acbf8`); each getter here reads
-    // it as of its call.
+    // The reference rebuilds the list (`0x4ad970`) at the world-enter init (`0x4acbd7`), at the
+    // last awaited paper's answer (`0x4acbf8`) and in `GetNumStationeries` (`0x4ae1f0`) while no
+    // paper's record is awaited; every other getter reads it as last rebuilt.
 
     g.set(
         "GetNumStationeries",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(stationeries_now(lua, &model).len() as i64)
+            Ok(stationeries_now(lua, &model, true).len() as i64)
         })?,
     )?;
 
@@ -1228,7 +1233,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?;
             let list = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                stationeries_now(lua, &model)
+                stationeries_now(lua, &model, false)
             };
             let row = usize::try_from(index)
                 .ok()
@@ -1261,7 +1266,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?;
             let list = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                stationeries_now(lua, &model)
+                stationeries_now(lua, &model, false)
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.mail_stationery = usize::try_from(index)

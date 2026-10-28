@@ -351,6 +351,9 @@ fn the_list_defaults_the_paper_and_masks_the_subject() {
         }
     }
     world.insert_resource(darn_filter());
+    // The list as `GetNumStationeries` rebuilds it (`0x4ae202`), which the parse reads.
+    assert_eq!(h.eval::<i64>("return GetNumStationeries()"), 2);
+    let world = h.app.world_mut();
     let mut none = entry(1, 0);
     none.stationery = 0;
     none.subject = "darn it".into();

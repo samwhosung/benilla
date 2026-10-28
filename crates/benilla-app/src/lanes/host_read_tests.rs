@@ -38,7 +38,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
 const FRAME_FINAL_FEEDS: usize = 38;
-const FRAME_FINAL_INPUTS: usize = 201;
+const FRAME_FINAL_INPUTS: usize = 200;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the host's live
@@ -96,6 +96,10 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "the mail init (`0x4acb10`) clears the session and stamps \"no mail\" at the world-enter \
          cascade (`0x4909f6`), which the reference runs inside our own player's create \
          (`0x4908c0`)"),
+    ("::ui_mail::stationery::count_papers_on_enter", &["ui_mail::stationery::UsableStationery"],
+        "the mail init (`0x4acb10`) counts the papers' items it awaits and rebuilds the stationery \
+         list when none is (`0x4acbd7`) at the world-enter cascade (`0x4909f6`), which the \
+         reference runs inside our own player's create (`0x4908c0`)"),
     ("::ui_party::feed::feed_party", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_pet::unit::feed_pet_unit", &["UiScript"], "a field event's listeners read its push"),
     ("::ui_session::close_npc_session_out_of_range<benilla_app::ui_binder::BinderState>",

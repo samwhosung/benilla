@@ -594,3 +594,56 @@ fn a_selected_paper_no_longer_usable_still_answers_its_texture() {
         "0/PAPER"
     );
 }
+
+/// The usable list is rebuilt only at its three places (`0x4ad970`): the world-enter init when no
+/// paper's item is awaited (`0x4acbd7`), the last awaited item's answer (`0x4acbf8`) and
+/// `GetNumStationeries` while none is (`0x4ae202`). A paper picked up or used between them changes
+/// no getter until the next.
+#[test]
+fn a_paper_picked_up_between_rebuilds_changes_nothing_until_the_next() {
+    const FREE_ROW: u32 = 6;
+    const FREE: u32 = 9_312;
+    let mut c = carrying_paper();
+    seat_in_backpack(&mut c, 0);
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_mail::Stationery(
+        benilla_formats::StationeryCatalog::from_rows(vec![
+            benilla_formats::StationeryRow {
+                id: PAPER_ROW,
+                item: PAPER,
+                texture: "PAPER".into(),
+                flags: 0,
+            },
+            benilla_formats::StationeryRow {
+                id: FREE_ROW,
+                item: FREE,
+                texture: "FREE".into(),
+                flags: 1,
+            },
+        ]),
+    ));
+    // The init finds the paper's record and misses the free one's, so one is awaited and the
+    // list is not rebuilt.
+    world.write_message(crate::net::WorldEnterCascadeMessage);
+    c.frame(vec![]);
+    let read = "local n = GetNumStationeries() return n .. '/' .. tostring(GetStationeryInfo(1))";
+    let first = "return tostring(GetStationeryInfo(1))";
+    seat_in_backpack(&mut c, item_guid(1));
+    c.frame(vec![]);
+    assert_eq!(
+        c.eval::<String>(true, read),
+        "0/nil",
+        "a paper picked up while one is awaited"
+    );
+    // The awaited answer rebuilds, the paper carried.
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: FREE,
+        info: Some(Box::new(crate::items::test_template("Free Paper"))),
+    }]]);
+    assert_eq!(c.eval::<String>(true, first), "Plain Paper");
+    // Used up: the getters that do not rebuild read the list as it stood.
+    seat_in_backpack(&mut c, 0);
+    c.frame(vec![]);
+    assert_eq!(c.eval::<String>(true, first), "Plain Paper");
+    assert_eq!(c.eval::<String>(true, read), "1/Free Paper");
+}
