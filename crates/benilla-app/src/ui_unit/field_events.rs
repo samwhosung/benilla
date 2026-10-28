@@ -706,6 +706,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PLAYER_FARSIGHT_FOCUS_CHANGED => "PLAYER_FARSIGHT_FOCUS_CHANGED",
         id::LANGUAGE_LIST_CHANGED => "LANGUAGE_LIST_CHANGED",
         id::LOCALPLAYER_PET_RENAMED => "LOCALPLAYER_PET_RENAMED",
+        id::UPDATE_LFG_TYPES => "UPDATE_LFG_TYPES",
         _ => return None,
     })
 }

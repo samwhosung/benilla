@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use benilla_formats::{SkillLineCatalog, SpellCatalog, SpellDisplay, Talent, TalentCatalog};
 use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1;
 use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
 use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
 use benilla_ui::script::UiScript;
@@ -227,7 +228,7 @@ fn arrived(known: &[u32]) -> Client {
             local f = CreateFrame("Frame")
             for _, e in ipairs({"SPELLS_CHANGED", "LEARNED_SPELL_IN_TAB",
                     "CHARACTER_POINTS_CHANGED", "CONFIRM_TALENT_WIPE", "SPELL_UPDATE_COOLDOWN",
-                    "UPDATE_SHAPESHIFT_FORMS", "TUTORIAL_TRIGGER"}) do
+                    "UPDATE_SHAPESHIFT_FORMS", "TUTORIAL_TRIGGER", "UPDATE_LFG_TYPES"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function()
@@ -478,7 +479,8 @@ fn a_form_spell_signals_the_form_list_ahead_of_the_book() {
 }
 
 /// A level change on the active player signals the book at its packet (`0x6045b0` →
-/// `0x5edb7b`).
+/// `0x5edb7b`), then the looking-for-group type recount's `UPDATE_LFG_TYPES` (`0x5edb8a` →
+/// `0x4e8b0e`).
 #[test]
 fn a_level_change_signals_the_book_at_its_packet() {
     let mut c = client();
@@ -495,6 +497,30 @@ fn a_level_change_signals_the_book_at_its_packet() {
         [
             "SPELL_UPDATE_COOLDOWN:nil",
             "SPELLS_CHANGED:nil",
+            "UPDATE_LFG_TYPES:nil",
+            "SPELL_UPDATE_COOLDOWN:nil",
+        ]
+    );
+}
+
+/// A change of a quest-log slot of the active player runs the slot watcher `0x5ddd80`, whose
+/// quest-list rebuild signals `UPDATE_LFG_TYPES` at the packet (`0x5dde98` → `0x4e8c70`).
+#[test]
+fn a_quest_log_slot_change_signals_the_lfg_types_at_its_packet() {
+    let mut c = client();
+    c.frame(vec![
+        cooldown(),
+        vec![SessionEvent::ObjectValues {
+            guid: ME,
+            fields: ObjectFields::from_pairs(&[(FIELD_PLAYER_QUEST_LOG_1_1, 5)]),
+        }],
+        cooldown(),
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "SPELL_UPDATE_COOLDOWN:nil",
+            "UPDATE_LFG_TYPES:nil",
             "SPELL_UPDATE_COOLDOWN:nil",
         ]
     );

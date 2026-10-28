@@ -8,7 +8,9 @@
 //! side (`0x4e89c0`) and sorted so the rows that fit the level come first (`0x4e8b20`); the quest
 //! list (type 3) is the quest log's ids, cached titles first (`0x4e8be0`, `0x4e8c80`). A type's
 //! entries are the first `count` of its sorted list, so a row of the wrong side can show where a
-//! right one is cut, as in the reference.
+//! right one is cut, as in the reference. Each recount and rebuild signals `UPDATE_LFG_TYPES`
+//! (`0x4e8b0e`, `0x4e8c70`): the app fires it at a level change and at each quest slot that moved
+//! (`field_watch` in benilla-app).
 
 use mlua::{Lua, MultiValue, Value};
 

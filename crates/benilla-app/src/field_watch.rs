@@ -21,7 +21,7 @@
 //! `0x4c70b0`, and the weapon arms of the visible-item watch `0x5e2810`. The item watchers' and the
 //! inventory watcher's runs are [`crate::item_watch`]'s.
 
-use benilla_protocol::messages::ObjectType;
+use benilla_protocol::messages::{ObjectType, PLAYER_QUEST_LOG_SLOTS};
 use benilla_protocol::{ObjectFields, OwnerFallback};
 use bevy::prelude::*;
 
@@ -252,6 +252,7 @@ pub(crate) mod id {
     pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
     pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
     pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
+    pub(crate) const UPDATE_LFG_TYPES: u16 = 531;
     pub(crate) const INSPECT_HONOR_UPDATE: u16 = 525;
     pub(crate) const PLAYER_REGEN_DISABLED: u16 = 190;
     pub(crate) const PLAYER_REGEN_ENABLED: u16 = 191;
@@ -371,6 +372,8 @@ pub(crate) fn bridge_len(id: u16) -> u16 {
 /// `0x51bd90` (`0x51bd93`).
 const VISIBLE_ITEMS_WATCH: (u16, u16) = (0x118, 0x390);
 const QUEST_LOG_WATCH: (u16, u16) = (0x28, 0xf0);
+/// One quest slot, three dwords: the id, the state and counters, the timer.
+const QUEST_SLOT_BYTES: u16 = 12;
 
 /// The active player's point counters' watch `0x4c7000`, `PLAYER_CHARACTER_POINTS1` and `2` at
 /// the player section's `+0xe48`, 8 bytes, registered at world entry (`0x4c6fce`, `0x4c6fd8`).
@@ -861,6 +864,10 @@ pub(crate) fn placed_values(
         let id = id::SPELLS_CHANGED;
         pass.push(at, FieldNotice::Global { id });
         pass.push(at, FieldNotice::TrainerPass);
+        // The type-list recount (`0x5edb8a` → `0x4e89c0`) signals `UPDATE_LFG_TYPES` (`0x4e8b0e`),
+        // behind the quest-giver sweep (`0x5edb85`).
+        let id = id::UPDATE_LFG_TYPES;
+        pass.push(at, FieldNotice::Global { id });
     }
 
     // The bridge (`0x51bbb0`), the object's own watches. The happiness watch carries its field's
@@ -994,7 +1001,23 @@ pub(crate) fn placed_values(
             let id = id::PLAYER_FARSIGHT_FOCUS_CHANGED;
             pass.push(at, FieldNotice::Global { id });
         }
-        // Registered at world entry (`0x4de430`), after the bridge's watch on the same range.
+        // The slot watchers `0x5ddd80`, one 12-byte watch a quest slot (`0x5dd974`-`0x5dd99e`),
+        // registered on the active player's arrival (`0x5dd8a0`): each run ends in the quest-list
+        // rebuild `0x4e8be0` (`0x5dde98`), which signals `UPDATE_LFG_TYPES` (`0x4e8c70`). One run
+        // per slot that moved, ahead of the log's own watcher below.
+        for slot in 0..u16::from(PLAYER_QUEST_LOG_SLOTS) {
+            let slot_watch = (
+                QUEST_LOG_WATCH.0 + QUEST_SLOT_BYTES * slot,
+                QUEST_SLOT_BYTES,
+            );
+            if let Some((fired, _, list)) = at(PLAYER_SECTION, slot_watch, List::Object) {
+                let first = PLAYER_SECTION + QUEST_LOG_WATCH.0 / 4;
+                let id = id::UPDATE_LFG_TYPES;
+                pass.push((fired, first, list), FieldNotice::Global { id });
+            }
+        }
+        // Registered at world entry (`0x4de430`), after the bridge's watch on the same range and
+        // the slot watchers.
         if let Some(at) = at(PLAYER_SECTION, QUEST_LOG_WATCH, List::Object) {
             pass.push(at, FieldNotice::QuestLog);
         }
@@ -1823,10 +1846,17 @@ mod tests {
 
     /// The active player's log carries the quest log's own watcher (`0x4de430`, registered after
     /// the bridge's on the same 0xf0 bytes): one run a block, however many slots moved, and none
-    /// for an equal rewrite.
+    /// for an equal rewrite. Each slot that moved also runs its own watcher `0x5ddd80`, whose
+    /// quest-list rebuild signals `UPDATE_LFG_TYPES` (`0x5dde98` → `0x4e8c70`), ahead of the log's.
     #[test]
     fn the_active_players_quest_log_watcher_runs_once_per_block() {
         let mut me = player();
+        // Slots 0 (fields 198-200), 1 (201-203) and 19 (255-257) moved. The log's watcher runs at
+        // the first field the block visits, slot 0's, so after that slot's own watcher and ahead
+        // of the later slots'.
+        let lfg = FieldNotice::Global {
+            id: id::UPDATE_LFG_TYPES,
+        };
         assert_eq!(
             block(
                 &mut me,
@@ -1834,9 +1864,35 @@ mod tests {
                 ME,
                 &[(198, 5), (199, 3), (201, 7), (257, 1)]
             ),
-            [bridge(ME, 522), FieldNotice::QuestLog]
+            [bridge(ME, 522), lfg, FieldNotice::QuestLog, lfg, lfg]
         );
         assert!(block(&mut me, Some(ME), ME, &[(198, 5), (201, 7)]).is_empty());
+    }
+
+    /// A quest slot's watcher `0x5ddd80` runs once for the slot, whichever of its three dwords
+    /// moved (a quest taken, a counter, an abandon), and signals `UPDATE_LFG_TYPES` for the
+    /// active player alone; a quest log outside the 20 slots is no slot.
+    #[test]
+    fn a_quest_slot_change_signals_the_lfg_types_once_per_slot() {
+        let lfg = FieldNotice::Global {
+            id: id::UPDATE_LFG_TYPES,
+        };
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(198, 5), (199, 3), (200, 9)]),
+            [bridge(ME, 522), lfg, FieldNotice::QuestLog]
+        );
+        // The slot's counter word alone is a change of the slot.
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(199, 4)]),
+            [bridge(ME, 522), lfg, FieldNotice::QuestLog]
+        );
+        // Another player's log is not the active player's: no slot watcher.
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(198, 5)]),
+            [bridge(OTHER, 522)]
+        );
     }
 
     /// The pet number signals the classification; an entry change names the unit only when the
@@ -2173,7 +2229,9 @@ mod tests {
     }
 
     /// The level's type watcher signals the book for the active player alone (`0x5edb6f`), then
-    /// runs the trainer's pass (`0x5edb80`), ahead of the bridge's `UNIT_LEVEL` on the same field.
+    /// runs the trainer's pass (`0x5edb80`) and the type-list recount, which signals
+    /// `UPDATE_LFG_TYPES` (`0x5edb8a` → `0x4e8b0e`), ahead of the bridge's `UNIT_LEVEL` on the same
+    /// field.
     #[test]
     fn a_level_change_signals_the_book_for_the_active_player() {
         let mut me = player();
@@ -2184,6 +2242,9 @@ mod tests {
                     id: id::SPELLS_CHANGED
                 },
                 FieldNotice::TrainerPass,
+                FieldNotice::Global {
+                    id: id::UPDATE_LFG_TYPES
+                },
                 bridge(ME, id::UNIT_LEVEL)
             ]
         );
