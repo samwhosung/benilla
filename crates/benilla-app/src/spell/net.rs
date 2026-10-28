@@ -38,6 +38,10 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::CastResult, on_cast_result)
         .net_handler(K::SpellStart, on_spell_start)
         .net_handler(K::SpellGo, on_spell_go)
+        // `HandleSpellGo`'s tail in its order: the repeat hook (`0x6e81e7`), then the cooldown
+        // inserts (`0x6e8425`-`0x6e8570`).
+        .net_handler(K::SpellGo, on_go_repeat)
+        .net_handler(K::SpellGo, on_go_cooldowns)
         .net_handler(K::SpellChainTargets, on_spell_chain_targets)
         .net_handler(K::SpellFailedOther, on_spell_failed_other)
         .net_handler(K::SpellDelayed, on_spell_delayed)
@@ -447,8 +451,8 @@ fn on_spell_go(
         source,
         dest,
         ammo_display_id,
-        item_caster,
         unit_caster,
+        ..
     } = ev
     {
         let points = GoPoints {
@@ -472,7 +476,6 @@ fn on_spell_go(
                 go_target,
                 points,
                 ammo_display_id,
-                item_caster,
                 unit_caster,
                 &mut sc.commands,
                 &l.index,
@@ -483,25 +486,8 @@ fn on_spell_go(
                 &sc.stores,
                 &mut sc.go_lid,
                 &mut sc.loot_latch,
-                (
-                    &mut l.cooldowns,
-                    l.spells.as_deref(),
-                    &mut sc.items,
-                    &mut l.pet_bar,
-                    &l.spell_mods,
-                ),
-                (
-                    &sc.edits,
-                    engaged,
-                    &mut super::CastCore {
-                        pending: &mut l.pending,
-                        queued_melee: &mut l.queued_melee,
-                        ground: &mut l.ground,
-                        reports: &mut l.reports,
-                        net: &l.net,
-                        tutorials: l.tutorials.as_deref(),
-                    },
-                ),
+                l.spells.as_deref(),
+                (&sc.edits, engaged),
                 l.play_seq.next(),
             )
         };
@@ -509,6 +495,42 @@ fn on_spell_go(
             set.p1()
                 .engine_start_attack(guid, mark, |mut commit| commit.start_attack(guid));
         }
+    }
+}
+
+/// The go's tradeskill repeat hook ([`crate::ui_tradeskill::repeat_hook_at_go`]), between its
+/// legs and its cooldown inserts.
+fn on_go_repeat(In(ev): In<SessionEvent>, world: &mut World) {
+    if let ev @ SessionEvent::SpellGo { .. } = ev {
+        crate::ui_tradeskill::repeat_hook_at_go(ev, world);
+    }
+}
+
+/// The go's cooldown inserts ([`go_cooldown_inserts`]), after its repeat hook.
+fn on_go_cooldowns(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
+    if let SessionEvent::SpellGo {
+        caster,
+        spell_id,
+        item_caster,
+        ..
+    } = ev
+    {
+        go_cooldown_inserts(
+            caster,
+            spell_id,
+            item_caster,
+            &l.index,
+            &l.self_guid,
+            &sc.stores,
+            &l.net,
+            (
+                &mut l.cooldowns,
+                l.spells.as_deref(),
+                &mut sc.items,
+                &mut l.pet_bar,
+                &l.spell_mods,
+            ),
+        );
     }
 }
 
@@ -1322,7 +1344,6 @@ fn spell_go(
     go_target: Option<u64>,
     points: GoPoints,
     ammo_display_id: Option<u32>,
-    item_caster: Option<u64>,
     // The packet's second guid as written, the caster slot `0x6e7f8b` looks up as a unit.
     unit_caster: u64,
     commands: &mut Commands,
@@ -1335,18 +1356,10 @@ fn spell_go(
     go_lid: &mut MessageWriter<crate::go_anim::GoLidOpen>,
     // The loot-target latch, armed here for a chest (`0x6e831b`).
     loot_latch: &mut crate::ui_loot::LootLatch,
-    // The cooldown store and what it reads; the last member is the pet's, the second bank this
-    // handler inserts into ([`pet_go_cooldown`]).
-    cooldown_ctx: (
-        &mut Cooldowns,
-        Option<&Spells>,
-        &mut crate::items::Items,
-        &mut crate::ui_pet::PetBar,
-        &crate::spell::SpellModifiers,
-    ),
+    spells: Option<&Spells>,
     // The precast edits, the attack lock the GO-deferred auto-attack start gates on (`Engaged`,
     // the reference's `[player+0xc48]`, `0x6e83e7`), and the cast core.
-    attack_ctx: (&crate::creature_anim::UnitEdits, bool, &mut super::CastCore),
+    attack_ctx: (&crate::creature_anim::UnitEdits, bool),
     seq: u64,
 ) -> Option<u64> {
     let GoPoints { mask, source, dest } = points;
@@ -1372,7 +1385,6 @@ fn spell_go(
             ),
         );
     }
-    let (cooldowns, spells, items, pet_bar, spell_mods) = cooldown_ctx;
     // A spell with no record does nothing (`0x6e7cd7 jl`, `0x6e7ce3 jg` and `0x6e7cf7 je`, all to
     // the end `0x6e8647`), ahead of the caster's lookup and every leg.
     let display = spells.and_then(|s| s.catalog.get(spell_id))?;
@@ -1381,12 +1393,9 @@ fn spell_go(
     if let Some(go_guid) = go_target {
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
-    // The item leg held the cooldown for its record ([`item_go_cooldown`]).
-    let mut pended = false;
-    let (edits, engaged, core) = attack_ctx;
+    let (edits, engaged) = attack_ctx;
     // The guid the GO-deferred auto-attack starts at, for the caller to run StartAttack at.
     let mut deferred = None;
-    let now = Instant::now();
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
     // 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`, which writes `[player+0x1d28]` and
     // plays Loot 50. Gates: the local player cast it (`0x6e81b6`), the spell has `OPEN_LOCK`
@@ -1434,64 +1443,6 @@ fn spell_go(
                 debug!("net: spell go {spell_id} — deferred auto-attack start at {guid:#x}");
                 deferred = Some(guid);
             }
-        }
-
-        // Our launch starts the cast's cooldown here, at the GO receive time. The self-insert
-        // forks on the first guid against the caster's (`0x6e8441`): the spell leg
-        // (`0x6e8498`: RecoveryTime, Category, CategoryRecoveryTime, on-hold from Attributes bit
-        // 25) or the item leg ([`item_go_cooldown`]). `SMSG_SPELL_COOLDOWN` is the server's
-        // override; vmangos sends none for a plain cast. A ranged-slot cast folds
-        // `UNIT_FIELD_RANGEDATTACKTIME` into the category recovery (`0x6e2b60`).
-        let ranged_ms = if display.ranged_speed_cooldown() {
-            index
-                .0
-                .get(&caster)
-                .and_then(|&e| stores.get(e).ok())
-                .and_then(|s| s.0.unit_ranged_attack_time())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        match item_caster {
-            Some(item) => {
-                pended = item_go_cooldown(
-                    item, spell_id, display, now, index, stores, items, core.net, cooldowns,
-                );
-            }
-            None => cooldowns.start_spell(spell_id, display, ranged_ms, now, Some(spell_mods)),
-        }
-        if benilla_assets::trace::enabled() {
-            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(display, ranged_ms);
-            benilla_assets::trace::line(
-                "cd",
-                &format!(
-                    "arm spell={spell_id} rec={}ms cat={}:{}ms (GO self-insert)",
-                    recovery_ms, display.category, category_ms
-                ),
-            );
-        }
-    }
-    // The pet leg of the same insert: an independent `if`, not an else, which a held item cooldown
-    // skips, as it ends the handler (`0x6e84dd`).
-    if !pended && pet_go_cooldown(caster, self_guid, index, stores) {
-        // No ranged pad: `0x6e2b60` is called on the self leg only (`0x6e845d`). Op 11 still
-        // applies to both columns (`0x6e85c5`, `0x6e85d1`) off the player's tables, which gate
-        // on the spell's family and never the caster (`0x6e6b30`).
-        pet_bar
-            .cooldowns
-            .start_spell(spell_id, display, 0, now, Some(spell_mods));
-        // Its flush follows, inserted or not (`0x6e85fc` `0x4b31b0`, `0x6e8601` `0x4bce90`):
-        // `ACTIONBAR_UPDATE_COOLDOWN`, `SPELL_UPDATE_COOLDOWN`, `PET_BAR_UPDATE_COOLDOWN`, and no
-        // `PET_BAR_UPDATE`.
-        if benilla_assets::trace::enabled() {
-            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(display, 0);
-            benilla_assets::trace::line(
-                "cd",
-                &format!(
-                    "arm spell={spell_id} rec={}ms cat={}:{}ms (GO pet-insert)",
-                    recovery_ms, display.category, category_ms
-                ),
-            );
         }
     }
     // The miss list's lines, words and `UNIT_COMBAT` are the combat log's
@@ -1664,6 +1615,97 @@ fn cancel_auto_repeat(
     // The same cancel `0x6ea080` as every local trigger, its unconditional CMSG ack included.
     let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
     crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
+}
+
+/// The cooldown store a go inserts into and what the inserts read; the last member is the pet's,
+/// the second bank ([`pet_go_cooldown`]).
+pub(super) type GoCooldowns<'a> = (
+    &'a mut Cooldowns,
+    Option<&'a Spells>,
+    &'a mut crate::items::Items,
+    &'a mut crate::ui_pet::PetBar,
+    &'a crate::spell::SpellModifiers,
+);
+
+/// `HandleSpellGo`'s cooldown inserts (`0x6e8425`-`0x6e8570`), after the repeat hook
+/// (`0x6e81e7`, [`crate::ui_tradeskill`]), so a repeated craft with a cooldown recasts before its
+/// own cooldown starts.
+#[allow(clippy::too_many_arguments)] // the go's fields and the stores the inserts read
+pub(super) fn go_cooldown_inserts(
+    caster: u64,
+    spell_id: u32,
+    item_caster: Option<u64>,
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
+    net: &NetCommands,
+    (cooldowns, spells, items, pet_bar, spell_mods): GoCooldowns,
+) {
+    let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
+        return;
+    };
+    let now = Instant::now();
+    // The item leg held the cooldown for its record ([`item_go_cooldown`]).
+    let mut pended = false;
+    if self_guid.0 == Some(caster) {
+        // Our launch starts the cast's cooldown here, at the GO receive time. The self-insert
+        // forks on the first guid against the caster's (`0x6e8441`): the spell leg
+        // (`0x6e8498`: RecoveryTime, Category, CategoryRecoveryTime, on-hold from Attributes bit
+        // 25) or the item leg ([`item_go_cooldown`]). `SMSG_SPELL_COOLDOWN` is the server's
+        // override; vmangos sends none for a plain cast. A ranged-slot cast folds
+        // `UNIT_FIELD_RANGEDATTACKTIME` into the category recovery (`0x6e2b60`).
+        let ranged_ms = if display.ranged_speed_cooldown() {
+            index
+                .0
+                .get(&caster)
+                .and_then(|&e| stores.get(e).ok())
+                .and_then(|s| s.0.unit_ranged_attack_time())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        match item_caster {
+            Some(item) => {
+                pended = item_go_cooldown(
+                    item, spell_id, display, now, index, stores, items, net, cooldowns,
+                );
+            }
+            None => cooldowns.start_spell(spell_id, display, ranged_ms, now, Some(spell_mods)),
+        }
+        if benilla_assets::trace::enabled() {
+            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(display, ranged_ms);
+            benilla_assets::trace::line(
+                "cd",
+                &format!(
+                    "arm spell={spell_id} rec={}ms cat={}:{}ms (GO self-insert)",
+                    recovery_ms, display.category, category_ms
+                ),
+            );
+        }
+    }
+    // The pet leg of the same insert: an independent `if`, not an else, which a held item cooldown
+    // skips, as it ends the handler (`0x6e84dd`).
+    if !pended && pet_go_cooldown(caster, self_guid, index, stores) {
+        // No ranged pad: `0x6e2b60` is called on the self leg only (`0x6e845d`). Op 11 still
+        // applies to both columns (`0x6e85c5`, `0x6e85d1`) off the player's tables, which gate
+        // on the spell's family and never the caster (`0x6e6b30`).
+        pet_bar
+            .cooldowns
+            .start_spell(spell_id, display, 0, now, Some(spell_mods));
+        // Its flush follows, inserted or not (`0x6e85fc` `0x4b31b0`, `0x6e8601` `0x4bce90`):
+        // `ACTIONBAR_UPDATE_COOLDOWN`, `SPELL_UPDATE_COOLDOWN`, `PET_BAR_UPDATE_COOLDOWN`, and no
+        // `PET_BAR_UPDATE`.
+        if benilla_assets::trace::enabled() {
+            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(display, 0);
+            benilla_assets::trace::line(
+                "cd",
+                &format!(
+                    "arm spell={spell_id} rec={}ms cat={}:{}ms (GO pet-insert)",
+                    recovery_ms, display.category, category_ms
+                ),
+            );
+        }
+    }
 }
 
 /// The go's item leg, for a cast whose first guid is not the caster's: the item's entry off its
@@ -2440,7 +2482,6 @@ mod tests {
                             None,
                             GoPoints::default(),
                             None,
-                            None,
                             Self::SELF,
                             &mut commands,
                             &index,
@@ -2451,6 +2492,18 @@ mod tests {
                             &stores,
                             &mut go_lid,
                             &mut crate::ui_loot::LootLatch::default(),
+                            spells.as_deref(),
+                            (&edits, false),
+                            1,
+                        );
+                        go_cooldown_inserts(
+                            Self::SELF,
+                            spell_id,
+                            None,
+                            &index,
+                            &self_guid,
+                            &stores,
+                            &net_commands,
                             (
                                 &mut cooldowns,
                                 spells.as_deref(),
@@ -2458,19 +2511,6 @@ mod tests {
                                 &mut pet_bar,
                                 &crate::spell::SpellModifiers::default(),
                             ),
-                            (
-                                &edits,
-                                false,
-                                &mut crate::spell::CastCore {
-                                    pending: &mut Default::default(),
-                                    queued_melee: &mut Default::default(),
-                                    ground: &mut Default::default(),
-                                    reports: &mut Default::default(),
-                                    net: &net_commands,
-                                    tutorials: None,
-                                },
-                            ),
-                            1,
                         );
                     },
                 )
@@ -3366,7 +3406,6 @@ mod tests {
                         None,
                         GoPoints::default(),
                         None,
-                        item_caster,
                         caster,
                         &mut commands,
                         &index,
@@ -3377,6 +3416,18 @@ mod tests {
                         &stores,
                         &mut go_lid,
                         &mut crate::ui_loot::LootLatch::default(),
+                        Some(&spells),
+                        (&edits, false),
+                        1,
+                    );
+                    go_cooldown_inserts(
+                        caster,
+                        SPELL,
+                        item_caster,
+                        &index,
+                        &self_guid,
+                        &stores,
+                        &net_commands,
                         (
                             &mut cooldowns,
                             Some(&spells),
@@ -3384,19 +3435,6 @@ mod tests {
                             &mut pet_bar,
                             &mods,
                         ),
-                        (
-                            &edits,
-                            false,
-                            &mut crate::spell::CastCore {
-                                pending: &mut Default::default(),
-                                queued_melee: &mut Default::default(),
-                                ground: &mut Default::default(),
-                                reports: &mut Default::default(),
-                                net: &net_commands,
-                                tutorials: None,
-                            },
-                        ),
-                        1,
                     );
                 },
             )
@@ -3563,7 +3601,6 @@ mod tests {
                         None,
                         GoPoints::default(),
                         None,
-                        None,
                         10,
                         &mut commands,
                         &index,
@@ -3574,6 +3611,18 @@ mod tests {
                         &stores,
                         &mut go_lid,
                         &mut crate::ui_loot::LootLatch::default(),
+                        Some(&spells),
+                        (&edits, false),
+                        1,
+                    );
+                    go_cooldown_inserts(
+                        10,
+                        421,
+                        None,
+                        &index,
+                        &self_guid,
+                        &stores,
+                        &net_commands,
                         (
                             &mut cooldowns,
                             Some(&spells),
@@ -3581,19 +3630,6 @@ mod tests {
                             &mut pet_bar,
                             &crate::spell::SpellModifiers::default(),
                         ),
-                        (
-                            &edits,
-                            false,
-                            &mut crate::spell::CastCore {
-                                pending: &mut Default::default(),
-                                queued_melee: &mut Default::default(),
-                                ground: &mut Default::default(),
-                                reports: &mut Default::default(),
-                                net: &net_commands,
-                                tutorials: None,
-                            },
-                        ),
-                        1,
                     );
                 },
             )
@@ -3908,7 +3944,6 @@ mod tests {
             }
             app.world_mut().resource_mut::<SelfGuid>().0 = Some(10);
 
-            let (tx, _rx) = crossbeam_channel::unbounded();
             let spells = make_spells();
             app.world_mut()
                 .run_system_once(
@@ -3920,12 +3955,7 @@ mod tests {
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
                           mut go_lid: MessageWriter<GoLidOpen>,
-                          mut cooldowns: ResMut<Cooldowns>,
-                          mut pet_bar: ResMut<crate::ui_pet::PetBar>,
-                          mut items: ResMut<crate::items::Items>,
-
                           edits: Res<crate::creature_anim::UnitEdits>| {
-                        let net_commands = crate::net::NetCommands(tx.clone());
                         spell_go(
                             caster,
                             spell_id,
@@ -3937,7 +3967,6 @@ mod tests {
                             None,
                             GoPoints::default(),
                             None,
-                            None,
                             caster,
                             &mut commands,
                             &index,
@@ -3948,25 +3977,8 @@ mod tests {
                             &stores,
                             &mut go_lid,
                             &mut crate::ui_loot::LootLatch::default(),
-                            (
-                                &mut cooldowns,
-                                Some(&spells),
-                                &mut items,
-                                &mut pet_bar,
-                                &crate::spell::SpellModifiers::default(),
-                            ),
-                            (
-                                &edits,
-                                engaged,
-                                &mut crate::spell::CastCore {
-                                    pending: &mut Default::default(),
-                                    queued_melee: &mut Default::default(),
-                                    ground: &mut Default::default(),
-                                    reports: &mut Default::default(),
-                                    net: &net_commands,
-                                    tutorials: None,
-                                },
-                            ),
+                            Some(&spells),
+                            (&edits, engaged),
                             1,
                         )
                     },

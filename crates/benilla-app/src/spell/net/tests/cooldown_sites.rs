@@ -113,7 +113,6 @@ impl GoRig {
                         None,
                         GoPoints::default(),
                         None,
-                        item,
                         caster,
                         &mut commands,
                         &index,
@@ -124,6 +123,18 @@ impl GoRig {
                         &stores,
                         &mut go_lid,
                         &mut crate::ui_loot::LootLatch::default(),
+                        Some(&*spells),
+                        (&edits, false),
+                        1,
+                    );
+                    go_cooldown_inserts(
+                        caster,
+                        SPELL,
+                        item,
+                        &index,
+                        &self_guid,
+                        &stores,
+                        &net_commands,
                         (
                             &mut cooldowns,
                             Some(&*spells),
@@ -131,19 +142,6 @@ impl GoRig {
                             &mut pet_bar,
                             &mods,
                         ),
-                        (
-                            &edits,
-                            false,
-                            &mut crate::spell::CastCore {
-                                pending: &mut Default::default(),
-                                queued_melee: &mut Default::default(),
-                                ground: &mut Default::default(),
-                                reports: &mut Default::default(),
-                                net: &net_commands,
-                                tutorials: None,
-                            },
-                        ),
-                        1,
                     );
                 },
             )

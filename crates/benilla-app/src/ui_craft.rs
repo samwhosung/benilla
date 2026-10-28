@@ -1639,14 +1639,12 @@ mod tests {
         assert_eq!(open(&mut app), ["CRAFT_UPDATE", "CRAFT_SHOW"]);
         world_enter(&mut app);
         assert!(heard(&mut app).is_empty(), "a worldport closes it silently");
-        // The host's half, which this harness has none of.
-        app.world_mut().resource_mut::<CraftOpen>().line = None;
+        assert_eq!(app.world().resource::<CraftOpen>().line, None);
 
         assert_eq!(open(&mut app), ["CRAFT_UPDATE", "CRAFT_SHOW"]);
         app.insert_non_send_resource(listening());
         world_enter(&mut app);
         assert!(heard(&mut app).is_empty(), "a reload shows nothing");
-        // The host's half, which this harness has none of.
-        app.world_mut().resource_mut::<CraftOpen>().line = None;
+        assert_eq!(app.world().resource::<CraftOpen>().line, None);
     }
 }

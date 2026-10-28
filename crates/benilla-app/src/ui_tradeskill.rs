@@ -33,8 +33,8 @@ use crate::ui_spellbook::SkillLines;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
-/// Opener spell ids (effect 47) that `send_spell_cast` intercepted, opened by
-/// [`open_trade_skill`] the same frame.
+/// Opener spell ids (effect 47) that `send_spell_cast` intercepted (`0x6e4bd7`), which the call
+/// host toggles before the call returns ([`TradeSkillSteps::toggle_opens`]).
 #[derive(Resource, Default)]
 pub(crate) struct TradeSkillOpens(pub(crate) Vec<u32>);
 
@@ -99,9 +99,7 @@ pub(crate) struct UiTradeSkillPlugin;
 
 impl Plugin for UiTradeSkillPlugin {
     fn build(&self, app: &mut App) {
-        app.net_handler(SessionEventKind::Disconnected, on_session_end)
-            // After the spell's own go handler, whose steps come first (`0x6e81e7`).
-            .net_handler(SessionEventKind::SpellGo, on_spell_go);
+        app.net_handler(SessionEventKind::Disconnected, on_session_end);
         register_rebuild_triggers(app);
         app.add_sweep_leg(SweepLeg::TradeSkill, cancel_trade_skill_waits);
         app.init_resource::<TradeSkillOpens>()
@@ -668,12 +666,12 @@ fn feed_trade_skill(
             return;
         };
         let memo = memo.get(script);
-        // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
-        // window's show; the rebuilds between read, as the getters' lookups stand for the stock
-        // frame's calls (`0x4fdba8`), which the asks below make.
+        // The open's build asked its products in its call ([`TradeSkillSteps`]); a new VM's first
+        // push asks what it lacks, and the pushes between read, as the getters' lookups stand for
+        // the stock frame's calls (`0x4fdba8`).
         let fresh = open
             .line
-            .and_then(|line| reads.state(line, memo.state.is_none() || open.is_changed(), &clock));
+            .and_then(|line| reads.state(line, memo.state.is_none(), &clock));
         // The line stays open while a frame cannot resolve its book (a worldport's purge of our
         // own player): only a close ends it (`0x4fc870`, `0x4fc920`).
         let fresh = match fresh {
@@ -768,12 +766,14 @@ pub(crate) fn landed(waits: &mut Vec<u32>, items: &Items) -> u32 {
 }
 
 /// `HandleSpellGo`'s call to the repeat hook `OnTradeSkillCastDone` (`0x4fd7b0` at `0x6e81e7`),
-/// after the go's own steps: for a go whose first guid (`0x6e81b6`) and caster unit (`0x6e81d3`)
-/// are the active player, an item's cast's first guid being the item, and with neither flag
-/// `0x41` (`0x6e81de`). The hook counts the armed spell down and casts it again inside the
-/// packet, so the recast goes out ahead of a later packet's send; its `UPDATE_TRADESKILL_RECAST`
-/// is parked at this packet's place ([`crate::field_callbacks::Parked`]).
-fn on_spell_go(In(ev): In<SessionEvent>, world: &mut World) {
+/// registered by the spell's go handlers between its legs and its cooldown inserts
+/// (`0x6e8425`-`0x6e8570`), so a recast meets no cooldown of its own go: for a go whose caster
+/// unit (`0x6e81b6`, the second guid) and first guid (`0x6e81d3`, an item's cast's being the item)
+/// are the active player, with neither flag `0x41` (`0x6e81de`). The hook counts the armed spell
+/// down and casts it again inside the packet, so the recast goes out ahead of a later packet's
+/// send; its `UPDATE_TRADESKILL_RECAST` is parked at this packet's place
+/// ([`crate::field_callbacks::Parked`]).
+pub(crate) fn repeat_hook_at_go(ev: SessionEvent, world: &mut World) {
     let SessionEvent::SpellGo {
         caster,
         spell_id,
@@ -2085,6 +2085,39 @@ mod tests {
         );
     }
 
+    /// The go's hook (`0x6e81e7`) runs ahead of its cooldown inserts (`0x6e8425`-`0x6e8570`), so
+    /// "Create All" on a recipe with a cooldown, Mooncloth's day, recasts at the go where a
+    /// cooldown started first would refuse it.
+    #[test]
+    fn a_create_all_on_a_cooldown_recipe_recasts_at_the_go() {
+        let (mut app, rx) = headless_tailor();
+        app.world_mut().insert_resource(Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(HashMap::from([(
+                2963,
+                SpellDisplay {
+                    name: "Bolt of Linen Cloth".into(),
+                    recovery_ms: 86_400_000,
+                    ..Default::default()
+                },
+            )])),
+            ..Spells::empty_for_tests()
+        });
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run("DoTradeSkill(2, 3)")
+        })
+        .unwrap();
+        frame(&mut app, our_go(2963).to_vec());
+        assert_eq!(casts(&rx), ["Cast", "Cast"]);
+        assert!(
+            app.world()
+                .resource::<crate::spell::Cooldowns>()
+                .info(2963, 0, None, Instant::now())
+                .ui_triple(Instant::now(), 0.0)
+                .is_some(),
+            "the go's own cooldown starts after the recast"
+        );
+    }
+
     /// Each of our gos runs its hook (`0x4fd7b0`), which counts down (`0x4fd7ca`) and signals
     /// `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`) inside its packet, so each go's handlers read the
     /// count it left: 3 at the arm, then 2 and 1. Two gos of one frame park both signals on the
@@ -2220,8 +2253,7 @@ mod tests {
             }],
         );
 
-        // The host's half, which this harness has none of.
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
+        assert_eq!(app.world().resource::<TradeSkillOpen>().line, None);
     }
 
     /// The Bolt of Silk Cloth book behind the Tailoring opener 3908, its product's record in
@@ -2365,6 +2397,26 @@ mod tests {
         );
     }
 
+    /// An opener of a line with no `SkillLine` row opens nothing (`0x6e4c03`-`0x6e4c1a`, again at
+    /// `0x4fc939`-`0x4fc94a`): no event, the line stays shut and the queue is spent.
+    #[test]
+    fn an_opener_of_a_line_with_no_skill_line_row_opens_nothing() {
+        let mut app = silk_book();
+        let sla = benilla_formats::SlaInfo {
+            skill_id: 197,
+            req_skill_value: 1,
+            forward_spell_id: 0,
+            trivial_low: 1,
+            trivial_high: 2,
+        };
+        app.insert_resource(SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_abilities([(3839, sla), (3908, sla)]),
+        });
+        assert!(cast_opener(&mut app).is_empty());
+        assert_eq!(app.world().resource::<TradeSkillOpen>().line, None);
+        assert!(app.world().resource::<TradeSkillOpens>().0.is_empty());
+    }
+
     /// An opener toggles the book (`0x4fc910`): the open line's opener closes it with
     /// `TRADE_SKILL_CLOSE` (`0x4fc918`-`0x4fc930`), and the next opens it again. After a reload
     /// the line is still open, so the first opener closes the unshown book and the second shows it.
@@ -2374,8 +2426,7 @@ mod tests {
         let open = cast_opener;
         assert_eq!(open(&mut app), ["TRADE_SKILL_SHOW"]);
         assert_eq!(open(&mut app), ["TRADE_SKILL_CLOSE"]);
-        // The host's half, which this harness has none of.
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
+        assert_eq!(app.world().resource::<TradeSkillOpen>().line, None);
         assert_eq!(open(&mut app), ["TRADE_SKILL_SHOW"]);
         reload(&mut app);
         assert!(heard(&mut app).is_empty());
