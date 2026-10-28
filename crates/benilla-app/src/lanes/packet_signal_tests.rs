@@ -278,10 +278,10 @@ fn an_uncached_page_begins_at_its_answer() {
 }
 
 /// The session's end drops the reads the item-text lane holds, as the other lanes' ends drop
-/// theirs; so does a worldport's leave-world sweep in the same frame, which closes the reader
-/// (`0x490abc` → `0x4e3240`) ahead of the lanes' drain.
+/// theirs; so does the leave-world sweep run ahead of the drain (a `/reload`'s), which closes the
+/// reader (`0x490abc` → `0x4e3240`).
 #[test]
-fn the_session_end_and_a_worldport_drop_the_item_text_lane() {
+fn the_session_end_and_a_sweep_drop_the_item_text_lane() {
     let reader = |app: &App| {
         app.world()
             .resource::<crate::ui_item_text::ItemTextOpen>()
@@ -306,7 +306,7 @@ fn the_session_end_and_a_worldport_drop_the_item_text_lane() {
         .resource_mut::<crate::ui_script::LeavingWorldArmed>()
         .arm();
     crate::ui_script::run_leave_world_sweep(world);
-    assert!(frame(&mut app, vec![]).is_empty(), "the worldport's sweep");
+    assert!(frame(&mut app, vec![]).is_empty(), "the sweep");
     assert_eq!(reader(&app), None);
 }
 

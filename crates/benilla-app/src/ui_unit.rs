@@ -63,6 +63,9 @@ impl Plugin for UiUnitPlugin {
     fn build(&self, app: &mut App) {
         field_events::add_notice_lane(app);
         views::add_unit_views_lane(app);
+        // At the frame's start, so a worldport's leaving edge precedes everything the next frame's
+        // packets raise, the entering edge `feed_units` raises for the new world among them.
+        crate::ui_script::add_worldport_sweep(app);
         app.configure_sets(
             Update,
             UnitFeed
@@ -76,14 +79,6 @@ impl Plugin for UiUnitPlugin {
         .init_resource::<crate::ui_chat::ChatLog>()
         .add_message::<crate::net::WorldportMessage>()
         .init_world_leave_sweep()
-        // Ahead of the unit feed and outside its gate: the destructor sweeps (`0x5dd543`) whether
-        // or not an interface is up, the host legs with it.
-        .add_systems(
-            Update,
-            crate::ui_script::sweep_on_worldport
-                .after(benilla_world::schedule::WorldStage::Net)
-                .before(UnitFeed),
-        )
         .add_systems(
             Update,
             (warn_sideless_template, feed_far_sight_bit).in_set(UnitFeed),
@@ -3046,8 +3041,8 @@ mod tests {
     fn a_cross_map_worldport_fires_leaving_world_and_the_login_map_does_not() {
         let mut app = App::new();
         app.add_message::<crate::net::WorldportMessage>()
-            .init_world_leave_sweep()
-            .add_systems(Update, crate::ui_script::sweep_on_worldport);
+            .init_world_leave_sweep();
+        crate::ui_script::add_worldport_sweep(&mut app);
         app.insert_non_send_resource(UiScript::new().expect("VM"));
         app.world_mut()
             .non_send_resource::<UiScript>()

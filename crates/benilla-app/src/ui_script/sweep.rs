@@ -22,6 +22,7 @@
 //! bare `ret`s, and past the event the camera's detach (`0x490b52`-`0x490b5a`, `0x4841a0` →
 //! `0x50d0f0(0)`).
 
+use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::ecs::schedule::{ExecutorKind, ScheduleConfigs, ScheduleLabel};
 use bevy::ecs::system::ScheduleSystem;
 use bevy::prelude::*;
@@ -267,19 +268,38 @@ pub(crate) fn arm_leaving_world_on_self_create(
 }
 
 /// The sweep from the local player's destructor (`0x5dd543`) on a cross-map worldport; a
-/// same-map teleport destroys nothing and never sweeps. The sweep runs at this system's sync
-/// point, so its legs and their events land ahead of the unit feeds, ordered after it.
+/// same-map teleport destroys nothing and never sweeps.
+///
+/// `SMSG_NEW_WORLD` (`0x401b00`) posts the teardown `0x401bc0` as a timer at no delay
+/// (`0x401ba5`-`0x401bae`), and a tick runs its timers before the window input and the packets
+/// (`0x420d0c`, `0x420d23`, `0x420d55`). So the sweep runs at the start of the frame after the
+/// port's, in `PreUpdate` ahead of the input pass and the net drain, and `PLAYER_LEAVING_WORLD`
+/// follows every event the port's own frame raised, the lanes' drain among them. It follows a
+/// `/reload` the port's frame asked for ([`super::run_pending_reload`]), which the reference ran
+/// inside its call, and it precedes the new world's create, which the server sends after the
+/// teardown's acknowledgement. The system reads the port's message from its own cursor, so a
+/// port is swept once however many frames the message lives.
 pub(crate) fn sweep_on_worldport(
-    mut ports: MessageReader<crate::net::WorldportMessage>,
-    mut commands: Commands,
+    world: &mut World,
+    mut seen: Local<MessageCursor<crate::net::WorldportMessage>>,
 ) {
+    let Some(ports) = world.get_resource::<Messages<crate::net::WorldportMessage>>() else {
+        return;
+    };
     // `needs_ack` false is the initial-login map, an arrival; the whole iterator is read so no
     // message carries over.
-    if ports.read().filter(|w| w.needs_ack).count() > 0 {
-        commands.queue(|world: &mut World| {
-            run_leave_world_sweep(world);
-        });
+    if seen.read(ports).filter(|w| w.needs_ack).count() > 0 {
+        run_leave_world_sweep(world);
     }
+}
+
+/// Register [`sweep_on_worldport`] at the frame's start, outside any interface gate: the
+/// destructor sweeps (`0x5dd543`) whether or not an interface is up, the host legs with it.
+pub(crate) fn add_worldport_sweep(app: &mut App) -> &mut App {
+    app.add_systems(
+        PreUpdate,
+        sweep_on_worldport.after(super::run_pending_reload),
+    )
 }
 
 /// What a test of a leg needs: a spied VM, and the reload's and the worldport's sweeps.

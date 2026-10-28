@@ -314,12 +314,11 @@ impl Plugin for UiLogoutPlugin {
             .add_systems(
                 Update,
                 (
-                    // Ahead of a worldport's sweep: the world load marks the connection out of
-                    // the world (`0x401bd4`), firing `LOGOUT_CANCEL`, before it destroys the old
-                    // world, whose player destructor runs the sweep's `PLAYER_LEAVING_WORLD`.
-                    feed_logout
-                        .in_set(UiFeed)
-                        .before(crate::ui_script::sweep_on_worldport),
+                    // A worldport's `LOGOUT_CANCEL` (the world load marks the connection out of
+                    // the world, `0x401bd4`) fires here in the port's frame, ahead of the next
+                    // frame's sweep whose `PLAYER_LEAVING_WORLD` follows it in the load
+                    // (`0x401bf7`).
+                    feed_logout.in_set(UiFeed),
                     exit_on_logout_complete.in_set(crate::ui_script::UiDrain),
                 ),
             );
@@ -604,43 +603,6 @@ mod tests {
         let logout = app.world().resource::<LogoutState>();
         assert!(!logout.pending);
         assert_eq!(logout.signals, [LogoutSignal::Cancelled]);
-    }
-
-    /// A worldport's `LOGOUT_CANCEL` fires ahead of its sweep's `PLAYER_LEAVING_WORLD`: the
-    /// world load marks the connection out of the world (`0x401bd4`) before it destroys the old
-    /// world, whose player destructor runs the sweep (`0x5dd543`).
-    #[test]
-    fn a_worldports_cancel_fires_ahead_of_its_sweep() {
-        use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoints};
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
-        let update = census(&mut app, Update, SyncPoints::Declared);
-        if !type_names_available(&update) {
-            return;
-        }
-        let one = |suffix: &str| {
-            let mut hits = update
-                .systems
-                .iter()
-                .filter(|(_, s)| s.name.ends_with(suffix));
-            match (hits.next(), hits.next()) {
-                (Some((key, _)), None) => *key,
-                _ => panic!("exactly one `…{suffix}`"),
-            }
-        };
-        let (feed, sweep) = (one("ui_logout::feed_logout"), one("::sweep_on_worldport"));
-        let mut seen = std::collections::HashSet::new();
-        let mut stack = vec![feed];
-        while let Some(n) = stack.pop() {
-            for (a, b) in &update.dependencies {
-                if *a == n && seen.insert(*b) {
-                    stack.push(*b);
-                }
-            }
-        }
-        assert!(
-            seen.contains(&sweep),
-            "the feed is declared ahead of the sweep"
-        );
     }
 
     /// A world load zeroes the world handle (`0x401bd4` → `0x5aae70(0)`, stored at `0x5aae82`)

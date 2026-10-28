@@ -274,7 +274,8 @@ impl ItemTextLane {
 }
 
 /// The session's end and the leave-world sweep drop what the lane holds: no later world reads
-/// those objects, and a worldport's sweep closes the reader ahead of the lanes' drain.
+/// those objects. A worldport's sweep runs after its frame's drain, so it drops only the reads
+/// still waiting on a record.
 fn drop_item_text_lane(world: &mut World) {
     if let Some(mut lane) = world.get_resource_mut::<ItemTextLane>() {
         lane.0.clear();

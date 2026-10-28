@@ -735,7 +735,7 @@ pub(crate) use sweep::test_support as sweep_test;
 #[cfg(test)]
 pub(crate) use sweep::WorldLeaveSweep;
 pub(crate) use sweep::{
-    run_leave_world_sweep, sweep_on_worldport, LeavingWorldArmed, SweepApp, SweepLeg, SweptWorlds,
+    add_worldport_sweep, run_leave_world_sweep, LeavingWorldArmed, SweepApp, SweepLeg, SweptWorlds,
 };
 #[cfg(test)]
 mod sweep_tests;

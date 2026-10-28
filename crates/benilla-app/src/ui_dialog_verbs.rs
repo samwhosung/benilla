@@ -1642,8 +1642,8 @@ mod tests {
         app.init_resource::<MeetingStone>()
             .insert_resource(NetCommands(tx))
             .add_message::<crate::net::WorldportMessage>()
-            .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world)
-            .add_systems(Update, crate::ui_script::sweep_on_worldport);
+            .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world);
+        crate::ui_script::add_worldport_sweep(&mut app);
         app.world_mut()
             .resource_mut::<crate::ui_script::LeavingWorldArmed>()
             .arm();

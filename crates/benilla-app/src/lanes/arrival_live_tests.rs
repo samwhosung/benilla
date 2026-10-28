@@ -615,6 +615,98 @@ fn a_worldport_latches_the_lines_of_the_next_frame() {
     );
 }
 
+/// A cross-map `SMSG_NEW_WORLD` in a frame, with `needs_ack` as the cross-map one carries it.
+fn port() -> SessionEvent {
+    SessionEvent::Worldport {
+        map_id: 1,
+        position: [0.0; 3],
+        orientation: 0.0,
+        needs_ack: true,
+    }
+}
+
+/// A system line on the wire.
+fn system_line(text: &str) -> SessionEvent {
+    SessionEvent::Chat(ChatMessage {
+        chat_type: CHAT_MSG_SYSTEM,
+        language: 0,
+        sender_guid: 0,
+        target_guid: 0,
+        sender_name: None,
+        channel: None,
+        text: text.into(),
+        chat_tag: 0,
+    })
+}
+
+const LEAVE_SPY: &str = r#"Seen = {}
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({"PLAYER_ENTERING_WORLD", "CHAT_MSG_SYSTEM", "PLAYER_LEAVING_WORLD",
+                        "LOGOUT_CANCEL"}) do
+        f:RegisterEvent(e)
+    end
+    f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. tostring(arg1)) end)"#;
+
+/// The teardown timer `SMSG_NEW_WORLD` posts at no delay (`0x401bac`) runs at the next tick's
+/// start, ahead of its packets (`core/loop`, "What one tick runs"): the leave-world sweep
+/// (`0x401bf7` → `0x467700` → `0x5dd543` → `0x490a9e`) signals `PLAYER_LEAVING_WORLD` after every
+/// event the worldport's own tick raised, the lines of the packets on either side of it among
+/// them, and before the next tick's packets.
+#[test]
+fn a_worldports_leave_fires_at_the_next_ticks_start() {
+    let mut c = client(LEAVE_SPY);
+    c.frame(vec![vec![me()]]);
+    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD:nil"]);
+    c.frame(vec![
+        vec![system_line("before")],
+        vec![port()],
+        vec![system_line("after")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["CHAT_MSG_SYSTEM:before", "CHAT_MSG_SYSTEM:after"],
+        "the port's own tick raised them, ahead of the teardown"
+    );
+    c.frame(vec![vec![system_line("next")]]);
+    assert_eq!(
+        c.seen(),
+        ["PLAYER_LEAVING_WORLD:nil"],
+        "the next tick's timer runs first, and its line waits for the next world entry"
+    );
+    c.frame(vec![]);
+    assert_eq!(c.seen(), Vec::<String>::new(), "once per port");
+}
+
+/// A worldport alone in its frame: nothing fires in it, the leave fires once in the next.
+#[test]
+fn a_worldport_alone_leaves_in_the_next_frame() {
+    let mut c = client(LEAVE_SPY);
+    c.frame(vec![vec![me()]]);
+    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD:nil"]);
+    c.frame(vec![vec![port()]]);
+    assert_eq!(c.seen(), Vec::<String>::new());
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["PLAYER_LEAVING_WORLD:nil"]);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), Vec::<String>::new());
+}
+
+/// The timer's body calls the connection out of the world first (`0x401bd4` → `0x5aae70(0)`,
+/// which signals `LOGOUT_CANCEL` for a pending request) and destroys the old world after
+/// (`0x401bf7`): the cancel reaches the sweep's leave in that order.
+#[test]
+fn a_worldports_logout_cancel_precedes_its_leave() {
+    let mut c = client(LEAVE_SPY);
+    c.frame(vec![vec![me()]]);
+    assert_eq!(c.seen(), ["PLAYER_ENTERING_WORLD:nil"]);
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |vm| {
+        vm.expect("a VM").run("Logout()").expect("the verb runs")
+    });
+    c.frame(vec![vec![port()]]);
+    c.frame(vec![]);
+    assert_eq!(c.seen(), ["LOGOUT_CANCEL:nil", "PLAYER_LEAVING_WORLD:nil"]);
+}
+
 /// The cascade's trainer reset zeroes the guid, the selection and the total (`0x4d73e0`), and not
 /// the expanded mask (`0xb73a24`): the VM's collapsed lines stay for the next list to reset.
 #[test]

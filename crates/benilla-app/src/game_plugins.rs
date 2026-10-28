@@ -884,7 +884,7 @@ pub(crate) mod schedule_tests {
     #[test]
     fn the_worldport_sweep_is_not_gated_on_the_interface() {
         let mut app = headless_client();
-        let update = census(&mut app, Update, SyncPoints::Built);
+        let update = census(&mut app, PreUpdate, SyncPoints::Built);
         if !type_names_available(&update) {
             eprintln!(
                 "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
@@ -895,7 +895,7 @@ pub(crate) mod schedule_tests {
             .systems
             .values()
             .find(|s| s.name.ends_with("::sweep_on_worldport"))
-            .expect("the worldport's sweep is in Update");
+            .expect("the worldport's sweep is in PreUpdate");
         assert!(
             !sweep
                 .conditions
