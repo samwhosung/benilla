@@ -38,8 +38,8 @@ impl super::UiScript {
         })
     }
 
-    /// Push the wire bits, `(helm_shown, cloak_shown)`, for a getter that runs with no host free
-    /// to ask ([`super::SelfRead`]).
+    /// Set the VM's copy of the wire bits, `(helm_shown, cloak_shown)`, for a getter that runs
+    /// with no host free to ask ([`super::SelfRead`]).
     pub fn set_worn_display(&mut self, helm_shown: bool, cloak_shown: bool) {
         let mut model = self.model_mut();
         model.helm_shown = helm_shown;

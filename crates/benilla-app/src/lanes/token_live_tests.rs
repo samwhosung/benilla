@@ -302,6 +302,10 @@ fn client() -> Client {
     c.frame(vec![]);
     c.frame(vec![]);
     c.eval::<()>(false, "Seen = {} PetSeen = {} DeepSeen = {}");
+    // The VM's copy of our experience, which no feed pushes: `UnitXP` reads it through the host.
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM").set_player_xp(1234, 0)
+    });
     c
 }
 

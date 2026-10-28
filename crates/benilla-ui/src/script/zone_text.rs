@@ -3,7 +3,8 @@
 //! area change, before it fires `MINIMAP_ZONE_CHANGED` or the `ZONE_CHANGED` family. The caches
 //! live in the [`Model`], out of an addon's reach, as the reference's live in the client's BSS.
 //! `GetZonePVPInfo` reads its zone's rows off the commit and, at the call, the realm's PvP flag
-//! and the active player's faction template, which the host pushes as they change.
+//! and the active player's faction template's masks, the masks through the lent host
+//! ([`PlayerFactionMasksQuery`]).
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -40,6 +41,18 @@ pub struct ZonePvp {
     pub faction_name: String,
 }
 
+/// `GetZonePVPInfo`'s question of the lent host ([`super::live::ask`]): the active player's
+/// faction template's `(friend, enemy)` group masks as the call runs, off its
+/// `UNIT_FIELD_FACTIONTEMPLATE` (`[+0x110]+0x74`, `0x48d5d6`) and the template row's `+0x10` and
+/// `+0x14` (`0x48d604`, `0x48d613`); `None` with no active player (`0x48d5bc`) or no template
+/// row (`0x48d5e1`-`0x48d5fe`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayerFactionMasksQuery;
+
+impl super::live::LiveQuery for PlayerFactionMasksQuery {
+    type Answer = Option<(u32, u32)>;
+}
+
 /// `GetZonePVPInfo`'s first two values: nil with no zone row (`0x48d5b4`), no active player
 /// (`0x48d5bc`), the gate closed, neither the realm flag `0x88272c` nor the capital bit
 /// (`0x48d5c2`-`0x48d5d0`), or no template row (`0x48d5e1`-`0x48d5fe`). Open, `"friendly"` when
@@ -74,8 +87,8 @@ impl super::UiScript {
         self.model_mut().realm_pvp = on;
     }
 
-    /// Push the active player's faction template masks, `(friend, enemy)`, `None` with no active
-    /// player or no template row: what `GetZonePVPInfo` reads at the call (`0x48d5d6`-`0x48d613`).
+    /// Set the VM's copy of the active player's faction template masks, `(friend, enemy)`, `None`
+    /// with no active player or no template row, which `GetZonePVPInfo` reads with no host lent.
     pub fn set_player_faction_masks(&mut self, masks: Option<(u32, u32)>) {
         self.model_mut().player_faction_masks = masks;
     }
@@ -107,12 +120,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetZonePVPInfo",
         lua.create_function(|lua, ()| {
+            let masks = super::live::ask(lua, &PlayerFactionMasksQuery);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let z = &model.zone;
             let pvp = zone_pvp_type(
                 z.pvp_zone.as_ref(),
                 model.realm_pvp,
-                model.player_faction_masks,
+                masks.unwrap_or(model.player_faction_masks),
             );
             let string = |s: Option<&str>| match s {
                 Some(s) => lua.create_string(s).map(Value::String),

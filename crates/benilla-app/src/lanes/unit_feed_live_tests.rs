@@ -279,6 +279,66 @@ fn the_language_getters_read_the_player_at_the_call() {
     assert_eq!(c.eval::<String>(true, default), "Orcish", "the race now");
 }
 
+/// `PLAYER_FIELD_BYTES`, the combo points in byte 1 and the bar toggles in byte 2, and
+/// `PLAYER_FIELD_COMBO_TARGET`, a guid pair.
+const FIELD_BYTES: u16 = 1222;
+const COMBO_TARGET: u16 = 714;
+
+/// The active player's combo pair, bar toggles and faction masks are read off its object as the
+/// call runs (`GetComboPoints` `0x51a1c3`-`0x51a234`, `GetActionBarToggles` `0x4e768c`,
+/// `GetZonePVPInfo` `0x48d5d6`-`0x48d613`): what a handler wrote shows to the hosted getter with no
+/// frame between, and the VM's copy, which no feed pushes, stays as it was across the frame.
+#[test]
+fn the_player_scalars_read_as_written() {
+    let mut c = client();
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        let s = s.expect("a VM");
+        s.set_realm_pvp(true);
+        // An Alliance zone: friendly to the Human template (friend mask 2), hostile to the Orc
+        // one (enemy mask 10).
+        s.set_zone_texts(benilla_ui::script::ZoneTexts {
+            pvp_zone: Some(benilla_ui::script::ZonePvp {
+                faction_group_mask: 2,
+                faction_name: "Alliance".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    });
+    let chunk = "return GetComboPoints(), (GetZonePVPInfo()), GetActionBarToggles()";
+    type Scalars = (
+        i64,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    );
+    let human = (0, Some("friendly".to_string()), None, None, None, None);
+    assert_eq!(c.eval::<Scalars>(true, chunk), human);
+    // A rogue (class 4, `UNIT_FIELD_BYTES_0` byte 1) of the Orc template, three points banked on
+    // the wolf, the target, and the second and third bars on.
+    c.write(
+        ME,
+        &[
+            (BYTES_0, 1 | 4 << 8),
+            (TEMPLATE, ORC),
+            (FIELD_BYTES, 0b0110 << 16 | 3 << 8),
+            (COMBO_TARGET, WOLF as u32),
+            (COMBO_TARGET + 1, (WOLF >> 32) as u32),
+        ],
+    );
+    let written = (3, Some("hostile".to_string()), None, Some(1), Some(1), None);
+    assert_eq!(c.eval::<Scalars>(true, chunk), written);
+    c.frame(vec![]);
+    assert_eq!(c.eval::<Scalars>(true, chunk), written);
+    assert_eq!(
+        c.eval::<Scalars>(false, chunk),
+        (0, None, None, None, None, None),
+        "no feed pushes the scalars: the VM's copies hold nothing"
+    );
+}
+
 /// `SMSG_SPELL_COOLDOWN` for us on [`PLAIN`], a packet of the cooldown lane's.
 fn cooldown() -> Vec<SessionEvent> {
     vec![SessionEvent::SpellCooldowns {

@@ -449,17 +449,18 @@ impl super::UiScript {
         self.model_mut().money = copper;
     }
 
-    /// Push `PLAYER_XP` and `PLAYER_NEXT_LEVEL_XP`, private fields that `UnitXP` and `UnitXPMax`
-    /// answer for `"player"` alone.
+    /// Set the VM's copy of `PLAYER_XP` and `PLAYER_NEXT_LEVEL_XP`, private fields that `UnitXP`
+    /// and `UnitXPMax` answer for `"player"` alone, which they read with no host lent
+    /// ([`super::SelfRead`]).
     pub fn set_player_xp(&mut self, xp: u32, next_level_xp: u32) {
         let mut model = self.model_mut();
         model.player_xp = xp;
         model.player_next_level_xp = next_level_xp;
     }
 
-    /// Push the rest state (`PLAYER_BYTES_2` byte 3), the rested pool
-    /// (`PLAYER_REST_STATE_EXPERIENCE`, raw) and `PLAYER_FLAGS_RESTING` together, so
-    /// `GetRestState`, `GetXPExhaustion` and `IsResting` never read a half update.
+    /// Set the VM's copy of the rest state (`PLAYER_BYTES_2` byte 3), the rested pool
+    /// (`PLAYER_REST_STATE_EXPERIENCE`, raw) and `PLAYER_FLAGS_RESTING`, which `GetRestState`,
+    /// `GetXPExhaustion` and `IsResting` read with no host lent ([`super::SelfRead`]).
     pub fn set_rest_state(&mut self, state: u8, pool: u32, resting: bool) {
         let mut model = self.model_mut();
         model.rest_state = state;
@@ -467,8 +468,8 @@ impl super::UiScript {
         model.resting = resting;
     }
 
-    /// Push `PLAYER_FLAGS` bits 12 (`PartialPlayTime`) and 13 (`NoPlayTime`) together, as
-    /// `PlayerFrame.lua:244` tests them in one if/elseif.
+    /// Set the VM's copy of `PLAYER_FLAGS` bits 12 (`PartialPlayTime`) and 13 (`NoPlayTime`),
+    /// which those getters read with no host lent ([`super::SelfRead`]).
     pub fn set_play_time(&mut self, partial: bool, none: bool) {
         let mut model = self.model_mut();
         model.partial_play_time = partial;
@@ -515,9 +516,9 @@ impl super::UiScript {
         self.model_ref().exhaustion.get(&state).cloned()
     }
 
-    /// Push the combo points (`PLAYER_FIELD_BYTES` byte 1) and their target
-    /// (`PLAYER_FIELD_COMBO_TARGET`) together, as `Player::SetComboPoints` writes them. Raw:
-    /// `GetComboPoints`' class and target gates are the binding's.
+    /// Set the VM's copy of the combo points (`PLAYER_FIELD_BYTES` byte 1) and their target
+    /// (`PLAYER_FIELD_COMBO_TARGET`), which `GetComboPoints` reads with no host lent
+    /// ([`super::SelfRead`]). Raw: its class and target gates are the binding's.
     pub fn set_combo_points(&mut self, points: u8, target: u64) {
         let mut model = self.model_mut();
         model.combo_points = points;

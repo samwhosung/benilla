@@ -123,7 +123,7 @@ fn elect_event(cache: &ZoneCache, next: &ZoneSignal) -> Option<&'static str> {
 /// active player's, and nothing with neither held (`0x5db937`, `0x5db956`, `0x5db95d`): after a
 /// worldport frees every object, the commit waits for our player's create. It runs on the tick
 /// after the tick's packets (category 6's drain `0x403620`, then category 5's `0x401ec0`), so it
-/// reads what the unit feed pushed of a player that arrived this frame.
+/// reads a player that arrived this frame.
 #[allow(clippy::too_many_arguments)] // a Bevy system's full input set
 fn feed_zone_events(
     mut ticks: Local<u32>,
@@ -342,8 +342,8 @@ impl Plugin for AreaPlugin {
                 Update,
                 // After the leaf authority: leaf, indoor bit and names must come from one frame,
                 // as in the client's single-pass resolve (`0x67e510`), or a stale leaf fires a
-                // spurious splash. After the unit feed too, by the sets: the commit's handlers read
-                // our template as the frame's packets left it.
+                // spurious splash. The commit's handlers read our template through the host, as the
+                // frame's packets left it.
                 feed_zone_events
                     .after(crate::ui_script::UiTick)
                     .after(benilla_world::terrain_stream::AreaAuthoritySet),
@@ -543,17 +543,17 @@ mod tests {
         world.resource_mut::<GuidIndex>().0.insert(ME, me);
         let pvp = |app: &mut App| {
             let world = app.world_mut();
-            crate::ui_unit::run_feed_units_once(world);
             // The poll's tenth tick (`0x5db906`).
             for _ in 0..10 {
                 world.run_system_cached(feed_zone_events).unwrap();
             }
-            world
-                .non_send_resource::<UiScript>()
-                .eval::<(Option<String>, Option<String>)>(
-                    "local t, f = GetZonePVPInfo() return t, f",
-                )
-                .unwrap()
+            crate::script_calls::with_hosted_vm(world, |s| {
+                s.expect("a VM")
+                    .eval::<(Option<String>, Option<String>)>(
+                        "local t, f = GetZonePVPInfo() return t, f",
+                    )
+                    .unwrap()
+            })
         };
         assert_eq!(pvp(&mut app), (None, None), "no template: nil");
         app.world_mut().entity_mut(me).insert(store(Some(ORC)));
@@ -632,16 +632,6 @@ mod tests {
         let me = app.world_mut().spawn((SelfPlayer, Guid(ME), store)).id();
         app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
         assert_eq!(frame(&mut app), ["friendly"]);
-    }
-
-    /// The commit reads what the unit feed pushed of a player that arrived this frame.
-    #[test]
-    fn the_zone_commit_runs_after_the_unit_feed() {
-        let mut app = crate::game_plugins::schedule_tests::headless_client();
-        assert!(crate::ui_unit::feed_units_runs_before(
-            &mut app,
-            feed_zone_events
-        ));
     }
 
     /// The poll `0x5db900` counts its calls (`0xc4d790`) and reports the area only on the tenth

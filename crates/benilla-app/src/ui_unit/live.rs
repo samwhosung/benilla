@@ -4,7 +4,8 @@
 //! as of the call ([`benilla_ui::script::RelationQuery`]), the range verbs' reach
 //! ([`benilla_ui::script::UnitReachQuery`]), the item use's control exemption
 //! ([`benilla_ui::script::ControlBypassQuery`]) and the language walk
-//! ([`benilla_ui::script::KnownLanguagesQuery`], [`benilla_ui::script::DefaultLanguageQuery`]).
+//! ([`benilla_ui::script::KnownLanguagesQuery`], [`benilla_ui::script::DefaultLanguageQuery`])
+//! and the zone's faction masks ([`benilla_ui::script::PlayerFactionMasksQuery`]).
 //! Each store reads as of the drain's place ([`super::views::ViewStores`]), as the unit getters'
 //! own objects do.
 
@@ -14,8 +15,8 @@ use bevy::prelude::*;
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
     ControlBypassQuery, DefaultLanguageQuery, HeldCandidatesQuery, KnownLanguagesQuery,
-    LiveCandidate, LiveCandidates, RelationQuery, UnitHeld, UnitHeldQuery, UnitReach,
-    UnitReachQuery, UnitRelations, UnitStateAnswer, UnitStateQuery,
+    LiveCandidate, LiveCandidates, PlayerFactionMasksQuery, RelationQuery, UnitHeld, UnitHeldQuery,
+    UnitReach, UnitReachQuery, UnitRelations, UnitStateAnswer, UnitStateQuery,
 };
 
 use crate::names::NameCache;
@@ -149,6 +150,19 @@ impl UnitFeedLive<'_, '_> {
             has_skill_line,
             &languages.0,
         )))
+    }
+
+    /// The active player's faction template's `(friend, enemy)` group masks as of here
+    /// (`0x48d5d6`-`0x48d613`): `None` with no player held (`0x48d5bc`), no template sent or no
+    /// template row (`0x48d5e1`-`0x48d5fe`).
+    fn faction_masks(&self) -> Option<(u32, u32)> {
+        let (_, store) = self.player()?;
+        let template = self
+            .relations
+            .factions()?
+            .catalog()
+            .template(store.0.unit_faction_template()?)?;
+        Some((template.friend_group_mask, template.enemy_group_mask))
     }
 
     /// The active player's race's base language's name as of here (`0x5ec890`, `0x49fcd0`),
@@ -359,6 +373,7 @@ impl crate::script_calls::live::LiveFamily for UnitFeedLive<'_, '_> {
             || ask.answer(|q: &ControlBypassQuery| Some(self.exempts(q.0)))
             || ask.answer(|_: &KnownLanguagesQuery| self.known_languages())
             || ask.answer(|_: &DefaultLanguageQuery| self.default_language())
+            || ask.answer(|_: &PlayerFactionMasksQuery| Some(self.faction_masks()))
     }
 }
 

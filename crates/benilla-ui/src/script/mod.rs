@@ -512,7 +512,7 @@ pub use worldmap::{
 };
 pub use worldstate::WorldStateUiView;
 pub use worn_display::{WornDisplay, WornDisplaySet};
-pub use zone_text::{ZonePvp, ZoneTexts};
+pub use zone_text::{PlayerFactionMasksQuery, ZonePvp, ZoneTexts};
 
 use mlua::Lua;
 

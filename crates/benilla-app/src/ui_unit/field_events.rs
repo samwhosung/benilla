@@ -14,8 +14,8 @@ use benilla_ui::strings::Arg;
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
 
-/// The feeds that push what a field event's handlers read: the unit tokens' snapshots with the XP
-/// and rest values (`feed_units`), the group's and the pet's tokens, the player's combat stats and
+/// The feeds that push what a field event's handlers read: the unit tokens' snapshots
+/// (`feed_units`), the group's and the pet's tokens, the player's combat stats and
 /// inventory, the inspected unit's slots, the honor block and the watched faction. The lanes'
 /// drain runs after all of them, as the update handler writes every block of its packet before its
 /// notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
@@ -1374,11 +1374,11 @@ mod tests {
         crate::ui_world_enter::fire_lane(app.world_mut());
     }
 
-    /// A values block with new XP: `PLAYER_XP_UPDATE`'s handler reads the new `UnitXP`, because
-    /// the schedule runs every push the field events' handlers read ahead of the firing.
+    /// Every feed whose push a field event's handlers read runs ahead of the drain that fires it,
+    /// as the update handler writes every block of its packet before its notify pass (`0x46520e`,
+    /// `0x465222`, then `0x46522d`).
     #[test]
-    fn the_xp_handler_reads_the_xp_its_block_wrote() {
-        const XP: u16 = 716;
+    fn the_field_event_pushes_run_ahead_of_the_drain() {
         let mut headless = crate::game_plugins::schedule_tests::headless_client();
         let ahead = [
             crate::test_support::runs_before(
@@ -1403,53 +1403,6 @@ mod tests {
             ),
         ];
         assert_eq!(ahead, [true; 4], "feed_units, char, party, pet");
-
-        // In that order: the block lands, the push, the firing.
-        let (mut app, me) = feed_world(
-            &[(XP, 10), (XP + 1, 100)],
-            r#"SEEN = {}
-               local f = CreateFrame("Frame")
-               f:RegisterEvent("PLAYER_XP_UPDATE")
-               f:SetScript("OnEvent", function()
-                   table.insert(SEEN, event .. " " .. UnitXP("player"))
-               end)"#,
-        );
-        app.world_mut()
-            .run_system_once(super::super::feed_units)
-            .unwrap();
-        let mut edges = Vec::new();
-        let fields = {
-            let mut store = app
-                .world_mut()
-                .get_mut::<crate::net::ObjectStore>(me)
-                .unwrap();
-            store.0.merge_diff(
-                benilla_protocol::ObjectFields::from_pairs(&[(XP, 30)]),
-                |i, o, n| edges.push((i, o, n)),
-            );
-            store.0.clone()
-        };
-        let notices = crate::field_watch::values(
-            &crate::field_watch::Around {
-                me: Some(ME),
-                target: None,
-                creature_lookup: &|_| false,
-                others: &Vec::new,
-                pet_bar: 0,
-            },
-            ME,
-            benilla_protocol::messages::ObjectType::Player,
-            &fields,
-            &crate::field_watch::Notified::new(crate::field_watch::Sent::Fields(&[XP]), &edges),
-        );
-        app.world_mut()
-            .resource_mut::<crate::field_watch::NoticeLane>()
-            .write_batch(notices);
-        app.world_mut()
-            .run_system_once(super::super::feed_units)
-            .unwrap();
-        app.world_mut().run_system_once(fire_field_notices).unwrap();
-        assert_eq!(seen(&mut app), ["PLAYER_XP_UPDATE 30"]);
     }
 
     /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)

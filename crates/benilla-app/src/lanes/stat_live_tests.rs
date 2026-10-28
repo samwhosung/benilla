@@ -406,8 +406,15 @@ fn client() -> Client {
     c.frame(vec![]);
     c.frame(vec![]);
     c.eval::<()>(false, "Seen = {}");
-    // The purse's VM copy, which no feed pushes: `GetMoney` reads the coinage through the host.
-    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| s.expect("a VM").set_money(123_456));
+    // The VM's copies of the purse, the experience, the rest and the play-time bits, which no
+    // feed pushes: their getters read the descriptor through the host.
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        let s = s.expect("a VM");
+        s.set_money(123_456);
+        s.set_player_xp(4_200, 9_000);
+        s.set_rest_state(1, 1_500, true);
+        s.set_play_time(true, false);
+    });
     c
 }
 

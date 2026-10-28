@@ -84,21 +84,8 @@ struct UnitFeedMemo {
     /// The lazy caches' landing counters: their per-frame `&mut` misses would trip `is_changed`.
     names_generation: gate::Watch,
     guild_generation: gate::Watch,
-    /// Whether the world-enter events have fired for this world entry.
-    entered_world: bool,
     /// Per token, the last snapshot pushed.
     last: HashMap<String, UnitState>,
-    last_xp: Option<(u32, u32)>,
-    /// `(rest state, pool, PLAYER_FLAGS)`, pushed as one so no binding reads it half-updated.
-    last_rest: Option<(u8, u32, u32)>,
-    /// `(count, banked target)`, pushed as a pair because `GetComboPoints` reads both.
-    last_combo: Option<(u8, u64)>,
-    /// Our faction template's `(friend, enemy)` masks, as last pushed.
-    faction_masks: Option<Option<(u32, u32)>>,
-    /// `(HIDE_HELM, HIDE_CLOAK)`, as last pushed.
-    worn_hidden: Option<(bool, bool)>,
-    /// `PLAYER_FIELD_BYTES` byte 2 (`GetActionBarToggles`, `0x4e7660`); no field watch, no event.
-    action_bar_toggles: Option<u8>,
 }
 
 /// Adds the per-frame unit feed; the `Unit*` bindings live in `benilla-ui`.
@@ -1024,7 +1011,7 @@ impl UnitObjectRead for StoreObject<'_> {
 }
 
 /// The active player's own fields as the getters read them ([`benilla_ui::script::SelfRead`]),
-/// the derivation the XP and rest pushes take too ([`xp_pair`]).
+/// the derivation the reload's seat takes too ([`xp_pair`]).
 impl benilla_ui::script::SelfRead for StoreObject<'_> {
     fn money(&self) -> u64 {
         self.0 .0.player_money().map_or(0, u64::from)
@@ -1058,6 +1045,15 @@ impl benilla_ui::script::SelfRead for StoreObject<'_> {
     }
     fn shows_cloak(&self) -> bool {
         !self.0 .0.player_hides_cloak()
+    }
+    fn combo_points(&self) -> u8 {
+        self.0 .0.player_combo_points().unwrap_or(0)
+    }
+    fn combo_target(&self) -> u64 {
+        self.0 .0.player_combo_target()
+    }
+    fn action_bar_toggles(&self) -> u8 {
+        self.0 .0.player_action_bar_toggles().unwrap_or(0)
     }
 }
 
@@ -1544,83 +1540,6 @@ fn feed_units(
             }
         }
 
-        // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead
-        // of the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read
-        // real values. Pushing fires nothing: `PLAYER_XP_UPDATE` and `UPDATE_EXHAUSTION` are field
-        // watches (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), and so are the `PLAYER_FLAGS` arms
-        // (`crate::field_watch`), fired by `field_events` after this push.
-        if let Some((store, _)) = self_q.iter().next() {
-            let xp = xp_pair(store);
-            let rest = {
-                use benilla_ui::script::SelfRead;
-                let own = StoreObject(store);
-                (own.rest_state(), own.rest_pool(), store.0.player_flags())
-            };
-            if memo.last_xp != Some(xp) {
-                gate.audit("feed_units", "the XP pair");
-                memo.last_xp = Some(xp);
-                script.set_player_xp(xp.0, xp.1);
-            }
-            if memo.last_rest != Some(rest) {
-                gate.audit("feed_units", "the rest snapshot");
-                memo.last_rest = Some(rest);
-                script.set_rest_state(rest.0, rest.1, rest.2 & PLAYER_FLAGS_RESTING != 0);
-                // The play-time bits share the dword and the memo; only the events split by bit.
-                script.set_play_time(
-                    rest.2 & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0,
-                    rest.2 & PLAYER_FLAGS_NO_PLAY_TIME != 0,
-                );
-            }
-        }
-
-        // `PLAYER_FIELD_BYTES` byte 2, the four extra bars, on the edge: the reference never writes
-        // the cell (its one access is the read at `0x4e768c`) or watches it (`0x468070`), and stock
-        // reads it once, at `PLAYER_ENTERING_WORLD` (`UIParent.lua:364`), so this goes ahead of
-        // that fire. No player and a zero byte share the four-nil branch (`0x4e7684`).
-        if let Some((store, _)) = self_q.iter().next() {
-            let toggles = store.0.player_action_bar_toggles().unwrap_or(0);
-            if memo.action_bar_toggles != Some(toggles) {
-                gate.audit("feed_units", "the action-bar toggle byte");
-                memo.action_bar_toggles = Some(toggles);
-                script.set_action_bar_toggles(toggles);
-            }
-        }
-
-        // Our faction template's masks, which `GetZonePVPInfo` reads at the call
-        // (`0x48d5d6`-`0x48d613`), ahead of the world-enter events whose handlers colour the zone
-        // text; none with no player or no template row (`0x48d5bc`, `0x48d5fe`).
-        let faction_masks = self_q
-            .iter()
-            .next()
-            .and_then(|(store, _)| {
-                world
-                    .factions()?
-                    .catalog()
-                    .template(store.0.unit_faction_template()?)
-            })
-            .map(|t| (t.friend_group_mask, t.enemy_group_mask));
-        if memo.faction_masks != Some(faction_masks) {
-            gate.audit("feed_units", "the faction template's masks");
-            memo.faction_masks = Some(faction_masks);
-            script.set_player_faction_masks(faction_masks);
-        }
-
-        // The world entry's own events are its arrival's and its cascade's
-        // ([`crate::ui_world_enter`]); here only the world's exit is seen, which forgets the
-        // player-global memos so the next character seeds them.
-        if self_pair.is_some() {
-            memo.entered_world = true;
-        } else if memo.entered_world {
-            gate.audit("feed_units", "the world-exit disarm");
-            memo.entered_world = false;
-            memo.last_xp = None;
-            memo.last_rest = None;
-            memo.last_combo = None;
-            // Edge-only pushes: a stale memo would skip a new character whose values match it.
-            memo.worn_hidden = None;
-            memo.action_bar_toggles = None;
-        }
-
         // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its
         // own changes' (`crate::field_watch`), and a token that comes to name another unit is
         // announced by the selection's `PLAYER_TARGET_CHANGED` alone (`0x493540` signals only
@@ -1639,31 +1558,6 @@ fn feed_units(
                 None => {
                     memo.last.remove(token);
                 }
-            }
-        }
-
-        // The hide bits for `ShowingHelm()`/`ShowingCloak()` with no host free to ask.
-        if let Some((store, _)) = self_pair {
-            let hidden = (store.0.player_hides_helm(), store.0.player_hides_cloak());
-            if memo.worn_hidden != Some(hidden) {
-                gate.audit("feed_units", "the worn-display pair");
-                memo.worn_hidden = Some(hidden);
-                script.set_worn_display(!hidden.0, !hidden.1);
-            }
-        }
-
-        // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads
-        // both. `PLAYER_COMBO_POINTS` is the count's watcher's (`0x5ddff0`), on the notice lane,
-        // which fires after this push.
-        if let Some((store, _)) = self_q.iter().next() {
-            let banked = (
-                store.0.player_combo_points().unwrap_or(0),
-                store.0.player_combo_target(),
-            );
-            if memo.last_combo != Some(banked) {
-                gate.audit("feed_units", "the combo-point push");
-                memo.last_combo = Some(banked);
-                script.set_combo_points(banked.0, banked.1);
             }
         }
     });
@@ -2774,103 +2668,6 @@ mod tests {
         for (unit_flags, player_flags) in [(0x8_0000, 0), (0, 0x3220), (0x8_0000, 0)] {
             assert_eq!(step(unit_flags, player_flags), Vec::<String>::new());
         }
-    }
-
-    /// The XP and rest values are pushed on first sight and on every change, and the push fires
-    /// nothing: their events are the field watches' (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), which a
-    /// create and a `/reload` never run.
-    #[test]
-    fn the_xp_and_rest_pushes_fire_nothing() {
-        use bevy::ecs::system::RunSystemOnce;
-        const FIELD_PLAYER_BYTES_2: u16 = 194;
-        const FIELD_PLAYER_XP: u16 = 716;
-        const FIELD_PLAYER_NEXT_LEVEL_XP: u16 = 717;
-        const FIELD_PLAYER_REST_STATE_EXPERIENCE: u16 = 1175;
-
-        let mut app = App::new();
-        app.init_resource::<Selection>()
-            .init_resource::<UnitFeedState>()
-            .init_resource::<NameCache>()
-            .init_resource::<Reputations>()
-            .init_resource::<crate::ui_party::GroupState>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .init_resource::<crate::ui_guild::GuildState>();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        app.insert_resource(NetCommands(tx));
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_XP_UPDATE")
-                f:RegisterEvent("UPDATE_EXHAUSTION")
-                f:SetScript("OnEvent", function()
-                    table.insert(SEEN, event .. " " .. tostring(arg1))
-                end)
-            "#,
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        let me = app
-            .world_mut()
-            .spawn((
-                SelfPlayer,
-                Guid(0x77),
-                ObjectStore(
-                    benilla_protocol::ObjectFields::from_pairs(&[])
-                        .into_created(benilla_protocol::messages::ObjectType::Player),
-                ),
-            ))
-            .id();
-        // What the VM reads after the push, and what it heard.
-        let step = |app: &mut App, pairs: &[(u16, u32)]| -> (String, Vec<String>) {
-            app.world_mut()
-                .entity_mut(me)
-                .get_mut::<ObjectStore>()
-                .unwrap()
-                .0
-                .merge(benilla_protocol::ObjectFields::from_pairs(pairs));
-            app.world_mut().run_system_once(feed_units).unwrap();
-            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-            s.resolve();
-            let read = s
-                .eval::<String>(
-                    r#"return UnitXP("player") .. "/" .. UnitXPMax("player") .. " "
-                        .. tostring(GetXPExhaustion())"#,
-                )
-                .unwrap();
-            let heard = s.eval::<Vec<String>>("return SEEN").unwrap();
-            s.run("SEEN = {}").unwrap();
-            (read, heard)
-        };
-
-        let (read, heard) = step(
-            &mut app,
-            &[
-                (FIELD_PLAYER_XP, 10),
-                (FIELD_PLAYER_NEXT_LEVEL_XP, 100),
-                (FIELD_PLAYER_BYTES_2, 1 << 24),
-                (FIELD_PLAYER_REST_STATE_EXPERIENCE, 500),
-            ],
-        );
-        assert_eq!(read, "10/100 1000", "rested: the pool at the factor 2");
-        assert!(heard.is_empty(), "the first sight is a create: {heard:?}");
-        let (read, heard) = step(
-            &mut app,
-            &[
-                (FIELD_PLAYER_XP, 0),
-                (FIELD_PLAYER_NEXT_LEVEL_XP, 200),
-                (FIELD_PLAYER_BYTES_2, 2 << 24),
-                (FIELD_PLAYER_REST_STATE_EXPERIENCE, 0),
-            ],
-        );
-        assert_eq!(read, "0/200 nil");
-        assert!(
-            heard.is_empty(),
-            "a change is the watches' to fire: {heard:?}"
-        );
     }
 
     /// `CanInspect` answers by `0x4944a0` (`0x48a2a1`), whose player and cooperation legs the host

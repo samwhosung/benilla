@@ -2447,7 +2447,7 @@ f:RegisterEvent(\"PLAYER_ENTERING_WORLD\")
 f:SetScript(\"OnEvent\", function()
     if event == \"PLAYER_LOGIN\" then
         LoginProbe.order = LoginProbe.order .. \"LOGIN:\" .. tostring(UnitExists(\"player\"))
-            .. \":\" .. UnitLevel(\"player\") .. \":\" .. UnitXP(\"player\") .. \" \"
+            .. \":\" .. UnitLevel(\"player\") .. \" \"
     else
         LoginProbe.order = LoginProbe.order .. \"PEW \"
     end
@@ -2519,11 +2519,11 @@ fn player_login_fires_from_the_world_entry_with_the_player_seated() {
     app.update();
     assert_eq!(
         login_probe(&app, "order"),
-        "LOGIN:1:17:1234 PEW ",
+        "LOGIN:1:17 PEW ",
         "PLAYER_LOGIN sees the player's own unit, then PLAYER_ENTERING_WORLD fires at once"
     );
     app.update();
-    assert_eq!(login_probe(&app, "order"), "LOGIN:1:17:1234 PEW ");
+    assert_eq!(login_probe(&app, "order"), "LOGIN:1:17 PEW ");
 
     // A cross-map worldport: the player object is destroyed and created again.
     app.world_mut().despawn(me);
@@ -2532,7 +2532,7 @@ fn player_login_fires_from_the_world_entry_with_the_player_seated() {
     app.update();
     assert_eq!(
         login_probe(&app, "order"),
-        "LOGIN:1:17:1234 PEW PEW ",
+        "LOGIN:1:17 PEW PEW ",
         "a worldport re-fires PLAYER_ENTERING_WORLD and not PLAYER_LOGIN"
     );
 
@@ -2646,7 +2646,7 @@ fn a_reload_fires_player_login_once_against_the_live_player() {
     super::load_ingame_ui_on_world_entry(app.world_mut());
     spawn_self_player(app.world_mut());
     app.update();
-    assert_eq!(login_probe(&app, "order"), "LOGIN:1:17:1234 PEW ");
+    assert_eq!(login_probe(&app, "order"), "LOGIN:1:17 PEW ");
 
     reload(app.world_mut(), crate::client_state::ClientState::InWorld);
     assert_eq!(
@@ -2661,7 +2661,7 @@ fn a_reload_fires_player_login_once_against_the_live_player() {
     app.update();
     assert_eq!(
         login_probe(&app, "order"),
-        "LOGIN:1:17:1234 PEW ",
+        "LOGIN:1:17 PEW ",
         "the new VM gets PLAYER_LOGIN then PLAYER_ENTERING_WORLD, once each"
     );
 

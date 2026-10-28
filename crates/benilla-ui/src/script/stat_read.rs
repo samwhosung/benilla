@@ -220,6 +220,13 @@ pub trait SelfRead {
     fn shows_helm(&self) -> bool;
     /// `PLAYER_FLAGS` bit `0x800` clear, `ShowingCloak`'s (`0x48ddeb`).
     fn shows_cloak(&self) -> bool;
+    /// `PLAYER_FIELD_BYTES` byte 1 (`+0x1029`), `GetComboPoints`' count (`0x51a234`).
+    fn combo_points(&self) -> u8;
+    /// `PLAYER_FIELD_COMBO_TARGET` (`+0x838`), which `GetComboPoints` compares with the target
+    /// (`0x51a1f3`-`0x51a213`).
+    fn combo_target(&self) -> u64;
+    /// `PLAYER_FIELD_BYTES` byte 2 (`+0x102a`), `GetActionBarToggles`' (`0x4e768c`).
+    fn action_bar_toggles(&self) -> u8;
     /// Whether an active player is held (`0x468550` → `0x468460`), `CanReadUnitInventory`'s
     /// first test (`0x4944c9`); only [`NoPlayer`] holds none.
     fn held(&self) -> bool {
@@ -266,6 +273,16 @@ impl SelfRead for NoPlayer {
     fn shows_cloak(&self) -> bool {
         false
     }
+    // 0 with no player (`0x51a261`), and the toggles' four nils (`0x4e7684`).
+    fn combo_points(&self) -> u8 {
+        0
+    }
+    fn combo_target(&self) -> u64 {
+        0
+    }
+    fn action_bar_toggles(&self) -> u8 {
+        0
+    }
     fn held(&self) -> bool {
         false
     }
@@ -305,6 +322,15 @@ impl SelfRead for Model {
     }
     fn shows_cloak(&self) -> bool {
         self.cloak_shown
+    }
+    fn combo_points(&self) -> u8 {
+        self.combo_points
+    }
+    fn combo_target(&self) -> u64 {
+        self.combo_target
+    }
+    fn action_bar_toggles(&self) -> u8 {
+        self.action_bar_toggles.unwrap_or(0)
     }
 }
 

@@ -321,10 +321,8 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::minimap::ping::drive_minimap_ping", &["minimap::ping::MinimapPing",
         "ui_party::GroupState"]),
     ("::minimap::feed_game_time", &["net::game_time::ServerTime"]),
-    // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
-    // XP pair, the rest state, the combo points, the bar toggles and the worn display read the
-    // live store, and every snapshot its names, relations, selection and group, as the frame left
-    // them.
+    // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`), and
+    // every snapshot its names, relations, selection and group, as the frame left them.
     ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
         "ui_guild::GuildState", "ui_party::GroupState"]),
