@@ -1081,10 +1081,10 @@ pub(crate) mod schedule_tests {
     /// `video::apply_present_mode` and `video::apply_window_mode` and before `paint_script`, which
     /// puts the barrier between `video::drain_restart_gx` and those two applies on the paint's path
     /// (its commands fire the `gx*` CVar events whose observer writes the `VideoConfig` they read).
-    /// Without those two edges the count is 57. Lowered to 52 when the click's dispatchers queued
+    /// Without those two edges the count is 57. Lowered to 54 when the click's dispatchers queued
     /// their window opens as unit edits, the call host applying the world click inside its call.
     /// `WOW_SYNC_DUMP=1` lists each barrier's neighbours.
-    const UPDATE_SYNC_POINT_CEILING: usize = 52;
+    const UPDATE_SYNC_POINT_CEILING: usize = 54;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]
@@ -1915,7 +1915,7 @@ pub(crate) mod schedule_tests {
         ("ui_action/cooldown_lane.rs", "fire_cooldowns", Because::Deliberate,
          "a lane's firing, run only by the drain: `drop_cooldown_log`, gated on the interface being down, drops the log the frame it is written, so no signal fires into a later VM"),
         ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,
-         "filled only by a world right-click on a GameObject or a body; the drain sends casts to the wire"),
+         "filled only by a nameplate's right-click, which a frameless VM has no plate to make, or a crate's `Interact`; the world click's own casts drain inside its call, and the drain sends casts to the wire"),
         ("ui_action/recount.rs", "recount", Because::Deliberate,
          "no system: the item lane's firing calls it per run (`item_lane::fire_run`), inside the lanes' drain, which runs only with the interface up (`ingame_ui_up`)"),
         ("ui_char.rs", "feed_char", Because::FilledByVm,

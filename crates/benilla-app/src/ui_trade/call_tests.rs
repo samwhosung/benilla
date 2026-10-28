@@ -110,11 +110,7 @@ fn client() -> Trade {
     let drop = app
         .world_mut()
         .register_system(crate::ui_action::drop_item::drop_item_on_unit);
-    Trade {
-        app,
-        rx,
-        drop,
-    }
+    Trade { app, rx, drop }
 }
 
 /// A left click on `guid`'s model, through the world click's trade leg.
