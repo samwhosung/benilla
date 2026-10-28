@@ -7,7 +7,7 @@
 
 use super::selection::{queue_strike, swinging_at_old};
 use super::*;
-use crate::script_calls::census::{shows_in_order, shows_writes_only, writes_after};
+use crate::script_calls::census::{shows_no_send, shows_writes_only, writes_after};
 
 /// A frame noting every event, so each signal a call makes is held for a listener, and the
 /// census watching the writes while the guard lives.
@@ -51,8 +51,8 @@ fn a_bar_equip_signals_its_cursor_set_ahead_of_its_send() {
             })
             .collect();
     assert_eq!(wire, ["roll", "roll", "equip", "roll"]);
-    // The only handler held at the send is the send's own clear's, which follows it in 1.12.1.
-    shows_in_order("UseAction");
+    // The send is handed over in place, so no handler is held when it goes out.
+    shows_no_send();
 }
 
 /// A deselect while swinging reports the queued strike's stop first (`StopAttack`, `0x493a08`),

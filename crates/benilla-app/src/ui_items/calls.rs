@@ -146,9 +146,12 @@ impl ItemSteps<'_, '_> {
                     item_guid: guid,
                 });
             }
-            // `AutoEquipCursorItem` past its question: the call cleared the cursor, keeping the
-            // pickup's lock but an arrow's (`0x5e1577`, `0x5e1711`).
-            ItemCall::AutoEquip { bag, slot } => {
+            // `AutoEquipCursorItem` past its question, ahead of its clear, which keeps the
+            // pickup's lock but an arrow's (`0x5e1577`, `0x5e1711`). When `0x5e1840` put the item
+            // on the cursor in the same call, `SetCursorItem`'s pickup (`0x494c4a`) and the clear's
+            // put-down (`0x49520a`) both land inside it, so the frame's cursor-sound diff sees
+            // nothing and the pair plays here.
+            ItemCall::AutoEquip { bag, slot, picked } => {
                 let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
                     debug!("ui_items: autoequip ({bag}, {slot}) out of range — ignored");
                     return;
@@ -156,6 +159,13 @@ impl ItemSteps<'_, '_> {
                 let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
                 let guid = store.and_then(|s| slot_guid(&s.0, bag, slot0, objects));
                 send_auto_equip(objects, items, net, bag_index, wire_slot, guid);
+                let display_id = guid.filter(|_| picked).and_then(|guid| {
+                    let entry = objects.object(guid)?.object_entry()?;
+                    Some(items.template(entry, guid, Ask::Read)?.display_info_id)
+                });
+                if let Some(display_id) = display_id {
+                    equip_sound.write(crate::sound::AutoEquipSound { display_id });
+                }
             }
             // By entry, the stack staying in its bag; the call cleared the cursor.
             ItemCall::SetAmmo { entry } => {
@@ -184,16 +194,7 @@ impl ItemSteps<'_, '_> {
                 });
             }
             ItemCall::EquipAnswer(answer) => {
-                answer_pending_equip(
-                    script,
-                    gate,
-                    equip_sound,
-                    objects,
-                    items,
-                    net,
-                    store,
-                    answer,
-                );
+                answer_pending_equip(script, gate, objects, store, answer);
             }
             // The host hands this one to the item use, which holds the cast ladder.
             ItemCall::BindOnUse { .. } => {}
@@ -210,15 +211,11 @@ impl ItemSteps<'_, '_> {
 /// judged afresh. A cancel sends nothing, unlocks the items the click locked and frees the record:
 /// a swap's two ends as they sit now (`0x5e1ca5`, `0x5e1d04`), an auto-equip's one item, its
 /// record naming no second container (`0x5e1cd1`). An unfiled index does nothing: `0x5e1be0`
-/// bounds-checks it and returns.
-#[allow(clippy::too_many_arguments)] // the gate, the sound and the senders' state, one call
+/// bounds-checks it and returns. An accept's re-issue hands its send over in place.
 fn answer_pending_equip(
     script: &mut UiScript,
     gate: &mut crate::ui_bind_confirm::BindGate,
-    equip_sound: &mut MessageWriter<crate::sound::AutoEquipSound>,
     objects: &Objects,
-    items: &Items,
-    net: &NetCommands,
     store: Option<&ObjectStore>,
     answer: benilla_ui::script::PendingEquipAnswer,
 ) {
@@ -261,38 +258,23 @@ fn answer_pending_equip(
             dst_slot,
             ..
         } => {
-            let mv = benilla_ui::script::ContainerMove {
-                src_bag,
-                src_slot,
-                dst_bag,
-                dst_slot,
-                count: None,
-            };
-            if let benilla_ui::script::Swap::Sent(mv) = script.swap_items(mv, true) {
-                send_container_move(net, mv);
-            }
+            script.swap_items(
+                benilla_ui::script::ContainerMove {
+                    src_bag,
+                    src_slot,
+                    dst_bag,
+                    dst_slot,
+                    count: None,
+                },
+                true,
+            );
         }
         // The accept re-issues the pick-up and auto-equip from the slot as it stands (`0x5e1c23`
         // into `0x5e1840`, `suppress` set): `SetCursorItem`'s clear drops and unlocks the held
-        // item, then the equip goes out ahead of its clear, handed to the host in its place
-        // among the signals held while this applies. A slot emptied under the dialog sends
+        // item, then the equip goes out ahead of its clear. A slot emptied under the dialog sends
         // nothing (`0x5e18da`).
         PendingEquip::AutoEquip { bag, slot, .. } => {
-            let benilla_ui::script::AutoEquip::Sent { guid, .. } =
-                script.auto_equip_slot(bag, slot, true)
-            else {
-                return;
-            };
-            // The re-issue's `SetCursorItem` and send clear play their pair inside the answer
-            // (`0x494c4a`, `0x49520a`), after the held item's own clear.
-            if let Some(display_id) = objects
-                .object(guid)
-                .and_then(|o| o.object_entry())
-                .and_then(|entry| items.template(entry, guid, Ask::Read))
-                .map(|t| t.display_info_id)
-            {
-                equip_sound.write(crate::sound::AutoEquipSound { display_id });
-            }
+            script.auto_equip_slot(bag, slot, true);
         }
     }
 }

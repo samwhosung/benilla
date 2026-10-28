@@ -39,8 +39,10 @@ pub enum ItemCall {
     /// A repair-cursor click on a worn item, its 1-based doll slot (`0x4c7714`, `0x4c79c4`).
     RepairWorn(u32),
     /// `AutoEquipCursorItem`'s send past its question (`0x5e1480`): the item from Lua
-    /// `(bag, slot)`.
-    AutoEquip { bag: i64, slot: u32 },
+    /// `(bag, slot)`. `picked`: `0x5e1840` put it on the cursor in the same call (the bag's
+    /// right-click, the bar's equip, the bind-confirm accept), so its pickup and the send's
+    /// put-down both land inside the call (`0x494c4a`, `0x49520a`) and play with the send.
+    AutoEquip { bag: i64, slot: u32, picked: bool },
     /// `AutoEquipCursorItem`'s bind question (`0x5e16c6`): the record and its event, filed with
     /// the item held.
     EquipAsk { bag: i64, slot: u32, guid: u64 },
@@ -113,7 +115,7 @@ impl super::UiScript {
     /// The `(bag, slot)` auto-equip sends kept ([`ItemCall::AutoEquip`]).
     pub fn take_container_autoequips(&mut self) -> Vec<(i64, u32)> {
         self.take_item_calls_where(|call| match *call {
-            ItemCall::AutoEquip { bag, slot } => Some((bag, slot)),
+            ItemCall::AutoEquip { bag, slot, .. } => Some((bag, slot)),
             _ => None,
         })
     }

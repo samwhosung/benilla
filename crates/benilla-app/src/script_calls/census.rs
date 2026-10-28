@@ -2,20 +2,9 @@
 //! held ([`benilla_ui::script::census`]), as `SignalEvent` (`0x703e50`) runs every listener before
 //! the verb goes on. A kind made faithful leaves its list with its test, and none joins one.
 //!
-//! The census only counts; the reference says whether a count is a defect. A send counted under a
-//! kind whose signal follows the send in the reference (the held handler then runs after the
-//! packet too) is in order and sits on [`SENDS_IN_ORDER`], and a write counted after a signal sits
-//! on [`WRITES_AFTER`] when the reference writes it ahead of the signal.
-
-/// The call kinds the census counts that the reference orders the same way, each with its test:
-/// - `Item`: an accepted pending swap sends `CMSG_SWAP_INV_ITEM` (`0x5e0fdb`), then clears the
-///   cursor (`0x5e0fe7`), so the clear's handlers run after the packet, as they do held
-///   (`an_accepted_swap_sends_before_its_held_clear_signals`).
-/// - `UseAction`: the bar's equip signals `SetCursorItem`'s clear and put (`0x494bb6`, `0x494c54`)
-///   in place, then sends (`0x5e1757`) and clears the cursor (`0x5e1763`), so that clear's handlers
-///   run after the packet, as they do held
-///   (`a_bar_equip_signals_its_cursor_set_ahead_of_its_send`).
-pub(crate) const SENDS_IN_ORDER: &[&str] = &["Item", "UseAction"];
+//! The census only counts; the reference says whether a count is a defect. No call sends while a
+//! handler it signalled is held, and a write counted after a signal sits on [`WRITES_AFTER`] when
+//! the reference writes it ahead of the signal.
 
 /// The `kind:member` pairs that write state a held handler can read after the signal, where the
 /// reference writes it ahead of the signal; a turn's key is `turn@file:member`, its line left
@@ -36,15 +25,10 @@ pub(crate) const WRITES_AFTER: &[&str] = &[
 /// which the census cannot tell from a write, so [`writes_after`] leaves them out.
 const EPILOGUE: &[&str] = &["cast", "reports", "cast_views", "select", "cursor"];
 
-/// The census since the last take shows `kind` alone, which is on [`SENDS_IN_ORDER`].
-pub(crate) fn shows_in_order(kind: &str) {
+/// The census since the last take counts no send made while a handler was held.
+pub(crate) fn shows_no_send() {
     let counted = benilla_ui::script::census::take();
-    assert!(SENDS_IN_ORDER.contains(&kind), "{kind} is not on the list");
-    assert_eq!(
-        counted.keys().map(String::as_str).collect::<Vec<_>>(),
-        [kind],
-        "{counted:?}"
-    );
+    assert!(counted.is_empty(), "{counted:?}");
 }
 
 /// The `kind:member` pairs that wrote after a held handler since the last take, sorted: the

@@ -276,7 +276,6 @@ pub(crate) struct ActionPress<'w, 's> {
     ui_errors: Res<'w, UiErrorKeys>,
     ladder: CastLadder<'w, 's>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
-    equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,
     /// What the item's requirement gate and equip question read, seated with the host out.
     requirements: crate::ui_items::RequirementsLive<'w, 's>,
     /// The bags the item slot's auto-equip reads, lent with the host out; with no cooldown list,
@@ -346,7 +345,6 @@ fn press_slot(
         ui_errors,
         ladder,
         gate,
-        equip_sound: _,
         requirements,
         bags: _,
     } = p;
@@ -515,55 +513,11 @@ fn press_slot(
 }
 
 /// [`UseOutcome::Equip`]'s second half: `AutoEquipCursorItem` (`0x5e1480`) on the cursor as the
-/// set and its listeners left it, sent as the bar's equip sends.
+/// set and its listeners left it, its send, question or wait handed over in place, so it applies
+/// as the call settles, ahead of its clear's signals.
 fn auto_equip_cursor(p: &mut ActionPress, script: &mut UiScript) {
-    let ActionPress {
-        ladder,
-        gate,
-        equip_sound,
-        requirements,
-        ..
-    } = p;
-    requirements.seat(script);
-    match script.auto_equip_cursor(false) {
-        // The item sent is the cursor's: the bar's own, or with no control (the set
-        // refused) whatever was held (`0x5e18c9`).
-        benilla_ui::script::AutoEquip::Sent { bag, slot, guid } => {
-            if let Some((bag_index, wire_slot)) = crate::ui_items::wire_pos(bag, slot) {
-                crate::ui_items::send_auto_equip(
-                    &ladder.objects,
-                    &ladder.items,
-                    &ladder.commands,
-                    bag_index,
-                    wire_slot,
-                    Some(guid),
-                );
-                // The set and the send's clear both land inside the call
-                // (`0x494c4a`, `0x49520a`), so the pair plays here.
-                if let Some(display_id) = ladder
-                    .objects
-                    .object(guid)
-                    .and_then(|o| o.object_entry())
-                    .and_then(|entry| ladder.items.template(entry, guid, Ask::Read))
-                    .map(|t| t.display_info_id)
-                {
-                    equip_sound.write(crate::sound::AutoEquipSound { display_id });
-                }
-            }
-        }
-        benilla_ui::script::AutoEquip::Asked { bag, slot, guid } => gate.defer_equip(
-            script,
-            crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
-        ),
-        benilla_ui::script::AutoEquip::Waits { entry } => {
-            gate.await_auto_equip(entry, &ladder.items, &ladder.commands);
-        }
-        // With no control the set refused and held ammo loads (`0x5e1486`).
-        benilla_ui::script::AutoEquip::Ammo { entry } => {
-            let _ = ladder.commands.0.send(ClientCommand::SetAmmo { entry });
-        }
-        benilla_ui::script::AutoEquip::Back | benilla_ui::script::AutoEquip::None => {}
-    }
+    p.requirements.seat(script);
+    script.auto_equip_cursor(false);
 }
 
 /// The action bar's sends inside their calls ([`benilla_ui::script::ActionBarCall`]): the

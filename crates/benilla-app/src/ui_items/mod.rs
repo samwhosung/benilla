@@ -33,7 +33,7 @@ mod sets;
 #[cfg(test)]
 mod verb_tests;
 
-pub(crate) use drain::{clear_wrap_on_right_press, dispatch_fork, send_auto_equip};
+pub(crate) use drain::{clear_wrap_on_right_press, dispatch_fork};
 pub(crate) use equip_error::{equip_error_key, inventory_result_key, EquipError, EquipErrors};
 // `UseContainerItem`, `UseInventoryItem` and the item verbs' calls, applied in call order by
 // `crate::script_calls`.

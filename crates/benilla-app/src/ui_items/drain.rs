@@ -50,7 +50,6 @@ pub(crate) fn send_auto_equip(
 pub(crate) struct ScriptItemUse<'w, 's> {
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     merchant: Res<'w, crate::ui_merchant::MerchantOpen>,
-    equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
     // The item use's casts and sends.
@@ -135,7 +134,6 @@ impl ScriptItemUse<'_, '_> {
         let Self {
             self_q,
             merchant,
-            equip_sound,
             item_text,
             targeting,
             ladder,
@@ -148,24 +146,9 @@ impl ScriptItemUse<'_, '_> {
             slot,
             guid: item_guid,
             arm,
-            asks,
             on_self,
             ..
         } = call;
-        // A bind-on-equip equip the call asked about is filed whatever the slot holds now: the
-        // reference raised the question inside the call (`0x5e16c6`), the item is on the cursor,
-        // and the answer re-judges the slot (`0x5e1c23`) or only unlocks (`0x5e1c50`).
-        if asks {
-            gate.defer_equip(
-                script,
-                crate::ui_bind_confirm::PendingEquip::AutoEquip {
-                    bag,
-                    slot,
-                    guid: item_guid,
-                },
-            );
-            return None;
-        }
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
         // The slot must still hold the item the call resolved (`0x4fa1a6`). The reference sends
         // inside the call, so nothing moves between; here the frame may have applied a move since,
@@ -228,7 +211,6 @@ impl ScriptItemUse<'_, '_> {
                 guid: item_guid,
                 entry,
                 item_text_id: obj.item_text_id().unwrap_or(0),
-                display_info_id: t.display_info_id,
                 start_quest: t.start_quest,
                 spell_index: t.use_spell_index().unwrap_or(0),
                 use_spell: t.use_spell.map(|u| u.spell_id),
@@ -237,24 +219,6 @@ impl ScriptItemUse<'_, '_> {
             })
         });
         match (fork, clicked) {
-            // The call put the item on the cursor, `SetCursorItem` playing its pickup (`0x494c4a`),
-            // and ran `AutoEquipCursorItem`, whose clear plays the put-down (`0x49520a`). Both
-            // land inside the call, so the frame's cursor-sound diff sees nothing and this path
-            // plays the pair itself. A bind question leaves the item held instead, and the diff
-            // plays its pickup.
-            (UseFork::Equip, Some(c)) => {
-                send_auto_equip(
-                    &ladder.objects,
-                    &ladder.items,
-                    &ladder.commands,
-                    bag_index,
-                    wire_slot,
-                    Some(c.guid),
-                );
-                equip_sound.write(crate::sound::AutoEquipSound {
-                    display_id: c.display_info_id,
-                });
-            }
             // `CMSG_OPEN_ITEM` (emitter `0x5edd60`); vmangos swaps the entry back from
             // `character_gifts`.
             (UseFork::Unwrap, Some(c)) => {
@@ -411,10 +375,7 @@ impl ScriptItemUse<'_, '_> {
 /// Whether the call took a lock for `arm`, which a send that never goes out lets go. A projectile's
 /// equip unlocked instead; letting it go again only signals again.
 fn arm_locked(arm: UseArm) -> bool {
-    matches!(
-        arm,
-        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Equip)
-    )
+    matches!(arm, UseArm::Withdraw | UseArm::Deposit | UseArm::Sell)
 }
 
 /// The clicked item's send data, read as the call applies.
@@ -424,7 +385,6 @@ struct Clicked {
     entry: u32,
     /// Instance `ITEM_FIELD_ITEM_TEXT_ID`, nonzero on a letter made from mail.
     item_text_id: u32,
-    display_info_id: u32,
     start_quest: u32,
     spell_index: u8,
     /// The template's on-use spell, the key of the cast tail's in-flight guard.

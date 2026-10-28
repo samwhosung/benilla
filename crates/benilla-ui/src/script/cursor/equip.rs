@@ -4,7 +4,7 @@
 use mlua::Lua;
 
 use crate::script::tick::verb;
-use crate::script::{ContainerUse, ItemCall, Model, ScriptCall, UseArm, UseFork};
+use crate::script::{ItemCall, Model};
 
 use super::{
     clear, clear_cursor, set_cursor, Clear, CursorItem, CursorPayload, Setter, EQUIPMENT_BAG,
@@ -72,49 +72,20 @@ impl EquipFacts {
     }
 }
 
-/// Who sends what `AutoEquipCursorItem` decided. The reference sends in its body ahead of its
-/// clear (`0x5e1757` then `0x5e1763`; held ammo `0x5e14e0` then `0x5e14ec`), and raises its
-/// question (`0x5e16c6`) or asks the record (`0x5e1603`) there too.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Sender {
-    /// A verb's own segment: the send, the question or the record's ask goes to the host in its
-    /// place, ahead of the clear's signals ([`Model::call_in_verb`]), so a listener of the clear
-    /// runs after the packet, whether the segment's signals run now or are held for the host.
-    Verb,
-    /// `UseContainerItem`'s equip arm (`0x4fa3ff`): [`Sender::Verb`], but a send or a question goes
-    /// as the use's call, which plays the pickup and put-down that land inside it.
-    Use { on_self: bool, may_cast: bool },
-    /// The host, which sends the step it gets back: the bar's equip, applied with the host out, so
-    /// the segment's signals are held and its clear's listeners run after the host's send.
-    Host,
-}
-
-/// Hand `step` to the host in its place for `sender` ([`Sender`]).
-fn hand_over(model: &mut Model, sender: Sender, step: AutoEquip) {
-    let call = match (sender, step) {
-        (Sender::Host, _) | (_, AutoEquip::None | AutoEquip::Back) => return,
-        (
-            Sender::Use { on_self, may_cast },
-            AutoEquip::Sent { bag, slot, guid } | AutoEquip::Asked { bag, slot, guid },
-        ) => ScriptCall::UseContainerItem(ContainerUse {
-            bag,
-            slot,
-            guid,
-            arm: UseArm::Item(UseFork::Equip),
-            asks: matches!(step, AutoEquip::Asked { .. }),
-            on_self,
-            may_cast,
-        }),
-        (_, AutoEquip::Sent { bag, slot, .. }) => {
-            ScriptCall::Item(ItemCall::AutoEquip { bag, slot })
-        }
-        (_, AutoEquip::Asked { bag, slot, guid }) => {
-            ScriptCall::Item(ItemCall::EquipAsk { bag, slot, guid })
-        }
-        (_, AutoEquip::Waits { entry }) => ScriptCall::Item(ItemCall::AutoEquipWait { entry }),
-        (_, AutoEquip::Ammo { entry }) => ScriptCall::Item(ItemCall::SetAmmo { entry }),
+/// Hand what `AutoEquipCursorItem` decided to the host in its place among the segment's signals
+/// ([`Model::item_call`]): the reference sends in its body ahead of its clear (`0x5e1757` then
+/// `0x5e1763`; held ammo `0x5e14e0` then `0x5e14ec`), and raises its question (`0x5e16c6`) or asks
+/// the record (`0x5e1603`) there too. `picked`: `0x5e1840` put the item on the cursor in the same
+/// call, so the send carries the pickup and put-down that land inside it.
+fn hand_over(model: &mut Model, step: AutoEquip, picked: bool) {
+    let call = match step {
+        AutoEquip::None | AutoEquip::Back => return,
+        AutoEquip::Sent { bag, slot, .. } => ItemCall::AutoEquip { bag, slot, picked },
+        AutoEquip::Asked { bag, slot, guid } => ItemCall::EquipAsk { bag, slot, guid },
+        AutoEquip::Waits { entry } => ItemCall::AutoEquipWait { entry },
+        AutoEquip::Ammo { entry } => ItemCall::SetAmmo { entry },
     };
-    model.call_in_verb(call);
+    model.item_call(call);
 }
 
 /// The answer of an equip question.
@@ -183,16 +154,16 @@ pub(super) fn held_facts(lua: &Lua, model: &Model, item: &CursorItem) -> Option<
 /// by its guid (`0x5e15b2`, none returning with nothing done), then asked about, parked on its
 /// record or sent ([`equip_question`]), the server picking the slot and swapping the displaced
 /// piece back (`ItemHandler.cpp:138-228`). A split carry is no exception: the call never reads
-/// the split count `0xb4b40c`. The send (`0x5e1757`) goes ahead of its clear, `ClearCursor(ebx,1)`
-/// (`0x5e1763`), through `sender` ([`Sender`]): a projectile, by the found item's record
-/// (`0x5e16ff`), loads by entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets
+/// the split count `0xb4b40c`. The send (`0x5e1757`) goes to the host in place ahead of its clear,
+/// `ClearCursor(ebx,1)` (`0x5e1763`) ([`hand_over`], `picked` passed on): a projectile, by the
+/// found item's record (`0x5e16ff`), loads by entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets
 /// `ebx = 1` (`0x5e1704`, `0x5e1711`) and the item unlocks; every other arm keeps the lock for
 /// the server's answer (`0x5e1577`). Neither locks anything new.
 pub(crate) fn auto_equip_held(
     lua: &Lua,
     model: &mut Model,
     suppress: bool,
-    sender: Sender,
+    picked: bool,
 ) -> AutoEquip {
     let item = match &model.cursor {
         Some(CursorPayload::Item(item)) => item.clone(),
@@ -201,7 +172,7 @@ pub(crate) fn auto_equip_held(
             let step = AutoEquip::Ammo {
                 entry: ammo.item_id,
             };
-            hand_over(model, sender, step);
+            hand_over(model, step, picked);
             clear_cursor(model);
             return step;
         }
@@ -220,7 +191,7 @@ pub(crate) fn auto_equip_held(
         Question::Wait(entry) => AutoEquip::Waits { entry },
         Question::Send => AutoEquip::Sent { bag, slot, guid },
     };
-    hand_over(model, sender, step);
+    hand_over(model, step, picked);
     if let AutoEquip::Sent { .. } = step {
         // The class the item took the cursor with stands in for a view that carries none.
         let how = if facts.class.or(item.item_class) == Some(ITEM_CLASS_PROJECTILE) {
@@ -242,10 +213,10 @@ pub(super) fn repaints(step: AutoEquip) -> bool {
 }
 
 /// `AutoEquipCursorItem()` (`0x48a040` into `0x5e1480`), a click or drop on the doll's model
-/// (`PaperDollFrame.lua:31-35`), its send, question or wait handed to the host in place
-/// ([`Sender::Verb`]). Returns whether to repaint.
+/// (`PaperDollFrame.lua:31-35`), its send, question or wait handed to the host in place. Returns
+/// whether to repaint.
 pub(crate) fn auto_equip_cursor_item(lua: &Lua, model: &mut Model) -> bool {
-    repaints(auto_equip_held(lua, model, false, Sender::Verb))
+    repaints(auto_equip_held(lua, model, false, false))
 }
 
 /// `SetCursorItem`'s control gate (`0x494b8d`): without control of the character
@@ -262,17 +233,16 @@ pub(crate) fn has_cursor_control(model: &Model) -> bool {
 /// locked. An item in the trade window is refused first with its line. A refused set (no control,
 /// not on a taxi, [`Setter::Item`]) clears nothing and sets nothing, and `AutoEquipCursorItem` runs
 /// all the same (`0x5e18c9` falls through to `0x5e18d5` with no test), on whatever the cursor
-/// holds, its outcome handed over through `sender`.
+/// holds.
 pub(crate) fn auto_equip_from(
     lua: &Lua,
     item: CursorItem,
     suppress: bool,
-    sender: Sender,
 ) -> mlua::Result<AutoEquip> {
     if !put_for_equip(lua, item)? {
         return Ok(AutoEquip::None);
     }
-    Ok(auto_equip_on_cursor(lua, suppress, sender))
+    Ok(auto_equip_on_cursor(lua, suppress))
 }
 
 /// The first half of `0x5e1840`: the trade window's refusal (`0x5e1897`-`0x5e18b3`, `0x4bfd20`),
@@ -292,9 +262,10 @@ pub(crate) fn put_for_equip(lua: &Lua, item: CursorItem) -> mlua::Result<bool> {
 }
 
 /// The second half of `0x5e1840`: `AutoEquipCursorItem(suppress)` (`0x5e18d5`) on whatever the
-/// cursor holds now, the signals of the set and of any listener between having run.
-pub(crate) fn auto_equip_on_cursor(lua: &Lua, suppress: bool, sender: Sender) -> AutoEquip {
-    verb(lua, |model| auto_equip_held(lua, model, suppress, sender))
+/// cursor holds now, the signals of the set and of any listener between having run. Its send
+/// carries the set's pickup ([`hand_over`]'s `picked`).
+pub(crate) fn auto_equip_on_cursor(lua: &Lua, suppress: bool) -> AutoEquip {
+    verb(lua, |model| auto_equip_held(lua, model, suppress, true))
 }
 
 impl crate::script::UiScript {
@@ -326,14 +297,13 @@ impl crate::script::UiScript {
 
     /// `0x5e1840` on the item at Lua `(bag, slot)`: the bind-confirm accept re-issues it with
     /// `suppress` set (`0x5e1c23`). Nothing happens for an empty or unresolved slot (`0x5e18da`).
-    /// The send goes to the host in its place ([`Sender::Verb`]): with the host out applying the
-    /// accept, the set's signals, the send and the clear's signals run in that order as it
-    /// settles.
+    /// With the host out applying the accept, the set's signals, the send handed over in place
+    /// and the clear's signals run in that order as it settles.
     pub fn auto_equip_slot(&mut self, bag: i64, slot: u32, suppress: bool) -> AutoEquip {
         let Some(item) = self.item_at(bag, slot) else {
             return AutoEquip::None;
         };
-        auto_equip_from(&self.lua, item, suppress, Sender::Verb).unwrap_or_else(|e| {
+        auto_equip_from(&self.lua, item, suppress).unwrap_or_else(|e| {
             self.push_error(e);
             AutoEquip::None
         })
@@ -373,9 +343,10 @@ impl crate::script::UiScript {
     }
 
     /// The second half of `0x5e1840`: `AutoEquipCursorItem(suppress)` on whatever the cursor
-    /// holds now ([`auto_equip_on_cursor`]), for the host to send ([`Sender::Host`]).
+    /// holds now ([`auto_equip_on_cursor`]), its send handed to the host in place: the bar's
+    /// equip, whose segment is held while its call applies and runs as it settles.
     pub fn auto_equip_cursor(&mut self, suppress: bool) -> AutoEquip {
-        auto_equip_on_cursor(&self.lua, suppress, Sender::Host)
+        auto_equip_on_cursor(&self.lua, suppress)
     }
 }
 
@@ -449,10 +420,9 @@ mod tests {
         assert_eq!(s.take_container_autoequips(), vec![(0, 2)]);
     }
 
-    /// The bar's second half leaves the send to the host ([`super::Sender::Host`]): nothing is
-    /// handed over.
+    /// The bar's second half hands its send over in place, carrying the set's pickup.
     #[test]
-    fn the_bars_second_half_leaves_the_send_to_the_host() {
+    fn the_bars_second_half_hands_its_send_over() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_container(0, Some(bag(&[(1, 0x11, 4)])));
@@ -463,7 +433,14 @@ mod tests {
             AutoEquip::Sent { guid: 0x11, .. }
         ));
         assert!(s.cursor_item().is_none());
-        assert!(s.take_script_calls().is_empty());
+        assert_eq!(
+            s.take_item_calls(),
+            [crate::script::ItemCall::AutoEquip {
+                bag: 0,
+                slot: 1,
+                picked: true
+            }]
+        );
     }
 
     /// A projectile's send clears with the unlock (`0x5e1711`, `0x5e1763`), signalling it.
@@ -714,12 +691,8 @@ mod tests {
 
         assert_eq!(s.cursor_item().map(|i| i.guid), Some(0x11));
         assert!(s.item_locked(0x11));
-        let calls = s.take_script_calls();
-        let [crate::script::ScriptCall::UseContainerItem(u)] = calls.as_slice() else {
-            panic!("one use call: {calls:?}");
-        };
-        assert!(u.asks);
-        assert!(s.take_container_autoequips().is_empty());
+        assert_eq!(s.take_container_equip_asks(), vec![(0, 1, 0x11)]);
+        assert!(s.take_script_calls().is_empty(), "the question alone");
     }
 
     /// Unbound and not asked, the right-click puts the item on the cursor and the send clears it
@@ -734,11 +707,14 @@ mod tests {
 
         assert!(s.cursor_item().is_none());
         assert!(s.item_locked(0x11));
-        let calls = s.take_script_calls();
-        let [crate::script::ScriptCall::UseContainerItem(u)] = calls.as_slice() else {
-            panic!("one use call: {calls:?}");
-        };
-        assert!(!u.asks);
+        assert_eq!(
+            s.take_item_calls(),
+            [crate::script::ItemCall::AutoEquip {
+                bag: 0,
+                slot: 1,
+                picked: true
+            }]
+        );
     }
 
     /// The accept re-issues from the slot with `suppress` set (`0x5e1c23`): the held item drops

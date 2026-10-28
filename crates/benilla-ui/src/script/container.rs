@@ -196,9 +196,6 @@ pub struct ContainerUse {
     pub slot: u32,
     pub guid: u64,
     pub arm: UseArm,
-    /// The equip arm raised the bind-on-equip question and sent nothing: the item stays on the
-    /// cursor, locked, under the popup (`0x5e16c6`, `0x5e16ce`).
-    pub asks: bool,
     /// `onSelf`: the use targets the player in place of the selection (`0x4fa17d`-`0x4fa18e`).
     pub on_self: bool,
     /// What the protected-action gate's tag 2 allowed the call: an item's on-use spell casts
@@ -561,7 +558,6 @@ fn use_cleared(
         slot,
         guid,
         arm,
-        asks: false,
         on_self,
         may_cast,
     }));
@@ -579,11 +575,10 @@ fn use_cleared(
 /// `0x4fa418`), whose clear unlocked it instead (`0x5e1711`). A bind-on-equip item sends nothing:
 /// it stays held and locked under the question. An item the verb refused (in the trade window)
 /// sends nothing, but still locks.
-fn use_equip_arm(lua: &Lua, item: CursorItem, on_self: bool, may_cast: bool) -> mlua::Result<()> {
+fn use_equip_arm(lua: &Lua, item: CursorItem) -> mlua::Result<()> {
     let guid = item.guid;
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
-    let sender = cursor::equip::Sender::Use { on_self, may_cast };
-    cursor::equip::auto_equip_from(lua, item, false, sender)?;
+    cursor::equip::auto_equip_from(lua, item, false)?;
     super::tick::verb(lua, |model| {
         if !projectile {
             cursor::lock_item(model, guid);
@@ -1115,7 +1110,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::calls::submit(lua, call)?;
             }
             if let Some(item) = equip {
-                use_equip_arm(lua, item, on_self, may_cast)?;
+                use_equip_arm(lua, item)?;
             }
             Ok(())
         })?,
@@ -2996,7 +2991,8 @@ mod tests {
         assert!((start - 100.02).abs() < 1e-9);
     }
 
-    /// `UseContainerItem`'s use and equip arms hand their call to the lent host inside the call.
+    /// `UseContainerItem`'s use arm hands its call to the lent host inside the call, and its equip
+    /// arm the equip's send, carrying the set's pickup.
     #[test]
     fn container_uses_apply_in_the_call_with_a_host_lent() {
         use crate::script::ScriptCall;
@@ -3014,9 +3010,15 @@ mod tests {
         s.seat_item_records();
         let equipped =
             crate::script::host::test_support::applied_in_call(&mut s, "UseContainerItem(0, 1)");
-        let equip_arm = super::UseArm::Item(super::UseFork::Equip);
         assert!(
-            matches!(equipped.as_slice(), [ScriptCall::UseContainerItem(u)] if u.arm == equip_arm),
+            matches!(
+                equipped.as_slice(),
+                [ScriptCall::Item(crate::script::ItemCall::AutoEquip {
+                    bag: 0,
+                    slot: 1,
+                    picked: true
+                })]
+            ),
             "{equipped:?}"
         );
     }

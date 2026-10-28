@@ -321,7 +321,7 @@ fn equip_held(lua: &Lua, model: &mut Model, id: u32) -> Option<u64> {
 /// `AutoEquipCursorItem(1)` on the held item (`0x48979c`): the question skipped, the send handed
 /// over in place.
 fn auto_equip_unasked(lua: &Lua, model: &mut Model) {
-    super::equip::auto_equip_held(lua, model, true, super::equip::Sender::Verb);
+    super::equip::auto_equip_held(lua, model, true, false);
 }
 
 /// `CursorCanGoInSlot(id)`, the doll slot's highlight on `CURSOR_UPDATE`
@@ -972,7 +972,11 @@ mod tests {
         assert!(s.cursor_payload().is_none());
         assert_eq!(
             s.take_item_calls(),
-            [ItemCall::AutoEquip { bag: 0, slot: 2 }]
+            [ItemCall::AutoEquip {
+                bag: 0,
+                slot: 2,
+                picked: false
+            }]
         );
 
         s.set_cursor_for_test(CursorPayload::Ammo(CursorAmmo {

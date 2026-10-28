@@ -438,11 +438,10 @@ fn the_bind_answers_act_inside_their_calls() {
 }
 
 /// An accepted pending swap sends `CMSG_SWAP_INV_ITEM` (`0x5e0fdb`) and only then clears the
-/// cursor (`0x5e0fe7`), so the clear's handlers send after the packet. The census counts the send
-/// under `Item` as made while a handler waits, which is the reference's order: see
-/// [`SENDS_IN_ORDER`](crate::script_calls::census::SENDS_IN_ORDER).
+/// cursor (`0x5e0fe7`), so the clear's handlers send after the packet. The send is handed over in
+/// place, so the census counts no send made while a handler waits.
 #[test]
-fn an_accepted_swap_sends_before_its_held_clear_signals() {
+fn an_accepted_swap_sends_before_its_clears_signals() {
     let mut h = Bags::new();
     h.run("PickupContainerItem(0, 7) PickupInventoryItem(1)");
     h.run(
@@ -468,7 +467,7 @@ fn an_accepted_swap_sends_before_its_held_clear_signals() {
         ],
         "the packet, then the clear's handler"
     );
-    crate::script_calls::census::shows_in_order("Item");
+    crate::script_calls::census::shows_no_send();
 }
 
 /// An auto-equip's bind answer re-issues the pick-up and equip from the slot as it stands
