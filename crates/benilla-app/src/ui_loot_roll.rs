@@ -27,8 +27,10 @@
 //! A result's line, its `CANCEL_LOOT_ROLL` and the promotion after it wait for the result's item
 //! record and, for a win, the winner's name (`0x61b96a` → `0x61b9a0` → `0x61b9bf` → `0x61b9e0`,
 //! `0x61b5c0` → `0x61b640`); until then the roll stays listed. Deviation: a refused record or name
-//! closes the roll unspoken, where the reference's failure callbacks (`0x61bc80`, `0x61bd50`,
-//! `0x61b7d0`) free the record with neither, leaving its frame open on a roll no getter finds.
+//! closes the roll unspoken. In 1.12.1 the failure callbacks (`0x61bc80`, `0x61bd50`, `0x61b7d0`)
+//! free the record with no `CANCEL_LOOT_ROLL` and leave the open count unlowered, so its frame
+//! stays up, empty and dead, until a `/reload`, and holds one of the four frames, so a later
+//! fourth roll never shows; benilla closes the roll instead.
 //!
 //! A promoted roll's `arg2` is still the wire's countdown (`0x61b430` and `0x61b79a` push
 //! `node+0x3c`, which nothing rewrites); only the bar is short, as `GetLootRollTimeLeft` counts
@@ -126,7 +128,9 @@ impl ActiveRoll {
             texture,
             quality: t.map(|t| t.quality),
             bind_on_pickup: t.is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP),
-            time_left_ms: expires.saturating_sub(now).as_millis() as u32,
+            // The 32-bit difference, unclamped: a past expiry wraps to about 4.29e9, which the
+            // stock bar reads as its minimum (`LootFrame.lua:290-293`).
+            time_left_ms: (expires.as_millis() as u32).wrapping_sub(now.as_millis() as u32),
             item_id: self.item_id,
             random_property_id: self.random_property_id,
             // `GetLootRollItemLink`, the chat lines' link; `None` until the template answers.
@@ -1791,6 +1795,10 @@ mod tests {
         assert_eq!(e.time_left_ms, 60_005 - 30_000);
         assert_eq!(e.name.as_deref(), Some("Sulfuras"));
         let late = fifth.entry(&f.items, None, RollCatalogs::NONE, Duration::from_secs(99));
-        assert_eq!(late.time_left_ms, 0);
+        assert_eq!(
+            late.time_left_ms,
+            60_005u32.wrapping_sub(99_000),
+            "a past expiry wraps, unclamped"
+        );
     }
 }

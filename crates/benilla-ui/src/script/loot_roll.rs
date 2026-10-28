@@ -38,7 +38,7 @@ pub struct LootRollEntry {
     /// Bind on pickup, which swaps in the gold backdrop; `false` while the template is in flight.
     pub bind_on_pickup: bool,
     /// Milliseconds left: the expiry the start packet set, its arrival plus the countdown
-    /// (`0x61b404`), less the clock at the call (`0x4c331c`); saturates at 0.
+    /// (`0x61b404`), less the clock at the call (`0x4c331c`), as a wrapping 32-bit difference.
     pub time_left_ms: u32,
     /// The item id, the key of the hover's item lookup.
     pub item_id: u32,
