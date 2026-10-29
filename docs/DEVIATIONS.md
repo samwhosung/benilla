@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 252
+- [benilla-app](#benilla-app): 251
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -186,8 +186,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:659`](../crates/benilla-app/src/net/motion/spline.rs#L659))
-- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:918`](../crates/benilla-app/src/net/objects/update.rs#L918))
-- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:930`](../crates/benilla-app/src/net/objects/update.rs#L930))
+- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:986`](../crates/benilla-app/src/net/objects/update.rs#L986))
+- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:998`](../crates/benilla-app/src/net/objects/update.rs#L998))
 - On benilla's unattended reconnect, which the reference lacks, the world's VM survives the loss, so the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the surviving target frame lets the lost unit go. ([`src/net/session.rs:286`](../crates/benilla-app/src/net/session.rs#L286))
 
 #### no_install
@@ -196,10 +196,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### player
 
-- The reference re-projects the point's height onto the first walkable facet a zero-size box gather finds at the enemy (`0x60fe25`-`0x60fe51`); here it keeps the enemy's height. ([`src/player/approach.rs:277`](../crates/benilla-app/src/player/approach.rs#L277))
-- The reference stores the world point unconverted and reads it back as deck-local (`0x60fe6c`, `0x610e95`), so on a transport it walks astray; here it rides the deck. ([`src/player/approach.rs:280`](../crates/benilla-app/src/player/approach.rs#L280))
-- The reference converts back through the transport the player stands on each frame (`0x610e6b`), so stepping off mid-walk sends the point astray; here the deck is fixed at the arm. ([`src/player/approach.rs:309`](../crates/benilla-app/src/player/approach.rs#L309))
-- The melee arm names the player's own guid (`0x60fe5f`), so the reference turns to face itself, a fixed heading; here the melee walk does not turn. ([`src/player/approach.rs:522`](../crates/benilla-app/src/player/approach.rs#L522))
+- The reference re-projects the point's height onto the first walkable facet a zero-size box gather finds at the enemy (`0x60fe25`-`0x60fe51`); here it keeps the enemy's height. ([`src/player/approach.rs:417`](../crates/benilla-app/src/player/approach.rs#L417))
+- The reference stores the world point unconverted and reads it back as deck-local (`0x60fe6c`, `0x610e95`), so on a transport it walks astray; here it rides the deck. ([`src/player/approach.rs:420`](../crates/benilla-app/src/player/approach.rs#L420))
+- The reference converts back through the transport the player stands on each frame (`0x610e6b`), so stepping off mid-walk sends the point astray; here the deck is fixed at the arm. ([`src/player/approach.rs:449`](../crates/benilla-app/src/player/approach.rs#L449))
+- The melee arm names the player's own guid (`0x60fe5f`), so the reference turns to face itself, a fixed heading; here the melee walk does not turn. ([`src/player/approach.rs:665`](../crates/benilla-app/src/player/approach.rs#L665))
 - The shape is kept, its scale anchored to `LOOK_SENSITIVITY` on both axes at the default speeds, because the unit factor is a per-machine OS setting and this keeps the shipped feel: both axes turn alike, where the reference's yaw turns 1.5× faster than its pitch. ([`src/player/camera.rs:121`](../crates/benilla-app/src/player/camera.rs#L121))
 - A delay holds the channel at `from`, because the reference's `0x512830` backs the start time up by the delay, so `s` runs negative and the even cosine jumps the value away and back, an unclamped divide rather than a behaviour. ([`src/player/camera_channel.rs:13`](../crates/benilla-app/src/player/camera_channel.rs#L13))
 - A code table, not the reference's ninety `cameraTerrainTilt<Style><State>` CVars, because the matrix is a law, not a setting. ([`src/player/camera_dynamics.rs:285`](../crates/benilla-app/src/player/camera_dynamics.rs#L285))
@@ -208,10 +208,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - `ResetView` writes the CVars back to their defaults, because the CVar store is our persistence; the reference (`0x50fae0`) touches no CVar, so its reset reverts at next launch. ([`src/player/camera_view.rs:15`](../crates/benilla-app/src/player/camera_view.rs#L15))
 - The starting zoom, `CAM_DIST_DEFAULT`, is 15 yd where the reference starts at 5.55, the third-person-A row of its default table `0x84f488` that `cameraView` 1 picks (`0x50c17a`, `0x50c18b`; the `cameraDistance` CVar itself registers "0.0"), for a wider view. ([`src/player/camera_zoom.rs:9`](../crates/benilla-app/src/player/camera_zoom.rs#L9))
 - No drunk field-of-view lane, because the reference's is invisible in play: its target `(179° − 90°)·fraction` (camera `+0x10c`, setter `0x511250`) eases at `cameraFoVSmoothSpeed`, 0.5°/s, and restarts on every drunk-byte change, so it creeps under 1°. ([`src/player/drunk.rs:46`](../crates/benilla-app/src/player/drunk.rs#L46))
+- Every end signals `END`, because the reference's three silent ends are a bug: two writers reset the follow mode cell `0xc4d888` directly (`0x5fb646`, `0x60396f`), leaving a stale guid at `0xc4d980`, and the canceller's early-out (`0x60fb70`) fires nothing. ([`src/player/follow.rs:24`](../crates/benilla-app/src/player/follow.rs#L24))
 - A settle hold is summed and sent once on release, without the push, because it stands in for the reference's blocking load (`0x694920`), not a refused substep, and lasts seconds. ([`src/player/movement_net.rs:470`](../crates/benilla-app/src/player/movement_net.rs#L470))
 - The reference's blocking load (`0x694920`) waits out its reads before the frame goes on and has no such release; without one, a model that never loads would freeze our body for good. ([`src/player/state.rs:120`](../crates/benilla-app/src/player/state.rs#L120))
 - Root is not merged, because a bare pose unrooting us while the server still roots us streams motion into `CHEAT_TYPE_ROOT_MOVE`; vmangos keeps a rooted mover's root bit (`MovementHandler.cpp:1064`), so the reference's merge of it is a no-op anyway. ([`src/player/state.rs:202`](../crates/benilla-app/src/player/state.rs#L202))
-- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:497`](../crates/benilla-app/src/player/wire_in.rs#L497))
+- Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:503`](../crates/benilla-app/src/player/wire_in.rs#L503))
 
 #### portrait
 
@@ -244,10 +245,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - The file is a PNG where the reference writes a TGA (`0x4426f0`, the name `%s\WoWScrnShot_%s.tga` at `0x834c44`), because a 32-bit Targa of a modern window is about 8 MB and few tools open it. ([`src/screenshot.rs:14`](../crates/benilla-app/src/screenshot.rs#L14))
 - A failed write answers `SCREENSHOT_FAILED` and logs the reason (`report_captures`), where the reference fires `SCREENSHOT_SUCCEEDED`, because its capture returns 1 whenever it had a buffer and discards the write's result (`0x442792`, `0x4427a2`); announcing a shot that was never saved is a defect. ([`src/screenshot.rs:18`](../crates/benilla-app/src/screenshot.rs#L18))
-
-#### script_calls
-
-- The feed's stops fire `END` for every follow (`crate::ui_follow`), so the arm's stop fires it for the follow this VM was last told of. ([`src/script_calls/engine.rs:40`](../crates/benilla-app/src/script_calls/engine.rs#L40))
 
 #### shaders
 
@@ -287,7 +284,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### target
 
 - The reference's arm reads the last object's stop (`0x611336` before `0x610383` stores this one's), so its first walk has no stop. ([`src/target/click.rs:741`](../crates/benilla-app/src/target/click.rs#L741))
-- It runs on the first frame with none, so an arrival that sends no stop (mid-air, rooted, under a held turn key) acts at once or on landing or release, where the reference waits for the next ground stop and can act long after, wherever the player then is. ([`src/target/click.rs:1693`](../crates/benilla-app/src/target/click.rs#L1693))
+- It runs on the first frame with none, so an arrival that sends no stop (mid-air, rooted, under a held turn key) acts at once or on landing or release, where the reference waits for the next ground stop and can act long after, wherever the player then is. ([`src/target/click.rs:1709`](../crates/benilla-app/src/target/click.rs#L1709))
 - The rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the reference keeps any value; a server rank past 7 would index outside our palette. ([`src/target/relations.rs:487`](../crates/benilla-app/src/target/relations.rs#L487))
 - TAB uses Classic Era's screen-space priority, not 1.12's ±30° facing cone and snapshot cursor (`0x493f60`), because the cone skips a close mob in front of the camera, which sits behind the character. ([`src/target/scan.rs:3`](../crates/benilla-app/src/target/scan.rs#L3))
 - Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:194`](../crates/benilla-app/src/target/scan.rs#L194))
@@ -337,10 +334,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - The challenger's name comes from the `NameCache`, so a name still being queried delays the popup to the name's answer rather than dropping it; the reference reads it off the streamed player and fires nothing without one (`0x4d4a72`). ([`src/ui_duel.rs:8`](../crates/benilla-app/src/ui_duel.rs#L8))
 - Zero arms nothing, where the reference prints 0 and re-arms forever on the `dec`'s wraparound, a bug vmangos never reaches (it sends 3000). ([`src/ui_duel.rs:95`](../crates/benilla-app/src/ui_duel.rs#L95))
-
-#### ui_follow
-
-- Every stop fires `END`, because the reference's three silent stops are a bug: two writers reset the follow mode cell `0xc4d888` directly (`0x5fb646`, `0x60396f`), leaving a stale guid at `0xc4d980`, and the canceller's early-out (`0x60fb70`) fires nothing. ([`src/ui_follow.rs:7`](../crates/benilla-app/src/ui_follow.rs#L7))
 
 #### ui_gamma
 
