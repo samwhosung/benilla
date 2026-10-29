@@ -1246,6 +1246,7 @@ fn publish_filter_policy(filter: Res<benilla_assets::TexFilterSetting>) {
 mod tests {
     use super::*;
     use crate::chat_bubble::BubbleConfig;
+    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
     use crate::minimap::MinimapZoom;
     use crate::nameplates::NameConfig;
     use crate::player::camera::{FollowConfig, FollowStyle, LookConfig};
@@ -1377,8 +1378,9 @@ mod tests {
     /// initial value; a locale that does not leaves every knob where it was.
     #[test]
     fn a_locale_default_reaches_its_knob_at_load() {
+        let env = CvarEnv::hold();
         let boot = |locale: usize| {
-            let mut app = cvar_app();
+            let mut app = cvar_app_in(&env);
             app.insert_resource(Cvars::for_locale(locale));
             app.update();
             let video = *res::<VideoConfig>(&app);
@@ -2522,19 +2524,12 @@ mod tests {
 
     #[test]
     fn a_change_saves_after_one_quiet_second_with_no_exit() {
-        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
-        let _l = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CvarEnv::hold();
         let tmp = std::env::temp_dir().join(format!("benilla-cvar-quiet-{}", std::process::id()));
         std::fs::remove_dir_all(&tmp).ok();
-        let _c = EnvGuard::unset("WOW_CAPTURE");
-        let _u = EnvGuard::unset("WOW_UI_SCALE");
-        let _f = EnvGuard::unset("WOW_FARCLIP");
-        let _d = EnvGuard::unset("WOW_CLUTTER_DENSITY");
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
 
-        let mut app = cvar_app();
+        let mut app = cvar_app_in(&env);
         app.update();
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
@@ -2565,19 +2560,15 @@ mod tests {
     /// boot reads the row.
     #[test]
     fn the_old_saved_account_file_moves_into_config_toml_once() {
-        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
-        let _l = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CvarEnv::hold();
         let tmp = std::env::temp_dir().join(format!("benilla-cvar-acct-{}", std::process::id()));
         std::fs::remove_dir_all(&tmp).ok();
         std::fs::create_dir_all(&tmp).unwrap();
-        let _c = EnvGuard::unset("WOW_CAPTURE");
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
         let old = tmp.join("account");
         std::fs::write(&old, "PLAYER\n").unwrap();
 
-        let mut app = cvar_app();
+        let mut app = cvar_app_in(&env);
         app.update();
         assert_eq!(res::<Cvars>(&app).get("accountName"), Some("PLAYER"));
         let glue = app
@@ -2596,7 +2587,7 @@ mod tests {
 
         // The next boot reads the row; a stale file beside it is not read over it.
         std::fs::write(&old, "STALE").unwrap();
-        let mut next = cvar_app();
+        let mut next = cvar_app_in(&env);
         next.update();
         assert_eq!(res::<Cvars>(&next).get("accountName"), Some("PLAYER"));
         std::fs::remove_dir_all(&tmp).ok();
@@ -2607,20 +2598,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_old_saved_account_file_outlives_a_failed_save() {
-        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
         use std::os::unix::fs::PermissionsExt;
-        let _l = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CvarEnv::hold();
         let tmp = std::env::temp_dir().join(format!("benilla-cvar-acct2-{}", std::process::id()));
         std::fs::remove_dir_all(&tmp).ok();
         std::fs::create_dir_all(&tmp).unwrap();
-        let _c = EnvGuard::unset("WOW_CAPTURE");
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
         let old = tmp.join("account");
         std::fs::write(&old, "PLAYER").unwrap();
 
-        let mut app = cvar_app();
+        let mut app = cvar_app_in(&env);
         app.update();
         // The folder turns read-only: the write of `config.toml` fails (unless the run is root's,
         // which no mode stops).
@@ -2636,7 +2623,7 @@ mod tests {
         std::fs::write(&old, "PLAYER").unwrap();
 
         std::fs::write(tmp.join("config.toml"), "not [ toml").unwrap();
-        let mut bad = cvar_app();
+        let mut bad = cvar_app_in(&env);
         bad.update();
         assert_eq!(res::<Cvars>(&bad).get("accountName"), Some("PLAYER"));
         assert!(
@@ -2674,16 +2661,9 @@ mod tests {
 
     #[test]
     fn a_lua_setcvar_lands_in_config_toml_end_to_end() {
-        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
-        let _l = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CvarEnv::hold();
         let tmp = std::env::temp_dir().join(format!("benilla-cvar-e2e-{}", std::process::id()));
         std::fs::remove_dir_all(&tmp).ok();
-        let _c = EnvGuard::unset("WOW_CAPTURE");
-        let _u = EnvGuard::unset("WOW_UI_SCALE");
-        let _f = EnvGuard::unset("WOW_FARCLIP");
-        let _d = EnvGuard::unset("WOW_CLUTTER_DENSITY");
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
         crate::local_state::write_atomic(
             &tmp.join("config.toml"),
@@ -2691,7 +2671,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut app = cvar_app();
+        let mut app = cvar_app_in(&env);
 
         // Startup: the file's MusicVolume reaches the knob; Update: the VM table seeds from it.
         app.update();
@@ -2723,9 +2703,91 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    /// What a CVar host reads from the environment when it is built and when it loads
+    /// ([`session_values`], [`crate::video::windowed_env`], [`crate::local_state::home`]); the
+    /// persistence variables are `ENV_LOCK`'s own, the window ones are the capture tests'.
+    const HOST_ENV: [&str; 13] = [
+        "WOW_WIN",
+        "WOW_CAPTURE",
+        "WOW_CAPTURE_UI",
+        "WOW_UI_SCALE",
+        "WOW_FARCLIP",
+        "WOW_CLUTTER_DENSITY",
+        "WOW_NOVSYNC",
+        "WOW_TRILINEAR",
+        "WOW_ANISO",
+        "WOW_MSAA",
+        "WOW_RENDER_SCALE",
+        "WOW_HOST",
+        "BENILLA_HOME",
+    ];
+
+    /// [`HOST_ENV`] cleared for an attended run with no state folder, until dropped. The caller
+    /// holds `ENV_LOCK`. `background_run` counts any env under a run-driving prefix
+    /// (`WOW_UNATTENDED`, `WOW_RIG…`), so it is answered with `WOW_BG=0`, which forces no.
+    fn scrub_host_env() -> Vec<EnvGuard> {
+        let mut guards: Vec<_> = HOST_ENV.into_iter().map(EnvGuard::unset).collect();
+        guards.push(EnvGuard::set("WOW_BG", "0"));
+        guards
+    }
+
+    /// `ENV_LOCK` held with [`HOST_ENV`] cleared, so a client built under it reads the same
+    /// environment whichever tests run beside it. A test that sets variables of its own (a state
+    /// folder) sets them after this. Not reentrant: the one thread holds one, builds its clients
+    /// with [`cvar_app_in`] and takes no `ENV_LOCK` of its own.
+    struct CvarEnv {
+        // Dropped first: the variables come back while the lock is still held.
+        _scrubbed: Vec<EnvGuard>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl CvarEnv {
+        fn hold() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Self {
+                _scrubbed: scrub_host_env(),
+                _lock: lock,
+            }
+        }
+    }
+
+    /// A [`cvar_app`] and the environment it was built under, which it keeps for as long as the
+    /// test has it: its load reads the environment again.
+    struct CvarApp {
+        app: App,
+        // After `app`, so the client is gone before the variables come back.
+        _env: CvarEnv,
+    }
+
+    impl std::ops::Deref for CvarApp {
+        type Target = App;
+        fn deref(&self) -> &App {
+            &self.app
+        }
+    }
+
+    impl std::ops::DerefMut for CvarApp {
+        fn deref_mut(&mut self) -> &mut App {
+            &mut self.app
+        }
+    }
+
+    /// A client with a real CVar host, hermetic: it holds [`CvarEnv`] for its life. A test that
+    /// builds a second client, or sets variables of its own, holds one itself and builds with
+    /// [`cvar_app_in`].
+    fn cvar_app() -> CvarApp {
+        let env = CvarEnv::hold();
+        CvarApp {
+            app: cvar_app_in(&env),
+            _env: env,
+        }
+    }
+
     /// A client with a real CVar host: every knob resource a callback writes, the callbacks,
     /// [`CvarPlugin`] and a VM for the mirror.
-    fn cvar_app() -> App {
+    fn cvar_app_in(_env: &CvarEnv) -> App {
         let mut app = App::new();
         app.add_plugins(bevy::MinimalPlugins)
             .insert_resource(SoundConfig::default())
@@ -2782,6 +2844,64 @@ mod tests {
             .add_plugins(CvarPlugin);
         app.insert_non_send_resource(UiScript::new().unwrap());
         app
+    }
+
+    /// A test built on [`cvar_app`] reads the same environment whichever tests run beside it: a
+    /// capture that sets the window variables under `ENV_LOCK` on another thread leaves the build
+    /// waiting for the lock, and it then sees the attended default, not that run's windowed one.
+    #[test]
+    fn a_cvar_app_is_built_outside_another_tests_window_variables() {
+        use std::sync::mpsc;
+        let (set_tx, set_rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel();
+        let capture = std::thread::spawn(move || {
+            let _l = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _w = EnvGuard::set("WOW_WIN", "800x600");
+            let _c = EnvGuard::set("WOW_CAPTURE", "ui-trainer");
+            set_tx.send(()).unwrap();
+            go_rx.recv().unwrap();
+            // Held for as long as a capture test builds its client: far past the build below.
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        });
+        set_rx.recv().unwrap();
+        go_tx.send(()).unwrap();
+        let app = cvar_app();
+        assert_eq!(
+            res::<VideoConfig>(&app).display,
+            crate::video::DisplayMode::Fullscreen
+        );
+        drop(app);
+        capture.join().unwrap();
+    }
+
+    /// The scrub leaves nothing a CVar host reads: no window variable, no state folder, and no
+    /// run-driving variable the list does not name; it gives them back.
+    #[test]
+    fn the_host_environment_is_scrubbed_and_comes_back() {
+        use crate::video::windowed_env;
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _set: Vec<_> = HOST_ENV
+            .into_iter()
+            .map(|k| EnvGuard::set(k, "1"))
+            .collect();
+        let _run = EnvGuard::set("WOW_UNATTENDED", "1");
+        assert!(windowed_env(), "the premise: a run that owns its window");
+
+        let scrub = scrub_host_env();
+        assert!(!windowed_env(), "the prefix scan too, whatever is set");
+        for key in HOST_ENV {
+            assert!(std::env::var_os(key).is_none(), "{key}");
+        }
+        drop(scrub);
+        assert!(windowed_env());
+        for key in HOST_ENV {
+            assert_eq!(std::env::var(key).as_deref(), Ok("1"), "{key}");
+        }
+        assert!(std::env::var_os("WOW_BG").is_none());
     }
 
     /// A host write, its latch committed at once, and its callbacks run before this returns.
@@ -2982,16 +3102,9 @@ mod tests {
 
     #[test]
     fn a_minimap_setzoom_reaches_the_knob_and_the_file() {
-        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
-        let _l = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CvarEnv::hold();
         let tmp = std::env::temp_dir().join(format!("benilla-mmzoom-{}", std::process::id()));
         std::fs::remove_dir_all(&tmp).ok();
-        let _c = EnvGuard::unset("WOW_CAPTURE");
-        let _u = EnvGuard::unset("WOW_UI_SCALE");
-        let _f = EnvGuard::unset("WOW_FARCLIP");
-        let _d = EnvGuard::unset("WOW_CLUTTER_DENSITY");
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
         // The previous session left the outdoor map zoomed right in.
         crate::local_state::write_atomic(
@@ -3000,7 +3113,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut app = cvar_app();
+        let mut app = cvar_app_in(&env);
         app.update();
 
         assert_eq!(app.world().resource::<MinimapZoom>().outdoor, 5);
@@ -3419,17 +3532,9 @@ mod tests {
     /// [`CvarLoad`].
     #[test]
     fn the_loaded_file_reaches_a_knob_before_anything_ordered_after_cvar_load() {
-        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
-        let _l = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CvarEnv::hold();
         let tmp = std::env::temp_dir().join(format!("benilla-cvar-load-{}", std::process::id()));
         std::fs::remove_dir_all(&tmp).ok();
-        let _c = EnvGuard::unset("WOW_CAPTURE");
-        let _u = EnvGuard::unset("WOW_UI_SCALE");
-        let _f = EnvGuard::unset("WOW_FARCLIP");
-        let _d = EnvGuard::unset("WOW_CLUTTER_DENSITY");
-        let _m = EnvGuard::unset("WOW_MSAA");
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
         crate::local_state::write_atomic(
             &tmp.join("config.toml"),
@@ -3445,7 +3550,7 @@ mod tests {
         ) {
             seen.0 = Some((sound.music, msaa.samples));
         }
-        let mut app = cvar_app();
+        let mut app = cvar_app_in(&env);
         app.init_resource::<SeenAtStartup>()
             .add_systems(Startup, after_load.after(CvarLoad));
         app.update();
