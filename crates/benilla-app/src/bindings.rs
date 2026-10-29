@@ -367,7 +367,10 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
 }
 
 /// Drain the VM's binding requests: `SaveBindings` writes the set's diff; saving the account set
-/// deletes the character file.
+/// deletes the character file. Left at the frame, not in the call: the call's own work, the copy
+/// and the dirty mark (`0x4b8260` → `0x4b6310`), is the VM's and signals nothing (only a copy into
+/// the live set does, `0x4b6498`), and the reference writes the files at the interface's shutdown
+/// (`0x490bd0` → `0x4b65e0`), which no script reads.
 fn drain_binding_requests(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut files: ResMut<BindingFiles>,
