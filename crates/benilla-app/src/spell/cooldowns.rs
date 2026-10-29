@@ -31,7 +31,7 @@ mod live;
 mod log;
 pub(crate) use live::CooldownLive;
 pub(crate) use log::Signal;
-use log::{expired, CooldownLog, Write};
+use log::{CooldownLog, Write};
 
 /// A signed millisecond time as a timer's duration, untracked at or below zero: a negative time
 /// ends before its start, so no leg of a read passes it (`0x6e14f7`, `0x6e1588`, `0x6e15df`).
@@ -306,7 +306,7 @@ impl Cooldowns {
     /// An elapsed record awaits the next insert's sweep.
     #[cfg(test)]
     pub(crate) fn sweep_pending(&self, now: Instant) -> bool {
-        self.records.iter().any(|r| expired(r, now))
+        self.records.iter().any(|r| log::expired(r, now))
     }
 
     /// `AddCooldown 0x6e12c0`: always appends, never matching by id, so one spell holds separate
