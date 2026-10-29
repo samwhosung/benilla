@@ -12,7 +12,6 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use benilla_protocol::EntityKind;
 use bevy::prelude::*;
 
 use super::{head_height, CameraPivot};
@@ -47,8 +46,9 @@ impl RemoteView {
 
 /// The far-sight machine `UpdateFarSight` (`0x5ee290`) runs for the active player, written
 /// through `&self` as a shared sink of the VM pass ([`crate::vm_pass::shared_sinks`]): the buff
-/// cancel runs it inside its call (`0x6e70ad`), and [`publish_view_subject`] for the field's
-/// change, an object's arrival and the camera's lost object.
+/// cancel runs it inside its call (`0x6e70ad`); the update handler at the field's change
+/// (`0x5de0d0`) and at the arrival of the object it names (`0x5fbb1a`, `0x5d552d`); the clear's
+/// handler (`0x5e441d`); and [`publish_view_subject`] for the camera's lost object.
 ///
 /// Not built: the mover switch (`SetActiveMover` `0x6006e0` at `0x5ee35b`, `0x5ee477`,
 /// `0x5ee573`), which possession already moves by the control update; the attack stop at a
@@ -132,15 +132,10 @@ impl FarSight {
     }
 }
 
-/// Runs the far-sight callers outside a script call and outside the field's change, whose start
-/// or end its handler runs (`0x5de0d0`, [`crate::field_watch::FieldNotice::FarSight`]), then
-/// resolves the camera's object into a pose, before the controller runs; an object not held
-/// leaves the camera on the body.
-/// - the field's object arriving, a unit's (`0x5fbb1a`) or a dynamic object's (`0x5d552d`): the
-///   start;
-/// - the camera's object gone while far sight is on, the world frame's render (`0x483031`,
-///   `0x483054`-`0x483061`): the update.
-#[allow(clippy::too_many_arguments)] // a Bevy system's full input set
+/// Runs the one far-sight caller outside a packet and a script call, the world frame's render
+/// (`0x483031`, `0x483054`-`0x483061`): with far sight on and the camera's object gone, the
+/// update. Then it resolves the camera's object into a pose, before the controller runs; an object
+/// not held leaves the camera on the body.
 pub(super) fn publish_view_subject(
     mut subject: ResMut<ViewSubject>,
     far_sight: Res<FarSight>,
@@ -149,29 +144,12 @@ pub(super) fn publish_view_subject(
     // The pivot height takes the raw `OBJECT_FIELD_SCALE_X`, not the eased render scale.
     poses: Query<(&Transform, Option<&CameraPivot>, Option<&NetEntity>)>,
     net: Res<NetCommands>,
-    mut seen_object: Local<Option<Entity>>,
 ) {
     let field = self_store
         .iter()
         .next()
         .and_then(|store| store.0.player_farsight());
     let held = |guid: u64| index.0.contains_key(&guid);
-    let object = field.and_then(|guid| index.0.get(&guid).copied());
-    if object.is_some() && object != *seen_object {
-        let arrives = object
-            .and_then(|e| poses.get(e).ok())
-            .and_then(|(_, _, net)| net)
-            .is_some_and(|n| {
-                matches!(
-                    n.kind,
-                    EntityKind::Unit | EntityKind::Player | EntityKind::DynamicObject
-                )
-            });
-        if arrives {
-            far_sight.start(field, held, &net);
-        }
-    }
-    *seen_object = object;
     if far_sight.camera().is_some_and(|guid| !held(guid)) && far_sight.on() {
         far_sight.update(field, held, &net);
     }
@@ -220,14 +198,24 @@ pub(super) fn register(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// A unit's network identity, whose arrival as the field's object starts far sight
-    /// (`0x5fbb1a`).
-    fn arrived_unit() -> crate::net::NetEntity {
+    /// A unit's network identity.
+    fn unit_identity() -> crate::net::NetEntity {
         crate::net::NetEntity {
             kind: benilla_protocol::EntityKind::Unit,
             display_id: None,
             scale: 1.0,
         }
+    }
+
+    /// Far sight started on `guid` as its create starts it (`0x5fbb1a`), the update handler's.
+    fn started_on(app: &App, guid: u64) {
+        let world = app.world();
+        let index = world.resource::<GuidIndex>();
+        world.resource::<FarSight>().start(
+            Some(guid),
+            |g| index.0.contains_key(&g),
+            world.resource::<NetCommands>(),
+        );
     }
 
     #[test]
@@ -303,11 +291,21 @@ mod tests {
              far sight is off"
         );
 
-        // Streamed: the subject's feet, and its pivot as the sweep origin's height.
+        // Streamed: the pass starts nothing, as the arrival is the create's (`0x5fbb1a`).
         app.world_mut()
             .resource_mut::<GuidIndex>()
             .0
             .insert(0x1234, subject);
+        app.update();
+        assert!(
+            app.world().resource::<ViewSubject>().remote.is_none(),
+            "the pass starts no far sight"
+        );
+        assert!(votes(&rx).is_empty(), "and tells the server nothing");
+
+        // Started: the subject's feet, and its pivot as the sweep origin's height.
+        started_on(&app, 0x1234);
+        assert_eq!(votes(&rx), [true], "the start tells the server once");
         app.update();
         let remote = app
             .world()
@@ -320,11 +318,6 @@ mod tests {
             Vec3::new(100.0, 2.0, 0.0),
             "the boom sweeps from the SUBJECT's head, not ours — otherwise it is cast across the \
              world and stops at the first wall in between"
-        );
-        assert_eq!(
-            votes(&rx),
-            [true],
-            "the unit's arrival starts far sight (`0x5fbb1a`), which tells the server once"
         );
         app.update();
         assert!(votes(&rx).is_empty(), "once, not per frame");
@@ -367,7 +360,7 @@ mod tests {
         });
         let totem = app
             .world_mut()
-            .spawn((Transform::from_xyz(50.0, 0.0, 0.0), arrived_unit()))
+            .spawn((Transform::from_xyz(50.0, 0.0, 0.0), unit_identity()))
             .id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
@@ -409,10 +402,11 @@ mod tests {
                 .unwrap();
         };
 
+        started_on(&app, TOTEM);
         assert_eq!(
             publish(&mut app),
             Some(totem),
-            "the field's unit's arrival engages the totem (`0x5fbb1a`)"
+            "the totem's arrival engaged it (`0x5fbb1a`)"
         );
         assert_eq!(sent(&rx), ["far sight 1"]);
 
@@ -447,7 +441,7 @@ mod tests {
         app.insert_resource(NetCommands(tx));
         let eye = app
             .world_mut()
-            .spawn((Transform::from_xyz(50.0, 0.0, 0.0), arrived_unit()))
+            .spawn((Transform::from_xyz(50.0, 0.0, 0.0), unit_identity()))
             .id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
@@ -484,6 +478,7 @@ mod tests {
                 vec![benilla_protocol::SessionEvent::FarSightCleared],
             );
         };
+        started_on(&app, EYE);
         assert_eq!(publish(&mut app), Some(eye));
         assert_eq!(votes(&rx), [true]);
 
