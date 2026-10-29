@@ -612,11 +612,16 @@ fn map_spy(c: &mut Client, token: &str) {
 
 /// `SMSG_PARTY_MEMBER_STATS` for `guid`, online, at `hp` health in `zone` at `at`.
 fn member_at(guid: u64, hp: u16, zone: u16, at: (i16, i16)) -> SessionEvent {
+    member_with(member_status::ONLINE, guid, hp, zone, at)
+}
+
+/// [`member_at`] with the record's status byte `status`.
+fn member_with(status: u8, guid: u64, hp: u16, zone: u16, at: (i16, i16)) -> SessionEvent {
     SessionEvent::PartyMemberStats {
         guid,
         full: true,
         info: Box::new(PartyMemberStatsInfo {
-            status: Some(member_status::ONLINE),
+            status: Some(status),
             cur_hp: Some(hp),
             max_hp: Some(100),
             zone: Some(zone),
@@ -656,6 +661,26 @@ fn a_member_in_an_instance_reads_no_map_position() {
     ]);
     let seen: Vec<String> = c.eval(false, "return Maps");
     assert_eq!(seen, ["0.1,0.2", "0.0,0.0"]);
+}
+
+/// A member whose record's status has bit 0x20 reads (0, 0), and the same record without it reads
+/// its position: `0x4a7870` leaves a record with that bit (`0x4a7906`) unread.
+#[test]
+fn a_member_whose_status_has_bit_0x20_reads_no_map_position() {
+    let mut c = client();
+    map_spy(&mut c, "party2");
+    c.frame(vec![
+        vec![member_with(
+            member_status::ONLINE | 0x20,
+            FAR,
+            20,
+            ELWYNN,
+            (100, 200),
+        )],
+        vec![member_at(FAR, 10, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.0,0.0", "0.1,0.2"]);
 }
 
 /// A member in view reads its object's position under our map whatever its record's zone:

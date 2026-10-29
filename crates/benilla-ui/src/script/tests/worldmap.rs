@@ -353,10 +353,6 @@ fn get_map_info_answers_the_texture_height_and_its_power_of_two_round() {
     assert_eq!(info(&s), (1152, 1152));
 }
 
-/// `SetMapToCurrentZone` lands on the app-fed player zone, and the feed surfaces through
-/// `GetPlayerMapPosition` for the player, `party1..4` and the raid rows, by the token's guid
-/// (`0x4a8658` → `0x515970`): any case, a `target` that names a member, and "Unknown unit name"
-/// for a token the resolver does not know. A string or number is required (`0x4a861e`).
 /// A host answering `GetPlayerMapPosition`'s read of a unit (`0x4a7870`) from `at`, and, while
 /// `party1` names one, the group's first party row and membership.
 #[derive(Default)]
@@ -399,6 +395,10 @@ fn project_map_zero(s: &mut UiScript) {
     s.set_world_loc_projector(Box::new(|_, map, x, y| (map == 0).then_some((x, y))));
 }
 
+/// `SetMapToCurrentZone` lands on the app-fed player zone, and `GetPlayerMapPosition` reads the
+/// player, `party1..4` and the raid rows through the lent host, by the token's guid (`0x4a8658` →
+/// `0x515970`): any case, a `target` that names a member, and "Unknown unit name" for a token the
+/// resolver does not know. A string or number is required (`0x4a861e`).
 #[test]
 fn worldmap_current_zone_and_player_feed() {
     let mut s = script();
