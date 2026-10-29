@@ -340,16 +340,16 @@ fn an_initial_cooldown_resumes_its_sweep_and_parks_when_held() {
     );
 }
 
-/// The callback `0x6e2f70` on an awaited record: its arrival re-queries `0x6e2ed0` (`0x6e2f80`) and
+/// A cooldown query's miss leaves the callback `0x6e2f70` on the item cache once, deduped
+/// (`0x6e2ef4`), and a hit leaves none. Its run on a found record queries again (`0x6e2f80`) and
 /// flushes the pair and the bags while the item's on-use spell reads running or held
-/// (`0x6e2f85`-`0x6e2f8e`), once, as the callback is spent; a refusal runs it with no record, which
-/// returns (`0x6e2f78`).
+/// (`0x6e2f85`-`0x6e2f8e`).
 #[test]
-fn an_awaited_record_flushes_its_running_cooldown_once_it_lands() {
+fn a_cooldown_querys_record_flushes_its_running_cooldown_once_it_lands() {
+    use crate::items::RecordCallback;
     use benilla_protocol::messages::ItemInfo;
     const HEARTHSTONE: u32 = 6948;
     const LINEN: u32 = 2589;
-    const REFUSED: u32 = 4242;
     let on_use = |spell_id| ItemInfo {
         use_spell: Some(ItemUseSpell {
             spell_id,
@@ -363,34 +363,37 @@ fn an_awaited_record_flushes_its_running_cooldown_once_it_lands() {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let net = crate::net::NetCommands(tx);
     let mut items = crate::items::Items::default();
-    let _ = items.template(REFUSED, 0, crate::query_cache::Ask::New(&net));
+    for ask in [true, false, true] {
+        Cooldowns::query_record(&items, &net, HEARTHSTONE, 0, ask);
+    }
+    assert_eq!(
+        items.take_waiters(HEARTHSTONE, RecordCallback::CooldownQuery),
+        1,
+        "deduped"
+    );
+    items.insert_template(LINEN, Some(on_use(7934)));
+    Cooldowns::query_record(&items, &net, LINEN, 0, true);
+    assert_eq!(
+        items.take_waiters(LINEN, RecordCallback::CooldownQuery),
+        0,
+        "a hit waits on nothing"
+    );
+
     let mut cds = Cooldowns::default();
     cds.apply_wire_item_cooldown(HEARTHSTONE, 8690, now);
-    cds.apply_wire_item_cooldown(REFUSED, 8690, now);
-    for entry in [HEARTHSTONE, LINEN, REFUSED] {
-        cds.await_item_record(entry);
-    }
     let edges = |cds: &Cooldowns| (cds.generation, cds.bag_flushes);
     let before = edges(&cds);
-    cds.answer_awaited_records(&items, None, now);
-    assert_eq!(edges(&cds), before, "nothing landed");
-
-    items.insert_template(LINEN, Some(on_use(7934)));
-    items.insert_template(REFUSED, None);
-    cds.answer_awaited_records(&items, None, now);
-    assert_eq!(edges(&cds), before, "nothing running, and a refusal");
-    items.insert_template(REFUSED, Some(on_use(8690)));
-    cds.answer_awaited_records(&items, None, now);
-    assert_eq!(edges(&cds), before, "the refusal spent its callback");
+    cds.query_answered(LINEN, &items, None, now);
+    assert_eq!(edges(&cds), before, "nothing running");
+    cds.query_answered(HEARTHSTONE, &items, None, now);
+    assert_eq!(edges(&cds), before, "no record");
     items.insert_template(HEARTHSTONE, Some(on_use(8690)));
-    cds.answer_awaited_records(&items, None, now);
+    cds.query_answered(HEARTHSTONE, &items, None, now);
     assert_eq!(
         edges(&cds),
         (before.0 + 1, before.1 + 1),
         "the hearthstone's record, on its running cooldown"
     );
-    cds.answer_awaited_records(&items, None, now);
-    assert_eq!(edges(&cds), (before.0 + 1, before.1 + 1), "once");
 }
 
 /// Each flush site logs its signals at its place, in the reference's order: `SMSG_SPELL_COOLDOWN`

@@ -50,9 +50,8 @@ pub(crate) struct BagReads<'w, 's> {
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     names: Res<'w, crate::names::NameCache>,
     petitions: Option<Res<'w, crate::ui_petition::PetitionRecords>>,
-    /// The frame's clock pair every pushed start is mapped through, as the action feed last read
-    /// it ([`crate::ui_script::UiClock`] is the tick's to write while it lends the host).
-    clock: Option<Res<'w, crate::ui_action::ActionStateMemory>>,
+    /// The interface clock's pair every start is mapped through, as the pushes map theirs.
+    clock: Option<Res<'w, crate::ui_script::HostClock>>,
     /// `ChrClasses.dbc` field 16, the fit rule's relic flag.
     classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
 }
@@ -175,7 +174,7 @@ impl Bags<'_, '_, '_> {
                 .as_deref()
                 .is_some_and(|t| t.0.has_relic_slot(u32::from(c)))
         });
-        let clock = self.clock.as_deref().and_then(|c| c.clock());
+        let clock = self.clock.as_deref().map(|c| (c.0.anchor, c.0.ui_now));
         super::feed::resolve_slot(
             guid,
             held,

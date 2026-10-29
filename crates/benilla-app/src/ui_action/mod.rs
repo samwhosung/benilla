@@ -48,7 +48,7 @@ mod reactive;
 mod reactive_tests;
 pub(crate) mod recount;
 mod state;
-pub(crate) use state::{wears_entry, ActionStateMemory, ActionStates};
+pub(crate) use state::{wears_entry, ActionStates};
 mod spell_slots;
 pub(crate) mod toggle;
 // The bar's legs of the spell packets, run in their handlers.

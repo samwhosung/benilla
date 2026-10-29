@@ -1684,9 +1684,7 @@ fn an_item_slots_record_landing_flushes_its_running_cooldown() {
         }),
         ..crate::items::test_template("Hearthstone")
     };
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(HEARTHSTONE, Some(hearthstone));
+    crate::net::answer_item(app.world_mut(), HEARTHSTONE, Some(hearthstone));
     assert_eq!(
         frame(&mut app),
         [
@@ -1697,9 +1695,11 @@ fn an_item_slots_record_landing_flushes_its_running_cooldown() {
         "the record lands on a running cooldown"
     );
     assert!(frame(&mut app).is_empty(), "once");
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
+    crate::net::answer_item(
+        app.world_mut(),
+        LINEN,
+        Some(crate::items::test_template("Linen Cloth")),
+    );
     assert!(
         frame(&mut app).is_empty(),
         "a record landing with nothing running"
@@ -1749,9 +1749,7 @@ fn a_record_landing_after_its_slot_was_cleared_still_flushes() {
         frame(&mut app).is_empty(),
         "the slot is gone, its ask is not"
     );
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(HEARTHSTONE, Some(hearthstone_record()));
+    crate::net::answer_item(app.world_mut(), HEARTHSTONE, Some(hearthstone_record()));
     assert_eq!(frame(&mut app), RECORD_FLUSH);
 }
 
@@ -1791,22 +1789,19 @@ fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
         s.run("GetContainerItemCooldown(0, 1)").unwrap();
         s.take_cooldown_record_asks()
     };
-    // The lookup the host makes inside the call ([`Cooldowns::ask_item_record`]).
-    app.world_mut()
-        .resource_scope(|world, mut cooldowns: Mut<Cooldowns>| {
-            for entry in entries {
-                cooldowns.ask_item_record(
-                    world.resource::<Items>(),
-                    world.resource::<crate::net::NetCommands>(),
-                    entry,
-                    0,
-                );
-            }
-        });
+    // The lookup the host makes inside the call ([`Cooldowns::query_record`]).
+    let world = app.world();
+    for entry in entries {
+        Cooldowns::query_record(
+            world.resource::<Items>(),
+            world.resource::<crate::net::NetCommands>(),
+            entry,
+            0,
+            true,
+        );
+    }
     assert!(frame(&mut app).is_empty(), "asked, and waiting");
-    app.world_mut()
-        .resource_mut::<Items>()
-        .insert_template(HEARTHSTONE, Some(hearthstone_record()));
+    crate::net::answer_item(app.world_mut(), HEARTHSTONE, Some(hearthstone_record()));
     assert_eq!(frame(&mut app), RECORD_FLUSH);
     assert!(frame(&mut app).is_empty(), "once");
 }

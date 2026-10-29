@@ -296,7 +296,10 @@ pub(crate) struct ActionEvents {
 #[derive(bevy::ecs::system::SystemParam)]
 #[allow(clippy::type_complexity)] // every input the slot walk reads, as one param
 pub(crate) struct ActionStates<'w, 's> {
-    cooldowns: ResMut<'w, Cooldowns>,
+    cooldowns: Res<'w, Cooldowns>,
+    /// The interface clock's pair every cooldown start is mapped through, absent in a harness
+    /// that seeds none.
+    clock: Option<Res<'w, crate::ui_script::HostClock>>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
     actions: Res<'w, PlayerActions>,
@@ -333,26 +336,8 @@ pub(crate) struct ActionStates<'w, 's> {
 #[derive(Resource, Default)]
 pub(crate) struct ActionStateMemory {
     vm: crate::ui_script::VmMemo<StateMemory>,
-    /// The frame's (`Instant`, `GetTime`) pair the feed last read ([`crate::ui_script::UiClock`]):
-    /// every frame's pair maps a store `Instant` onto the same `GetTime`, so a refresh between
-    /// feeds derives the same cooldown starts.
-    clock: Option<(Instant, f64)>,
     cache: UsableCache,
     reactive: super::reactive::ReactiveList,
-}
-
-impl ActionStateMemory {
-    /// The frame's (`Instant`, `GetTime`) pair the feed last read, which every pushed cooldown
-    /// start is mapped through; `None` before the first feed.
-    pub(crate) fn clock(&self) -> Option<(Instant, f64)> {
-        self.clock
-    }
-
-    /// The pair a feed would have read, for a rig that runs no action feed.
-    #[cfg(test)]
-    pub(crate) fn set_clock(&mut self, clock: (Instant, f64)) {
-        self.clock = Some(clock);
-    }
 }
 
 /// One pass over the slots: when it runs, and which of the refreshes it is.
@@ -392,6 +377,15 @@ impl UsableSignals {
 }
 
 impl ActionStates<'_, '_> {
+    /// The (`Instant`, `GetTime`) pair cooldown starts are mapped through: the interface clock's
+    /// ([`crate::ui_script::HostClock`]), the same at every pass between two ticks, so a running
+    /// cooldown derives the same start; with none, `now` against the VM's clock.
+    fn clock_pair(&self, now: Instant, script: &benilla_ui::script::UiScript) -> (Instant, f64) {
+        self.clock
+            .as_deref()
+            .map_or((now, script.now()), |c| (c.0.anchor, c.0.ui_now))
+    }
+
     /// The usable refresh `0x4b31c0` a selection change runs inside `SetSelection`, after the
     /// target is stored (`0x4936e2`, `0x4939d3`) and before `PLAYER_TARGET_CHANGED` (`0x493892`
     /// ahead of `0x49389c`, `0x493a69` ahead of `0x493a73`): every slot's state recomputed against
@@ -402,7 +396,7 @@ impl ActionStates<'_, '_> {
         script: &mut benilla_ui::script::UiScript,
     ) -> UsableSignals {
         let now = Instant::now();
-        let clock = self.memory.clock.unwrap_or((now, script.now()));
+        let clock = self.clock_pair(now, script);
         let pass = Pass {
             now,
             clock,
@@ -426,7 +420,7 @@ impl ActionStates<'_, '_> {
         script: &mut benilla_ui::script::UiScript,
     ) -> bool {
         let now = Instant::now();
-        let clock = self.memory.clock.unwrap_or((now, script.now()));
+        let clock = self.clock_pair(now, script);
         let pass = Pass {
             now,
             clock,
@@ -444,7 +438,7 @@ impl ActionStates<'_, '_> {
     /// stores the pair of each slot whose word or count no longer matches the cache's.
     pub(crate) fn slot_written(&mut self, script: &mut benilla_ui::script::UiScript) {
         let now = Instant::now();
-        let clock = self.memory.clock.unwrap_or((now, script.now()));
+        let clock = self.clock_pair(now, script);
         let pass = Pass {
             now,
             clock,
@@ -462,20 +456,12 @@ impl ActionStates<'_, '_> {
     fn feed(
         &mut self,
         script: &mut benilla_ui::script::UiScript,
-        clock: (Instant, f64),
         bag_updates: u64,
         arrived: bool,
         owed: &mut ActionEvents,
     ) {
         let (memory, _) = self.memory.vm.get_reset(script);
-        let cooldowns = &mut *self.cooldowns;
-        let (items, spells) = (&*self.items, &self.spells);
         let now = Instant::now();
-        cooldowns.prune(now);
-        // Every record the callback `0x6e2f70` awaits that answered, whose flush is this frame's:
-        // the bag getter's and the bag and inventory tooltips' queries asked it inside their calls
-        // (`0x6e2f0d`, [`benilla_ui::script::RecordAsk::CooldownItem`]).
-        cooldowns.answer_awaited_records(items, spells.as_deref().map(|s| &s.catalog), now);
         // The cooldown-clock trace (`WOW_MOVE_TRACE` sink, tag "cd"): once per second.
         let trace_cd = benilla_assets::trace::enabled()
             && memory
@@ -508,7 +494,7 @@ impl ActionStates<'_, '_> {
             }
         }
 
-        self.memory.clock = Some(clock);
+        let clock = self.clock_pair(now, script);
         let pass = Pass {
             now,
             clock,
@@ -539,6 +525,7 @@ impl ActionStates<'_, '_> {
         } = pass;
         let Self {
             cooldowns,
+            clock: _,
             targeting,
             pet_bar,
             actions,
@@ -710,8 +697,8 @@ impl ActionStates<'_, '_> {
                     let template = items.template(button.action, 0, Ask::New(commands));
                     // A missing record is asked with the callback `0x6e2f70` by the slot's cooldown
                     // query and its usable test (`0x6e2efb`, `0x6e2fea`).
-                    if template.is_none() && !items.template_answered_unknown(button.action) {
-                        cooldowns.await_item_record(button.action);
+                    if template.is_none() {
+                        Cooldowns::query_record(items, commands, button.action, 0, false);
                     }
                     let use_spell = template.and_then(|t| t.use_spell);
                     // `IsCurrentAction`'s item arm holds the entry against the in-flight item
@@ -868,18 +855,14 @@ pub(super) fn feed_action_state(
     // The active player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
     // empties the reactive list (`0x5dea86`); a reload reaches neither.
     created: Query<(), Added<SelfPlayer>>,
-    // Every cooldown pushes its absolute start on the `GetTime` clock, derived from this frame's
-    // pair, so a running cooldown derives the same start every frame.
-    clock: Res<crate::ui_script::UiClock>,
 ) {
-    let clock = (clock.anchor, clock.ui_now);
     let bag_updates = vm.own().1.map_or(0, |l| l.bag_raises());
     let arrived = !created.is_empty();
     vm.turn(|script, (mut states, _)| {
         let Some(script) = script else {
             return;
         };
-        states.feed(script, clock, bag_updates, arrived, &mut owed);
+        states.feed(script, bag_updates, arrived, &mut owed);
     })
 }
 

@@ -21,8 +21,6 @@ pub(super) enum Write {
     /// `AddCooldown 0x6e12c0` past its early-out: the records run out by the time dropped, then the
     /// record appended.
     Add(Instant, Record),
-    /// The records run out by the time dropped (the expiry sweep `0x6e1910`).
-    Prune(Instant),
     /// `ClearGlobalCooldown 0x6e1630` on a match: every record of the spell has its GCD category
     /// and time zeroed, then the sweep at the time.
     ClearGcd(u32, Instant),
@@ -51,7 +49,6 @@ impl Write {
                 records.retain(|r| !expired(r, *now));
                 records.push(record.clone());
             }
-            Self::Prune(now) => records.retain(|r| !expired(r, *now)),
             Self::ClearGcd(spell, now) => {
                 for r in records.iter_mut().filter(|r| r.spell_id == *spell) {
                     r.gcd_category = 0;

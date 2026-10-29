@@ -28,10 +28,10 @@ fn an_initial_item_cooldown_alone_reaches_the_bags() {
         .init_resource::<crate::sound::MessageSounds>()
         .init_resource::<crate::names::NameCache>()
         .init_resource::<crate::ui_petition::PetitionRecords>()
-        .init_resource::<crate::ui_action::ActionStateMemory>();
-    app.world_mut()
-        .resource_mut::<crate::ui_action::ActionStateMemory>()
-        .set_clock((now, 1000.0));
+        .insert_resource(crate::ui_script::HostClock(crate::ui_script::UiClock {
+            anchor: now,
+            ui_now: 1000.0,
+        }));
     app.world_mut().resource_mut::<Items>().insert_template(
         HEARTHSTONE,
         Some(benilla_protocol::messages::ItemInfo {

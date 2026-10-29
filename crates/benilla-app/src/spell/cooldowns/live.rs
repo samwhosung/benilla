@@ -19,9 +19,8 @@ pub(crate) struct CooldownLive<'w, 's> {
     pet: Option<Res<'w, crate::ui_pet::PetBar>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     items: Option<Res<'w, crate::items::Items>>,
-    /// The frame's clock pair every pushed start is mapped through, as the action feed last read
-    /// it ([`crate::ui_script::UiClock`] is the tick's to write while it lends the host).
-    clock: Option<Res<'w, crate::ui_action::ActionStateMemory>>,
+    /// The interface clock's pair every start is mapped through, as the pushes map theirs.
+    clock: Option<Res<'w, crate::ui_script::HostClock>>,
     objects: crate::net::Objects<'w, 's>,
     stores: crate::ui_unit::views::ViewStores<'w, 's>,
 }
@@ -30,7 +29,8 @@ impl CooldownLive<'_, '_> {
     /// `query`'s answer as of here; `None` for an item object not held then, and in a harness
     /// without the list, the items or the clock.
     pub(crate) fn read(&self, query: CooldownQuery) -> Option<Option<CooldownTriple>> {
-        let (anchor, ui_now) = self.clock.as_deref()?.clock()?;
+        let clock = &self.clock.as_deref()?.0;
+        let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         let catalog = self.spells.as_deref().map(|s| &s.catalog);
         // `0x6e2ea0` on list 1 with item 0, as the pet bar's feed reads it.
         if let CooldownQuery::PetSpell(spell) = query {

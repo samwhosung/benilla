@@ -264,6 +264,64 @@ fn an_item_cooldowns_listeners_read_its_packets_list() {
     );
 }
 
+/// A cooldown query that missed its record left the callback `0x6e2f70` on the item cache
+/// (`0x6e2efb`), and the record's answer runs it inside its handler (`0x55bdb0`): the query again,
+/// and with the item's cooldown running the pair and the bags (`0x6e2f89`, `0x6e2f8e`), at the
+/// answer's place. So with the answer first and a spell cooldown after it in one frame, the
+/// record's flush fires first and reads Frost Nova cold.
+#[test]
+fn a_cooldown_querys_record_flushes_at_its_answers_place() {
+    const HEARTHSTONE: u32 = 6948;
+    const HEARTH: u32 = 8690;
+    let mut c = client();
+    let world = c.app.world_mut();
+    {
+        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
+        slots.buttons.insert(
+            3,
+            ActionButton {
+                slot: 3,
+                action: HEARTHSTONE,
+                kind: ACTION_KIND_ITEM,
+            },
+        );
+        slots.touch();
+    }
+    world
+        .resource_mut::<crate::spell::Cooldowns>()
+        .apply_wire_item_cooldown(HEARTHSTONE, HEARTH, std::time::Instant::now());
+    c.frame(vec![]);
+    c.seen(&[]);
+    let mut record = crate::items::test_template("Hearthstone");
+    record.use_spell = Some(benilla_protocol::messages::ItemUseSpell {
+        spell_id: HEARTH,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    });
+    c.frame(vec![
+        vec![SessionEvent::ItemTemplate {
+            entry: HEARTHSTONE,
+            info: Some(Box::new(record)),
+        }],
+        vec![spell_cooldown(FROST_NOVA, 10_000)],
+    ]);
+    assert_eq!(
+        c.seen(&[
+            "ACTIONBAR_UPDATE_COOLDOWN",
+            "SPELL_UPDATE_COOLDOWN",
+            "BAG_UPDATE_COOLDOWN"
+        ]),
+        [
+            "ACTIONBAR_UPDATE_COOLDOWN:0:0:0:0:0:0",
+            "SPELL_UPDATE_COOLDOWN:0:0:0:0:0:0",
+            "BAG_UPDATE_COOLDOWN:0:0:0:0:0:0",
+            "ACTIONBAR_UPDATE_COOLDOWN:10:0:0:10:0:0",
+            "SPELL_UPDATE_COOLDOWN:10:0:0:10:0:0",
+        ]
+    );
+}
+
 /// The getters answer the same through the lent host as off the frame's snapshots wherever the
 /// snapshots are current: every slot, cold and running. The book and the bags are read through
 /// the host alone, so their lines are the live read's.

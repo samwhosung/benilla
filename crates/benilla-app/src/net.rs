@@ -25,6 +25,8 @@ pub(crate) mod handlers;
 pub(crate) mod io;
 pub(crate) mod motion;
 mod objects;
+#[cfg(test)]
+pub(crate) use objects::answer_item;
 pub(crate) use objects::continue_refusal_walk;
 #[cfg(test)]
 pub(crate) use objects::wire;

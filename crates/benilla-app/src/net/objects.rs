@@ -229,6 +229,23 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
     }
 }
 
+/// The record answer for `entry` run as its handler runs it ([`on_item_answer`]), for a test with
+/// no net stack: `info` stored, or refused, and its callbacks walked.
+#[cfg(test)]
+pub(crate) fn answer_item(
+    world: &mut World,
+    entry: u32,
+    info: Option<benilla_protocol::messages::ItemInfo>,
+) {
+    on_item_answer(
+        In(SessionEvent::ItemTemplate {
+            entry,
+            info: info.map(Box::new),
+        }),
+        world,
+    );
+}
+
 /// A refusal's walk of `list` for `entry`, and with `tail` the callbacks run after the list; when
 /// a listener of what it signalled may add to it, the walk goes on behind those signals
 /// ([`continue_refusal_walk`]).
@@ -283,6 +300,11 @@ fn run_callback(
             Cb::ItemCooldown => {
                 run_answer_step(world, crate::spell::net::item_cooldown_answered, entry)
             }
+            // The query again for a found record only (`0x6e2f78`).
+            Cb::CooldownQuery if answered => {
+                run_answer_step(world, crate::spell::net::cooldown_query_answered, entry)
+            }
+            Cb::CooldownQuery => {}
             Cb::Stationery => run_answer_step(world, paper_answered, entry),
             // `QUEST_LOG_UPDATE` for a ready record only (`0x4e0838`), held and parked here.
             Cb::QuestLog if answered => crate::ui_items::feed::quest_log_answered(world),
@@ -369,6 +391,7 @@ fn run_record_callback(
         Cb::Swap
         | Cb::AutoEquip
         | Cb::ItemCooldown
+        | Cb::CooldownQuery
         | Cb::Stationery
         | Cb::QuestLog
         | Cb::Tooltip => {}

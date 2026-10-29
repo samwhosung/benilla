@@ -177,10 +177,6 @@ pub(crate) struct Cooldowns {
     /// The item cooldowns the spell go's item leg holds until the item's record arrives, the
     /// table `0xceca60` of `ITEMCOOLDOWNHASHNODE`s keyed by item entry ([`Self::pend_item`]).
     pending_items: std::collections::HashMap<u32, PendingItem>,
-    /// The item entries a cooldown query found without a record and asked with the callback
-    /// `0x6e2f70` ([`Self::await_item_record`]). The item cache holds the callback, so it outlives
-    /// the asking slot and a `/reload`.
-    awaited_records: std::collections::HashSet<u32>,
 }
 
 /// `StartCooldown 0x6e2c60`'s own arguments: the spell and item, the category, the two remainders
@@ -307,7 +303,8 @@ impl Cooldowns {
         self.records.len()
     }
 
-    /// An elapsed record awaits its prune.
+    /// An elapsed record awaits the next insert's sweep.
+    #[cfg(test)]
     pub(crate) fn sweep_pending(&self, now: Instant) -> bool {
         self.records.iter().any(|r| expired(r, now))
     }
@@ -317,8 +314,8 @@ impl Cooldowns {
     /// insert wipe the running GCD.
     ///
     /// The list only grows here, so this is where it is bounded: the records that have run out by
-    /// `now` are dropped first ([`Self::prune`]), and a list holds its live records plus those
-    /// that ran out since its last insert. The pet's list has no other pruner.
+    /// `now` are dropped first, invisible to reads, and a list holds its live records plus those
+    /// that ran out since its last insert.
     ///
     /// It flushes nothing: each caller's site does ([`Self::flush`]).
     fn add(
@@ -356,15 +353,6 @@ impl Cooldowns {
             gcd: millis(gcd_ms),
         };
         self.write(Write::Add(now, record));
-    }
-
-    /// Drop fully elapsed records that are not on hold; invisible to reads, it stands in for the
-    /// client's event-driven sweeps. It moves no [`Self::generation`], so it flushes no event. [`Self::add`] runs it at every insert, and the player's feed each frame,
-    /// which the gated feeds need to see an expiry with no insert.
-    pub(crate) fn prune(&mut self, now: Instant) {
-        if self.sweep_pending(now) {
-            self.write(Write::Prune(now));
-        }
     }
 
     /// The go's spell leg (`0x6e8498`) or its pet leg (`0x6e85f7`): the spell's own cooldown from
@@ -525,68 +513,54 @@ impl Cooldowns {
         self.flush_item_leg();
     }
 
-    /// A cooldown query (`0x6e2ed0`, `0x6e2fc0`) found the record of `item_entry` missing and asked
-    /// it with the callback `0x6e2f70` (`0x6e2efb`, `0x6e2fea`).
-    pub(crate) fn await_item_record(&mut self, item_entry: u32) {
-        self.awaited_records.insert(item_entry);
-    }
-
-    /// The cooldown query's lookup of a record its getter's mirror lacks, inside the call
-    /// ([`benilla_ui::script::RecordAsk::CooldownItem`]): the item cache asks a miss, a refused
-    /// entry again, and the callback `0x6e2f70` awaits it, deduped (`0x6e2ef4`-`0x6e2f0d`).
-    pub(crate) fn ask_item_record(
-        &mut self,
+    /// A cooldown query's lookup of `item_entry` (`0x6e2ed0`, `0x6e2fc0`), its miss leaving the
+    /// callback `0x6e2f70` on the item cache with the dedupe flag set (`0x6e2ef4`-`0x6e2f0d`), so it
+    /// outlives the asking slot and a `/reload`: `ask` sends the query, as a getter's lookup inside
+    /// its call does ([`benilla_ui::script::RecordAsk::CooldownItem`]), else only a first one.
+    pub(crate) fn query_record(
         items: &crate::items::Items,
         commands: &crate::net::NetCommands,
         item_entry: u32,
         owner: u64,
+        ask: bool,
     ) {
-        let _ = items.template(item_entry, owner, crate::query_cache::Ask::Event(commands));
-        self.await_item_record(item_entry);
+        use crate::query_cache::Ask;
+        let how = if ask {
+            Ask::Event(commands)
+        } else {
+            Ask::New(commands)
+        };
+        if items.template(item_entry, owner, how).is_none()
+            && (ask || !items.template_answered_unknown(item_entry))
+        {
+            items.wait_once(item_entry, crate::items::RecordCallback::CooldownQuery);
+        }
     }
 
-    /// Whether a cooldown query's callback awaits the record of `item_entry`.
-    #[cfg(test)]
-    pub(crate) fn awaits_item_record(&self, item_entry: u32) -> bool {
-        self.awaited_records.contains(&item_entry)
-    }
-
-    /// The callback `0x6e2f70` of each awaited record the item cache now answers, spent either
-    /// way: a record re-queries `0x6e2ed0` (`0x6e2f80`), which reads the first on-use spell with
-    /// the item (`0x6e2f20`-`0x6e2f58`), and flushes the pair and the bags while a leg ends after
-    /// now, running or held (`0x6e2f85`-`0x6e2f8e`); a refusal runs it with no record, which
-    /// returns (`0x6e2f78`).
-    pub(crate) fn answer_awaited_records(
+    /// The callback `0x6e2f70` on the found record of `item_entry`: the query again (`0x6e2f80`),
+    /// which reads the first on-use spell with the item (`0x6e2f20`-`0x6e2f58`), and the pair and
+    /// the bags flushed while a leg ends after now, running or held (`0x6e2f85`-`0x6e2f8e`). A
+    /// refusal runs it with no record, which returns (`0x6e2f78`).
+    pub(crate) fn query_answered(
         &mut self,
+        item_entry: u32,
         items: &crate::items::Items,
         spells: Option<&benilla_formats::SpellCatalog>,
         now: Instant,
     ) {
-        use crate::query_cache::Ask;
-        let answered: Vec<u32> = self
-            .awaited_records
-            .iter()
-            .copied()
-            .filter(|&e| {
-                items.template(e, 0, Ask::Read).is_some() || items.template_answered_unknown(e)
-            })
-            .collect();
-        for entry in answered {
-            self.awaited_records.remove(&entry);
-            let Some(u) = items
-                .template(entry, 0, Ask::Read)
-                .and_then(|t| t.use_spell)
-            else {
-                continue;
-            };
-            let spell = spells.and_then(|s| s.get(u.spell_id));
-            if self
-                .info_item(u.spell_id, entry, u.category, spell, now)
-                .remaining_ms
-                > 0
-            {
-                self.flush_item_leg();
-            }
+        let Some(u) = items
+            .template(item_entry, 0, crate::query_cache::Ask::Read)
+            .and_then(|t| t.use_spell)
+        else {
+            return;
+        };
+        let spell = spells.and_then(|s| s.get(u.spell_id));
+        if self
+            .info_item(u.spell_id, item_entry, u.category, spell, now)
+            .remaining_ms
+            > 0
+        {
+            self.flush_item_leg();
         }
     }
 
@@ -1602,23 +1576,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn prune_drops_only_fully_elapsed_records() {
-        let t0 = Instant::now();
-        let mut cds = Cooldowns::default();
-        cds.start_gcd(133, &fireball(), t0, &super::SpellModifiers::default());
-        cds.start_spell(100, &charge(), 0, t0, None);
-        assert_eq!(cds.records.len(), 2);
-
-        // Past the 1.5 s GCD, inside Charge's 15 s.
-        cds.prune(t0 + Duration::from_secs(5));
-        assert_eq!(cds.records.len(), 1);
-        assert_eq!(cds.records[0].spell_id, 100);
-
-        cds.prune(t0 + Duration::from_secs(20));
-        assert!(cds.records.is_empty());
-    }
-
     /// The list is bounded where it grows: whatever the inserts' spacing, it holds the records
     /// live at the insert plus the insert itself, never every record ever added.
     #[test]
@@ -1695,50 +1652,6 @@ mod tests {
             generation + 1,
             "one mutation, the insert's own"
         );
-    }
-
-    /// An elapsed record answers no read, so a prune cannot change one: what it keeps, a running
-    /// timer and a parked record whose own timers have run down, answers as before.
-    #[test]
-    fn a_prune_changes_no_read() {
-        let t0 = Instant::now();
-        let mut cds = Cooldowns::default();
-        let mods = super::SpellModifiers::default();
-        let brief = || spell(7, 2_000, 0, (0, 0), 0);
-        // Parked: `Attributes` bit 25, its timers wait for `SMSG_COOLDOWN_EVENT`.
-        let parked = || spell(9, 1_000, 0, (0, 0), 1 << 25);
-        cds.start_gcd(133, &fireball(), t0, &mods);
-        cds.start_spell(100, &brief(), 0, t0, None);
-        cds.start_spell(200, &charge(), 0, t0, None);
-        cds.start_spell(300, &parked(), 0, t0, None);
-        assert_eq!(cds.records.len(), 4);
-
-        let now = t0 + Duration::from_secs(5);
-        let asks = [
-            (133, fireball()),
-            (100, brief()),
-            (200, charge()),
-            // Another spell of Charge's category, and one of the parked spell's.
-            (201, spell(44, 0, 0, (0, 0), 0)),
-            (300, parked()),
-            (301, spell(9, 0, 0, (0, 0), 0)),
-            (999, spell(0, 0, 0, (0, 0), 0)),
-        ];
-        let reads = |cds: &Cooldowns| {
-            asks.iter()
-                .map(|(id, d)| cds.info(*id, 0, Some(d), now))
-                .collect::<Vec<_>>()
-        };
-        let before = reads(&cds);
-        assert!(cds.sweep_pending(now), "the GCD and Brief have run out");
-        assert_eq!(before[2].remaining_ms, 10_000, "Charge runs");
-        assert!(!before[4].enabled, "and the parked spell reads disabled");
-
-        cds.prune(now);
-
-        assert_eq!(cds.records.len(), 2, "the GCD and Brief are gone");
-        assert!(!cds.sweep_pending(now));
-        assert_eq!(reads(&cds), before);
     }
 
     /// A fail-clear and re-arm between two feeds must still read as a new start.

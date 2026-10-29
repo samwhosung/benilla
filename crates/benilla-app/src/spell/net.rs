@@ -637,6 +637,19 @@ pub(crate) fn item_cooldown_answered(
     cooldowns.item_record_landed(entry, record, |id| spells?.catalog.get(id));
 }
 
+/// The callback `0x6e2f70` a cooldown query's miss registered, on its record's answer: the query
+/// again ([`Cooldowns::query_answered`]), in the answer's handler, so its flush fires at the
+/// answer's place among the frame's packets.
+pub(crate) fn cooldown_query_answered(
+    In(entry): In<u32>,
+    items: Res<crate::items::Items>,
+    spells: Option<Res<Spells>>,
+    mut cooldowns: ResMut<Cooldowns>,
+) {
+    let catalog = spells.as_deref().map(|s| &s.catalog);
+    cooldowns.query_answered(entry, &items, catalog, Instant::now());
+}
+
 /// `SMSG_INVENTORY_CHANGE_FAILURE`'s cast leg (`0x5e3a45`-`0x5e3ab3`): a refusal whose first item
 /// is the in-flight cast's (`0x6e3d20` → `[0xcecab0]`, compared at `0x5e3aa1`) cancels it as
 /// `CancelCast(1, 0, 0x17)` with the tail's reap, while the active player's object is held

@@ -588,6 +588,9 @@ pub(crate) enum RecordCallback {
     Stationery,
     /// A spell go's item cooldown held for its record (`0x6e84c2` with `0x6e8830`), one per go.
     ItemCooldown,
+    /// A cooldown query's miss, the action bar's, the bags' or the paper doll's (`0x6e2efb` with
+    /// `0x6e2f70`), deduped (`0x6e2ef4`).
+    CooldownQuery,
     /// The quest log's leaderboard and reward getters (`0x4e05e0`, `0x4e0bb3`, `0x4e0da3` with
     /// `0x4e0830`), one per entry as the VM keeps its waits.
     QuestLog,

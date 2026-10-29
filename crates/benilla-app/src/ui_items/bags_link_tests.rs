@@ -30,10 +30,10 @@ fn bag_link(pairs: &[(u16, u32)], template_flags: u32) -> String {
         .init_resource::<crate::sound::MessageSounds>()
         .init_resource::<crate::names::NameCache>()
         .init_resource::<crate::ui_petition::PetitionRecords>()
-        .init_resource::<crate::ui_action::ActionStateMemory>();
-    app.world_mut()
-        .resource_mut::<crate::ui_action::ActionStateMemory>()
-        .set_clock((now, 1000.0));
+        .insert_resource(crate::ui_script::HostClock(crate::ui_script::UiClock {
+            anchor: now,
+            ui_now: 1000.0,
+        }));
     let mut template = crate::items::test_template("Bloodrazor");
     template.quality = 3;
     template.flags = template_flags;

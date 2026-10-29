@@ -486,9 +486,13 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
             "roll 5"
         ]
     );
-    let cooldowns = app.world().resource::<crate::spell::Cooldowns>();
+    let mut items = app.world_mut().resource_mut::<crate::items::Items>();
     for entry in [6948, 5976, 2589] {
-        assert!(cooldowns.awaits_item_record(entry), "{entry} awaited");
+        assert_eq!(
+            items.take_waiters(entry, crate::items::RecordCallback::CooldownQuery),
+            1,
+            "{entry} awaited"
+        );
     }
 }
 

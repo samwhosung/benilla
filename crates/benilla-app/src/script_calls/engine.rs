@@ -60,7 +60,6 @@ pub(crate) struct RecordAsks<'w, 's> {
     summon: Option<Res<'w, crate::ui_summon::SummonState>>,
     battlefield: Option<ResMut<'w, crate::ui_battlefield_positions::BattlefieldPositions>>,
     ammo_hits: Option<ResMut<'w, crate::ui_char::AmmoRecordHits>>,
-    cooldowns: Option<ResMut<'w, crate::spell::Cooldowns>>,
     quest: Option<ResMut<'w, crate::ui_quest::QuestGiver>>,
     /// The quest cache the rebuild's lookups ask, and the leaderboard's creature waits.
     quest_log: Option<ResMut<'w, crate::ui_quest_log::QuestLog>>,
@@ -153,10 +152,8 @@ impl RecordAsks<'_, '_> {
                 }
             }
             RecordAsk::CooldownItem { entry, owner } => {
-                if let (Some(items), Some(cooldowns)) =
-                    (self.items.as_deref(), self.cooldowns.as_deref_mut())
-                {
-                    cooldowns.ask_item_record(items, &self.net, entry, owner);
+                if let Some(items) = self.items.as_deref() {
+                    crate::spell::Cooldowns::query_record(items, &self.net, entry, owner, true);
                 }
             }
             RecordAsk::Item {
