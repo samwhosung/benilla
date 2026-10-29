@@ -81,28 +81,12 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
         why: "QUEUED_FOR_THE_TICK: a capture's fixture",
     },
     Allow {
-        frame: "capture::probe_service::service_probe",
-        why: "QUEUED_FOR_THE_TICK: a probe's scripted sale",
-    },
-    Allow {
-        frame: "target::click::talk",
-        why: "QUEUED_FOR_THE_TICK: the vendor arm's sale",
-    },
-    Allow {
-        frame: "ui_world_map::feed_landmarks",
-        why: "QUEUED_FOR_THE_TICK: the landmark list's rebuild",
-    },
-    Allow {
         frame: "ui_world_map::feed_world_map",
         why: "QUEUED_FOR_THE_TICK: the first world enter's selection",
     },
     Allow {
         frame: "ui_world_map::install_world_loc_projector",
         why: "QUEUED_FOR_THE_TICK: the projector's install",
-    },
-    Allow {
-        frame: "ui_world_map::seed_world_map_catalog",
-        why: "QUEUED_FOR_THE_TICK: the catalog and the instance maps' push",
     },
     Allow {
         frame: "ui_char::feed_char",
