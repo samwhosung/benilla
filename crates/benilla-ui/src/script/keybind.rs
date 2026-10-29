@@ -285,8 +285,9 @@ impl KeybindState {
     }
 
     /// `LoadBindings(set)`: 0 defaults, 1 account, 2 character, which falls back to the account
-    /// set (the reference's starts as a copy), each falling back to the defaults. Loading defaults
-    /// keeps the current set, as the window's Reset To Default does.
+    /// set (the reference's starts as a copy), each falling back to the defaults. The current set
+    /// stays: the verb only copies the set into the live one (`0x4b8249`-`0x4b8252`), so the
+    /// window's Cancel (`LoadBindings(GetCurrentBindingSet())`) reloads the set saved last.
     fn load(&mut self, set: u32) {
         let list = match set {
             0 => &self.defaults,
@@ -298,9 +299,6 @@ impl KeybindState {
             _ => return,
         };
         self.live = list.clone();
-        if set != 0 {
-            self.current_set = set;
-        }
         self.generation += 1;
     }
 
@@ -404,9 +402,13 @@ impl super::UiScript {
         }
     }
 
-    /// Host-side `LoadBindings` (world entry: character set if it exists, else account).
+    /// Host-side `LoadBindings` (world entry: character set if it exists, else account), which
+    /// makes `set` current first, as the sets' read does (`0x4b64cb`).
     pub fn load_binding_set(&mut self, set: u32) {
         let mut model = self.model_mut();
+        if set != 0 {
+            model.keybinds.current_set = set;
+        }
         model.keybinds.load(set);
         model.keybinds.signal_owed = true;
     }
@@ -997,6 +999,34 @@ mod tests {
         assert_eq!(s.current_binding_set(), 1);
         assert!(!s.character_bindings_exist());
         assert_eq!(s.take_keybind_requests(), vec![KeybindRequest::Save(1)]);
+    }
+
+    /// Ticking Character Specific loads set 2 (`KeyBindingFrame_ChangeBindingProfile`), and
+    /// Cancel's `LoadBindings(GetCurrentBindingSet())` puts the account set back: `LoadBindings`
+    /// never writes the current set (`0x4b8249`-`0x4b8252`), so it is still 1.
+    #[test]
+    fn a_cancelled_character_tick_leaves_the_account_set_live() {
+        let mut s = script();
+        s.run(r#"SetBinding("F", "JUMP") SaveBindings(1)"#).unwrap();
+        s.run(r#"SetBinding("F", "CAMERAZOOMIN") SaveBindings(2)"#)
+            .unwrap();
+        // World entry on the account set.
+        s.load_binding_set(1);
+        assert_eq!(s.current_binding_set(), 1);
+        s.run("LoadBindings(2)").unwrap();
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
+            "CAMERAZOOMIN",
+            "the tick shows the character set"
+        );
+        assert_eq!(s.eval::<i64>("return GetCurrentBindingSet()").unwrap(), 1);
+        s.run("LoadBindings(GetCurrentBindingSet())").unwrap();
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
+            "JUMP",
+            "Cancel puts the account set back"
+        );
+        assert_eq!(s.current_binding_set(), 1);
     }
 
     #[test]

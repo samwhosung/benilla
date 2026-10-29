@@ -794,10 +794,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // Each `CVar::Set` (`0x48c72a`, `0x48c75b`, `0x48c78c`) runs its row's callback
             // inside the call.
             written(lua)?;
-            // Deviation: the reference then runs the console command `gxRestart` (`0x842978`
-            // through `0x63ce00`); none is queued here, because `gxMultisample` applies at next
-            // launch anyway: the camera reads its sample count once, at spawn.
-            Ok(())
+            // Then `gxRestart`, always (`0x48c79b`).
+            restart_gx(lua)
         })?,
     )?;
 
@@ -852,10 +850,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     super::video_pairs::install(lua)
 }
 
-/// `gxRestart`'s handler (`0x639f60`) inside the call that runs it (`RestartGx` `0x48dab0`,
-/// `SetScreenResolution` at `0x48c0bc`, `RestoreVideoDefaults` at `0x639a51`, each through
-/// `ConsoleCommandExecute` `0x63ce00`, which calls the handler synchronously): the host commits
-/// the latched rows (`0x639ec0`) before the verb goes on. With no host open (a bare VM) it is
+/// `gxRestart`'s handler (`0x639f60`) inside the call that runs it: `RestartGx` (`0x48dab0`),
+/// `SetScreenResolution` (`0x48c0bc`) and `SetMultisampleFormat` (`0x48c79b`) through
+/// `ConsoleCommandExecute` (`0x63ce00`), which calls the handler synchronously, and
+/// `RestoreVideoDefaults`, which calls it directly (`0x639a51`). The host commits the latched rows
+/// (`0x639ec0`) before the verb goes on. With no host open (a bare VM) it is
 /// counted for the host's frame drain.
 fn restart_gx(lua: &Lua) -> mlua::Result<()> {
     if super::host::open(lua) {

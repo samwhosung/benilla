@@ -521,6 +521,8 @@ pub(crate) struct GxRestartSteps<'w> {
 impl GxRestartSteps<'_> {
     /// `runs` restarts at once.
     pub(crate) fn restart(&mut self, script: &mut UiScript, runs: u32) {
+        // The VM's writes no call took first, so a stage made before the restart is committed.
+        self.cvars.sync(Some(script));
         let Some(cvars) = self.cvars.cvars() else {
             return;
         };

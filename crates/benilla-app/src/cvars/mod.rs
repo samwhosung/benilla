@@ -3633,4 +3633,41 @@ mod tests {
         assert_eq!(res::<crate::ui_gamma::DisplayGamma>(&app).0, 0.75);
         assert_eq!(res::<crate::minimap::MinimapZoom>(&app).outdoor, 2);
     }
+
+    /// The Video options' Okay sets the resolution, then the multisample format
+    /// (`OptionsFrame.lua:239-240`), with no `RestartGx` when no other row asked one. Each verb
+    /// runs `gxRestart` inside its call (`0x48c0bc`, `0x48c79b`), so both latched changes commit.
+    #[test]
+    fn an_okay_with_a_new_resolution_and_multisample_commits_both() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        app.insert_resource(benilla_world::view::MsaaFormats {
+            formats: vec![(24, 24, 1), (24, 24, 4)],
+        });
+        app.update();
+        let mut script = UiScript::new().expect("a VM");
+        let size = |width, height| benilla_ui::script::ScreenResolution { width, height };
+        script.set_screen_resolutions(vec![size(800, 600), size(1024, 768)], Some(size(800, 600)));
+        app.insert_non_send_resource(script);
+        app.update();
+        let (resolution, samples): (String, String) =
+            crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+                s.expect("a VM").eval(
+                    r#"
+                    SetScreenResolution(2)
+                    SetMultisampleFormat(2)
+                    return GetCVar("gxResolution"), GetCVar("gxMultisample")
+                    "#,
+                )
+            })
+            .expect("the chunk runs");
+        assert_eq!((resolution.as_str(), samples.as_str()), ("1024x768", "4"));
+        let cvars = res::<Cvars>(&app);
+        assert_eq!(cvars.get("gxResolution"), Some("1024x768"));
+        assert_eq!(cvars.get("gxMultisample"), Some("4"));
+    }
 }
