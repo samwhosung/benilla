@@ -457,7 +457,7 @@ pub(crate) struct MeetingStoneInputs<'w, 's> {
     visuals: Option<Res<'w, SpellVisuals>>,
     fx: MessageWriter<'w, SpellKitFx>,
     self_q: Query<'w, 's, Entity, With<SelfPlayer>>,
-    tutorials: Option<MessageWriter<'w, crate::tutorial::TutorialEvent>>,
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
 }
 
 /// `SMSG 0x295` (`0x4ca230`): the area stored, the line for the status (`0x4ca3a4`), status 1's
@@ -483,10 +483,8 @@ fn stone_set_queue(
                 inputs.fx.write(fx);
             }
         }
-        if let Some(t) = inputs.tutorials.as_mut() {
-            t.write(crate::tutorial::TutorialEvent::trigger(
-                crate::tutorial::id::MEETING_STONES,
-            ));
+        if let Some(t) = inputs.tutorials.as_deref() {
+            t.trigger_now(crate::tutorial::id::MEETING_STONES);
         }
     }
     lane.event("MEETINGSTONE_CHANGED", vec![]);

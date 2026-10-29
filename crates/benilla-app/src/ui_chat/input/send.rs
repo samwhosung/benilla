@@ -199,7 +199,6 @@ impl ChatSender<'_, '_> {
         // call, ahead of the line's packet (`0x49f72a`).
         if let Some(tutorials) = self.tutorials.as_deref() {
             tutorials.acknowledge_now(crate::tutorial::id::CHATTING, &self.commands);
-            script.set_tutorial_bank(tutorials.acknowledged_bank());
         }
         let mut text =
             benilla_ui::script::expand_target_tokens(&send.text, || self.target_name(script));

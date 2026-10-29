@@ -259,7 +259,6 @@ fn on_item_push_result(
     In(ev): In<SessionEvent>,
     self_guid: Res<SelfGuid>,
     mut loot: ResMut<LootState>,
-    tutorials: Res<crate::tutorial::Tutorials>,
     items: Res<crate::items::Items>,
     commands: Res<NetCommands>,
 ) {
@@ -272,7 +271,7 @@ fn on_item_push_result(
             }
             held
         };
-        item_push_result(p, &self_guid, &mut loot, &mut tutorials.lock(), held);
+        item_push_result(p, &self_guid, &mut loot, held);
     }
 }
 
@@ -472,14 +471,13 @@ fn is_our_push(p: &ItemPushResult, self_guid: &SelfGuid) -> bool {
     self_guid.0 == Some(p.player_guid)
 }
 
-/// `SMSG_ITEM_PUSH_RESULT`: queues our own push for its chat line and its bag-bar animation, and
-/// another member's for its line, at its packet when its record is `held`, else at the record's
-/// answer.
+/// `SMSG_ITEM_PUSH_RESULT`: queues our own push for its bag-bar animation, its chat line and its
+/// tutorials, and another member's for its line, at its packet when its record is `held`, else at
+/// the record's answer.
 fn item_push_result(
     p: ItemPushResult,
     self_guid: &SelfGuid,
     loot: &mut LootState,
-    tutorials: &mut crate::tutorial::TutorialState,
     held: impl Fn(u32) -> bool,
 ) {
     debug!(
@@ -496,7 +494,6 @@ fn item_push_result(
         loot.push_receive_other(&p, held);
         return;
     }
-    tutorials.item_received(p.item_entry, p.bag_slot, p.item_slot);
     loot.push_receive(&p, held(p.item_entry));
 }
 
@@ -1933,7 +1930,6 @@ mod tests {
                 },
                 &me,
                 &mut loot,
-                &mut crate::tutorial::TutorialState::default(),
                 |_| true,
             );
             loot.pending_receive_count()
@@ -1955,13 +1951,7 @@ mod tests {
         // `showInChat` is not this gate: a silent push still queues and animates.
         assert!(is_our_push(&push(ME, false), &me));
         let mut loot = LootState::default();
-        item_push_result(
-            push(ME, false),
-            &me,
-            &mut loot,
-            &mut crate::tutorial::TutorialState::default(),
-            |_| true,
-        );
+        item_push_result(push(ME, false), &me, &mut loot, |_| true);
         assert_eq!(loot.pending_receive_count(), 1);
     }
 }

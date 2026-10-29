@@ -102,7 +102,7 @@ fn on_list(
     names: Res<NameCache>,
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
-    tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
+    tutorials: Option<Res<crate::tutorial::Tutorials>>,
     mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::GroupList {
@@ -116,10 +116,8 @@ fn on_list(
         // The raid roster writer opens on Raid Groups for a rebuild with rows (`0x4ba604`,
         // `0x4ba60d`), every one; the tutorial's own bit makes it fire once.
         if group_type == GROUPTYPE_RAID && !members.is_empty() {
-            if let Some(mut tutorials) = tutorials {
-                tutorials.write(crate::tutorial::TutorialEvent::trigger(
-                    crate::tutorial::id::RAID_GROUPS,
-                ));
+            if let Some(tutorials) = tutorials {
+                tutorials.trigger_now(crate::tutorial::id::RAID_GROUPS);
             }
         }
         let before = teardown.before(&group);
@@ -1007,7 +1005,7 @@ mod tests {
     /// list that names a member asks for it, each time, and a raid of one or a party asks nothing.
     #[test]
     fn a_raid_list_with_rows_triggers_the_raid_groups_tutorial() {
-        use crate::tutorial::{id, TutorialEvent};
+        use crate::tutorial::{id, TutorialAsk, Tutorials};
         use bevy::ecs::system::RunSystemOnce;
         let mut app = App::new();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -1019,7 +1017,7 @@ mod tests {
             .insert_resource(SelfGuid(Some(0x10)))
             .init_resource::<NameCache>()
             .init_resource::<GuidIndex>()
-            .add_message::<TutorialEvent>();
+            .init_resource::<Tutorials>();
         let mut triggered = |group_type: u8, members: Vec<GroupMemberEntry>| {
             app.world_mut()
                 .run_system_once_with(
@@ -1033,10 +1031,16 @@ mod tests {
                     },
                 )
                 .expect("the group-list handler");
-            app.world_mut()
-                .resource_mut::<Messages<TutorialEvent>>()
-                .drain()
-                .filter(|e| *e == TutorialEvent::trigger(id::RAID_GROUPS))
+            app.world()
+                .resource::<Tutorials>()
+                .take_asks()
+                .into_iter()
+                .filter(|ask| {
+                    *ask == TutorialAsk::Trigger {
+                        id: id::RAID_GROUPS,
+                        delay_ms: 0,
+                    }
+                })
                 .count()
         };
         assert_eq!(triggered(GROUPTYPE_RAID, Vec::new()), 0, "a raid of one");

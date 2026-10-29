@@ -145,9 +145,6 @@ fn invite_to_party_flags_the_grouping_tutorial_before_its_invite() {
             .run(r#"InviteByName("Zed") InviteToParty("target") InviteToParty("target")"#)
             .expect("the chunk runs")
     });
-    world
-        .run_system_once(crate::tutorial::drain_tutorials)
-        .expect("the tutorial drain runs on the built client");
     let sent: Vec<String> = rx
         .try_iter()
         .filter_map(|c| match c {

@@ -1390,7 +1390,6 @@ pub(super) fn arm_loot_fx(
     visuals: Option<Res<SpellVisuals>>,
     mut fx: MessageWriter<SpellKitFx>,
     mut armed: Local<EntityHashSet>,
-    mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     let full_sweep = visuals.as_ref().is_some_and(|v| v.is_changed());
     let Some((effect, path)) = visuals.as_ref().and_then(|v| v.0.loot_art_effect()) else {
@@ -1426,12 +1425,6 @@ pub(super) fn arm_loot_fx(
             store.0.unit_is_dead() && store.0.unit_lootable()
         };
         if lootable && armed.insert(entity) {
-            // The Looting tutorial on the rise (`0x60049b`).
-            if let Some(t) = tutorials.as_mut() {
-                t.write(crate::tutorial::TutorialEvent::trigger(
-                    crate::tutorial::id::LOOTING,
-                ));
-            }
             fx.write(SpellKitFx::Begin {
                 entity,
                 spell_id: LOOT_FX_KEY,

@@ -440,7 +440,7 @@ mod net {
         mut positions: ResMut<crate::ui_battlefield_positions::BattlefieldPositions>,
         reads: crate::ui_battlefield_score::BoardReads,
         catalog: Option<Res<crate::world_state_ui::WorldStateUiRes>>,
-        tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
+        tutorials: Option<Res<crate::tutorial::Tutorials>>,
     ) {
         let SessionEvent::BattlefieldStatus(status) = ev else {
             return;
@@ -448,8 +448,8 @@ mod net {
         let Some(applied) = queue.apply(status) else {
             return;
         };
-        if let (Some(id), Some(mut tutorials)) = (applied.tutorial, tutorials) {
-            tutorials.write(crate::tutorial::TutorialEvent::trigger(id));
+        if let (Some(id), Some(tutorials)) = (applied.tutorial, tutorials) {
+            tutorials.trigger_now(id);
         }
         match applied.active_map {
             Some(map) => {

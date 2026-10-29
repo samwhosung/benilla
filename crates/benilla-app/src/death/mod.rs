@@ -852,11 +852,7 @@ impl Plugin for DeathPlugin {
             .add_systems(
                 Update,
                 (
-                    // After the tutorial's selection judge, whose relation reads share the
-                    // reputations with it.
-                    feed_death
-                        .in_set(UiFeed)
-                        .after(crate::tutorial::judge_selections),
+                    feed_death.in_set(UiFeed),
                     drive_death_look,
                     // Before the feed, so the frame a session ends carries no memory of it.
                     end_session_death_feed.before(feed_death),

@@ -3293,27 +3293,17 @@ fn every_line_past_the_dead_check_acknowledges_the_chat_tutorial() {
             "{line}"
         );
     }
-    // The VM reads the bank the call wrote on its next line: the bit is set.
+    // The call writes the bank before it returns, so `TutorialsEnabled`, which reads it through
+    // the host (`crate::tutorial::TutorialLive`), finds the bit set on the next line.
     let last_open = [0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0xff, 0xff];
-    world
-        .resource::<crate::tutorial::Tutorials>()
-        .lock()
-        .apply_flags(&last_open);
-    world
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .set_tutorial_bank(Some(last_open.to_vec()));
-    super::run_chat(
-        &mut world,
-        r#"assert(TutorialsEnabled() == 1) SendChatMessage("hi") ENABLED = TutorialsEnabled()"#,
-    )
-    .expect("lua");
-    let enabled: Option<i64> = world
-        .non_send_resource::<benilla_ui::script::UiScript>()
-        .lua()
-        .globals()
-        .get("ENABLED")
-        .expect("a global");
-    assert_eq!(enabled, None, "the last open bit, acknowledged in the call");
+    let tutorials = || world.resource::<crate::tutorial::Tutorials>();
+    tutorials().lock().apply_flags(&last_open);
+    assert!(tutorials().enabled());
+    super::run_chat(&mut world, r#"SendChatMessage("hi")"#).expect("lua");
+    assert!(
+        !world.resource::<crate::tutorial::Tutorials>().enabled(),
+        "the last open bit, acknowledged in the call"
+    );
 }
 
 /// `SMSG_CHANNEL_LIST` (`0x49c690`) prints the members by name, with their prefixes, under the

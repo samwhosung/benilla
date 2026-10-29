@@ -66,6 +66,7 @@ fn an_item_received_line_reads_the_installs_strings() {
             enchants: None,
         },
         &|_| None,
+        &|_, _| {},
     );
     assert!(left.is_empty());
     let link = "|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r";
@@ -105,6 +106,7 @@ fn drain(script: &mut UiScript, batch: Vec<PendingReceive>) -> Vec<String> {
             enchants: None,
         },
         &owner,
+        &|_, _| {},
     );
     chat.pending_lines()
 }

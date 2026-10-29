@@ -488,7 +488,8 @@ pub(crate) fn close_core(world: &mut World) {
 
 /// `SMSG_LIST_INVENTORY` opens the window on the vendor's rows (`0x4facf0`): the old rows' record
 /// callbacks cancelled while the window holds rows (`0x4fad01`-`0x4fad1b`), which a close zeroes
-/// (`0x4fae22`), so a list after a close leaves the waits standing; then the latch, registered
+/// (`0x4fae22`), so a list after a close leaves the waits standing; the Vendors tutorial, on every
+/// list (`0x4fad32`); then the latch, registered
 /// with no test of its own cell (`0x4fad40`), so a list from the open vendor closes it and opens
 /// it again, the cell (`0x4fad4b`), the rows, the wait count at 0 (`0x4fad88`) and
 /// `MERCHANT_SHOW` (`0x4fad92`).
@@ -499,6 +500,9 @@ pub(crate) fn open_merchant(world: &mut World, vendor: u64, items: Vec<VendorIte
         .is_some_and(|open| open.vendor.is_some() && !open.items.is_empty());
     if let (true, Some(cache)) = (held, world.get_resource::<Items>()) {
         cache.cancel_waits(crate::items::RecordCallback::Merchant);
+    }
+    if let Some(tutorials) = world.get_resource::<crate::tutorial::Tutorials>() {
+        tutorials.trigger_now(crate::tutorial::id::VENDORS);
     }
     crate::ui_session::register(world, vendor);
     world.resource_mut::<MerchantOpen>().open(vendor, items);

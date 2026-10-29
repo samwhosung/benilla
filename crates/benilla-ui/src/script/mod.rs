@@ -489,7 +489,7 @@ pub use trainer::{
     TrainerServiceCategory, TrainerServiceLive, TrainerServiceQuery, TrainerSkillReq, TrainerState,
     TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
-pub use tutorial::TutorialCall;
+pub use tutorial::{TutorialCall, TutorialsEnabledQuery};
 pub(crate) use types::{monochrome_flag, FontMask, MeasuredText, RegionData};
 pub use types::{
     BlendMode, EditAction, EditBoxAdvanceRequest, EditBoxTextUi, EditOutcome, EditUnit,

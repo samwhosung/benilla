@@ -878,10 +878,18 @@ pub(crate) fn placed_values(
         }
     }
     if let Some(at) = at(UNIT_SECTION, DYNAMIC_FLAGS, List::Type) {
-        // `0x600440` on the flipped bits: 0x20, the dead look, signals `UNIT_HEALTH` and the power
+        // `0x600440` on the flipped bits: first 0x1, the lootable bit, whose rise triggers Looting
+        // (`0x600482`-`0x60049b`); then 0x20, the dead look, signals `UNIT_HEALTH` and the power
         // event of `UNIT_FIELD_BYTES_0` byte 3 (`0x6004cd`, `0x6004f0`); 0x4, the tap,
         // `UNIT_FACTION` (`0x6005bb`).
-        let flipped = block.flipped(UNIT_SECTION + DYNAMIC_FLAGS.0 / 4);
+        let (old, new) = block
+            .edge(UNIT_SECTION + DYNAMIC_FLAGS.0 / 4)
+            .unwrap_or_default();
+        if old & 0x1 == 0 && new & 0x1 != 0 {
+            let id = tutorial::LOOTING;
+            pass.push(at, FieldNotice::Tutorial { id });
+        }
+        let flipped = old ^ new;
         if flipped & 0x20 != 0 {
             pass.signal(at, guid, id::UNIT_HEALTH);
             pass.signal(at, guid, id::POWER + u16::from(fields.unit_power_type()));
@@ -1911,6 +1919,31 @@ mod tests {
         assert_eq!(
             block(&mut mob, Some(ME), MOB, &[(143, 0x2c)]),
             [bridge(MOB, 137)]
+        );
+    }
+
+    /// `0x600440`'s first leg: the lootable bit's rise triggers Looting (`0x600482`-`0x60049b`),
+    /// ahead of the dead look's signals; its fall triggers nothing, and a rise again asks again,
+    /// for the fire-once bank to gate.
+    #[test]
+    fn the_lootable_bits_rise_triggers_looting_ahead_of_the_dead_look() {
+        let looting = FieldNotice::Tutorial {
+            id: crate::tutorial::id::LOOTING,
+        };
+        let mut mob = ObjectFields::from_pairs(&[(36, 1 << 24)]).into_created(ObjectType::Unit);
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(143, 0x21)]),
+            [looting, signal(MOB, 16), signal(MOB, 18), bridge(MOB, 137)]
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(143, 0x20)]),
+            [bridge(MOB, 137)],
+            "the fall"
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(143, 0x21)]),
+            [looting, bridge(MOB, 137)],
+            "a rise again"
         );
     }
 

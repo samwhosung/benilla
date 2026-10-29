@@ -6,19 +6,22 @@
 //! lands nothing fires. Bank A is fire-once: [`TutorialState::trigger`] tests and sets it and raises
 //! `TUTORIAL_TRIGGER(id + 1)`, never sending. Bank B is acknowledged: [`TutorialState::acknowledge`]
 //! tests it, sets both banks, cancels the id's timer and sends `CMSG_TUTORIAL_FLAG`. So A ⊇ B, and
-//! doing the thing suppresses its tutorial, account-wide.
+//! doing the thing suppresses its tutorial, account-wide. `TutorialsEnabled` reads bank B through
+//! the host at its call ([`TutorialLive`]).
 //!
 //! `TriggerTutorial(id, delayMs)` (`0x4b5390`): with a zero delay the `TutorialPopup` cue plays and
 //! the event fires now; otherwise a timer holds it (the 10 s Targeting popup is the one site). The
 //! reference bounds-checks nothing; an id past the bank is a no-op here.
 //!
 //! The reference has fifty-one trigger sites and seven acknowledge sites (the callers of
-//! `0x4b5390` and `0x4b54c0`); the ones this app can produce reach here through
-//! [`TutorialEvent`], [`Tutorials::trigger_now`] from a site that holds the bank, the VM's queue
-//! for a site beside a script, the polled edges below, or a field watcher's
-//! [`crate::field_watch::FieldNotice::Tutorial`], fired in the watcher's place
-//! ([`TutorialState::fire_now`]).
+//! `0x4b5390` and `0x4b54c0`), each inside the handler, the input or the call that raises it. An
+//! engine site with no VM in hand asks on the tutorials lane ([`Tutorials::trigger_now`]), stamped
+//! where it runs, so the bank's test and its `TUTORIAL_TRIGGER` come at that place among the
+//! packets' signals ([`crate::lanes`]). A site inside a lane's firing tests and fires in place
+//! ([`TutorialState::fire_now`], [`fire_now`]); a call acknowledges in the call
+//! ([`Tutorials::acknowledge_now`]); the sites beside a script queue on the VM.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
@@ -26,10 +29,9 @@ use bevy::prelude::*;
 use benilla_ui::script::{ScriptValue, TutorialCall, UiScript};
 
 use crate::client_state::ClientState;
+use crate::lanes::{LaneApp, Stamp, Until};
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::Player;
-use crate::query_cache::Ask;
-use crate::ui_script::UiFeed;
 
 /// The popup cue `0x4b5390` plays on both legs (`0x846b68`).
 const TUTORIAL_POPUP_SOUND: &str = "TutorialPopup";
@@ -48,6 +50,7 @@ pub(crate) mod id {
     pub(crate) const DRINK: u32 = 0x0b;
     pub(crate) const USING_ITEMS: u32 = 0x08;
     pub(crate) const BAGS: u32 = 0x09;
+    pub(crate) const LEARNING_TALENTS: u32 = 0x0c;
     pub(crate) const TRAINERS: u32 = 0x0d;
     pub(crate) const REPUTATION: u32 = 0x0f;
     pub(crate) const REPLYING_TO_TELLS: u32 = 0x10;
@@ -172,27 +175,25 @@ pub(crate) const TARGETING_DELAY_MS: u32 = 10_000;
 /// after world enter with no movement input; what the stamp (`0x5143e0`) holds is untraced.
 const MOVEMENT_SILENCE: Duration = Duration::from_millis(90_000);
 
-/// The banks' frame: the world-entry bring-up, then the sites' triggers fired. A field watcher's
-/// tutorial tests the same fire-once bank after it ([`TutorialState::fire_now`]).
-#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct TutorialFeed;
-
-/// A site's ask of the tutorial system, written from wherever the reference's site lives.
-#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TutorialEvent {
-    /// `TriggerTutorial(id, delayMs)`: the fire-once leg.
+/// A site's ask of the tutorial system, stamped on the tutorials lane where the site runs and
+/// applied at that stamp ([`fire_tutorials`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TutorialAsk {
+    /// `TriggerTutorial(id, delayMs)` (`0x4b5390`): the fire-once test, then the event.
     Trigger { id: u32, delay_ms: u32 },
-    /// `SetTutorialFlag(id)` (`0x4b54c0`): the acknowledge-and-send leg.
+    /// `SetTutorialFlag(id)` (`0x4b54c0`): the acknowledge, and its `CMSG_TUTORIAL_FLAG`.
     Acknowledge { id: u32 },
+    /// A published id whose bit its site already set: a due timer's (`0x4b5840`), or a site's
+    /// that fired with no VM to hear it.
+    Fire { published: u32 },
+    /// `SetSelection` (`0x493540`) lit `entity`, `guid`'s object: its ladder
+    /// (`0x493789`-`0x49383c`, [`select_tutorial`]).
+    Selected { entity: Entity, guid: u64 },
+    /// `SMSG_TUTORIAL_FLAGS` (`0x4b5700`): both banks copied from the payload.
+    Flags(Vec<u8>),
 }
 
-impl TutorialEvent {
-    pub(crate) const fn trigger(id: u32) -> Self {
-        Self::Trigger { id, delay_ms: 0 }
-    }
-}
-
-/// A send the drains owe the wire.
+/// A send the acknowledges and the verbs owe the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TutorialSend {
     Flag(u32),
@@ -226,47 +227,88 @@ impl Tutorials {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// `SetTutorialFlag(id)` (`0x4b54c0`) inside a script call: the acknowledge, and its
-    /// `CMSG_TUTORIAL_FLAG` sent at once, with any send owed before it, so it leaves ahead of the
-    /// call's own packet.
+    /// `SetTutorialFlag(id)` (`0x4b54c0`) inside a script call or an input: the acknowledge, and
+    /// its `CMSG_TUTORIAL_FLAG` sent at once, with any send owed before it, so it leaves ahead of
+    /// the call's own packet.
     pub(crate) fn acknowledge_now(&self, id: u32, commands: &NetCommands) {
         let mut state = self.lock();
         state.acknowledge(id);
         state.flush(commands);
     }
 
-    /// `TriggerTutorial(id, 0)` (`0x4b5390`) from an engine site that holds the bank: the
-    /// fire-once test now, the event at the next feed.
+    /// `TriggerTutorial(id, 0)` (`0x4b5390`) from an engine site with no VM in hand: stamped here
+    /// on the tutorials lane, where the fire-once test and its `TUTORIAL_TRIGGER` run, so a
+    /// handler's fires after every earlier packet's signals and ahead of every later one's.
     pub(crate) fn trigger_now(&self, id: u32) {
-        self.lock().trigger(id, 0, Instant::now());
+        self.lock().push(TutorialAsk::Trigger { id, delay_ms: 0 });
+    }
+
+    /// `SetTutorialFlag(id)` (`0x4b54c0`) from a handler: stamped here on the tutorials lane, where
+    /// the banks take it and its packet goes out.
+    pub(crate) fn acknowledge_at_place(&self, id: u32) {
+        self.lock().push(TutorialAsk::Acknowledge { id });
     }
 
     /// `SetSelection` (`0x493540`) lit `entity`, `guid`'s object: its tutorial ladder
-    /// (`0x493789`-`0x49383c`) is judged at the next feed ([`select_tutorial`]).
+    /// (`0x493789`-`0x49383c`) is judged at this place on the tutorials lane ([`select_tutorial`]).
     pub(crate) fn selected(&self, entity: Entity, guid: u64) {
-        self.lock().selects.push((entity, guid));
+        self.lock().push(TutorialAsk::Selected { entity, guid });
     }
 
-    /// The selections queued for the ladder, taken.
+    /// `TutorialsEnabled()` (`0x4b5960`): any byte of bank B's whole `[0xb711ec] * 4` bytes, not
+    /// just the fifty ids, is not 0xFF; false with no bank.
+    pub(crate) fn enabled(&self) -> bool {
+        self.lock()
+            .acknowledged
+            .as_ref()
+            .is_some_and(|b| b.iter().any(|&byte| byte != 0xFF))
+    }
+
+    /// The asks the lane holds, in order, taken unapplied.
+    #[cfg(test)]
+    pub(crate) fn take_asks(&self) -> Vec<TutorialAsk> {
+        std::mem::take(&mut self.lock().lane)
+            .into_iter()
+            .map(|(_, ask)| ask)
+            .collect()
+    }
+
+    /// The selections the lane holds, taken.
     #[cfg(test)]
     pub(crate) fn take_selects(&self) -> Vec<(Entity, u64)> {
-        std::mem::take(&mut self.lock().selects)
+        let mut state = self.lock();
+        let mut out = Vec::new();
+        state.lane.retain(|(_, ask)| match ask {
+            TutorialAsk::Selected { entity, guid } => {
+                out.push((*entity, *guid));
+                false
+            }
+            _ => true,
+        });
+        out
     }
 
-    /// The published ids owed the VM, taken.
+    /// The published ids the lane's asks fire, each applied in its order but for the selections,
+    /// which stay ([`Self::take_selects`]).
     #[cfg(test)]
     pub(crate) fn take_fired(&self) -> Vec<u32> {
-        std::mem::take(&mut self.lock().fired)
-    }
-
-    /// The acknowledged bank, as `TutorialsEnabled` (`0x4b5960`) reads it, for a VM told inside the
-    /// call that wrote it.
-    pub(crate) fn acknowledged_bank(&self) -> Option<Vec<u8>> {
-        self.lock().acknowledged.clone()
+        let mut state = self.lock();
+        let asks = std::mem::take(&mut state.lane);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut fired = Vec::new();
+        for (stamp, ask) in asks {
+            if matches!(ask, TutorialAsk::Selected { .. }) {
+                state.lane.push_back((stamp, ask));
+            } else if let Some(published) = state.apply(ask, Instant::now(), &commands) {
+                fired.push(published);
+            }
+        }
+        fired
     }
 }
 
-/// The two banks, the timers, and what the frame owes the VM and the wire.
+/// The two banks, the timers, the lane and what the acknowledges owe the wire.
 #[derive(Default)]
 pub(crate) struct TutorialState {
     /// Bank A (`0xb711b8`…): fire-once. `None` until the packet lands.
@@ -275,16 +317,50 @@ pub(crate) struct TutorialState {
     acknowledged: Option<Vec<u8>>,
     /// The delayed triggers (`TUTORIALTIMER` nodes): `(id, due)`.
     timers: Vec<(u32, Instant)>,
-    /// Published ids (`id + 1`) whose event and cue are owed this frame.
-    fired: Vec<u32>,
     sends: Vec<TutorialSend>,
-    /// Item pushes for us since the last feed (`0x491a60`'s sites): `(entry, bag, slot)`.
-    pushes: Vec<(u32, u8, u32)>,
-    /// The units `SetSelection` lit since the last feed, for its ladder.
-    selects: Vec<(Entity, u64)>,
+    /// The tutorials lane: each site's ask, stamped where it ran, in stamp order.
+    lane: VecDeque<(Stamp, TutorialAsk)>,
 }
 
 impl TutorialState {
+    /// Queue `ask` on the lane, stamped now, behind everything stamped before it.
+    fn push(&mut self, ask: TutorialAsk) {
+        let stamp = crate::lanes::stamp();
+        let at = self.lane.partition_point(|(s, _)| *s < stamp);
+        self.lane.insert(at, (stamp, ask));
+    }
+
+    fn head(&self) -> Option<Stamp> {
+        self.lane.front().map(|(s, _)| *s)
+    }
+
+    /// The head, taken if `until` admits it.
+    fn pop(&mut self, until: Until) -> Option<(Stamp, TutorialAsk)> {
+        until
+            .admits(self.head()?)
+            .then(|| self.lane.pop_front())
+            .flatten()
+    }
+
+    /// One ask applied at its stamp: the published id it fires, if any. A selection's ladder needs
+    /// the world's reads and is judged by the lane's firing.
+    fn apply(&mut self, ask: TutorialAsk, now: Instant, commands: &NetCommands) -> Option<u32> {
+        match ask {
+            TutorialAsk::Trigger { id, delay_ms } => self.trigger(id, delay_ms, now),
+            TutorialAsk::Acknowledge { id } => {
+                self.acknowledge(id);
+                self.flush(commands);
+                None
+            }
+            TutorialAsk::Fire { published } => Some(published),
+            TutorialAsk::Flags(bytes) => {
+                self.apply_flags(&bytes);
+                None
+            }
+            TutorialAsk::Selected { .. } => None,
+        }
+    }
+
     /// Send what is owed, in order.
     fn flush(&mut self, commands: &NetCommands) {
         for send in std::mem::take(&mut self.sends) {
@@ -313,22 +389,23 @@ impl TutorialState {
         }
     }
 
-    /// The teardown `0x4b5380`: every pending timer flushed.
+    /// The teardown `0x4b5380`: every pending timer flushed, and what the lane held for the
+    /// interface that was up.
     fn world_leave(&mut self) {
         self.timers.clear();
+        self.lane.clear();
     }
 
-    /// `TriggerTutorial(id, delayMs)` (`0x4b5390`).
-    pub(crate) fn trigger(&mut self, id: u32, delay_ms: u32, now: Instant) {
-        let Some(published) = self.fire_now(id) else {
-            return;
-        };
+    /// `TriggerTutorial(id, delayMs)` (`0x4b5390`): the published id to fire now for no delay;
+    /// else the timer armed and nothing yet.
+    pub(crate) fn trigger(&mut self, id: u32, delay_ms: u32, now: Instant) -> Option<u32> {
+        let published = self.fire_now(id)?;
         if delay_ms == 0 {
-            self.fired.push(published);
-        } else {
-            self.timers
-                .push((id, now + Duration::from_millis(u64::from(delay_ms))));
+            return Some(published);
         }
+        self.timers
+            .push((id, now + Duration::from_millis(u64::from(delay_ms))));
+        None
     }
 
     /// `0x4b5390`'s fire-once test: bank A's bit for `id` tested and set, and the published id
@@ -392,8 +469,9 @@ impl TutorialState {
         self.sends.push(TutorialSend::Reset);
     }
 
-    /// `ProcessTutorialTimers`: every due node fires the same cue and event.
-    fn tick(&mut self, now: Instant) {
+    /// `ProcessTutorialTimers`: the published ids of every due node, which fire the same cue and
+    /// event untested.
+    fn tick(&mut self, now: Instant) -> Vec<u32> {
         let mut due = Vec::new();
         self.timers.retain(|&(id, at)| {
             if at <= now {
@@ -403,13 +481,7 @@ impl TutorialState {
                 true
             }
         });
-        self.fired.extend(due);
-    }
-
-    /// `SMSG_ITEM_PUSH_RESULT` for one of ours: the item-received handler's five sites, resolved
-    /// on the next feed with the item's template.
-    pub(crate) fn item_received(&mut self, entry: u32, bag: u8, slot: u32) {
-        self.pushes.push((entry, bag, slot));
+        due
     }
 
     #[cfg(test)]
@@ -438,148 +510,163 @@ const INVENTORY_SLOT_MASK: [u32; 29] = [
     0x20000, 0, 0x20000,
 ];
 const CLASS_HUNTER: u8 = 3;
-/// The keyring bag and its slot band (`edi == 0xff`, slot ∈ [0x51, 0x70]).
-const KEYRING_BAG: u8 = 0xff;
-const KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 0x51..=0x70;
 
-/// Before the script tick: the sites' asks, the descriptor edges, the timers, the cue and the
-/// event, and the acknowledged bank's push to whichever VM is live.
-fn feed_tutorials(
-    mut hosted_vm: crate::script_calls::HostedVm,
+/// The item-received function's tutorials for our own push, in its order (`0x491cec`-`0x491ec9`),
+/// which runs with the item's record held, at the push's packet or at the record's answer
+/// (`0x491ee0`): Backpack always; Using Items for an on-use spell; Equippable Items for an inventory
+/// type that fits a slot ([`INVENTORY_SLOT_MASK`]); Bags for a container; Keyrings for the keyring
+/// band; Hearthstones by entry; Ranged Weapons for a ranged type on a non-hunter.
+pub(crate) fn item_tutorials(
+    entry: u32,
+    keyring: bool,
+    info: &benilla_protocol::messages::ItemInfo,
+    class: Option<u8>,
+) -> Vec<u32> {
+    // A spell in any of the five blocks with trigger 0, ON_USE (`0x491d00`-`0x491d0a`).
+    let on_use = info.spells.iter().any(|s| s.trigger == 0);
+    // A set bit among the first 23 of the type's slot mask (`0x491d23`-`0x491d3f`).
+    let equippable = INVENTORY_SLOT_MASK
+        .get(info.inventory_type as usize)
+        .is_some_and(|m| m & 0x7f_ffff != 0);
+    [
+        (true, id::BACKPACK),
+        (on_use, id::USING_ITEMS),
+        (equippable, id::EQUIPPABLE_ITEMS),
+        // Class 1, Container (`0x491d4f cmp [esi],1`).
+        (info.class == 1, id::BAGS),
+        // Bag 255, slots 0x51 to 0x70 (`0x491d60`-`0x491d73`).
+        (keyring, id::KEYRINGS),
+        (entry == HEARTHSTONE, id::HEARTHSTONES),
+        (
+            info.inventory_type == INVTYPE_RANGED && class != Some(CLASS_HUNTER),
+            id::RANGED_WEAPONS,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(owed, id)| owed.then_some(id))
+    .collect()
+}
+
+/// The tutorials lane's head ([`crate::lanes`]).
+fn peek_tutorials(world: &World) -> Option<Stamp> {
+    world.get_resource::<Tutorials>()?.lock().head()
+}
+
+/// The lane's firing: each ask the drain admits, applied at its stamp, its `TUTORIAL_TRIGGER`
+/// fired with the host lent. The bank is free while Lua runs: a listener may acknowledge in a
+/// call. It stops after an ask whose firing stamped anything, so what that pushed fires next.
+fn fire_tutorials(
+    In(until): In<Until>,
+    mut vm: crate::script_calls::VmWith<SelectReads<'static, 'static>>,
     tutorials: Res<Tutorials>,
-    mut asks: MessageReader<TutorialEvent>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    items: Res<crate::items::Items>,
     sounds: Res<crate::sound::MessageSounds>,
-    mut told: Local<crate::ui_script::VmMemo<Option<Vec<u8>>>>,
+    commands: Res<NetCommands>,
 ) {
-    hosted_vm.run(|mut script| {
-        let now = Instant::now();
-        let mut tutorials = tutorials.lock();
-        for ask in asks.read() {
-            match *ask {
-                TutorialEvent::Trigger { id, delay_ms } => tutorials.trigger(id, delay_ms, now),
-                TutorialEvent::Acknowledge { id } => tutorials.acknowledge(id),
-            }
-        }
-        // The sites beside a script, queued on the VM: Quest Completion (`0x4df792`), Elite
-        // Quests (`0x5dde7d`), Replying to Tells (`0x49b107`), The Spellbook (`0x4b2ba1`) and the
-        // inventory alerts (`0x4c8002`, `0x4c802e`).
-        if let Some(script) = script.as_mut() {
-            for id in script.take_tutorial_triggers() {
-                tutorials.trigger(id, 0, now);
-            }
-        }
-
-        // The item-received sites in the handler's order (`0x491cec`-`0x491ec9`): Backpack
-        // always; Using Items for an on-use spell; Equippable Items for an inventory type that
-        // fits a slot ([`INVENTORY_SLOT_MASK`]); Bags for a container; Keyrings by the slot band;
-        // Hearthstones by entry; Ranged Weapons for a ranged type on a non-hunter.
-        let pushes = std::mem::take(&mut tutorials.pushes);
-        let class = self_q.single().ok().and_then(|s| s.0.unit_class());
-        for (entry, bag, slot) in pushes {
-            tutorials.trigger(id::BACKPACK, 0, now);
-            let info = items.template(entry, 0, Ask::Read);
-            // A spell in any of the five blocks with trigger 0, ON_USE (`0x491d00`-`0x491d0a`).
-            if info.is_some_and(|i| i.spells.iter().any(|s| s.trigger == 0)) {
-                tutorials.trigger(id::USING_ITEMS, 0, now);
-            }
-            // A set bit among the first 23 of the type's slot mask (`0x491d23`-`0x491d3f`).
-            if info.is_some_and(|i| {
-                INVENTORY_SLOT_MASK
-                    .get(i.inventory_type as usize)
-                    .is_some_and(|m| m & 0x7f_ffff != 0)
-            }) {
-                tutorials.trigger(id::EQUIPPABLE_ITEMS, 0, now);
-            }
-            // Class 1, Container (`0x491d4f cmp [esi],1`).
-            if info.is_some_and(|i| i.class == 1) {
-                tutorials.trigger(id::BAGS, 0, now);
-            }
-            if bag == KEYRING_BAG && KEYRING_SLOTS.contains(&slot) {
-                tutorials.trigger(id::KEYRINGS, 0, now);
-            }
-            if entry == HEARTHSTONE {
-                tutorials.trigger(id::HEARTHSTONES, 0, now);
-            }
-            if info.is_some_and(|i| i.inventory_type == INVTYPE_RANGED)
-                && class != Some(CLASS_HUNTER)
-            {
-                tutorials.trigger(id::RANGED_WEAPONS, 0, now);
-            }
-        }
-
-        tutorials.tick(now);
-
-        let Some(script) = script else {
+    if !vm.run(|script| script.is_some()) {
+        return;
+    }
+    loop {
+        let next = tutorials.lock().pop(until);
+        let Some((at, ask)) = next else {
             return;
         };
-        let fired = std::mem::take(&mut tutorials.fired);
-        // The bank is owed to every VM: what it has been told is per VM, so a `/reload`'s fresh VM
-        // is told again.
-        let told = told.get(script);
-        if *told != tutorials.acknowledged {
-            told.clone_from(&tutorials.acknowledged);
-            script.set_tutorial_bank(tutorials.acknowledged.clone());
-        }
-        // Free before any handler runs: one may acknowledge inside a call.
-        drop(tutorials);
-        for published in fired {
-            fire_published(script, &sounds, published);
-        }
-    })
-}
-
-/// Before the feed: the selections' ladder (`0x493789`-`0x49383c`), in their order, each judged
-/// against the bank as the ones before it left it.
-pub(crate) fn judge_selections(
-    tutorials: Res<Tutorials>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    stores: Query<&ObjectStore>,
-    relations: crate::target::RelationWorld,
-) {
-    let mut tutorials = tutorials.lock();
-    let now = Instant::now();
-    for (entity, guid) in std::mem::take(&mut tutorials.selects) {
-        let own = self_q.single().ok();
-        let Some(facts) = select_facts(entity, guid, &stores, own, &relations) else {
+        let now = Instant::now();
+        let published = match ask {
+            TutorialAsk::Selected { entity, guid } => {
+                let facts = vm.own().facts(entity, guid);
+                let mut state = tutorials.lock();
+                facts
+                    .and_then(|f| select_tutorial(f, state.has_fired(id::PLAYERS)))
+                    .and_then(|id| state.trigger(id, 0, now))
+            }
+            ask => tutorials.lock().apply(ask, now, &commands),
+        };
+        let Some(published) = published else {
             continue;
         };
-        let players_fired = tutorials.has_fired(id::PLAYERS);
-        if let Some(id) = select_tutorial(facts, players_fired) {
-            tutorials.trigger(id, 0, now);
+        let ((), moved) = crate::lanes::firing(at, || {
+            vm.run(|script| {
+                if let Some(script) = script {
+                    fire_published(script, &sounds, published);
+                }
+            })
+        });
+        if moved {
+            return;
         }
     }
 }
 
-/// What the ladder reads of the lit unit `guid`, `entity`'s object, against the active player;
-/// `None` without either, or for an object that is no unit (`0x49370f`).
-fn select_facts(
-    entity: Entity,
-    guid: u64,
-    stores: &Query<&ObjectStore>,
-    own: Option<&ObjectStore>,
-    relations: &crate::target::RelationWorld,
-) -> Option<SelectFacts> {
-    const TYPE_UNIT: u32 = 0x8;
-    const TYPE_PLAYER: u32 = 0x10;
-    const NPC_FLIGHT_MASTER: u32 = 0x8;
-    let store = stores.get(entity).ok()?;
-    let mask = store.0.object_type_mask().unwrap_or(0);
-    if mask & TYPE_UNIT == 0 {
-        return None;
+/// What the selection ladder reads of the lit unit and the active player.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SelectReads<'w, 's> {
+    self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    stores: Query<'w, 's, &'static ObjectStore>,
+    relations: crate::target::RelationWorld<'w, 's>,
+}
+
+impl SelectReads<'_, '_> {
+    /// What the ladder reads of the lit unit `guid`, `entity`'s object, against the active
+    /// player; `None` without either, or for an object that is no unit (`0x49370f`).
+    fn facts(&self, entity: Entity, guid: u64) -> Option<SelectFacts> {
+        const TYPE_UNIT: u32 = 0x8;
+        const TYPE_PLAYER: u32 = 0x10;
+        const NPC_FLIGHT_MASTER: u32 = 0x8;
+        let store = self.stores.get(entity).ok()?;
+        let mask = store.0.object_type_mask().unwrap_or(0);
+        if mask & TYPE_UNIT == 0 {
+            return None;
+        }
+        let relations = &self.relations;
+        let me = relations.me()?;
+        let unit = relations.unit_of(guid, store);
+        let rel = relations.get();
+        let own = self.self_q.single().ok();
+        Some(SelectFacts {
+            player: mask & TYPE_PLAYER != 0,
+            me: relations.me_guid() == Some(guid),
+            cooperates: rel.can_cooperate(&me, &unit),
+            my_level: own.and_then(|s| s.0.unit_level()).unwrap_or(0) as i32,
+            attackable: rel.can_attack(&me, &unit),
+            flight_master: store.0.unit_npc_flags() & NPC_FLIGHT_MASTER != 0,
+        })
     }
-    let me = relations.me()?;
-    let unit = relations.unit_of(guid, store);
-    let rel = relations.get();
-    Some(SelectFacts {
-        player: mask & TYPE_PLAYER != 0,
-        me: relations.me_guid() == Some(guid),
-        cooperates: rel.can_cooperate(&me, &unit),
-        my_level: own.and_then(|s| s.0.unit_level()).unwrap_or(0) as i32,
-        attackable: rel.can_attack(&me, &unit),
-        flight_master: store.0.unit_npc_flags() & NPC_FLIGHT_MASTER != 0,
-    })
+}
+
+/// `TutorialsEnabled` (`0x4b5960`) at its call: bank B as it stands, through the host.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TutorialLive<'w> {
+    /// Absent in a harness without the tutorials, whose VM reads its own copy.
+    tutorials: Option<Res<'w, Tutorials>>,
+}
+
+impl crate::script_calls::live::LiveFamily for TutorialLive<'_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &benilla_ui::script::TutorialsEnabledQuery| {
+            Some(self.tutorials.as_deref()?.enabled())
+        })
+    }
+}
+
+/// The game timer's callback `0x4b5840`, at the frame's head: each due timer's published id,
+/// stamped ahead of the frame's input and packets, as the timers run first in the tick
+/// (`0x420d0c`).
+fn tick_tutorial_timers(tutorials: Res<Tutorials>) {
+    let mut state = tutorials.lock();
+    for published in state.tick(Instant::now()) {
+        state.push(TutorialAsk::Fire { published });
+    }
+}
+
+/// Before the drain: the triggers the VM's sites beside a script queued, stamped here: Quest
+/// Completion (`0x4df792`), Replying to Tells (`0x49b107`), the Quest Log (`0x5013df`) and the
+/// inventory alerts (`0x4c8002`, `0x4c802e`).
+fn stamp_script_triggers(mut hosted_vm: crate::script_calls::HostedVm, tutorials: Res<Tutorials>) {
+    let ids = hosted_vm.run(|script| script.map(UiScript::take_tutorial_triggers));
+    let mut state = tutorials.lock();
+    for id in ids.into_iter().flatten() {
+        state.push(TutorialAsk::Trigger { id, delay_ms: 0 });
+    }
 }
 
 /// `0x4b5390`'s firing of a published id: the `TutorialPopup` cue, then `TUTORIAL_TRIGGER`.
@@ -595,33 +682,29 @@ pub(crate) fn fire_published(
     );
 }
 
-/// The polled `0x4b5390` edge site: the mover entering water. It fires on a change, never at the
-/// login; the bring-up resets the memory.
+/// The polled `0x4b5390` edge site, `StartSwimming`'s (`0x60df70`, `0x60dfa1`): the mover entering
+/// water, at the frame time that moves it. It fires on a change, never at the login; the bring-up
+/// resets the memory.
 fn watch_self(
     player: Res<Player>,
     mut cascade: ResMut<WorldEnterCascade>,
     mut watch: Local<SelfWatch>,
-    mut asks: MessageWriter<TutorialEvent>,
+    tutorials: Res<Tutorials>,
 ) {
     if std::mem::take(&mut cascade.reset_watch) {
         *watch = SelfWatch::default();
     }
     if let Some(prev) = watch.swimming {
         if !prev && player.swimming {
-            asks.write(TutorialEvent::trigger(id::SWIMMING));
+            tutorials.trigger_now(id::SWIMMING);
         }
     }
     watch.swimming = Some(player.swimming);
 }
 
-/// After the script tick: every send the engine's own acknowledges owe ([`TutorialEvent`]).
-pub(crate) fn drain_tutorials(tutorials: Res<Tutorials>, commands: Res<NetCommands>) {
-    tutorials.lock().flush(&commands);
-}
-
 /// The tutorial verbs' engine half ([`crate::script_calls::ScriptCallHost`]): each writes the banks
-/// and sends before the verb returns, and the VM's bank reads the write on the verb's next line,
-/// as `TutorialsEnabled` (`0x4b5960`) reads the bank the call wrote.
+/// and sends before the verb returns, and `TutorialsEnabled` (`0x4b5960`) reads the write on the
+/// verb's next line ([`TutorialLive`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct TutorialSteps<'w> {
     /// Absent in a harness with no tutorial state, which drops the calls.
@@ -632,21 +715,17 @@ pub(crate) struct TutorialSteps<'w> {
 impl TutorialSteps<'_> {
     /// `FlagTutorial`'s `0x4b54c0` (`0x4b59dc`), `ClearTutorials`'s `0x4b55c0` (`0x4b5a00`) or
     /// `ResetTutorials`'s `0x4b5660` (`0x4b5a10`), its packet sent with any owed before it.
-    pub(crate) fn apply(&mut self, script: &mut UiScript, call: TutorialCall) {
+    pub(crate) fn apply(&mut self, call: TutorialCall) {
         let Some(tutorials) = self.tutorials.as_deref() else {
             return;
         };
-        let bank = {
-            let mut state = tutorials.lock();
-            match call {
-                TutorialCall::Flag(id) => state.acknowledge(id),
-                TutorialCall::Clear => state.clear(),
-                TutorialCall::Reset => state.reset(),
-            }
-            state.flush(&self.commands);
-            state.acknowledged.clone()
-        };
-        script.set_tutorial_bank(bank);
+        let mut state = tutorials.lock();
+        match call {
+            TutorialCall::Flag(id) => state.acknowledge(id),
+            TutorialCall::Clear => state.clear(),
+            TutorialCall::Reset => state.reset(),
+        }
+        state.flush(&self.commands);
     }
 }
 
@@ -679,15 +758,15 @@ pub(crate) struct WorldEnterCascade {
     reset_watch: bool,
 }
 
-/// The Movement popup's silence window: its tutorial when no movement input came in
-/// [`MOVEMENT_SILENCE`] since the world session began. The arrival's tutorial and the cascade's
-/// fire in their places ([`fire_now`]).
+/// The Movement popup's silence window, the world frame's idle pass (`0x482ea0`, `0x483000`): its
+/// tutorial when no movement input came in [`MOVEMENT_SILENCE`] since the world session began,
+/// stamped at the frame pass, after the packets. The arrival's tutorial and the cascade's fire in
+/// their places ([`fire_now`]).
 fn run_world_enter_cascade(mut cascade: ResMut<WorldEnterCascade>, tutorials: Res<Tutorials>) {
-    let now = Instant::now();
     if let Some(at) = cascade.entered_at {
-        if !cascade.moved && now.duration_since(at) >= MOVEMENT_SILENCE {
+        if !cascade.moved && Instant::now().duration_since(at) >= MOVEMENT_SILENCE {
             cascade.entered_at = None;
-            tutorials.lock().trigger(id::MOVEMENT, 0, now);
+            tutorials.trigger_now(id::MOVEMENT);
         }
     }
 }
@@ -695,87 +774,60 @@ fn run_world_enter_cascade(mut cascade: ResMut<WorldEnterCascade>, tutorials: Re
 /// `FireTutorial 0x4b5390(id, 0)` in its caller's place: the arrival's ghost state's Death
 /// (`0x5de9f0`) and the world-enter cascade's Welcome and Questgivers (`0x490a48`, `0x490a51`).
 /// The fire-once test, then its `TUTORIAL_TRIGGER` with the host lent; with no VM the published
-/// id waits for the feed, as every other site's does.
+/// id waits on the lane for one.
 pub(crate) fn fire_now(
     In(id): In<u32>,
     mut hosted_vm: crate::script_calls::HostedVm,
     tutorials: Res<Tutorials>,
     sounds: Res<crate::sound::MessageSounds>,
 ) {
-    hosted_vm.run(|script| {
-        let published = {
-            let mut tutorials = tutorials.lock();
-            let before = tutorials.fired.len();
-            tutorials.trigger(id, 0, Instant::now());
-            match script {
-                Some(_) => tutorials.fired.split_off(before),
-                None => Vec::new(),
-            }
-        };
-        if let Some(script) = script {
-            for published in published {
-                fire_published(script, &sounds, published);
-            }
-        }
+    let Some(published) = tutorials.lock().trigger(id, 0, Instant::now()) else {
+        return;
+    };
+    hosted_vm.run(|script| match script {
+        Some(script) => fire_published(script, &sounds, published),
+        None => tutorials.lock().push(TutorialAsk::Fire { published }),
     })
 }
 
-/// The world-input sites (`0x514840`), bundled for the controller: a movement input
-/// acknowledges Movement and arms the 10 s Targeting popup; a mouse-look acknowledges Cameras.
+/// The world-input sites (`0x514840`), bundled for the controller, each in the input that makes
+/// it: a movement input acknowledges Movement and arms the 10 s Targeting popup; a mouse-look
+/// acknowledges Cameras.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct InputHooks<'w> {
     /// Optional, so a controller test's partial app runs without the tutorial plugin.
-    asks: Option<MessageWriter<'w, TutorialEvent>>,
+    tutorials: Option<Res<'w, Tutorials>>,
+    commands: Option<Res<'w, NetCommands>>,
     cascade: Option<ResMut<'w, WorldEnterCascade>>,
 }
 
 impl InputHooks<'_> {
-    /// A movement input this frame (`test ecx,0x1030`, taken as the forward and side axes).
+    /// A movement input this frame (`test ecx,0x1030`, taken as the forward and side axes):
+    /// Movement acknowledged (`0x514a88`), then Targeting armed (`0x514a97`).
     pub(crate) fn moved(&mut self) {
         if let Some(c) = self.cascade.as_mut() {
             c.moved = true;
         }
-        if let Some(asks) = self.asks.as_mut() {
-            asks.write(TutorialEvent::Acknowledge { id: id::MOVEMENT });
-            asks.write(TutorialEvent::Trigger {
-                id: id::TARGETING,
-                delay_ms: TARGETING_DELAY_MS,
-            });
-        }
+        let (Some(tutorials), Some(commands)) =
+            (self.tutorials.as_deref(), self.commands.as_deref())
+        else {
+            return;
+        };
+        tutorials.acknowledge_now(id::MOVEMENT, commands);
+        // A delayed trigger fires nothing here: its timer holds it (`0x4b53e7`).
+        let _ = tutorials
+            .lock()
+            .trigger(id::TARGETING, TARGETING_DELAY_MS, Instant::now());
     }
 
-    /// A mouse-look this frame (`[ebp+8] & 3`, the two buttons).
+    /// A mouse-look this frame (`[ebp+8] & 3`, the two buttons, `0x514aa9`).
     pub(crate) fn mouselooked(&mut self) {
-        if let Some(asks) = self.asks.as_mut() {
-            asks.write(TutorialEvent::Acknowledge { id: id::CAMERAS });
+        if let (Some(tutorials), Some(commands)) =
+            (self.tutorials.as_deref(), self.commands.as_deref())
+        {
+            tutorials.acknowledge_now(id::CAMERAS, commands);
         }
     }
-}
-
-/// The window edges the reference's handlers fire from: the trainer list (Trainers acknowledged,
-/// `0x4d74ae`) and the vendor list (Vendors, `0x4fad32`). The taxi map's Travel (`0x4dbaa2`) fires
-/// with its open's event (`ui_taxi`), and Raid Groups from the group list itself
-/// (`ui_party::net`).
-#[derive(Default)]
-struct WindowWatch {
-    trainer: Option<u64>,
-    vendor: Option<u64>,
-}
-
-fn watch_windows(
-    trainer: Res<crate::ui_trainer::TrainerOpen>,
-    merchant: Res<crate::ui_merchant::MerchantOpen>,
-    mut watch: Local<WindowWatch>,
-    mut asks: MessageWriter<TutorialEvent>,
-) {
-    if trainer.trainer.is_some() && trainer.trainer != watch.trainer {
-        asks.write(TutorialEvent::Acknowledge { id: id::TRAINERS });
-    }
-    watch.trainer = trainer.trainer;
-    if merchant.vendor.is_some() && merchant.vendor != watch.vendor {
-        asks.write(TutorialEvent::trigger(id::VENDORS));
-    }
-    watch.vendor = merchant.vendor;
 }
 
 fn on_world_leave(tutorials: Res<Tutorials>, mut cascade: ResMut<WorldEnterCascade>) {
@@ -790,35 +842,29 @@ impl Plugin for TutorialPlugin {
         net::register(app);
         app.init_resource::<Tutorials>()
             .init_resource::<WorldEnterCascade>()
-            .add_message::<TutorialEvent>()
+            .add_lane("tutorials", peek_tutorials, fire_tutorials, None)
             .add_systems(
                 Update,
                 (
-                    on_world_enter.before(run_world_enter_cascade),
-                    run_world_enter_cascade.before(feed_tutorials),
-                    // After the self tag, whose object the ladder reads the player off.
-                    judge_selections
+                    // The timers' callback ahead of the frame's input and packets.
+                    tick_tutorial_timers.before(crate::ui_script::UiInput),
+                    // The rest ahead of the feeds, so what each stamps fires in this frame's drain.
+                    on_world_enter
+                        .before(run_world_enter_cascade)
+                        .before(crate::ui_script::UiFeed),
+                    // The idle pass, after the packets.
+                    run_world_enter_cascade
                         .after(benilla_world::schedule::WorldStage::Net)
-                        .before(feed_tutorials),
-                    // After the drain whose packets open the windows it watches, and before the
-                    // pass resumes, whose trainer and merchant calls write them.
-                    watch_windows
-                        .after(benilla_world::schedule::WorldStage::Net)
-                        .before(feed_tutorials)
-                        .before(crate::vm_pass::VmPass::Resume),
+                        .before(crate::ui_script::UiFeed),
                     watch_self
                         .after(on_world_enter)
+                        .after(run_world_enter_cascade)
                         .after(crate::player::ControlRestore)
-                        .before(feed_tutorials),
-                    // Not before the in-game UI exists: `fired` is taken once, with no `VmMemo`
-                    // behind it, so the login's Welcome and Questgivers fired into the glue VM
-                    // during the one frame it is still live in the world would be lost. `fired`
-                    // simply waits for the first frame with an interface.
-                    feed_tutorials
-                        .in_set(UiFeed)
-                        .in_set(TutorialFeed)
+                        .before(crate::ui_script::UiFeed),
+                    // Not before the in-game UI exists: the glue VM's queue is not the world's.
+                    stamp_script_triggers
+                        .in_set(crate::ui_script::UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
-                    drain_tutorials.in_set(crate::ui_script::UiDrain),
                 ),
             )
             .add_systems(
@@ -833,7 +879,7 @@ mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
 
-    use super::Tutorials;
+    use super::{TutorialAsk, Tutorials};
     use crate::net::NetHandlerApp;
 
     /// Register the handler, from [`super::TutorialPlugin`].
@@ -841,9 +887,10 @@ mod net {
         app.net_handler(SessionEventKind::TutorialFlags, on_flags);
     }
 
+    /// `0x4b5700`: the copy at its packet's place on the tutorials lane.
     fn on_flags(In(ev): In<SessionEvent>, tutorials: Res<Tutorials>) {
         if let SessionEvent::TutorialFlags(bytes) = ev {
-            tutorials.lock().apply_flags(&bytes);
+            tutorials.lock().push(TutorialAsk::Flags(bytes));
         }
     }
 }
@@ -895,12 +942,14 @@ mod tests {
     fn the_trigger_fires_once_per_bank_a_and_never_sends() {
         let now = Instant::now();
         let mut t = TutorialState::default();
-        t.trigger(id::WELCOME, 0, now);
-        assert!(t.fired.is_empty(), "no bank yet: silent");
+        assert_eq!(t.trigger(id::WELCOME, 0, now), None, "no bank yet: silent");
         let mut t = banked();
-        t.trigger(id::WELCOME, 0, now);
-        t.trigger(id::WELCOME, 0, now);
-        assert_eq!(t.fired, vec![id::WELCOME + 1], "published as id + 1, once");
+        assert_eq!(
+            t.trigger(id::WELCOME, 0, now),
+            Some(id::WELCOME + 1),
+            "published as id + 1"
+        );
+        assert_eq!(t.trigger(id::WELCOME, 0, now), None, "once");
         let (a, b) = t.bits();
         assert_eq!(bank_bit(a.unwrap(), id::WELCOME), Some(true));
         assert_eq!(
@@ -909,8 +958,7 @@ mod tests {
             "bank B untouched"
         );
         assert!(t.sends.is_empty(), "the trigger sends nothing");
-        t.trigger(300, 0, now);
-        assert_eq!(t.fired.len(), 1, "past the bank: a no-op");
+        assert_eq!(t.trigger(300, 0, now), None, "past the bank: a no-op");
     }
 
     /// The delayed leg holds the id until due; an acknowledge cancels it.
@@ -918,18 +966,23 @@ mod tests {
     fn a_delayed_trigger_waits_and_an_acknowledge_cancels_it() {
         let now = Instant::now();
         let mut t = banked();
-        t.trigger(id::TARGETING, TARGETING_DELAY_MS, now);
-        assert!(t.fired.is_empty());
-        t.tick(now + Duration::from_millis(9_999));
-        assert!(t.fired.is_empty(), "not yet");
-        t.tick(now + Duration::from_millis(10_000));
-        assert_eq!(t.fired, vec![id::TARGETING + 1]);
+        assert_eq!(t.trigger(id::TARGETING, TARGETING_DELAY_MS, now), None);
+        assert!(
+            t.tick(now + Duration::from_millis(9_999)).is_empty(),
+            "not yet"
+        );
+        assert_eq!(
+            t.tick(now + Duration::from_millis(10_000)),
+            [id::TARGETING + 1]
+        );
 
         let mut t = banked();
         t.trigger(id::TARGETING, TARGETING_DELAY_MS, now);
         t.acknowledge(id::TARGETING);
-        t.tick(now + Duration::from_millis(20_000));
-        assert!(t.fired.is_empty(), "the acknowledge cancelled the timer");
+        assert!(
+            t.tick(now + Duration::from_millis(20_000)).is_empty(),
+            "the acknowledge cancelled the timer"
+        );
         assert_eq!(t.sends, vec![TutorialSend::Flag(id::TARGETING)]);
     }
 
@@ -948,8 +1001,7 @@ mod tests {
         assert_eq!(bank_bit(a.unwrap(), id::CHATTING), Some(true));
         assert_eq!(bank_bit(b.unwrap(), id::CHATTING), Some(true));
         // Acknowledged first: the later trigger is silent (A ⊇ B).
-        t.trigger(id::CHATTING, 0, Instant::now());
-        assert!(t.fired.is_empty());
+        assert_eq!(t.trigger(id::CHATTING, 0, Instant::now()), None);
     }
 
     /// Clear sets every bit and flushes the timers; Reset clears every bit and keeps them.
@@ -998,81 +1050,6 @@ mod tests {
         assert_eq!(bank_bit(a.unwrap(), 32), None, "past a 4-byte bank");
     }
 
-    /// A bare app around [`feed_tutorials`], the one system that owes the VM the bank.
-    fn feeder() -> App {
-        let mut app = App::new();
-        app.init_resource::<Tutorials>()
-            .init_resource::<crate::items::Items>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_message::<TutorialEvent>()
-            .add_systems(Update, feed_tutorials);
-        app
-    }
-
-    fn enabled(app: &mut App) -> bool {
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<bool>("return TutorialsEnabled() ~= nil")
-            .unwrap()
-    }
-
-    /// A `/reload`'s fresh VM is told the bank again, though no world entry refills it. Untold,
-    /// `TutorialsEnabled()` answers nil, the Show Tutorials row loads off, and ticking it passes
-    /// `UIOptionsFrame.lua:319`'s `~=` guard into `ResetTutorials()`, re-arming every dismissed
-    /// popup account-wide.
-    #[test]
-    fn a_rebuilt_vm_is_told_the_acknowledged_bank_again() {
-        let mut app = feeder();
-        // One unacknowledged bit is all `TutorialsEnabled()` scans for.
-        let mut bank = vec![0xFFu8; 32];
-        bank[0] = 0xFE;
-        app.world_mut()
-            .resource::<Tutorials>()
-            .lock()
-            .apply_flags(&bank);
-
-        app.insert_non_send_resource(UiScript::new().expect("VM"));
-        app.update();
-        assert!(
-            enabled(&mut app),
-            "the VM that was live when the bank landed"
-        );
-
-        // `ReloadUI()`: a fresh VM, and nothing touches the app's banks.
-        app.insert_non_send_resource(UiScript::new().expect("VM"));
-        assert!(
-            !enabled(&mut app),
-            "a fresh VM starts knowing no bank — this is the state the row used to load in"
-        );
-        app.update();
-        assert!(enabled(&mut app), "…and must be told it again");
-    }
-
-    /// The push is per-VM, not per-frame: a steady session hands the bank over once.
-    #[test]
-    fn an_unchanged_bank_is_not_re_pushed_every_frame() {
-        let mut app = feeder();
-        app.world_mut()
-            .resource::<Tutorials>()
-            .lock()
-            .apply_flags(&[0u8; 32]);
-        app.insert_non_send_resource(UiScript::new().expect("VM"));
-        app.update();
-        // Cleared behind the feed's back, a bank the VM was told stays cleared.
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .set_tutorial_bank(None);
-        app.update();
-        assert!(!enabled(&mut app), "unchanged ⇒ nothing pushed");
-        // A real change is still pushed, on the same VM.
-        app.world_mut()
-            .resource::<Tutorials>()
-            .lock()
-            .acknowledge(id::CHATTING);
-        app.update();
-        assert!(enabled(&mut app), "a moved bank reaches the live VM");
-    }
-
     /// The flag tutorials are field watchers' (`crate::field_watch`), which a first create skips:
     /// the self descriptor's poll raises none, whatever its flags became since it last looked.
     #[test]
@@ -1082,7 +1059,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Player>()
             .init_resource::<WorldEnterCascade>()
-            .add_message::<TutorialEvent>()
+            .init_resource::<Tutorials>()
             .add_systems(Update, watch_self);
         let store = |pairs: &[(u16, u32)]| {
             ObjectStore(ObjectFields::from_pairs(pairs).into_created(ObjectType::Player))
@@ -1096,41 +1073,24 @@ mod tests {
             (194, 1 << 24),
         ]));
         app.update();
-        let asked: Vec<TutorialEvent> = app
-            .world_mut()
-            .resource_mut::<Messages<TutorialEvent>>()
-            .drain()
-            .collect();
+        let asked = app.world().resource::<Tutorials>().take_asks();
         assert!(asked.is_empty(), "{asked:?}");
     }
 
-    /// The login's own tutorials wait for an interface, on the real plugin's registration:
-    /// The engine's ask, a passing turn-in test's Quest Completion (`0x4df792`), goes through the
-    /// fire-once bank to `TUTORIAL_TRIGGER(34)`.
+    /// The engine's ask beside a script, a passing turn-in test's Quest Completion (`0x4df792`),
+    /// is stamped on the tutorials lane, whose fire-once test publishes it as 34.
     #[test]
     fn a_completable_quest_triggers_the_quest_completion_tutorial() {
         let mut app = App::new();
         app.init_resource::<Tutorials>()
-            .init_resource::<crate::items::Items>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_message::<TutorialEvent>()
-            .add_systems(Update, feed_tutorials);
+            .add_systems(Update, stamp_script_triggers);
         let mut script = UiScript::new().unwrap();
         let mut q = crate::ui_quest_log::fixture::quest(7, "Deliver the Message", 1);
         q.record.objectives[0] = crate::ui_quest_log::fixture::kill(40, 3);
         q.slot.counters[0] = 3;
         crate::ui_quest_log::fixture::seat(&mut script, &[q]);
         script
-            .run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("TUTORIAL_TRIGGER")
-                f:SetScript("OnEvent", function() table.insert(SEEN, arg1) end)
-                local _, _, _, _, _, c = GetQuestLogTitle(2)
-                assert(c == 1)
-            "#,
-            )
+            .run("local _, _, _, _, _, c = GetQuestLogTitle(2) assert(c == 1)")
             .unwrap();
         app.insert_non_send_resource(script);
         app.world_mut()
@@ -1138,25 +1098,21 @@ mod tests {
             .lock()
             .apply_flags(&[0u8; 32]);
         app.update();
-        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-        s.resolve();
         assert_eq!(
-            s.eval::<Vec<i64>>("return SEEN").unwrap(),
+            app.world().resource::<Tutorials>().take_fired(),
             [34],
             "the engine's 0x21, published as `TUTORIAL_TITLE34`"
         );
     }
 
-    /// `TUTORIAL_TRIGGER` is fired once, so one published to a frameless VM is gone for the
-    /// session.
-    #[test]
-    fn the_world_enter_tutorials_are_not_fired_into_a_ui_less_vm() {
+    /// The tutorial plugin with what its lane's firing reads, around one VM recording
+    /// `TUTORIAL_TRIGGER`, in the world.
+    fn plugin_app() -> App {
         let mut app = App::new();
         app.add_plugins(TutorialPlugin)
             .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::sound::MessageSounds>()
-            // The other watchers' inputs, so the real plugin can run.
             .init_resource::<crate::ui_trainer::TrainerOpen>()
             .init_resource::<crate::ui_merchant::MerchantOpen>()
             .init_resource::<crate::ui_taxi::TaxiState>()
@@ -1164,34 +1120,46 @@ mod tests {
             .add_message::<EnteredWorldMessage>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(crate::net::NetCommands(tx));
-
-        // The deferral window: in the world on the wire, the entry load still owed, and a live
-        // VM with no frames.
         app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
-        app.insert_resource(crate::ui_script::PendingEntryUiLoad);
-        app.insert_non_send_resource(UiScript::new().expect("a frameless VM"));
+        let script = UiScript::new().expect("a VM");
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') \
+                 f:RegisterEvent('TUTORIAL_TRIGGER') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, arg1) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app
+    }
 
+    /// `TUTORIAL_TRIGGER` is fired once, so one published to a frameless VM is gone for the
+    /// session: the lane holds its asks until an interface is up.
+    #[test]
+    fn the_world_enter_tutorials_are_not_fired_into_a_ui_less_vm() {
+        let mut app = plugin_app();
+        // The deferral window: in the world on the wire, the entry load still owed.
+        app.insert_resource(crate::ui_script::PendingEntryUiLoad);
         {
             let t = app.world().resource::<Tutorials>();
-            let mut t = t.lock();
-            t.apply_flags(&[0u8; 32]);
-            t.trigger(id::WELCOME, 0, Instant::now());
+            t.lock().apply_flags(&[0u8; 32]);
+            t.trigger_now(id::WELCOME);
         }
-
         app.update();
         assert_eq!(
-            app.world().resource::<Tutorials>().lock().fired,
-            vec![id::WELCOME + 1],
-            "the window must not publish: there is no frame registered for TUTORIAL_TRIGGER, and \
-             the take is one-way"
+            app.world().resource::<Tutorials>().lock().lane.len(),
+            1,
+            "the window must not publish: the take is one-way"
         );
+        assert!(seen(&mut app).is_empty());
 
         // The interface comes up; the same frame delivers what was waiting.
         app.world_mut()
             .remove_resource::<crate::ui_script::PendingEntryUiLoad>();
         app.update();
+        assert_eq!(seen(&mut app), [i64::from(id::WELCOME + 1)]);
         assert!(
-            app.world().resource::<Tutorials>().lock().fired.is_empty(),
+            app.world().resource::<Tutorials>().lock().lane.is_empty(),
             "…and once there is an interface, it is published exactly once"
         );
     }
@@ -1353,17 +1321,17 @@ mod tests {
         assert_eq!(select_tutorial(SelectFacts::default(), false), None);
     }
 
-    /// A feed over one VM recording `TUTORIAL_TRIGGER`, with what the selection ladder reads.
-    fn recording_feeder() -> App {
+    /// The lane's firing over one VM recording `TUTORIAL_TRIGGER`, with what the selection ladder
+    /// reads, run alone on what the lane holds.
+    fn recording_lane() -> App {
         let mut app = App::new();
         app.init_resource::<Tutorials>()
-            .init_resource::<crate::items::Items>()
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::net::GuidIndex>()
-            .insert_resource(crate::net::SelfGuid(Some(0x10)))
-            .add_message::<TutorialEvent>()
-            .add_systems(Update, (judge_selections, feed_tutorials).chain());
+            .insert_resource(crate::net::SelfGuid(Some(0x10)));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
         let script = UiScript::new().unwrap();
         script
             .run(
@@ -1380,19 +1348,26 @@ mod tests {
         app
     }
 
+    fn fire_lane(app: &mut App) {
+        use bevy::ecs::system::RunSystemOnce;
+        app.world_mut()
+            .run_system_once_with(fire_tutorials, Until::all())
+            .expect("the tutorials lane fires");
+    }
+
     fn seen(app: &mut App) -> Vec<i64> {
         let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
         s.resolve();
         s.eval::<Vec<i64>>("return SEEN").unwrap()
     }
 
-    /// The selections a frame queued go up the ladder at the feed, in order: another player is
+    /// The selections go up the ladder at their places on the lane, in order: another player is
     /// Players (`0x4937be`), an attackable creature Combat Mode (`0x49381a`), a flight master
     /// that cannot be attacked Travel (`0x49383c`), each published as its number plus one.
     #[test]
     fn a_selection_fires_its_rung_of_the_ladder() {
         use benilla_protocol::ObjectFields;
-        let mut app = recording_feeder();
+        let mut app = recording_lane();
         let mut unit = |guid: u64, pairs: &[(u16, u32)]| {
             let world = app.world_mut();
             let e = world
@@ -1423,17 +1398,24 @@ mod tests {
                 tutorials.selected(e, g);
             }
         }
-        app.update();
+        fire_lane(&mut app);
         assert_eq!(seen(&mut app), [0x13, 0x05, 0x23]);
     }
 
-    /// The item-received sites in the handler's order (`0x491cec`-`0x491d5b`): Backpack on any
+    fn template(
+        edit: impl FnOnce(&mut benilla_protocol::messages::ItemInfo),
+    ) -> benilla_protocol::messages::ItemInfo {
+        let mut info = crate::items::test_template("Item");
+        edit(&mut info);
+        info
+    }
+
+    /// The item-received sites in the function's order (`0x491cec`-`0x491d5b`): Backpack on any
     /// item, Using Items for a template with an on-use spell (`0x491d00`-`0x491d1e`, trigger 0),
     /// Bags for a container (class 1, `0x491d4f`); an on-equip spell is no use.
     #[test]
     fn a_received_on_use_item_and_container_fire_using_items_and_bags() {
         use benilla_protocol::messages::ItemSpellEntry;
-        let mut app = recording_feeder();
         let spell = |trigger: u32| ItemSpellEntry {
             index: 0,
             spell_id: 100,
@@ -1443,75 +1425,53 @@ mod tests {
             category: 0,
             category_cooldown_ms: -1,
         };
-        {
-            let mut items = app.world_mut().resource_mut::<crate::items::Items>();
-            items.insert_template(
-                1,
-                Some(benilla_protocol::messages::ItemInfo {
-                    spells: vec![spell(1)],
-                    ..crate::items::test_template("Ring")
-                }),
-            );
-            items.insert_template(
-                2,
-                Some(benilla_protocol::messages::ItemInfo {
-                    spells: vec![spell(0)],
-                    ..crate::items::test_template("Potion")
-                }),
-            );
-            items.insert_template(
-                3,
-                Some(benilla_protocol::messages::ItemInfo {
-                    class: 1,
-                    ..crate::items::test_template("Bag")
-                }),
-            );
-        }
-        {
-            let mut t = app.world().resource::<Tutorials>().lock();
-            t.item_received(1, 0, 23);
-            t.item_received(2, 0, 24);
-            t.item_received(3, 0, 25);
-        }
-        app.update();
-        assert_eq!(seen(&mut app), [0x08, 0x09, 0x0a]);
+        let ring = template(|i| i.spells = vec![spell(1)]);
+        let potion = template(|i| i.spells = vec![spell(0)]);
+        let bag = template(|i| i.class = 1);
+        assert_eq!(item_tutorials(1, false, &ring, None), [id::BACKPACK]);
+        assert_eq!(
+            item_tutorials(2, false, &potion, None),
+            [id::BACKPACK, id::USING_ITEMS]
+        );
+        assert_eq!(
+            item_tutorials(3, false, &bag, None),
+            [id::BACKPACK, id::BAGS]
+        );
+        assert_eq!(
+            item_tutorials(HEARTHSTONE, true, &ring, None),
+            [id::BACKPACK, id::KEYRINGS, id::HEARTHSTONES],
+            "the keyring band, then the hearthstone's entry"
+        );
     }
 
     /// Equippable Items fires on a set bit among the first 23 of the slot mask `0x809200`
     /// indexed by the inventory type (`0x491d23`-`0x491d4a`). The mask is 0 for types 0, 24
-    /// (ammo) and 27 (quiver), so those raise no prompt; a bag (type 18, `0x780000`) does.
+    /// (ammo) and 27 (quiver), so those raise no prompt; a bag (type 18, `0x780000`) does. A
+    /// ranged weapon is Ranged Weapons last, but not for a hunter (`0x491ebc`).
     #[test]
     fn equippable_items_reads_the_slot_mask_so_ammo_and_quivers_raise_none() {
-        let mut app = recording_feeder();
-        {
-            let mut items = app.world_mut().resource_mut::<crate::items::Items>();
-            for (entry, inventory_type) in [(1, 0), (2, 24), (3, 27), (4, 18)] {
-                items.insert_template(
-                    entry,
-                    Some(benilla_protocol::messages::ItemInfo {
-                        inventory_type,
-                        ..crate::items::test_template("Item")
-                    }),
-                );
-            }
+        for inventory_type in [0, 24, 27] {
+            let info = template(|i| i.inventory_type = inventory_type);
+            assert_eq!(
+                item_tutorials(1, false, &info, None),
+                [id::BACKPACK],
+                "only Backpack: no equippable prompt for type {inventory_type}"
+            );
         }
-        {
-            let mut t = app.world().resource::<Tutorials>().lock();
-            t.item_received(1, 0, 23);
-            t.item_received(2, 0, 24);
-            t.item_received(3, 0, 25);
-        }
-        app.update();
+        let bag = template(|i| i.inventory_type = 18);
         assert_eq!(
-            seen(&mut app),
-            [0x08],
-            "only Backpack: no equippable prompt for types 0, 24 and 27"
+            item_tutorials(4, false, &bag, None),
+            [id::BACKPACK, id::EQUIPPABLE_ITEMS],
+            "a bag is worn in a bag slot"
         );
-        app.world()
-            .resource::<Tutorials>()
-            .lock()
-            .item_received(4, 0, 26);
-        app.update();
-        assert_eq!(seen(&mut app), [0x08, 0x18], "a bag is worn in a bag slot");
+        let bow = template(|i| i.inventory_type = INVTYPE_RANGED);
+        assert_eq!(
+            item_tutorials(5, false, &bow, Some(1)),
+            [id::BACKPACK, id::EQUIPPABLE_ITEMS, id::RANGED_WEAPONS]
+        );
+        assert_eq!(
+            item_tutorials(5, false, &bow, Some(CLASS_HUNTER)),
+            [id::BACKPACK, id::EQUIPPABLE_ITEMS]
+        );
     }
 }

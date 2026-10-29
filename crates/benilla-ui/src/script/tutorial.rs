@@ -1,6 +1,7 @@
-//! The four tutorial verbs, registered at `0x846b04`. The banks are the app's: it pushes the
-//! acknowledged bank for `TutorialsEnabled`, and each writer hands its [`TutorialCall`] to the call
-//! host, which writes the banks and sends before the verb returns. `FlagTutorial(n)` acknowledges
+//! The four tutorial verbs, registered at `0x846b04`. The banks are the app's: `TutorialsEnabled`
+//! asks the host for the acknowledged bank at its call ([`TutorialsEnabledQuery`]), and each writer
+//! hands its [`TutorialCall`] to the call host, which writes the banks and sends before the verb
+//! returns. `FlagTutorial(n)` acknowledges
 //! (`0x4b59dc` → `0x4b54c0`); `ClearTutorials()` sets every bit of both banks and sends
 //! `CMSG_TUTORIAL_CLEAR` (`0x4b5a00` → `0x4b55c0`); `ResetTutorials()` clears them and sends
 //! `CMSG_TUTORIAL_RESET` (`0x4b5a10` → `0x4b5660`). None of the three writers returns a value.
@@ -8,7 +9,16 @@
 use mlua::{Lua, Value};
 
 use super::binding_abi::{flag, number_arg};
+use super::live::{ask, LiveQuery};
 use super::Model;
+
+/// The question `TutorialsEnabled` (`0x4b5960`) asks at the call: whether any byte of the
+/// acknowledged bank's whole `[0xb711ec] * 4` bytes is not 0xFF, false with no bank.
+pub struct TutorialsEnabledQuery;
+
+impl LiveQuery for TutorialsEnabledQuery {
+    type Answer = bool;
+}
 
 /// `FlagTutorial`'s bound, `0 ≤ n − 1 < 0x32`: the fifty tutorials `GlobalStrings.lua` names.
 const TUTORIAL_IDS: i32 = 0x32;
@@ -26,7 +36,8 @@ pub enum TutorialCall {
 }
 
 impl super::UiScript {
-    /// The acknowledged bank's bytes, `None` before `SMSG_TUTORIAL_FLAGS`.
+    /// The acknowledged bank's bytes `TutorialsEnabled` reads with no host to ask, `None` before
+    /// `SMSG_TUTORIAL_FLAGS`.
     pub fn set_tutorial_bank(&mut self, bank: Option<Vec<u8>>) {
         self.model_mut().tutorial_bank = bank;
     }
@@ -61,15 +72,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // `TutorialsEnabled()` (`0x4b5960`): 1 if any of the bank's `[0xb711ec] * 4` bytes is not
-    // 0xFF, the whole bank and not just the fifty ids; else nil, as with no bank.
+    // 0xFF, the whole bank and not just the fifty ids; else nil, as with no bank. The bank is read
+    // at the call through the host; with no host to ask, the copy the VM was given.
     g.set(
         "TutorialsEnabled",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let enabled = model
-                .tutorial_bank
-                .as_ref()
-                .is_some_and(|b| b.iter().any(|&byte| byte != 0xFF));
+            let enabled = ask(lua, &TutorialsEnabledQuery).unwrap_or_else(|| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .tutorial_bank
+                    .as_ref()
+                    .is_some_and(|b| b.iter().any(|&byte| byte != 0xFF))
+            });
             Ok(flag(enabled))
         })?,
     )?;

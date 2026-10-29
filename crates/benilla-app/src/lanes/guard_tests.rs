@@ -58,16 +58,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "::tutorial::Tutorials",
-        "the tutorial banks a handler fires",
-    ),
-    (
-        Row::Queue,
-        "Messages<benilla_app::tutorial::TutorialEvent>",
-        "the tutorial events",
-    ),
-    (
-        Row::Queue,
         "::ui_action::errors::MountErrors",
         "the mount refusals",
     ),
@@ -130,19 +120,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          `drive_mouseover_tooltip` rebuilds each frame; and the combat log's (`0x6294b0`) and the \
          auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which `run_answer_tail` runs after \
          the answer's list rather than in it",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_merchant::MerchantOpen",
-        "the vendor's cell, whose open `tutorial::watch_windows` turns into the Vendors tutorial \
-         `feed_tutorials` fires, where the list's handler triggers it (`0x4fad32`)",
-    ),
-    (
-        Row::HostHeld,
-        "::ui_trainer::TrainerOpen",
-        "the trainer's cell, whose open `tutorial::watch_windows` turns into the Trainers \
-         tutorial's acknowledge `feed_tutorials` applies, where the list's handler makes it \
-         (`0x4d74ae`)",
     ),
     (
         Row::HostHeld,
@@ -305,6 +282,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // pending time in the world frame's update, as `0x4ade60` does after the packets.
     "::ui_mail::MailOpen",
     "::ui_mail::pending::MailPending",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read through the host by the
+    // vendor's getters, and quiet. The list's handler triggers the Vendors tutorial on the
+    // tutorials lane at its packet (`0x4fad32`), and the window's events fire on the merchant lane.
+    "::ui_merchant::MerchantOpen",
     // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read, and quiet. A new pet's
     // `SMSG_PET_SPELLS` lowers it inside `SetPet` (`0x4bc8ce`), whose `PET_BAR_UPDATE` (`0x4bc90c`)
     // fires on the notice lane; `IsPetAttackActive` and the bar's getters read it through the host,
@@ -345,6 +326,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read, and quiet: `CheckTalentMasterDist` reads the latch through the host and the Accept
     // holds it; the question's `CONFIRM_TALENT_WIPE` fires on the notice lane.
     "::ui_talent_wipe::TalentWipeState",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read through the host by the
+    // trainer's getters, and quiet. The list's open acknowledges its tutorial on the tutorials lane
+    // at its packet (`0x4d74ae`), and the window's events fire on the trainer lane.
+    "::ui_trainer::TrainerOpen",
     // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the trade getters read it through
     // the host, and no feed fires off it, as its statuses' events go on the trade lane at their
     // handlers and the initiate's name callback.
@@ -387,7 +372,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // members' names and objects as the frame left them; the tokens read live at the call.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_party::GroupState"]),
-    ("::tutorial::feed_tutorials", &["items::Items", "net::ObjectStore"]),
     ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
     ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
@@ -458,8 +442,8 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
-/// as a read: the error keys a refusal pushes, the tutorial banks a watcher fires, the close
-/// counts a window's core adds to and what a session verb posts. The lanes and the host's two
+/// as a read: the error keys a refusal pushes, the close counts a window's core adds to and what a
+/// session verb posts. The lanes (the tutorials' among them) and the host's two
 /// other sinks (the message sounds and the unit edits, which raise no event) are not queues here.
 pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     // The account-data sections, which the download's handler stores through `&self`.
@@ -467,7 +451,6 @@ pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     "::ui_action::errors::UiErrorKeys",
     // The far-sight machine the call host's buff cancel runs (`0x6e70ad`).
     "::player::view_subject::FarSight",
-    "::tutorial::Tutorials",
     "::ui_logout::SessionPosts",
     // The gestures a chat line or a world click's greeting plays, which `drive_gestures` takes.
     "::creature_anim::gesture::GestureQueue",
@@ -671,7 +654,7 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-pub(super) fn lane_types() -> [TypeId; 39] {
+pub(super) fn lane_types() -> [TypeId; 40] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -747,12 +730,15 @@ pub(super) fn lane_types() -> [TypeId; 39] {
         TypeId::of::<crate::ui_mail::MailLane>(),
         // Our player's arrival, stamped at its create.
         TypeId::of::<crate::ui_world_enter::ArrivalLane>(),
+        // The tutorials lane: each site's trigger, acknowledge and selection, and the flags'
+        // copy, stamped where it runs.
+        TypeId::of::<crate::tutorial::Tutorials>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 39] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 40] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -826,6 +812,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 39] {
             "arrival",
             TypeId::of::<crate::ui_world_enter::ArrivalLane>(),
         ),
+        ("tutorials", TypeId::of::<crate::tutorial::Tutorials>()),
     ]
 }
 
@@ -1013,6 +1000,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "taxi",
             "trade",
             "trainer",
+            "tutorials",
             "unit views",
             "world states"
         ]
@@ -1846,6 +1834,11 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // A close's tail parked behind the lane reads the deferred refresh at its place (`0x4acda8`),
     // past an arrival's arm by a later packet of the frame (`0x4ad642`).
     ("mail", &["ui_mail::pending::MailPending"]),
+    // A selection's tutorial ladder (`0x493789`-`0x49383c`) reads the lit unit, our own and the
+    // relation functions' inputs as the frame left them, where the reference judges it inside
+    // `SetSelection`.
+    ("tutorials", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "spell::group_relation::GroupRoster"]),
     // With the bubble and filter switches, which a listener's `SetCVar` moves inside its call.
     ("chat", &["chat_bubble::BubbleConfig", "go_templates::GameObjectTemplates", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",

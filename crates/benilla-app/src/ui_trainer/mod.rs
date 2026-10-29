@@ -923,8 +923,9 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
 
 /// `SMSG_TRAINER_LIST`'s open, `0x4d7440(trainer)`: the open trainer's own list re-lists in place
 /// (`0x4d7459`); a zero guid is the close core (`0x4d7461`), after which the list builds on the
-/// zero cell; any other registers on the latch (`0x4d74ce`), then the cell (`0x4d74d5`). The
-/// builder's `TRAINER_SHOW` (`0x4d7b73`) goes on the lane.
+/// zero cell; any other acknowledges its tutorial, Learning Talents for our own guid and Trainers
+/// for another (`0x4d7492`-`0x4d74ae`), registers on the latch (`0x4d74ce`), then the cell
+/// (`0x4d74d5`). The builder's `TRAINER_SHOW` (`0x4d7b73`) goes on the lane.
 pub(crate) fn open_trainer(
     world: &mut World,
     trainer: u64,
@@ -935,6 +936,18 @@ pub(crate) fn open_trainer(
     if trainer == 0 {
         close_core(world);
     } else if world.resource::<TrainerOpen>().trainer != Some(trainer) {
+        let own = world
+            .get_resource::<crate::net::SelfGuid>()
+            .and_then(|g| g.0)
+            == Some(trainer);
+        if let Some(tutorials) = world.get_resource::<crate::tutorial::Tutorials>() {
+            use crate::tutorial::id;
+            tutorials.acknowledge_at_place(if own {
+                id::LEARNING_TALENTS
+            } else {
+                id::TRAINERS
+            });
+        }
         crate::ui_session::register(world, trainer);
     }
     world

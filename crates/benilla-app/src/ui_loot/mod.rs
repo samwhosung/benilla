@@ -1128,6 +1128,7 @@ fn drain_receives(
     script: &mut UiScript,
     rolls: RollCatalogs,
     owner: &dyn Fn(u64) -> Option<Option<String>>,
+    received: &dyn Fn(&PendingReceive, &benilla_protocol::ItemInfo),
 ) -> Vec<PendingReceive> {
     let mut still = Vec::new();
     for r in pending {
@@ -1190,6 +1191,10 @@ fn drain_receives(
                         text,
                     ));
                 }
+                // The tutorials after the line (`0x491cdd`, then `0x491cec`).
+                if let Some(info) = items.template(r.entry, 0, Ask::Read) {
+                    received(&r, info);
+                }
             }
             // A record dropped since it was held (`0x491a93`): its callback waits on the answer.
             None => {
@@ -1241,6 +1246,10 @@ struct LootReads<'w, 's> {
     rolls: crate::items::Rolls<'w>,
     names: Res<'w, NameCache>,
     objects: LootSourceObjects<'w, 's>,
+    // Our own pushes' tutorials and the class the ranged one reads (`0x491ebc`); absent in a
+    // harness without the tutorials.
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
+    me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
 }
 
 impl LootReads<'_, '_> {
@@ -1264,6 +1273,8 @@ impl LootReads<'_, '_> {
             rolls: self.rolls.get(),
             names: &self.names,
             objects: &self.objects,
+            tutorials: self.tutorials.as_deref(),
+            class: self.me.single().ok().and_then(|s| s.0.unit_class()),
         }
     }
 }
@@ -1609,6 +1620,8 @@ struct PushInputs<'a> {
     rolls: RollCatalogs<'a>,
     names: &'a NameCache,
     objects: &'a LootSourceObjects<'a, 'a>,
+    tutorials: Option<&'a crate::tutorial::Tutorials>,
+    class: Option<u8>,
 }
 
 /// Fire `batch` as one turn ([`drain_receives`]); what still waits on its template comes back.
@@ -1636,6 +1649,15 @@ fn emit_pushes<P: bevy::ecs::system::SystemParam + 'static>(
                         .resolve_unit(guid, Some(store), Ask::Event(with.commands))
                         .map(str::to_string),
                 )
+            },
+            &|r, info| {
+                let Some(tutorials) = with.tutorials else {
+                    return;
+                };
+                let keyring = r.container == KEYRING_CONTAINER;
+                for id in crate::tutorial::item_tutorials(r.entry, keyring, info, with.class) {
+                    tutorials.trigger_now(id);
+                }
             },
         ),
         None => batch,
