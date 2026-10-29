@@ -28,7 +28,7 @@ use bevy::prelude::*;
 
 use benilla_formats::RangeTargets;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
-use benilla_ui::script::{macro_slot_id, ActionState, ActionStateNow};
+use benilla_ui::script::{macro_slot_id, ActionState, ActionStateNow, ActionUsableNow};
 
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
@@ -650,6 +650,20 @@ impl ActionStates<'_, '_> {
         Some(st)
     }
 
+    /// `IsUsableAction`'s pair for `action` as the bar's cache holds it (`0x4e5230`), an empty
+    /// slot's `(false, false)`.
+    fn usable_now(&self, action: u32) -> (bool, bool) {
+        let occupied = action
+            .checked_sub(1)
+            .and_then(|s| u8::try_from(s).ok())
+            .is_some_and(|slot| self.slots.buttons.contains_key(&slot));
+        if occupied {
+            self.memory.cache.pair(action)
+        } else {
+            (false, false)
+        }
+    }
+
     /// The states of the occupied slots `walk` names, and with its refresh the reactive spells
     /// that turned usable.
     fn slot_states(&mut self, walk: Walk) -> (HashMap<u32, ActionState>, Vec<String>) {
@@ -939,6 +953,7 @@ struct Walk<'a> {
 impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {
     fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
         ask.answer(|q: &ActionStateNow| Some(self.state_now(q)))
+            || ask.answer(|q: &ActionUsableNow| Some(self.usable_now(q.0)))
     }
 }
 

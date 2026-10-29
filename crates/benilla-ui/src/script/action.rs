@@ -133,6 +133,15 @@ impl super::live::LiveQuery for ActionStateNow {
     type Answer = Option<ActionState>;
 }
 
+/// `IsUsableAction`'s question to the lent host: the slot's `(usable, notEnoughMana)` as the bar's
+/// cache holds it at the call (`0x4e5230`), which no walk of the slot recomputes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionUsableNow(pub u32);
+
+impl super::live::LiveQuery for ActionUsableNow {
+    type Answer = (bool, bool);
+}
+
 /// `action`'s state as the lent host reads it at the call ([`ActionStateNow`]), else the pushed
 /// snapshot; `None` for an empty slot.
 fn state_of(lua: &Lua, action: u32) -> Option<ActionState> {
@@ -606,10 +615,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: IsUsableAction(slot)` (`0x84c0f0`, `0x4e744f`). The pair is
             // the bar's cache (`0x4e5230`), as the last refresh or slot write stored it.
             let action = binding_abi::index_arg32(lua, action, "Usage: IsUsableAction(slot)")?;
-            Ok((
-                state_flag(lua, action, |s| s.usable),
-                state_flag(lua, action, |s| s.not_enough_mana),
-            ))
+            let pair = super::live::ask(lua, &ActionUsableNow(action)).unwrap_or_else(|| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .action_states
+                    .get(&action)
+                    .map_or((false, false), |s| {
+                        (s.state.usable, s.state.not_enough_mana)
+                    })
+            });
+            Ok((flag(pair.0), flag(pair.1)))
         })?,
     )?;
 

@@ -508,11 +508,12 @@ fn let_the_gcds_run_out() {
     std::thread::sleep(Duration::from_millis(120));
 }
 
-/// Every pet GCD and every recovery the GO leg inserts is a record, and the insert is where the
-/// list is bounded: after forty presses whose GCDs have all run out, the next press leaves the
-/// list with its live records and its own, a running recovery and a parked record among them.
+/// Every pet GCD and every recovery the GO leg inserts is a record, and an insert sweeps nothing
+/// (`0x6e12c0`): after forty presses whose GCDs have all run out, the next press adds its own, and
+/// a running recovery and a parked record read as before. The go's sweep bounds the list
+/// (`0x6e862b`).
 #[test]
-fn an_insert_leaves_the_pets_list_its_live_records_alone() {
+fn an_insert_sweeps_nothing_from_the_pets_list() {
     let mut rig = rig(
         vec![(CLAW, brisk_claw()), (GROWL, growl()), (PARKED, parked())],
         &[CLAW, GROWL, PARKED],
@@ -540,11 +541,11 @@ fn an_insert_leaves_the_pets_list_its_live_records_alone() {
 
     rig.press(1);
 
-    assert!(!rig.elapsed_pending(pressed), "the insert dropped them");
+    assert!(rig.elapsed_pending(pressed), "the insert swept nothing");
     assert_eq!(
         rig.record_count(),
-        3,
-        "Growl's recovery, the parked record and the new GCD"
+        43,
+        "Growl's recovery, the parked record and the forty-one GCDs"
     );
     rig.frame();
     assert_eq!(rig.cooldown(2).1, 5.0, "Growl still sweeps its 5 s");
@@ -555,11 +556,11 @@ fn an_insert_leaves_the_pets_list_its_live_records_alone() {
     );
 }
 
-/// The reference flushes no event for a cooldown's end, and the insert's prune is that end: the
-/// insert is the list's one mutation, so the frame fires the flush once, for it, and nothing
-/// else. An insert that arms nothing changes nothing.
+/// The reference flushes no event for a cooldown's end: the insert is the list's one mutation, so
+/// the frame fires the flush once, for it, and nothing else. An insert that arms nothing changes
+/// nothing.
 #[test]
-fn an_inserts_prune_fires_only_the_inserts_own_flush() {
+fn an_insert_fires_only_its_own_flush() {
     let mut rig = rig(
         vec![(CLAW, brisk_claw()), (GROWL, growl())],
         &[CLAW, GROWL],
@@ -574,7 +575,7 @@ fn an_inserts_prune_fires_only_the_inserts_own_flush() {
     let pressed = Instant::now();
     assert!(rig.elapsed_pending(pressed));
 
-    // Growl has no GCD pair: nothing is armed, so nothing is dropped or flushed.
+    // Growl has no GCD pair: nothing is armed, so nothing is flushed.
     rig.press(2);
     assert!(
         rig.frame().is_empty(),
@@ -583,17 +584,12 @@ fn an_inserts_prune_fires_only_the_inserts_own_flush() {
     assert_eq!(rig.generation(), held);
 
     rig.press(1);
-    assert!(!rig.elapsed_pending(pressed), "the insert dropped the five");
     assert_eq!(rig.frame(), FLUSH, "the insert's flush, once");
-    assert_eq!(
-        rig.generation(),
-        held + 1,
-        "the prune is no mutation of its own"
-    );
+    assert_eq!(rig.generation(), held + 1, "one mutation, the insert's");
     assert!(rig.frame().is_empty(), "and nothing follows");
 }
 
-/// An insert's prune is invisible to `GetPetActionCooldown`: a running recovery and a parked
+/// An insert is invisible to `GetPetActionCooldown`'s other reads: a running recovery and a parked
 /// record whose timers have run down push what they pushed before, the same start included.
 #[test]
 fn an_insert_changes_no_bar_read_of_the_records_that_stay() {
@@ -628,7 +624,6 @@ fn an_insert_changes_no_bar_read_of_the_records_that_stay() {
     assert!(rig.elapsed_pending(pressed));
 
     rig.press(1);
-    assert!(!rig.elapsed_pending(pressed), "the insert pruned");
     rig.frame();
 
     assert_eq!(

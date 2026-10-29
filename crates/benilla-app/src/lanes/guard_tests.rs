@@ -1776,8 +1776,8 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
     // Our arrival's legs read and reset what later packets of its frame write, as the frame left
     // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
-    // death stores its death state reads and its corpse ask resets, the class family it sets, the
-    // and the connection the clock resync asks through.
+    // death stores its death state reads and its corpse ask resets, the class family it sets and
+    // the connection the clock resync asks through.
     ("arrival", &["chat_bubble::BubbleConfig", "death::DeathNet", "net::NetStatus",
         "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_battlefield::Battlefield",

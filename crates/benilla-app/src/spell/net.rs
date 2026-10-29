@@ -1719,6 +1719,11 @@ pub(super) fn go_cooldown_inserts(
             );
         }
     }
+    // Then both lists' expiry sweep, at most once in 120 s (`0x6e8606`-`0x6e863a`), which a held
+    // item cooldown skips with the pet leg.
+    if !pended {
+        cooldowns.sweep_at_go(&mut pet_bar.cooldowns, now);
+    }
 }
 
 /// The go's item leg, for a cast whose first guid is not the caster's: the item's entry off its

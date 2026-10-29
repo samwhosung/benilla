@@ -18,9 +18,10 @@ use crate::lanes::{Stamp, Until};
 /// One write to a list's records, replayable: each carries the time its handler read.
 #[derive(Clone, Debug)]
 pub(super) enum Write {
-    /// `AddCooldown 0x6e12c0` past its early-out: the records run out by the time dropped, then the
-    /// record appended.
-    Add(Instant, Record),
+    /// `AddCooldown 0x6e12c0` past its early-out: the record appended, nothing swept.
+    Add(Record),
+    /// The expiry sweep `0x6e1910` at the time ([`expired`]).
+    Sweep(Instant),
     /// `ClearGlobalCooldown 0x6e1630` on a match: every record of the spell has its GCD category
     /// and time zeroed, then the sweep at the time.
     ClearGcd(u32, Instant),
@@ -32,23 +33,20 @@ pub(super) enum Write {
     Clear,
 }
 
-/// Whether a record has run out by `now`: unheld, with its recovery, category recovery and GCD
-/// over.
+/// Whether the sweep `0x6e1910` frees a record at `now`: unheld (`0x6e1946`), with its recovery and
+/// its category recovery over or of no time (`0x6e195d`, `0x6e1973`). It never reads the global
+/// cooldown, so a record with only a global cooldown goes at the first sweep.
 pub(super) fn expired(r: &Record, now: Instant) -> bool {
-    !r.on_hold
-        && r.recovery.remaining(now).is_zero()
-        && r.category_recovery.remaining(now).is_zero()
-        && r.gcd_remaining(now).is_zero()
+    let over = |t: &super::Timer| t.duration.is_zero() || t.remaining(now).is_zero();
+    !r.on_hold && over(&r.recovery) && over(&r.category_recovery)
 }
 
 impl Write {
     /// Make the write on `records`.
     pub(super) fn apply(&self, records: &mut Vec<Record>) {
         match self {
-            Self::Add(now, record) => {
-                records.retain(|r| !expired(r, *now));
-                records.push(record.clone());
-            }
+            Self::Add(record) => records.push(record.clone()),
+            Self::Sweep(now) => records.retain(|r| !expired(r, *now)),
             Self::ClearGcd(spell, now) => {
                 for r in records.iter_mut().filter(|r| r.spell_id == *spell) {
                     r.gcd_category = 0;

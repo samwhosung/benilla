@@ -972,6 +972,69 @@ fn a_macro_section_from_the_server_is_read_again() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// The reader rebuilds the order, which signals `UPDATE_MACROS` (`0x4f0a50` → `0x4f0d30`), then
+/// derives every record (`0x4f0a55` → `0x4f0ca0`): a listener of the load's `UPDATE_MACROS` finds
+/// the loaded `/cast` unbound, and the record is bound once the reader returns.
+#[test]
+fn the_macro_reader_derives_after_its_update_macros() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-macros-derive-{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+    let account = crate::local_state::macros_account_path().unwrap();
+    crate::local_state::write_atomic(
+        &account,
+        "MACRO 1 \"Sed\" Ability_Ambush\n/cast Seduction\nEND\n",
+    )
+    .unwrap();
+    let mut script = UiScript::new().unwrap();
+    script.set_pet_book(benilla_ui::script::PetBookState {
+        token: None,
+        slots: vec![benilla_ui::script::SpellSlotView {
+            autocast: Some((true, false)),
+            ..book_slot(6358, "Seduction")
+        }],
+    });
+    script.set_action(
+        1,
+        Some(benilla_ui::script::ActionSlot {
+            kind: 0x40,
+            action: 1,
+            ..Default::default()
+        }),
+    );
+    script
+        .run(
+            r#"SLASH_CAST1 = "/cast"
+            SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UPDATE_MACROS")
+            f:SetScript("OnEvent", function()
+                table.insert(SEEN, tostring(GetActionAutocast(1)))
+            end)"#,
+        )
+        .unwrap();
+    let mut app = file_app(script);
+    app.update();
+    let script = app.world().non_send_resource::<UiScript>();
+    assert_eq!(
+        script.eval::<Vec<String>>("return SEEN").unwrap(),
+        ["nil"],
+        "the listener ran ahead of the derivation"
+    );
+    assert_eq!(
+        script
+            .eval::<Option<i64>>("return (GetActionAutocast(1))")
+            .unwrap(),
+        Some(1),
+        "bound out of the pet's book by the reader"
+    );
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// The reader registers for each section through `0x5afe50` (`0x4f0a7c`, `0x4f0a8d`): a pending
 /// scope is not read, and nothing is saved over its file (`0x5afee0`); once its section settles
 /// (`0x5afaca`) its file merges into the table as it stands (`0x4f0600`), an id the table holds
