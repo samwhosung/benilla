@@ -59,6 +59,7 @@ impl super::UiScript {
     }
 
     /// The `Stuck()` calls a harness's VM kept, each one cast of spell 7355.
+    #[cfg(test)]
     pub fn take_stuck_casts(&mut self) -> u32 {
         self.take_calls_like(&super::ScriptCall::GmTicket(GmTicketCall::Stuck)) as u32
     }

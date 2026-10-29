@@ -236,6 +236,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 impl super::UiScript {
     /// The `RequestTimePlayed()` sends a harness's VM kept ([`Self::keep_calls`]): a count, as the
     /// request body is empty.
+    #[cfg(test)]
     pub fn take_played_time_asks(&mut self) -> u32 {
         self.take_calls_where(|call| {
             matches!(call, super::ScriptCall::RequestTimePlayed).then_some(())

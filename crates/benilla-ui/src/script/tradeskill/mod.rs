@@ -333,6 +333,7 @@ impl super::UiScript {
     }
 
     /// The `CloseTradeSkill` calls a harness's VM kept ([`Self::keep_calls`]).
+    #[cfg(test)]
     pub fn take_trade_skill_closes(&mut self) -> usize {
         self.take_calls_where(|call| match call {
             super::ScriptCall::TradeSkill(TradeSkillCall::Close) => Some(()),

@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use mlua::Lua;
 
-use super::{Model, NearestMode, ScriptCall};
+use super::{Model, ScriptCall};
 
 /// A selection ask from Lua, queued in call order for the app to resolve and commit. The reference
 /// routes `TargetUnit`, `AssistUnit` and `TargetLastEnemy` through one helper (`0x489a40`: commit,
@@ -361,6 +361,7 @@ impl super::UiScript {
     /// The guids `UnitName` read off a unit with no object and found no name for, which the
     /// reference's lookup asks the server for (`0x5171eb`), as a harness's VM kept them
     /// ([`Self::keep_calls`]), in call order.
+    #[cfg(test)]
     pub fn take_unit_name_asks(&mut self) -> Vec<u64> {
         self.take_calls_where(|call| match call {
             super::ScriptCall::RecordAsk(super::RecordAsk::PlayerName(guid)) => Some(*guid),
@@ -536,7 +537,8 @@ impl super::UiScript {
     /// Take the `TargetNearest*([reverse])` calls out of the call stream, `true` for reverse.
     /// They name no unit: the reference runs the TAB cycler (`0x493f60`) straight into
     /// `SetSelection`.
-    pub fn take_target_nearest_requests(&mut self) -> Vec<(NearestMode, bool)> {
+    #[cfg(test)]
+    pub fn take_target_nearest_requests(&mut self) -> Vec<(super::NearestMode, bool)> {
         self.take_calls_where(|c| match c {
             ScriptCall::TargetNearest { mode, reverse, .. } => Some((*mode, *reverse)),
             _ => None,
@@ -544,6 +546,7 @@ impl super::UiScript {
     }
 
     /// Take the `TargetByName(name, exactMatch)` calls out of the call stream.
+    #[cfg(test)]
     pub fn take_target_by_name_requests(&mut self) -> Vec<(String, bool)> {
         self.take_calls_where(|c| match c {
             ScriptCall::TargetByName { name, exact, .. } => Some((name.clone(), *exact)),

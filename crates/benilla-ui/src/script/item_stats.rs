@@ -458,7 +458,7 @@ impl super::UiScript {
 
     /// The guids of the creators and givers the item builds a harness's VM kept the calls of
     /// ([`Self::keep_calls`]) missed in the name cache, in ask order.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn take_item_name_asks(&mut self) -> Vec<u64> {
         self.take_calls_where(|call| match call {
             super::ScriptCall::RecordAsk(super::RecordAsk::ItemBuildName(guid)) => Some(*guid),
@@ -468,7 +468,7 @@ impl super::UiScript {
 
     /// The charter item guids whose petition record or owner the item builds a harness's VM kept
     /// the calls of missed, in ask order.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn take_petition_asks(&mut self) -> Vec<u64> {
         self.take_calls_where(|call| match call {
             super::ScriptCall::RecordAsk(super::RecordAsk::Petition(item)) => Some(*item),
@@ -486,16 +486,6 @@ impl super::UiScript {
     /// live read ([`ItemSetQuery`]).
     pub fn set_item_set(&mut self, set_id: u32, view: ItemSetView) {
         self.model_mut().item_sets.insert(set_id, view);
-    }
-
-    /// The member entries the set blocks a harness's VM kept the calls of
-    /// ([`Self::keep_calls`]) asked the item-name cache for, in ask order.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn take_item_name_record_asks(&mut self) -> Vec<u32> {
-        self.take_calls_where(|call| match call {
-            super::ScriptCall::RecordAsk(super::RecordAsk::ItemName(entry)) => Some(*entry),
-            _ => None,
-        })
     }
 
     /// Pushes the whole `ItemRandomProperties` table once, at load: a clicked tooltip cannot

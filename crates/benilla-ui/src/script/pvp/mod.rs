@@ -122,6 +122,7 @@ pub enum PvpCall {
 
 impl super::UiScript {
     /// The `TogglePVP` calls a harness's VM kept ([`Self::keep_calls`]).
+    #[cfg(test)]
     pub fn take_pvp_toggles(&mut self) -> u32 {
         self.take_calls_like(&super::ScriptCall::Pvp(PvpCall::Toggle)) as u32
     }
