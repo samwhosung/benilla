@@ -178,8 +178,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     }
                     Write::TruncOneMinus(name) => (name, ftol_low(1.0 - v).to_string()),
                 };
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                write_cvar(&mut model, name, text);
+                write_cvar(
+                    &mut lua.app_data_mut::<Model>().expect("model app_data"),
+                    name,
+                    text,
+                );
+                // `CVar::Set` (`0x488f30` and its siblings) runs the row's callback inside the
+                // call.
+                super::cvars::written(lua)?;
                 // Zero return values, not nil (`xor eax,eax` at every `ret`).
                 Ok(MultiValue::new())
             })?,

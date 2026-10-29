@@ -621,6 +621,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 name
             };
+            // `ConnectToRealm`'s `CVar::Set` (`0x5ab7bf`) runs the row's callback inside the call.
+            super::cvars::written(lua)?;
             if let Some(name) = name {
                 call(lua, GlueCall::ChangeRealm(name));
             }

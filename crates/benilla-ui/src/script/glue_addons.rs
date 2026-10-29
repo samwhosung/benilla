@@ -331,7 +331,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 CVAR_VERSION_CHECK,
                 if on { "1" } else { "0" }.to_string(),
             );
-            Ok(())
+            super::cvars::written(lua)
         })?,
     )?;
 
@@ -358,7 +358,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 CVAR_SCRIPT_MEMORY,
                 (mb << 10).to_string(),
             );
-            Ok(())
+            super::cvars::written(lua)
         })?,
     )?;
 

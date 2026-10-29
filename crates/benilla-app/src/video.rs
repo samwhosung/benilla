@@ -22,7 +22,7 @@
 //! "vsync on" is `AutoNoVsync` paced to the monitor's refresh rate ([`present_choice`]), which
 //! keeps the synced look without the crash. `$WOW_PRESENT=fifo` restores plain `Fifo`.
 
-use benilla_ui::script::ScreenResolution;
+use benilla_ui::script::{ScreenResolution, UiScript};
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::window::{
@@ -505,32 +505,48 @@ impl Plugin for VideoPlugin {
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct GxRestarts(u32);
 
-/// Carry `RestartGx()` calls into [`GxRestarts`] and commit the latched `gx*` rows (flags `3`),
-/// where the reference's restart calls `CVar::Update` (`0x63e060`) on each; `GetCVar` answers the
-/// applied value until then.
-fn drain_restart_gx(
-    mut vm: crate::script_calls::VmWith<crate::cvars::CvarSteps<'static>>,
-    mut restarts: ResMut<GxRestarts>,
-) {
-    vm.turn(|script, mut steps| {
-        let Some(script) = script else {
+/// `gxRestart`'s handler (`0x639f60`) inside the call that ran it
+/// ([`benilla_ui::script::ScriptCall::RestartGx`]): the latched `gx*` rows (flags `3`) committed,
+/// where the reference's restart calls `CVar::Update` (`0x63e060`) on each (`0x639ec0`), their
+/// callbacks run and the VM's mirror synced, so `GetCVar` reads the committed value on the
+/// verb's next line. The device switch it asks, a [`GxRestarts`] bump, is the window appliers' in
+/// the frame's drain: no script reads the window but through these rows.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct GxRestartSteps<'w> {
+    cvars: crate::cvars::CvarSteps<'w>,
+    /// Absent in a harness without the video plugin.
+    restarts: Option<ResMut<'w, GxRestarts>>,
+}
+
+impl GxRestartSteps<'_> {
+    /// `runs` restarts at once.
+    pub(crate) fn restart(&mut self, script: &mut UiScript, runs: u32) {
+        let Some(cvars) = self.cvars.cvars() else {
             return;
         };
-        let asks = script.take_restart_gx_asks();
-        if asks == 0 {
-            // A `ResMut` deref-mut is a change signal, so a quiet frame touches nothing.
-            return;
-        }
-        let Some(cvars) = steps.cvars() else {
-            return;
-        };
-        restarts.0 = restarts.0.wrapping_add(asks);
         let committed = cvars.commit_latched();
-        steps.sync(Some(script));
+        if let Some(restarts) = self.restarts.as_deref_mut() {
+            restarts.0 = restarts.0.wrapping_add(runs);
+        }
+        self.cvars.sync(Some(script));
         info!(
             "video: RestartGx — {committed} staged setting(s) committed; re-asserting the \
                display mode and present mode"
         );
+    }
+}
+
+/// The restarts no call took, a VM's with no host lent ([`GxRestartSteps`]).
+fn drain_restart_gx(mut vm: crate::script_calls::VmWith<GxRestartSteps<'static>>) {
+    vm.turn(|script, mut steps| {
+        let Some(script) = script else {
+            return;
+        };
+        let runs = script.take_restart_gx_asks();
+        // A `ResMut` deref-mut is a change signal, so a quiet frame touches nothing.
+        if runs > 0 {
+            steps.restart(script, runs);
+        }
     })
 }
 

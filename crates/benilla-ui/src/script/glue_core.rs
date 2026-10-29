@@ -893,9 +893,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetSavedAccountName",
         lua.create_function(|lua, name: Value| {
             let name = string_arg(lua, name, "Usage: SetSavedAccountName(\"accountName\")")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            super::cvars::write_cvar(&mut model, "accountName", name);
-            Ok(())
+            super::cvars::write_cvar(
+                &mut lua.app_data_mut::<Model>().expect("model app_data"),
+                "accountName",
+                name,
+            );
+            super::cvars::written(lua)
         })?,
     )?;
 
@@ -951,7 +954,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     },
                 );
                 super::cvars::set_from_engine(&mut model, notice.cvar(), "1".to_string());
-                Ok(())
+                drop(model);
+                super::cvars::written(lua)
             })?,
         )?;
     }

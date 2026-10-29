@@ -277,6 +277,10 @@ pub enum ScriptCall {
     /// `NextView`, `PrevView` or `FlipCameraYaw`, seated on the camera inside the call, its CVar
     /// writes with it (`0x512f17`, `0x50fa09`).
     CameraView(super::CameraViewRequest),
+    /// `gxRestart`'s handler (`0x639f60`), run inside `RestartGx`, `SetScreenResolution` and
+    /// `RestoreVideoDefaults` (`0x63ce00` calls it synchronously): the host commits the latched
+    /// display rows (`0x639ec0`) and runs their callbacks before the verb goes on.
+    RestartGx,
     /// A dressing-room verb ([`super::DressUpIntent`]): `Dress`, `Undress`, `TryOn`, or `SetUnit`
     /// and `RefreshUnit` on a `DressUpModel`, applied to the room inside the call; a cached
     /// record's try-on goes on, or refuses with `ERR_NOT_EQUIPPABLE`, there (`0x504540`).

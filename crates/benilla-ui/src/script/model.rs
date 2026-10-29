@@ -559,7 +559,7 @@ pub(crate) struct Model {
     pub(crate) current_resolution: Option<usize>,
     /// What this device and presentation path offer, behind `GetVideoCaps`.
     pub(crate) video_caps: super::cvars::VideoCaps,
-    /// `RestartGx()` calls, the video window's apply button.
+    /// The `gxRestart` runs no call took, a bare VM's, for the host's frame drain.
     pub(crate) restart_gx_asks: u32,
 
     /// Globals `RegisterForSave` declared, in order: written at logout and read back at load.

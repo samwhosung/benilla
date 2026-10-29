@@ -393,7 +393,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let text = model.minimap.active_zoom().to_string();
                 super::cvars::set_from_engine(&mut model, cvar, text);
             }
-            Ok(())
+            drop(model);
+            // `set_zoom`'s `CVar::Set` (`0x6da974`) runs the row's callback inside the call.
+            super::cvars::written(lua)
         })?,
     )?;
     m.set(

@@ -3587,4 +3587,50 @@ mod tests {
             ]
         );
     }
+
+    /// The engine verbs that write a CVar run its callback inside the call, as `SetCVar` does:
+    /// `SetGamma` (`0x489267`), `SetWorldDetail` (`0x488e51`), a video pair's setter (`0x488f30`)
+    /// and the minimap's `SetZoom` (`0x6da974`) each call `CVar::Set` (`0x63df50`), and
+    /// `RestartGx`'s handler commits the latched rows synchronously (`0x48dab0` → `0x639f60`).
+    /// So each knob has moved, and `GetCVar` reads the committed `gxWindow`, before the chunk's
+    /// next line, with no frame run.
+    #[test]
+    fn the_engine_cvar_verbs_run_their_callbacks_inside_the_call() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        app.update();
+        app.insert_non_send_resource(UiScript::new().expect("a VM"));
+        // The registry seeds the new VM's mirror.
+        app.update();
+        let window: String = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").eval(
+                r#"
+                CreateFrame("Minimap", "ProbeMinimap", UIParent):SetZoom(2)
+                SetGamma(0.25)
+                SetWorldDetail(0)
+                SetFarclip(500)
+                SetCVar("gxWindow", "1")
+                RestartGx()
+                return GetCVar("gxWindow")
+                "#,
+            )
+        })
+        .expect("the chunk runs");
+        assert_eq!(
+            window, "1",
+            "the restart committed the stage inside its call"
+        );
+        let cvars = res::<Cvars>(&app);
+        assert_eq!(cvars.get("gamma"), Some("0.750000"));
+        assert_eq!(cvars.get("frillDensity"), Some("16"));
+        assert_eq!(cvars.get("farclip"), Some("500.000000"));
+        assert_eq!(cvars.get("minimapZoom"), Some("2"));
+        assert_eq!(cvars.get("gxWindow"), Some("1"));
+        assert_eq!(res::<crate::ui_gamma::DisplayGamma>(&app).0, 0.75);
+        assert_eq!(res::<crate::minimap::MinimapZoom>(&app).outdoor, 2);
+    }
 }
