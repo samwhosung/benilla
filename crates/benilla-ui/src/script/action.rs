@@ -114,6 +114,55 @@ pub struct ActionState {
     pub no_cooldown_query: bool,
 }
 
+/// The state getters' question to the lent host, which reads the slot as of the call: the
+/// reference's `Is*Action` and `GetActionCooldown` resolve the slot (`0x4e5a50`) and test the live
+/// player, cast state, range and cooldown list inside the call, and `IsUsableAction` reads the
+/// bar's cache as it stands (`0x4e5230`). The answer is `None` for an empty slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ActionStateNow {
+    /// The 1-based Lua action id.
+    pub action: u32,
+    /// The macro id the VM's copy of the slot names and the VM's record of it (`[rec+0x564]`,
+    /// `[rec+0x568]`, read by `0x4e5ba0`), `None` inside for a macro that is gone (`0x4e5030`).
+    pub bound: Option<(u32, Option<super::MacroBinding>)>,
+    /// `GetTime` at the call, which a host with no clock of its own maps a cooldown start through.
+    pub ui_now: f64,
+}
+
+impl super::live::LiveQuery for ActionStateNow {
+    type Answer = Option<ActionState>;
+}
+
+/// `action`'s state as the lent host reads it at the call ([`ActionStateNow`]), else the pushed
+/// snapshot; `None` for an empty slot.
+fn state_of(lua: &Lua, action: u32) -> Option<ActionState> {
+    let ui_now = super::clock::now(lua);
+    let (query, snapshot) = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let bound = model
+            .actions
+            .get(&action)
+            .and_then(|s| macro_slot_id(s.kind, s.action))
+            .map(|id| {
+                let record = model
+                    .macros
+                    .by_id(id)
+                    .map(|_| model.macro_bindings.get(&id).copied().unwrap_or_default());
+                (id, record)
+            });
+        let snapshot = model.action_states.get(&action).map(|s| s.state);
+        (
+            ActionStateNow {
+                action,
+                bound,
+                ui_now,
+            },
+            snapshot,
+        )
+    };
+    super::live::ask(lua, &query).unwrap_or(snapshot)
+}
+
 /// `IsEquippedAction`'s walk of the active player's worn slots for a whole item of the entry, at
 /// the call (`0x4e5310` → `0x622270` at mask 1, `0x4e5380`): `false` with no player held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -535,18 +584,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // 1/nil booleans and `IsActionInRange`'s nil/0/1, which FrameXML tests with a plain `if`.
 
     fn state_flag(lua: &Lua, action: u32, pick: impl Fn(&ActionState) -> bool) -> Value {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        match model.action_states.get(&action) {
-            Some(s) if pick(&s.state) => Value::Integer(1),
+        match state_of(lua, action) {
+            Some(s) if pick(&s) => Value::Integer(1),
             _ => Value::Nil,
         }
     }
 
     /// 1 or nil for a slot's test against the live cast state.
     fn live_flag(lua: &Lua, action: u32, pick: impl Fn(&ActionState, &CastView) -> bool) -> Value {
+        let state = state_of(lua, action);
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        match model.action_states.get(&action) {
-            Some(s) if pick(&s.state, &model.cast_view) => Value::Integer(1),
+        match state {
+            Some(s) if pick(&s, &model.cast_view) => Value::Integer(1),
             _ => Value::Nil,
         }
     }
@@ -571,18 +620,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(action) = binding_abi::index_or(lua, action)? else {
                 return Ok(Value::Nil);
             };
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(
-                match model
-                    .action_states
-                    .get(&action)
-                    .and_then(|s| s.state.in_range)
-                {
-                    Some(true) => Value::Integer(1),
-                    Some(false) => Value::Integer(0),
-                    None => Value::Nil,
-                },
-            )
+            Ok(match state_of(lua, action).and_then(|s| s.in_range) {
+                Some(true) => Value::Integer(1),
+                Some(false) => Value::Integer(0),
+                None => Value::Nil,
+            })
         })?,
     )?;
 
@@ -605,14 +647,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let action = binding_abi::index_arg32(lua, action, "Usage: IsCurrentAction(slot)")?;
             // The form arm reads the active player's form byte at the call (`0x4e558b`).
             let form = super::stat_read::read_self(lua, |own| own.shapeshift_form());
+            let state = state_of(lua, action);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let open = model.open_professions();
             let view = CastView {
                 form,
                 ..model.cast_view
             };
-            Ok(match model.action_states.get(&action) {
-                Some(s) if s.state.is_current(&view, open) => Value::Integer(1),
+            Ok(match state {
+                Some(s) if s.is_current(&view, open) => Value::Integer(1),
                 _ => Value::Nil,
             })
         })?,
@@ -683,23 +726,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetActionCooldown(slot)` (`0x84bfb4`, `0x4e6f77`).
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionCooldown(slot)")?;
             let now = crate::script::clock::now(lua);
-            let (query, snapshot) = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let Some(state) = model
-                    .action_states
-                    .get(&action)
-                    .filter(|s| !s.state.no_cooldown_query)
-                else {
-                    return Ok((0.0, 0.0, 0));
-                };
-                let query = match (state.state.spell, state.state.item, state.state.pet_spell) {
-                    (Some(spell), _, _) => Some(super::CooldownQuery::Spell(spell)),
-                    (None, Some(entry), _) => Some(super::CooldownQuery::Item(entry)),
-                    (None, None, Some(spell)) => Some(super::CooldownQuery::PetSpell(spell)),
-                    (None, None, None) => None,
-                };
-                (query, state.cooldown)
+            // The slot resolved and its query picked as of the call (`0x4e6cf4`-`0x4e6d0b`).
+            let Some(state) = state_of(lua, action).filter(|s| !s.no_cooldown_query) else {
+                return Ok((0.0, 0.0, 0));
             };
+            let query = match (state.spell, state.item, state.pet_spell) {
+                (Some(spell), _, _) => Some(super::CooldownQuery::Spell(spell)),
+                (None, Some(entry), _) => Some(super::CooldownQuery::Item(entry)),
+                (None, None, Some(spell)) => Some(super::CooldownQuery::PetSpell(spell)),
+                (None, None, None) => None,
+            };
+            let snapshot = state.cooldown.map(super::cooldown_read::seconds);
             let live = query.and_then(|q| super::cooldown_read::read_live(lua, q));
             Ok(match live.unwrap_or(snapshot) {
                 Some((start, duration, enabled)) if start + duration > now || !enabled => (

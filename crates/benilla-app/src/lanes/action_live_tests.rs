@@ -31,6 +31,8 @@ const POTION: u32 = 118;
 
 /// The spells on the bar: a Frostbolt at 50 mana, the druid's Cat and Bear forms, and Attack.
 const FROSTBOLT: u32 = 116;
+/// Frostbolt's second rank, which supersedes the first.
+const FROSTBOLT_2: u32 = 205;
 const CAT: u32 = 768;
 const BEAR: u32 = 5487;
 const ATTACK: u32 = 6603;
@@ -151,6 +153,7 @@ fn spells() -> crate::ui_action::Spells {
     };
     let catalog = SpellCatalog::from_displays(HashMap::from([
         row(FROSTBOLT, |d| d.mana_cost = 50),
+        row(FROSTBOLT_2, |d| d.mana_cost = 60),
         row(CAT, |d| d.shapeshift_form = Some(CAT_FORM)),
         row(BEAR, |d| d.shapeshift_form = Some(BEAR_FORM)),
         // `SPELL_EFFECT_ATTACK`, which makes the slot the Attack slot (`0x4e59de`).
@@ -490,6 +493,58 @@ fn an_equipped_listener_finds_an_item_a_later_packet_destroys() {
     };
     let seen: Vec<String> = c.seen(&["UNIT_MANA"]).iter().map(worn).collect();
     assert_eq!(seen, ["UNIT_MANA:1"]);
+}
+
+/// `SMSG_SUPERCEDED_SPELL` gives a bar macro that cast the old rank the new one in its record
+/// (`0x5e6356` → `0x4e5e60`, `0x4e5ec4`), with no signal; `GetActionCooldown` resolves the slot
+/// through that record at the call (`0x4e6ca0` → `0x4e5a50` → `0x4e5ba0`) and queries the new
+/// rank's cooldown (`0x6e2ea0`). So a getter inside the packet that rewrote the record reads the
+/// new rank's 10 s, where the frame's push still names the old rank.
+#[test]
+fn a_superseded_macro_slots_cooldown_reads_the_new_rank_inside_its_packet() {
+    use crate::ui_macro::{Bound, BoundSpell};
+    let mut c = client();
+    {
+        let world = c.app.world_mut();
+        crate::ui_macro::bind_for_test(
+            &mut world.non_send_resource_mut::<UiScript>(),
+            &[(1, Bound::from(BoundSpell::Spell(FROSTBOLT)))],
+        );
+        world
+            .resource_mut::<crate::ui_action::PlayerActions>()
+            .spells
+            .insert(FROSTBOLT_2);
+        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
+        slots.buttons.insert(
+            5,
+            ActionButton {
+                slot: 5,
+                action: 1,
+                kind: benilla_protocol::messages::ACTION_KIND_MACRO,
+            },
+        );
+        slots.touch();
+    }
+    c.frame(vec![vec![SessionEvent::SpellCooldowns {
+        caster: ME,
+        cooldowns: vec![(FROSTBOLT_2, 10_000)],
+    }]]);
+    c.frame(vec![]);
+    let chunk = "local _, d = GetActionCooldown(6) return d";
+    assert_eq!(c.eval::<f64>(true, chunk), 0.0, "the macro casts rank 1");
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::SpellSuperceded {
+            old_spell_id: FROSTBOLT,
+            new_spell_id: FROSTBOLT_2,
+        }],
+    );
+    assert_eq!(c.eval::<f64>(true, chunk), 10.0, "live: the new rank's");
+    assert_eq!(
+        c.eval::<f64>(false, chunk),
+        0.0,
+        "the frame's push names rank 1"
+    );
 }
 
 /// The bar's getters' per-call cost with the host lent and off the snapshots: 10k calls of each.

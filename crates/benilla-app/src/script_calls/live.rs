@@ -127,6 +127,9 @@ live_reads! {
         petition: crate::ui_petition::PetitionLive<'static, 'static>,
         /// The pet bar, the pet it names, its stat block, its menu and its book.
         pet: crate::ui_pet::PetLive<'static, 'static>,
+        /// The action slots' states, each derived at the call; absent in a harness without the
+        /// action feed's inputs.
+        actions: Option<crate::ui_action::ActionStates<'static, 'static>>,
         /// The requirement state, the known-spell list and the lock openers an item is judged by.
         requirements: crate::ui_items::RequirementsLive<'static, 'static>,
         /// The item set blocks: the set table, the member names and the bonuses.
