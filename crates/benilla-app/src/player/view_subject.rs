@@ -113,14 +113,14 @@ impl FarSight {
     }
 
     /// `StartFarSight` (`0x5ee270`): the update while far sight is off.
-    fn start(&self, field: Option<u64>, held: impl Fn(u64) -> bool, net: &NetCommands) {
+    pub(crate) fn start(&self, field: Option<u64>, held: impl Fn(u64) -> bool, net: &NetCommands) {
         if !self.state().on {
             self.update(field, held, net);
         }
     }
 
     /// `EndFarSight` (`0x5ee590`): the update while far sight is on.
-    fn end(&self, field: Option<u64>, held: impl Fn(u64) -> bool, net: &NetCommands) {
+    pub(crate) fn end(&self, field: Option<u64>, held: impl Fn(u64) -> bool, net: &NetCommands) {
         if self.state().on {
             self.update(field, held, net);
         }
@@ -132,10 +132,10 @@ impl FarSight {
     }
 }
 
-/// Runs the far-sight callers outside a script call, then resolves the camera's object into a
-/// pose, before the controller runs; an object not held leaves the camera on the body.
-/// - `PLAYER_FARSIGHT`'s change (`0x5de0d0`): the start when the new field's object is held
-///   (`0x5de144`), else the end (`0x5de15d`);
+/// Runs the far-sight callers outside a script call and outside the field's change, whose start
+/// or end its handler runs (`0x5de0d0`, [`crate::field_watch::FieldNotice::FarSight`]), then
+/// resolves the camera's object into a pose, before the controller runs; an object not held
+/// leaves the camera on the body.
 /// - the field's object arriving, a unit's (`0x5fbb1a`) or a dynamic object's (`0x5d552d`): the
 ///   start;
 /// - the camera's object gone while far sight is on, the world frame's render (`0x483031`,
@@ -149,7 +149,6 @@ pub(super) fn publish_view_subject(
     // The pivot height takes the raw `OBJECT_FIELD_SCALE_X`, not the eased render scale.
     poses: Query<(&Transform, Option<&CameraPivot>, Option<&NetEntity>)>,
     net: Res<NetCommands>,
-    mut seen_field: Local<Option<u64>>,
     mut seen_object: Local<Option<Entity>>,
 ) {
     let field = self_store
@@ -158,14 +157,7 @@ pub(super) fn publish_view_subject(
         .and_then(|store| store.0.player_farsight());
     let held = |guid: u64| index.0.contains_key(&guid);
     let object = field.and_then(|guid| index.0.get(&guid).copied());
-    if *seen_field != field {
-        *seen_field = field;
-        if object.is_some() {
-            far_sight.start(field, held, &net);
-        } else {
-            far_sight.end(field, held, &net);
-        }
-    } else if object.is_some() && object != *seen_object {
+    if object.is_some() && object != *seen_object {
         let arrives = object
             .and_then(|e| poses.get(e).ok())
             .and_then(|(_, _, net)| net)
@@ -227,6 +219,16 @@ pub(super) fn register(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A unit's network identity, whose arrival as the field's object starts far sight
+    /// (`0x5fbb1a`).
+    fn arrived_unit() -> crate::net::NetEntity {
+        crate::net::NetEntity {
+            kind: benilla_protocol::EntityKind::Unit,
+            display_id: None,
+            scale: 1.0,
+        }
+    }
 
     #[test]
     fn an_unset_or_unstreamed_far_sight_both_resolve_to_the_body() {
@@ -327,14 +329,11 @@ mod tests {
         app.update();
         assert!(votes(&rx).is_empty(), "once, not per frame");
 
-        // Cleared to zero: home.
+        // Cleared to zero: the field's change is its handler's (`0x5de0d0`), so the frame's pass
+        // leaves the view where it is.
         set(&mut app, 0);
         app.update();
-        assert!(
-            app.world().resource::<ViewSubject>().remote.is_none(),
-            "a zeroed field is vmangos's teardown signal: it sends no CLEAR_FAR_SIGHT_IMMEDIATE"
-        );
-        assert_eq!(votes(&rx), [false], "and the release votes 0, once");
+        assert!(votes(&rx).is_empty(), "the pass runs no end of its own");
     }
 
     /// Cancelling the buff of a far-sight spell (`AttributesEx` 0x2000 without 0x4: Sentry Totem,
@@ -368,7 +367,7 @@ mod tests {
         });
         let totem = app
             .world_mut()
-            .spawn(Transform::from_xyz(50.0, 0.0, 0.0))
+            .spawn((Transform::from_xyz(50.0, 0.0, 0.0), arrived_unit()))
             .id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
@@ -413,7 +412,7 @@ mod tests {
         assert_eq!(
             publish(&mut app),
             Some(totem),
-            "the field engages the totem"
+            "the field's unit's arrival engages the totem (`0x5fbb1a`)"
         );
         assert_eq!(sent(&rx), ["far sight 1"]);
 
@@ -448,7 +447,7 @@ mod tests {
         app.insert_resource(NetCommands(tx));
         let eye = app
             .world_mut()
-            .spawn(Transform::from_xyz(50.0, 0.0, 0.0))
+            .spawn((Transform::from_xyz(50.0, 0.0, 0.0), arrived_unit()))
             .id();
         app.world_mut()
             .resource_mut::<GuidIndex>()

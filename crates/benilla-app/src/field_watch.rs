@@ -209,10 +209,12 @@ pub(crate) enum FieldNotice {
     /// with `apply` set, which stops the auto-move when the unit may neither translate nor turn
     /// (`0x5146c1`-`0x5146d6`).
     InputTick,
-    /// A far-sight start on `object` (`UpdateFarSight 0x5ee290` from `0x5de0d0`): with the object
-    /// held, the view goes out and the mover's tick stops its auto-move (`0x5ee4a2`), or a
-    /// controlled unit takes the mover, whose switch stops it (`0x5ee477` → `0x600742`).
-    FarSightStop { object: u64 },
+    /// The far-sight field's change to `object`, 0 for none (`0x5de0d0`): with the object held the
+    /// start (`0x5de144` → `0x5ee270`), whose update while far sight is off sends
+    /// `CMSG_FAR_SIGHT` 1, puts the view out and stops the auto-move, through the mover's tick
+    /// (`0x5ee4a2`) or a controlled unit's mover switch (`0x5ee477` → `0x600742`); else the end
+    /// (`0x5de15d` → `0x5ee590`). Both run ahead of the change's signal.
+    FarSight { object: u64 },
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -1097,13 +1099,11 @@ pub(crate) fn placed_values(
             pass.push(at, FieldNotice::UsableRefresh);
             pass.push(at, FieldNotice::ComboPoints);
         }
-        // `0x5de0d0`: the far-sight update, then `PLAYER_FARSIGHT_FOCUS_CHANGED` bare on every
-        // change, whether or not the new guid resolves (`0x5de14e`, `0x5de167`).
+        // `0x5de0d0`: the far-sight start or end, then `PLAYER_FARSIGHT_FOCUS_CHANGED` bare on
+        // every change, whether or not the new guid resolves (`0x5de14e`, `0x5de167`).
         if let Some(at) = at(PLAYER_SECTION, FARSIGHT, List::Object) {
             let object = fields.player_farsight().unwrap_or(0);
-            if object != 0 {
-                pass.push(at, FieldNotice::FarSightStop { object });
-            }
+            pass.push(at, FieldNotice::FarSight { object });
             let id = id::PLAYER_FARSIGHT_FOCUS_CHANGED;
             pass.push(at, FieldNotice::Global { id });
         }

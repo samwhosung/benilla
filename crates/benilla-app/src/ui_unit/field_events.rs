@@ -635,7 +635,7 @@ pub(crate) fn fire(
         | FieldNotice::AutoMoveStop
         | FieldNotice::AutorunClear
         | FieldNotice::InputTick
-        | FieldNotice::FarSightStop { .. } => {}
+        | FieldNotice::FarSight { .. } => {}
         // Run at its place by the packet's handler ([`crate::net::objects`]), its signal written
         // there.
         FieldNotice::AreaSpiritHealerClear | FieldNotice::QuestAccepted { .. } => {}

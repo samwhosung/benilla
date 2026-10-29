@@ -161,6 +161,8 @@ pub(crate) struct Scene<'w, 's> {
     mover: Option<ResMut<'w, super::MoverClaim>>,
     /// The far-sight subject, whose view-out term the stun's tick reads.
     view_subject: Option<Res<'w, crate::player::ViewSubject>>,
+    /// The far-sight machine the field's change starts or ends (`0x5de0d0`).
+    far_sight: Option<Res<'w, crate::player::FarSight>>,
     /// The active mover's auto-move, which its release and the watchers' stops end.
     follow: Option<ResMut<'w, crate::player::FollowState>>,
     approach: Option<ResMut<'w, crate::player::Approach>>,

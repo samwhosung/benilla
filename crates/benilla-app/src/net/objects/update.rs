@@ -1202,15 +1202,34 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     );
                 }
             }
-            // A far sight on a held object (`0x5ee39c` on, past the unresolved return). A unit we
-            // control takes the active mover (`0x5ee45d` → `0x5ee477`), whose switch stops the
-            // outgoing one's auto-move (`0x600742`) and is a no-op when it already holds it
-            // (`0x6006fb`); the switch itself is possession's control update's. Any other object
-            // runs the mover's tick (`0x5ee4a2`), which the view's going out tears down.
-            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::FarSightStop {
+            // The far-sight field's change (`0x5de0d0`): on a held object the start
+            // (`0x5de144` → `0x5ee270`), which updates only while far sight is off; else the end
+            // (`0x5de15d` → `0x5ee590`). A start's update on a held object (`0x5ee39c` on, past
+            // the unresolved return) stops the auto-move: a unit we control takes the active
+            // mover (`0x5ee45d` → `0x5ee477`), whose switch stops the outgoing one's
+            // (`0x600742`) and is a no-op when it already holds it (`0x6006fb`); the switch itself
+            // is possession's control update's. Any other object runs the mover's tick
+            // (`0x5ee4a2`), which the view's going out tears down.
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::FarSight {
                 object,
             }) => {
-                if !sc.index.0.contains_key(&object) {
+                let field = (object != 0).then_some(object);
+                let index = &sc.index;
+                let held = |guid: u64| index.0.contains_key(&guid);
+                let started = match sc.far_sight.as_deref() {
+                    Some(far_sight) if field.is_some_and(held) => {
+                        let was_on = far_sight.on();
+                        far_sight.start(field, held, &sc.net);
+                        !was_on
+                    }
+                    Some(far_sight) => {
+                        far_sight.end(field, held, &sc.net);
+                        false
+                    }
+                    // A harness without the machine: the start's stop, as a held object's.
+                    None => field.is_some_and(held),
+                };
+                if !started {
                     continue;
                 }
                 let active = sc.mover.as_deref().and_then(crate::net::MoverClaim::get);

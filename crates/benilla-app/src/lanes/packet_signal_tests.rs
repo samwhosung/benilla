@@ -528,3 +528,52 @@ fn has_full_control_reads_the_far_sight_bit_at_the_call() {
     crate::net::handlers::dispatch(app.world_mut(), vec![SessionEvent::FarSightCleared]);
     assert_eq!(live(&mut app), Some(1), "the clear's handler ended it");
 }
+
+/// `PLAYER_FARSIGHT`'s change on our player (`0x5de0d0`) starts far sight on a held object
+/// (`0x5de144` → `0x5ee270`), `CMSG_FAR_SIGHT` 1 out, then signals
+/// `PLAYER_FARSIGHT_FOCUS_CHANGED` (`0x5de14e`), whose listener's `HasFullControl()` refuses on
+/// the bit (`0x51a142`); the clear ends it (`0x5de15d` → `0x5ee590`), 0 out, ahead of its signal
+/// (`0x5de167`).
+#[test]
+fn a_far_sight_change_starts_and_ends_at_its_packet_ahead_of_its_signal() {
+    /// `PLAYER_FARSIGHT`, the guid's low word.
+    const FARSIGHT: u16 = 712;
+    /// [`client`]'s wolf, held.
+    const EYE: u64 = 0xF130_0000_0044_0001;
+    let mut app = client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script.set_player_control(true);
+    script
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_FARSIGHT_FOCUS_CHANGED")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. tostring(HasFullControl()))
+            end)
+            "#,
+        )
+        .unwrap();
+    let votes = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| -> Vec<bool> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::FarSight { engage } => Some(engage),
+                _ => None,
+            })
+            .collect()
+    };
+    let field = |guid: u64| {
+        values(
+            ME,
+            &[(FARSIGHT, guid as u32), (FARSIGHT + 1, (guid >> 32) as u32)],
+        )
+    };
+    let seen = frame(&mut app, vec![field(EYE)]);
+    assert_eq!(seen, ["PLAYER_FARSIGHT_FOCUS_CHANGED:nil"]);
+    assert_eq!(votes(&rx), [true]);
+    let seen = frame(&mut app, vec![field(0)]);
+    assert_eq!(seen, ["PLAYER_FARSIGHT_FOCUS_CHANGED:1"]);
+    assert_eq!(votes(&rx), [false]);
+}
