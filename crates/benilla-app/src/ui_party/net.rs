@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 
-use super::{GroupState, RosterRelease, GROUPTYPE_RAID};
+use super::{GroupState, RosterRelease};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::query_cache::Ask;
@@ -102,7 +102,6 @@ fn on_list(
     names: Res<NameCache>,
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
-    tutorials: Option<Res<crate::tutorial::Tutorials>>,
     mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::GroupList {
@@ -113,13 +112,6 @@ fn on_list(
         loot,
     } = ev
     {
-        // The raid roster writer opens on Raid Groups for a rebuild with rows (`0x4ba604`,
-        // `0x4ba60d`), every one; the tutorial's own bit makes it fire once.
-        if group_type == GROUPTYPE_RAID && !members.is_empty() {
-            if let Some(tutorials) = tutorials {
-                tutorials.trigger_now(crate::tutorial::id::RAID_GROUPS);
-            }
-        }
         let before = teardown.before(&group);
         list(
             &mut group, &sounds, &mut quest, group_type, own_flags, members, leader, loot,
@@ -569,7 +561,7 @@ fn command_result(
 
 #[cfg(test)]
 mod tests {
-    use super::super::GroupSignal;
+    use super::super::{GroupSignal, GROUPTYPE_RAID};
     use super::*;
     use crate::net::ClientCommand;
     use benilla_protocol::guid;
@@ -1001,11 +993,12 @@ mod tests {
         assert_eq!(rec.auras, Some(vec![(0, 1126)]));
     }
 
-    /// Raid Groups opens on every raid roster rebuild with rows (`0x4ba604`, `0x4ba60d`): a raid
-    /// list that names a member asks for it, each time, and a raid of one or a party asks nothing.
+    /// Raid Groups opens every raid roster rebuild with rows (`0x5e6eb4` → `0x4ba604`-`0x4ba60d`),
+    /// after the list's `PARTY_MEMBERS_CHANGED` (`0x5e6c66`) and leader store, ahead of the
+    /// rebuild's own signals; a raid of one or a party asks nothing.
     #[test]
-    fn a_raid_list_with_rows_triggers_the_raid_groups_tutorial() {
-        use crate::tutorial::{id, TutorialAsk, Tutorials};
+    fn a_raid_list_with_rows_triggers_raid_groups_at_the_rebuilds_head() {
+        use crate::tutorial::id;
         use bevy::ecs::system::RunSystemOnce;
         let mut app = App::new();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -1016,9 +1009,8 @@ mod tests {
             .init_resource::<QuestGiver>()
             .insert_resource(SelfGuid(Some(0x10)))
             .init_resource::<NameCache>()
-            .init_resource::<GuidIndex>()
-            .init_resource::<Tutorials>();
-        let mut triggered = |group_type: u8, members: Vec<GroupMemberEntry>| {
+            .init_resource::<GuidIndex>();
+        let mut list = |group_type: u8, members: Vec<GroupMemberEntry>| {
             app.world_mut()
                 .run_system_once_with(
                     on_list,
@@ -1031,24 +1023,38 @@ mod tests {
                     },
                 )
                 .expect("the group-list handler");
-            app.world()
-                .resource::<Tutorials>()
-                .take_asks()
+            app.world_mut()
+                .resource_mut::<GroupState>()
+                .signals
+                .take()
                 .into_iter()
-                .filter(|ask| {
-                    *ask == TutorialAsk::Trigger {
-                        id: id::RAID_GROUPS,
-                        delay_ms: 0,
-                    }
-                })
-                .count()
+                .filter(|s| !matches!(s, GroupSignal::Line(_)))
+                .collect::<Vec<_>>()
         };
-        assert_eq!(triggered(GROUPTYPE_RAID, Vec::new()), 0, "a raid of one");
-        assert_eq!(triggered(0, vec![member(0x22, "Brisca")]), 0, "a party");
-        assert_eq!(triggered(GROUPTYPE_RAID, vec![member(0x22, "Brisca")]), 1);
-        assert_eq!(
-            triggered(GROUPTYPE_RAID, vec![member(0x22, "Brisca")]),
-            1,
+        let raid_groups = GroupSignal::Tutorial(id::RAID_GROUPS);
+        assert!(
+            !list(GROUPTYPE_RAID, Vec::new()).contains(&raid_groups),
+            "a raid of one"
+        );
+        assert!(
+            !list(0, vec![member(0x22, "Brisca")]).contains(&raid_groups),
+            "a party"
+        );
+        let signals = list(GROUPTYPE_RAID, vec![member(0x22, "Brisca")]);
+        let at = |s: &GroupSignal| {
+            signals
+                .iter()
+                .position(|x| x == s)
+                .unwrap_or_else(|| panic!("{s:?} in {signals:?}"))
+        };
+        assert!(
+            at(&GroupSignal::MembersChanged) < at(&raid_groups)
+                && at(&GroupSignal::LeaderChanged) < at(&raid_groups)
+                && at(&raid_groups) < at(&GroupSignal::RaidRebuilt { gone: false }),
+            "{signals:?}"
+        );
+        assert!(
+            list(GROUPTYPE_RAID, vec![member(0x22, "Brisca")]).contains(&raid_groups),
             "every rebuild with rows"
         );
     }

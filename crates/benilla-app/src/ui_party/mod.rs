@@ -239,6 +239,10 @@ pub(crate) enum GroupSignal {
     /// carry the pending flags, and with a member `gone` (the count at `0x4ba825`) the check
     /// closes for its leader once no row is both pending and online.
     RaidRebuilt { gone: bool },
+    /// `TriggerTutorial(id, 0)` (`0x4b5390`) inside a list's handler: the raid rebuild's Raid
+    /// Groups at its head (`0x4ba604`-`0x4ba60d`), the fire-once test and its `TUTORIAL_TRIGGER`
+    /// in place.
+    Tutorial(u32),
     /// `UPDATE_INSTANCE_INFO`, once per `SMSG_RAID_INSTANCE_INFO` (`0x49e1a7`, straight from
     /// `0x49e08e` when empty), with the list: `RaidFrame.lua:43` ignores the first, so the Raid
     /// Info button is decided on the second.
@@ -313,13 +317,20 @@ impl SignalLog {
         self.aged = self.base;
     }
 
-    /// Every entry but the lines and the raid rebuild's ready-check leg, which leaves the log
-    /// empty.
+    /// Every entry but the lines, the raid rebuild's tutorial and its ready-check leg, which
+    /// leaves the log empty.
     #[cfg(test)]
     pub(crate) fn take_events(&mut self) -> Vec<GroupSignal> {
         self.take()
             .into_iter()
-            .filter(|s| !matches!(s, GroupSignal::Line(_) | GroupSignal::RaidRebuilt { .. }))
+            .filter(|s| {
+                !matches!(
+                    s,
+                    GroupSignal::Line(_)
+                        | GroupSignal::RaidRebuilt { .. }
+                        | GroupSignal::Tutorial(_)
+                )
+            })
             .collect()
     }
 
@@ -502,7 +513,12 @@ impl GroupState {
             self.signal(GroupSignal::LootMethodChanged);
         }
         if raid {
-            // `0x4ba5f0`: with names pending, the old rows' lookups are cancelled first.
+            // `0x4ba5f0` opens on Raid Groups for a list with members, every rebuild; the
+            // tutorial's own bit makes it fire once (`0x4ba604`-`0x4ba60d`).
+            if !members.is_empty() {
+                self.signal(GroupSignal::Tutorial(crate::tutorial::id::RAID_GROUPS));
+            }
+            // With names pending, the old rows' lookups are cancelled next.
             if self.raid_names_pending != 0 {
                 let old: Vec<u64> = self.raid_rows().collect();
                 self.name_waits

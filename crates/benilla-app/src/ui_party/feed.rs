@@ -102,7 +102,10 @@ pub(super) fn fire_group_signals(
         Option<Res<'static, benilla_assets::MapCatalogRes>>,
     )>,
     mut sink: crate::ui_action::MessageSink,
+    // Absent in a harness without the tutorials.
+    tutorials: Option<Res<crate::tutorial::Tutorials>>,
 ) {
+    let tutorials = tutorials.as_deref();
     let owed = {
         let (_, mut lane, _) = vm.own();
         lane.owed.take_if(|(at, _)| until.admits(*at))
@@ -112,7 +115,7 @@ pub(super) fn fire_group_signals(
             vm.run(|script| {
                 if let Some(script) = script {
                     for signal in signals {
-                        fire_signal(script, &mut sink, signal, Vec::new());
+                        fire_signal(script, &mut sink, tutorials, signal, Vec::new());
                     }
                 }
             })
@@ -146,7 +149,7 @@ pub(super) fn fire_group_signals(
         let ((), moved) = crate::lanes::firing(stamp, || {
             vm.run(|script| {
                 if let Some(script) = script {
-                    fire_signal(script, &mut sink, signal, saved);
+                    fire_signal(script, &mut sink, tutorials, signal, saved);
                 }
             })
         });
@@ -172,6 +175,7 @@ pub(crate) fn fire_party_lane(world: &mut World) {
 fn fire_signal(
     script: &mut UiScript,
     sink: &mut crate::ui_action::MessageSink,
+    tutorials: Option<&crate::tutorial::Tutorials>,
     signal: GroupSignal,
     saved: Vec<SavedInstanceInfo>,
 ) {
@@ -213,6 +217,12 @@ fn fire_signal(
         GroupSignal::ReadyCheck => ("READY_CHECK", vec![]),
         GroupSignal::RaidRebuilt { gone } => {
             script.raid_roster_rebuilt(gone);
+            return;
+        }
+        GroupSignal::Tutorial(id) => {
+            if let Some(published) = tutorials.and_then(|t| t.lock().fire_now(id)) {
+                crate::tutorial::fire_published(script, &sink.sounds, published);
+            }
             return;
         }
         GroupSignal::ReadyCheckAnswer { guid, ready } => {

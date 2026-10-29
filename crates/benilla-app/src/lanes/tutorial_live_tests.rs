@@ -31,7 +31,7 @@ const BACKPACK: &str = "TUTORIAL_TRIGGER:8";
 struct Client {
     app: App,
     inbound: Sender<SessionEvent>,
-    _sent: Receiver<ClientCommand>,
+    sent: Receiver<ClientCommand>,
 }
 
 impl Client {
@@ -52,6 +52,17 @@ impl Client {
         } else {
             crate::script_calls::eval_in_vm(self.app.world(), chunk)
         }
+    }
+
+    /// The tutorial flags sent since the last call.
+    fn flags_sent(&mut self) -> Vec<u32> {
+        self.sent
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::TutorialFlag { id } => Some(id),
+                _ => None,
+            })
+            .collect()
     }
 
     /// What the spy heard since the last call.
@@ -99,11 +110,7 @@ fn client() -> Client {
     app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    let mut c = Client {
-        app,
-        inbound,
-        _sent: sent,
-    };
+    let mut c = Client { app, inbound, sent };
     c.frame(vec![vec![
         created(ME, EntityKind::Player, &[(FIELD_UNIT_HEALTH, 100)]),
         created(VENDOR, EntityKind::Unit, &[(FIELD_UNIT_NPC_FLAGS, 0x80)]),
@@ -277,4 +284,29 @@ fn tutorials_enabled_reads_the_bank_at_the_call() {
         .insert_non_send_resource(UiScript::new().expect("a fresh VM"));
     assert_eq!(c.eval::<i64>(true, "return TutorialsEnabled()"), 1);
     assert!(c.eval::<bool>(true, "ClearTutorials() return TutorialsEnabled() == nil"));
+}
+
+/// `SetTrainer` (`0x4d7440`) on a new trainer acknowledges Learning Talents (`0x0c`) for our own
+/// guid and Trainers (`0x0d`) for another (`0x4d7492`-`0x4d74ae`), its flag sent at the list's
+/// place; a re-list from the open trainer acknowledges nothing (`0x4d7459`).
+#[test]
+fn a_trainer_list_acknowledges_its_tutorial_by_whose_it_is() {
+    for (trainer, want) in [(VENDOR, 0x0d), (ME, 0x0c)] {
+        let mut c = client();
+        c.flags_sent();
+        let list = || SessionEvent::TrainerList {
+            trainer,
+            trainer_type: 0,
+            services: Vec::new(),
+            greeting: String::new(),
+        };
+        c.app
+            .world_mut()
+            .resource_mut::<crate::ui_trainer::TrainerOpen>()
+            .asked = trainer;
+        c.frame(vec![vec![list()]]);
+        assert_eq!(c.flags_sent(), [want], "trainer {trainer:#x}");
+        c.frame(vec![vec![list()]]);
+        assert!(c.flags_sent().is_empty(), "the open trainer's re-list");
+    }
 }
