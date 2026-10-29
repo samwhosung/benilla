@@ -497,6 +497,48 @@ impl ActionStates<'_, '_> {
         holds
     }
 
+    /// `0x4e5de0`'s step for the 1-based `action`: when the slot resolves to `spell` with book 0
+    /// (`0x4e5df5`-`0x4e5e03`), its pair stored as `0x4e58e0` with no send stores it; whether it
+    /// did.
+    pub(crate) fn spell_slot_notified(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        action: u32,
+        spell: u32,
+    ) -> bool {
+        let stands = spell != 0 && self.slot_spell(script, action) == Some((spell, false));
+        if stands {
+            self.slot_written(script, action);
+        }
+        stands
+    }
+
+    /// `GetActionSlotSpell 0x4e5a50` for the 1-based `action`: the spell and its book flag. A spell
+    /// word's own with book 0; an item's on-use spell with book 0 (`0x4e5ae0`, its record looked
+    /// up with the bar's callback); a macro's record's cached spell and book (`0x4e5ba0`, `+0x564`,
+    /// `+0x568`) while the macro exists (`0x4e5030`). `None` for nothing to stand for.
+    fn slot_spell(
+        &self,
+        script: &benilla_ui::script::UiScript,
+        action: u32,
+    ) -> Option<(u32, bool)> {
+        let b = self.walk.button(action)?;
+        match b.kind {
+            ACTION_KIND_SPELL => Some((b.action, false)),
+            ACTION_KIND_ITEM => self
+                .walk
+                .bar_record(b.action)?
+                .use_spell
+                .map(|u| (u.spell_id, false)),
+            kind => {
+                let id = macro_slot_id(kind, b.action)?;
+                script.macros().by_id(id)?;
+                let record = script.macro_bindings().get(&id).copied()?;
+                Some((u32::try_from(record.spell).ok()?, record.pet_book))
+            }
+        }
+    }
+
     /// An item word's write inside its verb (`PlaceAction`'s `0x4e66e9`-`0x4e66f1`,
     /// `SetActionSlot`'s `0x4e5d90`): the slot's count taken and stored, the VM's copy with it.
     pub(crate) fn item_written(&mut self, script: &mut benilla_ui::script::UiScript, action: u32) {
@@ -654,7 +696,13 @@ impl ActionWalk<'_, '_> {
         crate::ui_items::action_count(&store.0, &self.objects, entry, template)
     }
 
-    /// `GetActionSlotTexture 0x4e6a50` for a spell or item word, off the live player: an item's
+    /// The active player's object as of the drain's place, `None` while none is held.
+    fn me_view(&self) -> Option<&ObjectStore> {
+        self.objects.player().and_then(|e| self.views.get(e).ok())
+    }
+
+    /// `GetActionSlotTexture 0x4e6a50` for a spell or item word, off the player as of the drain's
+    /// place, so a toggle's listener reads its own packet's aura (`0x4e55f0`): an item's
     /// display icon, never nil (the resolver `0x5d88b0`'s question mark while the record is not
     /// cached or its display has no icon), looked up with the bar's callback when `ask`
     /// (`0x4e6b24`); a spell's [`super::spell_action_icon`]. A macro's is its record's, the VM's.
@@ -686,7 +734,7 @@ impl ActionWalk<'_, '_> {
                     b.action,
                     d,
                     spells,
-                    self.me_live(),
+                    self.me_view(),
                     &self.objects,
                     &self.items,
                     self.icons.as_deref(),

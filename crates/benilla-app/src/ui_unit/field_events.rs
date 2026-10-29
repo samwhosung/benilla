@@ -318,6 +318,29 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
             }
             continue;
         }
+        if let FieldNotice::SpellSlots { spell } = notice {
+            // Each slot resolved as the walk reaches it (`0x4e5df5`), so a listener's write to a
+            // later slot is seen.
+            let ((), moved) = crate::lanes::firing(stamp, || {
+                for action in 1..=120 {
+                    if !vm.engine_spell_slot_notified(action, spell) {
+                        continue;
+                    }
+                    vm.run(|script| {
+                        if let Some(script) = script {
+                            script.fire_event(
+                                "ACTIONBAR_SLOT_CHANGED",
+                                vec![ScriptValue::Int(i64::from(action))],
+                            );
+                        }
+                    });
+                }
+            });
+            if moved {
+                break;
+            }
+            continue;
+        }
         if let FieldNotice::ActionSlotChanged { action } = notice {
             let ((), moved) = crate::lanes::firing(stamp, || {
                 vm.engine_slot_written(action);
@@ -588,7 +611,9 @@ pub(crate) fn fire(
         // Caught by [`fire_lane`] before it reaches here: the refresh and the slot write's pair
         // run on the host's action states
         // ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
-        FieldNotice::UsableRefresh | FieldNotice::ActionSlotChanged { .. } => {}
+        FieldNotice::UsableRefresh
+        | FieldNotice::ActionSlotChanged { .. }
+        | FieldNotice::SpellSlots { .. } => {}
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
         // table, the spell catalog, the aura cache, the skill lines and the pet's stat tables.
         FieldNotice::QuestLog

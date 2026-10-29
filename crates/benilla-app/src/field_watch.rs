@@ -134,6 +134,11 @@ pub(crate) enum FieldNotice {
     /// bar ([`crate::ui_action::SpellSlots`]): the slot's usable pair recomputed (`0x4e5903`),
     /// then `ACTIONBAR_SLOT_CHANGED` with the 1-based `action` (`0x4e5998`).
     ActionSlotChanged { action: u32 },
+    /// `NotifySpellSlots 0x4e5de0` from an aura handler of the active player's (`0x61237e`,
+    /// `0x612440`): each of the 120 slots in order that resolves to `spell` in the player's book
+    /// (`0x4e5a50`, book 0) has its usable pair recomputed and signals `ACTIONBAR_SLOT_CHANGED`,
+    /// with no send (`0x4e5e05`-`0x4e5e0b` into `0x4e58e0`).
+    SpellSlots { spell: u32 },
     /// `0x4b25b0`'s live tail for a learned spell that entered the book: `LEARNED_SPELL_IN_TAB`
     /// (510) with its tab's 1-based place (`0x4b2b92`).
     LearnedInTab { tab: i64 },

@@ -374,6 +374,21 @@ impl ScriptCallHost<'_, '_> {
             .map(|states| states.item_count(entry))
     }
 
+    /// `0x4e5de0`'s notify of the 1-based `action` when it stands for `spell` in the player's book:
+    /// its usable pair stored; whether it did
+    /// ([`crate::ui_action::ActionStates::spell_slot_notified`]).
+    pub(crate) fn engine_spell_slot_notified(
+        &mut self,
+        script: &mut UiScript,
+        action: u32,
+        spell: u32,
+    ) -> bool {
+        self.appliers
+            .action_states()
+            .as_mut()
+            .is_some_and(|states| states.spell_slot_notified(script, action, spell))
+    }
+
     /// A recount's write of the 1-based `action` when it holds `entry`: `count` stored
     /// (`0x4e5caa`), the VM's copy with it, and the slot's usable pair (`0x4e5cb1` into
     /// `0x4e58e0`); whether it held the entry
@@ -1374,6 +1389,18 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     pub(crate) fn engine_item_count(&mut self, entry: u32) -> Option<u32> {
         self.script.as_ref()?;
         self.set.p1().as_mut()?.engine_item_count(entry)
+    }
+
+    /// `0x4e5de0`'s notify of one slot with the host
+    /// ([`ScriptCallHost::engine_spell_slot_notified`]); with no VM or no host nothing is notified.
+    pub(crate) fn engine_spell_slot_notified(&mut self, action: u32, spell: u32) -> bool {
+        let Some(script) = self.script.as_deref_mut() else {
+            return false;
+        };
+        self.set
+            .p1()
+            .as_mut()
+            .is_some_and(|host| host.engine_spell_slot_notified(script, action, spell))
     }
 
     /// A recount's write of one slot with the host ([`ScriptCallHost::engine_recounted`]).

@@ -40,6 +40,13 @@ const ATTACK: u32 = 6603;
 /// which the login lists Overpower first.
 const OVERPOWER: u32 = 7384;
 const REVENGE: u32 = 6572;
+/// A spell whose `ActiveIconID` shows while its own cancelable aura is on (`0x4e55f0`), and that
+/// icon.
+const TOGGLE: u32 = 2645;
+const TOGGLE_ACTIVE: &str = "Interface\\Icons\\Spell_Active";
+/// `UNIT_FIELD_AURA` and `UNIT_FIELD_AURAFLAGS`, slot 0's aura and its nibble.
+const AURA_0: u16 = 47;
+const AURA_FLAGS_0: u16 = 95;
 /// `UNIT_FIELD_AURASTATE`, whose bit 0 is the state the two need.
 const AURA_STATE: u16 = 125;
 /// The form bytes of Cat and Bear, and the bonus bars their rows page to.
@@ -170,6 +177,10 @@ fn spells() -> crate::ui_action::Spells {
         row(ATTACK, |d| d.effects[0] = 78),
         row(OVERPOWER, reactive),
         row(REVENGE, reactive),
+        row(TOGGLE, |d| {
+            d.active_icon_id = 1;
+            d.active_icon = Some(TOGGLE_ACTIVE.to_string());
+        }),
     ]));
     let form = |bonus_bar: u32| ShapeshiftForm {
         bonus_bar,
@@ -676,6 +687,58 @@ fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_li
             format!("UNIT_MANA:{RATION_ICON}:1:0"),
             format!("ACTIONBAR_SLOT_CHANGED:{RATION_ICON}:1:3"),
             format!("UNIT_MANA:{RATION_ICON}:1:3"),
+        ]
+    );
+}
+
+/// The active player's aura add and removal each notify the bar's slots that stand for the spell
+/// (`0x612440`, `0x61237e` → `0x4e5de0`): a toggle's `ACTIONBAR_SLOT_CHANGED` fires inside each
+/// aura packet, between its neighbours' events, after the add's line and ahead of the removal's
+/// (`0x62b480`), and its listener's `GetActionTexture` reads that packet's aura (`0x4e6bbd`): the
+/// active icon at the add, the spell's own at the removal.
+#[test]
+fn an_aura_packet_notifies_its_spells_slots_between_its_neighbours() {
+    let mut c = client_with(|world| {
+        world
+            .resource_mut::<crate::ui_action::ActionSlots>()
+            .buttons
+            .insert(
+                7,
+                ActionButton {
+                    slot: 7,
+                    action: TOGGLE,
+                    kind: benilla_protocol::messages::ACTION_KIND_SPELL,
+                },
+            );
+    });
+    c.eval::<()>(
+        false,
+        "AURAADDEDSELFHELPFUL = 'You gain %s.' AURAREMOVEDSELF = '%s fades from you.' \
+         local f = CreateFrame('Frame') f:RegisterEvent('UNIT_MANA') \
+         f:RegisterEvent('ACTIONBAR_SLOT_CHANGED') f:RegisterEvent('CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS') \
+         f:RegisterEvent('CHAT_MSG_SPELL_AURA_GONE_SELF') \
+         f:SetScript('OnEvent', function() \
+             if event == 'ACTIONBAR_SLOT_CHANGED' and arg1 ~= 8 then return end \
+             if event == 'UNIT_MANA' and arg1 ~= 'player' then return end \
+             table.insert(Seen, 'TOGGLE:' .. event .. ':' .. tostring(GetActionTexture(8))) end)",
+    );
+    c.seen(&[]);
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![values(ME, &[(AURA_0, TOGGLE), (AURA_FLAGS_0, 0xb)])],
+        vec![values(ME, &[(AURA_0, 0), (AURA_FLAGS_0, 0)])],
+        vec![values(ME, &[(MANA, 100)])],
+    ]);
+    let own = format!("Interface\\Icons\\Spell_{TOGGLE}");
+    assert_eq!(
+        c.seen(&["TOGGLE"]),
+        [
+            format!("TOGGLE:UNIT_MANA:{own}"),
+            format!("TOGGLE:CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS:{TOGGLE_ACTIVE}"),
+            format!("TOGGLE:ACTIONBAR_SLOT_CHANGED:{TOGGLE_ACTIVE}"),
+            format!("TOGGLE:ACTIONBAR_SLOT_CHANGED:{own}"),
+            format!("TOGGLE:CHAT_MSG_SPELL_AURA_GONE_SELF:{own}"),
+            format!("TOGGLE:UNIT_MANA:{own}"),
         ]
     );
 }

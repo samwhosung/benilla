@@ -199,8 +199,17 @@ fn word_lines(
     stores: Query<(Entity, &ObjectStore)>,
     poses: Query<&Transform>,
     log: Res<ChatLog>,
+    mut notices: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
-    aura_lines(&ctx, &stores, &poses, &log, &calls, &edges);
+    aura_lines(
+        &ctx,
+        &stores,
+        &poses,
+        &log,
+        notices.as_deref_mut(),
+        &calls,
+        &edges,
+    );
     pet_loyalty_lines(&ctx, &stores, &log, &edges);
 }
 
@@ -223,6 +232,7 @@ fn aura_lines(
     stores: &Query<(Entity, &ObjectStore)>,
     poses: &Query<&Transform>,
     log: &ChatLog,
+    mut notices: Option<&mut crate::field_watch::NoticeLane>,
     calls: &[AuraFieldsChanged],
     edges: &[FieldChanged],
 ) {
@@ -230,7 +240,7 @@ fn aura_lines(
     const SLOTS: u16 = benilla_protocol::messages::UNIT_AURA_SLOTS as u16;
 
     for call in calls {
-        aura_call(ctx, stores, poses, log, call);
+        aura_call(ctx, stores, poses, log, notices.as_deref_mut(), call);
     }
 
     // Stack counts: four slots per dword, one byte each, holding `stack - 1`. Each byte is its
@@ -300,15 +310,29 @@ fn held(span: &[u32; crate::net::AURA_WATCH_SPAN], slot: usize) -> Option<u32> {
     (span[slot] != 0 && nibble != 0).then_some(span[slot])
 }
 
-/// One call of the aura watcher `0x604d00`: the removals, then the adds.
+/// One call of the aura watcher `0x604d00`: the removals, then the adds, each slot's legs in its
+/// handler's order. On the active player (`0x5fa6d0`) each also notifies the bar's slots that stand
+/// for its spell in the player's book, with no send (`0x4e5de0`): a removal's ahead of its line
+/// (`0x61237e`, before `0x5ff290` and `0x62b480`), an add's after it, the spell read off the
+/// slot's field (`0x612433`-`0x612440`), so a toggle's slot repaints its active icon
+/// (`0x4e55f0`).
 fn aura_call(
     ctx: &WatchCtx,
     stores: &Query<(Entity, &ObjectStore)>,
     poses: &Query<&Transform>,
     log: &ChatLog,
+    mut notices: Option<&mut crate::field_watch::NoticeLane>,
     call: &AuraFieldsChanged,
 ) {
     const SLOTS: usize = benilla_protocol::messages::UNIT_AURA_SLOTS as usize;
+    let mine = ctx.self_guid.0 == Some(call.guid);
+    let mut notify = |spell: u32| {
+        if let Some(lane) = notices.as_deref_mut().filter(|_| mine) {
+            crate::lanes::firing(call.at, || {
+                lane.write(crate::field_watch::FieldNotice::SpellSlots { spell })
+            });
+        }
+    };
     let class = ctx.classify(call.guid, stores);
     let word = |message_type: &'static str, spell: &str| {
         (class == UnitClass::Me).then(|| LineWord::with(message_type, spell))
@@ -321,7 +345,11 @@ fn aura_call(
         let Some(old) = held(&call.old, slot) else {
             continue;
         };
-        if held(&call.new, slot) == Some(old) || !alive {
+        if held(&call.new, slot) == Some(old) {
+            continue;
+        }
+        notify(old);
+        if !alive {
             continue;
         }
         let Some(spell) = ctx.aura_spell_name(old) else {
@@ -361,6 +389,7 @@ fn aura_call(
         let helpful = !harmful(slot as u16);
         let (Some(spell), Some(kind)) = (ctx.aura_spell_name(new), periodic_kind(class, helpful))
         else {
+            notify(new);
             continue;
         };
         let (family, message_type) = if helpful {
@@ -384,6 +413,7 @@ fn aura_call(
             },
             word,
         );
+        notify(new);
     }
 }
 
