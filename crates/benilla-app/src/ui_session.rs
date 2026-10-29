@@ -55,8 +55,8 @@ impl Plugin for UiSessionPlugin {
                         .after(WorldStage::Net)
                         .before(crate::ui_script::UiFeed),
                     // Inside the net chain, after the apply pass that opens and closes windows
-                    // and before the facing chain: a `MERCHANT_SHOW` handler reads
-                    // `UnitName("NPC")` the frame it opens.
+                    // and before the facing chain, which turns the latched unit toward us; the
+                    // getters and the verbs read `"npc"` off the latch itself.
                     feed_interact_npc
                         .in_set(WorldStage::Net)
                         .after(crate::net::apply_net_updates)

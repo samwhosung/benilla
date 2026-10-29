@@ -273,10 +273,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // callbacks go on the questgiver lane at their handlers. `query_statuses` re-asks the givers'
     // statuses off it after the dispatch, a send no script reads.
     "::ui_quest::QuestGiver",
-    // Quiet: the getters' `"npc"` reads the latch through the host as it runs (`0x515c00`), and
-    // the watchdog `watch_interaction_range` closes off it every frame, as `0x493230` does from
-    // the world frame's update, after the packets. `feed_interact_npc` copies it as
-    // `InteractNpc` right after the dispatch, for the engine's own token reads.
+    // Quiet: the getters' and the verbs' `"npc"` reads the latch through the host as it runs
+    // (`0x515c00`), and the watchdog `watch_interaction_range` closes off it every frame, as
+    // `0x493230` does from the world frame's update, after the packets. `feed_interact_npc`
+    // copies it as `InteractNpc` right after the dispatch, for the frame's own readers: the
+    // facing chain and the portrait booth.
     "::ui_session::latch::InteractLatch",
     // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the session verbs read and write
     // the logout bytes through the host in their calls, and quiet: the replies' handlers signal on
@@ -549,7 +550,6 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::MeetingStone",
     "::InstanceState",
     "::UiClock",
-    "::InteractNpc",
     "::SkillLines",
     // The talent catalog, which the host's talent getters read.
     "::ui_talent::Talents",

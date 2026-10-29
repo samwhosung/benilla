@@ -472,7 +472,9 @@ pub(crate) struct UnitTokens<'w, 's> {
     index: Option<Res<'w, crate::net::GuidIndex>>,
     hovered: Option<Res<'w, crate::target::Hovered>>,
     hovered_go: Option<Res<'w, crate::target::HoveredObject>>,
-    interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
+    /// `"npc"` is the interaction latch itself (`0x515c00`), set inside the handlers through
+    /// `SetInteractionTarget` (`0x4930d0`).
+    interact: Option<Res<'w, crate::ui_session::InteractLatch>>,
     group: Res<'w, crate::ui_party::GroupState>,
     /// The stores as of the drain's place, so a verb a listener calls reads its packet's.
     pub(crate) stores: views::ViewStores<'w, 's>,
@@ -568,7 +570,11 @@ impl UnitTokenGlobals for TokenGlobals<'_, '_, '_> {
             .map_or(0, |(_, guid)| guid)
     }
     fn npc(&self) -> u64 {
-        self.tokens.interact.as_ref().and_then(|i| i.1).unwrap_or(0)
+        self.tokens
+            .interact
+            .as_ref()
+            .and_then(|l| l.guid())
+            .unwrap_or(0)
     }
     fn party(&self, row: u32) -> u64 {
         self.tokens.party_member(row).unwrap_or(0)

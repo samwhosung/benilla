@@ -615,3 +615,18 @@ fn a_repair_cost_reads_as_of_each_packet() {
         [i64::from(discounted), i64::from(full)]
     );
 }
+
+/// A verb's `"npc"` is the interaction latch as the handlers leave it (`0x515c00`), with no frame
+/// between: the list's handler latches the vendor (`0x4930d0`), and `TargetUnit("npc")` selects
+/// it before any feed runs.
+#[test]
+fn a_verbs_npc_token_reads_the_latch_at_the_call() {
+    let mut c = client();
+    c.handle(vec![list(vec![row(1, 159)])]);
+    c.eval::<()>(true, "TargetUnit('npc')");
+    assert_eq!(
+        c.app.world().resource::<crate::target::Selection>().guid,
+        Some(VENDOR),
+        "the latch the list's handler set, read as the verb runs"
+    );
+}

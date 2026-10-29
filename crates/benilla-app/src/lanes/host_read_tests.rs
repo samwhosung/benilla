@@ -88,10 +88,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
          character's buttons off benilla's older numbering through the bar verbs, a move with no \
          reference fact; the reference runs the reader inside the account-data settle \
          (`0x5afaca`, `0x5afd19`)"),
-    ("::ui_session::feed_interact_npc", &["ui_session::InteractNpc"],
-        "copies the interaction latch into the `npc` unit the token lookups read, where the \
-         reference's `npc` is the latch itself (`0x515c00`), set inside the handlers through \
-         `SetInteractionTarget` `0x4930d0`"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,
