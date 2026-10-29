@@ -1032,7 +1032,8 @@ pub(crate) struct Model {
     pub(crate) inventory_slots: char_stats::InventorySlots,
     /// The six bank-bag slots, ids 64..=69, fed from the player descriptor's guids.
     pub(crate) bank_bag_slots: char_stats::BankBagSlots,
-    /// `GetInventoryAlertStatus` in `0x806eb8` order; every push fires `UPDATE_INVENTORY_ALERTS`.
+    /// The 12 alert statuses `GetInventoryAlertStatus` reads (`0xb71f60`), in `0x806eb8` order, as
+    /// the last recompute left them ([`super::UiScript::recompute_inventory_alerts`]).
     pub(crate) inventory_alerts: [u8; 12],
     /// Main- and off-hand temporary enchants in `GetWeaponEnchantInfo`'s order, pushed each frame.
     pub(crate) weapon_enchants: [Option<weapon_enchant::WeaponEnchant>; 2],

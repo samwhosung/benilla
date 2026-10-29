@@ -516,6 +516,8 @@ pub(crate) fn fire_in_order(world: &mut World) {
 #[cfg(test)]
 mod action_live_tests;
 #[cfg(test)]
+mod alert_live_tests;
+#[cfg(test)]
 mod arrival_live_tests;
 #[cfg(test)]
 mod auction_live_tests;

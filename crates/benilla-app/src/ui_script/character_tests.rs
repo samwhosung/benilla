@@ -462,6 +462,8 @@ fn clicking_an_occupied_doll_slot_picks_it_up_and_locks_it() {
     s.set_unit("player", Some(player_unit()));
     s.set_player_combat_stats(Some(combat_stats()));
     s.set_inventory_slots(inventory_with_head_item());
+    // The worn item's watcher runs the alert recompute, whose event repaints the slots.
+    s.recompute_inventory_alerts();
     // Shown, so extract() emits the slot quads.
     s.run(r#"ToggleCharacter("PaperDollFrame")"#).unwrap();
     s.take_sounds();

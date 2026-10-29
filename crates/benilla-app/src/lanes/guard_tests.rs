@@ -81,15 +81,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which `run_answer_tail` runs after \
          the answer's list rather than in it",
     ),
-    (
-        Row::Edge,
-        "::ui_char::feed_char",
-        "the doll push's `UPDATE_INVENTORY_ALERTS` (`set_inventory_slots`), signalled at frame time \
-         off the frame's doll, where the reference recomputes and signals (`0x4c7ee0`, \
-         `0x4c8085`) in the item field watchers (`0x5d952a`, `0x5d97aa`, `0x5d9920`, `0x5d9b2f`, \
-         `0x5dee7a`), inside the update packet; the raise check found it, as the call reaches the \
-         signal in another crate",
-    ),
 ];
 
 /// The host-held queues a handler fills that no feed fires off, each named quiet beside why: the

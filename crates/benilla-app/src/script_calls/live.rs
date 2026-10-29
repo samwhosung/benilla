@@ -182,6 +182,7 @@ impl LiveFamily for crate::ui_items::live::ItemLive<'_, '_> {}
 impl LiveFamily for StatsLive<'_, '_> {
     fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
         ask.answer(|q: &benilla_ui::script::WearsItem| Some(self.wears(q.0)))
+            || ask.answer(|_: &benilla_ui::script::InventoryAlertInputs| Some(self.alert_inputs()))
     }
 }
 
@@ -327,6 +328,14 @@ impl StatsLive<'_, '_> {
             Some(store) => read(&crate::ui_unit::StoreObject(store)),
             None => read(&benilla_ui::script::NoPlayer),
         }
+    }
+
+    /// The alert recompute's reads (`0x4c7ee0`) off the active player as of here, each item found
+    /// as of here; `None` while none is held.
+    fn alert_inputs(&self) -> Option<benilla_ui::script::AlertInputs> {
+        let items = self.stores.item_objects(&self.objects);
+        self.player()
+            .map(|store| crate::ui_char::alert_inputs(&store.0, &items))
     }
 
     /// Whether the active player's worn slots, as of here, hold a whole item of `entry`, each item

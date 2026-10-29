@@ -1558,6 +1558,8 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
         spell_0: false,
     });
     s.set_inventory_slots(inv);
+    // The worn item's watcher runs the alert recompute, whose event repaints the slots.
+    s.recompute_inventory_alerts();
     hover(&mut s, "CharacterBag0Slot");
     let line = s
         .eval::<String>("return GameTooltipTextLeft1:GetText()")

@@ -35,6 +35,13 @@ fn harness() -> UiScript {
     s
 }
 
+/// The doll pushed, then the alert recompute its watchers run on it (`0x4c7ee0`), off the
+/// snapshot as no host is lent.
+fn push(s: &mut UiScript, inv: InventorySlots) {
+    s.set_inventory_slots(inv);
+    s.recompute_inventory_alerts();
+}
+
 fn slot(item_id: u32, durability: Option<(u32, u32)>) -> Option<InvSlotView> {
     Some(InvSlotView {
         item_id,
@@ -88,7 +95,7 @@ fn armor_guy_shows_red_broken_yellow_damaged_and_hides_clean() {
 
     let mut inv: InventorySlots = Default::default();
     inv[16] = slot(25, Some((0, 20)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(s.errors().is_empty(), "alert errors: {:?}", s.errors());
     assert!(
         s.eval::<bool>("return DurabilityFrame:IsShown() and DurabilityWeapon:IsShown()")
@@ -108,7 +115,7 @@ fn armor_guy_shows_red_broken_yellow_damaged_and_hides_clean() {
     // Legs at 3 points: damaged is an absolute 1..=5 points left (`0x4c8012`).
     let mut inv: InventorySlots = Default::default();
     inv[7] = slot(39, Some((3, 25)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(
         s.eval::<bool>(
             "return DurabilityFrame:IsShown() and DurabilityLegs:IsShown() and DurabilityHead:IsShown()"
@@ -134,14 +141,14 @@ fn armor_guy_shows_red_broken_yellow_damaged_and_hides_clean() {
     // Absolute, not a ratio: 5 of 100 is damaged, 6 of 20 is not.
     let mut inv: InventorySlots = Default::default();
     inv[7] = slot(39, Some((5, 100)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(
         s.eval::<bool>("return DurabilityFrame:IsShown()").unwrap(),
         "5 points left is damaged at ANY max (absolute law)"
     );
     let mut inv: InventorySlots = Default::default();
     inv[7] = slot(39, Some((6, 20)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(
         !s.eval::<bool>("return DurabilityFrame:IsShown()").unwrap(),
         "6 points left is never damaged (absolute law, no percentage)"
@@ -161,7 +168,7 @@ fn flag_bits_and_the_low_ammo_region() {
     let mut v = slot(25, Some((20, 20))).unwrap();
     v.flags = 0x10;
     inv[16] = Some(v);
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert_eq!(
         s.eval::<i64>("return GetInventoryAlertStatus(9)").unwrap(),
         4,
@@ -176,7 +183,7 @@ fn flag_bits_and_the_low_ammo_region() {
     let mut v = slot(25, Some((0, 20))).unwrap();
     v.flags = 0x08;
     inv[16] = Some(v);
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(
         !s.eval::<bool>("return DurabilityFrame:IsShown()").unwrap(),
         "a wrapped item never alerts"
@@ -187,7 +194,7 @@ fn flag_bits_and_the_low_ammo_region() {
         v.count = 15;
         v
     });
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert_eq!(
         s.eval::<i64>("return GetInventoryAlertStatus(12)").unwrap(),
         3,
@@ -224,7 +231,7 @@ fn off_hand_glyph_follows_what_the_hand_holds() {
 
     let mut inv: InventorySlots = Default::default();
     inv[17] = slot(2362, Some((0, 20)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(
         s.eval::<bool>("return DurabilityShield:IsShown() and not DurabilityOffWeapon:IsShown()")
             .unwrap(),
@@ -237,7 +244,7 @@ fn off_hand_glyph_follows_what_the_hand_holds() {
 
     let mut inv: InventorySlots = Default::default();
     inv[17] = slot(2488, Some((0, 16)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     assert!(
         s.eval::<bool>("return DurabilityOffWeapon:IsShown() and not DurabilityShield:IsShown()")
             .unwrap(),
@@ -263,7 +270,7 @@ fn manage_pass_seats_the_frame_inside_the_cluster_edge() {
     // the offset leaves it out.
     let mut inv: InventorySlots = Default::default();
     inv[18] = slot(2504, Some((0, 20)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     s.resolve();
     let delta: f32 = s
         .eval("return MinimapCluster:GetRight() - DurabilityFrame:GetRight()")
@@ -273,10 +280,10 @@ fn manage_pass_seats_the_frame_inside_the_cluster_edge() {
         "a right-side glyph seats the frame 20 further left"
     );
 
-    s.set_inventory_slots(Default::default());
+    push(&mut s, Default::default());
     let mut inv: InventorySlots = Default::default();
     inv[7] = slot(39, Some((3, 25)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     s.resolve();
     let delta: f32 = s
         .eval("return MinimapCluster:GetRight() - DurabilityFrame:GetRight()")
@@ -314,7 +321,7 @@ fn a_late_side_glyph_refreshes_the_seat_while_the_frame_stays_shown() {
 
     let mut inv: InventorySlots = Default::default();
     inv[16] = slot(25, Some((0, 20)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     s.resolve();
     assert!(
         s.eval::<bool>("return DurabilityFrame:IsShown() and not DurabilityShield:IsShown()")
@@ -330,7 +337,7 @@ fn a_late_side_glyph_refreshes_the_seat_while_the_frame_stays_shown() {
     let mut inv: InventorySlots = Default::default();
     inv[16] = slot(25, Some((0, 20)));
     inv[17] = slot(30, Some((3, 35)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     s.resolve();
     assert!(
         s.eval::<bool>("return DurabilityShield:IsShown()").unwrap(),
@@ -388,7 +395,7 @@ fn the_quest_tracker_stacks_below_the_durability_guy() {
 
     let mut inv: InventorySlots = Default::default();
     inv[18] = slot(2504, Some((0, 20)));
-    s.set_inventory_slots(inv);
+    push(&mut s, inv);
     s.resolve();
 
     let dur_bottom: f32 = s.eval("return DurabilityFrame:GetBottom()").unwrap();

@@ -191,6 +191,15 @@ fn cascade(world: &mut World) {
     leg(world, crate::ui_chat::release_display);
     // `0x490979` → `0x4e4f90`: the bar's usable cache, then the bonus bar.
     leg(world, action_bar);
+    // `0x49097e` → `0x4c6d30`: the alert array's set-up, ending in the recompute and its
+    // `UPDATE_INVENTORY_ALERTS` (`0x4c6dd6` → `0x4c7ee0`).
+    leg(world, |mut vm: crate::script_calls::HostedVm| {
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.recompute_inventory_alerts();
+            }
+        })
+    });
     // `0x490983` → `0x4e4100`: the buff cache's set-up.
     leg(world, crate::ui_aura::enter_world_in_place);
     // `0x49098d` → `0x4f8cc0`: the bags' rescan.

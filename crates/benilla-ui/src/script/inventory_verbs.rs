@@ -5,7 +5,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::number_arg;
-use super::char_stats::{inventory_slot_reader_accepts, recompute_inventory_alerts};
+use super::char_stats::{inventory_slot_reader_accepts, recompute_inventory_alerts_in_verb};
 use super::container::UiCursorMode;
 use super::region::{clear_texture, this_texture};
 use super::Model;
@@ -100,15 +100,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UpdateInventoryAlertStatus() (`0x4c9560`): the alert recompute (`0x4c7ee0`), which fires
-    // UPDATE_INVENTORY_ALERTS (`0x4c8085`) in place, after every write; zero returns. Stock calls it when the durability
-    // figure's enchant timer runs out (`DurabilityFrame.lua:81`).
+    // UPDATE_INVENTORY_ALERTS (`0x4c8085`) in place, after every write; zero returns. Stock calls
+    // it when the durability figure's enchant timer runs out (`DurabilityFrame.lua:81`).
     g.set(
         "UpdateInventoryAlertStatus",
         lua.create_function(|lua, ()| {
-            super::tick::verb(lua, |model| {
-                recompute_inventory_alerts(model);
-                model.raise("UPDATE_INVENTORY_ALERTS", Vec::new());
-            });
+            recompute_inventory_alerts_in_verb(lua);
             Ok(MultiValue::new())
         })?,
     )?;

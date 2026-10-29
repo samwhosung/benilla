@@ -83,10 +83,6 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
         frame: "ui_world_map::install_world_loc_projector",
         why: "QUEUED_FOR_THE_TICK: the projector's install",
     },
-    Allow {
-        frame: "ui_char::feed_char",
-        why: "NOT_YET_ON_A_LANE: its push's `UPDATE_INVENTORY_ALERTS`, signalled at frame time",
-    },
 ];
 
 /// The guard's lists an allow entry's reason may cite as its row.

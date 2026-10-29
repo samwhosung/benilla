@@ -624,6 +624,36 @@ fn ammo_count(store: &ObjectStore, objects: &Objects, ammo_id: u32) -> u32 {
     n
 }
 
+/// The 0-based equipment slots of `0x4c7ee0`'s 11 worn regions, in `0x806eb8`'s order: head,
+/// shoulders, chest, waist, legs, feet, wrists, hands, main hand, off hand and ranged.
+const ALERT_REGIONS: [u8; 11] = [0, 2, 4, 5, 6, 7, 8, 9, 15, 16, 17];
+
+/// What the alert recompute `0x4c7ee0` reads off the active player `me`, each item found through
+/// `items`: the item in each worn region's slot (`0x6228a0`), and with `PLAYER_AMMO_ID` set
+/// (`[+0xe68]+0x102c`, `0x4c7f53`), the carried count of that ammunition (`0x622130(id, 0)`,
+/// `0x4c7f73`).
+pub(crate) fn alert_inputs(
+    me: &ObjectFields,
+    items: &(impl crate::ui_items::ItemObjects + ?Sized),
+) -> benilla_ui::script::AlertInputs {
+    let worn = ALERT_REGIONS.map(|slot| {
+        let item = me
+            .player_inv_slot(slot)
+            .filter(|&g| g != 0)
+            .and_then(|g| items.object(g))
+            .filter(|f| f.is_item())?;
+        Some(benilla_ui::script::AlertItem {
+            flags: item.item_flags().unwrap_or(0),
+            durability: item.item_durability().unwrap_or(0),
+            max_durability: item.item_max_durability().unwrap_or(0),
+        })
+    });
+    let ammo = me.player_ammo_id().filter(|&id| id != 0).map(|id| {
+        crate::ui_items::count_of(me, items, id, crate::ui_items::InventoryScope::DEFAULT)
+    });
+    benilla_ui::script::AlertInputs { worn, ammo }
+}
+
 /// The 24-wide inventory snapshot by `GetInventorySlotInfo` id: 0 ammo, 1..=19 the equipment,
 /// 20..=23 the equipped bags themselves (inv slots 19..22).
 fn inventory_slots(
@@ -886,9 +916,10 @@ pub(crate) fn feed_char(
         // The doll's `UNIT_INVENTORY_CHANGED` is its producers' alone, the visible-item bridge, the
         // ammunition watch and the item paths ([`crate::field_watch`], [`crate::item_watch`]),
         // fired after this push; a view change raises none, a repair's durability included, which
-        // repaints through the push's `UPDATE_INVENTORY_ALERTS` (`0x5d9920` → `0x4c7ee0`). So is
-        // the bank bag buttons' `PLAYERBANKSLOTS_CHANGED` (`BankFrame.lua:206-208`): the
-        // inventory watcher's (`0x5ddd69`) and the item path's (`0x4c728d`).
+        // repaints through the durability watcher's alert recompute (`0x5d9920` → `0x4c7ee0`), on
+        // the item lane at its packet. So is the bank bag buttons' `PLAYERBANKSLOTS_CHANGED`
+        // (`BankFrame.lua:206-208`): the inventory watcher's (`0x5ddd69`) and the item path's
+        // (`0x4c728d`).
         if memo.last_inv.as_ref() != Some(&inv) || memo.last_bank_bags.as_ref() != Some(&bank_bags)
         {
             gate.audit("feed_char", "the inventory snapshot");
