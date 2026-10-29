@@ -296,7 +296,7 @@ impl ScriptCallHost<'_, '_> {
     }
 
     /// The world-enter cascade's usable cache refresh (`0x490979` → `0x4e4f90` → `0x4e5c00`),
-    /// in its place ([`crate::ui_action::ActionStates::enter_world_refresh`]): whether a pair
+    /// in its place ([`crate::ui_action::ActionStates::cache_refresh`]): whether a pair
     /// changed. A harness without the action feed's inputs refreshes nothing.
     pub(crate) fn engine_enter_world_refresh(&mut self, script: &mut UiScript) -> bool {
         self.appliers
