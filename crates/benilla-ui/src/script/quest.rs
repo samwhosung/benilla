@@ -164,8 +164,9 @@ pub enum QuestCall {
     /// (`0x501d89`-`0x501da8`): on the reward panel, the latch, the choice's range, which raises
     /// from the verb, and `CMSG_QUESTGIVER_CHOOSE_REWARD`.
     Reward(i32),
-    /// `CloseQuest()` (`0x501a10` → `0x501130(0,1)`): a sharer's decline and the zeroed cell
-    /// (`0x501201`) in the call; the window's teardown and `QUEST_FINISHED` follow at the drain.
+    /// `CloseQuest()` (`0x501a10` → `0x501130(0,1)`): a sharer's decline, the zeroed cell
+    /// (`0x501201`), the latch's release (`0x50120d`) and `QUEST_FINISHED` (`0x501217`), in the
+    /// call.
     Close,
     /// `ConfirmAcceptQuest()` (`0x5021b0`): `CMSG_QUEST_CONFIRM_ACCEPT` with the quest the last
     /// confirm held (`[0xbe0840]`, `0x5021e0`), an engine cell the host keeps.

@@ -1099,7 +1099,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // DropItemOnUnit(unit) (`0x48d960`): drop the cursor's item on a unit, feeding a pet or
-    // opening a trade with a player. Only the token is queued; the app runs every gate.
+    // opening a trade with a player, inside the call; the host runs every gate.
     g.set(
         "DropItemOnUnit",
         lua.create_function(|lua, token: Value| {
@@ -1114,8 +1114,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if token != "pet"
                 || crate::script::protected::gate(lua, crate::script::protected::Tag::CAST)
             {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.drop_item_on_unit.push(token);
+                submit(lua, ScriptCall::DropItemOnUnit(token))?;
             }
             Ok(())
         })?,

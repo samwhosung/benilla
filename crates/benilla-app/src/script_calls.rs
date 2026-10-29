@@ -154,6 +154,9 @@ disjoint::disjoint_set! {
         live: live::LiveReads<'static, 'static>,
         /// The world click's arm, its pick and its legs.
         click: crate::target::ClickLegs<'static, 'static>,
+        /// The binding functions' input state, and `DropItemOnUnit`'s legs.
+        commands: crate::player::CommandSteps<'static, 'static>,
+        drop_item: crate::ui_action::drop_item::DropItemLeg<'static, 'static>,
     }
 }
 
@@ -943,6 +946,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
+            // `SetCommands` (`0x515090`): the bit, then the cast cancel (`0x51512a` → `0x6e4940`,
+            // `0x515193` → `0x6e9b70`), whose stop the call's reports signal as it returns.
+            ScriptCall::Input(input) => {
+                if let Some(mover_is_player) = appliers.commands().call(input) {
+                    appliers.self_cancel().cancel_for_move(mover_is_player);
+                }
+            }
+            ScriptCall::DropItemOnUnit(token) => appliers.drop_item().drop_on(script, &token),
         }
         // A profession opener the call cast toggles its window inside the cast (`0x6e4c22`,
         // `0x6e4c34`), whose signals' listeners run before the call goes on.
@@ -2919,12 +2930,12 @@ mod tests {
                 vec!["ERR_NO_ATTACK_TARGET"],
                 "pressed: {pressed}"
             );
-            let inputs = f
+            let held = f
                 .app
-                .world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .take_binding_input();
-            assert_eq!(!inputs.is_empty(), moved, "pressed: {pressed}");
+                .world()
+                .resource::<crate::bindings::BindingsState>()
+                .pressed(crate::bindings::Input::MoveForward);
+            assert_eq!(held, moved, "pressed: {pressed}");
         }
     }
 

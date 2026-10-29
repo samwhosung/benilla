@@ -75,16 +75,24 @@ impl BindingDispatch {
     }
 }
 
-/// This frame's binding activity, which engine-side consumers read instead of raw keys: the
-/// [`Input`]s the running bodies' Lua calls set.
+/// The engine's input state the binding functions drive, the reference's `[InputControl+4]` and
+/// the camera's axes, which engine-side consumers read instead of raw keys: the [`Input`]s the
+/// bodies' Lua calls set, each inside its call ([`benilla_ui::script::ScriptCall::Input`]).
 #[derive(Resource, Default)]
 pub(crate) struct BindingsState {
-    /// Live latches, (base input, command): a press not yet released, whose release runs the
-    /// command's `runOnUp` half. The reference replays the press-time chord at key-up (`0x483bd0`);
-    /// latching the resolved command is equivalent.
-    latched: Vec<(Held, String)>,
     /// The held bits a Start set and no Stop has cleared.
     held: Vec<Input>,
+    /// This frame's edges, which the frame's readers take after the binding pass.
+    edges: Edges,
+    /// The edges of the calls made after this frame's readers ran, for the next frame's.
+    carry: Edges,
+    /// The binding pass runs ([`BindingHead`] to [`BindingTail`]), ahead of every reader.
+    open: bool,
+}
+
+/// One frame's binding edges.
+#[derive(Default)]
+struct Edges {
     /// Inputs whose Start, or whose one-shot, came this frame (the press edge).
     just: Vec<Input>,
     /// One-shots fired this frame.
@@ -93,6 +101,18 @@ pub(crate) struct BindingsState {
     amounts: Vec<(Input, f32)>,
     /// This frame's `MoveView*` calls in call order, `(axis, start)`, for the camera's axes.
     view_calls: Vec<(script_input::ViewAxis, bool)>,
+    /// The edges whose `SetCommands` work ran inside their call ([`BindingsState::call`]).
+    settled: Vec<Input>,
+}
+
+/// The world frame's binding latches and the keys it believes are down: `CBindings`' state, not
+/// the input control's.
+#[derive(Resource, Default)]
+pub(crate) struct BindingLatches {
+    /// Live latches, (base input, command): a press not yet released, whose release runs the
+    /// command's `runOnUp` half. The reference replays the press-time chord at key-up (`0x483bd0`);
+    /// latching the resolved command is equivalent.
+    latched: Vec<(Held, String)>,
     /// The keys we believe are down: a press of one is a repeat. The reference classifies
     /// auto-repeat off its own list (`0x4248b3`), never the Win32 `lParam` repeat bit.
     /// Normalized like [`latched`](Self::latched) and reconciled against `ButtonInput` every
@@ -156,25 +176,36 @@ impl BindingsState {
     }
     /// Did this bit's Start, or this one-shot, come this frame (the key-down edge)?
     pub(crate) fn just_pressed(&self, i: Input) -> bool {
-        self.just.contains(&i)
+        self.edges.just.contains(&i)
+    }
+    /// Did this frame's edge of `i` come from a call that ran its `SetCommands` work inside it
+    /// ([`Self::call`])?
+    pub(crate) fn settled(&self, i: Input) -> bool {
+        self.edges.settled.contains(&i)
     }
     /// Did this one-shot fire this frame?
     pub(crate) fn fired(&self, i: Input) -> bool {
-        self.fired.contains(&i)
+        self.edges.fired.contains(&i)
     }
     /// Fire the one-shot `i` this frame, as a body's Lua call would.
     #[cfg(test)]
     pub(crate) fn fire_for_test(&mut self, i: Input) {
-        self.fired.push(i);
+        self.edges.fired.push(i);
     }
     /// End the frame's one-shots.
     #[cfg(test)]
     pub(crate) fn clear_for_test(&mut self) {
-        self.fired.clear();
+        self.edges.fired.clear();
+    }
+    /// The binding pass runs, so a call's edge is this frame's ([`Self::call`]).
+    #[cfg(test)]
+    pub(crate) fn open_for_test(&mut self) {
+        self.open = true;
     }
     /// Total amount for a one-shot this frame (0.0 when idle): the camera zoom's yards.
     pub(crate) fn amount(&self, i: Input) -> f32 {
-        self.amounts
+        self.edges
+            .amounts
             .iter()
             .filter(|&&(a, _)| a == i)
             .map(|&(_, v)| v)
@@ -182,7 +213,7 @@ impl BindingsState {
     }
     /// This frame's `MoveView*` calls in call order, `(axis, start)`.
     pub(crate) fn view_calls(&self) -> &[(script_input::ViewAxis, bool)] {
-        &self.view_calls
+        &self.edges.view_calls
     }
     /// Both mouse bits held by their Lua Starts, the both-button run: MOVEANDSTEER's body
     /// (`Bindings.xml:3-11`) runs `CameraOrSelectOrMoveStart` and `TurnOrActionStart`.
@@ -240,6 +271,7 @@ impl Plugin for BindingsPlugin {
             .configure_sets(Update, BindingHead.before(BindingTail))
             .init_resource::<BindingDispatch>()
             .init_resource::<BindingsState>()
+            .init_resource::<BindingLatches>()
             .init_resource::<BindingFiles>()
             .add_systems(
                 Update,
@@ -556,18 +588,31 @@ impl WheelNotches {
 /// activity cleared, the bulk clears, Lua's binding calls since the last pass, and the
 /// pressed-key reconcile.
 fn begin_dispatch(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The input state with the host, whose calls write it ([`BindingsState::call`]).
+    mut vm: crate::script_calls::VmWith<ResMut<'static, BindingsState>>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut state: ResMut<BindingsState>,
+    mut latches: ResMut<BindingLatches>,
     mut same_vm: Local<crate::ui_script::VmMemo<bool>>,
     mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
 ) {
-    state.just.clear();
-    state.fired.clear();
-    state.amounts.clear();
-    state.view_calls.clear();
-    hosted_vm.run(|script| begin_with(script, &mut state, &mut same_vm));
+    let (script, set) = vm.parts();
+    let mut state = set.p0();
+    state.begin_pass();
+    // Deviation: latches die with the VM that made them, because a latch names a command of that
+    // VM's table and releasing it against a new one would run another load's up-half. The
+    // reference keeps a held key running through `ReloadUI`; here it re-latches on its next press.
+    // The held bits die with it, as the key's Stop would have cleared them.
+    if let Some(script) = script {
+        if same_vm.claim(script) {
+            latches.latched.clear();
+            state.held.clear();
+        }
+        // Lua's binding calls made with no host lent since the last pass, before this frame's
+        // keys.
+        let inputs = script.take_binding_input();
+        state.apply_script_input(inputs);
+    }
     // The reference's two bulk clears: the window deactivate (`0x514490`'s `and eax,0xfffff00f`,
     // the direction bits only, so the mouse pair and autorun survive) and the world enter behind
     // the loading cover (`0x5144c0`), which clears every bit. A key's latch meets them in the
@@ -579,35 +624,10 @@ fn begin_dispatch(
             .held
             .retain(|&i| matches!(i, Input::TurnOrAction | Input::CameraOrSelectOrMove));
     }
-    // Lua's binding calls made since the last pass, before this frame's keys.
-    hosted_vm.run(|script| {
-        if let Some(s) = script {
-            let inputs = s.take_binding_input();
-            state.apply_script_input(inputs);
-        }
-    });
     // ── The pressed-key reconcile ── against bevy's button planes, before this frame's records: a
     // release the window never saw drops off the list, and a window deactivate empties it, the
     // reference's `0x424790` wipe, so a key held across an alt-tab re-latches on its next repeat.
-    state.down.reconcile(&keys);
-}
-
-/// [`begin_dispatch`]'s VM swap: the latches and held bits a new VM finds are dropped.
-fn begin_with(
-    script: Option<&mut UiScript>,
-    state: &mut BindingsState,
-    same_vm: &mut crate::ui_script::VmMemo<bool>,
-) {
-    // Deviation: latches die with the VM that made them, because a latch names a command of that
-    // VM's table and releasing it against a new one would run another load's up-half. The
-    // reference keeps a held key running through `ReloadUI`; here it re-latches on its next press.
-    // The held bits die with it, as the key's Stop would have cleared them.
-    if let Some(script) = script {
-        if same_vm.claim(script) {
-            state.latched.clear();
-            state.held.clear();
-        }
-    }
+    latches.down.reconcile(&keys);
 }
 
 /// How the interface's walk left one key record, which gates the world frame's binding.
@@ -627,7 +647,7 @@ pub(crate) struct KeyVerdict {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct WorldFrameBindings<'w> {
     dispatch: Option<Res<'w, BindingDispatch>>,
-    state: Option<ResMut<'w, BindingsState>>,
+    state: Option<ResMut<'w, BindingLatches>>,
 }
 
 impl WorldFrameBindings<'_> {
@@ -702,7 +722,7 @@ fn dev_plane(mods: Mods) -> bool {
 /// and `ButtonInput::release_all` reach the stuck-latch sweep.
 fn key_leg(
     dispatch: &BindingDispatch,
-    state: &mut BindingsState,
+    state: &mut BindingLatches,
     mut script: Option<&mut UiScript>,
     ev: &KeyboardInput,
     mods: Mods,
@@ -811,7 +831,7 @@ const BIND_BUTTONS: [MouseButton; 5] = [
 /// clicks), a release always.
 fn button_leg(
     dispatch: &BindingDispatch,
-    state: &mut BindingsState,
+    state: &mut BindingLatches,
     script: Option<&mut UiScript>,
     button: MouseButton,
     pressed: ButtonState,
@@ -843,33 +863,36 @@ fn button_leg(
 /// The dispatch pass's tail, after the frame's records: the stuck-latch sweep, and the calls the
 /// pass's bodies made.
 fn end_dispatch(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The input state with the host, whose calls write it ([`BindingsState::call`]).
+    mut vm: crate::script_calls::VmWith<ResMut<'static, BindingsState>>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
-    mut state: ResMut<BindingsState>,
+    mut latches: ResMut<BindingLatches>,
 ) {
-    hosted_vm.run(|mut script| {
+    vm.run(|mut script| {
         // ── The stuck-latch sweep ── a release the window never saw: a latch whose base key reads
         // up unlatches now and runs its up-half. The reference's two bulk clears land here too,
         // since bevy zeroes `ButtonInput` for both (see `begin_dispatch`). UI keyboard focus never
         // reaches here.
         let mut stuck: Vec<Held> = Vec::new();
-        for (k, _) in &state.latched {
+        for (k, _) in &latches.latched {
             if !physically_down(*k, &keys, &buttons) && !stuck.contains(k) {
                 stuck.push(*k);
             }
         }
         for k in stuck {
-            release(&mut state, script.as_deref_mut(), k);
+            release(&mut latches, script.as_deref_mut(), k);
         }
-
-        // The calls this pass's binding bodies made act this frame, as the reference's return from
-        // `0x515090` has already moved the bit.
-        if let Some(s) = script {
-            let inputs = s.take_binding_input();
-            state.apply_script_input(inputs);
-        }
-    })
+    });
+    // The calls this pass's binding bodies made with no host lent act this frame, as the
+    // reference's return from `0x515090` has already moved the bit.
+    let (script, set) = vm.parts();
+    let mut state = set.p0();
+    if let Some(s) = script {
+        let inputs = s.take_binding_input();
+        state.apply_script_input(inputs);
+    }
+    state.end_pass();
 }
 
 /// The world frame's leg of each record alone, for a test of the bindings without the interface's
@@ -946,7 +969,7 @@ fn physically_down(
 
 /// One matching press: the command's body with `keystate = "down"`, and a latch on its input so
 /// the release can run the up-half.
-fn press(state: &mut BindingsState, script: Option<&mut UiScript>, command: &str, key: Held) {
+fn press(state: &mut BindingLatches, script: Option<&mut UiScript>, command: &str, key: Held) {
     if let Some(s) = script {
         if let Err(e) = s.execute_binding(command, true) {
             warn!("bindings({command}): {e}");
@@ -957,7 +980,7 @@ fn press(state: &mut BindingsState, script: Option<&mut UiScript>, command: &str
 
 /// A base key's release: drop its latch and run the command's `runOnUp` up-half, even while
 /// typing (the reference completes a pressed binding's release regardless of focus).
-fn release(state: &mut BindingsState, mut script: Option<&mut UiScript>, key: Held) {
+fn release(state: &mut BindingLatches, mut script: Option<&mut UiScript>, key: Held) {
     let mut i = 0;
     while i < state.latched.len() {
         if state.latched[i].0 == key {
@@ -1120,6 +1143,7 @@ mod tests {
             .init_resource::<UiKeyboardCapture>()
             .init_resource::<PlayerUiHover>()
             .init_resource::<BindingsState>()
+            .init_resource::<BindingLatches>()
             .init_resource::<BindingDispatch>()
             .init_resource::<LayoutNames>()
             .add_systems(
@@ -1609,7 +1633,7 @@ mod tests {
         );
         assert_eq!(lua_str(&app, "PROBE_LAST"), "up");
         // Nothing is left latched: no key could end a wheel latch.
-        assert!(app.world().resource::<BindingsState>().latched.is_empty());
+        assert!(app.world().resource::<BindingLatches>().latched.is_empty());
     }
 
     /// Auto-repeat is classified off our pressed-key set, as the reference's (`0x4248b3`), not the

@@ -186,18 +186,19 @@ pub(crate) fn reconcile_afk_mirror(
 /// clears; mouse-look turning never reaches `0x514f50`, and knockback, fear and splines press
 /// nothing. Jump is here but not in `player::follow`'s cancel set: two separate reference tables.
 pub(crate) fn movement_clears_afk(
-    binds: Res<crate::bindings::BindingsState>,
     // The mirror shares the host's param set, whose chat sends write it too, and so does the
-    // registry, whose callbacks run inside the calls that write it.
+    // registry, whose callbacks run inside the calls that write it, and the input state, which
+    // the binding calls write inside theirs.
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, AfkMirror>,
         Res<'static, crate::cvars::Cvars>,
+        Res<'static, crate::bindings::BindingsState>,
     )>,
     commands: Res<crate::net::NetCommands>,
     chat: Res<ChatLog>,
 ) {
     use crate::bindings::Input;
-    let (mirror, cvars) = vm.own();
+    let (mirror, cvars, binds) = vm.own();
     if !mirror.is_afk() || cvars.flag("autoClearAFK") == Some(false) {
         return;
     }

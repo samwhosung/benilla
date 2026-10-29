@@ -60,8 +60,8 @@ pub enum GossipCall {
     /// `SelectGossipAvailableQuest(i)` (`0x4e24b0`) or `SelectGossipActiveQuest(i)`
     /// (`0x4e2600`), the 1-based row in its own list: the questgiver query or turn-in for it.
     Quest { active: bool, index: u32 },
-    /// `CloseGossip()` (`0x4e2b20` → `0x4e1fa0` with a zero guid): the cell zeroed in the call
-    /// (`0x4e1fcc`); the window's teardown and `GOSSIP_CLOSED` follow at the drain.
+    /// `CloseGossip()` (`0x4e2b20` → `0x4e1fa0` with a zero guid): the interaction's release
+    /// (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`) and `GOSSIP_CLOSED` (`0x4e1fdc`), in the call.
     Close,
 }
 

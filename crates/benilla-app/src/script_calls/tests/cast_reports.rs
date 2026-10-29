@@ -457,3 +457,59 @@ fn only_the_bars_press_toggles_a_running_repeat_off() {
         .any(|c| matches!(c, ClientCommand::CancelAutoRepeat)));
     assert_eq!(key(&f), None, "the bar's press stops it");
 }
+
+/// `MoveForwardStart()` mid-cast is `SetCommands` (`0x515090`) inside the call: the bit set
+/// (`0x5150a7` → `0x514840`), then for a press of the mask `0x10f0` the cancel of a cast whose
+/// `InterruptFlags` has bit 0 (`0x51511e` → `0x51512a` → `0x6e4940`), its `CMSG_CANCEL_CAST` sent
+/// and its stop signalled before the verb returns. So the script's next line reads the stop and the
+/// held bit, and its send follows the cancel on the wire. The turn keys cancel nothing (`0x5150ce`).
+#[test]
+fn move_forward_start_mid_cast_cancels_inside_the_call() {
+    let mut f = frame(false);
+    with_book_spell(
+        &mut f,
+        HEAL,
+        "Heal",
+        benilla_formats::SpellDisplay {
+            interrupt_flags: 0xf,
+            ..Default::default()
+        },
+    );
+    let world = f.app.world_mut();
+    world.init_resource::<crate::player::Player>();
+    world.resource_mut::<crate::player::Player>().active = true;
+    world
+        .resource_mut::<crate::bindings::BindingsState>()
+        .open_for_test();
+    run(&mut f, r#"CastSpellByName("Heal")"#);
+    assert_eq!(casts_and_cancels(&f), vec![("cast", HEAL)]);
+    let _ = reports(&mut f);
+
+    run_pressed(&mut f, &format!("TurnLeftStart() {SNAPSHOT}"));
+    assert_eq!(seen(&mut f), "", "a turn spares the cast");
+    run_pressed(
+        &mut f,
+        &format!(r#"MoveForwardStart() {SNAPSHOT} SendChatMessage("hi", "SAY")"#),
+    );
+    assert_eq!(
+        seen(&mut f),
+        "SPELLCAST_STOP",
+        "the next line reads the stop"
+    );
+    let world = f.app.world();
+    let binds = world.resource::<crate::bindings::BindingsState>();
+    assert!(
+        binds.pressed(crate::bindings::Input::MoveForward)
+            && binds.just_pressed(crate::bindings::Input::MoveForward),
+        "the bit is held as the call returns"
+    );
+    let sent: Vec<_> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CancelCast { spell_id } => Some(format!("cancel {spell_id}")),
+                ClientCommand::Chat { .. } => Some("chat".to_string()),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(sent, [format!("cancel {HEAL}"), "chat".to_string()]);
+}

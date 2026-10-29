@@ -77,36 +77,82 @@ fn fired_input(input: FiredInput) -> (Input, f32) {
 }
 
 impl BindingsState {
-    /// Apply Lua's binding calls, in call order.
+    /// The binding pass begins: last frame's edges are spent, and the calls made after its
+    /// readers ran are this frame's.
+    pub(super) fn begin_pass(&mut self) {
+        self.edges = std::mem::take(&mut self.carry);
+        self.open = true;
+    }
+
+    /// The binding pass ends: the readers follow, so a call from here on is the next frame's.
+    pub(super) fn end_pass(&mut self) {
+        self.open = false;
+    }
+
+    /// Apply Lua's binding calls that waited for no host, in call order.
     pub(super) fn apply_script_input(&mut self, inputs: Vec<BindingInput>) {
         for input in inputs {
-            match input {
-                // The set helper `0x514840` early-outs on a bit already set, so a Start on a held
-                // bit is no new edge.
-                BindingInput::Start(held) => {
-                    let i = held_input(held);
-                    if !self.pressed(i) {
-                        self.just.push(i);
-                        self.held.push(i);
-                    }
+            self.apply(input, false);
+        }
+    }
+
+    /// One binding call inside its verb's call: the bit moves now, and its edge goes to this
+    /// frame's readers while the binding pass runs, else to the next frame's, whose head would
+    /// clear it unread. The edge is marked settled: the cast cancel and the autorun toggle its
+    /// `SetCommands` makes ran in the call. Whether the call is a new edge: a Start on a bit not
+    /// held, or a one-shot.
+    pub(crate) fn call(&mut self, input: BindingInput) -> bool {
+        self.apply(input, true)
+    }
+
+    fn apply(&mut self, input: BindingInput, settled: bool) -> bool {
+        let edges = if settled && !self.open {
+            &mut self.carry
+        } else {
+            &mut self.edges
+        };
+        match input {
+            // The set helper `0x514840` early-outs on a bit already set, so a Start on a held
+            // bit is no new edge.
+            BindingInput::Start(held) => {
+                let i = held_input(held);
+                if self.held.contains(&i) {
+                    return false;
                 }
-                // `0x514b70` clears the bit whoever set it, so a second key still down on the
-                // same command stops too, and its release is a no-op second Stop.
-                BindingInput::Stop(held) => {
-                    let i = held_input(held);
-                    self.held.retain(|&h| h != i);
+                self.held.push(i);
+                edges.just.push(i);
+                if settled {
+                    edges.settled.push(i);
                 }
-                // A one-shot is its own press edge.
-                BindingInput::Fire(fired) => {
-                    let (i, amount) = fired_input(fired);
-                    self.fired.push(i);
-                    self.just.push(i);
-                    self.amounts.push((i, amount));
+                true
+            }
+            // `0x514b70` clears the bit whoever set it, so a second key still down on the
+            // same command stops too, and its release is a no-op second Stop.
+            BindingInput::Stop(held) => {
+                let i = held_input(held);
+                self.held.retain(|&h| h != i);
+                false
+            }
+            // A one-shot is its own press edge.
+            BindingInput::Fire(fired) => {
+                let (i, amount) = fired_input(fired);
+                edges.fired.push(i);
+                edges.just.push(i);
+                edges.amounts.push((i, amount));
+                if settled {
+                    edges.settled.push(i);
                 }
-                // The camera's axes are its own state (`[cam+0x128]`), not `[InputControl+4]`:
-                // passed through in call order for the camera to apply.
-                BindingInput::ViewStart(axis) => self.view_calls.push((axis, true)),
-                BindingInput::ViewStop(axis) => self.view_calls.push((axis, false)),
+                true
+            }
+            // The camera's axes are its own state (`[cam+0x128]`), not `[InputControl+4]`:
+            // passed through in call order for the camera to apply.
+            BindingInput::ViewStart(axis) => {
+                edges.view_calls.push((axis, true));
+                false
+            }
+            BindingInput::ViewStop(axis) => {
+                edges.view_calls.push((axis, false));
+                false
             }
         }
     }
@@ -117,10 +163,7 @@ impl BindingsState {
     pub(crate) fn after_calls(earlier: Vec<BindingInput>, now: Vec<BindingInput>) -> Self {
         let mut state = Self::default();
         state.apply_script_input(earlier);
-        state.just.clear();
-        state.fired.clear();
-        state.amounts.clear();
-        state.view_calls.clear();
+        state.edges = Default::default();
         state.apply_script_input(now);
         state
     }

@@ -399,8 +399,10 @@ fn every_leg_of_the_pet_frame_click_reaches_a_live_binding() {
     s.run("PetFrame_OnClick(\"LeftButton\")")
         .expect("the cursor-holds-an-item leg must not error");
     assert_eq!(
-        s.take_drop_item_on_unit(),
-        vec!["pet".to_string()],
+        s.take_script_calls(),
+        vec![benilla_ui::script::ScriptCall::DropItemOnUnit(
+            "pet".to_string()
+        )],
         "a held item + a pet click queues the drop"
     );
     // The drop leg alone: the reference's if/elseif is exclusive.

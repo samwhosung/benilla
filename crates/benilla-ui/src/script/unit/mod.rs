@@ -561,12 +561,6 @@ impl super::UiScript {
             .is_empty()
     }
 
-    /// Drain `DropItemOnUnit`'s tokens; on the pet the app casts the learned Feed Pet spell at
-    /// the held item (`0x48d960`).
-    pub fn take_drop_item_on_unit(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().drop_item_on_unit)
-    }
-
     /// Take the `SpellTargetUnit` calls out of the call stream.
     pub fn take_spell_target_unit(&mut self) -> Vec<String> {
         self.take_calls_where(|c| match c {

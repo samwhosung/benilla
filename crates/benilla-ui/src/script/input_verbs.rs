@@ -3,9 +3,10 @@
 //! `0x50c089`) and the targeting and posture verbs of the main table `0x83de68` (loop
 //! `0x49027c`). A key and its Lua function share one path: a held command's Start and Stop are the
 //! key's press and release ([`HeldInput`]), a one-shot command fires as its key does
-//! ([`FiredInput`]), and the targeting and attack calls are script calls ([`ScriptCall`]),
-//! applied inside the verb, so a macro's `TargetNearestEnemy()` then `/cast` casts at the new
-//! target.
+//! ([`FiredInput`]), and each applies to the engine's input state inside the verb through the host
+//! lent ([`ScriptCall::Input`]), as `SetCommands` (`0x515090`) sets the bit, cancels the cast and
+//! runs the tick before the verb returns. The targeting and attack calls are script calls too,
+//! so a macro's `TargetNearestEnemy()` then `/cast` casts at the new target.
 //!
 //! Every movement function but the mouselook three opens on the protected-action gate `0x494a50`
 //! with tag 0 ([`protected`]), which is all twenty-three of its tag-0 callers. The four
@@ -182,7 +183,8 @@ pub struct ClickPress {
 }
 
 impl UiScript {
-    /// Take the binding calls queued since the last call, in call order.
+    /// Take the binding calls made with no host lent since the last call, in call order; with a
+    /// host lent each applies inside its call ([`ScriptCall::Input`]).
     pub fn take_binding_input(&mut self) -> Vec<BindingInput> {
         std::mem::take(&mut self.model_mut().input.queue)
     }
@@ -354,9 +356,15 @@ fn gate(lua: &Lua) -> bool {
     protected::gate(lua, Tag::MOVEMENT)
 }
 
-fn push(lua: &Lua, input: BindingInput) {
+/// A binding call, applied to the engine's input state inside the call through the host lent
+/// ([`ScriptCall::Input`]); with none lent it waits for the app ([`UiScript::take_binding_input`]).
+fn push(lua: &Lua, input: BindingInput) -> mlua::Result<()> {
+    if super::host::open(lua) {
+        return push_call(lua, ScriptCall::Input(input));
+    }
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     model.input.queue.push(input);
+    Ok(())
 }
 
 fn push_look(lua: &Lua, call: LookCall) {
@@ -439,7 +447,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     if let Some((bit, mode)) = primary {
                         press_primary(lua, bit, Some(mode))?;
                     }
-                    push(lua, BindingInput::Start(input));
+                    push(lua, BindingInput::Start(input))?;
                 }
                 Ok(())
             })?,
@@ -451,7 +459,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     if let Some((bit, _)) = primary {
                         release_primary(lua, bit)?;
                     }
-                    push(lua, BindingInput::Stop(input));
+                    push(lua, BindingInput::Stop(input))?;
                     // A mouse bit's release carries its fourth argument to the camera: the sticky
                     // flag through `0x6f1c10` with default 0 (`0x5141f6`), else 0 (`0x51417b`).
                     match input {
@@ -481,7 +489,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, _: MultiValue| {
                 if gate(lua) {
-                    push(lua, BindingInput::Fire(input));
+                    push(lua, BindingInput::Fire(input))?;
                 }
                 Ok(())
             })?,
@@ -524,7 +532,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CameraZoomIn",
         lua.create_function(|lua, v: Option<Value>| {
             if let Some(yards) = zoom_amount(lua, v) {
-                push(lua, BindingInput::Fire(FiredInput::CameraZoomIn(yards)));
+                push(lua, BindingInput::Fire(FiredInput::CameraZoomIn(yards)))?;
             }
             Ok(())
         })?,
@@ -533,7 +541,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CameraZoomOut",
         lua.create_function(|lua, v: Option<Value>| {
             if let Some(yards) = zoom_amount(lua, v) {
-                push(lua, BindingInput::Fire(FiredInput::CameraZoomOut(yards)));
+                push(lua, BindingInput::Fire(FiredInput::CameraZoomOut(yards)))?;
             }
             Ok(())
         })?,
@@ -553,14 +561,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             start,
             lua.create_function(move |lua, _: MultiValue| {
-                push(lua, BindingInput::ViewStart(axis));
+                push(lua, BindingInput::ViewStart(axis))?;
                 Ok(())
             })?,
         )?;
         g.set(
             stop,
             lua.create_function(move |lua, _: MultiValue| {
-                push(lua, BindingInput::ViewStop(axis));
+                push(lua, BindingInput::ViewStop(axis))?;
                 Ok(())
             })?,
         )?;
@@ -629,7 +637,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ToggleSheath",
         lua.create_function(move |lua, _: MultiValue| {
-            push(lua, BindingInput::Fire(FiredInput::ToggleSheath));
+            push(lua, BindingInput::Fire(FiredInput::ToggleSheath))?;
             Ok(())
         })?,
     )?;
@@ -1015,6 +1023,33 @@ mod tests {
                 ScriptCall::ClearTarget,
             ]
         );
+    }
+
+    /// With a host lent, every movement and camera binding call applies inside its call, in call
+    /// order with the other calls (`0x515090` returns with the bit set and the cast cancelled), and
+    /// nothing waits for the app.
+    #[test]
+    fn the_binding_calls_apply_in_the_call_with_a_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        let calls = crate::script::host::test_support::applied_in_call(
+            &mut s,
+            "MoveForwardStart() SitOrStand() Jump() MoveForwardStop() CameraZoomOut(2) \
+             MoveViewLeftStart() ToggleSheath() PitchUpStart()",
+        );
+        assert_eq!(
+            calls,
+            [
+                ScriptCall::Input(BindingInput::Start(HeldInput::MoveForward)),
+                ScriptCall::Posture(PostureCall::SitOrStand),
+                ScriptCall::Input(BindingInput::Fire(FiredInput::Jump)),
+                ScriptCall::Input(BindingInput::Stop(HeldInput::MoveForward)),
+                ScriptCall::Input(BindingInput::Fire(FiredInput::CameraZoomOut(2.0))),
+                ScriptCall::Input(BindingInput::ViewStart(ViewAxis::Left)),
+                ScriptCall::Input(BindingInput::Fire(FiredInput::ToggleSheath)),
+                ScriptCall::Input(BindingInput::Start(HeldInput::PitchUp)),
+            ]
+        );
+        assert!(s.take_binding_input().is_empty(), "nothing waits");
     }
 
     /// The TAB cyclers, `TargetLastTarget` and `AttackTarget` apply inside their call with a host

@@ -210,8 +210,9 @@ pub(super) fn both_engaged(
     (both_buttons && rig.world_mouse.rose()) || binds.steering_began()
 }
 
-/// Whether this frame's input cancels the cast in flight, as the press handler `0x515090` and
-/// `Script::Jump` (`0x513c43`) decide it: a press that newly set forward, back, strafe or autorun
+/// Whether this frame's input cancels the cast in flight, for the edges no call settled inside it
+/// ([`super::press::CommandSteps`]), as the press handler `0x515090` and `Script::Jump`
+/// (`0x513c43`) decide it: a press that newly set forward, back, strafe or autorun
 /// (the mask `0x10f0` at `0x5150ce`; a Start on a held bit is no edge, `0x51484c`), the press that
 /// completed both mouse bits (`0x5150e2`), or the Jump command, which cancels ahead of its own
 /// checks once the active mover resolves (`0x513be0`-`0x513c02`), so not while control is lost
@@ -234,10 +235,10 @@ pub(super) fn cancels_cast(
         Input::StrafeRight,
     ]
     .into_iter()
-    .any(|i| binds.just_pressed(i))
+    .any(|i| binds.just_pressed(i) && !binds.settled(i))
         || autorun_on
         || both_engaged
-        || has_mover && binds.fired(Input::Jump)
+        || has_mover && binds.fired(Input::Jump) && !binds.settled(Input::Jump)
 }
 
 #[cfg(test)]

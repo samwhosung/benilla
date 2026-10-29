@@ -355,12 +355,10 @@ impl Plugin for TargetPlugin {
                         .chain(),
                     // The units the plate selects parked with the targeting cursor up, bound to its
                     // cast; then the unit interact of a nameplate's right-click and a crate's
-                    // `Interact`, so the cast goes out ahead of the interact it came with; then
-                    // `DropItemOnUnit`'s legs.
+                    // `Interact`, so the cast goes out ahead of the interact it came with.
                     (
                         crate::script_calls::bind_parked_picks,
                         click::act_on_interact,
-                        crate::ui_action::drop_item::drop_item_on_unit,
                     )
                         .chain(),
                     // The casts the dispatchers queued (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`).

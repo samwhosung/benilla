@@ -26,8 +26,6 @@ const JERKY: u64 = 0x4000_0000_0000_0a02;
 struct Trade {
     app: App,
     rx: Receiver<ClientCommand>,
-    /// The drop's system, registered once so its memory persists.
-    drop: SystemId,
 }
 
 /// Our object with `extra` fields: `OBJECT_FIELD_TYPE` a player, alive, the human template,
@@ -107,10 +105,7 @@ fn client() -> Trade {
         )
         .expect("the recorder installs");
     app.world_mut().insert_non_send_resource(script);
-    let drop = app
-        .world_mut()
-        .register_system(crate::ui_action::drop_item::drop_item_on_unit);
-    Trade { app, rx, drop }
+    Trade { app, rx }
 }
 
 /// A left click on `guid`'s model, through the world click's trade leg.
@@ -295,8 +290,6 @@ fn held_coins_stay_on_the_cursor_when_a_trade_opens_that_no_drop_started() {
 fn an_item_dropped_on_a_player_starts_and_fills_a_trade() {
     let mut t = client();
     run(&mut t, "PickupContainerItem(0, 1) DropItemOnUnit('target')");
-    let drop = t.drop;
-    run_system(&mut t, drop);
     assert!(
         matches!(
             sent(&t)[..],
@@ -323,8 +316,6 @@ fn an_item_dropped_on_a_player_starts_and_fills_a_trade() {
     let _ = heard(&mut t);
 
     run(&mut t, "PickupContainerItem(0, 2) DropItemOnUnit('target')");
-    let drop = t.drop;
-    run_system(&mut t, drop);
     assert!(
         sent(&t)
             .iter()
@@ -333,6 +324,42 @@ fn an_item_dropped_on_a_player_starts_and_fills_a_trade() {
     );
     assert_eq!(heard(&mut t), "TRADE_PLAYER_ITEM_CHANGED(2,nil) ");
     assert!(eval::<bool>(&mut t, "return CursorHasItem() == nil"));
+}
+
+/// `DropItemOnUnit` does its legs inside its call (`0x48d960`): on the open partner the held item
+/// is placed and the cursor cleared before the script's next line (`0x48da50` → `0x4bfc50`), and
+/// with no trade open `CMSG_INITIATE_TRADE` goes out ahead of a send the next line makes
+/// (`0x48da62`).
+#[test]
+fn a_drop_on_a_player_trades_inside_its_call() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    assert_eq!(
+        eval::<(bool, Option<String>)>(
+            &mut t,
+            "PickupContainerItem(0, 1) DropItemOnUnit('target') \
+             return CursorHasItem() == nil, (GetTradePlayerItemInfo(1))"
+        ),
+        (true, Some("Linen Cloth".to_string())),
+        "the next line reads the item placed"
+    );
+    assert_eq!(heard(&mut t), "TRADE_PLAYER_ITEM_CHANGED(1,nil) ");
+
+    let mut t = client();
+    run(
+        &mut t,
+        "PickupContainerItem(0, 1) DropItemOnUnit('target') RandomRoll(1, 2)",
+    );
+    assert!(
+        matches!(
+            sent(&t)[..],
+            [
+                ClientCommand::InitiateTrade { target: BOB },
+                ClientCommand::RandomRoll { .. }
+            ]
+        ),
+        "the ask goes out in call order"
+    );
 }
 
 /// No sender tests the window (`0x5d4680`, `0x4bfa70`, `0x5d4380`, `0x5d4480`): money, a placement
@@ -858,7 +885,7 @@ fn the_accept_signal_runs_before_its_packet() {
 fn a_refused_drop_placement_writes_nothing_and_keeps_the_cursor() {
     let mut t = client();
     open_with_bob(&mut t);
-    run(&mut t, "PickupContainerItem(0, 1) DropItemOnUnit('target')");
+    run(&mut t, "PickupContainerItem(0, 1)");
     let world = t.app.world_mut();
     if let Some(cloth) = world
         .resource_mut::<crate::net::GuidIndex>()
@@ -867,8 +894,7 @@ fn a_refused_drop_placement_writes_nothing_and_keeps_the_cursor() {
     {
         world.despawn(cloth);
     }
-    let drop = t.drop;
-    run_system(&mut t, drop);
+    run(&mut t, "DropItemOnUnit('target')");
     assert!(sent(&t).is_empty(), "nothing went out");
     assert_eq!(heard(&mut t), "", "no slot signal");
     assert_eq!(

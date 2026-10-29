@@ -6,12 +6,21 @@
 //! stun as they stand then (`0x514560`, `0x5145b0`), so its start or stop is queued, and goes out
 //! on the wire, ahead of anything this frame's packets apply.
 //!
+//! A binding call's bit change and its cast cancel run inside the call
+//! ([`CommandSteps`]), so `MoveForwardStart()` mid-cast has sent `CMSG_CANCEL_CAST` and fired its
+//! stop before the script's next line. The tick follows among the input records: the reference's
+//! queues its start on the mover (`0x617840` → `0x617570`, no send), which the frame's mover
+//! update sends (`0x615b10` → `0x616620` → `0x615c30`), after the input's calls have run.
+//!
 //! Two systems, around the cast bar's self-cancel (`crate::spell::LocalCancel`), which sends the
-//! cancel between them: [`press_commands`], the bit change and the cancel's verdict, then
-//! [`press_tick`], the tick. [`super::controller::control`] keeps the frame time: it runs the same
-//! axes and flag build after the packets and finds the word this changed already streamed.
+//! cancel between them: [`press_commands`], the cancel's verdict for the edges no call settled
+//! (a call made with no host lent, a world mouse press), then [`press_tick`], the tick.
+//! [`super::controller::control`] keeps the frame time: it runs the same axes and flag build after
+//! the packets and finds the word this changed already streamed.
 
 use bevy::prelude::*;
+
+use benilla_ui::script::{BindingInput, FiredInput, HeldInput};
 
 use crate::creature_anim::move_flags;
 use crate::net::{Embodied, NetCommands};
@@ -49,11 +58,15 @@ pub(super) fn press_commands(
     // possession sets to the creature and lost control zeroes (`0x5fa600`), so steering a
     // possessed creature, or pressing while feared, ends a cast but not a channel.
     let active_mover = active.iter().next();
-    let autorun_on = input::toggle_autorun(&binds, &mut player);
+    let autorun_on = input::toggle_autorun(&binds, &mut player)
+        && !binds.settled(crate::bindings::Input::ToggleAutoRun);
+    // A mouse command's call decided the both-button cancel inside it ([`CommandSteps`]).
+    let called = binds.settled(crate::bindings::Input::TurnOrAction)
+        || binds.settled(crate::bindings::Input::CameraOrSelectOrMove);
     if input::cancels_cast(
         &binds,
         autorun_on,
-        input::both_engaged(&binds, &rig, both_buttons),
+        !called && input::both_engaged(&binds, &rig, both_buttons),
         active_mover.is_some(),
     ) {
         cancel.pressed = true;
@@ -158,5 +171,52 @@ pub(super) fn press_tick(
     move_trace::press(word, prev, player.move_flags);
     if lock.foreign_mover.is_none() && loot_walk_away(prev, player.move_flags) {
         loot.0 = true;
+    }
+}
+
+/// A binding call inside its verb's call ([`benilla_ui::script::ScriptCall::Input`]): the bit
+/// set or cleared through `SetCommands` (`0x515090` → `0x514840`, `0x514b70`), and for a press
+/// that changed a bit the cast cancel's verdict (`0x5150ce`-`0x515193`), before the call returns.
+/// `ToggleAutoRun` (`0x513de0`) presses or releases `0x1000` by its current state, and `Jump`
+/// cancels once the active mover resolves (`0x513be0`-`0x513c43`). A one-shot and the camera axes
+/// leave their edge for the frame's readers.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CommandSteps<'w, 's> {
+    binds: ResMut<'w, crate::bindings::BindingsState>,
+    player: Option<Res<'w, Player>>,
+    // The active mover `0xc4da98`, as whether it is our own character.
+    active: Query<'w, 's, Has<crate::net::SelfPlayer>, With<crate::net::ActiveMover>>,
+}
+
+impl CommandSteps<'_, '_> {
+    /// Apply `input`; when it cancels the cast, whether the player is the active mover, the one
+    /// extra test of the channel's cancel (`0x51517b`-`0x515191`).
+    pub(crate) fn call(&mut self, input: BindingInput) -> Option<bool> {
+        let changed = self.binds.call(input);
+        let player = self.player.as_deref()?;
+        if !player.active || player.detached || !changed {
+            return None;
+        }
+        let mover = self.active.iter().next();
+        let cancels = match input {
+            // The mask `0x10f0` (`0x5150ce`): forward, back and the strafes; the turns and the
+            // pitches (`0x100`-`0x800`) never cancel.
+            BindingInput::Start(
+                HeldInput::MoveForward
+                | HeldInput::MoveBackward
+                | HeldInput::StrafeLeft
+                | HeldInput::StrafeRight,
+            ) => true,
+            // The press that completed both mouse bits (`0x5150d6`-`0x5150ec`).
+            BindingInput::Start(HeldInput::TurnOrAction | HeldInput::CameraOrSelectOrMove) => {
+                self.binds.steering()
+            }
+            // `0x1000` pressed, when it was clear (`0x513de7`); its release cancels nothing. The
+            // latch itself flips at the command press ([`input::toggle_autorun`]).
+            BindingInput::Fire(FiredInput::ToggleAutoRun) => !player.autorun,
+            BindingInput::Fire(FiredInput::Jump) => mover.is_some(),
+            _ => false,
+        };
+        cancels.then_some(mover == Some(true))
     }
 }

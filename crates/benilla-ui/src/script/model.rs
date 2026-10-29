@@ -416,8 +416,6 @@ pub(crate) struct Model {
     pub(crate) input: super::input_verbs::InputState,
     /// The protected-action gate's input events ([`super::protected`]).
     pub(crate) protected: super::protected::Flags,
-    /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
-    pub(crate) drop_item_on_unit: Vec<String>,
 
     /// The joined channels, in join order: the numbers `GetChannelName` answers.
     pub(crate) joined_channels: Vec<Option<super::channel::JoinedChannel>>,
@@ -1422,7 +1420,6 @@ impl Model {
             call_raises: Default::default(),
             input: Default::default(),
             protected: Default::default(),
-            drop_item_on_unit: Vec::new(),
             joined_channels: Vec::new(),
             party: party::PartyState::default(),
             ready_check: party::ReadyCheckState::default(),

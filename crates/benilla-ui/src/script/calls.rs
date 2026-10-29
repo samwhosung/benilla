@@ -299,6 +299,14 @@ pub enum ScriptCall {
     /// the press (`ArmClick 0x514810` → `0x481f00`), or the last primary's release and its
     /// dispatch (`ReleaseCommands 0x514b70` → `DispatchWorldClick 0x481f60`), inside the call.
     WorldClick(super::ClickCall),
+    /// A movement or camera binding function's call ([`super::BindingInput`]) on the engine's
+    /// input state, inside the call: a command bit pressed or released through `SetCommands`
+    /// (`0x515090`) with the cast cancel a new direction makes (`0x5150ce`-`0x515193`), a
+    /// one-shot, or a camera axis.
+    Input(super::BindingInput),
+    /// `DropItemOnUnit(unit)` (`0x48d960`) on the token: the trade leg, then the pet leg's feed
+    /// on the unit it names, inside the call.
+    DropItemOnUnit(String),
 }
 
 /// A getter's lookup with a callback, which the host makes inside the getter's call: the cache

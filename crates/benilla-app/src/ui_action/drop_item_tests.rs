@@ -7,7 +7,6 @@ use benilla_formats::{SpellCatalog, SpellDisplay};
 use benilla_protocol::messages::ObjectType;
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{ContainerSlot, ContainerState, CursorPayload, UiScript, UnitGuids};
-use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
@@ -27,7 +26,6 @@ const HEALTH: u16 = 22;
 struct Feed {
     app: App,
     rx: Receiver<ClientCommand>,
-    drop: SystemId,
 }
 
 /// Us, alive or not, a hunter who knows Feed Pet, with Tough Jerky in the backpack and our pet
@@ -149,16 +147,11 @@ fn client_with(alive: bool, pet_number: u32, charmed: bool) -> Feed {
     );
     script.set_container(0, Some(bag));
     app.world_mut().insert_non_send_resource(script);
-    let drop = app
-        .world_mut()
-        .register_system(super::drop_item::drop_item_on_unit);
-    Feed { app, rx, drop }
+    Feed { app, rx }
 }
 
 fn run(f: &mut Feed, lua: &str) {
     with_hosted_vm(f.app.world_mut(), |vm| vm.expect("a VM").run(lua)).expect("the chunk runs");
-    let drop = f.drop;
-    f.app.world_mut().run_system(drop).expect("the drop runs");
 }
 
 /// The casts sent since the last read, as their debug lines.

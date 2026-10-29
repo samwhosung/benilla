@@ -24,52 +24,54 @@ fn feedable_pet(pet: &benilla_protocol::ObjectFields, self_guid: u64) -> bool {
         && pet.unit_created_by() == Some(self_guid)
 }
 
-/// Runs `DropItemOnUnit(unit)`'s legs (`0x48d960`): the trade leg, then the pet leg on a token
+/// `DropItemOnUnit(unit)`'s legs (`0x48d960`) inside its call
+/// ([`benilla_ui::script::ScriptCall::DropItemOnUnit`]): the trade leg, then the pet leg on a token
 /// that resolves to the pet's unit (`0x48da6c`-`0x48da7f`, guids compared, so `"target"` and
-/// `"targettarget"` feed a targeted pet). The world click's entry into the pet leg, a left click on
-/// the pet's model with an item held (`0x4927e8`), is [`ClickFeed`], inside the click's call.
-pub(crate) fn drop_item_on_unit(
-    mut vm: crate::script_calls::VmWith<(
-        crate::spell::ScriptCast<'static, 'static>,
-        TradeLeg<'static, 'static>,
-    )>,
-    self_q: Query<(&crate::net::Guid, &crate::net::ObjectStore), With<crate::net::SelfPlayer>>,
-    stores: Query<&crate::net::ObjectStore>,
-    index: Res<crate::net::GuidIndex>,
-    learned: Res<super::LearnedAbilities>,
-) {
-    vm.turn(|script, (mut cast, mut trade)| {
-        let Some(script) = script else {
-            return;
-        };
-        let pet_guid = cast.ladder.pet_guid();
-        let tokens = script.take_drop_item_on_unit();
-        if tokens.is_empty() {
+/// `"targettarget"` feed a targeted pet). The world click's entry into the pet leg, a left click
+/// on the pet's model with an item held (`0x4927e8`), is [`ClickFeed`], inside the click's call.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct DropItemLeg<'w, 's> {
+    trade: TradeLeg<'w, 's>,
+    cast: crate::spell::ScriptCast<'w, 's>,
+    self_q: Query<
+        'w,
+        's,
+        (&'static crate::net::Guid, &'static crate::net::ObjectStore),
+        With<crate::net::SelfPlayer>,
+    >,
+    stores: Query<'w, 's, &'static crate::net::ObjectStore>,
+    index: Res<'w, crate::net::GuidIndex>,
+    learned: Res<'w, super::LearnedAbilities>,
+}
+
+impl DropItemLeg<'_, '_> {
+    /// The drop on the unit `token` names.
+    pub(crate) fn drop_on(&mut self, script: &mut benilla_ui::script::UiScript, token: &str) {
+        // Only an item on the cursor drops (`0x48d98f`-`0x48d9aa`).
+        if !matches!(script.cursor_payload(), Some(CursorPayload::Item(_))) {
             return;
         }
-        let Some((self_guid, self_store)) = self_q.iter().next() else {
+        let pet_guid = self.cast.ladder.pet_guid();
+        let Some((self_guid, self_store)) = self.self_q.iter().next() else {
+            return;
+        };
+        self.trade.drop_on(script, token);
+        let Some(guid) = self.trade.unit_guid(token) else {
             return;
         };
         let leg = PetLeg {
             pet_guid,
-            pet: index.0.get(&pet_guid).and_then(|&e| stores.get(e).ok()),
+            pet: self
+                .index
+                .0
+                .get(&pet_guid)
+                .and_then(|&e| self.stores.get(e).ok()),
             me: self_guid.0,
             me_store: self_store,
-            feed_pet: learned.feed_pet,
+            feed_pet: self.learned.feed_pet,
         };
-        // Each entry in turn: a token's trade leg, then the pet leg on the unit it resolves to
-        // (`0x515940`).
-        for token in tokens {
-            // Only an item on the cursor drops (`0x48d98f`-`0x48d9aa`).
-            if !matches!(script.cursor_payload(), Some(CursorPayload::Item(_))) {
-                continue;
-            }
-            trade.drop_on(script, &token);
-            if let Some(guid) = trade.unit_guid(&token) {
-                leg.run(script, &mut cast, guid);
-            }
-        }
-    })
+        leg.run(script, &mut self.cast, guid);
+    }
 }
 
 /// The world click's pet leg (`0x492793`-`0x4927f8`, in its object leg `0x4925d0`, ahead of the

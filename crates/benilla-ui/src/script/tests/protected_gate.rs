@@ -535,11 +535,6 @@ fn effects(s: &mut UiScript) -> Vec<String> {
     out.extend(s.take_session_requests().iter().map(|r| format!("{r:?}")));
     out.extend(s.take_duel_requests().iter().map(|r| format!("{r:?}")));
     out.extend(
-        s.take_drop_item_on_unit()
-            .iter()
-            .map(|t| format!("drop {t}")),
-    );
-    out.extend(
         s.take_pet_autocast_toggles()
             .iter()
             .map(|i| format!("autocast {i}")),

@@ -453,6 +453,12 @@ impl SelfCancel<'_> {
         self.cancel(true, false, false);
     }
 
+    /// A movement command's cancel inside its call (`0x51512a`, `0x515193`, `Script::Jump`'s
+    /// `0x513c43`); `mover_is_player` gates the channel's.
+    pub(crate) fn cancel_for_move(&mut self, mover_is_player: bool) {
+        self.cancel(false, true, mover_is_player);
+    }
+
     /// `CancelCast(1, 1, 0x1c)` (`0x6e4940`) as `UseSoulstone`'s item leg calls it (`0x48ae6b`),
     /// ungated: a targeting word is dropped (`0x6e4955`), else the cast or queued strike in flight
     /// is cancelled on the wire (`0x6e4970`), whatever its `InterruptFlags`. Its failed flag fires
